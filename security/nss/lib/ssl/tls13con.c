@@ -1678,7 +1678,8 @@ tls13_SelectServerCert(sslSocket *ss)
                                      cert->serverKeyPair->privKey,
                                      ss->xtnData.sigSchemes,
                                      ss->xtnData.numSigSchemes,
-                                     PR_FALSE);
+                                     PR_FALSE,
+                                     &ss->ssl3.hs.signatureScheme);
         if (rv == SECSuccess) {
             /* Found one. */
             ss->sec.serverCert = cert;
@@ -1829,8 +1830,8 @@ tls13_HandleClientHelloPart2(sslSocket *ss,
     TLS13KeyShareEntry *clientShare = NULL;
     ssl3CipherSuite previousCipherSuite = 0;
     const sslNamedGroupDef *previousGroup = NULL;
-    PRBool previousEchOffered = PR_FALSE;
     PRBool hrr = PR_FALSE;
+    PRBool previousOfferedEch;
 
     /* If the legacy_version field is set to 0x300 or smaller,
      * reject the connection with protocol_version alert. */
@@ -1882,8 +1883,8 @@ tls13_HandleClientHelloPart2(sslSocket *ss,
                                    ss->xtnData.cookie.len,
                                    &previousCipherSuite,
                                    &previousGroup,
-                                   &previousEchOffered,
-                                   NULL, NULL, NULL, NULL, PR_TRUE);
+                                   &previousOfferedEch, NULL, PR_TRUE);
+
         if (rv != SECSuccess) {
             FATAL_ERROR(ss, SSL_ERROR_BAD_2ND_CLIENT_HELLO, illegal_parameter);
             goto loser;
@@ -1944,9 +1945,9 @@ tls13_HandleClientHelloPart2(sslSocket *ss,
         }
 
         /* CH1/CH2 must either both include ECH, or both exclude it. */
-        if (previousEchOffered != (ss->xtnData.ech != NULL)) {
+        if (previousOfferedEch != (ss->xtnData.ech != NULL)) {
             FATAL_ERROR(ss, SSL_ERROR_BAD_2ND_CLIENT_HELLO,
-                        previousEchOffered ? missing_extension : illegal_parameter);
+                        previousOfferedEch ? missing_extension : illegal_parameter);
             goto loser;
         }
 
@@ -2220,6 +2221,24 @@ tls13_SendHelloRetryRequest(sslSocket *ss,
                 SSL_GETPID(), ss->fd));
 
     PORT_Assert(ss->opt.noLocks || ssl_HaveSSL3HandshakeLock(ss));
+
+    if (ss->xtnData.ech) {
+        PRUint8 echGreaseRaw[TLS13_ECH_SIGNAL_LEN] = { 0 };
+        if (!ss->ssl3.hs.echAccepted) {
+            rv = PK11_GenerateRandom(echGreaseRaw, TLS13_ECH_SIGNAL_LEN);
+            if (rv != SECSuccess) {
+                return SECFailure;
+            }
+        }
+        sslBuffer echGreaseBuffer = SSL_BUFFER_EMPTY;
+        rv = sslBuffer_Append(&echGreaseBuffer, echGreaseRaw, sizeof(echGreaseRaw));
+        if (rv != SECSuccess) {
+            return SECFailure;
+        }
+        /* Store the GREASE signal so we can later include it in the cookie and HRR extension */
+        SSL_TRC(100, ("Generating and storing a random value for ECH HRR Grease value."));
+        ss->ssl3.hs.greaseEchBuf = echGreaseBuffer;
+    }
 
     /* Compute the cookie we are going to need. */
     rv = tls13_MakeHrrCookie(ss, requestedGroup,
@@ -2514,6 +2533,18 @@ ssl_ListCount(PRCList *list)
     return c;
 }
 
+/*
+ * savedMsg contains the HelloRetryRequest message. When its extensions are parsed
+ * in ssl3_HandleParsedExtensions, the handler for ECH HRR extensions (tls13_ClientHandleHrrEchXtn)
+ * will take a reference into the message buffer.
+ *
+ * This reference is then used in tls13_MaybeHandleEchSignal in order to compute
+ * the transcript for the ECH signal calculation. This was felt to be preferable
+ * to re-parsing the HelloRetryRequest message in order to create the transcript.
+ *
+ * Consequently, savedMsg should not be moved or mutated between these
+ * function calls. 
+ */
 SECStatus
 tls13_HandleHelloRetryRequest(sslSocket *ss, const PRUint8 *savedMsg,
                               PRUint32 savedLength)
@@ -2552,9 +2583,13 @@ tls13_HandleHelloRetryRequest(sslSocket *ss, const PRUint8 *savedMsg,
      * ensure that a HelloRetryRequest isn't a no-op: we must have at least two
      * extensions, supported_versions plus one other.  That other must be one
      * that we understand and recognize as being valid for HelloRetryRequest,
-     * and all the extensions we permit cause us to modify our second
-     * ClientHello in some meaningful way. */
-    if (ssl_ListCount(&ss->ssl3.hs.remoteExtensions) <= 1) {
+     * and should alter our next Client Hello. */
+    unsigned int requiredExtensions = 1;
+    /* The ECH HRR extension is a no-op from the client's perspective. */
+    if (ss->xtnData.ech) {
+        requiredExtensions++;
+    }
+    if (ssl_ListCount(&ss->ssl3.hs.remoteExtensions) <= requiredExtensions) {
         FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_HELLO_RETRY_REQUEST,
                     decode_error);
         return SECFailure;
@@ -2565,7 +2600,10 @@ tls13_HandleHelloRetryRequest(sslSocket *ss, const PRUint8 *savedMsg,
     if (rv != SECSuccess) {
         return SECFailure; /* Error code set below */
     }
-
+    rv = tls13_MaybeHandleEchSignal(ss, savedMsg, savedLength, PR_TRUE);
+    if (rv != SECSuccess) {
+        return SECFailure;
+    }
     ss->ssl3.hs.helloRetry = PR_TRUE;
     rv = tls13_ReinjectHandshakeTranscript(ss);
     if (rv != SECSuccess) {
@@ -3016,7 +3054,7 @@ tls13_HandleServerHelloPart2(sslSocket *ss, const PRUint8 *savedMsg, PRUint32 sa
         return SECFailure; /* error code is set. */
     }
 
-    rv = tls13_MaybeHandleEchSignal(ss, savedMsg, savedLength);
+    rv = tls13_MaybeHandleEchSignal(ss, savedMsg, savedLength, PR_FALSE);
     if (rv != SECSuccess) {
         return SECFailure; /* error code is set. */
     }
@@ -5550,8 +5588,7 @@ static const struct {
     { ssl_tls13_supported_versions_xtn, _M3(client_hello, server_hello,
                                             hello_retry_request) },
     { ssl_record_size_limit_xtn, _M2(client_hello, encrypted_extensions) },
-    { ssl_tls13_encrypted_client_hello_xtn, _M2(client_hello, encrypted_extensions) },
-    { ssl_tls13_ech_is_inner_xtn, _M1(client_hello) },
+    { ssl_tls13_encrypted_client_hello_xtn, _M3(client_hello, encrypted_extensions, hello_retry_request) },
     { ssl_tls13_outer_extensions_xtn, _M_NONE /* Encoding/decoding only */ },
     { ssl_tls13_post_handshake_auth_xtn, _M1(client_hello) }
 };
@@ -5754,7 +5791,7 @@ tls13_ProtectRecord(sslSocket *ss,
  *
  * If SECFailure is returned, we:
  * 1. Set |*alert| to the alert to be sent.
- * 2. Call PORT_SetError() witn an appropriate code.
+ * 2. Call PORT_SetError() with an appropriate code.
  */
 SECStatus
 tls13_UnprotectRecord(sslSocket *ss,
@@ -5767,6 +5804,7 @@ tls13_UnprotectRecord(sslSocket *ss,
     const ssl3BulkCipherDef *cipher_def = spec->cipherDef;
     const int ivLen = cipher_def->iv_size + cipher_def->explicit_nonce_size;
     const int tagLen = cipher_def->tag_size;
+    const int innerTypeLen = 1;
 
     PRUint8 aad[21];
     unsigned int aadLen;
@@ -5779,7 +5817,14 @@ tls13_UnprotectRecord(sslSocket *ss,
                 SSL_GETPID(), ss->fd, spec, spec->epoch, spec->phase,
                 cText->seqNum, cText->buf->len));
 
-    /* Verify that the content type is right, even though we overwrite it.
+    /* Verify that the outer content type is right.
+     *
+     * For the inner content type as well as lower TLS versions this is checked
+     * in ssl3con.c/ssl3_HandleNonApllicationData().
+     *
+     * For DTLS 1.3 this is checked in ssl3gthr.c/dtls_GatherData(). DTLS drops
+     * invalid records silently [RFC6347, Section 4.1.2.7].
+     *
      * Also allow the DTLS short header in TLS 1.3. */
     if (!(cText->hdr[0] == ssl_ct_application_data ||
           (IS_DTLS(ss) &&
@@ -5800,6 +5845,17 @@ tls13_UnprotectRecord(sslSocket *ss,
                 ("%d: TLS13[%d]: record too short to contain valid AEAD data",
                  SSL_GETPID(), ss->fd));
         PORT_SetError(SSL_ERROR_BAD_MAC_READ);
+        return SECFailure;
+    }
+
+    /* Check if the ciphertext can be valid if we assume maximum plaintext and
+     * add the specific ciphersuite expansion.
+     * This way we detect overlong plaintexts/padding before decryption.
+     * This check enforces size limitations more strict than the RFC.
+     * (see RFC8446, Section 5.2) */
+    if (cText->buf->len > (spec->recordSizeLimit + innerTypeLen + tagLen)) {
+        *alert = record_overflow;
+        PORT_SetError(SSL_ERROR_RX_RECORD_TOO_LONG);
         return SECFailure;
     }
 
@@ -5850,11 +5906,9 @@ tls13_UnprotectRecord(sslSocket *ss,
     }
 
     /* There is a similar test in ssl3_HandleRecord, but this test is needed to
-     * account for padding.  It's safe to do this here (including the alert),
-     * because it only confirms that the record exceeded the size limit, which
-     * is apparent from the size of the ciphertext. */
-    if (plaintext->len > spec->recordSizeLimit + 1) {
-        SSL3_SendAlert(ss, alert_fatal, record_overflow);
+     * account for padding. */
+    if (plaintext->len > spec->recordSizeLimit + innerTypeLen) {
+        *alert = record_overflow;
         PORT_SetError(SSL_ERROR_RX_RECORD_TOO_LONG);
         return SECFailure;
     }
@@ -5871,6 +5925,7 @@ tls13_UnprotectRecord(sslSocket *ss,
         SSL_TRC(3, ("%d: TLS13[%d]: empty record", SSL_GETPID(), ss->fd));
         /* It's safe to report this specifically because it happened
          * after the MAC has been verified. */
+        *alert = unexpected_message;
         PORT_SetError(SSL_ERROR_BAD_BLOCK_PADDING);
         return SECFailure;
     }
@@ -5878,6 +5933,29 @@ tls13_UnprotectRecord(sslSocket *ss,
     /* Record the type. */
     *innerType = (SSLContentType)plaintext->buf[plaintext->len - 1];
     --plaintext->len;
+
+    /* Check for zero-length encrypted Alert and Handshake fragments
+     * (zero-length + inner content type byte).
+     *
+     * Implementations MUST NOT send Handshake and Alert records that have a
+     * zero-length TLSInnerPlaintext.content; if such a message is received,
+     * the receiving implementation MUST terminate the connection with an
+     * "unexpected_message" alert [RFC8446, Section 5.4]. */
+    if (!plaintext->len && ((!IS_DTLS(ss) && cText->hdr[0] == ssl_ct_application_data) ||
+                            (IS_DTLS(ss) && dtls_IsDtls13Ciphertext(spec->version, cText->hdr[0])))) {
+        switch (*innerType) {
+            case ssl_ct_alert:
+                *alert = unexpected_message;
+                PORT_SetError(SSL_ERROR_RX_MALFORMED_ALERT);
+                return SECFailure;
+            case ssl_ct_handshake:
+                *alert = unexpected_message;
+                PORT_SetError(SSL_ERROR_RX_MALFORMED_HANDSHAKE);
+                return SECFailure;
+            default:
+                break;
+        }
+    }
 
     /* Check that we haven't received too much 0-RTT data. */
     if (spec->epoch == TrafficKeyEarlyApplicationData &&
@@ -6224,6 +6302,17 @@ tls13_ClientReadSupportedVersion(sslSocket *ss)
         return SECFailure;
     }
 
+    /* Any endpoint receiving a Hello message with...ServerHello.legacy_version
+     * set to 0x0300 (SSL3) MUST abort the handshake with a "protocol_version"
+     * alert. [RFC8446, Section D.5]
+     *
+     * The ServerHello.legacy_version is read into the ss->version field by
+     * ssl_ClientReadVersion(). */
+    if (ss->version == SSL_LIBRARY_VERSION_3_0) {
+        FATAL_ERROR(ss, SSL_ERROR_RX_MALFORMED_SERVER_HELLO, protocol_version);
+        return SECFailure;
+    }
+
     ss->version = SSL_LIBRARY_VERSION_TLS_1_3;
     return SECSuccess;
 }
@@ -6250,9 +6339,12 @@ tls13_NegotiateVersion(sslSocket *ss, const TLSExtension *supportedVersions)
     for (version = ss->vrange.max; version >= ss->vrange.min; --version) {
         if (version < SSL_LIBRARY_VERSION_TLS_1_3 &&
             (ss->ssl3.hs.helloRetry || ss->ssl3.hs.echAccepted)) {
-            /* Prevent negotiating to a lower version after 1.3 HRR or ECH */
+            /* Prevent negotiating to a lower version after 1.3 HRR or ECH
+             * When accepting ECH, a different alert is generated.
+             */
+            SSL3AlertDescription alert = ss->ssl3.hs.echAccepted ? illegal_parameter : protocol_version;
             PORT_SetError(SSL_ERROR_UNSUPPORTED_VERSION);
-            FATAL_ERROR(ss, SSL_ERROR_UNSUPPORTED_VERSION, protocol_version);
+            FATAL_ERROR(ss, SSL_ERROR_UNSUPPORTED_VERSION, alert);
             return SECFailure;
         }
 

@@ -5,7 +5,6 @@
 import parseScriptTags from "parse-script-tags";
 import * as babelParser from "@babel/parser";
 import * as t from "@babel/types";
-import isEmpty from "lodash/isEmpty";
 import { getSource } from "../sources";
 
 let ASTs = new Map();
@@ -22,6 +21,7 @@ const sourceOptions = {
     sourceType: "unambiguous",
     tokens: true,
     plugins: [
+      "classStaticBlock",
       "classPrivateProperties",
       "classPrivateMethods",
       "classProperties",
@@ -42,6 +42,7 @@ const sourceOptions = {
       "nullishCoalescingOperator",
       "decorators-legacy",
       "objectRestSpread",
+      "classStaticBlock",
       "classPrivateProperties",
       "classPrivateMethods",
       "classProperties",
@@ -112,6 +113,7 @@ export function parseConsoleScript(text, opts) {
   try {
     return _parse(text, {
       plugins: [
+        "classStaticBlock",
         "classPrivateProperties",
         "classPrivateMethods",
         "objectRestSpread",
@@ -184,7 +186,7 @@ export function clearASTs() {
 
 export function traverseAst(sourceId, visitor, state) {
   const ast = getAst(sourceId);
-  if (isEmpty(ast)) {
+  if (!ast || Object.keys(ast).length == 0) {
     return null;
   }
 

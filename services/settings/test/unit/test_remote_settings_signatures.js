@@ -9,7 +9,7 @@ const { RemoteSettings } = ChromeUtils.import(
 const { RemoteSettingsClient } = ChromeUtils.import(
   "resource://services-settings/RemoteSettingsClient.jsm"
 );
-const { UptakeTelemetry } = ChromeUtils.import(
+const { UptakeTelemetry, Policy } = ChromeUtils.import(
   "resource://services-common/uptake-telemetry.js"
 );
 const { TelemetryTestUtils } = ChromeUtils.import(
@@ -19,13 +19,10 @@ const { TelemetryTestUtils } = ChromeUtils.import(
 const PREF_SETTINGS_SERVER = "services.settings.server";
 const PREF_SIGNATURE_ROOT = "security.content.signature.root_hash";
 const SIGNER_NAME = "onecrl.content-signature.mozilla.org";
+const TELEMETRY_COMPONENT = "remotesettings";
 
 const CERT_DIR = "test_remote_settings_signatures/";
-const CHAIN_FILES = [
-  "collection_signing_ee.pem",
-  "collection_signing_int.pem",
-  "collection_signing_root.pem",
-];
+const CHAIN_FILES = ["collection_signing_ee.pem", "collection_signing_int.pem"];
 
 function getFileData(file) {
   const stream = Cc["@mozilla.org/network/file-input-stream;1"].createInstance(
@@ -35,21 +32,6 @@ function getFileData(file) {
   const data = NetUtil.readInputStreamToString(stream, stream.available());
   stream.close();
   return data;
-}
-
-function setRoot() {
-  const filename = CERT_DIR + CHAIN_FILES[0];
-
-  const certFile = do_get_file(filename, false);
-  const b64cert = getFileData(certFile)
-    .replace(/-----BEGIN CERTIFICATE-----/, "")
-    .replace(/-----END CERTIFICATE-----/, "")
-    .replace(/[\r\n]/g, "");
-  const certdb = Cc["@mozilla.org/security/x509certdb;1"].getService(
-    Ci.nsIX509CertDB
-  );
-  const cert = certdb.constructX509FromBase64(b64cert);
-  Services.prefs.setCharPref(PREF_SIGNATURE_ROOT, cert.sha256Fingerprint);
 }
 
 function getCertChain() {
@@ -70,16 +52,20 @@ function run_test() {
 
   Services.prefs.setCharPref("services.settings.loglevel", "debug");
 
-  // set the content signing root to our test root
-  setRoot();
-
   // Set up an HTTP Server
   server = new HttpServer();
   server.start(-1);
 
+  // Pretend we are in nightly channel to make sure all telemetry events are sent.
+  let oldGetChannel = Policy.getChannel;
+  Policy.getChannel = () => "nightly";
+
   run_next_test();
 
-  registerCleanupFunction(() => server.stop(() => {}));
+  registerCleanupFunction(() => {
+    Policy.getChannel = oldGetChannel;
+    server.stop(() => {});
+  });
 }
 
 add_task(async function test_check_signatures() {
@@ -98,7 +84,8 @@ add_task(async function test_check_signatures() {
       emptyData,
       emptySignature,
       getCertChain(),
-      SIGNER_NAME
+      SIGNER_NAME,
+      Ci.nsIX509CertDB.AppXPCShellRoot
     )
   );
 
@@ -112,7 +99,8 @@ add_task(async function test_check_signatures() {
       collectionData,
       collectionSignature,
       getCertChain(),
-      SIGNER_NAME
+      SIGNER_NAME,
+      Ci.nsIX509CertDB.AppXPCShellRoot
     )
   );
 });
@@ -123,7 +111,7 @@ add_task(async function test_check_synchronization_with_signatures() {
   const x5u = `http://localhost:${port}/test_remote_settings_signatures/test_cert_chain.pem`;
 
   // Telemetry reports.
-  const TELEMETRY_HISTOGRAM_KEY = client.identifier;
+  const TELEMETRY_SOURCE = client.identifier;
 
   function registerHandlers(responses) {
     function handleResponse(serverTimeMillis, request, response) {
@@ -302,7 +290,10 @@ add_task(async function test_check_synchronization_with_signatures() {
   // .. and use this map to register handlers for each path
   registerHandlers(emptyCollectionResponses);
 
-  let startHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  let startSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
 
   // With all of this set up, we attempt a sync. This will resolve if all is
   // well and throw if something goes wrong.
@@ -310,11 +301,14 @@ add_task(async function test_check_synchronization_with_signatures() {
 
   equal((await client.get()).length, 0);
 
-  let endHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  let endSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
 
   // ensure that a success histogram is tracked when a succesful sync occurs.
   let expectedIncrements = { [UptakeTelemetry.STATUS.SUCCESS]: 1 };
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
+  checkUptakeTelemetry(startSnapshot, endSnapshot, expectedIncrements);
 
   //
   // 2.
@@ -494,7 +488,10 @@ add_task(async function test_check_synchronization_with_signatures() {
 
   registerHandlers(badSigGoodSigResponses);
 
-  startHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  startSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
 
   let syncEventSent = false;
   client.on("sync", ({ data }) => {
@@ -505,7 +502,10 @@ add_task(async function test_check_synchronization_with_signatures() {
 
   equal((await client.get()).length, 2);
 
-  endHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  endSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
 
   // since we only fixed the signature, and no data was changed, the sync event
   // was not sent.
@@ -515,7 +515,7 @@ add_task(async function test_check_synchronization_with_signatures() {
   // (initial) bad signature - only SERVICES_SETTINGS_SYNC_SIG_FAIL should
   // increment.
   expectedIncrements = { [UptakeTelemetry.STATUS.SIGNATURE_ERROR]: 1 };
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
+  checkUptakeTelemetry(startSnapshot, endSnapshot, expectedIncrements);
 
   //
   // 6.
@@ -621,28 +621,26 @@ add_task(async function test_check_synchronization_with_signatures() {
     method: "uptake",
   };
 
-  await withFakeChannel("nightly", async () => {
-    // Events telemetry is sampled on released, use fake channel.
-    await client.maybeSync(5000);
+  // Events telemetry is sampled on released, use fake channel.
+  await client.maybeSync(5000);
 
-    // We should report a corruption_error.
-    TelemetryTestUtils.assertEvents(
+  // We should report a corruption_error.
+  TelemetryTestUtils.assertEvents(
+    [
       [
-        [
-          "uptake.remotecontent.result",
-          "uptake",
-          "remotesettings",
-          UptakeTelemetry.STATUS.CORRUPTION_ERROR,
-          {
-            source: client.identifier,
-            duration: v => v > 0,
-            trigger: "manual",
-          },
-        ],
+        "uptake.remotecontent.result",
+        "uptake",
+        "remotesettings",
+        UptakeTelemetry.STATUS.CORRUPTION_ERROR,
+        {
+          source: client.identifier,
+          duration: v => v > 0,
+          trigger: "manual",
+        },
       ],
-      TELEMETRY_EVENTS_FILTERS
-    );
-  });
+    ],
+    TELEMETRY_EVENTS_FILTERS
+  );
 
   // The local data was corrupted, and the Telemetry status reflects it.
   // But the sync overwrote the bad data and was eventually a success.
@@ -711,7 +709,10 @@ add_task(async function test_check_synchronization_with_signatures() {
     ],
   };
 
-  startHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  startSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
   registerHandlers(allBadSigResponses);
   await Assert.rejects(
     client.maybeSync(6000),
@@ -720,9 +721,12 @@ add_task(async function test_check_synchronization_with_signatures() {
   );
 
   // Ensure that the failure is reflected in the accumulated telemetry:
-  endHistogram = getUptakeTelemetrySnapshot(TELEMETRY_HISTOGRAM_KEY);
+  endSnapshot = getUptakeTelemetrySnapshot(
+    TELEMETRY_COMPONENT,
+    TELEMETRY_SOURCE
+  );
   expectedIncrements = { [UptakeTelemetry.STATUS.SIGNATURE_RETRY_ERROR]: 1 };
-  checkUptakeTelemetry(startHistogram, endHistogram, expectedIncrements);
+  checkUptakeTelemetry(startSnapshot, endSnapshot, expectedIncrements);
 
   // When signature fails after retry, the local data present before sync
   // should be maintained (if its signature is valid).

@@ -20,6 +20,7 @@
 #include "lib/jxl/image.h"
 #include "lib/jxl/image_bundle.h"
 #include "lib/jxl/luminance.h"
+#include "lib/jxl/size_constraints.h"
 
 namespace jxl {
 
@@ -32,14 +33,6 @@ struct CodecInterval {
   // Defaults for temp.
   float min = 0.0f;
   float width = 1.0f;
-};
-
-struct SizeConstraints {
-  // Upper limit on pixel dimensions/area, enforced by VerifyDimensions
-  // (called from decoders). Fuzzers set smaller values to limit memory use.
-  uint32_t dec_max_xsize = 0xFFFFFFFFu;
-  uint32_t dec_max_ysize = 0xFFFFFFFFu;
-  uint64_t dec_max_pixels = 0xFFFFFFFFu;  // Might be up to ~0ull
 };
 
 template <typename T,
@@ -61,56 +54,13 @@ Status VerifyDimensions(const SizeConstraints* constraints, T xs, T ys) {
 
 using CodecIntervals = std::array<CodecInterval, 4>;  // RGB[A] or Y[A]
 
-// Allows passing arbitrary metadata to decoders (required for PNM).
-class DecoderHints {
- public:
-  // key=color_space, value=Description(c/pp): specify the ColorEncoding of
-  //   the pixels for decoding. Otherwise, if the codec did not obtain an ICC
-  //   profile from the image, assume sRGB.
-  //
-  // Strings are taken from the command line, so avoid spaces for convenience.
-  void Add(const std::string& key, const std::string& value) {
-    kv_.emplace_back(key, value);
-  }
-
-  // Calls `func(key, value)` for each key/value in the order they were added,
-  // returning false immediately if `func` returns false.
-  template <class Func>
-  Status Foreach(const Func& func) const {
-    for (const KeyValue& kv : kv_) {
-      Status ok = func(kv.key, kv.value);
-      if (!ok) {
-        return JXL_FAILURE("DecoderHints::Foreach returned false");
-      }
-    }
-    return true;
-  }
-
- private:
-  // Splitting into key/value avoids parsing in each codec.
-  struct KeyValue {
-    KeyValue(std::string key, std::string value)
-        : key(std::move(key)), value(std::move(value)) {}
-
-    std::string key;
-    std::string value;
-  };
-
-  std::vector<KeyValue> kv_;
-};
-
 // Optional text/EXIF metadata.
 struct Blobs {
-  PaddedBytes exif;
-  PaddedBytes iptc;
-  PaddedBytes jumbf;
-  PaddedBytes xmp;
+  std::vector<uint8_t> exif;
+  std::vector<uint8_t> iptc;
+  std::vector<uint8_t> jumbf;
+  std::vector<uint8_t> xmp;
 };
-
-// For Codec::kJPG, convert between JPEG and pixels or between JPEG and
-// quantized DCT coefficients
-// For pixel data, the nominal range is 0..1.
-enum class DecodeTarget { kPixels, kQuantizedCoeffs };
 
 // Holds a preview, a main image or one or more frames, plus the inputs/outputs
 // to/from decoding/encoding.
@@ -126,7 +76,7 @@ class CodecInOut {
   CodecInOut& operator=(CodecInOut&&) = default;
 
   size_t LastStillFrame() const {
-    JXL_DASSERT(frames.size() > 0);
+    JXL_DASSERT(!frames.empty());
     size_t last = 0;
     for (size_t i = 0; i < frames.size(); i++) {
       last = i;
@@ -173,43 +123,33 @@ class CodecInOut {
   }
 
   // Calls TransformTo for each ImageBundle (preview/frames).
-  Status TransformTo(const ColorEncoding& c_desired,
+  Status TransformTo(const ColorEncoding& c_desired, const JxlCmsInterface& cms,
                      ThreadPool* pool = nullptr) {
     if (metadata.m.have_preview) {
-      JXL_RETURN_IF_ERROR(preview_frame.TransformTo(c_desired, pool));
+      JXL_RETURN_IF_ERROR(preview_frame.TransformTo(c_desired, cms, pool));
     }
     for (ImageBundle& ib : frames) {
-      JXL_RETURN_IF_ERROR(ib.TransformTo(c_desired, pool));
+      JXL_RETURN_IF_ERROR(ib.TransformTo(c_desired, cms, pool));
     }
     return true;
+  }
+  // Calls PremultiplyAlpha for each ImageBundle (preview/frames).
+  void PremultiplyAlpha() {
+    ExtraChannelInfo* eci = metadata.m.Find(ExtraChannel::kAlpha);
+    if (eci == nullptr || eci->alpha_associated) return;  // nothing to do
+    if (metadata.m.have_preview) {
+      preview_frame.PremultiplyAlpha();
+    }
+    for (ImageBundle& ib : frames) {
+      ib.PremultiplyAlpha();
+    }
+    eci->alpha_associated = true;
+    return;
   }
 
   // -- DECODER INPUT:
 
   SizeConstraints constraints;
-  // Used to set c_current for codecs that lack color space metadata.
-  DecoderHints dec_hints;
-  // Decode to pixels or keep JPEG as quantized DCT coefficients
-  DecodeTarget dec_target = DecodeTarget::kPixels;
-
-  // Intended white luminance, in nits (cd/m^2).
-  // It is used by codecs that do not know the absolute luminance of their
-  // images. For those codecs, decoders map from white to this luminance. There
-  // is no other way of knowing the target brightness for those codecs - depends
-  // on source material. 709 typically targets 100 nits, BT.2100 PQ up to 10K,
-  // but HDR content is more typically mastered to 4K nits. Codecs that do know
-  // the absolute luminance of their images will typically ignore it as a
-  // decoder input. The corresponding decoder output and encoder input is the
-  // intensity target in the metadata. ALL decoders MUST set that metadata
-  // appropriately, but it does not have to be identical to this hint. Encoders
-  // for codecs that do not encode absolute luminance levels should use that
-  // metadata to decide on what to map to white. Encoders for codecs that *do*
-  // encode absolute luminance levels may use it to decide on encoding values,
-  // but not in a way that would affect the range of interpreted luminance.
-  //
-  // 0 means that it is up to the codec to decide on a reasonable value to use.
-
-  float target_nits = 0;
 
   // -- DECODER OUTPUT:
 

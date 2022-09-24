@@ -61,8 +61,6 @@ var suppressed_toggles = [
   "-moz-windows-default-theme",
   "-moz-windows-glass",
   "-moz-gtk-csd-available",
-  "-moz-gtk-csd-hide-titlebar-by-default",
-  "-moz-gtk-csd-transparent-background",
   "-moz-gtk-csd-minimize-button",
   "-moz-gtk-csd-maximize-button",
   "-moz-gtk-csd-close-button",
@@ -70,9 +68,6 @@ var suppressed_toggles = [
 ];
 
 var toggles_enabled_in_content = [];
-
-// Possible values for '-moz-os-version'
-var windows_versions = ["windows-win7", "windows-win8", "windows-win10"];
 
 // Read the current OS.
 var OS = SpecialPowers.Services.appinfo.OS;
@@ -125,27 +120,6 @@ var testToggles = function(resisting) {
   });
 };
 
-// __testWindowsSpecific__.
-// Runs a media query on the queryName with the given possible matching values.
-var testWindowsSpecific = function(resisting, queryName, possibleValues) {
-  let foundValue = null;
-  possibleValues.forEach(function(val) {
-    if (keyValMatches(queryName, val)) {
-      foundValue = val;
-    }
-  });
-  if (resisting || !is_chrome_window) {
-    ok(!foundValue, queryName + " should have no match");
-  } else {
-    ok(
-      foundValue,
-      foundValue
-        ? "Match found: '" + queryName + ":" + foundValue + "'"
-        : "Should have a match for '" + queryName + "'"
-    );
-  }
-};
-
 // __generateHtmlLines(resisting)__.
 // Create a series of div elements that look like:
 // `<div class='spoof' id='resolution'>resolution</div>`,
@@ -169,13 +143,6 @@ var generateHtmlLines = function(resisting) {
     div.textContent = key;
     fragment.appendChild(div);
   });
-  if (OS === "WINNT") {
-    let div = document.createElementNS(HTML_NS, "div");
-    div.setAttribute("class", "windows");
-    div.setAttribute("id", "-moz-os-version");
-    div.textContent = "-moz-os-version";
-    fragment.appendChild(div);
-  }
   return fragment;
 };
 
@@ -244,15 +211,6 @@ var generateCSSLines = function(resisting) {
       lines += suppressedMediaQueryCSSLine(key, "green");
     }
   });
-  if (OS === "WINNT") {
-    lines +=
-      ".windows { background-color: " + (resisting ? "green" : "red") + ";}\n";
-    lines +=
-      windows_versions.map(val => "(-moz-os-version: " + val + ")").join(", ") +
-      " { #-moz-os-version { background-color: " +
-      (resisting ? "red" : "green") +
-      ";} }\n";
-  }
   return lines;
 };
 
@@ -306,17 +264,18 @@ var sleep = function(timeoutMs) {
 // Test to see if media queries are properly spoofed in picture elements
 // when we are resisting fingerprinting.
 var testMediaQueriesInPictureElements = async function(resisting) {
-  let picture = document.createElementNS(HTML_NS, "picture");
+  const MATCH = "/tests/layout/style/test/chrome/match.png";
+  let container = document.getElementById("pictures");
+  let testImages = [];
   for (let [key, offVal, onVal] of expected_values) {
     let expected = resisting ? onVal : offVal;
     if (expected) {
+      let picture = document.createElementNS(HTML_NS, "picture");
       let query = constructQuery(key, expected);
+      ok(matchMedia(query).matches, `${query} should match`);
 
       let source = document.createElementNS(HTML_NS, "source");
-      source.setAttribute(
-        "srcset",
-        "/tests/layout/style/test/chrome/match.png"
-      );
+      source.setAttribute("srcset", MATCH);
       source.setAttribute("media", query);
 
       let image = document.createElementNS(HTML_NS, "img");
@@ -325,16 +284,19 @@ var testMediaQueriesInPictureElements = async function(resisting) {
       image.setAttribute("src", "/tests/layout/style/test/chrome/mismatch.png");
       image.setAttribute("alt", key);
 
+      testImages.push(image);
+
       picture.appendChild(source);
       picture.appendChild(image);
+      container.appendChild(picture);
     }
   }
-  document.getElementById("pictures").appendChild(picture);
-  var testImages = document.getElementsByClassName("testImage");
+  const matchURI = new URL(MATCH, document.baseURI).href;
   await sleep(0);
   for (let testImage of testImages) {
-    ok(
-      testImage.currentSrc.endsWith("/match.png"),
+    is(
+      testImage.currentSrc,
+      matchURI,
       "Media query '" + testImage.title + "' in picture should match."
     );
   }
@@ -359,9 +321,6 @@ var test = async function(isContent) {
       testMatch(key, resisting ? onVal : offVal);
     });
     testToggles(resisting);
-    if (OS === "WINNT") {
-      testWindowsSpecific(resisting, "-moz-os-version", windows_versions);
-    }
     testCSS(resisting);
     if (OS === "Darwin") {
       testOSXFontSmoothing(resisting);

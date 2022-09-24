@@ -1,7 +1,8 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
-Components.utils.importGlobalProperties(["URLSearchParams", "URL"]);
+"use strict";
+Cu.importGlobalProperties(["URLSearchParams", "URL"]);
 
 function handleRequest(request, response) {
   let params = new URLSearchParams(request.queryString);
@@ -14,7 +15,9 @@ function handleRequest(request, response) {
     } else {
       response.setStatusLine(request.httpVersion, 302, "Moved Temporarily");
     }
-    let url = new URL(params.get("redirect_uri") || params.get("default_redirect"));
+    let url = new URL(
+      params.get("redirect_uri") || params.get("default_redirect")
+    );
     url.searchParams.set("access_token", "here ya go");
     response.setHeader("Location", url.href);
   }

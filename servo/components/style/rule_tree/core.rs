@@ -4,8 +4,9 @@
 
 #![allow(unsafe_code)]
 
-use crate::properties::Importance;
+use crate::applicable_declarations::CascadePriority;
 use crate::shared_lock::StylesheetGuards;
+use crate::stylesheets::layer_rule::LayerOrder;
 use malloc_size_of::{MallocShallowSizeOf, MallocSizeOf, MallocSizeOfOps};
 use parking_lot::RwLock;
 use smallvec::SmallVec;
@@ -66,7 +67,7 @@ impl MallocSizeOf for RuleTree {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-struct ChildKey(CascadeLevel, ptr::NonNull<()>);
+struct ChildKey(CascadePriority, ptr::NonNull<()>);
 unsafe impl Send for ChildKey {}
 unsafe impl Sync for ChildKey {}
 
@@ -127,7 +128,7 @@ impl RuleTree {
             return;
         }
 
-        let mut children_count = crate::hash::FxHashMap::default();
+        let mut children_count = fxhash::FxHashMap::default();
 
         let mut stack = SmallVec::<[_; 32]>::new();
         stack.push(self.root.clone());
@@ -202,9 +203,6 @@ impl RuleTree {
 /// where it likely did not result from a rigorous performance analysis.)
 const RULE_TREE_GC_INTERVAL: usize = 300;
 
-/// Used for some size assertions.
-pub const RULE_NODE_SIZE: usize = std::mem::size_of::<RuleNode>();
-
 /// A node in the rule tree.
 struct RuleNode {
     /// The root node. Only the root has no root pointer, for obvious reasons.
@@ -219,8 +217,8 @@ struct RuleNode {
     /// None for the root node.
     source: Option<StyleSource>,
 
-    /// The cascade level this rule is positioned at.
-    level: CascadeLevel,
+    /// The cascade level + layer order this rule is positioned at.
+    cascade_priority: CascadePriority,
 
     /// The refcount of this node.
     ///
@@ -316,14 +314,14 @@ impl RuleNode {
         root: WeakRuleNode,
         parent: StrongRuleNode,
         source: StyleSource,
-        level: CascadeLevel,
+        cascade_priority: CascadePriority,
     ) -> Self {
         debug_assert!(root.p.parent.is_none());
         RuleNode {
             root: Some(root),
             parent: Some(parent),
             source: Some(source),
-            level: level,
+            cascade_priority,
             refcount: AtomicUsize::new(1),
             children: Default::default(),
             approximate_free_count: AtomicUsize::new(0),
@@ -336,7 +334,7 @@ impl RuleNode {
             root: None,
             parent: None,
             source: None,
-            level: CascadeLevel::UANormal,
+            cascade_priority: CascadePriority::new(CascadeLevel::UANormal, LayerOrder::root()),
             refcount: AtomicUsize::new(1),
             approximate_free_count: AtomicUsize::new(0),
             children: Default::default(),
@@ -346,7 +344,7 @@ impl RuleNode {
 
     fn key(&self) -> ChildKey {
         ChildKey(
-            self.level,
+            self.cascade_priority,
             self.source
                 .as_ref()
                 .expect("Called key() on the root node")
@@ -554,20 +552,20 @@ impl StrongRuleNode {
         &self,
         root: &StrongRuleNode,
         source: StyleSource,
-        level: CascadeLevel,
+        cascade_priority: CascadePriority,
     ) -> StrongRuleNode {
         use parking_lot::RwLockUpgradableReadGuard;
 
         debug_assert!(
-            self.p.level <= level,
+            self.p.cascade_priority <= cascade_priority,
             "Should be ordered (instead {:?} > {:?}), from {:?} and {:?}",
-            self.p.level,
-            level,
+            self.p.cascade_priority,
+            cascade_priority,
             self.p.source,
             source,
         );
 
-        let key = ChildKey(level, source.key());
+        let key = ChildKey(cascade_priority, source.key());
         let children = self.p.children.upgradable_read();
         if let Some(child) = children.get(&key, |node| node.p.key()) {
             // Sound to call because we read-locked the parent's children.
@@ -584,7 +582,7 @@ impl StrongRuleNode {
                     root.downgrade(),
                     self.clone(),
                     source,
-                    level,
+                    cascade_priority,
                 )));
                 // Sound to call because we still own a strong reference to
                 // this node, through the `node` variable itself that we are
@@ -602,14 +600,22 @@ impl StrongRuleNode {
         self.p.source.as_ref()
     }
 
-    /// The cascade level for this node
-    pub fn cascade_level(&self) -> CascadeLevel {
-        self.p.level
+    /// The cascade priority.
+    #[inline]
+    pub fn cascade_priority(&self) -> CascadePriority {
+        self.p.cascade_priority
     }
 
-    /// Get the importance that this rule node represents.
-    pub fn importance(&self) -> Importance {
-        self.p.level.importance()
+    /// The cascade level.
+    #[inline]
+    pub fn cascade_level(&self) -> CascadeLevel {
+        self.cascade_priority().cascade_level()
+    }
+
+    /// The importance.
+    #[inline]
+    pub fn importance(&self) -> crate::properties::Importance {
+        self.cascade_level().importance()
     }
 
     /// Returns whether this node has any child, only intended for testing
@@ -759,3 +765,8 @@ impl hash::Hash for StrongRuleNode {
         (&*self.p as *const RuleNode).hash(state)
     }
 }
+
+// Large pages generate thousands of RuleNode objects.
+size_of_test!(RuleNode, 80);
+// StrongRuleNode should be pointer-sized even inside an option.
+size_of_test!(Option<StrongRuleNode>, 8);

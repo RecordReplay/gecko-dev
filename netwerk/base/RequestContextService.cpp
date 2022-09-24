@@ -9,6 +9,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsIDocumentLoader.h"
 #include "nsIObserverService.h"
+#include "nsITimer.h"
 #include "nsIXULRuntime.h"
 #include "nsServiceManagerUtils.h"
 #include "nsThreadUtils.h"
@@ -40,11 +41,14 @@ static StaticRefPtr<RequestContextService> gSingleton;
 static bool sShutdown = false;
 
 // nsIRequestContext
-class RequestContext final : public nsIRequestContext, public nsITimerCallback {
+class RequestContext final : public nsIRequestContext,
+                             public nsITimerCallback,
+                             public nsINamed {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIREQUESTCONTEXT
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   explicit RequestContext(const uint64_t id);
 
@@ -90,7 +94,7 @@ class RequestContext final : public nsIRequestContext, public nsITimerCallback {
   bool mAfterDOMContentLoaded;
 };
 
-NS_IMPL_ISUPPORTS(RequestContext, nsIRequestContext, nsITimerCallback)
+NS_IMPL_ISUPPORTS(RequestContext, nsIRequestContext, nsITimerCallback, nsINamed)
 
 RequestContext::RequestContext(const uint64_t aID)
     : mID(aID),
@@ -294,8 +298,12 @@ void RequestContext::RescheduleUntailTimer(TimeStamp const& now) {
   }
 
   uint32_t delay = interval.ToMilliseconds();
-  mUntailTimer = do_CreateInstance("@mozilla.org/timer;1");
-  mUntailTimer->InitWithCallback(this, delay, nsITimer::TYPE_ONE_SHOT);
+  nsresult rv =
+      NS_NewTimerWithCallback(getter_AddRefs(mUntailTimer), this, delay,
+                              nsITimer::TYPE_ONE_SHOT, nullptr);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("Could not reschedule untail timer");
+  }
 
   LOG(("RequestContext::RescheduleUntailTimer %p in %d", this, delay));
 }
@@ -321,6 +329,12 @@ RequestContext::Notify(nsITimer* timer) {
 
   ProcessTailQueue(NS_OK);
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+RequestContext::GetName(nsACString& aName) {
+  aName.AssignLiteral("RequestContext");
   return NS_OK;
 }
 

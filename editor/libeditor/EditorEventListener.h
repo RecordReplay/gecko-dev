@@ -6,6 +6,8 @@
 #ifndef EditorEventListener_h
 #define EditorEventListener_h
 
+#include "EditorForwards.h"
+
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
 #include "nsCOMPtr.h"
@@ -29,10 +31,7 @@ class nsPresContext;
 #endif
 
 namespace mozilla {
-
-class EditorBase;
 class PresShell;
-
 namespace dom {
 class DragEvent;
 class MouseEvent;
@@ -77,17 +76,16 @@ class EditorEventListener : public nsIDOMEventListener {
       WidgetMouseEvent* aMouseClickEvent);
   MOZ_CAN_RUN_SCRIPT nsresult Focus(InternalFocusEvent* aFocusEvent);
   nsresult Blur(InternalFocusEvent* aBlurEvent);
-  MOZ_CAN_RUN_SCRIPT nsresult DragEnter(dom::DragEvent* aDragEvent);
   MOZ_CAN_RUN_SCRIPT nsresult DragOverOrDrop(dom::DragEvent* aDragEvent);
-  nsresult DragExit(dom::DragEvent* aDragEvent);
+  nsresult DragLeave(dom::DragEvent* aDragEvent);
 
   void RefuseToDropAndHideCaret(dom::DragEvent* aDragEvent);
   bool DragEventHasSupportingData(dom::DragEvent* aDragEvent) const;
   MOZ_CAN_RUN_SCRIPT bool CanInsertAtDropPosition(dom::DragEvent* aDragEvent);
+  void InitializeDragDropCaret();
   void CleanupDragDropCaret();
   PresShell* GetPresShell() const;
   nsPresContext* GetPresContext() const;
-  nsIContent* GetFocusedRootContent();
   // Returns true if IME consumes the mouse event.
   MOZ_CAN_RUN_SCRIPT bool NotifyIMEOfMouseButtonEvent(
       WidgetMouseEvent* aMouseEvent);

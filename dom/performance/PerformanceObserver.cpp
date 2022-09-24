@@ -10,8 +10,8 @@
 #include "mozilla/dom/PerformanceBinding.h"
 #include "mozilla/dom/PerformanceEntryBinding.h"
 #include "mozilla/dom/PerformanceObserverBinding.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerScope.h"
+#include "mozilla/StaticPrefs_dom.h"
 #include "nsIScriptError.h"
 #include "nsPIDOMWindow.h"
 #include "nsQueryObject.h"
@@ -22,7 +22,7 @@
 using namespace mozilla;
 using namespace mozilla::dom;
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(PerformanceObserver)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(PerformanceObserver)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(PerformanceObserver)
   tmp->Disconnect();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCallback)
@@ -37,7 +37,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(PerformanceObserver)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mQueuedEntries)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(PerformanceObserver)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(PerformanceObserver)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(PerformanceObserver)

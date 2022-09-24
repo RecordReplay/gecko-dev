@@ -67,7 +67,8 @@ const SQL_ADAPTIVE_QUERY = `/* do not warn (bug 487789) */
                             IFNULL(btitle, h.title), tags,
                             h.visit_count, h.typed, bookmarked,
                             t.open_count,
-                            :matchBehavior, :searchBehavior)
+                            :matchBehavior, :searchBehavior,
+                            NULL)
    ORDER BY rank DESC, h.frecency DESC
    LIMIT :maxResults`;
 
@@ -204,7 +205,7 @@ class ProviderInputHistory extends UrlbarProvider {
       SQL_ADAPTIVE_QUERY,
       {
         parent: PlacesUtils.tagsFolderId,
-        search_string: queryContext.searchString,
+        search_string: queryContext.searchString.toLowerCase(),
         matchBehavior: Ci.mozIPlacesAutoComplete.MATCH_ANYWHERE,
         searchBehavior: UrlbarPrefs.get("defaultBehavior"),
         userContextId: UrlbarProviderOpenTabs.getUserContextIdForOpenPagesTable(

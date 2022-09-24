@@ -9,6 +9,7 @@
 
 #include "mozilla/MathAlgorithms.h"
 
+#include <algorithm>
 #include <limits.h>
 #include <stdint.h>
 
@@ -54,16 +55,15 @@ class Registers {
     r1,
     r2,
     r3,
-    S0 = r3,
     r4,
     r5,
     r6,
     r7,
     r8,
-    S1 = r8,
     r9,
     r10,
     r11,
+    fp = r11,
     r12,
     ip = r12,
     r13,
@@ -132,7 +132,7 @@ class Registers {
 
   static const SetType NonAllocatableMask =
       (1 << Registers::sp) | (1 << Registers::r12) |  // r12 = ip = scratch
-      (1 << Registers::lr) | (1 << Registers::pc);
+      (1 << Registers::lr) | (1 << Registers::pc) | (1 << Registers::fp);
 
   // Registers returned from a JS -> JS call.
   static const SetType JSCallMask = (1 << Registers::r2) | (1 << Registers::r3);
@@ -328,6 +328,10 @@ class FloatRegisters {
 
   static const SetType AllocatableMask = AllMask & ~NonAllocatableMask;
 };
+
+static const uint32_t SpillSlotSize =
+    std::max(sizeof(Registers::RegisterContent),
+             sizeof(FloatRegisters::RegisterContent));
 
 template <typename T>
 class TypedRegisterSet;
@@ -708,10 +712,11 @@ inline bool hasMultiAlias() { return true; }
 // instead; see ParseARMHwCapFlags.
 void InitARMFlags();
 
-// Parse a string denoting ARM hardware flags and unconditionally set the flags.
-// Doing this after the flags have been observed is likely to cause problems, as
-// code is allowed to assume that the flags are stable.
-bool ParseARMHwCapFlags(const char* armHwCap);
+// Register a string denoting ARM hardware flags. During engine initialization,
+// these flags will then be used instead of the actual hardware capabilities.
+// This must be called before JS_Init and the passed string's buffer must
+// outlive the JS_Init call.
+void SetARMHwCapFlagsString(const char* armHwCap);
 
 // Retrive the ARM hardware flags at a bitmask.  They must have been set.
 uint32_t GetARMFlags();

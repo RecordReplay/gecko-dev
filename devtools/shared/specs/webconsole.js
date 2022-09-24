@@ -12,14 +12,8 @@ const {
   Arg,
 } = require("devtools/shared/protocol");
 
-types.addDictType("console.traits", {
-  evaluateJSAsync: "boolean",
-});
-
 types.addDictType("console.startlisteners", {
   startedListeners: "array:string",
-  nativeConsoleAPI: "nullable:boolean",
-  traits: "console.traits",
 });
 
 types.addDictType("console.stoplisteners", {
@@ -101,6 +95,7 @@ const webconsoleSpecPrototype = {
     documentEvent: {
       name: Option(0, "string"),
       time: Option(0, "string"),
+      hasNativeConsoleAPI: Option(0, "boolean"),
     },
   },
 

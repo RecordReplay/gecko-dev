@@ -11,7 +11,6 @@ UNIFIED_SOURCES = [
     "TestADAM7InterpolatingFilter.cpp",
     "TestAnimationFrameBuffer.cpp",
     "TestBlendAnimationFilter.cpp",
-    "TestContainers.cpp",
     "TestCopyOnWrite.cpp",
     "TestDeinterlacingFilter.cpp",
     "TestFrameAnimator.cpp",
@@ -33,15 +32,9 @@ if not (CONFIG["OS_TARGET"] == "WINNT" and CONFIG["CPU_ARCH"] == "aarch64"):
         "TestSurfaceCache.cpp",
     ]
 
-if CONFIG["MOZ_ENABLE_SKIA"]:
-    UNIFIED_SOURCES += [
-        "TestDownscalingFilter.cpp",
-        "TestSurfacePipeIntegration.cpp",
-    ]
-
-SOURCES += [
-    # Can't be unified because it manipulates the preprocessor environment.
-    "TestDownscalingFilterNoSkia.cpp",
+UNIFIED_SOURCES += [
+    "TestDownscalingFilter.cpp",
+    "TestSurfacePipeIntegration.cpp",
 ]
 
 TEST_HARNESS_FILES.gtest += [
@@ -106,6 +99,7 @@ TEST_HARNESS_FILES.gtest += [
     "green.jxl",
     "green.png",
     "green.webp",
+    "hdlr-nonzero-reserved-bug-1727033.avif",
     "invalid-truncated-metadata.bmp",
     "large.avif",
     "large.jxl",
@@ -144,6 +138,7 @@ TEST_HARNESS_FILES.gtest += [
     "transparent.jxl",
     "transparent.png",
     "transparent.webp",
+    "valid-avif-colr-nclx-and-prof.avif",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
@@ -157,6 +152,3 @@ LOCAL_INCLUDES += [
 LOCAL_INCLUDES += CONFIG["SKIA_INCLUDES"]
 
 FINAL_LIBRARY = "xul-gtest"
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

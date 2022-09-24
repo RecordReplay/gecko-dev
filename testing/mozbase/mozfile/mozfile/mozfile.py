@@ -231,7 +231,7 @@ def remove(path):
 
         _call_with_windows_retry(os.chmod, (path, mode))
 
-    if not os.path.exists(path):
+    if not os.path.lexists(path):
         return
 
     """
@@ -321,7 +321,7 @@ def move(src, dst):
 
 
 def depth(directory):
-    """returns the integer depth of a directory or path relative to '/' """
+    """returns the integer depth of a directory or path relative to '/'"""
 
     directory = os.path.abspath(directory)
     level = 0

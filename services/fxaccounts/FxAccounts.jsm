@@ -734,9 +734,10 @@ FxAccountsInternal.prototype = {
       this.observerPreloads = [
         // Sync
         () => {
-          let scope = {};
-          ChromeUtils.import("resource://services-sync/main.js", scope);
-          return scope.Weave.Service.promiseInitialized;
+          let { Weave } = ChromeUtils.import(
+            "resource://services-sync/main.js"
+          );
+          return Weave.Service.promiseInitialized;
         },
       ];
     }
@@ -1622,4 +1623,5 @@ XPCOMUtils.defineLazyGetter(this, "fxAccounts", function() {
   return a;
 });
 
-var EXPORTED_SYMBOLS = ["fxAccounts", "FxAccounts"];
+// `AccountState` is exported for tests.
+var EXPORTED_SYMBOLS = ["fxAccounts", "FxAccounts", "AccountState"];

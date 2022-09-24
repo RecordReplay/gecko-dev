@@ -19,7 +19,7 @@ load 404470-1.html
 load 411603-1.html
 load 412588-1.html
 load 413274-1.xhtml
-load chrome://reftest/content/crashtests/layout/style/crashtests/416461-1.xhtml
+skip-if(Android) load chrome://reftest/content/crashtests/layout/style/crashtests/416461-1.xhtml
 load 418007-1.xhtml
 load chrome://reftest/content/crashtests/layout/style/crashtests/431705-1.xhtml
 load 432561-1.html
@@ -209,9 +209,9 @@ load large_border_image_width.html
 load link-transition-before.html
 skip-if(winWidget&&isDebugBuild&&/^Windows\x20NT\x206\.1/.test(http.oscpu)) load long-url-list-stack-overflow.html #Bug 1525117
 load scale-on-block-continuation.html
-skip-if((/^Windows\x20NT\x2010\.0/.test(http.oscpu))&&(/^aarch64-msvc/.test(xulRuntime.XPCOMABI))) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981.html # Very sensitive to stack size.
-skip-if((/^Windows\x20NT\x2010\.0/.test(http.oscpu))&&(/^aarch64-msvc/.test(xulRuntime.XPCOMABI))) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981-2.html
-skip-if((/^Windows\x20NT\x2010\.0/.test(http.oscpu))&&(/^aarch64-msvc/.test(xulRuntime.XPCOMABI))) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981-3.html
+skip-if(/^Windows\x20NT\x2010\.0/.test(http.oscpu)&&/^aarch64-msvc/.test(xulRuntime.XPCOMABI)) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981.html # Very sensitive to stack size.
+skip-if(/^Windows\x20NT\x2010\.0/.test(http.oscpu)&&/^aarch64-msvc/.test(xulRuntime.XPCOMABI)) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981-2.html
+skip-if(/^Windows\x20NT\x2010\.0/.test(http.oscpu)&&/^aarch64-msvc/.test(xulRuntime.XPCOMABI)) skip-if(AddressSanitizer) skip-if(ThreadSanitizer) load 1383981-3.html
 load 1384824-1.html
 load 1384824-2.html
 load 1386773.html
@@ -302,8 +302,8 @@ load 1533783.html
 load 1533891.html
 pref(gfx.omta.background-color,true) load 1533968.html
 load 1545177.html
-skip-if(geckoview&&webrender) skip-if(Android) load 1546255.html # Bug 1563020 for GV+WR & Bug 1553971
-pref(layout.css.resizeobserver.enabled,true) load 1552911.html
+skip-if(geckoview) skip-if(Android) load 1546255.html # Bug 1563020 for GV+WR & Bug 1553971
+load 1552911.html
 load 1562361.html
 load 1566684.html
 load 1579788.html

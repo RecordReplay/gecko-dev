@@ -12,6 +12,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Security-Policy" content="default-src chrome:; object-src 'none'" />
+    <meta name="color-scheme" content="light dark" />
     <title data-l10n-id="page-title"/>
 
     <link rel="icon" type="image/png" id="favicon"
@@ -32,7 +33,7 @@
   <body class="wide-container">
 
 #ifndef ANDROID
-    <div id="action-box" class="notice-box">
+    <div class="action-box">
       <div id="reset-box">
         <h3 data-l10n-id="refresh-profile"/>
         <button id="reset-box-button" data-l10n-id="refresh-profile-button"/>
@@ -63,7 +64,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="app-basics-title"/>
+      <h2 class="major-section" id="app-basics" data-l10n-id="app-basics-title"/>
 
       <table>
         <tbody>
@@ -93,7 +94,7 @@
 
 #ifndef ANDROID
 #ifdef MOZ_UPDATER
-          <tr id="update-row" class="no-copy">
+          <tr id="update-dir-row" class="no-copy">
             <th class="column" data-l10n-id="app-basics-update-dir"/>
 
             <td>
@@ -103,7 +104,7 @@
             </td>
           </tr>
 
-          <tr class="no-copy">
+          <tr id="update-history-row" class="no-copy">
             <th class="column" data-l10n-id="app-basics-update-history"/>
 
             <td>
@@ -134,6 +135,13 @@
             </td>
           </tr>
 
+          <tr id="os-theme-row">
+            <th class="column" data-l10n-id="app-basics-os-theme"/>
+
+            <td id="os-theme-box">
+            </td>
+          </tr>
+
 #ifdef XP_MACOSX
           <tr>
             <th class="column" data-l10n-id="app-basics-rosetta"/>
@@ -160,6 +168,7 @@
             </td>
           </tr>
 
+#ifndef ANDROID
           <tr class="no-copy">
             <th class="column" data-l10n-id="app-basics-enabled-plugins"/>
 
@@ -167,6 +176,7 @@
               <a href="about:plugins">about:plugins</a>
             </td>
           </tr>
+#endif
 
           <tr class="no-copy">
             <th class="column" data-l10n-id="app-basics-build-config"/>
@@ -279,6 +289,20 @@
             </td>
           </tr>
 
+          <tr>
+            <th class="column" data-l10n-id="app-basics-memory-size"/>
+
+            <td id="memory-size-box">
+            </td>
+          </tr>
+
+          <tr>
+            <th class="column" data-l10n-id="app-basics-disk-available"/>
+
+            <td id="disk-available-box">
+            </td>
+          </tr>
+
 #ifndef ANDROID
           <tr class="no-copy">
             <th class="column" data-l10n-id="app-basics-profiles"/>
@@ -295,7 +319,7 @@
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 #ifdef MOZ_CRASHREPORTER
 
-      <h2 class="major-section" id="crashes-title" data-l10n-id="crashes-title"/>
+      <h2 class="major-section" id="crashes" data-l10n-id="crashes-title"/>
 
       <table id="crashes-table">
         <thead>
@@ -316,7 +340,7 @@
 #endif
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="features-title"/>
+      <h2 class="major-section" id="features" data-l10n-id="features-title"/>
 
       <table id="features-table">
         <thead>
@@ -333,7 +357,7 @@
 #ifdef MOZ_NORMANDY
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="support-remote-features-title"/>
+      <h2 class="major-section" id="remote-features" data-l10n-id="support-remote-features-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -363,7 +387,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="support-addons-title"/>
+      <h2 class="major-section" id="addons" data-l10n-id="support-addons-title"/>
 
       <table>
         <thead>
@@ -381,7 +405,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" id="security-software-title" data-l10n-id="security-software-title"/>
+      <h2 class="major-section" id="security-software" data-l10n-id="security-software-title"/>
 
       <table id="security-software-table">
         <thead>
@@ -416,7 +440,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="graphics-title"/>
+      <h2 class="major-section" id="graphics" data-l10n-id="graphics-title"/>
 
       <table>
         <tbody id="graphics-features-tbody">
@@ -470,7 +494,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="media-title"/>
+      <h2 class="major-section" id="media" data-l10n-id="media-title"/>
       <table>
         <tbody id="media-info-tbody">
         </tbody>
@@ -525,7 +549,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="environment-variables-title"/>
+      <h2 class="major-section" id="environment-variables" data-l10n-id="environment-variables-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -542,7 +566,7 @@
 #ifndef ANDROID
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="experimental-features-title"/>
+      <h2 class="major-section" id="experimental-features" data-l10n-id="experimental-features-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -558,7 +582,7 @@
 #endif
 #ifdef MOZ_NORMANDY
       <!-- - - - - - - - - - - - - - - - - - - - - -->
-      <h2 class="major-section" data-l10n-id="support-remote-experiments-title"/>
+      <h2 class="major-section" id="remote-experiments" data-l10n-id="support-remote-experiments-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -579,7 +603,7 @@
 #endif
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="modified-key-prefs-title"/>
+      <h2 class="major-section" id="modified-key-prefs" data-l10n-id="modified-key-prefs-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -601,7 +625,7 @@
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="locked-key-prefs-title"/>
+      <h2 class="major-section" id="locked-key-prefs" data-l10n-id="locked-key-prefs-title"/>
 
       <table class="prefs-table">
         <thead class="no-copy">
@@ -617,22 +641,24 @@
 #ifndef ANDROID
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="place-database-title"/>
+      <h2 class="major-section" id="place-database" data-l10n-id="place-database-title"/>
 
       <table>
-        <tr class="no-copy">
-          <th class="column" data-l10n-id="place-database-integrity"/>
+        <tbody>
+          <tr class="no-copy">
+            <th class="column" data-l10n-id="place-database-integrity"/>
 
-          <td>
-            <button id="verify-place-integrity-button" data-l10n-id="place-database-verify-integrity"/>
-            <pre id="verify-place-result" class="hidden no-copy"></pre>
-          </td>
-        </tr>
+            <td>
+              <button id="verify-place-integrity-button" data-l10n-id="place-database-verify-integrity"/>
+              <pre id="verify-place-result" class="hidden no-copy"></pre>
+            </td>
+          </tr>
+        </tbody>
       </table>
 #endif
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
-      <h2 class="major-section" data-l10n-id="a11y-title"/>
+      <h2 class="major-section" id="a11y" data-l10n-id="a11y-title"/>
 
       <table>
         <tbody>
@@ -667,7 +693,7 @@
       </table>
 
       <!-- - - - - - - - - - - - - - - - - - - - - -->
-      <h2 class="major-section" data-l10n-id="library-version-title"/>
+      <h2 class="major-section" id="library-version" data-l10n-id="library-version-title"/>
 
       <table>
         <tbody id="libversions-tbody">
@@ -704,7 +730,7 @@
 #endif
 #endif
 
-      <h2 class="major-section" data-l10n-id="startup-cache-title"/>
+      <h2 class="major-section" id="startup-cache" data-l10n-id="startup-cache-title"/>
 
       <table>
         <tbody>
@@ -735,7 +761,7 @@
         </tbody>
       </table>
 
-      <h2 class="major-section" data-l10n-id="intl-title"/>
+      <h2 class="major-section" id="intl" data-l10n-id="intl-title"/>
 
       <table>
         <tbody id="intl-localeservice-tbody">
@@ -788,7 +814,7 @@
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
 #if defined(ENABLE_WEBDRIVER)
-      <h2 class="major-section" data-l10n-id="remote-debugging-title"/>
+      <h2 class="major-section" id="remote-debugging" data-l10n-id="remote-debugging-title"/>
 
       <table>
         <tbody>
@@ -807,7 +833,7 @@
 #ifndef ANDROID
       <!-- - - - - - - - - - - - - - - - - - - - - -->
 
-      <h2 class="major-section" data-l10n-id="support-printing-title"/>
+      <h2 class="major-section" id="printing" data-l10n-id="support-printing-title"/>
 
       <table>
         <tr class="no-copy">

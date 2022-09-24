@@ -2,7 +2,7 @@
 // http://creativecommons.org/publicdomain/zero/1.0/
 
 "use strict";
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const Services = require("Services");
 const {
   FallibleJSPropertyProvider: JSPropertyProvider,
 } = require("devtools/shared/webconsole/js-property-provider");
@@ -13,6 +13,14 @@ const { addDebuggerToGlobal } = ChromeUtils.import(
 addDebuggerToGlobal(this);
 
 function run_test() {
+  Services.prefs.setBoolPref(
+    "security.allow_parent_unrestricted_js_loads",
+    true
+  );
+  registerCleanupFunction(() => {
+    Services.prefs.clearUserPref("security.allow_parent_unrestricted_js_loads");
+  });
+
   const testArray = `var testArray = [
     {propA: "A"},
     {

@@ -8,8 +8,14 @@ SOURCES += [
     "nsIconChannel.cpp",
 ]
 
+EXPORTS += [
+    "nsIconChannel.h",
+]
+
 LOCAL_INCLUDES += [
     "/image",
 ]
 
 FINAL_LIBRARY = "xul"
+
+include("/ipc/chromium/chromium-config.mozbuild")

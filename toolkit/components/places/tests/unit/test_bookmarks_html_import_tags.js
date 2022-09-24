@@ -27,10 +27,8 @@ var bookmarkData = [
 
 add_task(async function test_import_tags() {
   // Removes bookmarks.html if the file already exists.
-  let HTMLFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.html");
-  if (await OS.File.exists(HTMLFile)) {
-    await OS.File.remove(HTMLFile);
-  }
+  let HTMLFile = PathUtils.join(PathUtils.profileDir, "bookmarks.html");
+  await IOUtils.remove(HTMLFile, { ignoreAbsent: true });
 
   // Adds bookmarks and tags to the database.
   let bookmarkList = new Set();

@@ -20,6 +20,7 @@ const FAKE_UUID = "{foo-123-foo}";
 const FAKE_ROUTER_MESSAGE_PROVIDER = [{ id: "cfr", enabled: true }];
 const FAKE_TELEMETRY_ID = "foo123";
 
+// eslint-disable-next-line max-statements
 describe("TelemetryFeed", () => {
   let globals;
   let sandbox;
@@ -207,17 +208,22 @@ describe("TelemetryFeed", () => {
         assert.propertyVal(instance, "eventTelemetryEnabled", true);
       });
     });
-    it("should set a scalar for deletion-request", () => {
+    it("should set two scalars for deletion-request", () => {
       sandbox.spy(Services.telemetry, "scalarSet");
 
       instance.init();
 
-      assert.calledOnce(Services.telemetry.scalarSet);
-      assert.calledWith(
-        Services.telemetry.scalarSet,
-        "deletion.request.impression_id",
-        instance._impressionId
-      );
+      assert.calledTwice(Services.telemetry.scalarSet);
+
+      // impression_id
+      let [type, value] = Services.telemetry.scalarSet.firstCall.args;
+      assert.equal(type, "deletion.request.impression_id");
+      assert.equal(value, instance._impressionId);
+
+      // context_id
+      [type, value] = Services.telemetry.scalarSet.secondCall.args;
+      assert.equal(type, "deletion.request.context_id");
+      assert.equal(value, FAKE_UUID);
     });
   });
   describe("#handleEvent", () => {
@@ -328,14 +334,14 @@ describe("TelemetryFeed", () => {
       assert.equal(instance.sessions.get("foo"), session);
     });
     it("should set the session_id", () => {
-      sandbox.spy(global.gUUIDGenerator, "generateUUID");
+      sandbox.spy(Services.uuid, "generateUUID");
 
       const session = instance.addSession("foo");
 
-      assert.calledOnce(global.gUUIDGenerator.generateUUID);
+      assert.calledOnce(Services.uuid.generateUUID);
       assert.equal(
         session.session_id,
-        global.gUUIDGenerator.generateUUID.firstCall.returnValue
+        Services.uuid.generateUUID.firstCall.returnValue
       );
     });
     it("should set the page if a url parameter is given", () => {
@@ -774,6 +780,16 @@ describe("TelemetryFeed", () => {
       assert.equal(pingType, "infobar");
     });
   });
+  describe("#applySpotlightPolicy", () => {
+    it("should set client_id and set pingType", async () => {
+      let pingData = { action: "foo" };
+      const { ping, pingType } = await instance.applySpotlightPolicy(pingData);
+
+      assert.propertyVal(ping, "client_id", FAKE_TELEMETRY_ID);
+      assert.equal(pingType, "spotlight");
+      assert.notProperty(ping, "action");
+    });
+  });
   describe("#applyMomentsPolicy", () => {
     it("should use client_id and message_id in prerelease", async () => {
       globals.set("UpdateUtils", {
@@ -1044,6 +1060,18 @@ describe("TelemetryFeed", () => {
       await instance.createASRouterEvent(action);
 
       assert.calledOnce(instance.applyMomentsPolicy);
+    });
+    it("should call applySpotlightPolicy if action equals to spotlight_user_event", async () => {
+      const data = {
+        action: "spotlight_user_event",
+        event: "CLICK",
+        message_id: "SPOTLIGHT_MESSAGE_93",
+      };
+      sandbox.stub(instance, "applySpotlightPolicy");
+      const action = ac.ASRouterUserEvent(data);
+      await instance.createASRouterEvent(action);
+
+      assert.calledOnce(instance.applySpotlightPolicy);
     });
     it("should call applyUndesiredEventPolicy if action equals to asrouter_undesired_event", async () => {
       const data = {
@@ -1683,34 +1711,56 @@ describe("TelemetryFeed", () => {
       instance.handleDiscoveryStreamImpressionStats("new_session", {
         source: "foo",
         tiles: [{ id: 1, pos: 0 }],
+        window_inner_width: 1000,
+        window_inner_height: 900,
       });
 
       assert.equal(Object.keys(session.impressionSets).length, 1);
-      assert.deepEqual(session.impressionSets.foo, [{ id: 1, pos: 0 }]);
+      assert.deepEqual(session.impressionSets.foo, {
+        tiles: [{ id: 1, pos: 0 }],
+        window_inner_width: 1000,
+        window_inner_height: 900,
+      });
 
       // Add another ping with the same source
       instance.handleDiscoveryStreamImpressionStats("new_session", {
         source: "foo",
         tiles: [{ id: 2, pos: 1 }],
+        window_inner_width: 1000,
+        window_inner_height: 900,
       });
 
-      assert.deepEqual(session.impressionSets.foo, [
-        { id: 1, pos: 0 },
-        { id: 2, pos: 1 },
-      ]);
+      assert.deepEqual(session.impressionSets.foo, {
+        tiles: [
+          { id: 1, pos: 0 },
+          { id: 2, pos: 1 },
+        ],
+        window_inner_width: 1000,
+        window_inner_height: 900,
+      });
 
       // Add another ping with a different source
       instance.handleDiscoveryStreamImpressionStats("new_session", {
         source: "bar",
         tiles: [{ id: 3, pos: 2 }],
+        window_inner_width: 1000,
+        window_inner_height: 900,
       });
 
       assert.equal(Object.keys(session.impressionSets).length, 2);
-      assert.deepEqual(session.impressionSets.foo, [
-        { id: 1, pos: 0 },
-        { id: 2, pos: 1 },
-      ]);
-      assert.deepEqual(session.impressionSets.bar, [{ id: 3, pos: 2 }]);
+      assert.deepEqual(session.impressionSets.foo, {
+        tiles: [
+          { id: 1, pos: 0 },
+          { id: 2, pos: 1 },
+        ],
+        window_inner_width: 1000,
+        window_inner_height: 900,
+      });
+      assert.deepEqual(session.impressionSets.bar, {
+        tiles: [{ id: 3, pos: 2 }],
+        window_inner_width: 1000,
+        window_inner_height: 900,
+      });
     });
   });
   describe("#handleDiscoveryStreamLoadedContent", () => {
@@ -1763,7 +1813,7 @@ describe("TelemetryFeed", () => {
       FakePrefs.prototype.prefs[
         STRUCTURED_INGESTION_ENDPOINT_PREF
       ] = fakeEndpoint;
-      sandbox.stub(global.gUUIDGenerator, "generateUUID").returns(fakeUUID);
+      sandbox.stub(Services.uuid, "generateUUID").returns(fakeUUID);
       const feed = new TelemetryFeed();
       const url = feed._generateStructuredIngestionEndpoint(
         "testNameSpace",

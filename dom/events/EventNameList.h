@@ -233,10 +233,13 @@ EVENT(playing, ePlaying, EventNameType_HTML, eBasicEventClass)
 EVENT(progress, eProgress, EventNameType_HTML, eBasicEventClass)
 EVENT(ratechange, eRateChange, EventNameType_HTML, eBasicEventClass)
 EVENT(reset, eFormReset, EventNameType_HTMLXUL, eBasicEventClass)
+EVENT(securitypolicyviolation, eSecurityPolicyViolation, EventNameType_All,
+      eBasicEventClass)
 EVENT(seeked, eSeeked, EventNameType_HTML, eBasicEventClass)
 EVENT(seeking, eSeeking, EventNameType_HTML, eBasicEventClass)
 EVENT(select, eFormSelect, EventNameType_HTMLXUL, eBasicEventClass)
 EVENT(show, eShow, EventNameType_HTML, eBasicEventClass)
+EVENT(slotchange, eSlotChange, EventNameType_All, eBasicEventClass)
 EVENT(stalled, eStalled, EventNameType_HTML, eBasicEventClass)
 EVENT(start, eMarqueeStart, EventNameType_HTMLMarqueeOnly, eBasicEventClass)
 EVENT(submit, eFormSubmit, EventNameType_HTMLXUL, eBasicEventClass)
@@ -348,12 +351,15 @@ TOUCH_EVENT(touchcancel, eTouchCancel, EventNameType_All, eTouchEventClass)
 
 DOCUMENT_ONLY_EVENT(readystatechange, eReadyStateChange, EventNameType_HTMLXUL,
                     eBasicEventClass)
-DOCUMENT_ONLY_EVENT(selectionchange, eSelectionChange, EventNameType_HTMLXUL,
-                    eBasicEventClass)
+EVENT(selectionchange, eSelectionChange, EventNameType_HTMLXUL,
+      eBasicEventClass)
 DOCUMENT_ONLY_EVENT(visibilitychange, eVisibilityChange, EventNameType_HTMLXUL,
                     eBasicEventClass)
 
 NON_IDL_EVENT(MozMouseHittest, eMouseHitTest, EventNameType_None,
+              eMouseEventClass)
+
+NON_IDL_EVENT(MozMouseExploreByTouch, eMouseExploreByTouch, EventNameType_None,
               eMouseEventClass)
 
 NON_IDL_EVENT(DOMAttrModified, eLegacyAttrModified, EventNameType_HTMLXUL,
@@ -419,6 +425,8 @@ NON_IDL_EVENT(overflow, eScrollPortOverflow, EventNameType_XUL,
               eBasicEventClass)
 NON_IDL_EVENT(underflow, eScrollPortUnderflow, EventNameType_XUL,
               eBasicEventClass)
+NON_IDL_EVENT(systemstatusbarclick, eXULSystemStatusBarClick, EventNameType_XUL,
+              eBasicEventClass)
 
 // Various SVG events
 NON_IDL_EVENT(SVGLoad, eSVGLoad, EventNameType_None, eBasicEventClass)
@@ -426,18 +434,18 @@ NON_IDL_EVENT(SVGScroll, eSVGScroll, EventNameType_None, eBasicEventClass)
 
 // Only map the ID to the real event name when MESSAGE_TO_EVENT is defined.
 #ifndef MESSAGE_TO_EVENT
-NON_IDL_EVENT(begin, eSMILBeginEvent, EventNameType_SMIL, eBasicEventClass)
+EVENT(begin, eSMILBeginEvent, EventNameType_SMIL, eBasicEventClass)
 #endif
 NON_IDL_EVENT(beginEvent, eSMILBeginEvent, EventNameType_None,
               eSMILTimeEventClass)
 // Only map the ID to the real event name when MESSAGE_TO_EVENT is defined.
 #ifndef MESSAGE_TO_EVENT
-NON_IDL_EVENT(end, eSMILEndEvent, EventNameType_SMIL, eBasicEventClass)
+EVENT(end, eSMILEndEvent, EventNameType_SMIL, eBasicEventClass)
 #endif
 NON_IDL_EVENT(endEvent, eSMILEndEvent, EventNameType_None, eSMILTimeEventClass)
 // Only map the ID to the real event name when MESSAGE_TO_EVENT is defined.
 #ifndef MESSAGE_TO_EVENT
-NON_IDL_EVENT(repeat, eSMILRepeatEvent, EventNameType_SMIL, eBasicEventClass)
+EVENT(repeat, eSMILRepeatEvent, EventNameType_SMIL, eBasicEventClass)
 #endif
 NON_IDL_EVENT(repeatEvent, eSMILRepeatEvent, EventNameType_None,
               eSMILTimeEventClass)

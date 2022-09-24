@@ -21,8 +21,7 @@ template <class T>
 class Heap;
 }
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class OwningStringOrStringSequence;
 template <typename T>
@@ -80,8 +79,7 @@ class KeyPath {
   nsresult ExtractKeyAsJSVal(JSContext* aCx, const JS::Value& aValue,
                              JS::Value* aOutVal) const;
 
-  typedef nsresult (*ExtractOrCreateKeyCallback)(JSContext* aCx,
-                                                 void* aClosure);
+  using ExtractOrCreateKeyCallback = nsresult (*)(JSContext*, void*);
 
   nsresult ExtractOrCreateKey(JSContext* aCx, const JS::Value& aValue,
                               Key& aKey, ExtractOrCreateKeyCallback aCallback,
@@ -115,7 +113,6 @@ class KeyPath {
 };
 
 }  // namespace indexedDB
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_indexeddb_keypath_h__

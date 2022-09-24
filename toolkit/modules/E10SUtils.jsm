@@ -19,12 +19,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
 );
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
-  "useSeparateDataUriProcess",
-  "browser.tabs.remote.dataUriInDefaultWebProcess",
-  false
-);
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
   "useSeparatePrivilegedAboutContentProcess",
   "browser.tabs.remote.separatePrivilegedContentProcess",
   false
@@ -63,19 +57,6 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIExternalProtocolService"
 );
 
-function getAboutModule(aURL) {
-  // Needs to match NS_GetAboutModuleName
-  let moduleName = aURL.pathQueryRef.replace(/[#?].*/, "").toLowerCase();
-  let contract = "@mozilla.org/network/protocol/about;1?what=" + moduleName;
-  try {
-    return Cc[contract].getService(Ci.nsIAboutModule);
-  } catch (e) {
-    // Either the about module isn't defined or it is broken. In either case
-    // ignore it.
-    return null;
-  }
-}
-
 function getOriginalReaderModeURI(aURI) {
   try {
     let searchParams = new URLSearchParams(aURI.query);
@@ -88,7 +69,7 @@ function getOriginalReaderModeURI(aURI) {
 
 const NOT_REMOTE = null;
 
-// These must match any similar ones in ContentParent.h and ProcInfo.h
+// These must match the similar ones in RemoteTypes.h, ProcInfo.h, ChromeUtils.webidl and ChromeUtils.cpp
 const WEB_REMOTE_TYPE = "web";
 const FISSION_WEB_REMOTE_TYPE = "webIsolated";
 const WEB_REMOTE_COOP_COEP_TYPE_PREFIX = "webCOOP+COEP=";
@@ -96,15 +77,17 @@ const FILE_REMOTE_TYPE = "file";
 const EXTENSION_REMOTE_TYPE = "extension";
 const PRIVILEGEDABOUT_REMOTE_TYPE = "privilegedabout";
 const PRIVILEGEDMOZILLA_REMOTE_TYPE = "privilegedmozilla";
+const SERVICEWORKER_REMOTE_TYPE = "webServiceWorker";
 
 // This must start with the WEB_REMOTE_TYPE above.
-const LARGE_ALLOCATION_REMOTE_TYPE = "webLargeAllocation";
 const DEFAULT_REMOTE_TYPE = WEB_REMOTE_TYPE;
 
 // This list is duplicated between Navigator.cpp and here because navigator
 // is not accessible in this context. Please update both if the list changes.
 const kSafeSchemes = [
   "bitcoin",
+  "ftp",
+  "ftps",
   "geo",
   "im",
   "irc",
@@ -116,6 +99,7 @@ const kSafeSchemes = [
   "news",
   "nntp",
   "openpgp4fpr",
+  "sftp",
   "sip",
   "sms",
   "smsto",
@@ -126,6 +110,8 @@ const kSafeSchemes = [
   "wtai",
   "xmpp",
 ];
+
+const STANDARD_SAFE_PROTOCOLS = kSafeSchemes;
 
 // Note that even if the scheme fits the criteria for a web-handled scheme
 // (ie it is compatible with the checks registerProtocolHandler uses), it may
@@ -149,7 +135,8 @@ function validatedWebRemoteType(
   aResultPrincipal,
   aRemoteSubframes,
   aIsWorker = false,
-  aOriginAttributes = {}
+  aOriginAttributes = {},
+  aWorkerType = Ci.nsIE10SUtils.REMOTE_WORKER_TYPE_SHARED
 ) {
   // To load into the Privileged Mozilla Content Process you must be https,
   // and be an exact match or a subdomain of an allowlisted domain.
@@ -252,7 +239,14 @@ function validatedWebRemoteType(
       return aPreferredRemoteType;
     }
 
+    if (
+      aIsWorker &&
+      aWorkerType === Ci.nsIE10SUtils.REMOTE_WORKER_TYPE_SERVICE
+    ) {
+      return `${SERVICEWORKER_REMOTE_TYPE}=${targetPrincipal.siteOrigin}`;
+    }
     return `${FISSION_WEB_REMOTE_TYPE}=${targetPrincipal.siteOrigin}`;
+    // else fall through and probably return WEB_REMOTE_TYPE
   }
 
   if (!aPreferredRemoteType) {
@@ -281,8 +275,26 @@ var E10SUtils = {
   EXTENSION_REMOTE_TYPE,
   PRIVILEGEDABOUT_REMOTE_TYPE,
   PRIVILEGEDMOZILLA_REMOTE_TYPE,
-  LARGE_ALLOCATION_REMOTE_TYPE,
   FISSION_WEB_REMOTE_TYPE,
+  SERVICEWORKER_REMOTE_TYPE,
+  STANDARD_SAFE_PROTOCOLS,
+
+  /**
+   * @param aURI The URI of the about page
+   * @return The instance of the nsIAboutModule related to this uri
+   */
+  getAboutModule(aURL) {
+    // Needs to match NS_GetAboutModuleName
+    let moduleName = aURL.pathQueryRef.replace(/[#?].*/, "").toLowerCase();
+    let contract = "@mozilla.org/network/protocol/about;1?what=" + moduleName;
+    try {
+      return Cc[contract].getService(Ci.nsIAboutModule);
+    } catch (e) {
+      // Either the about module isn't defined or it is broken. In either case
+      // ignore it.
+      return null;
+    }
+  },
 
   useCrossOriginOpenerPolicy() {
     return useCrossOriginOpenerPolicy;
@@ -420,7 +432,8 @@ var E10SUtils = {
     aResultPrincipal = null,
     aIsSubframe = false,
     aIsWorker = false,
-    aOriginAttributes = {}
+    aOriginAttributes = {},
+    aWorkerType = Ci.nsIE10SUtils.REMOTE_WORKER_TYPE_SHARED
   ) {
     if (!aMultiProcess) {
       return NOT_REMOTE;
@@ -448,7 +461,7 @@ var E10SUtils = {
           : DEFAULT_REMOTE_TYPE;
 
       case "about":
-        let module = getAboutModule(aURI);
+        let module = this.getAboutModule(aURI);
         // If the module doesn't exist then an error page will be loading, that
         // should be ok to load in any process
         if (!module) {
@@ -615,79 +628,12 @@ var E10SUtils = {
           aResultPrincipal,
           aRemoteSubframes,
           aIsWorker,
-          aOriginAttributes
+          aOriginAttributes,
+          aWorkerType
         );
         log.debug(`  validatedWebRemoteType() returning: ${remoteType}`);
         return remoteType;
     }
-  },
-
-  getRemoteTypeForPrincipal(
-    aPrincipal,
-    aOriginalURI,
-    aMultiProcess,
-    aRemoteSubframes,
-    aPreferredRemoteType = DEFAULT_REMOTE_TYPE,
-    aCurrentPrincipal,
-    aIsSubframe
-  ) {
-    if (!aMultiProcess) {
-      return NOT_REMOTE;
-    }
-
-    // We want to use the original URI for "about:" (except for "about:srcdoc"
-    // and "about:blank") and "chrome://" scheme, so that we can properly
-    // determine the remote type.
-    let useOriginalURI;
-    if (aOriginalURI.scheme == "about") {
-      useOriginalURI = !["about:srcdoc", "about:blank"].includes(
-        aOriginalURI.spec
-      );
-    } else {
-      useOriginalURI = aOriginalURI.scheme == "chrome";
-    }
-
-    if (!useOriginalURI) {
-      // We can't pick a process based on a system principal or expanded
-      // principal.
-      if (aPrincipal.isSystemPrincipal || aPrincipal.isExpandedPrincipal) {
-        throw Components.Exception("", Cr.NS_ERROR_UNEXPECTED);
-      }
-
-      // Null principals can be loaded in any remote process, but when
-      // using fission we add the option to force them into the default
-      // web process for better test coverage.
-      if (aPrincipal.isNullPrincipal) {
-        if (aOriginalURI.spec == "about:blank") {
-          useOriginalURI = true;
-        } else if (
-          (aRemoteSubframes && useSeparateDataUriProcess) ||
-          aPreferredRemoteType == NOT_REMOTE
-        ) {
-          return WEB_REMOTE_TYPE;
-        }
-        return aPreferredRemoteType;
-      }
-    }
-    // We might care about the currently loaded URI. Pull it out of our current
-    // principal. We never care about the current URI when working with a
-    // non-content principal.
-    let currentURI =
-      aCurrentPrincipal && aCurrentPrincipal.isContentPrincipal
-        ? Services.io.newURI(aCurrentPrincipal.spec)
-        : null;
-
-    return E10SUtils.getRemoteTypeForURIObject(
-      useOriginalURI ? aOriginalURI : Services.io.newURI(aPrincipal.spec),
-      aMultiProcess,
-      aRemoteSubframes,
-      aPreferredRemoteType,
-      currentURI,
-      aPrincipal,
-      aIsSubframe,
-      false, //aIsWorker
-      aPrincipal.originAttributes
-    );
   },
 
   getRemoteTypeForWorkerPrincipal(
@@ -717,17 +663,10 @@ var E10SUtils = {
       return NOT_REMOTE;
     }
 
-    if (
-      // We don't want to launch workers in a large allocation remote type,
-      // change it to the web remote type (then getRemoteTypeForURIObject
-      // may change it to an isolated one).
-      aPreferredRemoteType === LARGE_ALLOCATION_REMOTE_TYPE ||
-      // Similarly to the large allocation remote type, we don't want to
-      // launch the shared worker in a web coop+coep remote type even if
-      // was registered from a frame loaded in a child process with that
-      // remote type.
-      aPreferredRemoteType?.startsWith(WEB_REMOTE_COOP_COEP_TYPE_PREFIX)
-    ) {
+    // We don't want to launch the shared worker in a web coop+coep remote type
+    // even if was registered from a frame loaded in a child process with that
+    // remote type.
+    if (aPreferredRemoteType?.startsWith(WEB_REMOTE_COOP_COEP_TYPE_PREFIX)) {
       aPreferredRemoteType = DEFAULT_REMOTE_TYPE;
     }
 
@@ -765,7 +704,8 @@ var E10SUtils = {
         aPrincipal,
         false, // aIsSubFrame
         true, // aIsWorker
-        aPrincipal.originAttributes
+        aPrincipal.originAttributes,
+        aWorkerType
       );
     }
 

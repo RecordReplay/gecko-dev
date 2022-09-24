@@ -13,7 +13,6 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/DOMEventTargetHelper.h"
-#include "mozilla/net/WebSocketChannel.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/MessageEventBinding.h"
@@ -77,8 +76,7 @@
 
 using namespace mozilla::net;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class WebSocketImpl;
 
@@ -178,7 +176,7 @@ class WebSocketImpl final : public nsIInterfaceRequestor,
   void PrintErrorOnConsole(const char* aBundleURI, const char* aError,
                            nsTArray<nsString>&& aFormatStrings);
 
-  nsresult DoOnMessageAvailable(const nsACString& aMsg, bool isBinary);
+  nsresult DoOnMessageAvailable(const nsACString& aMsg, bool isBinary) const;
 
   // ConnectionCloseEvents: 'error' event if needed, then 'close' event.
   nsresult ScheduleConnectionCloseEvents(nsISupports* aContext,
@@ -250,7 +248,7 @@ class WebSocketImpl final : public nsIInterfaceRequestor,
 
   // This mutex protects mWorkerShuttingDown.
   mozilla::Mutex mMutex;
-  bool mWorkerShuttingDown;
+  bool mWorkerShuttingDown GUARDED_BY(mMutex);
 
   RefPtr<WebSocketEventService> mService;
   nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
@@ -701,7 +699,7 @@ WebSocketImpl::SendMessage(const nsAString& aMessage) {
 //-----------------------------------------------------------------------------
 
 nsresult WebSocketImpl::DoOnMessageAvailable(const nsACString& aMsg,
-                                             bool isBinary) {
+                                             bool isBinary) const {
   AssertIsOnTargetThread();
 
   if (mDisconnectingOrDisconnected) {
@@ -1213,7 +1211,7 @@ class AsyncOpenRunnable final : public WebSocketMainThreadRunnable {
       return true;
     }
 
-    nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
+    nsCOMPtr<nsIPrincipal> principal = doc->PartitionedPrincipal();
     if (!principal) {
       mErrorCode = NS_ERROR_FAILURE;
       return true;
@@ -1233,8 +1231,9 @@ class AsyncOpenRunnable final : public WebSocketMainThreadRunnable {
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(aTopLevelWorkerPrivate && !aTopLevelWorkerPrivate->GetWindow());
 
-    mErrorCode = mImpl->AsyncOpen(aTopLevelWorkerPrivate->GetPrincipal(), 0,
-                                  nullptr, ""_ns, nullptr);
+    mErrorCode =
+        mImpl->AsyncOpen(aTopLevelWorkerPrivate->GetPartitionedPrincipal(), 0,
+                         nullptr, ""_ns, nullptr);
     return true;
   }
 
@@ -1256,6 +1255,7 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
     const nsACString& aNegotiatedExtensions, ErrorResult& aRv) {
   MOZ_ASSERT_IF(!aTransportProvider, aNegotiatedExtensions.IsEmpty());
   nsCOMPtr<nsIPrincipal> principal;
+  nsCOMPtr<nsIPrincipal> partitionedPrincipal;
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
   if (NS_WARN_IF(!global)) {
@@ -1272,7 +1272,8 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
     }
 
     principal = scriptPrincipal->GetPrincipal();
-    if (!principal) {
+    partitionedPrincipal = scriptPrincipal->PartitionedPrincipal();
+    if (!principal || !partitionedPrincipal) {
       aRv.Throw(NS_ERROR_FAILURE);
       return nullptr;
     }
@@ -1420,6 +1421,7 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
 
   if (NS_IsMainThread()) {
     MOZ_ASSERT(principal);
+    MOZ_ASSERT(partitionedPrincipal);
 
     nsCOMPtr<nsPIDOMWindowInner> ownerWindow = do_QueryInterface(global);
 
@@ -1437,8 +1439,9 @@ already_AddRefed<WebSocket> WebSocket::ConstructorCommon(
       }
     }
 
-    aRv = webSocket->mImpl->AsyncOpen(principal, windowID, aTransportProvider,
-                                      aNegotiatedExtensions, std::move(stack));
+    aRv = webSocket->mImpl->AsyncOpen(partitionedPrincipal, windowID,
+                                      aTransportProvider, aNegotiatedExtensions,
+                                      std::move(stack));
   } else {
     MOZ_ASSERT(!aTransportProvider && aNegotiatedExtensions.IsEmpty(),
                "not yet implemented");
@@ -1635,20 +1638,19 @@ nsresult WebSocketImpl::Init(JSContext* aCx, nsIPrincipal* aLoadingPrincipal,
       // Disallowed by content policy
       return NS_ERROR_CONTENT_BLOCKED;
     }
-  }
 
-  // If the HTTPS-Only mode is enabled, we need to upgrade the websocket
-  // connection from ws:// to wss:// and mark it as secure.
-  if (!mIsServerSide && !mSecure && originDoc) {
-    nsCOMPtr<nsIURI> uri;
-    nsresult rv = NS_NewURI(getter_AddRefs(uri), mURI);
-    NS_ENSURE_SUCCESS(rv, rv);
+    // If the HTTPS-Only mode is enabled, we need to upgrade the websocket
+    // connection from ws:// to wss:// and mark it as secure.
+    if (!mSecure && originDoc &&
+        !nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(
+            originDoc->GetDocumentURI())) {
+      nsCOMPtr<nsIURI> uri;
+      nsresult rv = NS_NewURI(getter_AddRefs(uri), mURI);
+      NS_ENSURE_SUCCESS(rv, rv);
 
-    nsCOMPtr<nsIChannel> channel = originDoc->GetChannel();
-    if (channel) {
-      nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
-
-      if (nsHTTPSOnlyUtils::ShouldUpgradeWebSocket(uri, loadInfo)) {
+      // secCheckLoadInfo is only used for the triggering principal, so this
+      // is okay.
+      if (nsHTTPSOnlyUtils::ShouldUpgradeWebSocket(uri, secCheckLoadInfo)) {
         mURI.ReplaceSubstring("ws://", "wss://");
         if (NS_WARN_IF(mURI.Find("wss://") != 0)) {
           return NS_OK;
@@ -1664,7 +1666,9 @@ nsresult WebSocketImpl::Init(JSContext* aCx, nsIPrincipal* aLoadingPrincipal,
   // to wss: before performing content policy checks because CSP needs to
   // send reports in case the scheme is about to be upgraded.
   if (!mIsServerSide && !mSecure && originDoc &&
-      originDoc->GetUpgradeInsecureRequests(false)) {
+      originDoc->GetUpgradeInsecureRequests(false) &&
+      !nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(
+          originDoc->GetDocumentURI())) {
     // let's use the old specification before the upgrade for logging
     AutoTArray<nsString, 2> params;
     CopyUTF8toUTF16(mURI, *params.AppendElement());
@@ -1748,7 +1752,9 @@ nsresult WebSocketImpl::AsyncOpen(
     MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
-  rv = mChannel->AsyncOpen(uri, asciiOrigin, aInnerWindowID, this, nullptr);
+  rv = mChannel->AsyncOpenNative(uri, asciiOrigin,
+                                 aPrincipal->OriginAttributesRef(),
+                                 aInnerWindowID, this, nullptr);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return NS_ERROR_CONTENT_BLOCKED;
   }
@@ -2750,6 +2756,16 @@ WebSocketImpl::DelayedDispatch(already_AddRefed<nsIRunnable>, uint32_t) {
 }
 
 NS_IMETHODIMP
+WebSocketImpl::RegisterShutdownTask(nsITargetShutdownTask*) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+WebSocketImpl::UnregisterShutdownTask(nsITargetShutdownTask*) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 WebSocketImpl::IsOnCurrentThread(bool* aResult) {
   *aResult = IsTargetThread();
   return NS_OK;
@@ -2830,5 +2846,4 @@ nsresult WebSocketImpl::GetLoadingPrincipal(nsIPrincipal** aPrincipal) {
   return NS_OK;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

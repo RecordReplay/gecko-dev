@@ -24,18 +24,16 @@ class nsIContent;
 class nsIParser;
 class nsTextNode;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class NodeInfo;
 class ProcessingInstruction;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
-typedef enum {
+enum XMLContentSinkState {
   eXMLContentSinkState_InProlog,
   eXMLContentSinkState_InDocumentElement,
   eXMLContentSinkState_InEpilog
-} XMLContentSinkState;
+};
 
 class nsXMLContentSink : public nsContentSink,
                          public nsIXMLContentSink,
@@ -64,7 +62,7 @@ class nsXMLContentSink : public nsContentSink,
   NS_IMETHOD WillBuildModel(nsDTDMode aDTDMode) override;
   NS_IMETHOD DidBuildModel(bool aTerminated) override;
   NS_IMETHOD WillInterrupt(void) override;
-  NS_IMETHOD WillResume(void) override;
+  void WillResume() override;
   NS_IMETHOD SetParser(nsParserBase* aParser) override;
   virtual void InitialTranslationCompleted() override;
   virtual void FlushPendingNotifications(mozilla::FlushType aType) override;

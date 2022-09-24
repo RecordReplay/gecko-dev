@@ -7,7 +7,7 @@
 "use strict";
 
 const TEST_URI =
-  "http://example.com/browser/devtools/client/webconsole/" +
+  "https://example.com/browser/devtools/client/webconsole/" +
   "test/browser/test-inspect-cross-domain-objects-top.html";
 
 add_task(async function() {
@@ -24,13 +24,15 @@ add_task(async function() {
     // is being switched, so here we directly open the "real" test URI. See Bug 1614291.
     hud = await openNewTabAndConsole(TEST_URI);
     info("Wait for the 'foobar' message to be logged by the frame");
-    node = await waitFor(() => findMessage(hud, "foobar"));
+    node = await waitFor(() => findConsoleAPIMessage(hud, "foobar"));
   } else {
-    hud = await openNewTabAndConsole("data:text/html;charset=utf8,<p>hello");
+    hud = await openNewTabAndConsole(
+      "data:text/html;charset=utf8,<!DOCTYPE html><p>hello"
+    );
     info(
       "Navigate and wait for the 'foobar' message to be logged by the frame"
     );
-    const onMessage = waitForMessage(hud, "foobar");
+    const onMessage = waitForMessageByType(hud, "foobar", ".console-api");
     await navigateTo(TEST_URI);
     ({ node } = await onMessage);
   }

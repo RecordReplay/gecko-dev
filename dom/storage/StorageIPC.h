@@ -290,6 +290,9 @@ class SessionStorageManagerChild final
 
   // IPDL methods are only called by IPDL.
   void ActorDestroy(ActorDestroyReason aWhy) override;
+
+  mozilla::ipc::IPCResult RecvClearStoragesForOrigin(
+      const nsCString& aOriginAttrs, const nsCString& aOriginKey) override;
 };
 
 class LocalStorageCacheParent final
@@ -509,18 +512,21 @@ class SessionStorageObserverParent final : public PSessionStorageObserverParent,
 class SessionStorageCacheParent final
     : public PBackgroundSessionStorageCacheParent {
   friend class PBackgroundSessionStorageCacheParent;
-  const nsCString mOriginAttrs;
+  const PrincipalInfo mPrincipalInfo;
   const nsCString mOriginKey;
 
   RefPtr<SessionStorageManagerParent> mManagerActor;
   FlippedOnce<false> mLoadReceived;
 
  public:
-  SessionStorageCacheParent(const nsCString& aOriginAttrs,
+  SessionStorageCacheParent(const PrincipalInfo& aPrincipalInfo,
                             const nsCString& aOriginKey,
                             SessionStorageManagerParent* aActor);
 
   NS_INLINE_DECL_REFCOUNTING(mozilla::dom::SessionStorageCacheParent, override)
+
+  const PrincipalInfo& PrincipalInfo() const { return mPrincipalInfo; }
+  const nsCString& OriginKey() const { return mOriginKey; }
 
  private:
   ~SessionStorageCacheParent();
@@ -550,9 +556,14 @@ class SessionStorageManagerParent final
 
   already_AddRefed<PBackgroundSessionStorageCacheParent>
   AllocPBackgroundSessionStorageCacheParent(
-      const nsCString& aOriginAttrs, const nsCString& aOriginKey) override;
+      const PrincipalInfo& aPrincipalInfo,
+      const nsCString& aOriginKey) override;
 
   BackgroundSessionStorageManager* GetManager() const;
+
+  mozilla::ipc::IPCResult RecvClearStorages(
+      const OriginAttributesPattern& aPattern,
+      const nsCString& aOriginScope) override;
 
  private:
   ~SessionStorageManagerParent();
@@ -594,8 +605,9 @@ bool DeallocPSessionStorageObserverParent(
     PSessionStorageObserverParent* aActor);
 
 already_AddRefed<PBackgroundSessionStorageCacheParent>
-AllocPBackgroundSessionStorageCacheParent(const nsCString& aOriginAttrs,
-                                          const nsCString& aOriginKey);
+AllocPBackgroundSessionStorageCacheParent(
+    const mozilla::ipc::PrincipalInfo& aPrincipalInfo,
+    const nsCString& aOriginKey);
 
 already_AddRefed<PBackgroundSessionStorageManagerParent>
 AllocPBackgroundSessionStorageManagerParent(const uint64_t& aTopContextId);

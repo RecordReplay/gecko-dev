@@ -3,18 +3,18 @@
 API Implementation Basics
 =========================
 This page describes some of the pieces involved when creating
-WebExtension APIs.  Detailed documentation about how these pieces work
+WebExtensions APIs.  Detailed documentation about how these pieces work
 together to build specific features is in the next section.
 
 The API Schema
 --------------
 As described previously, a WebExtension runs in a sandboxed environment
-but the implementation of a WebExtension API runs with full chrome
+but the implementation of a WebExtensions API runs with full chrome
 privileges.  API implementations do not directly interact with
 extensions' Javascript environments, that is handled by the WebExtensions
 framework.  Each API includes a schema that describes all the functions,
 events, and other properties that the API might inject into an
-extension's Javascript environment.  
+extension's Javascript environment.
 Among other things, the schema specifies the namespace into which
 an API should be injected, what permissions (if any) are required to
 use it, and in which contexts (e.g., extension pages, content scripts, etc)
@@ -29,7 +29,7 @@ The next section describes the format of the schema in detail.
 
 The ExtensionAPI class
 ----------------------
-Every WebExtension API is represented by an instance of the Javascript
+Every WebExtensions API is represented by an instance of the Javascript
 `ExtensionAPI <reference.html#extensionapi-class>`_ class.
 An instance of its API class is created every time an extension that has
 access to the API is enabled.  Instances of this class contain the
@@ -38,19 +38,20 @@ and they also contain code for handling manifest keys as well as other
 part of the extension lifecycle (e.g., updates, uninstalls, etc.)
 The details of this class are covered in a subsequent section, for now the
 important point is that this class contains all the actual code that
-backs a particular WebExtension API.
+backs a particular WebExtensions API.
 
-Built-in APIs versus Experiments
---------------------------------
-A WebExtension API can be built directly into the browser or it can be
-contained in a special type of extension called a "WebExtension Experiment".
+Built-in versus Experimental APIs
+---------------------------------
+A WebExtensions API can be built directly into the browser or it can be
+contained in a special type of extension called a privileged extension
+that defines a WebExtensions Experiment (i.e. experimental APIs).
 The API schema and the ExtensionAPI class are written in the same way
 regardless of how the API will be delivered, the rest of this section
 explains how to package a new API using these methods.
 
 Adding a built-in API
 ---------------------
-Built-in WebExtension APIs are loaded lazily.  That is, the schema and
+Built-in WebExtensions APIs are loaded lazily.  That is, the schema and
 accompanying code are not actually loaded and interpreted until an
 extension that uses the API is activated.
 To actually register the API with the WebExtensions framework, an entry
@@ -129,7 +130,7 @@ A reference to a property only causes the API to be loaded if the
 extension referencing the property also has all the permissions listed
 in the ``permissions`` property.
 
-A WebExtension API that is controlled by a manifest key can also be loaded
+A WebExtensions API that is controlled by a manifest key can also be loaded
 when an extension that includes the relevant manifest key is activated.
 This is specified by the ``manifest`` property, which lists any manifest keys
 that should cause the API to be loaded.
@@ -138,18 +139,23 @@ Finally, APIs can be loaded based on other events in the WebExtension
 lifecycle.  These are listed in the ``events`` property and described in
 more detail in :ref:`lifecycle`.
 
-WebExtensions Experiments
--------------------------
-A new API may also be implemented within an extension. An API implemented
-this way is called a WebExtension Experiment.  Experiments can be useful
-when actively developing a new API, as they do not require building
-Firefox locally. Note that extensions that include experiments cannot be
-signed by addons.mozilla.org.  They may be installed temporarily via
-``about:debugging`` or, on browser that support it (current Nightly and
-Developer Edition), by setting the preference
+Adding Experimental APIs in Privileged Extensions
+-------------------------------------------------
+
+A new API may also be implemented within a privileged extension. An API
+implemented this way is called a WebExtensions Experiment (or simply an
+Experimental API).  Experiments can be useful when actively developing a
+new API, as they do not require building Firefox locally. These extensions
+may be installed temporarily via ``about:debugging`` or, on browser that
+support it (current Nightly and Developer Edition), by setting the preference
 ``xpinstall.signatures.required`` to ``false``.  You may also set the
 preference ``extensions.experiments.enabled`` to ``true`` to install the
 addon normally and test across restart.
+
+.. note::
+   Out-of-tree privileged extensions cannot be signed by addons.mozilla.org.
+   A different pipeline is used to sign them with a privileged certificate.
+   You'll find more information in the `xpi-manifest repository on GitHub <https://github.com/mozilla-extensions/xpi-manifest>`_.
 
 Experimental APIs have a few limitations compared with built-in APIs:
 
@@ -243,9 +249,27 @@ all API scripts look to the following source:
 - Only available in the Desktop builds:
   `browser/components/extensions/parent/ext-browser.js <https://searchfox.org/mozilla-central/source/browser/components/extensions/parent/ext-browser.js>`_
 - Only available in the Android builds:
-  `mobile/android/components/extensions/ext-android.js <https://searchfox.org/mozilla-central/source/mobile/android/components/extensions/ext-android.js>`_ 
+  `mobile/android/components/extensions/ext-android.js <https://searchfox.org/mozilla-central/source/mobile/android/components/extensions/ext-android.js>`_
 
 .. warning::
    The extension API authors should never redefine these globals to avoid introducing potential
    conflicts between API scripts (e.g. see `Bug 1697404 comment 3 <https://bugzilla.mozilla.org/show_bug.cgi?id=1697404#c3>`_
    and `Bug 1697404 comment 4 <https://bugzilla.mozilla.org/show_bug.cgi?id=1697404#c4>`_).
+
+WebIDL Bindings
+---------------
+
+In ``manifest_version: 3`` the extension will be able to declare a background service worker
+instead of a background page, and the existing WebExtensions API bindings can't be injected into this
+new extension global, because it lives off the main thread.
+
+To expose WebExtensions API bindings to the WebExtensions ``background.service_worker`` global
+we are in the process of generating new WebIDL bindings for the WebExtensions API.
+
+An high level view of the architecture and a more in depth details about the architecture process
+to create or modify WebIDL bindings for the WebExtensions API can be found here:
+
+.. toctree::
+   :maxdepth: 2
+
+   webidl_bindings

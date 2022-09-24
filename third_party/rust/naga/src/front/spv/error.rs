@@ -41,6 +41,15 @@ pub enum Error {
     UnsupportedControlFlow(spirv::Word),
     #[error("unsupported binary operator %{0}")]
     UnsupportedBinaryOperator(spirv::Word),
+    #[error("Naga supports OpTypeRuntimeArray in the StorageBuffer storage class only")]
+    UnsupportedRuntimeArrayStorageClass,
+    #[error("unsupported matrix stride {stride} for a {columns}x{rows} matrix with scalar width={width}")]
+    UnsupportedMatrixStride {
+        stride: u32,
+        columns: u8,
+        rows: u8,
+        width: u8,
+    },
     #[error("unknown binary operator {0:?}")]
     UnknownBinaryOperator(spirv::Op),
     #[error("unknown relational function {0:?}")]
@@ -73,6 +82,8 @@ pub enum Error {
     InvalidBinding(spirv::Word),
     #[error("invalid global var {0:?}")]
     InvalidGlobalVar(crate::Expression),
+    #[error("invalid image/sampler expression {0:?}")]
+    InvalidImageExpression(crate::Expression),
     #[error("invalid image base type {0:?}")]
     InvalidImageBaseType(Handle<crate::Type>),
     #[error("invalid image {0:?}")]
@@ -108,6 +119,4 @@ pub enum Error {
     #[error("invalid barrier memory semantics %{0}")]
     InvalidBarrierMemorySemantics(spirv::Word),
     // incomplete implementation errors
-    #[error("unsupported matrix stride {0}")]
-    UnsupportedMatrixStride(spirv::Word),
 }

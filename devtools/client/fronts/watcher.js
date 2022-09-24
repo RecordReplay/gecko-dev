@@ -11,8 +11,8 @@ const {
 
 loader.lazyRequireGetter(
   this,
-  "BrowsingContextTargetFront",
-  "devtools/client/fronts/targets/browsing-context",
+  "WindowGlobalTargetFront",
+  "devtools/client/fronts/targets/window-global",
   true
 );
 loader.lazyRequireGetter(
@@ -52,7 +52,7 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
     } else if (form.actor.includes("/workerTarget")) {
       front = new WorkerTargetFront(this.conn, null, this);
     } else {
-      front = new BrowsingContextTargetFront(this.conn, null, this);
+      front = new WindowGlobalTargetFront(this.conn, null, this);
     }
     front.actorID = form.actor;
     front.form(form);
@@ -86,17 +86,26 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
   }
 
   /**
-   * Retrieve the already existing BrowsingContextTargetFront for the parent
+   * Retrieve the already existing WindowGlobalTargetFront for the parent
    * BrowsingContext of the given BrowsingContext ID.
    */
-  async getParentBrowsingContextTarget(browsingContextID) {
+  async getParentWindowGlobalTarget(browsingContextID) {
     const id = await this.getParentBrowsingContextID(browsingContextID);
     if (!id) {
       return null;
     }
-    return this.getBrowsingContextTarget(id);
+    return this.getWindowGlobalTarget(id);
   }
 
+  /**
+   * Memoized getter for the "blackboxing" actor
+   */
+  async getBlackboxingActor() {
+    if (!this._blackboxingActor) {
+      this._blackboxingActor = await super.getBlackboxingActor();
+    }
+    return this._blackboxingActor;
+  }
   /**
    * Memoized getter for the "breakpoint-list" actor
    */
@@ -128,9 +137,9 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
   }
 
   /**
-   * For a given BrowsingContext ID, return the already existing BrowsingContextTargetFront
+   * For a given BrowsingContext ID, return the already existing WindowGlobalTargetFront
    */
-  async getBrowsingContextTarget(id) {
+  async getWindowGlobalTarget(id) {
     // First scan the watcher children as the watcher manages all the targets
     for (const front of this.poolChildren()) {
       if (front.browsingContextID == id) {
@@ -147,16 +156,34 @@ class WatcherFront extends FrontClassWithSpec(watcherSpec) {
       return topLevelTarget;
     }
 
-    // If we could not find a browsing context target for the provided id, the
-    // browsing context might not be the topmost browsing context of a given
-    // process. For now we only create targets for the top browsing context of
-    // each process, so we recursively check the parent browsing context ids
+    // If we could not find a window global target for the provided id, the
+    // window global might not be the topmost one of a given process (isProcessRoot == true).
+    // For now we only create targets for the top window global of each process,
+    // so we recursively check the parent browsing context ids
     // until we find a valid target.
     const parentBrowsingContextID = await this.getParentBrowsingContextID(id);
     if (parentBrowsingContextID && parentBrowsingContextID !== id) {
-      return this.getBrowsingContextTarget(parentBrowsingContextID);
+      return this.getWindowGlobalTarget(parentBrowsingContextID);
     }
 
+    return null;
+  }
+
+  getWindowGlobalTargetByInnerWindowId(innerWindowId) {
+    for (const front of this.poolChildren()) {
+      if (front.innerWindowId == innerWindowId) {
+        return front;
+      }
+    }
+    // Use getCachedTarget in order to have a fully synchronous method
+    // as the callsite in ResourceCommand benefit from being synchronous.
+    // Here we care only about already existing resource and do not need to
+    // wait for the next target to come.
+    const topLevelTarget = this.parentFront.getCachedTarget();
+    if (topLevelTarget?.innerWindowId == innerWindowId) {
+      return topLevelTarget;
+    }
+    console.error("Unable to find target with innerWindowId:" + innerWindowId);
     return null;
   }
 

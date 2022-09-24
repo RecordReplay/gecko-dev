@@ -8,6 +8,14 @@
 
 #include "mozilla/Assertions.h"
 
+// This file is built both within libxul and as a separate libmozsandbox
+// library. We can only use profiler annotations within libxul.
+#ifdef MOZILLA_INTERNAL_API
+#  include "mozilla/ProfilerThreadSleep.h"
+#else
+#  define AUTO_PROFILER_THREAD_SLEEP
+#endif
+
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -66,6 +74,7 @@ ssize_t SandboxBrokerCommon::RecvWithFd(int aFd, const iovec* aIO,
     // accidentally leaking a copy of the child's response socket to a
     // new child process.  (The child won't be able to exec, so this
     // doesn't matter as much for that direction.)
+    AUTO_PROFILER_THREAD_SLEEP;
     rv = recvmsg(aFd, &msg, MSG_CMSG_CLOEXEC);
   } while (rv < 0 && errno == EINTR);
 
@@ -84,6 +93,10 @@ ssize_t SandboxBrokerCommon::RecvWithFd(int aFd, const iovec* aIO,
         for (size_t i = 0; CMSG_LEN(sizeof(int) * i) < cmsg->cmsg_len; ++i) {
           close(fds[i]);
         }
+        // In theory, the kernel should delete the message instead of
+        // giving us an empty one, if errors prevent transferring the
+        // fd.
+        MOZ_DIAGNOSTIC_ASSERT(cmsg->cmsg_len != 0);
         errno = EMSGSIZE;
         return -1;
       }
@@ -98,7 +111,14 @@ ssize_t SandboxBrokerCommon::RecvWithFd(int aFd, const iovec* aIO,
       close(*aPassedFdPtr);
       *aPassedFdPtr = -1;
     }
-    errno = EMSGSIZE;
+    // MSG_CTRUNC usually means the fd was dropped due to fd
+    // exhaustion in the receiving process, so map that to `EMFILE`.
+    // MSG_TRUNC (truncation of the data part) shouldn't ever happen.
+    // (If the sender is malicious it can send too many bytes or fds,
+    // but this is about getting an accurate error message in genuine
+    // error cases.)
+    MOZ_DIAGNOSTIC_ASSERT((msg.msg_flags & MSG_TRUNC) == 0);
+    errno = EMFILE;
     return -1;
   }
 

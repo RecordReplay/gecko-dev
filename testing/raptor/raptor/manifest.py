@@ -35,7 +35,6 @@ required_settings = [
 
 playback_settings = [
     "playback_pageset_manifest",
-    "playback_recordings",
 ]
 
 
@@ -244,10 +243,7 @@ def write_test_settings_json(args, test_details, oskey):
     # if Gecko profiling is enabled, write profiling settings for webext
     if test_details.get("gecko_profile", False):
         threads = ["GeckoMain", "Compositor"]
-
-        # With WebRender enabled profile some extra threads
-        if os.getenv("MOZ_WEBRENDER") == "1":
-            threads.extend(["Renderer", "WR"])
+        threads.extend(["Renderer", "WR"])
 
         if test_details.get("gecko_profile_threads"):
             # pylint --py3k: W1639
@@ -366,9 +362,6 @@ def get_raptor_test_list(args, oskey):
         if next_test.get("playback") is not None:
             next_test["playback_pageset_manifest"] = transform_subtest(
                 next_test["playback_pageset_manifest"], next_test["name"]
-            )
-            next_test["playback_recordings"] = transform_subtest(
-                next_test["playback_recordings"], next_test["name"]
             )
 
         if args.gecko_profile is True:
@@ -547,7 +540,11 @@ def get_raptor_test_list(args, oskey):
             and next_test.get("measure") is None
             and next_test.get("type") == "pageload"
         ):
-            next_test["measure"] = "fnbpaint, fcp, dcf, loadtime"
+            next_test["measure"] = (
+                "fnbpaint, fcp, dcf, loadtime,"
+                "ContentfulSpeedIndex, PerceptualSpeedIndex,"
+                "SpeedIndex, FirstVisualChange, LastVisualChange"
+            )
 
         # convert 'measure =' test INI line to list
         if next_test.get("measure") is not None:
@@ -567,18 +564,15 @@ def get_raptor_test_list(args, oskey):
                 # remove the 'hero =' line since no longer measuring hero
                 del next_test["hero"]
 
-        if next_test.get("lower_is_better") is not None:
-            next_test["lower_is_better"] = bool_from_str(
-                next_test.get("lower_is_better")
-            )
-        if next_test.get("subtest_lower_is_better") is not None:
-            next_test["subtest_lower_is_better"] = bool_from_str(
-                next_test.get("subtest_lower_is_better")
-            )
-        if next_test.get("accept_zero_vismet", None) is not None:
-            next_test["accept_zero_vismet"] = bool_from_str(
-                next_test.get("accept_zero_vismet")
-            )
+        bool_settings = [
+            "lower_is_better",
+            "subtest_lower_is_better",
+            "accept_zero_vismet",
+            "interactive",
+        ]
+        for setting in bool_settings:
+            if next_test.get(setting, None) is not None:
+                next_test[setting] = bool_from_str(next_test.get(setting))
 
     # write out .json test setting files for the control server to read and send to web ext
     if len(tests_to_run) != 0:

@@ -12,7 +12,6 @@
 #include "nsRegion.h"
 #include <memory>
 
-class gfxASurface;
 namespace mozilla {
 namespace layers {
 class SurfaceTextureImage;
@@ -22,11 +21,9 @@ class CompositorWidget;
 }  // namespace widget
 namespace gl {
 
-RefPtr<GLLibraryEGL> DefaultEglLibrary(nsACString* const out_failureId);
-
 inline std::shared_ptr<EglDisplay> DefaultEglDisplay(
     nsACString* const out_failureId) {
-  const auto lib = DefaultEglLibrary(out_failureId);
+  const auto lib = GLLibraryEGL::Get(out_failureId);
   if (!lib) {
     return nullptr;
   }
@@ -92,10 +89,6 @@ class GLContextEGL final : public GLContext {
 
   virtual void GetWSIInfo(nsCString* const out) const override;
 
-  // hold a reference to the given surface
-  // for the lifetime of this context.
-  void HoldSurface(gfxASurface* aSurf);
-
   EGLSurface GetEGLSurface() const { return mSurface; }
 
   bool HasExtBufferAge() const;
@@ -113,13 +106,15 @@ class GLContextEGL final : public GLContext {
   static RefPtr<GLContextEGL> CreateEGLPBufferOffscreenContextImpl(
       std::shared_ptr<EglDisplay>, const GLContextCreateDesc&,
       const gfx::IntSize& size, bool aUseGles, nsACString* const out_FailureId);
+  static RefPtr<GLContextEGL> CreateEGLSurfacelessContext(
+      const std::shared_ptr<EglDisplay> display,
+      const GLContextCreateDesc& desc, nsACString* const out_failureId);
 
   static EGLSurface CreateEGLSurfaceForCompositorWidget(
       widget::CompositorWidget* aCompositorWidget, const EGLConfig aConfig);
 
 #ifdef MOZ_X11
-  static bool FindVisual(bool aUseWebRender, bool useAlpha,
-                         int* const out_visualId);
+  static bool FindVisual(int* const out_visualId);
 #endif
 
  protected:
@@ -138,7 +133,6 @@ class GLContextEGL final : public GLContext {
   const EGLSurface mFallbackSurface;
 
   EGLSurface mSurfaceOverride = EGL_NO_SURFACE;
-  RefPtr<gfxASurface> mThebesSurface;
   bool mBound = false;
 
   bool mIsPBuffer = false;
@@ -153,18 +147,18 @@ class GLContextEGL final : public GLContext {
       EglDisplay&, EGLConfig, EGLenum bindToTextureFormat,
       gfx::IntSize& pbsize);
 
+#ifdef MOZ_WAYLAND
   static EGLSurface CreateWaylandBufferSurface(EglDisplay&, EGLConfig,
                                                gfx::IntSize& pbsize);
+#endif
 
  public:
   EGLSurface CreateCompatibleSurface(void* aWindow) const;
 };
 
-// -
-// aVisual is used in Linux only to exactly match window and framebuffer
-// visuals on NVIDIA drivers (Bug 1478454).
-bool CreateConfig(EglDisplay&, EGLConfig* aConfig, int32_t depth,
-                  bool aEnableDepthBuffer, bool aUseGles, int aVisual = 0);
+bool CreateConfig(EglDisplay&, EGLConfig* aConfig, int32_t aDepth,
+                  bool aEnableDepthBuffer, bool aUseGles,
+                  bool aAllowFallback = true);
 
 }  // namespace gl
 }  // namespace mozilla

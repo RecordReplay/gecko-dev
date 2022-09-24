@@ -11,9 +11,11 @@ pub type msgqnum_t = ::c_ulong;
 pub type msglen_t = ::c_ulong;
 pub type nlink_t = u32;
 pub type __u64 = ::c_ulonglong;
+pub type __s64 = ::c_longlong;
 pub type __fsword_t = i32;
 pub type fsblkcnt64_t = u64;
 pub type fsfilcnt64_t = u64;
+pub type __syscall_ulong_t = ::c_ulong;
 
 cfg_if! {
     if #[cfg(target_arch = "riscv32")] {
@@ -133,10 +135,21 @@ s! {
         pub _f: [::c_char; 8],
     }
 
-    pub struct ip_mreqn {
-        pub imr_multiaddr: ::in_addr,
-        pub imr_address: ::in_addr,
-        pub imr_ifindex: ::c_int,
+    pub struct semid_ds {
+        pub sem_perm: ipc_perm,
+        #[cfg(target_arch = "powerpc")]
+        __reserved: ::__syscall_ulong_t,
+        pub sem_otime: ::time_t,
+        #[cfg(not(any(target_arch = "mips", target_arch = "powerpc")))]
+        __reserved: ::__syscall_ulong_t,
+        #[cfg(target_arch = "powerpc")]
+        __reserved2: ::__syscall_ulong_t,
+        pub sem_ctime: ::time_t,
+        #[cfg(not(any(target_arch = "mips", target_arch = "powerpc")))]
+        __reserved2: ::__syscall_ulong_t,
+        pub sem_nsems: ::__syscall_ulong_t,
+        __glibc_reserved3: ::__syscall_ulong_t,
+        __glibc_reserved4: ::__syscall_ulong_t,
     }
 }
 
@@ -304,9 +317,6 @@ pub const PTRACE_SETFPREGS: ::c_uint = 15;
 pub const PTRACE_GETREGS: ::c_uint = 12;
 pub const PTRACE_SETREGS: ::c_uint = 13;
 
-pub const TIOCSBRK: ::c_int = 0x5427;
-pub const TIOCCBRK: ::c_int = 0x5428;
-
 extern "C" {
     pub fn sysctl(
         name: *mut ::c_int,
@@ -328,6 +338,9 @@ cfg_if! {
     } else if #[cfg(target_arch = "mips")] {
         mod mips;
         pub use self::mips::*;
+    } else if #[cfg(target_arch = "m68k")] {
+        mod m68k;
+        pub use self::m68k::*;
     } else if #[cfg(target_arch = "powerpc")] {
         mod powerpc;
         pub use self::powerpc::*;

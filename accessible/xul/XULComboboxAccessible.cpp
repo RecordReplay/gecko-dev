@@ -54,7 +54,7 @@ uint64_t XULComboboxAccessible::NativeState() const {
   return state | states::HASPOPUP;
 }
 
-void XULComboboxAccessible::Description(nsString& aDescription) {
+void XULComboboxAccessible::Description(nsString& aDescription) const {
   aDescription.Truncate();
   // Use description of currently focused option
   nsCOMPtr<nsIDOMXULMenuListElement> menuListElm = Elm()->AsXULMenuList();
@@ -76,10 +76,7 @@ void XULComboboxAccessible::Value(nsString& aValue) const {
   if (menuList) menuList->GetLabel(aValue);
 }
 
-uint8_t XULComboboxAccessible::ActionCount() const {
-  // Just one action (click).
-  return 1;
-}
+bool XULComboboxAccessible::HasPrimaryAction() const { return true; }
 
 bool XULComboboxAccessible::DoAction(uint8_t aIndex) const {
   if (aIndex != XULComboboxAccessible::eAction_Click) return false;

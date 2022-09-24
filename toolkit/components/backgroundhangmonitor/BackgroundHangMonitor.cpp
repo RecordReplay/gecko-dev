@@ -68,7 +68,7 @@ class BackgroundHangManager : public nsIObserver {
  private:
   // Background hang monitor thread function
   static void MonitorThread(void* aData) {
-    AUTO_PROFILER_REGISTER_THREAD("BgHangMonitor");
+    AUTO_PROFILER_REGISTER_THREAD("BHMgr Monitor");
     NS_SetCurrentThreadName("BHMgr Monitor");
 
     /* We do not hold a reference to BackgroundHangManager here
@@ -95,7 +95,7 @@ class BackgroundHangManager : public nsIObserver {
   static bool sDisabled;
 
   // Lock for access to members of this class
-  Monitor mLock;
+  Monitor mLock MOZ_UNANNOTATED;
   // Current time as seen by hang monitors
   TimeStamp mNow;
   // List of BackgroundHangThread instances associated with each thread
@@ -103,6 +103,8 @@ class BackgroundHangManager : public nsIObserver {
 
   // Unwinding and reporting of hangs is despatched to this thread.
   nsCOMPtr<nsIThread> mHangProcessingThread;
+
+  ProfilerThreadId mHangMonitorProfilerThreadId;
 
   // Used for recording a permahang in case we don't ever make it back to
   // the main thread to record/send it.
@@ -250,11 +252,17 @@ class BackgroundHangThread : public LinkedListElement<BackgroundHangThread> {
   // Called by BackgroundHangMonitor::NotifyActivity
   void NotifyActivity() {
     MonitorAutoLock autoLock(mManager->mLock);
+    PROFILER_MARKER_UNTYPED(
+        "NotifyActivity", OTHER,
+        MarkerThreadId(mManager->mHangMonitorProfilerThreadId));
     Update();
   }
   // Called by BackgroundHangMonitor::NotifyWait
   void NotifyWait() {
     MonitorAutoLock autoLock(mManager->mLock);
+    PROFILER_MARKER_UNTYPED(
+        "NotifyWait", OTHER,
+        MarkerThreadId(mManager->mHangMonitorProfilerThreadId));
 
     if (mWaiting) {
       return;
@@ -322,6 +330,8 @@ BackgroundHangManager::~BackgroundHangManager() {
 void BackgroundHangManager::RunMonitorThread() {
   // Keep us locked except when waiting
   MonitorAutoLock autoLock(mLock);
+
+  mHangMonitorProfilerThreadId = profiler_current_thread_id();
 
   /* mNow is updated at various intervals determined by waitTime.
      However, if an update latency is too long (due to CPU scheduling, system
@@ -530,7 +540,8 @@ void BackgroundHangThread::ReportHang(TimeDuration aHangTime,
 
   // If the profiler is enabled, add a marker.
 #ifdef MOZ_GECKO_PROFILER
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers(
+          mStackHelper.GetThreadId())) {
     struct HangMarker {
       static constexpr Span<const char> MarkerTypeName() {
         return MakeStringSpan("BHR-detected hang");
@@ -539,12 +550,12 @@ void BackgroundHangThread::ReportHang(TimeDuration aHangTime,
           baseprofiler::SpliceableJSONWriter& aWriter) {}
       static MarkerSchema MarkerTypeDisplay() {
         using MS = MarkerSchema;
-        MS schema{MS::Location::markerChart, MS::Location::markerTable};
+        MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
         return schema;
       }
     };
 
-    const TimeStamp endTime = TimeStamp::NowUnfuzzed();
+    const TimeStamp endTime = TimeStamp::Now();
     const TimeStamp startTime = endTime - aHangTime;
     profiler_add_marker("BHR-detected hang", geckoprofiler::category::OTHER,
                         {MarkerThreadId(mStackHelper.GetThreadId()),

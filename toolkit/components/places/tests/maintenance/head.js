@@ -18,20 +18,21 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 });
 
 async function createCorruptDb(filename) {
-  let path = OS.Path.join(OS.Constants.Path.profileDir, filename);
-  await OS.File.remove(path, { ignoreAbsent: true });
+  let path = PathUtils.join(PathUtils.profileDir, filename);
+  await IOUtils.remove(path, { ignoreAbsent: true });
   // Create a corrupt database.
-  let dir = await OS.File.getCurrentDirectory();
-  let src = OS.Path.join(dir, "corruptDB.sqlite");
-  await OS.File.copy(src, path);
+  let dir = do_get_cwd().path;
+  let src = PathUtils.join(dir, "corruptDB.sqlite");
+  await IOUtils.copy(src, path);
 }
 
 /**
  * Used in _replaceOnStartup_ tests as common test code. It checks whether we
  * are properly cloning or replacing a corrupt database.
  *
- * @param {string} src
- *        Path to a test database, relative to this test folder
+ * @param {string[]} src
+ *        Array of strings which form a path to a test database, relative to
+ *        the parent of this test folder.
  * @param {string} filename
  *        Database file name
  * @param {boolean} shouldClone
@@ -50,23 +51,20 @@ async function test_database_replacement(src, filename, shouldClone, dbStatus) {
   let willClone = shouldClone && filename == DB_FILENAME;
 
   // Ensure that our databases don't exist yet.
-  let dest = OS.Path.join(OS.Constants.Path.profileDir, filename);
+  let dest = PathUtils.join(PathUtils.profileDir, filename);
   Assert.ok(
-    !(await OS.File.exists(dest)),
+    !(await IOUtils.exists(dest)),
     `"${filename} should not exist initially`
   );
-  let corrupt = OS.Path.join(
-    OS.Constants.Path.profileDir,
-    `${filename}.corrupt`
-  );
+  let corrupt = PathUtils.join(PathUtils.profileDir, `${filename}.corrupt`);
   Assert.ok(
-    !(await OS.File.exists(corrupt)),
+    !(await IOUtils.exists(corrupt)),
     `${filename}.corrupt should not exist initially`
   );
 
-  let dir = await OS.File.getCurrentDirectory();
-  src = OS.Path.join(dir, src);
-  await OS.File.copy(src, dest);
+  let dir = PathUtils.parent(do_get_cwd().path);
+  src = PathUtils.join(dir, ...src);
+  await IOUtils.copy(src, dest);
 
   // Create some unique stuff to check later.
   let db = await Sqlite.openConnection({ path: dest });
@@ -82,7 +80,7 @@ async function test_database_replacement(src, filename, shouldClone, dbStatus) {
   );
   Assert.equal(PlacesUtils.history.databaseStatus, dbStatus);
 
-  Assert.ok(await OS.File.exists(dest), "The database should exist");
+  Assert.ok(await IOUtils.exists(dest), "The database should exist");
 
   // Check the new database still contains our special data.
   db = await Sqlite.openConnection({ path: dest });
@@ -100,10 +98,10 @@ async function test_database_replacement(src, filename, shouldClone, dbStatus) {
 
   if (willClone) {
     Assert.ok(
-      !(await OS.File.exists(corrupt)),
+      !(await IOUtils.exists(corrupt)),
       "The corrupt db should not exist"
     );
   } else {
-    Assert.ok(await OS.File.exists(corrupt), "The corrupt db should exist");
+    Assert.ok(await IOUtils.exists(corrupt), "The corrupt db should exist");
   }
 }

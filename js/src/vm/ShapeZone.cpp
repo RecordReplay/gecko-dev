@@ -82,17 +82,9 @@ ShapeZone::ShapeZone(Zone* zone)
       initialShapes(zone),
       propMapShapes(zone) {}
 
-void ShapeZone::clearTables(JSFreeOp* fop) {
-  baseShapes.clear();
-  initialPropMaps.clear();
-  initialShapes.clear();
-  propMapShapes.clear();
-  purgeShapeCaches(fop);
-}
-
-void ShapeZone::purgeShapeCaches(JSFreeOp* fop) {
+void ShapeZone::purgeShapeCaches(JS::GCContext* gcx) {
   for (Shape* shape : shapesWithCache) {
-    MaybeForwarded(shape)->purgeCache(fop);
+    MaybeForwarded(shape)->purgeCache(gcx);
   }
   shapesWithCache.clearAndFree();
 }

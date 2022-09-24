@@ -8,6 +8,7 @@
 #include "nsStringStream.h"
 #include "nsComponentManagerUtils.h"
 #include "nsMemory.h"
+#include "nsCRT.h"
 #include "plstr.h"
 #include "mozilla/UniquePtr.h"
 
@@ -75,13 +76,14 @@ NS_IMETHODIMP nsDeflateConverter::AsyncConvertData(const char* aFromType,
 
   NS_ENSURE_ARG_POINTER(aListener);
 
-  if (!PL_strncasecmp(aToType, ZLIB_TYPE, sizeof(ZLIB_TYPE) - 1))
+  if (!PL_strncasecmp(aToType, ZLIB_TYPE, sizeof(ZLIB_TYPE) - 1)) {
     mWrapMode = WRAP_ZLIB;
-  else if (!PL_strcasecmp(aToType, GZIP_TYPE) ||
-           !PL_strcasecmp(aToType, X_GZIP_TYPE))
+  } else if (!nsCRT::strcasecmp(aToType, GZIP_TYPE) ||
+             !nsCRT::strcasecmp(aToType, X_GZIP_TYPE)) {
     mWrapMode = WRAP_GZIP;
-  else
+  } else {
     mWrapMode = WRAP_NONE;
+  }
 
   nsresult rv = Init();
   NS_ENSURE_SUCCESS(rv, rv);
@@ -121,7 +123,7 @@ NS_IMETHODIMP nsDeflateConverter::OnDataAvailable(nsIRequest* aRequest,
 
     while (mZstream.avail_out == 0) {
       // buffer is full, push the data out to the listener
-      rv = PushAvailableData(aRequest, nullptr);
+      rv = PushAvailableData(aRequest);
       NS_ENSURE_SUCCESS(rv, rv);
       zerr = deflate(&mZstream, Z_NO_FLUSH);
     }
@@ -145,7 +147,7 @@ NS_IMETHODIMP nsDeflateConverter::OnStopRequest(nsIRequest* aRequest,
   int zerr;
   do {
     zerr = deflate(&mZstream, Z_FINISH);
-    rv = PushAvailableData(aRequest, nullptr);
+    rv = PushAvailableData(aRequest);
     NS_ENSURE_SUCCESS(rv, rv);
   } while (zerr == Z_OK);
 
@@ -154,8 +156,7 @@ NS_IMETHODIMP nsDeflateConverter::OnStopRequest(nsIRequest* aRequest,
   return mListener->OnStopRequest(aRequest, aStatusCode);
 }
 
-nsresult nsDeflateConverter::PushAvailableData(nsIRequest* aRequest,
-                                               nsISupports* aContext) {
+nsresult nsDeflateConverter::PushAvailableData(nsIRequest* aRequest) {
   uint32_t bytesToWrite = sizeof(mWriteBuffer) - mZstream.avail_out;
   // We don't need to do anything if there isn't any data
   if (bytesToWrite == 0) return NS_OK;

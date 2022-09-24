@@ -12,18 +12,10 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
 var oldClassID, oldFactory;
-var newClassID = Cc["@mozilla.org/uuid-generator;1"]
-  .getService(Ci.nsIUUIDGenerator)
-  .generateUUID();
+var newClassID = Services.uuid.generateUUID();
 var newFactory = {
-  createInstance(aOuter, aIID) {
-    if (aOuter) {
-      throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-    }
+  createInstance(aIID) {
     return new MockPermissionPromptInstance().QueryInterface(aIID);
-  },
-  lockFactory(aLock) {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   },
   QueryInterface: ChromeUtils.generateQI(["nsIFactory"]),
 };

@@ -21,10 +21,13 @@ var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const defaultSettings = {
   entries: 8 * 1024 * 1024, // 8M entries = 64MB
   interval: 1, // ms
-  features: ["threads"],
+  features: [],
   threads: ["GeckoMain"],
 };
 
+// Effectively `async`: Start the profiler and return the `startProfiler`
+// promise that will get resolved when all child process have started their own
+// profiler.
 function startProfiler(callersSettings) {
   if (Services.profiler.IsActive()) {
     throw new Error(
@@ -32,7 +35,7 @@ function startProfiler(callersSettings) {
     );
   }
   const settings = Object.assign({}, defaultSettings, callersSettings);
-  Services.profiler.StartProfiler(
+  return Services.profiler.StartProfiler(
     settings.entries,
     settings.interval,
     settings.features,
@@ -43,8 +46,8 @@ function startProfiler(callersSettings) {
 }
 
 function startProfilerForMarkerTests() {
-  startProfiler({
-    features: ["threads", "nostacksampling"],
+  return startProfiler({
+    features: ["nostacksampling", "js"],
     threads: ["GeckoMain", "DOM Worker"],
   });
 }
@@ -158,18 +161,41 @@ function getInflatedNetworkMarkers(thread) {
  * @return {InflatedMarker[][]} Pairs of network markers
  */
 function getPairsOfNetworkMarkers(allNetworkMarkers) {
-  // For each 'start' marker we want to find the 'stop' or 'redirect' marker
-  // with the same id.
-  // Note: the algorithm we use here to match markers is very crude and would
-  // be too slow for the real product, but because it is very simple it's good
-  // for a test. Also the logic will be compatible with future marker sets.
-  // Because we only have a few markers the performance is good enough in this
-  // case.
-  return allNetworkMarkers
-    .filter(({ data }) => data.status === "STATUS_START")
-    .map(startMarker =>
-      allNetworkMarkers.filter(({ data }) => data.id === startMarker.data.id)
-    );
+  // For each 'start' marker we want to find the next 'stop' or 'redirect'
+  // marker with the same id.
+  const result = [];
+  const mapOfStartMarkers = new Map(); // marker id -> id in result array
+  for (const marker of allNetworkMarkers) {
+    const { data } = marker;
+    if (data.status === "STATUS_START") {
+      if (mapOfStartMarkers.has(data.id)) {
+        const previousMarker = result[mapOfStartMarkers.get(data.id)][0];
+        Assert.ok(
+          false,
+          `We found 2 start markers with the same id ${data.id}, without end marker in-between.` +
+            `The first marker has URI ${previousMarker.data.URI}, the second marker has URI ${data.URI}.` +
+            ` This should not happen.`
+        );
+        continue;
+      }
+
+      mapOfStartMarkers.set(data.id, result.length);
+      result.push([marker]);
+    } else {
+      // STOP or REDIRECT
+      if (!mapOfStartMarkers.has(data.id)) {
+        Assert.ok(
+          false,
+          `We found an end marker without a start marker (id: ${data.id}, URI: ${data.URI}). This should not happen.`
+        );
+        continue;
+      }
+      result[mapOfStartMarkers.get(data.id)].push(marker);
+      mapOfStartMarkers.delete(data.id);
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -199,9 +225,11 @@ function captureAtLeastOneJsSample() {
  * @returns {Promise<Profile>}
  */
 async function stopAndGetProfile() {
+  // Don't await the pause, because each process will handle it before it
+  // receives the following `getProfileDataAsync()`.
   Services.profiler.Pause();
   const profile = await Services.profiler.getProfileDataAsync();
-  Services.profiler.StopProfiler();
+  await Services.profiler.StopProfiler();
   return profile;
 }
 

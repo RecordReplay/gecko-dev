@@ -45,7 +45,6 @@
 #include "mozilla/dom/WindowBinding.h"
 #include "Units.h"
 #include "nsComponentManagerUtils.h"
-#include "nsSize.h"
 #include "nsCheapSets.h"
 #include "mozilla/dom/ImageBitmapSource.h"
 #include "mozilla/UniquePtr.h"
@@ -117,15 +116,15 @@ class VRDisplay;
 enum class VRDisplayEventReason : uint8_t;
 class VREventObserver;
 class WakeLock;
-#if defined(MOZ_WIDGET_ANDROID)
-class WindowOrientationObserver;
-#endif
 class Worklet;
 namespace cache {
 class CacheStorage;
 }  // namespace cache
 class IDBFactory;
 }  // namespace dom
+namespace layout {
+class RemotePrintJobChild;
+}  // namespace layout
 }  // namespace mozilla
 
 extern already_AddRefed<nsIScriptTimeoutHandler> NS_CreateJSTimeoutHandler(
@@ -166,8 +165,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                                   public nsIInterfaceRequestor,
                                   public PRCListStr {
  public:
-  typedef nsTHashMap<nsUint64HashKey, nsGlobalWindowOuter*>
-      OuterWindowByIdTable;
+  using OuterWindowByIdTable =
+      nsTHashMap<nsUint64HashKey, nsGlobalWindowOuter*>;
 
   using PrintPreviewResolver =
       std::function<void(const mozilla::dom::PrintPreviewResultInfo&)>;
@@ -189,6 +188,8 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   static nsGlobalWindowOuter* Cast(mozIDOMWindowProxy* aWin) {
     return Cast(nsPIDOMWindowOuter::From(aWin));
   }
+
+  bool IsOuterWindow() const final { return true; }  // Overriding EventTarget
 
   static nsGlobalWindowOuter* GetOuterWindowWithId(uint64_t aWindowID) {
     AssertIsOnMainThread();
@@ -229,6 +230,11 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                                JS::Handle<JSObject*> aGivenProto) override {
     return EnsureInnerWindow() ? GetWrapper() : nullptr;
   }
+
+  // nsIGlobalObject
+  bool ShouldResistFingerprinting() const final;
+  uint32_t GetPrincipalHashValue() const final;
+  mozilla::OriginTrials Trials() const final;
 
   // nsIGlobalJSObjectHolder
   JSObject* GetGlobalJSObject() final { return GetWrapper(); }
@@ -328,6 +334,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   // Outer windows only.
   virtual void EnsureSizeAndPositionUpToDate() override;
 
+  virtual void SuppressEventHandling() override;
+  virtual void UnsuppressEventHandling() override;
+
   MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual nsGlobalWindowOuter* EnterModalState()
       override;
   virtual void LeaveModalState() override;
@@ -354,7 +363,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   void MacFullscreenMenubarOverlapChanged(
       mozilla::DesktopCoord aOverlapAmount) final;
   bool SetWidgetFullscreen(FullscreenReason aReason, bool aIsFullscreen,
-                           nsIWidget* aWidget, nsIScreen* aScreen);
+                           nsIWidget* aWidget);
   bool Fullscreen() const;
 
   // nsIInterfaceRequestor
@@ -378,22 +387,19 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   already_AddRefed<mozilla::dom::BrowsingContext> GetChildWindow(
       const nsAString& aName);
 
-  // These return true if we've reached the state in this top level window
+  // Returns true if we've reached the state in windows of this BC group
   // where we ask the user if further dialogs should be blocked.
   //
-  // DialogsAreBeingAbused must be called on the scriptable top inner window.
-  //
-  // ShouldPromptToBlockDialogs is implemented in terms of
-  // DialogsAreBeingAbused, and will get the scriptable top inner window
-  // automatically.
-  // Outer windows only.
+  // This function is implemented in terms of
+  // BrowsingContextGroup::DialogsAreBeingAbused.
   bool ShouldPromptToBlockDialogs();
 
   // These functions are used for controlling and determining whether dialogs
-  // (alert, prompt, confirm) are currently allowed in this window.  If you want
-  // to temporarily disable dialogs, please use TemporarilyDisableDialogs, not
-  // EnableDialogs/DisableDialogs, because correctly determining whether to
-  // re-enable dialogs is actually quite difficult.
+  // (alert, prompt, confirm) are currently allowed in this browsing context
+  // group. If you want to temporarily disable dialogs, please use
+  // TemporarilyDisableDialogs, not EnableDialogs/DisableDialogs, because
+  // correctly determining whether to re-enable dialogs is actually quite
+  // difficult.
   void EnableDialogs();
   void DisableDialogs();
   // Outer windows only.
@@ -401,18 +407,18 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   class MOZ_RAII TemporarilyDisableDialogs {
    public:
-    explicit TemporarilyDisableDialogs(nsGlobalWindowOuter* aWindow);
+    explicit TemporarilyDisableDialogs(mozilla::dom::BrowsingContext* aBC);
     ~TemporarilyDisableDialogs();
 
    private:
-    // Always an inner window; this is the window whose dialog state we messed
+    // This is the browsing context group whose dialog state we messed
     // with.  We just want to keep it alive, because we plan to poke at its
     // members in our destructor.
-    RefPtr<nsGlobalWindowInner> mTopWindow;
+    RefPtr<mozilla::dom::BrowsingContextGroup> mGroup;
     // This is not a AutoRestore<bool> because that would require careful
     // member destructor ordering, which is a bit fragile.  This way we can
-    // explicitly restore things before we drop our ref to mTopWindow.
-    bool mSavedDialogsEnabled;
+    // explicitly restore things before we drop our ref to mGroup.
+    bool mSavedDialogsEnabled = false;
   };
   friend class TemporarilyDisableDialogs;
 
@@ -531,10 +537,16 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   bool GetClosedOuter();
   bool Closed() override;
   void StopOuter(mozilla::ErrorResult& aError);
-  void FocusOuter(mozilla::dom::CallerType aCallerType, bool aFromOtherProcess,
-                  uint64_t aActionId);
+  // TODO: Convert FocusOuter() to MOZ_CAN_RUN_SCRIPT and get rid of the
+  // kungFuDeathGrip in it.
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void FocusOuter(
+      mozilla::dom::CallerType aCallerType, bool aFromOtherProcess,
+      uint64_t aActionId);
   nsresult Focus(mozilla::dom::CallerType aCallerType) override;
-  void BlurOuter(mozilla::dom::CallerType aCallerType);
+  // TODO: Convert BlurOuter() to MOZ_CAN_RUN_SCRIPT and get rid of the
+  // kungFuDeathGrip in it.
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void BlurOuter(
+      mozilla::dom::CallerType aCallerType);
   mozilla::dom::WindowProxyHolder GetFramesOuter();
   uint32_t Length();
   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> GetTopOuter();
@@ -566,10 +578,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
                 mozilla::dom::BrowsingContext** _retval) override;
   mozilla::dom::Navigator* GetNavigator() override;
 
-#if defined(MOZ_WIDGET_ANDROID)
-  int16_t Orientation(mozilla::dom::CallerType aCallerType) const;
-#endif
-
  protected:
   bool AlertOrConfirm(bool aAlert, const nsAString& aMessage,
                       nsIPrincipal& aSubjectPrincipal,
@@ -589,8 +597,9 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   enum class IsPreview : bool { No, Yes };
   enum class IsForWindowDotPrint : bool { No, Yes };
   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> Print(
-      nsIPrintSettings*, nsIWebProgressListener*, nsIDocShell*, IsPreview,
-      IsForWindowDotPrint, PrintPreviewResolver&&, mozilla::ErrorResult&);
+      nsIPrintSettings*, mozilla::layout::RemotePrintJobChild* aRemotePrintJob,
+      nsIWebProgressListener*, nsIDocShell*, IsPreview, IsForWindowDotPrint,
+      PrintPreviewResolver&&, mozilla::ErrorResult&);
   mozilla::dom::Selection* GetSelectionOuter();
   already_AddRefed<mozilla::dom::Selection> GetSelection() override;
   nsScreen* GetScreen();
@@ -617,7 +626,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   nsresult GetControllers(nsIControllers** aControllers) override;
   float GetMozInnerScreenXOuter(mozilla::dom::CallerType aCallerType);
   float GetMozInnerScreenYOuter(mozilla::dom::CallerType aCallerType);
-  double GetDevicePixelRatioOuter(mozilla::dom::CallerType aCallerType);
   bool GetFullscreenOuter();
   bool GetFullScreen() override;
   void SetFullscreenOuter(bool aFullscreen, mozilla::ErrorResult& aError);
@@ -625,9 +633,6 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   bool FindOuter(const nsAString& aString, bool aCaseSensitive, bool aBackwards,
                  bool aWrapAround, bool aWholeWord, bool aSearchInFrames,
                  bool aShowDialog, mozilla::ErrorResult& aError);
-  uint64_t GetMozPaintCountOuter();
-
-  bool ShouldResistFingerprinting();
 
   mozilla::dom::Nullable<mozilla::dom::WindowProxyHolder> OpenDialogOuter(
       JSContext* aCx, const nsAString& aUrl, const nsAString& aName,
@@ -924,7 +929,7 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
   // Helper for getComputedStyle and getDefaultComputedStyle
   already_AddRefed<nsICSSDeclaration> GetComputedStyleHelperOuter(
       mozilla::dom::Element& aElt, const nsAString& aPseudoElt,
-      bool aDefaultStylesOnly);
+      bool aDefaultStylesOnly, mozilla::ErrorResult& aRv);
 
   // Outer windows only.
   void PreloadLocalStorage();
@@ -1131,10 +1136,10 @@ class nsGlobalWindowOuter final : public mozilla::dom::EventTarget,
 
   // It's useful when we get matched EnterModalState/LeaveModalState calls, in
   // which case the outer window is responsible for unsuspending events on the
-  // document. If we don't (for example, if the outer window is closed before
-  // the LeaveModalState call), then the inner window whose mDoc is our
-  // mSuspendedDoc is responsible for unsuspending it.
-  RefPtr<Document> mSuspendedDoc;
+  // documents. If we don't (for example, if the outer window is closed before
+  // the LeaveModalState call), then the inner window whose mDoc is in our
+  // mSuspendedDocs is responsible for unsuspending.
+  nsTArray<RefPtr<Document>> mSuspendedDocs;
 
   // This is the CC generation the last time we called CanSkip.
   uint32_t mCanSkipCCGeneration;

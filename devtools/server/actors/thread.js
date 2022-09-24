@@ -28,9 +28,6 @@ const {
 const {
   WatchpointMap,
 } = require("devtools/server/actors/utils/watchpoint-map");
-const {
-  getDebuggerSourceURL,
-} = require("devtools/server/actors/utils/source-url");
 
 const { logEvent } = require("devtools/server/actors/utils/logEvent");
 
@@ -54,7 +51,7 @@ loader.lazyRequireGetter(
 );
 loader.lazyRequireGetter(
   this,
-  "EventLoopStack",
+  "EventLoop",
   "devtools/server/actors/utils/event-loop",
   true
 );
@@ -190,28 +187,25 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
   initialize(parent, global) {
     Actor.prototype.initialize.call(this, parent.conn);
     this._state = STATES.DETACHED;
-    this._frameActors = [];
     this._parent = parent;
-    this._dbg = null;
-    this._gripDepth = 0;
-    this._threadLifetimePool = null;
-    this._parentClosed = false;
-    this._xhrBreakpoints = [];
-    this._observingNetwork = false;
-    this._activeEventBreakpoints = new Set();
-    this._activeEventPause = null;
-    this._pauseOverlay = null;
-    this._priorPause = null;
-    this._frameActorMap = new WeakMap();
-
-    this._watchpointsMap = new WatchpointMap(this);
-
+    this.global = global;
     this._options = {
       skipBreakpoints: false,
     };
+    this._gripDepth = 0;
+    this._parentClosed = false;
+    this._observingNetwork = false;
+    this._frameActors = [];
+    this._xhrBreakpoints = [];
 
-    this.breakpointActorMap = new BreakpointActorMap(this);
+    this._dbg = null;
+    this._threadLifetimePool = null;
+    this._activeEventPause = null;
+    this._pauseOverlay = null;
+    this._priorPause = null;
 
+    this._activeEventBreakpoints = new Set();
+    this._frameActorMap = new WeakMap();
     this._debuggerSourcesSeen = new WeakSet();
 
     // A Set of URLs string to watch for when new sources are found by
@@ -224,7 +218,13 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     // throws a particular exception, instead of for all older frames as well.
     this._handledFrameExceptions = new WeakMap();
 
-    this.global = global;
+    this._watchpointsMap = new WatchpointMap(this);
+
+    this.breakpointActorMap = new BreakpointActorMap(this);
+
+    this._nestedEventLoop = new EventLoop({
+      thread: this,
+    });
 
     this.onNewSourceEvent = this.onNewSourceEvent.bind(this);
 
@@ -316,27 +316,6 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       this._options.skipBreakpoints ||
       (this.insideClientEvaluation && this.insideClientEvaluation.eager)
     );
-  },
-
-  /**
-   * Keep track of all of the nested event loops we use to pause the debuggee
-   * when we hit a breakpoint/debugger statement/etc in one place so we can
-   * resolve them when we get resume packets. We have more than one (and keep
-   * them in a stack) because we can pause within client evals.
-   */
-  _threadPauseEventLoops: null,
-  _pushThreadPause() {
-    if (!this._threadPauseEventLoops) {
-      this._threadPauseEventLoops = [];
-    }
-    const eventLoop = this._nestedEventLoops.push();
-    this._threadPauseEventLoops.push(eventLoop);
-    eventLoop.enter();
-  },
-  _popThreadPause() {
-    const eventLoop = this._threadPauseEventLoops.pop();
-    assert(eventLoop, "Should have an event loop.");
-    eventLoop.resolve();
   },
 
   isPaused() {
@@ -435,12 +414,6 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
 
     this.sourcesManager.on("newSource", this.onNewSourceEvent);
 
-    // Initialize an event loop stack. This can't be done in the constructor,
-    // because this.conn is not yet initialized by the actor pool at that time.
-    this._nestedEventLoops = new EventLoopStack({
-      thread: this,
-    });
-
     this.reconfigure(options);
 
     // Switch state from DETACHED to RUNNING
@@ -484,16 +457,22 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
   },
 
   _canShowOverlay() {
+    const { window } = this._parent;
+
     // The CanvasFrameAnonymousContentHelper class we're using to create the paused overlay
     // need to have access to a documentElement.
-    // Accept only browsing context target which exposes such element, but ignore
-    // privileged document (top level window, special about:* pages, …).
-    return (
-      // We might have access to a non-chrome window getter that is a Sandox (e.g. in the
-      // case of ContentProcessTargetActor).
-      this._parent.window?.document?.documentElement &&
-      !this._parent.window.isChromeWindow
-    );
+    // We might have access to a non-chrome window getter that is a Sandox (e.g. in the
+    // case of ContentProcessTargetActor).
+    if (!window?.document?.documentElement) {
+      return false;
+    }
+
+    // Ignore privileged document (top level window, special about:* pages, …).
+    if (window.isChromeWindow) {
+      return false;
+    }
+
+    return true;
   },
 
   async showOverlay() {
@@ -616,6 +595,34 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
   getActiveEventBreakpoints() {
     return Array.from(this._activeEventBreakpoints);
   },
+
+  /**
+   * Add event breakpoints to the list of active event breakpoints
+   *
+   * @param {Array<String>} ids: events to add (e.g. ["event.mouse.click","event.mouse.mousedown"])
+   */
+  addEventBreakpoints(ids) {
+    this.setActiveEventBreakpoints(
+      this.getActiveEventBreakpoints().concat(ids)
+    );
+  },
+
+  /**
+   * Remove event breakpoints from the list of active event breakpoints
+   *
+   * @param {Array<String>} ids: events to remove (e.g. ["event.mouse.click","event.mouse.mousedown"])
+   */
+  removeEventBreakpoints(ids) {
+    this.setActiveEventBreakpoints(
+      this.getActiveEventBreakpoints().filter(eventBp => !ids.includes(eventBp))
+    );
+  },
+
+  /**
+   * Set the the list of active event breakpoints
+   *
+   * @param {Array<String>} ids: events to add breakpoint for (e.g. ["event.mouse.click","event.mouse.mousedown"])
+   */
   setActiveEventBreakpoints(ids) {
     this._activeEventBreakpoints = new Set(ids);
 
@@ -795,6 +802,9 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     if ("observeAsmJS" in options) {
       this.dbg.allowUnobservedAsmJS = !options.observeAsmJS;
     }
+    if ("observeWasm" in options) {
+      this.dbg.allowUnobservedWasm = !options.observeWasm;
+    }
 
     if (
       "pauseWorkersUntilAttach" in options &&
@@ -928,7 +938,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       packet.why = reason;
 
       if (!sourceActor) {
-        // If the frame location is in a source that not pass the 'allowSource'
+        // If the frame location is in a source that not pass the 'isHiddenSource'
         // check and thus has no actor, we do not bother pausing.
         return undefined;
       }
@@ -953,7 +963,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     }
 
     try {
-      this._pushThreadPause();
+      this._nestedEventLoop.enter();
     } catch (e) {
       reportException("TA__pauseAndRespond", e);
     }
@@ -1286,11 +1296,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     // In case of multiple nested event loops (due to multiple debuggers open in
     // different tabs or multiple devtools clients connected to the same tab)
     // only allow resumption in a LIFO order.
-    if (
-      this._nestedEventLoops.size &&
-      this._nestedEventLoops.lastPausedThreadActor &&
-      this._nestedEventLoops.lastPausedThreadActor !== this
-    ) {
+    if (!this._nestedEventLoop.isTheLastPausedThreadActor()) {
       return {
         error: "wrongOrder",
         message: "trying to resume in the wrong order.",
@@ -1331,47 +1337,12 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     this._pausePool = null;
 
     this._pauseActor = null;
-    this._popThreadPause();
+    this._nestedEventLoop.exit();
 
     // Tell anyone who cares of the resume (as of now, that's the xpcshell harness and
     // devtools-startup.js when handling the --wait-for-jsdebugger flag)
     this.emit("resumed");
     this.hideOverlay();
-  },
-
-  /**
-   * Spin up a nested event loop so we can synchronously resolve a promise.
-   *
-   * DON'T USE THIS UNLESS YOU ABSOLUTELY MUST! Nested event loops suck: the
-   * world's state can change out from underneath your feet because JS is no
-   * longer run-to-completion.
-   *
-   * @param p
-   *        The promise we want to resolve.
-   * @returns The promise's resolution.
-   */
-  unsafeSynchronize(p) {
-    let needNest = true;
-    let eventLoop;
-    let returnVal;
-
-    p.then(resolvedVal => {
-      needNest = false;
-      returnVal = resolvedVal;
-    })
-      .catch(e => reportException("unsafeSynchronize", e))
-      .then(() => {
-        if (eventLoop) {
-          eventLoop.resolve();
-        }
-      });
-
-    if (needNest) {
-      eventLoop = this._nestedEventLoops.push();
-      eventLoop.enter();
-    }
-
-    return returnVal;
   },
 
   /**
@@ -1461,12 +1432,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       // there is an active Debugger.Source that represents the SaveFrame's
       // source, it will have already been created in the server.
       if (frame instanceof Debugger.Frame) {
-        const sourceActor = this.sourcesManager.createSourceActor(
-          frame.script.source
-        );
-        if (!sourceActor) {
-          continue;
-        }
+        this.sourcesManager.createSourceActor(frame.script.source);
       }
 
       if (RESTARTED_FRAMES.has(frame)) {
@@ -1497,9 +1463,16 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     for (const source of sources) {
       this._addSource(source);
 
-      const url = getDebuggerSourceURL(source);
-      if (url) {
-        urlMap[url]--;
+      // The following check should match the filtering done by `findSourceURLs`:
+      // https://searchfox.org/mozilla-central/rev/ac7a567f036e1954542763f4722fbfce041fb752/js/src/debugger/Debugger.cpp#2406-2409
+      // Otherwise we may populate `urlMap` incorrectly and resurrect sources that weren't GCed,
+      // and spawn duplicated SourceActors/Debugger.Source for the same actual source.
+      // `findSourceURLs` uses !introductionScript check as that allows to identify <script>'s
+      // loaded from the HTML page. This boolean will be defined only when the <script> tag
+      // is added by Javascript code at runtime.
+      // https://searchfox.org/mozilla-central/rev/3d03a3ca09f03f06ef46a511446537563f62a0c6/devtools/docs/user/debugger-api/debugger.source/index.rst#113
+      if (!source.introductionScript) {
+        urlMap[source.url]--;
       }
     }
 
@@ -1602,7 +1575,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       this.emit("paused", packet);
 
       // Start a nested event loop.
-      this._pushThreadPause();
+      this._nestedEventLoop.enter();
 
       // We already sent a response to this request, don't send one
       // now.
@@ -1797,6 +1770,9 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
   },
 
   _onWindowReady({ isTopLevel, isBFCache, window }) {
+    // Note that this code relates to the disabling of Debugger API from will-navigate listener.
+    // And should only be triggered when the target actor doesn't follow WindowGlobal lifecycle.
+    // i.e. when the Thread Actor manages more than one top level WindowGlobal.
     if (isTopLevel && this.state != STATES.DETACHED) {
       this.sourcesManager.reset();
       this.clearDebuggees();
@@ -1826,7 +1802,16 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
 
     // Proceed normally only if the debuggee is not paused.
     if (this.state == STATES.PAUSED) {
-      this.unsafeSynchronize(Promise.resolve(this.doResume()));
+      // If we were paused while navigating to a new page,
+      // we resume previous page execution, so that the document can be sucessfully unloaded.
+      // And we disable the Debugger API, so that we do not hit any breakpoint or trigger any
+      // thread actor feature. We will re-enable it just before the next page starts loading,
+      // from window-ready listener. That's for when the target doesn't follow WindowGlobal
+      // lifecycle.
+      // When the target follows the WindowGlobal lifecycle, we will stiff resume and disable
+      // this thread actor. It will soon be destroyed. And a new target will pick up
+      // the next WindowGlobal and spawn a new Debugger API, via ThreadActor.attach().
+      this.doResume();
       this.dbg.disable();
     }
 
@@ -2015,7 +2000,7 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
       };
       this.emit("paused", packet);
 
-      this._pushThreadPause();
+      this._nestedEventLoop.enter();
     } catch (e) {
       reportException("TA_onExceptionUnwind", e);
     }
@@ -2076,13 +2061,8 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
    *
    * @param aSource Debugger.Source
    *        The source that will be stored.
-   * @returns true, if the source was added; false otherwise.
    */
   _addSource(source) {
-    if (!this.sourcesManager.allowSource(source)) {
-      return false;
-    }
-
     // Preloaded WebExtension content scripts may be cached internally by
     // ExtensionContent.jsm and ThreadActor would ignore them on a page reload
     // because it finds them in the _debuggerSourcesSeen WeakSet,
@@ -2125,7 +2105,6 @@ const ThreadActor = ActorClassWithSpec(threadSpec, {
     }
 
     this._debuggerSourcesSeen.add(source);
-    return true;
   },
 
   /**

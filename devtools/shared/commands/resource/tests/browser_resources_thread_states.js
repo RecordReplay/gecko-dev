@@ -43,10 +43,6 @@ async function checkBreakpointBeforeWatchResources() {
     tab
   );
 
-  // Attach the thread actor before running the debugger statement,
-  // so that it is correctly catched by the thread actor.
-  info("Attach the top level target");
-  await targetCommand.targetFront.attach();
   // Init the Thread actor via attachAndInitThread in order to ensure
   // memoizing the thread front and avoid attaching it twice
   info("Attach the top level thread actor");
@@ -269,9 +265,11 @@ async function checkPauseOnException() {
     "data:text/html,<meta charset=utf8><script>a.b.c.d</script>"
   );
 
-  const { client, resourceCommand, targetCommand } = await initResourceCommand(
-    tab
-  );
+  const {
+    commands,
+    resourceCommand,
+    targetCommand,
+  } = await initResourceCommand(tab);
 
   info("Call watchResources");
   const availableResources = [];
@@ -285,13 +283,12 @@ async function checkPauseOnException() {
     "Got no THREAD_STATE when calling watchResources"
   );
 
-  // treadFront is created and attached while calling watchResources
-  const { threadFront } = targetCommand.targetFront;
-  await threadFront.reconfigure({ pauseOnExceptions: true });
+  await commands.threadConfigurationCommand.updateConfiguration({
+    pauseOnExceptions: true,
+  });
 
   info("Reload the page, in order to trigger exception on load");
-  const reloaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
-  tab.linkedBrowser.reload();
+  const reloaded = reloadBrowser();
 
   await waitFor(
     () => availableResources.length == 1,
@@ -318,6 +315,7 @@ async function checkPauseOnException() {
     },
   });
 
+  const { threadFront } = targetCommand.targetFront;
   await threadFront.resume();
   info("Wait for page to finish reloading after resume");
   await reloaded;
@@ -332,7 +330,7 @@ async function checkPauseOnException() {
   assertResumedResource(resumed);
 
   targetCommand.destroy();
-  await client.close();
+  await commands.destroy();
 }
 
 async function checkSetBeforeWatch() {
@@ -346,9 +344,6 @@ async function checkSetBeforeWatch() {
     tab
   );
 
-  // Attach the target in order to create the thread actor
-  info("Attach the top level target");
-  await targetCommand.targetFront.attach();
   // Instantiate the thread front in order to be able to set a breakpoint before watching for thread state
   info("Attach the top level thread actor");
   await targetCommand.targetFront.attachAndInitThread(targetCommand);
@@ -483,17 +478,17 @@ async function checkDebuggerStatementInIframes() {
   });
 
   const iframeTarget = threadState.targetFront;
-  if (isFissionEnabled()) {
+  if (isFissionEnabled() || isEveryFrameTargetEnabled()) {
     is(
       iframeTarget.url,
       REMOTE_IFRAME_URL,
-      "With fission, the pause is from the iframe's target"
+      "With fission/EFT, the pause is from the iframe's target"
     );
   } else {
     is(
       iframeTarget,
       targetCommand.targetFront,
-      "Without fission, the pause is from the top level target"
+      "Without fission/EFT, the pause is from the top level target"
     );
   }
   const { threadFront } = iframeTarget;

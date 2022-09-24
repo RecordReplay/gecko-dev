@@ -19,13 +19,17 @@ const {
   isPacketPrivate,
 } = require("devtools/client/webconsole/utils/messages");
 const {
-  getAllMessagesById,
+  getMutableMessagesById,
   getMessage,
 } = require("devtools/client/webconsole/selectors/messages");
 const Telemetry = require("devtools/client/shared/telemetry");
 
 const EventEmitter = require("devtools/shared/event-emitter");
 const App = createFactory(require("devtools/client/webconsole/components/App"));
+
+loader.lazyGetter(this, "AppErrorBoundary", () =>
+  createFactory(require("devtools/client/shared/components/AppErrorBoundary"))
+);
 
 const {
   setupServiceContainer,
@@ -36,6 +40,12 @@ loader.lazyRequireGetter(
   "Constants",
   "devtools/client/webconsole/constants"
 );
+
+// Localized strings for (devtools/client/locales/en-US/startup.properties)
+loader.lazyGetter(this, "L10N", function() {
+  const { LocalizationHelper } = require("devtools/shared/l10n");
+  return new LocalizationHelper("devtools/client/locales/startup.properties");
+});
 
 function renderApp({ app, store, toolbox, root }) {
   return ReactDOM.render(
@@ -79,6 +89,8 @@ class WebConsoleWrapper {
     this.telemetry = new Telemetry();
   }
 
+  #serviceContainer;
+
   async init() {
     const { webConsoleUI } = this;
 
@@ -94,27 +106,27 @@ class WebConsoleWrapper {
         },
       });
 
-      const serviceContainer = setupServiceContainer({
-        webConsoleUI,
-        toolbox: this.toolbox,
-        hud: this.hud,
-        webConsoleWrapper: this,
-      });
-
-      const app = App({
-        serviceContainer,
-        webConsoleUI,
-        onFirstMeaningfulPaint: resolve,
-        closeSplitConsole: this.closeSplitConsole.bind(this),
-        hidePersistLogsCheckbox:
-          webConsoleUI.isBrowserConsole || webConsoleUI.isBrowserToolboxConsole,
-        hideShowContentMessagesCheckbox:
-          !webConsoleUI.isBrowserConsole &&
-          !webConsoleUI.isBrowserToolboxConsole,
-        inputEnabled:
-          !webConsoleUI.isBrowserConsole ||
-          Services.prefs.getBoolPref("devtools.chrome.enabled"),
-      });
+      const app = AppErrorBoundary(
+        {
+          componentName: "Console",
+          panel: L10N.getStr("ToolboxTabWebconsole.label"),
+        },
+        App({
+          serviceContainer: this.getServiceContainer(),
+          webConsoleUI,
+          onFirstMeaningfulPaint: resolve,
+          closeSplitConsole: this.closeSplitConsole.bind(this),
+          hidePersistLogsCheckbox:
+            webConsoleUI.isBrowserConsole ||
+            webConsoleUI.isBrowserToolboxConsole,
+          hideShowContentMessagesCheckbox:
+            !webConsoleUI.isBrowserConsole &&
+            !webConsoleUI.isBrowserToolboxConsole,
+          inputEnabled:
+            !webConsoleUI.isBrowserConsole ||
+            Services.prefs.getBoolPref("devtools.chrome.enabled"),
+        })
+      );
 
       // Render the root Application component.
       if (this.parentNode) {
@@ -164,7 +176,7 @@ class WebConsoleWrapper {
 
     // For (network) message updates, we need to check both messages queue and the state
     // since we can receive updates even if the message isn't rendered yet.
-    const messages = [...getAllMessagesById(store.getState()).values()];
+    const messages = [...getMutableMessagesById(store.getState()).values()];
     this.queuedMessageUpdates = this.queuedMessageUpdates.filter(
       ({ actor }) => {
         const queuedNetworkMessage = this.queuedMessageAdds.find(
@@ -273,6 +285,10 @@ class WebConsoleWrapper {
     store.dispatch(actions.evaluateExpression(expression));
   }
 
+  dispatchUpdateInstantEvaluationResultForCurrentExpression() {
+    store.dispatch(actions.updateInstantEvaluationResultForCurrentExpression());
+  }
+
   /**
    * Returns a Promise that resolves once any async dispatch is finally dispatched.
    */
@@ -352,6 +368,18 @@ class WebConsoleWrapper {
 
   getStore() {
     return store;
+  }
+
+  getServiceContainer() {
+    if (!this.#serviceContainer) {
+      this.#serviceContainer = setupServiceContainer({
+        webConsoleUI: this.webConsoleUI,
+        toolbox: this.toolbox,
+        hud: this.hud,
+        webConsoleWrapper: this,
+      });
+    }
+    return this.#serviceContainer;
   }
 
   subscribeToStore(callback) {

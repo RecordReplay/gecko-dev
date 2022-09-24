@@ -12,6 +12,7 @@
 #include "mozilla/ipc/IdleSchedulerChild.h"
 #include "nsCycleCollector.h"
 #include "nsJSEnvironment.h"
+#include "nsCycleCollectionParticipant.h"
 
 namespace mozilla {
 
@@ -60,9 +61,6 @@ static const TimeDuration kMaxCCLockedoutTime = TimeDuration::FromSeconds(30);
 // Trigger a CC if the purple buffer exceeds this size when we check it.
 static const uint32_t kCCPurpleLimit = 200;
 
-// How many cycle collected nodes to traverse between time checks.
-static const int64_t kNumCCNodesBetweenTimeChecks = 1000;
-
 // Actions performed by the GCRunner state machine.
 enum class GCRunnerAction {
   WaitToMajorGC,  // We want to start a new major GC
@@ -104,10 +102,18 @@ struct CCRunnerStep {
   // or not. (ForgetSkippable is the only action requiring a parameter; if
   // that changes, this will become a union.)
   CCRunnerForgetSkippableRemoveChildless mRemoveChildless;
+
+  // If the action is CycleCollect, the reason for the collection.
+  CCReason mCCReason;
 };
 
 class CCGCScheduler {
  public:
+  CCGCScheduler()
+      : mAskParentBeforeMajorGC(XRE_IsContentProcess()),
+        mReadyForMajorGC(!mAskParentBeforeMajorGC),
+        mInterruptRequested(false) {}
+
   static bool CCRunnerFired(TimeStamp aDeadline);
 
   // Parameter setting
@@ -135,13 +141,14 @@ class CCGCScheduler {
   bool NeedsFullGC() const { return mNeedsFullGC; }
 
   // Requests
-  void PokeGC(JS::GCReason aReason, JSObject* aObj, uint32_t aDelay = 0);
+  void PokeGC(JS::GCReason aReason, JSObject* aObj, TimeDuration aDelay = 0);
   void PokeShrinkingGC();
   void PokeFullGC();
   void MaybePokeCC(TimeStamp aNow, uint32_t aSuspectedCCObjects);
 
   void UserIsInactive();
   void UserIsActive();
+  bool IsUserActive() const { return mUserIsActive; }
 
   void KillShrinkingGCTimer();
   void KillFullGCTimer();
@@ -149,12 +156,20 @@ class CCGCScheduler {
   void KillCCRunner();
   void KillAllTimersAndRunners();
 
+  js::SliceBudget CreateGCSliceBudget(mozilla::TimeDuration aDuration,
+                                      bool isIdle, bool isExtended) {
+    auto budget = js::SliceBudget(aDuration, &mInterruptRequested);
+    budget.idle = isIdle;
+    budget.extended = isExtended;
+    return budget;
+  }
+
   /*
    * aDelay is the delay before the first time the idle task runner runs.
    * Then it runs every
    * StaticPrefs::javascript_options_gc_delay_interslice()
    */
-  void EnsureGCRunner(uint32_t aDelay);
+  void EnsureGCRunner(TimeDuration aDelay);
 
   void EnsureCCRunner(TimeDuration aDelay, TimeDuration aBudget);
 
@@ -163,55 +178,83 @@ class CCGCScheduler {
   void SetNeedsFullGC(bool aNeedGC = true) { mNeedsFullGC = aNeedGC; }
 
   void SetWantMajorGC(JS::GCReason aReason) {
-    mMajorGCReason = aReason;
+    MOZ_ASSERT(aReason != JS::GCReason::NO_REASON);
+
+    // If the GC being requested is not a shrinking GC set this flag.
+    // If/when the shrinking GC timer fires but the user is active we check
+    // this flag before canceling the GC, so as not to cancel the
+    // non-shrinking GC being requested here.
+    if (aReason != JS::GCReason::USER_INACTIVE) {
+      mWantAtLeastRegularGC = true;
+    }
 
     // Force full GCs when called from reftests so that we collect dead zones
     // that have not been scheduled for collection.
     if (aReason == JS::GCReason::DOM_WINDOW_UTILS) {
       SetNeedsFullGC();
     }
+
+    // USER_INACTIVE trumps everything,
+    // FULL_GC_TIMER trumps everything except USER_INACTIVE,
+    // all other reasons just use the latest reason.
+    switch (aReason) {
+      case JS::GCReason::USER_INACTIVE:
+        mMajorGCReason = aReason;
+        break;
+      case JS::GCReason::FULL_GC_TIMER:
+        if (mMajorGCReason != JS::GCReason::USER_INACTIVE) {
+          mMajorGCReason = aReason;
+        }
+        break;
+      default:
+        if (mMajorGCReason != JS::GCReason::USER_INACTIVE &&
+            mMajorGCReason != JS::GCReason::FULL_GC_TIMER) {
+          mMajorGCReason = aReason;
+        }
+        break;
+    }
   }
+
   // Ensure that the current runner does a cycle collection, and trigger a GC
   // after it finishes.
-  void EnsureCCThenGC() {
+  void EnsureCCThenGC(CCReason aReason) {
     MOZ_ASSERT(mCCRunnerState != CCRunnerState::Inactive);
-    mNeedsFullCC = true;
+    MOZ_ASSERT(aReason != CCReason::NO_REASON);
+    mNeedsFullCC = aReason;
     mNeedsGCAfterCC = true;
   }
 
   // Returns false if we started and finished a major GC while waiting for a
   // response.
   [[nodiscard]] bool NoteReadyForMajorGC() {
-    if (mMajorGCReason == JS::GCReason::NO_REASON) {
+    if (mMajorGCReason == JS::GCReason::NO_REASON || InIncrementalGC()) {
       return false;
     }
     mReadyForMajorGC = true;
     return true;
   }
 
-  void NoteGCBegin() {
-    // Treat all GC as incremental here; non-incremental GC will just appear to
-    // be one slice.
-    mInIncrementalGC = true;
-    mReadyForMajorGC = false;
-  }
+  // Starting a major GC (incremental or non-incremental).
+  void NoteGCBegin();
 
-  void NoteGCEnd() {
-    mMajorGCReason = JS::GCReason::NO_REASON;
+  // Major GC completed.
+  void NoteGCEnd();
 
-    mInIncrementalGC = false;
-    mCCBlockStart = TimeStamp();
-    mInIncrementalGC = false;
-    mReadyForMajorGC = false;
-    mNeedsFullCC = true;
-    mHasRunGC = true;
-    mIsCompactingOnUserInactive = false;
+  // A timer fired, but then decided not to run a GC.
+  void NoteWontGC();
 
-    mCleanupsSinceLastGC = 0;
-    mCCollectedWaitingForGC = 0;
-    mCCollectedZonesWaitingForGC = 0;
-    mLikelyShortLivingObjectsNeedingGC = 0;
-  }
+  // This is invoked when we reach the actual cycle collection portion of the
+  // overall cycle collection.
+  void NoteCCBegin(CCReason aReason, TimeStamp aWhen,
+                   uint32_t aNumForgetSkippables, uint32_t aSuspected,
+                   uint32_t aRemovedPurples);
+
+  // This is invoked when the whole process of collection is done -- i.e., CC
+  // preparation (eg ForgetSkippables) in addition to the CC itself. There
+  // really ought to be a separate name for the overall CC as opposed to the
+  // actual cycle collection portion.
+  void NoteCCEnd(const CycleCollectorResults& aResults, TimeStamp aWhen,
+                 mozilla::TimeDuration aMaxSliceTime);
 
   void NoteGCSliceEnd(TimeDuration aSliceDuration) {
     if (mMajorGCReason == JS::GCReason::NO_REASON) {
@@ -228,12 +271,11 @@ class CCGCScheduler {
     mGCUnnotifiedTotalTime += aSliceDuration;
   }
 
-  void FullGCTimerFired(nsITimer* aTimer);
-  void ShrinkingGCTimerFired(nsITimer* aTimer);
   bool GCRunnerFired(TimeStamp aDeadline);
+  bool GCRunnerFiredDoGC(TimeStamp aDeadline, const GCRunnerStep& aStep);
 
   using MayGCPromise =
-      MozPromise<bool /* aIgnored */, mozilla::ipc::ResponseRejectReason, true>;
+      MozPromise<bool, mozilla::ipc::ResponseRejectReason, true>;
 
   // Returns null if we shouldn't GC now (eg a GC is already running).
   static RefPtr<MayGCPromise> MayGCNow(JS::GCReason reason);
@@ -265,24 +307,8 @@ class CCGCScheduler {
     return aSuspectedBeforeForgetSkippable - aSuspectedCCObjects;
   }
 
-  // After collecting cycles, record the results that are used in scheduling
-  // decisions.
-  void NoteCycleCollected(const CycleCollectorResults& aResults) {
-    mCCollectedWaitingForGC += aResults.mFreedGCed;
-    mCCollectedZonesWaitingForGC += aResults.mFreedJSZones;
-  }
-
-  // This is invoked when the whole process of collection is done -- i.e., CC
-  // preparation (eg ForgetSkippables), the CC itself, and the optional
-  // followup GC. There really ought to be a separate name for the overall CC
-  // as opposed to the actual cycle collection portion.
-  void NoteCCEnd(TimeStamp aWhen) {
-    mLastCCEndTime = aWhen;
-    mNeedsFullCC = false;
-
-    // The GC for this CC has already been requested.
-    mNeedsGCAfterCC = false;
-  }
+  // Test if we are in the NoteCCBegin .. NoteCCEnd interval.
+  bool IsCollectingCycles() const { return mIsCollectingCycles; }
 
   // The CC was abandoned without running a slice, so we only did forget
   // skippables. Prevent running another cycle soon.
@@ -306,8 +332,8 @@ class CCGCScheduler {
                                        TimeStamp aNow,
                                        bool* aPreferShorterSlices) const;
 
-  TimeDuration ComputeInterSliceGCBudget(TimeStamp aDeadline,
-                                         TimeStamp aNow) const;
+  js::SliceBudget ComputeInterSliceGCBudget(TimeStamp aDeadline,
+                                            TimeStamp aNow);
 
   bool ShouldForgetSkippable(uint32_t aSuspectedCCObjects) const {
     // Only do a forget skippable if there are more than a few new objects
@@ -320,16 +346,22 @@ class CCGCScheduler {
   // garbage to cycle collect: either we just finished a GC, or the purple
   // buffer is getting really big, or it's getting somewhat big and it has been
   // too long since the last CC.
-  bool IsCCNeeded(TimeStamp aNow, uint32_t aSuspectedCCObjects) const {
-    if (mNeedsFullCC) {
-      return true;
+  CCReason IsCCNeeded(TimeStamp aNow, uint32_t aSuspectedCCObjects) const {
+    if (mNeedsFullCC != CCReason::NO_REASON) {
+      return mNeedsFullCC;
     }
-    return aSuspectedCCObjects > kCCPurpleLimit ||
-           (aSuspectedCCObjects > kCCForcedPurpleLimit && mLastCCEndTime &&
-            aNow - mLastCCEndTime > kCCForced);
+    if (aSuspectedCCObjects > kCCPurpleLimit) {
+      return CCReason::MANY_SUSPECTED;
+    }
+    if (aSuspectedCCObjects > kCCForcedPurpleLimit && mLastCCEndTime &&
+        aNow - mLastCCEndTime > kCCForced) {
+      return CCReason::TIMED;
+    }
+    return CCReason::NO_REASON;
   }
 
-  bool ShouldScheduleCC(TimeStamp aNow, uint32_t aSuspectedCCObjects) const;
+  mozilla::CCReason ShouldScheduleCC(TimeStamp aNow,
+                                     uint32_t aSuspectedCCObjects) const;
 
   // If we collected a substantial amount of cycles, poke the GC since more
   // objects might be unreachable now.
@@ -357,10 +389,13 @@ class CCGCScheduler {
     NumStates
   };
 
-  void InitCCRunnerStateMachine(CCRunnerState initialState) {
+  void InitCCRunnerStateMachine(CCRunnerState initialState, CCReason aReason) {
     if (mCCRunner) {
       return;
     }
+
+    MOZ_ASSERT(mCCReason == CCReason::NO_REASON);
+    mCCReason = aReason;
 
     // The state machine should always have been deactivated after the previous
     // collection, however far that collection may have gone.
@@ -380,9 +415,12 @@ class CCGCScheduler {
     }
   }
 
-  void DeactivateCCRunner() { mCCRunnerState = CCRunnerState::Inactive; }
+  void DeactivateCCRunner() {
+    mCCRunnerState = CCRunnerState::Inactive;
+    mCCReason = CCReason::NO_REASON;
+  }
 
-  GCRunnerStep GetNextGCRunnerAction(TimeStamp aDeadline);
+  GCRunnerStep GetNextGCRunnerAction() const;
 
   CCRunnerStep AdvanceCCRunner(TimeStamp aDeadline, TimeStamp aNow,
                                uint32_t aSuspectedCCObjects);
@@ -399,8 +437,24 @@ class CCGCScheduler {
   // duration (or until it goes too long and is finished synchronously.)
   bool mInIncrementalGC = false;
 
+  // Whether to ask the parent process if now is a good time to GC (false for
+  // the parent process.)
+  const bool mAskParentBeforeMajorGC;
+
+  // We've asked the parent process if now is a good time to GC (do not ask
+  // again).
+  bool mHaveAskedParent = false;
+
   // The parent process is ready for us to do a major GC.
-  bool mReadyForMajorGC = false;
+  bool mReadyForMajorGC;
+
+  // Set when the IdleTaskRunner requests the current task be interrupted.
+  // Cleared when the GC slice budget has detected the interrupt request.
+  mozilla::Atomic<bool> mInterruptRequested;
+
+  // When a shrinking GC has been requested but we back-out, if this is true
+  // we run a non-shrinking GC.
+  bool mWantAtLeastRegularGC = false;
 
   // When the CC started actually waiting for the GC to finish. This will be
   // set to non-null at a later time than mCCLockedOut.
@@ -422,7 +476,7 @@ class CCGCScheduler {
   // gray bits.
   bool mHasRunGC = false;
 
-  bool mNeedsFullCC = false;
+  mozilla::CCReason mNeedsFullCC = CCReason::NO_REASON;
   bool mNeedsFullGC = true;
   bool mNeedsGCAfterCC = false;
   uint32_t mPreviousSuspectedCount = 0;
@@ -436,9 +490,11 @@ class CCGCScheduler {
   nsITimer* mShrinkingGCTimer = nullptr;
   nsITimer* mFullGCTimer = nullptr;
 
+  mozilla::CCReason mCCReason = mozilla::CCReason::NO_REASON;
   JS::GCReason mMajorGCReason = JS::GCReason::NO_REASON;
 
   bool mIsCompactingOnUserInactive = false;
+  bool mIsCollectingCycles = false;
   bool mUserIsActive = true;
 
  public:

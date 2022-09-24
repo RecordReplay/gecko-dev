@@ -38,8 +38,13 @@
 interface mozIMozIntl : nsISupports
 {
   jsval getCalendarInfo([optional] in jsval locales);
-  jsval getDisplayNames([optional] in jsval locales, [optional] in jsval options);
-  jsval getLocaleInfo([optional] in jsval locales);
+
+  /**
+   * Helper for IntlUtils.webidl, will be removed once Intl.DisplayNames
+   * supports date-time types in non-privileged code.
+   */
+  jsval getDisplayNamesDeprecated([optional] in jsval locales, [optional] in jsval options);
+
 
   /**
    * Returns a list of locale codes for a given type.
@@ -76,10 +81,20 @@ interface mozIMozIntl : nsISupports
    *   let locs = getLocaleDisplayNames(["pl"], ["sr-RU", "es-MX", "fr-CA"]);
    *   locs === ["Serbski (Rosja)", "Hiszpański (Meksyk)", "Francuski (Kanada)"]
    */
-  jsval getLocaleDisplayNames(in jsval locales, in jsval localeCodes);
+  jsval getLocaleDisplayNames(in jsval locales, in jsval localeCodes, [optional] in jsval options);
+
+  /**
+   * Returns the assumed script directionality for known Firefox locales. This is
+   * somewhat crude, but should work until Bug 1750781 lands.
+   *
+   * TODO (Bug 1750781) - Callers should use Intl.LocaleInfo once it is standardized (see
+   * Bug 1693576), rather than maintaining a hardcoded list of RTL locales.
+   */
+  jsval getScriptDirection(in jsval locale);
 
   readonly attribute jsval Collator;
   readonly attribute jsval DateTimeFormat;
+  readonly attribute jsval DisplayNames;
   readonly attribute jsval ListFormat;
   readonly attribute jsval Locale;
   readonly attribute jsval NumberFormat;

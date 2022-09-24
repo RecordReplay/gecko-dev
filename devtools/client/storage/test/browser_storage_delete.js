@@ -29,6 +29,10 @@ const TEST_CASES = [
 ];
 
 add_task(async function() {
+  // storage-listings.html explicitly mixes secure and insecure frames.
+  // We should not enforce https for tests using this page.
+  await pushPref("dom.security.https_first", false);
+
   await openTabAndSetupStorage(MAIN_DOMAIN + "storage-listings.html");
 
   const contextMenu = gPanelWindow.document.getElementById(
@@ -59,7 +63,9 @@ add_task(async function() {
         .replace(SEPARATOR_GUID, "-")
         .substr(0, 16);
       ok(
-        menuDeleteItem.getAttribute("label").includes(truncatedRowName),
+        JSON.parse(
+          menuDeleteItem.getAttribute("data-l10n-args")
+        ).itemName.includes(truncatedRowName),
         `Context menu item label contains '${rowName}' (maybe truncated)`
       );
     });

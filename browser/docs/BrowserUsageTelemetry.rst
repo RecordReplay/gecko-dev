@@ -8,12 +8,6 @@ The `BrowserUsageTelemetry.jsm <https://searchfox.org/mozilla-central/source/bro
 
 The measurements recording begins right after the ``SessionStore`` has finished restoring the session (i.e. restoring tabs/windows after Firefox starts).
 
-Search telemetry
-================
-This module exposes the ``recordSearch`` method, which serves as the main entry point for recording search related Telemetry. It records only the search *counts* per engine and the origin of the search, but nothing pertaining the search contents themselves.
-
-A list of the components recording search Telemetry can be found using the following `Searchfox search <https://searchfox.org/mozilla-central/search?q=recordSearch>`_.
-
 Tab and window interactions
 ===========================
 The usage telemetry module currently measures these interactions with the browser's tabs and windows:
@@ -114,7 +108,7 @@ interacts with the browser. The area is one of those above with the addition of
 When an interaction occurs the widget's identifier is used as the key and the
 scalar is incremented. If the widget is provided by an add-on then the add-on
 identifier is dropped and an identifier of the form ``addonX`` is used where X
-is a number. The number used is stable for a single session. Everytime the user
+is a number. The number used is stable for a single session. Every time the user
 moves or interacts with an add-on the same number is used but then the numbers
 for each add-on may change after Firefox has been restarted.
 

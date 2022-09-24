@@ -8,6 +8,7 @@
 
 // Optional output information for debugging and analyzing size usage.
 
+#include <inttypes.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -103,7 +104,7 @@ static inline const char* LayerName(size_t layer) {
     case kLayerExtraChannels:
       return "extra channels";
     default:
-      JXL_ABORT("Invalid layer %zu\n", layer);
+      JXL_ABORT("Invalid layer %d\n", static_cast<int>(layer));
   }
 }
 
@@ -119,11 +120,13 @@ struct AuxOut {
       clustered_entropy += victim.clustered_entropy;
     }
     void Print(size_t num_inputs) const {
-      printf("%10zd", total_bits);
+      printf("%10" PRId64, static_cast<int64_t>(total_bits));
       if (histogram_bits != 0) {
-        printf("   [c/i:%6.2f | hst:%8zd | ex:%8zd | h+c+e:%12.3f",
-               num_clustered_histograms * 1.0 / num_inputs, histogram_bits >> 3,
-               extra_bits >> 3,
+        printf("   [c/i:%6.2f | hst:%8" PRId64 " | ex:%8" PRId64
+               " | h+c+e:%12.3f",
+               num_clustered_histograms * 1.0 / num_inputs,
+               static_cast<int64_t>(histogram_bits >> 3),
+               static_cast<int64_t>(extra_bits >> 3),
                (histogram_bits + clustered_entropy + extra_bits) / 8.0);
         printf("]");
       }
@@ -148,8 +151,7 @@ struct AuxOut {
       layers[i].Assimilate(victim.layers[i]);
     }
     num_blocks += victim.num_blocks;
-    num_dct2_blocks += victim.num_dct2_blocks;
-    num_dct4_blocks += victim.num_dct4_blocks;
+    num_small_blocks += victim.num_small_blocks;
     num_dct4x8_blocks += victim.num_dct4x8_blocks;
     num_afv_blocks += victim.num_afv_blocks;
     num_dct8_blocks += victim.num_dct8_blocks;
@@ -158,6 +160,8 @@ struct AuxOut {
     num_dct16_blocks += victim.num_dct16_blocks;
     num_dct16x32_blocks += victim.num_dct16x32_blocks;
     num_dct32_blocks += victim.num_dct32_blocks;
+    num_dct32x64_blocks += victim.num_dct32x64_blocks;
+    num_dct64_blocks += victim.num_dct64_blocks;
     num_butteraugli_iters += victim.num_butteraugli_iters;
     for (size_t i = 0; i < dc_pred_usage.size(); ++i) {
       dc_pred_usage[i] += victim.dc_pred_usage[i];
@@ -216,7 +220,7 @@ struct AuxOut {
     Image3MinMax(image, &min, &max);
     Image3B normalized(image.xsize(), image.ysize());
     for (size_t c = 0; c < 3; ++c) {
-      float mul = min[c] == max[c] ? 0 : (1.0f / (max[c] - min[c]));
+      float mul = min[c] == max[c] ? 0 : (255.0f / (max[c] - min[c]));
       for (size_t y = 0; y < image.ysize(); ++y) {
         const T* JXL_RESTRICT row_in = image.ConstPlaneRow(c, y);
         uint8_t* JXL_RESTRICT row_out = normalized.PlaneRow(c, y);
@@ -247,12 +251,6 @@ struct AuxOut {
     DumpImage(label, normalized);
   }
 
-  // This dumps coefficients as a 16-bit PNG with coefficients of a block placed
-  // in the area that would contain that block in a normal image. To view the
-  // resulting image manually, rescale intensities by using:
-  // $ convert -auto-level IMAGE.PNG - | display -
-  void DumpCoeffImage(const char* label, const Image3S& coeff_image) const;
-
   void SetInspectorImage3F(const jxl::InspectorImage3F& inspector) {
     inspector_image3f_ = inspector;
   }
@@ -270,8 +268,7 @@ struct AuxOut {
   size_t num_blocks = 0;
 
   // Number of blocks that use larger DCT (set by ac_strategy).
-  size_t num_dct2_blocks = 0;
-  size_t num_dct4_blocks = 0;
+  size_t num_small_blocks = 0;
   size_t num_dct4x8_blocks = 0;
   size_t num_afv_blocks = 0;
   size_t num_dct8_blocks = 0;
@@ -280,9 +277,11 @@ struct AuxOut {
   size_t num_dct16_blocks = 0;
   size_t num_dct16x32_blocks = 0;
   size_t num_dct32_blocks = 0;
+  size_t num_dct32x64_blocks = 0;
+  size_t num_dct64_blocks = 0;
 
-  std::array<uint32_t, 8> dc_pred_usage = {0};
-  std::array<uint32_t, 8> dc_pred_usage_xb = {0};
+  std::array<uint32_t, 8> dc_pred_usage = {{0}};
+  std::array<uint32_t, 8> dc_pred_usage_xb = {{0}};
 
   int num_butteraugli_iters = 0;
 

@@ -11,11 +11,8 @@ import org.hamcrest.Matchers.*
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoResult
-import org.mozilla.geckoview.GeckoSession
 import org.junit.Assume.assumeTrue
 import org.mozilla.geckoview.PanZoomController
-import org.mozilla.geckoview.test.rule.GeckoSessionTestRule
-import org.mozilla.geckoview.test.util.Callbacks
 
 @RunWith(AndroidJUnit4::class)
 @MediumTest
@@ -24,13 +21,10 @@ class PanZoomControllerTest : BaseSessionTest() {
     private val scrollWaitTimeout = 10000.0 // 10 seconds
 
     private fun setupDocument(documentPath: String) {
-        sessionRule.session.loadTestPath(documentPath)
-        sessionRule.waitUntilCalled(object : Callbacks.ContentDelegate {
-            @GeckoSessionTestRule.AssertCalled(count = 1)
-            override fun onFirstContentfulPaint(session: GeckoSession) {
-            }
-        })
-        sessionRule.session.flushApzRepaints()
+        mainSession.loadTestPath(documentPath)
+        mainSession.waitForPageStop()
+        mainSession.promiseAllPaintsDone()
+        mainSession.flushApzRepaints()
     }
 
     private fun setupScroll() {
@@ -68,7 +62,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vh = mainSession.evaluateJS("window.visualViewport.height") as Double
         assertThat("Visual viewport height is not zero", vh, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh, scrollWaitTimeout)
         val scrollY = mainSession.evaluateJS("window.visualViewport.pageTop") as Double
         assertThat("scrollBy should have scrolled along y axis one viewport", scrollY, closeTo(vh, errorEpsilon))
@@ -79,7 +73,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vw = mainSession.evaluateJS("window.visualViewport.width") as Double
         assertThat("Visual viewport width is not zero", vw, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollBy(ScreenLength.fromVisualViewportWidth(1.0), ScreenLength.zero(), mode)
+        mainSession.panZoomController.scrollBy(ScreenLength.fromVisualViewportWidth(1.0), ScreenLength.zero(), mode)
         waitForHorizontalScroll(vw, scrollWaitTimeout)
         val scrollX = mainSession.evaluateJS("window.visualViewport.pageLeft") as Double
         assertThat("scrollBy should have scrolled along x axis one viewport", scrollX, closeTo(vw, errorEpsilon))
@@ -113,9 +107,9 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vh = mainSession.evaluateJS("window.visualViewport.height") as Double
         assertThat("Visual viewport height is not zero", vh, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh, scrollWaitTimeout)
-        sessionRule.session.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollBy(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh * 2.0, scrollWaitTimeout)
         val scrollY = mainSession.evaluateJS("window.visualViewport.pageTop") as Double
         assertThat("scrollBy should have scrolled along y axis one viewport", scrollY, closeTo(vh * 2.0, errorEpsilon))
@@ -137,7 +131,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vh = mainSession.evaluateJS("window.visualViewport.height") as Double
         assertThat("Visual viewport height is not zero", vh, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh, scrollWaitTimeout)
         val scrollY = mainSession.evaluateJS("window.visualViewport.pageTop") as Double
         assertThat("scrollBy should have scrolled along y axis one viewport", scrollY, closeTo(vh, errorEpsilon))
@@ -148,7 +142,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vw = mainSession.evaluateJS("window.visualViewport.width") as Double
         assertThat("Visual viewport width is not zero", vw, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollTo(ScreenLength.fromVisualViewportWidth(1.0), ScreenLength.zero(), mode)
+        mainSession.panZoomController.scrollTo(ScreenLength.fromVisualViewportWidth(1.0), ScreenLength.zero(), mode)
         waitForHorizontalScroll(vw, scrollWaitTimeout)
         val scrollX = mainSession.evaluateJS("window.visualViewport.pageLeft") as Double
         assertThat("scrollBy should have scrolled along x axis one viewport", scrollX, closeTo(vw, errorEpsilon))
@@ -191,7 +185,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         assertThat("Visual viewport scale is the initial scale", originalScale, closeTo(0.5, 0.01))
 
         // Change the resolution so that the visual viewport will be different from the layout viewport.
-        sessionRule.setResolutionAndScaleTo(2.0f)
+        mainSession.setResolutionAndScaleTo(2.0f)
 
         val scale = mainSession.evaluateJS("visualViewport.scale") as Double
         assertThat("Visual viewport scale is now greater than the initial scale", scale, greaterThan(originalScale))
@@ -199,7 +193,7 @@ class PanZoomControllerTest : BaseSessionTest() {
         val vh = mainSession.evaluateJS("window.visualViewport.height") as Double
         assertThat("Visual viewport height has been changed", vh, lessThan(originalVH))
 
-        sessionRule.session.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
 
         waitForVerticalScroll(vh, scrollWaitTimeout)
         val scrollY = mainSession.evaluateJS("window.visualViewport.pageTop") as Double
@@ -222,9 +216,9 @@ class PanZoomControllerTest : BaseSessionTest() {
         setupScroll()
         val vh = mainSession.evaluateJS("window.visualViewport.height") as Double
         assertThat("Visual viewport height is not zero", vh, greaterThan(0.0))
-        sessionRule.session.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh, scrollWaitTimeout)
-        sessionRule.session.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
+        mainSession.panZoomController.scrollTo(ScreenLength.zero(), ScreenLength.fromVisualViewportHeight(1.0), mode)
         waitForVerticalScroll(vh, scrollWaitTimeout)
         val scrollY = mainSession.evaluateJS("window.visualViewport.pageTop") as Double
         assertThat("scrollBy should have scrolled along y axis one viewport", scrollY, closeTo(vh, errorEpsilon))

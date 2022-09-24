@@ -171,19 +171,21 @@ var Heartbeat = class {
       });
     }
 
-    this.notificationBox = this.chromeWindow.gHighPriorityNotificationBox;
+    this.notificationBox = this.chromeWindow.gNotificationBox;
     this.notice = this.notificationBox.appendNotification(
-      this.options.message,
       "heartbeat-" + this.options.flowId,
-      "resource://normandy/skin/shared/heartbeat-icon.svg",
-      this.notificationBox.PRIORITY_SYSTEM,
-      this.buttons,
-      eventType => {
-        if (eventType !== "removed") {
-          return;
-        }
-        this.maybeNotifyHeartbeat("NotificationClosed");
-      }
+      {
+        label: this.options.message,
+        image: "resource://normandy/skin/shared/heartbeat-icon.svg",
+        priority: this.notificationBox.PRIORITY_SYSTEM,
+        eventCallback: eventType => {
+          if (eventType !== "removed") {
+            return;
+          }
+          this.maybeNotifyHeartbeat("NotificationClosed");
+        },
+      },
+      this.buttons
     );
     this.notice.classList.add("heartbeat");
     this.notice.messageText.classList.add("heartbeat");
@@ -220,16 +222,7 @@ var Heartbeat = class {
         this.ratingContainer.appendChild(ratingElement);
       }
 
-      if (Services.prefs.getBoolPref("browser.proton.enabled")) {
-        // This will append if there aren't any .text-link elements.
-        this.notice.buttonContainer.append(this.ratingContainer);
-      } else {
-        this.notice.messageText.flex = 0;
-        this.notice.messageDetails.insertBefore(
-          this.ratingContainer,
-          this.notice.spacer
-        );
-      }
+      this.notice.buttonContainer.append(this.ratingContainer);
     }
 
     // Let the consumer know the notification was shown.

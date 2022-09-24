@@ -14,6 +14,9 @@ fuzzy-if(Android,0-8,0-454) == mq_print_maxheight.xhtml mq_print-ref.xhtml
 == mq_overflow-block.svg mq_overflow-block-ref.svg
 == mq_overflow-inline.html mq_overflow-inline-ref.html
 == mq_print_overflow-inline.html mq_print_overflow-inline-ref.html
+== mq_update.html mq_update-ref.html
+== mq_print_update.html mq_print_update-ref.html
+== mq_update.svg mq_update-ref.svg
 
 == mq_print_maxwidth_updown.xhtml mq_print-ref.xhtml
 == mq_print_maxheight_updown.xhtml mq_print-ref.xhtml
@@ -27,8 +30,8 @@ test-pref(ui.prefersReducedMotion,0) == mq_prefers_reduced_motion_reduce.html ab
 test-pref(ui.prefersReducedMotion,1) == mq_prefers_reduced_motion_reduce.html greenbox.html
 test-pref(privacy.resistFingerprinting,true) test-pref(ui.prefersReducedMotion,1) == mq_prefers_reduced_motion_reduce.html about:blank
 test-pref(privacy.resistFingerprinting,true) == mq_prefers_reduced_motion_both.html greenbox.html
-test-pref(ui.systemUsesDarkTheme,1) == mq_prefers_color_scheme.html greenbox.html
+test-pref(layout.css.prefers-color-scheme.content-override,0) == mq_prefers_color_scheme.html greenbox.html
 test-pref(privacy.resistFingerprinting,true) == mq_prefers_color_scheme_light.html greenbox.html
 == mq_prefers_color_scheme_print.html greenbox-print.html
-test-pref(ui.systemUsesDarkTheme,0) == mq_prefers_color_scheme_light.html greenbox.html
-test-pref(ui.systemUsesDarkTheme,1) == mq_prefers_color_scheme_dark.html greenbox.html
+test-pref(layout.css.prefers-color-scheme.content-override,1) == mq_prefers_color_scheme_light.html greenbox.html
+test-pref(layout.css.prefers-color-scheme.content-override,0) == mq_prefers_color_scheme_dark.html greenbox.html

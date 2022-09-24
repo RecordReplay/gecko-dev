@@ -125,7 +125,7 @@ var PreferenceRollouts = {
   STATE_ROLLED_BACK: "rolled-back",
   STATE_GRADUATED: "graduated",
 
-  // A set of rollout slugs that are obsolete based the code in this build of
+  // A set of rollout slugs that are obsolete based on the code in this build of
   // Firefox. This may include things like the preference no longer being
   // applicable, or the feature changing in such a way that Normandy's automatic
   // graduation system cannot detect that the rollout should hand off to the
@@ -134,6 +134,14 @@ var PreferenceRollouts = {
     "pref-webrender-intel-rollout-70-release",
     "bug-1703186-rollout-http3-support-release-88-89",
     "rollout-doh-nightly-rollout-to-all-us-desktop-users-nightly-74-80-bug-1613481",
+    "rollout-doh-beta-rollout-to-all-us-desktop-users-v2-beta-74-80-bug-1613489",
+    "rollout-doh-us-staged-rollout-to-all-us-desktop-users-release-73-77-bug-1586331",
+    "bug-1648229-rollout-comcast-steering-rollout-release-78-80",
+    "bug-1732206-rollout-fission-release-rollout-release-94-95",
+    "bug-1745237-rollout-fission-beta-96-97-rollout-beta-96-97",
+    "bug-1750601-rollout-doh-steering-in-canada-staggered-starting-for-release-97-98",
+    "bug-1758988-rollout-doh-enablment-to-new-countries-staggered-st-release-98-100",
+    "bug-1758818-rollout-enabling-doh-in-new-countries-staggered-sta-release-98-100",
   ]),
 
   /**

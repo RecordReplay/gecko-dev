@@ -262,34 +262,28 @@ static void BuildPreviousPageOverflow(nsDisplayListBuilder* aBuilder,
  * Remove all leaf display items that are not for descendants of
  * aBuilder->GetReferenceFrame() from aList.
  * @param aPage the page we're constructing the display list for
- * @param aExtraPage the page we constructed aList for
  * @param aList the list that is modified in-place
  */
 static void PruneDisplayListForExtraPage(nsDisplayListBuilder* aBuilder,
                                          nsPageFrame* aPage,
-                                         nsIFrame* aExtraPage,
                                          nsDisplayList* aList) {
-  nsDisplayList newList;
-
-  while (true) {
-    nsDisplayItem* i = aList->RemoveBottom();
+  for (nsDisplayItem* i : aList->TakeItems()) {
     if (!i) break;
     nsDisplayList* subList = i->GetSameCoordinateSystemChildren();
     if (subList) {
-      PruneDisplayListForExtraPage(aBuilder, aPage, aExtraPage, subList);
+      PruneDisplayListForExtraPage(aBuilder, aPage, subList);
       i->UpdateBounds(aBuilder);
     } else {
       nsIFrame* f = i->Frame();
-      if (!nsLayoutUtils::IsProperAncestorFrameCrossDoc(aPage, f)) {
+      if (!nsLayoutUtils::IsProperAncestorFrameCrossDocInProcess(aPage, f)) {
         // We're throwing this away so call its destructor now. The memory
         // is owned by aBuilder which destroys all items at once.
         i->Destroy(aBuilder);
         continue;
       }
     }
-    newList.AppendToTop(i);
+    aList->AppendToTop(i);
   }
-  aList->AppendToTop(&newList);
 }
 
 static void BuildDisplayListForExtraPage(nsDisplayListBuilder* aBuilder,
@@ -303,9 +297,9 @@ static void BuildDisplayListForExtraPage(nsDisplayListBuilder* aBuilder,
   if (!aExtraPage->HasAnyStateBits(NS_FRAME_FORCE_DISPLAY_LIST_DESCEND_INTO)) {
     return;
   }
-  nsDisplayList list;
+  nsDisplayList list(aBuilder);
   aExtraPage->BuildDisplayListForStackingContext(aBuilder, &list);
-  PruneDisplayListForExtraPage(aBuilder, aPage, aExtraPage, &list);
+  PruneDisplayListForExtraPage(aBuilder, aPage, &list);
   aList->AppendToTop(&list);
 }
 
@@ -334,7 +328,7 @@ void nsPageContentFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
 
   nsDisplayListCollection set(aBuilder);
 
-  nsDisplayList content;
+  nsDisplayList content(aBuilder);
   {
     const nsRect clipRect(aBuilder->ToReferenceFrame(this), GetSize());
     DisplayListClipState::AutoSaveRestore clipState(aBuilder);
@@ -349,7 +343,6 @@ void nsPageContentFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
       nsDisplayListBuilder::AutoPageNumberSetter p(aBuilder, pageNum);
       BuildPreviousPageOverflow(aBuilder, pageFrame, this, set);
     }
-
     mozilla::ViewportFrame::BuildDisplayList(aBuilder, set);
 
     set.SerializeWithCorrectZOrder(&content, GetContent());

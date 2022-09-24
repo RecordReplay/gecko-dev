@@ -32,6 +32,7 @@ nsresult ContentHandlerService::Init() {
   mHandlerServiceChild = new HandlerServiceChild();
   if (!cpc->SendPHandlerServiceConstructor(mHandlerServiceChild)) {
     mHandlerServiceChild = nullptr;
+    return NS_ERROR_UNEXPECTED;
   }
   return NS_OK;
 }
@@ -124,7 +125,7 @@ NS_IMETHODIMP RemoteHandlerApp::LaunchWithURI(
 
 NS_IMPL_ISUPPORTS(RemoteHandlerApp, nsIHandlerApp)
 
-static inline void CopyHanderInfoTonsIHandlerInfo(
+static inline void CopyHandlerInfoTonsIHandlerInfo(
     const HandlerInfo& info, nsIHandlerInfo* aHandlerInfo) {
   HandlerApp preferredApplicationHandler = info.preferredApplicationHandler();
   nsCOMPtr<nsIHandlerApp> preferredApp(
@@ -134,6 +135,9 @@ static inline void CopyHanderInfoTonsIHandlerInfo(
   aHandlerInfo->GetPossibleApplicationHandlers(
       getter_AddRefs(possibleHandlers));
   possibleHandlers->AppendElement(preferredApp);
+
+  aHandlerInfo->SetPreferredAction(info.preferredAction());
+  aHandlerInfo->SetAlwaysAskBeforeHandling(info.alwaysAskBeforeHandling());
 
   if (info.isMIMEInfo()) {
     nsCOMPtr<nsIMIMEInfo> mimeInfo(do_QueryInterface(aHandlerInfo));
@@ -159,7 +163,7 @@ NS_IMETHODIMP ContentHandlerService::FillHandlerInfo(
   nsIHandlerInfoToHandlerInfo(aHandlerInfo, &info);
   mHandlerServiceChild->SendFillHandlerInfo(info, nsCString(aOverrideType),
                                             &returnedInfo);
-  CopyHanderInfoTonsIHandlerInfo(returnedInfo, aHandlerInfo);
+  CopyHandlerInfoTonsIHandlerInfo(returnedInfo, aHandlerInfo);
   return NS_OK;
 }
 
@@ -178,7 +182,7 @@ NS_IMETHODIMP ContentHandlerService::GetMIMEInfoFromOS(
     return rv;
   }
 
-  CopyHanderInfoTonsIHandlerInfo(returnedInfo, aHandlerInfo);
+  CopyHandlerInfoTonsIHandlerInfo(returnedInfo, aHandlerInfo);
   return NS_OK;
 }
 

@@ -246,7 +246,7 @@ DocManager::OnStateChange(nsIWebProgress* aWebProgress, nsIRequest* aRequest,
     // Some XUL documents get start state and then stop state with failure
     // status when everything is ok. Fire document load complete event in this
     // case.
-    if (NS_SUCCEEDED(aStatus) || !nsCoreUtils::IsContentDocument(document)) {
+    if (NS_SUCCEEDED(aStatus) || !document->IsContentDocument()) {
       eventType = nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE;
     }
 
@@ -454,7 +454,9 @@ DocAccessible* DocManager::CreateDocOrRootAccessible(Document* aDocument) {
     return nullptr;
   }
 
-  // Ignore documents without presshell and not having root frame.
+  // Ignore documents without presshell. We must not ignore documents with no
+  // root frame because DOM focus can hit such documents and ignoring them would
+  // prevent a11y focus.
   PresShell* presShell = aDocument->GetPresShell();
   if (!presShell || presShell->IsDestroying()) {
     return nullptr;

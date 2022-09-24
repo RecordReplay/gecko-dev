@@ -52,7 +52,9 @@ The following snippet presents an example of a client of FooService that has a s
 
     // Some client of FooService called FooClient
 
-    Components.utils.import("resource://gre/modules/FooService.jsm", this);
+    const { FooService } = ChromeUtils.import(
+      "resource://gre/modules/FooService.jsm"
+    );
 
     // FooService.shutdown is the `client` capability of a `Barrier`.
     // See example 2 for the definition of `FooService.shutdown`
@@ -74,7 +76,9 @@ outstanding operations before FooService shuts down.
 
     // Module FooService
 
-    Components.utils.import("resource://gre/modules/AsyncShutdown.jsm", this);
+    const { AsyncShutdown } = ChromeUtils.import(
+      "resource://gre/modules/AsyncShutdown.jsm"
+    );
 
     this.exports = ["FooService"];
 
@@ -107,7 +111,9 @@ The following snippet presents FooClient2, a more sophisticated client of FooSer
 
     // Some client of FooService called FooClient2
 
-    Components.utils.import("resource://gre/modules/FooService.jsm", this);
+    const { FooService } = ChromeUtils.import(
+      "resource://gre/modules/FooService.jsm"
+    );
 
     FooService.shutdown.addBlocker(
       "FooClient2: Collecting data, writing it to disk and shutting down",
@@ -152,8 +158,12 @@ Example 4: A service with both internal and external dependencies
 
     // Module FooService2
 
-    Components.utils.import("resource://gre/modules/AsyncShutdown.jsm", this);
-    Components.utils.import("resource://gre/modules/Promise.jsm", this);
+    let { AsyncShutdown } = ChromeUtils.import(
+      "resource://gre/modules/AsyncShutdown.jsm"
+    );
+    let { PromiseUtils } = ChromeUtils.import(
+      "resource://gre/modules/PromiseUtils.jsm"
+    );
 
     this.exports = ["FooService2"];
 
@@ -172,7 +182,7 @@ Example 4: A service with both internal and external dependencies
         throw new Error("FooService2 is closed");
       }
 
-      let deferred = Promise.defer();
+      let deferred = PromiseUtils.defer();
       connections.client.addBlocker("FooService2: Waiting for connection " + name + " to close",  deferred.promise);
 
       // ...

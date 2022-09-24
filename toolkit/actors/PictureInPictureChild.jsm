@@ -46,17 +46,39 @@ ChromeUtils.defineModuleGetter(
   "resource://gre/modules/ContentDOMReference.jsm"
 );
 
+const { WebVTT } = ChromeUtils.import("resource://gre/modules/vtt.jsm");
+const { setTimeout, clearTimeout } = ChromeUtils.import(
+  "resource://gre/modules/Timer.jsm"
+);
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+XPCOMUtils.defineLazyModuleGetters(this, {
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
+});
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "DISPLAY_TEXT_TRACKS_PREF",
+  "media.videocontrols.picture-in-picture.display-text-tracks.enabled",
+  false
+);
 const TOGGLE_ENABLED_PREF =
   "media.videocontrols.picture-in-picture.video-toggle.enabled";
+const PIP_ENABLED_PREF = "media.videocontrols.picture-in-picture.enabled";
 const TOGGLE_TESTING_PREF =
   "media.videocontrols.picture-in-picture.video-toggle.testing";
+const TOGGLE_VISIBILITY_THRESHOLD_PREF =
+  "media.videocontrols.picture-in-picture.video-toggle.visibility-threshold";
+const TEXT_TRACK_FONT_SIZE =
+  "media.videocontrols.picture-in-picture.display-text-tracks.size";
 
 const MOUSEMOVE_PROCESSING_DELAY_MS = 50;
 const TOGGLE_HIDING_TIMEOUT_MS = 2000;
+// If you change this, also change VideoControlsWidget.SEEK_TIME_SECS:
+const SEEK_TIME_SECS = 5;
+const EMPTIED_TIMEOUT_MS = 1000;
 
 // The ToggleChild does not want to capture events from the PiP
 // windows themselves. This set contains all currently open PiP
@@ -75,6 +97,47 @@ var gWeakIntersectingVideosForTesting = new WeakSet();
 XPCOMUtils.defineLazyGetter(this, "gSiteOverrides", () => {
   return PictureInPictureToggleChild.getSiteOverrides();
 });
+
+XPCOMUtils.defineLazyGetter(this, "logConsole", () => {
+  return console.createInstance({
+    prefix: "PictureInPictureChild",
+    maxLogLevel: Services.prefs.getBoolPref(
+      "media.videocontrols.picture-in-picture.log",
+      false
+    )
+      ? "Debug"
+      : "Error",
+  });
+});
+
+/**
+ * Creates and returns an instance of the PictureInPictureChildVideoWrapper class responsible
+ * for applying site-specific wrapper methods around the original video.
+ *
+ * The Picture-In-Picture add-on can use this to provide site-specific wrappers for
+ * sites that require special massaging to control.
+ * @param {Object} pipChild reference to PictureInPictureChild class calling this function
+ * @param {Element} originatingVideo
+ *   The <video> element to wrap.
+ * @returns {PictureInPictureChildVideoWrapper} instance of PictureInPictureChildVideoWrapper
+ */
+function applyWrapper(pipChild, originatingVideo) {
+  let originatingDoc = originatingVideo.ownerDocument;
+  let originatingDocumentURI = originatingDoc.documentURI;
+
+  let overrides = gSiteOverrides.find(([matcher]) => {
+    return matcher.matches(originatingDocumentURI);
+  });
+
+  // gSiteOverrides is a list of tuples where the first element is the MatchPattern
+  // for a supported site and the second is the actual overrides object for it.
+  let wrapperPath = overrides ? overrides[1].videoWrapperScriptPath : null;
+  return new PictureInPictureChildVideoWrapper(
+    wrapperPath,
+    originatingVideo,
+    pipChild
+  );
+}
 
 class PictureInPictureLauncherChild extends JSWindowActorChild {
   handleEvent(event) {
@@ -127,6 +190,13 @@ class PictureInPictureLauncherChild extends JSWindowActorChild {
       return;
     }
 
+    if (!PictureInPictureChild.videoWrapper) {
+      PictureInPictureChild.videoWrapper = applyWrapper(
+        PictureInPictureChild,
+        video
+      );
+    }
+
     // All other requests to toggle PiP should open a new PiP
     // window
     const videoRef = ContentDOMReference.get(video);
@@ -136,32 +206,35 @@ class PictureInPictureLauncherChild extends JSWindowActorChild {
       videoHeight: video.videoHeight,
       videoWidth: video.videoWidth,
       videoRef,
+      ccEnabled: DISPLAY_TEXT_TRACKS_PREF,
+      webVTTSubtitles: !!video.textTracks?.length,
     });
   }
 
   //
   /**
-   * The keyboard was used to attempt to open Picture-in-Picture. In this case,
-   * find the focused window, and open Picture-in-Picture for the first
-   * playing video, or if none, the largest dimension video. We suspect this
-   * heuristic will handle most cases, though we might refine this later on.
+   * The keyboard was used to attempt to open Picture-in-Picture. If a video is focused,
+   * select that video. Otherwise find the first playing video, or if none, the largest
+   * dimension video. We suspect this heuristic will handle most cases, though we
+   * might refine this later on. Note that we assume that this method will only be
+   * called for the focused document.
    */
   keyToggle() {
-    let focusedWindow = Services.focus.focusedWindow;
-    if (focusedWindow) {
-      let doc = focusedWindow.document;
-      if (doc) {
+    let doc = this.document;
+    if (doc) {
+      let video = doc.activeElement;
+      if (!HTMLVideoElement.isInstance(video)) {
         let listOfVideos = [...doc.querySelectorAll("video")].filter(
           video => !isNaN(video.duration)
         );
         // Get the first non-paused video, otherwise the longest video. This
         // fallback is designed to skip over "preview"-style videos on sidebars.
-        let video =
+        video =
           listOfVideos.filter(v => !v.paused)[0] ||
           listOfVideos.sort((a, b) => b.duration - a.duration)[0];
-        if (video) {
-          this.togglePictureInPicture(video);
-        }
+      }
+      if (video) {
+        this.togglePictureInPicture(video);
       }
     }
   }
@@ -181,7 +254,9 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
     // We keep the state stashed inside of this WeakMap, keyed on the document
     // itself.
     this.weakDocStates = new WeakMap();
-    this.toggleEnabled = Services.prefs.getBoolPref(TOGGLE_ENABLED_PREF);
+    this.toggleEnabled =
+      Services.prefs.getBoolPref(TOGGLE_ENABLED_PREF) &&
+      Services.prefs.getBoolPref(PIP_ENABLED_PREF);
     this.toggleTesting = Services.prefs.getBoolPref(TOGGLE_TESTING_PREF, false);
 
     // Bug 1570744 - JSWindowActorChild's cannot be used as nsIObserver's
@@ -191,12 +266,14 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       this.observe(subject, topic, data);
     };
     Services.prefs.addObserver(TOGGLE_ENABLED_PREF, this.observerFunction);
+    Services.prefs.addObserver(PIP_ENABLED_PREF, this.observerFunction);
     Services.cpmm.sharedData.addEventListener("change", this);
   }
 
   didDestroy() {
     this.stopTrackingMouseOverVideos();
     Services.prefs.removeObserver(TOGGLE_ENABLED_PREF, this.observerFunction);
+    Services.prefs.removeObserver(PIP_ENABLED_PREF, this.observerFunction);
     Services.cpmm.sharedData.removeEventListener("change", this);
 
     // remove the observer on the <video> element
@@ -204,6 +281,11 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
     if (state?.intersectionObserver) {
       state.intersectionObserver.disconnect();
     }
+
+    // ensure the sandbox created by the video is destroyed
+    this.videoWrapper?.destroy();
+    this.videoWrapper = null;
+
     // ensure we don't access the state
     this.isDestroyed = true;
   }
@@ -213,7 +295,9 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       return;
     }
 
-    this.toggleEnabled = Services.prefs.getBoolPref(TOGGLE_ENABLED_PREF);
+    this.toggleEnabled =
+      Services.prefs.getBoolPref(TOGGLE_ENABLED_PREF) &&
+      Services.prefs.getBoolPref(PIP_ENABLED_PREF);
 
     if (this.toggleEnabled) {
       // We have enabled the Picture-in-Picture toggle, so we need to make
@@ -238,6 +322,11 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
     }
 
     let state = this.weakDocStates.get(this.document);
+
+    let visibilityThresholdPref = Services.prefs.getFloatPref(
+      TOGGLE_VISIBILITY_THRESHOLD_PREF,
+      "1.0"
+    );
 
     if (!state) {
       state = {
@@ -270,7 +359,7 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
         // this is false.
         isTrackingVideos: false,
         togglePolicy: TOGGLE_POLICIES.DEFAULT,
-        toggleVisibilityThreshold: 1.0,
+        toggleVisibilityThreshold: visibilityThresholdPref,
         // The documentURI that has been checked with toggle policies and
         // visibility thresholds for this document. Note that the documentURI
         // might change for a document via the history API, so we remember
@@ -336,7 +425,7 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       case "UAWidgetSetupOrChange": {
         if (
           this.toggleEnabled &&
-          event.target instanceof this.contentWindow.HTMLVideoElement &&
+          this.contentWindow.HTMLVideoElement.isInstance(event.target) &&
           event.target.ownerDocument == this.document
         ) {
           this.registerVideo(event.target);
@@ -353,10 +442,19 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
         this.onMouseOut(event);
         break;
       }
+      case "click":
+        if (event.detail == 0) {
+          let shadowRoot = event.originalTarget.containingShadowRoot;
+          let toggle = this.getToggleElement(shadowRoot);
+          if (event.originalTarget == toggle) {
+            this.startPictureInPicture(event, shadowRoot.host, toggle);
+            return;
+          }
+        }
+      // fall through
       case "mousedown":
       case "pointerup":
-      case "mouseup":
-      case "click": {
+      case "mouseup": {
         this.onMouseButtonEvent(event);
         break;
       }
@@ -661,28 +759,40 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
     }
 
     let state = this.docState;
-    let { clientX, clientY } = event;
-    let winUtils = this.contentWindow.windowUtils;
-    // We use winUtils.nodesFromRect instead of document.elementsFromPoint,
-    // since document.elementsFromPoint always flushes layout. The 1's in that
-    // function call are for the size of the rect that we want, which is 1x1.
-    //
-    // We pass the aOnlyVisible boolean argument to check that the video isn't
-    // occluded by anything visible at the point of mousedown. If it is, we'll
-    // ignore the mousedown.
-    let elements = winUtils.nodesFromRect(
-      clientX,
-      clientY,
-      1,
-      1,
-      1,
-      1,
-      true,
-      false,
-      true /* aOnlyVisible */,
-      state.toggleVisibilityThreshold
-    );
-    if (!Array.from(elements).includes(video)) {
+
+    let overVideo = (() => {
+      let { clientX, clientY } = event;
+      let winUtils = this.contentWindow.windowUtils;
+      // We use winUtils.nodesFromRect instead of document.elementsFromPoint,
+      // since document.elementsFromPoint always flushes layout. The 1's in that
+      // function call are for the size of the rect that we want, which is 1x1.
+      //
+      // We pass the aOnlyVisible boolean argument to check that the video isn't
+      // occluded by anything visible at the point of mousedown. If it is, we'll
+      // ignore the mousedown.
+      let elements = winUtils.nodesFromRect(
+        clientX,
+        clientY,
+        1,
+        1,
+        1,
+        1,
+        true,
+        false,
+        /* aOnlyVisible = */ true,
+        state.toggleVisibilityThreshold
+      );
+
+      for (let element of elements) {
+        if (element == video || element.containingShadowRoot == shadowRoot) {
+          return true;
+        }
+      }
+
+      return false;
+    })();
+
+    if (!overVideo) {
       return;
     }
 
@@ -692,24 +802,41 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       state.clickedElement = Cu.getWeakReference(event.originalTarget);
       event.stopImmediatePropagation();
 
-      Services.telemetry.keyedScalarAdd(
-        "pictureinpicture.opened_method",
-        "toggle",
-        1
-      );
-
-      let pipEvent = new this.contentWindow.CustomEvent(
-        "MozTogglePictureInPicture",
-        {
-          bubbles: true,
-        }
-      );
-      video.dispatchEvent(pipEvent);
-
-      // Since we've initiated Picture-in-Picture, we can go ahead and
-      // hide the toggle now.
-      this.onMouseLeaveVideo(video);
+      this.startPictureInPicture(event, video, toggle);
     }
+  }
+
+  startPictureInPicture(event, video, toggle) {
+    Services.telemetry.keyedScalarAdd(
+      "pictureinpicture.opened_method",
+      "toggle",
+      1
+    );
+    let args = {
+      method: "toggle",
+      firstTimeToggle: (!Services.prefs.getBoolPref(
+        "media.videocontrols.picture-in-picture.video-toggle.has-used"
+      )).toString(),
+    };
+    Services.telemetry.recordEvent(
+      "pictureinpicture",
+      "opened_method",
+      "method",
+      null,
+      args
+    );
+
+    let pipEvent = new this.contentWindow.CustomEvent(
+      "MozTogglePictureInPicture",
+      {
+        bubbles: true,
+      }
+    );
+    video.dispatchEvent(pipEvent);
+
+    // Since we've initiated Picture-in-Picture, we can go ahead and
+    // hide the toggle now.
+    this.onMouseLeaveVideo(video);
   }
 
   /**
@@ -800,6 +927,8 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
     let state = this.docState;
     let event = state.lastMouseMoveEvent;
     let { clientX, clientY } = event;
+    logConsole.debug("Visible videos count:", state.visibleVideosCount);
+    logConsole.debug("Tracking videos:", state.isTrackingVideos);
     let winUtils = this.contentWindow.windowUtils;
     // We use winUtils.nodesFromRect instead of document.elementsFromPoint,
     // since document.elementsFromPoint always flushes layout. The 1's in that
@@ -813,16 +942,29 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       1,
       true,
       false,
-      true
+      /* aOnlyVisible = */ true
     );
 
     for (let element of elements) {
-      if (
-        state.weakVisibleVideos.has(element) &&
-        !element.isCloningElementVisually
-      ) {
-        this.onMouseOverVideo(element, event);
-        return;
+      logConsole.debug("Element id under cursor:", element.id);
+      logConsole.debug(
+        "Node name of an element under cursor:",
+        element.nodeName
+      );
+      logConsole.debug(
+        "Supported <video> element:",
+        state.weakVisibleVideos.has(element)
+      );
+      logConsole.debug("PiP window is open:", element.isCloningElementVisually);
+
+      // Check for hovering over the video controls or so too, not only
+      // directly over the video.
+      for (let el = element; el; el = el.containingShadowRoot?.host) {
+        if (state.weakVisibleVideos.has(el) && !el.isCloningElementVisually) {
+          logConsole.debug("Found supported element");
+          this.onMouseOverVideo(el, event);
+          return;
+        }
       }
     }
 
@@ -875,14 +1017,26 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
         ? PictureInPictureToggleChild.getSiteOverrides()
         : gSiteOverrides;
 
+      let visibilityThresholdPref = Services.prefs.getFloatPref(
+        TOGGLE_VISIBILITY_THRESHOLD_PREF,
+        "1.0"
+      );
+
+      if (!this.videoWrapper) {
+        this.videoWrapper = applyWrapper(this, video);
+      }
+
       // Do we have any toggle overrides? If so, try to apply them.
       for (let [override, { policy, visibilityThreshold }] of siteOverrides) {
         if (
           (policy || visibilityThreshold) &&
           override.matches(this.document.documentURI)
         ) {
-          state.togglePolicy = policy || TOGGLE_POLICIES.DEFAULT;
-          state.toggleVisibilityThreshold = visibilityThreshold || 1.0;
+          state.togglePolicy = this.videoWrapper?.shouldHideToggle(video)
+            ? TOGGLE_POLICIES.HIDDEN
+            : policy || TOGGLE_POLICIES.DEFAULT;
+          state.toggleVisibilityThreshold =
+            visibilityThreshold || visibilityThresholdPref;
           break;
         }
       }
@@ -900,6 +1054,27 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       toggle.setAttribute("policy", TOGGLE_POLICY_STRINGS[state.togglePolicy]);
     } else {
       toggle.removeAttribute("policy");
+    }
+
+    const nimbusExperimentVariables = NimbusFeatures.pictureinpicture.getAllVariables(
+      { defaultValues: { title: null, message: false, showIconOnly: false } }
+    );
+    // nimbusExperimentVariables will be defaultValues when the experiment is disabled
+    if (nimbusExperimentVariables.title && nimbusExperimentVariables.message) {
+      let pipExplainer = shadowRoot.querySelector(".pip-explainer");
+      let pipLabel = shadowRoot.querySelector(".pip-label");
+
+      pipExplainer.innerText = nimbusExperimentVariables.message;
+      pipLabel.innerText = nimbusExperimentVariables.title;
+    } else if (nimbusExperimentVariables.showIconOnly) {
+      // We only want to show the PiP icon in this experiment scenario
+      let pipExpanded = shadowRoot.querySelector(".pip-expanded");
+      pipExpanded.style.display = "none";
+      let pipSmall = shadowRoot.querySelector(".pip-small");
+      pipSmall.style.opacity = "1";
+
+      let pipIcon = shadowRoot.querySelectorAll(".pip-icon")[1];
+      pipIcon.style.display = "block";
     }
 
     controlsOverlay.removeAttribute("hidetoggle");
@@ -938,6 +1113,23 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
       !toggle.hasAttribute("hidden")
     ) {
       Services.telemetry.scalarAdd("pictureinpicture.saw_toggle", 1);
+      const hasUsedPiP = Services.prefs.getBoolPref(
+        "media.videocontrols.picture-in-picture.video-toggle.has-used"
+      );
+      let args = {
+        firstTime: (!hasUsedPiP).toString(),
+      };
+      Services.telemetry.recordEvent(
+        "pictureinpicture",
+        "saw_toggle",
+        "toggle",
+        null,
+        args
+      );
+      // only record if this is the first time seeing the toggle
+      if (!hasUsedPiP) {
+        NimbusFeatures.pictureinpicture.recordExposureEvent();
+      }
     }
 
     // Now that we're hovering the video, we'll check to see if we're
@@ -1049,14 +1241,14 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
 
     let toggle = this.getToggleElement(shadowRoot);
     if (this.isMouseOverToggle(toggle, event)) {
-      event.stopImmediatePropagation();
-      event.preventDefault();
-
+      let devicePixelRatio = toggle.ownerGlobal.devicePixelRatio;
       this.sendAsyncMessage("PictureInPicture:OpenToggleContextMenu", {
-        screenX: event.screenX,
-        screenY: event.screenY,
+        screenXDevPx: event.screenX * devicePixelRatio,
+        screenYDevPx: event.screenY * devicePixelRatio,
         mozInputSource: event.mozInputSource,
       });
+      event.stopImmediatePropagation();
+      event.preventDefault();
     }
   }
 
@@ -1104,11 +1296,244 @@ class PictureInPictureToggleChild extends JSWindowActorChild {
 }
 
 class PictureInPictureChild extends JSWindowActorChild {
+  #subtitlesEnabled = false;
   // A weak reference to this PiP window's video element
   weakVideo = null;
 
   // A weak reference to this PiP window's content window
   weakPlayerContent = null;
+
+  // A reference to current WebVTT track currently displayed on the content window
+  _currentWebVTTTrack = null;
+
+  observerFunction = null;
+
+  observe(subject, topic, data) {
+    if (topic != "nsPref:changed") {
+      return;
+    }
+
+    switch (data) {
+      case "media.videocontrols.picture-in-picture.display-text-tracks.enabled": {
+        const originatingVideo = this.getWeakVideo();
+        let isTextTrackPrefEnabled = Services.prefs.getBoolPref(
+          "media.videocontrols.picture-in-picture.display-text-tracks.enabled"
+        );
+
+        // Enable or disable text track support
+        if (isTextTrackPrefEnabled) {
+          this.setupTextTracks(originatingVideo);
+        } else {
+          this.removeTextTracks(originatingVideo);
+        }
+        break;
+      }
+      case TEXT_TRACK_FONT_SIZE:
+        this.setTextTrackFontSize();
+        break;
+    }
+  }
+
+  /**
+   * Creates a link element with a reference to the css stylesheet needed
+   * for text tracks responsive styling.
+   * @returns {Element} the link element containing text tracks stylesheet.
+   */
+  createTextTracksStyleSheet() {
+    let headStyleElement = this.document.createElement("link");
+    headStyleElement.setAttribute("rel", "stylesheet");
+    headStyleElement.setAttribute(
+      "href",
+      "chrome://global/skin/pictureinpicture/texttracks.css"
+    );
+    headStyleElement.setAttribute("type", "text/css");
+    return headStyleElement;
+  }
+
+  /**
+   * Sets up Picture-in-Picture to support displaying text tracks from WebVTT
+   * or if WebVTT isn't supported we will register the caption change mutation observer if
+   * the site wrapper exists.
+   *
+   * If the originating video supports WebVTT, try to read the
+   * active track and cues. Display any active cues on the pip window
+   * right away if applicable.
+   *
+   * @param originatingVideo {Element|null}
+   *  The <video> being displayed in Picture-in-Picture mode, or null if that <video> no longer exists.
+   */
+  setupTextTracks(originatingVideo) {
+    const isWebVTTSupported = !!originatingVideo.textTracks?.length;
+
+    if (!isWebVTTSupported) {
+      this.setUpCaptionChangeListener(originatingVideo);
+      return;
+    }
+
+    // Verify active track for originating video
+    this.setActiveTextTrack(originatingVideo.textTracks);
+
+    if (!this._currentWebVTTTrack) {
+      // If WebVTT track is invalid, try using a video wrapper
+      this.setUpCaptionChangeListener(originatingVideo);
+      return;
+    }
+
+    // Listen for changes in tracks and active cues
+    originatingVideo.textTracks.addEventListener("change", this);
+    this._currentWebVTTTrack.addEventListener("cuechange", this.onCueChange);
+
+    const cues = this._currentWebVTTTrack.activeCues;
+    this.updateWebVTTTextTracksDisplay(cues);
+  }
+
+  /**
+   * Removes existing text tracks on the Picture in Picture window.
+   *
+   * If the originating video supports WebVTT, clear references to active
+   * tracks and cues. No longer listen for any track or cue changes.
+   *
+   * @param originatingVideo {Element|null}
+   *  The <video> being displayed in Picture-in-Picture mode, or null if that <video> no longer exists.
+   */
+  removeTextTracks(originatingVideo) {
+    const isWebVTTSupported = !!originatingVideo.textTracks;
+
+    if (!isWebVTTSupported) {
+      return;
+    }
+
+    // No longer listen for changes to tracks and active cues
+    originatingVideo.textTracks.removeEventListener("change", this);
+    this._currentWebVTTTrack?.removeEventListener(
+      "cuechange",
+      this.onCueChange
+    );
+    this._currentWebVTTTrack = null;
+    this.updateWebVTTTextTracksDisplay(null);
+  }
+
+  /**
+   * Moves the text tracks container position above the pip window's video controls
+   * if their positions visually overlap. Since pip controls are within the parent
+   * process, we determine if pip video controls and text tracks visually overlap by
+   * comparing their relative positions with DOMRect.
+   *
+   * If overlap is found, set attribute "overlap-video-controls" to move text tracks
+   * and define a new relative bottom position according to pip window size and the
+   * position of video controls.
+   *  @param {Object} data args needed to determine if text tracks must be moved
+   */
+  moveTextTracks(data) {
+    const {
+      isFullscreen,
+      isVideoControlsShowing,
+      playerBottomControlsDOMRect,
+    } = data;
+    let textTracks = this.document.getElementById("texttracks");
+    const originatingWindow = this.getWeakVideo().ownerGlobal;
+    const isReducedMotionEnabled = originatingWindow.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches;
+    const textTracksFontScale = this.document
+      .querySelector(":root")
+      .style.getPropertyValue("--font-scale");
+
+    if (isFullscreen || isReducedMotionEnabled) {
+      textTracks.removeAttribute("overlap-video-controls");
+      return;
+    }
+
+    if (isVideoControlsShowing) {
+      let playerVideoRect = textTracks.parentElement.getBoundingClientRect();
+      let isOverlap =
+        playerVideoRect.bottom - textTracksFontScale * playerVideoRect.height >
+        playerBottomControlsDOMRect.top;
+
+      if (isOverlap) {
+        textTracks.setAttribute("overlap-video-controls", true);
+      } else {
+        textTracks.removeAttribute("overlap-video-controls");
+      }
+    } else {
+      textTracks.removeAttribute("overlap-video-controls");
+    }
+  }
+
+  /**
+   * Updates the text content for the container that holds and displays text tracks
+   * on the pip window.
+   * @param textTrackCues {TextTrackCueList|null}
+   *  Collection of TextTrackCue objects containing text displayed, or null if there is no cue to display.
+   */
+  updateWebVTTTextTracksDisplay(textTrackCues) {
+    let pipWindowTracksContainer = this.document.getElementById("texttracks");
+    let playerVideo = this.document.getElementById("playervideo");
+    let playerVideoWindow = playerVideo.ownerGlobal;
+
+    // To prevent overlap with previous cues, clear all text from the pip window
+    pipWindowTracksContainer.replaceChildren();
+
+    if (!textTrackCues) {
+      return;
+    }
+
+    if (!this.isSubtitlesEnabled) {
+      this.isSubtitlesEnabled = true;
+    }
+
+    let allCuesArray = [...textTrackCues];
+    // Re-order cues
+    this.getOrderedWebVTTCues(allCuesArray);
+    // Parse through WebVTT cue using vtt.js to ensure
+    // semantic markup like <b> and <i> tags are rendered.
+    allCuesArray.forEach(cue => {
+      let text = cue.text;
+      // Trim extra newlines and whitespaces
+      const re = /(\s*\n{2,}\s*)/g;
+      text = text.trim();
+      text = text.replace(re, "\n");
+      let cueTextNode = WebVTT.convertCueToDOMTree(playerVideoWindow, text);
+      let cueDiv = this.document.createElement("div");
+      cueDiv.appendChild(cueTextNode);
+      pipWindowTracksContainer.appendChild(cueDiv);
+    });
+  }
+
+  /**
+   * Re-orders list of multiple active cues to ensure cues are rendered in the correct order.
+   * How cues are ordered depends on the VTTCue.line value of the cue.
+   *
+   * If line is string "auto", we want to reverse the order of cues.
+   * Cues are read from top to bottom in a vtt file, but are inserted into a video from bottom to top.
+   * Ensure this order is followed.
+   *
+   * If line is an integer or percentage, we want to order cues according to numeric value.
+   * Assumptions:
+   *  1) all active cues are numeric
+   *  2) all active cues are in range 0..100
+   *  3) all actives cue are horizontal (no VTTCue.vertical)
+   *  4) all active cues with VTTCue.line integer have VTTCue.snapToLines = true
+   *  5) all active cues with VTTCue.line percentage have VTTCue.snapToLines = false
+   *
+   * vtt.jsm currently sets snapToLines to false if line is a percentage value, but
+   * cues are still ordered by line. In most cases, snapToLines is set to true by default,
+   * unless intentionally overridden.
+   * @param allCuesArray {Array<VTTCue>} array of active cues
+   */
+  getOrderedWebVTTCues(allCuesArray) {
+    if (!allCuesArray || allCuesArray.length <= 1) {
+      return;
+    }
+
+    let allCuesHaveNumericLines = allCuesArray.find(cue => cue.line !== "auto");
+
+    if (allCuesHaveNumericLines) {
+      allCuesArray.sort((cue1, cue2) => cue1.line - cue2.line);
+    } else if (allCuesArray.length >= 2) {
+      allCuesArray.reverse();
+    }
+  }
 
   /**
    * Returns a reference to the PiP's <video> element being displayed in Picture-in-Picture
@@ -1167,7 +1592,7 @@ class PictureInPictureChild extends JSWindowActorChild {
   }
 
   static videoIsMuted(video) {
-    return video.muted;
+    return this.videoWrapper.isMuted(video);
   }
 
   handleEvent(event) {
@@ -1210,7 +1635,7 @@ class PictureInPictureChild extends JSWindowActorChild {
           return;
         }
 
-        if (video.muted) {
+        if (this.constructor.videoIsMuted(video)) {
           this.sendAsyncMessage("PictureInPicture:Muting");
         } else {
           this.sendAsyncMessage("PictureInPicture:Unmuting");
@@ -1225,6 +1650,53 @@ class PictureInPictureChild extends JSWindowActorChild {
             videoWidth: video.videoWidth,
           });
         }
+        this.setupTextTracks(video);
+        break;
+      }
+      case "emptied": {
+        if (this.emptiedTimeout) {
+          clearTimeout(this.emptiedTimeout);
+          this.emptiedTimeout = null;
+        }
+        let video = this.getWeakVideo();
+        // We may want to keep the pip window open if the video
+        // is still in DOM. But if video src is no longer defined,
+        // close Picture-in-Picture.
+        this.emptiedTimeout = setTimeout(() => {
+          if (!video || !video.src) {
+            this.closePictureInPicture({ reason: "video-el-emptied" });
+          }
+        }, EMPTIED_TIMEOUT_MS);
+        break;
+      }
+      case "change": {
+        // Clear currently stored track data (webvtt support) before reading
+        // a new track.
+        if (this._currentWebVTTTrack) {
+          this._currentWebVTTTrack.removeEventListener(
+            "cuechange",
+            this.onCueChange
+          );
+          this._currentWebVTTTrack = null;
+        }
+
+        const tracks = event.target;
+        this.setActiveTextTrack(tracks);
+        const isCurrentTrackAvailable = this._currentWebVTTTrack;
+
+        // If tracks are disabled or invalid while change occurs,
+        // remove text tracks from the pip window and stop here.
+        if (!isCurrentTrackAvailable || !tracks.length) {
+          this.updateWebVTTTextTracksDisplay(null);
+          return;
+        }
+
+        this._currentWebVTTTrack.addEventListener(
+          "cuechange",
+          this.onCueChange
+        );
+        const cues = this._currentWebVTTTrack.activeCues;
+        this.updateWebVTTTextTracksDisplay(cues);
         break;
       }
     }
@@ -1284,7 +1756,7 @@ class PictureInPictureChild extends JSWindowActorChild {
           // can be either a MediaStream, MediaSource or Blob. In case of future changes
           // we do not want to pause MediaStream srcObjects and we want to maintain current
           // behavior for non-MediaStream srcObjects.
-          if (video && video.srcObject instanceof MediaStream) {
+          if (video && MediaStream.isInstance(video.srcObject)) {
             break;
           }
         }
@@ -1303,6 +1775,55 @@ class PictureInPictureChild extends JSWindowActorChild {
         this.keyDown(message.data);
         break;
       }
+      case "PictureInPicture:EnterFullscreen":
+      case "PictureInPicture:ExitFullscreen": {
+        let textTracks = this.document.getElementById("texttracks");
+        if (textTracks) {
+          this.moveTextTracks(message.data);
+        }
+        break;
+      }
+      case "PictureInPicture:ShowVideoControls":
+      case "PictureInPicture:HideVideoControls": {
+        let textTracks = this.document.getElementById("texttracks");
+        if (textTracks) {
+          this.moveTextTracks(message.data);
+        }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Updates this._currentWebVTTTrack if an active track is found
+   * for the originating video.
+   * @param {TextTrackList} textTrackList list of text tracks
+   */
+  setActiveTextTrack(textTrackList) {
+    this._currentWebVTTTrack = null;
+
+    for (let i = 0; i < textTrackList.length; i++) {
+      let track = textTrackList[i];
+      let isCCText = track.kind === "subtitles" || track.kind === "captions";
+      if (isCCText && track.mode === "showing" && track.cues) {
+        this._currentWebVTTTrack = track;
+        break;
+      }
+    }
+  }
+
+  setTextTrackFontSize() {
+    const fontSize = Services.prefs.getStringPref(
+      TEXT_TRACK_FONT_SIZE,
+      "medium"
+    );
+    const root = this.document.querySelector(":root");
+    if (fontSize === "small") {
+      root.style.setProperty("--font-scale", "0.03");
+    } else if (fontSize === "large") {
+      root.style.setProperty("--font-scale", "0.09");
+    } else {
+      root.style.setProperty("--font-scale", "0.06");
     }
   }
 
@@ -1312,6 +1833,16 @@ class PictureInPictureChild extends JSWindowActorChild {
    * of its content to go away as well.
    */
   trackOriginatingVideo(originatingVideo) {
+    this.observerFunction = (subject, topic, data) => {
+      this.observe(subject, topic, data);
+    };
+    Services.prefs.addObserver(
+      "media.videocontrols.picture-in-picture.display-text-tracks.enabled",
+      this.observerFunction
+    );
+
+    Services.prefs.addObserver(TEXT_TRACK_FONT_SIZE, this.observerFunction);
+
     let originatingWindow = originatingVideo.ownerGlobal;
     if (originatingWindow) {
       originatingWindow.addEventListener("pagehide", this);
@@ -1319,6 +1850,11 @@ class PictureInPictureChild extends JSWindowActorChild {
       originatingVideo.addEventListener("pause", this);
       originatingVideo.addEventListener("volumechange", this);
       originatingVideo.addEventListener("resize", this);
+      originatingVideo.addEventListener("emptied", this);
+
+      if (DISPLAY_TEXT_TRACKS_PREF) {
+        this.setupTextTracks(originatingVideo);
+      }
 
       let chromeEventHandler = originatingWindow.docShell.chromeEventHandler;
       chromeEventHandler.addEventListener(
@@ -1334,6 +1870,12 @@ class PictureInPictureChild extends JSWindowActorChild {
     }
   }
 
+  setUpCaptionChangeListener(originatingVideo) {
+    if (this.videoWrapper) {
+      this.videoWrapper.setCaptionContainerObserver(originatingVideo, this);
+    }
+  }
+
   /**
    * Stops tracking the originating video's document. This should
    * happen once the Picture-in-Picture window goes away (or is about
@@ -1341,6 +1883,11 @@ class PictureInPictureChild extends JSWindowActorChild {
    * window's document unloads.
    */
   untrackOriginatingVideo(originatingVideo) {
+    Services.prefs.removeObserver(
+      "media.videocontrols.picture-in-picture.display-text-tracks.enabled",
+      this.observerFunction
+    );
+
     let originatingWindow = originatingVideo.ownerGlobal;
     if (originatingWindow) {
       originatingWindow.removeEventListener("pagehide", this);
@@ -1348,6 +1895,11 @@ class PictureInPictureChild extends JSWindowActorChild {
       originatingVideo.removeEventListener("pause", this);
       originatingVideo.removeEventListener("volumechange", this);
       originatingVideo.removeEventListener("resize", this);
+      originatingVideo.removeEventListener("emptied", this);
+
+      if (DISPLAY_TEXT_TRACKS_PREF) {
+        this.removeTextTracks(originatingVideo);
+      }
 
       let chromeEventHandler = originatingWindow.docShell.chromeEventHandler;
       chromeEventHandler.removeEventListener(
@@ -1391,6 +1943,8 @@ class PictureInPictureChild extends JSWindowActorChild {
       return;
     }
 
+    this.videoWrapper = applyWrapper(this, originatingVideo);
+
     let loadPromise = new Promise(resolve => {
       this.contentWindow.addEventListener("load", resolve, {
         once: true,
@@ -1409,6 +1963,8 @@ class PictureInPictureChild extends JSWindowActorChild {
 
     let doc = this.document;
     let playerVideo = doc.createElement("video");
+    playerVideo.id = "playervideo";
+    let textTracks = doc.createElement("div");
 
     doc.body.style.overflow = "hidden";
     doc.body.style.margin = "0";
@@ -1419,7 +1975,19 @@ class PictureInPictureChild extends JSWindowActorChild {
     playerVideo.style.width = "100vw";
     playerVideo.style.backgroundColor = "#000";
 
+    // Load text tracks container in the content process so that
+    // we can load text tracks without having to constantly
+    // access the parent process.
+    textTracks.id = "texttracks";
+    // When starting pip, player controls are expected to appear.
+    textTracks.setAttribute("overlap-video-controls", true);
     doc.body.appendChild(playerVideo);
+    doc.body.appendChild(textTracks);
+    // Load text tracks stylesheet
+    let textTracksStyleSheet = this.createTextTracksStyleSheet();
+    doc.head.appendChild(textTracksStyleSheet);
+
+    this.setTextTrackFontSize();
 
     originatingVideo.cloneElementVisually(playerVideo);
 
@@ -1429,6 +1997,7 @@ class PictureInPictureChild extends JSWindowActorChild {
       playerVideo.style.transform = "scaleX(-1)";
     }
 
+    this.onCueChange = this.onCueChange.bind(this);
     this.trackOriginatingVideo(originatingVideo);
 
     this.contentWindow.addEventListener(
@@ -1447,29 +2016,38 @@ class PictureInPictureChild extends JSWindowActorChild {
 
   play() {
     let video = this.getWeakVideo();
-    if (video) {
-      video.play();
+    if (video && this.videoWrapper) {
+      this.videoWrapper.play(video);
     }
   }
 
   pause() {
     let video = this.getWeakVideo();
-    if (video) {
-      video.pause();
+    if (video && this.videoWrapper) {
+      this.videoWrapper.pause(video);
     }
   }
 
   mute() {
     let video = this.getWeakVideo();
-    if (video) {
-      video.muted = true;
+    if (video && this.videoWrapper) {
+      this.videoWrapper.setMuted(video, true);
     }
   }
 
   unmute() {
     let video = this.getWeakVideo();
-    if (video) {
-      video.muted = false;
+    if (video && this.videoWrapper) {
+      this.videoWrapper.setMuted(video, false);
+    }
+  }
+
+  onCueChange(e) {
+    if (!DISPLAY_TEXT_TRACKS_PREF) {
+      this.updateWebVTTTextTracksDisplay(null);
+    } else {
+      const cues = this._currentWebVTTTrack.activeCues;
+      this.updateWebVTTTextTracksDisplay(cues);
     }
   }
 
@@ -1554,9 +2132,12 @@ class PictureInPictureChild extends JSWindowActorChild {
       case this.contentWindow.KeyEvent.DOM_VK_SPACE:
         keystroke += "space";
         break;
+      case this.contentWindow.KeyEvent.DOM_VK_W:
+        keystroke += "w";
+        break;
     }
 
-    const isVideoStreaming = video.duration == +Infinity;
+    const isVideoStreaming = this.videoWrapper.getDuration(video) == +Infinity;
     var oldval, newval;
 
     try {
@@ -1565,83 +2146,101 @@ class PictureInPictureChild extends JSWindowActorChild {
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.PLAY_PAUSE)) {
             return;
           }
-          if (video.paused || video.ended) {
-            video.play();
+
+          if (
+            this.videoWrapper.getPaused(video) ||
+            this.videoWrapper.getEnded(video)
+          ) {
+            this.videoWrapper.play(video);
           } else {
-            video.pause();
+            this.videoWrapper.pause(video);
           }
+
+          break;
+        case "accel-w" /* Close video */:
+          if (!this.isKeyEnabled(KEYBOARD_CONTROLS.CLOSE)) {
+            return;
+          }
+          this.pause();
+          this.closePictureInPicture({ reason: "close-player-shortcut" });
           break;
         case "downArrow" /* Volume decrease */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.VOLUME)) {
             return;
           }
-          oldval = video.volume;
-          video.volume = oldval < 0.1 ? 0 : oldval - 0.1;
-          video.muted = false;
+          oldval = this.videoWrapper.getVolume(video);
+          this.videoWrapper.setVolume(video, oldval < 0.1 ? 0 : oldval - 0.1);
+          this.videoWrapper.setMuted(video, false);
           break;
         case "upArrow" /* Volume increase */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.VOLUME)) {
             return;
           }
-          oldval = video.volume;
-          video.volume = oldval > 0.9 ? 1 : oldval + 0.1;
-          video.muted = false;
+          oldval = this.videoWrapper.getVolume(video);
+          this.videoWrapper.setVolume(video, oldval > 0.9 ? 1 : oldval + 0.1);
+          this.videoWrapper.setMuted(video, false);
           break;
         case "accel-downArrow" /* Mute */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.MUTE_UNMUTE)) {
             return;
           }
-          video.muted = true;
+          this.videoWrapper.setMuted(video, true);
           break;
         case "accel-upArrow" /* Unmute */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.MUTE_UNMUTE)) {
             return;
           }
-          video.muted = false;
+          this.videoWrapper.setMuted(video, false);
           break;
-        case "leftArrow": /* Seek back 15 seconds */
+        case "leftArrow": /* Seek back 5 seconds */
         case "accel-leftArrow" /* Seek back 10% */:
           if (isVideoStreaming || !this.isKeyEnabled(KEYBOARD_CONTROLS.SEEK)) {
             return;
           }
 
-          oldval = video.currentTime;
+          oldval = this.videoWrapper.getCurrentTime(video);
           if (keystroke == "leftArrow") {
-            newval = oldval - 15;
+            newval = oldval - SEEK_TIME_SECS;
           } else {
-            newval = oldval - video.duration / 10;
+            newval = oldval - this.videoWrapper.getDuration(video) / 10;
           }
-          video.currentTime = newval >= 0 ? newval : 0;
+          this.videoWrapper.setCurrentTime(video, newval >= 0 ? newval : 0);
           break;
-        case "rightArrow": /* Seek forward 15 seconds */
+        case "rightArrow": /* Seek forward 5 seconds */
         case "accel-rightArrow" /* Seek forward 10% */:
           if (isVideoStreaming || !this.isKeyEnabled(KEYBOARD_CONTROLS.SEEK)) {
             return;
           }
 
-          oldval = video.currentTime;
-          var maxtime = video.duration;
+          oldval = this.videoWrapper.getCurrentTime(video);
+          var maxtime = this.videoWrapper.getDuration(video);
           if (keystroke == "rightArrow") {
-            newval = oldval + 15;
+            newval = oldval + SEEK_TIME_SECS;
           } else {
             newval = oldval + maxtime / 10;
           }
-          video.currentTime = newval <= maxtime ? newval : maxtime;
+          let selectedTime = newval <= maxtime ? newval : maxtime;
+          this.videoWrapper.setCurrentTime(video, selectedTime);
           break;
         case "home" /* Seek to beginning */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.SEEK)) {
             return;
           }
           if (!isVideoStreaming) {
-            video.currentTime = 0;
+            this.videoWrapper.setCurrentTime(video, 0);
           }
           break;
         case "end" /* Seek to end */:
           if (!this.isKeyEnabled(KEYBOARD_CONTROLS.SEEK)) {
             return;
           }
-          if (!isVideoStreaming && video.currentTime != video.duration) {
-            video.currentTime = video.duration;
+
+          let duration = this.videoWrapper.getDuration(video);
+          if (
+            !isVideoStreaming &&
+            this.videoWrapper.getCurrentTime(video) != duration
+          ) {
+            this.videoWrapper.setCurrentTime(video, duration);
           }
           break;
         default:
@@ -1649,5 +2248,436 @@ class PictureInPictureChild extends JSWindowActorChild {
     } catch (e) {
       /* ignore any exception from setting video.currentTime */
     }
+  }
+
+  get isSubtitlesEnabled() {
+    return this.#subtitlesEnabled;
+  }
+
+  set isSubtitlesEnabled(val) {
+    if (val) {
+      Services.telemetry.recordEvent(
+        "pictureinpicture",
+        "subtitles_shown",
+        "subtitles",
+        null,
+        {
+          webVTTSubtitles: (!!this.getWeakVideo().textTracks
+            ?.length).toString(),
+        }
+      );
+    }
+    this.#subtitlesEnabled = val;
+  }
+}
+
+/**
+ * The PictureInPictureChildVideoWrapper class handles providing a path to a script that
+ * defines a "site wrapper" for the original <video> (or other controls API provided
+ * by the site) to command it.
+ *
+ * This "site wrapper" provided to PictureInPictureChildVideoWrapper is a script file that
+ * defines a class called `PictureInPictureVideoWrapper` and exports it. These scripts can
+ * be found under "browser/extensions/pictureinpicture/video-wrappers" as part of the
+ * Picture-In-Picture addon.
+ *
+ * Site wrappers need to adhere to a specific interface to work properly with
+ * PictureInPictureChildVideoWrapper:
+ *
+ * - The "site wrapper" script must export a class called "PictureInPictureVideoWrapper"
+ * - Method names on a site wrapper class should match its caller's name
+ *   (i.e: PictureInPictureChildVideoWrapper.play will only call `play` on a site-wrapper, if available)
+ */
+class PictureInPictureChildVideoWrapper {
+  #sandbox;
+  #siteWrapper;
+  #PictureInPictureChild;
+
+  /**
+   * Create a wrapper for the original <video>
+   *
+   * @param {String|null} videoWrapperScriptPath
+   *        Path to a wrapper script from the Picture-in-Picture addon. If a wrapper isn't
+   *        provided to the class, then we fallback on a default implementation for
+   *        commanding the original <video>.
+   * @param {HTMLVideoElement} video
+   *        The original <video> we want to create a wrapper class for.
+   * @param {Object} pipChild
+   *        Reference to PictureInPictureChild class calling this function.
+   */
+  constructor(videoWrapperScriptPath, video, pipChild) {
+    this.#sandbox = videoWrapperScriptPath
+      ? this.#createSandbox(videoWrapperScriptPath, video)
+      : null;
+    this.#PictureInPictureChild = pipChild;
+  }
+
+  /**
+   * Handles calling methods defined on the site wrapper class to perform video
+   * controls operations on the source video. If the method doesn't exist,
+   * or if an error is thrown while calling it, use a fallback implementation.
+   *
+   * @param {String} methodInfo.name
+   *        The method name to call.
+   * @param {Array} methodInfo.args
+   *        Arguments to pass to the site wrapper method being called.
+   * @param {Function} methodInfo.fallback
+   *        A fallback function that's invoked when a method doesn't exist on the site
+   *        wrapper class or an error is thrown while calling a method
+   * @param {Function} methodInfo.validateReturnVal
+   *        Validates whether or not the return value of the wrapper method is correct.
+   *        If this isn't provided or if it evaluates false for a return value, then
+   *        return null.
+   *
+   * @returns The expected output of the wrapper function.
+   */
+  #callWrapperMethod({ name, args = [], fallback = () => {}, validateRetVal }) {
+    try {
+      const wrappedMethod = this.#siteWrapper?.[name];
+      if (typeof wrappedMethod === "function") {
+        let retVal = wrappedMethod.call(this.#siteWrapper, ...args);
+
+        if (!validateRetVal) {
+          logConsole.debug(
+            `Invalid return value validator was found for method ${name}(). Replacing return value ${retVal} with null.`
+          );
+          Cu.reportError(
+            `No return value validator was provided for method ${name}(). Returning null.`
+          );
+          return null;
+        }
+
+        if (!validateRetVal(retVal)) {
+          logConsole.debug("Invalid return value:", retVal);
+          Cu.reportError(
+            `Calling method ${name}() returned an unexpected value: ${retVal}. Returning null.`
+          );
+          return null;
+        }
+
+        return retVal;
+      }
+    } catch (e) {
+      logConsole.debug("Error:", e.message);
+      Cu.reportError(`There was an error while calling ${name}(): `, e.message);
+    }
+
+    return fallback();
+  }
+
+  /**
+   * Creates a sandbox with Xray vision to execute content code in an unprivileged
+   * context. This way, privileged code (PictureInPictureChild) can call into the
+   * sandbox to perform video controls operations on the originating video
+   * (content code) and still be protected from direct access by it.
+   *
+   * @param {String} videoWrapperScriptPath
+   *        Path to a wrapper script from the Picture-in-Picture addon.
+   * @param {HTMLVideoElement} video
+   *        The source video element whose window to create a sandbox for.
+   */
+  #createSandbox(videoWrapperScriptPath, video) {
+    const addonPolicy = WebExtensionPolicy.getByID(
+      "pictureinpicture@mozilla.org"
+    );
+    let wrapperScriptUrl = addonPolicy.getURL(videoWrapperScriptPath);
+    let originatingWin = video.ownerGlobal;
+    let originatingDoc = video.ownerDocument;
+
+    let sandbox = Cu.Sandbox([originatingDoc.nodePrincipal], {
+      sandboxName: "Picture-in-Picture video wrapper sandbox",
+      sandboxPrototype: originatingWin,
+      sameZoneAs: originatingWin,
+      wantXrays: false,
+    });
+
+    try {
+      Services.scriptloader.loadSubScript(wrapperScriptUrl, sandbox);
+    } catch (e) {
+      Cu.nukeSandbox(sandbox);
+      Cu.reportError("Error loading wrapper script for Picture-in-Picture" + e);
+      return null;
+    }
+
+    // The prototype of the wrapper class instantiated from the sandbox with Xray
+    // vision is `Object` and not actually `PictureInPictureVideoWrapper`. But we
+    // need to be able to access methods defined on this class to perform site-specific
+    // video control operations otherwise we fallback to a default implementation.
+    // Because of this, we need to "waive Xray vision" by adding `.wrappedObject` to the
+    // end.
+    this.#siteWrapper = new sandbox.PictureInPictureVideoWrapper(
+      video
+    ).wrappedJSObject;
+
+    return sandbox;
+  }
+
+  #isBoolean(val) {
+    return typeof val === "boolean";
+  }
+
+  #isNumber(val) {
+    return typeof val === "number";
+  }
+
+  /**
+   * Destroys the sandbox for the site wrapper class
+   */
+  destroy() {
+    if (this.#sandbox) {
+      Cu.nukeSandbox(this.#sandbox);
+    }
+  }
+
+  /**
+   * Function to display the captions on the PiP window
+   * @param text The captions to be shown on the PiP window
+   */
+  updatePiPTextTracks(text) {
+    if (!this.#PictureInPictureChild.isSubtitlesEnabled && text) {
+      this.#PictureInPictureChild.isSubtitlesEnabled = true;
+    }
+    let pipWindowTracksContainer = this.#PictureInPictureChild.document.getElementById(
+      "texttracks"
+    );
+    pipWindowTracksContainer.textContent = text;
+  }
+
+  /* Video methods to be used for video controls from the PiP window. */
+
+  /**
+   * OVERRIDABLE - calls the play() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to handle video
+   * behaviour when a video is played.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   */
+  play(video) {
+    return this.#callWrapperMethod({
+      name: "play",
+      args: [video],
+      fallback: () => video.play(),
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the pause() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to handle video
+   * behaviour when a video is paused.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   */
+  pause(video) {
+    return this.#callWrapperMethod({
+      name: "pause",
+      args: [video],
+      fallback: () => video.pause(),
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the getPaused() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to determine if
+   * a video is paused or not.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Boolean} Boolean value true if paused, or false if video is still playing
+   */
+  getPaused(video) {
+    return this.#callWrapperMethod({
+      name: "getPaused",
+      args: [video],
+      fallback: () => video.paused,
+      validateRetVal: retVal => this.#isBoolean(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the getEnded() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to determine if
+   * video playback or streaming has stopped.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Boolean} Boolean value true if the video has ended, or false if still playing
+   */
+  getEnded(video) {
+    return this.#callWrapperMethod({
+      name: "getEnded",
+      args: [video],
+      fallback: () => video.ended,
+      validateRetVal: retVal => this.#isBoolean(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the getDuration() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to get the current
+   * duration of a video in seconds.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Number} Duration of the video in seconds
+   */
+  getDuration(video) {
+    return this.#callWrapperMethod({
+      name: "getDuration",
+      args: [video],
+      fallback: () => video.duration,
+      validateRetVal: retVal => this.#isNumber(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the getCurrentTime() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to get the current
+   * time of a video in seconds.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Number} Current time of the video in seconds
+   */
+  getCurrentTime(video) {
+    return this.#callWrapperMethod({
+      name: "getCurrentTime",
+      args: [video],
+      fallback: () => video.currentTime,
+      validateRetVal: retVal => this.#isNumber(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the setCurrentTime() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to set the current
+   * time of a video.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @param {Number} position
+   *  The current playback time of the video
+   */
+  setCurrentTime(video, position) {
+    return this.#callWrapperMethod({
+      name: "setCurrentTime",
+      args: [video, position],
+      fallback: () => {
+        video.currentTime = position;
+      },
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the getVolume() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to get the volume
+   * value of a video.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Number} Volume of the video between 0 (muted) and 1 (loudest)
+   */
+  getVolume(video) {
+    return this.#callWrapperMethod({
+      name: "getVolume",
+      args: [video],
+      fallback: () => video.volume,
+      validateRetVal: retVal => this.#isNumber(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the setVolume() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to set the volume
+   * value of a video.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @param {Number} volume
+   *  Value between 0 (muted) and 1 (loudest)
+   */
+  setVolume(video, volume) {
+    return this.#callWrapperMethod({
+      name: "setVolume",
+      args: [video, volume],
+      fallback: () => {
+        video.volume = volume;
+      },
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the isMuted() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to get the mute
+   * state a video.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @param {Boolean} shouldMute
+   *  Boolean value true to mute the video, or false to unmute the video
+   */
+  isMuted(video) {
+    return this.#callWrapperMethod({
+      name: "isMuted",
+      args: [video],
+      fallback: () => video.muted,
+      validateRetVal: retVal => this.#isBoolean(retVal),
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the setMuted() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to mute or unmute
+   * a video.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @param {Boolean} shouldMute
+   *  Boolean value true to mute the video, or false to unmute the video
+   */
+  setMuted(video, shouldMute) {
+    return this.#callWrapperMethod({
+      name: "setMuted",
+      args: [video, shouldMute],
+      fallback: () => {
+        video.muted = shouldMute;
+      },
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the setCaptionContainerObserver() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to listen for any cue changes in a
+   * video's caption container and execute a callback function responsible for updating the pip window's text tracks container whenever
+   * a cue change is triggered {@see updatePiPTextTracks()}.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @param {Function} callback
+   *  The callback function to be executed when cue changes are detected
+   */
+  setCaptionContainerObserver(video, callback) {
+    return this.#callWrapperMethod({
+      name: "setCaptionContainerObserver",
+      args: [
+        video,
+        text => {
+          this.updatePiPTextTracks(text);
+        },
+      ],
+      fallback: () => {},
+      validateRetVal: retVal => retVal == null,
+    });
+  }
+
+  /**
+   * OVERRIDABLE - calls the shouldHideToggle() method defined in the site wrapper script. Runs a fallback implementation
+   * if the method does not exist or if an error is thrown while calling it. This method is meant to determine if the pip toggle
+   * for a video should be hidden by the site wrapper.
+   * @param {HTMLVideoElement} video
+   *  The originating video source element
+   * @returns {Boolean} Boolean value true if the pip toggle should be hidden by the site wrapper, or false if it should not
+   */
+  shouldHideToggle(video) {
+    return this.#callWrapperMethod({
+      name: "shouldHideToggle",
+      args: [video],
+      fallback: () => false,
+      validateRetVal: retVal => this.#isBoolean(retVal),
+    });
   }
 }

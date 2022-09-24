@@ -5,8 +5,8 @@
 
 // Check that source maps work in the event popup.
 
-const INITIAL_URL = URL_ROOT + "doc_markup_void_elements.html";
-const TEST_URL = URL_ROOT + "doc_markup_events-source_map.html";
+const INITIAL_URL = URL_ROOT_SSL + "doc_markup_void_elements.html";
+const TEST_URL = URL_ROOT_SSL + "doc_markup_events-source_map.html";
 
 /* import-globals-from helper_events_test_runner.js */
 loadHelperScript("helper_events_test_runner.js");
@@ -19,7 +19,7 @@ const TEST_DATA = [
       {
         type: "click",
         filename: "webpack:///events_original.js:7",
-        attributes: ["Bubbling", "DOM2"],
+        attributes: ["Bubbling"],
         handler: `function clickme() {
   console.log("clickme");
 }`,

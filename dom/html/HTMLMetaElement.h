@@ -10,8 +10,7 @@
 #include "mozilla/Attributes.h"
 #include "nsGenericHTMLElement.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class HTMLMetaElement final : public nsGenericHTMLElement {
  public:
@@ -30,7 +29,7 @@ class HTMLMetaElement final : public nsGenericHTMLElement {
                                 nsIPrincipal* aSubjectPrincipal,
                                 bool aNotify) override;
 
-  void CreateAndDispatchEvent(Document* aDoc, const nsAString& aEventName);
+  void CreateAndDispatchEvent(Document&, const nsAString& aEventName);
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
@@ -62,12 +61,13 @@ class HTMLMetaElement final : public nsGenericHTMLElement {
   virtual ~HTMLMetaElement();
 
  private:
-  void SetMetaReferrer(Document* aDocument);
-  void ProcessViewportContent(Document* aDocument);
-  void DiscardViewportContent(Document* aDocument);
+  enum class ChangeKind : uint8_t { TreeChange, NameChange, ContentChange };
+  void MetaRemoved(Document& aDoc, const nsAttrValue& aName,
+                   ChangeKind aChangeKind);
+  void MetaAddedOrChanged(Document& aDoc, const nsAttrValue& aName,
+                          ChangeKind aChangeKind);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_HTMLMetaElement_h

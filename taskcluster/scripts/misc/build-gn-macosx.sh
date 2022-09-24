@@ -4,10 +4,10 @@ set -e -v
 # This script is for building GN.
 
 WORKSPACE=$HOME/workspace
-COMPRESS_EXT=xz
 
 CROSS_CCTOOLS_PATH=$MOZ_FETCHES_DIR/cctools
-CROSS_SYSROOT=$MOZ_FETCHES_DIR/MacOSX10.12.sdk
+CROSS_SYSROOT=$MOZ_FETCHES_DIR/MacOSX11.0.sdk
+export MACOSX_DEPLOYMENT_TARGET=10.12
 
 export CC=$MOZ_FETCHES_DIR/clang/bin/clang
 export CXX=$MOZ_FETCHES_DIR/clang/bin/clang++

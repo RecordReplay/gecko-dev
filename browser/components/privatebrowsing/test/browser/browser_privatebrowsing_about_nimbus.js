@@ -2,60 +2,25 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-const { ExperimentFakes } = ChromeUtils.import(
-  "resource://testing-common/NimbusTestUtils.jsm"
-);
-const { ExperimentAPI } = ChromeUtils.import(
-  "resource://nimbus/ExperimentAPI.jsm"
-);
-
-/**
- * These tests ensure that the experiment and remote default capabilities
- * for the "privatebrowsing" feature are working as expected.
- */
-
-async function openTabAndWaitForRender() {
-  let { win, tab } = await openAboutPrivateBrowsing();
-  await SpecialPowers.spawn(tab, [], async function() {
-    // Wait for render to complete
-    await ContentTaskUtils.waitForCondition(() =>
-      content.document.documentElement.hasAttribute(
-        "PrivateBrowsingRenderComplete"
-      )
-    );
-  });
-  return { win, tab };
-}
-
-function waitForTelemetryEvent(category) {
-  info("waiting for telemetry event");
-  return TestUtils.waitForCondition(() => {
-    let events = Services.telemetry.snapshotEvents(
-      Ci.nsITelemetry.DATASET_PRERELEASE_CHANNELS,
-      false
-    ).content;
-    if (!events) {
-      return null;
-    }
-    events = events.filter(e => e[1] == category);
-    if (events.length) {
-      return events[0];
-    }
-    return null;
-  }, "waiting for telemetry event");
-}
+/* import-globals-from head.js */
 
 add_task(async function test_experiment_plain_text() {
+  const defaultMessageContent = (await PanelTestProvider.getMessages()).find(
+    m => m.template === "pb_newtab"
+  ).content;
   let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
     featureId: "privatebrowsing",
     enabled: true,
     value: {
+      ...defaultMessageContent,
       infoTitle: "Hello world",
+      infoTitleEnabled: true,
       infoBody: "This is some text",
       infoLinkText: "This is a link",
       infoIcon: "chrome://branding/content/about-logo.png",
       promoTitle: "Promo title",
       promoLinkText: "Promo link",
+      promoLinkUrl: "https://test.com",
     },
   });
 
@@ -93,12 +58,17 @@ add_task(async function test_experiment_plain_text() {
 });
 
 add_task(async function test_experiment_fluent() {
+  const defaultMessageContent = (await PanelTestProvider.getMessages()).find(
+    m => m.template === "pb_newtab"
+  ).content;
   let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
     featureId: "privatebrowsing",
     enabled: true,
     value: {
+      ...defaultMessageContent,
       infoBody: "fluent:about-private-browsing-info-title",
-      promoLinkText: "fluent:about-private-browsing-need-more-privacy",
+      promoLinkText: "fluent:about-private-browsing-prominent-cta",
+      promoLinkUrl: "https://test.com",
     },
   });
 
@@ -118,7 +88,7 @@ add_task(async function test_experiment_fluent() {
     );
     is(
       promoLink.textContent,
-      "Need more privacy?",
+      "Stay private with Mozilla VPN",
       "should render promoLinkText with fluent"
     );
   });
@@ -179,6 +149,8 @@ add_task(async function test_experiment_format_urls() {
     featureId: "privatebrowsing",
     enabled: true,
     value: {
+      infoEnabled: true,
+      promoEnabled: true,
       infoLinkUrl: "http://foo.mozilla.com/%LOCALE%",
       promoLinkUrl: "http://bar.mozilla.com/%LOCALE%",
     },
@@ -193,7 +165,7 @@ add_task(async function test_experiment_format_urls() {
       "should format the infoLinkUrl url"
     );
     is(
-      content.document.querySelector(".promo a").getAttribute("href"),
+      content.document.querySelector(".promo button").getAttribute("href"),
       "http://bar.mozilla.com/" + locale,
       "should format the promoLinkUrl url"
     );
@@ -208,13 +180,15 @@ add_task(async function test_experiment_click_info_telemetry() {
     featureId: "privatebrowsing",
     enabled: true,
     value: {
+      infoEnabled: true,
       infoLinkUrl: "http://example.com",
     },
   });
 
-  let { win, tab } = await openTabAndWaitForRender();
-
+  // Required for `mach test --verify`
   Services.telemetry.clearEvents();
+
+  let { win, tab } = await openTabAndWaitForRender();
 
   await SpecialPowers.spawn(tab, [], () => {
     const el = content.document.querySelector(".info a");
@@ -237,6 +211,7 @@ add_task(async function test_experiment_click_promo_telemetry() {
     featureId: "privatebrowsing",
     enabled: true,
     value: {
+      promoEnabled: true,
       promoLinkUrl: "http://example.com",
     },
   });
@@ -246,7 +221,7 @@ add_task(async function test_experiment_click_promo_telemetry() {
   Services.telemetry.clearEvents();
 
   await SpecialPowers.spawn(tab, [], () => {
-    const el = content.document.querySelector(".promo a");
+    const el = content.document.querySelector(".promo button");
     el.click();
   });
 
@@ -262,13 +237,19 @@ add_task(async function test_experiment_click_promo_telemetry() {
 });
 
 add_task(async function test_experiment_bottom_promo() {
+  const defaultMessageContent = (await PanelTestProvider.getMessages()).find(
+    m => m.template === "pb_newtab"
+  ).content;
   let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
     featureId: "privatebrowsing",
     value: {
+      ...defaultMessageContent,
       enabled: true,
       promoLinkType: "button",
+      promoLinkUrl: "http://example.com",
       promoSectionStyle: "bottom",
       promoHeader: "Need more privacy?",
+      infoTitleEnabled: true,
       promoTitleEnabled: false,
       promoImageLarge: "",
       promoImageSmall: "chrome://browser/content/assets/vpn-logo.svg",
@@ -295,10 +276,6 @@ add_task(async function test_experiment_bottom_promo() {
       "Should have .bottom for the promo section"
     );
     ok(
-      content.document.querySelector("#info-title"),
-      "Should render info title if infoTitleEnabled is true"
-    );
-    ok(
       !content.document.querySelector("#private-browsing-vpn-text"),
       "Should not render promo title if promoTitleEnabled is true"
     );
@@ -313,20 +290,24 @@ add_task(async function test_experiment_bottom_promo() {
   });
 
   await BrowserTestUtils.closeWindow(win);
-
   await doExperimentCleanup();
 });
 
 add_task(async function test_experiment_below_search_promo() {
+  const defaultMessageContent = (await PanelTestProvider.getMessages()).find(
+    m => m.template === "pb_newtab"
+  ).content;
   let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
     featureId: "privatebrowsing",
     value: {
+      ...defaultMessageContent,
       enabled: true,
       promoLinkType: "button",
+      promoLinkUrl: "http://example.com",
       promoSectionStyle: "below-search",
       promoHeader: "Need more privacy?",
       promoTitle:
-        "Mozilla VPN. Security, reliability and speed — on every device,  anywhere you go.",
+        "Mozilla VPN. Security, reliability and speed — on every device, anywhere you go.",
       promoImageLarge: "chrome://browser/content/assets/moz-vpn.svg",
       promoImageSmall: "chrome://browser/content/assets/vpn-logo.svg",
       infoTitleEnabled: false,
@@ -368,20 +349,24 @@ add_task(async function test_experiment_below_search_promo() {
   });
 
   await BrowserTestUtils.closeWindow(win);
-
   await doExperimentCleanup();
 });
 
 add_task(async function test_experiment_top_promo() {
+  const defaultMessageContent = (await PanelTestProvider.getMessages()).find(
+    m => m.template === "pb_newtab"
+  ).content;
   let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig({
     featureId: "privatebrowsing",
     value: {
+      ...defaultMessageContent,
       enabled: true,
       promoLinkType: "button",
+      promoLinkUrl: "http://example.com",
       promoSectionStyle: "top",
       promoHeader: "Need more privacy?",
       promoTitle:
-        "Mozilla VPN. Security, reliability and speed — on every device, anywhere you go.",
+        "Mozilla VPN. Security, reliability and speed — on every device, anywhere you go.",
       promoImageLarge: "chrome://browser/content/assets/moz-vpn.svg",
       promoImageSmall: "chrome://browser/content/assets/vpn-logo.svg",
       infoTitleEnabled: false,
@@ -420,6 +405,5 @@ add_task(async function test_experiment_top_promo() {
   });
 
   await BrowserTestUtils.closeWindow(win);
-
   await doExperimentCleanup();
 });

@@ -13,6 +13,7 @@
 #include "nsJSUtils.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 
 namespace mozilla::glean {
 
@@ -23,17 +24,11 @@ void MemoryDistributionMetric::Accumulate(uint64_t aSample) const {
   if (hgramId) {
     Telemetry::Accumulate(hgramId.extract(), aSample);
   }
-#ifndef MOZ_GLEAN_ANDROID
   fog_memory_distribution_accumulate(mId, aSample);
-#endif
 }
 
 Result<Maybe<DistributionData>, nsCString>
 MemoryDistributionMetric::TestGetValue(const nsACString& aPingName) const {
-#ifdef MOZ_GLEAN_ANDROID
-  Unused << mId;
-  return Maybe<DistributionData>();
-#else
   nsCString err;
   if (fog_memory_distribution_test_get_error(mId, &aPingName, &err)) {
     return Err(err);
@@ -47,7 +42,6 @@ MemoryDistributionMetric::TestGetValue(const nsACString& aPingName) const {
   fog_memory_distribution_test_get_value(mId, &aPingName, &sum, &buckets,
                                          &counts);
   return Some(DistributionData(buckets, counts, sum));
-#endif
 }
 
 }  // namespace impl

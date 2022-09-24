@@ -127,7 +127,8 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
 
   static int32_t AppleWeightToCSSWeight(int32_t aAppleWeight);
 
-  gfxFontEntry* LookupLocalFont(const nsACString& aFontName,
+  gfxFontEntry* LookupLocalFont(nsPresContext* aPresContext,
+                                const nsACString& aFontName,
                                 WeightRange aWeightForEntry,
                                 StretchRange aStretchForEntry,
                                 SlantStyleRange aStyleForEntry) override;
@@ -139,13 +140,12 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
                                  const uint8_t* aFontData,
                                  uint32_t aLength) override;
 
-  bool FindAndAddFamilies(mozilla::StyleGenericFontFamily aGeneric,
-                          const nsACString& aFamily,
-                          nsTArray<FamilyAndGeneric>* aOutput,
-                          FindFamiliesFlags aFlags,
-                          gfxFontStyle* aStyle = nullptr,
-                          nsAtom* aLanguage = nullptr,
-                          gfxFloat aDevToCssSize = 1.0) override;
+  bool FindAndAddFamiliesLocked(
+      nsPresContext* aPresContext, mozilla::StyleGenericFontFamily aGeneric,
+      const nsACString& aFamily, nsTArray<FamilyAndGeneric>* aOutput,
+      FindFamiliesFlags aFlags, gfxFontStyle* aStyle = nullptr,
+      nsAtom* aLanguage = nullptr, gfxFloat aDevToCssSize = 1.0)
+      REQUIRES(mLock) override;
 
   // lookup the system font for a particular system font type and set
   // the name and style characteristics
@@ -162,8 +162,10 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
   void ReadSystemFontList(mozilla::dom::SystemFontList*);
 
  protected:
-  FontFamily GetDefaultFontForPlatform(const gfxFontStyle* aStyle,
-                                       nsAtom* aLanguage = nullptr) override;
+  FontFamily GetDefaultFontForPlatform(nsPresContext* aPresContext,
+                                       const gfxFontStyle* aStyle,
+                                       nsAtom* aLanguage = nullptr)
+      REQUIRES(mLock) override;
 
  private:
   friend class gfxPlatformMac;
@@ -172,22 +174,23 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
   virtual ~gfxMacPlatformFontList();
 
   // initialize font lists
-  nsresult InitFontListForPlatform() override;
-  void InitSharedFontListForPlatform() override;
+  nsresult InitFontListForPlatform() REQUIRES(mLock) override;
+  void InitSharedFontListForPlatform() REQUIRES(mLock) override;
 
   // handle commonly used fonts for which the name table should be loaded at
   // startup
-  void PreloadNamesList();
+  void PreloadNamesList() REQUIRES(mLock);
 
   // special case font faces treated as font families (set via prefs)
-  void InitSingleFaceList();
-  void InitAliasesForSingleFaceList();
+  void InitSingleFaceList() REQUIRES(mLock);
+  void InitAliasesForSingleFaceList() REQUIRES(mLock);
 
   // initialize system fonts
-  void InitSystemFontNames();
+  void InitSystemFontNames() REQUIRES(mLock);
 
   // helper function to lookup in both hidden system fonts and normal fonts
-  gfxFontFamily* FindSystemFontFamily(const nsACString& aFamily);
+  gfxFontFamily* FindSystemFontFamily(const nsACString& aFamily)
+      REQUIRES(mLock);
 
   FontVisibility GetVisibilityForFamily(const nsACString& aName) const;
 
@@ -197,10 +200,12 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
 
   // attempt to use platform-specific fallback for the given character
   // return null if no usable result found
-  gfxFontEntry* PlatformGlobalFontFallback(const uint32_t aCh,
+  gfxFontEntry* PlatformGlobalFontFallback(nsPresContext* aPresContext,
+                                           const uint32_t aCh,
                                            Script aRunScript,
                                            const gfxFontStyle* aMatchStyle,
-                                           FontFamily& aMatchedFamily) override;
+                                           FontFamily& aMatchedFamily)
+      REQUIRES(mLock) override;
 
   bool UsesSystemFallback() override { return true; }
 
@@ -211,9 +216,10 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
   // file is included in .cpp files, so we can't use objective C classes here.
   // But CFStringRef and NSString* are the same thing anyway (they're
   // toll-free bridged).
-  void AddFamily(CFStringRef aFamily);
+  void AddFamily(CFStringRef aFamily) REQUIRES(mLock);
 
-  void AddFamily(const nsACString& aFamilyName, FontVisibility aVisibility);
+  void AddFamily(const nsACString& aFamilyName, FontVisibility aVisibility)
+      REQUIRES(mLock);
 
   gfxFontEntry* CreateFontEntry(
       mozilla::fontlist::Face* aFace,
@@ -225,7 +231,8 @@ class gfxMacPlatformFontList final : public gfxPlatformFontList {
       bool aLoadCmaps) const override;
 
   void ReadFaceNamesForFamily(mozilla::fontlist::Family* aFamily,
-                              bool aNeedFullnamePostscriptNames) override;
+                              bool aNeedFullnamePostscriptNames)
+      REQUIRES(mLock) override;
 
   enum { kATSGenerationInitial = -1 };
 

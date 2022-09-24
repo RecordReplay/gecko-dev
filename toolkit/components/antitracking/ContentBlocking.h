@@ -13,6 +13,8 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/StaticPrefs_privacy.h"
 
+#include "nsIUrlClassifierFeature.h"
+
 class nsIChannel;
 class nsICookieJarSettings;
 class nsIPermission;
@@ -28,6 +30,7 @@ class OriginAttributes;
 namespace dom {
 class BrowsingContext;
 class ContentParent;
+class Document;
 }  // namespace dom
 
 class ContentBlocking final {
@@ -68,6 +71,11 @@ class ContentBlocking final {
   static bool ShouldAllowAccessFor(nsIPrincipal* aPrincipal,
                                    nsICookieJarSettings* aCookieJarSettings);
 
+  typedef MozPromise<nsresult, uint32_t, true> AsyncShouldAllowAccessForPromise;
+  [[nodiscard]] static RefPtr<AsyncShouldAllowAccessForPromise>
+  AsyncShouldAllowAccessFor(dom::BrowsingContext* aBrowsingContext,
+                            nsIPrincipal* aPrincipal);
+
   enum StorageAccessPromptChoices { eAllow, eAllowAutoGrant };
 
   // Grant the permission for aOrigin to have access to the first party storage.
@@ -106,17 +114,66 @@ class ContentBlocking final {
   // For IPC only.
   typedef MozPromise<nsresult, bool, true> ParentAccessGrantPromise;
   static RefPtr<ParentAccessGrantPromise> SaveAccessForOriginOnParentProcess(
-      nsIPrincipal* aParentPrincipal, nsIPrincipal* aTrackingPrinciapl,
-      const nsCString& aTrackingOrigin, int aAllowMode,
+      nsIPrincipal* aParentPrincipal, nsIPrincipal* aTrackingPrincipal,
+      int aAllowMode,
       uint64_t aExpirationTime =
           StaticPrefs::privacy_restrict3rdpartystorage_expiration());
 
   static RefPtr<ParentAccessGrantPromise> SaveAccessForOriginOnParentProcess(
       uint64_t aTopLevelWindowId, dom::BrowsingContext* aParentContext,
-      nsIPrincipal* aTrackingPrinciapl, const nsCString& aTrackingOrigin,
-      int aAllowMode,
+      nsIPrincipal* aTrackingPrincipal, int aAllowMode,
       uint64_t aExpirationTime =
           StaticPrefs::privacy_restrict3rdpartystorage_expiration());
+
+  // This function checks if the document has explicit permission either to
+  // allow or deny access to cookies. This may be because of the "cookie"
+  // permission or because the domain is on the ContentBlockingAllowList
+  // e.g. because the user flipped the sheild.
+  // This returns:
+  //   Some(true) if unpartitioned cookies will be permitted
+  //   Some(false) if unpartitioned cookies will be blocked
+  //   None if it is not clear from permission alone what to do
+  static Maybe<bool> CheckCookiesPermittedDecidesStorageAccessAPI(
+      nsICookieJarSettings* aCookieJarSettings,
+      nsIPrincipal* aRequestingPrincipal);
+
+  // This function checks if the browser settings give explicit permission
+  // either to allow or deny access to cookies. This only checks the
+  // cookieBehavior setting. This requires an additional bool to indicate
+  // whether or not the context considered is third-party. This returns:
+  //   Some(true) if unpartitioned cookies will be permitted
+  //   Some(false) if unpartitioned cookies will be blocked
+  //   None if it is not clear from settings alone what to do
+  static Maybe<bool> CheckBrowserSettingsDecidesStorageAccessAPI(
+      nsICookieJarSettings* aCookieJarSettings, bool aThirdParty);
+
+  // This function checks if the document's context (like if it is third-party
+  // or an iframe) gives an answer of how a the StorageAccessAPI call, that is
+  // meant to be called by an embedded third party, should return.
+  // This requires an argument that allows some checks to be run only if the
+  // caller of this function is performing a request for storage access.
+  // This returns:
+  //   Some(true) if the calling context has access to cookies if it is not
+  //              disallowed by the browser settings and cookie permissions
+  //   Some(false) if the calling context should not have access to cookies if
+  //               it is not expressly allowed by the browser settings and
+  //               cookie permissions
+  //   None if the calling context does not determine the document's access to
+  //        unpartitioned cookies
+  static Maybe<bool> CheckCallingContextDecidesStorageAccessAPI(
+      dom::Document* aDocument, bool aRequestingStorageAccess);
+
+  // This function checks if the document has already been granted or denied
+  // access to its unpartitioned cookies by the StorageAccessAPI
+  // This returns:
+  //   Some(true) if the document has been granted access by the Storage Access
+  //              API before
+  //   Some(false) if the document has been denied access by the Storage Access
+  //               API before
+  //   None if the document has not been granted or denied access by the Storage
+  //        Access API before
+  static Maybe<bool> CheckExistingPermissionDecidesStorageAccessAPI(
+      dom::Document* aDocument);
 
  private:
   friend class dom::ContentParent;
@@ -135,6 +192,32 @@ class ContentBlocking final {
 
   static void UpdateAllowAccessOnParentProcess(
       dom::BrowsingContext* aParentContext, const nsACString& aTrackingOrigin);
+
+  typedef MozPromise<uint32_t, nsresult, true> CheckTrackerForPrincipalPromise;
+  class TrackerClassifierFeatureCallback final
+      : public nsIUrlClassifierFeatureCallback {
+   public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSIURLCLASSIFIERFEATURECALLBACK
+
+    RefPtr<CheckTrackerForPrincipalPromise> Promise() {
+      return mHolder.Ensure(__func__);
+    }
+
+    void Reject(nsresult rv) { mHolder.Reject(rv, __func__); }
+
+    TrackerClassifierFeatureCallback() = default;
+
+   private:
+    ~TrackerClassifierFeatureCallback() = default;
+
+    MozPromiseHolder<CheckTrackerForPrincipalPromise> mHolder;
+  };
+
+  // This method checks if the given princpal belongs to a tracker or a social
+  // tracker.
+  [[nodiscard]] static RefPtr<CheckTrackerForPrincipalPromise>
+  CheckTrackerForPrincipal(nsIPrincipal* aPrincipal);
 };
 
 }  // namespace mozilla

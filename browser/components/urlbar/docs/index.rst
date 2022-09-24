@@ -34,9 +34,22 @@ Table of Contents
 
    nontechnical-overview
    overview
+   lifetime
    utilities
    telemetry
+   firefox-suggest-telemetry
    debugging
    experiments
    dynamic-result-types
+   preferences
+   testing
    contact
+
+API Reference
+-------------
+
+.. toctree::
+
+   UrlbarController
+   UrlbarInput
+   UrlbarView

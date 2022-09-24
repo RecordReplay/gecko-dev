@@ -54,10 +54,7 @@ this.PersistentCache = class PersistentCache {
       (this._cache = new Promise(async (resolve, reject) => {
         let filepath;
         try {
-          filepath = PathUtils.join(
-            await PathUtils.getLocalProfileDir(),
-            this._filename
-          );
+          filepath = PathUtils.join(PathUtils.localProfileDir, this._filename);
         } catch (error) {
           reject(error);
           return;
@@ -68,6 +65,8 @@ this.PersistentCache = class PersistentCache {
           data = await IOUtils.readJSON(filepath);
         } catch (error) {
           if (
+            // isInstance() is not available in node unit test. It should be safe to use instanceof as it's directly from IOUtils.
+            // eslint-disable-next-line mozilla/use-isInstance
             !(error instanceof DOMException) ||
             error.name !== "NotFoundError"
           ) {
@@ -86,10 +85,7 @@ this.PersistentCache = class PersistentCache {
    * Persist the cache to file.
    */
   async _persist(data) {
-    const filepath = PathUtils.join(
-      await PathUtils.getLocalProfileDir(),
-      this._filename
-    );
+    const filepath = PathUtils.join(PathUtils.localProfileDir, this._filename);
     await IOUtils.writeJSON(filepath, data, {
       tmpPath: `${filepath}.tmp`,
     });

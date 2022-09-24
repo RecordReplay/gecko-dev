@@ -15,11 +15,9 @@
 #include "mozilla/HalTypes.h"   // for hal::THREAD_PRIORITY_COMPOSITOR
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/MessageChannel.h"  // for MessageChannel, etc
-#include "mozilla/ipc/Transport.h"       // for Transport
 #include "mozilla/media/MediaSystemResourceManagerParent.h"  // for MediaSystemResourceManagerParent
 #include "mozilla/layers/BufferTexture.h"
 #include "mozilla/layers/CompositableTransactionParent.h"
-#include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/layers/LayersMessages.h"  // for EditReply
 #include "mozilla/layers/PImageBridgeParent.h"
 #include "mozilla/layers/TextureHostOGL.h"  // for TextureHostOGL
@@ -211,13 +209,6 @@ mozilla::ipc::IPCResult ImageBridgeParent::RecvUpdate(
     }
   }
 
-  if (!IsSameProcess()) {
-    // Ensure that any pending operations involving back and front
-    // buffers have completed, so that neither process stomps on the
-    // other's buffer contents.
-    LayerManagerComposite::PlatformSyncBeforeReplyUpdate();
-  }
-
   return IPC_OK();
 }
 
@@ -280,10 +271,8 @@ mozilla::ipc::IPCResult ImageBridgeParent::RecvWillClose() {
 }
 
 mozilla::ipc::IPCResult ImageBridgeParent::RecvNewCompositable(
-    const CompositableHandle& aHandle, const TextureInfo& aInfo,
-    const LayersBackend& aLayersBackend) {
-  bool useWebRender = aLayersBackend == LayersBackend::LAYERS_WR;
-  RefPtr<CompositableHost> host = AddCompositable(aHandle, aInfo, useWebRender);
+    const CompositableHandle& aHandle, const TextureInfo& aInfo) {
+  RefPtr<CompositableHost> host = AddCompositable(aHandle, aInfo);
   if (!host) {
     return IPC_FAIL_NO_REASON(this);
   }
@@ -299,10 +288,10 @@ mozilla::ipc::IPCResult ImageBridgeParent::RecvReleaseCompositable(
 }
 
 PTextureParent* ImageBridgeParent::AllocPTextureParent(
-    const SurfaceDescriptor& aSharedData, const ReadLockDescriptor& aReadLock,
+    const SurfaceDescriptor& aSharedData, ReadLockDescriptor& aReadLock,
     const LayersBackend& aLayersBackend, const TextureFlags& aFlags,
     const uint64_t& aSerial, const wr::MaybeExternalImageId& aExternalImageId) {
-  return TextureHost::CreateIPDLActor(this, aSharedData, aReadLock,
+  return TextureHost::CreateIPDLActor(this, aSharedData, std::move(aReadLock),
                                       aLayersBackend, aFlags, aSerial,
                                       aExternalImageId);
 }
@@ -432,12 +421,6 @@ void ImageBridgeParent::NotifyNotUsed(PTextureParent* aTexture,
     MOZ_ASSERT(texture->GetFlags() & TextureFlags::RECYCLE);
 
     Maybe<FileDescriptor> fenceFd = Some(FileDescriptor());
-    auto* compositor = texture->GetProvider()
-                           ? texture->GetProvider()->AsCompositorOGL()
-                           : nullptr;
-    if (compositor) {
-      fenceFd = Some(compositor->GetReleaseFence());
-    }
 
     auto* wrTexture = texture->AsWebRenderTextureHost();
     if (wrTexture) {
@@ -486,13 +469,7 @@ void ImageBridgeParent::NotifyBufferNotUsedOfCompositorBridge(
   MOZ_ASSERT(aTexture->GetAndroidHardwareBuffer());
 
 #ifdef MOZ_WIDGET_ANDROID
-  auto* compositor = aTexture->GetProvider()
-                         ? aTexture->GetProvider()->AsCompositorOGL()
-                         : nullptr;
   Maybe<FileDescriptor> fenceFd = Some(FileDescriptor());
-  if (compositor) {
-    fenceFd = Some(compositor->GetReleaseFence());
-  }
 
   auto* wrTexture = aTexture->AsWebRenderTextureHost();
   if (wrTexture) {

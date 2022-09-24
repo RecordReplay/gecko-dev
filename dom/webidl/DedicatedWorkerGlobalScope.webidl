@@ -21,10 +21,19 @@ interface DedicatedWorkerGlobalScope : WorkerGlobalScope {
   [Throws]
   void postMessage(any message, sequence<object> transfer);
   [Throws]
-  void postMessage(any message, optional PostMessageOptions options = {});
+  void postMessage(any message, optional StructuredSerializeOptions options = {});
 
   void close();
 
   attribute EventHandler onmessage;
   attribute EventHandler onmessageerror;
+
+  // https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#animation-frames
+  // Ideally we would just include AnimationFrameProvider to add the interface,
+  // but we cannot make an include conditional.
+  [Pref="dom.workers.requestAnimationFrame", Throws]
+  long requestAnimationFrame(FrameRequestCallback callback);
+
+  [Pref="dom.workers.requestAnimationFrame", Throws]
+  void cancelAnimationFrame(long handle);
 };

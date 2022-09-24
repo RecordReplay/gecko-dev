@@ -46,6 +46,7 @@ class ErrorMessageWatcher extends nsIConsoleListenerWatcher {
       return false;
     }
 
+    // Filter specific to CONTENT PROCESS targets
     if (this.isProcessTarget(targetActor)) {
       // Don't want to display cached messages from private windows.
       const isCachedFromPrivateWindow =
@@ -78,7 +79,9 @@ class ErrorMessageWatcher extends nsIConsoleListenerWatcher {
       return false;
     }
 
-    const ids = WebConsoleUtils.getInnerWindowIDsForFrames(targetActor.window);
+    const ids = targetActor.windows.map(window =>
+      WebConsoleUtils.getInnerWindowId(window)
+    );
     return ids.includes(message.innerWindowID);
   }
 
@@ -102,7 +105,12 @@ class ErrorMessageWatcher extends nsIConsoleListenerWatcher {
       return true;
     }
 
-    // For non-process targets, we filter-out platform-specific errors.
+    // Don't restrict any categories in the Browser Toolbox/Browser Console
+    if (targetActor.sessionContext.type == "all") {
+      return true;
+    }
+
+    // For non-process targets in other toolboxes, we filter-out platform-specific errors.
     return !PLATFORM_SPECIFIC_CATEGORIES.includes(category);
   }
 

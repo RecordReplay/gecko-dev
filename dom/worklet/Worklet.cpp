@@ -24,12 +24,11 @@
 #include "nsIInputStreamPump.h"
 #include "nsIStreamLoader.h"
 #include "nsIThreadRetargetableRequest.h"
-#include "nsIInputStreamPump.h"
 #include "nsNetUtil.h"
 #include "xpcprivate.h"
+#include "mozilla/ScopeExit.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ExecutionRunnable final : public Runnable {
  public:
@@ -79,6 +78,11 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
                                          ErrorResult& aRv) {
     MOZ_ASSERT(aWorklet);
     MOZ_ASSERT(NS_IsMainThread());
+
+    aWorklet->Impl()->OnAddModuleStarted();
+
+    auto promiseSettledGuard =
+        MakeScopeExit([&] { aWorklet->Impl()->OnAddModulePromiseSettled(); });
 
     nsCOMPtr<nsIGlobalObject> global =
         do_QueryInterface(aWorklet->GetParentObject());
@@ -148,6 +152,8 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
       return nullptr;
     }
 
+    promiseSettledGuard.release();
+
     RefPtr<WorkletFetchHandler> handler =
         new WorkletFetchHandler(aWorklet, spec, promise);
     fetchPromise->AppendNativeHandler(handler);
@@ -156,8 +162,8 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
     return promise.forget();
   }
 
-  virtual void ResolvedCallback(JSContext* aCx,
-                                JS::Handle<JS::Value> aValue) override {
+  virtual void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                                ErrorResult& aRv) override {
     MOZ_ASSERT(NS_IsMainThread());
 
     if (!aValue.isObject()) {
@@ -248,8 +254,8 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
     return NS_OK;
   }
 
-  virtual void RejectedCallback(JSContext* aCx,
-                                JS::Handle<JS::Value> aValue) override {
+  virtual void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                                ErrorResult& aRv) override {
     MOZ_ASSERT(NS_IsMainThread());
     RejectPromises(NS_ERROR_DOM_NETWORK_ERR);
   }
@@ -304,6 +310,8 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
     MOZ_ASSERT(NS_FAILED(aResult));
     MOZ_ASSERT(NS_IsMainThread());
 
+    mWorklet->Impl()->OnAddModulePromiseSettled();
+
     for (uint32_t i = 0; i < mPromises.Length(); ++i) {
       mPromises[i]->MaybeReject(aResult);
     }
@@ -317,6 +325,8 @@ class WorkletFetchHandler final : public PromiseNativeHandler,
   void ResolvePromises() {
     MOZ_ASSERT(mStatus == ePending);
     MOZ_ASSERT(NS_IsMainThread());
+
+    mWorklet->Impl()->OnAddModulePromiseSettled();
 
     for (uint32_t i = 0; i < mPromises.Length(); ++i) {
       mPromises[i]->MaybeResolveWithUndefined();
@@ -439,7 +449,7 @@ void ExecutionRunnable::RunOnMainThread() {
 // ---------------------------------------------------------------------------
 // Worklet
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(Worklet)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(Worklet)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Worklet)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mWindow)
@@ -452,8 +462,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Worklet)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwnedObject)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(Worklet)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(Worklet)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(Worklet)
@@ -501,5 +509,4 @@ void Worklet::AddImportFetchHandler(const nsACString& aURI,
   mImportHandlers.InsertOrUpdate(aURI, RefPtr{aHandler});
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

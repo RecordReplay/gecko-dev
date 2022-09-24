@@ -6,15 +6,14 @@
 
 #include "mozilla/net/OpaqueResponseUtils.h"
 
-#include "mozilla/Telemetry.h"
-#include "mozilla/TelemetryHistogramEnums.h"
+#include "nsContentUtils.h"
 #include "nsHttpResponseHead.h"
 #include "nsMimeTypes.h"
 
 namespace mozilla {
 namespace net {
 
-bool IsOpaqueSafeListedMIMEType(const nsACString& aContentType) {
+static bool IsOpaqueSafeListedMIMEType(const nsACString& aContentType) {
   if (aContentType.EqualsLiteral(TEXT_CSS) ||
       aContentType.EqualsLiteral(IMAGE_SVG_XML)) {
     return true;
@@ -24,7 +23,7 @@ bool IsOpaqueSafeListedMIMEType(const nsACString& aContentType) {
   return nsContentUtils::IsJavascriptMIMEType(typeString);
 }
 
-bool IsOpaqueBlockListedMIMEType(const nsACString& aContentType) {
+static bool IsOpaqueBlockListedMIMEType(const nsACString& aContentType) {
   return aContentType.EqualsLiteral(TEXT_HTML) ||
          StringEndsWith(aContentType, "+json"_ns) ||
          aContentType.EqualsLiteral(APPLICATION_JSON) ||
@@ -34,7 +33,8 @@ bool IsOpaqueBlockListedMIMEType(const nsACString& aContentType) {
          aContentType.EqualsLiteral(TEXT_XML);
 }
 
-bool IsOpaqueBlockListedNeverSniffedMIMEType(const nsACString& aContentType) {
+static bool IsOpaqueBlockListedNeverSniffedMIMEType(
+    const nsACString& aContentType) {
   return aContentType.EqualsLiteral(APPLICATION_GZIP2) ||
          aContentType.EqualsLiteral(APPLICATION_MSEXCEL) ||
          aContentType.EqualsLiteral(APPLICATION_MSPPT) ||
@@ -74,6 +74,39 @@ bool IsOpaqueBlockListedNeverSniffedMIMEType(const nsACString& aContentType) {
          aContentType.EqualsLiteral(TEXT_CSV);
 }
 
+OpaqueResponseBlockedReason GetOpaqueResponseBlockedReason(
+    const nsHttpResponseHead& aResponseHead) {
+  nsAutoCString contentType;
+  aResponseHead.ContentType(contentType);
+  if (contentType.IsEmpty()) {
+    return OpaqueResponseBlockedReason::BLOCKED_SHOULD_SNIFF;
+  }
+
+  if (IsOpaqueSafeListedMIMEType(contentType)) {
+    return OpaqueResponseBlockedReason::ALLOWED_SAFE_LISTED;
+  }
+
+  if (IsOpaqueBlockListedNeverSniffedMIMEType(contentType)) {
+    return OpaqueResponseBlockedReason::BLOCKED_BLOCKLISTED_NEVER_SNIFFED;
+  }
+
+  if (aResponseHead.Status() == 206 &&
+      IsOpaqueBlockListedMIMEType(contentType)) {
+    return OpaqueResponseBlockedReason::BLOCKED_206_AND_BLOCKLISTED;
+  }
+
+  nsAutoCString contentTypeOptionsHeader;
+  if (aResponseHead.GetContentTypeOptionsHeader(contentTypeOptionsHeader) &&
+      contentTypeOptionsHeader.EqualsIgnoreCase("nosniff") &&
+      (IsOpaqueBlockListedMIMEType(contentType) ||
+       contentType.EqualsLiteral(TEXT_PLAIN))) {
+    return OpaqueResponseBlockedReason::
+        BLOCKED_NOSNIFF_AND_EITHER_BLOCKLISTED_OR_TEXTPLAIN;
+  }
+
+  return OpaqueResponseBlockedReason::BLOCKED_SHOULD_SNIFF;
+}
+
 Result<std::tuple<int64_t, int64_t, int64_t>, nsresult>
 ParseContentRangeHeaderString(const nsAutoCString& aRangeStr) {
   // Parse the range header: e.g. Content-Range: bytes 7000-7999/8000.
@@ -99,7 +132,7 @@ ParseContentRangeHeaderString(const nsAutoCString& aRangeStr) {
   if (NS_FAILED(rv)) {
     return Err(rv);
   }
-  if (rangeStart >= rangeEnd) {
+  if (rangeStart > rangeEnd) {
     return Err(NS_ERROR_ILLEGAL_VALUE);
   }
 
@@ -135,87 +168,5 @@ bool IsFirstPartialResponse(nsHttpResponseHead& aResponseHead) {
   return responseFirstBytePos == 0;
 }
 
-OpaqueResponseBlockingInfo::OpaqueResponseBlockingInfo(
-    ExtContentPolicyType aContentPolicyType)
-    : mStartTime(TimeStamp::Now()) {
-  switch (aContentPolicyType) {
-    case ExtContentPolicy::TYPE_OTHER:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Other;
-      break;
-    case ExtContentPolicy::TYPE_SCRIPT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Script;
-      break;
-    case ExtContentPolicy::TYPE_IMAGE:
-    case ExtContentPolicy::TYPE_IMAGESET:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Image;
-      break;
-    case ExtContentPolicy::TYPE_STYLESHEET:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Style;
-      break;
-    case ExtContentPolicy::TYPE_OBJECT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Object;
-      break;
-    case ExtContentPolicy::TYPE_DOCUMENT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Document;
-      break;
-    case ExtContentPolicy::TYPE_SUBDOCUMENT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Subdocument;
-      break;
-    case ExtContentPolicy::TYPE_PING:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Ping;
-      break;
-    case ExtContentPolicy::TYPE_XMLHTTPREQUEST:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::XHR;
-      break;
-    case ExtContentPolicy::TYPE_OBJECT_SUBREQUEST:
-      mDestination =
-          Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::ObjectSubrequest;
-      break;
-    case ExtContentPolicy::TYPE_DTD:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::DTD;
-      break;
-    case ExtContentPolicy::TYPE_FONT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Font;
-      break;
-    case ExtContentPolicy::TYPE_MEDIA:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Media;
-      break;
-    case ExtContentPolicy::TYPE_WEBSOCKET:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Websocket;
-      break;
-    case ExtContentPolicy::TYPE_CSP_REPORT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::CspReport;
-      break;
-    case ExtContentPolicy::TYPE_XSLT:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::XSLT;
-      break;
-    case ExtContentPolicy::TYPE_BEACON:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Beacon;
-      break;
-    case ExtContentPolicy::TYPE_FETCH:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Fetch;
-      break;
-    case ExtContentPolicy::TYPE_WEB_MANIFEST:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::WebManifest;
-      break;
-    default:
-      mDestination = Telemetry::LABELS_OPAQUE_RESPONSE_BLOCKING::Unexpected;
-      break;
-  }
-}
-
-void OpaqueResponseBlockingInfo::Report(const nsCString& aKey) {
-  Telemetry::AccumulateCategoricalKeyed(aKey, mDestination);
-
-  AccumulateTimeDelta(Telemetry::OPAQUE_RESPONSE_BLOCKING_TIME_MS, mStartTime);
-}
-
-void OpaqueResponseBlockingInfo::ReportContentLength(int64_t aContentLength) {
-  // XXX: We might want to filter negative cases (when the content length is
-  // unknown).
-  Telemetry::ScalarAdd(
-      Telemetry::ScalarID::OPAQUE_RESPONSE_BLOCKING_PARSING_SIZE_KB,
-      aContentLength > 0 ? aContentLength >> 10 : aContentLength);
-}
 }  // namespace net
 }  // namespace mozilla

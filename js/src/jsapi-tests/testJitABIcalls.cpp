@@ -635,6 +635,7 @@ class JitABICall final : public JSAPITest, public DefineCheckArgs<Sig> {
     this->set_instance(this, &result);
 
     StackMacroAssembler masm(cx);
+    AutoCreatedBy acb(masm, __func__);
     PrepareJit(masm);
 
     AllocatableGeneralRegisterSet regs(GeneralRegisterSet::All());
@@ -657,6 +658,9 @@ class JitABICall final : public JSAPITest, public DefineCheckArgs<Sig> {
     regs.take(base);
 #elif defined(JS_CODEGEN_MIPS64)
     Register base = t1;
+    regs.take(base);
+#elif defined(JS_CODEGEN_LOONG64)
+    Register base = t0;
     regs.take(base);
 #else
 #  error "Unknown architecture!"

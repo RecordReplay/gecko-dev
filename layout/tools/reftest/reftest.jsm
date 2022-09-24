@@ -10,22 +10,69 @@ var EXPORTED_SYMBOLS = [
     "OnRefTestUnload",
 ];
 
-Cu.import("resource://gre/modules/FileUtils.jsm");
-Cu.import("resource://reftest/globals.jsm", this);
-Cu.import("resource://reftest/httpd.jsm", this);
-Cu.import("resource://reftest/manifest.jsm", this);
-Cu.import("resource://reftest/StructuredLog.jsm", this);
-Cu.import("resource://reftest/PerTestCoverageUtils.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import('resource://gre/modules/XPCOMUtils.jsm');
+const { FileUtils } = ChromeUtils.import(
+    "resource://gre/modules/FileUtils.jsm"
+);
+const {
+    XHTML_NS,
+    XUL_NS,
+
+    IO_SERVICE_CONTRACTID,
+    DEBUG_CONTRACTID,
+    NS_DIRECTORY_SERVICE_CONTRACTID,
+    NS_OBSERVER_SERVICE_CONTRACTID,
+
+    TYPE_REFTEST_EQUAL,
+    TYPE_REFTEST_NOTEQUAL,
+    TYPE_LOAD,
+    TYPE_SCRIPT,
+    TYPE_PRINT,
+
+    URL_TARGET_TYPE_TEST,
+    URL_TARGET_TYPE_REFERENCE,
+
+    EXPECTED_PASS,
+    EXPECTED_FAIL,
+    EXPECTED_RANDOM,
+    EXPECTED_FUZZY,
+
+    PREF_BOOLEAN,
+    PREF_STRING,
+    PREF_INTEGER,
+
+    FOCUS_FILTER_NON_NEEDS_FOCUS_TESTS,
+
+    g,
+} = ChromeUtils.import("resource://reftest/globals.jsm");
+const { HttpServer } = ChromeUtils.import("resource://reftest/httpd.jsm");
+const { ReadTopManifest, CreateUrls } = ChromeUtils.import(
+    "resource://reftest/manifest.jsm"
+);
+const { StructuredLogger } = ChromeUtils.import(
+    "resource://reftest/StructuredLog.jsm"
+);
+const { PerTestCoverageUtils } = ChromeUtils.import(
+    "resource://reftest/PerTestCoverageUtils.jsm"
+);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { XPCOMUtils } = ChromeUtils.import(
+    "resource://gre/modules/XPCOMUtils.jsm"
+);
 
 const { E10SUtils } = ChromeUtils.import(
   "resource://gre/modules/E10SUtils.jsm"
 );
 
 XPCOMUtils.defineLazyGetter(this, "OS", function() {
-    const { OS } = Cu.import("resource://gre/modules/osfile.jsm");
+    const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm");
     return OS;
+});
+
+XPCOMUtils.defineLazyServiceGetters(this, {
+  proxyService: [
+    "@mozilla.org/network/protocol-proxy-service;1",
+    "nsIProtocolProxyService",
+  ],
 });
 
 function HasUnexpectedResult()
@@ -63,13 +110,12 @@ function TestBuffer(str)
   g.testLog.push(str);
 }
 
-function isWebRenderOnAndroidDevice() {
+function isAndroidDevice() {
   var xr = Cc["@mozilla.org/xre/app-info;1"].getService(Ci.nsIXULRuntime);
   // This is the best we can do for now; maybe in the future we'll have
   // more correct detection of this case.
   return xr.OS == "Android" &&
-      g.browserIsRemote &&
-      g.windowUtils.layerManagerType.startsWith("WebRender");
+      g.browserIsRemote;
 }
 
 function FlushTestBuffer()
@@ -176,7 +222,7 @@ function OnRefTestLoad(win)
     g.browser.setAttribute("remote", g.browserIsRemote ? "true" : "false");
     // Make sure the browser element is exactly 800x1000, no matter
     // what size our window is
-    g.browser.setAttribute("style", "padding: 0px; margin: 0px; border:none; min-width: 800px; min-height: 1000px; max-width: 800px; max-height: 1000px");
+    g.browser.setAttribute("style", "padding: 0px; margin: 0px; border:none; min-width: 800px; min-height: 1000px; max-width: 800px; max-height: 1000px; color-scheme: env(-moz-content-preferred-color-scheme)");
 
     if (Services.appinfo.OS == "Android") {
       let doc = g.containingWindow.document.getElementById('main-window');
@@ -313,6 +359,33 @@ function StartHTTPServer()
 {
     g.server.registerContentType("sjs", "sjs");
     g.server.start(-1);
+
+    g.server.identity.add("http", "example.org", "80");
+    g.server.identity.add("https", "example.org", "443");
+
+    const proxyFilter = {
+        proxyInfo: proxyService.newProxyInfo(
+            "http", // type of proxy
+            "localhost", //proxy host
+            g.server.identity.primaryPort, // proxy host port
+            "", // auth header
+            "", // isolation key
+            0, // flags
+            4096, // timeout
+            null // failover proxy
+        ),
+
+        applyFilter(channel, defaultProxyInfo, callback) {
+            if (channel.URI.host == "example.org") {
+                callback.onProxyFilterResult(this.proxyInfo);
+            } else {
+                callback.onProxyFilterResult(defaultProxyInfo);
+            }
+        },
+    };
+
+    proxyService.registerChannelFilter(proxyFilter, 0);
+
     g.httpServerPort = g.server.identity.primaryPort;
 }
 
@@ -595,13 +668,13 @@ function Focus()
 {
     var fm = Cc["@mozilla.org/focus-manager;1"].getService(Ci.nsIFocusManager);
     fm.focusedWindow = g.containingWindow;
-#ifdef XP_MACOSX
+
     try {
         var dock = Cc["@mozilla.org/widget/macdocksupport;1"].getService(Ci.nsIMacDockSupport);
         dock.activateApplication(true);
     } catch(ex) {
     }
-#endif // XP_MACOSX
+
     return true;
 }
 
@@ -614,7 +687,7 @@ function Blur()
     g.containingWindow.blur();
 }
 
-function StartCurrentTest()
+async function StartCurrentTest()
 {
     g.testLog = [];
 
@@ -643,7 +716,7 @@ function StartCurrentTest()
 
     if ((g.urls.length == 0 && g.repeat == 0) ||
         (g.runUntilFailure && HasUnexpectedResult())) {
-        RestoreChangedPreferences();
+        await RestoreChangedPreferences();
         DoneTests();
     } else if (g.urls.length == 0 && g.repeat > 0) {
         // Repeat
@@ -699,6 +772,14 @@ function updateBrowserRemotenessByURL(aBrowser, aURL) {
   return Promise.resolve();
 }
 
+// This logic should match SpecialPowersParent._applyPrefs.
+function PrefRequiresRefresh(name) {
+  return name == "layout.css.prefers-color-scheme.content-override" ||
+         name.startsWith("ui.") ||
+         name.startsWith("browser.display.") ||
+         name.startsWith("font.");
+}
+
 async function StartCurrentURI(aURLTargetType)
 {
     const isStartingRef = (aURLTargetType == URL_TARGET_TYPE_REFERENCE);
@@ -706,13 +787,15 @@ async function StartCurrentURI(aURLTargetType)
     g.currentURL = g.urls[0][isStartingRef ? "url2" : "url1"].spec;
     g.currentURLTargetType = aURLTargetType;
 
-    RestoreChangedPreferences();
+    await RestoreChangedPreferences();
 
     var prefs = Cc["@mozilla.org/preferences-service;1"].
         getService(Ci.nsIPrefBranch);
 
     const prefSettings =
       g.urls[0][isStartingRef ? "prefSettings2" : "prefSettings1"];
+
+    var prefsRequireRefresh = false;
 
     if (prefSettings.length > 0) {
         var badPref = undefined;
@@ -756,10 +839,13 @@ async function StartCurrentURI(aURLTargetType)
                     }
                 }
                 if (!prefExists || oldVal != ps.value) {
+                    var requiresRefresh = PrefRequiresRefresh(ps.name);
+                    prefsRequireRefresh = prefsRequireRefresh || requiresRefresh;
                     g.prefsToRestore.push( { name: ps.name,
-                                            type: ps.type,
-                                            value: oldVal,
-                                            prefExisted: prefExists } );
+                                             type: ps.type,
+                                             value: oldVal,
+                                             requiresRefresh,
+                                             prefExisted: prefExists } );
                     var value = ps.value;
                     if (ps.type == PREF_BOOLEAN) {
                         prefs.setBoolPref(ps.name, value);
@@ -787,7 +873,7 @@ async function StartCurrentURI(aURLTargetType)
 
                 // skip the test that had a bad preference
                 g.urls.shift();
-                StartCurrentTest();
+                await StartCurrentTest();
                 return;
             } else {
                 throw e;
@@ -811,6 +897,10 @@ async function StartCurrentURI(aURLTargetType)
                 " (" + Math.floor(100 * (currentTest / g.totalTests)) + "%)\n");
         TestBuffer("START " + g.currentURL);
         await updateBrowserRemotenessByURL(g.browser, g.currentURL);
+
+        if (prefsRequireRefresh) {
+            await new Promise(resolve => g.containingWindow.requestAnimationFrame(resolve));
+        }
 
         var type = g.urls[0].type
         if (TYPE_SCRIPT == type) {
@@ -1180,7 +1270,7 @@ function RecordResult(testRunTime, errorMsg, typeSpecificResults)
 
             if (g.urls[0].noAutoFuzz) {
                 // Autofuzzing is disabled
-            } else if (isWebRenderOnAndroidDevice() && maxDifference.value <= 2 && differences > 0) {
+            } else if (isAndroidDevice() && maxDifference.value <= 2 && differences > 0) {
                 // Autofuzz for WR on Android physical devices: Reduce any
                 // maxDifference of 2 to 0, because we get a lot of off-by-ones
                 // and off-by-twos that are very random and hard to annotate.
@@ -1427,7 +1517,7 @@ function FinishTestItem()
     g.failedAssignedLayerMessages = [];
 }
 
-function DoAssertionCheck(numAsserts)
+async function DoAssertionCheck(numAsserts)
 {
     if (g.debug.isDebugBuild) {
         if (g.browserIsRemote) {
@@ -1459,7 +1549,7 @@ function DoAssertionCheck(numAsserts)
 
     // And start the next test.
     g.urls.shift();
-    StartCurrentTest();
+    await StartCurrentTest();
 }
 
 function ResetRenderingState()
@@ -1468,30 +1558,38 @@ function ResetRenderingState()
     // We would want to clear any viewconfig here, if we add support for it
 }
 
-function RestoreChangedPreferences()
+async function RestoreChangedPreferences()
 {
-    if (g.prefsToRestore.length > 0) {
-        var prefs = Cc["@mozilla.org/preferences-service;1"].
-                    getService(Ci.nsIPrefBranch);
-        g.prefsToRestore.reverse();
-        g.prefsToRestore.forEach(function(ps) {
-            if (ps.prefExisted) {
-                var value = ps.value;
-                if (ps.type == PREF_BOOLEAN) {
-                    prefs.setBoolPref(ps.name, value);
-                } else if (ps.type == PREF_STRING) {
-                    prefs.setStringPref(ps.name, value);
-                    value = '"' + value + '"';
-                } else if (ps.type == PREF_INTEGER) {
-                    prefs.setIntPref(ps.name, value);
-                }
-                logger.info("RESTORE PREFERENCE pref(" + ps.name + "," + value + ")");
-            } else {
-                prefs.clearUserPref(ps.name);
-                logger.info("RESTORE PREFERENCE pref(" + ps.name + ", <no value set>) (clearing user pref)");
+    if (!g.prefsToRestore.length) {
+        return;
+    }
+    var prefs = Cc["@mozilla.org/preferences-service;1"].
+                getService(Ci.nsIPrefBranch);
+    var requiresRefresh = false;
+    g.prefsToRestore.reverse();
+    g.prefsToRestore.forEach(function(ps) {
+        requiresRefresh = requiresRefresh || ps.requiresRefresh;
+        if (ps.prefExisted) {
+            var value = ps.value;
+            if (ps.type == PREF_BOOLEAN) {
+                prefs.setBoolPref(ps.name, value);
+            } else if (ps.type == PREF_STRING) {
+                prefs.setStringPref(ps.name, value);
+                value = '"' + value + '"';
+            } else if (ps.type == PREF_INTEGER) {
+                prefs.setIntPref(ps.name, value);
             }
-        });
-        g.prefsToRestore = [];
+            logger.info("RESTORE PREFERENCE pref(" + ps.name + "," + value + ")");
+        } else {
+            prefs.clearUserPref(ps.name);
+            logger.info("RESTORE PREFERENCE pref(" + ps.name + ", <no value set>) (clearing user pref)");
+        }
+    });
+
+    g.prefsToRestore = [];
+
+    if (requiresRefresh) {
+        await new Promise(resolve => g.containingWindow.requestAnimationFrame(resolve));
     }
 }
 
@@ -1591,9 +1689,9 @@ function RegisterMessageListenersAndLoadContentScript(aReload)
     });
 }
 
-function RecvAssertionCount(count)
+async function RecvAssertionCount(count)
 {
-    DoAssertionCheck(count);
+    await DoAssertionCheck(count);
 }
 
 function RecvContentReady(info)
@@ -1680,16 +1778,15 @@ function RecvStartPrint(isPrintSelection, printRange)
     file.append(fileName);
 
     let PSSVC = Cc["@mozilla.org/gfx/printsettings-service;1"].getService(Ci.nsIPrintSettingsService);
-    let ps = PSSVC.newPrintSettings;
+    let ps = PSSVC.createNewPrintSettings();
     ps.printSilent = true;
-    ps.showPrintProgress = false;
     ps.printBGImages = true;
     ps.printBGColors = true;
     ps.unwriteableMarginTop = 0;
     ps.unwriteableMarginRight = 0;
     ps.unwriteableMarginLeft = 0;
     ps.unwriteableMarginBottom = 0;
-    ps.printToFile = true;
+    ps.outputDestination = Ci.nsIPrintSettings.kOutputDestinationFile;
     ps.toFileName = file.path;
     ps.outputFormat = Ci.nsIPrintSettings.kOutputFormatPDF;
     ps.printSelectionOnly = isPrintSelection;

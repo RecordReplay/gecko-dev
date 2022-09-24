@@ -281,6 +281,12 @@ nsFormFillController::MarkAsLoginManagerField(HTMLInputElement* aInput) {
     if (focusedContent == aInput) {
       if (!mFocusedInput) {
         MaybeStartControllingInput(aInput);
+      } else {
+        // If we change who is responsible for searching the autocomplete
+        // result, notify the controller that the previous result is not valid
+        // anymore.
+        nsCOMPtr<nsIAutoCompleteController> controller = mController;
+        controller->ResetInternalState();
       }
     }
   }
@@ -317,7 +323,13 @@ nsFormFillController::MarkAsAutofillField(HTMLInputElement* aInput) {
   if (fm) {
     nsCOMPtr<nsIContent> focusedContent = fm->GetFocusedElement();
     if (focusedContent == aInput) {
-      MaybeStartControllingInput(aInput);
+      if (!mFocusedInput) {
+        MaybeStartControllingInput(aInput);
+      } else {
+        // See `MarkAsLoginManagerField` for why this is needed.
+        nsCOMPtr<nsIAutoCompleteController> controller = mController;
+        controller->ResetInternalState();
+      }
     }
   }
 
@@ -542,12 +554,6 @@ nsFormFillController::SetTextValue(const nsAString& aTextValue) {
 }
 
 NS_IMETHODIMP
-nsFormFillController::SetTextValueWithReason(const nsAString& aTextValue,
-                                             uint16_t aReason) {
-  return SetTextValue(aTextValue);
-}
-
-NS_IMETHODIMP
 nsFormFillController::GetSelectionStart(int32_t* aSelectionStart) {
   if (!mFocusedInput) {
     return NS_ERROR_UNEXPECTED;
@@ -670,6 +676,13 @@ nsFormFillController::GetUserContextId(uint32_t* aUserContextId) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+nsFormFillController::GetInvalidatePreviousResult(
+    bool* aInvalidatePreviousResult) {
+  *aInvalidatePreviousResult = mInvalidatePreviousResult;
+  return NS_OK;
+}
+
 ////////////////////////////////////////////////////////////////////////
 //// nsIAutoCompleteSearch
 
@@ -778,6 +791,8 @@ void nsFormFillController::RevalidateDataList() {
     return;
   }
 
+  // We cannot use previous result since any items in search target are updated.
+  mInvalidatePreviousResult = true;
   controller->StartSearch(mLastSearchString);
 }
 
@@ -788,7 +803,9 @@ nsFormFillController::StopSearch() {
   if (mLastFormAutoComplete) {
     mLastFormAutoComplete->StopAutoCompleteSearch();
     mLastFormAutoComplete = nullptr;
-  } else if (mLoginManagerAC) {
+  }
+
+  if (mLoginManagerAC) {
     mLoginManagerAC->StopSearch();
   }
   return NS_OK;
@@ -843,11 +860,17 @@ nsFormFillController::HandleEvent(Event* aEvent) {
   EventTarget* target = aEvent->GetOriginalTarget();
   NS_ENSURE_STATE(target);
 
+  mInvalidatePreviousResult = false;
+
   nsCOMPtr<nsPIDOMWindowInner> inner =
       do_QueryInterface(target->GetOwnerGlobal());
   NS_ENSURE_STATE(inner);
 
   if (!inner->GetBrowsingContext()->IsContent()) {
+    return NS_OK;
+  }
+
+  if (aEvent->ShouldIgnoreChromeEventTargetListener()) {
     return NS_OK;
   }
 

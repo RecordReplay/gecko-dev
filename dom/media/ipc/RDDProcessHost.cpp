@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "RDDProcessHost.h"
 
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/ipc/ProcessUtils.h"
 #include "RDDChild.h"
 #include "chrome/common/process_watcher.h"
@@ -46,7 +47,8 @@ bool RDDProcessHost::Launch(StringVector aExtraOpts) {
   MOZ_ASSERT(!mRDDChild);
 
   mPrefSerializer = MakeUnique<ipc::SharedPreferenceSerializer>();
-  if (!mPrefSerializer->SerializeToSharedMemory()) {
+  if (!mPrefSerializer->SerializeToSharedMemory(GeckoProcessType_RDD,
+                                                /* remoteType */ ""_ns)) {
     return false;
   }
   mPrefSerializer->AddSharedPrefCmdLineArgs(*this, aExtraOpts);
@@ -125,7 +127,7 @@ RefPtr<GenericNonExclusivePromise> RDDProcessHost::LaunchPromise() {
   return mLaunchPromise;
 }
 
-void RDDProcessHost::OnChannelConnected(int32_t peer_pid) {
+void RDDProcessHost::OnChannelConnected(base::ProcessId peer_pid) {
   MOZ_ASSERT(!NS_IsMainThread());
 
   GeckoChildProcessHost::OnChannelConnected(peer_pid);
@@ -246,7 +248,7 @@ void RDDProcessHost::KillHard(const char* aReason) {
   MOZ_ASSERT(NS_IsMainThread());
 
   ProcessHandle handle = GetChildProcessHandle();
-  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER, false)) {
+  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER)) {
     NS_WARNING("failed to kill subprocess!");
   }
 

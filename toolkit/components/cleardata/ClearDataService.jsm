@@ -448,12 +448,21 @@ const MediaDevicesCleaner = {
     mediaMgr.sanitizeDeviceIds(aFrom);
   },
 
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  // TODO: We should call the MediaManager to clear by principal, rather than
+  // over-clearing for user requests or bailing out for programmatic calls.
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  // TODO: Same as above, but for base domain.
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
   async deleteAll() {
@@ -529,11 +538,7 @@ const QuotaCleaner = {
     );
 
     // Clear sessionStorage
-    Services.obs.notifyObservers(
-      null,
-      "browser:purge-sessionStorage",
-      aPrincipal.host
-    );
+    Services.sessionStorage.clearStoragesForOrigin(aPrincipal);
 
     // ServiceWorkers: they must be removed before cleaning QuotaManager.
     return ServiceWorkerCleanUp.removeFromPrincipal(aPrincipal)
@@ -737,12 +742,21 @@ const PredictorNetworkCleaner = {
     np.reset();
   },
 
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  // TODO: We should call the NetworkPredictor to clear by principal, rather
+  // than over-clearing for user requests or bailing out for programmatic calls.
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  // TODO: Same as above, but for base domain.
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 };
 
@@ -820,10 +834,10 @@ const StorageAccessCleaner = {
     for (let principal of aPrincipalsWithStorage) {
       baseDomainsWithStorage.add(principal.baseDomain);
     }
-
     for (let perm of Services.perms.getAllByTypeSince(
       "storageAccessAPI",
-      aFrom
+      // The permission manager uses milliseconds instead of microseconds
+      aFrom / 1000
     )) {
       if (!baseDomainsWithStorage.has(perm.principal.baseDomain)) {
         Services.perms.removePermission(perm);
@@ -944,12 +958,20 @@ const SessionHistoryCleaner = {
 };
 
 const AuthTokensCleaner = {
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  // TODO: Bug 1726742
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  // TODO: Bug 1726742
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
   async deleteAll() {
@@ -961,12 +983,20 @@ const AuthTokensCleaner = {
 };
 
 const AuthCacheCleaner = {
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  // TODO: Bug 1726743
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  // TODO: Bug 1726743
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
   deleteAll() {
@@ -1093,21 +1123,8 @@ const PreferencesCleaner = {
   },
 };
 
-const SecuritySettingsCleaner = {
+const ClientAuthRememberCleaner = {
   async deleteByHost(aHost, aOriginAttributes) {
-    let sss = Cc["@mozilla.org/ssservice;1"].getService(
-      Ci.nsISiteSecurityService
-    );
-    // Also remove HSTS information for subdomains by enumerating
-    // the information in the site security service.
-    for (let entry of sss.enumerate()) {
-      let hostname = entry.hostname;
-      if (Services.eTLD.hasRootDomain(hostname, aHost)) {
-        // This uri is used as a key to reset the state.
-        let uri = Services.io.newURI("https://" + hostname);
-        sss.resetState(uri, 0, entry.originAttributes);
-      }
-    }
     let cars = Cc[
       "@mozilla.org/security/clientAuthRememberService;1"
     ].getService(Ci.nsIClientAuthRememberService);
@@ -1120,22 +1137,6 @@ const SecuritySettingsCleaner = {
   },
 
   async deleteByBaseDomain(aDomain) {
-    let sss = Cc["@mozilla.org/ssservice;1"].getService(
-      Ci.nsISiteSecurityService
-    );
-
-    // Remove HSTS information by enumerating entries of the site security
-    // service.
-    Array.from(sss.enumerate())
-      .filter(({ hostname, originAttributes }) =>
-        hasBaseDomain({ host: hostname, originAttributes }, aDomain)
-      )
-      .forEach(({ hostname, originAttributes }) => {
-        // This uri is used as a key to reset the state.
-        let uri = Services.io.newURI("https://" + hostname);
-        sss.resetState(uri, 0, originAttributes);
-      });
-
     let cars = Cc[
       "@mozilla.org/security/clientAuthRememberService;1"
     ].getService(Ci.nsIClientAuthRememberService);
@@ -1174,16 +1175,59 @@ const SecuritySettingsCleaner = {
   },
 
   async deleteAll() {
+    let cars = Cc[
+      "@mozilla.org/security/clientAuthRememberService;1"
+    ].getService(Ci.nsIClientAuthRememberService);
+    cars.clearRememberedDecisions();
+  },
+};
+
+const HSTSCleaner = {
+  async deleteByHost(aHost, aOriginAttributes) {
+    let sss = Cc["@mozilla.org/ssservice;1"].getService(
+      Ci.nsISiteSecurityService
+    );
+    // Remove HSTS information for subdomains by enumerating
+    // the information in the site security service.
+    for (let entry of sss.enumerate()) {
+      let hostname = entry.hostname;
+      if (Services.eTLD.hasRootDomain(hostname, aHost)) {
+        // This uri is used as a key to reset the state.
+        let uri = Services.io.newURI("https://" + hostname);
+        sss.resetState(uri, entry.originAttributes);
+      }
+    }
+  },
+
+  deleteByPrincipal(aPrincipal) {
+    return this.deleteByHost(aPrincipal.host, aPrincipal.originAttributes);
+  },
+
+  async deleteByBaseDomain(aDomain) {
+    let sss = Cc["@mozilla.org/ssservice;1"].getService(
+      Ci.nsISiteSecurityService
+    );
+
+    // Remove HSTS information by enumerating entries of the site security
+    // service.
+    Array.from(sss.enumerate())
+      .filter(({ hostname, originAttributes }) =>
+        hasBaseDomain({ host: hostname, originAttributes }, aDomain)
+      )
+      .forEach(({ hostname, originAttributes }) => {
+        // This uri is used as a key to reset the state.
+        let uri = Services.io.newURI("https://" + hostname);
+        sss.resetState(uri, originAttributes);
+      });
+  },
+
+  async deleteAll() {
     // Clear site security settings - no support for ranges in this
     // interface either, so we clearAll().
     let sss = Cc["@mozilla.org/ssservice;1"].getService(
       Ci.nsISiteSecurityService
     );
     sss.clearAll();
-    let cars = Cc[
-      "@mozilla.org/security/clientAuthRememberService;1"
-    ].getService(Ci.nsIClientAuthRememberService);
-    cars.clearRememberedDecisions();
   },
 };
 
@@ -1242,12 +1286,18 @@ const ContentBlockingCleaner = {
     return TrackingDBService.clearAll();
   },
 
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
   deleteByRange(aFrom, aTo) {
@@ -1260,12 +1310,18 @@ const ContentBlockingCleaner = {
  * about where the user has been, or what they've downloaded.
  */
 const AboutHomeStartupCacheCleaner = {
-  deleteByPrincipal(aPrincipal) {
-    return this.deleteAll();
+  async deleteByPrincipal(aPrincipal, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
-  deleteByBaseDomain(aBaseDomain) {
-    return this.deleteAll();
+  async deleteByBaseDomain(aBaseDomain, aIsUserRequest) {
+    if (!aIsUserRequest) {
+      return;
+    }
+    await this.deleteAll();
   },
 
   deleteAll() {
@@ -1353,6 +1409,11 @@ const FLAGS_MAP = [
   },
 
   {
+    flag: Ci.nsIClearDataService.CLEAR_CLIENT_AUTH_REMEMBER_SERVICE,
+    cleaners: [ClientAuthRememberCleaner],
+  },
+
+  {
     flag: Ci.nsIClearDataService.CLEAR_DOWNLOADS,
     cleaners: [DownloadsCleaner, AboutHomeStartupCacheCleaner],
   },
@@ -1410,8 +1471,8 @@ const FLAGS_MAP = [
   },
 
   {
-    flag: Ci.nsIClearDataService.CLEAR_SECURITY_SETTINGS,
-    cleaners: [SecuritySettingsCleaner],
+    flag: Ci.nsIClearDataService.CLEAR_HSTS,
+    cleaners: [HSTSCleaner],
   },
 
   { flag: Ci.nsIClearDataService.CLEAR_EME, cleaners: [EMECleaner] },

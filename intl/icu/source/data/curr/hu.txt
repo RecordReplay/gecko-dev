@@ -557,7 +557,7 @@ hu{
         }
         LSL{
             "LSL",
-            "Lesothoi loti",
+            "lesothoi loti",
         }
         LTL{
             "LTL",
@@ -1253,7 +1253,6 @@ hu{
         ZMW{"ZK"}
     }
     Currencies%variant{
-        GEL{"₾"}
         TRY{"TL"}
     }
     CurrencyPlurals{
@@ -1728,6 +1727,10 @@ hu{
         LRD{
             one{"libériai dollár"}
             other{"libériai dollár"}
+        }
+        LSL{
+            one{"lesothoi loti"}
+            other{"lesothoi loti"}
         }
         LTL{
             one{"litvániai litas"}

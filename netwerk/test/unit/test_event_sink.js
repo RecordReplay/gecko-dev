@@ -20,14 +20,8 @@ const categoryName = "net-channel-event-sinks";
  */
 var eventsink = {
   QueryInterface: ChromeUtils.generateQI(["nsIFactory", "nsIChannelEventSink"]),
-  createInstance: function eventsink_ci(outer, iid) {
-    if (outer) {
-      throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-    }
+  createInstance: function eventsink_ci(iid) {
     return this.QueryInterface(iid);
-  },
-  lockFactory: function eventsink_lockf(lock) {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   },
 
   asyncOnChannelRedirect: function eventsink_onredir(
@@ -137,14 +131,10 @@ function run_test() {
 function run_test_continued() {
   eventsink.called = false;
 
-  var catMan = Cc["@mozilla.org/categorymanager;1"].getService(
-    Ci.nsICategoryManager
-  );
-
   var chan;
   if (listener._iteration == 1) {
     // Step 2: Category entry
-    catMan.nsICategoryManager.addCategoryEntry(
+    Services.catMan.nsICategoryManager.addCategoryEntry(
       categoryName,
       "unit test",
       sinkContract,
@@ -154,7 +144,7 @@ function run_test_continued() {
     chan = makeChan(URL + "/redirect");
   } else {
     // Step 3: Global contract id
-    catMan.nsICategoryManager.deleteCategoryEntry(
+    Services.catMan.nsICategoryManager.deleteCategoryEntry(
       categoryName,
       "unit test",
       false

@@ -10,8 +10,7 @@
 #include "mozilla/dom/TypedArray.h"
 #include "ObjectModel.h"
 
-namespace mozilla {
-namespace webgpu {
+namespace mozilla::webgpu {
 namespace ffi {
 struct WGPURenderBundleEncoder;
 }  // namespace ffi
@@ -20,7 +19,7 @@ class Device;
 class RenderBundle;
 
 struct ScopedFfiBundleTraits {
-  typedef ffi::WGPURenderBundleEncoder* type;
+  using type = ffi::WGPURenderBundleEncoder*;
   static type empty();
   static void release(type raw);
 };
@@ -63,12 +62,16 @@ class RenderBundleEncoder final : public ObjectBase, public ChildOf<Device> {
   void DrawIndirect(const Buffer& aIndirectBuffer, uint64_t aIndirectOffset);
   void DrawIndexedIndirect(const Buffer& aIndirectBuffer,
                            uint64_t aIndirectOffset);
+
+  void PushDebugGroup(const nsAString& aString);
+  void PopDebugGroup();
+  void InsertDebugMarker(const nsAString& aString);
+
   // self
   already_AddRefed<RenderBundle> Finish(
       const dom::GPURenderBundleDescriptor& aDesc);
 };
 
-}  // namespace webgpu
-}  // namespace mozilla
+}  // namespace mozilla::webgpu
 
 #endif  // GPU_RenderBundleEncoder_H_

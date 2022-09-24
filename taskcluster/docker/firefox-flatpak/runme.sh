@@ -25,8 +25,8 @@ export DATE
 SCRIPT_DIRECTORY="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 TARGET_TAR_XZ_FULL_PATH="$ARTIFACTS_DIR/target.flatpak.tar.xz"
 SOURCE_DEST="${WORKSPACE}/source"
-FREEDESKTOP_VERSION="20.08"
-FIREFOX_BASEAPP_CHANNEL="20.08"
+FREEDESKTOP_VERSION="21.08"
+FIREFOX_BASEAPP_CHANNEL="21.08"
 
 
 # XXX: these commands are temporarily, there's an upcoming fix in the upstream Docker image
@@ -129,25 +129,28 @@ mkdir -p "${appdir}/lib/firefox/distribution/extensions"
 # directory to where Firefox looks them up; this way only subset configured
 # on user system is downloaded vs all locales
 for locale in $locales; do
-    install -D -m644 -t "${appdir}/share/runtime/langpack/${locale:0:2}/" "${DISTRIBUTION_DIR}/extensions/langpack-${locale}@firefox.mozilla.org.xpi"
-    ln -sf "/app/share/runtime/langpack/${locale:0:2}/langpack-${locale}@firefox.mozilla.org.xpi" "${appdir}/lib/firefox/distribution/extensions/langpack-${locale}@firefox.mozilla.org.xpi"
+    install -D -m644 -t "${appdir}/share/runtime/langpack/${locale%%-*}/" "${DISTRIBUTION_DIR}/extensions/langpack-${locale}@firefox.mozilla.org.xpi"
+    ln -sf "/app/share/runtime/langpack/${locale%%-*}/langpack-${locale}@firefox.mozilla.org.xpi" "${appdir}/lib/firefox/distribution/extensions/langpack-${locale}@firefox.mozilla.org.xpi"
 done
 install -D -m644 -t "${appdir}/lib/firefox/distribution" "$DISTRIBUTION_DIR/distribution.ini"
 install -D -m644 -t "${appdir}/lib/firefox/distribution" policies.json
 install -D -m644 -t "${appdir}/lib/firefox/browser/defaults/preferences" default-preferences.js
 install -D -m755 launch-script.sh "${appdir}/bin/firefox"
 
+# We need to set GTK_PATH to load cups printing backend which is missing in
+# freedesktop sdk.
 flatpak build-finish build                                      \
         --share=ipc                                             \
         --share=network                                         \
+        --env=GTK_PATH=/app/lib/gtkmodules                      \
         --socket=pulseaudio                                     \
+        --socket=wayland                                        \
         --socket=x11                                            \
         --socket=pcsc                                           \
+        --socket=cups                                           \
         --require-version=0.11.1                                \
         --persist=.mozilla                                      \
-        --filesystem=xdg-run/pipewire-0                         \
         --filesystem=xdg-download:rw                            \
-        --filesystem=/etc/firefox/policies                      \
         --device=all                                            \
         --talk-name=org.freedesktop.FileManager1                \
         --system-talk-name=org.freedesktop.NetworkManager       \
@@ -158,6 +161,7 @@ flatpak build-finish build                                      \
         --talk-name=org.freedesktop.Notifications               \
         --own-name="org.mpris.MediaPlayer2.firefox.*"           \
         --own-name="org.mozilla.firefox.*"                      \
+        --own-name="org.mozilla.firefox_beta.*"                 \
         --command=firefox
 
 flatpak build-export --disable-sandbox --no-update-summary --exclude='/share/runtime/langpack/*/*' repo build "$FLATPAK_BRANCH"

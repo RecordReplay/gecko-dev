@@ -27,6 +27,8 @@
 #include "nsTArray.h"
 #include "prio.h"
 
+class nsFileStream;
+
 namespace mozilla {
 
 /**
@@ -60,70 +62,136 @@ class IOUtils final {
 
   static already_AddRefed<Promise> Read(GlobalObject& aGlobal,
                                         const nsAString& aPath,
-                                        const ReadOptions& aOptions);
+                                        const ReadOptions& aOptions,
+                                        ErrorResult& aError);
 
   static already_AddRefed<Promise> ReadUTF8(GlobalObject& aGlobal,
                                             const nsAString& aPath,
-                                            const ReadUTF8Options& aOptions);
+                                            const ReadUTF8Options& aOptions,
+                                            ErrorResult& aError);
 
   static already_AddRefed<Promise> ReadJSON(GlobalObject& aGlobal,
                                             const nsAString& aPath,
-                                            const ReadUTF8Options& aOptions);
+                                            const ReadUTF8Options& aOptions,
+                                            ErrorResult& aError);
 
   static already_AddRefed<Promise> Write(GlobalObject& aGlobal,
                                          const nsAString& aPath,
                                          const Uint8Array& aData,
-                                         const WriteOptions& aOptions);
+                                         const WriteOptions& aOptions,
+                                         ErrorResult& aError);
 
   static already_AddRefed<Promise> WriteUTF8(GlobalObject& aGlobal,
                                              const nsAString& aPath,
                                              const nsACString& aString,
-                                             const WriteOptions& aOptions);
+                                             const WriteOptions& aOptions,
+                                             ErrorResult& aError);
 
   static already_AddRefed<Promise> WriteJSON(GlobalObject& aGlobal,
                                              const nsAString& aPath,
                                              JS::Handle<JS::Value> aValue,
-                                             const WriteOptions& aOptions);
+                                             const WriteOptions& aOptions,
+                                             ErrorResult& aError);
 
   static already_AddRefed<Promise> Move(GlobalObject& aGlobal,
                                         const nsAString& aSourcePath,
                                         const nsAString& aDestPath,
-                                        const MoveOptions& aOptions);
+                                        const MoveOptions& aOptions,
+                                        ErrorResult& aError);
 
   static already_AddRefed<Promise> Remove(GlobalObject& aGlobal,
                                           const nsAString& aPath,
-                                          const RemoveOptions& aOptions);
+                                          const RemoveOptions& aOptions,
+                                          ErrorResult& aError);
 
   static already_AddRefed<Promise> MakeDirectory(
       GlobalObject& aGlobal, const nsAString& aPath,
-      const MakeDirectoryOptions& aOptions);
+      const MakeDirectoryOptions& aOptions, ErrorResult& aError);
 
   static already_AddRefed<Promise> Stat(GlobalObject& aGlobal,
-                                        const nsAString& aPath);
+                                        const nsAString& aPath,
+                                        ErrorResult& aError);
 
   static already_AddRefed<Promise> Copy(GlobalObject& aGlobal,
                                         const nsAString& aSourcePath,
                                         const nsAString& aDestPath,
-                                        const CopyOptions& aOptions);
+                                        const CopyOptions& aOptions,
+                                        ErrorResult& aError);
 
-  static already_AddRefed<Promise> Touch(
+  static already_AddRefed<Promise> SetModificationTime(
       GlobalObject& aGlobal, const nsAString& aPath,
-      const Optional<int64_t>& aModification);
+      const Optional<int64_t>& aModification, ErrorResult& aError);
 
-  static already_AddRefed<Promise> GetChildren(GlobalObject& aGlobal,
-                                               const nsAString& aPath);
+  static already_AddRefed<Promise> GetChildren(
+      GlobalObject& aGlobal, const nsAString& aPath,
+      const GetChildrenOptions& aOptions, ErrorResult& aError);
 
   static already_AddRefed<Promise> SetPermissions(GlobalObject& aGlobal,
                                                   const nsAString& aPath,
                                                   uint32_t aPermissions,
-                                                  const bool aHonorUmask);
+                                                  const bool aHonorUmask,
+                                                  ErrorResult& aError);
 
   static already_AddRefed<Promise> Exists(GlobalObject& aGlobal,
-                                          const nsAString& aPath);
+                                          const nsAString& aPath,
+                                          ErrorResult& aError);
+
+  static already_AddRefed<Promise> CreateUniqueFile(GlobalObject& aGlobal,
+                                                    const nsAString& aParent,
+                                                    const nsAString& aPrefix,
+                                                    const uint32_t aPermissions,
+                                                    ErrorResult& aError);
+  static already_AddRefed<Promise> CreateUniqueDirectory(
+      GlobalObject& aGlobal, const nsAString& aParent, const nsAString& aPrefix,
+      const uint32_t aPermissions, ErrorResult& aError);
+
+ private:
+  /**
+   * A helper method for CreateUniqueFile and CreateUniqueDirectory.
+   */
+  static already_AddRefed<Promise> CreateUnique(GlobalObject& aGlobal,
+                                                const nsAString& aParent,
+                                                const nsAString& aPrefix,
+                                                const uint32_t aFileType,
+                                                const uint32_t aPermissions,
+                                                ErrorResult& aError);
+
+ public:
+#if defined(XP_WIN)
+  static already_AddRefed<Promise> GetWindowsAttributes(GlobalObject& aGlobal,
+                                                        const nsAString& aPath,
+                                                        ErrorResult& aError);
+
+  static already_AddRefed<Promise> SetWindowsAttributes(
+      GlobalObject& aGlobal, const nsAString& aPath,
+      const mozilla::dom::WindowsFileAttributes& aAttrs, ErrorResult& aError);
+#elif defined(XP_MACOSX)
+  static already_AddRefed<Promise> HasMacXAttr(GlobalObject& aGlobal,
+                                               const nsAString& aPath,
+                                               const nsACString& aAttr,
+                                               ErrorResult& aError);
+  static already_AddRefed<Promise> GetMacXAttr(GlobalObject& aGlobal,
+                                               const nsAString& aPath,
+                                               const nsACString& aAttr,
+                                               ErrorResult& aError);
+  static already_AddRefed<Promise> SetMacXAttr(GlobalObject& aGlobal,
+                                               const nsAString& aPath,
+                                               const nsACString& aAttr,
+                                               const Uint8Array& aValue,
+                                               ErrorResult& aError);
+  static already_AddRefed<Promise> DelMacXAttr(GlobalObject& aGlobal,
+                                               const nsAString& aPath,
+                                               const nsACString& aAttr,
+                                               ErrorResult& aError);
+#endif
 
   static void GetProfileBeforeChange(GlobalObject& aGlobal,
                                      JS::MutableHandle<JS::Value>,
                                      ErrorResult& aRv);
+
+  static RefPtr<SyncReadFile> OpenFileForSyncReading(GlobalObject& aGlobal,
+                                                     const nsAString& aPath,
+                                                     ErrorResult& aRv);
 
   class JsBuffer;
 
@@ -151,9 +219,17 @@ class IOUtils final {
   class EventQueue;
   class State;
 
+  template <typename Fn>
+  static already_AddRefed<Promise> WithPromiseAndState(GlobalObject& aGlobal,
+                                                       ErrorResult& aError,
+                                                       Fn aFn);
+
   /**
    * Dispatch a task on the event queue and resolve or reject the associated
    * promise based on the result.
+   *
+   * NB: If the calling thread is a worker, this function takes care of keepting
+   *     it alive until the |IOPromise| can complete.
    *
    * @param aPromise The promise corresponding to the task running on the event
    * queue.
@@ -168,7 +244,8 @@ class IOUtils final {
    *
    * @return The new promise, or |nullptr| on failure.
    */
-  static already_AddRefed<Promise> CreateJSPromise(GlobalObject& aGlobal);
+  static already_AddRefed<Promise> CreateJSPromise(GlobalObject& aGlobal,
+                                                   ErrorResult& aError);
 
   // Allow conversion of |InternalFileInfo| with |ToJSValue|.
   friend bool ToJSValue(JSContext* aCx,
@@ -190,7 +267,7 @@ class IOUtils final {
    *         error.
    */
   static Result<JsBuffer, IOError> ReadSync(nsIFile* aFile,
-                                            const uint32_t aOffset,
+                                            const uint64_t aOffset,
                                             const Maybe<uint32_t> aMaxBytes,
                                             const bool aDecompress,
                                             BufferKind aBufferKind);
@@ -322,8 +399,8 @@ class IOUtils final {
    *
    * @return Timestamp of the file if the operation was successful, or an error.
    */
-  static Result<int64_t, IOError> TouchSync(nsIFile* aFile,
-                                            const Maybe<int64_t>& aNewModTime);
+  static Result<int64_t, IOError> SetModificationTimeSync(
+      nsIFile* aFile, const Maybe<int64_t>& aNewModTime);
 
   /**
    * Returns the immediate children of the directory at |aFile|, if any.
@@ -333,7 +410,8 @@ class IOUtils final {
    * @return An array of absolute paths identifying the children of |aFile|.
    *         If there are no children, an empty array. Otherwise, an error.
    */
-  static Result<nsTArray<nsString>, IOError> GetChildrenSync(nsIFile* aFile);
+  static Result<nsTArray<nsString>, IOError> GetChildrenSync(
+      nsIFile* aFile, bool aIgnoreAbsent);
 
   /**
    * Set the permissions of the given file.
@@ -359,6 +437,51 @@ class IOUtils final {
    * @return Whether or not the file exists.
    */
   static Result<bool, IOError> ExistsSync(nsIFile* aFile);
+
+  /**
+   * Create a file or directory with a unique path.
+   *
+   * @param aFile     The location of the file or directory (including prefix)
+   * @param aFileType One of |nsIFile::NORMAL_FILE_TYPE| or
+   *                  |nsIFile::DIRECTORY_TYPE|.
+   * @param aperms    The permissions to create the file or directory with.
+   *
+   * @return A unique path.
+   */
+  static Result<nsString, IOError> CreateUniqueSync(
+      nsIFile* aFile, const uint32_t aFileType, const uint32_t aPermissions);
+
+#if defined(XP_WIN)
+  /**
+   * Return the Windows-specific attributes of the file.
+   *
+   * @param aFile The location of the file.
+   *
+   * @return The Windows-specific attributes of the file.
+   */
+  static Result<uint32_t, IOError> GetWindowsAttributesSync(nsIFile* aFile);
+
+  /**
+   * Set the Windows-specific attributes of the file.
+   *
+   * @param aFile  The location of the file.
+   * @param aAttrs The attributes to set on the file.
+   *
+   * @return |Ok| if the attributes were successfully set, or an error.
+   */
+  static Result<Ok, IOError> SetWindowsAttributesSync(
+      nsIFile* aFile, const uint32_t aSetAttrs, const uint32_t aClearAttrs);
+#elif defined(XP_MACOSX)
+  static Result<bool, IOError> HasMacXAttrSync(nsIFile* aFile,
+                                               const nsCString& aAttr);
+  static Result<nsTArray<uint8_t>, IOError> GetMacXAttrSync(
+      nsIFile* aFile, const nsCString& aAttr);
+  static Result<Ok, IOError> SetMacXAttrSync(nsIFile* aFile,
+                                             const nsCString& aAttr,
+                                             const nsTArray<uint8_t>& aValue);
+  static Result<Ok, IOError> DelMacXAttrSync(nsIFile* aFile,
+                                             const nsCString& aAttr);
+#endif
 
   enum class EventQueueStatus {
     Uninitialized,
@@ -419,6 +542,21 @@ class IOUtils::EventQueue final {
   EventQueue& operator=(const EventQueue&) = delete;
   EventQueue& operator=(EventQueue&&) = delete;
 
+  /**
+   * Dispatch a task on the event queue.
+   *
+   * NB: If using this directly from |IOUtils| instead of
+   *     |IOUtils::DispatchAndResolve| *and* the calling thread is a worker, you
+   *     *must* take care to keep the worker thread alive until the |IOPromise|
+   *     resolves or rejects. See the implementation of
+   *     |IOUtils::DispatchAndResolve| or |IOUtils::GetWindowsAttributes| for an
+   *     example.
+   *
+   * @param aFunc The task to dispatch on the event queue.
+   *
+   * @return A promise that resolves to the task's return value or rejects with
+   *         an error.
+   */
   template <typename OkT, typename Fn>
   RefPtr<IOPromise<OkT>> Dispatch(Fn aFunc);
 
@@ -669,6 +807,31 @@ class IOUtils::JsBuffer final {
   JS::UniqueChars mBuffer;
 
   JsBuffer(BufferKind aBufferKind, size_t aCapacity);
+};
+
+class SyncReadFile : public nsISupports, public nsWrapperCache {
+ public:
+  SyncReadFile(nsISupports* aParent, RefPtr<nsFileStream>&& aStream,
+               int64_t aSize);
+
+  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(SyncReadFile)
+
+  nsISupports* GetParentObject() const { return mParent; }
+
+  virtual JSObject* WrapObject(JSContext* aCx,
+                               JS::Handle<JSObject*> aGivenProto) override;
+
+  int64_t Size() const { return mSize; }
+  void ReadBytesInto(const Uint8Array&, const int64_t, ErrorResult& aRv);
+  void Close();
+
+ private:
+  virtual ~SyncReadFile();
+
+  nsCOMPtr<nsISupports> mParent;
+  RefPtr<nsFileStream> mStream;
+  int64_t mSize = 0;
 };
 
 }  // namespace dom

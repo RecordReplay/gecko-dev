@@ -7,10 +7,13 @@
 
 #include "DeleteNodeTransaction.h"
 #include "DeleteTextTransaction.h"
+#include "EditorBase.h"
+#include "EditorDOMPoint.h"
+#include "EditorUtils.h"
+#include "HTMLEditUtils.h"
 
 #include "mozilla/Assertions.h"
 #include "mozilla/ContentIterator.h"
-#include "mozilla/EditorBase.h"
 #include "mozilla/Logging.h"
 #include "mozilla/mozalloc.h"
 #include "mozilla/RangeBoundary.h"
@@ -29,6 +32,8 @@
 namespace mozilla {
 
 using namespace dom;
+
+using EditorType = EditorUtils::EditorType;
 
 DeleteRangeTransaction::DeleteRangeTransaction(EditorBase& aEditorBase,
                                                const nsRange& aRangeToDelete)
@@ -112,13 +117,11 @@ NS_IMETHODIMP DeleteRangeTransaction::DoTransaction() {
     return NS_OK;
   }
 
-  RefPtr<Selection> selection = mEditorBase->GetSelection();
-  if (NS_WARN_IF(!selection)) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-  rv = selection->CollapseInLimiter(startRef.AsRaw());
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "Selection::CollapseInLimiter() failed");
+  OwningNonNull<EditorBase> editorBase = *mEditorBase;
+  rv = editorBase->CollapseSelectionTo(EditorRawDOMPoint(startRef));
+  NS_WARNING_ASSERTION(
+      NS_SUCCEEDED(rv),
+      "EditorBase::CollapseSelectionToEndOfLastLeafNode() failed");
   return rv;
 }
 
@@ -174,6 +177,12 @@ nsresult DeleteRangeTransaction::CreateTxnsToDeleteBetween(
 
   // see what kind of node we have
   if (Text* textNode = Text::FromNode(aStart.Container())) {
+    if (mEditorBase->IsHTMLEditor() &&
+        NS_WARN_IF(
+            !EditorUtils::IsEditableContent(*textNode, EditorType::HTML))) {
+      // Just ignore to append the transaction for non-editable node.
+      return NS_OK;
+    }
     // if the node is a chardata node, then delete chardata content
     uint32_t textLengthToDelete;
     if (aStart == aEnd) {
@@ -203,38 +212,7 @@ nsresult DeleteRangeTransaction::CreateTxnsToDeleteBetween(
     return NS_OK;
   }
 
-  if (mEditorBase->IsTextEditor()) {
-    // XXX(krosylight): We only want to delete anything within the text node in
-    // TextEditor, but there are things that still try deleting the text node
-    // itself (bug 1716714).  Do this until we are 100% sure nothing does so.
-    MOZ_ASSERT(aStart.Container() == mEditorBase->GetRoot() &&
-               aEnd.Container() == mEditorBase->GetRoot());
-    MOZ_ASSERT(
-        aStart.Offset(RawRangeBoundary::OffsetFilter::kValidOffsets).value() ==
-        0);
-    MOZ_ASSERT(
-        aEnd.Offset(RawRangeBoundary::OffsetFilter::kValidOffsets).value() ==
-        mEditorBase->GetRoot()->Length());
-
-    RefPtr<Text> textNode =
-        Text::FromNodeOrNull(aStart.Container()->GetFirstChild());
-    MOZ_ASSERT(textNode);
-
-    RefPtr<DeleteTextTransaction> deleteTextTransaction =
-        DeleteTextTransaction::MaybeCreate(*mEditorBase, *textNode, 0,
-                                           textNode->TextDataLength());
-    // If the text node isn't editable, it should be never undone/redone.
-    // So, the transaction shouldn't be recorded.
-    if (!deleteTextTransaction) {
-      NS_WARNING("DeleteTextTransaction::MaybeCreate() failed");
-      return NS_ERROR_FAILURE;
-    }
-    DebugOnly<nsresult> rvIgnored = AppendChild(deleteTextTransaction);
-    NS_WARNING_ASSERTION(
-        NS_SUCCEEDED(rvIgnored),
-        "DeleteRangeTransaction::AppendChild() failed, but ignored");
-    return NS_OK;
-  }
+  MOZ_ASSERT(mEditorBase->IsHTMLEditor());
 
   // Even if we detect invalid range, we should ignore it for removing
   // specified range's nodes as far as possible.
@@ -243,12 +221,11 @@ nsresult DeleteRangeTransaction::CreateTxnsToDeleteBetween(
   for (nsIContent* child = aStart.GetChildAtOffset();
        child && child != aEnd.GetChildAtOffset();
        child = child->GetNextSibling()) {
+    if (NS_WARN_IF(!HTMLEditUtils::IsRemovableNode(*child))) {
+      continue;  // Should we abort?
+    }
     RefPtr<DeleteNodeTransaction> deleteNodeTransaction =
         DeleteNodeTransaction::MaybeCreate(*mEditorBase, *child);
-    // XXX This is odd handling.  Even if some children are not editable,
-    //     editor should append transactions because they could be editable
-    //     at undoing/redoing.  Additionally, if the transaction needs to
-    //     delete/restore all nodes, it should at undoing/redoing.
     if (deleteNodeTransaction) {
       DebugOnly<nsresult> rvIgnored = AppendChild(deleteNodeTransaction);
       NS_WARNING_ASSERTION(
@@ -325,20 +302,17 @@ nsresult DeleteRangeTransaction::CreateTxnsToDeleteNodesBetween(
       return NS_ERROR_FAILURE;
     }
 
+    if (NS_WARN_IF(!HTMLEditUtils::IsRemovableNode(*node->AsContent()))) {
+      continue;
+    }
     RefPtr<DeleteNodeTransaction> deleteNodeTransaction =
         DeleteNodeTransaction::MaybeCreate(*mEditorBase, *node->AsContent());
-    // XXX This is odd handling.  Even if some nodes in the range are not
-    //     editable, editor should append transactions because they could
-    //     at undoing/redoing.  Additionally, if the transaction needs to
-    //     delete/restore all nodes, it should at undoing/redoing.
-    if (!deleteNodeTransaction) {
-      NS_WARNING("DeleteNodeTransaction::MaybeCreate() failed");
-      return NS_ERROR_FAILURE;
+    if (deleteNodeTransaction) {
+      DebugOnly<nsresult> rvIgnored = AppendChild(deleteNodeTransaction);
+      NS_WARNING_ASSERTION(
+          NS_SUCCEEDED(rvIgnored),
+          "DeleteRangeTransaction::AppendChild() failed, but ignored");
     }
-    DebugOnly<nsresult> rvIgnored = AppendChild(deleteNodeTransaction);
-    NS_WARNING_ASSERTION(
-        NS_SUCCEEDED(rvIgnored),
-        "DeleteRangeTransaction::AppendChild() failed, but ignored");
   }
   return NS_OK;
 }

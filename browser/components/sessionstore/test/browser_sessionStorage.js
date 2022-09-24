@@ -130,15 +130,12 @@ add_task(async function session_storage() {
     "modified3",
     "navigating retains correct storage data"
   );
-  ok(!storage[INNER_ORIGIN], "storage data was discarded");
 
-  // Check that loading a new URL discards data.
-  BrowserTestUtils.loadURI(browser2, "about:mozilla");
-  await promiseBrowserLoaded(browser2);
-  await TabStateFlusher.flush(browser2);
-
-  let state = JSON.parse(ss.getTabState(tab2));
-  is(state?.storage, null, "storage data was discarded");
+  is(
+    storage[INNER_ORIGIN].test,
+    "modified2",
+    "sessionStorage data for example.com wasn't discarded after top-level same-site navigation"
+  );
 
   // Test that clearing the data in the first tab works properly within
   // the subframe
@@ -209,7 +206,7 @@ add_task(async function respect_privacy_level() {
     {
       state: { storage },
     },
-  ] = JSON.parse(ss.getClosedTabData(window));
+  ] = ss.getClosedTabData(window);
   is(
     storage[OUTER_ORIGIN].test,
     OUTER_VALUE,
@@ -233,7 +230,7 @@ add_task(async function respect_privacy_level() {
     {
       state: { storage },
     },
-  ] = JSON.parse(ss.getClosedTabData(window));
+  ] = ss.getClosedTabData(window);
   is(
     storage[OUTER_ORIGIN].test,
     OUTER_VALUE,
@@ -259,7 +256,7 @@ add_task(async function respect_privacy_level() {
     {
       state: { storage },
     },
-  ] = JSON.parse(ss.getClosedTabData(window));
+  ] = ss.getClosedTabData(window);
   ok(!storage, "sessionStorage data has *not* been saved");
 
   // Remove all closed tabs before continuing with the next test.
@@ -278,7 +275,7 @@ add_task(async function respect_privacy_level() {
     {
       state: { storage },
     },
-  ] = JSON.parse(ss.getClosedTabData(window));
+  ] = ss.getClosedTabData(window);
   is(
     storage[OUTER_ORIGIN].test,
     OUTER_VALUE,

@@ -37,7 +37,7 @@ using L10nArgs =
 class FluentPattern : public nsWrapperCache {
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(FluentPattern)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(FluentPattern)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(FluentPattern)
 
   FluentPattern(nsISupports* aParent, const nsACString& aId);
   FluentPattern(nsISupports* aParent, const nsACString& aId,
@@ -58,7 +58,9 @@ class FluentPattern : public nsWrapperCache {
 class FluentBundle final : public nsWrapperCache {
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(FluentBundle)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(FluentBundle)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(FluentBundle)
+
+  FluentBundle(nsISupports* aParent, UniquePtr<ffi::FluentBundleRc> aRaw);
 
   static already_AddRefed<FluentBundle> Constructor(
       const dom::GlobalObject& aGlobal,
@@ -79,9 +81,10 @@ class FluentBundle final : public nsWrapperCache {
                      const dom::Optional<JS::Handle<JSObject*>>& aErrors,
                      nsACString& aRetVal, ErrorResult& aRv);
 
+  static void ConvertArgs(const L10nArgs& aArgs,
+                          nsTArray<ffi::L10nArg>& aRetVal);
+
  protected:
-  explicit FluentBundle(nsISupports* aParent,
-                        UniquePtr<ffi::FluentBundleRc> aRaw);
   virtual ~FluentBundle();
 
   nsCOMPtr<nsISupports> mParent;

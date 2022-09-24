@@ -14,14 +14,21 @@ add_task(async function database_is_valid() {
   let db = await PlacesUtils.promiseDBConnection();
   Assert.equal(await db.getSchemaVersion(), CURRENT_SCHEMA_VERSION);
 
-  let count = (
-    await db.execute(`SELECT count(*) FROM moz_places_metadata`)
-  )[0].getResultByIndex(0);
-  Assert.equal(count, 0, "Empty table");
-  count = (
-    await db.execute(`SELECT count(*) FROM moz_places_metadata_search_queries`)
-  )[0].getResultByIndex(0);
-  Assert.equal(count, 0, "Empty table");
+  for (let table of [
+    "moz_places_metadata",
+    "moz_places_metadata_search_queries",
+    "moz_places_metadata_snapshots",
+    "moz_places_metadata_snapshots_extra",
+    "moz_places_metadata_snapshots_groups",
+    "moz_places_metadata_groups_to_snapshots",
+    "moz_session_metadata",
+    "moz_session_to_places",
+  ]) {
+    let count = (
+      await db.execute(`SELECT count(*) FROM ${table}`)
+    )[0].getResultByIndex(0);
+    Assert.equal(count, 0, `Empty table ${table}`);
+  }
 });
 
 add_task(async function scrolling_fields_in_database() {
@@ -29,4 +36,14 @@ add_task(async function scrolling_fields_in_database() {
   await db.execute(
     `SELECT scrolling_time,scrolling_distance FROM moz_places_metadata`
   );
+});
+
+add_task(async function site_name_field_in_database() {
+  let db = await PlacesUtils.promiseDBConnection();
+  await db.execute(`SELECT site_name FROM moz_places`);
+});
+
+add_task(async function previews_tombstones_in_database() {
+  let db = await PlacesUtils.promiseDBConnection();
+  await db.execute(`SELECT hash FROM moz_previews_tombstones`);
 });

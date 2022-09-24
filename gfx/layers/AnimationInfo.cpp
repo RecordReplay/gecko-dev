@@ -121,12 +121,7 @@ bool AnimationInfo::StartPendingAnimations(const TimeStamp& aReadyTime) {
   return updated;
 }
 
-void AnimationInfo::TransferMutatedFlagToLayer(Layer* aLayer) {
-  if (mMutated) {
-    aLayer->Mutated();
-    mMutated = false;
-  }
-}
+void AnimationInfo::TransferMutatedFlagToLayer(Layer* aLayer) {}
 
 bool AnimationInfo::ApplyPendingUpdatesForThisTransaction() {
   if (mPendingAnimations) {
@@ -154,12 +149,6 @@ Maybe<uint64_t> AnimationInfo::GetGenerationFromFrame(
     nsIFrame* aFrame, DisplayItemType aDisplayItemKey) {
   MOZ_ASSERT(aFrame->IsPrimaryFrame() ||
              nsLayoutUtils::IsFirstContinuationOrIBSplitSibling(aFrame));
-
-  layers::Layer* layer =
-      FrameLayerBuilder::GetDedicatedLayer(aFrame, aDisplayItemKey);
-  if (layer) {
-    return layer->GetAnimationInfo().GetAnimationGeneration();
-  }
 
   // In case of continuation, KeyframeEffectReadOnly uses its first frame,
   // whereas nsDisplayItem uses its last continuation, so we have to use the
@@ -195,7 +184,7 @@ void AnimationInfo::EnumerateGenerationOnFrame(
       // in PuppetWidget::GetLayerManager queries the parent state, it results
       // the assertion in the function failure.
       if (widget->GetOwningBrowserChild() &&
-          !static_cast<widget::PuppetWidget*>(widget)->HasLayerManager()) {
+          !static_cast<widget::PuppetWidget*>(widget)->HasWindowRenderer()) {
         for (auto displayItem : LayerAnimationInfo::sDisplayItemTypes) {
           aCallback(Nothing(), displayItem);
         }
@@ -204,11 +193,9 @@ void AnimationInfo::EnumerateGenerationOnFrame(
     }
   }
 
-  RefPtr<LayerManager> layerManager =
-      nsContentUtils::LayerManagerForContent(aContent);
+  WindowRenderer* renderer = nsContentUtils::WindowRendererForContent(aContent);
 
-  if (layerManager &&
-      layerManager->GetBackendType() == layers::LayersBackend::LAYERS_WR) {
+  if (renderer && renderer->AsWebRender()) {
     // In case of continuation, nsDisplayItem uses its last continuation, so we
     // have to use the last continuation frame here.
     if (nsLayoutUtils::IsFirstContinuationOrIBSplitSibling(aFrame)) {
@@ -233,8 +220,6 @@ void AnimationInfo::EnumerateGenerationOnFrame(
     }
     return;
   }
-
-  FrameLayerBuilder::EnumerateGenerationForDedicatedLayers(aFrame, aCallback);
 }
 
 static StyleTransformOperation ResolveTranslate(
@@ -347,21 +332,23 @@ static StyleTransform ResolveTransformOperations(
   return transform;
 }
 
-static TimingFunction ToTimingFunction(
-    const Maybe<ComputedTimingFunction>& aCTF) {
-  if (aCTF.isNothing()) {
-    return TimingFunction(null_t());
+static Maybe<ScrollTimelineOptions> GetScrollTimelineOptions(
+    dom::AnimationTimeline* aTimeline) {
+  if (!aTimeline || !aTimeline->IsScrollTimeline()) {
+    return Nothing();
   }
 
-  if (aCTF->HasSpline()) {
-    const SMILKeySpline* spline = aCTF->GetFunction();
-    return TimingFunction(CubicBezierFunction(
-        static_cast<float>(spline->X1()), static_cast<float>(spline->Y1()),
-        static_cast<float>(spline->X2()), static_cast<float>(spline->Y2())));
-  }
+  const dom::ScrollTimeline* timeline = aTimeline->AsScrollTimeline();
+  MOZ_ASSERT(timeline->IsActive(),
+             "We send scroll animation to the compositor only if its timeline "
+             "is active");
 
-  return TimingFunction(StepFunction(
-      aCTF->GetSteps().mSteps, static_cast<uint8_t>(aCTF->GetSteps().mPos)));
+  ScrollableLayerGuid::ViewID source = ScrollableLayerGuid::NULL_SCROLL_ID;
+  DebugOnly<bool> success =
+      nsLayoutUtils::FindIDFor(timeline->SourceElement(), &source);
+  MOZ_ASSERT(success, "We should have a valid ViewID for the scroller");
+
+  return Some(ScrollTimelineOptions(source, timeline->Axis()));
 }
 
 // FIXME: Bug 1489392: We don't have to normalize the path here if we accept
@@ -501,11 +488,14 @@ void AnimationInfo::AddAnimationForProperty(
           ? static_cast<float>(aAnimation->PlaybackRate())
           : std::numeric_limits<float>::quiet_NaN();
   animation->transformData() = aTransformData;
-  animation->easingFunction() = ToTimingFunction(timing.TimingFunction());
+  animation->easingFunction() =
+      ComputedTimingFunction::ToLayersTimingFunction(timing.TimingFunction());
   animation->iterationComposite() = static_cast<uint8_t>(
       aAnimation->GetEffect()->AsKeyframeEffect()->IterationComposite());
   animation->isNotPlaying() = !aAnimation->IsPlaying();
   animation->isNotAnimating() = false;
+  animation->scrollTimelineOptions() =
+      GetScrollTimelineOptions(aAnimation->GetTimeline());
 
   TransformReferenceBox refBox(aFrame);
 
@@ -536,7 +526,8 @@ void AnimationInfo::AddAnimationForProperty(
     animSegment->startComposite() =
         static_cast<uint8_t>(segment.mFromComposite);
     animSegment->endComposite() = static_cast<uint8_t>(segment.mToComposite);
-    animSegment->sampleFn() = ToTimingFunction(segment.mTimingFunction);
+    animSegment->sampleFn() =
+        ComputedTimingFunction::ToLayersTimingFunction(segment.mTimingFunction);
   }
 }
 
@@ -600,7 +591,7 @@ bool AnimationInfo::AddAnimationsForProperty(
     nsIFrame* aFrame, const EffectSet* aEffects,
     const nsTArray<RefPtr<dom::Animation>>& aCompositorAnimations,
     const Maybe<TransformData>& aTransformData, nsCSSPropertyID aProperty,
-    Send aSendFlag, LayerManager* aLayerManager) {
+    Send aSendFlag, WebRenderLayerManager* aLayerManager) {
   bool addedAny = false;
   // Add from first to last (since last overrides)
   for (dom::Animation* anim : aCompositorAnimations) {
@@ -809,7 +800,7 @@ static Maybe<TransformData> CreateAnimationData(
     // is also reference frame too, so the parent's reference frame
     // are used.
     nsIFrame* referenceFrame = nsLayoutUtils::GetReferenceFrame(
-        nsLayoutUtils::GetCrossDocParentFrame(aFrame));
+        nsLayoutUtils::GetCrossDocParentFrameInProcess(aFrame));
     origin = aFrame->GetOffsetToCrossDoc(referenceFrame);
   }
 
@@ -918,7 +909,7 @@ void AnimationInfo::AddNonAnimatingTransformLikePropertiesStyles(
 
 void AnimationInfo::AddAnimationsForDisplayItem(
     nsIFrame* aFrame, nsDisplayListBuilder* aBuilder, nsDisplayItem* aItem,
-    DisplayItemType aType, LayerManager* aLayerManager,
+    DisplayItemType aType, WebRenderLayerManager* aLayerManager,
     const Maybe<LayoutDevicePoint>& aPosition) {
   Send sendFlag = !aBuilder ? Send::NextTransaction : Send::Immediate;
   if (sendFlag == Send::NextTransaction) {

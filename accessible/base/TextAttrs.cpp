@@ -30,20 +30,23 @@ using namespace mozilla::a11y;
 void TextAttrsMgr::GetAttributes(AccAttributes* aAttributes,
                                  uint32_t* aStartOffset, uint32_t* aEndOffset) {
   // 1. Hyper text accessible must be specified always.
-  // 2. Offset accessible and result hyper text offsets must be specified in
-  // the case of text attributes.
+  // 2. Offset accessible must be specified in
+  // the case of text attributes. Result hyper text offsets are optional if you
+  // just want the attributes for a single text Accessible.
   // 3. Offset accessible and result hyper text offsets must not be specified
   // but include default text attributes flag and attributes list must be
   // specified in the case of default text attributes.
   MOZ_ASSERT(
-      mHyperTextAcc &&
-          ((mOffsetAcc && mOffsetAccIdx != -1 && aStartOffset && aEndOffset) ||
-           (!mOffsetAcc && mOffsetAccIdx == -1 && !aStartOffset &&
-            !aEndOffset && mIncludeDefAttrs && aAttributes)),
+      mHyperTextAcc && ((mOffsetAcc && mOffsetAccIdx != -1) ||
+                        (!mOffsetAcc && mOffsetAccIdx == -1 && !aStartOffset &&
+                         !aEndOffset && mIncludeDefAttrs && aAttributes)),
       "Wrong usage of TextAttrsMgr!");
 
   // Embedded objects are combined into own range with empty attributes set.
   if (mOffsetAcc && !mOffsetAcc->IsText()) {
+    if (!aStartOffset) {
+      return;
+    }
     for (int32_t childIdx = mOffsetAccIdx - 1; childIdx >= 0; childIdx--) {
       LocalAccessible* currAcc = mHyperTextAcc->LocalChildAt(childIdx);
       if (currAcc->IsText()) break;
@@ -71,8 +74,9 @@ void TextAttrsMgr::GetAttributes(AccAttributes* aAttributes,
   }
 
   nsIFrame* rootFrame = mHyperTextAcc->GetFrame();
-  MOZ_ASSERT(rootFrame, "No frame for accessible!");
-  if (!rootFrame) return;
+  if (!rootFrame) {
+    return;
+  }
 
   nsIContent *offsetNode = nullptr, *offsetElm = nullptr;
   nsIFrame* frame = nullptr;
@@ -132,7 +136,7 @@ void TextAttrsMgr::GetAttributes(AccAttributes* aAttributes,
   }
 
   // Expose text attributes range where they are applied if applicable.
-  if (mOffsetAcc) {
+  if (aStartOffset) {
     GetRange(attrArray, ArrayLength(attrArray), aStartOffset, aEndOffset);
   }
 }
@@ -217,7 +221,7 @@ bool TextAttrsMgr::LangTextAttr::GetValueFor(LocalAccessible* aAccessible,
 
 void TextAttrsMgr::LangTextAttr::ExposeValue(AccAttributes* aAttributes,
                                              const nsString& aValue) {
-  aAttributes->SetAttribute(nsGkAtoms::language, aValue);
+  aAttributes->SetAttributeStringCopy(nsGkAtoms::language, aValue);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -397,7 +401,7 @@ bool TextAttrsMgr::FontFamilyTextAttr::GetValueFor(LocalAccessible* aAccessible,
 
 void TextAttrsMgr::FontFamilyTextAttr::ExposeValue(AccAttributes* aAttributes,
                                                    const nsString& aValue) {
-  aAttributes->SetAttribute(nsGkAtoms::font_family, aValue);
+  aAttributes->SetAttributeStringCopy(nsGkAtoms::font_family, aValue);
 }
 
 bool TextAttrsMgr::FontFamilyTextAttr::GetFontFamily(nsIFrame* aFrame,
@@ -498,14 +502,13 @@ void TextAttrsMgr::FontStyleTextAttr::ExposeValue(
     aAttributes->SetAttribute(nsGkAtoms::font_style, atom);
   } else {
     auto angle = aValue.ObliqueAngle();
-    nsAutoString string;
-    string.AppendLiteral("oblique");
+    nsString string(u"oblique"_ns);
     if (angle != FontSlantStyle::kDefaultAngle) {
       string.AppendLiteral(" ");
       nsStyleUtil::AppendCSSNumber(angle, string);
       string.AppendLiteral("deg");
     }
-    aAttributes->SetAttribute(nsGkAtoms::font_style, string);
+    aAttributes->SetAttribute(nsGkAtoms::font_style, std::move(string));
   }
 }
 
@@ -554,10 +557,9 @@ FontWeight TextAttrsMgr::FontWeightTextAttr::GetFontWeight(nsIFrame* aFrame) {
 
   // When there doesn't exist a bold font in the family and so the rendering of
   // a non-bold font face is changed so that the user sees what looks like a
-  // bold font, i.e. synthetic bolding is used. IsSyntheticBold method is only
-  // needed on Mac, but it is "safe" to use on all platforms.  (For non-Mac
-  // platforms it always return false.)
-  if (font->IsSyntheticBold()) {
+  // bold font, i.e. synthetic bolding is used. (Simply returns false on any
+  // platforms that don't use the multi-strike synthetic bolding.)
+  if (font->ApplySyntheticBold()) {
     return FontWeight::Bold();
   }
 

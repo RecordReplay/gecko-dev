@@ -28,19 +28,11 @@ if (__URI__.includes("specialpowers")) {
 
 var registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
 var oldClassID;
-var newClassID = Cc["@mozilla.org/uuid-generator;1"]
-  .getService(Ci.nsIUUIDGenerator)
-  .generateUUID();
+var newClassID = Services.uuid.generateUUID();
 var newFactory = function(window) {
   return {
-    createInstance(aOuter, aIID) {
-      if (aOuter) {
-        throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-      }
+    createInstance(aIID) {
       return new MockFilePickerInstance(window).QueryInterface(aIID);
-    },
-    lockFactory(aLock) {
-      throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
     },
     QueryInterface: ChromeUtils.generateQI(["nsIFactory"]),
   };
@@ -150,7 +142,7 @@ var MockFilePicker = {
     this.pendingPromises = [];
 
     for (let file of files) {
-      if (file instanceof this.window.File) {
+      if (this.window.File.isInstance(file)) {
         this.returnData.push(this.internalFileData({ domFile: file }));
       } else {
         let promise = this.window.File.createFromNsIFile(file, {

@@ -36,7 +36,7 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(JSActor)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(JSActor)
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(JSActor)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(JSActor)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(JSActor)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
@@ -52,8 +52,6 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(JSActor)
     CycleCollectionNoteChild(cb, query.mPromise.get(), "Pending Query Promise");
   }
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(JSActor)
 
 JSActor::JSActor(nsISupports* aGlobal) {
   mGlobal = do_QueryInterface(aGlobal);
@@ -372,7 +370,8 @@ JSActor::QueryHandler::QueryHandler(JSActor* aActor,
       mQueryId(aMetadata.queryId()) {}
 
 void JSActor::QueryHandler::RejectedCallback(JSContext* aCx,
-                                             JS::Handle<JS::Value> aValue) {
+                                             JS::Handle<JS::Value> aValue,
+                                             ErrorResult& aRv) {
   if (!mActor) {
     // Make sure that this rejection is reported. See comment below.
     if (!JS::CallOriginalPromiseReject(aCx, aValue)) {
@@ -414,7 +413,8 @@ void JSActor::QueryHandler::RejectedCallback(JSContext* aCx,
 }
 
 void JSActor::QueryHandler::ResolvedCallback(JSContext* aCx,
-                                             JS::Handle<JS::Value> aValue) {
+                                             JS::Handle<JS::Value> aValue,
+                                             ErrorResult& aRv) {
   if (!mActor) {
     return;
   }
@@ -438,7 +438,7 @@ void JSActor::QueryHandler::ResolvedCallback(JSContext* aCx,
 
     JS::Rooted<JS::Value> val(aCx);
     if (ToJSValue(aCx, exc, &val)) {
-      RejectedCallback(aCx, val);
+      RejectedCallback(aCx, val, aRv);
     } else {
       JS_ClearPendingException(aCx);
     }

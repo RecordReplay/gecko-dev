@@ -11,16 +11,20 @@ ChromeUtils.defineModuleGetter(
 
 ChromeUtils.defineModuleGetter(
   this,
+  "Utils",
+  "resource://services-settings/Utils.jsm"
+);
+
+ChromeUtils.defineModuleGetter(
+  this,
   "NewTabUtils",
   "resource://gre/modules/NewTabUtils.jsm"
 );
 
-const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
-ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
 const { BasePromiseWorker } = ChromeUtils.import(
@@ -31,24 +35,13 @@ const RECIPE_NAME = "personality-provider-recipe";
 const MODELS_NAME = "personality-provider-models";
 
 this.PersonalityProvider = class PersonalityProvider {
-  constructor(v2Params) {
-    this.v2Params = v2Params || {};
-    this.modelKeys = this.v2Params.modelKeys;
+  constructor(modelKeys) {
+    this.modelKeys = modelKeys;
     this.onSync = this.onSync.bind(this);
     this.setup();
   }
 
-  setAffinities(
-    timeSegments,
-    parameterSets,
-    maxHistoryQueryResults,
-    version,
-    scores
-  ) {
-    this.timeSegments = timeSegments;
-    this.parameterSets = parameterSets;
-    this.maxHistoryQueryResults = maxHistoryQueryResults;
-    this.version = version;
+  setScores(scores) {
     this.scores = scores || {};
     this.interestConfig = this.scores.interestConfig;
     this.interestVector = this.scores.interestVector;
@@ -63,10 +56,6 @@ this.PersonalityProvider = class PersonalityProvider {
       "resource://activity-stream/lib/PersonalityProvider/PersonalityProviderWorker.js"
     );
 
-    // As the PersonalityProviderWorker performs I/O, we can receive instances of
-    // OS.File.Error, so we need to install a decoder.
-    this._personalityProviderWorker.ExceptionHandlers["OS.File.Error"] =
-      OS.File.Error.fromMsg;
     return this._personalityProviderWorker;
   }
 
@@ -79,7 +68,7 @@ this.PersonalityProvider = class PersonalityProvider {
     if (this._baseAttachmentsURL) {
       return this._baseAttachmentsURL;
     }
-    const server = Services.prefs.getCharPref("services.settings.server");
+    const server = Utils.SERVER_URL;
     const serverInfo = await (
       await fetch(`${server}/`, {
         credentials: "omit",
@@ -292,22 +281,16 @@ this.PersonalityProvider = class PersonalityProvider {
   }
 
   /**
-   * Returns an object holding the settings and affinity scores of this provider instance.
+   * Returns an object holding the personalization scores of this provider instance.
    */
-  getAffinities() {
+  getScores() {
     return {
-      timeSegments: this.timeSegments,
-      parameterSets: this.parameterSets,
-      maxHistoryQueryResults: this.maxHistoryQueryResults,
-      version: this.version,
-      scores: {
-        // We cannot return taggers here.
-        // What we return here goes into persistent cache, and taggers have functions on it.
-        // If we attempted to save taggers into persistent cache, it would store it to disk,
-        // and the next time we load it, it would start thowing function is not defined.
-        interestConfig: this.interestConfig,
-        interestVector: this.interestVector,
-      },
+      // We cannot return taggers here.
+      // What we return here goes into persistent cache, and taggers have functions on it.
+      // If we attempted to save taggers into persistent cache, it would store it to disk,
+      // and the next time we load it, it would start thowing function is not defined.
+      interestConfig: this.interestConfig,
+      interestVector: this.interestVector,
     };
   }
 };

@@ -10,6 +10,8 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/MathAlgorithms.h"
 
+#include <algorithm>
+
 #include "jit/arm64/vixl/Instructions-vixl.h"
 #include "jit/shared/Architecture-shared.h"
 
@@ -201,7 +203,8 @@ class Registers {
       (1 << Registers::x28) |  // PseudoStackPointer.
       (1 << Registers::ip0) |  // First scratch register.
       (1 << Registers::ip1) |  // Second scratch register.
-      (1 << Registers::tls) | (1 << Registers::lr) | (1 << Registers::sp);
+      (1 << Registers::tls) | (1 << Registers::lr) | (1 << Registers::sp) |
+      (1 << Registers::fp);
 
   static const SetType WrapperMask = VolatileMask;
 
@@ -546,6 +549,10 @@ class FloatRegisters {
     return Code((invalid << 7) | (kind << 5) | encoding);
   }
 };
+
+static const uint32_t SpillSlotSize =
+    std::max(sizeof(Registers::RegisterContent),
+             sizeof(FloatRegisters::RegisterContent));
 
 static const uint32_t ShadowStackSpace = 0;
 

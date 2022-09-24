@@ -45,6 +45,7 @@
 #include "mozilla/Unused.h"
 #include "prenv.h"
 #include "base/posix/eintr_wrapper.h"
+#include "sandbox/linux/bpf_dsl/bpf_dsl.h"
 #include "sandbox/linux/bpf_dsl/codegen.h"
 #include "sandbox/linux/bpf_dsl/dump_bpf.h"
 #include "sandbox/linux/bpf_dsl/policy.h"
@@ -549,6 +550,24 @@ static void SetCurrentProcessSandbox(
   // lifetime, but does not take ownership of them.
   sandbox::bpf_dsl::PolicyCompiler compiler(aPolicy.get(),
                                             sandbox::Trap::Registry());
+
+  // In case of errors detected by the compiler (like ABI violations),
+  // log and crash normally; the default is SECCOMP_RET_KILL_THREAD,
+  // which results in hard-to-debug hangs.
+  compiler.SetPanicFunc([](const char* error) -> sandbox::bpf_dsl::ResultExpr {
+    // Note: this assumes that `error` is a string literal, which is
+    // currently the case for all callers.  (An intentionally leaked
+    // heap allocation would also work.)
+    return sandbox::bpf_dsl::Trap(
+        [](const sandbox::arch_seccomp_data&, void* aux) -> intptr_t {
+          auto error = reinterpret_cast<const char*>(aux);
+          SANDBOX_LOG_ERROR("Panic: %s", error);
+          MOZ_CRASH("Sandbox Panic");
+          // unreachable
+        },
+        (void*)error);
+  });
+
   sandbox::CodeGen::Program program = compiler.Compile();
   if (SandboxInfo::Get().Test(SandboxInfo::kVerbose)) {
     sandbox::bpf_dsl::DumpBPF::PrintProgram(program);
@@ -655,6 +674,7 @@ void SetMediaPluginSandbox(const char* aFilePath) {
   auto files = new SandboxOpenedFiles();
   files->Add(std::move(plugin));
   files->Add("/dev/urandom", SandboxOpenedFile::Dup::YES);
+  files->Add("/dev/random", SandboxOpenedFile::Dup::YES);
   files->Add("/etc/ld.so.cache");  // Needed for NSS in clearkey.
   files->Add("/sys/devices/system/cpu/cpu0/tsc_freq_khz");
   files->Add("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq");
@@ -713,6 +733,41 @@ void SetSocketProcessSandbox(int aBroker) {
   }
 
   SetCurrentProcessSandbox(GetSocketProcessSandboxPolicy(sBroker));
+}
+
+void SetUtilitySandbox(int aBroker, ipc::SandboxingKind aKind) {
+  if (!SandboxInfo::Get().Test(SandboxInfo::kHasSeccompBPF) ||
+      PR_GetEnv("MOZ_DISABLE_UTILITY_SANDBOX")) {
+    if (aBroker >= 0) {
+      close(aBroker);
+    }
+    return;
+  }
+
+  gSandboxReporterClient =
+      new SandboxReporterClient(SandboxReport::ProcType::UTILITY);
+
+  static SandboxBrokerClient* sBroker;
+  if (aBroker >= 0) {
+    sBroker = new SandboxBrokerClient(aBroker);
+  }
+
+  UniquePtr<sandbox::bpf_dsl::Policy> policy;
+  switch (aKind) {
+    case ipc::SandboxingKind::GENERIC_UTILITY:
+      policy = GetUtilitySandboxPolicy(sBroker);
+      break;
+
+    case ipc::SandboxingKind::UTILITY_AUDIO_DECODING:
+      policy = GetUtilityAudioDecoderSandboxPolicy(sBroker);
+      break;
+
+    default:
+      MOZ_ASSERT(false, "Invalid SandboxingKind");
+      break;
+  }
+
+  SetCurrentProcessSandbox(std::move(policy));
 }
 
 bool SetSandboxCrashOnError(bool aValue) {

@@ -22,8 +22,7 @@
 class nsISerialEventTarget;
 class nsIConsoleReportCollector;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ErrorValue;
 class FetchEventOpProxyChild;
@@ -49,8 +48,6 @@ class RemoteWorkerChild final
   friend class ServiceWorkerOp;
 
  public:
-  MOZ_DECLARE_THREADSAFEWEAKREFERENCE_TYPENAME(RemoteWorkerChild)
-
   MOZ_DECLARE_REFCOUNTED_TYPENAME(RemoteWorkerChild)
 
   explicit RemoteWorkerChild(const RemoteWorkerData& aData);
@@ -63,6 +60,8 @@ class RemoteWorkerChild final
 
   void ErrorPropagationOnMainThread(const WorkerErrorReport* aReport,
                                     bool aIsErrorEvent);
+
+  void NotifyLock(bool aCreated);
 
   void FlushReportsOnMainThread(nsIConsoleReportCollector* aReporter);
 
@@ -121,14 +120,12 @@ class RemoteWorkerChild final
   mozilla::ipc::IPCResult RecvExecServiceWorkerOp(
       ServiceWorkerOpArgs&& aArgs, ExecServiceWorkerOpResolver&& aResolve);
 
-  PFetchEventOpProxyChild* AllocPFetchEventOpProxyChild(
-      const ServiceWorkerFetchEventOpArgs& aArgs);
+  already_AddRefed<PFetchEventOpProxyChild> AllocPFetchEventOpProxyChild(
+      const ParentToChildServiceWorkerFetchEventOpArgs& aArgs);
 
   mozilla::ipc::IPCResult RecvPFetchEventOpProxyConstructor(
       PFetchEventOpProxyChild* aActor,
-      const ServiceWorkerFetchEventOpArgs& aArgs) override;
-
-  bool DeallocPFetchEventOpProxyChild(PFetchEventOpProxyChild* aActor);
+      const ParentToChildServiceWorkerFetchEventOpArgs& aArgs) override;
 
   nsresult ExecWorkerOnMainThread(RemoteWorkerData&& aData);
 
@@ -175,7 +172,6 @@ class RemoteWorkerChild final
   ThreadBound<LauncherBoundData> mLauncherData;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_RemoteWorkerChild_h

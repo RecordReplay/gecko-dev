@@ -60,19 +60,60 @@ using WasmGlobalObjectVector =
     GCVector<WasmGlobalObject*, 0, SystemAllocPolicy>;
 using RootedWasmGlobalObject = Rooted<WasmGlobalObject*>;
 
+class WasmTagObject;
+using GCPtrWasmTagObject = GCPtr<WasmTagObject*>;
+using WasmTagObjectVector = GCVector<WasmTagObject*, 0, SystemAllocPolicy>;
+using RootedWasmTagObject = Rooted<WasmTagObject*>;
+using HandleWasmTagObject = Handle<WasmTagObject*>;
+
 class WasmExceptionObject;
-using WasmExceptionObjectVector =
-    GCVector<WasmExceptionObject*, 0, SystemAllocPolicy>;
 using RootedWasmExceptionObject = Rooted<WasmExceptionObject*>;
 
-class WasmRuntimeExceptionObject;
-using RootedWasmRuntimeExceptionObject = Rooted<WasmRuntimeExceptionObject*>;
+class RttValue;
+using HandleRttValue = Handle<RttValue*>;
+using MutableHandleRttValue = MutableHandle<RttValue*>;
 
 namespace wasm {
 
 struct ModuleEnvironment;
+class CodeRange;
+class CodeTier;
+class ModuleSegment;
+struct Metadata;
+struct MetadataTier;
 class Decoder;
+class GeneratedSourceMap;
 class Instance;
+class Module;
+
+class Code;
+using SharedCode = RefPtr<const Code>;
+using MutableCode = RefPtr<Code>;
+
+class Table;
+using SharedTable = RefPtr<Table>;
+using SharedTableVector = Vector<SharedTable, 0, SystemAllocPolicy>;
+
+class DebugState;
+using UniqueDebugState = UniquePtr<DebugState>;
+
+struct DataSegment;
+using MutableDataSegment = RefPtr<DataSegment>;
+using SharedDataSegment = RefPtr<const DataSegment>;
+using DataSegmentVector = Vector<SharedDataSegment, 0, SystemAllocPolicy>;
+
+struct ElemSegment;
+using MutableElemSegment = RefPtr<ElemSegment>;
+using SharedElemSegment = RefPtr<const ElemSegment>;
+using ElemSegmentVector = Vector<SharedElemSegment, 0, SystemAllocPolicy>;
+
+struct ExceptionTag;
+using SharedExceptionTag = RefPtr<ExceptionTag>;
+using SharedExceptionTagVector =
+    Vector<SharedExceptionTag, 0, SystemAllocPolicy>;
+
+class Val;
+using ValVector = GCVector<Val, 0, SystemAllocPolicy>;
 
 // Uint32Vector has initial size 8 on the basis that the dominant use cases
 // (line numbers and control stacks) tend to have a small but nonzero number
@@ -85,8 +126,7 @@ using UniqueConstBytes = UniquePtr<const Bytes>;
 using UTF8Bytes = Vector<char, 0, SystemAllocPolicy>;
 using InstanceVector = Vector<Instance*, 0, SystemAllocPolicy>;
 using UniqueCharsVector = Vector<UniqueChars, 0, SystemAllocPolicy>;
-using RenumberMap =
-    HashMap<uint32_t, uint32_t, DefaultHasher<uint32_t>, SystemAllocPolicy>;
+using RenumberVector = Vector<uint32_t, 0, SystemAllocPolicy>;
 
 }  // namespace wasm
 }  // namespace js

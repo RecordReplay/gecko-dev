@@ -86,8 +86,7 @@ nsresult NS_NewSVGElement(
   return rv;
 }
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 using namespace SVGUnitTypes_Binding;
 
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGElement)
@@ -1217,7 +1216,7 @@ void MappedAttrParser::ParseMappedAttrValue(nsAtom* aMappedAttrName,
         mDecl->Raw(), propertyID, &value, false, data,
         ParsingMode::AllowUnitlessLength,
         mElement->OwnerDoc()->GetCompatibilityMode(), mLoader,
-        CSSRule_Binding::STYLE_RULE, {});
+        StyleCssRuleType::Style, {});
 
     // TODO(emilio): If we want to record these from CSSOM more generally, we
     // can pass the document use counters down the FFI call. For now manually
@@ -2269,27 +2268,6 @@ nsresult SVGElement::ReportAttributeParseFailure(Document* aDocument,
                                           strings);
 }
 
-void SVGElement::RecompileScriptEventListeners() {
-  int32_t i, count = mAttrs.AttrCount();
-  for (i = 0; i < count; ++i) {
-    const nsAttrName* name = mAttrs.AttrNameAt(i);
-
-    // Eventlistenener-attributes are always in the null namespace
-    if (!name->IsAtom()) {
-      continue;
-    }
-
-    nsAtom* attr = name->Atom();
-    if (!IsEventAttributeName(attr)) {
-      continue;
-    }
-
-    nsAutoString value;
-    GetAttr(attr, value);
-    SetEventHandler(GetEventNameForAttr(attr), value, true);
-  }
-}
-
 UniquePtr<SMILAttr> SVGElement::GetAnimatedAttr(int32_t aNamespaceID,
                                                 nsAtom* aName) {
   if (aNamespaceID == kNameSpaceID_None) {
@@ -2485,5 +2463,4 @@ void SVGElement::AddSizeOfExcludingThis(nsWindowSizes& aSizes,
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

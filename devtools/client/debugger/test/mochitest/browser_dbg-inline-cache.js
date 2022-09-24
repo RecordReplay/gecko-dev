@@ -2,14 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-"use strict";
-
 /*
  * Test loading inline scripts from cache:
  *   - Load document with inline script
  *   - Reload inside debugger with toolbox caching disabled
  *   - Reload inside debugger with toolbox caching enabled
  */
+
+"use strict";
 
 // Breakpoint position calculations can throw when interrupted by a navigation.
 PromiseTestUtils.allowMatchingRejectionsGlobally(/Resource .*? does not exist/);
@@ -42,8 +42,9 @@ add_task(async function() {
   clearDebuggerPreferences();
   const toolbox = await openToolboxForTab(tab, "jsdebugger");
   const dbg = createDebuggerContext(toolbox);
+  await waitForSource(dbg, "inline-cache.html");
   info("Reload tab to ensure debugger finds script");
-  await reloadTabAndDebugger(tab, dbg);
+  await reloadBrowser();
   let pageValue = await getPageValue(tab);
   is(pageValue, "let x = 1;", "Content loads from network, has doc value 1");
   await waitForSource(dbg, "inline-cache.html");
@@ -63,7 +64,7 @@ add_task(async function() {
   makeChanges();
 
   info("Reload inside debugger with toolbox caching disabled (attempt 1)");
-  await reloadTabAndDebugger(tab, dbg);
+  await reloadBrowser();
   pageValue = await getPageValue(tab);
   is(pageValue, "let x = 2;", "Content loads from network, has doc value 2");
   await waitForLoadedSource(dbg, "inline-cache.html");
@@ -78,7 +79,7 @@ add_task(async function() {
   makeChanges();
 
   info("Reload inside debugger with toolbox caching disabled (attempt 2)");
-  await reloadTabAndDebugger(tab, dbg);
+  await reloadBrowser();
   pageValue = await getPageValue(tab);
   is(pageValue, "let x = 3;", "Content loads from network, has doc value 3");
   await waitForLoadedSource(dbg, "inline-cache.html");
@@ -100,7 +101,7 @@ add_task(async function() {
   // document contents.
 
   info("Reload inside debugger with toolbox caching enabled (attempt 1)");
-  await reloadTabAndDebugger(tab, dbg);
+  await reloadBrowser();
   pageValue = await getPageValue(tab);
   is(pageValue, "let x = 4;", "Content loads from network, has doc value 4");
   await waitForLoadedSource(dbg, "inline-cache.html");
@@ -114,7 +115,7 @@ add_task(async function() {
   makeChanges();
 
   info("Reload inside debugger with toolbox caching enabled (attempt 2)");
-  await reloadTabAndDebugger(tab, dbg);
+  await reloadBrowser();
   pageValue = await getPageValue(tab);
   is(pageValue, "let x = 5;", "Content loads from network, has doc value 5");
   await waitForLoadedSource(dbg, "inline-cache.html");
@@ -142,11 +143,4 @@ function getPageValue(tab) {
   return SpecialPowers.spawn(tab.linkedBrowser, [], function() {
     return content.document.querySelector("script").textContent.trim();
   });
-}
-
-async function reloadTabAndDebugger(tab, dbg) {
-  let navigated = waitForDispatch(dbg.store, "NAVIGATE");
-  let loaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
-  await reload(dbg, "inline-cache.html");
-  return Promise.all([navigated, loaded]);
 }

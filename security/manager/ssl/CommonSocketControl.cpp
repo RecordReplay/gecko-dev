@@ -6,7 +6,6 @@
 
 #include "CommonSocketControl.h"
 
-#include "BRNameMatchingPolicy.h"
 #include "PublicKeyPinningService.h"
 #include "SharedCertVerifier.h"
 #include "nsNSSComponent.h"
@@ -15,6 +14,7 @@
 #include "ssl.h"
 #include "mozilla/net/SSLTokensCache.h"
 #include "nsICertOverrideService.h"
+#include "nsITlsHandshakeListener.h"
 
 using namespace mozilla;
 
@@ -152,17 +152,15 @@ CommonSocketControl::IsAcceptableForHost(const nsACString& hostname,
   // Ensure that the server certificate covers the hostname that would
   // like to join this connection
 
-  UniqueCERTCertificate nssCert;
-
   nsCOMPtr<nsIX509Cert> cert;
   if (NS_FAILED(GetServerCert(getter_AddRefs(cert)))) {
     return NS_OK;
   }
-  if (cert) {
-    nssCert.reset(cert->GetCert());
+  if (!cert) {
+    return NS_OK;
   }
-
-  if (!nssCert) {
+  nsTArray<uint8_t> certDER;
+  if (NS_FAILED(cert->GetRawDER(certDER))) {
     return NS_OK;
   }
 
@@ -180,7 +178,7 @@ CommonSocketControl::IsAcceptableForHost(const nsACString& hostname,
   // CertVerifier::VerifySSLServerCert we need to add them here too.
   Input serverCertInput;
   mozilla::pkix::Result rv =
-      serverCertInput.Init(nssCert->derCert.data, nssCert->derCert.len);
+      serverCertInput.Init(certDER.Elements(), certDER.Length());
   if (rv != Success) {
     return NS_OK;
   }
@@ -193,11 +191,7 @@ CommonSocketControl::IsAcceptableForHost(const nsACString& hostname,
     return NS_OK;
   }
 
-  mozilla::psm::BRNameMatchingPolicy nameMatchingPolicy(
-      mIsBuiltCertChainRootBuiltInRoot
-          ? mozilla::psm::PublicSSLState()->NameMatchingMode()
-          : mozilla::psm::BRNameMatchingPolicy::Mode::DoNotEnforce);
-  rv = CheckCertHostname(serverCertInput, hostnameInput, nameMatchingPolicy);
+  rv = CheckCertHostname(serverCertInput, hostnameInput);
   if (rv != Success) {
     return NS_OK;
   }
@@ -241,17 +235,9 @@ void CommonSocketControl::RebuildCertificateInfoFromSSLTokenCache() {
     return;
   }
 
-  RefPtr<nsNSSCertificate> nssc = nsNSSCertificate::ConstructFromDER(
-      BitwiseCast<char*, uint8_t*>(info.mServerCertBytes.Elements()),
-      info.mServerCertBytes.Length());
-  if (!nssc) {
-    MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-            ("RebuildCertificateInfoFromSSLTokenCache failed to construct "
-             "server cert"));
-    return;
-  }
-
-  SetServerCert(nssc, info.mEVStatus);
+  nsCOMPtr<nsIX509Cert> cert(
+      new nsNSSCertificate(std::move(info.mServerCertBytes)));
+  SetServerCert(cert, info.mEVStatus);
   SetCertificateTransparencyStatus(info.mCertificateTransparencyStatus);
   if (info.mSucceededCertChainBytes) {
     SetSucceededCertChain(std::move(*info.mSucceededCertChainBytes));
@@ -342,12 +328,6 @@ CommonSocketControl::GetEchConfig(nsACString& aEchConfig) {
 
 NS_IMETHODIMP
 CommonSocketControl::SetEchConfig(const nsACString& aEchConfig) {
-  // TODO: Implement this in bug 1654507.
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-CommonSocketControl::GetPeerId(nsACString& aResult) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -355,3 +335,12 @@ NS_IMETHODIMP
 CommonSocketControl::GetRetryEchConfig(nsACString& aEchConfig) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
+
+NS_IMETHODIMP
+CommonSocketControl::SetHandshakeCallbackListener(
+    nsITlsHandshakeCallbackListener* callback) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+CommonSocketControl::DisableEarlyData(void) { return NS_ERROR_NOT_IMPLEMENTED; }

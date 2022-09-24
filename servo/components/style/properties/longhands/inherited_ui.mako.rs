@@ -96,6 +96,19 @@ ${helpers.predefined_type(
 )}
 
 ${helpers.predefined_type(
+    "color-scheme",
+    "ColorScheme",
+    "specified::color::ColorScheme::normal()",
+    engines="gecko",
+    spec="https://drafts.csswg.org/css-color-adjust/#color-scheme-prop",
+    gecko_pref="layout.css.color-scheme.enabled",
+    animation_value_type="discrete",
+    has_effect_on_gecko_scrollbars=False,
+    ignored_when_colors_disabled=True,
+    enabled_in="chrome",
+)}
+
+${helpers.predefined_type(
     "scrollbar-color",
     "ui::ScrollbarColor",
     "Default::default()",

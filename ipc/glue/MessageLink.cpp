@@ -25,19 +25,6 @@
 
 using namespace mozilla;
 
-// We rely on invariants about the lifetime of the transport:
-//
-//  - outlives this MessageChannel
-//  - deleted on the IO thread
-//
-// These invariants allow us to send messages directly through the
-// transport without having to worry about orphaned Send() tasks on
-// the IO thread touching MessageChannel memory after it's been deleted
-// on the worker thread.  We also don't need to refcount the
-// Transport, because whatever task triggers its deletion only runs on
-// the IO thread, and only runs after this MessageChannel is done with
-// the Transport.
-
 namespace mozilla {
 namespace ipc {
 
@@ -73,7 +60,7 @@ class PortLink::PortObserverThunk : public NodeController::PortObserver {
 
 PortLink::PortLink(MessageChannel* aChan, ScopedPort aPort)
     : MessageLink(aChan), mNode(aPort.Controller()), mPort(aPort.Release()) {
-  MonitorAutoLock lock(*mChan->mMonitor);
+  mChan->mMonitor->AssertCurrentThreadOwns();
 
   mObserver = new PortObserverThunk(mChan->mMonitor, this);
   mNode->SetPortObserver(mPort, mObserver);
@@ -174,6 +161,7 @@ void PortLink::SendMessage(UniquePtr<Message> aMessage) {
   PortRef port = mPort;
 
   bool ok = false;
+  monitor->AssertCurrentThreadOwns();
   {
     MonitorAutoUnlock guard(*monitor);
     ok = node->SendUserMessage(port, std::move(aMessage));
@@ -242,23 +230,15 @@ void PortLink::OnPortStatusChanged() {
       return;
     }
 
-    mChan->OnMessageReceivedFromLink(std::move(*message));
+    mChan->OnMessageReceivedFromLink(std::move(message));
   }
 }
 
-bool PortLink::Unsound_IsClosed() const {
+bool PortLink::IsClosed() const {
   if (Maybe<PortStatus> status = mNode->GetStatus(mPort)) {
     return !(status->has_messages || status->receiving_messages);
   }
   return true;
-}
-
-uint32_t PortLink::Unsound_NumQueuedMessages() const {
-  // There is no easy way to see the number of messages which have been sent to
-  // a port but haven't been delivered yet.
-  //
-  // FIXME: If this is important, we'll need to add a mechanism for this.
-  return 0;
 }
 
 }  // namespace ipc

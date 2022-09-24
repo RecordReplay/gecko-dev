@@ -35,16 +35,13 @@
 class nsGeolocationService;
 class nsGeolocationRequest;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Geolocation;
-typedef CallbackObjectHolder<PositionCallback, nsIDOMGeoPositionCallback>
-    GeoPositionCallback;
-typedef CallbackObjectHolder<PositionErrorCallback,
-                             nsIDOMGeoPositionErrorCallback>
-    GeoPositionErrorCallback;
-}  // namespace dom
-}  // namespace mozilla
+using GeoPositionCallback =
+    CallbackObjectHolder<PositionCallback, nsIDOMGeoPositionCallback>;
+using GeoPositionErrorCallback =
+    CallbackObjectHolder<PositionErrorCallback, nsIDOMGeoPositionErrorCallback>;
+}  // namespace mozilla::dom
 
 struct CachedPositionAndAccuracy {
   nsCOMPtr<nsIDOMGeoPosition> position;
@@ -64,7 +61,7 @@ class nsGeolocationService final : public nsIGeolocationUpdate,
   NS_DECL_NSIGEOLOCATIONUPDATE
   NS_DECL_NSIOBSERVER
 
-  nsGeolocationService() { mHigherAccuracy = false; }
+  nsGeolocationService() = default;
 
   nsresult Init();
 
@@ -76,13 +73,12 @@ class nsGeolocationService final : public nsIGeolocationUpdate,
   CachedPositionAndAccuracy GetCachedPosition();
 
   // Find and startup a geolocation device (gps, nmea, etc.)
-  MOZ_CAN_RUN_SCRIPT
-  nsresult StartDevice(nsIPrincipal* aPrincipal);
+  MOZ_CAN_RUN_SCRIPT nsresult StartDevice();
 
   // Stop the started geolocation device (gps, nmea, etc.)
   void StopDevice();
 
-  // create, or reinitalize the callback timer
+  // create, or reinitialize the callback timer
   void SetDisconnectTimer();
 
   // Update the accuracy and notify the provider if changed
@@ -109,11 +105,10 @@ class nsGeolocationService final : public nsIGeolocationUpdate,
   CachedPositionAndAccuracy mLastPosition;
 
   // Current state of requests for higher accuracy
-  bool mHigherAccuracy;
+  bool mHigherAccuracy = false;
 };
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * Can return a geolocation info
@@ -121,7 +116,7 @@ namespace dom {
 class Geolocation final : public nsIGeolocationUpdate, public nsWrapperCache {
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Geolocation)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(Geolocation)
 
   NS_DECL_NSIGEOLOCATIONUPDATE
 
@@ -138,13 +133,15 @@ class Geolocation final : public nsIGeolocationUpdate, public nsWrapperCache {
                         PositionErrorCallback* aErrorCallback,
                         const PositionOptions& aOptions, CallerType aCallerType,
                         ErrorResult& aRv);
+
+  MOZ_CAN_RUN_SCRIPT
   void GetCurrentPosition(PositionCallback& aCallback,
                           PositionErrorCallback* aErrorCallback,
                           const PositionOptions& aOptions,
                           CallerType aCallerType, ErrorResult& aRv);
   void ClearWatch(int32_t aWatchId);
 
-  // A WatchPosition for C++ use.  Returns -1 if we failed to actually watch.
+  // A WatchPosition for C++ use. Returns 0 if we failed to actually watch.
   MOZ_CAN_RUN_SCRIPT
   int32_t WatchPosition(nsIDOMGeoPositionCallback* aCallback,
                         nsIDOMGeoPositionErrorCallback* aErrorCallback,
@@ -185,10 +182,12 @@ class Geolocation final : public nsIGeolocationUpdate, public nsWrapperCache {
  private:
   ~Geolocation();
 
+  MOZ_CAN_RUN_SCRIPT
   nsresult GetCurrentPosition(GeoPositionCallback aCallback,
                               GeoPositionErrorCallback aErrorCallback,
                               UniquePtr<PositionOptions>&& aOptions,
                               CallerType aCallerType);
+
   MOZ_CAN_RUN_SCRIPT
   int32_t WatchPosition(GeoPositionCallback aCallback,
                         GeoPositionErrorCallback aErrorCallback,
@@ -203,6 +202,10 @@ class Geolocation final : public nsIGeolocationUpdate, public nsWrapperCache {
   // Returns whether the Geolocation object should block requests
   // within a context that is not secure.
   bool ShouldBlockInsecureRequests() const;
+
+  // Checks if the request is in a content window that is fully active, or the
+  // request is coming from a chrome window.
+  bool IsFullyActiveOrChrome();
 
   // Two callback arrays.  The first |mPendingCallbacks| holds objects for only
   // one callback and then they are released/removed from the array.  The second
@@ -241,7 +244,6 @@ class Geolocation final : public nsIGeolocationUpdate, public nsWrapperCache {
   static mozilla::StaticRefPtr<Geolocation> sNonWindowSingleton;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_Geolocation_h */

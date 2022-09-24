@@ -6,9 +6,10 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html;charset=utf-8,Web Console test for bug 618078";
+const TEST_URI =
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console test for bug 618078";
 const TEST_URI2 =
-  "http://example.com/browser/devtools/client/webconsole/" +
+  "https://example.com/browser/devtools/client/webconsole/" +
   "test/browser/test-network-exceptions.html";
 
 add_task(async function() {
@@ -20,7 +21,7 @@ add_task(async function() {
     expectUncaughtException();
   }
 
-  const onMessage = waitForMessage(hud, "bug618078exception");
+  const onMessage = waitForMessageByType(hud, "bug618078exception", ".error");
   await navigateTo(TEST_URI2);
   const { node } = await onMessage;
   ok(true, "Network exception logged as expected.");

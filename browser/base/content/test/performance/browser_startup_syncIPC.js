@@ -288,6 +288,13 @@ const startupPhases = {
       ignoreIfUnused: true,
       maxCount: 2,
     },
+    // Added for the search-detection built-in add-on.
+    {
+      name: "PGPU::Msg_AddLayerTreeIdMapping",
+      condition: WIN,
+      ignoreIfUnused: true,
+      maxCount: 1,
+    },
   ],
 };
 
@@ -365,8 +372,7 @@ add_task(async function() {
       let expected = false;
       for (let entry of knownIPCList) {
         if (marker == entry.name) {
-          entry.maxCount = (entry.maxCount || 0) - 1;
-          entry._used = true;
+          entry.useCount = (entry.useCount || 0) + 1;
           expected = true;
           break;
         }
@@ -378,18 +384,20 @@ add_task(async function() {
     }
 
     for (let entry of knownIPCList) {
+      // Make sure useCount has been defined.
+      entry.useCount = entry.useCount || 0;
       let message = `sync IPC ${entry.name} `;
-      if (entry.maxCount == 0) {
+      if (entry.useCount == entry.maxCount) {
         message += "happened as many times as expected";
-      } else if (entry.maxCount > 0) {
-        message += `allowed ${entry.maxCount} more times`;
+      } else if (entry.useCount < entry.maxCount) {
+        message += `allowed ${entry.maxCount} but only happened ${entry.useCount} times`;
       } else {
-        message += `${entry.maxCount * -1} more times than expected`;
+        message += `happened ${entry.useCount} but max is ${entry.maxCount}`;
         shouldPass = false;
       }
-      ok(entry.maxCount >= 0, `${message} ${phase}`);
+      ok(entry.useCount <= entry.maxCount, `${message} ${phase}`);
 
-      if (!("_used" in entry) && !entry.ignoreIfUnused) {
+      if (entry.useCount == 0 && !entry.ignoreIfUnused) {
         ok(false, `unused known IPC entry ${phase}: ${entry.name}`);
         shouldPass = false;
       }
@@ -403,12 +411,8 @@ add_task(async function() {
     let path = Cc["@mozilla.org/process/environment;1"]
       .getService(Ci.nsIEnvironment)
       .get("MOZ_UPLOAD_DIR");
-    let encoder = new TextEncoder();
-    let profilePath = OS.Path.join(path, filename);
-    await OS.File.writeAtomic(
-      profilePath,
-      encoder.encode(JSON.stringify(startupRecorder.data.profile))
-    );
+    let profilePath = PathUtils.join(path, filename);
+    await IOUtils.writeJSON(profilePath, startupRecorder.data.profile);
     ok(
       false,
       `Unexpected sync IPC behavior during startup; open the ${filename} ` +

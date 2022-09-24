@@ -94,6 +94,10 @@ FileDescriptorFile::GetNativeLeafName(nsACString& aLeafName) {
   return mFile->GetNativeLeafName(aLeafName);
 }
 
+NS_IMETHODIMP FileDescriptorFile::GetDisplayName(nsAString& aLeafName) {
+  return mFile->GetDisplayName(aLeafName);
+}
+
 nsresult FileDescriptorFile::GetTarget(nsAString& aRetVal) {
   return mFile->GetTarget(aRetVal);
 }
@@ -398,6 +402,11 @@ FileDescriptorFile::Load(PRLibrary** aRetVal) {
 
 NS_IMETHODIMP
 FileDescriptorFile::GetDiskSpaceAvailable(int64_t* aDiskSpaceAvailable) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+FileDescriptorFile::GetDiskCapacity(int64_t* aDiskCapacity) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

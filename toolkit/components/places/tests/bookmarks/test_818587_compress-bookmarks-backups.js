@@ -19,18 +19,18 @@ add_task(async function compress_bookmark_backups_test() {
   let mostRecentBackupFile = await PlacesBackups.getMostRecentBackup();
   Assert.notEqual(mostRecentBackupFile, null);
   Assert.ok(
-    PlacesBackups.filenamesRegex.test(OS.Path.basename(mostRecentBackupFile))
+    PlacesBackups.filenamesRegex.test(PathUtils.filename(mostRecentBackupFile))
   );
 
   // The most recent backup file has to be removed since saveBookmarksToJSONFile
   // will otherwise over-write the current backup, since it will be made on the
   // same date
-  await OS.File.remove(mostRecentBackupFile);
-  Assert.equal(false, await OS.File.exists(mostRecentBackupFile));
+  await IOUtils.remove(mostRecentBackupFile);
+  Assert.equal(false, await IOUtils.exists(mostRecentBackupFile));
 
   // Check that, if the user created a custom backup out of the default
   // backups folder, it gets copied (compressed) into it.
-  let jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
+  let jsonFile = PathUtils.join(PathUtils.profileDir, "bookmarks.json");
   await PlacesBackups.saveBookmarksToJSONFile(jsonFile);
   Assert.equal((await PlacesBackups.getBackupFiles()).length, 1);
 
@@ -56,5 +56,5 @@ add_task(async function compress_bookmark_backups_test() {
   await PlacesUtils.bookmarks.eraseEverything();
 
   // Cleanup.
-  await OS.File.remove(jsonFile);
+  await IOUtils.remove(jsonFile);
 });

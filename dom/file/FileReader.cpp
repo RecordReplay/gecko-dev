@@ -18,6 +18,7 @@
 #include "mozilla/dom/FileReaderBinding.h"
 #include "mozilla/dom/ProgressEvent.h"
 #include "mozilla/dom/UnionTypes.h"
+#include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerScope.h"
@@ -473,7 +474,7 @@ nsresult FileReader::GetAsText(Blob* aBlob, const nsACString& aCharset,
 
   auto data = Span(reinterpret_cast<const uint8_t*>(aFileData), aDataLen);
   nsresult rv;
-  Tie(rv, encoding) = encoding->Decode(data, aResult);
+  std::tie(rv, std::ignore) = encoding->Decode(data, aResult);
   return NS_FAILED(rv) ? rv : NS_OK;
 }
 
@@ -500,6 +501,14 @@ JSObject* FileReader::WrapObject(JSContext* aCx,
 }
 
 void FileReader::StartProgressEventTimer() {
+  if (!NS_IsMainThread() && !mWeakWorkerRef) {
+    // The worker is possibly shutting down if dispatching a DOM event right
+    // before this call triggered an InterruptCallback call.
+    // XXX Note, the check is limited to workers for now, since it is unclear
+    // in the spec how FileReader should behave in this case on the main thread.
+    return;
+  }
+
   if (!mProgressNotifier) {
     mProgressNotifier = NS_NewTimer(mTarget);
   }

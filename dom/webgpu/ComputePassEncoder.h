@@ -28,7 +28,7 @@ class CommandEncoder;
 class ComputePipeline;
 
 struct ScopedFfiComputeTraits {
-  typedef ffi::WGPUComputePass* type;
+  using type = ffi::WGPUComputePass*;
   static type empty();
   static void release(type raw);
 };
@@ -57,9 +57,15 @@ class ComputePassEncoder final : public ObjectBase,
                     const dom::Sequence<uint32_t>& aDynamicOffsets);
   // self
   void SetPipeline(const ComputePipeline& aPipeline);
-  void Dispatch(uint32_t x, uint32_t y, uint32_t z);
-  void DispatchIndirect(const Buffer& aIndirectBuffer,
-                        uint64_t aIndirectOffset);
+
+  void DispatchWorkgroups(uint32_t x, uint32_t y, uint32_t z);
+  void DispatchWorkgroupsIndirect(const Buffer& aIndirectBuffer,
+                                  uint64_t aIndirectOffset);
+
+  void PushDebugGroup(const nsAString& aString);
+  void PopDebugGroup();
+  void InsertDebugMarker(const nsAString& aString);
+
   void EndPass(ErrorResult& aRv);
 };
 

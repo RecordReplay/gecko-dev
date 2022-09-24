@@ -58,9 +58,9 @@ class CanvasTranslator final : public gfx::InlineTranslator,
    */
   ipc::IPCResult RecvInitTranslator(
       const TextureType& aTextureType,
-      const ipc::SharedMemoryBasic::Handle& aReadHandle,
-      const CrossProcessSemaphoreHandle& aReaderSem,
-      const CrossProcessSemaphoreHandle& aWriterSem);
+      ipc::SharedMemoryBasic::Handle&& aReadHandle,
+      CrossProcessSemaphoreHandle&& aReaderSem,
+      CrossProcessSemaphoreHandle&& aWriterSem);
 
   /**
    * Used to tell the CanvasTranslator to start translating again after it has
@@ -175,6 +175,9 @@ class CanvasTranslator final : public gfx::InlineTranslator,
     InlineTranslator::RemoveSourceSurface(aRefPtr);
   }
 
+  already_AddRefed<gfx::SourceSurface> LookupExternalSurface(
+      uint64_t aKey) final;
+
   /**
    * Gets the cached DataSourceSurface, if it exists, associated with a
    * SourceSurface from another process.
@@ -269,7 +272,7 @@ class CanvasTranslator final : public gfx::InlineTranslator,
   UniquePtr<gfx::DataSourceSurface::ScopedMap> mPreparedMap;
   typedef std::unordered_map<int64_t, UniquePtr<SurfaceDescriptor>>
       DescriptorMap;
-  DescriptorMap mSurfaceDescriptors;
+  DescriptorMap mSurfaceDescriptors GUARDED_BY(mSurfaceDescriptorsMonitor);
   Monitor mSurfaceDescriptorsMonitor{
       "CanvasTranslator::mSurfaceDescriptorsMonitor"};
   Atomic<bool> mDeactivated{false};

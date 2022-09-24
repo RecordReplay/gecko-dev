@@ -54,15 +54,20 @@ module.exports = {
       banner: `/* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
- `,
+`,
       raw: true,
-      exclude: /\.css$/,
     }),
     new ObjectRestSpreadPlugin(),
     new ExtractTextPlugin("[name].css"),
     new webpack.NormalModuleReplacementPlugin(
-      /.\/src\/network-request/,
-      "./src/privileged-network-request"
+      /\.\/utils\/network-request/,
+      "./utils/privileged-network-request"
+    ),
+    // This additional NormalModuleReplacementPlugin is for files in the same
+    // folder as network-request which use require("./network-request");
+    new webpack.NormalModuleReplacementPlugin(
+      /\.\/network-request/,
+      "./privileged-network-request"
     ),
     new webpack.DefinePlugin({
       "process.env": {

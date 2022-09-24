@@ -9,18 +9,17 @@ const SUGGEST_ALL_PREF = "browser.search.suggest.enabled";
 const SUGGEST_URLBAR_PREF = "browser.urlbar.suggest.searches";
 const TEST_ENGINE_BASENAME = "searchSuggestionEngine.xml";
 
-async function getResultText(element) {
+async function getResultText(element, expectedValue, description = "") {
   await initAccessibilityService();
 
-  // Text localized with Fluent will only be available after the next refresh.
-  // requestAnimationFrame resolves at the beginning of the refresh driver tick
-  // at a time when accessible events haven't been processed yet.
-  // waitForTick puts us at the end of the event queue.
-  await new Promise(requestAnimationFrame);
-  await TestUtils.waitForTick();
-
-  let accessible = accService.getAccessibleFor(element);
-  return accessible.name;
+  await BrowserTestUtils.waitForCondition(
+    () => {
+      let accessible = accService.getAccessibleFor(element);
+      return accessible !== null && accessible.name === expectedValue;
+    },
+    description,
+    200
+  );
 }
 
 let accService;
@@ -75,10 +74,12 @@ add_task(async function switchToTab() {
     window,
     index
   );
-  is(
-    await getResultText(element),
-    "about: robots— Switch to Tab",
-    "Result a11y label should be: <title>— Switch to Tab"
+  // The a11y text will include the "Firefox Suggest" pseudo-element label shown
+  // before the result.
+  await getResultText(
+    element,
+    "Firefox Suggest about:robots — Switch to Tab",
+    "Result a11y text is correct"
   );
 
   await UrlbarTestUtils.promisePopupClose(window);
@@ -115,9 +116,8 @@ add_task(async function searchSuggestions() {
   );
   // The first expected search is the search term itself since the heuristic
   // result will come before the search suggestions.
-  // The extra spaces are here due to bug 1550644.
-  let searchTerm = "foo ";
-  let expectedSearches = [searchTerm, "foo foo", "foo bar"];
+  let searchTerm = "foo";
+  let expectedSearches = [searchTerm, "foofoo", "foobar"];
   for (let i = 0; i < length; i++) {
     let result = await UrlbarTestUtils.getDetailsOfResultAt(window, i);
     if (result.type === UrlbarUtils.RESULT_TYPE.SEARCH) {
@@ -137,17 +137,17 @@ add_task(async function searchSuggestions() {
         element.toggleAttribute("selected", true);
       }
       if (result.searchParams.inPrivateWindow) {
-        Assert.equal(
-          await getResultText(element),
-          searchTerm + "— Search in a Private Window",
+        await getResultText(
+          element,
+          searchTerm + " — Search in a Private Window",
           "Check result label"
         );
       } else {
         let suggestion = expectedSearches.shift();
-        Assert.equal(
-          await getResultText(element),
+        await getResultText(
+          element,
           suggestion +
-            "— Search with browser_searchSuggestionEngine searchSuggestionEngine.xml",
+            " — Search with browser_searchSuggestionEngine searchSuggestionEngine.xml",
           "Check result label"
         );
       }

@@ -4,6 +4,8 @@
 
 // This test checks the 'Restart frame' context menu item in the Call stack.
 
+"use strict";
+
 add_task(async function() {
   const dbg = await initDebugger("doc-scripts.html", "simple3.js");
   await selectSource(dbg, "simple3.js");
@@ -17,7 +19,7 @@ add_task(async function() {
   rightClickEl(dbg, frameEls[1]);
   await waitForContextMenu(dbg);
 
-  selectContextMenuItem(dbg, "#node-menu-restart-frame");
+  selectContextMenuItem(dbg, "#node-menu-restartFrame");
   await waitForDispatch(dbg.store, "COMMAND");
   await waitForPaused(dbg);
 

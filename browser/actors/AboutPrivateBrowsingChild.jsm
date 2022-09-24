@@ -3,10 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-var EXPORTED_SYMBOLS = [
-  "AboutPrivateBrowsingChild",
-  "AboutPrivateBrowsingTelemetryHelper",
-];
+var EXPORTED_SYMBOLS = ["AboutPrivateBrowsingChild"];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
@@ -35,21 +32,44 @@ class AboutPrivateBrowsingChild extends RemotePageChild {
     Cu.exportFunction(this.PrivateBrowsingRecordClick.bind(this), window, {
       defineAs: "PrivateBrowsingRecordClick",
     });
+    Cu.exportFunction(
+      this.PrivateBrowsingShouldHideDefault.bind(this),
+      window,
+      {
+        defineAs: "PrivateBrowsingShouldHideDefault",
+      }
+    );
+    Cu.exportFunction(
+      this.PrivateBrowsingExposureTelemetry.bind(this),
+      window,
+      { defineAs: "PrivateBrowsingExposureTelemetry" }
+    );
   }
 
   PrivateBrowsingRecordClick(source) {
-    const experiment = ExperimentAPI.getExperimentMetaData({
-      featureId: "privatebrowsing",
-    });
+    const experiment =
+      ExperimentAPI.getExperimentMetaData({
+        featureId: "privatebrowsing",
+      }) || ExperimentAPI.getExperimentMetaData({ featureId: "pbNewtab" });
     if (experiment) {
       Services.telemetry.recordEvent("aboutprivatebrowsing", "click", source);
     }
+    return experiment;
+  }
+
+  PrivateBrowsingShouldHideDefault() {
+    const config = NimbusFeatures.pbNewtab.getAllVariables() || {};
+    return config?.content?.hideDefault;
+  }
+
+  PrivateBrowsingExposureTelemetry() {
+    NimbusFeatures.pbNewtab.recordExposureEvent({ once: false });
   }
 
   PrivateBrowsingFeatureConfig() {
-    const config = NimbusFeatures.privatebrowsing.getAllVariables({
-      sendExposureEvent: true,
-    });
+    const config = NimbusFeatures.privatebrowsing.getAllVariables() || {};
+
+    NimbusFeatures.privatebrowsing.recordExposureEvent();
 
     // Format urls if any are defined
     ["infoLinkUrl", "promoLinkUrl"].forEach(key => {

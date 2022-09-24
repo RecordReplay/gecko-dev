@@ -214,6 +214,12 @@ netwerk/test/http3server/target: security/target
 endif
 endif
 
+ifdef MOZ_USING_WASM_SANDBOXING
+security/rlbox/target-objects: config/external/wasm2c_sandbox_compiler/host
+security/rlbox/target: security/rlbox/target-objects
+dom/media/ogg/target-objects extensions/spellcheck/hunspell/glue/target-objects gfx/thebes/target-objects parser/expat/target-objects parser/htmlparser/target-objects gfx/ots/src/target-objects: security/rlbox/target-objects
+endif
+
 # Most things are built during compile (target/host), but some things happen during export
 # Those need to depend on config/export for system wrappers.
 $(addprefix build/unix/stdc++compat/,target host) build/clang-plugin/host: config/export

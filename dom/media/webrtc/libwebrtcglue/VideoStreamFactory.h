@@ -10,8 +10,8 @@
 #include "CodecConfig.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/UniquePtr.h"
-#include "webrtc/media/base/videoadapter.h"
-#include "call/video_config.h"
+#include "api/video_codecs/video_encoder_config.h"
+#include "media/base/video_adapter.h"
 
 namespace mozilla {
 
@@ -27,12 +27,16 @@ class VideoStreamFactory
     int max_bitrate_bps;
   };
 
+  static ResolutionAndBitrateLimits GetLimitsFor(unsigned int aWidth,
+                                                 unsigned int aHeight,
+                                                 int aCapBps = 0);
+
   VideoStreamFactory(VideoCodecConfig aConfig,
                      webrtc::VideoCodecMode aCodecMode, int aMinBitrate,
                      int aStartBitrate, int aPrefMaxBitrate,
-                     int aNegotiatedMaxBitrate, unsigned int aSendingFramerate)
+                     int aNegotiatedMaxBitrate, unsigned int aMaxFramerate)
       : mCodecMode(aCodecMode),
-        mSendingFramerate(aSendingFramerate),
+        mMaxFramerateForAllStreams(aMaxFramerate),
         mCodecConfig(std::forward<VideoCodecConfig>(aConfig)),
         mMinBitrate(aMinBitrate),
         mStartBitrate(aStartBitrate),
@@ -41,7 +45,7 @@ class VideoStreamFactory
         mSimulcastAdapter(MakeUnique<cricket::VideoAdapter>()) {}
 
   void SetCodecMode(webrtc::VideoCodecMode aCodecMode);
-  void SetSendingFramerate(unsigned int aSendingFramerate);
+  void SetMaxFramerateForAllStreams(unsigned int aMaxFramerate);
 
   // This gets called off-main thread and may hold internal webrtc.org
   // locks. May *NOT* lock the conduit's mutex, to avoid deadlocks.
@@ -53,7 +57,7 @@ class VideoStreamFactory
   Atomic<webrtc::VideoCodecMode> mCodecMode;
 
   // The framerate we're currently sending at.
-  Atomic<unsigned int> mSendingFramerate;
+  Atomic<unsigned int> mMaxFramerateForAllStreams;
 
   // The current send codec config, containing simulcast layer configs.
   const VideoCodecConfig mCodecConfig;

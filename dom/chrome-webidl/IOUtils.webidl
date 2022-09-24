@@ -24,32 +24,41 @@
 [ChromeOnly, Exposed=(Window, Worker)]
 namespace IOUtils {
  /**
-   * Reads up to |maxBytes| of the file at |path| according to |opts|.
+   * Reads up to |opts.maxBytes| of the file at |path| according to |opts|.
+   *
+   * NB: The maximum file size that can be read is UINT32_MAX.
    *
    * @param path An absolute file path.
    *
    * @return Resolves with an array of unsigned byte values read from disk,
    *         otherwise rejects with a DOMException.
    */
+  [NewObject]
   Promise<Uint8Array> read(DOMString path, optional ReadOptions opts = {});
   /**
    * Reads the UTF-8 text file located at |path| and returns the decoded
    * contents as a |DOMString|.
+   *
+   * NB: The maximum file size that can be read is UINT32_MAX.
    *
    * @param path An absolute file path.
    *
    * @return Resolves with the file contents encoded as a string, otherwise
    *         rejects with a DOMException.
    */
+  [NewObject]
   Promise<UTF8String> readUTF8(DOMString path, optional ReadUTF8Options opts = {});
   /**
    * Read the UTF-8 text file located at |path| and return the contents
    * parsed as JSON into a JS value.
    *
+   * NB: The maximum file size that can be read is UINT32_MAX.
+   *
    * @param path An absolute path.
    *
    * @return Resolves with the contents of the file parsed as JSON.
    */
+  [NewObject]
   Promise<any> readJSON(DOMString path, optional ReadUTF8Options opts = {});
   /**
    * Attempts to safely write |data| to a file at |path|.
@@ -68,6 +77,7 @@ namespace IOUtils {
    * @return Resolves with the number of bytes successfully written to the file,
    *         otherwise rejects with a DOMException.
    */
+  [NewObject]
   Promise<unsigned long long> write(DOMString path, Uint8Array data, optional WriteOptions options = {});
   /**
    * Attempts to encode |string| to UTF-8, then safely write the result to a
@@ -80,6 +90,7 @@ namespace IOUtils {
    * @return Resolves with the number of bytes successfully written to the file,
    *         otherwise rejects with a DOMException.
    */
+  [NewObject]
   Promise<unsigned long long> writeUTF8(DOMString path, UTF8String string, optional WriteOptions options = {});
   /**
    * Attempts to serialize |value| into a JSON string and encode it as into a
@@ -93,6 +104,7 @@ namespace IOUtils {
    * @return Resolves with the number of bytes successfully written to the file,
    *         otherwise rejects with a DOMException.
    */
+  [NewObject]
   Promise<unsigned long long> writeJSON(DOMString path, any value, optional WriteOptions options = {});
   /**
    * Moves the file from |sourcePath| to |destPath|, creating necessary parents.
@@ -107,6 +119,7 @@ namespace IOUtils {
    * @return Resolves if the file is moved successfully, otherwise rejects with
    *         a DOMException.
    */
+  [NewObject]
   Promise<void> move(DOMString sourcePath, DOMString destPath, optional MoveOptions options = {});
   /**
    * Removes a file or directory at |path| according to |options|.
@@ -117,6 +130,7 @@ namespace IOUtils {
    * @return Resolves if the file is removed successfully, otherwise rejects
    *         with a DOMException.
    */
+  [NewObject]
   Promise<void> remove(DOMString path, optional RemoveOptions options = {});
   /**
    * Creates a new directory at |path| according to |options|.
@@ -126,6 +140,7 @@ namespace IOUtils {
    * @return Resolves if the directory is created successfully, otherwise
    *         rejects with a DOMException.
    */
+  [NewObject]
   Promise<void> makeDirectory(DOMString path, optional MakeDirectoryOptions options = {});
   /**
    * Obtains information about a file, such as size, modification dates, etc.
@@ -138,6 +153,7 @@ namespace IOUtils {
    *
    * @see FileInfo
    */
+  [NewObject]
   Promise<FileInfo> stat(DOMString path);
   /**
    * Copies a file or directory from |sourcePath| to |destPath| according to
@@ -151,11 +167,14 @@ namespace IOUtils {
    * @return Resolves if the file was copied successfully, otherwise rejects
    *         with a DOMException.
    */
+  [NewObject]
   Promise<void> copy(DOMString sourcePath, DOMString destPath, optional CopyOptions options = {});
   /**
    * Updates the |modification| time for the file at |path|.
    *
-   * @param path         An absolute file path identifying the file to touch.
+   * @param path         An absolute file path identifying the file whose
+   *                     modification time is to be set. This file must exist
+   *                     and will not be created.
    * @param modification An optional modification time for the file expressed in
    *                     milliseconds since the Unix epoch
    *                     (1970-01-01T00:00:00Z). The current system time is used
@@ -165,11 +184,11 @@ namespace IOUtils {
    *         milliseconds since the Unix epoch, otherwise rejects with a
    *         DOMException.
    */
-  Promise<long long> touch(DOMString path, optional long long modification);
+  [NewObject]
+  Promise<long long> setModificationTime(DOMString path, optional long long modification);
   /**
    * Retrieves a (possibly empty) list of immediate children of the directory at
-   * |path|. If the file at |path| is not a directory, this method resolves with
-   * an empty list.
+   * |path|.
    *
    * @param path An absolute file path.
    *
@@ -177,7 +196,8 @@ namespace IOUtils {
    *         children of the directory at |path|, otherwise rejects with a
    *         DOMException.
    */
-  Promise<sequence<DOMString>> getChildren(DOMString path);
+  [NewObject]
+  Promise<sequence<DOMString>> getChildren(DOMString path, optional GetChildrenOptions options = {});
   /**
    * Set the permissions of the file at |path|.
    *
@@ -197,6 +217,7 @@ namespace IOUtils {
    * @return Resolves if the permissions were set successfully, otherwise
    *         rejects with a DOMException.
    */
+  [NewObject]
   Promise<void> setPermissions(DOMString path, unsigned long permissions, optional boolean honorUmask = true);
   /**
    * Return whether or not the file exists at the given path.
@@ -205,13 +226,152 @@ namespace IOUtils {
    *
    * @return A promise that resolves to whether or not the given file exists.
    */
+  [NewObject]
   Promise<boolean> exists(DOMString path);
+
+  /**
+   * Create a file with a unique name and return its path.
+   *
+   * @param parent An absolute path to the directory where the file is to be
+   *               created.
+   * @param prefix A prefix for the filename.
+   *
+   * @return A promise that resolves to a unique filename.
+   */
+  [NewObject]
+  Promise<DOMString> createUniqueFile(DOMString parent, DOMString prefix, optional unsigned long permissions = 0644);
+
+  /**
+   * Create a directory with a unique name and return its path.
+   *
+   * @param parent An absolute path to the directory where the file is to be
+   *               created.
+   * @param prefix A prefix for the directory name.
+   *
+   * @return A promise that resolves to a unique directory name.
+   */
+  [NewObject]
+  Promise<DOMString> createUniqueDirectory(DOMString parent, DOMString prefix, optional unsigned long permissions = 0755);
+
+#if defined(XP_WIN)
+  /**
+   * Return the Windows-specific file attributes of the file at the given path.
+   *
+   * @param path An absolute file path.
+   *
+   * @return A promise that resolves to the Windows-specific file attributes.
+   */
+  [NewObject]
+  Promise<WindowsFileAttributes> getWindowsAttributes(DOMString path);
+
+  /**
+   * Set the Windows-specific file attributes of the file at the given path.
+   *
+   * @param path An absolute file path.
+   * @param attrs The attributes to set. Attributes will only be set if they are
+   *              |true| or |false| (i.e., |undefined| attributes are not
+   *              changed).
+   *
+   * @return A promise that resolves is the attributes were set successfully.
+   */
+  [NewObject]
+  Promise<void> setWindowsAttributes(DOMString path, optional WindowsFileAttributes attrs = {});
+#elif defined(XP_MACOSX)
+  /**
+   * Return whether or not the file has a specific extended attribute.
+   *
+   * @param path An absolute path.
+   * @param attr The attribute to check for.
+   *
+   * @return A promise that resolves to whether or not the file has an extended
+   *         attribute, or rejects with an error.
+   */
+  [NewObject]
+  Promise<boolean> hasMacXAttr(DOMString path, UTF8String attr);
+  /**
+   * Return the value of an extended attribute for a file.
+   *
+   * @param path An absolute path.
+   * @param attr The attribute to get the value of.
+   *
+   * @return A promise that resolves to the value of the extended attribute, or
+   *         rejects with an error.
+   */
+  [NewObject]
+  Promise<Uint8Array> getMacXAttr(DOMString path, UTF8String attr);
+  /**
+   * Set the extended attribute on a file.
+   *
+   * @param path  An absolute path.
+   * @param attr  The attribute to set.
+   * @param value The value of the attribute to set.
+   *
+   * @return A promise that resolves to whether or not the file has an extended
+   *         attribute, or rejects with an error.
+   */
+  [NewObject]
+  Promise<void> setMacXAttr(DOMString path, UTF8String attr, Uint8Array value);
+  /**
+   * Delete the extended attribute on a file.
+   *
+   * @param path An absolute path.
+   * @param attr The attribute to delete.
+   *
+   * @return A promise that resolves if the attribute was deleted, or rejects
+   *         with an error.
+   */
+  [NewObject]
+  Promise<void> delMacXAttr(DOMString path, UTF8String attr);
+#endif
 };
 
 [Exposed=Window]
 partial namespace IOUtils {
   [Throws]
   readonly attribute any profileBeforeChange;
+};
+
+[Exposed=Worker]
+partial namespace IOUtils {
+  /**
+   * Synchronously opens the file at |path|. This API is only available in workers.
+   *
+   * @param path An absolute file path.
+   *
+   * @return A |SyncReadFile| object for the file.
+   */
+  [Throws]
+  SyncReadFile openFileForSyncReading(DOMString path);
+};
+
+/**
+ * An object representing an open file, allowing parts of the file contents to be
+ * read synchronously. Only available in workers.
+ */
+[ChromeOnly, Exposed=Worker]
+interface SyncReadFile {
+  /**
+   * The file size, in bytes.
+   */
+  readonly attribute long long size;
+
+  /**
+   * Synchronously read |dest.length| bytes at offset |offset| into |dest|.
+   * Throws if the file has been closed already or if the read would be out-of-bounds.
+   *
+   * @param dest   A Uint8Array whose entire contents will be overwritten with
+   *               bytes read from the file.
+   * @param offset The file offset at which the read range begins. (The length of the
+   *               range is given by |dest.length|.)
+   */
+  [Throws]
+  void readBytesInto(Uint8Array dest, long long offset);
+
+  /**
+   * Close the file. Subsequent calls to readBytesInto will throw.
+   * If the file is not closed manually, it will be closed once this object is GC'ed.
+   */
+  void close();
 };
 
 /**
@@ -234,7 +394,7 @@ dictionary ReadOptions : ReadUTF8Options {
    * The offset into the file to read from. If unspecified, the file will be read
    * from the start.
    */
-  unsigned long offset = 0;
+  unsigned long long offset = 0;
 
   /**
    * The max bytes to read from the file at path. If unspecified, the entire
@@ -363,6 +523,16 @@ dictionary CopyOptions {
 };
 
 /**
+ * Options to be passed to the |IOUtils.getChildren| method.
+ */
+dictionary GetChildrenOptions {
+  /**
+   * If true, no error will be reported if the target file is missing.
+   */
+  boolean ignoreAbsent = false;
+};
+
+/**
  * Types of files that are recognized by the |IOUtils.stat| method.
  */
 enum FileType { "regular", "directory", "other" };
@@ -408,3 +578,23 @@ dictionary FileInfo {
    */
   unsigned long permissions;
 };
+
+#ifdef XP_WIN
+/**
+ * Windows-specific file attributes.
+ */
+dictionary WindowsFileAttributes {
+  /**
+   * Whether or not the file is read-only.
+   */
+  boolean readOnly;
+  /**
+   * Whether or not the file is hidden.
+   */
+  boolean hidden;
+  /**
+   * Whether or not the file is classified as a system file.
+   */
+  boolean system;
+};
+#endif

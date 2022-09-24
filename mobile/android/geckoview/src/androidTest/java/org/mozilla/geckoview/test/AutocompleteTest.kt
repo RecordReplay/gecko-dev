@@ -23,6 +23,7 @@ import org.mozilla.geckoview.GeckoSession.PromptDelegate.AutocompleteRequest
 import org.mozilla.geckoview.Autocomplete.Address
 import org.mozilla.geckoview.Autocomplete.AddressSelectOption
 import org.mozilla.geckoview.Autocomplete.CreditCard
+import org.mozilla.geckoview.Autocomplete.CreditCardSaveOption
 import org.mozilla.geckoview.Autocomplete.CreditCardSelectOption
 import org.mozilla.geckoview.Autocomplete.LoginEntry
 import org.mozilla.geckoview.Autocomplete.LoginSaveOption
@@ -32,7 +33,6 @@ import org.mozilla.geckoview.Autocomplete.StorageDelegate
 import org.mozilla.geckoview.Autocomplete.UsedField
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.AssertCalled
-import org.mozilla.geckoview.test.util.Callbacks
 
 
 @RunWith(AndroidJUnit4::class)
@@ -47,19 +47,9 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.rememberSignons" to true,
                 "signon.autofillForms.http" to true))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val fetchHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateDuringNextWait(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateDuringNextWait(object : StorageDelegate {
             @AssertCalled(count = 1)
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -79,22 +69,12 @@ class AutocompleteTest : BaseSessionTest() {
 
     @Test
     fun fetchCreditCards() {
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val fetchHandled = GeckoResult<Void>()
 
         mainSession.loadTestPath(CC_FORM_HTML_PATH)
         mainSession.waitForPageStop()
 
-        sessionRule.addExternalDelegateDuringNextWait(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateDuringNextWait(object : StorageDelegate {
             @AssertCalled(count = 1)
             override fun onCreditCardFetch()
                     : GeckoResult<Array<CreditCard>>? {
@@ -121,18 +101,10 @@ class AutocompleteTest : BaseSessionTest() {
         //    d. Select and return one of the options.
         //    e. Ensure the form is filled accordingly.
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val name = arrayOf("Peter Parker", "John Doe")
         val number = arrayOf("1234-1234-1234-1234", "2345-2345-2345-2345")
         val guid = arrayOf("test-guid1", "test-guid2")
-        val expMonth = arrayOf("Apr", "Aug")
+        val expMonth = arrayOf("04", "08")
         val expYear = arrayOf("22", "23")
         val savedCC = arrayOf(
           CreditCard.Builder()
@@ -155,17 +127,18 @@ class AutocompleteTest : BaseSessionTest() {
         mainSession.loadTestPath(CC_FORM_HTML_PATH)
         mainSession.waitForPageStop()
 
-        sessionRule.addExternalDelegateDuringNextWait(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateDuringNextWait(object : StorageDelegate {
             @AssertCalled
             override fun onCreditCardFetch()
                     : GeckoResult<Array<CreditCard>>? {
                 return GeckoResult.fromValue(savedCC)
             }
+
+            @AssertCalled(false)
+            override fun onCreditCardSave(creditCard: CreditCard) {}
         })
 
-        mainSession.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        mainSession.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onCreditCardSelect(
                     session: GeckoSession,
@@ -223,29 +196,19 @@ class AutocompleteTest : BaseSessionTest() {
 
     @Test
     fun fetchAddresses() {
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val fetchHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
-                    @AssertCalled(count = 1)
-                    override fun onAddressFetch()
-                            : GeckoResult<Array<Address>>? {
-                        Handler(Looper.getMainLooper()).postDelayed({
-                            fetchHandled.complete(null)
-                        }, acceptDelay)
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled(count = 1)
+            override fun onAddressFetch()
+                    : GeckoResult<Array<Address>>? {
+                Handler(Looper.getMainLooper()).postDelayed({
+                    fetchHandled.complete(null)
+                }, acceptDelay)
 
-                        return null
-                    }
-                })
+                return null
+            }
+        })
 
         mainSession.loadTestPath(ADDRESS_FORM_HTML_PATH)
         mainSession.waitForPageStop()
@@ -263,19 +226,9 @@ class AutocompleteTest : BaseSessionTest() {
         //    d. Select and return one of the options.
         //    e. Ensure the form is filled accordingly.
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val selectHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
                     @AssertCalled
                     override fun onAddressFetch()
                             : GeckoResult<Array<Address>>? {
@@ -286,7 +239,7 @@ class AutocompleteTest : BaseSessionTest() {
                     override fun onAddressSave(address: Address) {}
                 })
 
-        mainSession.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        mainSession.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onAddressSelect(
                     session: GeckoSession,
@@ -392,7 +345,6 @@ class AutocompleteTest : BaseSessionTest() {
         checkAddressesForCorrectness(savedAddresses.toTypedArray(), savedAddress)
     }
 
-
     @Test
     fun addressSelectAndFillMultipleAddresses() {
         val givenNames = arrayOf("Peter", "Wade")
@@ -441,17 +393,7 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
-        sessionRule.addExternalDelegateDuringNextWait(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateDuringNextWait(object : StorageDelegate {
             @AssertCalled(count = 1)
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -464,9 +406,7 @@ class AutocompleteTest : BaseSessionTest() {
         mainSession.loadTestPath(FORMS3_HTML_PATH)
         mainSession.waitForPageStop()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled(count = 0)
             override fun onLoginSave(login: LoginEntry) {}
         })
@@ -478,7 +418,7 @@ class AutocompleteTest : BaseSessionTest() {
         // Submit the form.
         mainSession.evaluateJS("document.querySelector('#form1').submit()")
 
-        sessionRule.waitUntilCalled(object : Callbacks.PromptDelegate {
+        sessionRule.waitUntilCalled(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -512,22 +452,12 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         mainSession.loadTestPath(FORMS3_HTML_PATH)
         mainSession.waitForPageStop()
 
         val saveHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginSave(login: LoginEntry) {
                 assertThat(
@@ -544,7 +474,7 @@ class AutocompleteTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        sessionRule.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -589,22 +519,12 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         mainSession.loadTestPath(FORMS3_HTML_PATH)
         mainSession.waitForPageStop()
 
         val saveHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginSave(login: LoginEntry) {
                 assertThat(
@@ -621,7 +541,7 @@ class AutocompleteTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        sessionRule.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -674,14 +594,6 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val saveHandled = GeckoResult<Void>()
         val saveHandled2 = GeckoResult<Void>()
 
@@ -691,9 +603,7 @@ class AutocompleteTest : BaseSessionTest() {
         val guid = "test-guid"
         val savedLogins = mutableListOf<LoginEntry>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -737,7 +647,7 @@ class AutocompleteTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        sessionRule.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(count = 2)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -783,20 +693,435 @@ class AutocompleteTest : BaseSessionTest() {
         sessionRule.waitForResult(saveHandled2)
     }
 
+    @Test
+    fun creditCardSaveAccept() {
+        val ccName = "MyCard"
+        val ccNumber = "5105105105105100"
+        val ccExpMonth = "6"
+        val ccExpYear = "2024"
+
+        mainSession.loadTestPath(CC_FORM_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        val saveHandled = GeckoResult<Void>()
+
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(creditCard: CreditCard) {
+                assertThat("Credit card name should match", creditCard.name, equalTo(ccName))
+                assertThat("Credit card number should match", creditCard.number, equalTo(ccNumber))
+                assertThat("Credit card expiration month should match", creditCard.expirationMonth, equalTo(ccExpMonth))
+                assertThat("Credit card expiration year should match", creditCard.expirationYear, equalTo(ccExpYear))
+                saveHandled.complete(null)
+            }
+        })
+
+        sessionRule.delegateDuringNextWait(object : PromptDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(
+                    session: GeckoSession,
+                    request: AutocompleteRequest<CreditCardSaveOption>)
+            : GeckoResult<PromptDelegate.PromptResponse> {
+                assertThat("Session should not be null", session, notNullValue())
+
+                val option = request.options[0]
+                val cc = option.value
+
+                assertThat("Credit card should not be null", cc, notNullValue())
+
+                assertThat(
+                        "Credit card name should match",
+                        cc.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        cc.number,
+                        equalTo(ccNumber))
+                assertThat(
+                        "Credit card expiration month should match",
+                        cc.expirationMonth,
+                        equalTo(ccExpMonth))
+                assertThat(
+                        "Credit card expiration year should match",
+                        cc.expirationYear,
+                        equalTo(ccExpYear))
+
+                return GeckoResult.fromValue(request.confirm(option))
+            }
+        })
+
+        // Enter the card values
+        mainSession.evaluateJS("document.querySelector('#name').value = '${ccName}'")
+        mainSession.evaluateJS("document.querySelector('#name').focus()")
+        mainSession.evaluateJS("document.querySelector('#number').value = '${ccNumber}'")
+        mainSession.evaluateJS("document.querySelector('#number').focus()")
+        mainSession.evaluateJS("document.querySelector('#expMonth').value = '${ccExpMonth}'")
+        mainSession.evaluateJS("document.querySelector('#expMonth').focus()")
+        mainSession.evaluateJS("document.querySelector('#expYear').value = '${ccExpYear}'")
+        mainSession.evaluateJS("document.querySelector('#expYear').focus()")
+
+        // Submit the form
+        mainSession.evaluateJS("document.querySelector('form').requestSubmit()")
+
+        sessionRule.waitForResult(saveHandled)
+    }
+
+    @Test
+    fun creditCardSaveAcceptForm2() {
+        // TODO Bug 1764709: Right now we fill normalized credit card data to match
+        // the expected result.
+        val ccName = "MyCard"
+        val ccNumber = "5105105105105100"
+        val ccExpMonth = "6"
+        val ccExpYear = "2024"
+
+        mainSession.loadTestPath(CC_FORM_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        val saveHandled = GeckoResult<Void>()
+
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(creditCard: CreditCard) {
+                assertThat("Credit card name should match", creditCard.name, equalTo(ccName))
+                assertThat("Credit card number should match", creditCard.number, equalTo(ccNumber))
+                assertThat("Credit card expiration month should match", creditCard.expirationMonth, equalTo(ccExpMonth))
+                assertThat("Credit card expiration year should match", creditCard.expirationYear, equalTo(ccExpYear))
+                saveHandled.complete(null)
+            }
+        })
+
+        sessionRule.delegateDuringNextWait(object : PromptDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(
+                    session: GeckoSession,
+                    request: AutocompleteRequest<CreditCardSaveOption>)
+            : GeckoResult<PromptDelegate.PromptResponse> {
+                assertThat("Session should not be null", session, notNullValue())
+
+                val option = request.options[0]
+                val cc = option.value
+
+                assertThat("Credit card should not be null", cc, notNullValue())
+
+                assertThat(
+                        "Credit card name should match",
+                        cc.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        cc.number,
+                        equalTo(ccNumber))
+                assertThat(
+                        "Credit card expiration month should match",
+                        cc.expirationMonth,
+                        equalTo(ccExpMonth))
+                assertThat(
+                        "Credit card expiration year should match",
+                        cc.expirationYear,
+                        equalTo(ccExpYear))
+
+                return GeckoResult.fromValue(request.confirm(option))
+            }
+        })
+
+        // Enter the card values
+        mainSession.evaluateJS("document.querySelector('#form2 #name').value = '${ccName}'")
+        mainSession.evaluateJS("document.querySelector('#form2 #name').focus()")
+        mainSession.evaluateJS("document.querySelector('#form2 #number').value = '${ccNumber}'")
+        mainSession.evaluateJS("document.querySelector('#form2 #number').focus()")
+        mainSession.evaluateJS("document.querySelector('#form2 #exp').value = '${ccExpMonth}/${ccExpYear}'")
+        mainSession.evaluateJS("document.querySelector('#form2 #exp').focus()")
+
+        // Submit the form
+        mainSession.evaluateJS("document.querySelector('#form2').requestSubmit()")
+
+        sessionRule.waitForResult(saveHandled)
+    }
+
+    @Test
+    fun creditCardSaveDismiss() {
+        val ccName = "MyCard"
+        val ccNumber = "5105105105105100"
+        val ccExpMonth = "6"
+        val ccExpYear = "2024"
+
+        mainSession.loadTestPath(CC_FORM_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        sessionRule.delegateDuringNextWait(object : StorageDelegate {
+            @AssertCalled
+            override fun onCreditCardFetch(): GeckoResult<Array<CreditCard>>? {
+                return null
+            }
+        })
+
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled(count = 0)
+            override fun onCreditCardSave(creditCard: CreditCard) {}
+        })
+
+        // Enter the card values
+        mainSession.evaluateJS("document.querySelector('#name').value = '${ccName}'")
+        mainSession.evaluateJS("document.querySelector('#name').focus()")
+        mainSession.evaluateJS("document.querySelector('#number').value = '${ccNumber}'")
+        mainSession.evaluateJS("document.querySelector('#number').focus()")
+        mainSession.evaluateJS("document.querySelector('#expMonth').value = '${ccExpMonth}'")
+        mainSession.evaluateJS("document.querySelector('#expMonth').focus()")
+        mainSession.evaluateJS("document.querySelector('#expYear').value = '${ccExpYear}'")
+        mainSession.evaluateJS("document.querySelector('#expYear').focus()")
+
+        // Submit the form
+        mainSession.evaluateJS("document.querySelector('form').requestSubmit()")
+
+        sessionRule.waitUntilCalled(object : PromptDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(
+                    session: GeckoSession,
+                    request: AutocompleteRequest<CreditCardSaveOption>)
+                    : GeckoResult<PromptDelegate.PromptResponse> {
+                assertThat("Session should not be null", session, notNullValue())
+
+                val option = request.options[0]
+                val cc = option.value
+
+                assertThat("Credit card should not be null", cc, notNullValue())
+
+                assertThat(
+                        "Credit card name should match",
+                        cc.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        cc.number,
+                        equalTo(ccNumber))
+                assertThat(
+                        "Credit card expiration month should match",
+                        cc.expirationMonth,
+                        equalTo(ccExpMonth))
+                assertThat(
+                        "Credit card expiration year should match",
+                        cc.expirationYear,
+                        equalTo(ccExpYear))
+
+                return GeckoResult.fromValue(request.dismiss())
+            }
+        })
+    }
+
+    @Test
+    fun creditCardSaveModifyAccept() {
+        val ccName = "MyCard"
+        val ccNumber = "5105105105105100"
+        val ccExpMonth = "6"
+        val ccExpYearNew = "2026"
+        val ccExpYear = "2024"
+
+        mainSession.loadTestPath(CC_FORM_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        val saveHandled = GeckoResult<Void>()
+
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(creditCard: CreditCard) {
+                assertThat("Credit card name should match", creditCard.name, equalTo(ccName))
+                assertThat("Credit card number should match", creditCard.number, equalTo(ccNumber))
+                assertThat("Credit card expiration month should match", creditCard.expirationMonth, equalTo(ccExpMonth))
+                assertThat("Credit card expiration year should match", creditCard.expirationYear, equalTo(ccExpYearNew))
+                saveHandled.complete(null)
+            }
+        })
+
+        sessionRule.delegateDuringNextWait(object : PromptDelegate {
+            @AssertCalled
+            override fun onCreditCardSave(
+                    session: GeckoSession,
+                    request: AutocompleteRequest<CreditCardSaveOption>)
+                    : GeckoResult<PromptDelegate.PromptResponse> {
+                assertThat("Session should not be null", session, notNullValue())
+
+                val option = request.options[0]
+                val cc = option.value
+
+                assertThat("Credit card should not be null", cc, notNullValue())
+
+                assertThat(
+                        "Credit card name should match",
+                        cc.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        cc.number,
+                        equalTo(ccNumber))
+                assertThat(
+                        "Credit card expiration month should match",
+                        cc.expirationMonth,
+                        equalTo(ccExpMonth))
+                assertThat(
+                        "Credit card expiration year should match",
+                        cc.expirationYear,
+                        equalTo(ccExpYear))
+
+                val modifiedCreditCard = CreditCard.Builder()
+                        .name(cc.name)
+                        .number(cc.number)
+                        .expirationMonth(cc.expirationMonth)
+                        .expirationYear(ccExpYearNew)
+                        .build()
+
+                return GeckoResult.fromValue(request.confirm(CreditCardSaveOption(modifiedCreditCard)))
+            }
+        })
+
+        // Enter the card values
+        mainSession.evaluateJS("document.querySelector('#name').value = '${ccName}'")
+        mainSession.evaluateJS("document.querySelector('#name').focus()")
+        mainSession.evaluateJS("document.querySelector('#number').value = '${ccNumber}'")
+        mainSession.evaluateJS("document.querySelector('#number').focus()")
+        mainSession.evaluateJS("document.querySelector('#expMonth').value = '${ccExpMonth}'")
+        mainSession.evaluateJS("document.querySelector('#expMonth').focus()")
+        mainSession.evaluateJS("document.querySelector('#expYear').value = '${ccExpYear}'")
+        mainSession.evaluateJS("document.querySelector('#expYear').focus()")
+
+        // Submit the form
+        mainSession.evaluateJS("document.querySelector('form').requestSubmit()")
+
+        sessionRule.waitForResult(saveHandled)
+    }
+
+    @Test
+    fun creditCardUpdateAccept() {
+        val ccName = "MyCard"
+        val ccNumber1 = "5105105105105100"
+        val ccExpMonth1 = "6"
+        val ccExpYear1 = "2024"
+        val ccNumber2 = "4111111111111111"
+        val ccExpMonth2 = "11"
+        val ccExpYear2 = "2021"
+        val savedCreditCards = mutableListOf<CreditCard>()
+
+        mainSession.loadTestPath(CC_FORM_HTML_PATH)
+        mainSession.waitForPageStop()
+
+        val saveHandled1 = GeckoResult<Void>()
+        val saveHandled2 = GeckoResult<Void>()
+
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
+            @AssertCalled
+            override fun onCreditCardFetch(): GeckoResult<Array<CreditCard>> {
+                return GeckoResult.fromValue(savedCreditCards.toTypedArray())
+            }
+
+            @AssertCalled(count = 2)
+            override fun onCreditCardSave(creditCard: CreditCard) {
+                assertThat(
+                        "Credit card name should match",
+                        creditCard.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        creditCard.number,
+                        equalTo(forEachCall(ccNumber1, ccNumber2)))
+                assertThat(
+                        "Credit card expiration month should match",
+                        creditCard.expirationMonth,
+                        equalTo(forEachCall(ccExpMonth1, ccExpMonth2)))
+                assertThat(
+                        "Credit card expiration year should match",
+                        creditCard.expirationYear,
+                        equalTo(forEachCall(ccExpYear1, ccExpYear2)))
+
+                val savedCC = CreditCard.Builder()
+                        .guid("test1")
+                        .name(creditCard.name)
+                        .number(creditCard.number)
+                        .expirationMonth(creditCard.expirationMonth)
+                        .expirationYear(creditCard.expirationYear)
+                        .build()
+                savedCreditCards.add(savedCC)
+
+                if (sessionRule.currentCall.counter == 1) {
+                    saveHandled1.complete(null)
+                } else if (sessionRule.currentCall.counter == 2) {
+                    saveHandled2.complete(null)
+                }
+            }
+        })
+
+        sessionRule.delegateUntilTestEnd(object : PromptDelegate {
+            @AssertCalled(count = 2)
+            override fun onCreditCardSave(
+                    session: GeckoSession,
+                    request: AutocompleteRequest<CreditCardSaveOption>)
+                    : GeckoResult<PromptDelegate.PromptResponse> {
+                assertThat("Session should not be null", session, notNullValue())
+
+                val option = request.options[0]
+                val cc = option.value
+
+                assertThat("Credit card should not be null", cc, notNullValue())
+
+                assertThat(
+                        "Credit card name should match",
+                        cc.name,
+                        equalTo(ccName))
+                assertThat(
+                        "Credit card number should match",
+                        cc.number,
+                        equalTo(forEachCall(ccNumber1, ccNumber2)))
+                assertThat(
+                        "Credit card expiration month should match",
+                        cc.expirationMonth,
+                        equalTo(forEachCall(ccExpMonth1, ccExpMonth2)))
+                assertThat(
+                        "Credit card expiration year should match",
+                        cc.expirationYear,
+                        equalTo(forEachCall(ccExpYear1, ccExpYear2)))
+
+                return GeckoResult.fromValue(request.confirm(option))
+            }
+        })
+
+        // Enter the card values
+        mainSession.evaluateJS("document.querySelector('#name').value = '${ccName}'")
+        mainSession.evaluateJS("document.querySelector('#name').focus()")
+        mainSession.evaluateJS("document.querySelector('#number').value = '${ccNumber1}'")
+        mainSession.evaluateJS("document.querySelector('#number').focus()")
+        mainSession.evaluateJS("document.querySelector('#expMonth').value = '${ccExpMonth1}'")
+        mainSession.evaluateJS("document.querySelector('#expMonth').focus()")
+        mainSession.evaluateJS("document.querySelector('#expYear').value = '${ccExpYear1}'")
+        mainSession.evaluateJS("document.querySelector('#expYear').focus()")
+
+        // Submit the form
+        mainSession.evaluateJS("document.querySelector('form').requestSubmit()")
+
+        sessionRule.waitForResult(saveHandled1)
+
+        // Update credit card
+        val session2 = sessionRule.createOpenSession()
+        session2.loadTestPath(CC_FORM_HTML_PATH)
+        session2.waitForPageStop()
+        session2.evaluateJS("document.querySelector('#name').value = '${ccName}'")
+        session2.evaluateJS("document.querySelector('#name').focus()")
+        session2.evaluateJS("document.querySelector('#number').value = '${ccNumber2}'")
+        session2.evaluateJS("document.querySelector('#number').focus()")
+        session2.evaluateJS("document.querySelector('#expMonth').value = '${ccExpMonth2}'")
+        session2.evaluateJS("document.querySelector('#expMonth').focus()")
+        session2.evaluateJS("document.querySelector('#expYear').value = '${ccExpYear2}'")
+        session2.evaluateJS("document.querySelector('#expYear').focus()")
+
+        session2.evaluateJS("document.querySelector('form').requestSubmit()")
+
+        sessionRule.waitForResult(saveHandled2)
+    }
+
     fun testLoginUsed(autofillEnabled: Boolean) {
         sessionRule.setPrefsUntilTestEnd(mapOf(
                 // Enable login management since it's disabled in automation.
                 "signon.rememberSignons" to true,
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
-
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
 
         val usedHandled = GeckoResult<Void>()
 
@@ -814,9 +1139,7 @@ class AutocompleteTest : BaseSessionTest() {
         val savedLogins = mutableListOf<LoginEntry>(savedLogin)
 
         if (autofillEnabled) {
-            sessionRule.addExternalDelegateUntilTestEnd(
-                    StorageDelegate::class, register, unregister,
-                    object : StorageDelegate {
+            sessionRule.delegateUntilTestEnd(object : StorageDelegate {
                 @AssertCalled
                 override fun onLoginFetch(domain: String)
                         : GeckoResult<Array<LoginEntry>>? {
@@ -851,9 +1174,7 @@ class AutocompleteTest : BaseSessionTest() {
                 }
             })
         } else {
-            sessionRule.addExternalDelegateUntilTestEnd(
-                    StorageDelegate::class, register, unregister,
-                    object : StorageDelegate {
+            sessionRule.delegateUntilTestEnd(object : StorageDelegate {
                 @AssertCalled
                 override fun onLoginFetch(domain: String)
                         : GeckoResult<Array<LoginEntry>>? {
@@ -867,7 +1188,7 @@ class AutocompleteTest : BaseSessionTest() {
             })
         }
 
-        sessionRule.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        sessionRule.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(false)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -907,14 +1228,6 @@ class AutocompleteTest : BaseSessionTest() {
                 "signon.autofillForms.http" to true,
                 "signon.userInputRequiredToCapture.enabled" to false))
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val user1 = "user1x"
         val pass1 = "pass1x"
         val guid = "test-guid"
@@ -928,9 +1241,7 @@ class AutocompleteTest : BaseSessionTest() {
                 .build()
         val savedLogins = mutableListOf<LoginEntry>(savedLogin)
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -943,7 +1254,7 @@ class AutocompleteTest : BaseSessionTest() {
             override fun onLoginUsed(login: LoginEntry, usedFields: Int) {}
         })
 
-        sessionRule.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        sessionRule.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(false)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -1017,14 +1328,6 @@ class AutocompleteTest : BaseSessionTest() {
         //    e. Submit the form.
         //    f. Ensure that onLoginUsed is called.
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val user1 = "user1x"
         val user2 = "user2x"
         val pass1 = "pass1x"
@@ -1036,9 +1339,7 @@ class AutocompleteTest : BaseSessionTest() {
         val selectHandled = GeckoResult<Void>()
         val usedHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -1121,7 +1422,7 @@ class AutocompleteTest : BaseSessionTest() {
         mainSession.loadTestPath(FORMS3_HTML_PATH)
         mainSession.waitForPageStop()
 
-        mainSession.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        mainSession.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -1161,7 +1462,7 @@ class AutocompleteTest : BaseSessionTest() {
         session2.loadTestPath(FORMS3_HTML_PATH)
         session2.waitForPageStop()
 
-        session2.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        session2.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -1199,7 +1500,7 @@ class AutocompleteTest : BaseSessionTest() {
         // Reload for the last time.
         val session3 = sessionRule.createOpenSession()
 
-        session3.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        session3.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSelect(
                     session: GeckoSession,
@@ -1289,14 +1590,6 @@ class AutocompleteTest : BaseSessionTest() {
         //    e. Submit the form.
         //    f. Ensure that onLoginUsed is not called.
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val user1 = "user1x"
         val user2 = "user2x"
         val pass1 = "pass1x"
@@ -1309,9 +1602,7 @@ class AutocompleteTest : BaseSessionTest() {
         val saveHandled2 = GeckoResult<Void>()
         val selectHandled = GeckoResult<Void>()
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -1372,7 +1663,7 @@ class AutocompleteTest : BaseSessionTest() {
         mainSession.loadTestPath(FORMS3_HTML_PATH)
         mainSession.waitForPageStop()
 
-        mainSession.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        mainSession.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -1412,7 +1703,7 @@ class AutocompleteTest : BaseSessionTest() {
         session2.loadTestPath(FORMS3_HTML_PATH)
         session2.waitForPageStop()
 
-        session2.delegateDuringNextWait(object : Callbacks.PromptDelegate {
+        session2.delegateDuringNextWait(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSave(
                     session: GeckoSession,
@@ -1450,7 +1741,7 @@ class AutocompleteTest : BaseSessionTest() {
         // Reload for the last time.
         val session3 = sessionRule.createOpenSession()
 
-        session3.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        session3.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled(count = 1)
             override fun onLoginSelect(
                     session: GeckoSession,
@@ -1538,14 +1829,6 @@ class AutocompleteTest : BaseSessionTest() {
         // 4. Submit the login form.
         //    a. Ensure onLoginSave is called with accordingly.
 
-        val runtime = sessionRule.runtime
-        val register = { delegate: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = delegate
-        }
-        val unregister = { _: StorageDelegate ->
-            runtime.autocompleteStorageDelegate = null
-        }
-
         val user1 = "user1x"
         var genPass = ""
 
@@ -1553,9 +1836,7 @@ class AutocompleteTest : BaseSessionTest() {
         val selectHandled = GeckoResult<Void>()
         var numSelects = 0
 
-        sessionRule.addExternalDelegateUntilTestEnd(
-                StorageDelegate::class, register, unregister,
-                object : StorageDelegate {
+        sessionRule.delegateUntilTestEnd(object : StorageDelegate {
             @AssertCalled
             override fun onLoginFetch(domain: String)
                     : GeckoResult<Array<LoginEntry>>? {
@@ -1586,7 +1867,7 @@ class AutocompleteTest : BaseSessionTest() {
         mainSession.loadTestPath(FORMS4_HTML_PATH)
         mainSession.waitForPageStop()
 
-        mainSession.delegateUntilTestEnd(object : Callbacks.PromptDelegate {
+        mainSession.delegateUntilTestEnd(object : PromptDelegate {
             @AssertCalled
             override fun onLoginSelect(
                     session: GeckoSession,

@@ -5,6 +5,7 @@
 import {
   getSelectedFrameId,
   getSource,
+  getLocationSource,
   getSourceContent,
   isMapScopesEnabled,
   getSelectedFrame,
@@ -17,7 +18,7 @@ import { PROMISE } from "../utils/middleware/promise";
 import assert from "../../utils/assert";
 
 import { log } from "../../utils/log";
-import { isGenerated, isOriginal } from "../../utils/source";
+import { isGenerated } from "../../utils/source";
 
 import { buildMappedScopes } from "../../utils/pause/mapScopes";
 import { isFulfilled } from "../../utils/async-value";
@@ -129,12 +130,12 @@ export function mapScopes(cx, scopes, frame) {
 export function getMappedScopes(cx, scopes, frame) {
   return async function(thunkArgs) {
     const { getState, dispatch } = thunkArgs;
-    const generatedSource = getSource(
+    const generatedSource = getLocationSource(
       getState(),
-      frame.generatedLocation.sourceId
+      frame.generatedLocation
     );
 
-    const source = getSource(getState(), frame.location.sourceId);
+    const source = getLocationSource(getState(), frame.location);
 
     if (
       !isMapScopesEnabled(getState()) ||
@@ -148,7 +149,7 @@ export function getMappedScopes(cx, scopes, frame) {
     }
 
     await dispatch(loadSourceText({ cx, source }));
-    if (isOriginal(source)) {
+    if (source.isOriginal) {
       await dispatch(loadSourceText({ cx, source: generatedSource }));
     }
 

@@ -10,34 +10,54 @@
 #include "mozilla/AutoRestore.h"
 #include "mozilla/SVGContextPaint.h"
 #include "mozilla/dom/SVGSVGElement.h"
+#include "nsPresContext.h"
 #include "SVGDrawingParameters.h"
 #include "SVGDocumentWrapper.h"
+#include "mozilla/dom/DocumentInlines.h"
+#include "mozilla/dom/SVGDocument.h"
+#include "mozilla/dom/BrowsingContextBinding.h"
 
-namespace mozilla {
-namespace image {
+namespace mozilla::image {
 
 class MOZ_STACK_CLASS AutoRestoreSVGState final {
  public:
   AutoRestoreSVGState(const SVGDrawingParameters& aParams,
                       SVGDocumentWrapper* aSVGDocumentWrapper,
                       bool aContextPaint)
-      : mIsDrawing(aSVGDocumentWrapper->mIsDrawing)
+      : AutoRestoreSVGState(aParams.svgContext, aParams.animationTime,
+                            aSVGDocumentWrapper, aContextPaint) {}
+
+  AutoRestoreSVGState(const Maybe<SVGImageContext>& aSVGContext,
+                      float aAnimationTime,
+                      SVGDocumentWrapper* aSVGDocumentWrapper,
+                      bool aContextPaint)
+      : mIsDrawing(aSVGDocumentWrapper->mIsDrawing),
         // Apply any 'preserveAspectRatio' override (if specified) to the root
         // element:
-        ,
-        mPAR(aParams.svgContext, aSVGDocumentWrapper->GetRootSVGElem())
+        mPAR(aSVGContext, aSVGDocumentWrapper->GetRootSVGElem()),
         // Set the animation time:
-        ,
-        mTime(aSVGDocumentWrapper->GetRootSVGElem(), aParams.animationTime) {
+        mTime(aSVGDocumentWrapper->GetRootSVGElem(), aAnimationTime) {
     MOZ_ASSERT(!mIsDrawing.SavedValue());
     MOZ_ASSERT(aSVGDocumentWrapper->GetDocument());
+
+    if (auto* pc = aSVGDocumentWrapper->GetDocument()->GetPresContext()) {
+      pc->SetColorSchemeOverride([&] {
+        if (aSVGContext && aSVGContext->GetColorScheme()) {
+          auto scheme = *aSVGContext->GetColorScheme();
+          return scheme == ColorScheme::Light
+                     ? dom::PrefersColorSchemeOverride::Light
+                     : dom::PrefersColorSchemeOverride::Dark;
+        }
+        return dom::PrefersColorSchemeOverride::None;
+      }());
+    }
 
     aSVGDocumentWrapper->mIsDrawing = true;
 
     // Set context paint (if specified) on the document:
     if (aContextPaint) {
-      MOZ_ASSERT(aParams.svgContext->GetContextPaint());
-      mContextPaint.emplace(*aParams.svgContext->GetContextPaint(),
+      MOZ_ASSERT(aSVGContext->GetContextPaint());
+      mContextPaint.emplace(*aSVGContext->GetContextPaint(),
                             *aSVGDocumentWrapper->GetDocument());
     }
   }
@@ -49,7 +69,6 @@ class MOZ_STACK_CLASS AutoRestoreSVGState final {
   Maybe<AutoSetRestoreSVGContextPaint> mContextPaint;
 };
 
-}  // namespace image
-}  // namespace mozilla
+}  // namespace mozilla::image
 
 #endif  // mozilla_image_AutoRestoreSVGState_h

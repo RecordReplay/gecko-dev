@@ -1,5 +1,5 @@
 use std::fmt;
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 /// `AtomicPtr` providing an additional `load_unsync` function.
 pub(crate) struct AtomicPtr<T> {
@@ -11,10 +11,6 @@ impl<T> AtomicPtr<T> {
         let inner = std::sync::atomic::AtomicPtr::new(ptr);
         AtomicPtr { inner }
     }
-
-    pub(crate) fn with_mut<R>(&mut self, f: impl FnOnce(&mut *mut T) -> R) -> R {
-        f(self.inner.get_mut())
-    }
 }
 
 impl<T> Deref for AtomicPtr<T> {
@@ -22,6 +18,12 @@ impl<T> Deref for AtomicPtr<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.inner
+    }
+}
+
+impl<T> DerefMut for AtomicPtr<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
     }
 }
 

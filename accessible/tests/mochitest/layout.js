@@ -205,9 +205,10 @@ function testTextBounds(aID, aStartOffset, aEndOffset, aRect, aCoordOrigin) {
   );
 
   // x
-  is(
-    xObj.value,
+  isWithin(
     expectedX,
+    xObj.value,
+    1,
     "Wrong x coordinate of text between offsets (" +
       aStartOffset +
       ", " +
@@ -218,8 +219,8 @@ function testTextBounds(aID, aStartOffset, aEndOffset, aRect, aCoordOrigin) {
 
   // y
   isWithin(
-    yObj.value,
     expectedY,
+    yObj.value,
     1,
     `y coord of text between offsets (${aStartOffset}, ${aEndOffset}) ` +
       `for ${prettyName(aID)}`
@@ -232,17 +233,22 @@ function testTextBounds(aID, aStartOffset, aEndOffset, aRect, aCoordOrigin) {
     ", " +
     aEndOffset +
     ") for " +
-    prettyName(aID);
-  if (widthObj.value == expectedWidth) {
-    ok(true, msg);
+    prettyName(aID) +
+    " - Got " +
+    widthObj.value +
+    " Expected " +
+    expectedWidth;
+  if (!WIN) {
+    isWithin(expectedWidth, widthObj.value, 1, msg);
   } else {
+    // fails on some windows machines
     todo(false, msg);
-  } // fails on some windows machines
+  }
 
   // Height
   isWithin(
-    heightObj.value,
     expectedHeight,
+    heightObj.value,
     1,
     `height of text between offsets (${aStartOffset}, ${aEndOffset}) ` +
       `for ${prettyName(aID)}`
@@ -278,29 +284,30 @@ function getBounds(aID, aDPR = window.devicePixelRatio) {
   accessible.getBounds(x, y, width, height);
   accessible.getBoundsInCSSPixels(xInCSS, yInCSS, widthInCSS, heightInCSS);
 
+  info(`DPR is: ${aDPR}`);
   isWithin(
-    x.value / aDPR,
     xInCSS.value,
+    x.value / aDPR,
     1,
-    "Heights in CSS pixels is calculated correctly"
+    "X in CSS pixels is calculated correctly"
   );
   isWithin(
-    y.value / aDPR,
     yInCSS.value,
+    y.value / aDPR,
     1,
-    "Heights in CSS pixels is calculated correctly"
+    "Y in CSS pixels is calculated correctly"
   );
   isWithin(
-    width.value / aDPR,
     widthInCSS.value,
+    width.value / aDPR,
     1,
-    "Heights in CSS pixels is calculated correctly"
+    "Width in CSS pixels is calculated correctly"
   );
   isWithin(
-    height.value / aDPR,
     heightInCSS.value,
+    height.value / aDPR,
     1,
-    "Heights in CSS pixels is calculated correctly"
+    "Height in CSS pixels is calculated correctly"
   );
 
   return [x.value, y.value, width.value, height.value];
@@ -370,9 +377,7 @@ function getBoundsForDOMElm(aID) {
 }
 
 function CSSToDevicePixels(aWindow, aX, aY, aWidth, aHeight) {
-  var winUtil = aWindow.windowUtils;
-
-  var ratio = winUtil.screenPixelsPerCSSPixel;
+  var ratio = aWindow.devicePixelRatio;
 
   // CSS pixels and ratio can be not integer. Device pixels are always integer.
   // Do our best and hope it works.

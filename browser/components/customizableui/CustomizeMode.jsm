@@ -4,13 +4,13 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["CustomizeMode", "_defaultImportantThemes"];
+var EXPORTED_SYMBOLS = ["CustomizeMode"];
 
 const kPrefCustomizationDebug = "browser.uiCustomization.debug";
 const kPaletteId = "customization-palette";
 const kDragDataTypePrefix = "text/toolbarwrapper-id/";
 const kSkipSourceNodePref = "browser.uiCustomization.skipSourceNodeCheck";
-const kDrawInTitlebarPref = "browser.tabs.drawInTitlebar";
+const kDrawInTitlebarPref = "browser.tabs.inTitlebar";
 const kCompactModeShowPref = "browser.compactmode.show";
 const kBookmarksToolbarPref = "browser.toolbars.bookmarks.visibility";
 const kKeepBroadcastAttributes = "keepbroadcastattributeswhencustomizing";
@@ -74,27 +74,14 @@ XPCOMUtils.defineLazyServiceGetter(
 
 let gDebug;
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let scope = {};
-  ChromeUtils.import("resource://gre/modules/Console.jsm", scope);
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
   gDebug = Services.prefs.getBoolPref(kPrefCustomizationDebug, false);
   let consoleOptions = {
     maxLogLevel: gDebug ? "all" : "log",
     prefix: "CustomizeMode",
   };
-  return new scope.ConsoleAPI(consoleOptions);
+  return new ConsoleAPI(consoleOptions);
 });
-
-const DEFAULT_THEME_ID = "default-theme@mozilla.org";
-const LIGHT_THEME_ID = "firefox-compact-light@mozilla.org";
-const DARK_THEME_ID = "firefox-compact-dark@mozilla.org";
-const ALPENGLOW_THEME_ID = "firefox-alpenglow@mozilla.org";
-
-const _defaultImportantThemes = [
-  DEFAULT_THEME_ID,
-  LIGHT_THEME_ID,
-  DARK_THEME_ID,
-  ALPENGLOW_THEME_ID,
-];
 
 var gDraggingInToolbars;
 
@@ -285,14 +272,14 @@ CustomizeMode.prototype = {
 
   enter() {
     if (!this.window.toolbar.visible) {
-      let w = this.window.getTopWin(true);
+      let w = this.window.getTopWin({ skipPopups: true });
       if (w) {
         w.gCustomizeMode.enter();
         return;
       }
       let obs = () => {
         Services.obs.removeObserver(obs, "browser-delayed-startup-finished");
-        w = this.window.getTopWin(true);
+        w = this.window.getTopWin({ skipPopups: true });
         w.gCustomizeMode.enter();
       };
       Services.obs.addObserver(obs, "browser-delayed-startup-finished");
@@ -1210,7 +1197,7 @@ CustomizeMode.prototype = {
     }
     aTarget.addEventListener("dragstart", this, true);
     aTarget.addEventListener("dragover", this, true);
-    aTarget.addEventListener("dragexit", this, true);
+    aTarget.addEventListener("dragleave", this, true);
     aTarget.addEventListener("drop", this, true);
     aTarget.addEventListener("dragend", this, true);
   },
@@ -1231,7 +1218,7 @@ CustomizeMode.prototype = {
     }
     aTarget.removeEventListener("dragstart", this, true);
     aTarget.removeEventListener("dragover", this, true);
-    aTarget.removeEventListener("dragexit", this, true);
+    aTarget.removeEventListener("dragleave", this, true);
     aTarget.removeEventListener("drop", this, true);
     aTarget.removeEventListener("dragend", this, true);
   },
@@ -1411,8 +1398,7 @@ CustomizeMode.prototype = {
     }
   },
 
-  openAddonsManagerThemes(aEvent) {
-    aEvent.target.parentNode.parentNode.hidePopup();
+  openAddonsManagerThemes() {
     AMTelemetry.recordLinkEvent({ object: "customize", value: "manageThemes" });
     this.window.BrowserOpenAddonsMgr("addons://list/theme");
   },
@@ -1542,100 +1528,6 @@ CustomizeMode.prototype = {
     this._onUIChange();
   },
 
-  async onThemesMenuShowing(aEvent) {
-    const MAX_THEME_COUNT = 6;
-
-    this._clearThemesMenu(aEvent.target);
-
-    let onThemeSelected = panel => {
-      // This causes us to call _onUIChange when the LWT actually changes,
-      // so the restore defaults / undo reset button is updated correctly.
-      this._nextThemeChangeUserTriggered = true;
-      panel.hidePopup();
-    };
-
-    let doc = this.document;
-
-    function buildToolbarButton(aTheme) {
-      let tbb = doc.createXULElement("toolbarbutton");
-      tbb.theme = aTheme;
-      tbb.setAttribute("label", aTheme.name);
-      tbb.setAttribute(
-        "image",
-        aTheme.iconURL || "chrome://mozapps/skin/extensions/themeGeneric.svg"
-      );
-      if (aTheme.description) {
-        tbb.setAttribute("tooltiptext", aTheme.description);
-      }
-      tbb.setAttribute("tabindex", "0");
-      tbb.classList.add("customization-lwtheme-menu-theme");
-      let isActive = aTheme.isActive;
-      tbb.setAttribute("aria-checked", isActive);
-      tbb.setAttribute("role", "menuitemradio");
-      if (isActive) {
-        tbb.setAttribute("active", "true");
-      }
-
-      return tbb;
-    }
-
-    let themes = await AddonManager.getAddonsByTypes(["theme"]);
-    let currentTheme = themes.find(theme => theme.isActive);
-
-    // Move the current theme (if any) and the default themes to the start:
-    let importantThemes = new Set(_defaultImportantThemes);
-    if (currentTheme) {
-      importantThemes.add(currentTheme.id);
-    }
-    let importantList = [];
-    for (let importantTheme of importantThemes) {
-      importantList.push(
-        ...themes.splice(
-          themes.findIndex(theme => theme.id == importantTheme),
-          1
-        )
-      );
-    }
-
-    // Sort the remainder alphabetically:
-    themes.sort((a, b) => a.name.localeCompare(b.name));
-    themes = importantList.concat(themes);
-
-    if (themes.length > MAX_THEME_COUNT) {
-      themes.length = MAX_THEME_COUNT;
-    }
-
-    let footer = doc.getElementById("customization-lwtheme-menu-footer");
-    let panel = footer.parentNode;
-    for (let theme of themes) {
-      let button = buildToolbarButton(theme);
-      button.addEventListener("command", async () => {
-        onThemeSelected(panel);
-        await button.theme.enable();
-        AMTelemetry.recordActionEvent({
-          object: "customize",
-          action: "enable",
-          extra: { type: "theme", addonId: theme.id },
-        });
-      });
-      panel.insertBefore(button, footer);
-    }
-  },
-
-  _clearThemesMenu(panel) {
-    let footer = this.$("customization-lwtheme-menu-footer");
-    let element = footer;
-    while (
-      element.previousElementSibling &&
-      element.previousElementSibling.localName == "toolbarbutton"
-    ) {
-      element.previousElementSibling.remove();
-    }
-
-    // Workaround for bug 1059934
-    panel.removeAttribute("height");
-  },
-
   _onUIChange() {
     this._changed = true;
     if (!this.resetting) {
@@ -1713,8 +1605,8 @@ CustomizeMode.prototype = {
       case "drop":
         this._onDragDrop(aEvent);
         break;
-      case "dragexit":
-        this._onDragExit(aEvent);
+      case "dragleave":
+        this._onDragLeave(aEvent);
         break;
       case "dragend":
         this._onDragEnd(aEvent);
@@ -1822,10 +1714,7 @@ CustomizeMode.prototype = {
   },
 
   _updateTitlebarCheckbox() {
-    let drawInTitlebar = Services.prefs.getBoolPref(
-      kDrawInTitlebarPref,
-      this.window.matchMedia("(-moz-gtk-csd-hide-titlebar-by-default)").matches
-    );
+    let drawInTitlebar = Services.appinfo.drawInTitlebar;
     let checkbox = this.$("customization-titlebar-visibility-checkbox");
     // Drawing in the titlebar means 'hiding' the titlebar.
     // We use the attribute rather than a property because if we're not in
@@ -1839,7 +1728,7 @@ CustomizeMode.prototype = {
 
   toggleTitlebar(aShouldShowTitlebar) {
     // Drawing in the titlebar means not showing the titlebar, hence the negation:
-    Services.prefs.setBoolPref(kDrawInTitlebarPref, !aShouldShowTitlebar);
+    Services.prefs.setIntPref(kDrawInTitlebarPref, !aShouldShowTitlebar);
   },
 
   _getBoundsWithoutFlushing(element) {
@@ -2292,7 +2181,7 @@ CustomizeMode.prototype = {
     }
   },
 
-  _onDragExit(aEvent) {
+  _onDragLeave(aEvent) {
     if (this._isUnwantedDragDrop(aEvent)) {
       return;
     }
@@ -2301,7 +2190,7 @@ CustomizeMode.prototype = {
 
     // When leaving customization areas, cancel the drag on the last dragover item
     // We've attached the listener to areas, so aEvent.currentTarget will be the area.
-    // We don't care about dragexit events fired on descendants of the area,
+    // We don't care about dragleave events fired on descendants of the area,
     // so we check that the event's target is the same as the area to which the listener
     // was attached.
     if (this._dragOverItem && aEvent.target == aEvent.currentTarget) {

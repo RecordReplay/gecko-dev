@@ -9,6 +9,7 @@
 
 #include "nsCOMPtr.h"
 #include "nsISupports.h"
+#include "nsTHashMap.h"
 #include "nsWrapperCache.h"
 
 class nsIGlobalObject;
@@ -19,18 +20,92 @@ class ErrorResult;
 
 namespace extensions {
 
+class ExtensionAlarms;
 class ExtensionMockAPI;
+class ExtensionPort;
+class ExtensionRuntime;
+class ExtensionTest;
 
 bool ExtensionAPIAllowed(JSContext* aCx, JSObject* aGlobal);
 
+void CreateAndDispatchInitWorkerContextRunnable();
+
+already_AddRefed<Runnable> CreateWorkerLoadedRunnable(
+    const uint64_t aServiceWorkerDescriptorId,
+    const nsCOMPtr<nsIURI>& aWorkerBaseURI);
+
+already_AddRefed<Runnable> CreateWorkerDestroyedRunnable(
+    const uint64_t aServiceWorkerDescriptorId,
+    const nsCOMPtr<nsIURI>& aWorkerBaseURI);
+
+// An HashMap used to keep track of listeners registered synchronously while
+// the worker script is executing, used internally by nsIServiceWorkerManager
+// wakeforExtensionAPIEvent method to resolve to true if the worker script
+// spawned did have a listener subscribed for the related API event name.
+class ExtensionEventWakeupMap final
+    : public nsTHashMap<nsStringHashKey, uint64_t> {
+  static void ToMapKey(const nsAString& aAPINamespace,
+                       const nsAString& aAPIName, nsAString& aResultMapKey);
+
+ public:
+  nsresult IncrementListeners(const nsAString& aAPINamespace,
+                              const nsAString& aAPIName);
+  nsresult DecrementListeners(const nsAString& aAPINamespace,
+                              const nsAString& aAPIName);
+  bool HasListener(const nsAString& aAPINamespace, const nsAString& aAPIName);
+};
+
 class ExtensionBrowser final : public nsISupports, public nsWrapperCache {
   nsCOMPtr<nsIGlobalObject> mGlobal;
+  JS::Heap<JS::Value> mLastError;
+  bool mCheckedLastError;
+  RefPtr<ExtensionAlarms> mExtensionAlarms;
   RefPtr<ExtensionMockAPI> mExtensionMockAPI;
+  RefPtr<ExtensionRuntime> mExtensionRuntime;
+  RefPtr<ExtensionTest> mExtensionTest;
+  nsTHashMap<nsStringHashKey, WeakPtr<ExtensionPort>> mPortsLookup;
+
+  // `[APINamespace].[APIName]` => int64 (listeners count)
+  ExtensionEventWakeupMap mExpectedEventWakeupMap;
 
   ~ExtensionBrowser() = default;
 
  public:
   explicit ExtensionBrowser(nsIGlobalObject* aGlobal);
+
+  // Helpers used for the expected behavior of the browser.runtime.lastError
+  // and browser.extension.lastError.
+  void SetLastError(JS::Handle<JS::Value> aLastError);
+  void GetLastError(JS::MutableHandle<JS::Value> aRetVal);
+  // ClearLastError is used by ChromeCompatCallbackHandler::RejectedCallback
+  // to clear the lastError property. When this method returns true the
+  // caller will know that the error value wasn't checked by the callback and
+  // should be reported to the console
+  bool ClearLastError();
+
+  // Helpers used to keep track of the event listeners added during the
+  // initial sync worker script execution.
+  nsresult TrackWakeupEventListener(JSContext* aCx,
+                                    const nsString& aAPINamespace,
+                                    const nsString& aAPIName);
+  nsresult UntrackWakeupEventListener(JSContext* aCx,
+                                      const nsString& aAPINamespace,
+                                      const nsString& aAPIName);
+  bool HasWakeupEventListener(const nsString& aAPINamespace,
+                              const nsString& aAPIName);
+
+  // Helpers used for the ExtensionPort.
+
+  // Get an ExtensionPort instance given its port descriptor (returns an
+  // existing port if an instance is still tracked in the ports lookup table,
+  // otherwise it creates a new one).
+  already_AddRefed<ExtensionPort> GetPort(
+      JS::Handle<JS::Value> aDescriptorValue, ErrorResult& aRv);
+
+  // Remove the entry for an ExtensionPort tracked in the ports lookup map
+  // given its portId (called from the ExtensionPort destructor when the
+  // instance is being released).
+  void ForgetReleasedPort(const nsAString& aPortId);
 
   // nsWrapperCache interface methods
   JSObject* WrapObject(JSContext* aCx,
@@ -40,7 +115,10 @@ class ExtensionBrowser final : public nsISupports, public nsWrapperCache {
 
   nsIGlobalObject* GetParentObject() const;
 
+  ExtensionAlarms* GetExtensionAlarms();
   ExtensionMockAPI* GetExtensionMockAPI();
+  ExtensionRuntime* GetExtensionRuntime();
+  ExtensionTest* GetExtensionTest();
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(ExtensionBrowser)

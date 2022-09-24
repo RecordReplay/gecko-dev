@@ -4,19 +4,22 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-include protocol PFileDescriptorSet;
 include protocol PBrowser;
 include protocol PDocAccessiblePlatformExt;
 
+include DocAccessibleTypes;
+
 include "mozilla/GfxMessageUtils.h";
 
-using nsIntRect from "nsRect.h";
+using LayoutDeviceIntRect from "Units.h";
+using LayoutDeviceIntPoint from "Units.h";
+using LayoutDeviceIntSize from "Units.h";
 using mozilla::a11y::role from "mozilla/a11y/IPCTypes.h";
 using mozilla::a11y::AccType from "mozilla/a11y/IPCTypes.h";
 using mozilla::a11y::AccGenericType from "mozilla/a11y/IPCTypes.h";
 [RefCounted] using mozilla::a11y::AccAttributes from "mozilla/a11y/IPCTypes.h";
-using mozilla::gfx::IntSize from "mozilla/gfx/Point.h";
-using mozilla::gfx::IntPoint from "mozilla/gfx/Point.h";
+using mozilla::a11y::CacheUpdateType from "mozilla/a11y/IPCTypes.h";
+using mozilla::gfx::Matrix4x4 from "mozilla/gfx/Matrix.h";
 
 namespace mozilla {
 namespace a11y {
@@ -41,7 +44,7 @@ struct BatchData
   OriginDocument Document;
   uint64_t ID;
   uint64_t State;
-  nsIntRect Bounds;
+  LayoutDeviceIntRect Bounds;
   uint8_t ActionCount;
   nsString Name;
   nsString TextValue;
@@ -76,7 +79,8 @@ struct TextRangeData
   int32_t EndOffset;
 };
 
-nested(upto inside_sync) sync protocol PDocAccessible
+[ManualDealloc, NestedUpTo=inside_sync, ChildImpl=virtual, ParentImpl=virtual]
+sync protocol PDocAccessible
 {
   manager PBrowser;
   manages PDocAccessiblePlatformExt;
@@ -93,7 +97,9 @@ parent:
   async ShowEvent(ShowEventData data, bool aFromuser);
   async HideEvent(uint64_t aRootID, bool aFromUser);
   async StateChangeEvent(uint64_t aID, uint64_t aState, bool aEnabled);
-  async CaretMoveEvent(uint64_t aID, int32_t aOffset, bool aIsSelectionCollapsed);
+  async CaretMoveEvent(uint64_t aID, int32_t aOffset,
+                       bool aIsSelectionCollapsed, bool aIsAtEndOfLine,
+                       int32_t aGranularity);
   async TextChangeEvent(uint64_t aID, nsString aStr, int32_t aStart, uint32_t aLen,
                         bool aIsInsert, bool aFromUser);
   async SelectionEvent(uint64_t aID, uint64_t aWidgetID, uint32_t aType);
@@ -121,6 +127,19 @@ parent:
 
   // Android
   async Batch(uint64_t aBatchType, BatchData[] aData);
+
+  /*
+   * Cache The World
+   * aFinal is false when paginating cache into several pushes,
+   * and then true on the final push.
+   */
+  async Cache(CacheUpdateType aUpdateType, CacheData[] aData, bool aFinal);
+
+  /*
+   * Tell the parent process that the given Accessibles are about to be moved
+   * via subsequent hide and show events.
+   */
+  async AccessiblesWillMove(uint64_t[] aIDs);
 
 child:
   /*
@@ -183,9 +202,9 @@ child:
 
   [Nested=inside_sync] sync TextBounds(uint64_t aID, int32_t aStartOffset, int32_t aEndOffset,
                              uint32_t aCoordType)
-    returns(nsIntRect aRetVal);
+    returns(LayoutDeviceIntRect aRetVal);
   [Nested=inside_sync] sync CharBounds(uint64_t aID, int32_t aOffset, uint32_t aCoordType)
-    returns(nsIntRect aRetVal);
+    returns(LayoutDeviceIntRect aRetVal);
 
   [Nested=inside_sync] sync OffsetAtPoint(uint64_t aID, int32_t aX, int32_t aY, uint32_t aCoordType)
     returns(int32_t aRetVal);
@@ -221,8 +240,8 @@ child:
   [Nested=inside_sync] sync PasteText(uint64_t aID, int32_t aPosition)
     returns(bool aValid);
 
-  [Nested=inside_sync] sync ImagePosition(uint64_t aID, uint32_t aCoordType) returns(IntPoint aRetVal);
-  [Nested=inside_sync] sync ImageSize(uint64_t aID) returns(IntSize aRetVal);
+  [Nested=inside_sync] sync ImagePosition(uint64_t aID, uint32_t aCoordType) returns(LayoutDeviceIntPoint aRetVal);
+  [Nested=inside_sync] sync ImageSize(uint64_t aID) returns(LayoutDeviceIntSize aRetVal);
 
   [Nested=inside_sync] sync StartOffset(uint64_t aID) returns(uint32_t aRetVal, bool aOk);
   [Nested=inside_sync] sync EndOffset(uint64_t aID) returns(uint32_t aRetVal, bool aOk);
@@ -233,7 +252,6 @@ child:
 
   [Nested=inside_sync] sync LinkCount(uint64_t aID) returns(uint32_t aCount);
   [Nested=inside_sync] sync LinkAt(uint64_t aID, uint32_t aIndex) returns(uint64_t aIDOfLink, bool aOk);
-  [Nested=inside_sync] sync LinkIndexOf(uint64_t aID, uint64_t aLinkID) returns(int32_t aIndex);
   [Nested=inside_sync] sync LinkIndexAtOffset(uint64_t aID, uint32_t aOffset) returns(int32_t aIndex);
 
   [Nested=inside_sync] sync TableOfACell(uint64_t aID) returns(uint64_t aTableID, bool aOk);
@@ -294,8 +312,8 @@ child:
   async SetSelected(uint64_t aID, bool aSelected);
 
   [Nested=inside_sync] sync DoAction(uint64_t aID, uint8_t aIndex) returns(bool aSuccess);
+  async DoActionAsync(uint64_t aID, uint8_t aIndex);
   [Nested=inside_sync] sync ActionCount(uint64_t aID) returns(uint8_t aCount);
-  [Nested=inside_sync] sync ActionDescriptionAt(uint64_t aID, uint8_t aIndex) returns(nsString aDescription);
   [Nested=inside_sync] sync ActionNameAt(uint64_t aID, uint8_t aIndex) returns(nsString aName);
   [Nested=inside_sync] sync AccessKey(uint64_t aID) returns(uint32_t aKey, uint32_t aModifierMask);
   [Nested=inside_sync] sync KeyboardShortcut(uint64_t aID) returns(uint32_t aKey, uint32_t aModifierMask);
@@ -326,6 +344,12 @@ child:
   [Nested=inside_sync] sync ExtentsInCSSPixels(uint64_t aID)
     returns(int32_t aX, int32_t aY, int32_t aWidth, int32_t aHeight);
   [Nested=inside_sync] sync DOMNodeID(uint64_t aID) returns(nsString aDOMNodeID);
+
+  /*
+   * Verify the cache. Used for testing purposes.
+   */
+  async VerifyCache(uint64_t aID, uint64_t aCacheDomain, AccAttributes aFields);
+
 };
 
 }

@@ -94,7 +94,7 @@ GType mai_atk_hyperlink_get_type(void) {
   return type;
 }
 
-MaiHyperlink::MaiHyperlink(AccessibleOrProxy aHyperLink)
+MaiHyperlink::MaiHyperlink(Accessible* aHyperLink)
     : mHyperlink(aHyperLink), mMaiAtkHyperlink(nullptr) {
   mMaiAtkHyperlink = reinterpret_cast<AtkHyperlink*>(
       g_object_new(mai_atk_hyperlink_get_type(), nullptr));
@@ -184,26 +184,14 @@ gint getEndIndexCB(AtkHyperlink* aLink) {
   MaiHyperlink* maiLink = GetMaiHyperlink(aLink);
   if (!maiLink) return false;
 
-  if (LocalAccessible* hyperlink = maiLink->GetAccHyperlink()) {
-    return static_cast<gint>(hyperlink->EndOffset());
-  }
-
-  bool valid = false;
-  uint32_t endIdx = maiLink->Proxy()->EndOffset(&valid);
-  return valid ? static_cast<gint>(endIdx) : -1;
+  return static_cast<gint>(maiLink->Acc()->EndOffset());
 }
 
 gint getStartIndexCB(AtkHyperlink* aLink) {
   MaiHyperlink* maiLink = GetMaiHyperlink(aLink);
   if (!maiLink) return -1;
 
-  if (LocalAccessible* hyperlink = maiLink->GetAccHyperlink()) {
-    return static_cast<gint>(hyperlink->StartOffset());
-  }
-
-  bool valid = false;
-  uint32_t startIdx = maiLink->Proxy()->StartOffset(&valid);
-  return valid ? static_cast<gint>(startIdx) : -1;
+  return static_cast<gint>(maiLink->Acc()->StartOffset());
 }
 
 gboolean isValidCB(AtkHyperlink* aLink) {

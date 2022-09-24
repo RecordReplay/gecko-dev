@@ -6,12 +6,12 @@
 
 #include "WorkerRunnable.h"
 
-#include "WorkerPrivate.h"
 #include "WorkerScope.h"
 #include "js/RootingAPI.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "mozilla/AlreadyAddRefed.h"
+#include "mozilla/AppShutdown.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/ErrorResult.h"
@@ -33,8 +33,7 @@
 #include "nsThreadUtils.h"
 #include "nsWrapperCacheInlines.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -466,13 +465,14 @@ MainThreadStopSyncLoopRunnable::MainThreadStopSyncLoopRunnable(
 }
 
 nsresult MainThreadStopSyncLoopRunnable::Cancel() {
-  nsresult rv = Run();
+  // We need to check first if cancel is called twice
+  nsresult rv = WorkerSyncRunnable::Cancel();
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  rv = Run();
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Run() failed");
 
-  nsresult rv2 = WorkerSyncRunnable::Cancel();
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv2), "Cancel() failed");
-
-  return NS_FAILED(rv) ? rv : rv2;
+  return rv;
 }
 
 bool MainThreadStopSyncLoopRunnable::WorkerRun(JSContext* aCx,
@@ -510,11 +510,15 @@ WorkerControlRunnable::WorkerControlRunnable(WorkerPrivate* aWorkerPrivate,
 #endif
 
 nsresult WorkerControlRunnable::Cancel() {
+  // We need to check first if cancel is called twice
+  nsresult rv = WorkerRunnable::Cancel();
+  NS_ENSURE_SUCCESS(rv, rv);
+
   if (NS_FAILED(Run())) {
     NS_WARNING("WorkerControlRunnable::Run() failed.");
   }
 
-  return WorkerRunnable::Cancel();
+  return NS_OK;
 }
 
 bool WorkerControlRunnable::DispatchInternal() {
@@ -579,6 +583,12 @@ void WorkerMainThreadRunnable::Dispatch(WorkerStatus aFailStatus,
 NS_IMETHODIMP
 WorkerMainThreadRunnable::Run() {
   AssertIsOnMainThread();
+
+  // This shouldn't be necessary once we're better about making sure no workers
+  // are created during shutdown in earlier phases.
+  if (AppShutdown::IsInOrBeyond(ShutdownPhase::XPCOMShutdownThreads)) {
+    return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
+  }
 
   bool runResult = MainThreadRun();
 
@@ -713,5 +723,4 @@ bool WorkerDebuggeeRunnable::PreDispatch(WorkerPrivate* aWorkerPrivate) {
   return WorkerRunnable::PreDispatch(aWorkerPrivate);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

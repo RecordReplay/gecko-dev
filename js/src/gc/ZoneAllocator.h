@@ -57,18 +57,9 @@ class ZoneAllocator : public JS::shadow::Zone,
                                     void* reallocPtr = nullptr);
   void reportAllocationOverflow() const;
 
-  void adoptMallocBytes(ZoneAllocator* other) {
-    mallocHeapSize.adopt(other->mallocHeapSize);
-    jitHeapSize.adopt(other->jitHeapSize);
-#ifdef DEBUG
-    mallocTracker.adopt(other->mallocTracker);
-#endif
-  }
-
   void updateMemoryCountersOnGCStart();
-  void updateGCStartThresholds(gc::GCRuntime& gc, JS::GCOptions options,
-                               const js::AutoLockGC& lock);
-  void setGCSliceThresholds(gc::GCRuntime& gc);
+  void updateGCStartThresholds(gc::GCRuntime& gc, const js::AutoLockGC& lock);
+  void setGCSliceThresholds(gc::GCRuntime& gc, bool waitingOnBGTask);
   void clearGCSliceThresholds();
 
   // Memory accounting APIs for malloc memory owned by GC cells.
@@ -194,6 +185,8 @@ class ZoneAllocator : public JS::shadow::Zone,
   gc::JitHeapThreshold jitHeapThreshold;
 
   // Use counts for memory that can be referenced by more than one GC thing.
+  // Memory recorded here is also recorded in mallocHeapSize.  This structure
+  // is used to avoid over-counting in mallocHeapSize.
   gc::SharedMemoryMap sharedMemoryUseCounts;
 
  private:

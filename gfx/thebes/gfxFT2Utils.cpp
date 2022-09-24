@@ -7,7 +7,7 @@
 #include "gfxFT2Utils.h"
 #include "mozilla/Likely.h"
 
-#ifdef HAVE_FONTCONFIG_FCFREETYPE_H
+#ifdef USE_FC_FREETYPE
 #  include <fontconfig/fcfreetype.h>
 #endif
 
@@ -19,7 +19,7 @@
 uint32_t gfxFT2LockedFace::GetGlyph(uint32_t aCharCode) {
   if (MOZ_UNLIKELY(!mFace)) return 0;
 
-#ifdef HAVE_FONTCONFIG_FCFREETYPE_H
+#ifdef USE_FC_FREETYPE
   // FcFreeTypeCharIndex will search starting from the most recently
   // selected charmap.  This can cause non-determistic behavior when more
   // than one charmap supports a character but with different glyphs, as
@@ -36,10 +36,17 @@ uint32_t gfxFT2LockedFace::GetGlyph(uint32_t aCharCode) {
     }
   }
 
-  return FcFreeTypeCharIndex(mFace, aCharCode);
+  uint32_t gid = FcFreeTypeCharIndex(mFace, aCharCode);
 #else
-  return FT_Get_Char_Index(mFace, aCharCode);
+  uint32_t gid = FT_Get_Char_Index(mFace, aCharCode);
 #endif
+  if (!gid && mFace->charmap &&
+      mFace->charmap->encoding == FT_ENCODING_MS_SYMBOL) {
+    if (auto pua = gfxFontUtils::MapLegacySymbolFontCharToPUA(aCharCode)) {
+      gid = FT_Get_Char_Index(mFace, pua);
+    }
+  }
+  return gid;
 }
 
 typedef FT_UInt (*GetCharVariantFunction)(FT_Face face, FT_ULong charcode,
@@ -55,7 +62,7 @@ uint32_t gfxFT2LockedFace::GetUVSGlyph(uint32_t aCharCode,
   static CharVariantFunction sGetCharVariantPtr = FindCharVariantFunction();
   if (!sGetCharVariantPtr) return 0;
 
-#ifdef HAVE_FONTCONFIG_FCFREETYPE_H
+#ifdef USE_FC_FREETYPE
   // FcFreeTypeCharIndex may have changed the selected charmap.
   // FT_Face_GetCharVariantIndex needs a unicode charmap.
   if (!mFace->charmap || mFace->charmap->encoding != FT_ENCODING_UNICODE) {

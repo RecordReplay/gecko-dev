@@ -65,7 +65,7 @@ requestLongerTimeout(10);
 /**
  * Common tasks to perform for all tests before each one has started.
  */
-add_task(async function setupTestCommon() {
+add_setup(async function setupTestCommon() {
   await SpecialPowers.pushPrefEnv({
     set: [
       [PREF_APP_UPDATE_BADGEWAITTIME, 1800],
@@ -196,16 +196,13 @@ function lockWriteTestFile() {
   );
   // Remove the file if it exists just in case.
   if (file.exists()) {
-    file.fileAttributesWin |= file.WFA_READWRITE;
-    file.fileAttributesWin &= ~file.WFA_READONLY;
+    file.readOnly = false;
     file.remove(false);
   }
   file.create(file.NORMAL_FILE_TYPE, 0o444);
-  file.fileAttributesWin |= file.WFA_READONLY;
-  file.fileAttributesWin &= ~file.WFA_READWRITE;
+  file.readOnly = true;
   registerCleanupFunction(() => {
-    file.fileAttributesWin |= file.WFA_READWRITE;
-    file.fileAttributesWin &= ~file.WFA_READONLY;
+    file.readOnly = false;
     file.remove(false);
   });
 }
@@ -661,10 +658,18 @@ function runAboutDialogUpdateTest(params, steps) {
       return step(aboutDialog);
     }
 
-    const { panelId, checkActiveUpdate, continueFile, downloadInfo } = step;
+    const {
+      panelId,
+      checkActiveUpdate,
+      continueFile,
+      downloadInfo,
+      forceApply,
+    } = step;
     return (async function() {
       await TestUtils.waitForCondition(
-        () => aboutDialog.gAppUpdater.selectedPanel?.id == panelId,
+        () =>
+          aboutDialog.gAppUpdater &&
+          aboutDialog.gAppUpdater.selectedPanel?.id == panelId,
         "Waiting for the expected panel ID: " + panelId,
         undefined,
         200
@@ -777,7 +782,7 @@ function runAboutDialogUpdateTest(params, steps) {
         ok(!buttonEl.disabled, "The button should be enabled");
         // Don't click the button on the apply panel since this will restart the
         // application.
-        if (panelId != "apply") {
+        if (panelId != "apply" || forceApply) {
           buttonEl.click();
         }
       }
@@ -866,7 +871,13 @@ function runAboutPrefsUpdateTest(params, steps) {
       return step(tab);
     }
 
-    const { panelId, checkActiveUpdate, continueFile, downloadInfo } = step;
+    const {
+      panelId,
+      checkActiveUpdate,
+      continueFile,
+      downloadInfo,
+      forceApply,
+    } = step;
     return (async function() {
       await SpecialPowers.spawn(
         tab.linkedBrowser,
@@ -978,8 +989,8 @@ function runAboutPrefsUpdateTest(params, steps) {
 
       await SpecialPowers.spawn(
         tab.linkedBrowser,
-        [{ panelId, gDetailsURL }],
-        async ({ panelId, gDetailsURL }) => {
+        [{ panelId, gDetailsURL, forceApply }],
+        async ({ panelId, gDetailsURL, forceApply }) => {
           let linkPanels = [
             "downloadFailed",
             "manualUpdate",
@@ -1013,7 +1024,7 @@ function runAboutPrefsUpdateTest(params, steps) {
             ok(!buttonEl.disabled, "The button should be enabled");
             // Don't click the button on the apply panel since this will restart
             // the application.
-            if (selectedPanel.id != "apply") {
+            if (selectedPanel.id != "apply" || forceApply) {
               buttonEl.click();
             }
           }

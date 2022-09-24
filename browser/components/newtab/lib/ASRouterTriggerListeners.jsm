@@ -9,9 +9,10 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
-  EveryWindow: "resource:///modules/EveryWindow.jsm",
   AboutReaderParent: "resource:///actors/AboutReaderParent.jsm",
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  EveryWindow: "resource:///modules/EveryWindow.jsm",
+  PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
 });
 
 const FEW_MINUTES = 15 * 60 * 1000; // 15 mins
@@ -581,6 +582,101 @@ this.ASRouterTriggerListeners = new Map([
           !isSameDocument
         ) {
           this._sessionPageLoad += 1;
+        }
+      },
+    },
+  ],
+
+  [
+    "captivePortalLogin",
+    {
+      id: "captivePortalLogin",
+      _initialized: false,
+      _triggerHandler: null,
+
+      _shouldShowCaptivePortalVPNPromo() {
+        return BrowserUtils.shouldShowVPNPromo();
+      },
+
+      init(triggerHandler) {
+        if (!this._initialized) {
+          Services.obs.addObserver(this, "captive-portal-login-success");
+          this._initialized = true;
+        }
+        this._triggerHandler = triggerHandler;
+      },
+
+      observe(aSubject, aTopic, aData) {
+        switch (aTopic) {
+          case "captive-portal-login-success":
+            const browser = Services.wm.getMostRecentBrowserWindow();
+            // The check is here rather than in init because some
+            // folks leave their browsers running for a long time,
+            // eg from before leaving on a plane trip to after landing
+            // in the new destination, and the current region may have
+            // changed since init time.
+            if (browser && this._shouldShowCaptivePortalVPNPromo()) {
+              this._triggerHandler(browser.gBrowser.selectedBrowser, {
+                id: this.id,
+              });
+            }
+            break;
+        }
+      },
+
+      uninit() {
+        if (this._initialized) {
+          this._triggerHandler = null;
+          this._initialized = false;
+          Services.obs.removeObserver(this, "captive-portal-login-success");
+        }
+      },
+    },
+  ],
+
+  [
+    "preferenceObserver",
+    {
+      id: "preferenceObserver",
+      _initialized: false,
+      _triggerHandler: null,
+      _observedPrefs: [],
+
+      init(triggerHandler, prefs) {
+        if (!this._initialized) {
+          this._triggerHandler = triggerHandler;
+          this._initialized = true;
+        }
+        prefs.forEach(pref => {
+          this._observedPrefs.push(pref);
+          Services.prefs.addObserver(pref, this);
+        });
+      },
+
+      observe(aSubject, aTopic, aData) {
+        switch (aTopic) {
+          case "nsPref:changed":
+            const browser = Services.wm.getMostRecentBrowserWindow();
+            if (browser && this._observedPrefs.includes(aData)) {
+              this._triggerHandler(browser.gBrowser.selectedBrowser, {
+                id: this.id,
+                param: {
+                  type: aData,
+                },
+              });
+            }
+            break;
+        }
+      },
+
+      uninit() {
+        if (this._initialized) {
+          this._observedPrefs.forEach(pref =>
+            Services.prefs.removeObserver(pref, this)
+          );
+          this._initialized = false;
+          this._triggerHandler = null;
+          this._observedPrefs = [];
         }
       },
     },

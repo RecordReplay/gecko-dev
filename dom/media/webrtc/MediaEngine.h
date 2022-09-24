@@ -21,6 +21,7 @@ class Blob;
 }  // namespace dom
 
 class AllocationHandle;
+class MediaDevice;
 class MediaEngineSource;
 
 enum MediaSinkEnum {
@@ -41,17 +42,20 @@ class MediaEngine {
    * Populate an array of sources of the requested type in the nsTArray.
    * Also include devices that are currently unavailable.
    */
-  virtual void EnumerateDevices(uint64_t aWindowId, dom::MediaSourceEnum,
-                                MediaSinkEnum,
+  virtual void EnumerateDevices(dom::MediaSourceEnum, MediaSinkEnum,
                                 nsTArray<RefPtr<MediaDevice>>*) = 0;
 
   virtual void Shutdown() = 0;
 
-  virtual void SetFakeDeviceChangeEventsEnabled(bool aEnable) {
-    MOZ_DIAGNOSTIC_ASSERT(false, "Fake events may not have started/stopped");
-  }
+  virtual RefPtr<MediaEngineSource> CreateSource(
+      const MediaDevice* aDevice) = 0;
 
   virtual MediaEventSource<void>& DeviceListChangeEvent() = 0;
+  /**
+   * Return true if devices returned from EnumerateDevices are emulated media
+   * devices.
+   */
+  virtual bool IsFake() const = 0;
 
  protected:
   virtual ~MediaEngine() = default;

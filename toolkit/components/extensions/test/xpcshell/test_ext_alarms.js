@@ -3,26 +3,41 @@
 /* eslint-disable mozilla/no-arbitrary-setTimeout */
 "use strict";
 
-add_task(async function test_alarm_without_permissions() {
-  function backgroundScript() {
-    browser.test.assertTrue(
-      !browser.alarms,
-      "alarm API is not available when the alarm permission is not required"
-    );
-    browser.test.notifyPass("alarms_permission");
+AddonTestUtils.init(this);
+AddonTestUtils.overrideCertDB();
+AddonTestUtils.createAppInfo(
+  "xpcshell@tests.mozilla.org",
+  "XPCShell",
+  "1",
+  "43"
+);
+
+add_task(
+  {
+    // TODO(Bug 1725478): remove the skip if once webidl API bindings will be hidden based on permissions.
+    skip_if: () => ExtensionTestUtils.isInBackgroundServiceWorkerTests(),
+  },
+  async function test_alarm_without_permissions() {
+    function backgroundScript() {
+      browser.test.assertTrue(
+        !browser.alarms,
+        "alarm API is not available when the alarm permission is not required"
+      );
+      browser.test.notifyPass("alarms_permission");
+    }
+
+    let extension = ExtensionTestUtils.loadExtension({
+      background: `(${backgroundScript})()`,
+      manifest: {
+        permissions: [],
+      },
+    });
+
+    await extension.startup();
+    await extension.awaitFinish("alarms_permission");
+    await extension.unload();
   }
-
-  let extension = ExtensionTestUtils.loadExtension({
-    background: `(${backgroundScript})()`,
-    manifest: {
-      permissions: [],
-    },
-  });
-
-  await extension.startup();
-  await extension.awaitFinish("alarms_permission");
-  await extension.unload();
-});
+);
 
 add_task(async function test_alarm_clear_non_matching_name() {
   async function backgroundScript() {
@@ -76,6 +91,40 @@ add_task(async function test_alarm_get_and_clear_single_argument() {
   await extension.startup();
   await extension.awaitFinish("alarm-single-arg");
   await extension.unload();
+});
+
+// This test case covers the behavior of browser.alarms.create when the
+// first optional argument (the alarm name) is passed explicitly as null
+// or undefined instead of being omitted.
+add_task(async function test_alarm_name_arg_null_or_undefined() {
+  async function backgroundScript(alarmName) {
+    browser.alarms.create(alarmName, { when: Date.now() + 2000000 });
+
+    let alarm = await browser.alarms.get();
+    browser.test.assertTrue(alarm, "got an alarm");
+    browser.test.assertEq("", alarm.name, "expected alarm returned");
+
+    let wasCleared = await browser.alarms.clear();
+    browser.test.assertTrue(wasCleared, "alarm was cleared");
+
+    let alarms = await browser.alarms.getAll();
+    browser.test.assertEq(0, alarms.length, "alarm was removed");
+
+    browser.test.notifyPass("alarm-test-done");
+  }
+
+  for (const alarmName of [null, undefined]) {
+    info(`Test alarm.create with alarm name ${alarmName}`);
+    let extension = ExtensionTestUtils.loadExtension({
+      background: `(${backgroundScript})(${alarmName})`,
+      manifest: {
+        permissions: ["alarms"],
+      },
+    });
+    await extension.startup();
+    await extension.awaitFinish("alarm-test-done");
+    await extension.unload();
+  }
 });
 
 add_task(async function test_get_get_all_clear_all_alarms() {
@@ -154,7 +203,7 @@ add_task(async function test_get_get_all_clear_all_alarms() {
   await extension.unload();
 });
 
-async function test_alarm_fires_with_options(alarmCreateOptions) {
+function getAlarmExtension(alarmCreateOptions, extOpts = {}) {
   info(
     `Test alarms.create fires with options: ${JSON.stringify(
       alarmCreateOptions
@@ -172,7 +221,7 @@ async function test_alarm_fires_with_options(alarmCreateOptions) {
         "alarm has the expected name"
       );
       clearTimeout(timer);
-      browser.test.notifyPass("alarms-create-with-options");
+      browser.test.sendMessage("alarms-create-with-options");
     });
 
     browser.alarms.create(ALARM_NAME, createOptions);
@@ -181,20 +230,27 @@ async function test_alarm_fires_with_options(alarmCreateOptions) {
       browser.test.fail("alarm fired within expected time");
       let wasCleared = await browser.alarms.clear(ALARM_NAME);
       browser.test.assertTrue(wasCleared, "alarm was cleared");
-      browser.test.notifyFail("alarms-create-with-options");
+      browser.test.sendMessage("alarms-create-with-options");
     }, 10000);
   }
 
-  let extension = ExtensionTestUtils.loadExtension({
+  let { persistent, useAddonManager } = extOpts;
+  return ExtensionTestUtils.loadExtension({
+    useAddonManager,
     // Pass the alarms.create options to the background page.
     background: `(${backgroundScript})(${JSON.stringify(alarmCreateOptions)})`,
     manifest: {
       permissions: ["alarms"],
+      background: { persistent },
     },
   });
+}
+
+async function test_alarm_fires_with_options(alarmCreateOptions) {
+  let extension = getAlarmExtension(alarmCreateOptions);
 
   await extension.startup();
-  await extension.awaitFinish("alarms-create-with-options");
+  await extension.awaitMessage("alarms-create-with-options");
 
   // Defer unloading the extension so the asynchronous event listener
   // reply finishes.
@@ -217,3 +273,70 @@ add_task(async function test_alarm_fires() {
     "privacy.resistFingerprinting.reduceTimerPrecision.jitter"
   );
 });
+
+function trackEvents(wrapper) {
+  let events = new Map();
+  for (let event of ["background-script-event", "start-background-script"]) {
+    events.set(event, false);
+    wrapper.extension.once(event, () => events.set(event, true));
+  }
+  return events;
+}
+
+add_task(
+  {
+    // TODO(Bug 1748665): remove the skip once background service worker is also
+    // woken up by persistent listeners.
+    skip_if: () => ExtensionTestUtils.isInBackgroundServiceWorkerTests(),
+    pref_set: [
+      ["privacy.resistFingerprinting.reduceTimerPrecision.jitter", false],
+      ["extensions.eventPages.enabled", true],
+    ],
+  },
+  async function test_alarm_persists() {
+    await AddonTestUtils.promiseStartupManager();
+
+    let extension = getAlarmExtension(
+      { periodInMinutes: 0.01 },
+      { useAddonManager: "permanent", persistent: false }
+    );
+    info(`wait startup`);
+    await extension.startup();
+    assertPersistentListeners(extension, "alarms", "onAlarm", {
+      primed: false,
+    });
+    info(`wait first alarm`);
+    await extension.awaitMessage("alarms-create-with-options");
+
+    // Shutdown the background page
+    await extension.terminateBackground();
+    assertPersistentListeners(extension, "alarms", "onAlarm", {
+      primed: true,
+    });
+
+    // Test an early startup event
+    let events = trackEvents(extension);
+    ok(
+      !events.get("background-script-event"),
+      "Should not have received a background script event"
+    );
+    ok(
+      !events.get("start-background-script"),
+      "Background script should not be started"
+    );
+
+    info("waiting for alarm to wake background");
+    await extension.awaitMessage("alarms-create-with-options");
+    ok(
+      events.get("background-script-event"),
+      "Should have received a background script event"
+    );
+    ok(
+      events.get("start-background-script"),
+      "Background script should be started"
+    );
+
+    await extension.unload();
+    await AddonTestUtils.promiseShutdownManager();
+  }
+);

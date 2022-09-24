@@ -15,6 +15,7 @@ XPIDL_MODULE = "uconv"
 
 EXPORTS += [
     "nsConverterInputStream.h",
+    "nsTextToSubURI.h",
 ]
 
 UNIFIED_SOURCES += [
@@ -30,5 +31,4 @@ XPCOM_MANIFESTS += [
 
 FINAL_LIBRARY = "xul"
 
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
+REQUIRES_UNIFIED_BUILD = True

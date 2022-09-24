@@ -14,9 +14,11 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   clearTimeout: "resource://gre/modules/Timer.jsm",
   InteractionsBlocklist: "resource:///modules/InteractionsBlocklist.jsm",
+  PageDataService: "resource:///modules/pagedata/PageDataService.jsm",
   PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
+  Snapshots: "resource:///modules/Snapshots.jsm",
   setTimeout: "resource://gre/modules/Timer.jsm",
 });
 
@@ -45,6 +47,13 @@ XPCOMUtils.defineLazyPreferenceGetter(
 
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
+  "snapshotIdleTime",
+  "browser.places.interactions.snapshotIdleTime",
+  2
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
   "saveInterval",
   "browser.places.interactions.saveInterval",
   10000
@@ -66,28 +75,6 @@ function monotonicNow() {
 }
 
 /**
- * The TypingInteraction object measures time spent typing on the current interaction.
- * This is consists of the current typing metrics as well as accumulated typing metrics.
- */
-class TypingInteraction {
-  /**
-   * Returns an object with all current and accumulated typing metrics.
-   *
-   * @returns {object} with properties typingTime, keypresses
-   */
-  getTypingInteraction() {
-    let typingInteraction = { typingTime: 0, keypresses: 0 };
-    const interactionData = ChromeUtils.consumeInteractionData();
-    const typing = interactionData.Typing;
-    if (typing) {
-      typingInteraction.typingTime += typing.interactionTimeInMilliseconds;
-      typingInteraction.keypresses += typing.interactionCount;
-    }
-    return typingInteraction;
-  }
-}
-
-/**
  * @typedef {object} DocumentInfo
  *   DocumentInfo is used to pass document information from the child process
  *   to _Interactions.
@@ -104,6 +91,8 @@ class TypingInteraction {
  *   Time in milliseconds that the page has been actively viewed for.
  * @property {string} url
  *   The url of the page that was interacted with.
+ * @property {Interactions.DOCUMENT_TYPE} documentType
+ *   The type of the document.
  * @property {number} typingTime
  *   Time in milliseconds that the user typed on the page
  * @property {number} keypresses
@@ -112,6 +101,13 @@ class TypingInteraction {
  *   Time in milliseconds that the user spent scrolling the page
  * @property {number} scrollingDistance
  *   The distance, in pixels, that the user scrolled the page
+ * @property {number} created_at
+ *   Creation time as the number of milliseconds since the epoch.
+ * @property {number} updated_at
+ *   Last updated time as the number of milliseconds since the epoch.
+ * @property {string} referrer
+ *   The referrer to the url of the page that was interacted with (may be empty)
+ *
  */
 
 /**
@@ -119,6 +115,13 @@ class TypingInteraction {
  * obtaining interaction information and passing it to the InteractionsManager.
  */
 class _Interactions {
+  DOCUMENT_TYPE = {
+    // Used when the document type is unknown.
+    GENERIC: 0,
+    // Used for pages serving media, e.g. videos.
+    MEDIA: 1,
+  };
+
   /**
    * This is used to store potential interactions. It maps the browser
    * to the current interaction information.
@@ -129,13 +132,6 @@ class _Interactions {
    * @type {WeakMap<browser, InteractionInfo>}
    */
   #interactions = new WeakMap();
-
-  /**
-   * This tracks and reports the typing interactions
-   *
-   * @type {TypingInteraction}
-   */
-  #typingInteraction = new TypingInteraction();
 
   /**
    * Tracks the currently active window so that we can avoid recording
@@ -168,6 +164,11 @@ class _Interactions {
   #store = undefined;
 
   /**
+   * Whether the component has been initialized.
+   */
+  #initialized = false;
+
+  /**
    * Initializes, sets up actors and observers.
    */
   init() {
@@ -183,12 +184,12 @@ class _Interactions {
       },
       child: {
         moduleURI: "resource:///actors/InteractionsChild.jsm",
-        group: "browsers",
         events: {
           DOMContentLoaded: {},
           pagehide: { mozSystemGroup: true },
         },
       },
+      messageManagerGroups: ["browsers"],
     });
 
     this.#activeWindow = Services.wm.getMostRecentBrowserWindow();
@@ -200,13 +201,16 @@ class _Interactions {
     }
     Services.obs.addObserver(this, DOMWINDOW_OPENED_TOPIC, true);
     idleService.addIdleObserver(this, pageViewIdleTime);
+    this.#initialized = true;
   }
 
   /**
    * Uninitializes, removes any observers that need cleaning up manually.
    */
   uninit() {
-    idleService.removeIdleObserver(this, pageViewIdleTime);
+    if (this.#initialized) {
+      idleService.removeIdleObserver(this, pageViewIdleTime);
+    }
   }
 
   /**
@@ -214,11 +218,12 @@ class _Interactions {
    * Used by tests.
    */
   async reset() {
-    logConsole.debug("Reset");
+    logConsole.debug("Database reset");
     this.#interactions = new WeakMap();
     this.#userIsIdle = false;
     this._pageViewStartTime = Cu.now();
     ChromeUtils.consumeInteractionData();
+    await _Interactions.interactionUpdatePromise;
     await this.store.reset();
   }
 
@@ -249,14 +254,15 @@ class _Interactions {
     }
 
     if (InteractionsBlocklist.isUrlBlocklisted(docInfo.url)) {
-      logConsole.debug("URL is blocklisted", docInfo);
+      logConsole.debug("Ignoring a page as the URL is blocklisted", docInfo);
       return;
     }
 
-    logConsole.debug("New interaction", docInfo);
+    logConsole.debug("Tracking a new interaction", docInfo);
     let now = monotonicNow();
     interaction = {
       url: docInfo.url,
+      referrer: docInfo.referrer,
       totalViewTime: 0,
       typingTime: 0,
       keypresses: 0,
@@ -266,6 +272,10 @@ class _Interactions {
       updated_at: now,
     };
     this.#interactions.set(browser, interaction);
+
+    // Lock any potential page data in memory until we've decided if this page
+    // needs to become a snapshot or not.
+    PageDataService.lockEntry(this, docInfo.url);
 
     // Only reset the time if this is being loaded in the active tab of the
     // active window.
@@ -291,14 +301,14 @@ class _Interactions {
     if (!browser) {
       return;
     }
-    logConsole.debug("End of interaction");
+    logConsole.debug("Saw the end of an interaction");
 
     this.#updateInteraction(browser);
     this.#interactions.delete(browser);
   }
 
   /**
-   * Updates the current interaction.
+   * Updates the current interaction
    *
    * @param {Browser} [browser]
    *   The browser object that has triggered the update, if known. This is
@@ -306,11 +316,49 @@ class _Interactions {
    *   optimization to avoid obtaining the browser object.
    */
   #updateInteraction(browser = undefined) {
-    if (
-      !this.#activeWindow ||
-      (browser && browser.ownerGlobal != this.#activeWindow)
-    ) {
-      logConsole.debug("No update due to no active window");
+    _Interactions.#updateInteraction_async(
+      browser,
+      this.#activeWindow,
+      this.#userIsIdle,
+      this.#interactions,
+      this._pageViewStartTime,
+      this.store
+    );
+  }
+
+  /**
+   * Stores the promise created in updateInteraction_async so that we can await its fulfillment
+   * when sychronization is needed.
+   */
+  static interactionUpdatePromise = Promise.resolve();
+
+  /**
+   * Returns the interactions update promise to be used when sychronization is needed from tests.
+   */
+  get interactionUpdatePromise() {
+    return _Interactions.interactionUpdatePromise;
+  }
+
+  /**
+   * Updates the current interaction on fulfillment of the asynchronous collection of scrolling interactions.
+   *
+   *  @param {Browser} browser
+   *  @param {DOMWindow} activeWindow
+   *  @param {boolean} userIsIdle
+   *  @param {WeakMap<browser, InteractionInfo>} interactions
+   *  @param {number} pageViewStartTime
+   *  @param {InteractionsStore} store
+   */
+  static async #updateInteraction_async(
+    browser,
+    activeWindow,
+    userIsIdle,
+    interactions,
+    pageViewStartTime,
+    store
+  ) {
+    if (!activeWindow || (browser && browser.ownerGlobal != activeWindow)) {
+      logConsole.debug("Not updating interaction as there is no active window");
       return;
     }
 
@@ -318,31 +366,49 @@ class _Interactions {
     // have already updated it when idle was signalled.
     // Sometimes an interaction may be signalled before idle is cleared, however
     // worst case we'd only loose approx 2 seconds of interaction detail.
-    if (this.#userIsIdle) {
-      logConsole.debug("No update due to user is idle");
+    if (userIsIdle) {
+      logConsole.debug("Not updating interaction as the user is idle");
       return;
     }
 
     if (!browser) {
-      browser = this.#activeWindow.gBrowser.selectedTab.linkedBrowser;
+      browser = activeWindow.gBrowser.selectedTab.linkedBrowser;
     }
 
-    let interaction = this.#interactions.get(browser);
+    let interaction = interactions.get(browser);
     if (!interaction) {
       logConsole.debug("No interaction to update");
       return;
     }
 
-    interaction.totalViewTime += Cu.now() - this._pageViewStartTime;
-    this._pageViewStartTime = Cu.now();
+    interaction.totalViewTime += Cu.now() - pageViewStartTime;
+    Interactions._pageViewStartTime = Cu.now();
 
-    const typingInteraction = this.#typingInteraction.getTypingInteraction();
-    interaction.typingTime += typingInteraction.typingTime;
-    interaction.keypresses += typingInteraction.keypresses;
-    interaction.updated_at = monotonicNow();
+    const interactionData = ChromeUtils.consumeInteractionData();
+    const typing = interactionData.Typing;
+    if (typing) {
+      interaction.typingTime += typing.interactionTimeInMilliseconds;
+      interaction.keypresses += typing.interactionCount;
+    }
 
-    logConsole.debug("Add to store: ", interaction);
-    this.store.add(interaction);
+    // Collect the scrolling data and add the interaction to the store on completion
+    _Interactions.interactionUpdatePromise = _Interactions.interactionUpdatePromise
+      .then(async () => ChromeUtils.collectScrollingData())
+      .then(
+        result => {
+          interaction.scrollingTime += result.interactionTimeInMilliseconds;
+          interaction.scrollingDistance += result.scrollingDistanceInPixels;
+        },
+        reason => {
+          Cu.reportError(reason);
+        }
+      )
+      .then(() => {
+        interaction.updated_at = monotonicNow();
+
+        logConsole.debug("Add to store: ", interaction);
+        store.add(interaction);
+      });
   }
 
   /**
@@ -351,7 +417,7 @@ class _Interactions {
    * @param {DOMWindow} win
    */
   #onActivateWindow(win) {
-    logConsole.debug("Activate window");
+    logConsole.debug("Window activated");
 
     if (PrivateBrowsingUtils.isWindowPrivate(win)) {
       return;
@@ -367,7 +433,7 @@ class _Interactions {
    * @param {DOMWindow} win
    */
   #onDeactivateWindow(win) {
-    logConsole.debug("Deactivate window");
+    logConsole.debug("Window deactivate");
 
     this.#updateInteraction();
     this.#activeWindow = undefined;
@@ -382,7 +448,7 @@ class _Interactions {
    *   The instance of the browser that the user switched away from.
    */
   #onTabSelect(previousBrowser) {
-    logConsole.debug("Tab switch notified");
+    logConsole.debug("Tab switched");
 
     this.#updateInteraction(previousBrowser);
     this._pageViewStartTime = Cu.now();
@@ -423,14 +489,14 @@ class _Interactions {
         this.#onWindowOpen(subject);
         break;
       case "idle":
-        logConsole.debug("idle");
+        logConsole.debug("User went idle");
         // We save the state of the current interaction when we are notified
         // that the user is idle.
         this.#updateInteraction();
         this.#userIsIdle = true;
         break;
       case "active":
-        logConsole.debug("active");
+        logConsole.debug("User became active");
         this.#userIsIdle = false;
         this._pageViewStartTime = Cu.now();
         break;
@@ -521,6 +587,17 @@ class InteractionsStore {
    * Used to unblock the queue of promises when the timer is cleared.
    */
   #timerResolve = undefined;
+  /*
+   * A list of URLs that have had interactions updated since we last checked for
+   * new snapshots.
+   * @type {Set<string>}
+   */
+  #potentialSnapshots = new Set();
+  /*
+   * Whether the user has been idle for more than the value of
+   * `browser.places.interactions.snapshotIdleTime`.
+   */
+  #userIsIdle = false;
 
   constructor() {
     // Block async shutdown to ensure the last write goes through.
@@ -533,6 +610,23 @@ class InteractionsStore {
 
     // Can be used to wait for the last pending write to have happened.
     this.pendingPromise = Promise.resolve();
+
+    idleService.addIdleObserver(this, snapshotIdleTime);
+  }
+
+  /**
+   * Tells the snapshot service to check all of the potential snapshots.
+   *
+   * @returns {Promise}
+   */
+  async updateSnapshots() {
+    let urls = [...this.#potentialSnapshots];
+    this.#potentialSnapshots.clear();
+    await Snapshots.updateSnapshots(urls);
+
+    for (let url of urls) {
+      PageDataService.unlockEntry(Interactions, url);
+    }
   }
 
   /**
@@ -544,6 +638,7 @@ class InteractionsStore {
       clearTimeout(this.#timer);
       this.#timerResolve();
       await this.#updateDatabase();
+      await this.updateSnapshots();
     }
   }
 
@@ -574,6 +669,8 @@ class InteractionsStore {
    *   The document information to write.
    */
   add(interaction) {
+    logConsole.debug("Preparing interaction for storage", interaction);
+
     let interactionsForUrl = this.#interactions.get(interaction.url);
     if (!interactionsForUrl) {
       interactionsForUrl = new Map();
@@ -585,13 +682,30 @@ class InteractionsStore {
       let promise = new Promise(resolve => {
         this.#timerResolve = resolve;
         this.#timer = setTimeout(() => {
-          logConsole.debug("Save Timer");
           this.#updateDatabase()
             .catch(Cu.reportError)
             .then(resolve);
         }, saveInterval);
       });
       this.pendingPromise = this.pendingPromise.then(() => promise);
+    }
+  }
+
+  /**
+   * Handles notifications from the observer service.
+   *
+   * @param {nsISupports} subject
+   * @param {string} topic
+   * @param {string} data
+   */
+  observe(subject, topic, data) {
+    switch (topic) {
+      case "idle":
+        this.#userIsIdle = true;
+        this.updateSnapshots();
+        break;
+      case "active":
+        this.#userIsIdle = false;
     }
   }
 
@@ -606,11 +720,16 @@ class InteractionsStore {
     let params = {};
     let SQLInsertFragments = [];
     let i = 0;
-    for (let interactionsForUrl of interactions.values()) {
+    for (let [url, interactionsForUrl] of interactions) {
+      this.#potentialSnapshots.add(url);
+
       for (let interaction of interactionsForUrl.values()) {
         params[`url${i}`] = interaction.url;
+        params[`referrer${i}`] = interaction.referrer;
         params[`created_at${i}`] = interaction.created_at;
         params[`updated_at${i}`] = interaction.updated_at;
+        params[`document_type${i}`] =
+          interaction.documentType ?? Interactions.DOCUMENT_TYPE.GENERIC;
         params[`total_view_time${i}`] =
           Math.round(interaction.totalViewTime) || 0;
         params[`typing_time${i}`] = Math.round(interaction.typingTime) || 0;
@@ -624,8 +743,10 @@ class InteractionsStore {
             WHERE place_id = (SELECT id FROM moz_places WHERE url_hash = hash(:url${i}) AND url = :url${i})
               AND created_at = :created_at${i}),
           (SELECT id FROM moz_places WHERE url_hash = hash(:url${i}) AND url = :url${i}),
+          (SELECT id FROM moz_places WHERE url_hash = hash(:referrer${i}) AND url = :referrer${i} AND :referrer${i} != :url${i}),
           :created_at${i},
           :updated_at${i},
+          :document_type${i},
           :total_view_time${i},
           :typing_time${i},
           :key_presses${i},
@@ -635,18 +756,20 @@ class InteractionsStore {
         i++;
       }
     }
+
     logConsole.debug(`Storing ${i} entries in the database`);
+
     this.progress.pendingUpdates = i;
     await PlacesUtils.withConnectionWrapper(
       "Interactions.jsm::updateDatabase",
       async db => {
         await db.executeCached(
           `
-          WITH inserts (id, place_id, created_at, updated_at, total_view_time, typing_time, key_presses, scrolling_time, scrolling_distance) AS (
+          WITH inserts (id, place_id, referrer_place_id, created_at, updated_at, document_type, total_view_time, typing_time, key_presses, scrolling_time, scrolling_distance) AS (
             VALUES ${SQLInsertFragments.join(", ")}
           )
           INSERT OR REPLACE INTO moz_places_metadata (
-            id, place_id, created_at, updated_at, total_view_time, typing_time, key_presses, scrolling_time, scrolling_distance
+            id, place_id, referrer_place_id, created_at, updated_at, document_type, total_view_time, typing_time, key_presses, scrolling_time, scrolling_distance
           ) SELECT * FROM inserts WHERE place_id NOT NULL;
         `,
           params
@@ -654,5 +777,11 @@ class InteractionsStore {
       }
     );
     this.progress.pendingUpdates = 0;
+
+    Services.obs.notifyObservers(null, "places-metadata-updated");
+
+    if (this.#userIsIdle) {
+      this.updateSnapshots();
+    }
   }
 }

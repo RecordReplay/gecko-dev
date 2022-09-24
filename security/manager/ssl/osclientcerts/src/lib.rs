@@ -17,26 +17,26 @@ extern crate libloading;
 #[macro_use]
 extern crate log;
 extern crate pkcs11;
-#[cfg(target_os = "macos")]
 #[macro_use]
-extern crate rental;
+extern crate rsclientcerts;
 extern crate sha2;
 #[cfg(target_os = "windows")]
 extern crate winapi;
 
 use pkcs11::types::*;
+use rsclientcerts::manager::{ManagerProxy, SlotType};
 use std::sync::Mutex;
 use std::thread;
 
-mod manager;
-#[macro_use]
-mod util;
 #[cfg(target_os = "macos")]
 mod backend_macos;
 #[cfg(target_os = "windows")]
 mod backend_windows;
 
-use manager::{ManagerProxy, SlotType};
+#[cfg(target_os = "macos")]
+use crate::backend_macos::Backend;
+#[cfg(target_os = "windows")]
+use crate::backend_windows::Backend;
 
 lazy_static! {
     /// The singleton `ManagerProxy` that handles state with respect to PKCS #11. Only one thread
@@ -85,8 +85,7 @@ macro_rules! manager_guard_to_manager {
 // Helper macro to prefix log messages with the current thread ID.
 macro_rules! log_with_thread_id {
     ($log_level:ident, $($message:expr),*) => {
-        let message = format!($($message),*);
-        $log_level!("{:?} {}", thread::current().id(), message);
+        $log_level!("{:?} {}", thread::current().id(), format_args!($($message),*));
     };
 }
 
@@ -97,9 +96,12 @@ extern "C" fn C_Initialize(_pInitArgs: CK_C_INITIALIZE_ARGS_PTR) -> CK_RV {
     // logging has been initialized.
     let _ = env_logger::try_init();
     let mut manager_guard = try_to_get_manager_guard!();
-    let manager_proxy = match ManagerProxy::new() {
+    let manager_proxy = match ManagerProxy::new(Backend {}) {
         Ok(p) => p,
-        Err(()) => return CKR_DEVICE_ERROR,
+        Err(e) => {
+            log_with_thread_id!(error, "C_Initialize: ManagerProxy: {}", e);
+            return CKR_DEVICE_ERROR;
+        }
     };
     match manager_guard.replace(manager_proxy) {
         Some(_unexpected_previous_manager) => {
@@ -126,8 +128,8 @@ extern "C" fn C_Finalize(_pReserved: CK_VOID_PTR) -> CK_RV {
             log_with_thread_id!(debug, "C_Finalize: CKR_OK");
             CKR_OK
         }
-        Err(()) => {
-            log_with_thread_id!(error, "C_Finalize: CKR_DEVICE_ERROR");
+        Err(e) => {
+            log_with_thread_id!(error, "C_Finalize: CKR_DEVICE_ERROR: {}", e);
             CKR_DEVICE_ERROR
         }
     }
@@ -274,9 +276,9 @@ extern "C" fn C_GetMechanismList(
             log_with_thread_id!(error, "C_GetMechanismList: CKR_ARGUMENTS_BAD");
             return CKR_ARGUMENTS_BAD;
         }
-        for i in 0..mechanisms.len() {
+        for (i, mechanism) in mechanisms.iter().enumerate() {
             unsafe {
-                *pMechanismList.offset(i as isize) = mechanisms[i];
+                *pMechanismList.add(i) = *mechanism;
             }
         }
     }
@@ -348,8 +350,8 @@ extern "C" fn C_OpenSession(
     };
     let session_handle = match manager.open_session(slot_type) {
         Ok(session_handle) => session_handle,
-        Err(()) => {
-            log_with_thread_id!(error, "C_OpenSession: open_session failed");
+        Err(e) => {
+            log_with_thread_id!(error, "C_OpenSession: open_session failed: {}", e);
             return CKR_DEVICE_ERROR;
         }
     };
@@ -390,8 +392,12 @@ extern "C" fn C_CloseAllSessions(slotID: CK_SLOT_ID) -> CK_RV {
             log_with_thread_id!(debug, "C_CloseAllSessions: CKR_OK");
             CKR_OK
         }
-        Err(()) => {
-            log_with_thread_id!(error, "C_CloseAllSessions: close_all_sessions failed");
+        Err(e) => {
+            log_with_thread_id!(
+                error,
+                "C_CloseAllSessions: close_all_sessions failed: {}",
+                e
+            );
             CKR_DEVICE_ERROR
         }
     }
@@ -492,16 +498,16 @@ extern "C" fn C_GetAttributeValue(
         return CKR_ARGUMENTS_BAD;
     }
     let mut attr_types = Vec::with_capacity(ulCount as usize);
-    for i in 0..ulCount {
-        let attr = unsafe { &*pTemplate.offset(i as isize) };
+    for i in 0..ulCount as usize {
+        let attr = unsafe { &*pTemplate.add(i) };
         attr_types.push(attr.attrType);
     }
     let mut manager_guard = try_to_get_manager_guard!();
     let manager = manager_guard_to_manager!(manager_guard);
     let values = match manager.get_attributes(hObject, attr_types) {
         Ok(values) => values,
-        Err(()) => {
-            log_with_thread_id!(error, "C_GetAttributeValue: CKR_ARGUMENTS_BAD");
+        Err(e) => {
+            log_with_thread_id!(error, "C_GetAttributeValue: CKR_ARGUMENTS_BAD ({})", e);
             return CKR_ARGUMENTS_BAD;
         }
     };
@@ -512,10 +518,9 @@ extern "C" fn C_GetAttributeValue(
         );
         return CKR_DEVICE_ERROR;
     }
-    for i in 0..ulCount as usize {
-        let mut attr = unsafe { &mut *pTemplate.offset(i as isize) };
-        // NB: the safety of this array access depends on the length check above
-        if let Some(attr_value) = &values[i] {
+    for (i, value) in values.iter().enumerate().take(ulCount as usize) {
+        let mut attr = unsafe { &mut *pTemplate.add(i) };
+        if let Some(attr_value) = value {
             if attr.pValue.is_null() {
                 attr.ulValueLen = attr_value.len() as CK_ULONG;
             } else {
@@ -588,9 +593,9 @@ extern "C" fn C_FindObjectsInit(
     }
     let mut attrs = Vec::new();
     log_with_thread_id!(trace, "C_FindObjectsInit:");
-    for i in 0..ulCount {
-        let attr = unsafe { &*pTemplate.offset(i as isize) };
-        trace_attr("  ", &attr);
+    for i in 0..ulCount as usize {
+        let attr = unsafe { &*pTemplate.add(i) };
+        trace_attr("  ", attr);
         let slice = unsafe {
             std::slice::from_raw_parts(attr.pValue as *const u8, attr.ulValueLen as usize)
         };
@@ -600,8 +605,8 @@ extern "C" fn C_FindObjectsInit(
     let manager = manager_guard_to_manager!(manager_guard);
     match manager.start_search(hSession, attrs) {
         Ok(()) => {}
-        Err(()) => {
-            log_with_thread_id!(error, "C_FindObjectsInit: CKR_ARGUMENTS_BAD");
+        Err(e) => {
+            log_with_thread_id!(error, "C_FindObjectsInit: CKR_ARGUMENTS_BAD: {}", e);
             return CKR_ARGUMENTS_BAD;
         }
     }
@@ -626,8 +631,8 @@ extern "C" fn C_FindObjects(
     let manager = manager_guard_to_manager!(manager_guard);
     let handles = match manager.search(hSession, ulMaxObjectCount as usize) {
         Ok(handles) => handles,
-        Err(()) => {
-            log_with_thread_id!(error, "C_FindObjects: CKR_ARGUMENTS_BAD");
+        Err(e) => {
+            log_with_thread_id!(error, "C_FindObjects: CKR_ARGUMENTS_BAD: {}", e);
             return CKR_ARGUMENTS_BAD;
         }
     };
@@ -661,8 +666,8 @@ extern "C" fn C_FindObjectsFinal(hSession: CK_SESSION_HANDLE) -> CK_RV {
             log_with_thread_id!(debug, "C_FindObjectsFinal: CKR_OK");
             CKR_OK
         }
-        Err(()) => {
-            log_with_thread_id!(error, "C_FindObjectsFinal: clear_search failed");
+        Err(e) => {
+            log_with_thread_id!(error, "C_FindObjectsFinal: clear_search failed: {}", e);
             CKR_DEVICE_ERROR
         }
     }
@@ -819,8 +824,8 @@ extern "C" fn C_SignInit(
     let manager = manager_guard_to_manager!(manager_guard);
     match manager.start_sign(hSession, hKey, mechanism_params) {
         Ok(()) => {}
-        Err(()) => {
-            log_with_thread_id!(error, "C_SignInit: CKR_GENERAL_ERROR");
+        Err(e) => {
+            log_with_thread_id!(error, "C_SignInit: CKR_GENERAL_ERROR: {}", e);
             return CKR_GENERAL_ERROR;
         }
     };
@@ -850,8 +855,8 @@ extern "C" fn C_Sign(
             Ok(signature_length) => unsafe {
                 *pulSignatureLen = signature_length as CK_ULONG;
             },
-            Err(()) => {
-                log_with_thread_id!(error, "C_Sign: get_signature_length failed");
+            Err(e) => {
+                log_with_thread_id!(error, "C_Sign: get_signature_length failed: {}", e);
                 return CKR_GENERAL_ERROR;
             }
         }
@@ -871,8 +876,8 @@ extern "C" fn C_Sign(
                     *pulSignatureLen = signature.len() as CK_ULONG;
                 }
             }
-            Err(()) => {
-                log_with_thread_id!(error, "C_Sign: sign failed");
+            Err(e) => {
+                log_with_thread_id!(error, "C_Sign: sign failed: {}", e);
                 return CKR_GENERAL_ERROR;
             }
         }
@@ -1195,16 +1200,17 @@ static mut FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     C_WaitForSlotEvent: Some(C_WaitForSlotEvent),
 };
 
+/// # Safety
+///
 /// This is the only function this module exposes. NSS calls it to obtain the list of functions
 /// comprising this module.
+/// ppFunctionList must be a valid pointer.
 #[no_mangle]
-pub extern "C" fn C_GetFunctionList(ppFunctionList: CK_FUNCTION_LIST_PTR_PTR) -> CK_RV {
+pub unsafe extern "C" fn C_GetFunctionList(ppFunctionList: CK_FUNCTION_LIST_PTR_PTR) -> CK_RV {
     if ppFunctionList.is_null() {
         return CKR_ARGUMENTS_BAD;
     }
-    unsafe {
-        *ppFunctionList = &mut FUNCTION_LIST;
-    }
+    *ppFunctionList = &mut FUNCTION_LIST;
     CKR_OK
 }
 

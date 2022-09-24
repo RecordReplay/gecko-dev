@@ -22,20 +22,12 @@
 #include "js/TraceKind.h"
 #include "js/TypeDecls.h"
 #include "vm/StringType.h"
-#include "vm/Xdr.h"
 
 namespace JS {
 
 class JS_PUBLIC_API BigInt;
 
 }  // namespace JS
-
-namespace js {
-
-template <XDRMode mode>
-XDRResult XDRBigInt(XDRState<mode>* xdr, MutableHandle<JS::BigInt*> bi);
-
-}  // namespace js
 
 namespace JS {
 
@@ -107,7 +99,7 @@ class BigInt final : public js::gc::CellWithLengthAndFlags {
     js::gc::PostWriteBarrierImpl<BigInt>(cellp, prev, next);
   }
 
-  void finalize(JSFreeOp* fop);
+  void finalize(JS::GCContext* gcx);
   js::HashNumber hash() const;
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
   size_t sizeOfExcludingThisInNursery(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -145,8 +137,8 @@ class BigInt final : public js::gc::CellWithLengthAndFlags {
   static BigInt* bitOr(JSContext* cx, Handle<BigInt*> x, Handle<BigInt*> y);
   static BigInt* bitNot(JSContext* cx, Handle<BigInt*> x);
 
-  static int64_t toInt64(BigInt* x);
-  static uint64_t toUint64(BigInt* x);
+  static int64_t toInt64(const BigInt* x);
+  static uint64_t toUint64(const BigInt* x);
 
   // Return true if the BigInt is without loss of precision representable as an
   // int64 and store the int64 value in the output. Otherwise return false and
@@ -209,7 +201,8 @@ class BigInt final : public js::gc::CellWithLengthAndFlags {
   template <typename CharT>
   static BigInt* parseLiteral(JSContext* cx,
                               const mozilla::Range<const CharT> chars,
-                              bool* haveParseError);
+                              bool* haveParseError,
+                              js::gc::InitialHeap heap = js::gc::DefaultHeap);
   template <typename CharT>
   static BigInt* parseLiteralDigits(
       JSContext* cx, const mozilla::Range<const CharT> chars, unsigned radix,
@@ -415,9 +408,6 @@ class BigInt final : public js::gc::CellWithLengthAndFlags {
 
   friend struct ::JSStructuredCloneReader;
   friend struct ::JSStructuredCloneWriter;
-  template <js::XDRMode mode>
-  friend js::XDRResult js::XDRBigInt(js::XDRState<mode>* xdr,
-                                     MutableHandle<BigInt*> bi);
 
   BigInt() = delete;
   BigInt(const BigInt& other) = delete;

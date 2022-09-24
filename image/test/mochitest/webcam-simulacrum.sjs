@@ -3,14 +3,14 @@
  */
 
 var counter = 2;
-var frames = ['red.gif', 'blue.gif'];
-var timer = Components.classes["@mozilla.org/timer;1"];
-var partTimer = timer.createInstance(Components.interfaces.nsITimer);
+var frames = ["red.gif", "blue.gif"];
+var timer = Cc["@mozilla.org/timer;1"];
+var partTimer = timer.createInstance(Ci.nsITimer);
 
 function getFileAsInputStream(aFilename) {
-  var file = Components.classes["@mozilla.org/file/directory_service;1"]
-             .getService(Components.interfaces.nsIProperties)
-             .get("CurWorkD", Components.interfaces.nsIFile);
+  var file = Cc["@mozilla.org/file/directory_service;1"]
+    .getService(Ci.nsIProperties)
+    .get("CurWorkD", Ci.nsIFile);
 
   file.append("tests");
   file.append("image");
@@ -18,21 +18,24 @@ function getFileAsInputStream(aFilename) {
   file.append("mochitest");
   file.append(aFilename);
 
-  var fileStream = Components.classes['@mozilla.org/network/file-input-stream;1']
-                   .createInstance(Components.interfaces.nsIFileInputStream);
+  var fileStream = Cc[
+    "@mozilla.org/network/file-input-stream;1"
+  ].createInstance(Ci.nsIFileInputStream);
   fileStream.init(file, 1, 0, false);
   return fileStream;
 }
 
-function handleRequest(request, response)
-{
-  response.setHeader("Content-Type",
-                     "multipart/x-mixed-replace;boundary=BOUNDARYOMG", false);
+function handleRequest(request, response) {
+  response.setHeader(
+    "Content-Type",
+    "multipart/x-mixed-replace;boundary=BOUNDARYOMG",
+    false
+  );
   response.setHeader("Cache-Control", "no-cache", false);
   response.setStatusLine(request.httpVersion, 200, "OK");
   response.processAsync();
   response.write("--BOUNDARYOMG\r\n");
-  while (frames.length > 0) {
+  while (frames.length) {
     sendNextPart(response);
   }
   response.write("--BOUNDARYOMG--\r\n");
@@ -48,4 +51,3 @@ function sendNextPart(response) {
   // Toss in the boundary, so the browser can know this part is complete
   response.write("--BOUNDARYOMG\r\n");
 }
-

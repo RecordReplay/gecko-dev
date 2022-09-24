@@ -7,11 +7,14 @@
 /**
  * @typedef {import("./@types/perf").PerfFront} PerfFront
  * @typedef {import("./@types/perf").PreferenceFront} PreferenceFront
- * @typedef {import("./@types/perf").RecordingStateFromPreferences} RecordingStateFromPreferences
+ * @typedef {import("./@types/perf").RecordingSettings} RecordingSettings
  * @typedef {import("./@types/perf").PageContext} PageContext
  * @typedef {import("./@types/perf").PanelWindow} PanelWindow
  * @typedef {import("./@types/perf").Store} Store
  * @typedef {import("./@types/perf").MinimallyTypedGeckoProfile} MinimallyTypedGeckoProfile
+ * @typedef {import("./@types/perf").ProfileCaptureResult} ProfileCaptureResult
+ * @typedef {import("./@types/perf").ProfilerViewMode} ProfilerViewMode
+ * @typedef {import("./@types/perf").RootTraits} RootTraits
  */
 "use strict";
 
@@ -21,7 +24,7 @@
   // the section on "Do not overload require" for more information.
 
   const { BrowserLoader } = ChromeUtils.import(
-    "resource://devtools/client/shared/browser-loader.js"
+    "resource://devtools/shared/loader/browser-loader.js"
   );
   const browserLoader = BrowserLoader({
     baseURI: "resource://devtools/client/performance-new/",
@@ -55,19 +58,24 @@ const DevToolsPanel = React.createFactory(
 const ProfilerEventHandling = React.createFactory(
   require("devtools/client/performance-new/components/ProfilerEventHandling")
 );
+const ProfilerPreferenceObserver = React.createFactory(
+  require("devtools/client/performance-new/components/ProfilerPreferenceObserver")
+);
 const createStore = require("devtools/client/shared/redux/create-store");
 const selectors = require("devtools/client/performance-new/store/selectors");
 const reducers = require("devtools/client/performance-new/store/reducers");
 const actions = require("devtools/client/performance-new/store/actions");
 const {
-  receiveProfile,
-  createMultiModalGetSymbolTableFn,
+  openProfilerTab,
+  sharedLibrariesFromProfile,
 } = require("devtools/client/performance-new/browser");
-
+const { createLocalSymbolicationService } = ChromeUtils.import(
+  "resource://devtools/client/performance-new/symbolication.jsm.js"
+);
 const {
-  setRecordingPreferences,
   presets,
-  getRecordingPreferences,
+  getProfilerViewModeForCurrentPreset,
+  registerProfileCaptureForBrowser,
 } = ChromeUtils.import(
   "resource://devtools/client/performance-new/popup/background.jsm.js"
 );
@@ -82,19 +90,16 @@ const {
  * Initialize the panel by creating a redux store, and render the root component.
  *
  * @param {PerfFront} perfFront - The Perf actor's front. Used to start and stop recordings.
+ * @param {RootTraits} traits - The traits coming from the root actor. This
+ *                              makes it possible to change some code path
+ *                              depending on the server version.
  * @param {PageContext} pageContext - The context that the UI is being loaded in under.
- * @param {(() => void)?} openAboutProfiling - Optional call to open about:profiling
+ * @param {(() => void)} openAboutProfiling - Optional call to open about:profiling
  */
-async function gInit(perfFront, pageContext, openAboutProfiling) {
+async function gInit(perfFront, traits, pageContext, openAboutProfiling) {
   const store = createStore(reducers);
+  const isSupportedPlatform = await perfFront.isSupportedPlatform();
   const supportedFeatures = await perfFront.getSupportedFeatures();
-
-  if (!openAboutProfiling) {
-    openAboutProfiling = () => {
-      const { openTrustedLink } = require("devtools/client/shared/link");
-      openTrustedLink("about:profiling", {});
-    };
-  }
 
   {
     // Expose the store as a global, for testing.
@@ -109,6 +114,8 @@ async function gInit(perfFront, pageContext, openAboutProfiling) {
   const l10n = new FluentL10n();
   await l10n.init([
     "devtools/client/perftools.ftl",
+    // For -brand-shorter-name used in some profiler preset descriptions.
+    "branding/brand.ftl",
     // Needed for the onboarding UI
     "devtools/client/toolbox-options.ftl",
     "browser/branding/brandings.ftl",
@@ -118,37 +125,40 @@ async function gInit(perfFront, pageContext, openAboutProfiling) {
   // the browser.
   store.dispatch(
     actions.initializeStore({
-      perfFront,
-      receiveProfile,
-      recordingPreferences: getRecordingPreferences(
-        pageContext,
-        supportedFeatures
-      ),
+      isSupportedPlatform,
       presets,
       supportedFeatures,
-      openAboutProfiling,
-      pageContext: "devtools",
-
-      // Go ahead and hide the implementation details for the component on how the
-      // preference information is stored
-      /**
-       * @param {RecordingStateFromPreferences} newRecordingPreferences
-       */
-      setRecordingPreferences: newRecordingPreferences =>
-        setRecordingPreferences(pageContext, newRecordingPreferences),
-
-      // Configure the getSymbolTable function for the DevTools workflow.
-      // See createMultiModalGetSymbolTableFn for more information.
-      getSymbolTableGetter:
-        /** @type {(profile: MinimallyTypedGeckoProfile) => GetSymbolTableCallback} */
-        profile =>
-          createMultiModalGetSymbolTableFn(
-            profile,
-            () => selectors.getObjdirs(store.getState()),
-            selectors.getPerfFront(store.getState())
-          ),
+      pageContext,
     })
   );
+
+  /**
+   * @param {MinimallyTypedGeckoProfile} profile
+   */
+  const onProfileReceived = async profile => {
+    const objdirs = selectors.getObjdirs(store.getState());
+    const profilerViewMode = getProfilerViewModeForCurrentPreset(pageContext);
+    const sharedLibraries = sharedLibrariesFromProfile(profile);
+    const symbolicationService = createLocalSymbolicationService(
+      sharedLibraries,
+      objdirs,
+      perfFront
+    );
+    const browser = await openProfilerTab(profilerViewMode);
+
+    /**
+     * @type {ProfileCaptureResult}
+     */
+    const profileCaptureResult = { type: "SUCCESS", profile };
+
+    registerProfileCaptureForBrowser(
+      browser,
+      profileCaptureResult,
+      symbolicationService
+    );
+  };
+
+  const onEditSettingsLinkClicked = openAboutProfiling;
 
   ReactDOM.render(
     Provider(
@@ -158,13 +168,20 @@ async function gInit(perfFront, pageContext, openAboutProfiling) {
         React.createElement(
           React.Fragment,
           null,
-          ProfilerEventHandling(),
-          DevToolsPanel()
+          ProfilerEventHandling({ perfFront, traits }),
+          ProfilerPreferenceObserver(),
+          DevToolsPanel({
+            perfFront,
+            onProfileReceived,
+            onEditSettingsLinkClicked,
+          })
         )
       )
     ),
     document.querySelector("#root")
   );
+
+  window.addEventListener("unload", () => gDestroy(), { once: true });
 }
 
 function gDestroy() {

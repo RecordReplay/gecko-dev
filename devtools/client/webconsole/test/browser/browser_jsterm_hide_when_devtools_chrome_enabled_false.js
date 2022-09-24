@@ -43,7 +43,9 @@ add_task(async function() {
   testInputRelatedElementsAreVisibile(browserConsole);
   await testObjectInspectorPropertiesAreSet(objInspector);
 
-  const browserTab = await addTab("data:text/html;charset=utf8,hello world");
+  const browserTab = await addTab(
+    "data:text/html;charset=utf8,<!DOCTYPE html>hello world"
+  );
   webConsole = await openConsole(browserTab);
   objInspector = await logObject(webConsole);
   testInputRelatedElementsAreVisibile(webConsole);
@@ -77,11 +79,10 @@ add_task(async function() {
 
 async function logObject(hud) {
   const prop = "browser_console_hide_jsterm_test";
-  const { node } = await executeAndWaitForMessage(
+  const { node } = await executeAndWaitForResultMessage(
     hud,
     `new Object({ ${prop}: true })`,
-    prop,
-    ".result"
+    prop
   );
   return node.querySelector(".tree");
 }
@@ -187,10 +188,16 @@ function waitForSourceMapWorker(hud) {
         !seenWorkerTargets.has(targetFront)
       ) {
         seenWorkerTargets.add(targetFront);
-        targetCommand.unwatchTargets([targetCommand.TYPES.WORKER], onAvailable);
+        targetCommand.unwatchTargets({
+          types: [targetCommand.TYPES.WORKER],
+          onAvailable,
+        });
         resolve();
       }
     };
-    targetCommand.watchTargets([targetCommand.TYPES.WORKER], onAvailable);
+    targetCommand.watchTargets({
+      types: [targetCommand.TYPES.WORKER],
+      onAvailable,
+    });
   });
 }

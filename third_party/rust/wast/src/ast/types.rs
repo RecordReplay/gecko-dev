@@ -617,6 +617,11 @@ pub struct ModuleType<'a> {
 
 impl<'a> Parse<'a> for ModuleType<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
+        // See comments in `nested_module.rs` for why this is tested here.
+        if parser.parens_depth() > 100 {
+            return Err(parser.error("module type nesting too deep"));
+        }
+
         let mut imports = Vec::new();
         while parser.peek2::<kw::import>() {
             imports.push(parser.parens(|p| p.parse())?);
@@ -658,6 +663,11 @@ pub struct InstanceType<'a> {
 
 impl<'a> Parse<'a> for InstanceType<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
+        // See comments in `nested_module.rs` for why this is tested here.
+        if parser.parens_depth() > 100 {
+            return Err(parser.error("instance type nesting too deep"));
+        }
+
         let mut exports = Vec::new();
         while !parser.is_empty() {
             exports.push(parser.parens(|p| p.parse())?);
@@ -726,6 +736,8 @@ pub struct Type<'a> {
     /// An optional identifer to refer to this `type` by as part of name
     /// resolution.
     pub id: Option<ast::Id<'a>>,
+    /// An optional name for this function stored in the custom `name` section.
+    pub name: Option<ast::NameAnnotation<'a>>,
     /// The type that we're declaring.
     pub def: TypeDef<'a>,
 }
@@ -734,6 +746,7 @@ impl<'a> Parse<'a> for Type<'a> {
     fn parse(parser: Parser<'a>) -> Result<Self> {
         let span = parser.parse::<kw::r#type>()?.0;
         let id = parser.parse()?;
+        let name = parser.parse()?;
         let def = parser.parens(|parser| {
             let mut l = parser.lookahead1();
             if l.peek::<kw::func>() {
@@ -755,7 +768,12 @@ impl<'a> Parse<'a> for Type<'a> {
                 Err(l.error())
             }
         })?;
-        Ok(Type { span, id, def })
+        Ok(Type {
+            span,
+            id,
+            name,
+            def,
+        })
     }
 }
 

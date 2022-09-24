@@ -6,6 +6,7 @@
 #include "benchmark/benchmark.h"
 #include "lib/extras/codec.h"
 #include "lib/extras/tone_mapping.h"
+#include "lib/jxl/enc_color_management.h"
 #include "lib/jxl/testdata.h"
 
 namespace jxl {
@@ -13,7 +14,7 @@ namespace jxl {
 static void BM_ToneMapping(benchmark::State& state) {
   CodecInOut image;
   const PaddedBytes image_bytes =
-      ReadTestData("imagecompression.info/flower_foveon.png");
+      ReadTestData("third_party/imagecompression.info/flower_foveon.png");
   JXL_CHECK(SetFromBytes(Span<const uint8_t>(image_bytes), &image));
 
   // Convert to linear Rec. 2020 so that `ToneMapTo` doesn't have to and we
@@ -24,7 +25,7 @@ static void BM_ToneMapping(benchmark::State& state) {
   linear_rec2020.white_point = WhitePoint::kD65;
   linear_rec2020.tf.SetTransferFunction(TransferFunction::kLinear);
   JXL_CHECK(linear_rec2020.CreateICC());
-  JXL_CHECK(image.TransformTo(linear_rec2020));
+  JXL_CHECK(image.TransformTo(linear_rec2020, GetJxlCms()));
 
   for (auto _ : state) {
     state.PauseTiming();

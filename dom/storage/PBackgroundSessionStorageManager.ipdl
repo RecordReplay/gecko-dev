@@ -4,22 +4,33 @@
 
 include protocol PBackground;
 include protocol PBackgroundSessionStorageCache;
+include PBackgroundSharedTypes;
+
+include "mozilla/dom/quota/SerializationHelpers.h";
+
+using mozilla::OriginAttributesPattern
+  from "mozilla/OriginAttributes.h";
 
 namespace mozilla {
 namespace dom {
 
-sync refcounted protocol PBackgroundSessionStorageManager
+[ChildImpl=virtual, ParentImpl=virtual]
+sync protocol PBackgroundSessionStorageManager
 {
  manager PBackground;
  manages PBackgroundSessionStorageCache;
 
  parent:
-  async PBackgroundSessionStorageCache(nsCString aOriginAttrs, nsCString aOriginKey);
+  async PBackgroundSessionStorageCache(PrincipalInfo aPrincipalInfo, nsCString aOriginKey);
+
+  async ClearStorages(OriginAttributesPattern aPattern, nsCString aOriginScope);
 
   async DeleteMe();
 
  child:
-   async __delete__();
+  async __delete__();
+
+  async ClearStoragesForOrigin(nsCString aOriginAttrs, nsCString aOriginKey);
 };
 
 } // namespace dom

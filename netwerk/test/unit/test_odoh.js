@@ -32,26 +32,30 @@ const certOverrideService = Cc[
   "@mozilla.org/security/certoverride;1"
 ].getService(Ci.nsICertOverrideService);
 
-function setup() {
+add_setup(async function setup() {
   h2Port = trr_test_setup();
   runningODoHTests = true;
 
-  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRONLY);
   // This is for skiping the security check for the odoh host.
   certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyData(
     true
   );
-}
 
-setup();
-registerCleanupFunction(() => {
-  trr_clear_prefs();
-  Services.prefs.clearUserPref("network.trr.odoh.enabled");
-  Services.prefs.clearUserPref("network.trr.odoh.target_path");
-  Services.prefs.clearUserPref("network.trr.odoh.configs_uri");
-  certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyData(
-    false
-  );
+  registerCleanupFunction(() => {
+    trr_clear_prefs();
+    Services.prefs.clearUserPref("network.trr.odoh.enabled");
+    Services.prefs.clearUserPref("network.trr.odoh.target_path");
+    Services.prefs.clearUserPref("network.trr.odoh.configs_uri");
+    certOverrideService.setDisableAllSecurityChecksAndLetAttackersInterceptMyData(
+      false
+    );
+  });
+
+  if (mozinfo.socketprocess_networking) {
+    await TestUtils.waitForCondition(() => Services.io.socketProcessLaunched);
+  }
+
+  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRONLY);
 });
 
 add_task(async function testODoHConfig() {
@@ -61,7 +65,7 @@ add_task(async function testODoHConfig() {
     "https://foo.example.com:" + h2Port + "/odohconfig"
   );
 
-  let [, inRecord] = await new TRRDNSListener("odoh_host.example.com", {
+  let { inRecord } = await new TRRDNSListener("odoh_host.example.com", {
     type: Ci.nsIDNSService.RESOLVE_TYPE_HTTPSSVC,
   });
   let answer = inRecord.QueryInterface(Ci.nsIDNSHTTPSSVCRecord).records;
@@ -217,6 +221,8 @@ add_task(test_GET_ECS);
 
 add_task(test_timeout_mode3);
 
+add_task(test_strict_native_fallback);
+
 add_task(test_no_answers_fallback);
 
 add_task(test_404_fallback);
@@ -256,4 +262,8 @@ add_task(test_fqdn);
 
 add_task(test_ipv6_trr_fallback);
 
+add_task(test_ipv4_trr_fallback);
+
 add_task(test_no_retry_without_doh);
+
+add_task(test_connection_reuse_and_cycling).skip(); // Bug 1742743

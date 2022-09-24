@@ -157,6 +157,9 @@ class CookieJarSettings final : public nsICookieJarSettings {
   void UpdateIsOnContentBlockingAllowList(nsIChannel* aChannel);
 
   void SetPartitionKey(nsIURI* aURI);
+  void SetPartitionKey(const nsAString& aPartitionKey) {
+    mPartitionKey = aPartitionKey;
+  }
   const nsAString& GetPartitionKey() { return mPartitionKey; };
 
   // Utility function to test if the passed cookiebahvior is
@@ -188,6 +191,7 @@ class CookieJarSettings final : public nsICookieJarSettings {
   bool mIsFirstPartyIsolated;
   CookiePermissionList mCookiePermissions;
   bool mIsOnContentBlockingAllowList;
+  bool mIsOnContentBlockingAllowListUpdated;
   nsString mPartitionKey;
 
   State mState;

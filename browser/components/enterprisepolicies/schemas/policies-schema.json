@@ -25,6 +25,10 @@
       "type": "boolean"
     },
 
+    "AppUpdatePin": {
+      "type": "string"
+    },
+
     "AppUpdateURL": {
       "type": "URL"
     },
@@ -461,6 +465,24 @@
       }
     },
 
+    "ExemptDomainFileTypePairsFromFileTypeDownloadWarnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file_extension": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+
     "Extensions": {
       "type": "object",
       "properties": {
@@ -499,7 +521,7 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "enum": ["extension", "dictionary", "locale", "theme"]
+                "enum": ["extension", "dictionary", "locale", "theme", "sitepermission"]
               }
             },
             "blocked_install_message": {
@@ -603,6 +625,10 @@
           "type": "boolean"
         }
       }
+    },
+
+    "GoToIntranetSiteForSingleWordEntryInAddressBar": {
+      "type": "boolean"
     },
 
     "Handlers": {
@@ -1232,6 +1258,10 @@
       "enum": ["tls1", "tls1.1", "tls1.2", "tls1.3"]
     },
 
+    "StartDownloadsInTempDirectory": {
+      "type": "boolean"
+    },
+
     "SupportMenu": {
       "type": "object",
       "properties": {
@@ -1266,10 +1296,17 @@
         "SkipOnboarding": {
           "type": "boolean"
         },
+        "MoreFromMozilla": {
+          "type": "boolean"
+        },
         "Locked": {
           "type": "boolean"
         }
       }
+    },
+
+    "UseSystemPrintDialog": {
+      "type": "boolean"
     },
 
     "WebsiteFilter": {

@@ -56,7 +56,6 @@ class GfxInfoBase : public nsIGfxInfo,
 
   NS_IMETHOD GetMonitors(JSContext* cx,
                          JS::MutableHandleValue _retval) override;
-  NS_IMETHOD RefreshMonitors() override;
   NS_IMETHOD GetFailures(nsTArray<int32_t>& indices,
                          nsTArray<nsCString>& failures) override;
   NS_IMETHOD_(void) LogFailure(const nsACString& failure) override;
@@ -71,12 +70,6 @@ class GfxInfoBase : public nsIGfxInfo,
   NS_IMETHOD GetUsingGPUProcess(bool* aOutValue) override;
   NS_IMETHOD GetWebRenderEnabled(bool* aWebRenderEnabled) override;
   NS_IMETHOD GetIsHeadless(bool* aIsHeadless) override;
-  NS_IMETHOD GetUsesTiling(bool* aUsesTiling) override;
-  NS_IMETHOD GetContentUsesTiling(bool* aUsesTiling) override;
-  NS_IMETHOD GetOffMainThreadPaintEnabled(
-      bool* aOffMainThreadPaintEnabled) override;
-  NS_IMETHOD GetOffMainThreadPaintWorkerCount(
-      int32_t* aOffMainThreadPaintWorkerCount) override;
   NS_IMETHOD GetTargetFrameRate(uint32_t* aTargetFrameRate) override;
 
   // Non-XPCOM method to get IPC data:
@@ -92,12 +85,7 @@ class GfxInfoBase : public nsIGfxInfo,
   virtual nsresult Init();
 
   NS_IMETHOD_(void) GetData() override;
-  NS_IMETHOD_(int32_t) GetMaxRefreshRate(bool* aMixed) override {
-    if (aMixed) {
-      *aMixed = false;
-    }
-    return -1;
-  }
+  NS_IMETHOD_(int32_t) GetMaxRefreshRate(bool* aMixed) override;
 
   static void AddCollector(GfxInfoCollectorBase* collector);
   static void RemoveCollector(GfxInfoCollectorBase* collector);
@@ -157,6 +145,9 @@ class GfxInfoBase : public nsIGfxInfo,
 
   NS_IMETHOD ControlGPUProcessForXPCShell(bool aEnable, bool* _retval) override;
 
+  NS_IMETHOD KillGPUProcessForTests() override;
+  NS_IMETHOD CrashGPUProcessForTests() override;
+
   // Total number of pixels for all detected screens at startup.
   int64_t mScreenPixels;
 
@@ -173,7 +164,7 @@ class GfxInfoBase : public nsIGfxInfo,
   bool BuildFeatureStateLog(JSContext* aCx, const gfx::FeatureState& aFeature,
                             JS::MutableHandle<JS::Value> aOut);
 
-  Mutex mMutex;
+  Mutex mMutex MOZ_UNANNOTATED;
 };
 
 }  // namespace widget

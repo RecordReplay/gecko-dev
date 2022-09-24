@@ -48,7 +48,6 @@ class GradientStopsCairo : public GradientStops {
 class DrawTargetCairo final : public DrawTarget {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(DrawTargetCairo, override)
-  friend class BorrowedCairoContext;
   friend class BorrowedXlibDrawable;
 
   DrawTargetCairo();
@@ -61,6 +60,8 @@ class DrawTargetCairo final : public DrawTarget {
   }
 
   virtual void Link(const char* aDestination, const Rect& aRect) override;
+  virtual void Destination(const char* aDestination,
+                           const Point& aPoint) override;
 
   virtual already_AddRefed<SourceSurface> Snapshot() override;
   virtual IntSize GetSize() const override;
@@ -84,8 +85,7 @@ class DrawTargetCairo final : public DrawTarget {
                           const DrawOptions& aOptions = DrawOptions()) override;
   virtual void DrawSurfaceWithShadow(SourceSurface* aSurface,
                                      const Point& aDest,
-                                     const DeviceColor& aColor,
-                                     const Point& aOffset, Float aSigma,
+                                     const ShadowOptions& aShadow,
                                      CompositionOp aOperator) override;
 
   virtual void ClearRect(const Rect& aRect) override;

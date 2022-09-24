@@ -3,6 +3,8 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import { Component } from "react";
+import PropTypes from "prop-types";
+
 import { connect } from "../../utils/connect";
 import { showMenu } from "../../context-menu/menu";
 
@@ -13,11 +15,19 @@ import {
   getIsCurrentThreadPaused,
   getThreadContext,
   isSourceWithMap,
+  getBlackBoxRanges,
 } from "../../selectors";
 
 import { editorMenuItems, editorItemActions } from "./menus/editor";
 
 class EditorMenu extends Component {
+  static get propTypes() {
+    return {
+      clearContextMenu: PropTypes.func.isRequired,
+      contextMenu: PropTypes.object,
+    };
+  }
+
   componentWillUpdate(nextProps) {
     this.props.clearContextMenu();
     if (nextProps.contextMenu) {
@@ -30,6 +40,7 @@ class EditorMenu extends Component {
       cx,
       editor,
       selectedSource,
+      blackboxedRanges,
       editorActions,
       hasMappedLocation,
       isPaused,
@@ -50,12 +61,14 @@ class EditorMenu extends Component {
         cx,
         editorActions,
         selectedSource,
+        blackboxedRanges,
         hasMappedLocation,
         location,
         isPaused,
         editorWrappingEnabled,
         selectionText: editor.codeMirror.getSelection().trim(),
         isTextSelected: editor.codeMirror.somethingSelected(),
+        editor,
       })
     );
   }
@@ -67,6 +80,7 @@ class EditorMenu extends Component {
 
 const mapStateToProps = (state, props) => ({
   cx: getThreadContext(state),
+  blackboxedRanges: getBlackBoxRanges(state),
   isPaused: getIsCurrentThreadPaused(state),
   hasMappedLocation:
     (props.selectedSource.isOriginal ||

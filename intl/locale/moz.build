@@ -6,6 +6,10 @@
 
 XPCSHELL_TESTS_MANIFESTS += ["tests/unit/xpcshell.ini"]
 
+TESTING_JS_MODULES += [
+    "tests/LangPackMatcherTestUtils.jsm",
+]
+
 toolkit = CONFIG["MOZ_WIDGET_TOOLKIT"]
 
 if toolkit == "windows":
@@ -20,32 +24,26 @@ elif toolkit == "android":
 XPIDL_SOURCES += [
     "mozILocaleService.idl",
     "mozIOSPreferences.idl",
-    "nsICollation.idl",
 ]
 
 XPIDL_MODULE = "locale"
 
 EXPORTS += [
-    "DateTimeFormat.h",
-    "nsCollationCID.h",
     "nsLanguageAtomService.h",
     "nsUConvPropertySearch.h",
 ]
 
 EXPORTS.mozilla.intl += [
+    "AppDateTimeFormat.h",
     "LocaleService.h",
-    "MozLocale.h",
     "MozLocaleBindings.h",
     "OSPreferences.h",
     "Quotes.h",
 ]
 
 UNIFIED_SOURCES += [
-    "DateTimeFormat.cpp",
+    "AppDateTimeFormat.cpp",
     "LocaleService.cpp",
-    "MozLocale.cpp",
-    "nsCollation.cpp",
-    "nsCollationFactory.cpp",
     "nsLanguageAtomService.cpp",
     "nsUConvPropertySearch.cpp",
     "OSPreferences.cpp",
@@ -53,6 +51,7 @@ UNIFIED_SOURCES += [
 ]
 
 EXTRA_JS_MODULES += [
+    "LangPackMatcher.jsm",
     "PluralForm.jsm",
 ]
 
@@ -93,3 +92,5 @@ if CONFIG["COMPILE_ENVIRONMENT"]:
         "!fluent_langneg_ffi_generated.h",
         "!unic_langid_ffi_generated.h",
     ]
+
+REQUIRES_UNIFIED_BUILD = True

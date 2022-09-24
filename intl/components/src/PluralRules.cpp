@@ -4,7 +4,9 @@
 
 #include "mozilla/intl/PluralRules.h"
 
+#include "mozilla/intl/ICU4CGlue.h"
 #include "mozilla/intl/NumberFormat.h"
+#include "mozilla/intl/NumberRangeFormat.h"
 #include "mozilla/Utf8.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Span.h"
@@ -14,41 +16,50 @@
 #include "unicode/upluralrules.h"
 #include "unicode/ustring.h"
 
-namespace mozilla {
-namespace intl {
+namespace mozilla::intl {
 
 PluralRules::PluralRules(UPluralRules*& aPluralRules,
-                         UniquePtr<NumberFormat>&& aNumberFormat)
-    : mPluralRules(aPluralRules), mNumberFormat(std::move(aNumberFormat)) {
+                         UniquePtr<NumberFormat>&& aNumberFormat,
+                         UniquePtr<NumberRangeFormat>&& aNumberRangeFormat)
+    : mPluralRules(aPluralRules),
+      mNumberFormat(std::move(aNumberFormat)),
+      mNumberRangeFormat(std::move(aNumberRangeFormat)) {
   MOZ_ASSERT(aPluralRules);
   aPluralRules = nullptr;
 }
 
-Result<UniquePtr<PluralRules>, PluralRules::Error> PluralRules::TryCreate(
+Result<UniquePtr<PluralRules>, ICUError> PluralRules::TryCreate(
     const std::string_view aLocale, const PluralRulesOptions& aOptions) {
   auto numberFormat =
       NumberFormat::TryCreate(aLocale, aOptions.ToNumberFormatOptions());
 
   if (numberFormat.isErr()) {
-    return Err(PluralRules::Error::InternalError);
+    return Err(numberFormat.unwrapErr());
+  }
+
+  auto numberRangeFormat = NumberRangeFormat::TryCreate(
+      aLocale, aOptions.ToNumberRangeFormatOptions());
+
+  if (numberRangeFormat.isErr()) {
+    return Err(numberRangeFormat.unwrapErr());
   }
 
   UErrorCode status = U_ZERO_ERROR;
   auto pluralType = aOptions.mPluralType == PluralRules::Type::Cardinal
                         ? UPLURAL_TYPE_CARDINAL
                         : UPLURAL_TYPE_ORDINAL;
-  UPluralRules* pluralRules =
-      uplrules_openForType(aLocale.data(), pluralType, &status);
+  UPluralRules* pluralRules = uplrules_openForType(
+      AssertNullTerminatedString(aLocale), pluralType, &status);
 
   if (U_FAILURE(status)) {
-    return Err(PluralRules::Error::InternalError);
+    return Err(ToICUError(status));
   }
 
-  return UniquePtr<PluralRules>(
-      new PluralRules(pluralRules, numberFormat.unwrap()));
+  return UniquePtr<PluralRules>(new PluralRules(
+      pluralRules, numberFormat.unwrap(), numberRangeFormat.unwrap()));
 }
 
-Result<PluralRules::Keyword, PluralRules::Error> PluralRules::Select(
+Result<PluralRules::Keyword, ICUError> PluralRules::Select(
     const double aNumber) const {
   char16_t keyword[MAX_KEYWORD_LENGTH];
 
@@ -56,18 +67,32 @@ Result<PluralRules::Keyword, PluralRules::Error> PluralRules::Select(
       aNumber, keyword, MAX_KEYWORD_LENGTH, mPluralRules);
 
   if (lengthResult.isErr()) {
-    return Err(PluralRules::Error::FormatError);
+    return Err(lengthResult.unwrapErr());
   }
 
   return KeywordFromUtf16(Span(keyword, lengthResult.unwrap()));
 }
 
-Result<EnumSet<PluralRules::Keyword>, PluralRules::Error>
-PluralRules::Categories() const {
+Result<PluralRules::Keyword, ICUError> PluralRules::SelectRange(
+    double aStart, double aEnd) const {
+  char16_t keyword[MAX_KEYWORD_LENGTH];
+
+  auto lengthResult = mNumberRangeFormat->selectForRange(
+      aStart, aEnd, keyword, MAX_KEYWORD_LENGTH, mPluralRules);
+
+  if (lengthResult.isErr()) {
+    return Err(lengthResult.unwrapErr());
+  }
+
+  return KeywordFromUtf16(Span(keyword, lengthResult.unwrap()));
+}
+
+Result<EnumSet<PluralRules::Keyword>, ICUError> PluralRules::Categories()
+    const {
   UErrorCode status = U_ZERO_ERROR;
   UEnumeration* enumeration = uplrules_getKeywords(mPluralRules, &status);
   if (U_FAILURE(status)) {
-    return Err(PluralRules::Error::InternalError);
+    return Err(ToICUError(status));
   }
 
   ScopedICUObject<UEnumeration, uenum_close> closeEnum(enumeration);
@@ -77,7 +102,7 @@ PluralRules::Categories() const {
     int32_t keywordLength;
     const char* keyword = uenum_next(enumeration, &keywordLength, &status);
     if (U_FAILURE(status)) {
-      return Err(PluralRules::Error::InternalError);
+      return Err(ToICUError(status));
     }
 
     if (!keyword) {
@@ -152,5 +177,4 @@ PluralRules::~PluralRules() {
   }
 }
 
-}  // namespace intl
-}  // namespace mozilla
+}  // namespace mozilla::intl

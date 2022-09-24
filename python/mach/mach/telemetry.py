@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 
+from pathlib import Path
 from six.moves import input, configparser
 from textwrap import dedent
 
@@ -16,16 +17,16 @@ import requests
 import six.moves.urllib.parse as urllib_parse
 
 from mach.config import ConfigSettings
+from mach.site import MozSiteMetadata
 from mach.telemetry_interface import NoopTelemetry, GleanTelemetry
-from mozboot.util import get_state_dir, get_mach_virtualenv_binary
+from mach.util import get_state_dir
 from mozbuild.base import MozbuildObject, BuildEnvironmentNotFoundException
 from mozbuild.settings import TelemetrySettings
 from mozbuild.telemetry import filter_args
-import mozpack.path
 
 from mozversioncontrol import get_repository_object, InvalidRepoPath
 
-MACH_METRICS_PATH = os.path.abspath(os.path.join(__file__, "..", "..", "metrics.yaml"))
+MACH_METRICS_PATH = (Path(__file__) / ".." / ".." / "metrics.yaml").resolve()
 
 
 def create_telemetry_from_environment(settings):
@@ -38,9 +39,8 @@ def create_telemetry_from_environment(settings):
     doesn't support it.
     """
 
-    is_mach_virtualenv = mozpack.path.normpath(sys.executable) == mozpack.path.normpath(
-        get_mach_virtualenv_binary()
-    )
+    active_metadata = MozSiteMetadata.from_runtime()
+    is_mach_virtualenv = active_metadata and active_metadata.site_name == "mach"
 
     if not (
         is_applicable_telemetry_environment()
@@ -53,17 +53,19 @@ def create_telemetry_from_environment(settings):
     ):
         return NoopTelemetry(False)
 
+    is_enabled = is_telemetry_enabled(settings)
+
     try:
         from glean import Glean
     except ImportError:
-        return NoopTelemetry(True)
+        return NoopTelemetry(is_enabled)
 
     from pathlib import Path
 
     Glean.initialize(
         "mozilla.mach",
         "Unknown",
-        is_telemetry_enabled(settings),
+        is_enabled,
         data_dir=Path(get_state_dir()) / "glean",
     )
     return GleanTelemetry()
@@ -109,24 +111,25 @@ def is_telemetry_enabled(settings):
 
 def arcrc_path():
     if sys.platform.startswith("win32") or sys.platform.startswith("msys"):
-        return os.path.join(os.environ.get("APPDATA", ""), ".arcrc")
+        return Path(os.environ.get("APPDATA", "")) / ".arcrc"
     else:
-        return os.path.expanduser("~/.arcrc")
+        return Path("~/.arcrc").expanduser()
 
 
-def resolve_setting_from_arcconfig(topsrcdir, setting):
-    git_path = os.path.join(topsrcdir, ".git")
-    if os.path.isfile(git_path):
+def resolve_setting_from_arcconfig(topsrcdir: Path, setting):
+    git_path = topsrcdir / ".git"
+    if git_path.is_file():
         git_path = subprocess.check_output(
             ["git", "rev-parse", "--git-common-dir"],
-            cwd=topsrcdir,
+            cwd=str(topsrcdir),
             universal_newlines=True,
         )
+        git_path = Path(git_path)
 
     for arcconfig_path in [
-        os.path.join(topsrcdir, ".hg", ".arcconfig"),
-        os.path.join(git_path, ".arcconfig"),
-        os.path.join(topsrcdir, ".arcconfig"),
+        topsrcdir / ".hg" / ".arcconfig",
+        git_path / ".arcconfig",
+        topsrcdir / ".arcconfig",
     ]:
         try:
             with open(arcconfig_path, "r") as arcconfig_file:
@@ -139,7 +142,7 @@ def resolve_setting_from_arcconfig(topsrcdir, setting):
             return value
 
 
-def resolve_is_employee_by_credentials(topsrcdir):
+def resolve_is_employee_by_credentials(topsrcdir: Path):
     phabricator_uri = resolve_setting_from_arcconfig(topsrcdir, "phabricator.uri")
 
     if not phabricator_uri:
@@ -171,9 +174,9 @@ def resolve_is_employee_by_credentials(topsrcdir):
     return "mozilla-employee-confidential" in bmo_result.json().get("groups", [])
 
 
-def resolve_is_employee_by_vcs(topsrcdir):
+def resolve_is_employee_by_vcs(topsrcdir: Path):
     try:
-        vcs = get_repository_object(topsrcdir)
+        vcs = get_repository_object(str(topsrcdir))
     except InvalidRepoPath:
         return None
 
@@ -184,7 +187,7 @@ def resolve_is_employee_by_vcs(topsrcdir):
     return "@mozilla.com" in email
 
 
-def resolve_is_employee(topsrcdir):
+def resolve_is_employee(topsrcdir: Path):
     """Detect whether or not the current user is a Mozilla employee.
 
     Checks using Bugzilla authentication, if possible. Otherwise falls back to checking
@@ -203,23 +206,21 @@ def resolve_is_employee(topsrcdir):
 
 def record_telemetry_settings(
     main_settings,
-    state_dir,
+    state_dir: Path,
     is_enabled,
 ):
     # We want to update the user's machrc file. However, the main settings object
     # contains config from "$topsrcdir/machrc" (if it exists) which we don't want
     # to accidentally include. So, we have to create a brand new mozbuild-specific
     # settings, update it, then write to it.
-    settings_path = os.path.join(state_dir, "machrc")
+    settings_path = state_dir / "machrc"
     file_settings = ConfigSettings()
     file_settings.register_provider(TelemetrySettings)
     try:
         file_settings.load_file(settings_path)
-    except configparser.Error as e:
+    except configparser.Error as error:
         print(
-            "Your mach configuration file at `{path}` cannot be parsed:\n{error}".format(
-                path=settings_path, error=e
-            )
+            f"Your mach configuration file at `{settings_path}` cannot be parsed:\n{error}"
         )
         return
 
@@ -279,11 +280,18 @@ def prompt_telemetry_message_contributor():
             return choice == "y"
 
 
-def initialize_telemetry_setting(settings, topsrcdir, state_dir):
+def initialize_telemetry_setting(settings, topsrcdir: str, state_dir: str):
     """Enables telemetry for employees or prompts the user."""
     # If the user doesn't care about telemetry for this invocation, then
     # don't make requests to Bugzilla and/or prompt for whether the
     # user wants to opt-in.
+
+    if topsrcdir is not None:
+        topsrcdir = Path(topsrcdir)
+
+    if state_dir is not None:
+        state_dir = Path(state_dir)
+
     if os.environ.get("DISABLE_TELEMETRY") == "1":
         return
 

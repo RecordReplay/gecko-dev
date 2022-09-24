@@ -8,6 +8,10 @@ const Services = require("Services");
 const { DevToolsServer } = require("devtools/server/devtools-server");
 const { Cc, Ci } = require("chrome");
 
+const {
+  createBrowserSessionContext,
+  createContentProcessSessionContext,
+} = require("devtools/server/actors/watcher/session-context");
 const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
 const {
   processDescriptorSpec,
@@ -45,47 +49,66 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
     }
     Actor.prototype.initialize.call(this, connection);
     this.id = options.id;
-    this._browsingContextTargetActor = null;
+    this._windowGlobalTargetActor = null;
     this.isParent = options.parent;
     this.destroy = this.destroy.bind(this);
   },
 
   get browsingContextID() {
-    if (this._browsingContextTargetActor) {
-      return this._browsingContextTargetActor.docShell.browsingContext.id;
+    if (this._windowGlobalTargetActor) {
+      return this._windowGlobalTargetActor.docShell.browsingContext.id;
     }
     return null;
   },
 
-  _parentProcessConnect() {
+  get isWindowlessParent() {
+    return this.isParent && (this.isXpcshell || this.isBackgroundTaskMode);
+  },
+
+  get isXpcshell() {
     const env = Cc["@mozilla.org/process/environment;1"].getService(
       Ci.nsIEnvironment
     );
-    const isXpcshell = env.exists("XPCSHELL_TEST_PROFILE_DIR");
+    return env.exists("XPCSHELL_TEST_PROFILE_DIR");
+  },
+
+  get isBackgroundTaskMode() {
+    const bts = Cc["@mozilla.org/backgroundtasks;1"]?.getService(
+      Ci.nsIBackgroundTasks
+    );
+    return bts && bts.isBackgroundTaskMode;
+  },
+
+  _parentProcessConnect({ isBrowserToolboxFission }) {
     let targetActor;
-    if (isXpcshell) {
-      // Check if we are running on xpcshell.
-      // When running on xpcshell, there is no valid browsing context to attach to
+    if (this.isWindowlessParent) {
+      // Check if we are running on xpcshell or in background task mode.
+      // In these modes, there is no valid browsing context to attach to
       // and so ParentProcessTargetActor doesn't make sense as it inherits from
-      // BrowsingContextTargetActor. So instead use ContentProcessTargetActor, which
-      // matches xpcshell needs.
+      // WindowGlobalTargetActor. So instead use ContentProcessTargetActor, which
+      // matches the needs of these modes.
       targetActor = new ContentProcessTargetActor(this.conn, {
         isXpcShellTarget: true,
+        sessionContext: createContentProcessSessionContext(),
       });
     } else {
       // Create the target actor for the parent process, which is in the same process
       // as this target. Because we are in the same process, we have a true actor that
       // should be managed by the ProcessDescriptorActor.
       targetActor = new ParentProcessTargetActor(this.conn, {
-        // This BrowsingContextTargetActor is special and will stay alive as long
+        // This target actor is special and will stay alive as long
         // as the toolbox/client is alive. It is the original top level target for
         // the BrowserToolbox and isTopLevelTarget should always be true here.
+        // (It isn't the typical behavior of WindowGlobalTargetActor's base class)
         isTopLevelTarget: true,
+        sessionContext: createBrowserSessionContext({
+          isBrowserToolboxFission,
+        }),
       });
       // this is a special field that only parent process with a browsing context
       // have, as they are the only processes at the moment that have child
       // browsing contexts
-      this._browsingContextTargetActor = targetActor;
+      this._windowGlobalTargetActor = targetActor;
     }
     this.manage(targetActor);
     // to be consistent with the return value of the _childProcessConnect, we are returning
@@ -128,7 +151,7 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
   /**
    * Connect the a process actor.
    */
-  async getTarget() {
+  async getTarget({ isBrowserToolboxFission }) {
     if (!DevToolsServer.allowChromeProcess) {
       return {
         error: "forbidden",
@@ -136,7 +159,7 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
       };
     }
     if (this.isParent) {
-      return this._parentProcessConnect();
+      return this._parentProcessConnect({ isBrowserToolboxFission });
     }
     // This is a remote process we are connecting to
     return this._childProcessConnect();
@@ -147,9 +170,12 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
    * already exists or will be created. It also helps knowing when they
    * are destroyed.
    */
-  getWatcher() {
+  getWatcher({ isBrowserToolboxFission }) {
     if (!this.watcher) {
-      this.watcher = new WatcherActor(this.conn);
+      this.watcher = new WatcherActor(
+        this.conn,
+        createBrowserSessionContext({ isBrowserToolboxFission })
+      );
       this.manage(this.watcher);
     }
     return this.watcher;
@@ -160,25 +186,26 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
       actor: this.actorID,
       id: this.id,
       isParent: this.isParent,
+      isWindowlessParent: this.isWindowlessParent,
       traits: {
         // Supports the Watcher actor. Can be removed as part of Bug 1680280.
         watcher: true,
         // ParentProcessTargetActor can be reloaded.
-        supportsReloadDescriptor: this.isParent,
+        supportsReloadDescriptor: this.isParent && !this.isWindowlessParent,
       },
     };
   },
 
   async reloadDescriptor({ bypassCache }) {
-    if (!this.isParent) {
+    if (!this.isParent || this.isWindowlessParent) {
       throw new Error(
-        "reloadDescriptor is not available for content process descriptors"
+        "reloadDescriptor is only available for parent process descriptors linked to a window"
       );
     }
 
     // For parent process debugging, we only reload the current top level
     // browser window.
-    this._browsingContextTargetActor.browsingContext.reload(
+    this._windowGlobalTargetActor.browsingContext.reload(
       bypassCache
         ? Ci.nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE
         : Ci.nsIWebNavigation.LOAD_FLAGS_NONE
@@ -188,7 +215,7 @@ const ProcessDescriptorActor = ActorClassWithSpec(processDescriptorSpec, {
   destroy() {
     this.emit("descriptor-destroyed");
 
-    this._browsingContextTargetActor = null;
+    this._windowGlobalTargetActor = null;
     Actor.prototype.destroy.call(this);
   },
 });

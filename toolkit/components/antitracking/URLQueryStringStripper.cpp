@@ -9,6 +9,7 @@
 #include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Unused.h"
+#include "mozilla/Telemetry.h"
 
 #include "nsEffectiveTLDService.h"
 #include "nsISupportsImpl.h"
@@ -30,25 +31,34 @@ URLQueryStringStripper* URLQueryStringStripper::GetOrCreate() {
     gQueryStringStripper = new URLQueryStringStripper();
     gQueryStringStripper->Init();
 
-    RunOnShutdown([&] {
-      gQueryStringStripper->Shutdown();
-      gQueryStringStripper = nullptr;
-    });
+    RunOnShutdown(
+        [&] {
+          gQueryStringStripper->Shutdown();
+          gQueryStringStripper = nullptr;
+        },
+        ShutdownPhase::XPCOMShutdown);
   }
 
   return gQueryStringStripper;
 }
 
 /* static */
-bool URLQueryStringStripper::Strip(nsIURI* aURI, nsCOMPtr<nsIURI>& aOutput) {
-  if (!StaticPrefs::privacy_query_stripping_enabled()) {
-    return false;
+uint32_t URLQueryStringStripper::Strip(nsIURI* aURI, bool aIsPBM,
+                                       nsCOMPtr<nsIURI>& aOutput) {
+  if (aIsPBM) {
+    if (!StaticPrefs::privacy_query_stripping_enabled_pbmode()) {
+      return 0;
+    }
+  } else {
+    if (!StaticPrefs::privacy_query_stripping_enabled()) {
+      return 0;
+    }
   }
 
   RefPtr<URLQueryStringStripper> stripper = GetOrCreate();
 
   if (stripper->CheckAllowList(aURI)) {
-    return false;
+    return 0;
   }
 
   return stripper->StripQueryString(aURI, aOutput);
@@ -58,6 +68,7 @@ void URLQueryStringStripper::Init() {
   mService = do_GetService("@mozilla.org/query-stripping-list-service;1");
   NS_ENSURE_TRUE_VOID(mService);
 
+  mService->Init();
   mService->RegisterAndRunObserver(this);
 }
 
@@ -69,8 +80,8 @@ void URLQueryStringStripper::Shutdown() {
   mService = nullptr;
 }
 
-bool URLQueryStringStripper::StripQueryString(nsIURI* aURI,
-                                              nsCOMPtr<nsIURI>& aOutput) {
+uint32_t URLQueryStringStripper::StripQueryString(nsIURI* aURI,
+                                                  nsCOMPtr<nsIURI>& aOutput) {
   MOZ_ASSERT(aURI);
 
   nsCOMPtr<nsIURI> uri(aURI);
@@ -79,13 +90,14 @@ bool URLQueryStringStripper::StripQueryString(nsIURI* aURI,
   nsresult rv = aURI->GetQuery(query);
   NS_ENSURE_SUCCESS(rv, false);
 
+  uint32_t numStripped = 0;
+
   // We don't need to do anything if there is no query string.
   if (query.IsEmpty()) {
-    return false;
+    return numStripped;
   }
 
   URLParams params;
-  bool hasStripped = false;
 
   URLParams::Parse(query, [&](nsString&& name, nsString&& value) {
     nsAutoString lowerCaseName;
@@ -93,7 +105,16 @@ bool URLQueryStringStripper::StripQueryString(nsIURI* aURI,
     ToLowerCase(name, lowerCaseName);
 
     if (mList.Contains(lowerCaseName)) {
-      hasStripped = true;
+      numStripped += 1;
+
+      // Count how often a specific query param is stripped. For privacy reasons
+      // this will only count query params listed in the Histogram definition.
+      // Calls for any other query params will be discarded.
+      nsAutoCString telemetryLabel("param_");
+      AppendUTF16toUTF8(lowerCaseName, telemetryLabel);
+      Telemetry::AccumulateCategorical(
+          Telemetry::QUERY_STRIPPING_COUNT_BY_PARAM, telemetryLabel);
+
       return true;
     }
 
@@ -102,18 +123,18 @@ bool URLQueryStringStripper::StripQueryString(nsIURI* aURI,
   });
 
   // Return if there is no parameter has been stripped.
-  if (!hasStripped) {
-    return false;
+  if (!numStripped) {
+    return numStripped;
   }
 
   nsAutoString newQuery;
-  params.Serialize(newQuery);
+  params.Serialize(newQuery, false);
 
   Unused << NS_MutateURI(uri)
                 .SetQuery(NS_ConvertUTF16toUTF8(newQuery))
                 .Finalize(aOutput);
 
-  return true;
+  return numStripped;
 }
 
 bool URLQueryStringStripper::CheckAllowList(nsIURI* aURI) {
@@ -123,6 +144,9 @@ bool URLQueryStringStripper::CheckAllowList(nsIURI* aURI) {
   nsAutoCString baseDomain;
   nsresult rv =
       nsEffectiveTLDService::GetInstance()->GetBaseDomain(aURI, 0, baseDomain);
+  if (rv == NS_ERROR_INSUFFICIENT_DOMAIN_LEVELS) {
+    return false;
+  }
   NS_ENSURE_SUCCESS(rv, false);
 
   return mAllowList.Contains(baseDomain);

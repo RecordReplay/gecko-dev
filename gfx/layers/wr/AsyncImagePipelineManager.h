@@ -178,7 +178,8 @@ class AsyncImagePipelineManager final {
   };
 
   struct AsyncImagePipeline {
-    AsyncImagePipeline();
+    AsyncImagePipeline(wr::PipelineId aPipelineId,
+                       layers::WebRenderBackend aBackend);
     void Update(const LayoutDeviceRect& aScBounds,
                 VideoInfo::Rotation aRotation,
                 const wr::ImageRendering& aFilter,
@@ -202,6 +203,7 @@ class AsyncImagePipelineManager final {
     RefPtr<WebRenderImageHost> mImageHost;
     CompositableTextureHostRef mCurrentTexture;
     nsTArray<wr::ImageKey> mKeys;
+    wr::DisplayListBuilder mDLBuilder;
   };
 
   void ApplyAsyncImageForPipeline(const wr::Epoch& aEpoch,
@@ -261,7 +263,7 @@ class AsyncImagePipelineManager final {
 
   std::vector<std::pair<wr::RenderedFrameId, WebRenderPipelineInfoHolder>>
       mRenderSubmittedUpdates;
-  Mutex mRenderSubmittedUpdatesLock;
+  Mutex mRenderSubmittedUpdatesLock MOZ_UNANNOTATED;
 
   Atomic<uint64_t> mLastCompletedFrameId;
   std::vector<std::pair<wr::RenderedFrameId,

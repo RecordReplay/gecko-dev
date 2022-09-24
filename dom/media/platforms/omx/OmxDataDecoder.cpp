@@ -580,7 +580,11 @@ void OmxDataDecoder::FillCodecConfigDataToOmx() {
   RefPtr<BufferData> inbuf = FindAvailableBuffer(OMX_DirInput);
   RefPtr<MediaByteBuffer> csc;
   if (mTrackInfo->IsAudio()) {
-    csc = mTrackInfo->GetAsAudioInfo()->mCodecSpecificConfig;
+    // It would be nice to instead use more specific information here, but
+    // we force a byte buffer for now since this handles arbitrary codecs.
+    // TODO(bug 1768566): implement further type checking for codec data.
+    csc = ForceGetAudioCodecSpecificBlob(
+        mTrackInfo->GetAsAudioInfo()->mCodecSpecificConfig);
   } else if (mTrackInfo->IsVideo()) {
     csc = mTrackInfo->GetAsVideoInfo()->mExtraData;
   }
@@ -937,6 +941,8 @@ already_AddRefed<VideoData> MediaDataHelper::CreateYUV420VideoData(
   b.mPlanes[2].mStride = (stride + 1) / 2;
   b.mPlanes[2].mSkip = 0;
 
+  b.mChromaSubsampling = gfx::ChromaSubsampling::HALF_WIDTH_AND_HEIGHT;
+
   VideoInfo info(*mTrackInfo->GetAsVideoInfo());
 
   auto maybeColorSpace = info.mColorSpace;
@@ -952,7 +958,7 @@ already_AddRefed<VideoData> MediaDataHelper::CreateYUV420VideoData(
       media::TimeUnit::FromMicroseconds(1),  // We don't know the duration.
       b,
       0,  // Filled later by caller.
-      media::TimeUnit::FromMicroseconds(-1), info.ImageRect());
+      media::TimeUnit::FromMicroseconds(-1), info.ImageRect(), nullptr);
 
   MOZ_LOG(sPDMLog, mozilla::LogLevel::Debug,
           ("YUV420 VideoData: disp width %d, height %d, pic width %d, height "

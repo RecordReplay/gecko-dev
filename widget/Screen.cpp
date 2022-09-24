@@ -7,37 +7,58 @@
 #include "Screen.h"
 
 #include "mozilla/dom/DOMTypes.h"
+#include "mozilla/Hal.h"
 #include "mozilla/StaticPrefs_layout.h"
 
-namespace mozilla {
-namespace widget {
+namespace mozilla::widget {
 
 NS_IMPL_ISUPPORTS(Screen, nsIScreen)
 
+static hal::ScreenOrientation EffectiveOrientation(
+    hal::ScreenOrientation aOrientation, const LayoutDeviceIntRect& aRect) {
+  if (aOrientation == hal::ScreenOrientation::None) {
+    return aRect.Width() >= aRect.Height()
+               ? hal::ScreenOrientation::LandscapePrimary
+               : hal::ScreenOrientation::PortraitPrimary;
+  }
+  return aOrientation;
+}
+
 Screen::Screen(LayoutDeviceIntRect aRect, LayoutDeviceIntRect aAvailRect,
                uint32_t aPixelDepth, uint32_t aColorDepth,
-               DesktopToLayoutDeviceScale aContentsScale,
-               CSSToLayoutDeviceScale aDefaultCssScale, float aDPI)
+               uint32_t aRefreshRate, DesktopToLayoutDeviceScale aContentsScale,
+               CSSToLayoutDeviceScale aDefaultCssScale, float aDPI,
+               IsPseudoDisplay aIsPseudoDisplay,
+               hal::ScreenOrientation aOrientation,
+               OrientationAngle aOrientationAngle)
     : mRect(aRect),
       mAvailRect(aAvailRect),
       mRectDisplayPix(RoundedToInt(aRect / aContentsScale)),
       mAvailRectDisplayPix(RoundedToInt(aAvailRect / aContentsScale)),
       mPixelDepth(aPixelDepth),
       mColorDepth(aColorDepth),
+      mRefreshRate(aRefreshRate),
       mContentsScale(aContentsScale),
       mDefaultCssScale(aDefaultCssScale),
-      mDPI(aDPI) {}
+      mDPI(aDPI),
+      mScreenOrientation(EffectiveOrientation(aOrientation, aRect)),
+      mOrientationAngle(aOrientationAngle),
+      mIsPseudoDisplay(aIsPseudoDisplay == IsPseudoDisplay::Yes) {}
 
-Screen::Screen(const mozilla::dom::ScreenDetails& aScreen)
+Screen::Screen(const dom::ScreenDetails& aScreen)
     : mRect(aScreen.rect()),
       mAvailRect(aScreen.availRect()),
       mRectDisplayPix(aScreen.rectDisplayPix()),
       mAvailRectDisplayPix(aScreen.availRectDisplayPix()),
       mPixelDepth(aScreen.pixelDepth()),
       mColorDepth(aScreen.colorDepth()),
+      mRefreshRate(aScreen.refreshRate()),
       mContentsScale(aScreen.contentsScaleFactor()),
       mDefaultCssScale(aScreen.defaultCSSScaleFactor()),
-      mDPI(aScreen.dpi()) {}
+      mDPI(aScreen.dpi()),
+      mScreenOrientation(aScreen.orientation()),
+      mOrientationAngle(aScreen.orientationAngle()),
+      mIsPseudoDisplay(aScreen.isPseudoDisplay()) {}
 
 Screen::Screen(const Screen& aOther)
     : mRect(aOther.mRect),
@@ -46,14 +67,19 @@ Screen::Screen(const Screen& aOther)
       mAvailRectDisplayPix(aOther.mAvailRectDisplayPix),
       mPixelDepth(aOther.mPixelDepth),
       mColorDepth(aOther.mColorDepth),
+      mRefreshRate(aOther.mRefreshRate),
       mContentsScale(aOther.mContentsScale),
       mDefaultCssScale(aOther.mDefaultCssScale),
-      mDPI(aOther.mDPI) {}
+      mDPI(aOther.mDPI),
+      mScreenOrientation(aOther.mScreenOrientation),
+      mOrientationAngle(aOther.mOrientationAngle),
+      mIsPseudoDisplay(aOther.mIsPseudoDisplay) {}
 
-mozilla::dom::ScreenDetails Screen::ToScreenDetails() {
-  return mozilla::dom::ScreenDetails(
+dom::ScreenDetails Screen::ToScreenDetails() const {
+  return dom::ScreenDetails(
       mRect, mRectDisplayPix, mAvailRect, mAvailRectDisplayPix, mPixelDepth,
-      mColorDepth, mContentsScale, mDefaultCssScale, mDPI);
+      mColorDepth, mRefreshRate, mContentsScale, mDefaultCssScale, mDPI,
+      mScreenOrientation, mOrientationAngle, mIsPseudoDisplay);
 }
 
 NS_IMETHODIMP
@@ -119,5 +145,16 @@ Screen::GetDpi(float* aDPI) {
   return NS_OK;
 }
 
-}  // namespace widget
-}  // namespace mozilla
+NS_IMETHODIMP
+Screen::GetRefreshRate(int32_t* aRefreshRate) {
+  *aRefreshRate = mRefreshRate;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+Screen::GetIsPseudoDisplay(bool* aIsPseudoDisplay) {
+  *aIsPseudoDisplay = mIsPseudoDisplay;
+  return NS_OK;
+}
+
+}  // namespace mozilla::widget

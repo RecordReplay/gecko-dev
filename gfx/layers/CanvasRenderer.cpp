@@ -68,6 +68,28 @@ std::shared_ptr<BorrowedSourceSurface> CanvasRenderer::BorrowSnapshot(
   return std::make_shared<BorrowedSourceSurface>(provider, ss);
 }
 
+bool CanvasRenderer::CopySnapshotTo(gfx::DrawTarget* aDT,
+                                    bool aRequireAlphaPremult) {
+  auto* const context = mData.GetContext();
+  if (!context) return false;
+
+  if (RefPtr<PersistentBufferProvider> provider =
+          context->GetBufferProvider()) {
+    // If we can copy the snapshot directly to the DT, try that first.
+    if (provider->CopySnapshotTo(aDT)) {
+      return true;
+    }
+  }
+
+  // Otherwise, we have to borrow a snapshot before we can copy it to the DT.
+  auto borrowed = BorrowSnapshot(aRequireAlphaPremult);
+  if (!borrowed) {
+    return false;
+  }
+  aDT->CopySurface(borrowed->mSurf, borrowed->mSurf->GetRect(), {0, 0});
+  return true;
+}
+
 void CanvasRenderer::FirePreTransactionCallback() const {
   if (!mData.mDoPaintCallbacks) return;
   const auto context = mData.GetContext();
@@ -87,17 +109,12 @@ TextureType TexTypeForWebgl(KnowsCompositor* const knowsCompositor) {
   const auto layersBackend = knowsCompositor->GetCompositorBackendType();
 
   switch (layersBackend) {
-    case LayersBackend::LAYERS_CLIENT:
-      MOZ_CRASH("Unexpected LayersBackend::LAYERS_CLIENT");
     case LayersBackend::LAYERS_LAST:
       MOZ_CRASH("Unexpected LayersBackend::LAYERS_LAST");
 
     case LayersBackend::LAYERS_NONE:
-    case LayersBackend::LAYERS_BASIC:
       return TextureType::Unknown;
 
-    case LayersBackend::LAYERS_D3D11:
-    case LayersBackend::LAYERS_OPENGL:
     case LayersBackend::LAYERS_WR:
       break;
   }
@@ -117,12 +134,7 @@ TextureType TexTypeForWebgl(KnowsCompositor* const knowsCompositor) {
     }
     return TextureType::DMABUF;
   }
-  if (kIsX11) {
-    if (knowsCompositor->UsingSoftwareWebRender()) {
-      return TextureType::Unknown;
-    }
-    return TextureType::X11;
-  }
+
   if (kIsAndroid) {
     if (gfx::gfxVars::UseAHardwareBufferSharedSurface()) {
       return TextureType::AndroidHardwareBuffer;

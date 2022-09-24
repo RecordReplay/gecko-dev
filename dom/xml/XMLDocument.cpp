@@ -5,7 +5,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/dom/XMLDocument.h"
-#include "nsParserCIID.h"
 #include "nsCharsetSource.h"
 #include "nsIXMLContentSink.h"
 #include "nsPresContext.h"
@@ -32,6 +31,7 @@
 #include "nsIConsoleService.h"
 #include "nsIScriptError.h"
 #include "nsHTMLDocument.h"
+#include "nsParser.h"
 #include "mozilla/BasicEvents.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Encoding.h"
@@ -192,8 +192,7 @@ nsresult NS_NewXMLDocument(Document** aInstancePtrResult, bool aLoadedAsData,
   return NS_OK;
 }
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 XMLDocument::XMLDocument(const char* aContentType)
     : Document(aContentType),
@@ -243,14 +242,11 @@ bool XMLDocument::SuppressParserErrorConsoleMessages() {
   return mSuppressParserErrorConsoleMessages;
 }
 
-nsresult XMLDocument::StartDocumentLoad(const char* aCommand,
-                                        nsIChannel* aChannel,
-                                        nsILoadGroup* aLoadGroup,
-                                        nsISupports* aContainer,
-                                        nsIStreamListener** aDocListener,
-                                        bool aReset, nsIContentSink* aSink) {
-  nsresult rv = Document::StartDocumentLoad(
-      aCommand, aChannel, aLoadGroup, aContainer, aDocListener, aReset, aSink);
+nsresult XMLDocument::StartDocumentLoad(
+    const char* aCommand, nsIChannel* aChannel, nsILoadGroup* aLoadGroup,
+    nsISupports* aContainer, nsIStreamListener** aDocListener, bool aReset) {
+  nsresult rv = Document::StartDocumentLoad(aCommand, aChannel, aLoadGroup,
+                                            aContainer, aDocListener, aReset);
   if (NS_FAILED(rv)) return rv;
 
   int32_t charsetSource = kCharsetFromDocTypeDefault;
@@ -261,25 +257,18 @@ nsresult XMLDocument::StartDocumentLoad(const char* aCommand,
   rv = aChannel->GetURI(getter_AddRefs(aUrl));
   if (NS_FAILED(rv)) return rv;
 
-  static NS_DEFINE_CID(kCParserCID, NS_PARSER_CID);
-
-  mParser = do_CreateInstance(kCParserCID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
+  mParser = new nsParser();
 
   nsCOMPtr<nsIXMLContentSink> sink;
 
-  if (aSink) {
-    sink = do_QueryInterface(aSink);
-  } else {
-    nsCOMPtr<nsIDocShell> docShell;
-    if (aContainer) {
-      docShell = do_QueryInterface(aContainer);
-      NS_ENSURE_TRUE(docShell, NS_ERROR_FAILURE);
-    }
-    rv = NS_NewXMLContentSink(getter_AddRefs(sink), this, aUrl, docShell,
-                              aChannel);
-    NS_ENSURE_SUCCESS(rv, rv);
+  nsCOMPtr<nsIDocShell> docShell;
+  if (aContainer) {
+    docShell = do_QueryInterface(aContainer);
+    NS_ENSURE_TRUE(docShell, NS_ERROR_FAILURE);
   }
+  rv = NS_NewXMLContentSink(getter_AddRefs(sink), this, aUrl, docShell,
+                            aChannel);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   // Set the parser as the stream listener for the document loader...
   rv = CallQueryInterface(mParser, aDocListener);
@@ -292,7 +281,7 @@ nsresult XMLDocument::StartDocumentLoad(const char* aCommand,
   mParser->SetDocumentCharset(encoding, charsetSource);
   mParser->SetCommand(aCommand);
   mParser->SetContentSink(sink);
-  mParser->Parse(aUrl, nullptr, (void*)this);
+  mParser->Parse(aUrl);
 
   return NS_OK;
 }
@@ -309,7 +298,8 @@ void XMLDocument::EndLoad() {
     // document was loaded as pure data without any presentation
     // attached to it.
     WidgetEvent event(true, eLoad);
-    EventDispatcher::Dispatch(ToSupports(this), nullptr, &event);
+    // TODO: Bug 1506441
+    EventDispatcher::Dispatch(MOZ_KnownLive(ToSupports(this)), nullptr, &event);
   }
 }
 
@@ -344,5 +334,4 @@ JSObject* XMLDocument::WrapNode(JSContext* aCx,
   return XMLDocument_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

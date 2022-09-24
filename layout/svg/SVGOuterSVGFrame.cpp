@@ -11,6 +11,7 @@
 #include "gfxContext.h"
 #include "nsDisplayList.h"
 #include "nsIInterfaceRequestorUtils.h"
+#include "nsLayoutUtils.h"
 #include "nsObjectLoadingContent.h"
 #include "nsSubDocumentFrame.h"
 #include "mozilla/PresShell.h"
@@ -83,25 +84,18 @@ SVGOuterSVGFrame::SVGOuterSVGFrame(ComputedStyle* aStyle,
   AddStateBits(NS_FRAME_MAY_BE_TRANSFORMED);
 }
 
-// helper
-static inline bool DependsOnIntrinsicSize(const nsIFrame* aEmbeddingFrame) {
-  const nsStylePosition* pos = aEmbeddingFrame->StylePosition();
-
-  // XXX it would be nice to know if the size of aEmbeddingFrame's containing
-  // block depends on aEmbeddingFrame, then we'd know if we can return false
-  // for eStyleUnit_Percent too.
-  return !pos->mWidth.ConvertsToLength() || !pos->mHeight.ConvertsToLength();
-}
-
 // The CSS Containment spec says that size-contained replaced elements must be
 // treated as having an intrinsic width and height of 0.  That's applicable to
 // outer SVG frames, unless they're the outermost element (in which case
 // they're not really "replaced", and there's no outer context to contain sizes
 // from leaking into). Hence, we check for a parent element before we bother
 // testing for 'contain:size'.
-static inline bool IsReplacedAndContainSize(const SVGOuterSVGFrame* aFrame) {
-  return aFrame->GetContent()->GetParent() &&
-         aFrame->StyleDisplay()->IsContainSize();
+static inline ContainSizeAxes ContainSizeAxesIfApplicable(
+    const SVGOuterSVGFrame* aFrame) {
+  if (!aFrame->GetContent()->GetParent()) {
+    return ContainSizeAxes(false, false);
+  }
+  return aFrame->StyleDisplay()->GetContainSizeAxes();
 }
 
 void SVGOuterSVGFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
@@ -180,7 +174,7 @@ nscoord SVGOuterSVGFrame::GetPrefISize(gfxContext* aRenderingContext) {
       wm.IsVertical() ? svg->mLengthAttributes[SVGSVGElement::ATTR_HEIGHT]
                       : svg->mLengthAttributes[SVGSVGElement::ATTR_WIDTH];
 
-  if (IsReplacedAndContainSize(this)) {
+  if (ContainSizeAxesIfApplicable(this).mIContained) {
     result = nscoord(0);
   } else if (isize.IsPercentage()) {
     // It looks like our containing block's isize may depend on our isize. In
@@ -217,7 +211,8 @@ IntrinsicSize SVGOuterSVGFrame::GetIntrinsicSize() {
   // XXXjwatt Note that here we want to return the CSS width/height if they're
   // specified and we're embedded inside an nsIObjectLoadingContent.
 
-  if (IsReplacedAndContainSize(this)) {
+  const auto containAxes = ContainSizeAxesIfApplicable(this);
+  if (containAxes.IsBoth()) {
     // Intrinsic size of 'contain:size' replaced elements is 0,0.
     return IntrinsicSize(0, 0);
   }
@@ -242,12 +237,12 @@ IntrinsicSize SVGOuterSVGFrame::GetIntrinsicSize() {
     intrinsicSize.height.emplace(std::max(val, 0));
   }
 
-  return intrinsicSize;
+  return containAxes.ContainIntrinsicSize(intrinsicSize, GetWritingMode());
 }
 
 /* virtual */
 AspectRatio SVGOuterSVGFrame::GetIntrinsicRatio() const {
-  if (IsReplacedAndContainSize(this)) {
+  if (ContainSizeAxesIfApplicable(this).IsAny()) {
     return AspectRatio();
   }
 
@@ -613,7 +608,7 @@ void nsDisplayOuterSVG::Paint(nsDisplayListBuilder* aBuilder,
   nsRect viewportRect =
       mFrame->GetContentRectRelativeToSelf() + ToReferenceFrame();
 
-  nsRect clipRect = GetPaintRect().Intersect(viewportRect);
+  nsRect clipRect = GetPaintRect(aBuilder, aContext).Intersect(viewportRect);
 
   uint32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
 
@@ -1006,7 +1001,7 @@ void SVGOuterSVGAnonChildFrame::BuildDisplayList(
   // inside the nsDisplayTransform for our viewbox transform. The
   // nsDisplaySVGWrapper's reference frame is this frame, because this frame
   // always returns true from IsSVGTransformed.
-  nsDisplayList newList;
+  nsDisplayList newList(aBuilder);
   nsDisplayListSet set(&newList, &newList, &newList, &newList, &newList,
                        &newList);
   BuildDisplayListForNonBlockChildren(aBuilder, set);

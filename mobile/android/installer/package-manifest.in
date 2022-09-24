@@ -66,6 +66,8 @@
 @BINPATH@/@DLL_PREFIX@softokn3.chk
 #endif
 
+@BINPATH@/@DLL_PREFIX@ipcclientcerts@DLL_SUFFIX@
+
 #ifndef MOZ_FOLD_LIBS
 @BINPATH@/@DLL_PREFIX@mozsqlite3@DLL_SUFFIX@
 #endif
@@ -208,8 +210,6 @@
 
 ; WebDriver (Marionette, Remote Agent) remote protocols
 #ifdef ENABLE_WEBDRIVER
-@BINPATH@/components/marionette.manifest
-@BINPATH@/components/marionette.js
 @BINPATH@/chrome/remote@JAREXT@
 @BINPATH@/chrome/remote.manifest
 #endif

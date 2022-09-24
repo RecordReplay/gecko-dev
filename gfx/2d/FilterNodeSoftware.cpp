@@ -618,19 +618,15 @@ already_AddRefed<DataSourceSurface> FilterNodeSoftware::GetOutput(
   IntRect requestedRect;
   RefPtr<DataSourceSurface> cachedOutput;
 
-  // Lock the cache and retrieve a cached surface if we have one and it can
+  // Retrieve a cached surface if we have one and it can
   // satisfy this request, or else request a rect we will compute and cache
-  {
-    MutexAutoLock lock(mCacheMutex);
-
-    if (!mCachedRect.Contains(aRect)) {
-      RequestRect(aRect);
-      requestedRect = mRequestedRect;
-    } else {
-      MOZ_ASSERT(mCachedOutput, "cached rect but no cached output?");
-      cachedRect = mCachedRect;
-      cachedOutput = mCachedOutput;
-    }
+  if (!mCachedRect.Contains(aRect)) {
+    RequestRect(aRect);
+    requestedRect = mRequestedRect;
+  } else {
+    MOZ_ASSERT(mCachedOutput, "cached rect but no cached output?");
+    cachedRect = mCachedRect;
+    cachedOutput = mCachedOutput;
   }
 
   if (!cachedOutput) {
@@ -638,8 +634,6 @@ already_AddRefed<DataSourceSurface> FilterNodeSoftware::GetOutput(
     cachedOutput = Render(requestedRect);
 
     // Update the cache for future requests
-    MutexAutoLock lock(mCacheMutex);
-
     mCachedOutput = cachedOutput;
     if (!mCachedOutput) {
       mCachedRect = IntRect();
@@ -710,6 +704,7 @@ void FilterNodeSoftware::RequestInputRect(uint32_t aInputEnumIndex,
   }
   RefPtr<FilterNodeSoftware> filter = mInputFilters[inputIndex];
   MOZ_ASSERT(filter, "missing input");
+
   filter->RequestRect(filter->GetOutputRectInRect(aRect));
 }
 
@@ -896,7 +891,6 @@ void FilterNodeSoftware::FilterInvalidated(FilterNodeSoftware* aFilter) {
 }
 
 void FilterNodeSoftware::Invalidate() {
-  MutexAutoLock lock(mCacheMutex);
   mCachedOutput = nullptr;
   mCachedRect = IntRect();
   for (std::vector<FilterInvalidationListener*>::iterator it =
@@ -906,8 +900,7 @@ void FilterNodeSoftware::Invalidate() {
   }
 }
 
-FilterNodeSoftware::FilterNodeSoftware()
-    : mCacheMutex("FilterNodeSoftware::mCacheMutex") {}
+FilterNodeSoftware::FilterNodeSoftware() {}
 
 FilterNodeSoftware::~FilterNodeSoftware() {
   MOZ_ASSERT(
@@ -1015,10 +1008,9 @@ static CompositionOp ToBlendOp(BlendMode aOp) {
       return CompositionOp::OP_COLOR;
     case BLEND_MODE_LUMINOSITY:
       return CompositionOp::OP_LUMINOSITY;
-    default:
-      return CompositionOp::OP_OVER;
   }
 
+  MOZ_ASSERT_UNREACHABLE("Unexpected BlendMode");
   return CompositionOp::OP_OVER;
 }
 
@@ -3349,10 +3341,8 @@ static inline Point3D Normalized(const Point3D& vec) {
 template <typename LightType, typename LightingType>
 FilterNodeLightingSoftware<LightType, LightingType>::FilterNodeLightingSoftware(
     const char* aTypeName)
-    : mLock("FilterNodeLightingSoftware"),
-      mSurfaceScale(0)
-#if defined(MOZILLA_INTERNAL_API) && \
-    (defined(DEBUG) || defined(FORCE_BUILD_REFCNT_LOGGING))
+    : mSurfaceScale(0)
+#if defined(MOZILLA_INTERNAL_API) && defined(NS_BUILD_REFCNT_LOGGING)
       ,
       mTypeName(aTypeName)
 #endif
@@ -3623,8 +3613,6 @@ FilterNodeLightingSoftware<LightType, LightingType>::DoRender(
   uint8_t* targetData = targetMap.GetData();
   int32_t targetStride = targetMap.GetStride();
 
-  MutexAutoLock lock(mLock);
-
   uint32_t lightColor = ColorToBGRA(mColor);
   mLight.Prepare();
   mLighting.Prepare();
@@ -3718,7 +3706,11 @@ uint32_t SpecularLightingSoftware::LightPixel(const Point3D& aNormal,
                                               const Point3D& aVectorToLight,
                                               uint32_t aColor) {
   Point3D vectorToEye(0, 0, 1);
-  Point3D halfwayVector = Normalized(aVectorToLight + vectorToEye);
+  Point3D halfwayVector = aVectorToLight + vectorToEye;
+  Float halfwayLength = halfwayVector.Length();
+  if (halfwayLength > 0) {
+    halfwayVector /= halfwayLength;
+  }
   Float dotNH = aNormal.DotProduct(halfwayVector);
   uint16_t dotNHi =
       uint16_t(dotNH * (dotNH >= 0) * (1 << PowCache::sInputIntPrecisionBits));

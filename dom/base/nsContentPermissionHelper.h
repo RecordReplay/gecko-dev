@@ -32,8 +32,7 @@ namespace IPC {
 class Principal;
 }  // namespace IPC
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Element;
 class PermissionRequest;
@@ -60,18 +59,24 @@ class nsContentPermissionUtils {
   static uint32_t ConvertPermissionRequestToArray(
       nsTArray<PermissionRequest>& aSrcArray, nsIMutableArray* aDesArray);
 
-  static uint32_t ConvertArrayToPermissionRequest(
+  // Converts blindly, that is, strings are not matched against any list.
+  //
+  // @param aSrcArray needs to contain elements of type
+  // `nsIContentPermissionType`.
+  static void ConvertArrayToPermissionRequest(
       nsIArray* aSrcArray, nsTArray<PermissionRequest>& aDesArray);
 
   static nsresult CreatePermissionArray(const nsACString& aType,
                                         const nsTArray<nsString>& aOptions,
                                         nsIArray** aTypesArray);
 
+  // @param aIsRequestDelegatedToUnsafeThirdParty see
+  // ContentPermissionRequestParent.
   static PContentPermissionRequestParent* CreateContentPermissionRequestParent(
       const nsTArray<PermissionRequest>& aRequests, Element* aElement,
       nsIPrincipal* aPrincipal, nsIPrincipal* aTopLevelPrincipal,
-      const bool aIsHandlingUserInput,
-      const bool aMaybeUnsafePermissionDelegate, const TabId& aTabId);
+      const bool aHasValidTransientUserGestureActivation,
+      const bool aIsRequestDelegatedToUnsafeThirdParty, const TabId& aTabId);
 
   static nsresult AskPermission(nsIContentPermissionRequest* aRequest,
                                 nsPIDOMWindowInner* aWindow);
@@ -106,9 +111,10 @@ class ContentPermissionRequestBase : public nsIContentPermissionRequest {
   NS_IMETHOD GetTopLevelPrincipal(nsIPrincipal** aTopLevelPrincipal) override;
   NS_IMETHOD GetWindow(mozIDOMWindow** aWindow) override;
   NS_IMETHOD GetElement(mozilla::dom::Element** aElement) override;
-  NS_IMETHOD GetIsHandlingUserInput(bool* aIsHandlingUserInput) override;
-  NS_IMETHOD GetMaybeUnsafePermissionDelegate(
-      bool* aMaybeUnsafePermissionDelegate) override;
+  NS_IMETHOD GetHasValidTransientUserGestureActivation(
+      bool* aHasValidTransientUserGestureActivation) override;
+  NS_IMETHOD GetIsRequestDelegatedToUnsafeThirdParty(
+      bool* aIsRequestDelegatedToUnsafeThirdParty) override;
   // Overrides for Allow() and Cancel() aren't provided by this class.
   // That is the responsibility of the subclasses.
 
@@ -119,10 +125,10 @@ class ContentPermissionRequestBase : public nsIContentPermissionRequest {
   };
   nsresult ShowPrompt(PromptResult& aResult);
 
-  PromptResult CheckPromptPrefs();
+  PromptResult CheckPromptPrefs() const;
 
   // Check if the permission has an opportunity to request.
-  bool CheckPermissionDelegate();
+  bool CheckPermissionDelegate() const;
 
   enum class DelayedTaskType {
     Allow,
@@ -132,6 +138,8 @@ class ContentPermissionRequestBase : public nsIContentPermissionRequest {
   void RequestDelayedTask(nsIEventTarget* aTarget, DelayedTaskType aType);
 
  protected:
+  // @param aPrefName see `mPrefName`.
+  // @param aType see `mType`.
   ContentPermissionRequestBase(nsIPrincipal* aPrincipal,
                                nsPIDOMWindowInner* aWindow,
                                const nsACString& aPrefName,
@@ -142,14 +150,25 @@ class ContentPermissionRequestBase : public nsIContentPermissionRequest {
   nsCOMPtr<nsIPrincipal> mTopLevelPrincipal;
   nsCOMPtr<nsPIDOMWindowInner> mWindow;
   RefPtr<PermissionDelegateHandler> mPermissionHandler;
-  nsCString mPrefName;
-  nsCString mType;
-  bool mIsHandlingUserInput;
-  bool mMaybeUnsafePermissionDelegate;
+
+  // The prefix of a pref which allows tests to bypass showing the prompt.
+  // Tests will have to set both of
+  // ${mPrefName}.prompt.testing and
+  // ${mPrefName}.prompt.testing.allow
+  // to either true or false. If no such testing is required, mPrefName may be
+  // empty.
+  const nsCString mPrefName;
+
+  // The type of the request, such as "autoplay-media-audible".
+  const nsCString mType;
+
+  bool mHasValidTransientUserGestureActivation;
+
+  // See nsIPermissionDelegateHandler.maybeUnsafePermissionDelegate`.
+  bool mIsRequestDelegatedToUnsafeThirdParty;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 using mozilla::dom::ContentPermissionRequestParent;
 
@@ -175,7 +194,8 @@ class nsContentPermissionRequestProxy : public nsIContentPermissionRequest {
 };
 
 /**
- * RemotePermissionRequest will send a prompt ipdl request to b2g process.
+ * RemotePermissionRequest will send a prompt ipdl request to the chrome process
+ * (https://wiki.mozilla.org/Security/Sandbox/Process_model#Chrome_process_.28Parent.29).
  */
 class RemotePermissionRequest final
     : public mozilla::dom::PContentPermissionRequestChild {

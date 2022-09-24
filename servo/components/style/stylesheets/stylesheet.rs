@@ -16,7 +16,6 @@ use crate::stylesheets::{CssRule, CssRules, Origin, UrlExtraData};
 use crate::use_counters::UseCounters;
 use crate::{Namespace, Prefix};
 use cssparser::{Parser, ParserInput, RuleListParser};
-use fallible::FallibleVec;
 use fxhash::FxHashMap;
 #[cfg(feature = "gecko")]
 use malloc_size_of::{MallocSizeOfOps, MallocUnconditionalShallowSizeOf};
@@ -278,15 +277,7 @@ pub trait StylesheetInDocument: ::std::fmt::Debug {
 
     rule_filter! {
         effective_style_rules(Style => StyleRule),
-        effective_media_rules(Media => MediaRule),
-        effective_font_face_rules(FontFace => FontFaceRule),
-        effective_font_face_feature_values_rules(FontFeatureValues => FontFeatureValuesRule),
-        effective_counter_style_rules(CounterStyle => CounterStyleRule),
         effective_viewport_rules(Viewport => ViewportRule),
-        effective_keyframes_rules(Keyframes => KeyframesRule),
-        effective_supports_rules(Supports => SupportsRule),
-        effective_page_rules(Page => PageRule),
-        effective_document_rules(Document => DocumentRule),
     }
 }
 
@@ -367,7 +358,12 @@ impl SanitizationKind {
             CssRule::Document(..) |
             CssRule::Media(..) |
             CssRule::Supports(..) |
-            CssRule::Import(..) => false,
+            CssRule::Import(..) |
+            CssRule::Container(..) |
+            // TODO(emilio): Perhaps Layer should not be always sanitized? But
+            // we sanitize @media and co, so this seems safer for now.
+            CssRule::LayerStatement(..) |
+            CssRule::LayerBlock(..) => false,
 
             CssRule::FontFace(..) | CssRule::Namespace(..) | CssRule::Style(..) => true,
 
@@ -375,7 +371,8 @@ impl SanitizationKind {
             CssRule::Page(..) |
             CssRule::FontFeatureValues(..) |
             CssRule::Viewport(..) |
-            CssRule::CounterStyle(..) => !is_standard,
+            CssRule::CounterStyle(..) |
+            CssRule::ScrollTimeline(..) => !is_standard,
         }
     }
 }
@@ -508,9 +505,10 @@ impl Stylesheet {
                         // Use a fallible push here, and if it fails, just fall
                         // out of the loop.  This will cause the page to be
                         // shown incorrectly, but it's better than OOMing.
-                        if rules.try_push(rule).is_err() {
+                        if rules.try_reserve(1).is_err() {
                             break;
                         }
+                        rules.push(rule);
                     },
                     Err((error, slice)) => {
                         let location = error.location;
@@ -594,9 +592,11 @@ impl Clone for Stylesheet {
         // Make a deep clone of the media, using the new lock.
         let media = self.media.read_with(&guard).clone();
         let media = Arc::new(lock.wrap(media));
-        let contents = Arc::new(self
-            .contents
-            .deep_clone_with_lock(&lock, &guard, &DeepCloneParams));
+        let contents = Arc::new(self.contents.deep_clone_with_lock(
+            &lock,
+            &guard,
+            &DeepCloneParams,
+        ));
 
         Stylesheet {
             contents,

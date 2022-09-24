@@ -18,11 +18,11 @@
 
 #include "base/message_loop.h"
 #include "base/task.h"
-#include "chrome/common/file_descriptor_set_posix.h"
 
 #include "mozilla/Maybe.h"
 #include "mozilla/Queue.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/UniquePtrExtensions.h"
 
 namespace IPC {
 
@@ -34,7 +34,7 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 
   // Mirror methods of Channel, see ipc_channel.h for description.
   ChannelImpl(const ChannelId& channel_id, Mode mode, Listener* listener);
-  ChannelImpl(int fd, Mode mode, Listener* listener);
+  ChannelImpl(ChannelHandle pipe, Mode mode, Listener* listener);
   ~ChannelImpl() { Close(); }
   bool Connect();
   void Close();
@@ -46,17 +46,19 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   bool Send(mozilla::UniquePtr<Message> message);
   void GetClientFileDescriptorMapping(int* src_fd, int* dest_fd) const;
 
-  void ResetFileDescriptor(int fd);
-
   int GetFileDescriptor() const { return pipe_; }
   void CloseClientFileDescriptor();
 
   int32_t OtherPid() const { return other_pid_; }
 
-  // See the comment in ipc_channel.h for info on Unsound_IsClosed() and
-  // Unsound_NumQueuedMessages().
-  bool Unsound_IsClosed() const;
-  uint32_t Unsound_NumQueuedMessages() const;
+  // See the comment in ipc_channel.h for info on IsClosed()
+  bool IsClosed() const;
+
+#if defined(OS_MACOSX)
+  void SetOtherMachTask(task_t task);
+
+  void StartAcceptingMachPorts(Mode mode);
+#endif
 
  private:
   void Init(Mode mode, Listener* listener);
@@ -74,6 +76,11 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 
 #if defined(OS_MACOSX)
   void CloseDescriptors(uint32_t pending_fd_id);
+
+  // Called on a Message immediately before it is sent/recieved to transfer
+  // handles to the remote process, or accept handles from the remote process.
+  bool AcceptMachPorts(Message& msg);
+  bool TransferMachPorts(Message& msg);
 #endif
 
   void OutputQueuePush(mozilla::UniquePtr<Message> msg);
@@ -93,7 +100,11 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   // If sending a message blocks then we use this iterator to keep track of
   // where in the message we are. It gets reset when the message is finished
   // sending.
-  mozilla::Maybe<Pickle::BufferList::IterImpl> partial_write_iter_;
+  struct PartialWrite {
+    Pickle::BufferList::IterImpl iter_;
+    mozilla::Span<const mozilla::UniqueFileHandle> handles_;
+  };
+  mozilla::Maybe<PartialWrite> partial_write_;
 
   int server_listen_pipe_;
   int pipe_;
@@ -113,22 +124,23 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
   // The control message buffer will hold all of the file descriptors that will
   // be read in during a single recvmsg call. Message::WriteFileDescriptor
   // always writes one word of data for every file descriptor added to the
-  // message, and the number of file descriptors per message will not exceed
-  // MAX_DESCRIPTORS_PER_MESSAGE.
+  // message, and the number of file descriptors per recvmsg will not exceed
+  // kControlBufferMaxFds. This is based on the true maximum SCM_RIGHTS
+  // descriptor count, which is just over 250 on both Linux and macOS.
   //
   // This buffer also holds a control message header of size CMSG_SPACE(0)
   // bytes. However, CMSG_SPACE is not a constant on Macs, so we can't use it
   // here. Consequently, we pick a number here that is at least CMSG_SPACE(0) on
   // all platforms. We assert at runtime, in Channel::ChannelImpl::Init, that
   // it's big enough.
+  static constexpr size_t kControlBufferMaxFds = 200;
   static constexpr size_t kControlBufferHeaderSize = 32;
   static constexpr size_t kControlBufferSize =
-      FileDescriptorSet::MAX_DESCRIPTORS_PER_MESSAGE * sizeof(int) +
-      kControlBufferHeaderSize;
+      kControlBufferMaxFds * sizeof(int) + kControlBufferHeaderSize;
 
   // Large incoming messages that span multiple pipe buffers get built-up in the
   // buffers of this message.
-  mozilla::Maybe<Message> incoming_message_;
+  mozilla::UniquePtr<Message> incoming_message_;
   std::vector<int> input_overflow_fds_;
 
   // In server-mode, we have to wait for the client to connect before we
@@ -151,24 +163,23 @@ class Channel::ChannelImpl : public MessageLoopForIO::Watcher {
 #if defined(OS_MACOSX)
   struct PendingDescriptors {
     uint32_t id;
-    RefPtr<FileDescriptorSet> fds;
-
-    PendingDescriptors() : id(0) {}
-    PendingDescriptors(uint32_t id, FileDescriptorSet* fds)
-        : id(id), fds(fds) {}
+    nsTArray<mozilla::UniqueFileHandle> handles;
   };
 
   std::list<PendingDescriptors> pending_fds_;
 
   // A generation ID for RECEIVED_FD messages.
   uint32_t last_pending_fd_id_;
-#endif
 
-  // This variable is updated so it matches output_queue_.Count(), except we can
-  // read output_queue_length_ from any thread (if we're OK getting an
-  // occasional out-of-date or bogus value).  We use output_queue_length_ to
-  // implement Unsound_NumQueuedMessages.
-  std::atomic<size_t> output_queue_length_;
+  // Whether or not to accept mach ports from a remote process, and whether this
+  // process is the privileged side of a IPC::Channel which can transfer mach
+  // ports.
+  bool accept_mach_ports_ = false;
+  bool privileged_ = false;
+
+  // If available, the task port for the remote process.
+  mozilla::UniqueMachSendRight other_task_;
+#endif
 
   ScopedRunnableMethodFactory<ChannelImpl> factory_;
 

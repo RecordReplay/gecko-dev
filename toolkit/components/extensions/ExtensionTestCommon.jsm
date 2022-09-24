@@ -28,7 +28,22 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
+  "AppConstants",
+  "resource://gre/modules/AppConstants.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
+  "Assert",
+  "resource://testing-common/Assert.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
   "Extension",
+  "resource://gre/modules/Extension.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
+  "ExtensionData",
   "resource://gre/modules/Extension.jsm"
 );
 ChromeUtils.defineModuleGetter(
@@ -59,13 +74,6 @@ const { ExtensionCommon } = ChromeUtils.import(
 );
 const { ExtensionUtils } = ChromeUtils.import(
   "resource://gre/modules/ExtensionUtils.jsm"
-);
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "uuidGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
 );
 
 const { flushJarCache } = ExtensionUtils;
@@ -222,6 +230,18 @@ class MockExtension {
         return OS.File.remove(this.file.path);
       });
   }
+
+  terminateBackground() {
+    return this._extensionPromise.then(extension => {
+      return extension.terminateBackground();
+    });
+  }
+
+  wakeupBackground() {
+    return this._extensionPromise.then(extension => {
+      return extension.wakeupBackground();
+    });
+  }
 }
 
 function provide(obj, keys, value, override = false) {
@@ -237,7 +257,133 @@ function provide(obj, keys, value, override = false) {
   }
 }
 
+// Some test assertions to work in both mochitest and xpcshell.  This
+// will be revisited later.
+const ExtensionTestAssertions = {
+  getPersistentListeners(extWrapper, apiNs, apiEvent) {
+    let policy = WebExtensionPolicy.getByID(extWrapper.id);
+    const extension = policy?.extension || extWrapper.extension;
+
+    if (!extension || !(extension instanceof Extension)) {
+      throw new Error(
+        `Unable to retrieve the Extension class instance for ${extWrapper.id}`
+      );
+    }
+
+    const { persistentListeners } = extension;
+    if (
+      !persistentListeners?.size > 0 ||
+      !persistentListeners.get(apiNs)?.has(apiEvent)
+    ) {
+      return [];
+    }
+
+    return Array.from(
+      persistentListeners
+        .get(apiNs)
+        .get(apiEvent)
+        .values()
+    );
+  },
+
+  assertPersistentListeners(
+    extWrapper,
+    apiNs,
+    apiEvent,
+    { primed, persisted = true }
+  ) {
+    if (primed && !persisted) {
+      throw new Error(
+        "Inconsistent assertion, can't assert a primed listener if it is not persisted"
+      );
+    }
+
+    let listenersInfo = ExtensionTestAssertions.getPersistentListeners(
+      extWrapper,
+      apiNs,
+      apiEvent
+    );
+    Assert.equal(
+      persisted,
+      !!listenersInfo?.length,
+      `Got a persistent listener for ${apiNs}.${apiEvent}`
+    );
+    for (const info of listenersInfo) {
+      if (primed) {
+        Assert.ok(
+          info.primed,
+          `${apiNs}.${apiEvent} listener expected to be primed`
+        );
+      } else {
+        Assert.equal(
+          info.primed,
+          undefined,
+          `${apiNs}.${apiEvent} listener expected to not be primed`
+        );
+      }
+    }
+  },
+};
+
 ExtensionTestCommon = class ExtensionTestCommon {
+  static get testAssertions() {
+    return ExtensionTestAssertions;
+  }
+
+  // Called by AddonTestUtils.promiseShutdownManager to reset startup promises
+  static resetStartupPromises() {
+    ExtensionParent._resetStartupPromises();
+  }
+
+  // Called to notify "browser-delayed-startup-finished", which resolves
+  // ExtensionParent.browserPaintedPromise.  Thus must be resolved for
+  // primed listeners to be able to wake the extension.
+  static notifyEarlyStartup() {
+    Services.obs.notifyObservers(null, "browser-delayed-startup-finished");
+    return ExtensionParent.browserPaintedPromise;
+  }
+
+  // Called to notify "extensions-late-startup", which resolves
+  // ExtensionParent.browserStartupPromise.  Normally, in Firefox, the
+  // notification would be "sessionstore-windows-restored", however
+  // mobile listens for "extensions-late-startup" so that is more useful
+  // in testing.
+  static notifyLateStartup() {
+    Services.obs.notifyObservers(null, "extensions-late-startup");
+    return ExtensionParent.browserStartupPromise;
+  }
+
+  /**
+   * Shortcut to more easily access WebExtensionPolicy.backgroundServiceWorkerEnabled
+   * from mochitest-plain tests.
+   *
+   * @returns {boolean} true if the background service worker are enabled.
+   */
+  static getBackgroundServiceWorkerEnabled() {
+    return WebExtensionPolicy.backgroundServiceWorkerEnabled;
+  }
+
+  /**
+   * A test helper mainly used to skip test tasks if running in "backgroundServiceWorker" test mode
+   * (e.g. while running test files shared across multiple test modes: e.g. in-process-webextensions,
+   * remote-webextensions, sw-webextensions etc.).
+   *
+   * The underlying pref "extension.backgroundServiceWorker.forceInTestExtension":
+   * - is set to true in the xpcshell-serviceworker.ini and mochitest-serviceworker.ini manifests
+   *   (and so it is going to be set to true while running the test files listed in those manifests)
+   * - when set to true, all test extension using a background script without explicitly listing it
+   *   in the test extension manifest will be automatically executed as background service workers
+   *   (instead of background scripts loaded in a background page)
+   *
+   * @returns {boolean} true if the test is running in "background service worker mode"
+   */
+  static isInBackgroundServiceWorkerTests() {
+    return Services.prefs.getBoolPref(
+      "extensions.backgroundServiceWorker.forceInTestExtension",
+      false
+    );
+  }
+
   /**
    * This code is designed to make it easy to test a WebExtension
    * without creating a bunch of files. Everything is contained in a
@@ -277,10 +423,34 @@ ExtensionTestCommon = class ExtensionTestCommon {
     provide(manifest, ["manifest_version"], 2);
     provide(manifest, ["version"], "1.0");
 
-    if (data.background) {
-      let bgScript = uuidGen.generateUUID().number + ".js";
+    // Make it easier to test same manifest in both MV2 and MV3 configurations.
+    if (manifest.manifest_version === 2 && manifest.host_permissions) {
+      manifest.permissions = [].concat(
+        manifest.permissions || [],
+        manifest.host_permissions
+      );
+      delete manifest.host_permissions;
+    }
 
-      provide(manifest, ["background", "scripts"], [bgScript], true);
+    if (data.useServiceWorker === undefined) {
+      // If we're force-testing service workers we will turn the background
+      // script part of ExtensionTestUtils test extensions into a background
+      // service worker.
+      data.useServiceWorker = ExtensionTestCommon.isInBackgroundServiceWorkerTests();
+    }
+
+    if (data.background) {
+      let bgScript = Services.uuid.generateUUID().number + ".js";
+
+      // If persistent is set keep the flag.
+      let persistent = manifest.background?.persistent;
+      let scriptKey = data.useServiceWorker
+        ? ["background", "service_worker"]
+        : ["background", "scripts"];
+      let scriptVal = data.useServiceWorker ? bgScript : [bgScript];
+      provide(manifest, scriptKey, scriptVal, true);
+      provide(manifest, ["background", "persistent"], persistent);
+
       files[bgScript] = data.background;
     }
 
@@ -424,7 +594,7 @@ ExtensionTestCommon = class ExtensionTestCommon {
     provide(
       data,
       ["manifest", "applications", "gecko", "id"],
-      uuidGen.generateUUID().number
+      Services.uuid.generateUUID().number
     );
   }
 
@@ -436,6 +606,31 @@ ExtensionTestCommon = class ExtensionTestCommon {
    * @returns {Extension}
    */
   static generate(data) {
+    if (data.useAddonManager === "android-only") {
+      // Some extension APIs are partially implemented in Java, and the
+      // interface between the JS and Java side (GeckoViewWebExtension)
+      // expects extensions to be registered with the AddonManager.
+      // This is at least necessary for tests that use the following APIs:
+      //   - browserAction/pageAction.
+      //   - tabs.create, tabs.update, tabs.remove (uses GeckoViewTabBridge).
+      //   - downloads API
+      //   - browsingData API (via ExtensionBrowsingData.jsm).
+      //
+      // In xpcshell tests, the AddonManager is optional, so the AddonManager
+      // cannot unconditionally be enabled.
+      // In mochitests, tests are run in an actual browser, so the AddonManager
+      // is always enabled and hence useAddonManager is always set by default.
+      if (AppConstants.platform === "android") {
+        data.useAddonManager = "permanent";
+        // MockExtension requires data.manifest.applications.gecko.id to be set.
+        // The AddonManager requires an ID in the manifest for unsigned XPIs.
+        this.setExtensionID(data);
+      } else {
+        // On non-Android, default to not using the AddonManager.
+        data.useAddonManager = null;
+      }
+    }
+
     let file = this.generateXPI(data);
 
     flushJarCache(file.path);
@@ -463,7 +658,7 @@ ExtensionTestCommon = class ExtensionTestCommon {
       }
     }
     if (!id) {
-      id = uuidGen.generateUUID().number;
+      id = Services.uuid.generateUUID().number;
     }
 
     let signedState = AddonManager.SIGNEDSTATE_SIGNED;
@@ -474,6 +669,12 @@ ExtensionTestCommon = class ExtensionTestCommon {
       signedState = AddonManager.SIGNEDSTATE_SYSTEM;
     }
 
+    let isPrivileged = ExtensionData.getIsPrivileged({
+      signedState,
+      builtIn: false,
+      temporarilyInstalled: !!data.temporarilyInstalled,
+    });
+
     return new Extension(
       {
         id,
@@ -482,7 +683,10 @@ ExtensionTestCommon = class ExtensionTestCommon {
         signedState,
         incognitoOverride: data.incognitoOverride,
         temporarilyInstalled: !!data.temporarilyInstalled,
+        isPrivileged,
         TEST_NO_ADDON_MANAGER: true,
+        // By default we set TEST_NO_DELAYED_STARTUP to true
+        TEST_NO_DELAYED_STARTUP: !data.delayedStartup,
       },
       data.startupReason
     );

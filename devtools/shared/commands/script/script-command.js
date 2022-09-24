@@ -49,7 +49,15 @@ class ScriptCommand {
       selectedTargetFront,
     } = options;
 
-    let targetFront = this._commands.targetCommand.targetFront;
+    // Retrieve the right WebConsole front that relates either to (by order of priority):
+    // - the currently selected target in the context selector
+    //   (selectedTargetFront argument),
+    // - the object picked in the console (when using store as global) (selectedObjectActor),
+    // - the currently selected Node in the inspector (selectedNodeActor),
+    // - the currently selected frame in the debugger (when paused) (frameActor),
+    // - the currently selected target in the iframe dropdown
+    //   (selectedTargetFront from the TargetCommand)
+    let targetFront = this._commands.targetCommand.selectedTargetFront;
 
     const selectedActor =
       selectedObjectActor || selectedNodeActor || frameActor;

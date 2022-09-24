@@ -260,7 +260,7 @@ class nsPACMan final : public nsIStreamLoaderObserver,
   nsresult DispatchToPAC(already_AddRefed<nsIRunnable> aEvent,
                          bool aSync = false);
 
-  ProxyAutoConfig mPAC;
+  UniquePtr<ProxyAutoConfigBase> mPAC;
   nsCOMPtr<nsIThread> mPACThread;
   nsCOMPtr<nsISystemProxySettings> mSystemProxySettings;
   nsCOMPtr<nsIDHCPClient> mDHCPClient;
@@ -278,7 +278,7 @@ class nsPACMan final : public nsIStreamLoaderObserver,
   bool mLoadPending;
   Atomic<bool, Relaxed> mShutdown;
   TimeStamp mScheduledReload;
-  uint32_t mLoadFailureCount;
+  Atomic<uint32_t, Relaxed> mLoadFailureCount;
 
   bool mInProgress;
   bool mIncludePath;

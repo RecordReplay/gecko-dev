@@ -74,11 +74,11 @@ void SurfacePoolCA::LockedPool::MutateEntryStorage(const char* aMutationType,
   [[maybe_unused]] size_t inUseCountBefore = mInUseEntries.size();
   [[maybe_unused]] size_t pendingCountBefore = mPendingEntries.Length();
   [[maybe_unused]] size_t availableCountBefore = mAvailableEntries.Length();
-  [[maybe_unused]] TimeStamp before = TimeStamp::NowUnfuzzed();
+  [[maybe_unused]] TimeStamp before = TimeStamp::Now();
 
   aFn();
 
-  if (profiler_thread_is_being_profiled()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     PROFILER_MARKER_TEXT(
         "SurfacePool", GRAPHICS, MarkerTiming::IntervalUntilNowFrom(before),
         nsPrintfCString("%d -> %d in use | %d -> %d waiting for | %d -> %d "

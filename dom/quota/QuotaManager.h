@@ -18,9 +18,9 @@
 #include "mozilla/RefPtr.h"
 #include "mozilla/Result.h"
 #include "mozilla/dom/Nullable.h"
-#include "mozilla/dom/QMResult.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/dom/quota/CommonMetadata.h"
+#include "mozilla/dom/quota/ForwardDecls.h"
 #include "mozilla/dom/quota/InitializationTypes.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/dom/quota/QuotaCommon.h"
@@ -106,8 +106,7 @@ class QuotaManager final : public BackgroundThreadObject {
 
   static Result<MovingNotNull<RefPtr<QuotaManager>>, nsresult> GetOrCreate();
 
-  // TODO: Remove this overload once all clients use the synchronous GetOrCreate
-  static void GetOrCreate(nsIRunnable* aCallback);
+  static Result<Ok, nsresult> EnsureCreated();
 
   // Returns a non-owning reference.
   static QuotaManager* Get();
@@ -362,30 +361,34 @@ class QuotaManager final : public BackgroundThreadObject {
 
   uint64_t GetGroupLimit() const;
 
-  uint64_t GetGroupUsage(const nsACString& aGroup);
+  std::pair<uint64_t, uint64_t> GetUsageAndLimitForEstimate(
+      const OriginMetadata& aOriginMetadata);
 
   uint64_t GetOriginUsage(const PrincipalMetadata& aPrincipalMetadata);
+
+  Maybe<FullOriginMetadata> GetFullOriginMetadata(
+      const OriginMetadata& aOriginMetadata);
 
   void NotifyStoragePressure(uint64_t aUsage);
 
   // Record a quota client shutdown step, if shutting down.
   // Assumes that the QuotaManager singleton is alive.
   static void MaybeRecordQuotaClientShutdownStep(
-      const Client::Type aClientType, const nsACString& aStepDescription) {
-    // Callable on any thread.
-
-    MOZ_DIAGNOSTIC_ASSERT(QuotaManager::Get());
-    QuotaManager::Get()->MaybeRecordShutdownStep(Some(aClientType),
-                                                 aStepDescription);
-  }
+      const Client::Type aClientType, const nsACString& aStepDescription);
 
   // Record a quota client shutdown step, if shutting down.
   // Checks if the QuotaManager singleton is alive.
   static void SafeMaybeRecordQuotaClientShutdownStep(
       Client::Type aClientType, const nsACString& aStepDescription);
 
+  // Record a quota manager shutdown step, use only if shutdown is active.
+  void RecordQuotaManagerShutdownStep(const nsACString& aStepDescription);
+
   // Record a quota manager shutdown step, if shutting down.
   void MaybeRecordQuotaManagerShutdownStep(const nsACString& aStepDescription);
+
+  template <typename F>
+  void MaybeRecordQuotaManagerShutdownStepWith(F&& aFunc);
 
   static void GetStorageId(PersistenceType aPersistenceType,
                            const nsACString& aOrigin, Client::Type aClientType,
@@ -474,7 +477,7 @@ class QuotaManager final : public BackgroundThreadObject {
 
   nsresult MaybeCreateOrUpgradeStorage(mozIStorageConnection& aConnection);
 
-  Result<Ok, QMResult> MaybeRemoveLocalStorageArchiveTmpFile();
+  OkOrErr MaybeRemoveLocalStorageArchiveTmpFile();
 
   nsresult MaybeRemoveLocalStorageDataAndArchive(nsIFile& aLsArchiveFile);
 
@@ -505,7 +508,9 @@ class QuotaManager final : public BackgroundThreadObject {
   Result<Ok, nsresult> CreateEmptyLocalStorageArchive(
       nsIFile& aLsArchiveFile) const;
 
-  nsresult InitializeRepository(PersistenceType aPersistenceType);
+  template <typename OriginFunc>
+  nsresult InitializeRepository(PersistenceType aPersistenceType,
+                                OriginFunc&& aOriginFunc);
 
   nsresult InitializeOrigin(PersistenceType aPersistenceType,
                             const OriginMetadata& aOriginMetadata,
@@ -531,6 +536,9 @@ class QuotaManager final : public BackgroundThreadObject {
 
   void FinalizeOriginEviction(nsTArray<RefPtr<OriginDirectoryLock>>&& aLocks);
 
+  Result<Ok, nsresult> ArchiveOrigins(
+      const nsTArray<FullOriginMetadata>& aFullOriginMetadatas);
+
   void ReleaseIOThreadObjects() {
     AssertIsOnIOThread();
 
@@ -545,8 +553,28 @@ class QuotaManager final : public BackgroundThreadObject {
 
   int64_t GenerateDirectoryLockId();
 
-  void MaybeRecordShutdownStep(Maybe<Client::Type> aClientType,
-                               const nsACString& aStepDescription);
+  bool ShutdownStarted() const;
+
+  void RecordShutdownStep(Maybe<Client::Type> aClientType,
+                          const nsACString& aStepDescription);
+
+  template <typename Func>
+  auto ExecuteInitialization(Initialization aInitialization, Func&& aFunc)
+      -> std::invoke_result_t<Func, const FirstInitializationAttempt<
+                                        Initialization, StringGenerator>&>;
+
+  template <typename Func>
+  auto ExecuteInitialization(Initialization aInitialization,
+                             const nsACString& aContext, Func&& aFunc)
+      -> std::invoke_result_t<Func, const FirstInitializationAttempt<
+                                        Initialization, StringGenerator>&>;
+
+  template <typename Func>
+  auto ExecuteOriginInitialization(const nsACString& aOrigin,
+                                   const OriginInitialization aInitialization,
+                                   const nsACString& aContext, Func&& aFunc)
+      -> std::invoke_result_t<Func, const FirstInitializationAttempt<
+                                        Initialization, StringGenerator>&>;
 
   template <typename Iterator>
   static void MaybeInsertNonPersistedOriginInfos(
@@ -562,9 +590,6 @@ class QuotaManager final : public BackgroundThreadObject {
 
   nsCOMPtr<mozIStorageConnection> mStorageConnection;
 
-  // A timer that gets activated at shutdown to ensure we close all storages.
-  LazyInitializedOnceNotNull<const nsCOMPtr<nsITimer>> mShutdownTimer;
-
   EnumeratedArray<Client::Type, Client::TYPE_MAX, nsCString> mShutdownSteps;
   LazyInitializedOnce<const TimeStamp> mShutdownStartedAt;
   Atomic<bool> mShutdownStarted;
@@ -572,7 +597,7 @@ class QuotaManager final : public BackgroundThreadObject {
   // Accesses to mQuotaManagerShutdownSteps must be protected by mQuotaMutex.
   nsCString mQuotaManagerShutdownSteps;
 
-  mutable mozilla::Mutex mQuotaMutex;
+  mutable mozilla::Mutex mQuotaMutex MOZ_UNANNOTATED;
 
   nsClassHashtable<nsCStringHashKey, GroupInfoPair> mGroupInfoPairs;
 
@@ -620,6 +645,7 @@ class QuotaManager final : public BackgroundThreadObject {
   const nsString mStorageName;
   LazyInitializedOnce<const nsString> mIndexedDBPath;
   LazyInitializedOnce<const nsString> mStoragePath;
+  LazyInitializedOnce<const nsString> mStorageArchivesPath;
   LazyInitializedOnce<const nsString> mPermanentStoragePath;
   LazyInitializedOnce<const nsString> mTemporaryStoragePath;
   LazyInitializedOnce<const nsString> mDefaultStoragePath;

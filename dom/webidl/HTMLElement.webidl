@@ -27,6 +27,8 @@ interface HTMLElement : Element {
 
   [CEReactions, GetterThrows, Pure]
            attribute [LegacyNullToEmptyString] DOMString innerText;
+  [CEReactions, GetterThrows, SetterThrows, Pure]
+           attribute [LegacyNullToEmptyString] DOMString outerText;
 
   // user interaction
   [CEReactions, SetterThrows, Pure]
@@ -68,7 +70,7 @@ interface HTMLElement : Element {
   //readonly attribute boolean? commandChecked;
 
   // https://html.spec.whatwg.org/multipage/custom-elements.html#dom-attachinternals
-  [Pref="dom.webcomponents.formAssociatedCustomElement.enabled", Throws]
+  [Throws]
   ElementInternals attachInternals();
 };
 
@@ -80,6 +82,14 @@ partial interface HTMLElement {
   readonly attribute long offsetLeft;
   readonly attribute long offsetWidth;
   readonly attribute long offsetHeight;
+};
+
+partial interface HTMLElement {
+  [ChromeOnly]
+  readonly attribute ElementInternals? internals;
+
+  [ChromeOnly]
+  readonly attribute boolean isFormAssociatedCustomElements;
 };
 
 interface mixin TouchEventHandlers {

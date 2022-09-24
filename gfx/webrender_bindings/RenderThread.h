@@ -119,8 +119,8 @@ class RendererEvent {
 /// The render thread owns the different RendererOGLs (one per window) and
 /// implements the RenderNotifier api exposed by the WebRender bindings.
 ///
-/// We should generally avoid posting tasks to the render thread's event loop
-/// directly and instead use the RendererEvent mechanism which avoids races
+/// Callers are not allowed to post tasks to the render thread's event loop
+/// directly and must instead use the RendererEvent mechanism which avoids races
 /// between the events and WebRender's own messages.
 ///
 /// The GL context(s) should be created and used on this thread only.
@@ -138,19 +138,16 @@ class RenderThread final {
   static RenderThread* Get();
 
   /// Can only be called from the main thread.
-  static void Start();
+  static void Start(uint32_t aNamespace);
 
   /// Can only be called from the main thread.
   static void ShutDown();
 
   /// Can be called from any thread.
-  /// In most cases it is best to post RendererEvents through WebRenderAPI
-  /// instead of scheduling directly to this message loop (so as to preserve the
-  /// ordering of the messages).
-  static MessageLoop* Loop();
+  static bool IsInRenderThread();
 
   /// Can be called from any thread.
-  static bool IsInRenderThread();
+  static already_AddRefed<nsIThread> GetRenderThread();
 
   // Can be called from any thread. Dispatches an event to the Renderer thread
   // to iterate over all Renderers, accumulates memory statistics, and resolves
@@ -199,28 +196,30 @@ class RenderThread final {
   bool Resume(wr::WindowId aWindowId);
 
   /// Can be called from any thread.
-  void RegisterExternalImage(uint64_t aExternalImageId,
+  void RegisterExternalImage(const wr::ExternalImageId& aExternalImageId,
                              already_AddRefed<RenderTextureHost> aTexture);
 
   /// Can be called from any thread.
-  void UnregisterExternalImage(uint64_t aExternalImageId);
+  void UnregisterExternalImage(const wr::ExternalImageId& aExternalImageId);
 
   /// Can be called from any thread.
-  void PrepareForUse(uint64_t aExternalImageId);
+  void PrepareForUse(const wr::ExternalImageId& aExternalImageId);
 
   /// Can be called from any thread.
-  void NotifyNotUsed(uint64_t aExternalImageId);
+  void NotifyNotUsed(const wr::ExternalImageId& aExternalImageId);
 
   /// Can be called from any thread.
-  void NotifyForUse(uint64_t aExternalImageId);
+  void NotifyForUse(const wr::ExternalImageId& aExternalImageId);
 
   void HandleRenderTextureOps();
 
   /// Can only be called from the render thread.
-  void UnregisterExternalImageDuringShutdown(uint64_t aExternalImageId);
+  void UnregisterExternalImageDuringShutdown(
+      const wr::ExternalImageId& aExternalImageId);
 
   /// Can only be called from the render thread.
-  RenderTextureHost* GetRenderTexture(ExternalImageId aExternalImageId);
+  RenderTextureHost* GetRenderTexture(
+      const wr::ExternalImageId& aExternalImageId);
 
   /// Can be called from any thread.
   bool IsDestroyed(wr::WindowId aWindowId);
@@ -303,22 +302,24 @@ class RenderThread final {
     NotifyNotUsed,
   };
 
-  explicit RenderThread(base::Thread* aThread);
+  explicit RenderThread(RefPtr<nsIThread> aThread);
 
   void DeferredRenderTextureHostDestroy();
   void ShutDownTask(layers::SynchronousTask* aTask);
   void InitDeviceTask();
+  void PostRunnable(already_AddRefed<nsIRunnable> aRunnable);
 
   void DoAccumulateMemoryReport(MemoryReport,
                                 const RefPtr<MemoryReportPromise::Private>&);
 
-  void AddRenderTextureOp(RenderTextureOp aOp, uint64_t aExternalImageId);
+  void AddRenderTextureOp(RenderTextureOp aOp,
+                          const wr::ExternalImageId& aExternalImageId);
 
   void CreateSingletonGL(nsACString& aError);
 
   ~RenderThread();
 
-  base::Thread* const mThread;
+  RefPtr<nsIThread> const mThread;
 
   WebRenderThreadPool mThreadPool;
   WebRenderThreadPool mThreadPoolLP;
@@ -353,9 +354,18 @@ class RenderThread final {
 
   DataMutex<std::unordered_map<uint64_t, WindowInfo*>> mWindowInfos;
 
-  Mutex mRenderTextureMapLock;
-  std::unordered_map<uint64_t, RefPtr<RenderTextureHost>> mRenderTextures;
-  std::unordered_map<uint64_t, RefPtr<RenderTextureHost>>
+  struct ExternalImageIdHashFn {
+    std::size_t operator()(const wr::ExternalImageId& aId) const {
+      return HashGeneric(wr::AsUint64(aId));
+    }
+  };
+
+  Mutex mRenderTextureMapLock MOZ_UNANNOTATED;
+  std::unordered_map<wr::ExternalImageId, RefPtr<RenderTextureHost>,
+                     ExternalImageIdHashFn>
+      mRenderTextures;
+  std::unordered_map<wr::ExternalImageId, RefPtr<RenderTextureHost>,
+                     ExternalImageIdHashFn>
       mSyncObjectNeededRenderTextures;
   std::list<std::pair<RenderTextureOp, RefPtr<RenderTextureHost>>>
       mRenderTextureOps;
@@ -365,6 +375,9 @@ class RenderThread final {
   // callback. On device reset we have to remove all GL related resources right
   // away.
   std::list<RefPtr<RenderTextureHost>> mRenderTexturesDeferred;
+
+  RefPtr<nsIRunnable> mRenderTextureOpsRunnable;
+
   bool mHasShutdown;
 
   bool mHandlingDeviceReset;

@@ -6,7 +6,8 @@
 
 #include "mozilla/LoadInfo.h"
 
-#include "js/Array.h"  // JS::NewArrayObject
+#include "js/Array.h"               // JS::NewArrayObject
+#include "js/PropertyAndElement.h"  // JS_DefineElement
 #include "mozilla/Assertions.h"
 #include "mozilla/ExpandedPrincipal.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
@@ -29,6 +30,8 @@
 #include "nsIContentSecurityPolicy.h"
 #include "nsIDocShell.h"
 #include "mozilla/dom/Document.h"
+#include "nsIHttpChannel.h"
+#include "nsIHttpChannelInternal.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsIScriptElement.h"
 #include "nsISupportsImpl.h"
@@ -44,8 +47,7 @@
 
 using namespace mozilla::dom;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 static nsContentPolicyType InternalContentPolicyTypeForFrame(
     CanonicalBrowsingContext* aBrowsingContext) {
@@ -99,6 +101,7 @@ LoadInfo::LoadInfo(
                                         : aLoadingPrincipal),
       mTriggeringPrincipal(aTriggeringPrincipal ? aTriggeringPrincipal
                                                 : mLoadingPrincipal.get()),
+      mSandboxedNullPrincipalID(nsID::GenerateUUID()),
       mClientInfo(aLoadingClientInfo),
       mController(aController),
       mLoadingContext(do_GetWeakReference(aLoadingContext)),
@@ -181,25 +184,11 @@ LoadInfo::LoadInfo(
       if (innerWindow) {
         mTopLevelPrincipal = innerWindow->GetTopLevelAntiTrackingPrincipal();
 
-        // The top-level-storage-area-principal is not null only for the first
-        // level of iframes (null for top-level contexts, and null for
-        // sub-iframes). If we are loading a sub-document resource, we must
-        // calculate what the top-level-storage-area-principal will be for the
-        // new context.
-        if (externalType != ExtContentPolicy::TYPE_SUBDOCUMENT) {
-          mTopLevelStorageAreaPrincipal =
-              innerWindow->GetTopLevelStorageAreaPrincipal();
-        } else if (bc->IsTop()) {
-          Document* doc = innerWindow->GetExtantDoc();
-          if (!doc || (!doc->StorageAccessSandboxed())) {
-            mTopLevelStorageAreaPrincipal = innerWindow->GetPrincipal();
-          }
-
+        if (!mTopLevelPrincipal &&
+            externalType == ExtContentPolicy::TYPE_SUBDOCUMENT && bc->IsTop()) {
           // If this is the first level iframe, innerWindow is our top-level
           // principal.
-          if (!mTopLevelPrincipal) {
-            mTopLevelPrincipal = innerWindow->GetPrincipal();
-          }
+          mTopLevelPrincipal = innerWindow->GetPrincipal();
         }
       }
 
@@ -248,14 +237,22 @@ LoadInfo::LoadInfo(
         (nsContentUtils::IsPreloadType(mInternalContentPolicyType) &&
          aLoadingContext->OwnerDoc()->GetBlockAllMixedContent(true));
 
-    // if the document forces all requests to be upgraded from http to https,
-    // then we should do that for all requests. If it only forces preloads to be
-    // upgraded then we should enforce upgrade insecure requests only for
-    // preloads.
-    mUpgradeInsecureRequests =
-        aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests(false) ||
-        (nsContentUtils::IsPreloadType(mInternalContentPolicyType) &&
-         aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests(true));
+    if (mLoadingPrincipal && BasePrincipal::Cast(mTriggeringPrincipal)
+                                 ->OverridesCSP(mLoadingPrincipal)) {
+      // if the load is triggered by an addon which potentially overrides the
+      // CSP of the document, then do not force insecure requests to be
+      // upgraded.
+      mUpgradeInsecureRequests = false;
+    } else {
+      // if the document forces all requests to be upgraded from http to https,
+      // then we should do that for all requests. If it only forces preloads to
+      // be upgraded then we should enforce upgrade insecure requests only for
+      // preloads.
+      mUpgradeInsecureRequests =
+          aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests(false) ||
+          (nsContentUtils::IsPreloadType(mInternalContentPolicyType) &&
+           aLoadingContext->OwnerDoc()->GetUpgradeInsecureRequests(true));
+    }
 
     if (nsContentUtils::IsUpgradableDisplayType(externalType)) {
       if (mLoadingPrincipal->SchemeIs("https")) {
@@ -317,6 +314,7 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
                    nsISupports* aContextForTopLevelLoad,
                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : mTriggeringPrincipal(aTriggeringPrincipal),
+      mSandboxedNullPrincipalID(nsID::GenerateUUID()),
       mContextForTopLevelLoad(do_GetWeakReference(aContextForTopLevelLoad)),
       mSecurityFlags(aSecurityFlags),
       mSandboxFlags(aSandboxFlags),
@@ -342,8 +340,6 @@ LoadInfo::LoadInfo(nsPIDOMWindowOuter* aOuterWindow,
       nsGlobalWindowInner::Cast(aOuterWindow->GetCurrentInnerWindow());
   if (innerWindow) {
     mTopLevelPrincipal = innerWindow->GetTopLevelAntiTrackingPrincipal();
-    // mTopLevelStorageAreaPrincipal is always null for top-level document
-    // loading.
   }
 
   // get the docshell from the outerwindow, and then get the originattributes
@@ -377,6 +373,7 @@ LoadInfo::LoadInfo(dom::CanonicalBrowsingContext* aBrowsingContext,
                    const OriginAttributes& aOriginAttributes,
                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : mTriggeringPrincipal(aTriggeringPrincipal),
+      mSandboxedNullPrincipalID(nsID::GenerateUUID()),
       mSecurityFlags(aSecurityFlags),
       mSandboxFlags(aSandboxFlags),
 
@@ -418,6 +415,7 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
                    nsContentPolicyType aContentPolicyType,
                    nsSecurityFlags aSecurityFlags, uint32_t aSandboxFlags)
     : mTriggeringPrincipal(aTriggeringPrincipal),
+      mSandboxedNullPrincipalID(nsID::GenerateUUID()),
       mSecurityFlags(aSecurityFlags),
       mSandboxFlags(aSandboxFlags),
       mInternalContentPolicyType(aContentPolicyType) {
@@ -456,21 +454,10 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
     }
   }
 
-  // The top-level-storage-area-principal is not null only for the first
-  // level of iframes (null for top-level contexts, and null for
-  // sub-iframes). If we are loading a sub-document resource, we must
-  // calculate what the top-level-storage-area-principal will be for the
-  // new context.
-  if (parentBC->IsTop()) {
-    if (!Document::StorageAccessSandboxed(aParentWGP->SandboxFlags())) {
-      mTopLevelStorageAreaPrincipal = aParentWGP->DocumentPrincipal();
-    }
-
+  if (!mTopLevelPrincipal && parentBC->IsTop()) {
     // If this is the first level iframe, embedder WindowGlobalParent's document
     // principal is our top-level principal.
-    if (!mTopLevelPrincipal) {
-      mTopLevelPrincipal = aParentWGP->DocumentPrincipal();
-    }
+    mTopLevelPrincipal = aParentWGP->DocumentPrincipal();
   }
 
   mInnerWindowID = aParentWGP->InnerWindowId();
@@ -480,11 +467,19 @@ LoadInfo::LoadInfo(dom::WindowGlobalParent* aParentWGP,
   // store that bit for all requests on the loadinfo.
   mBlockAllMixedContent = aParentWGP->GetDocumentBlockAllMixedContent();
 
-  // if the document forces all requests to be upgraded from http to https,
-  // then we should do that for all requests. If it only forces preloads to be
-  // upgraded then we should enforce upgrade insecure requests only for
-  // preloads.
-  mUpgradeInsecureRequests = aParentWGP->GetDocumentUpgradeInsecureRequests();
+  if (mTopLevelPrincipal && BasePrincipal::Cast(mTriggeringPrincipal)
+                                ->OverridesCSP(mTopLevelPrincipal)) {
+    // if the load is triggered by an addon which potentially overrides the
+    // CSP of the document, then do not force insecure requests to be
+    // upgraded.
+    mUpgradeInsecureRequests = false;
+  } else {
+    // if the document forces all requests to be upgraded from http to https,
+    // then we should do that for all requests. If it only forces preloads to
+    // be upgraded then we should enforce upgrade insecure requests only for
+    // preloads.
+    mUpgradeInsecureRequests = aParentWGP->GetDocumentUpgradeInsecureRequests();
+  }
   mOriginAttributes = mLoadingPrincipal->OriginAttributesRef();
 
   // We need to do this after inheriting the document's origin attributes
@@ -524,12 +519,12 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
     : mLoadingPrincipal(rhs.mLoadingPrincipal),
       mTriggeringPrincipal(rhs.mTriggeringPrincipal),
       mPrincipalToInherit(rhs.mPrincipalToInherit),
-      mSandboxedLoadingPrincipal(rhs.mSandboxedLoadingPrincipal),
       mTopLevelPrincipal(rhs.mTopLevelPrincipal),
-      mTopLevelStorageAreaPrincipal(rhs.mTopLevelStorageAreaPrincipal),
       mResultPrincipalURI(rhs.mResultPrincipalURI),
+      mChannelCreationOriginalURI(rhs.mChannelCreationOriginalURI),
       mCookieJarSettings(rhs.mCookieJarSettings),
       mCspToInherit(rhs.mCspToInherit),
+      mSandboxedNullPrincipalID(rhs.mSandboxedNullPrincipalID),
       mClientInfo(rhs.mClientInfo),
       // mReservedClientSource must be handled specially during redirect
       // mReservedClientInfo must be handled specially during redirect
@@ -588,7 +583,7 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
       mAllowDeprecatedSystemRequests(rhs.mAllowDeprecatedSystemRequests),
       mIsInDevToolsContext(rhs.mIsInDevToolsContext),
       mParserCreatedScript(rhs.mParserCreatedScript),
-      mHasStoragePermission(rhs.mHasStoragePermission),
+      mStoragePermission(rhs.mStoragePermission),
       mIsMetaRefresh(rhs.mIsMetaRefresh),
       mIsFromProcessingFrameAttributes(rhs.mIsFromProcessingFrameAttributes),
       mIsMediaRequest(rhs.mIsMediaRequest),
@@ -599,12 +594,10 @@ LoadInfo::LoadInfo(const LoadInfo& rhs)
 
 LoadInfo::LoadInfo(
     nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
-    nsIPrincipal* aPrincipalToInherit, nsIPrincipal* aSandboxedLoadingPrincipal,
-    nsIPrincipal* aTopLevelPrincipal,
-    nsIPrincipal* aTopLevelStorageAreaPrincipal, nsIURI* aResultPrincipalURI,
-    nsICookieJarSettings* aCookieJarSettings,
+    nsIPrincipal* aPrincipalToInherit, nsIPrincipal* aTopLevelPrincipal,
+    nsIURI* aResultPrincipalURI, nsICookieJarSettings* aCookieJarSettings,
     nsIContentSecurityPolicy* aCspToInherit,
-    const Maybe<ClientInfo>& aClientInfo,
+    const nsID& aSandboxedNullPrincipalID, const Maybe<ClientInfo>& aClientInfo,
     const Maybe<ClientInfo>& aReservedClientInfo,
     const Maybe<ClientInfo>& aInitialClientInfo,
     const Maybe<ServiceWorkerDescriptor>& aController,
@@ -619,7 +612,7 @@ LoadInfo::LoadInfo(
     bool aForceInheritPrincipalDropped, uint64_t aInnerWindowID,
     uint64_t aBrowsingContextID, uint64_t aFrameBrowsingContextID,
     bool aInitialSecurityCheckDone, bool aIsThirdPartyContext,
-    bool aIsThirdPartyContextToTopWindow, bool aIsFormSubmission,
+    const Maybe<bool>& aIsThirdPartyContextToTopWindow, bool aIsFormSubmission,
     bool aSendCSPViolationEvents, const OriginAttributes& aOriginAttributes,
     RedirectHistoryArray&& aRedirectChainIncludingInternalRedirects,
     RedirectHistoryArray&& aRedirectChain,
@@ -633,7 +626,7 @@ LoadInfo::LoadInfo(
     bool aSkipContentSniffing, uint32_t aHttpsOnlyStatus,
     bool aHasValidUserGestureActivation, bool aAllowDeprecatedSystemRequests,
     bool aIsInDevToolsContext, bool aParserCreatedScript,
-    bool aHasStoragePermission, bool aIsMetaRefresh,
+    nsILoadInfo::StoragePermissionState aStoragePermission, bool aIsMetaRefresh,
     uint32_t aRequestBlockingReason, nsINode* aLoadingContext,
     nsILoadInfo::CrossOriginEmbedderPolicy aLoadingEmbedderPolicy,
     nsIURI* aUnstrippedURI)
@@ -641,10 +634,10 @@ LoadInfo::LoadInfo(
       mTriggeringPrincipal(aTriggeringPrincipal),
       mPrincipalToInherit(aPrincipalToInherit),
       mTopLevelPrincipal(aTopLevelPrincipal),
-      mTopLevelStorageAreaPrincipal(aTopLevelStorageAreaPrincipal),
       mResultPrincipalURI(aResultPrincipalURI),
       mCookieJarSettings(aCookieJarSettings),
       mCspToInherit(aCspToInherit),
+      mSandboxedNullPrincipalID(aSandboxedNullPrincipalID),
       mClientInfo(aClientInfo),
       mReservedClientInfo(aReservedClientInfo),
       mInitialClientInfo(aInitialClientInfo),
@@ -699,7 +692,7 @@ LoadInfo::LoadInfo(
       mAllowDeprecatedSystemRequests(aAllowDeprecatedSystemRequests),
       mIsInDevToolsContext(aIsInDevToolsContext),
       mParserCreatedScript(aParserCreatedScript),
-      mHasStoragePermission(aHasStoragePermission),
+      mStoragePermission(aStoragePermission),
       mIsMetaRefresh(aIsMetaRefresh),
 
       mLoadingEmbedderPolicy(aLoadingEmbedderPolicy),
@@ -763,7 +756,57 @@ void LoadInfo::ComputeIsThirdPartyContext(dom::WindowGlobalParent* aGlobal) {
   thirdPartyUtil->IsThirdPartyGlobal(aGlobal, &mIsThirdPartyContext);
 }
 
-NS_IMPL_ISUPPORTS(LoadInfo, nsILoadInfo)
+NS_IMPL_ADDREF(LoadInfo)
+
+bool LoadInfo::DispatchRelease() {
+  if (NS_IsMainThread()) {
+    return false;
+  }
+
+  NS_DispatchToMainThread(NewNonOwningRunnableMethod("net::LoadInfo::Release",
+                                                     this, &LoadInfo::Release),
+                          NS_DISPATCH_NORMAL);
+  return true;
+}
+
+NS_IMETHODIMP_(MozExternalRefCountType)
+LoadInfo::Release() {
+  nsrefcnt count = mRefCnt - 1;
+  if (DispatchRelease()) {
+    // Redispatched to main thread.
+    return count;
+  }
+
+  MOZ_ASSERT(0 != mRefCnt, "dup release");
+  count = --mRefCnt;
+  NS_LOG_RELEASE(this, count, "LoadInfo");
+
+  if (0 == count) {
+    mRefCnt = 1;
+    delete (this);
+    return 0;
+  }
+
+  return count;
+}
+
+NS_IMPL_QUERY_INTERFACE(LoadInfo, nsILoadInfo)
+
+void LoadInfo::ReleaseMembers() {
+  mCSPEventListener = nullptr;
+  mCookieJarSettings = nullptr;
+  mPerformanceStorage = nullptr;
+  mLoadingPrincipal = nullptr;
+  mTriggeringPrincipal = nullptr;
+  mPrincipalToInherit = nullptr;
+  mTopLevelPrincipal = nullptr;
+  mResultPrincipalURI = nullptr;
+  mCspToInherit = nullptr;
+  mUnstrippedURI = nullptr;
+  mAncestorPrincipals.Clear();
+}
+
+LoadInfo::~LoadInfo() { ReleaseMembers(); }
 
 already_AddRefed<nsILoadInfo> LoadInfo::Clone() const {
   RefPtr<LoadInfo> copy(new LoadInfo(*this));
@@ -788,7 +831,7 @@ already_AddRefed<nsILoadInfo> LoadInfo::CloneForNewRequest() const {
 
 NS_IMETHODIMP
 LoadInfo::GetLoadingPrincipal(nsIPrincipal** aLoadingPrincipal) {
-  NS_IF_ADDREF(*aLoadingPrincipal = mLoadingPrincipal);
+  *aLoadingPrincipal = do_AddRef(mLoadingPrincipal).take();
   return NS_OK;
 }
 
@@ -806,7 +849,7 @@ nsIPrincipal* LoadInfo::TriggeringPrincipal() { return mTriggeringPrincipal; }
 
 NS_IMETHODIMP
 LoadInfo::GetPrincipalToInherit(nsIPrincipal** aPrincipalToInherit) {
-  NS_IF_ADDREF(*aPrincipalToInherit = mPrincipalToInherit);
+  *aPrincipalToInherit = do_AddRef(mPrincipalToInherit).take();
   return NS_OK;
 }
 
@@ -833,30 +876,17 @@ nsIPrincipal* LoadInfo::FindPrincipalToInherit(nsIChannel* aChannel) {
   return prin->PrincipalToInherit(uri);
 }
 
-nsIPrincipal* LoadInfo::GetSandboxedLoadingPrincipal() {
-  if (!(mSandboxFlags & SANDBOXED_ORIGIN)) {
-    return nullptr;
-  }
+const nsID& LoadInfo::GetSandboxedNullPrincipalID() {
+  MOZ_ASSERT(!mSandboxedNullPrincipalID.Equals(nsID{}),
+             "mSandboxedNullPrincipalID wasn't initialized?");
+  return mSandboxedNullPrincipalID;
+}
 
-  if (!mSandboxedLoadingPrincipal) {
-    if (mLoadingPrincipal) {
-      mSandboxedLoadingPrincipal =
-          NullPrincipal::CreateWithInheritedAttributes(mLoadingPrincipal);
-    } else {
-      OriginAttributes attrs(mOriginAttributes);
-      mSandboxedLoadingPrincipal = NullPrincipal::Create(attrs);
-    }
-  }
-  MOZ_ASSERT(mSandboxedLoadingPrincipal);
-
-  return mSandboxedLoadingPrincipal;
+void LoadInfo::ResetSandboxedNullPrincipalID() {
+  mSandboxedNullPrincipalID = nsID::GenerateUUID();
 }
 
 nsIPrincipal* LoadInfo::GetTopLevelPrincipal() { return mTopLevelPrincipal; }
-
-nsIPrincipal* LoadInfo::GetTopLevelStorageAreaPrincipal() {
-  return mTopLevelStorageAreaPrincipal;
-}
 
 NS_IMETHODIMP
 LoadInfo::GetLoadingDocument(Document** aResult) {
@@ -948,14 +978,15 @@ LoadInfo::SetIsInThirdPartyContext(bool aIsInThirdPartyContext) {
 NS_IMETHODIMP
 LoadInfo::GetIsThirdPartyContextToTopWindow(
     bool* aIsThirdPartyContextToTopWindow) {
-  *aIsThirdPartyContextToTopWindow = mIsThirdPartyContextToTopWindow;
+  *aIsThirdPartyContextToTopWindow =
+      mIsThirdPartyContextToTopWindow.valueOr(true);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 LoadInfo::SetIsThirdPartyContextToTopWindow(
     bool aIsThirdPartyContextToTopWindow) {
-  mIsThirdPartyContextToTopWindow = aIsThirdPartyContextToTopWindow;
+  mIsThirdPartyContextToTopWindow = Some(aIsThirdPartyContextToTopWindow);
   return NS_OK;
 }
 
@@ -1021,14 +1052,16 @@ LoadInfo::SetCookieJarSettings(nsICookieJarSettings* aCookieJarSettings) {
 }
 
 NS_IMETHODIMP
-LoadInfo::GetHasStoragePermission(bool* aHasStoragePermission) {
-  *aHasStoragePermission = mHasStoragePermission;
+LoadInfo::GetStoragePermission(
+    nsILoadInfo::StoragePermissionState* aStoragePermission) {
+  *aStoragePermission = mStoragePermission;
   return NS_OK;
 }
 
 NS_IMETHODIMP
-LoadInfo::SetHasStoragePermission(bool aHasStoragePermission) {
-  mHasStoragePermission = aHasStoragePermission;
+LoadInfo::SetStoragePermission(
+    nsILoadInfo::StoragePermissionState aStoragePermission) {
+  mStoragePermission = aStoragePermission;
   return NS_OK;
 }
 
@@ -1345,15 +1378,158 @@ LoadInfo::GetInitialSecurityCheckDone(bool* aResult) {
   return NS_OK;
 }
 
+// To prevent unintenional credential and information leaks in content
+// processes we can use this function to truncate a Principal's URI as much as
+// possible.
+already_AddRefed<nsIPrincipal> CreateTruncatedPrincipal(
+    nsIPrincipal* aPrincipal) {
+  nsCOMPtr<nsIPrincipal> truncatedPrincipal;
+  // System Principal URIs don't need to be truncated as they don't contain any
+  // sensitive browsing history information.
+  if (aPrincipal->IsSystemPrincipal()) {
+    truncatedPrincipal = aPrincipal;
+    return truncatedPrincipal.forget();
+  }
+
+  // Content Principal URIs are the main location of the information we need to
+  // truncate.
+  if (aPrincipal->GetIsContentPrincipal()) {
+    // Certain URIs (chrome, resource, about) don't need to be truncated as they
+    // should be free of any sensitive user browsing history.
+    if (aPrincipal->SchemeIs("chrome") || aPrincipal->SchemeIs("resource") ||
+        aPrincipal->SchemeIs("about")) {
+      truncatedPrincipal = aPrincipal;
+      return truncatedPrincipal.forget();
+    }
+
+    // Different parts of the URI are preserved due to being vital to the
+    // browser's operation.
+    // Scheme for differentiating between different types of URIs and how to
+    // truncate them and later on utilize them.
+    // Host and Port to retain the redirect chain's core functionality.
+    // Path would ideally be removed but needs to be retained to ensure that
+    // http/https redirect loops can be detected.
+    // The entirety of the Query String, Reference Fragment, and User Info
+    // subcomponents must be stripped to avoid leaking Oauth tokens, user
+    // identifiers, and similar bits of information that these subcomponents may
+    // contain.
+    nsAutoCString scheme;
+    nsAutoCString separator("://");
+    nsAutoCString hostPort;
+    nsAutoCString path;
+    nsAutoCString uriString("");
+    if (aPrincipal->SchemeIs("view-source")) {
+      // The path portion of the view-source URI will be the URI whose source is
+      // being viewed, so we create a new URI object with a truncated form of
+      // the path and append the view-source scheme to the front again.
+      nsAutoCString viewSourcePath;
+      aPrincipal->GetFilePath(viewSourcePath);
+
+      nsCOMPtr<nsIURI> nestedURI;
+      nsresult rv = NS_NewURI(getter_AddRefs(nestedURI), viewSourcePath);
+
+      if (NS_FAILED(rv)) {
+        // Since the path here should be an already validated URI this should
+        // never happen.
+        NS_WARNING(viewSourcePath.get());
+        MOZ_ASSERT(false,
+                   "Failed to create truncated form of URI with NS_NewURI.");
+        truncatedPrincipal = aPrincipal;
+        return truncatedPrincipal.forget();
+      }
+
+      nestedURI->GetScheme(scheme);
+      nestedURI->GetHostPort(hostPort);
+      nestedURI->GetFilePath(path);
+      uriString += "view-source:";
+    } else {
+      aPrincipal->GetScheme(scheme);
+      aPrincipal->GetHostPort(hostPort);
+      aPrincipal->GetFilePath(path);
+    }
+    uriString += scheme + separator + hostPort + path;
+
+    nsCOMPtr<nsIURI> truncatedURI;
+    nsresult rv = NS_NewURI(getter_AddRefs(truncatedURI), uriString);
+    if (NS_FAILED(rv)) {
+      NS_WARNING(uriString.get());
+      MOZ_ASSERT(false,
+                 "Failed to create truncated form of URI with NS_NewURI.");
+      truncatedPrincipal = aPrincipal;
+      return truncatedPrincipal.forget();
+    }
+
+    return BasePrincipal::CreateContentPrincipal(
+        truncatedURI, aPrincipal->OriginAttributesRef());
+  }
+
+  // Null Principal Precursor URIs can also contain information that needs to
+  // be truncated.
+  if (aPrincipal->GetIsNullPrincipal()) {
+    nsCOMPtr<nsIPrincipal> precursorPrincipal =
+        aPrincipal->GetPrecursorPrincipal();
+    // If there is no precursor then nothing needs to be truncated.
+    if (!precursorPrincipal) {
+      truncatedPrincipal = aPrincipal;
+      return truncatedPrincipal.forget();
+    }
+
+    // Otherwise we return a new Null Principal with the original's Origin
+    // Attributes and a truncated version of the original's precursor URI.
+    nsCOMPtr<nsIPrincipal> truncatedPrecursor =
+        CreateTruncatedPrincipal(precursorPrincipal);
+    return NullPrincipal::CreateWithInheritedAttributes(truncatedPrecursor);
+  }
+
+  // If we hit this assertion we need to update this function to add the
+  // Principals and URIs seen as new corner cases to handle.
+  // For example we may need to do this for Expanded Principals and moz-icon
+  // URIs.
+  MOZ_ASSERT(false, "Unhandled Principal or URI type encountered.");
+
+  truncatedPrincipal = aPrincipal;
+  return truncatedPrincipal.forget();
+}
+
 NS_IMETHODIMP
-LoadInfo::AppendRedirectHistoryEntry(nsIRedirectHistoryEntry* aEntry,
+LoadInfo::AppendRedirectHistoryEntry(nsIChannel* aChannel,
                                      bool aIsInternalRedirect) {
-  NS_ENSURE_ARG(aEntry);
+  NS_ENSURE_ARG(aChannel);
   MOZ_ASSERT(NS_IsMainThread());
 
-  mRedirectChainIncludingInternalRedirects.AppendElement(aEntry);
+  nsCOMPtr<nsIPrincipal> uriPrincipal;
+  nsIScriptSecurityManager* sm = nsContentUtils::GetSecurityManager();
+  sm->GetChannelURIPrincipal(aChannel, getter_AddRefs(uriPrincipal));
+
+  nsCOMPtr<nsIURI> referrer;
+  nsCString remoteAddress;
+
+  nsCOMPtr<nsIHttpChannel> httpChannel(do_QueryInterface(aChannel));
+  if (httpChannel) {
+    nsCOMPtr<nsIReferrerInfo> referrerInfo;
+    Unused << httpChannel->GetReferrerInfo(getter_AddRefs(referrerInfo));
+    if (referrerInfo) {
+      referrer = referrerInfo->GetComputedReferrer();
+    }
+  }
+
+  // ClassifierDummyChannel implements this, but not nsIHttpChannel,
+  // whereas NullHttpChannel implements nsIHttpChannel but not this, so
+  // we can't make assumptions by nesting these QIs.
+  nsCOMPtr<nsIHttpChannelInternal> intChannel(do_QueryInterface(aChannel));
+  if (intChannel) {
+    Unused << intChannel->GetRemoteAddress(remoteAddress);
+  }
+
+  nsCOMPtr<nsIPrincipal> truncatedPrincipal =
+      CreateTruncatedPrincipal(uriPrincipal);
+
+  nsCOMPtr<nsIRedirectHistoryEntry> entry =
+      new nsRedirectHistoryEntry(truncatedPrincipal, referrer, remoteAddress);
+
+  mRedirectChainIncludingInternalRedirects.AppendElement(entry);
   if (!aIsInternalRedirect) {
-    mRedirectChain.AppendElement(aEntry);
+    mRedirectChain.AppendElement(entry);
   }
   return NS_OK;
 }
@@ -1625,6 +1801,20 @@ LoadInfo::SetAllowDeprecatedSystemRequests(
 }
 
 NS_IMETHODIMP
+LoadInfo::GetIsUserTriggeredSave(bool* aIsUserTriggeredSave) {
+  *aIsUserTriggeredSave =
+      mIsUserTriggeredSave ||
+      mInternalContentPolicyType == nsIContentPolicy::TYPE_SAVEAS_DOWNLOAD;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetIsUserTriggeredSave(bool aIsUserTriggeredSave) {
+  mIsUserTriggeredSave = aIsUserTriggeredSave;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 LoadInfo::GetIsInDevToolsContext(bool* aIsInDevToolsContext) {
   *aIsInDevToolsContext = mIsInDevToolsContext;
   return NS_OK;
@@ -1709,13 +1899,25 @@ LoadInfo::GetIsFromObjectOrEmbed(bool* aIsFromObjectOrEmbed) {
 
 NS_IMETHODIMP
 LoadInfo::GetResultPrincipalURI(nsIURI** aURI) {
-  NS_IF_ADDREF(*aURI = mResultPrincipalURI);
+  *aURI = do_AddRef(mResultPrincipalURI).take();
   return NS_OK;
 }
 
 NS_IMETHODIMP
 LoadInfo::SetResultPrincipalURI(nsIURI* aURI) {
   mResultPrincipalURI = aURI;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::GetChannelCreationOriginalURI(nsIURI** aURI) {
+  *aURI = do_AddRef(mChannelCreationOriginalURI).take();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+LoadInfo::SetChannelCreationOriginalURI(nsIURI* aURI) {
+  mChannelCreationOriginalURI = aURI;
   return NS_OK;
 }
 
@@ -1853,7 +2055,7 @@ PerformanceStorage* LoadInfo::GetPerformanceStorage() {
 
 NS_IMETHODIMP
 LoadInfo::GetCspEventListener(nsICSPEventListener** aCSPEventListener) {
-  NS_IF_ADDREF(*aCSPEventListener = mCSPEventListener);
+  *aCSPEventListener = do_AddRef(mCSPEventListener).take();
   return NS_OK;
 }
 
@@ -1951,5 +2153,4 @@ already_AddRefed<nsIContentSecurityPolicy> LoadInfo::GetCspToInherit() {
   return cspToInherit.forget();
 }
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net

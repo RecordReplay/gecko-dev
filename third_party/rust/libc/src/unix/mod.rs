@@ -23,12 +23,20 @@ pub type uintptr_t = usize;
 pub type ssize_t = isize;
 
 pub type pid_t = i32;
-pub type uid_t = u32;
-pub type gid_t = u32;
 pub type in_addr_t = u32;
 pub type in_port_t = u16;
 pub type sighandler_t = ::size_t;
 pub type cc_t = ::c_uchar;
+
+cfg_if! {
+    if #[cfg(any(target_os = "espidf", target_os = "horizon"))] {
+        pub type uid_t = ::c_ushort;
+        pub type gid_t = ::c_ushort;
+    } else {
+        pub type uid_t = u32;
+        pub type gid_t = u32;
+    }
+}
 
 #[cfg_attr(feature = "extra_traits", derive(Debug))]
 pub enum DIR {}
@@ -297,29 +305,29 @@ pub const ATF_PUBL: ::c_int = 0x08;
 pub const ATF_USETRAILERS: ::c_int = 0x10;
 
 cfg_if! {
-    if #[cfg(target_os = "l4re")] {
-        // required libraries for L4Re are linked externally, ATM
+    if #[cfg(any(target_os = "l4re", target_os = "espidf"))] {
+        // required libraries for L4Re and the ESP-IDF framework are linked externally, ATM
     } else if #[cfg(feature = "std")] {
         // cargo build, don't pull in anything extra as the libstd dep
         // already pulls in all libs.
     } else if #[cfg(all(target_os = "linux",
                         any(target_env = "gnu", target_env = "uclibc"),
                         feature = "rustc-dep-of-std"))] {
-        #[link(name = "util", kind = "static-nobundle",
+        #[link(name = "util", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "rt", kind = "static-nobundle",
+        #[link(name = "rt", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "pthread", kind = "static-nobundle",
+        #[link(name = "pthread", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "m", kind = "static-nobundle",
+        #[link(name = "m", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "dl", kind = "static-nobundle",
+        #[link(name = "dl", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "c", kind = "static-nobundle",
+        #[link(name = "c", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "gcc_eh", kind = "static-nobundle",
+        #[link(name = "gcc_eh", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
-        #[link(name = "gcc", kind = "static-nobundle",
+        #[link(name = "gcc", kind = "static", modifiers = "-bundle",
             cfg(target_feature = "crt-static"))]
         #[link(name = "util", cfg(not(target_feature = "crt-static")))]
         #[link(name = "rt", cfg(not(target_feature = "crt-static")))]
@@ -330,7 +338,7 @@ cfg_if! {
         extern {}
     } else if #[cfg(target_env = "musl")] {
         #[cfg_attr(feature = "rustc-dep-of-std",
-                   link(name = "c", kind = "static",
+                   link(name = "c", kind = "static", modifiers = "-bundle",
                         cfg(target_feature = "crt-static")))]
         #[cfg_attr(feature = "rustc-dep-of-std",
                    link(name = "c", cfg(not(target_feature = "crt-static"))))]
@@ -348,6 +356,7 @@ cfg_if! {
         extern {}
     } else if #[cfg(any(target_os = "macos",
                         target_os = "ios",
+                        target_os = "watchos",
                         target_os = "android",
                         target_os = "openbsd"))] {
         #[link(name = "c")]
@@ -372,7 +381,7 @@ cfg_if! {
         extern {}
     } else if #[cfg(target_os = "redox")] {
         #[cfg_attr(feature = "rustc-dep-of-std",
-                   link(name = "c", kind = "static-nobundle",
+                   link(name = "c", kind = "static", modifiers = "-bundle",
                         cfg(target_feature = "crt-static")))]
         #[cfg_attr(feature = "rustc-dep-of-std",
                    link(name = "c", cfg(not(target_feature = "crt-static"))))]
@@ -486,6 +495,7 @@ extern "C" {
         link_name = "strtod$UNIX2003"
     )]
     pub fn strtod(s: *const c_char, endp: *mut *mut c_char) -> c_double;
+    pub fn strtof(s: *const c_char, endp: *mut *mut c_char) -> c_float;
     pub fn strtol(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> c_long;
     pub fn strtoul(s: *const c_char, endp: *mut *mut c_char, base: c_int) -> c_ulong;
     pub fn calloc(nobj: size_t, size: size_t) -> *mut c_void;
@@ -505,6 +515,7 @@ extern "C" {
 
     pub fn strcpy(dst: *mut c_char, src: *const c_char) -> *mut c_char;
     pub fn strncpy(dst: *mut c_char, src: *const c_char, n: size_t) -> *mut c_char;
+    pub fn stpcpy(dst: *mut c_char, src: *const c_char) -> *mut c_char;
     pub fn strcat(s: *mut c_char, ct: *const c_char) -> *mut c_char;
     pub fn strncat(s: *mut c_char, ct: *const c_char, n: size_t) -> *mut c_char;
     pub fn strcmp(cs: *const c_char, ct: *const c_char) -> c_int;
@@ -528,6 +539,7 @@ extern "C" {
     )]
     pub fn strerror(n: c_int) -> *mut c_char;
     pub fn strtok(s: *mut c_char, t: *const c_char) -> *mut c_char;
+    pub fn strtok_r(s: *mut c_char, t: *const c_char, p: *mut *mut c_char) -> *mut c_char;
     pub fn strxfrm(s: *mut c_char, ct: *const c_char, n: size_t) -> size_t;
     pub fn strsignal(sig: c_int) -> *mut c_char;
     pub fn wcslen(buf: *const wchar_t) -> size_t;
@@ -576,6 +588,7 @@ extern "C" {
     )))]
     #[cfg_attr(target_os = "netbsd", link_name = "__socket30")]
     #[cfg_attr(target_os = "illumos", link_name = "__xnet_socket")]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_socket")]
     pub fn socket(domain: ::c_int, ty: ::c_int, protocol: ::c_int) -> ::c_int;
     #[cfg(not(all(
         libc_cfg_target_vendor,
@@ -587,11 +600,13 @@ extern "C" {
         link_name = "connect$UNIX2003"
     )]
     #[cfg_attr(target_os = "illumos", link_name = "__xnet_connect")]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_connect")]
     pub fn connect(socket: ::c_int, address: *const sockaddr, len: socklen_t) -> ::c_int;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "listen$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_listen")]
     pub fn listen(socket: ::c_int, backlog: ::c_int) -> ::c_int;
     #[cfg(not(all(
         libc_cfg_target_vendor,
@@ -602,6 +617,7 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "accept$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_accept")]
     pub fn accept(socket: ::c_int, address: *mut sockaddr, address_len: *mut socklen_t) -> ::c_int;
     #[cfg(not(all(
         libc_cfg_target_vendor,
@@ -612,6 +628,7 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "getpeername$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_getpeername")]
     pub fn getpeername(
         socket: ::c_int,
         address: *mut sockaddr,
@@ -626,11 +643,13 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "getsockname$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_getsockname")]
     pub fn getsockname(
         socket: ::c_int,
         address: *mut sockaddr,
         address_len: *mut socklen_t,
     ) -> ::c_int;
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_setsockopt")]
     pub fn setsockopt(
         socket: ::c_int,
         level: ::c_int,
@@ -659,6 +678,7 @@ extern "C" {
         link_name = "sendto$UNIX2003"
     )]
     #[cfg_attr(target_os = "illumos", link_name = "__xnet_sendto")]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_sendto")]
     pub fn sendto(
         socket: ::c_int,
         buf: *const ::c_void,
@@ -667,6 +687,7 @@ extern "C" {
         addr: *const sockaddr,
         addrlen: socklen_t,
     ) -> ::ssize_t;
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_shutdown")]
     pub fn shutdown(socket: ::c_int, how: ::c_int) -> ::c_int;
 
     #[cfg_attr(
@@ -1007,7 +1028,7 @@ extern "C" {
     pub fn getrusage(resource: ::c_int, usage: *mut rusage) -> ::c_int;
 
     #[cfg_attr(
-        any(target_os = "macos", target_os = "ios"),
+        any(target_os = "macos", target_os = "ios", target_os = "watchos"),
         link_name = "realpath$DARWIN_EXTSN"
     )]
     pub fn realpath(pathname: *const ::c_char, resolved: *mut ::c_char) -> *mut ::c_char;
@@ -1122,6 +1143,7 @@ extern "C" {
     pub fn pthread_rwlockattr_destroy(attr: *mut pthread_rwlockattr_t) -> ::c_int;
 
     #[cfg_attr(target_os = "illumos", link_name = "__xnet_getsockopt")]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_getsockopt")]
     pub fn getsockopt(
         sockfd: ::c_int,
         level: ::c_int,
@@ -1147,6 +1169,7 @@ extern "C" {
         target_vendor = "nintendo"
     )))]
     #[cfg_attr(target_os = "illumos", link_name = "__xnet_getaddrinfo")]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_getaddrinfo")]
     pub fn getaddrinfo(
         node: *const c_char,
         service: *const c_char,
@@ -1158,7 +1181,9 @@ extern "C" {
         target_arch = "powerpc",
         target_vendor = "nintendo"
     )))]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_freeaddrinfo")]
     pub fn freeaddrinfo(res: *mut addrinfo);
+    pub fn hstrerror(errcode: ::c_int) -> *const ::c_char;
     pub fn gai_strerror(errcode: ::c_int) -> *const ::c_char;
     #[cfg_attr(
         any(
@@ -1169,7 +1194,10 @@ extern "C" {
         ),
         link_name = "__res_init"
     )]
-    #[cfg_attr(any(target_os = "macos", target_os = "ios"), link_name = "res_9_init")]
+    #[cfg_attr(
+        any(target_os = "macos", target_os = "ios", target_os = "watchos"),
+        link_name = "res_9_init"
+    )]
     pub fn res_init() -> ::c_int;
 
     #[cfg_attr(target_os = "netbsd", link_name = "__gmtime_r50")]
@@ -1233,11 +1261,13 @@ extern "C" {
         all(target_os = "macos", target_arch = "x86"),
         link_name = "send$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_send")]
     pub fn send(socket: ::c_int, buf: *const ::c_void, len: ::size_t, flags: ::c_int) -> ::ssize_t;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
         link_name = "recv$UNIX2003"
     )]
+    #[cfg_attr(target_os = "espidf", link_name = "lwip_recv")]
     pub fn recv(socket: ::c_int, buf: *mut ::c_void, len: ::size_t, flags: ::c_int) -> ::ssize_t;
     #[cfg_attr(
         all(target_os = "macos", target_arch = "x86"),
@@ -1361,6 +1391,17 @@ extern "C" {
     pub fn getline(lineptr: *mut *mut c_char, n: *mut size_t, stream: *mut FILE) -> ssize_t;
 
     pub fn lockf(fd: ::c_int, cmd: ::c_int, len: ::off_t) -> ::c_int;
+
+}
+cfg_if! {
+    if #[cfg(not(any(target_os = "emscripten",
+                     target_os = "android",
+                     target_os = "haiku")))] {
+        extern "C" {
+            pub fn adjtime(delta: *const timeval, olddelta: *mut timeval) -> ::c_int;
+            pub fn stpncpy(dst: *mut c_char, src: *const c_char, n: size_t) -> *mut c_char;
+        }
+    }
 }
 
 cfg_if! {
@@ -1440,6 +1481,7 @@ cfg_if! {
         pub use self::linux_like::*;
     } else if #[cfg(any(target_os = "macos",
                         target_os = "ios",
+                        target_os = "watchos",
                         target_os = "freebsd",
                         target_os = "dragonfly",
                         target_os = "openbsd",

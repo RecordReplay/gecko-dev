@@ -17,7 +17,7 @@ const ABOUT_NEWTAB = "about:newtab";
 const ABOUT_WELCOME = "about:welcome";
 const TEST_HTTP = "http://example.org/";
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["browser.newtab.preload", false],
@@ -80,7 +80,7 @@ add_task(async function process_switching_through_loading_in_the_same_tab() {
 
     for (let [url, remoteType] of [
       [ABOUT_NEWTAB, E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE],
-      [ABOUT_BLANK, E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE],
+      [ABOUT_BLANK, E10SUtils.WEB_REMOTE_TYPE],
       [TEST_HTTP, E10SUtils.WEB_REMOTE_TYPE],
       [ABOUT_HOME, E10SUtils.PRIVILEGEDABOUT_REMOTE_TYPE],
       [TEST_HTTP, E10SUtils.WEB_REMOTE_TYPE],

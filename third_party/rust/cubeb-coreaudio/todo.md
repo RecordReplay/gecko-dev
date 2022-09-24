@@ -2,8 +2,8 @@
 
 ## General
 
-- Resolve the [issues](https://github.com/ChunMinChang/cubeb-coreaudio-rs/issues)
-- Some of bugs are found when adding tests. Search *FIXIT* to find them.
+- Resolve the [issues](https://github.com/mozilla/cubeb-coreaudio-rs/issues)
+- Some of bugs are found when adding tests. Search *FIXME* to find them.
 - Remove `#[allow(non_camel_case_types)]`, `#![allow(unused_assignments)]`, `#![allow(unused_must_use)]`
 - Use `ErrorChain`
 - Centralize the error log in one place
@@ -77,8 +77,6 @@ and create a new one. It's easier than the current implementation.
 
 ### Setting master device
 
-- We always set the master device to the first subdevice of the default output device
-  but the output device (forming the aggregate device) may not be the default output device
 - Check if the first subdevice of the default output device is in the list of
   sub devices list of the aggregate device
 - Check the `name: CFStringRef` of the master device is not `NULL`
@@ -102,6 +100,7 @@ and create a new one. It's easier than the current implementation.
 
 ## [Cubeb Interface][cubeb-rs]
 
+- `current_device` should be the in-use device of the current stream rather than default input and output device.
 - Implement `From` trait for `enum cubeb_device_type` so we can use `devtype.into()` to get `ffi::CUBEB_DEVICE_TYPE_*`.
 - Implement `to_owned` in [`StreamParamsRef`][cubeb-rs-stmparamsref]
 - Check the passed parameters like what [cubeb.c does][cubeb-stm-check]!
@@ -114,7 +113,7 @@ and create a new one. It's easier than the current implementation.
 
 [cubeb-rs]: https://github.com/djg/cubeb-rs "cubeb-rs"
 [cubeb-rs-stmparamsref]: https://github.com/djg/cubeb-rs/blob/78ed9459b8ac2ca50ea37bb72f8a06847eb8d379/cubeb-core/src/stream.rs#L61 "StreamParamsRef"
-[cubeb-stm-check]: https://github.com/kinetiknz/cubeb/blob/a971bf1a045b0e5dcaffd2a15c3255677f43cd2d/src/cubeb.c#L70-L108
+[cubeb-stm-check]: https://github.com/mozilla/cubeb/blob/a971bf1a045b0e5dcaffd2a15c3255677f43cd2d/src/cubeb.c#L70-L108
 
 ## Test
 
@@ -122,3 +121,4 @@ and create a new one. It's easier than the current implementation.
   - Add tests for capturing/recording, output, duplex streams
 - Update the manual tests
   - Those tests are created in the middle of the development. Thay might be not outdated now.
+- Add in-out support for `TestDevicePlugger`

@@ -62,6 +62,7 @@ const XUL_HIGHLIGHTER_STYLES_SHEET = `data:text/css;charset=utf-8,
   width: 100%;
   height: 100%;
   z-index: 2;
+  color-scheme: light;
 }`;
 
 const STYLESHEET_URI =
@@ -134,14 +135,7 @@ ClassList.prototype = {
  * @return {Boolean}
  */
 function isXUL(window) {
-  // XXX: We temporarily return true for HTML documents if the document disables
-  // scroll frames since the regular highlighter is broken in this case. This
-  // should be removed when bug 1594587 is fixed.
-  return (
-    window.document.documentElement.namespaceURI === XUL_NS ||
-    (window.isChromeWindow &&
-      window.document.documentElement.getAttribute("scrolling") === "false")
-  );
+  return window.document.documentElement.namespaceURI === XUL_NS;
 }
 exports.isXUL = isXUL;
 
@@ -196,10 +190,19 @@ exports.isNodeValid = isNodeValid;
  * @param {Function} nodeBuilder
  *        A function that, when executed, returns a DOM node to be inserted into
  *        the canvasFrame.
+ * @param {Object} options
+ * @param {Boolean} options.waitForDocumentToLoad
+ *        Set to false to try to insert the anonymous content even if the document
+ *        isn't loaded yet. Defaults to true.
  */
-function CanvasFrameAnonymousContentHelper(highlighterEnv, nodeBuilder) {
+function CanvasFrameAnonymousContentHelper(
+  highlighterEnv,
+  nodeBuilder,
+  { waitForDocumentToLoad = true } = {}
+) {
   this.highlighterEnv = highlighterEnv;
   this.nodeBuilder = nodeBuilder;
+  this.waitForDocumentToLoad = !!waitForDocumentToLoad;
 
   this._onWindowReady = this._onWindowReady.bind(this);
   this.highlighterEnv.on("window-ready", this._onWindowReady);
@@ -219,7 +222,9 @@ CanvasFrameAnonymousContentHelper.prototype = {
     const doc = this.highlighterEnv.document;
     if (
       doc.documentElement &&
-      (isDocumentReady(doc) || doc.readyState !== "uninitialized")
+      (!this.waitForDocumentToLoad ||
+        isDocumentReady(doc) ||
+        doc.readyState !== "uninitialized")
     ) {
       this._insert();
     }
@@ -255,22 +260,28 @@ CanvasFrameAnonymousContentHelper.prototype = {
   },
 
   async _insert() {
-    await waitForContentLoaded(this.highlighterEnv.window);
+    if (this.waitForDocumentToLoad) {
+      await waitForContentLoaded(this.highlighterEnv.window);
+    }
     if (!this.highlighterEnv) {
       // CanvasFrameAnonymousContentHelper was already destroyed.
       return;
     }
-    if (isXUL(this.highlighterEnv.window)) {
+
+    const window = this.highlighterEnv.window;
+    const isXULWindow = isXUL(window);
+    const isChromeWindow = window.isChromeWindow;
+
+    if (isXULWindow || isChromeWindow) {
       // In order to use anonymous content, we need to create and use an IFRAME
       // inside a XUL document first and use its window/document the same way we
-      // would normally use highlighter environment's window/document. See
-      // TODO: bug 1594587 for more details.
-      //
-      // Note: xul:window is not necessarily the top chrome window (as it's the
-      // case with about:devtools-toolbox). We need to ensure that we use the
-      // top chrome window to look up or create the iframe.
+      // would normally use highlighter environment's window/document.
+      // See Bug 1594587 for more details.
+      // For Chrome Windows, we also need to do it as the first call to insertAnonymousContent
+      // closes XUL popups even if ui.popup.disable_autohide is true (See Bug 1768896).
+
+      const { documentElement } = window.document;
       if (!this._iframe) {
-        const { documentElement } = this.highlighterEnv.window.document;
         this._iframe = documentElement.querySelector(
           ":scope > .devtools-highlighter-renderer"
         );
@@ -280,20 +291,27 @@ CanvasFrameAnonymousContentHelper.prototype = {
           const numberOfHighlighters =
             parseInt(this._iframe.dataset.numberOfHighlighters, 10) + 1;
           this._iframe.dataset.numberOfHighlighters = numberOfHighlighters;
-        } else {
-          this._iframe = this.highlighterEnv.window.document.createElement(
-            "iframe"
-          );
-          this._iframe.classList.add("devtools-highlighter-renderer");
-          // If iframe is used for the first time, add ref count of one to its
-          // numberOfHighlighters data attribute.
-          this._iframe.dataset.numberOfHighlighters = 1;
-          documentElement.append(this._iframe);
-          loadSheet(this.highlighterEnv.window, XUL_HIGHLIGHTER_STYLES_SHEET);
         }
       }
 
-      await waitForContentLoaded(this._iframe);
+      if (!this._iframe) {
+        this._iframe = window.document.createElement("iframe");
+        // We need the color-scheme shenanigans to ensure that the iframe is
+        // transparent, see bug 1773155, bug 1738380, and
+        // https://github.com/mozilla/wg-decisions/issues/774.
+        this._iframe.srcdoc =
+          "<!doctype html><meta name=color-scheme content=light>";
+        this._iframe.classList.add("devtools-highlighter-renderer");
+        // If iframe is used for the first time, add ref count of one to its
+        // numberOfHighlighters data attribute.
+        this._iframe.dataset.numberOfHighlighters = 1;
+        documentElement.append(this._iframe);
+        loadSheet(window, XUL_HIGHLIGHTER_STYLES_SHEET);
+      }
+
+      if (this.waitForDocumentToLoad) {
+        await waitForContentLoaded(this._iframe);
+      }
       if (!this.highlighterEnv) {
         // CanvasFrameAnonymousContentHelper was already destroyed.
         return;
@@ -326,8 +344,12 @@ CanvasFrameAnonymousContentHelper.prototype = {
     // that scenario, fixes when we're adding anonymous content in a tab that
     // is not the active one (see bug 1260043 and bug 1260044)
     try {
+      // If we didn't wait for the document to load, we want to force a layout update
+      // to ensure the anonymous content will be rendered (see Bug 1580394).
+      const forceSynchronousLayoutUpdate = !this.waitForDocumentToLoad;
       this._content = this.anonymousContentDocument.insertAnonymousContent(
-        node
+        node,
+        forceSynchronousLayoutUpdate
       );
     } catch (e) {
       // If the `insertAnonymousContent` fails throwing a `NS_ERROR_UNEXPECTED`, it means
@@ -748,9 +770,6 @@ function waitForContentLoaded(iframeOrWindow) {
  * @param  {String} options.position
  *         Force the infobar to be displayed either on "top" or "bottom". Any other value
  *         will be ingnored.
- * @param  {Boolean} options.hideIfOffscreen
- *         If set to `true`, hides the infobar if it's offscreen, instead of automatically
- *         reposition it.
  */
 function moveInfobar(container, bounds, win, options = {}) {
   const zoom = getCurrentZoom(win);
@@ -823,10 +842,7 @@ function moveInfobar(container, bounds, win, options = {}) {
     top -= pageYOffset;
   }
 
-  if (isOverlapTheNode && options.hideIfOffscreen) {
-    container.setAttribute("hidden", "true");
-    return;
-  } else if (isOverlapTheNode) {
+  if (isOverlapTheNode) {
     left = Math.min(Math.max(leftBoundary, left - pageXOffset), rightBoundary);
 
     position = "fixed";

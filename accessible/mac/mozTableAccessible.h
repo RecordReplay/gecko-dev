@@ -78,6 +78,9 @@
 - (void)dealloc;
 
 // override
+- (void)expire;
+
+// override
 - (NSNumber*)moxRowCount;
 
 // override
@@ -173,6 +176,9 @@
 
 // override
 - (NSString*)moxLabel;
+
+// override
+- (id)moxValue;
 
 // override
 - (void)stateChanged:(uint64_t)state isEnabled:(BOOL)enabled;

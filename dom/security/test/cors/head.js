@@ -1,16 +1,9 @@
 "use strict";
 
-function scopedCuImport(path) {
-  const scope = {};
-  ChromeUtils.import(path, scope);
-  return scope;
-}
-const { loader, require } = scopedCuImport(
-  "resource://devtools/shared/Loader.jsm"
+const { require } = ChromeUtils.import(
+  "resource://devtools/shared/loader/Loader.jsm"
 );
-const { Utils: WebConsoleUtils } = require("devtools/client/webconsole/utils");
 let { gDevTools } = require("devtools/client/framework/devtools");
-let promise = require("promise");
 
 /**
  * Open the toolbox in a given tab.

@@ -38,15 +38,15 @@ add_task(async _ => {
   let records = [
     {
       id: "1",
-      last_modified: 100000000000000000001,
+      last_modified: 1000000000000001,
       firstPartyOrigin: "https://example.org",
       thirdPartyOrigin: "https://tracking.example.com",
     },
   ];
 
   // Add some initial data
-  let db = await RemoteSettings(COLLECTION_NAME).db;
-  await db.importChanges({}, 42, records);
+  let db = RemoteSettings(COLLECTION_NAME).db;
+  await db.importChanges({}, Date.now(), records);
 
   let promise = waitForEvent(updateEvent, "update");
   let obs = data => {
@@ -67,7 +67,7 @@ add_task(async _ => {
 
   records.push({
     id: "2",
-    last_modified: 100000000000000000002,
+    last_modified: 1000000000000002,
     firstPartyOrigin: "https://foo.org",
     thirdPartyOrigin: "https://bar.com",
   });

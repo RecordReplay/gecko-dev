@@ -41,6 +41,7 @@ hb_ot_old_tag_from_script (hb_script_t script)
   switch ((hb_tag_t) script)
   {
     case HB_SCRIPT_INVALID:		return HB_OT_TAG_DEFAULT_SCRIPT;
+    case HB_SCRIPT_MATH:		return HB_OT_TAG_MATH_SCRIPT;
 
     /* KATAKANA and HIRAGANA both map to 'kana' */
     case HB_SCRIPT_HIRAGANA:		return HB_TAG('k','a','n','a');
@@ -63,6 +64,8 @@ hb_ot_old_tag_to_script (hb_tag_t tag)
 {
   if (unlikely (tag == HB_OT_TAG_DEFAULT_SCRIPT))
     return HB_SCRIPT_INVALID;
+  if (unlikely (tag == HB_OT_TAG_MATH_SCRIPT))
+    return HB_SCRIPT_MATH;
 
   /* This side of the conversion is fully algorithmic. */
 
@@ -522,7 +525,7 @@ hb_ot_tags_to_script_and_language (hb_tag_t       script_tag,
       unsigned char *buf;
       const char *lang_str = hb_language_to_string (*language);
       size_t len = strlen (lang_str);
-      buf = (unsigned char *) malloc (len + 16);
+      buf = (unsigned char *) hb_malloc (len + 16);
       if (unlikely (!buf))
       {
 	*language = nullptr;
@@ -544,7 +547,7 @@ hb_ot_tags_to_script_and_language (hb_tag_t       script_tag,
 	for (shift = 28; shift >= 0; shift -= 4)
 	  buf[len++] = TOHEX (script_tag >> shift);
 	*language = hb_language_from_string ((char *) buf, len);
-	free (buf);
+	hb_free (buf);
       }
     }
   }

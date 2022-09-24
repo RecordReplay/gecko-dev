@@ -6,6 +6,10 @@
 
 EXPORTS += [
     "DXVA2Manager.h",
+    "MFMediaEngineAudioStream.h",
+    "MFMediaEngineDecoderModule.h",
+    "MFMediaEngineStream.h",
+    "MFMediaEngineVideoStream.h",
     "MFTDecoder.h",
     "WMF.h",
     "WMFAudioMFTManager.h",
@@ -16,8 +20,13 @@ EXPORTS += [
     "WMFUtils.h",
     "WMFVideoMFTManager.h",
 ]
+
 UNIFIED_SOURCES += [
     "DXVA2Manager.cpp",
+    "MFMediaEngineAudioStream.cpp",
+    "MFMediaEngineDecoderModule.cpp",
+    "MFMediaEngineStream.cpp",
+    "MFMediaEngineVideoStream.cpp",
     "MFTDecoder.cpp",
     "MFTEncoder.cpp",
     "WMFAudioMFTManager.cpp",
@@ -33,14 +42,19 @@ SOURCES += [
 ]
 
 LOCAL_INCLUDES += [
+    "/gfx/cairo/cairo/src",
     "/media/libyuv/libyuv/include",
+]
+
+TEST_DIRS += [
+    "gtest",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
 
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-
 # Add libFuzzer configuration directives
 include("/tools/fuzzing/libfuzzer-config.mozbuild")
+
+REQUIRES_UNIFIED_BUILD = True

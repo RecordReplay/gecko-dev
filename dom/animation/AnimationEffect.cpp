@@ -16,7 +16,7 @@
 
 namespace mozilla::dom {
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(AnimationEffect)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(AnimationEffect)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(AnimationEffect)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mDocument, mAnimation)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
@@ -25,8 +25,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(AnimationEffect)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mDocument, mAnimation)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(AnimationEffect)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(AnimationEffect)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(AnimationEffect)
@@ -192,7 +190,7 @@ ComputedTiming AnimationEffect::GetComputedTimingAt(
               overallProgress >= double(UINT64_MAX)
           ? UINT64_MAX  // In GetComputedTimingDictionary(),
                         // we will convert this into Infinity
-          : static_cast<uint64_t>(overallProgress);
+          : static_cast<uint64_t>(std::max(overallProgress, 0.0));
 
   // Convert the overall progress to a fraction of a single iteration--the
   // simply iteration progress.

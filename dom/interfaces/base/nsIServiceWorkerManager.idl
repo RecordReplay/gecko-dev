@@ -67,7 +67,6 @@ interface nsIServiceWorkerInfo : nsISupports
   readonly attribute PRTime activatedTime;
   readonly attribute PRTime redundantTime;
 
-
   // Total number of navigation faults experienced by this ServiceWorker since
   // it was loaded from disk at startup or was installed.
   readonly attribute unsigned long navigationFaultCount;
@@ -77,7 +76,6 @@ interface nsIServiceWorkerInfo : nsISupports
   // to the content process, but when it comes time to dispatch the fetch event,
   // the cancellation control flow path will be triggered.
   attribute nsresult testingInjectCancellation;
-
 
   void attachDebugger();
 
@@ -162,11 +160,39 @@ interface nsIServiceWorkerManagerListener : nsISupports
   void onRegister(in nsIServiceWorkerRegistrationInfo aInfo);
 
   void onUnregister(in nsIServiceWorkerRegistrationInfo aInfo);
+
+  /**
+   * Called by ServiceWorker bypass mitigations when checking whether an
+   * origin's quota usage is sufficiently full that we need to clear the origin
+   * (and possibly group's) data as part of our mitigation.
+   * This notification is provided primarily for testing code that needs to wait
+   * for this check to happen but has no other mechanism for knowing it's
+   * completed. Probably not relevant to devtools.
+   */
+  void onQuotaUsageCheckFinish(in nsIServiceWorkerRegistrationInfo aInfo);
 };
 
 [scriptable, builtinclass, uuid(7404c8e8-4d47-4449-8ed1-47d1261d4e33)]
 interface nsIServiceWorkerManager : nsISupports
 {
+  /**
+   * A testing helper that is meant to only be used in xpcshell-test to test behaviors
+   * that would need a browser restart to re-initialize the ServiceWorkerManager from
+   * the service worker registration dumped on disk (the one listed in the serviceworker.txt
+   * file part of the Firefox profile directory).
+   *
+   * NOTE: this test helper does
+   * - fail if "dom.serviceWorkers.testing.enabled" is not set to true 
+   * - fail if there are controlled clients (the test case is responsible of making sure that 
+   *   there is none when this method is being called)
+   * - shutdown and clear all service worker registrations (but without removing them from
+   *   the registration stored in serviceworker.txt)
+   * - force reload the registration data stored in serviceworker.txt (but the test case using 
+   *   this helper is responsible to be sure that the registrations have been already written
+   *   on disk)
+   */
+  void reloadRegistrationsForTest();
+
   /**
    * A testing helper that registers a service worker for testing purpose (e.g. used to test
    * a remote worker that has to spawn a new process to be launched).
@@ -187,6 +213,31 @@ interface nsIServiceWorkerManager : nsISupports
    */
   [implicit_jscontext]
   Promise registerForAddonPrincipal(in nsIPrincipal aPrincipal);
+
+  /**
+   * Get an extension background service worker registration for a
+   * given extension principal, return an nsIServiceWorkerRegistrationInfo
+   * if one exists (or null if no registration has been found).
+   */
+  void getRegistrationForAddonPrincipal(in nsIPrincipal aPrincipal,
+                                        [optional, retval] out nsIServiceWorkerRegistrationInfo regInfo);
+
+  /**
+   * Wake up the extension background service worker given its extension base url,
+   * for an API event identified by the namespace and event name strings.
+   *
+   * Returns a Promise which is resolved to true if a listener has been subscribed
+   * during the synchronous worker script execution for the expected WebExtensions
+   * API event.
+   *
+   * NOTE: ExtensionBrowser and ExtensionEventManager interfaces are keeping track
+   * of these listeners. These are WebExtensions API event listeners and they do not
+   * involve any functional events at all.
+   */
+  [implicit_jscontext]
+  Promise wakeForExtensionAPIEvent(in AString aExtensionBaseURL,
+                                   in AString aAPINamespace,
+                                   in AString aAPIEventName);
 
   /**
    * Unregister an existing ServiceWorker registration for `aScope`.

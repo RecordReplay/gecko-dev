@@ -44,7 +44,6 @@
 #include "nsCOMPtr.h"
 #include "nsHashtablesFwd.h"
 #include "nsIContentPolicy.h"
-#include "nsID.h"
 #include "nsINode.h"
 #include "nsIScriptError.h"
 #include "nsIThread.h"
@@ -95,7 +94,6 @@ class nsIInterfaceRequestor;
 class nsILoadGroup;
 class nsILoadInfo;
 class nsIObserver;
-class nsIParser;
 class nsIPluginTag;
 class nsIPrincipal;
 class nsIReferrerInfo;
@@ -110,11 +108,11 @@ class nsIStringBundleService;
 class nsISupports;
 class nsITransferable;
 class nsIURI;
-class nsIUUIDGenerator;
 class nsIWidget;
+class nsIWritableVariant;
 class nsIXPConnect;
-class nsNameSpaceManager;
 class nsNodeInfoManager;
+class nsParser;
 class nsPIWindowRoot;
 class nsPresContext;
 class nsStringBuffer;
@@ -131,7 +129,9 @@ class nsRefPtrHashKey;
 
 namespace IPC {
 class Message;
-}
+class MessageReader;
+class MessageWriter;
+}  // namespace IPC
 
 namespace JS {
 class Value;
@@ -162,6 +162,7 @@ template <class T>
 class StaticRefPtr;
 
 namespace dom {
+class ShmemImage;
 struct AutocompleteInfo;
 class BrowserChild;
 class BrowserParent;
@@ -183,23 +184,19 @@ class HTMLInputElement;
 class IPCDataTransfer;
 class IPCDataTransferItem;
 struct LifecycleCallbackArgs;
-struct LifecycleAdoptedCallbackArgs;
 class MessageBroadcaster;
 class NodeInfo;
 class Selection;
+struct StructuredSerializeOptions;
 class WorkerPrivate;
 enum class ElementCallbackType;
 enum class ReferrerPolicy : uint8_t;
 }  // namespace dom
 
-namespace intl {
-class LineBreaker;
-class WordBreaker;
-}  // namespace intl
-
 namespace ipc {
-class Shmem;
+class IProtocol;
 class IShmemAllocator;
+class Shmem;
 }  // namespace ipc
 
 namespace gfx {
@@ -207,9 +204,7 @@ class DataSourceSurface;
 enum class SurfaceFormat : int8_t;
 }  // namespace gfx
 
-namespace layers {
-class LayerManager;
-}  // namespace layers
+class WindowRenderer;
 
 }  // namespace mozilla
 
@@ -252,15 +247,15 @@ enum class PreventDefaultResult : uint8_t { No, ByContent, ByChrome };
 
 class nsContentUtils {
   friend class nsAutoScriptBlockerSuppressNodeRemoved;
-  typedef mozilla::dom::Element Element;
-  typedef mozilla::dom::Document Document;
-  typedef mozilla::Cancelable Cancelable;
-  typedef mozilla::CanBubble CanBubble;
-  typedef mozilla::Composed Composed;
-  typedef mozilla::ChromeOnlyDispatch ChromeOnlyDispatch;
-  typedef mozilla::EventMessage EventMessage;
-  typedef mozilla::TimeDuration TimeDuration;
-  typedef mozilla::Trusted Trusted;
+  using Element = mozilla::dom::Element;
+  using Document = mozilla::dom::Document;
+  using Cancelable = mozilla::Cancelable;
+  using CanBubble = mozilla::CanBubble;
+  using Composed = mozilla::Composed;
+  using ChromeOnlyDispatch = mozilla::ChromeOnlyDispatch;
+  using EventMessage = mozilla::EventMessage;
+  using TimeDuration = mozilla::TimeDuration;
+  using Trusted = mozilla::Trusted;
 
  public:
   static nsresult Init();
@@ -354,15 +349,27 @@ class nsContentUtils {
   // Check whether we should avoid leaking distinguishing information to JS/CSS.
   // This function can be called both in the main thread and worker threads.
   static bool ShouldResistFingerprinting();
+  static bool ShouldResistFingerprinting(nsIGlobalObject* aGlobalObject);
   static bool ShouldResistFingerprinting(nsIDocShell* aDocShell);
   static bool ShouldResistFingerprinting(nsIPrincipal* aPrincipal);
-  static bool ShouldResistFingerprinting(
-      mozilla::dom::WorkerPrivate* aWorkerPrivate);
+  // These functions are the new, nuanced functions
   static bool ShouldResistFingerprinting(const Document* aDoc);
   static bool ShouldResistFingerprinting(nsIChannel* aChannel);
+  static bool ShouldResistFingerprinting(
+      nsIPrincipal* aPrincipal,
+      const mozilla::OriginAttributes& aOriginAttributes);
 
-  // Prevent system colors from being exposed to CSS or canvas.
-  static bool UseStandinsForNativeColors();
+  /**
+   * Implement a RFP function that only checks the pref, and does not take
+   * into account any additional context such as PBM mode or Web Extensions.
+   *
+   * It requires an explanation for why the coarse check is being used instead
+   * of the nuanced check. While there is a gradual cut over of
+   * ShouldResistFingerprinting calls to a nuanced API, some features still
+   * require a legacy function. (Additionally, we sometimes use the coarse
+   * check first, to avoid running additional code to support a nuanced check.)
+   */
+  static bool ShouldResistFingerprinting(const char* aJustification);
 
   // A helper function to calculate the rounded window size for fingerprinting
   // resistance. The rounded size is based on the chrome UI size and available
@@ -441,13 +448,13 @@ class nsContentUtils {
    * This method fills |aAncestorNodes| with all ancestor nodes of |aNode|
    * including |aNode| (QI'd to nsIContent) at the zero index.
    * For each ancestor, there is a corresponding element in |aAncestorOffsets|
-   * which is the IndexOf the child in relation to its parent.
+   * which is the ComputeIndexOf the child in relation to its parent.
    *
    * This method just sucks.
    */
   static nsresult GetInclusiveAncestorsAndOffsets(
-      nsINode* aNode, int32_t aOffset, nsTArray<nsIContent*>* aAncestorNodes,
-      nsTArray<int32_t>* aAncestorOffsets);
+      nsINode* aNode, uint32_t aOffset, nsTArray<nsIContent*>* aAncestorNodes,
+      nsTArray<mozilla::Maybe<uint32_t>>* aAncestorOffsets);
 
   /**
    * Returns the closest common inclusive ancestor
@@ -506,16 +513,17 @@ class nsContentUtils {
    * Returns true if aNode1 is before aNode2 in the same connected
    * tree.
    * aNode1Index and aNode2Index are in/out arguments. If non-null, and value is
-   * not -1, that value is used instead of calling slow ComputeIndexOf on the
-   * parent node. If value is -1, the value will be set to the return value of
-   * ComputeIndexOf.
+   * Some, that value is used instead of calling slow ComputeIndexOf on the
+   * parent node. If value is Nothing, the value will be set to the return value
+   * of ComputeIndexOf.
    */
   static bool PositionIsBefore(nsINode* aNode1, nsINode* aNode2,
-                               int32_t* aNode1Index = nullptr,
-                               int32_t* aNode2Index = nullptr);
+                               mozilla::Maybe<uint32_t>* aNode1Index = nullptr,
+                               mozilla::Maybe<uint32_t>* aNode2Index = nullptr);
 
   struct ComparePointsCache {
-    int32_t ComputeIndexOf(const nsINode* aParent, const nsINode* aChild) {
+    mozilla::Maybe<uint32_t> ComputeIndexOf(const nsINode* aParent,
+                                            const nsINode* aChild) {
       if (aParent == mParent && aChild == mChild) {
         return mIndex;
       }
@@ -529,7 +537,7 @@ class nsContentUtils {
    private:
     const nsINode* mParent = nullptr;
     const nsINode* mChild = nullptr;
-    int32_t mIndex = 0;
+    mozilla::Maybe<uint32_t> mIndex;
   };
 
   /**
@@ -538,19 +546,14 @@ class nsContentUtils {
    *  Pass a cache object as aParent1Cache if you expect to repeatedly
    *  call this function with the same value as aParent1.
    *
-   *  XXX aOffset1 and aOffset2 should be uint32_t since valid offset value is
-   *      between 0 - UINT32_MAX.  However, these methods work even with
-   *      negative offset values!  E.g., when aOffset1 is -1 and aOffset is 0,
-   *      these methods return -1.  Some root callers depend on this behavior.
-   *
    *  @return -1 if point1 < point2,
    *          1 if point1 > point2,
    *          0 if point1 == point2.
    *          `Nothing` if the two nodes aren't in the same connected subtree.
    */
   static mozilla::Maybe<int32_t> ComparePoints(
-      const nsINode* aParent1, int32_t aOffset1, const nsINode* aParent2,
-      int32_t aOffset2, ComparePointsCache* aParent1Cache = nullptr);
+      const nsINode* aParent1, uint32_t aOffset1, const nsINode* aParent2,
+      uint32_t aOffset2, ComparePointsCache* aParent1Cache = nullptr);
   template <typename FPT, typename FRT, typename SPT, typename SRT>
   static mozilla::Maybe<int32_t> ComparePoints(
       const mozilla::RangeBoundaryBase<FPT, FRT>& aFirstBoundary,
@@ -567,23 +570,56 @@ class nsContentUtils {
    *
    *  Pass a cache object as aParent1Cache if you expect to repeatedly
    *  call this function with the same value as aParent1.
-   *
-   *  XXX aOffset1 and aOffset2 should be uint32_t since valid offset value is
-   *      between 0 - UINT32_MAX.  However, these methods work even with
-   *      negative offset values!  E.g., when aOffset1 is -1 and aOffset is 0,
-   *      these methods return -1.  Some root callers depend on this behavior.
-   *      On the other hand, nsINode can have ATTRCHILD_ARRAY_MAX_CHILD_COUN
-   *      (0x3FFFFF) at most.  Therefore, they can be int32_t for now.
    */
   static int32_t ComparePoints_Deprecated(
-      const nsINode* aParent1, int32_t aOffset1, const nsINode* aParent2,
-      int32_t aOffset2, bool* aDisconnected = nullptr,
+      const nsINode* aParent1, uint32_t aOffset1, const nsINode* aParent2,
+      uint32_t aOffset2, bool* aDisconnected = nullptr,
       ComparePointsCache* aParent1Cache = nullptr);
   template <typename FPT, typename FRT, typename SPT, typename SRT>
   static int32_t ComparePoints_Deprecated(
       const mozilla::RangeBoundaryBase<FPT, FRT>& aFirstBoundary,
       const mozilla::RangeBoundaryBase<SPT, SRT>& aSecondBoundary,
       bool* aDisconnected = nullptr);
+
+  /**
+   * DO NOT USE this method for comparing the points in new code.  this method
+   * emulates same result as `ComparePoints` before bug 1741148.
+   * When the old `ComparePoints` was called with offset value over `INT32_MAX`
+   * or `-1` which is used as "not found" by some API, they were treated as-is
+   * without checking whether the negative value or valid value.  Thus, this
+   * handles the negative offset cases in the special paths to keep the
+   * traditional behavior. If you want to use this in new code, it means that
+   * you **should** check the offset values and call `ComparePoints` instead.
+   */
+  static mozilla::Maybe<int32_t> ComparePoints_AllowNegativeOffsets(
+      const nsINode* aParent1, int64_t aOffset1, const nsINode* aParent2,
+      int64_t aOffset2) {
+    if (MOZ_UNLIKELY(aOffset1 < 0 || aOffset2 < 0)) {
+      // If in same container, just the offset is compared.
+      if (aParent1 == aParent2) {
+        const int32_t compOffsets =
+            aOffset1 == aOffset2 ? 0 : (aOffset1 < aOffset2 ? -1 : 1);
+        return mozilla::Some(compOffsets);
+      }
+      // Otherwise, aOffset1 is referred only when aParent2 is a descendant of
+      // aParent1.
+      if (aOffset1 < 0 && aParent2->IsInclusiveDescendantOf(aParent1)) {
+        return mozilla::Some(-1);
+      }
+      // And also aOffset2 is referred only when aParent1 is a descendant of
+      // aParent2.
+      if (aOffset2 < 0 && aParent1->IsInclusiveDescendantOf(aParent2)) {
+        return mozilla::Some(1);
+      }
+      // Otherwise, aOffset1 nor aOffset2 is referred so that any value is fine
+      // if negative.
+      return ComparePoints(
+          aParent1, aOffset1 < 0 ? UINT32_MAX : static_cast<uint32_t>(aOffset1),
+          aParent2,
+          aOffset2 < 0 ? UINT32_MAX : static_cast<uint32_t>(aOffset2));
+    }
+    return ComparePoints(aParent1, aOffset1, aParent2, aOffset2);
+  }
 
   /**
    * Brute-force search of the element subtree rooted at aContent for
@@ -628,8 +664,6 @@ class nsContentUtils {
    * Returns true if aChar is of class L*, N* or S* (for first-letter).
    */
   static bool IsAlphanumericOrSymbol(uint32_t aChar);
-  static bool IsAlphanumericOrSymbolAt(const nsTextFragment* aFrag,
-                                       uint32_t aOffset);
 
   /*
    * Is the character an HTML whitespace character?
@@ -671,13 +705,23 @@ class nsContentUtils {
     eParseHTMLInteger_Negative = 1 << 5,
   };
   static int32_t ParseHTMLInteger(const nsAString& aValue,
+                                  ParseHTMLIntegerResultFlags* aResult) {
+    return ParseHTMLInteger(aValue.BeginReading(), aValue.EndReading(),
+                            aResult);
+  }
+  static int32_t ParseHTMLInteger(const char16_t* aStart, const char16_t* aEnd,
                                   ParseHTMLIntegerResultFlags* aResult);
   static int32_t ParseHTMLInteger(const nsACString& aValue,
+                                  ParseHTMLIntegerResultFlags* aResult) {
+    return ParseHTMLInteger(aValue.BeginReading(), aValue.EndReading(),
+                            aResult);
+  }
+  static int32_t ParseHTMLInteger(const char* aStart, const char* aEnd,
                                   ParseHTMLIntegerResultFlags* aResult);
 
  private:
-  template <class StringT>
-  static int32_t ParseHTMLIntegerImpl(const StringT& aValue,
+  template <class CharT>
+  static int32_t ParseHTMLIntegerImpl(const CharT* aStart, const CharT* aEnd,
                                       ParseHTMLIntegerResultFlags* aResult);
 
  public:
@@ -760,8 +804,6 @@ class nsContentUtils {
   // Check if a node is in the document prolog, i.e. before the document
   // element.
   static bool InProlog(nsINode* aNode);
-
-  static nsNameSpaceManager* NameSpaceManager() { return sNameSpaceManager; }
 
   static nsIIOService* GetIOService() { return sIOService; }
 
@@ -861,16 +903,11 @@ class nsContentUtils {
   static bool IsExactSitePermDeny(nsIPrincipal* aPrincipal,
                                   const nsACString& aType);
 
+  // Returns true if the pref exists and is not UNKNOWN_ACTION.
+  static bool HasSitePerm(nsIPrincipal* aPrincipal, const nsACString& aType);
+
   // Returns true if aDoc1 and aDoc2 have equal NodePrincipal()s.
   static bool HaveEqualPrincipals(Document* aDoc1, Document* aDoc2);
-
-  static mozilla::intl::LineBreaker* LineBreaker() {
-    return sLineBreaker.get();
-  }
-
-  static mozilla::intl::WordBreaker* WordBreaker() {
-    return sWordBreaker.get();
-  }
 
   /**
    * Regster aObserver as a shutdown observer. A strong reference is held
@@ -1235,16 +1272,6 @@ class nsContentUtils {
    */
   static void SandboxFlagsToString(uint32_t aFlags, nsAString& aString);
 
-  /**
-   * Helper function that generates a UUID.
-   */
-  static nsresult GenerateUUIDInPlace(nsID& aUUID);
-
-  /**
-   * Infallable (with an assertion) helper function that generates a UUID.
-   */
-  static nsID GenerateUUID();
-
   static bool PrefetchPreloadEnabled(nsIDocShell* aDocShell);
 
   static void ExtractErrorValues(JSContext* aCx, JS::Handle<JS::Value> aValue,
@@ -1422,7 +1449,8 @@ class nsContentUtils {
    * @param aChild    The node to fire DOMNodeRemoved at.
    * @param aParent   The parent of aChild.
    */
-  static void MaybeFireNodeRemoved(nsINode* aChild, nsINode* aParent);
+  MOZ_CAN_RUN_SCRIPT static void MaybeFireNodeRemoved(nsINode* aChild,
+                                                      nsINode* aParent);
 
   /**
    * These methods create and dispatch a trusted event.
@@ -1877,13 +1905,15 @@ class nsContentUtils {
    * Will reuse the first text child if one is available. Will not reuse
    * existing cdata children.
    *
+   * TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+   *
    * @param aContent Node to set contents of.
    * @param aValue   Value to set contents to.
    * @param aTryReuse When true, the function will try to reuse an existing
    *                  textnodes rather than always creating a new one.
    */
-  static nsresult SetNodeTextContent(nsIContent* aContent,
-                                     const nsAString& aValue, bool aTryReuse);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY static nsresult SetNodeTextContent(
+      nsIContent* aContent, const nsAString& aValue, bool aTryReuse);
 
   /**
    * Get the textual contents of a node. This is a concatenation of all
@@ -1942,7 +1972,8 @@ class nsContentUtils {
    * closed. At opening, aInstalling should be TRUE, otherwise, it should be
    * FALSE.
    */
-  static void NotifyInstalledMenuKeyboardListener(bool aInstalling);
+  MOZ_CAN_RUN_SCRIPT static void NotifyInstalledMenuKeyboardListener(
+      bool aInstalling);
 
   /**
    * Check whether the nsIURI uses the given scheme.
@@ -2077,15 +2108,6 @@ class nsContentUtils {
    * Check whether an application should be allowed to use offline APIs.
    */
   static bool OfflineAppAllowed(nsIPrincipal* aPrincipal);
-
-  /**
-   * Determine whether the principal or document is allowed access to the
-   * localization system. We don't want the web to ever see this but all our UI
-   * including in content pages should pass this test.  aDocumentURI may be
-   * null.
-   */
-  static bool PrincipalAllowsL10n(nsIPrincipal& aPrincipal,
-                                  nsIURI* aDocumentURI);
 
   /**
    * Increases the count of blockers preventing scripts from running.
@@ -2349,47 +2371,30 @@ class nsContentUtils {
   static nsIWidget* WidgetForContent(const nsIContent* aContent);
 
   /**
-   * Returns a layer manager to use for the given document. Basically we
+   * Returns a window renderer to use for the given document. Basically we
    * look up the document hierarchy for the first document which has
    * a presentation with an associated widget, and use that widget's
-   * layer manager.
+   * window renderer.
    *
-   * You should probably use LayerManagerForContent() instead of this, unless
+   * You should probably use WindowRendererForContent() instead of this, unless
    * you have a good reason to do otherwise.
    *
-   * @param aDoc the document for which to return a layer manager.
+   * @param aDoc the document for which to return a window renderer.
    * @param aAllowRetaining an outparam that states whether the returned
    * layer manager should be used for retained layers
    */
-  static already_AddRefed<mozilla::layers::LayerManager>
-  LayerManagerForDocument(const Document* aDoc);
+  static mozilla::WindowRenderer* WindowRendererForDocument(
+      const Document* aDoc);
 
   /**
-   * Returns a layer manager to use for the given content. Unlike
-   * LayerManagerForDocument(), this returns the correct layer manager for
+   * Returns a window renderer to use for the given content. Unlike
+   * WindowRendererForDocument(), this returns the correct window renderer for
    * content in popups.
    *
-   * You should probably use this instead of LayerManagerForDocument().
+   * You should probably use this instead of WindowRendererForDocument().
    */
-  static already_AddRefed<mozilla::layers::LayerManager> LayerManagerForContent(
+  static mozilla::WindowRenderer* WindowRendererForContent(
       const nsIContent* aContent);
-
-  /**
-   * Returns a layer manager to use for the given document. Basically we
-   * look up the document hierarchy for the first document which has
-   * a presentation with an associated widget, and use that widget's
-   * layer manager. In addition to the normal layer manager lookup this will
-   * specifically request a persistent layer manager. This means that the layer
-   * manager is expected to remain the layer manager for the document in the
-   * forseeable future. This function should be used carefully as it may change
-   * the document's layer manager.
-   *
-   * @param aDoc the document for which to return a layer manager.
-   * @param aAllowRetaining an outparam that states whether the returned
-   * layer manager should be used for retained layers
-   */
-  static already_AddRefed<mozilla::layers::LayerManager>
-  PersistentLayerManagerForDocument(Document* aDoc);
 
   /**
    * Determine whether a content node is focused or not,
@@ -2455,7 +2460,11 @@ class nsContentUtils {
    * Returns the in-process subtree root document in a document hierarchy.
    * This could be a chrome document.
    */
-  static Document* GetInProcessSubtreeRootDocument(Document* aDoc);
+  static Document* GetInProcessSubtreeRootDocument(Document* aDoc) {
+    return const_cast<Document*>(
+        GetInProcessSubtreeRootDocument(const_cast<const Document*>(aDoc)));
+  }
+  static const Document* GetInProcessSubtreeRootDocument(const Document* aDoc);
 
   static void GetShiftText(nsAString& text);
   static void GetControlText(nsAString& text);
@@ -2724,7 +2733,7 @@ class nsContentUtils {
    * `aAnonymousContent` hasn't been created yet.
    */
   static mozilla::TextEditor* GetTextEditorFromAnonymousNodeWithoutCreation(
-      nsIContent* aAnonymousContent);
+      const nsIContent* aAnonymousContent);
 
   /**
    * Returns whether a node has an editable ancestor.
@@ -2867,12 +2876,20 @@ class nsContentUtils {
   static bool IsFlavorImage(const nsACString& aFlavor);
 
   static nsresult IPCTransferableToTransferable(
+      const mozilla::dom::IPCDataTransfer& aDataTransfer, bool aAddDataFlavor,
+      nsITransferable* aTransferable,
+      mozilla::ipc::IShmemAllocator* aAllocator);
+
+  static nsresult IPCTransferableToTransferable(
       const mozilla::dom::IPCDataTransfer& aDataTransfer,
       const bool& aIsPrivateData, nsIPrincipal* aRequestingPrincipal,
-      const nsContentPolicyType& aContentPolicyType,
+      const nsContentPolicyType& aContentPolicyType, bool aAddDataFlavor,
       nsITransferable* aTransferable,
-      mozilla::dom::ContentParent* aContentParent,
-      mozilla::dom::BrowserChild* aBrowserChild);
+      mozilla::ipc::IShmemAllocator* aAllocator);
+
+  static nsresult IPCTransferableItemToVariant(
+      const mozilla::dom::IPCDataTransferItem& aDataTransferItem,
+      nsIWritableVariant* aVariant, mozilla::ipc::IProtocol* aActor);
 
   static void TransferablesToIPCTransferables(
       nsIArray* aTransferables, nsTArray<mozilla::dom::IPCDataTransfer>& aIPC,
@@ -2889,16 +2906,20 @@ class nsContentUtils {
    * The length and stride will be assigned from the surface.
    */
   static mozilla::UniquePtr<char[]> GetSurfaceData(
-      mozilla::NotNull<mozilla::gfx::DataSourceSurface*> aSurface,
-      size_t* aLength, int32_t* aStride);
+      mozilla::gfx::DataSourceSurface&, size_t* aLength, int32_t* aStride);
 
   /*
    * Get the pixel data from the given source surface and fill it in Shmem.
    * The length and stride will be assigned from the surface.
    */
   static mozilla::Maybe<mozilla::ipc::Shmem> GetSurfaceData(
-      mozilla::gfx::DataSourceSurface* aSurface, size_t* aLength,
+      mozilla::gfx::DataSourceSurface& aSurface, size_t* aLength,
       int32_t* aStride, mozilla::ipc::IShmemAllocator* aAlloc);
+
+  static mozilla::Maybe<mozilla::dom::ShmemImage> SurfaceToIPCImage(
+      mozilla::gfx::DataSourceSurface&, mozilla::ipc::IShmemAllocator*);
+  static already_AddRefed<mozilla::gfx::DataSourceSurface> IPCImageToSurface(
+      mozilla::dom::ShmemImage&&, mozilla::ipc::IShmemAllocator*);
 
   // Helpers shared by the implementations of nsContentUtils methods and
   // nsIDOMWindowUtils methods.
@@ -2951,12 +2972,6 @@ class nsContentUtils {
   static bool IsNonSubresourceInternalPolicyType(nsContentPolicyType aType);
 
  public:
-  /*
-   * Returns true if this window/channel is a 3rd party context.
-   */
-  static bool IsThirdPartyWindowOrChannel(nsPIDOMWindowInner* aWindow,
-                                          nsIChannel* aChannel, nsIURI* aURI);
-
   /*
    * Returns true if this window's channel has been marked as a third-party
    * tracking resource.
@@ -3047,9 +3062,7 @@ class nsContentUtils {
 
   static void EnqueueLifecycleCallback(
       mozilla::dom::ElementCallbackType aType, Element* aCustomElement,
-      mozilla::dom::LifecycleCallbackArgs* aArgs = nullptr,
-      mozilla::dom::LifecycleAdoptedCallbackArgs* aAdoptedCallbackArgs =
-          nullptr,
+      const mozilla::dom::LifecycleCallbackArgs& aArgs,
       mozilla::dom::CustomElementDefinition* aDefinition = nullptr);
 
   /**
@@ -3113,6 +3126,15 @@ class nsContentUtils {
       JS::MutableHandle<JS::Value> aValue);
 
   /**
+   * This implements the structured cloning algorithm as described by
+   * https://html.spec.whatwg.org/#structured-cloning.
+   */
+  static void StructuredClone(
+      JSContext* aCx, nsIGlobalObject* aGlobal, JS::Handle<JS::Value> aValue,
+      const mozilla::dom::StructuredSerializeOptions& aOptions,
+      JS::MutableHandle<JS::Value> aRetval, mozilla::ErrorResult& aError);
+
+  /**
    * Returns true if reserved key events should be prevented from being sent
    * to their target. Instead, the key event should be handled by chrome only.
    */
@@ -3138,13 +3160,9 @@ class nsContentUtils {
    *
    * @param aMIMEType  The MIME type of the document being loaded.
    * @param aNoFakePlugin  If false then this method should consider JS plugins.
-   * @param aContent The nsIContent object which is performing the load. May be
-   *                 nullptr in which case the docshell's plugin permissions
-   *                 will not be checked.
    */
   static uint32_t HtmlObjectContentTypeForMIMEType(const nsCString& aMIMEType,
-                                                   bool aNoFakePlugin,
-                                                   nsIContent* aContent);
+                                                   bool aNoFakePlugin);
 
   static already_AddRefed<nsISerialEventTarget> GetEventTargetByLoadInfo(
       nsILoadInfo* aLoadInfo, mozilla::TaskCategory aCategory);
@@ -3201,9 +3219,13 @@ class nsContentUtils {
   // Alternate data MIME type used by the ScriptLoader to register and read
   // bytecode out of the nsCacheInfoChannel.
   [[nodiscard]] static bool InitJSBytecodeMimeType();
-  static nsCString& JSBytecodeMimeType() {
-    MOZ_ASSERT(sJSBytecodeMimeType);
-    return *sJSBytecodeMimeType;
+  static nsCString& JSScriptBytecodeMimeType() {
+    MOZ_ASSERT(sJSScriptBytecodeMimeType);
+    return *sJSScriptBytecodeMimeType;
+  }
+  static nsCString& JSModuleBytecodeMimeType() {
+    MOZ_ASSERT(sJSModuleBytecodeMimeType);
+    return *sJSModuleBytecodeMimeType;
   }
 
   /**
@@ -3298,7 +3320,7 @@ class nsContentUtils {
    * stylesheets.
    */
   static SubresourceCacheValidationInfo GetSubresourceCacheValidationInfo(
-      nsIRequest*);
+      nsIRequest*, nsIURI*);
 
   static uint32_t SecondsFromPRTime(PRTime aTime) {
     return uint32_t(int64_t(aTime) / int64_t(PR_USEC_PER_SEC));
@@ -3310,6 +3332,18 @@ class nsContentUtils {
    * Returns an empty string if aURL is null.
    */
   static nsCString TruncatedURLForDisplay(nsIURI* aURL, size_t aMaxLen = 128);
+
+  /**
+   * Anonymize the given id by hashing it with the provided origin. The
+   * resulting id will have the same length as the one that was passed in.
+   */
+  enum class OriginFormat {
+    Base64,
+    Plain,
+  };
+
+  static nsresult AnonymizeId(nsAString& aId, const nsACString& aOriginKey,
+                              OriginFormat aFormat = OriginFormat::Base64);
 
  private:
   static bool InitializeEventTable();
@@ -3324,18 +3358,18 @@ class nsContentUtils {
                              JS::MutableHandle<JS::Value> vp,
                              bool aAllowWrapping);
 
-  static nsresult DispatchEvent(Document* aDoc, nsISupports* aTarget,
-                                const nsAString& aEventName, CanBubble,
-                                Cancelable, Composed, Trusted,
-                                bool* aDefaultAction = nullptr,
-                                ChromeOnlyDispatch = ChromeOnlyDispatch::eNo);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY static nsresult DispatchEvent(
+      Document* aDoc, nsISupports* aTarget, const nsAString& aEventName,
+      CanBubble, Cancelable, Composed, Trusted, bool* aDefaultAction = nullptr,
+      ChromeOnlyDispatch = ChromeOnlyDispatch::eNo);
 
-  static nsresult DispatchEvent(Document* aDoc, nsISupports* aTarget,
-                                mozilla::WidgetEvent& aWidgetEvent,
-                                EventMessage aEventMessage, CanBubble,
-                                Cancelable, Trusted,
-                                bool* aDefaultAction = nullptr,
-                                ChromeOnlyDispatch = ChromeOnlyDispatch::eNo);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY static nsresult DispatchEvent(
+      Document* aDoc, nsISupports* aTarget, mozilla::WidgetEvent& aWidgetEvent,
+      EventMessage aEventMessage, CanBubble, Cancelable, Trusted,
+      bool* aDefaultAction = nullptr,
+      ChromeOnlyDispatch = ChromeOnlyDispatch::eNo);
 
   static void InitializeModifierStrings();
 
@@ -3370,10 +3404,7 @@ class nsContentUtils {
   static nsIPrincipal* sSystemPrincipal;
   static nsIPrincipal* sNullSubjectPrincipal;
 
-  static nsNameSpaceManager* sNameSpaceManager;
-
   static nsIIOService* sIOService;
-  static nsIUUIDGenerator* sUUIDGenerator;
 
   static nsIConsoleService* sConsoleService;
 
@@ -3387,9 +3418,6 @@ class nsContentUtils {
 
   static nsIContentPolicy* sContentPolicyService;
   static bool sTriedToGetContentPolicy;
-
-  static RefPtr<mozilla::intl::LineBreaker> sLineBreaker;
-  static RefPtr<mozilla::intl::WordBreaker> sWordBreaker;
 
   static mozilla::StaticRefPtr<nsIBidiKeyboard> sBidiKeyboard;
 
@@ -3413,7 +3441,7 @@ class nsContentUtils {
   static UserInteractionObserver* sUserInteractionObserver;
 
   static nsHtml5StringParser* sHTMLFragmentParser;
-  static nsIParser* sXMLFragmentParser;
+  static nsParser* sXMLFragmentParser;
   static nsIFragmentContentSink* sXMLFragmentSink;
 
   /**
@@ -3428,9 +3456,10 @@ class nsContentUtils {
   static nsString* sAltText;
   static nsString* sModifierSeparator;
 
-  // Alternate data mime type, used by the ScriptLoader to register and read the
-  // bytecode out of the nsCacheInfoChannel.
-  static nsCString* sJSBytecodeMimeType;
+  // Alternate data mime types, used by the ScriptLoader to register and read
+  // the bytecode out of the nsCacheInfoChannel.
+  static nsCString* sJSScriptBytecodeMimeType;
+  static nsCString* sJSModuleBytecodeMimeType;
 
   static mozilla::LazyLogModule gResistFingerprintingLog;
   static mozilla::LazyLogModule sDOMDumpLog;
@@ -3522,8 +3551,7 @@ class MOZ_STACK_CLASS nsAutoScriptBlockerSuppressNodeRemoved
   }
 };
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class TreeOrderComparator {
  public:
@@ -3535,8 +3563,7 @@ class TreeOrderComparator {
   }
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #define NS_INTERFACE_MAP_ENTRY_TEAROFF(_interface, _allocator) \
   if (aIID.Equals(NS_GET_IID(_interface))) {                   \

@@ -15,7 +15,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/ipc/MessageLink.h"
-#include "mozilla/ipc/Transport.h"
+#include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/ipc/NodeController.h"
 #include "mozilla/ipc/ScopedPort.h"
 #include "nsXULAppAPI.h"
@@ -29,6 +29,20 @@ struct ParamTraits;
 namespace mozilla {
 namespace ipc {
 
+namespace endpoint_detail {
+
+template <class T>
+static auto ActorNeedsOtherPidHelper(int)
+    -> decltype(std::declval<T>().OtherPid(), std::true_type{});
+template <class>
+static auto ActorNeedsOtherPidHelper(long) -> std::false_type;
+
+template <typename T>
+constexpr bool ActorNeedsOtherPid =
+    decltype(ActorNeedsOtherPidHelper<T>(0))::value;
+
+}  // namespace endpoint_detail
+
 struct PrivateIPDLInterface {};
 
 /**
@@ -38,10 +52,7 @@ struct PrivateIPDLInterface {};
  * Endpoint<PFooParent> parentEp;
  * Endpoint<PFooChild> childEp;
  * nsresult rv;
- * rv = PFoo::CreateEndpoints(parentPid, childPid, &parentEp, &childEp);
- *
- * You're required to pass in parentPid and childPid, which are the pids of the
- * processes in which the parent and child endpoints will be used.
+ * rv = PFoo::CreateEndpoints(&parentEp, &childEp);
  *
  * Endpoints can be passed in IPDL messages or sent to other threads using
  * PostTask. Once an Endpoint has arrived at its destination process and thread,
@@ -53,6 +64,10 @@ struct PrivateIPDLInterface {};
  *
  * (See Bind below for an explanation of processActor.) Once the actor is bound
  * to the endpoint, it can send and receive messages.
+ *
+ * If creating endpoints for a [NeedsOtherPid] actor, you're required to also
+ * pass in parentPid and childPid, which are the pids of the processes in which
+ * the parent and child endpoints will be used.
  */
 template <class PFooSide>
 class Endpoint {
@@ -61,8 +76,9 @@ class Endpoint {
 
   Endpoint() = default;
 
-  Endpoint(const PrivateIPDLInterface&, ScopedPort aPort, ProcessId aMyPid,
-           ProcessId aOtherPid)
+  Endpoint(const PrivateIPDLInterface&, ScopedPort aPort,
+           ProcessId aMyPid = base::kInvalidProcessId,
+           ProcessId aOtherPid = base::kInvalidProcessId)
       : mPort(std::move(aPort)), mMyPid(aMyPid), mOtherPid(aOtherPid) {}
 
   Endpoint(const Endpoint&) = delete;
@@ -71,13 +87,21 @@ class Endpoint {
   Endpoint& operator=(const Endpoint&) = delete;
   Endpoint& operator=(Endpoint&& aOther) = default;
 
-  ProcessId OtherPid() const { return mOtherPid; }
+  base::ProcessId OtherPid() const {
+    static_assert(
+        endpoint_detail::ActorNeedsOtherPid<PFooSide>,
+        "OtherPid may only be called on Endpoints for actors which are "
+        "[NeedsOtherPid]");
+    MOZ_RELEASE_ASSERT(mOtherPid != base::kInvalidProcessId);
+    return mOtherPid;
+  }
 
   // This method binds aActor to this endpoint. After this call, the actor can
   // be used to send and receive messages. The endpoint becomes invalid.
   bool Bind(PFooSide* aActor) {
     MOZ_RELEASE_ASSERT(IsValid());
-    MOZ_RELEASE_ASSERT(mMyPid == base::GetCurrentProcId());
+    MOZ_RELEASE_ASSERT(mMyPid == base::kInvalidProcessId ||
+                       mMyPid == base::GetCurrentProcId());
     return aActor->Open(std::move(mPort), mOtherPid);
   }
 
@@ -87,8 +111,8 @@ class Endpoint {
   friend struct IPC::ParamTraits<Endpoint<PFooSide>>;
 
   ScopedPort mPort;
-  ProcessId mMyPid = 0;
-  ProcessId mOtherPid = 0;
+  ProcessId mMyPid = base::kInvalidProcessId;
+  ProcessId mOtherPid = base::kInvalidProcessId;
 };
 
 #if defined(XP_MACOSX)
@@ -102,12 +126,28 @@ inline void AnnotateCrashReportWithErrno(CrashReporter::Annotation tag,
 // comment above Endpoint for a description of how it might be used.
 template <class PFooParent, class PFooChild>
 nsresult CreateEndpoints(const PrivateIPDLInterface& aPrivate,
+                         Endpoint<PFooParent>* aParentEndpoint,
+                         Endpoint<PFooChild>* aChildEndpoint) {
+  static_assert(
+      !endpoint_detail::ActorNeedsOtherPid<PFooParent> &&
+          !endpoint_detail::ActorNeedsOtherPid<PFooChild>,
+      "Pids are required when creating endpoints for [NeedsOtherPid] actors");
+
+  auto [parentPort, childPort] =
+      NodeController::GetSingleton()->CreatePortPair();
+  *aParentEndpoint = Endpoint<PFooParent>(aPrivate, std::move(parentPort));
+  *aChildEndpoint = Endpoint<PFooChild>(aPrivate, std::move(childPort));
+  return NS_OK;
+}
+
+template <class PFooParent, class PFooChild>
+nsresult CreateEndpoints(const PrivateIPDLInterface& aPrivate,
                          base::ProcessId aParentDestPid,
                          base::ProcessId aChildDestPid,
                          Endpoint<PFooParent>* aParentEndpoint,
                          Endpoint<PFooChild>* aChildEndpoint) {
-  MOZ_RELEASE_ASSERT(aParentDestPid);
-  MOZ_RELEASE_ASSERT(aChildDestPid);
+  MOZ_RELEASE_ASSERT(aParentDestPid != base::kInvalidProcessId);
+  MOZ_RELEASE_ASSERT(aChildDestPid != base::kInvalidProcessId);
 
   auto [parentPort, childPort] =
       NodeController::GetSingleton()->CreatePortPair();
@@ -117,6 +157,51 @@ nsresult CreateEndpoints(const PrivateIPDLInterface& aPrivate,
                                         aChildDestPid, aParentDestPid);
   return NS_OK;
 }
+
+class UntypedManagedEndpoint {
+ public:
+  bool IsValid() const { return mInner.isSome(); }
+
+  UntypedManagedEndpoint(const UntypedManagedEndpoint&) = delete;
+  UntypedManagedEndpoint& operator=(const UntypedManagedEndpoint&) = delete;
+
+ protected:
+  UntypedManagedEndpoint() = default;
+  explicit UntypedManagedEndpoint(IProtocol* aActor);
+
+  UntypedManagedEndpoint(UntypedManagedEndpoint&& aOther) noexcept
+      : mInner(std::move(aOther.mInner)) {
+    aOther.mInner = Nothing();
+  }
+  UntypedManagedEndpoint& operator=(UntypedManagedEndpoint&& aOther) noexcept {
+    this->~UntypedManagedEndpoint();
+    new (this) UntypedManagedEndpoint(std::move(aOther));
+    return *this;
+  }
+
+  ~UntypedManagedEndpoint() noexcept;
+
+  bool BindCommon(IProtocol* aActor, IProtocol* aManager);
+
+ private:
+  friend struct IPDLParamTraits<UntypedManagedEndpoint>;
+
+  struct Inner {
+    // Pointers to the toplevel actor which will manage this connection. When
+    // created, only `mOtherSide` will be set, and will reference the
+    // toplevel actor which the other side is managed by. After being sent over
+    // IPC, only `mToplevel` will be set, and will be the toplevel actor for the
+    // channel which received the IPC message.
+    RefPtr<WeakActorLifecycleProxy> mOtherSide;
+    RefPtr<WeakActorLifecycleProxy> mToplevel;
+
+    int32_t mId = 0;
+    ProtocolId mType = LastMsgIndex;
+    int32_t mManagerId = 0;
+    ProtocolId mManagerType = LastMsgIndex;
+  };
+  Maybe<Inner> mInner;
+};
 
 /**
  * A managed endpoint represents one end of a partially initialized managed
@@ -140,39 +225,28 @@ nsresult CreateEndpoints(const PrivateIPDLInterface& aPrivate,
  * a browser crash.
  */
 template <class PFooSide>
-class ManagedEndpoint {
+class ManagedEndpoint : public UntypedManagedEndpoint {
  public:
-  ManagedEndpoint() : mId(0) {}
+  ManagedEndpoint() = default;
+  ManagedEndpoint(ManagedEndpoint&&) noexcept = default;
+  ManagedEndpoint& operator=(ManagedEndpoint&&) noexcept = default;
 
-  ManagedEndpoint(const PrivateIPDLInterface&, int32_t aId) : mId(aId) {}
+  ManagedEndpoint(const PrivateIPDLInterface&, IProtocol* aActor)
+      : UntypedManagedEndpoint(aActor) {}
 
-  ManagedEndpoint(ManagedEndpoint&& aOther) : mId(aOther.mId) {
-    aOther.mId = 0;
+  bool Bind(const PrivateIPDLInterface&, PFooSide* aActor, IProtocol* aManager,
+            ManagedContainer<PFooSide>& aContainer) {
+    if (!BindCommon(aActor, aManager)) {
+      return false;
+    }
+    aContainer.Insert(aActor);
+    return true;
   }
 
-  ManagedEndpoint& operator=(ManagedEndpoint&& aOther) {
-    mId = aOther.mId;
-    aOther.mId = 0;
-    return *this;
+  // Only invalid ManagedEndpoints can be equal, as valid endpoints are unique.
+  bool operator==(const ManagedEndpoint& _o) const {
+    return !IsValid() && !_o.IsValid();
   }
-
-  bool IsValid() const { return mId != 0; }
-
-  Maybe<int32_t> ActorId() const { return IsValid() ? Some(mId) : Nothing(); }
-
-  bool operator==(const ManagedEndpoint& _o) const { return mId == _o.mId; }
-
- private:
-  friend struct IPC::ParamTraits<ManagedEndpoint<PFooSide>>;
-
-  ManagedEndpoint(const ManagedEndpoint&) = delete;
-  ManagedEndpoint& operator=(const ManagedEndpoint&) = delete;
-
-  // The routing ID for the to-be-created endpoint.
-  int32_t mId;
-
-  // XXX(nika): Might be nice to have other info for assertions?
-  // e.g. mManagerId, mManagerType, etc.
 };
 
 }  // namespace ipc

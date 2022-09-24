@@ -1161,10 +1161,7 @@ ContentPrefService2.prototype = {
   },
 
   async _getConnection(aAttemptNum = 0) {
-    let path = PathUtils.join(
-      await PathUtils.getProfileDir(),
-      "content-prefs.sqlite"
-    );
+    let path = PathUtils.join(PathUtils.profileDir, "content-prefs.sqlite");
     let conn;
     let resetAndRetry = async e => {
       if (e.result != Cr.NS_ERROR_FILE_CORRUPTED) {
@@ -1222,8 +1219,11 @@ ContentPrefService2.prototype = {
     if (aConn) {
       await aConn.close();
     }
-    let backupFile = aPath + ".corrupt";
-    let uniquePath = PathUtils.createUniquePath(backupFile);
+    let uniquePath = await IOUtils.createUniqueFile(
+      PathUtils.parent(aPath),
+      PathUtils.filename(aPath) + ".corrupt",
+      0o600
+    );
     await IOUtils.copy(aPath, uniquePath);
     await IOUtils.remove(aPath);
     this.log("Completed DB cleanup.");

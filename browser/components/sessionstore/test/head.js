@@ -219,6 +219,12 @@ function promiseTabState(tab, state) {
   return promise;
 }
 
+function promiseWindowRestoring(win) {
+  return new Promise(resolve =>
+    win.addEventListener("SSWindowRestoring", resolve, { once: true })
+  );
+}
+
 function promiseWindowRestored(win) {
   return new Promise(resolve =>
     win.addEventListener("SSWindowRestored", resolve, { once: true })
@@ -302,9 +308,8 @@ function forceSaveState() {
 function promiseRecoveryFileContents() {
   let promise = forceSaveState();
   return promise.then(function() {
-    return OS.File.read(SessionFile.Paths.recovery, {
-      encoding: "utf-8",
-      compression: "lz4",
+    return IOUtils.readUTF8(SessionFile.Paths.recovery, {
+      decompress: true,
     });
   });
 }
@@ -313,13 +318,12 @@ var promiseForEachSessionRestoreFile = async function(cb) {
   for (let key of SessionFile.Paths.loadOrder) {
     let data = "";
     try {
-      data = await OS.File.read(SessionFile.Paths[key], {
-        encoding: "utf-8",
-        compression: "lz4",
+      data = await IOUtils.readUTF8(SessionFile.Paths[key], {
+        decompress: true,
       });
     } catch (ex) {
       // Ignore missing files
-      if (!(ex instanceof OS.File.Error && ex.becauseNoSuchFile)) {
+      if (!(ex instanceof DOMException && ex.name == "NotFoundError")) {
         throw ex;
       }
     }

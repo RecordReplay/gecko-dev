@@ -12,6 +12,7 @@
 #include "gfxConfig.h"
 #include "gfxPlatform.h"
 #include "mozilla/Components.h"
+#include "mozilla/FOGIPC.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryIPC.h"
@@ -29,8 +30,10 @@
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/layers/APZInputBridgeChild.h"
 #include "mozilla/layers/LayerTreeOwnerTracker.h"
+#include "nsHashPropertyBag.h"
 #include "nsIGfxInfo.h"
 #include "nsIObserverService.h"
+#include "nsIPropertyBag2.h"
 #include "ProfilerParent.h"
 
 namespace mozilla {
@@ -54,7 +57,6 @@ void GPUChild::Init() {
   devicePrefs.oglCompositing() =
       gfxConfig::GetValue(Feature::OPENGL_COMPOSITING);
   devicePrefs.useD2D1() = gfxConfig::GetValue(Feature::DIRECT2D);
-  devicePrefs.webGPU() = gfxConfig::GetValue(Feature::WEBGPU);
   devicePrefs.d3d11HwAngle() = gfxConfig::GetValue(Feature::D3D11_HW_ANGLE);
 
   nsTArray<LayerTreeIdMapping> mappings;
@@ -70,7 +72,8 @@ void GPUChild::Init() {
     features = gfxInfoRaw->GetAllFeatures();
   }
 
-  SendInit(updates, devicePrefs, mappings, features);
+  SendInit(updates, devicePrefs, mappings, features,
+           GPUProcessManager::Get()->AllocateNamespace());
 
   gfxVars::AddReceiver(this);
 
@@ -99,6 +102,8 @@ bool GPUChild::EnsureGPUReady() {
 base::ProcessHandle GPUChild::GetChildProcessHandle() {
   return mHost->GetChildProcessHandle();
 }
+
+void GPUChild::OnUnexpectedShutdown() { mUnexpectedShutdown = true; }
 
 mozilla::ipc::IPCResult GPUChild::RecvInitComplete(const GPUDeviceData& aData) {
   // We synchronously requested GPU parameters before this arrived.
@@ -216,6 +221,12 @@ mozilla::ipc::IPCResult GPUChild::RecvNotifyDeviceReset(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult GPUChild::RecvNotifyOverlayInfo(
+    const OverlayInfo aInfo) {
+  gfxPlatform::GetPlatform()->SetOverlayInfo(aInfo);
+  return IPC_OK();
+}
+
 mozilla::ipc::IPCResult GPUChild::RecvFlushMemory(const nsString& aReason) {
   nsCOMPtr<nsIObserverService> os = mozilla::services::GetObserverService();
   if (os) {
@@ -262,8 +273,9 @@ mozilla::ipc::IPCResult GPUChild::RecvAddMemoryReport(
 }
 
 void GPUChild::ActorDestroy(ActorDestroyReason aWhy) {
-  if (aWhy == AbnormalShutdown) {
-    GenerateCrashReport(OtherPid());
+  if (aWhy == AbnormalShutdown || mUnexpectedShutdown) {
+    nsAutoString dumpId;
+    GenerateCrashReport(OtherPid(), &dumpId);
 
     Telemetry::Accumulate(
         Telemetry::SUBPROCESS_ABNORMAL_ABORT,
@@ -271,9 +283,13 @@ void GPUChild::ActorDestroy(ActorDestroyReason aWhy) {
         1);
 
     // Notify the Telemetry environment so that we can refresh and do a
-    // subsession split
+    // subsession split. This also notifies the crash reporter on geckoview.
     if (nsCOMPtr<nsIObserverService> obsvc = services::GetObserverService()) {
-      obsvc->NotifyObservers(nullptr, "compositor:process-aborted", nullptr);
+      RefPtr<nsHashPropertyBag> props = new nsHashPropertyBag();
+      props->SetPropertyAsBool(u"abnormal"_ns, true);
+      props->SetPropertyAsAString(u"dumpID"_ns, dumpId);
+      obsvc->NotifyObservers((nsIPropertyBag2*)props,
+                             "compositor:process-aborted", nullptr);
     }
   }
 
@@ -313,6 +329,11 @@ mozilla::ipc::IPCResult GPUChild::RecvUpdateMediaCodecsSupported(
     const PDMFactory::MediaCodecsSupported& aSupported) {
   dom::ContentParent::BroadcastMediaCodecsSupportedUpdate(
       RemoteDecodeIn::GpuProcess, aSupported);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GPUChild::RecvFOGData(ByteBuf&& aBuf) {
+  glean::FOGData(std::move(aBuf));
   return IPC_OK();
 }
 

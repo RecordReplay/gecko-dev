@@ -25,11 +25,19 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
       PromEvents);
     // gA11yEventDumpToConsole = true; // debugging
 
-    function changeARIAActiveDescendant(aContainer, aItem) {
+    function changeARIAActiveDescendant(aContainer, aItem, aPrevItemId) {
       let itemID = aItem instanceof Node ? aItem.id : aItem;
-      this.eventSeq = [
-        new focusChecker(aItem),
-      ];
+      this.eventSeq = [new focusChecker(aItem)];
+
+      if (aPrevItemId) {
+        this.eventSeq.push(
+          new stateChangeChecker(EXT_STATE_ACTIVE, true, false, aPrevItemId)
+        );
+      }
+
+      this.eventSeq.push(
+        new stateChangeChecker(EXT_STATE_ACTIVE, true, true, aItem)
+      );
 
       this.invoke = function changeARIAActiveDescendant_invoke() {
         getNode(aContainer).setAttribute("aria-activedescendant", itemID);
@@ -40,10 +48,16 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
       };
     }
 
-    function clearARIAActiveDescendant(aID) {
+    function clearARIAActiveDescendant(aID, aPrevItemId) {
       this.eventSeq = [
         new focusChecker(aID),
       ];
+
+      if (aPrevItemId) {
+        this.eventSeq.push(
+          new stateChangeChecker(EXT_STATE_ACTIVE, true, false, aPrevItemId)
+        );
+      }
 
       this.invoke = function clearARIAActiveDescendant_invoke() {
         getNode(aID).removeAttribute("aria-activedescendant");
@@ -58,7 +72,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
      * Change aria-activedescendant to an invalid (non-existent) id.
      * Ensure that focus is fired on the element itself.
      */
-    function changeARIAActiveDescendantInvalid(aID, aInvalidID) {
+    function changeARIAActiveDescendantInvalid(aID, aInvalidID, aPrevItemId) {
       if (!aInvalidID) {
         aInvalidID = "invalid";
       }
@@ -66,6 +80,12 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
       this.eventSeq = [
         new focusChecker(aID),
       ];
+
+      if (aPrevItemId) {
+        this.eventSeq.push(
+          new stateChangeChecker(EXT_STATE_ACTIVE, true, false, aPrevItemId)
+        );
+      }
 
       this.invoke = function changeARIAActiveDescendant_invoke() {
         getNode(aID).setAttribute("aria-activedescendant", aInvalidID);
@@ -76,11 +96,21 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
       };
     }
     
-    function insertItemNFocus(aID, aNewItemID) {
+    function insertItemNFocus(aID, aNewItemID, aPrevItemId) {
       this.eventSeq = [
         new invokerChecker(EVENT_SHOW, aNewItemID),
         new focusChecker(aNewItemID),
       ];
+
+      if (aPrevItemId) {
+        this.eventSeq.push(
+          new stateChangeChecker(EXT_STATE_ACTIVE, true, false, aPrevItemId)
+        );
+      }
+
+      this.eventSeq.push(
+        new stateChangeChecker(EXT_STATE_ACTIVE, true, true, aNewItemID)
+      );
 
       this.invoke = function insertItemNFocus_invoke() {
         var container  = getNode(aID);
@@ -112,6 +142,7 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
     function moveARIAActiveDescendantID(aFromID, aToID) {
       this.eventSeq = [
         new focusChecker(aToID),
+        new stateChangeChecker(EXT_STATE_ACTIVE, true, true, aToID),
       ];
 
       this.invoke = function moveARIAActiveDescendantID_invoke() {
@@ -139,22 +170,22 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
       });
 
       gQueue.push(new synthFocus("listbox", new focusChecker("item1")));
-      gQueue.push(new changeARIAActiveDescendant("listbox", "item2"));
-      gQueue.push(new changeARIAActiveDescendant("listbox", "item3"));
+      gQueue.push(new changeARIAActiveDescendant("listbox", "item2", "item1"));
+      gQueue.push(new changeARIAActiveDescendant("listbox", "item3", "item2"));
 
       gQueue.push(new synthFocus("combobox_entry", new focusChecker("combobox_entry")));
       gQueue.push(new changeARIAActiveDescendant("combobox", "combobox_option2"));
 
       gQueue.push(new synthFocus("listbox", new focusChecker("item3")));
-      gQueue.push(new insertItemNFocus("listbox", "item4"));
+      gQueue.push(new insertItemNFocus("listbox", "item4", "item3"));
 
-      gQueue.push(new clearARIAActiveDescendant("listbox"));
+      gQueue.push(new clearARIAActiveDescendant("listbox", "item4"));
       gQueue.push(new changeARIAActiveDescendant("listbox", "item1"));
-      gQueue.push(new changeARIAActiveDescendantInvalid("listbox", "invalid"));
+      gQueue.push(new changeARIAActiveDescendantInvalid("listbox", "invalid", "item1"));
 
       gQueue.push(new changeARIAActiveDescendant("listbox", "roaming"));
       gQueue.push(new moveARIAActiveDescendantID("roaming2", "roaming"));
-      gQueue.push(new changeARIAActiveDescendantInvalid("listbox", "roaming3"));
+      gQueue.push(new changeARIAActiveDescendantInvalid("listbox", "roaming3", "roaming"));
       gQueue.push(new moveARIAActiveDescendantID("roaming", "roaming3"));
 
       gQueue.push(new synthFocus("activedesc_nondesc_input",
@@ -173,16 +204,42 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=429547
 
       info("Testing simultaneous insertion, relocation and aria-activedescendant");
       let comboboxWithHiddenList = getNode("comboboxWithHiddenList");
-      let focused = PromEvents.waitForEvent(EVENT_FOCUS, comboboxWithHiddenList);
+      let evtProm = PromEvents.waitForEvent(EVENT_FOCUS, comboboxWithHiddenList);
       comboboxWithHiddenList.focus();
-      await focused;
+      await evtProm;
       testStates(comboboxWithHiddenList, STATE_FOCUSED);
       // hiddenList is owned, so unhiding causes insertion and relocation.
       getNode("hiddenList").hidden = false;
-      focused = PromEvents.waitForEvent(EVENT_FOCUS, "hiddenListOption");
+      evtProm = Promise.all([
+        PromEvents.waitForEvent(EVENT_FOCUS, "hiddenListOption"),
+        PromEvents.waitForStateChange("hiddenListOption", EXT_STATE_ACTIVE, true, true),
+      ]);
       comboboxWithHiddenList.setAttribute("aria-activedescendant", "hiddenListOption");
-      await focused;
+      await evtProm;
       testStates("hiddenListOption", STATE_FOCUSED);
+
+      info("Testing active state changes when not focused");
+      testStates("listbox", 0, 0, STATE_FOCUSED);
+      evtProm = Promise.all([
+        PromEvents.waitForStateChange("roaming3", EXT_STATE_ACTIVE, false, true),
+        PromEvents.waitForStateChange("item1", EXT_STATE_ACTIVE, true, true),
+      ]);
+      getNode("listbox").setAttribute("aria-activedescendant", "item1");
+      await evtProm;
+
+      info("Testing that focus is always fired first");
+      const listbox = getNode("listbox");
+      evtProm = PromEvents.waitForEvent(EVENT_FOCUS, "item1");
+      listbox.focus();
+      await evtProm;
+      const item1 = getNode("item1");
+      evtProm = PromEvents.waitForOrderedEvents([
+        [EVENT_FOCUS, "item2"],
+        [EVENT_NAME_CHANGE, item1],
+      ], "Focus then name change");
+      item1.setAttribute("aria-label", "changed");
+      listbox.setAttribute("aria-activedescendant", "item2");
+      await evtProm;
 
       SimpleTest.finish();
     }

@@ -18,8 +18,7 @@ const { FXA_PWDMGR_HOST, FXA_PWDMGR_REALM } = ChromeUtils.import(
 // Use a backstage pass to get at our LoginManagerStorage object, so we can
 // mock the prototype.
 var { LoginManagerStorage } = ChromeUtils.import(
-  "resource://gre/modules/FxAccountsStorage.jsm",
-  null
+  "resource://gre/modules/FxAccountsStorage.jsm"
 );
 var isLoggedIn = true;
 LoginManagerStorage.prototype.__defineGetter__("_isLoggedIn", () => isLoggedIn);
@@ -92,8 +91,7 @@ add_task(async function test_simple() {
 
   // This should have stored stuff in both the .json file in the profile
   // dir, and the login dir.
-  let profileDir = await PathUtils.getProfileDir();
-  let path = PathUtils.join(profileDir, "signedInUser.json");
+  let path = PathUtils.join(PathUtils.profileDir, "signedInUser.json");
   let data = await CommonUtils.readJSON(path);
 
   Assert.strictEqual(
@@ -191,8 +189,7 @@ add_task(async function test_MPLocked() {
 
   // This should have stored stuff in the .json, and the login manager stuff
   // will not exist.
-  let profileDir = await PathUtils.getProfileDir();
-  let path = PathUtils.join(profileDir, "signedInUser.json");
+  let path = PathUtils.join(PathUtils.profileDir, "signedInUser.json");
   let data = await CommonUtils.readJSON(path);
 
   Assert.strictEqual(

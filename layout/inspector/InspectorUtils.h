@@ -16,7 +16,6 @@ class nsAtom;
 class nsINode;
 class nsINodeList;
 class nsRange;
-class ComputedStyle;
 
 namespace mozilla {
 class BindingStyleRule;
@@ -261,10 +260,6 @@ class InspectorUtils {
    */
   static bool IsCustomElementName(GlobalObject&, const nsAString& aName,
                                   const nsAString& aNamespaceURI);
-
- private:
-  static already_AddRefed<ComputedStyle> GetCleanComputedStyleForElement(
-      Element* aElement, nsAtom* aPseudo);
 };
 
 }  // namespace dom

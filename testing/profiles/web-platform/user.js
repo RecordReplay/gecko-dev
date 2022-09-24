@@ -8,9 +8,13 @@
 user_pref("browser.newtabpage.enabled", false);
 // Don't restore the last open set of tabs if the browser has crashed
 user_pref("browser.sessionstore.resume_from_crash", false);
+//  Disable session restore infobar.
+user_pref("browser.startup.couldRestoreSession.count", -1);
 // Don't show the Bookmarks Toolbar on any tab (the above pref that
 // disables the New Tab Page ends up showing the toolbar on about:blank).
 user_pref("browser.toolbars.bookmarks.visibility", "never");
+// Expose TestUtils interface
+user_pref("dom.testing.testutils.enabled", true);
 // Only install add-ons from the profile and the application scope
 // Also ensure that those are not getting disabled.
 // see: https://developer.mozilla.org/en/Installing_extensions
@@ -21,6 +25,8 @@ user_pref("extensions.update.notifyUser", false);
 user_pref("focusmanager.testmode", true);
 // Enable fake media streams for getUserMedia
 user_pref("media.navigator.streams.fake", true);
+// Disable permission prompt for getUserMedia
+user_pref("media.navigator.permission.disabled", true);
 // Enable pre-fetching of resources
 user_pref("network.preload", true);
 // Enable direct connection
@@ -64,6 +70,8 @@ user_pref("nglayout.initialpaint.unsuppress_with_no_background", true);
 user_pref("media.block-autoplay-until-in-foreground", false);
 // Enable AppCache globally for now whilst it's being removed in Bug 1584984
 user_pref("browser.cache.offline.enable", true);
-// Enable blocking access to storage from tracking resources by default.
-// We don't want to run WPT using BEHAVIOR_REJECT_TRACKER_AND_PARTITION_FOREIGN (5 - aka Dynamic First Party Isolation) yet.
-user_pref("network.cookie.cookieBehavior", 4);
+// Force a light color scheme unless explicitly overriden by pref.
+user_pref("layout.css.prefers-color-scheme.content-override", 1);
+// Force OffscreenCanvas support
+user_pref("gfx.offscreencanvas.enabled", true);
+user_pref("dom.workers.requestAnimationFrame", true);

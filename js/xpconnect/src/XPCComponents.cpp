@@ -17,10 +17,12 @@
 #include "nsCycleCollector.h"
 #include "jsfriendapi.h"
 #include "js/Array.h"  // JS::IsArrayObject
+#include "js/CallAndConstruct.h"  // JS::IsCallable, JS_CallFunctionName, JS_CallFunctionValue
 #include "js/CharacterEncoding.h"
 #include "js/ContextOptions.h"
 #include "js/friend/WindowProxy.h"  // js::ToWindowProxyIfWindow
 #include "js/Object.h"              // JS::GetClass, JS::GetCompartment
+#include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_DefinePropertyById, JS_Enumerate, JS_GetProperty, JS_GetPropertyById, JS_HasProperty, JS_SetProperty, JS_SetPropertyById
 #include "js/SavedFrameAPI.h"
 #include "js/StructuredClone.h"
 #include "mozilla/AppShutdown.h"
@@ -47,6 +49,7 @@
 #include "nsGlobalWindow.h"
 #include "nsScriptError.h"
 #include "GeckoProfiler.h"
+#include "ProfilerControl.h"
 #include "mozilla/EditorSpellCheck.h"
 #include "nsCommandLine.h"
 #include "nsCommandParams.h"
@@ -213,11 +216,11 @@ nsXPCComponents_Interfaces::Resolve(nsIXPConnectWrappedNative* wrapper,
   RootedObject obj(cx, objArg);
   RootedId id(cx, idArg);
 
-  if (!JSID_IS_STRING(id)) {
+  if (!id.isString()) {
     return NS_OK;
   }
 
-  RootedString str(cx, JSID_TO_STRING(id));
+  RootedString str(cx, id.toString());
   JS::UniqueChars name = JS_EncodeStringToLatin1(cx, str);
 
   // we only allow interfaces by name here
@@ -367,8 +370,7 @@ nsXPCComponents_Classes::Resolve(nsIXPConnectWrappedNative* wrapper,
   RootedObject obj(cx, objArg);
 
   RootedValue cidv(cx);
-  if (JSID_IS_STRING(id) &&
-      xpc::ContractID2JSValue(cx, JSID_TO_STRING(id), &cidv)) {
+  if (id.isString() && xpc::ContractID2JSValue(cx, id.toString(), &cidv)) {
     *resolvedp = true;
     *_retval = JS_DefinePropertyById(cx, obj, id, cidv,
                                      JSPROP_ENUMERATE | JSPROP_READONLY |
@@ -496,11 +498,11 @@ nsXPCComponents_Results::Resolve(nsIXPConnectWrappedNative* wrapper,
                                  bool* resolvedp, bool* _retval) {
   RootedObject obj(cx, objArg);
   RootedId id(cx, idArg);
-  if (!JSID_IS_STRING(id)) {
+  if (!id.isString()) {
     return NS_OK;
   }
 
-  JS::UniqueChars name = JS_EncodeStringToLatin1(cx, JSID_TO_STRING(id));
+  JS::UniqueChars name = JS_EncodeStringToLatin1(cx, id.toString());
   if (name) {
     const char* rv_name;
     const void* iter = nullptr;
@@ -1316,6 +1318,12 @@ nsXPCComponents_Utils::CreateServicesCache(JSContext* aCx,
 }
 
 NS_IMETHODIMP
+nsXPCComponents_Utils::PrintStderr(const nsACString& message) {
+  printf_stderr("%s", PromiseFlatUTF8String(message).get());
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsXPCComponents_Utils::ReportError(HandleValue error, HandleValue stack,
                                    JSContext* cx) {
   // This function shall never fail! Silently eat any failure conditions.
@@ -1623,7 +1631,7 @@ nsXPCComponents_Utils::ForceGC(JSContext* aCx) {
 
 NS_IMETHODIMP
 nsXPCComponents_Utils::ForceCC(nsICycleCollectorListener* listener) {
-  nsJSContext::CycleCollectNow(listener);
+  nsJSContext::CycleCollectNow(CCReason::API, listener);
   return NS_OK;
 }
 
@@ -1675,7 +1683,7 @@ class PreciseGCRunnable : public Runnable {
 
   NS_IMETHOD Run() override {
     nsJSContext::GarbageCollectNow(
-        GCReason::COMPONENT_UTILS, nsJSContext::NonIncrementalGC,
+        GCReason::COMPONENT_UTILS,
         mShrinking ? nsJSContext::ShrinkingGC : nsJSContext::NonShrinkingGC);
 
     mCallback->Callback();
@@ -2072,9 +2080,7 @@ NS_IMETHODIMP
 nsXPCComponents_Utils::ExitIfInAutomation() {
   NS_ENSURE_TRUE(xpc::IsInAutomation(), NS_ERROR_FAILURE);
 
-#ifdef MOZ_GECKO_PROFILER
   profiler_shutdown(IsFastShutdown::Yes);
-#endif
 
   mozilla::AppShutdown::DoImmediateExit();
   return NS_OK;
@@ -2436,15 +2442,28 @@ nsXPCComponents_Utils::CreateSpellChecker(nsIEditorSpellCheck** aSpellChecker) {
 }
 
 NS_IMETHODIMP
-nsXPCComponents_Utils::CreateCommandLine(nsIFile* aWorkingDir,
+nsXPCComponents_Utils::CreateCommandLine(const nsTArray<nsCString>& aArgs,
+                                         nsIFile* aWorkingDir, uint32_t aState,
                                          nsISupports** aCommandLine) {
+  NS_ENSURE_ARG_MAX(aState, nsICommandLine::STATE_REMOTE_EXPLICIT);
   NS_ENSURE_ARG_POINTER(aCommandLine);
+
   nsCOMPtr<nsISupports> commandLine = new nsCommandLine();
-  if (aWorkingDir) {
-    nsCOMPtr<nsICommandLineRunner> runner = do_QueryInterface(commandLine);
-    char* argv[] = {nullptr};
-    runner->Init(0, argv, aWorkingDir, nsICommandLine::STATE_REMOTE_EXPLICIT);
+  nsCOMPtr<nsICommandLineRunner> runner = do_QueryInterface(commandLine);
+
+  nsTArray<const char*> fakeArgv(aArgs.Length() + 2);
+
+  // Prepend a dummy argument for the program name, which will be ignored.
+  fakeArgv.AppendElement(nullptr);
+  for (const nsCString& arg : aArgs) {
+    fakeArgv.AppendElement(arg.get());
   }
+  // Append a null terminator.
+  fakeArgv.AppendElement(nullptr);
+
+  nsresult rv = runner->Init(fakeArgv.Length() - 1, fakeArgv.Elements(),
+                             aWorkingDir, aState);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   commandLine.forget(aCommandLine);
   return NS_OK;
@@ -2503,8 +2522,7 @@ nsXPCComponents_Utils::CreateHTMLCopyEncoder(
 
 NS_IMETHODIMP
 nsXPCComponents_Utils::GetLoadedModules(nsTArray<nsCString>& aLoadedModules) {
-  mozJSComponentLoader::Get()->GetLoadedModules(aLoadedModules);
-  return NS_OK;
+  return mozJSComponentLoader::Get()->GetLoadedJSAndESModules(aLoadedModules);
 }
 
 NS_IMETHODIMP

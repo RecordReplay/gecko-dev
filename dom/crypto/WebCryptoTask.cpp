@@ -21,6 +21,7 @@
 #include "mozilla/dom/WebCryptoTask.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/RootedDictionary.h"
 
 // Template taken from security/nss/lib/util/templates.c
 // This (or SGN_EncodeDigestInfo) would ideally be exported
@@ -1504,6 +1505,9 @@ class ImportSymmetricKeyTask : public ImportKeyTask {
 
     // Construct an appropriate KeyAlorithm,
     // and verify that usages are appropriate
+    if (mKeyData.Length() > UINT32_MAX / 8) {
+      return NS_ERROR_DOM_DATA_ERR;
+    }
     uint32_t length = 8 * mKeyData.Length();  // bytes to bits
     if (mAlgName.EqualsLiteral(WEBCRYPTO_ALG_AES_CBC) ||
         mAlgName.EqualsLiteral(WEBCRYPTO_ALG_AES_CTR) ||
@@ -1792,12 +1796,34 @@ class ImportEcKeyTask : public ImportKeyTask {
     UniqueSECKEYPublicKey pubKey;
     UniqueSECKEYPrivateKey privKey;
 
-    if (mFormat.EqualsLiteral(WEBCRYPTO_KEY_FORMAT_JWK) &&
-        mJwk.mD.WasPassed()) {
+    if ((mFormat.EqualsLiteral(WEBCRYPTO_KEY_FORMAT_JWK) &&
+         mJwk.mD.WasPassed()) ||
+        mFormat.EqualsLiteral(WEBCRYPTO_KEY_FORMAT_PKCS8)) {
       // Private key import
-      privKey = CryptoKey::PrivateKeyFromJwk(mJwk);
-      if (!privKey) {
-        return NS_ERROR_DOM_DATA_ERR;
+      if (mFormat.EqualsLiteral(WEBCRYPTO_KEY_FORMAT_JWK)) {
+        privKey = CryptoKey::PrivateKeyFromJwk(mJwk);
+        if (!privKey) {
+          return NS_ERROR_DOM_DATA_ERR;
+        }
+      } else {
+        privKey = CryptoKey::PrivateKeyFromPkcs8(mKeyData);
+        if (!privKey) {
+          return NS_ERROR_DOM_DATA_ERR;
+        }
+
+        ScopedAutoSECItem ecParams;
+        if (PK11_ReadRawAttribute(PK11_TypePrivKey, privKey.get(),
+                                  CKA_EC_PARAMS, &ecParams) != SECSuccess) {
+          return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+        }
+        // Construct the OID tag.
+        SECItem oid = {siBuffer, nullptr, 0};
+        oid.len = ecParams.data[1];
+        oid.data = ecParams.data + 2;
+        // Find a matching and supported named curve.
+        if (!MapOIDTagToNamedCurve(SECOID_FindOIDTag(&oid), mNamedCurve)) {
+          return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+        }
       }
 
       if (NS_FAILED(mKey->SetPrivateKey(privKey.get()))) {
@@ -1855,7 +1881,6 @@ class ImportEcKeyTask : public ImportKeyTask {
         return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
       }
     }
-
     return NS_OK;
   }
 
@@ -1945,7 +1970,8 @@ class ExportKeyTask : public WebCryptoTask {
       }
 
       switch (mPrivateKey->keyType) {
-        case rsaKey: {
+        case rsaKey:
+        case ecKey: {
           nsresult rv =
               CryptoKey::PrivateKeyToPkcs8(mPrivateKey.get(), mResult);
           if (NS_FAILED(rv)) {
@@ -2651,7 +2677,6 @@ class DeriveKeyTask : public DeriveBitsTask {
 
   virtual void Cleanup() override { mTask = nullptr; }
 };
-
 class DeriveEcdhBitsTask : public ReturnArrayBufferViewTask {
  public:
   DeriveEcdhBitsTask(JSContext* aCx, const ObjectOrString& aAlgorithm,

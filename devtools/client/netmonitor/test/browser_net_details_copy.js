@@ -6,7 +6,7 @@
  * Test that the URL Preview can be copied
  */
 add_task(async function() {
-  const { tab, monitor } = await initNetMonitor(SIMPLE_URL, {
+  const { monitor } = await initNetMonitor(SIMPLE_URL, {
     requestCount: 1,
   });
 
@@ -18,7 +18,7 @@ add_task(async function() {
   store.dispatch(Actions.batchEnable(false));
 
   const wait = waitForNetworkEvents(monitor, 1);
-  tab.linkedBrowser.reload();
+  await reloadBrowser();
   await wait;
 
   store.dispatch(Actions.toggleNetworkDetails());
@@ -67,7 +67,7 @@ add_task(async function() {
  */
 
 add_task(async function() {
-  const { tab, monitor } = await initNetMonitor(SIMPLE_URL, {
+  const { monitor } = await initNetMonitor(SIMPLE_URL, {
     requestCount: 1,
   });
 
@@ -79,7 +79,7 @@ add_task(async function() {
   store.dispatch(Actions.batchEnable(false));
 
   const wait = waitForNetworkEvents(monitor, 1);
-  tab.linkedBrowser.reload();
+  await reloadBrowser();
   await wait;
 
   store.dispatch(Actions.toggleNetworkDetails());
@@ -106,6 +106,7 @@ add_task(async function() {
       Status: "200OK",
       Version: "HTTP/1.1",
       Transferred: "650 B (465 B size)",
+      "Request Priority": "Highest",
     },
     null,
     "\t"
@@ -148,6 +149,12 @@ add_task(async function() {
   const responsePanel = document.querySelector("#response-panel");
 
   const objectRow = responsePanel.querySelectorAll(".objectRow")[0];
+
+  // Open the node to get the string
+  const waitOpenNode = waitForDOM(document, ".stringRow");
+  const toggleButton = objectRow.querySelector("td span.treeIcon");
+  toggleButton.click();
+  await waitOpenNode;
   const stringRow = responsePanel.querySelectorAll(".stringRow")[0];
 
   /* Test for copy an object */
@@ -183,7 +190,7 @@ add_task(async function() {
  */
 
 add_task(async function() {
-  const { tab, monitor } = await initNetMonitor(SIMPLE_UNSORTED_COOKIES_SJS, {
+  const { monitor } = await initNetMonitor(SIMPLE_UNSORTED_COOKIES_SJS, {
     requestCount: 1,
   });
   info(
@@ -196,7 +203,7 @@ add_task(async function() {
   store.dispatch(Actions.batchEnable(false));
 
   let wait = waitForNetworkEvents(monitor, 1);
-  tab.linkedBrowser.reload();
+  await reloadBrowser();
   await wait;
 
   wait = waitForDOM(document, ".headers-overview");

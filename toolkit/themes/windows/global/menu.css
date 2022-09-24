@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+@import url("chrome://global/skin/menu-scrolling.css");
+
 /* ===== menu.css =======================================================
   == Styles used by XUL menu-related elements.
   ======================================================================= */
@@ -79,6 +81,10 @@ menuitem[default="true"],
 menuitem.spell-suggestion,
 menucaption {
   font-weight: bold;
+}
+
+menubar > menu:-moz-window-inactive {
+  color: ThreeDShadow;
 }
 
 /* ..... Internal content .... */
@@ -187,12 +193,12 @@ menubar > menu:-moz-lwtheme {
 }
 
 menubar > menu:-moz-lwtheme:not([disabled="true"]) {
-  color: inherit !important;
+  color: inherit;
 }
 
 menubar > menu:-moz-lwtheme[_moz-menuactive="true"]:not([disabled="true"]) {
-  background-color: Highlight;
-  color: HighlightText !important;
+  background-color: SelectedItem;
+  color: SelectedItemText;
   text-shadow: none;
 }
 
@@ -207,12 +213,6 @@ menubar > menu:-moz-lwtheme[_moz-menuactive="true"]:not([disabled="true"]) {
     text-shadow: inherit;
   }
 }
-
-%ifdef XP_WIN
-menubar > menu:-moz-window-inactive {
-  color: ThreeDShadow;
-}
-%endif
 
 /* ..... internal content .... */
 
@@ -252,10 +252,17 @@ menulist > menupopup {
 menulist > menupopup > menuitem,
 menulist > menupopup > menucaption,
 menulist > menupopup > menu {
-  appearance: none !important;
-  border: 1px solid transparent;
-  padding-inline: 5px;
   max-width: none;
+}
+
+@media not (-moz-windows-non-native-menus) {
+  menulist > menupopup > menuitem,
+  menulist > menupopup > menucaption,
+  menulist > menupopup > menu {
+    appearance: none !important;
+    border: 1px solid transparent;
+    padding-inline: 5px;
+  }
 }
 
 menulist > menupopup > menuitem[_moz-menuactive="true"],
@@ -273,8 +280,7 @@ menulist > menupopup > menu > .menu-iconic-left {
 menulist > menupopup > menuitem > label,
 menulist > menupopup > menucaption > label,
 menulist > menupopup > menu > label {
-  padding-top: 0;
-  padding-bottom: 0;
+  padding-block: 0;
 }
 
 menulist:-moz-focusring > menupopup > menuitem[_moz-menuactive="true"] {
@@ -304,13 +310,12 @@ menulist > menupopup > :is(menuitem, menucaption):not(.menuitem-iconic) > .menu-
 
 /* ::::: checkbox and radio menuitems ::::: */
 
-menuitem[type="checkbox"],
-menuitem[checked="true"] {
+menuitem:is([type="checkbox"], [checked="true"]) {
   appearance: auto;
   -moz-default-appearance: checkmenuitem;
 }
-menuitem[type="checkbox"] > .menu-iconic-left,
-menuitem[checked="true"] > .menu-iconic-left {
+
+menuitem:is([type="checkbox"], [checked="true"]) > .menu-iconic-left {
   appearance: auto;
   -moz-default-appearance: menucheckbox;
   padding-top: 0;
@@ -320,15 +325,14 @@ menuitem[type="radio"] {
   appearance: auto;
   -moz-default-appearance: radiomenuitem;
 }
+
 menuitem[type="radio"] > .menu-iconic-left {
   appearance: auto;
   -moz-default-appearance: menuradio;
   padding-top: 0;
 }
 
-menuitem[type="checkbox"] > .menu-iconic-left > .menu-iconic-icon,
-menuitem[checked="true"] > .menu-iconic-left > .menu-iconic-icon,
-menuitem[type="radio"] > .menu-iconic-left > .menu-iconic-icon {
+menuitem:is([type="checkbox"], [checked="true"], [type="radio"]) > .menu-iconic-left > .menu-iconic-icon {
   /* prevent .menu-iconic-icon from enforcing a minimal height of 16px (see bug 411064)
      XXXzeniko apply that .menu-iconic-icon rule only for children of .menu-iconic */
   display: none;
@@ -385,10 +389,12 @@ menuseparator {
   border-bottom: 1px solid ThreeDHighlight;
 }
 
-menulist > menupopup > menuseparator {
-  padding: 6px 0 5px;
-  border-top: 1px solid #000000;
-  border-bottom: none;
+@media not (-moz-windows-non-native-menus) {
+  menulist > menupopup > menuseparator {
+    padding: 6px 0 5px;
+    border-top: 1px solid #000000;
+    border-bottom: none;
+  }
 }
 
 /* On Windows 10, separators get entirely custom rendering. */
@@ -404,5 +410,3 @@ menulist > menupopup > menuseparator {
     margin: 2px 1em;
   }
 }
-
-%include ../../shared/menu-scrolling.inc.css

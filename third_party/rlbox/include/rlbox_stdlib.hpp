@@ -130,7 +130,12 @@ inline T_Wrap<T_Rhs*, T_Sbx> memset(rlbox_sandbox<T_Sbx>& sandbox,
 }
 
 /**
- * @brief Copy to sandbox memory area.
+ * @brief Copy to sandbox memory area. Note that memcpy is meant to be called on
+ * byte arrays does not adjust data according to ABI differences. If the
+ * programmer does accidentally call memcpy on buffers that needs ABI
+ * adjustment, this may cause compatibility issues, but will not cause a
+ * security issue as the destination is always a tainted or tainted_volatile
+ * pointer
  */
 template<typename T_Sbx,
          typename T_Rhs,
@@ -207,7 +212,7 @@ inline tainted_int_hint memcmp(rlbox_sandbox<T_Sbx>& sandbox,
  * - if the sandbox allows, adds the buffer to the existing sandbox memory
  * @param sandbox Target sandbox
  * @param src Raw pointer to the buffer
- * @param num Number of bytes in the buffer
+ * @param num Number of T-sized elements in the buffer
  * @param free_source_on_copy If the source buffer was copied, this variable
  * controls whether copy_memory_or_grant_access should call delete on the src.
  * This calls delete[] if num > 1.
@@ -220,23 +225,32 @@ tainted<T*, T_Sbx> copy_memory_or_grant_access(rlbox_sandbox<T_Sbx>& sandbox,
                                                bool free_source_on_copy,
                                                bool& copied)
 {
+  copied = false;
+
+  // Malloc in sandbox takes a uint32_t as the parameter, need a bounds check
+  detail::dynamic_check(num <= std::numeric_limits<uint32_t>::max(),
+                        "Granting access too large a region");
+  uint32_t num_trunc = num;
+
   // sandbox can grant access if it includes the following line
   // using can_grant_deny_access = void;
   if constexpr (detail::has_member_using_can_grant_deny_access_v<T_Sbx>) {
-    detail::check_range_doesnt_cross_app_sbx_boundary<T_Sbx>(src, num);
+    detail::check_range_doesnt_cross_app_sbx_boundary<T_Sbx>(src, num_trunc);
 
     bool success;
-    auto ret = sandbox.INTERNAL_grant_access(src, num, success);
+    auto ret = sandbox.INTERNAL_grant_access(src, num_trunc, success);
     if (success) {
-      copied = false;
       return ret;
     }
   }
 
   using T_nocv = std::remove_cv_t<T>;
   tainted<T_nocv*, T_Sbx> copy =
-    sandbox.template malloc_in_sandbox<T_nocv>(num);
-  rlbox::memcpy(sandbox, copy, src, num);
+    sandbox.template malloc_in_sandbox<T_nocv>(num_trunc);
+  if (!copy) {
+    return nullptr;
+  }
+  rlbox::memcpy(sandbox, copy, src, num * sizeof(T));
   if (free_source_on_copy) {
     free(const_cast<void*>(reinterpret_cast<const void*>(src)));
   }

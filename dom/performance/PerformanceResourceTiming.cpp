@@ -41,6 +41,13 @@ PerformanceResourceTiming::PerformanceResourceTiming(
 
 PerformanceResourceTiming::~PerformanceResourceTiming() = default;
 
+DOMHighResTimeStamp PerformanceResourceTiming::FetchStart() const {
+  if (mTimingData->TimingAllowed()) {
+    return mTimingData->FetchStartHighRes(mPerformance);
+  }
+  return StartTime();
+}
+
 DOMHighResTimeStamp PerformanceResourceTiming::StartTime() const {
   // Force the start time to be the earliest of:
   //  - RedirectStart
@@ -114,8 +121,9 @@ bool PerformanceResourceTiming::TimingAllowedForCaller(
 }
 
 bool PerformanceResourceTiming::ReportRedirectForCaller(
-    Maybe<nsIPrincipal*>& aCaller) const {
-  if (mTimingData->ShouldReportCrossOriginRedirect()) {
+    Maybe<nsIPrincipal*>& aCaller, bool aEnsureSameOriginAndIgnoreTAO) const {
+  if (mTimingData->ShouldReportCrossOriginRedirect(
+          aEnsureSameOriginAndIgnoreTAO)) {
     return true;
   }
 

@@ -4,7 +4,6 @@
 
 // Test that NetworkHelper.parseSecurityInfo correctly detects static hpkp pins
 
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
 const Services = require("Services");
 
 Object.defineProperty(this, "NetworkHelper", {
@@ -45,7 +44,9 @@ add_task(async function run_test() {
   Services.prefs.setIntPref("security.cert_pinning.enforcement_level", 1);
   const result = await NetworkHelper.parseSecurityInfo(
     MockSecurityInfo,
-    MockHttpInfo
+    {},
+    MockHttpInfo,
+    new Map()
   );
   equal(result.hpkp, true, "Static HPKP detected.");
 });

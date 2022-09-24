@@ -15,7 +15,7 @@ XPCOMUtils.defineLazyPreferenceGetter(
   60
 );
 
-add_task(async function global_setup() {
+add_setup(async function global_setup() {
   // Disable idle management because it interacts with our code, causing
   // unexpected intermittent failures, we'll fake idle notifications when
   // we need to test it.
@@ -39,22 +39,27 @@ add_task(async function global_setup() {
  * @param {Array} expected list of interactions to be found.
  */
 async function assertDatabaseValues(expected) {
+  await Interactions.interactionUpdatePromise;
   await Interactions.store.flush();
 
   let interactions = await PlacesUtils.withConnectionWrapper(
     "head.js::assertDatabaseValues",
     async db => {
       let rows = await db.execute(`
-        SELECT url, total_view_time, key_presses, typing_time
+        SELECT h.url AS url, h2.url as referrer_url, total_view_time, key_presses, typing_time, scrolling_time, scrolling_distance
         FROM moz_places_metadata m
         JOIN moz_places h ON h.id = m.place_id
+        LEFT JOIN moz_places h2 ON h2.id = m.referrer_place_id
         ORDER BY created_at ASC
       `);
       return rows.map(r => ({
         url: r.getResultByName("url"),
+        referrerUrl: r.getResultByName("referrer_url"),
         keypresses: r.getResultByName("key_presses"),
         typingTime: r.getResultByName("typing_time"),
         totalViewTime: r.getResultByName("total_view_time"),
+        scrollingTime: r.getResultByName("scrolling_time"),
+        scrollingDistance: r.getResultByName("scrolling_distance"),
       }));
     }
   );
@@ -68,7 +73,7 @@ async function assertDatabaseValues(expected) {
     expected.length,
     "Found the expected number of entries"
   );
-  for (let i = 0; i < expected.length; i++) {
+  for (let i = 0; i < Math.min(expected.length, interactions.length); i++) {
     let actual = interactions[i];
     Assert.equal(
       actual.url,
@@ -123,6 +128,34 @@ async function assertDatabaseValues(expected) {
         actual.typingTime,
         expected[i].typingTimeIsLessThan,
         "Should have stored less than this amount of typing time."
+      );
+    }
+
+    if (expected[i].exactScrollingDistance != undefined) {
+      Assert.equal(
+        actual.scrollingDistance,
+        expected[i].exactScrollingDistance,
+        "Should have scrolled by exactly least this distance"
+      );
+    } else if (expected[i].exactScrollingTime != undefined) {
+      Assert.greater(
+        actual.scrollingTime,
+        expected[i].exactScrollingTime,
+        "Should have scrolled for exactly least this duration"
+      );
+    }
+
+    if (expected[i].scrollingDistanceIsGreaterThan != undefined) {
+      Assert.greater(
+        actual.scrollingDistance,
+        expected[i].scrollingDistanceIsGreaterThan,
+        "Should have scrolled by at least this distance"
+      );
+    } else if (expected[i].scrollingTimeIsGreaterThan != undefined) {
+      Assert.greater(
+        actual.scrollingTime,
+        expected[i].scrollingTimeIsGreaterThan,
+        "Should have scrolled for at least this duration"
       );
     }
   }

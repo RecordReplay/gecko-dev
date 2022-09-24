@@ -2,7 +2,7 @@ toolkit.jar:
 %  content global %content/global/ contentaccessible=yes
 *  content/global/license.html
    content/global/minimal-xul.css
-*  content/global/xul.css
+   content/global/xul.css
    content/global/autocomplete.css
    content/global/aboutAbout.js
    content/global/aboutAbout.html
@@ -42,9 +42,11 @@ toolkit.jar:
    content/global/aboutReplay/assets/replay.svg (aboutReplay/assets/replay.svg)
    content/global/aboutReplay/assets/link.svg (aboutReplay/assets/link.svg)
    content/global/aboutReplay/assets/trash.svg (aboutReplay/assets/trash.svg)
+#ifndef ANDROID
    content/global/plugins.html
    content/global/plugins.css
    content/global/plugins.js
+#endif
 *   content/global/buildconfig.html
    content/global/buildconfig.css
    content/global/contentAreaUtils.js
@@ -118,4 +120,5 @@ toolkit.jar:
    content/global/gmp-sources/widevinecdm.json (gmp-sources/widevinecdm.json)
 
 # Third party files
-   content/global/third_party/d3/d3.js         (/third_party/js/d3/d3.js)
+   content/global/third_party/d3/d3.js                (/third_party/js/d3/d3.js)
+   content/global/third_party/cfworker/json-schema.js (/third_party/js/cfworker/json-schema.js)

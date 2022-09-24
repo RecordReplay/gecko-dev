@@ -73,8 +73,10 @@ WebrtcTCPSocket::~WebrtcTCPSocket() {
 void WebrtcTCPSocket::SetTabId(dom::TabId aTabId) {
   MOZ_ASSERT(NS_IsMainThread());
   dom::ContentProcessManager* cpm = dom::ContentProcessManager::GetSingleton();
-  dom::ContentParentId cpId = cpm->GetTabProcessId(aTabId);
-  mAuthProvider = cpm->GetBrowserParentByProcessAndTabId(cpId, aTabId);
+  if (cpm) {
+    dom::ContentParentId cpId = cpm->GetTabProcessId(aTabId);
+    mAuthProvider = cpm->GetBrowserParentByProcessAndTabId(cpId, aTabId);
+  }
 }
 
 nsresult WebrtcTCPSocket::Write(nsTArray<uint8_t>&& aWriteData) {
@@ -279,6 +281,8 @@ void WebrtcTCPSocket::OpenWithoutHttpProxy(nsIProxyInfo* aSocksProxyInfo) {
     return;
   }
 
+  LOG(("WebrtcTCPSocket::OpenWithoutHttpProxy %p\n", this));
+
   if (mClosed) {
     return;
   }
@@ -383,6 +387,7 @@ void WebrtcTCPSocket::OpenWithoutHttpProxy(nsIProxyInfo* aSocksProxyInfo) {
 
 nsresult WebrtcTCPSocket::OpenWithHttpProxy() {
   MOZ_ASSERT(NS_IsMainThread(), "not on main thread");
+  LOG(("WebrtcTCPSocket::OpenWithHttpProxy %p\n", this));
   nsresult rv;
   nsCOMPtr<nsIIOService> ioService;
   ioService = do_GetService(NS_IOSERVICE_CONTRACTID, &rv);
@@ -414,7 +419,8 @@ nsresult WebrtcTCPSocket::OpenWithHttpProxy() {
           // We need this flag to allow loads from any origin since this channel
           // is being used to CONNECT to an HTTP proxy.
           nsILoadInfo::SEC_ALLOW_CROSS_ORIGIN_SEC_CONTEXT_IS_NULL,
-      nsIContentPolicy::TYPE_OTHER, getter_AddRefs(localChannel));
+      nsIContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA,
+      getter_AddRefs(localChannel));
   if (NS_FAILED(rv)) {
     LOG(("WebrtcTCPSocket %p: bad open channel\n", this));
     return rv;

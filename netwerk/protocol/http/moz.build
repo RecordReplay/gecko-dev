@@ -9,6 +9,7 @@ with Files("**"):
 
 XPIDL_SOURCES += [
     "nsIBackgroundChannelRegistrar.idl",
+    "nsIEarlyHintObserver.idl",
     "nsIHttpActivityObserver.idl",
     "nsIHttpAuthenticableChannel.idl",
     "nsIHttpAuthenticator.idl",
@@ -20,6 +21,7 @@ XPIDL_SOURCES += [
     "nsIHttpHeaderVisitor.idl",
     "nsIHttpProtocolHandler.idl",
     "nsIRaceCacheWithNetwork.idl",
+    "nsITlsHandshakeListener.idl",
     "nsIWellKnownOpportunisticUtils.idl",
 ]
 
@@ -47,6 +49,9 @@ EXPORTS.mozilla.net += [
     "ClassifierDummyChannel.h",
     "ClassifierDummyChannelChild.h",
     "ClassifierDummyChannelParent.h",
+    "ClassOfService.h",
+    "EarlyHintPreloader.h",
+    "EarlyHintsService.h",
     "HttpAuthUtils.h",
     "HttpBackgroundChannelChild.h",
     "HttpBackgroundChannelParent.h",
@@ -96,9 +101,11 @@ UNIFIED_SOURCES += [
     "ConnectionDiagnostics.cpp",
     "ConnectionEntry.cpp",
     "ConnectionHandle.cpp",
-    "DelayHttpChannelQueue.cpp",
     "DnsAndConnectSocket.cpp",
+    "EarlyHintPreloader.cpp",
+    "EarlyHintsService.cpp",
     "Http2Compression.cpp",
+    "Http2ConnectTransaction.cpp",
     "Http2Push.cpp",
     "Http2Session.cpp",
     "Http2Stream.cpp",
@@ -119,8 +126,8 @@ UNIFIED_SOURCES += [
     "HttpTrafficAnalyzer.cpp",
     "HttpTransactionChild.cpp",
     "HttpTransactionParent.cpp",
-    "InterceptedChannel.cpp",
     "InterceptedHttpChannel.cpp",
+    "NetworkMarker.cpp",
     "nsCORSListenerProxy.cpp",
     "nsHttp.cpp",
     "nsHttpActivityDistributor.cpp",
@@ -146,9 +153,11 @@ UNIFIED_SOURCES += [
     "PendingTransactionInfo.cpp",
     "PendingTransactionQueue.cpp",
     "QuicSocketControl.cpp",
+    "SocketWrapper.cpp",
     "SpeculativeTransaction.cpp",
+    "TLSFilterTransaction.cpp",
+    "TlsHandshaker.cpp",
     "TRRServiceChannel.cpp",
-    "TunnelUtils.cpp",
 ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
@@ -180,7 +189,6 @@ FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
     "/dom/base",
-    "/extensions/auth",
     "/netwerk/base",
     "/netwerk/cookie",
     "/netwerk/dns",
@@ -188,6 +196,11 @@ LOCAL_INCLUDES += [
     "/netwerk/socket/neqo_glue",
     "/netwerk/url-classifier",
 ]
+
+if CONFIG["MOZ_AUTH_EXTENSION"]:
+    LOCAL_INCLUDES += [
+        "/extensions/auth",
+    ]
 
 EXTRA_JS_MODULES += [
     "WellKnownOpportunisticUtils.jsm",

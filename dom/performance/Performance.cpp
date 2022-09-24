@@ -27,6 +27,7 @@
 #include "mozilla/Preferences.h"
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
+#include "mozilla/dom/WorkerScope.h"
 
 #define PERFLOG(msg, ...) printf_stderr(msg, ##__VA_ARGS__)
 
@@ -61,6 +62,27 @@ already_AddRefed<Performance> Performance::CreateForWorker(
   aWorkerPrivate->AssertIsOnWorkerThread();
 
   RefPtr<Performance> performance = new PerformanceWorker(aWorkerPrivate);
+  return performance.forget();
+}
+
+/* static */
+already_AddRefed<Performance> Performance::Get(JSContext* aCx,
+                                               nsIGlobalObject* aGlobal) {
+  RefPtr<Performance> performance;
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(aGlobal);
+  if (window) {
+    performance = window->GetPerformance();
+  } else {
+    const WorkerPrivate* workerPrivate = GetWorkerPrivateFromContext(aCx);
+    if (!workerPrivate) {
+      return nullptr;
+    }
+
+    WorkerGlobalScope* scope = workerPrivate->GlobalScope();
+    MOZ_ASSERT(scope);
+    performance = scope->GetPerformance();
+  }
+
   return performance.forget();
 }
 
@@ -115,7 +137,7 @@ DOMHighResTimeStamp Performance::Now() {
 }
 
 DOMHighResTimeStamp Performance::NowUnclamped() const {
-  TimeDuration duration = TimeStamp::NowUnfuzzed() - CreationTimeStamp();
+  TimeDuration duration = TimeStamp::Now() - CreationTimeStamp();
   return duration.ToMilliseconds();
 }
 
@@ -188,24 +210,72 @@ void Performance::GetEntriesByName(
   RefPtr<nsAtom> entryType =
       aEntryType.WasPassed() ? NS_Atomize(aEntryType.Value()) : nullptr;
 
+  if (entryType) {
+    if (entryType == nsGkAtoms::mark || entryType == nsGkAtoms::measure) {
+      for (PerformanceEntry* entry : mUserEntries) {
+        if (entry->GetName() == name && entry->GetEntryType() == entryType) {
+          aRetval.AppendElement(entry);
+        }
+      }
+      return;
+    }
+    if (entryType == nsGkAtoms::resource) {
+      for (PerformanceEntry* entry : mResourceEntries) {
+        MOZ_ASSERT(entry->GetEntryType() == entryType);
+        if (entry->GetName() == name) {
+          aRetval.AppendElement(entry);
+        }
+      }
+      return;
+    }
+    // Invalid entryType
+    return;
+  }
+
+  nsTArray<PerformanceEntry*> qualifiedResourceEntries;
+  nsTArray<PerformanceEntry*> qualifiedUserEntries;
   // ::Measure expects that results from this function are already
   // passed through ReduceTimePrecision. mResourceEntries and mUserEntries
   // are, so the invariant holds.
   for (PerformanceEntry* entry : mResourceEntries) {
-    if (entry->GetName() == name &&
-        (!entryType || entry->GetEntryType() == entryType)) {
-      aRetval.AppendElement(entry);
+    if (entry->GetName() == name) {
+      qualifiedResourceEntries.AppendElement(entry);
     }
   }
 
   for (PerformanceEntry* entry : mUserEntries) {
-    if (entry->GetName() == name &&
-        (!entryType || entry->GetEntryType() == entryType)) {
-      aRetval.AppendElement(entry);
+    if (entry->GetName() == name) {
+      qualifiedUserEntries.AppendElement(entry);
     }
   }
 
-  aRetval.Sort(PerformanceEntryComparator());
+  size_t resourceEntriesIdx = 0, userEntriesIdx = 0;
+  aRetval.SetCapacity(qualifiedResourceEntries.Length() +
+                      qualifiedUserEntries.Length());
+
+  PerformanceEntryComparator comparator;
+
+  while (resourceEntriesIdx < qualifiedResourceEntries.Length() &&
+         userEntriesIdx < qualifiedUserEntries.Length()) {
+    if (comparator.LessThan(qualifiedResourceEntries[resourceEntriesIdx],
+                            qualifiedUserEntries[userEntriesIdx])) {
+      aRetval.AppendElement(qualifiedResourceEntries[resourceEntriesIdx]);
+      ++resourceEntriesIdx;
+    } else {
+      aRetval.AppendElement(qualifiedUserEntries[userEntriesIdx]);
+      ++userEntriesIdx;
+    }
+  }
+
+  while (resourceEntriesIdx < qualifiedResourceEntries.Length()) {
+    aRetval.AppendElement(qualifiedResourceEntries[resourceEntriesIdx]);
+    ++resourceEntriesIdx;
+  }
+
+  while (userEntriesIdx < qualifiedUserEntries.Length()) {
+    aRetval.AppendElement(qualifiedUserEntries[userEntriesIdx]);
+    ++userEntriesIdx;
+  }
 }
 
 void Performance::GetEntriesByTypeForObserver(
@@ -236,7 +306,7 @@ struct UserTimingMarker {
       const ProfilerString16View& aName, bool aIsMeasure,
       const Maybe<ProfilerString16View>& aStartMark,
       const Maybe<ProfilerString16View>& aEndMark) {
-    aWriter.StringProperty("name", NS_ConvertUTF16toUTF8(aName.Data()));
+    aWriter.StringProperty("name", NS_ConvertUTF16toUTF8(aName));
     if (aIsMeasure) {
       aWriter.StringProperty("entryType", "measure");
     } else {
@@ -244,27 +314,25 @@ struct UserTimingMarker {
     }
 
     if (aStartMark.isSome()) {
-      aWriter.StringProperty("startMark",
-                             NS_ConvertUTF16toUTF8(aStartMark->Data()));
+      aWriter.StringProperty("startMark", NS_ConvertUTF16toUTF8(*aStartMark));
     } else {
       aWriter.NullProperty("startMark");
     }
     if (aEndMark.isSome()) {
-      aWriter.StringProperty("endMark",
-                             NS_ConvertUTF16toUTF8(aEndMark->Data()));
+      aWriter.StringProperty("endMark", NS_ConvertUTF16toUTF8(*aEndMark));
     } else {
       aWriter.NullProperty("endMark");
     }
   }
   static MarkerSchema MarkerTypeDisplay() {
     using MS = MarkerSchema;
-    MS schema{MS::Location::markerChart, MS::Location::markerTable};
+    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
     schema.SetAllLabels("{marker.data.name}");
     schema.AddStaticLabelValue("Marker", "UserTiming");
-    schema.AddKeyLabelFormat("entryType", "Entry Type", MS::Format::string);
-    schema.AddKeyLabelFormat("name", "Name", MS::Format::string);
-    schema.AddKeyLabelFormat("startMark", "Start Mark", MS::Format::string);
-    schema.AddKeyLabelFormat("endMark", "End Mark", MS::Format::string);
+    schema.AddKeyLabelFormat("entryType", "Entry Type", MS::Format::String);
+    schema.AddKeyLabelFormat("name", "Name", MS::Format::String);
+    schema.AddKeyLabelFormat("startMark", "Start Mark", MS::Format::String);
+    schema.AddKeyLabelFormat("endMark", "End Mark", MS::Format::String);
     schema.AddStaticLabelValue("Description",
                                "UserTimingMeasure is created using the DOM API "
                                "performance.measure().");
@@ -272,22 +340,40 @@ struct UserTimingMarker {
   }
 };
 
-void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
-  // We add nothing when 'privacy.resistFingerprinting' is on.
-  if (nsContentUtils::ShouldResistFingerprinting()) {
-    return;
+already_AddRefed<PerformanceMark> Performance::Mark(
+    JSContext* aCx, const nsAString& aName,
+    const PerformanceMarkOptions& aMarkOptions, ErrorResult& aRv) {
+  nsCOMPtr<nsIGlobalObject> parent = GetParentObject();
+  if (!parent || parent->IsDying() || !parent->HasJSGlobal()) {
+    aRv.ThrowInvalidStateError("Global object is unavailable");
+    return nullptr;
   }
 
-  if (IsPerformanceTimingAttribute(aName)) {
-    aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
-    return;
+  GlobalObject global(aCx, parent->GetGlobalJSObject());
+  if (global.Failed()) {
+    aRv.ThrowInvalidStateError("Global object is unavailable");
+    return nullptr;
   }
 
   RefPtr<PerformanceMark> performanceMark =
-      new PerformanceMark(GetParentObject(), aName, Now());
-  InsertUserEntry(performanceMark);
+      PerformanceMark::Constructor(global, aName, aMarkOptions, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
 
-  if (profiler_can_accept_markers()) {
+  // To avoid fingerprinting in User Timing L2, we didn't add marks to the
+  // buffer so the user could not get timing data (which can be used to
+  // fingerprint) from the API. This may no longer be necessary (since
+  // performance.now() has reduced precision to protect against fingerprinting
+  // and performance.mark's primary fingerprinting issue is probably this timing
+  // data) but we need to do a more thorough reanalysis before we remove the
+  // fingerprinting protection. For now, we preserve the User Timing L2 behavior
+  // while supporting User Timing L3.
+  if (!nsContentUtils::ShouldResistFingerprinting()) {
+    InsertUserEntry(performanceMark);
+  }
+
+  if (profiler_thread_is_being_profiled_for_markers()) {
     Maybe<uint64_t> innerWindowId;
     if (GetOwner()) {
       innerWindowId = Some(GetOwner()->WindowID());
@@ -296,6 +382,8 @@ void Performance::Mark(const nsAString& aName, ErrorResult& aRv) {
                         MarkerInnerWindowId(innerWindowId), UserTimingMarker{},
                         aName, /* aIsMeasure */ false, Nothing{}, Nothing{});
   }
+
+  return performanceMark.forget();
 }
 
 void Performance::ClearMarks(const Optional<nsAString>& aName) {
@@ -365,7 +453,7 @@ void Performance::Measure(const nsAString& aName,
       new PerformanceMeasure(GetParentObject(), aName, startTime, endTime);
   InsertUserEntry(performanceMeasure);
 
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     TimeStamp startTimeStamp =
         CreationTimeStamp() + TimeDuration::FromMilliseconds(startTime);
     TimeStamp endTimeStamp =
@@ -410,7 +498,7 @@ void Performance::LogEntry(PerformanceEntry* aEntry,
 
 void Performance::TimingNotification(PerformanceEntry* aEntry,
                                      const nsACString& aOwner,
-                                     uint64_t aEpoch) {
+                                     const double aEpoch) {
   PerformanceEntryEventInit init;
   init.mBubbles = false;
   init.mCancelable = false;

@@ -1,6 +1,8 @@
 #include "gtest/gtest.h"
 
 #include "mozilla/FilePreferences.h"
+#include "nsComponentManagerUtils.h"
+#include "nsDirectoryServiceDefs.h"
 #include "nsIFile.h"
 #include "nsXPCOMCID.h"
 
@@ -124,7 +126,7 @@ TEST(FilePreferencesWin, AccessUNC)
   rv = lf->InitWithPath(u"\\\\nice\\..\\evil\\share"_ns);
   ASSERT_EQ(rv, NS_ERROR_FILE_ACCESS_DENIED);
 
-  mozilla::FilePreferences::testing::AddDirectoryToWhitelist(u"\\\\nice"_ns);
+  mozilla::FilePreferences::testing::AddDirectoryToAllowlist(u"\\\\nice"_ns);
 
   rv = lf->InitWithPath(u"\\\\nice\\share"_ns);
   ASSERT_EQ(rv, NS_OK);

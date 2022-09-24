@@ -7,7 +7,6 @@
 #ifndef CertVerifier_h
 #define CertVerifier_h
 
-#include "BRNameMatchingPolicy.h"
 #include "CTPolicyEnforcer.h"
 #include "CTVerifyResult.h"
 #include "EnterpriseRoots.h"
@@ -76,6 +75,7 @@ enum class CRLiteMode {
   Disabled = 0,
   TelemetryOnly = 1,
   Enforce = 2,
+  ConfirmRevocations = 3,
 };
 
 enum class NetscapeStepUpPolicy : uint32_t;
@@ -157,9 +157,9 @@ class CertVerifier {
   // *evOidPolicy == SEC_OID_UNKNOWN means the cert is NOT EV
   // Only one usage per verification is supported.
   mozilla::pkix::Result VerifyCert(
-      CERTCertificate* cert, SECCertificateUsage usage,
+      const nsTArray<uint8_t>& certBytes, SECCertificateUsage usage,
       mozilla::pkix::Time time, void* pinArg, const char* hostname,
-      /*out*/ UniqueCERTCertList& builtChain, Flags flags = 0,
+      /*out*/ nsTArray<nsTArray<uint8_t>>& builtChain, Flags flags = 0,
       /*optional in*/
       const Maybe<nsTArray<nsTArray<uint8_t>>>& extraCertificates = Nothing(),
       /*optional in*/ const Maybe<nsTArray<uint8_t>>& stapledOCSPResponseArg =
@@ -172,12 +172,13 @@ class CertVerifier {
       /*optional out*/ KeySizeStatus* keySizeStatus = nullptr,
       /*optional out*/ SHA1ModeResult* sha1ModeResult = nullptr,
       /*optional out*/ PinningTelemetryInfo* pinningTelemetryInfo = nullptr,
-      /*optional out*/ CertificateTransparencyInfo* ctInfo = nullptr);
+      /*optional out*/ CertificateTransparencyInfo* ctInfo = nullptr,
+      /*optional out*/ bool* isBuiltChainRootBuiltInRoot = nullptr);
 
   mozilla::pkix::Result VerifySSLServerCert(
-      const UniqueCERTCertificate& peerCert, mozilla::pkix::Time time,
-      void* pinarg, const nsACString& hostname,
-      /*out*/ UniqueCERTCertList& builtChain,
+      const nsTArray<uint8_t>& peerCert, mozilla::pkix::Time time, void* pinarg,
+      const nsACString& hostname,
+      /*out*/ nsTArray<nsTArray<uint8_t>>& builtChain,
       /*optional*/ Flags flags = 0,
       /*optional*/ const Maybe<nsTArray<nsTArray<uint8_t>>>& extraCertificates =
           Nothing(),
@@ -193,7 +194,7 @@ class CertVerifier {
       /*optional out*/ SHA1ModeResult* sha1ModeResult = nullptr,
       /*optional out*/ PinningTelemetryInfo* pinningTelemetryInfo = nullptr,
       /*optional out*/ CertificateTransparencyInfo* ctInfo = nullptr,
-      /*optional out*/ bool* isBuiltCertChainRootBuiltInRoot = nullptr);
+      /*optional out*/ bool* isBuiltChainRootBuiltInRoot = nullptr);
 
   enum class SHA1Mode {
     Allowed = 0,
@@ -218,10 +219,8 @@ class CertVerifier {
                mozilla::TimeDuration ocspTimeoutSoft,
                mozilla::TimeDuration ocspTimeoutHard,
                uint32_t certShortLifetimeInDays, SHA1Mode sha1Mode,
-               BRNameMatchingPolicy::Mode nameMatchingMode,
                NetscapeStepUpPolicy netscapeStepUpPolicy,
                CertificateTransparencyMode ctMode, CRLiteMode crliteMode,
-               uint64_t crliteCTMergeDelaySeconds,
                const Vector<EnterpriseCert>& thirdPartyCerts);
   ~CertVerifier();
 
@@ -233,11 +232,9 @@ class CertVerifier {
   const mozilla::TimeDuration mOCSPTimeoutHard;
   const uint32_t mCertShortLifetimeInDays;
   const SHA1Mode mSHA1Mode;
-  const BRNameMatchingPolicy::Mode mNameMatchingMode;
   const NetscapeStepUpPolicy mNetscapeStepUpPolicy;
   const CertificateTransparencyMode mCTMode;
   const CRLiteMode mCRLiteMode;
-  const uint64_t mCRLiteCTMergeDelaySeconds;
 
  private:
   OCSPCache mOCSPCache;
@@ -256,7 +253,8 @@ class CertVerifier {
 
   void LoadKnownCTLogs();
   mozilla::pkix::Result VerifyCertificateTransparencyPolicy(
-      NSSCertDBTrustDomain& trustDomain, const UniqueCERTCertList& builtChain,
+      NSSCertDBTrustDomain& trustDomain,
+      const nsTArray<nsTArray<uint8_t>>& builtChain,
       mozilla::pkix::Input sctsFromTLS, mozilla::pkix::Time time,
       /*optional out*/ CertificateTransparencyInfo* ctInfo);
 
@@ -267,7 +265,7 @@ class CertVerifier {
   bool SHA1ModeMoreRestrictiveThanGivenMode(SHA1Mode mode);
 };
 
-mozilla::pkix::Result IsCertBuiltInRoot(CERTCertificate* cert, bool& result);
+mozilla::pkix::Result IsCertBuiltInRoot(pkix::Input certInput, bool& result);
 mozilla::pkix::Result CertListContainsExpectedKeys(const CERTCertList* certList,
                                                    const char* hostname,
                                                    mozilla::pkix::Time time);

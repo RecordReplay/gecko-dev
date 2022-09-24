@@ -9,7 +9,6 @@ const {
   registerFront,
 } = require("devtools/shared/protocol");
 const { styleRuleSpec } = require("devtools/shared/specs/style-rule");
-const promise = require("promise");
 
 loader.lazyRequireGetter(
   this,
@@ -31,16 +30,12 @@ class StyleRuleFront extends FrontClassWithSpec(styleRuleSpec) {
     this.actorID = form.actor;
     this._form = form;
     this.traits = form.traits || {};
-    if (this._mediaText) {
-      this._mediaText = null;
-    }
   }
 
   /**
    * Ensure _form is updated when location-changed is emitted.
    */
   _locationChangedPre(line, column) {
-    this._clearOriginalLocation();
     this._form.line = line;
     this._form.column = column;
   }
@@ -91,26 +86,9 @@ class StyleRuleFront extends FrontClassWithSpec(styleRuleSpec) {
   get selectors() {
     return this._form.selectors;
   }
-  get media() {
-    return this._form.media;
-  }
-  get mediaText() {
-    if (!this._form.media) {
-      return null;
-    }
-    if (this._mediaText) {
-      return this._mediaText;
-    }
-    this._mediaText = this.media.join(", ");
-    return this._mediaText;
-  }
-
-  get parentRule() {
-    return this.conn.getFrontByID(this._form.parentRule);
-  }
 
   get parentStyleSheet() {
-    const resourceCommand = this.targetFront.resourceCommand;
+    const resourceCommand = this.targetFront.commands.resourceCommand;
     if (
       resourceCommand?.hasResourceCommandSupport(
         resourceCommand.TYPES.STYLESHEET
@@ -155,38 +133,8 @@ class StyleRuleFront extends FrontClassWithSpec(styleRuleSpec) {
     };
   }
 
-  _clearOriginalLocation() {
-    this._originalLocation = null;
-  }
-
-  getOriginalLocation() {
-    if (this._originalLocation) {
-      return promise.resolve(this._originalLocation);
-    }
-    const parentSheet = this.parentStyleSheet;
-    if (!parentSheet) {
-      // This rule doesn't belong to a stylesheet so it is an inline style.
-      // Inline styles do not have any mediaText so we can return early.
-      return promise.resolve(this.location);
-    }
-    return parentSheet
-      .getOriginalLocation(this.line, this.column)
-      .then(({ fromSourceMap, source, line, column }) => {
-        const location = {
-          href: source,
-          line: line,
-          column: column,
-          mediaText: this.mediaText,
-        };
-        if (fromSourceMap === false) {
-          location.source = this.parentStyleSheet;
-        }
-        if (!source) {
-          location.href = this.href;
-        }
-        this._originalLocation = location;
-        return location;
-      });
+  get ancestorData() {
+    return this._form.ancestorData;
   }
 
   async modifySelector(node, value) {

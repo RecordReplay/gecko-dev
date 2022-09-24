@@ -6,6 +6,7 @@
 
 #include "mozilla/dom/ResizeObserverController.h"
 
+#include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/RootedDictionary.h"
@@ -79,7 +80,22 @@ void ResizeObserverController::ShellDetachedFromDocument() {
   mResizeObserverNotificationHelper->Unregister();
 }
 
+static void FlushLayoutForWholeBrowsingContextTree(Document& aDoc) {
+  if (BrowsingContext* bc = aDoc.GetBrowsingContext()) {
+    RefPtr<BrowsingContext> top = bc->Top();
+    top->PreOrderWalk([](BrowsingContext* aCur) {
+      if (Document* doc = aCur->GetExtantDocument()) {
+        doc->FlushPendingNotifications(FlushType::Layout);
+      }
+    });
+  } else {
+    // If there is no browsing context, we just flush this document itself.
+    aDoc.FlushPendingNotifications(FlushType::Layout);
+  }
+}
+
 void ResizeObserverController::Notify() {
+  mResizeObserverNotificationHelper->Unregister();
   if (mResizeObservers.IsEmpty()) {
     return;
   }
@@ -110,16 +126,16 @@ void ResizeObserverController::Notify() {
                  "shallowestTargetDepth should be getting strictly deeper");
 
     // Flush layout, so that any callback functions' style changes / resizes
-    // get a chance to take effect.
-    doc->FlushPendingNotifications(FlushType::Layout);
+    // get a chance to take effect. The callback functions may do changes in its
+    // sub-documents or ancestors, so flushing layout for the whole browsing
+    // context tree makes sure we don't miss anyone.
+    FlushLayoutForWholeBrowsingContextTree(*doc);
 
     // To avoid infinite resize loop, we only gather all active observations
     // that have the depth of observed target element more than current
     // shallowestTargetDepth.
     GatherAllActiveObservations(shallowestTargetDepth);
   }
-
-  mResizeObserverNotificationHelper->Unregister();
 
   if (HasAnySkippedObservations()) {
     // Per spec, we deliver an error if the document has any skipped

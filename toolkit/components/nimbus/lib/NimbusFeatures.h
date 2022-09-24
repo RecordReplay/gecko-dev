@@ -8,17 +8,24 @@
 #define mozilla_NimbusFeatures_h
 
 #include "mozilla/Preferences.h"
+#include "nsTHashSet.h"
 
 namespace mozilla {
 
 class NimbusFeatures {
-  using PrefChangedFunc = void (*)(const char* aPref, void* aData);
-
  private:
-  static void GetPrefName(const nsACString& aFeatureId,
+  // This branch is used to store experiment data
+  static constexpr auto kSyncDataPrefBranch = "nimbus.syncdatastore."_ns;
+  // This branch is used to store rollouts data
+  static constexpr auto kSyncRolloutsPrefBranch =
+      "nimbus.syncdefaultsstore."_ns;
+  static void GetPrefName(const nsACString& branchPrefix,
+                          const nsACString& aFeatureId,
                           const nsACString& aVariable, nsACString& aPref);
 
-  static void PreferencesCallback(const char* aPref, void* aData);
+  static nsresult GetExperimentSlug(const nsACString& aFeatureId,
+                                    nsACString& aExperimentSlug,
+                                    nsACString& aBranchSlug);
 
  public:
   static bool GetBool(const nsACString& aFeatureId, const nsACString& aVariable,
@@ -29,11 +36,14 @@ class NimbusFeatures {
 
   static nsresult OnUpdate(const nsACString& aFeatureId,
                            const nsACString& aVariable,
-                           PrefChangedFunc aUserCallback);
+                           PrefChangedFunc aUserCallback, void* aUserData);
 
   static nsresult OffUpdate(const nsACString& aFeatureId,
                             const nsACString& aVariable,
-                            PrefChangedFunc aUserCallback);
+                            PrefChangedFunc aUserCallback, void* aUserData);
+
+  static nsresult RecordExposureEvent(const nsACString& aFeatureId,
+                                      const bool aOnce = false);
 };
 
 }  // namespace mozilla

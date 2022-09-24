@@ -89,12 +89,17 @@ ProfileBufferBlockIndex AddMarker(
 #ifndef MOZ_GECKO_PROFILER
   return {};
 #else
-  if (!baseprofiler::profiler_can_accept_markers()) {
+  // Record base markers whenever the core buffer is in session.
+  // TODO: When profiler_thread_is_being_profiled becomes available from
+  // mozglue, use it instead.
+  ProfileChunkedBuffer& coreBuffer =
+      ::mozilla::baseprofiler::profiler_get_core_buffer();
+  if (!coreBuffer.IsInSession()) {
     return {};
   }
   return ::mozilla::baseprofiler::AddMarkerToBuffer(
-      base_profiler_markers_detail::CachedBaseCoreBuffer(), aName, aCategory,
-      std::move(aOptions), aMarkerType, aPayloadArguments...);
+      coreBuffer, aName, aCategory, std::move(aOptions), aMarkerType,
+      aPayloadArguments...);
 #endif
 }
 
@@ -140,14 +145,16 @@ struct TextMarker {
   }
   static MarkerSchema MarkerTypeDisplay() {
     using MS = MarkerSchema;
-    MS schema{MS::Location::markerChart, MS::Location::markerTable};
+    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
     schema.SetChartLabel("{marker.data.name}");
     schema.SetTableLabel("{marker.name} - {marker.data.name}");
-    schema.AddKeyLabelFormat("name", "Details", MarkerSchema::Format::string);
+    schema.AddKeyLabelFormat("name", "Details", MS::Format::String);
     return schema;
   }
 };
 
+// Keep this struct in sync with the `gecko_profiler::marker::Tracing` Rust
+// counterpart.
 struct Tracing {
   static constexpr Span<const char> MarkerTypeName() {
     return MakeStringSpan("tracing");
@@ -160,9 +167,9 @@ struct Tracing {
   }
   static MarkerSchema MarkerTypeDisplay() {
     using MS = MarkerSchema;
-    MS schema{MS::Location::markerChart, MS::Location::markerTable,
-              MS::Location::timelineOverview};
-    schema.AddKeyLabelFormat("category", "Type", MS::Format::string);
+    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable,
+              MS::Location::TimelineOverview};
+    schema.AddKeyLabelFormat("category", "Type", MS::Format::String);
     return schema;
   }
 };
@@ -233,7 +240,7 @@ extern template MFBT_API ProfileBufferBlockIndex AddMarkerToBuffer(
 // even if MOZ_GECKO_PROFILER is not #defined.
 #define AUTO_BASE_PROFILER_MARKER_TEXT(markerName, categoryName, options,   \
                                        text)                                \
-  ::mozilla::baseprofiler::AutoProfilerTextMarker BASE_PROFILER_RAII(       \
+  ::mozilla::baseprofiler::AutoProfilerTextMarker PROFILER_RAII(            \
       markerName, ::mozilla::baseprofiler::category::categoryName, options, \
       text)
 

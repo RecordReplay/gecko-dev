@@ -339,7 +339,7 @@ sftkdb_fixupTemplateOut(CK_ATTRIBUTE *template, CK_OBJECT_HANDLE objectID,
 
     if ((keyHandle == NULL) ||
         ((SFTK_GET_SDB(keyHandle)->sdb_flags & SDB_HAS_META) == 0) ||
-        (keyHandle->passwordKey.data == NULL)) {
+        (sftkdb_PWCached(keyHandle) != SECSuccess)) {
         checkSig = PR_FALSE;
     }
 
@@ -1526,7 +1526,7 @@ sftkdb_DestroyObject(SFTKDBHandle *handle, CK_OBJECT_HANDLE objectID,
 
     crv = (*db->sdb_Begin)(db);
     if (crv != CKR_OK) {
-        goto loser;
+        return crv;
     }
     crv = (*db->sdb_DestroyObject)(db, objectID);
     if (crv != CKR_OK) {
@@ -1606,10 +1606,14 @@ sftkdb_CloseDB(SFTKDBHandle *handle)
         }
         (*handle->db->sdb_Close)(handle->db);
     }
+    if (handle->passwordLock) {
+        PZ_Lock(handle->passwordLock);
+    }
     if (handle->passwordKey.data) {
         SECITEM_ZfreeItem(&handle->passwordKey, PR_FALSE);
     }
     if (handle->passwordLock) {
+        PZ_Unlock(handle->passwordLock);
         SKIP_AFTER_FORK(PZ_DestroyLock(handle->passwordLock));
     }
     if (handle->updatePasswordKey) {
@@ -2461,7 +2465,7 @@ sftkdb_Update(SFTKDBHandle *handle, SECItem *key)
      */
     crv = (*handle->db->sdb_Begin)(handle->db);
     if (crv != CKR_OK) {
-        goto loser;
+        return crv;
     }
     inTransaction = PR_TRUE;
 
@@ -2695,10 +2699,12 @@ sftkdb_ResetKeyDB(SFTKDBHandle *handle)
         /* set error */
         return SECFailure;
     }
+    PZ_Lock(handle->passwordLock);
     if (handle->passwordKey.data) {
         SECITEM_ZfreeItem(&handle->passwordKey, PR_FALSE);
         handle->passwordKey.data = NULL;
     }
+    PZ_Unlock(handle->passwordLock);
     return SECSuccess;
 }
 

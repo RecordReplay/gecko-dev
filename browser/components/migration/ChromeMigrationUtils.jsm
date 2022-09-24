@@ -258,14 +258,17 @@ var ChromeMigrationUtils = {
   getDataPath(chromeProjectName = "Chrome") {
     const SUB_DIRECTORIES = {
       win: {
+        Brave: ["BraveSoftware", "Brave-Browser"],
         Chrome: ["Google", "Chrome"],
         "Chrome Beta": ["Google", "Chrome Beta"],
         Chromium: ["Chromium"],
         Canary: ["Google", "Chrome SxS"],
         Edge: ["Microsoft", "Edge"],
         "Edge Beta": ["Microsoft", "Edge Beta"],
+        "360 SE": ["360se6"],
       },
       macosx: {
+        Brave: ["BraveSoftware", "Brave-Browser"],
         Chrome: ["Google", "Chrome"],
         Chromium: ["Chromium"],
         Canary: ["Google", "Chrome Canary"],
@@ -273,6 +276,7 @@ var ChromeMigrationUtils = {
         "Edge Beta": ["Microsoft Edge Beta"],
       },
       linux: {
+        Brave: ["BraveSoftware", "Brave-Browser"],
         Chrome: ["google-chrome"],
         "Chrome Beta": ["google-chrome-beta"],
         "Chrome Dev": ["google-chrome-unstable"],
@@ -288,7 +292,7 @@ var ChromeMigrationUtils = {
 
     let rootDir;
     if (AppConstants.platform == "win") {
-      rootDir = "LocalAppData";
+      rootDir = chromeProjectName === "360 SE" ? "AppData" : "LocalAppData";
       subfolders = subfolders.concat(["User Data"]);
     } else if (AppConstants.platform == "macosx") {
       rootDir = "ULibDir";

@@ -3,12 +3,15 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 from __future__ import absolute_import
 
+import difflib
 import filecmp
 import os
 import yaml
 from perfdocs.logger import PerfDocLogger
 
 logger = PerfDocLogger()
+
+ON_TRY = "MOZ_AUTOMATION" in os.environ
 
 
 def save_file(file_content, path, extension="rst"):
@@ -65,6 +68,13 @@ def are_dirs_equal(dir_1, dir_2):
 
     dirs_cmp = filecmp.dircmp(dir_1, dir_2)
     if dirs_cmp.left_only or dirs_cmp.right_only or dirs_cmp.funny_files:
+        logger.log("Some files are missing or are funny.")
+        for file in dirs_cmp.left_only:
+            logger.log(f"Missing in existing docs: {file}")
+        for file in dirs_cmp.right_only:
+            logger.log(f"Missing in new docs: {file}")
+        for file in dirs_cmp.funny_files:
+            logger.log(f"The following file is funny: {file}")
         return False
 
     _, mismatch, errors = filecmp.cmpfiles(
@@ -72,6 +82,54 @@ def are_dirs_equal(dir_1, dir_2):
     )
 
     if mismatch or errors:
+        logger.log(f"Found mismatches: {mismatch}")
+
+        # The root for where to save the diff will be different based on
+        # whether we are running in CI or not
+        diff_filename = "diff.txt"
+        diff_root = "/builds/worker/"
+        if not ON_TRY:
+            diff_root = f"{PerfDocLogger.TOP_DIR}artifacts/"
+        diff_path = f"{diff_root}{diff_filename}"
+
+        with open(diff_path, "w") as diff_file:
+            for entry in mismatch:
+                logger.log(f"Mismatch found on {entry}")
+
+                with open(os.path.join(dir_1, entry)) as f:
+                    newlines = f.readlines()
+                with open(os.path.join(dir_2, entry)) as f:
+                    baselines = f.readlines()
+                for line in difflib.unified_diff(
+                    baselines, newlines, fromfile="base", tofile="new"
+                ):
+                    logger.log(line)
+
+                # Here we want to add to diff.txt in a patch format, we use
+                # the basedir to make the file names/paths relative and this is
+                # different in CI vs local runs.
+                basedir = "/builds/worker/checkouts/gecko/"
+                if not ON_TRY:
+                    basedir = diff_root
+
+                relative_path = os.path.join(dir_2, entry).split(basedir)[-1]
+                patch = difflib.unified_diff(
+                    baselines, newlines, fromfile=relative_path, tofile=relative_path
+                )
+
+                write_header = True
+                for line in patch:
+                    if write_header:
+                        diff_file.write(
+                            f"diff --git a/{relative_path} b/{relative_path}\n"
+                        )
+                        write_header = False
+                    diff_file.write(line)
+
+                logger.log(f"Completed diff on {entry}")
+
+        logger.log(f"Saved diff to {diff_path}")
+
         return False
 
     for common_dir in dirs_cmp.common_dirs:

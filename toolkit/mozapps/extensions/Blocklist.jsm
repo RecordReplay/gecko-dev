@@ -8,7 +8,7 @@
 
 /* eslint "valid-jsdoc": [2, {requireReturn: false}] */
 
-var EXPORTED_SYMBOLS = ["Blocklist"];
+var EXPORTED_SYMBOLS = ["Blocklist", "BlocklistPrivate"];
 
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
@@ -83,6 +83,17 @@ const kEscapeSequences = /\\[^.{}]/;
 //    plus an optional ) before the )$/
 const kRegExpRemovalRegExp = /^\/\^\(\(?|\\|\)\)?\$\/$/g;
 
+// In order to block add-ons, their type should be part of this list. There
+// may be additional requirements such as requiring the add-on to be signed.
+// See the uses of kXPIAddonTypes before introducing new addon types or
+// providers that differ from the existing types.
+XPCOMUtils.defineLazyGetter(this, "kXPIAddonTypes", () => {
+  // In practice, this result is equivalent to ALL_XPI_TYPES in XPIProvider.jsm.
+  // "plugin" (from GMPProvider.jsm) is intentionally omitted, as we decided to
+  // not support blocklisting of GMP plugins in bug 1086668.
+  return AddonManagerPrivate.getAddonTypesByProvider("XPIProvider");
+});
+
 // For a given input string matcher, produce either a string to compare with,
 // a regular expression, or a set of strings to compare with.
 function processMatcher(str) {
@@ -142,19 +153,7 @@ const DEFAULT_SEVERITY = 3;
 const DEFAULT_LEVEL = 2;
 const MAX_BLOCK_LEVEL = 3;
 
-// Remote Settings blocklist constants
-const PREF_BLOCKLIST_BUCKET = "services.blocklist.bucket";
-const PREF_BLOCKLIST_GFX_COLLECTION = "services.blocklist.gfx.collection";
-const PREF_BLOCKLIST_GFX_CHECKED_SECONDS = "services.blocklist.gfx.checked";
-const PREF_BLOCKLIST_GFX_SIGNER = "services.blocklist.gfx.signer";
-
-const PREF_BLOCKLIST_ADDONS_COLLECTION = "services.blocklist.addons.collection";
-const PREF_BLOCKLIST_ADDONS_CHECKED_SECONDS =
-  "services.blocklist.addons.checked";
-const PREF_BLOCKLIST_ADDONS_SIGNER = "services.blocklist.addons.signer";
-// Blocklist v3 - MLBF format.
-const PREF_BLOCKLIST_ADDONS3_CHECKED_SECONDS =
-  "services.blocklist.addons-mlbf.checked";
+const BLOCKLIST_BUCKET = "blocklists";
 
 const BlocklistTelemetry = {
   init() {
@@ -168,8 +167,7 @@ const BlocklistTelemetry = {
    * to retrieve a valid timestamp).
    *
    * @param {string} blocklistType
-   *        The blocklist type that has been updated (one of "addons" or "plugins",
-   *        or "addons_mlbf";
+   *        The blocklist type that has been updated ("addons" or "addons_mlbf");
    *        the "gfx" blocklist is not covered by this telemetry).
    * @param {RemoteSettingsClient} remoteSettingsClient
    *        The RemoteSettings client to retrieve the lastModified timestamp from.
@@ -251,8 +249,6 @@ const BlocklistTelemetry = {
     );
   },
 };
-
-this.BlocklistTelemetry = BlocklistTelemetry;
 
 const Utils = {
   /**
@@ -498,24 +494,17 @@ async function targetAppFilter(entry, environment) {
  * The RemoteSetttings client takes care of filtering out versions that don't apply.
  * The code here stores entries in memory and sends them to the gfx component in
  * serialized text form, using ',', '\t' and '\n' as separators.
- *
- * Note: we assign to the global to allow tests to reach the object directly.
  */
-this.GfxBlocklistRS = {
+const GfxBlocklistRS = {
   _ensureInitialized() {
     if (this._initialized || !gBlocklistEnabled) {
       return;
     }
     this._initialized = true;
-    this._client = RemoteSettings(
-      Services.prefs.getCharPref(PREF_BLOCKLIST_GFX_COLLECTION),
-      {
-        bucketNamePref: PREF_BLOCKLIST_BUCKET,
-        lastCheckTimePref: PREF_BLOCKLIST_GFX_CHECKED_SECONDS,
-        signerName: Services.prefs.getCharPref(PREF_BLOCKLIST_GFX_SIGNER),
-        filterFunc: targetAppFilter,
-      }
-    );
+    this._client = RemoteSettings("gfx", {
+      bucketName: BLOCKLIST_BUCKET,
+      filterFunc: targetAppFilter,
+    });
     this.checkForEntries = this.checkForEntries.bind(this);
     this._client.on("sync", this.checkForEntries);
   },
@@ -675,10 +664,8 @@ this.GfxBlocklistRS = {
  *
  * This is a legacy format, and implements deprecated operations (bug 1620580).
  * ExtensionBlocklistMLBF supersedes this implementation.
- *
- * Note: we assign to the global to allow tests to reach the object directly.
  */
-this.ExtensionBlocklistRS = {
+const ExtensionBlocklistRS = {
   async _ensureEntries() {
     this.ensureInitialized();
     if (!this._entries && gBlocklistEnabled) {
@@ -741,15 +728,10 @@ this.ExtensionBlocklistRS = {
       return;
     }
     this._initialized = true;
-    this._client = RemoteSettings(
-      Services.prefs.getCharPref(PREF_BLOCKLIST_ADDONS_COLLECTION),
-      {
-        bucketNamePref: PREF_BLOCKLIST_BUCKET,
-        lastCheckTimePref: PREF_BLOCKLIST_ADDONS_CHECKED_SECONDS,
-        signerName: Services.prefs.getCharPref(PREF_BLOCKLIST_ADDONS_SIGNER),
-        filterFunc: this._filterItem,
-      }
-    );
+    this._client = RemoteSettings("addons", {
+      bucketName: BLOCKLIST_BUCKET,
+      filterFunc: this._filterItem,
+    });
     this._onUpdate = this._onUpdate.bind(this);
     this._client.on("sync", this._onUpdate);
   },
@@ -774,8 +756,7 @@ this.ExtensionBlocklistRS = {
     await this.ensureInitialized();
     await this._updateEntries();
 
-    const types = ["extension", "theme", "locale", "dictionary", "service"];
-    let addons = await AddonManager.getAddonsByTypes(types);
+    let addons = await AddonManager.getAddonsByTypes(kXPIAddonTypes);
     for (let addon of addons) {
       let oldState = addon.blocklistState;
       if (addon.updateBlocklistState) {
@@ -946,10 +927,8 @@ this.ExtensionBlocklistRS = {
  *
  * Stashes can be used to update the blocklist without forcing the whole MLBF
  * to be downloaded again. These stashes are applied on top of the base MLBF.
- *
- * Note: we assign to the global to allow tests to reach the object directly.
  */
-this.ExtensionBlocklistMLBF = {
+const ExtensionBlocklistMLBF = {
   RS_ATTACHMENT_ID: "addons-mlbf.bin",
 
   async _fetchMLBF(record) {
@@ -975,7 +954,6 @@ this.ExtensionBlocklistMLBF = {
       _source: rsAttachmentSource,
     } = await this._client.attachments.download(record, {
       attachmentId: this.RS_ATTACHMENT_ID,
-      useCache: true,
       fallbackToCache: true,
       fallbackToDump: true,
     });
@@ -1008,7 +986,7 @@ this.ExtensionBlocklistMLBF = {
         this._stashes = null;
         return;
       }
-      let records = await this._client.get({ loadDumpIfNewer: true });
+      let records = await this._client.get();
       if (isUpdateReplaced()) {
         return;
       }
@@ -1111,8 +1089,7 @@ this.ExtensionBlocklistMLBF = {
     }
     this._initialized = true;
     this._client = RemoteSettings("addons-bloomfilters", {
-      bucketName: "blocklists",
-      lastCheckTimePref: PREF_BLOCKLIST_ADDONS3_CHECKED_SECONDS,
+      bucketName: BLOCKLIST_BUCKET,
     });
     this._onUpdate = this._onUpdate.bind(this);
     this._client.on("sync", this._onUpdate);
@@ -1137,9 +1114,7 @@ this.ExtensionBlocklistMLBF = {
     this.ensureInitialized();
     await this._updateMLBF(true);
 
-    // Check add-ons from XPIProvider.
-    const types = ["extension", "theme", "locale", "dictionary"];
-    let addons = await AddonManager.getAddonsByTypes(types);
+    let addons = await AddonManager.getAddonsByTypes(kXPIAddonTypes);
     for (let addon of addons) {
       let oldState = addon.blocklistState;
       await addon.updateBlocklistState(false);
@@ -1435,7 +1410,11 @@ let Blocklist = {
 
   loadBlocklistAsync() {
     // Need to ensure we notify gfx of new stuff.
-    GfxBlocklistRS.checkForEntries();
+    // Geckoview calls this for each new tab (bug 1730026), so ensure we only
+    // check for entries when first initialized.
+    if (!GfxBlocklistRS._initialized) {
+      GfxBlocklistRS.checkForEntries();
+    }
     this.ExtensionBlocklist.ensureInitialized();
   },
 
@@ -1476,3 +1455,11 @@ let Blocklist = {
 };
 
 Blocklist._init();
+
+// Allow tests to reach implementation objects.
+const BlocklistPrivate = {
+  BlocklistTelemetry,
+  ExtensionBlocklistMLBF,
+  ExtensionBlocklistRS,
+  GfxBlocklistRS,
+};

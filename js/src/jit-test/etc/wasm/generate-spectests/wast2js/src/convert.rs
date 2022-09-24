@@ -178,7 +178,10 @@ fn convert_directive(
             module,
             message,
         } => {
-            let text = module_to_js_string(&module, wast)?;
+            let text = match module {
+                wast::QuoteModule::Module(m) => module_to_js_string(&m, wast)?,
+                wast::QuoteModule::Quote(source) => quote_module_to_js_string(source)?,
+            };
             writeln!(
                 out,
                 "assert_invalid(() => instantiate(`{}`), `{}`);",
@@ -213,6 +216,13 @@ fn convert_directive(
                 "assert_unlinkable(() => instantiate(`{}`), `{}`);",
                 text,
                 escape_template_string(message)
+            )?;
+        }
+        AssertException { span: _, exec } => {
+            writeln!(
+                out,
+                "assert_exception(() => {});",
+                execute_to_js(current_instance, exec, wast)?,
             )?;
         }
     }
@@ -455,7 +465,7 @@ fn assert_expression_to_js_value(v: &wast::AssertExpression<'_>) -> Result<Strin
         F32(x) => f32_pattern_to_js_value(x),
         F64(x) => f64_pattern_to_js_value(x),
         RefNull(x) => match x {
-            Some(wast::HeapType::Func) => format!("value('funcref', null)"),
+            Some(wast::HeapType::Func) => format!("value('anyfunc', null)"),
             Some(wast::HeapType::Extern) => format!("value('externref', null)"),
             other => bail!(
                 "couldn't convert ref.null {:?} to a js assertion value",

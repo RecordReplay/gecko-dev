@@ -17,6 +17,8 @@ namespace mozilla {
 #endif
 #define LOGTAG "WebrtcVideoSessionConduit"
 
+#define DEFAULT_VIDEO_MAX_FRAMERATE 30u
+
 #define MB_OF(w, h) \
   ((unsigned int)((((w + 15) >> 4)) * ((unsigned int)((h + 15) >> 4))))
 // For now, try to set the max rates well above the knee in the curve.
@@ -39,8 +41,9 @@ static VideoStreamFactory::ResolutionAndBitrateLimits
         // clang-format on
 };
 
-static VideoStreamFactory::ResolutionAndBitrateLimits GetLimitsFor(
-    unsigned int aWidth, unsigned int aHeight, int aCapBps = 0) {
+auto VideoStreamFactory::GetLimitsFor(unsigned int aWidth, unsigned int aHeight,
+                                      int aCapBps /* = 0 */)
+    -> ResolutionAndBitrateLimits {
   // max bandwidth should be proportional (not linearly!) to resolution, and
   // proportional (perhaps linearly, or close) to current frame rate.
   int fs = MB_OF(aWidth, aHeight);
@@ -77,7 +80,7 @@ static void SelectBitrates(unsigned short width, unsigned short height, int min,
   int& out_max = aVideoStream.max_bitrate_bps;
 
   VideoStreamFactory::ResolutionAndBitrateLimits resAndLimits =
-      GetLimitsFor(width, height);
+      VideoStreamFactory::GetLimitsFor(width, height);
   out_min = MinIgnoreZero(resAndLimits.min_bitrate_bps, cap);
   out_start = MinIgnoreZero(resAndLimits.start_bitrate_bps, cap);
   out_max = MinIgnoreZero(resAndLimits.max_bitrate_bps, cap);
@@ -111,13 +114,12 @@ static void SelectBitrates(unsigned short width, unsigned short height, int min,
 }
 
 void VideoStreamFactory::SetCodecMode(webrtc::VideoCodecMode aCodecMode) {
-  MOZ_ASSERT(NS_IsMainThread());
   mCodecMode = aCodecMode;
 }
 
-void VideoStreamFactory::SetSendingFramerate(unsigned int aSendingFramerate) {
-  MOZ_ASSERT(NS_IsMainThread());
-  mSendingFramerate = aSendingFramerate;
+void VideoStreamFactory::SetMaxFramerateForAllStreams(
+    unsigned int aMaxFramerate) {
+  mMaxFramerateForAllStreams = aMaxFramerate;
 }
 
 std::vector<webrtc::VideoStream> VideoStreamFactory::CreateEncoderStreams(
@@ -172,8 +174,8 @@ std::vector<webrtc::VideoStream> VideoStreamFactory::CreateEncoderStreams(
       MOZ_ASSERT(effectiveScaleDownBy >= 1.0);
       mSimulcastAdapter->OnScaleResolutionBy(
           effectiveScaleDownBy > 1.0
-              ? rtc::Optional<float>(effectiveScaleDownBy)
-              : rtc::Optional<float>());
+              ? absl::optional<float>(effectiveScaleDownBy)
+              : absl::optional<float>());
       bool rv = mSimulcastAdapter->AdaptFrameResolution(
           width, height,
           0,  // Ok, since we don't request an output format with an interval
@@ -211,34 +213,38 @@ std::vector<webrtc::VideoStream> VideoStreamFactory::CreateEncoderStreams(
       continue;
     }
 
-    // We want to ensure this picks up the current framerate, so indirect
-    video_stream.max_framerate = mSendingFramerate;
+    // mMaxFramerateForAllStreams is based on codec-wide stuff like fmtp, and
+    // hard-coded limits based on the source resolution.
+    // mCodecConfig.mEncodingConstraints.maxFps does not take the hard-coded
+    // limits into account, so we have mMaxFramerateForAllStreams which
+    // incorporates those. Per-encoding max framerate is based on parameters
+    // from JS, and maybe rid
+    unsigned int max_framerate = mMaxFramerateForAllStreams;
+    max_framerate = std::min(WebrtcVideoConduit::ToLibwebrtcMaxFramerate(
+                                 encoding.constraints.maxFps),
+                             max_framerate);
+    if (max_framerate >= std::numeric_limits<int>::max()) {
+      // If nothing has specified any kind of limit (uncommon), pick something
+      // reasonable.
+      max_framerate = DEFAULT_VIDEO_MAX_FRAMERATE;
+    }
+    video_stream.max_framerate = static_cast<int>(max_framerate);
+    CSFLogInfo(LOGTAG, "%s Stream with RID %s maxFps=%d (global max fps = %u)",
+               __FUNCTION__, encoding.rid.c_str(), video_stream.max_framerate,
+               (unsigned)mMaxFramerateForAllStreams);
 
     SelectBitrates(video_stream.width, video_stream.height, mMinBitrate,
                    mStartBitrate, encoding.constraints.maxBr, mPrefMaxBitrate,
                    mNegotiatedMaxBitrate, video_stream);
 
+    video_stream.bitrate_priority = config.bitrate_priority;
     video_stream.max_qp = kQpMax;
-    video_stream.SetRid(encoding.rid);
 
-    // leave vector temporal_layer_thresholds_bps empty for non-simulcast
-    video_stream.temporal_layer_thresholds_bps.clear();
     if (streamCount > 1) {
-      // XXX Note: in simulcast.cc in upstream code, the array value is
-      // 3(-1) for all streams, though it's in an array, except for screencasts,
-      // which use 1 (i.e 2 layers).
-
-      // Oddly, though this is a 'bps' array, nothing really looks at the
-      // values for normal video, just the size of the array to know the
-      // number of temporal layers.
-      // For VideoEncoderConfig::ContentType::kScreen, though, in
-      // video_codec_initializer.cc it uses [0] to set the target bitrate
-      // for the screenshare.
       if (mCodecMode == webrtc::VideoCodecMode::kScreensharing) {
-        video_stream.temporal_layer_thresholds_bps.push_back(
-            video_stream.target_bitrate_bps);
+        video_stream.num_temporal_layers = 1;
       } else {
-        video_stream.temporal_layer_thresholds_bps.resize(2);
+        video_stream.num_temporal_layers = 2;
       }
       // XXX Bug 1390215 investigate using more of
       // simulcast.cc:GetSimulcastConfig() or our own algorithm to replace it

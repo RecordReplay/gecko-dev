@@ -178,9 +178,10 @@ function completeIter(request, data, ctx) {
 var prefs;
 var cePref;
 function run_test() {
-  prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
+  prefs = Services.prefs;
   cePref = prefs.getCharPref("network.http.accept-encoding");
   prefs.setCharPref("network.http.accept-encoding", "gzip, deflate, br");
+  prefs.setBoolPref("network.http.encoding.trustworthy_is_https", false);
 
   httpserver.registerPathHandler("/test/cegzip1", handler);
   httpserver.registerPathHandler("/test/cegzip2", handler);

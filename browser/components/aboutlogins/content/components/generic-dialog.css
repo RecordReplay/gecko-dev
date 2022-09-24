@@ -48,8 +48,8 @@
 ::slotted([slot="content"]) {
   grid-column-start: 2;
   align-self: baseline;
-  padding-top: 10px;
-  line-height: 1.8em;
+  margin-top: 16px;
+  line-height: 1.4em;
 }
 
 ::slotted([slot="buttons"]) {

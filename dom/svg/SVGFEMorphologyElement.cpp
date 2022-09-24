@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFEMorphologyElement.h"
 #include "mozilla/dom/SVGFEMorphologyElementBinding.h"
 #include "mozilla/SVGFilterInstance.h"
+#include "mozilla/dom/BindContext.h"
+#include "mozilla/dom/Document.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEMorphology)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEMorphologyElement::WrapNode(JSContext* aCx,
                                            JS::Handle<JSObject*> aGivenProto) {
@@ -109,6 +110,15 @@ bool SVGFEMorphologyElement::AttributeAffectsRendering(
            aAttribute == nsGkAtoms::_operator));
 }
 
+nsresult SVGFEMorphologyElement::BindToTree(BindContext& aCtx,
+                                            nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feMorphology);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -127,5 +137,4 @@ SVGElement::StringAttributesInfo SVGFEMorphologyElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

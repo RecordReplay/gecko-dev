@@ -64,23 +64,58 @@ template <>
 struct ParamTraits<JSStructuredCloneData> {
   typedef JSStructuredCloneData paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    MOZ_ASSERT(!(aParam.Size() % sizeof(uint64_t)));
+    WriteParam(aWriter, aParam.Size());
+    aParam.ForEachDataChunk([&](const char* aData, size_t aSize) {
+      return aWriter->WriteBytes(aData, aSize, sizeof(uint64_t));
+    });
+  }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult);
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    size_t length = 0;
+    if (!ReadParam(aReader, &length)) {
+      return false;
+    }
+    MOZ_ASSERT(!(length % sizeof(uint64_t)));
+
+    mozilla::BufferList<InfallibleAllocPolicy> buffers(0, 0, 4096);
+
+    // Borrowing is not suitable to use for IPC to hand out data
+    // because we often want to store the data somewhere for
+    // processing after IPC has released the underlying buffers. One
+    // case is PContentChild::SendGetXPCOMProcessAttributes. We can't
+    // return a borrowed buffer because the out param outlives the
+    // IPDL callback.
+    if (length &&
+        !aReader->ExtractBuffers(length, &buffers, sizeof(uint64_t))) {
+      return false;
+    }
+
+    bool success;
+    mozilla::BufferList<js::SystemAllocPolicy> out =
+        buffers.MoveFallible<js::SystemAllocPolicy>(&success);
+    if (!success) {
+      return false;
+    }
+
+    *aResult = JSStructuredCloneData(
+        std::move(out), JS::StructuredCloneScope::DifferentProcess);
+
+    return true;
+  }
 };
 
 template <>
 struct ParamTraits<mozilla::SerializedStructuredCloneBuffer> {
   typedef mozilla::SerializedStructuredCloneBuffer paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.data);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.data);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->data);
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return ReadParam(aReader, &aResult->data);
   }
 
   static void Log(const paramType& aParam, std::wstring* aLog) {

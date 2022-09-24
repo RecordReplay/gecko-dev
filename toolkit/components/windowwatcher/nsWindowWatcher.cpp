@@ -29,7 +29,7 @@
 #include "mozilla/dom/BrowsingContextGroup.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/DocumentInlines.h"
-#include "mozilla/Telemetry.h"
+#include "nsIDragService.h"
 #include "nsIDOMChromeWindow.h"
 #include "nsIPrompt.h"
 #include "nsIScriptObjectPrincipal.h"
@@ -306,48 +306,58 @@ nsWindowWatcher::OpenWindow(mozIDOMWindowProxy* aParent, const nsACString& aUrl,
 }
 
 struct SizeSpec {
-  SizeSpec()
-      : mLeft(0),
-        mTop(0),
-        mOuterWidth(0),
-        mOuterHeight(0),
-        mInnerWidth(0),
-        mInnerHeight(0),
-        mLeftSpecified(false),
-        mTopSpecified(false),
-        mOuterWidthSpecified(false),
-        mOuterHeightSpecified(false),
-        mInnerWidthSpecified(false),
-        mInnerHeightSpecified(false),
-        mLockAspectRatio(false) {}
+  SizeSpec() = default;
 
-  int32_t mLeft;
-  int32_t mTop;
-  int32_t mOuterWidth;   // Total window width
-  int32_t mOuterHeight;  // Total window height
-  int32_t mInnerWidth;   // Content area width
-  int32_t mInnerHeight;  // Content area height
+  // We store these in screen-independent pixels.
+  Maybe<DesktopIntCoord> mLeft;
+  Maybe<DesktopIntCoord> mTop;
+  Maybe<CSSIntCoord> mOuterWidth;   // Total window width
+  Maybe<CSSIntCoord> mOuterHeight;  // Total window height
+  Maybe<CSSIntCoord> mInnerWidth;   // Content area width
+  Maybe<CSSIntCoord> mInnerHeight;  // Content area height
 
-  bool mLeftSpecified;
-  bool mTopSpecified;
-  bool mOuterWidthSpecified;
-  bool mOuterHeightSpecified;
-  bool mInnerWidthSpecified;
-  bool mInnerHeightSpecified;
-  bool mLockAspectRatio;
+  bool mLockAspectRatio = false;
 
-  bool PositionSpecified() const { return mLeftSpecified || mTopSpecified; }
+  bool PositionSpecified() const { return mLeft.isSome() || mTop.isSome(); }
 
   bool SizeSpecified() const { return WidthSpecified() || HeightSpecified(); }
 
   bool WidthSpecified() const {
-    return mOuterWidthSpecified || mInnerWidthSpecified;
+    return mOuterWidth.isSome() || mInnerWidth.isSome();
   }
 
   bool HeightSpecified() const {
-    return mOuterHeightSpecified || mInnerHeightSpecified;
+    return mOuterHeight.isSome() || mInnerHeight.isSome();
+  }
+
+  void ScaleBy(float aOpenerZoom) {
+    if (aOpenerZoom == 1.0f) {
+      return;
+    }
+    auto Scale = [&aOpenerZoom](auto& aValue) {
+      if (aValue) {
+        *aValue = NSToIntRound(*aValue * aOpenerZoom);
+      }
+    };
+    // Scaling the position is needed to make sure that the window position is
+    // what the caller expects.
+    Scale(mLeft);
+    Scale(mTop);
+
+    // Scaling these CSS sizes by the zoom factor might be a bit dubious, as the
+    // created window should not be zoomed, but we've done that historically...
+    Scale(mOuterWidth);
+    Scale(mOuterHeight);
+    Scale(mInnerWidth);
+    Scale(mInnerHeight);
   }
 };
+
+static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
+                             mozIDOMWindowProxy* aParent, bool aIsCallerChrome,
+                             const SizeSpec&);
+static SizeSpec CalcSizeSpec(const WindowFeatures&, bool aHasChromeParent,
+                             CSSToDesktopScale);
 
 NS_IMETHODIMP
 nsWindowWatcher::OpenWindow2(mozIDOMWindowProxy* aParent,
@@ -416,6 +426,14 @@ nsresult nsWindowWatcher::CreateChromeWindow(nsIWebBrowserChrome* aParentChrome,
   }
 
   bool cancel = false;
+  if (aChromeFlags & nsIWebBrowserChrome::CHROME_OPENAS_DIALOG) {
+    // If there are any drag and drop operations in flight, try to end them.
+    nsCOMPtr<nsIDragService> ds =
+        do_GetService("@mozilla.org/widget/dragservice;1");
+    if (ds) {
+      ds->EndDragSession(true, 0);
+    }
+  }
   nsCOMPtr<nsIWebBrowserChrome> newWindowChrome;
   nsresult rv = mWindowCreator->CreateChromeWindow(
       aParentChrome, aChromeFlags, aOpenWindowInfo, &cancel,
@@ -444,13 +462,13 @@ nsresult nsWindowWatcher::CreateChromeWindow(nsIWebBrowserChrome* aParentChrome,
  *        The nsIDocShellTreeOwner of the newly opened window. If null,
  *        this function is a no-op.
  */
-void nsWindowWatcher::MaybeDisablePersistence(
-    const SizeSpec& sizeSpec, nsIDocShellTreeOwner* aTreeOwner) {
+static void MaybeDisablePersistence(const SizeSpec& aSizeSpec,
+                                    nsIDocShellTreeOwner* aTreeOwner) {
   if (!aTreeOwner) {
     return;
   }
 
-  if (sizeSpec.SizeSpecified()) {
+  if (aSizeSpec.SizeSpecified()) {
     aTreeOwner->SetPersistence(false, false, false);
   }
 }
@@ -518,10 +536,19 @@ nsWindowWatcher::OpenWindowWithRemoteTab(nsIRemoteTab* aRemoteTab,
   WindowFeatures features;
   features.Tokenize(aFeatures);
 
-  SizeSpec sizeSpec;
-  CalcSizeSpec(features, false, sizeSpec);
+  // get various interfaces for aDocShellItem, used throughout this method
+  CSSToDesktopScale cssToDesktopScale(1.0f);
+  if (nsCOMPtr<nsIBaseWindow> win = do_QueryInterface(parentTreeOwner)) {
+    cssToDesktopScale = win->GetCSSToDesktopScale();
+  }
+  SizeSpec sizeSpec = CalcSizeSpec(features, false, cssToDesktopScale);
+  sizeSpec.ScaleBy(aOpenerFullZoom);
 
-  uint32_t chromeFlags = CalculateChromeFlagsForContent(features, sizeSpec);
+  // This is not initiated by window.open call in content context, and we
+  // don't need to propagate isPopupRequested out-parameter to the resulting
+  // browsing context.
+  bool unused = false;
+  uint32_t chromeFlags = CalculateChromeFlagsForContent(features, &unused);
 
   if (isPrivateBrowsingWindow) {
     chromeFlags |= nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW;
@@ -571,8 +598,7 @@ nsWindowWatcher::OpenWindowWithRemoteTab(nsIRemoteTab* aRemoteTab,
 
   MaybeDisablePersistence(sizeSpec, chromeTreeOwner);
 
-  SizeOpenedWindow(chromeTreeOwner, parentWindowOuter, false, sizeSpec,
-                   Some(aOpenerFullZoom));
+  SizeOpenedWindow(chromeTreeOwner, parentWindowOuter, false, sizeSpec);
 
   nsCOMPtr<nsIRemoteTab> newBrowserParent;
   chromeTreeOwner->GetPrimaryRemoteTab(getter_AddRefs(newBrowserParent));
@@ -686,7 +712,7 @@ nsresult nsWindowWatcher::OpenWindowInternal(
   // no extant window? make a new one.
 
   // If no parent, consider it chrome when running in the parent process.
-  bool hasChromeParent = XRE_IsContentProcess() ? false : true;
+  bool hasChromeParent = !XRE_IsContentProcess();
   if (aParent) {
     // Check if the parent document has chrome privileges.
     Document* doc = parentWindow->GetDoc();
@@ -695,20 +721,27 @@ nsresult nsWindowWatcher::OpenWindowInternal(
 
   bool isCallerChrome = nsContentUtils::LegacyIsCallerChromeOrNativeCode();
 
-  SizeSpec sizeSpec;
-  CalcSizeSpec(features, hasChromeParent, sizeSpec);
+  CSSToDesktopScale cssToDesktopScale(1.0);
+  if (nsCOMPtr<nsIBaseWindow> win = do_QueryInterface(parentDocShell)) {
+    cssToDesktopScale = win->GetCSSToDesktopScale();
+  }
+  SizeSpec sizeSpec =
+      CalcSizeSpec(features, hasChromeParent, cssToDesktopScale);
+  sizeSpec.ScaleBy(parentBC ? parentBC->FullZoom() : 1.0f);
+
+  bool isPopupRequested = false;
 
   // Make sure we calculate the chromeFlags *before* we push the
   // callee context onto the context stack so that
   // the calculation sees the actual caller when doing its
   // security checks.
-  if (isCallerChrome && XRE_IsParentProcess()) {
-    chromeFlags = CalculateChromeFlagsForSystem(
-        features, sizeSpec, aDialog, uriToLoadIsChrome, hasChromeParent);
+  if (hasChromeParent && isCallerChrome && XRE_IsParentProcess()) {
+    chromeFlags =
+        CalculateChromeFlagsForSystem(features, aDialog, uriToLoadIsChrome);
   } else {
     MOZ_DIAGNOSTIC_ASSERT(parentBC && parentBC->IsContent(),
                           "content caller must provide content parent");
-    chromeFlags = CalculateChromeFlagsForContent(features, sizeSpec);
+    chromeFlags = CalculateChromeFlagsForContent(features, &isPopupRequested);
 
     if (aDialog) {
       MOZ_ASSERT(XRE_IsParentProcess());
@@ -840,11 +873,10 @@ nsresult nsWindowWatcher::OpenWindowInternal(
 
       nsCOMPtr<nsIWindowProvider> provider = do_GetInterface(parentTreeOwner);
       if (provider) {
-        rv = provider->ProvideWindow(openWindowInfo, chromeFlags, aCalledFromJS,
-                                     sizeSpec.WidthSpecified(), uriToLoad, name,
-                                     featuresStr, aForceNoOpener,
-                                     aForceNoReferrer, aLoadState, &windowIsNew,
-                                     getter_AddRefs(newBC));
+        rv = provider->ProvideWindow(
+            openWindowInfo, chromeFlags, aCalledFromJS, uriToLoad, name,
+            featuresStr, aForceNoOpener, aForceNoReferrer, isPopupRequested,
+            aLoadState, &windowIsNew, getter_AddRefs(newBC));
 
         if (NS_SUCCEEDED(rv) && newBC) {
           nsCOMPtr<nsIDocShell> newDocShell = newBC->GetDocShell();
@@ -1027,22 +1059,21 @@ nsresult nsWindowWatcher::OpenWindowInternal(
 
   RefPtr<nsGlobalWindowOuter> win(
       nsGlobalWindowOuter::Cast(newBC->GetDOMWindow()));
-  if (win) {
-    if (windowIsNew) {
 #ifdef DEBUG
-      // Assert that we're not loading things right now.  If we are, when
-      // that load completes it will clobber whatever principals we set up
-      // on this new window!
-      nsCOMPtr<nsIChannel> chan;
-      newDocShell->GetDocumentChannel(getter_AddRefs(chan));
-      MOZ_ASSERT(!chan, "Why is there a document channel?");
-#endif
+  if (win && windowIsNew) {
+    // Assert that we're not loading things right now.  If we are, when
+    // that load completes it will clobber whatever principals we set up
+    // on this new window!
+    nsCOMPtr<nsIChannel> chan;
+    newDocShell->GetDocumentChannel(getter_AddRefs(chan));
+    MOZ_ASSERT(!chan, "Why is there a document channel?");
 
-      if (RefPtr<Document> doc = win->GetExtantDoc()) {
-        doc->SetIsInitialDocument(true);
-      }
+    if (RefPtr<Document> doc = win->GetExtantDoc()) {
+      MOZ_ASSERT(doc->IsInitialDocument(),
+                 "New window's document should be an initial document");
     }
   }
+#endif
 
   MOZ_ASSERT(win || !windowIsNew, "New windows are always created in-process");
 
@@ -1688,7 +1719,7 @@ nsresult nsWindowWatcher::URIfromURL(const nsACString& aURL,
 // static
 uint32_t nsWindowWatcher::CalculateChromeFlagsHelper(
     uint32_t aInitialFlags, const WindowFeatures& aFeatures,
-    const SizeSpec& aSizeSpec, bool* presenceFlag, bool aHasChromeParent) {
+    bool* presenceFlag) {
   uint32_t chromeFlags = aInitialFlags;
 
   if (aFeatures.GetBoolWithDefault("titlebar", false, presenceFlag)) {
@@ -1723,127 +1754,42 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsHelper(
     chromeFlags |= nsIWebBrowserChrome::CHROME_SCROLLBARS;
   }
 
-  if (aHasChromeParent) {
-    return chromeFlags;
-  }
-
-  // Web content isn't allowed to control UI visibility separately, but only
-  // whether to open a popup or not.
-  //
-  // The above code is still necessary to calculate `presenceFlag`.
-  // (`ShouldOpenPopup` early returns and doesn't check all feature)
-
-  if (ShouldOpenPopup(aFeatures, aSizeSpec)) {
-    // Flags for opening a popup, that doesn't have the following:
-    //   * nsIWebBrowserChrome::CHROME_TOOLBAR
-    //   * nsIWebBrowserChrome::CHROME_PERSONAL_TOOLBAR
-    //   * nsIWebBrowserChrome::CHROME_MENUBAR
-    return aInitialFlags | nsIWebBrowserChrome::CHROME_TITLEBAR |
-           nsIWebBrowserChrome::CHROME_WINDOW_CLOSE |
-           nsIWebBrowserChrome::CHROME_LOCATIONBAR |
-           nsIWebBrowserChrome::CHROME_STATUSBAR |
-           nsIWebBrowserChrome::CHROME_WINDOW_RESIZE |
-           nsIWebBrowserChrome::CHROME_WINDOW_MIN |
-           nsIWebBrowserChrome::CHROME_SCROLLBARS;
-  }
-
-  // Otherwise open the current/new tab in the current/new window
-  // (depends on browser.link.open_newwindow).
-  return aInitialFlags | nsIWebBrowserChrome::CHROME_ALL;
+  return chromeFlags;
 }
 
 // static
-uint32_t nsWindowWatcher::EnsureFlagsSafeForContent(uint32_t aChromeFlags,
-                                                    bool aChromeURL) {
-  aChromeFlags |= nsIWebBrowserChrome::CHROME_TITLEBAR;
-  aChromeFlags |= nsIWebBrowserChrome::CHROME_WINDOW_CLOSE;
-  aChromeFlags &= ~nsIWebBrowserChrome::CHROME_WINDOW_LOWERED;
-  aChromeFlags &= ~nsIWebBrowserChrome::CHROME_WINDOW_RAISED;
-  aChromeFlags &= ~nsIWebBrowserChrome::CHROME_WINDOW_POPUP;
-  /* Untrusted script is allowed to pose modal windows with a chrome
-     scheme. This check could stand to be better. But it effectively
-     prevents untrusted script from opening modal windows in general
-     while still allowing alerts and the like. */
-  if (!aChromeURL) {
-    aChromeFlags &= ~(nsIWebBrowserChrome::CHROME_MODAL |
-                      nsIWebBrowserChrome::CHROME_OPENAS_CHROME);
-  }
-
-  if (!(aChromeFlags & nsIWebBrowserChrome::CHROME_OPENAS_CHROME)) {
-    aChromeFlags &= ~nsIWebBrowserChrome::CHROME_DEPENDENT;
-  }
-
-  return aChromeFlags;
-}
-
-// Determine if we should open a new popup instead of a new tab.
-//
-// Also collect a telemetry how the popup/tab is requested, to help creating a
-// proposal for standardizing window.open's `features` parameter.
-//
-//  * NoPopup_{Empty, Other}
-//    (expected) Both current behavior and proposed behavior opens a non-popup
-//  * Popup_Width
-//    (expected) Both current behavior and proposed behavior opens a popup
-//  * Popup_{Location, Menubar, Resizable, Scrollbars, Status}
-//    (unexpected) Current behavior opens a popup, and proposed behavior opens
-//    a non-popup
-//
-// static
-bool nsWindowWatcher::ShouldOpenPopup(const WindowFeatures& aFeatures,
-                                      const SizeSpec& aSizeSpec) {
+bool nsWindowWatcher::ShouldOpenPopup(const WindowFeatures& aFeatures) {
   if (aFeatures.IsEmpty()) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::NoPopup_Empty);
     return false;
   }
 
-  // Follow Safari's behavior that opens a popup when width is specified.
-  // This also follows current proposal.
-  if (aSizeSpec.WidthSpecified()) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Width);
-    return true;
+  // NOTE: This is different than chrome-only "popup" feature that is handled
+  //       in nsWindowWatcher::CalculateChromeFlagsForSystem.
+  if (aFeatures.Exists("popup")) {
+    return aFeatures.GetBool("popup");
   }
 
-  // Remaining conditions excluding the last non-popup don't follow the
-  // current proposal.
-
-  // Follow Google Chrome's behavior that opens a popup depending on
-  // the following features.
   if (!aFeatures.GetBoolWithDefault("location", false) &&
       !aFeatures.GetBoolWithDefault("toolbar", false)) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Location);
     return true;
   }
 
   if (!aFeatures.GetBoolWithDefault("menubar", false)) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Menubar);
     return true;
   }
 
   if (!aFeatures.GetBoolWithDefault("resizable", true)) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Resizable);
     return true;
   }
 
   if (!aFeatures.GetBoolWithDefault("scrollbars", false)) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Scrollbars);
     return true;
   }
 
   if (!aFeatures.GetBoolWithDefault("status", false)) {
-    AccumulateCategorical(
-        mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::Popup_Status);
     return true;
   }
 
-  AccumulateCategorical(
-      mozilla::Telemetry::LABELS_WINDOW_OPEN_TYPE::NoPopup_Other);
   return false;
 }
 
@@ -1852,20 +1798,22 @@ bool nsWindowWatcher::ShouldOpenPopup(const WindowFeatures& aFeatures,
  * from a child process. The feature string can only control whether to open a
  * new tab or a new popup.
  * @param aFeatures a string containing a list of named features
- * @param aSizeSpec the result of CalcSizeSpec
+ * @param aIsPopupRequested an out parameter that indicates whether a popup
+ *        is requested by aFeatures
  * @return the chrome bitmask
  */
 // static
 uint32_t nsWindowWatcher::CalculateChromeFlagsForContent(
-    const WindowFeatures& aFeatures, const SizeSpec& aSizeSpec) {
-  if (aFeatures.IsEmpty()) {
+    const WindowFeatures& aFeatures, bool* aIsPopupRequested) {
+  if (aFeatures.IsEmpty() || !ShouldOpenPopup(aFeatures)) {
+    // Open the current/new tab in the current/new window
+    // (depends on browser.link.open_newwindow).
     return nsIWebBrowserChrome::CHROME_ALL;
   }
 
-  uint32_t chromeFlags = CalculateChromeFlagsHelper(
-      nsIWebBrowserChrome::CHROME_WINDOW_BORDERS, aFeatures, aSizeSpec);
-
-  return EnsureFlagsSafeForContent(chromeFlags);
+  // Open a minimal popup.
+  *aIsPopupRequested = true;
+  return nsIWebBrowserChrome::CHROME_MINIMAL_POPUP;
 }
 
 /**
@@ -1874,13 +1822,11 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForContent(
  * @param aFeatures a string containing a list of named chrome features
  * @param aDialog affects the assumptions made about unnamed features
  * @param aChromeURL true if the window is being sent to a chrome:// URL
- * @param aHasChromeParent true if the parent window is privileged
  * @return the chrome bitmask
  */
 // static
 uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
-    const WindowFeatures& aFeatures, const SizeSpec& aSizeSpec, bool aDialog,
-    bool aChromeURL, bool aHasChromeParent) {
+    const WindowFeatures& aFeatures, bool aDialog, bool aChromeURL) {
   MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(nsContentUtils::LegacyIsCallerChromeOrNativeCode());
 
@@ -1912,8 +1858,8 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
   }
 
   /* Next, allow explicitly named options to override the initial settings */
-  chromeFlags = CalculateChromeFlagsHelper(chromeFlags, aFeatures, aSizeSpec,
-                                           &presenceFlag, aHasChromeParent);
+  chromeFlags =
+      CalculateChromeFlagsHelper(chromeFlags, aFeatures, &presenceFlag);
 
   // Determine whether the window is a private browsing window
   if (aFeatures.GetBoolWithDefault("private", false, &presenceFlag)) {
@@ -2039,11 +1985,6 @@ uint32_t nsWindowWatcher::CalculateChromeFlagsForSystem(
      chromeFlags->copy_history
    */
 
-  // Check security state for use in determing window dimensions
-  if (!aHasChromeParent) {
-    chromeFlags = EnsureFlagsSafeForContent(chromeFlags, aChromeURL);
-  }
-
   return chromeFlags;
 }
 
@@ -2078,8 +2019,9 @@ already_AddRefed<BrowsingContext> nsWindowWatcher::GetBrowsingContextByName(
 }
 
 // static
-void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
-                                   bool aHasChromeParent, SizeSpec& aResult) {
+SizeSpec CalcSizeSpec(const WindowFeatures& aFeatures, bool aHasChromeParent,
+                      CSSToDesktopScale aCSSToDesktopScale) {
+  SizeSpec result;
   // https://drafts.csswg.org/cssom-view/#set-up-browsing-context-features
   // To set up browsing context features for a browsing context `target` given
   // a map `tokenizedFeatures`:
@@ -2112,8 +2054,7 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
     // left edge is at the horizontal coordinate `x` relative to the left edge
     // of the Web-exposed screen area, measured in CSS pixels of target.
     // The positive axis is rightward.
-    aResult.mLeft = x;
-    aResult.mLeftSpecified = true;
+    result.mLeft.emplace((CSSCoord(x) * aCSSToDesktopScale).Rounded());
   }
 
   // Step 6. If `tokenizedFeatures["top"]` exists:
@@ -2132,8 +2073,7 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
     // edge is at the vertical coordinate `y` relative to the top edge of the
     // Web-exposed screen area, measured in CSS pixels of target. The positive
     // axis is downward.
-    aResult.mTop = y;
-    aResult.mTopSpecified = true;
+    result.mTop.emplace((CSSCoord(y) * aCSSToDesktopScale).Rounded());
   }
 
   // Non-standard extension.
@@ -2141,12 +2081,11 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
   if (aHasChromeParent && aFeatures.Exists("outerwidth")) {
     int32_t width = aFeatures.GetInt("outerwidth");
     if (width) {
-      aResult.mOuterWidth = width;
-      aResult.mOuterWidthSpecified = true;
+      result.mOuterWidth.emplace(width);
     }
   }
 
-  if (!aResult.mOuterWidthSpecified) {
+  if (result.mOuterWidth.isNothing()) {
     // Step 7. If `tokenizedFeatures["width"]` exists:
     if (aFeatures.Exists("width")) {
       // Step 7.1. Set `width` to the result of invoking the rules for parsing
@@ -2165,8 +2104,7 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
         // Step 7.3.2. Optionally, size `target`’s window by moving its right
         // edge such that the distance between the left and right edges of the
         // viewport are `width` CSS pixels of target.
-        aResult.mInnerWidth = width;
-        aResult.mInnerWidthSpecified = true;
+        result.mInnerWidth.emplace(width);
 
         // Step 7.3.3. Optionally, move target’s window in a user-agent-defined
         // manner so that it does not grow outside the Web-exposed available
@@ -2181,12 +2119,11 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
   if (aHasChromeParent && aFeatures.Exists("outerheight")) {
     int32_t height = aFeatures.GetInt("outerheight");
     if (height) {
-      aResult.mOuterHeight = height;
-      aResult.mOuterHeightSpecified = true;
+      result.mOuterHeight.emplace(height);
     }
   }
 
-  if (!aResult.mOuterHeightSpecified) {
+  if (result.mOuterHeight.isNothing()) {
     // Step 8. If `tokenizedFeatures["height"]` exists:
     if (aFeatures.Exists("height")) {
       // Step 8.1. Set `height` to the result of invoking the rules for parsing
@@ -2205,8 +2142,7 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
         // Step 8.3.2. Optionally, size `target`’s window by moving its bottom
         // edge such that the distance between the top and bottom edges of the
         // viewport are `height` CSS pixels of target.
-        aResult.mInnerHeight = height;
-        aResult.mInnerHeightSpecified = true;
+        result.mInnerHeight.emplace(height);
 
         // Step 8.3.3. Optionally, move target’s window in a user-agent-defined
         // manner so that it does not grow outside the Web-exposed available
@@ -2218,8 +2154,9 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
 
   // NOTE: The value is handled only on chrome-priv code.
   // See nsWindowWatcher::SizeOpenedWindow.
-  aResult.mLockAspectRatio =
+  result.mLockAspectRatio =
       aFeatures.GetBoolWithDefault("lockaspectratio", false);
+  return result;
 }
 
 /* Size and position a new window according to aSizeSpec. This method
@@ -2228,31 +2165,19 @@ void nsWindowWatcher::CalcSizeSpec(const WindowFeatures& aFeatures,
    accurate defaults. The new window is made visible at method end.
    @param aTreeOwner
           The top-level nsIDocShellTreeOwner of the newly opened window.
-   @param aParent (optional)
-          The parent window from which to inherit zoom factors from if
-          aOpenerFullZoom is none.
+   @param aParent
+          The parent window, used to do security checks.
    @param aIsCallerChrome
           True if the code requesting the new window is privileged.
    @param aSizeSpec
           The size that the new window should be.
-   @param aOpenerFullZoom
-          If not nothing, a zoom factor to scale the content to.
 */
-void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
-                                       mozIDOMWindowProxy* aParent,
-                                       bool aIsCallerChrome,
-                                       const SizeSpec& aSizeSpec,
-                                       const Maybe<float>& aOpenerFullZoom) {
+static void SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
+                             mozIDOMWindowProxy* aParent, bool aIsCallerChrome,
+                             const SizeSpec& aSizeSpec) {
   // We should only be sizing top-level windows if we're in the parent
   // process.
   MOZ_ASSERT(XRE_IsParentProcess());
-
-  // position and size of window
-  int32_t left = 0, top = 0, width = 100, height = 100;
-  // difference between chrome and content size
-  int32_t chromeWidth = 0, chromeHeight = 0;
-  // whether the window size spec refers to chrome or content
-  bool sizeChromeWidth = true, sizeChromeHeight = true;
 
   // get various interfaces for aDocShellItem, used throughout this method
   nsCOMPtr<nsIBaseWindow> treeOwnerAsWin(do_QueryInterface(aTreeOwner));
@@ -2260,33 +2185,34 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
     return;
   }
 
-  double openerZoom = aOpenerFullZoom.valueOr(1.0);
-  if (aParent && aOpenerFullZoom.isNothing()) {
-    nsCOMPtr<nsPIDOMWindowOuter> piWindow = nsPIDOMWindowOuter::From(aParent);
-    if (Document* doc = piWindow->GetDoc()) {
-      if (nsPresContext* presContext = doc->GetPresContext()) {
-        openerZoom = presContext->GetFullZoom();
-      }
-    }
-  }
+  // The current position and size will be unchanged if not specified
+  // (and they fit entirely onscreen). Also, calculate the difference
+  // between chrome and content sizes on aDocShellItem's window.
+  // This latter point becomes important if chrome and content
+  // specifications are mixed in aFeatures, and when bringing the window
+  // back from too far off the right or bottom edges of the screen. */
+  DesktopIntCoord left = 0, top = 0;
+  CSSIntCoord width = 0, height = 0;
+  // difference between chrome and content size
+  CSSIntCoord chromeWidth = 0, chromeHeight = 0;
+  // whether the window size spec refers to chrome or content
+  bool sizeChromeWidth = true, sizeChromeHeight = true;
 
-  double scale = 1.0;
-  treeOwnerAsWin->GetUnscaledDevicePixelsPerCSSPixel(&scale);
-
-  /* The current position and size will be unchanged if not specified
-     (and they fit entirely onscreen). Also, calculate the difference
-     between chrome and content sizes on aDocShellItem's window.
-     This latter point becomes important if chrome and content
-     specifications are mixed in aFeatures, and when bringing the window
-     back from too far off the right or bottom edges of the screen. */
-
-  treeOwnerAsWin->GetPositionAndSize(&left, &top, &width, &height);
-  left = NSToIntRound(left / scale);
-  top = NSToIntRound(top / scale);
-  width = NSToIntRound(width / scale);
-  height = NSToIntRound(height / scale);
   {
-    int32_t contentWidth, contentHeight;
+    CSSToLayoutDeviceScale cssToDevScale =
+        treeOwnerAsWin->UnscaledDevicePixelsPerCSSPixel();
+    DesktopToLayoutDeviceScale devToDesktopScale =
+        treeOwnerAsWin->DevicePixelsPerDesktopPixel();
+
+    LayoutDeviceIntRect devPxRect;
+    treeOwnerAsWin->GetPositionAndSize(&devPxRect.x, &devPxRect.y,
+                                       &devPxRect.width, &devPxRect.height);
+    width = (LayoutDeviceCoord(devPxRect.width) / cssToDevScale).Rounded();
+    height = (LayoutDeviceCoord(devPxRect.height) / cssToDevScale).Rounded();
+    left = (LayoutDeviceCoord(devPxRect.x) / devToDesktopScale).Rounded();
+    top = (LayoutDeviceCoord(devPxRect.y) / devToDesktopScale).Rounded();
+
+    int32_t contentWidth, contentHeight;  // CSS pixels.
     bool hasPrimaryContent = false;
     aTreeOwner->GetHasPrimaryContent(&hasPrimaryContent);
     if (hasPrimaryContent) {
@@ -2299,40 +2225,44 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
   }
 
   // Set up left/top
-  if (aSizeSpec.mLeftSpecified) {
-    left = NSToIntRound(aSizeSpec.mLeft * openerZoom);
+  if (aSizeSpec.mLeft) {
+    left = *aSizeSpec.mLeft;
   }
 
-  if (aSizeSpec.mTopSpecified) {
-    top = NSToIntRound(aSizeSpec.mTop * openerZoom);
+  if (aSizeSpec.mTop) {
+    top = *aSizeSpec.mTop;
   }
 
   // Set up width
-  if (aSizeSpec.mOuterWidthSpecified) {
-    width = NSToIntRound(aSizeSpec.mOuterWidth * openerZoom);
-  } else if (aSizeSpec.mInnerWidthSpecified) {
+  if (aSizeSpec.mOuterWidth) {
+    width = *aSizeSpec.mOuterWidth;
+  } else if (aSizeSpec.mInnerWidth) {
     sizeChromeWidth = false;
-    width = NSToIntRound(aSizeSpec.mInnerWidth * openerZoom);
+    width = *aSizeSpec.mInnerWidth;
   }
 
   // Set up height
-  if (aSizeSpec.mOuterHeightSpecified) {
-    height = NSToIntRound(aSizeSpec.mOuterHeight * openerZoom);
-  } else if (aSizeSpec.mInnerHeightSpecified) {
+  if (aSizeSpec.mOuterHeight) {
+    height = *aSizeSpec.mOuterHeight;
+  } else if (aSizeSpec.mInnerHeight) {
     sizeChromeHeight = false;
-    height = NSToIntRound(aSizeSpec.mInnerHeight * openerZoom);
+    height = *aSizeSpec.mInnerHeight;
   }
 
   bool positionSpecified = aSizeSpec.PositionSpecified();
 
-  // Check security state for use in determing window dimensions
+  // Check security state for use in determining window dimensions
   bool enabled = false;
   if (aIsCallerChrome) {
-    // Only enable special priveleges for chrome when chrome calls
+    // Only enable special privileges for chrome when chrome calls
     // open() on a chrome window
     nsCOMPtr<nsIDOMChromeWindow> chromeWin(do_QueryInterface(aParent));
     enabled = !aParent || chromeWin;
   }
+
+  const CSSIntCoord extraWidth = sizeChromeWidth ? CSSIntCoord(0) : chromeWidth;
+  const CSSIntCoord extraHeight =
+      sizeChromeHeight ? CSSIntCoord(0) : chromeHeight;
 
   if (!enabled) {
     // Security check failed.  Ensure all args meet minimum reqs.
@@ -2343,22 +2273,20 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
     nsCOMPtr<nsIScreen> screen;
     nsCOMPtr<nsIScreenManager> screenMgr(
         do_GetService("@mozilla.org/gfx/screenmanager;1"));
-    if (screenMgr)
+    if (screenMgr) {
+      // XXX width, height are in CSS rather than desktop pixels here.
       screenMgr->ScreenForRect(left, top, width, height,
                                getter_AddRefs(screen));
+    }
     if (screen) {
-      int32_t screenLeft, screenTop, screenWidth, screenHeight;
-      int32_t winWidth = width + (sizeChromeWidth ? 0 : chromeWidth),
-              winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
+      CSSIntCoord winWidth = width + extraWidth;
+      CSSIntCoord winHeight = height + extraHeight;
 
-      // Get screen dimensions (in device pixels)
-      screen->GetAvailRect(&screenLeft, &screenTop, &screenWidth,
-                           &screenHeight);
-      // Convert them to CSS pixels
-      screenLeft = NSToIntRound(screenLeft / scale);
-      screenTop = NSToIntRound(screenTop / scale);
-      screenWidth = NSToIntRound(screenWidth / scale);
-      screenHeight = NSToIntRound(screenHeight / scale);
+      const auto screenCssToDesktopScale = screen->GetCSSToDesktopScale();
+      const DesktopIntRect screenDesktopRect = screen->GetAvailRectDisplayPix();
+      // Get screen dimensions (in CSS pixels)
+      const CSSSize screenCssSize =
+          screenDesktopRect.Size() / screenCssToDesktopScale;
 
       if (aSizeSpec.SizeSpecified()) {
         if (!nsContentUtils::ShouldResistFingerprinting()) {
@@ -2367,59 +2295,61 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
              windows are broken. */
           if (height < 100) {
             height = 100;
-            winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
+            winHeight = height + extraHeight;
           }
-          if (winHeight > screenHeight) {
-            height = screenHeight - (sizeChromeHeight ? 0 : chromeHeight);
+          if (winHeight > screenCssSize.height) {
+            height = screenCssSize.height - extraHeight;
           }
           if (width < 100) {
             width = 100;
-            winWidth = width + (sizeChromeWidth ? 0 : chromeWidth);
+            winWidth = width + extraWidth;
           }
-          if (winWidth > screenWidth) {
-            width = screenWidth - (sizeChromeWidth ? 0 : chromeWidth);
+          if (winWidth > screenCssSize.width) {
+            width = screenCssSize.width - extraWidth;
           }
         } else {
           int32_t targetContentWidth = 0;
           int32_t targetContentHeight = 0;
 
           nsContentUtils::CalcRoundedWindowSizeForResistingFingerprinting(
-              chromeWidth, chromeHeight, screenWidth, screenHeight, width,
-              height, sizeChromeWidth, sizeChromeHeight, &targetContentWidth,
-              &targetContentHeight);
+              chromeWidth, chromeHeight, screenCssSize.width,
+              screenCssSize.height, width, height, sizeChromeWidth,
+              sizeChromeHeight, &targetContentWidth, &targetContentHeight);
 
-          if (aSizeSpec.mInnerWidthSpecified ||
-              aSizeSpec.mOuterWidthSpecified) {
+          if (aSizeSpec.mInnerWidth || aSizeSpec.mOuterWidth) {
             width = targetContentWidth;
-            winWidth = width + (sizeChromeWidth ? 0 : chromeWidth);
+            winWidth = width + extraWidth;
           }
 
-          if (aSizeSpec.mInnerHeightSpecified ||
-              aSizeSpec.mOuterHeightSpecified) {
+          if (aSizeSpec.mInnerHeight || aSizeSpec.mOuterHeight) {
             height = targetContentHeight;
-            winHeight = height + (sizeChromeHeight ? 0 : chromeHeight);
+            winHeight = height + extraHeight;
           }
         }
       }
 
-      CheckedInt<decltype(left)> leftPlusWinWidth = left;
-      leftPlusWinWidth += winWidth;
+      const DesktopIntCoord desktopWinWidth =
+          (CSSCoord(winWidth) * screenCssToDesktopScale).Rounded();
+      const DesktopIntCoord desktopWinHeight =
+          (CSSCoord(winHeight) * screenCssToDesktopScale).Rounded();
+      CheckedInt<int32_t> leftPlusWinWidth = int32_t(left);
+      leftPlusWinWidth += int32_t(desktopWinWidth);
       if (!leftPlusWinWidth.isValid() ||
-          leftPlusWinWidth.value() > screenLeft + screenWidth) {
-        left = screenLeft + screenWidth - winWidth;
+          leftPlusWinWidth.value() > screenDesktopRect.XMost()) {
+        left = screenDesktopRect.XMost() - desktopWinWidth;
       }
-      if (left < screenLeft) {
-        left = screenLeft;
+      if (left < screenDesktopRect.x) {
+        left = screenDesktopRect.x;
       }
 
-      CheckedInt<decltype(top)> topPlusWinHeight = top;
-      topPlusWinHeight += winHeight;
+      CheckedInt<int32_t> topPlusWinHeight = int32_t(top);
+      topPlusWinHeight += int32_t(desktopWinHeight);
       if (!topPlusWinHeight.isValid() ||
-          topPlusWinHeight.value() > screenTop + screenHeight) {
-        top = screenTop + screenHeight - winHeight;
+          topPlusWinHeight.value() > screenDesktopRect.YMost()) {
+        top = screenDesktopRect.YMost() - desktopWinHeight;
       }
-      if (top < screenTop) {
-        top = screenTop;
+      if (top < screenDesktopRect.y) {
+        top = screenDesktopRect.y;
       }
 
       if (top != oldTop || left != oldLeft) {
@@ -2431,56 +2361,34 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
   // size and position the window
 
   if (positionSpecified) {
-    // Get the scale factor appropriate for the screen we're actually
-    // positioning on.
-    nsCOMPtr<nsIScreen> screen;
-    nsCOMPtr<nsIScreenManager> screenMgr(
-        do_GetService("@mozilla.org/gfx/screenmanager;1"));
-    if (screenMgr) {
-      screenMgr->ScreenForRect(left, top, 1, 1, getter_AddRefs(screen));
-    }
-    if (screen) {
-      double cssToDevPixScale, desktopToDevPixScale;
-      screen->GetDefaultCSSScaleFactor(&cssToDevPixScale);
-      screen->GetContentsScaleFactor(&desktopToDevPixScale);
-      double cssToDesktopScale = cssToDevPixScale / desktopToDevPixScale;
-      int32_t screenLeft, screenTop, screenWd, screenHt;
-      screen->GetRectDisplayPix(&screenLeft, &screenTop, &screenWd, &screenHt);
-      // Adjust by desktop-pixel origin of the target screen when scaling
-      // to convert from per-screen CSS-px coords to global desktop coords.
-      treeOwnerAsWin->SetPositionDesktopPix(
-          (left - screenLeft) * cssToDesktopScale + screenLeft,
-          (top - screenTop) * cssToDesktopScale + screenTop);
-    } else {
-      // Couldn't find screen? This shouldn't happen.
-      treeOwnerAsWin->SetPosition(left * scale, top * scale);
-    }
-    // This shouldn't be necessary, given the screen check above, but in case
-    // moving the window didn't put it where we expected (e.g. due to issues
-    // at the widget level, or whatever), let's re-fetch the scale factor for
-    // wherever it really ended up
-    treeOwnerAsWin->GetUnscaledDevicePixelsPerCSSPixel(&scale);
+    treeOwnerAsWin->SetPositionDesktopPix(left, top);
   }
+
   if (aSizeSpec.SizeSpecified()) {
+    const CSSToLayoutDeviceScale scale =
+        treeOwnerAsWin->UnscaledDevicePixelsPerCSSPixel();
+
     /* Prefer to trust the interfaces, which think in terms of pure
        chrome or content sizes. If we have a mix, use the chrome size
        adjusted by the chrome/content differences calculated earlier. */
     if (!sizeChromeWidth && !sizeChromeHeight) {
+      const LayoutDeviceIntCoord widthDevPx =
+          (CSSCoord(width) * scale).Rounded();
+      const LayoutDeviceIntCoord heightDevPx =
+          (CSSCoord(height) * scale).Rounded();
       bool hasPrimaryContent = false;
       aTreeOwner->GetHasPrimaryContent(&hasPrimaryContent);
       if (hasPrimaryContent) {
-        aTreeOwner->SetPrimaryContentSize(width * scale, height * scale);
+        aTreeOwner->SetPrimaryContentSize(widthDevPx, heightDevPx);
       } else {
-        aTreeOwner->SetRootShellSize(width * scale, height * scale);
+        aTreeOwner->SetRootShellSize(widthDevPx, heightDevPx);
       }
     } else {
-      if (!sizeChromeWidth) {
-        width += chromeWidth;
-      }
-      if (!sizeChromeHeight) {
-        height += chromeHeight;
-      }
-      treeOwnerAsWin->SetSize(width * scale, height * scale, false);
+      const LayoutDeviceIntCoord widthDevPx =
+          (CSSCoord(width + extraWidth) * scale).Rounded();
+      const LayoutDeviceIntCoord heightDevPx =
+          (CSSCoord(height + extraHeight) * scale).Rounded();
+      treeOwnerAsWin->SetSize(widthDevPx, heightDevPx, false);
     }
   }
 
@@ -2498,7 +2406,6 @@ void nsWindowWatcher::SizeOpenedWindow(nsIDocShellTreeOwner* aTreeOwner,
 int32_t nsWindowWatcher::GetWindowOpenLocation(nsPIDOMWindowOuter* aParent,
                                                uint32_t aChromeFlags,
                                                bool aCalledFromJS,
-                                               bool aWidthSpecified,
                                                bool aIsForPrinting) {
   // These windows are not actually visible to the user, so we return the thing
   // that we can always handle.
@@ -2554,16 +2461,16 @@ int32_t nsWindowWatcher::GetWindowOpenLocation(nsPIDOMWindowOuter* aParent,
     }
 
     if (restrictionPref == 2) {
-      // Only continue if there are no width feature and no special
-      // chrome flags - with the exception of the remoteness and private flags,
-      // which might have been automatically flipped by Gecko.
+      // Only continue if there is no special chrome flags - with the exception
+      // of the remoteness and private flags, which might have been
+      // automatically flipped by Gecko.
       int32_t uiChromeFlags = aChromeFlags;
       uiChromeFlags &= ~(nsIWebBrowserChrome::CHROME_REMOTE_WINDOW |
                          nsIWebBrowserChrome::CHROME_FISSION_WINDOW |
                          nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW |
                          nsIWebBrowserChrome::CHROME_NON_PRIVATE_WINDOW |
                          nsIWebBrowserChrome::CHROME_PRIVATE_LIFETIME);
-      if (uiChromeFlags != nsIWebBrowserChrome::CHROME_ALL || aWidthSpecified) {
+      if (uiChromeFlags != nsIWebBrowserChrome::CHROME_ALL) {
         return nsIBrowserDOMWindow::OPEN_NEWWINDOW;
       }
     }

@@ -8,6 +8,7 @@
 #define jit_BacktrackingAllocator_h
 
 #include "mozilla/Array.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 
 #include "ds/PriorityQueue.h"
@@ -174,6 +175,7 @@ using UsePositionIterator = InlineForwardListIterator<UsePosition>;
 // These smaller bundles are then allocated independently.
 
 class LiveBundle;
+class VirtualRegister;
 
 class LiveRange : public TempObject {
  public:
@@ -219,9 +221,9 @@ class LiveRange : public TempObject {
   };
 
  private:
-  // The virtual register this range is for, or zero if this does not have a
+  // The virtual register this range is for, or nullptr if this does not have a
   // virtual register (for example, it is in the callRanges bundle).
-  uint32_t vreg_;
+  VirtualRegister* vreg_;
 
   // The bundle containing this range, null if liveness information is being
   // constructed and we haven't started allocating bundles yet.
@@ -246,7 +248,7 @@ class LiveRange : public TempObject {
   // Whether this range contains the virtual register's definition.
   bool hasDefinition_;
 
-  LiveRange(uint32_t vreg, Range range)
+  LiveRange(VirtualRegister* vreg, Range range)
       : vreg_(vreg),
         bundle_(nullptr),
         range_(range),
@@ -262,16 +264,16 @@ class LiveRange : public TempObject {
   void noteRemovedUse(UsePosition* use);
 
  public:
-  static LiveRange* FallibleNew(TempAllocator& alloc, uint32_t vreg,
+  static LiveRange* FallibleNew(TempAllocator& alloc, VirtualRegister* vreg,
                                 CodePosition from, CodePosition to) {
     return new (alloc.fallible()) LiveRange(vreg, Range(from, to));
   }
 
-  uint32_t vreg() const {
+  VirtualRegister& vreg() const {
     MOZ_ASSERT(hasVreg());
-    return vreg_;
+    return *vreg_;
   }
-  bool hasVreg() const { return vreg_ != 0; }
+  bool hasVreg() const { return vreg_ != nullptr; }
 
   LiveBundle* bundle() const { return bundle_; }
 
@@ -362,6 +364,14 @@ class SpillSet : public TempObject {
   void setAllocation(LAllocation alloc);
 };
 
+#ifdef JS_JITSPEW
+// See comment on LiveBundle::debugId_ just below.  This needs to be atomic
+// because TSan automation runs on debug builds will otherwise (correctly)
+// report a race.
+static mozilla::Atomic<uint32_t> LiveBundle_debugIdCounter =
+    mozilla::Atomic<uint32_t>{0};
+#endif
+
 // A set of live ranges which are all pairwise disjoint. The register allocator
 // attempts to find allocations for an entire bundle, and if it fails the
 // bundle will be broken into smaller ones which are allocated independently.
@@ -381,8 +391,19 @@ class LiveBundle : public TempObject {
   // will not be split.
   LiveBundle* spillParent_;
 
+#ifdef JS_JITSPEW
+  // This is used only for debug-printing bundles.  It gives them an
+  // identifiable identity in the debug output, which they otherwise wouldn't
+  // have.
+  uint32_t debugId_;
+#endif
+
   LiveBundle(SpillSet* spill, LiveBundle* spillParent)
-      : spill_(spill), spillParent_(spillParent) {}
+      : spill_(spill), spillParent_(spillParent) {
+#ifdef JS_JITSPEW
+    debugId_ = LiveBundle_debugIdCounter++;
+#endif
+  }
 
  public:
   static LiveBundle* FallibleNew(TempAllocator& alloc, SpillSet* spill,
@@ -403,7 +424,7 @@ class LiveBundle : public TempObject {
     ranges_.removeAndIncrement(iter);
   }
   void addRange(LiveRange* range);
-  [[nodiscard]] bool addRange(TempAllocator& alloc, uint32_t vreg,
+  [[nodiscard]] bool addRange(TempAllocator& alloc, VirtualRegister* vreg,
                               CodePosition from, CodePosition to);
   [[nodiscard]] bool addRangeAndDistributeUses(TempAllocator& alloc,
                                                LiveRange* oldRange,
@@ -420,6 +441,8 @@ class LiveBundle : public TempObject {
   LiveBundle* spillParent() const { return spillParent_; }
 
 #ifdef JS_JITSPEW
+  uint32_t debugId() const { return debugId_; }
+
   // Return a string describing this bundle.
   UniqueChars toString() const;
 #endif
@@ -656,6 +679,9 @@ class BacktrackingAllocator : protected RegisterAllocator {
                                          LiveBundle* bundle, bool* success,
                                          bool* pfixed,
                                          LiveBundleVector& conflicting);
+  [[nodiscard]] bool tryAllocateAnyRegister(LiveBundle* bundle, bool* success,
+                                            bool* pfixed,
+                                            LiveBundleVector& conflicting);
   [[nodiscard]] bool evictBundle(LiveBundle* bundle);
   [[nodiscard]] bool splitAndRequeueBundles(LiveBundle* bundle,
                                             const LiveBundleVector& newBundles);
@@ -760,7 +786,8 @@ class BacktrackingAllocator : protected RegisterAllocator {
 
   bool compilingWasm() { return mir->outerInfo().compilingWasm(); }
 
-  void dumpVregs(const char* who);
+  void dumpLiveRangesByVReg(const char* who);
+  void dumpLiveRangesByBundle(const char* who);
 };
 
 }  // namespace jit

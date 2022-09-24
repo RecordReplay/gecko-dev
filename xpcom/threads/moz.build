@@ -18,6 +18,7 @@ XPIDL_SOURCES += [
     "nsIThreadInternal.idl",
     "nsIThreadManager.idl",
     "nsIThreadPool.idl",
+    "nsIThreadShutdown.idl",
     "nsITimer.idl",
 ]
 
@@ -30,9 +31,9 @@ XPCOM_MANIFESTS += [
 EXPORTS += [
     "MainThreadUtils.h",
     "nsICancelableRunnable.h",
-    "nsIDelayedRunnableObserver.h",
     "nsIDiscardableRunnable.h",
     "nsIIdleRunnable.h",
+    "nsITargetShutdownTask.h",
     "nsMemoryPressure.h",
     "nsProcess.h",
     "nsProxyRelease.h",
@@ -51,6 +52,7 @@ EXPORTS.mozilla += [
     "DeadlockDetector.h",
     "DelayedRunnable.h",
     "EventQueue.h",
+    "EventTargetCapability.h",
     "IdlePeriodState.h",
     "IdleTaskRunner.h",
     "InputTaskManager.h",

@@ -179,10 +179,13 @@ bool nsHTTPSOnlyUtils::ShouldUpgradeRequest(nsIURI* aURI,
   NS_ConvertUTF8toUTF16 reportSpec(aURI->GetSpecOrDefault());
   NS_ConvertUTF8toUTF16 reportScheme(scheme);
 
+  bool isSpeculative = aLoadInfo->GetExternalContentPolicyType() ==
+                       ExtContentPolicy::TYPE_SPECULATIVE;
   AutoTArray<nsString, 2> params = {reportSpec, reportScheme};
-  nsHTTPSOnlyUtils::LogLocalizedString("HTTPSOnlyUpgradeRequest", params,
-                                       nsIScriptError::warningFlag, aLoadInfo,
-                                       aURI);
+  nsHTTPSOnlyUtils::LogLocalizedString(
+      isSpeculative ? "HTTPSOnlyUpgradeSpeculativeConnection"
+                    : "HTTPSOnlyUpgradeRequest",
+      params, nsIScriptError::warningFlag, aLoadInfo, aURI);
 
   // If the status was not determined before, we now indicate that the request
   // will get upgraded, but no event-listener has been registered yet.
@@ -217,6 +220,12 @@ bool nsHTTPSOnlyUtils::ShouldUpgradeWebSocket(nsIURI* aURI,
     nsHTTPSOnlyUtils::LogLocalizedString("HTTPSOnlyNoUpgradeException", params,
                                          nsIScriptError::infoFlag, aLoadInfo,
                                          aURI);
+    return false;
+  }
+
+  // All subresources of an exempt triggering principal are also exempt.
+  if (!aLoadInfo->TriggeringPrincipal()->IsSystemPrincipal() &&
+      TestIfPrincipalIsExempt(aLoadInfo->TriggeringPrincipal())) {
     return false;
   }
 
@@ -287,6 +296,25 @@ bool nsHTTPSOnlyUtils::IsUpgradeDowngradeEndlessLoop(
   nsAutoCString uriHost;
   aURI->GetAsciiHost(uriHost);
 
+  auto uriAndPrincipalComparator = [&](nsIPrincipal* aPrincipal) {
+    nsAutoCString principalHost;
+    aPrincipal->GetAsciiHost(principalHost);
+    bool checkPath = mozilla::StaticPrefs::
+        dom_security_https_only_check_path_upgrade_downgrade_endless_loop();
+    if (!checkPath) {
+      return uriHost.Equals(principalHost);
+    }
+
+    nsAutoCString uriPath;
+    nsresult rv = aURI->GetFilePath(uriPath);
+    if (NS_FAILED(rv)) {
+      return false;
+    }
+    nsAutoCString principalPath;
+    aPrincipal->GetFilePath(principalPath);
+    return uriHost.Equals(principalHost) && uriPath.Equals(principalPath);
+  };
+
   // 6. Check actual redirects. If the Principal that kicked off the
   // load/redirect is not https, then it's definitely not a redirect cause by
   // https-only. If the scheme of the principal however is https and the
@@ -297,12 +325,9 @@ bool nsHTTPSOnlyUtils::IsUpgradeDowngradeEndlessLoop(
     nsCOMPtr<nsIPrincipal> redirectPrincipal;
     for (nsIRedirectHistoryEntry* entry : aLoadInfo->RedirectChain()) {
       entry->GetPrincipal(getter_AddRefs(redirectPrincipal));
-      if (redirectPrincipal && redirectPrincipal->SchemeIs("https")) {
-        nsAutoCString redirectHost;
-        redirectPrincipal->GetAsciiHost(redirectHost);
-        if (uriHost.Equals(redirectHost)) {
-          return true;
-        }
+      if (redirectPrincipal && redirectPrincipal->SchemeIs("https") &&
+          uriAndPrincipalComparator(redirectPrincipal)) {
+        return true;
       }
     }
   } else {
@@ -325,9 +350,8 @@ bool nsHTTPSOnlyUtils::IsUpgradeDowngradeEndlessLoop(
   if (!triggeringPrincipal->SchemeIs("https")) {
     return false;
   }
-  nsAutoCString triggeringHost;
-  triggeringPrincipal->GetAsciiHost(triggeringHost);
-  return uriHost.Equals(triggeringHost);
+
+  return uriAndPrincipalComparator(triggeringPrincipal);
 }
 
 /* static */
@@ -339,9 +363,10 @@ bool nsHTTPSOnlyUtils::ShouldUpgradeHttpsFirstRequest(nsIURI* aURI,
     return false;
   }
 
-  // 2. HTTPS-First only upgrades top-level loads
-  if (aLoadInfo->GetExternalContentPolicyType() !=
-      ExtContentPolicy::TYPE_DOCUMENT) {
+  // 2. HTTPS-First only upgrades top-level loads (and speculative connections)
+  ExtContentPolicyType contentType = aLoadInfo->GetExternalContentPolicyType();
+  if (contentType != ExtContentPolicy::TYPE_DOCUMENT &&
+      contentType != ExtContentPolicy::TYPE_SPECULATIVE) {
     return false;
   }
 
@@ -399,10 +424,12 @@ bool nsHTTPSOnlyUtils::ShouldUpgradeHttpsFirstRequest(nsIURI* aURI,
   NS_ConvertUTF8toUTF16 reportSpec(aURI->GetSpecOrDefault());
   NS_ConvertUTF8toUTF16 reportScheme(scheme);
 
+  bool isSpeculative = contentType == ExtContentPolicy::TYPE_SPECULATIVE;
   AutoTArray<nsString, 2> params = {reportSpec, reportScheme};
-  nsHTTPSOnlyUtils::LogLocalizedString("HTTPSOnlyUpgradeRequest", params,
-                                       nsIScriptError::warningFlag, aLoadInfo,
-                                       aURI, true);
+  nsHTTPSOnlyUtils::LogLocalizedString(
+      isSpeculative ? "HTTPSOnlyUpgradeSpeculativeConnection"
+                    : "HTTPSOnlyUpgradeRequest",
+      params, nsIScriptError::warningFlag, aLoadInfo, aURI, true);
 
   // Set flag so we know that we upgraded the request
   httpsOnlyStatus |= nsILoadInfo::HTTPS_ONLY_UPGRADED_HTTPS_FIRST;
@@ -445,7 +472,7 @@ nsHTTPSOnlyUtils::PotentiallyDowngradeHttpsFirstRequest(nsIChannel* aChannel,
     // corresponding NS_ERROR_*.
     // To do so we convert the response status to  an nsresult error
     // Every NS_OK that is NOT an 4xx or 5xx error code won't get downgraded.
-    if (responseStatus >= 400 && responseStatus < 512) {
+    if (responseStatus >= 400 && responseStatus < 600) {
       // HttpProxyResponseToErrorCode() maps 400 and 404 on
       // the same error as a 500 status which would lead to no downgrade
       // later on. For that reason we explicit filter for 400 and 404 status
@@ -666,7 +693,7 @@ void nsHTTPSOnlyUtils::LogMessage(const nsAString& aMessage, uint32_t aFlags,
   // Allow for easy distinction in devtools code.
   nsCString category(aUseHttpsFirst ? "HTTPSFirst" : "HTTPSOnly");
 
-  uint32_t innerWindowId = aLoadInfo->GetInnerWindowID();
+  uint64_t innerWindowId = aLoadInfo->GetInnerWindowID();
   if (innerWindowId > 0) {
     // Send to content console
     nsContentUtils::ReportToConsoleByWindowID(message, aFlags, category,
@@ -959,8 +986,11 @@ TestHTTPAnswerRunnable::Notify(nsITimer* aTimer) {
   nsCOMPtr<nsIChannel> origChannel = mDocumentLoadListener->GetChannel();
   nsCOMPtr<nsILoadInfo> origLoadInfo = origChannel->LoadInfo();
   uint32_t origHttpsOnlyStatus = origLoadInfo->GetHttpsOnlyStatus();
-  if ((origHttpsOnlyStatus &
-       nsILoadInfo::HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS)) {
+  uint32_t topLevelLoadInProgress =
+      origHttpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_TOP_LEVEL_LOAD_IN_PROGRESS;
+  uint32_t downloadInProgress =
+      origHttpsOnlyStatus & nsILoadInfo::HTTPS_ONLY_DOWNLOAD_IN_PROGRESS;
+  if (topLevelLoadInProgress || downloadInProgress) {
     return NS_OK;
   }
 

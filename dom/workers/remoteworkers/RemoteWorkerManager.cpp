@@ -33,6 +33,9 @@
 
 mozilla::LazyLogModule gRemoteWorkerManagerLog("RemoteWorkerManager");
 
+#ifdef LOG
+#  undef LOG
+#endif
 #define LOG(fmt) \
   MOZ_LOG(gRemoteWorkerManagerLog, mozilla::LogLevel::Verbose, fmt)
 
@@ -95,10 +98,6 @@ bool RemoteWorkerManager::MatchRemoteType(const nsACString& processRemoteType,
   // remoteType and here we can just assert that it is not happening.
   MOZ_ASSERT(!IsWebCoopCoepRemoteType(workerRemoteType));
 
-  // For similar reasons to the ones related to COOP+COEP processes,
-  // we don't expect workerRemoteType to be set to a large allocation one.
-  MOZ_ASSERT(workerRemoteType != LARGE_ALLOCATION_REMOTE_TYPE);
-
   return processRemoteType.Equals(workerRemoteType);
 }
 
@@ -110,8 +109,8 @@ Result<nsCString, nsresult> RemoteWorkerManager::GetRemoteType(
   MOZ_ASSERT_IF(aWorkerKind == WorkerKind::WorkerKindService,
                 aPrincipal->GetIsContentPrincipal());
 
-  nsCOMPtr<nsIE10SUtils> e10sUtils =
-      do_ImportModule("resource://gre/modules/E10SUtils.jsm", "E10SUtils");
+  nsCOMPtr<nsIE10SUtils> e10sUtils = do_ImportModule(
+      "resource://gre/modules/E10SUtils.jsm", "E10SUtils", fallible);
   if (NS_WARN_IF(!e10sUtils)) {
     LOG(("GetRemoteType Abort: could not import E10SUtils"));
     return Err(NS_ERROR_DOM_ABORT_ERR);

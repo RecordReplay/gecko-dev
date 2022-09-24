@@ -8,10 +8,7 @@ function mockServicesChromeScript() {
   );
   const ALERTS_SERVICE_CONTRACT_ID = "@mozilla.org/alerts-service;1";
 
-  const { setTimeout } = ChromeUtils.import(
-    "resource://gre/modules/Timer.jsm",
-    {}
-  );
+  const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
   const registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
 
   let activeNotifications = Object.create(null);
@@ -71,10 +68,7 @@ function mockServicesChromeScript() {
 
     QueryInterface: ChromeUtils.generateQI(["nsIAlertsService"]),
 
-    createInstance: function(outer, iid) {
-      if (outer != null) {
-        throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-      }
+    createInstance: function(iid) {
       return this.QueryInterface(iid);
     },
   };

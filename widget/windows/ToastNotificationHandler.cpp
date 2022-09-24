@@ -14,9 +14,9 @@
 #include "mozilla/WindowsVersion.h"
 #include "mozilla/gfx/2D.h"
 #include "nsDirectoryServiceDefs.h"
+#include "nsIDUtils.h"
 #include "nsIStringBundle.h"
 #include "nsIURI.h"
-#include "nsIUUIDGenerator.h"
 #include "nsIWidget.h"
 #include "nsIWindowMediator.h"
 #include "nsNetUtil.h"
@@ -533,22 +533,13 @@ nsresult ToastNotificationHandler::AsyncSaveImage(imgIRequest* aRequest) {
     return rv;
   }
 
-  nsCOMPtr<nsIUUIDGenerator> idGen =
-      do_GetService("@mozilla.org/uuid-generator;1", &rv);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
   nsID uuid;
-  rv = idGen->GenerateUUIDInPlace(&uuid);
+  rv = nsID::GenerateUUIDInPlace(uuid);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
-  char uuidChars[NSID_LENGTH];
-  uuid.ToProvidedString(uuidChars);
-  // Remove the brackets at the beginning and ending of the generated UUID.
-  nsAutoCString uuidStr(Substring(uuidChars + 1, uuidChars + NSID_LENGTH - 2));
+  NSID_TrimBracketsASCII uuidStr(uuid);
   uuidStr.AppendLiteral(".bmp");
   mImageFile->AppendNative(uuidStr);
 

@@ -46,45 +46,13 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID, ColorScheme, nscolor& aResult) {
   nsresult res = NS_OK;
 
   switch (aID) {
-    case ColorID::WindowBackground:
-      aResult = NS_RGB(0xff, 0xff, 0xff);
-      break;
-    case ColorID::WindowForeground:
-      aResult = NS_RGB(0x00, 0x00, 0x00);
-      break;
-    case ColorID::WidgetBackground:
-      aResult = NS_RGB(0xdd, 0xdd, 0xdd);
-      break;
-    case ColorID::WidgetForeground:
-      aResult = NS_RGB(0x00, 0x00, 0x00);
-      break;
-    case ColorID::WidgetSelectBackground:
-      aResult = NS_RGB(0x80, 0x80, 0x80);
-      break;
-    case ColorID::WidgetSelectForeground:
-      aResult = NS_RGB(0x00, 0x00, 0x80);
-      break;
-    case ColorID::Widget3DHighlight:
-      aResult = NS_RGB(0xa0, 0xa0, 0xa0);
-      break;
-    case ColorID::Widget3DShadow:
-      aResult = NS_RGB(0x40, 0x40, 0x40);
-      break;
-    case ColorID::TextBackground:
-      aResult = NS_RGB(0xff, 0xff, 0xff);
-      break;
-    case ColorID::TextForeground:
-      aResult = NS_RGB(0x00, 0x00, 0x00);
-      break;
-    case ColorID::TextSelectBackground:
-    case ColorID::Highlight:  // CSS2 color
+    case ColorID::Highlight:
       aResult = NS_RGB(0xaa, 0xaa, 0xaa);
       break;
     case ColorID::MozMenuhover:
       aResult = NS_RGB(0xee, 0xee, 0xee);
       break;
-    case ColorID::TextSelectForeground:
-    case ColorID::Highlighttext:  // CSS2 color
+    case ColorID::Highlighttext:
     case ColorID::MozMenuhovertext:
       aResult = mColorTextSelectForeground;
       break;
@@ -199,7 +167,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID, ColorScheme, nscolor& aResult) {
       break;
     case ColorID::MozDialogtext:
     case ColorID::MozCellhighlighttext:
-    case ColorID::MozHtmlCellhighlighttext:
+    case ColorID::Selecteditemtext:
     case ColorID::MozColheadertext:
     case ColorID::MozColheaderhovertext:
       aResult = mColorDarkText;
@@ -231,7 +199,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID, ColorScheme, nscolor& aResult) {
       aResult = NS_RGB(0xDC, 0xDC, 0xDC);
       break;
     case ColorID::MozCellhighlight:
-    case ColorID::MozHtmlCellhighlight:
+    case ColorID::Selecteditem:
     case ColorID::MozMacSecondaryhighlight:
       // For inactive list selection
       aResult = NS_RGB(0xaa, 0xaa, 0xaa);
@@ -247,6 +215,11 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID, ColorScheme, nscolor& aResult) {
     case ColorID::MozNativehyperlinktext:
       // There appears to be no available system defined color. HARDCODING to the appropriate color.
       aResult = NS_RGB(0x14, 0x4F, 0xAE);
+      break;
+    case ColorID::MozNativevisitedhyperlinktext:
+      // Safari defaults to the MacOS color implementation for visited links, which in turn uses
+      // systemPurpleColor, so we do the same here.
+      aResult = GetColorFromUIColor([UIColor systemPurpleColor]);
       break;
     default:
       NS_WARNING("Someone asked nsILookAndFeel for a color I don't know about");

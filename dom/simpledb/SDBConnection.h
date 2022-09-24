@@ -36,9 +36,9 @@ class SDBRequest;
 class SDBRequestParams;
 
 class SDBConnection final : public nsISDBConnection {
-  typedef mozilla::dom::quota::PersistenceType PersistenceType;
-  typedef mozilla::ipc::PBackgroundChild PBackgroundChild;
-  typedef mozilla::ipc::PrincipalInfo PrincipalInfo;
+  using PersistenceType = mozilla::dom::quota::PersistenceType;
+  using PBackgroundChild = mozilla::ipc::PBackgroundChild;
+  using PrincipalInfo = mozilla::ipc::PrincipalInfo;
 
   nsCOMPtr<nsISDBCloseCallback> mCloseCallback;
 
@@ -52,7 +52,7 @@ class SDBConnection final : public nsISDBConnection {
   bool mAllowedToClose;
 
  public:
-  static nsresult Create(nsISupports* aOuter, REFNSIID aIID, void** aResult);
+  static nsresult Create(REFNSIID aIID, void** aResult);
 
   void AssertIsOnOwningThread() const { NS_ASSERT_OWNINGTHREAD(SDBConnection); }
 

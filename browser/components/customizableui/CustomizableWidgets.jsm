@@ -36,14 +36,13 @@ const kPrefCustomizationDebug = "browser.uiCustomization.debug";
 const kPrefScreenshots = "extensions.screenshots.disabled";
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let scope = {};
-  ChromeUtils.import("resource://gre/modules/Console.jsm", scope);
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
   let debug = Services.prefs.getBoolPref(kPrefCustomizationDebug, false);
   let consoleOptions = {
     maxLogLevel: debug ? "all" : "log",
     prefix: "CustomizableWidgets",
   };
-  return new scope.ConsoleAPI(consoleOptions);
+  return new ConsoleAPI(consoleOptions);
 });
 
 XPCOMUtils.defineLazyPreferenceGetter(
@@ -135,7 +134,7 @@ const CustomizableWidgets = [
 
       PanelMultiView.getViewNode(
         document,
-        "appMenuRestoreSession"
+        "appMenu-restoreSession"
       ).hidden = !SessionStore.canRestoreLastSession;
 
       // We restrict the amount of results to 42. Not 50, but 42. Why? Because 42.
@@ -233,11 +232,20 @@ const CustomizableWidgets = [
   },
   {
     id: "save-page-button",
+    l10nId: "toolbar-button-save-page",
     shortcutId: "key_savePage",
-    tooltiptext: "save-page-button.tooltiptext3",
     onCommand(aEvent) {
       let win = aEvent.target.ownerGlobal;
       win.saveBrowser(win.gBrowser.selectedBrowser);
+    },
+  },
+  {
+    id: "print-button",
+    l10nId: "navbar-print",
+    shortcutId: "printKb",
+    keepBroadcastAttributesWhenCustomizing: true,
+    onCreated(aNode) {
+      aNode.setAttribute("command", "cmd_printPreviewToggle");
     },
   },
   {
@@ -253,8 +261,8 @@ const CustomizableWidgets = [
   },
   {
     id: "open-file-button",
+    l10nId: "toolbar-button-open-file",
     shortcutId: "openFileKb",
-    tooltiptext: "open-file-button.tooltiptext3",
     onCommand(aEvent) {
       let win = aEvent.target.ownerGlobal;
       win.BrowserOpenFileWindow();
@@ -438,10 +446,60 @@ const CustomizableWidgets = [
   },
   {
     id: "email-link-button",
-    tooltiptext: "email-link-button.tooltiptext3",
+    l10nId: "toolbar-button-email-link",
     onCommand(aEvent) {
       let win = aEvent.view;
       win.MailIntegration.sendLinkForBrowser(win.gBrowser.selectedBrowser);
+    },
+  },
+  {
+    id: "firefox-view-button",
+    l10nId: "toolbar-button-firefox-view",
+    defaultArea: CustomizableUI.AREA_TABSTRIP,
+    introducedInVersion: Services.prefs.getBoolPref("browser.tabs.firefox-view")
+      ? "pref"
+      : 0,
+    onBeforeCreated() {
+      return Services.prefs.getBoolPref("browser.tabs.firefox-view");
+    },
+    onCommand(e) {
+      let button = e.target;
+      if (button.hasAttribute("open")) {
+        return;
+      }
+      let window = button.ownerGlobal;
+      let tabbrowser = window.gBrowser;
+      let tab = window.gFirefoxViewTab;
+      if (!tab) {
+        tab = tabbrowser.addTrustedTab("about:firefoxview", { index: 0 });
+        tabbrowser.hideTab(tab);
+        window.gFirefoxViewTab = tab;
+
+        let onTabSelect = event => {
+          button.toggleAttribute("open", event.target == tab);
+        };
+
+        let onTabClose = () => {
+          window.gFirefoxViewTab = null;
+          tabbrowser.tabContainer.removeEventListener("TabSelect", onTabSelect);
+        };
+
+        tabbrowser.tabContainer.addEventListener("TabSelect", onTabSelect);
+        tab.addEventListener("TabClose", onTabClose, { once: true });
+
+        window.addEventListener(
+          "unload",
+          () => {
+            tabbrowser.tabContainer.removeEventListener(
+              "TabSelect",
+              onTabSelect
+            );
+            tab.removeEventListener("TabClose", onTabClose);
+          },
+          { once: true }
+        );
+      }
+      tabbrowser.selectedTab = tab;
     },
   },
 ];
@@ -449,8 +507,7 @@ const CustomizableWidgets = [
 if (Services.prefs.getBoolPref("identity.fxaccounts.enabled")) {
   CustomizableWidgets.push({
     id: "sync-button",
-    label: "remotetabs-panelmenu.label",
-    tooltiptext: "remotetabs-panelmenu.tooltiptext2",
+    l10nId: "toolbar-button-synced-tabs",
     type: "view",
     viewId: "PanelUI-remotetabs",
     onViewShowing(aEvent) {
@@ -482,10 +539,20 @@ if (Services.prefs.getBoolPref("identity.fxaccounts.enabled")) {
 if (!screenshotsDisabled) {
   CustomizableWidgets.push({
     id: "screenshot-button",
+    shortcutId: "key_screenshot",
     l10nId: "screenshot-toolbarbutton",
     onCommand(aEvent) {
-      if (!SCREENSHOT_BROWSER_COMPONENT) {
-        Services.obs.notifyObservers(null, "menuitem-screenshot-extension");
+      if (SCREENSHOT_BROWSER_COMPONENT) {
+        Services.obs.notifyObservers(
+          aEvent.currentTarget.ownerGlobal,
+          "menuitem-screenshot"
+        );
+      } else {
+        Services.obs.notifyObservers(
+          null,
+          "menuitem-screenshot-extension",
+          "toolbar"
+        );
       }
     },
     onCreated(aNode) {
@@ -601,6 +668,7 @@ if (Services.prefs.getBoolPref("privacy.panicButton.enabled")) {
 if (PrivateBrowsingUtils.enabled) {
   CustomizableWidgets.push({
     id: "privatebrowsing-button",
+    l10nId: "toolbar-button-new-private-window",
     shortcutId: "key_privatebrowsing",
     onCommand(e) {
       let win = e.target.ownerGlobal;

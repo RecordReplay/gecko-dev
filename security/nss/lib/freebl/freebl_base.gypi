@@ -60,6 +60,7 @@
     'shvfy.c',
     'sysrand.c',
     'tlsprfalg.c',
+    'secmpi.c',
   ],
   'conditions': [
     [ 'OS=="linux" or OS=="android"', {
@@ -72,7 +73,7 @@
             'mpi/mp_comba.c',
           ],
           'conditions': [
-            [ 'cc_is_clang==1 and fuzz!=1 and coverage!=1', {
+            [ 'cc_is_clang==1 and fuzz!=1 and coverage!=1 and force_integrated_as!=1', {
               'cflags': [
                 '-no-integrated-as',
               ],

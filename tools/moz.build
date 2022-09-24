@@ -13,9 +13,6 @@ with Files("code-coverage/**"):
 with Files("compare-locales/mach_commands.py"):
     BUG_COMPONENT = ("Localization Infrastructure and Tools", "compare-locales")
 
-with Files("coverity/**"):
-    BUG_COMPONENT = ("Firefox Build System", "Source Code Analysis")
-
 with Files("github-sync/**"):
     BUG_COMPONENT = ("Core", "Graphics")
 
@@ -76,6 +73,7 @@ CRAMTEST_MANIFESTS += [
 ]
 
 PYTHON_UNITTEST_MANIFESTS += [
+    "fuzzing/smoke/python.ini",
     "lint/test/python.ini",
     "tryselect/test/python.ini",
 ]

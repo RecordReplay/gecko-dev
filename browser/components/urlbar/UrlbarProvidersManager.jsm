@@ -91,7 +91,7 @@ class ProvidersManager {
     // providers at the front.
     this.providers = [];
     for (let [symbol, module] of Object.entries(localProviderModules)) {
-      let { [symbol]: provider } = ChromeUtils.import(module, {});
+      let { [symbol]: provider } = ChromeUtils.import(module);
       this.registerProvider(provider);
     }
     // Tracks ongoing Query instances by queryContext.
@@ -105,7 +105,7 @@ class ProvidersManager {
     // This maps muxer names to muxers.
     this.muxers = new Map();
     for (let [symbol, module] of Object.entries(localMuxerModules)) {
-      let { [symbol]: muxer } = ChromeUtils.import(module, {});
+      let { [symbol]: muxer } = ChromeUtils.import(module);
       this.registerMuxer(muxer);
     }
   }
@@ -405,7 +405,7 @@ class Query {
               }
             }
           })
-          .catch(Cu.reportError)
+          .catch(ex => logger.error(ex))
       );
     }
 
@@ -492,13 +492,13 @@ class Query {
       provider.tryMethod("cancelQuery", this.context);
     }
     if (this._heuristicProviderTimer) {
-      this._heuristicProviderTimer.cancel().catch(Cu.reportError);
+      this._heuristicProviderTimer.cancel().catch(ex => logger.error(ex));
     }
     if (this._chunkTimer) {
-      this._chunkTimer.cancel().catch(Cu.reportError);
+      this._chunkTimer.cancel().catch(ex => logger.error(ex));
     }
     if (this._sleepTimer) {
-      this._sleepTimer.fire().catch(Cu.reportError);
+      this._sleepTimer.fire().catch(ex => logger.error(ex));
     }
   }
 
@@ -600,7 +600,7 @@ class Query {
       this._heuristicProviderTimer &&
       !this.context.pendingHeuristicProviders.size
     ) {
-      this._heuristicProviderTimer.fire().catch(Cu.reportError);
+      this._heuristicProviderTimer.fire().catch(ex => logger.error(ex));
     }
   }
 
@@ -608,12 +608,12 @@ class Query {
     this.muxer.sort(this.context);
 
     if (this._heuristicProviderTimer) {
-      this._heuristicProviderTimer.cancel().catch(Cu.reportError);
+      this._heuristicProviderTimer.cancel().catch(ex => logger.error(ex));
       this._heuristicProviderTimer = null;
     }
 
     if (this._chunkTimer) {
-      this._chunkTimer.cancel().catch(Cu.reportError);
+      this._chunkTimer.cancel().catch(ex => logger.error(ex));
       this._chunkTimer = null;
     }
 

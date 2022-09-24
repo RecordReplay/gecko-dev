@@ -1,17 +1,20 @@
 
+include "mozilla/_ipdltest/TestHangs.h";
+
 namespace mozilla {
 namespace _ipdltest {
 
+[ManualDealloc, ChildImpl="TestHangsChild", ParentImpl="TestHangsParent"]
 intr protocol PTestHangs {
 both:
-    intr StackFrame();
+    [LegacyIntr] intr StackFrame();
 
 parent:
     async Nonce();
 
 child:
     async Start();
-    intr Hang();
+    [LegacyIntr] intr Hang();
     async __delete__();
 };
 

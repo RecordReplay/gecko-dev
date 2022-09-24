@@ -12,7 +12,9 @@
 #include "GMPTimerParent.h"
 #include "MediaResult.h"
 #include "mozIGeckoMediaPluginService.h"
+#include "mozilla/dom/KeySystemNames.h"
 #include "mozilla/dom/WidevineCDMManifestBinding.h"
+#include "mozilla/FOGIPC.h"
 #include "mozilla/ipc/CrashReporterHost.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
@@ -21,6 +23,7 @@
 #endif
 #include "mozilla/Services.h"
 #include "mozilla/SSE.h"
+#include "mozilla/StaticPrefs_media.h"
 #include "mozilla/SyncRunnable.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
@@ -30,8 +33,8 @@
 #include "nsIWritablePropertyBag2.h"
 #include "nsPrintfCString.h"
 #include "nsThreadUtils.h"
+#include "ProfilerParent.h"
 #include "runnable_utils.h"
-#include "VideoUtils.h"
 #ifdef XP_WIN
 #  include "WMFDecoderModule.h"
 #endif
@@ -247,6 +250,38 @@ void GMPParent::Crash() {
   }
 }
 
+class NotifyGMPProcessLoadedTask : public Runnable {
+ public:
+  explicit NotifyGMPProcessLoadedTask(const ::base::ProcessId aProcessId,
+                                      GMPParent* aGMPParent)
+      : Runnable("NotifyGMPProcessLoadedTask"),
+        mProcessId(aProcessId),
+        mGMPParent(aGMPParent) {}
+
+  NS_IMETHOD Run() override {
+    MOZ_ASSERT(NS_IsMainThread());
+
+    nsCOMPtr<nsISerialEventTarget> gmpEventTarget =
+        mGMPParent->GMPEventTarget();
+    if (!gmpEventTarget) {
+      return NS_ERROR_FAILURE;
+    }
+
+    ipc::Endpoint<PProfilerChild> profilerParent(
+        ProfilerParent::CreateForProcess(mProcessId));
+
+    gmpEventTarget->Dispatch(
+        NewRunnableMethod<ipc::Endpoint<mozilla::PProfilerChild>&&>(
+            "GMPParent::SendInitProfiler", mGMPParent,
+            &GMPParent::SendInitProfiler, std::move(profilerParent)));
+
+    return NS_OK;
+  }
+
+  ::base::ProcessId mProcessId;
+  const RefPtr<GMPParent> mGMPParent;
+};
+
 nsresult GMPParent::LoadProcess() {
   MOZ_ASSERT(mDirectory, "Plugin directory cannot be NULL!");
   MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
@@ -317,8 +352,10 @@ nsresult GMPParent::LoadProcess() {
     }
 #endif
 
+    NS_DispatchToMainThread(new NotifyGMPProcessLoadedTask(OtherPid(), this));
+
     // Intr call to block initialization on plugin load.
-    if (!CallStartPlugin(mAdapter)) {
+    if (!SendStartPlugin(mAdapter)) {
       GMP_PARENT_LOG_DEBUG("%s: Failed to send start to child process",
                            __FUNCTION__);
       return NS_ERROR_FAILURE;
@@ -343,6 +380,12 @@ mozilla::ipc::IPCResult GMPParent::RecvPGMPContentChildDestroyed() {
   if (!IsUsed()) {
     CloseIfUnused();
   }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GMPParent::RecvFOGData(ByteBuf&& aBuf) {
+  GMP_PARENT_LOG_DEBUG("GMPParent RecvFOGData");
+  glean::FOGData(std::move(aBuf));
   return IPC_OK();
 }
 
@@ -539,9 +582,9 @@ bool GMPCapability::Supports(const nsTArray<GMPCapability>& aCapabilities,
         // file, but uses Windows Media Foundation to decode. That's not present
         // on Windows XP, and on some Vista, Windows N, and KN variants without
         // certain services packs.
-        if (tag.EqualsLiteral(EME_KEY_SYSTEM_CLEARKEY)) {
+        if (tag.EqualsLiteral(kClearKeyKeySystemName)) {
           if (capabilities.mAPIName.EqualsLiteral(GMP_API_VIDEO_DECODER)) {
-            if (!WMFDecoderModule::HasH264()) {
+            if (!WMFDecoderModule::CanCreateMFTDecoder(WMFStreamType::H264)) {
               continue;
             }
           }
@@ -659,8 +702,11 @@ bool GMPParent::DeallocPGMPStorageParent(PGMPStorageParent* aActor) {
 mozilla::ipc::IPCResult GMPParent::RecvPGMPStorageConstructor(
     PGMPStorageParent* aActor) {
   GMPStorageParent* p = (GMPStorageParent*)aActor;
-  if (NS_WARN_IF(NS_FAILED(p->Init()))) {
-    return IPC_FAIL_NO_REASON(this);
+  if (NS_FAILED(p->Init())) {
+    // TODO: Verify if this is really a good reason to IPC_FAIL.
+    // There might be shutdown edge cases here.
+    return IPC_FAIL(this,
+                    "GMPParent::RecvPGMPStorageConstructor: p->Init() failed.");
   }
   return IPC_OK();
 }
@@ -720,6 +766,20 @@ RefPtr<GenericPromise> GMPParent::ReadGMPMetaData() {
   return ReadChromiumManifestFile(manifestFile);
 }
 
+#if defined(XP_LINUX)
+static void ApplyGlibcWorkaround(nsCString& aLibs) {
+  // These glibc libraries were merged into libc.so.6 as of glibc
+  // 2.34; they now exist only as stub libraries for compatibility and
+  // newly linked code won't depend on them, so we need to ensure
+  // they're loaded for plugins that may have been linked against a
+  // different version of glibc.  (See also bug 1725828.)
+  if (!aLibs.IsEmpty()) {
+    aLibs.AppendLiteral(", ");
+  }
+  aLibs.AppendLiteral("libdl.so.2, libpthread.so.0, librt.so.1");
+}
+#endif
+
 RefPtr<GenericPromise> GMPParent::ReadGMPInfoFile(nsIFile* aFile) {
   MOZ_ASSERT(GMPEventTarget()->IsOnCurrentThread());
   GMPInfoFileParser parser;
@@ -738,6 +798,14 @@ RefPtr<GenericPromise> GMPParent::ReadGMPInfoFile(nsIFile* aFile) {
 #if defined(XP_WIN) || defined(XP_LINUX)
   // "Libraries" field is optional.
   ReadInfoField(parser, "libraries"_ns, mLibs);
+#endif
+
+#ifdef XP_LINUX
+  // The glibc workaround (see above) isn't needed for clearkey
+  // because it's built along with the browser.
+  if (!mDisplayName.EqualsASCII("clearkey")) {
+    ApplyGlibcWorkaround(mLibs);
+  }
 #endif
 
   nsTArray<nsCString> apiTokens;
@@ -842,12 +910,14 @@ RefPtr<GenericPromise> GMPParent::ParseChromiumManifest(
   }
 #endif
 
-  nsCString kEMEKeySystem;
+  GMPCapability video;
 
   // We hard code a few of the settings because they can't be stored in the
   // widevine manifest without making our API different to widevine's.
   if (mDisplayName.EqualsASCII("clearkey")) {
-    kEMEKeySystem.AssignLiteral(EME_KEY_SYSTEM_CLEARKEY);
+    video.mAPITags.AppendElement(nsCString{kClearKeyKeySystemName});
+    video.mAPITags.AppendElement(
+        nsCString{kClearKeyWithProtectionQueryKeySystemName});
 #if XP_WIN
     mLibs = nsLiteralCString(
         "dxva2.dll, evr.dll, freebl3.dll, mfh264dec.dll, mfplat.dll, "
@@ -856,16 +926,17 @@ RefPtr<GenericPromise> GMPParent::ParseChromiumManifest(
     mLibs = "libfreeblpriv3.so, libsoftokn3.so"_ns;
 #endif
   } else if (mDisplayName.EqualsASCII("WidevineCdm")) {
-    kEMEKeySystem.AssignLiteral(EME_KEY_SYSTEM_WIDEVINE);
+    video.mAPITags.AppendElement(nsCString{kWidevineKeySystemName});
 #if XP_WIN
     // psapi.dll added for GetMappedFileNameW, which could possibly be avoided
     // in future versions, see bug 1383611 for details.
-    mLibs = "dxva2.dll, psapi.dll"_ns;
+    mLibs = "dxva2.dll, ole32.dll, psapi.dll, winmm.dll"_ns;
 #endif
   } else if (mDisplayName.EqualsASCII("fake")) {
-    kEMEKeySystem.AssignLiteral("fake");
+    // The fake CDM just exposes a key system with id "fake".
+    video.mAPITags.AppendElement(nsCString{"fake"});
 #if XP_WIN
-    mLibs = "dxva2.dll"_ns;
+    mLibs = "dxva2.dll, ole32.dll"_ns;
 #endif
   } else {
     GMP_PARENT_LOG_DEBUG("%s: Unrecognized key system: %s, failing.",
@@ -874,20 +945,8 @@ RefPtr<GenericPromise> GMPParent::ParseChromiumManifest(
   }
 
 #ifdef XP_LINUX
-  // These glibc libraries were merged into libc.so.6 as of glibc
-  // 2.34; they now exist only as stub libraries for compatibility and
-  // newly linked code won't depend on them, so we need to ensure
-  // they're loaded for plugins that may have been linked against a
-  // different version of glibc.  (See also bug 1725828.)
-  if (!mDisplayName.EqualsASCII("clearkey")) {
-    if (!mLibs.IsEmpty()) {
-      mLibs.AppendLiteral(", ");
-    }
-    mLibs.AppendLiteral("libdl.so.2, libpthread.so.0, librt.so.1");
-  }
+  ApplyGlibcWorkaround(mLibs);
 #endif
-
-  GMPCapability video;
 
   nsCString codecsString = NS_ConvertUTF16toUTF8(m.mX_cdm_codecs);
   nsTArray<nsCString> codecs;
@@ -923,8 +982,6 @@ RefPtr<GenericPromise> GMPParent::ParseChromiumManifest(
 
     video.mAPITags.AppendElement(codec);
   }
-
-  video.mAPITags.AppendElement(kEMEKeySystem);
 
   video.mAPIName = nsLiteralCString(CHROMIUM_CDM_API);
   mAdapter = u"chromium"_ns;

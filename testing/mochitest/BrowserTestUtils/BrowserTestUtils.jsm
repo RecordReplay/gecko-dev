@@ -453,6 +453,22 @@ var BrowserTestUtils = {
       } else if (typeof wantLoad == "function") {
         return wantLoad(url);
       }
+
+      // HTTPS-First (Bug 1704453) TODO: In case we are waiting
+      // for an http:// URL to be loaded and https-first is enabled,
+      // then we also return true in case the backend upgraded
+      // the load to https://.
+      if (
+        BrowserTestUtils._httpsFirstEnabled &&
+        typeof wantLoad == "string" &&
+        wantLoad.startsWith("http://")
+      ) {
+        let wantLoadHttps = wantLoad.replace("http://", "https://");
+        if (wantLoadHttps == url) {
+          return true;
+        }
+      }
+
       // It's a string.
       return wantLoad == url;
     }
@@ -1013,18 +1029,15 @@ var BrowserTestUtils = {
   },
 
   /**
-   * Flush the XUL cache and open a new window to ensure
+   * Clear the stylesheet cache and open a new window to ensure
    * CSS @supports -moz-bool-pref(...) {} rules are correctly
    * applied to the browser chrome.
    *
    * @param {Object} options See BrowserTestUtils.openNewBrowserWindow
    * @returns {Promise} Resolves with the new window once it is loaded.
    */
-  async openNewWindowWithFlushedXULCacheForMozSupports(options) {
-    //
-    Services.obs.notifyObservers(null, "chrome-flush-caches");
-    await TestUtils.waitForTick();
-
+  async openNewWindowWithFlushedCacheForMozSupports(options) {
+    ChromeUtils.clearStyleSheetCache();
     return BrowserTestUtils.openNewBrowserWindow(options);
   },
 
@@ -1352,6 +1365,36 @@ var BrowserTestUtils = {
       return Promise.resolve();
     }
     return this.waitForEvent(popup, "popup" + eventSuffix);
+  },
+
+  /**
+   * Waits for the select popup to be shown. This is needed because the select
+   * dropdown is created lazily.
+   *
+   * @param {Window}
+   *        A window to expect the popup in.
+   *
+   * @return {Promise}
+   *        Resolves when the popup has been fully opened. The resolution value
+   *        is the select popup.
+   */
+  async waitForSelectPopupShown(win) {
+    let getMenulist = () =>
+      win.document.getElementById("ContentSelectDropdown");
+    let menulist = getMenulist();
+    if (!menulist) {
+      await this.waitForMutationCondition(
+        win.document,
+        { childList: true, subtree: true },
+        getMenulist
+      );
+      menulist = getMenulist();
+      if (menulist.menupopup.state == "open") {
+        return menulist.menupopup;
+      }
+    }
+    await this.waitForEvent(menulist.menupopup, "popupshown");
+    return menulist.menupopup;
   },
 
   /**
@@ -2181,7 +2224,7 @@ var BrowserTestUtils = {
    */
   waitForGlobalNotificationBar(win, notificationValue) {
     return this.waitForNotificationInNotificationBox(
-      win.gHighPriorityNotificationBox,
+      win.gNotificationBox,
       notificationValue
     );
   },
@@ -2324,8 +2367,9 @@ var BrowserTestUtils = {
   /**
    * Waits for the dialog to open, and clicks the specified button.
    *
-   * @param {string} buttonAction
-   *        The ID of the button to click ("accept", "cancel", etc).
+   * @param {string} buttonNameOrElementID
+   *        The name of the button ("accept", "cancel", etc) or element ID to
+   *        click.
    * @param {string} uri
    *        The URI of the dialog to wait for.  Defaults to the common dialog.
    * @return {Promise}
@@ -2334,7 +2378,7 @@ var BrowserTestUtils = {
    *         specified button is clicked.
    */
   async promiseAlertDialogOpen(
-    buttonAction,
+    buttonNameOrElementID,
     uri = "chrome://global/content/commonDialog.xhtml",
     options = { callback: null, isSubDialog: false }
   ) {
@@ -2357,9 +2401,12 @@ var BrowserTestUtils = {
       return win;
     }
 
-    if (buttonAction) {
+    if (buttonNameOrElementID) {
       let dialog = win.document.querySelector("dialog");
-      dialog.getButton(buttonAction).click();
+      let element =
+        dialog.getButton(buttonNameOrElementID) ||
+        win.document.getElementById(buttonNameOrElementID);
+      element.click();
     }
 
     return win;
@@ -2369,8 +2416,9 @@ var BrowserTestUtils = {
    * Waits for the dialog to open, and clicks the specified button, and waits
    * for the dialog to close.
    *
-   * @param {string} buttonAction
-   *        The ID of the button to click ("accept", "cancel", etc).
+   * @param {string} buttonNameOrElementID
+   *        The name of the button ("accept", "cancel", etc) or element ID to
+   *        click.
    * @param {string} uri
    *        The URI of the dialog to wait for.  Defaults to the common dialog.
    * @return {Promise}
@@ -2379,11 +2427,15 @@ var BrowserTestUtils = {
    *         specified button is clicked, and the dialog has been fully closed.
    */
   async promiseAlertDialog(
-    buttonAction,
+    buttonNameOrElementID,
     uri = "chrome://global/content/commonDialog.xhtml",
     options = { callback: null, isSubDialog: false }
   ) {
-    let win = await this.promiseAlertDialogOpen(buttonAction, uri, options);
+    let win = await this.promiseAlertDialogOpen(
+      buttonNameOrElementID,
+      uri,
+      options
+    );
     if (!win.docShell.browsingContext.embedderElement) {
       return this.windowClosed(win);
     }
@@ -2564,5 +2616,12 @@ var BrowserTestUtils = {
     });
   },
 };
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  BrowserTestUtils,
+  "_httpsFirstEnabled",
+  "dom.security.https_first",
+  false
+);
 
 Services.obs.addObserver(BrowserTestUtils, "test-complete");

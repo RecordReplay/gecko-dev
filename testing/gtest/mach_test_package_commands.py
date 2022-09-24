@@ -9,10 +9,8 @@ import sys
 from argparse import Namespace
 
 from mach.decorators import (
-    CommandProvider,
     Command,
 )
-from mozbuild.base import MachCommandBase
 
 here = os.path.abspath(os.path.dirname(__file__))
 parser = None
@@ -58,13 +56,7 @@ def run_gtest_desktop(context, args):
     import rungtests
 
     tester = rungtests.GTests()
-    return tester.run_gtest(
-        prog,
-        xre_path,
-        cwd,
-        utility_path=utility_path,
-        enable_webrender=args.enable_webrender,
-    )
+    return tester.run_gtest(prog, xre_path, cwd, utility_path=utility_path)
 
 
 def run_gtest_android(context, args):
@@ -99,7 +91,6 @@ def run_gtest_android(context, args):
         args.remote_test_root,
         libxul_path,
         args.symbols_path,
-        args.enable_webrender,
     )
 
 
@@ -119,15 +110,13 @@ def setup_argument_parser():
     return parser
 
 
-@CommandProvider
-class GtestCommands(MachCommandBase):
-    @Command(
-        "gtest",
-        category="testing",
-        description="Run the gtest harness.",
-        parser=setup_argument_parser,
-    )
-    def gtest(self, command_context, **kwargs):
-        self._mach_context.activate_mozharness_venv()
-        result = run_gtest(self._mach_context, **kwargs)
-        return 0 if result else 1
+@Command(
+    "gtest",
+    category="testing",
+    description="Run the gtest harness.",
+    parser=setup_argument_parser,
+)
+def gtest(command_context, **kwargs):
+    command_context._mach_context.activate_mozharness_venv()
+    result = run_gtest(command_context._mach_context, **kwargs)
+    return 0 if result else 1

@@ -16,6 +16,16 @@ about-processes-shutdown-process =
 about-processes-shutdown-tab =
     .title = Close tab
 
+# Profiler icons
+# Variables:
+#    $duration (Number) The time in seconds during which the profiler will be running.
+#                       The value will be an integer, typically less than 10.
+about-processes-profile-process =
+    .title = { $duration ->
+   [one] Profile all threads of this process for { $duration } second
+  *[other] Profile all threads of this process for { $duration } seconds
+}
+
 ## Column headers
 
 about-processes-column-name = Name
@@ -41,6 +51,7 @@ about-processes-socket-process = Network ({ $pid })
 about-processes-remote-sandbox-broker-process = Remote Sandbox Broker ({ $pid })
 about-processes-fork-server-process = Fork Server ({ $pid })
 about-processes-preallocated-process = Preallocated ({ $pid })
+about-processes-utility-process = Utility ({ $pid })
 
 # Unknown process names
 # Variables:
@@ -54,10 +65,9 @@ about-processes-unknown-process = Other: { $type } ({ $pid })
 ##    $origin (String) The domain name for this process.
 
 about-processes-web-isolated-process = { $origin } ({ $pid })
-about-processes-web-large-allocation-process = { $origin } ({ $pid }, large)
+about-processes-web-serviceworker = { $origin } ({ $pid }, serviceworker)
 about-processes-with-coop-coep-process = { $origin } ({ $pid }, cross-origin isolated)
 about-processes-web-isolated-process-private = { $origin } — Private ({ $pid })
-about-processes-web-large-allocation-process-private = { $origin } — Private ({ $pid }, large)
 about-processes-with-coop-coep-process-private = { $origin } — Private ({ $pid }, cross-origin isolated)
 
 ## Details within processes
@@ -73,7 +83,7 @@ about-processes-with-coop-coep-process-private = { $origin } — Private ({ $pid
 #    $list (String) Comma separated list of active threads.
 #                   Can be an empty string if the process is idle.
 about-processes-active-threads = { $active ->
-  [one] { $active } active thread out of { $number }: { $list }
+   [one] { $active } active thread out of { $number }: { $list }
   *[other] { $active } active threads out of { $number }: { $list }
 }
 
@@ -112,6 +122,10 @@ about-processes-frame-name-one = Subframe: { $url }
 #   $shortUrl (String) The shared prefix for the subframes in the group.
 about-processes-frame-name-many = Subframes ({ $number }): { $shortUrl }
 
+# Utility process actor names
+about-processes-utility-actor-unknown = Unknown actor
+about-processes-utility-actor-audio-decoder = Audio Decoder
+
 ## Displaying CPU (percentage and total)
 ## Variables:
 ##    $percent (Number) The percentage of CPU used by the process or thread.
@@ -128,9 +142,14 @@ about-processes-cpu = { NUMBER($percent, maximumSignificantDigits: 2, style: "pe
 # Special case: data is not available yet.
 about-processes-cpu-user-and-kernel-not-ready = (measuring)
 
+# Special case: process or thread is almost idle (using less than 0.1% of a CPU core).
+# This case only occurs on Windows where the precision of the CPU times is low.
+about-processes-cpu-almost-idle = < 0.1%
+    .title = Total CPU time: { NUMBER($total, maximumFractionDigits: 0) }{ $unit }
+
 # Special case: process or thread is currently idle.
-about-processes-cpu-idle = idle
-    .title = Total CPU time: { NUMBER($total, maximumFractionDigits: 2) }{ $unit }
+about-processes-cpu-fully-idle = idle
+    .title = Total CPU time: { NUMBER($total, maximumFractionDigits: 0) }{ $unit }
 
 ## Displaying Memory (total and delta)
 ## Variables:

@@ -35,7 +35,6 @@ enum FrameChildListID {
   kPopupList,
   kCaptionList,
   kColGroupList,
-  kSelectPopupList,
   kAbsoluteList,
   kFixedList,
   kOverflowList,
@@ -623,19 +622,19 @@ class MOZ_RAII AutoFrameListPtr final {
   nsFrameList* mFrameList;
 };
 
-namespace layout::detail {
+namespace detail {
 union AlignedFrameListBytes {
   void* ptr;
   char bytes[sizeof(nsFrameList)];
 };
 extern const AlignedFrameListBytes gEmptyFrameListBytes;
-}  // namespace layout::detail
+}  // namespace detail
 
 }  // namespace mozilla
 
 /* static */ inline const nsFrameList& nsFrameList::EmptyList() {
   return *reinterpret_cast<const nsFrameList*>(
-      &mozilla::layout::detail::gEmptyFrameListBytes);
+      &mozilla::detail::gEmptyFrameListBytes);
 }
 
 #endif /* nsFrameList_h___ */

@@ -14,13 +14,11 @@
 #include "mozilla/dom/FormData.h"
 
 #define WASM_CONTENT_TYPE "application/wasm"
-#define WASM_ALT_DATA_TYPE_V1 "wasm/machine-code/1"
 
 class nsIPrincipal;
 class nsIHttpChannel;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Document;
 class InternalRequest;
@@ -53,12 +51,21 @@ class FetchUtil final {
                                      InternalRequest& aRequest);
 
   /**
+   * The WebAssembly alt data type includes build-id, cpu-id and other relevant
+   * state that is necessary to ensure the validity of caching machine code and
+   * metadata in alt data. InitWasmAltDataType() must be called during startup
+   * before the first fetch(), ensuring that !WasmAltDataType.IsEmpty().
+   */
+  static const nsCString WasmAltDataType;
+  static void InitWasmAltDataType();
+
+  /**
    * Check that the given object is a Response and, if so, stream to the given
    * JS consumer. On any failure, this function will report an error on the
    * given JSContext before returning false. If executing in a worker, the
    * WorkerPrivate must be given.
    */
-  static bool StreamResponseToJS(JSContext* aCx, JS::HandleObject aObj,
+  static bool StreamResponseToJS(JSContext* aCx, JS::Handle<JSObject*> aObj,
                                  JS::MimeType aMimeType,
                                  JS::StreamConsumer* aConsumer,
                                  WorkerPrivate* aMaybeWorker);
@@ -72,6 +79,5 @@ class FetchUtil final {
   static void ReportJSStreamError(JSContext* aCx, size_t aErrorCode);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 #endif

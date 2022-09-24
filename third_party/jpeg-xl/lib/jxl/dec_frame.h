@@ -8,6 +8,7 @@
 
 #include <stdint.h>
 
+#include "jxl/decode.h"
 #include "lib/jxl/base/compiler_specific.h"
 #include "lib/jxl/base/data_parallel.h"
 #include "lib/jxl/base/span.h"
@@ -44,18 +45,16 @@ Status DecodeFrame(const DecompressParams& dparams,
                    const CodecMetadata& metadata,
                    const SizeConstraints* constraints, bool is_preview = false);
 
-// Leaves reader in the same state as DecodeFrame would. Used to skip preview.
-// Also updates `dec_state` with the new frame header.
-Status SkipFrame(const CodecMetadata& metadata, BitReader* JXL_RESTRICT reader,
-                 bool is_preview = false);
-
 // TODO(veluca): implement "forced drawing".
 class FrameDecoder {
  public:
   // All parameters must outlive the FrameDecoder.
   FrameDecoder(PassesDecoderState* dec_state, const CodecMetadata& metadata,
-               ThreadPool* pool)
-      : dec_state_(dec_state), pool_(pool), frame_header_(&metadata) {}
+               ThreadPool* pool, bool use_slow_rendering_pipeline)
+      : dec_state_(dec_state),
+        pool_(pool),
+        frame_header_(&metadata),
+        use_slow_rendering_pipeline_(use_slow_rendering_pipeline) {}
 
   // `constraints` must outlive the FrameDecoder if not null, or stay alive
   // until the next call to SetFrameSizeLimits.
@@ -63,6 +62,7 @@ class FrameDecoder {
     constraints_ = constraints;
   }
   void SetRenderSpotcolors(bool rsc) { render_spotcolors_ = rsc; }
+  void SetCoalescing(bool c) { coalescing_ = c; }
 
   // Read FrameHeader and table of contents from the given BitReader.
   // Also checks frame dimensions for their limits, and sets the output
@@ -71,7 +71,7 @@ class FrameDecoder {
   // on callers.
   Status InitFrame(BitReader* JXL_RESTRICT br, ImageBundle* decoded,
                    bool is_preview, bool allow_partial_frames,
-                   bool allow_partial_dc_global);
+                   bool allow_partial_dc_global, bool output_needed);
 
   struct SectionInfo {
     BitReader* JXL_RESTRICT br;
@@ -104,6 +104,20 @@ class FrameDecoder {
   // Must be called exactly once per frame, after all calls to ProcessSections.
   Status FinalizeFrame();
 
+  // Returns dependencies of this frame on reference ids as a bit mask: bits 0-3
+  // indicate reference frame 0-3 for patches and blending, bits 4-7 indicate DC
+  // frames this frame depends on. Only returns a valid result after all calls
+  // to ProcessSections are finished and before FinalizeFrame.
+  int References() const;
+
+  // Returns reference id of storage location where this frame is stored as a
+  // bit flag, or 0 if not stored.
+  // Matches the bit mask used for GetReferences: bits 0-3 indicate it is stored
+  // for patching or blending, bits 4-7 indicate DC frame.
+  // Unlike References, can be ran at any time as
+  // soon as the frame header is known.
+  static int SavedAs(const FrameHeader& header);
+
   // Returns offset of this section after the end of the TOC. The end of the TOC
   // is the byte position of the bit reader after InitFrame was called.
   const std::vector<uint64_t>& SectionOffsets() const {
@@ -118,34 +132,35 @@ class FrameDecoder {
 
   // Returns whether a DC image has been decoded, accessible at low resolution
   // at passes.shared_storage.dc_storage
-  bool HasDecodedDC() const {
-    return frame_header_.encoding == FrameEncoding::kVarDCT && finalized_dc_;
-  }
+  bool HasDecodedDC() const { return finalized_dc_; }
+  bool HasDecodedAll() const { return NumSections() == num_sections_done_; }
 
-  // If the image has default exif orientation and no
-  // blending, the current frame cannot be referenced by future frames, sets the
-  // buffer to which uint8 sRGB pixels will be decoded to.
-  // TODO(veluca): reduce this set of restrictions.
-  // If an output callback is set, this function *must not* be called.
+  // If enabled, ProcessSections will stop and return true when the DC
+  // sections have been processed, instead of starting the AC sections. This
+  // will only occur if supported (that is, flushing will produce a valid
+  // 1/8th*1/8th resolution image). The return value of true then does not mean
+  // all sections have been processed, use HasDecodedDC and HasDecodedAll
+  // to check the true finished state.
+  void SetPauseAtProgressive() { pause_at_progressive_ = true; }
+
+  // Sets the buffer to which uint8 sRGB pixels will be decoded. This is not
+  // supported for all images. If it succeeds, HasRGBBuffer() will return true.
+  // If it does not succeed, the image is decoded to the ImageBundle passed to
+  // InitFrame instead.
+  // If an output callback is set, this function *may not* be called.
+  //
+  // @param undo_orientation: if true, indicates the frame decoder should apply
+  // the exif orientation to bring the image to the intended display
+  // orientation. Performing this operation is not yet supported, so this
+  // results in not setting the buffer if the image has a non-identity EXIF
+  // orientation. When outputting to the ImageBundle, no orientation is undone.
   void MaybeSetRGB8OutputBuffer(uint8_t* rgb_output, size_t stride,
-                                bool is_rgba) const {
-    if (decoded_->metadata()->GetOrientation() != Orientation::kIdentity) {
-      return;
-    }
-    if (ImageBlender::NeedsBlending(dec_state_)) {
-      return;
-    }
-    if (frame_header_.CanBeReferenced()) {
-      return;
-    }
-    if (render_spotcolors_ &&
-        decoded_->metadata()->Find(ExtraChannel::kSpotColor)) {
-      return;
-    }
+                                bool is_rgba, bool undo_orientation) const {
+    if (!CanDoLowMemoryPath(undo_orientation)) return;
     dec_state_->rgb_output = rgb_output;
     dec_state_->rgb_output_is_rgba = is_rgba;
     dec_state_->rgb_stride = stride;
-    JXL_ASSERT(dec_state_->pixel_callback == nullptr);
+    JXL_ASSERT(!dec_state_->pixel_callback.IsPresent());
 #if !JXL_HIGH_PRECISION
     if (decoded_->metadata()->xyb_encoded &&
         dec_state_->output_encoding_info.color_encoding.IsSRGB() &&
@@ -156,27 +171,21 @@ class FrameDecoder {
 #endif
   }
 
-  // Same as MaybeSetRGB8OutputBuffer, but with a float callback.
-  // If a RGB8 output buffer is set, this function *must not* be called.
-  void MaybeSetFloatCallback(
-      const std::function<void(const float* pixels, size_t x, size_t y,
-                               size_t num_pixels)>& cb,
-      bool is_rgba) const {
-    if (decoded_->metadata()->GetOrientation() != Orientation::kIdentity) {
-      return;
-    }
-    if (frame_header_.blending_info.mode != BlendMode::kReplace ||
-        frame_header_.custom_size_or_origin) {
-      return;
-    }
-    if (frame_header_.CanBeReferenced()) {
-      return;
-    }
-    if (render_spotcolors_ &&
-        decoded_->metadata()->Find(ExtraChannel::kSpotColor)) {
-      return;
-    }
-    dec_state_->pixel_callback = cb;
+  // Same as MaybeSetRGB8OutputBuffer, but with a float callback. This is not
+  // supported for all images. If it succeeds, HasRGBBuffer() will return true.
+  // If it does not succeed, the image is decoded to the ImageBundle passed to
+  // InitFrame instead.
+  // If a RGB8 output buffer is set, this function *may not* be called.
+  //
+  // @param undo_orientation: if true, indicates the frame decoder should apply
+  // the exif orientation to bring the image to the intended display
+  // orientation. Performing this operation is not yet supported, so this
+  // results in not setting the buffer if the image has a non-identity EXIF
+  // orientation. When outputting to the ImageBundle, no orientation is undone.
+  void MaybeSetFloatCallback(const PixelCallback& pixel_callback, bool is_rgba,
+                             bool undo_orientation) const {
+    if (!CanDoLowMemoryPath(undo_orientation)) return;
+    dec_state_->pixel_callback = pixel_callback;
     dec_state_->rgb_output_is_rgba = is_rgba;
     JXL_ASSERT(dec_state_->rgb_output == nullptr);
   }
@@ -186,36 +195,55 @@ class FrameDecoder {
   // callback has been used.
   bool HasRGBBuffer() const {
     return dec_state_->rgb_output != nullptr ||
-           dec_state_->pixel_callback != nullptr;
+           dec_state_->pixel_callback.IsPresent();
   }
 
  private:
   Status ProcessDCGlobal(BitReader* br);
   Status ProcessDCGroup(size_t dc_group_id, BitReader* br);
   void FinalizeDC();
-  void AllocateOutput();
+  Status AllocateOutput();
   Status ProcessACGlobal(BitReader* br);
   Status ProcessACGroup(size_t ac_group_id, BitReader* JXL_RESTRICT* br,
                         size_t num_passes, size_t thread, bool force_draw,
                         bool dc_only);
+  void MarkSections(const SectionInfo* sections, size_t num,
+                    SectionStatus* section_status);
 
   // Allocates storage for parallel decoding using up to `num_threads` threads
   // of up to `num_tasks` tasks. The value of `thread` passed to
   // `GetStorageLocation` must be smaller than the `num_threads` value passed
   // here. The value of `task` passed to `GetStorageLocation` must be smaller
   // than the value of `num_tasks` passed here.
-  void PrepareStorage(size_t num_threads, size_t num_tasks) {
+  Status PrepareStorage(size_t num_threads, size_t num_tasks) {
     size_t storage_size = std::min(num_threads, num_tasks);
     if (storage_size > group_dec_caches_.size()) {
       group_dec_caches_.resize(storage_size);
     }
-    dec_state_->EnsureStorage(storage_size);
     use_task_id_ = num_threads > num_tasks;
+    if (dec_state_->render_pipeline) {
+      JXL_RETURN_IF_ERROR(dec_state_->render_pipeline->PrepareForThreads(
+          storage_size,
+          /*use_group_ids=*/modular_frame_decoder_.UsesFullImage() &&
+              frame_header_.encoding == FrameEncoding::kVarDCT));
+    }
+    return true;
   }
 
   size_t GetStorageLocation(size_t thread, size_t task) {
     if (use_task_id_) return task;
     return thread;
+  }
+
+  // If the image has default exif orientation (or has an orientation but should
+  // not be undone) and no blending, the current frame cannot be referenced by
+  // future frames, there are no spot colors to be rendered, and alpha is not
+  // premultiplied, then low memory options can be used
+  // (uint8 output buffer or float pixel callback).
+  // TODO(veluca): reduce this set of restrictions.
+  bool CanDoLowMemoryPath(bool undo_orientation) const {
+    return !(undo_orientation &&
+             decoded_->metadata()->GetOrientation() != Orientation::kIdentity);
   }
 
   PassesDecoderState* dec_state_;
@@ -231,15 +259,19 @@ class FrameDecoder {
   bool allow_partial_frames_;
   bool allow_partial_dc_global_;
   bool render_spotcolors_ = true;
+  bool coalescing_ = true;
 
   std::vector<uint8_t> processed_section_;
   std::vector<uint8_t> decoded_passes_per_ac_group_;
   std::vector<uint8_t> decoded_dc_groups_;
   bool decoded_dc_global_;
   bool decoded_ac_global_;
+  bool HasEverything() const;
   bool finalized_dc_ = true;
+  size_t num_sections_done_ = 0;
   bool is_finalized_ = true;
   size_t num_renders_ = 0;
+  bool allocated_ = false;
 
   std::vector<GroupDecCache> group_dec_caches_;
 
@@ -249,6 +281,11 @@ class FrameDecoder {
   // Whether or not the task id should be used for storage indexing, instead of
   // the thread id.
   bool use_task_id_ = false;
+
+  // Testing setting: whether or not to use the slow rendering pipeline.
+  bool use_slow_rendering_pipeline_;
+
+  bool pause_at_progressive_ = false;
 };
 
 }  // namespace jxl

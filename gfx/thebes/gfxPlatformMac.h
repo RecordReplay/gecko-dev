@@ -37,9 +37,6 @@ class gfxPlatformMac : public gfxPlatform {
     return (gfxPlatformMac*)gfxPlatform::GetPlatform();
   }
 
-  bool UsesTiling() const override;
-  bool ContentUsesTiling() const override;
-
   already_AddRefed<gfxASurface> CreateOffscreenSurface(
       const IntSize& aSize, gfxImageFormat aFormat) override;
 
@@ -73,7 +70,7 @@ class gfxPlatformMac : public gfxPlatform {
     return true;
   }
 
-  already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource()
+  already_AddRefed<mozilla::gfx::VsyncSource> CreateGlobalHardwareVsyncSource()
       override;
 
   // lower threshold on font anti-aliasing

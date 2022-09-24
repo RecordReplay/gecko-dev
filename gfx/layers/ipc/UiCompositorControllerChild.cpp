@@ -8,6 +8,7 @@
 
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/layers/CompositorThread.h"
+#include "mozilla/layers/SynchronousTask.h"
 #include "mozilla/layers/UiCompositorControllerMessageTypes.h"
 #include "mozilla/layers/UiCompositorControllerParent.h"
 #include "mozilla/gfx/GPUProcessManager.h"
@@ -28,8 +29,6 @@ static RefPtr<nsThread> GetUiThread() {
 }
 #endif  // defined(MOZ_WIDGET_ANDROID)
 
-static bool IsOnUiThread() { return GetUiThread()->IsOnCurrentThread(); }
-
 namespace mozilla {
 namespace layers {
 
@@ -37,9 +36,9 @@ namespace layers {
 /* static */
 RefPtr<UiCompositorControllerChild>
 UiCompositorControllerChild::CreateForSameProcess(
-    const LayersId& aRootLayerTreeId) {
+    const LayersId& aRootLayerTreeId, nsBaseWidget* aWidget) {
   RefPtr<UiCompositorControllerChild> child =
-      new UiCompositorControllerChild(0);
+      new UiCompositorControllerChild(0, aWidget);
   child->mParent = new UiCompositorControllerParent(aRootLayerTreeId);
   GetUiThread()->Dispatch(
       NewRunnableMethod(
@@ -53,9 +52,9 @@ UiCompositorControllerChild::CreateForSameProcess(
 RefPtr<UiCompositorControllerChild>
 UiCompositorControllerChild::CreateForGPUProcess(
     const uint64_t& aProcessToken,
-    Endpoint<PUiCompositorControllerChild>&& aEndpoint) {
+    Endpoint<PUiCompositorControllerChild>&& aEndpoint, nsBaseWidget* aWidget) {
   RefPtr<UiCompositorControllerChild> child =
-      new UiCompositorControllerChild(aProcessToken);
+      new UiCompositorControllerChild(aProcessToken, aWidget);
 
   RefPtr<nsIRunnable> task =
       NewRunnableMethod<Endpoint<PUiCompositorControllerChild>&&>(
@@ -156,31 +155,34 @@ bool UiCompositorControllerChild::EnableLayerUpdateNotifications(
 }
 
 void UiCompositorControllerChild::Destroy() {
-  if (!IsOnUiThread()) {
-    GetUiThread()->Dispatch(
-        NewRunnableMethod("layers::UiCompositorControllerChild::Destroy", this,
-                          &UiCompositorControllerChild::Destroy),
-        nsIThread::DISPATCH_SYNC);
-    return;
-  }
+  MOZ_ASSERT(NS_IsMainThread());
 
-  if (mWidget) {
-    // Dispatch mWidget to main thread to prevent it from being destructed by
-    // the ui thread.
-    RefPtr<nsIWidget> widget = std::move(mWidget);
-    NS_ReleaseOnMainThread("UiCompositorControllerChild::mWidget",
-                           widget.forget());
-  }
+  layers::SynchronousTask task("UiCompositorControllerChild::Destroy");
+  GetUiThread()->Dispatch(NS_NewRunnableFunction(
+      "layers::UiCompositorControllerChild::Destroy", [&]() {
+        MOZ_ASSERT(GetUiThread()->IsOnCurrentThread());
+        AutoCompleteTask complete(&task);
 
-  if (mIsOpen) {
-    // Close the underlying IPC channel.
-    PUiCompositorControllerChild::Close();
-    mIsOpen = false;
-  }
-}
+        // Clear the process token so that we don't notify the GPUProcessManager
+        // about an abnormal shutdown, thereby tearing down the GPU process.
+        mProcessToken = 0;
 
-void UiCompositorControllerChild::SetBaseWidget(nsBaseWidget* aWidget) {
-  mWidget = aWidget;
+        if (mWidget) {
+          // Dispatch mWidget to main thread to prevent it from being destructed
+          // by the ui thread.
+          RefPtr<nsIWidget> widget = std::move(mWidget);
+          NS_ReleaseOnMainThread("UiCompositorControllerChild::mWidget",
+                                 widget.forget());
+        }
+
+        if (mIsOpen) {
+          // Close the underlying IPC channel.
+          PUiCompositorControllerChild::Close();
+          mIsOpen = false;
+        }
+      }));
+
+  task.Wait();
 }
 
 bool UiCompositorControllerChild::DeallocPixelBuffer(Shmem& aMem) {
@@ -253,15 +255,15 @@ mozilla::ipc::IPCResult UiCompositorControllerChild::RecvScreenPixels(
 
 // private:
 UiCompositorControllerChild::UiCompositorControllerChild(
-    const uint64_t& aProcessToken)
-    : mIsOpen(false), mProcessToken(aProcessToken), mWidget(nullptr) {}
+    const uint64_t& aProcessToken, nsBaseWidget* aWidget)
+    : mIsOpen(false), mProcessToken(aProcessToken), mWidget(aWidget) {}
 
 UiCompositorControllerChild::~UiCompositorControllerChild() = default;
 
 void UiCompositorControllerChild::OpenForSameProcess() {
-  MOZ_ASSERT(IsOnUiThread());
+  MOZ_ASSERT(GetUiThread()->IsOnCurrentThread());
 
-  mIsOpen = Open(mParent->GetIPCChannel(), mozilla::layers::CompositorThread(),
+  mIsOpen = Open(mParent, mozilla::layers::CompositorThread(),
                  mozilla::ipc::ChildSide);
 
   if (!mIsOpen) {
@@ -278,7 +280,7 @@ void UiCompositorControllerChild::OpenForSameProcess() {
 
 void UiCompositorControllerChild::OpenForGPUProcess(
     Endpoint<PUiCompositorControllerChild>&& aEndpoint) {
-  MOZ_ASSERT(IsOnUiThread());
+  MOZ_ASSERT(GetUiThread()->IsOnCurrentThread());
 
   mIsOpen = aEndpoint.Bind(this);
 
@@ -317,6 +319,39 @@ void UiCompositorControllerChild::SendCachedValues() {
     mLayerUpdateEnabled.reset();
   }
 }
+
+#ifdef MOZ_WIDGET_ANDROID
+void UiCompositorControllerChild::SetCompositorSurfaceManager(
+    java::CompositorSurfaceManager::Param aCompositorSurfaceManager) {
+  MOZ_ASSERT(!mCompositorSurfaceManager,
+             "SetCompositorSurfaceManager must only be called once.");
+  MOZ_ASSERT(mProcessToken != 0,
+             "SetCompositorSurfaceManager must only be called for GPU process "
+             "controllers.");
+  mCompositorSurfaceManager = aCompositorSurfaceManager;
+};
+
+void UiCompositorControllerChild::OnCompositorSurfaceChanged(
+    int32_t aWidgetId, java::sdk::Surface::Param aSurface,
+    java::sdk::SurfaceControl::Param aSurfaceControl) {
+  // If mCompositorSurfaceManager is not set then there is no GPU process and
+  // we do not need to do anything.
+  if (mCompositorSurfaceManager == nullptr) {
+    return;
+  }
+
+  nsresult result = mCompositorSurfaceManager->OnSurfaceChanged(
+      aWidgetId, aSurface, aSurfaceControl);
+
+  // If our remote binder has died then notify the GPU process manager.
+  if (NS_FAILED(result)) {
+    if (mProcessToken) {
+      gfx::GPUProcessManager::Get()->NotifyRemoteActorDestroyed(mProcessToken);
+      mProcessToken = 0;
+    }
+  }
+}
+#endif
 
 }  // namespace layers
 }  // namespace mozilla

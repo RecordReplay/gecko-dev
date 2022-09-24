@@ -165,30 +165,18 @@ class GCVector {
   }
 
   bool traceWeak(JSTracer* trc) {
-    T* src = begin();
-    T* dst = begin();
-    while (src != end()) {
-      if (GCPolicy<T>::traceWeak(trc, src)) {
-        if (src != dst) {
-          *dst = std::move(*src);
-        }
-        dst++;
-      }
-      src++;
-    }
-
-    MOZ_ASSERT(dst <= end());
-    shrinkBy(end() - dst);
+    mutableEraseIf(
+        [trc](T& elem) { return !GCPolicy<T>::traceWeak(trc, &elem); });
     return !empty();
   }
 
-  bool needsSweep() const { return !this->empty(); }
-
-  void sweep() {
+  // Like eraseIf, but may mutate the contents of the vector.
+  template <typename Pred>
+  void mutableEraseIf(Pred pred) {
     T* src = begin();
     T* dst = begin();
     while (src != end()) {
-      if (!GCPolicy<T>::needsSweep(src)) {
+      if (!pred(*src)) {
         if (src != dst) {
           *dst = std::move(*src);
         }
@@ -273,15 +261,6 @@ class MutableWrappedPtrOperations<JS::GCVector<T, Capacity, AllocPolicy>,
   [[nodiscard]] bool resize(size_t aNewLength) {
     return vec().resize(aNewLength);
   }
-  [[nodiscard]] bool growByUninitialized(size_t aIncr) {
-    return vec().growByUninitialized(aIncr);
-  }
-  void infallibleGrowByUninitialized(size_t aIncr) {
-    vec().infallibleGrowByUninitialized(aIncr);
-  }
-  [[nodiscard]] bool resizeUninitialized(size_t aNewLength) {
-    return vec().resizeUninitialized(aNewLength);
-  }
   void clear() { vec().clear(); }
   void clearAndFree() { vec().clearAndFree(); }
   template <typename U>
@@ -328,10 +307,6 @@ class MutableWrappedPtrOperations<JS::GCVector<T, Capacity, AllocPolicy>,
   }
   void popBack() { vec().popBack(); }
   T popCopy() { return vec().popCopy(); }
-  template <typename U>
-  T* insert(T* aP, U&& aVal) {
-    return vec().insert(aP, std::forward<U>(aVal));
-  }
   void erase(T* aT) { vec().erase(aT); }
   void erase(T* aBegin, T* aEnd) { vec().erase(aBegin, aEnd); }
   template <typename Pred>

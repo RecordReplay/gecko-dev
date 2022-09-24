@@ -141,7 +141,9 @@ class SearchEngineSelector {
     let result = [];
     let failed = false;
     try {
-      result = await this._remoteConfig.get({ order: "id" });
+      result = await this._remoteConfig.get({
+        order: "id",
+      });
     } catch (ex) {
       logConsole.error(ex);
       failed = true;
@@ -218,12 +220,25 @@ class SearchEngineSelector {
           }
         }
 
+        let shouldInclude = () => {
+          let included =
+            "included" in section &&
+            this._isInSection(lcRegion, lcLocale, section.included);
+          let excluded =
+            "excluded" in section &&
+            this._isInSection(lcRegion, lcLocale, section.excluded);
+          return included && !excluded;
+        };
+
         const distroExcluded =
           (distroID &&
             sectionIncludes(section, "excludedDistributions", distroID)) ||
           isDistroExcluded(section, "distributions", distroID);
 
         if (distroID && !distroExcluded && section.override) {
+          if ("included" in section || "excluded" in section) {
+            return shouldInclude();
+          }
           return true;
         }
 
@@ -236,13 +251,7 @@ class SearchEngineSelector {
         ) {
           return false;
         }
-        let included =
-          "included" in section &&
-          this._isInSection(lcRegion, lcLocale, section.included);
-        let excluded =
-          "excluded" in section &&
-          this._isInSection(lcRegion, lcLocale, section.excluded);
-        return included && !excluded;
+        return shouldInclude();
       });
 
       let baseConfig = this._copyObject({}, config);
@@ -266,17 +275,9 @@ class SearchEngineSelector {
             const engine = { ...baseConfig };
             engine.webExtension = { ...baseConfig.webExtension };
             delete engine.webExtension.locales;
-            switch (webExtensionLocale) {
-              case USER_LOCALE:
-                engine.webExtension.locale = locale;
-                break;
-              case USER_REGION:
-                engine.webExtension.locale = lcRegion;
-                break;
-              default:
-                engine.webExtension.locale = webExtensionLocale;
-                break;
-            }
+            engine.webExtension.locale = webExtensionLocale
+              .replace(USER_LOCALE, locale)
+              .replace(USER_REGION, lcRegion);
             engines.push(engine);
           }
         } else {

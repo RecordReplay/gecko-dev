@@ -120,12 +120,12 @@ using namespace mozilla::a11y;
   }
 
   nsAutoString url;
-  if (mGeckoAccessible.IsAccessible()) {
-    MOZ_ASSERT(mGeckoAccessible.AsAccessible()->IsDoc());
-    DocAccessible* acc = mGeckoAccessible.AsAccessible()->AsDoc();
+  if (mGeckoAccessible->IsLocal()) {
+    MOZ_ASSERT(mGeckoAccessible->AsLocal()->IsDoc());
+    DocAccessible* acc = mGeckoAccessible->AsLocal()->AsDoc();
     acc->URL(url);
   } else {
-    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+    RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
     proxy->URL(url);
   }
 
@@ -183,15 +183,17 @@ using namespace mozilla::a11y;
     case nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE:
       [self moxPostNotification:
                 NSAccessibilityFocusedUIElementChangedNotification];
-      if ((mGeckoAccessible.IsProxy() && mGeckoAccessible.AsProxy()->IsDoc() &&
-           mGeckoAccessible.AsProxy()->AsDoc()->IsTopLevel()) ||
-          (mGeckoAccessible.IsAccessible() &&
-           !mGeckoAccessible.AsAccessible()->IsRoot() &&
-           mGeckoAccessible.AsAccessible()->AsDoc()->ParentDocument() &&
-           mGeckoAccessible.AsAccessible()
-               ->AsDoc()
-               ->ParentDocument()
-               ->IsRoot())) {
+      MOZ_ASSERT(mGeckoAccessible->IsRemote() ||
+                     mGeckoAccessible->AsLocal()->IsRoot() ||
+                     mGeckoAccessible->AsLocal()->AsDoc()->ParentDocument(),
+                 "Non-root doc without a parent!");
+      if ((mGeckoAccessible->IsRemote() &&
+           mGeckoAccessible->AsRemote()->IsDoc() &&
+           mGeckoAccessible->AsRemote()->AsDoc()->IsTopLevel()) ||
+          (mGeckoAccessible->IsLocal() &&
+           !mGeckoAccessible->AsLocal()->IsRoot() &&
+           mGeckoAccessible->AsLocal()->AsDoc()->ParentDocument() &&
+           mGeckoAccessible->AsLocal()->AsDoc()->ParentDocument()->IsRoot())) {
         // we fire an AXLoadComplete event on top-level documents only
         [self moxPostNotification:@"AXLoadComplete"];
       } else {
@@ -244,12 +246,12 @@ using namespace mozilla::a11y;
 
 - (id)rootGroup {
   NSArray* children = [super moxUnignoredChildren];
-  if (mRole != roles::APPLICATION && [children count] == 1 &&
+  if (mRole == roles::DOCUMENT && [children count] == 1 &&
       [[[children firstObject] moxUnignoredChildren] count] != 0) {
     // We only need a root group if our document:
     // (1) has multiple children, or
     // (2) a one child that is a leaf, or
-    // (3) has a role of APPLICATION
+    // (3) has a role other than the default document role
     return nil;
   }
 

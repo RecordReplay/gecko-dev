@@ -72,11 +72,11 @@ static MOZ_ALWAYS_INLINE nsresult _CallDnsQuery_A_Windows(
                                    nullptr, &dnsData, nullptr);
     if (status == DNS_INFO_NO_RECORDS || status == DNS_ERROR_RCODE_NAME_ERROR ||
         !dnsData) {
-      LOG("No DNS records found for %s. status=%X. reqFamily = %X\n",
+      LOG("No DNS records found for %s. status=%lX. reqFamily = %X\n",
           aHost.BeginReading(), status, reqFamily);
       return NS_ERROR_FAILURE;
     } else if (status != NOERROR) {
-      LOG_WARNING("DnsQuery_A failed with status %X.\n", status);
+      LOG_WARNING("DnsQuery_A failed with status %lX.\n", status);
       return NS_ERROR_UNEXPECTED;
     }
 
@@ -180,7 +180,7 @@ _DNSQuery_A_SingleLabel(const nsACString& aCanonHost, uint16_t aAddressFamily,
         addresses.AppendElement(addr);
       });
 
-  LOG("Query for: %s has %u results", aCanonHost.BeginReading(),
+  LOG("Query for: %s has %zu results", aCanonHost.BeginReading(),
       addresses.Length());
   if (addresses.IsEmpty()) {
     return NS_ERROR_UNKNOWN_HOST;
@@ -237,10 +237,13 @@ _GetAddrInfo_Portable(const nsACString& aCanonHost, uint16_t aAddressFamily,
   }
 #endif
 
+  LOG("Resolving %s using PR_GetAddrInfoByName", aCanonHost.BeginReading());
   PRAddrInfo* prai =
       PR_GetAddrInfoByName(aCanonHost.BeginReading(), aAddressFamily, prFlags);
 
   if (!prai) {
+    LOG("PR_GetAddrInfoByName returned null PR_GetError:%d PR_GetOSErrpr:%d",
+        PR_GetError(), PR_GetOSError());
     return NS_ERROR_UNKNOWN_HOST;
   }
 
@@ -255,11 +258,13 @@ _GetAddrInfo_Portable(const nsACString& aCanonHost, uint16_t aAddressFamily,
                                    filterNameCollision, canonName));
   PR_FreeAddrInfo(prai);
   if (ai->Addresses().IsEmpty()) {
+    LOG("PR_GetAddrInfoByName returned empty address list");
     return NS_ERROR_UNKNOWN_HOST;
   }
 
   ai.forget(aAddrInfo);
 
+  LOG("PR_GetAddrInfoByName resolved successfully");
   return NS_OK;
 }
 
@@ -347,6 +352,7 @@ nsresult GetAddrInfo(const nsACString& aHost, uint16_t aAddressFamily,
   // If there is an override for this host, then we synthetize a result.
   if (gOverrideService &&
       FindAddrOverride(aHost, aAddressFamily, aFlags, aAddrInfo)) {
+    LOG("Returning IP address from NativeDNSResolverOverride");
     return (*aAddrInfo)->Addresses().Length() ? NS_OK : NS_ERROR_UNKNOWN_HOST;
   }
 

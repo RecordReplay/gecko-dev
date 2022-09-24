@@ -6,7 +6,6 @@ use dtoa_short::{self, Notation};
 use itoa;
 use matches::matches;
 use std::fmt::{self, Write};
-use std::io;
 use std::str;
 
 use super::Token;
@@ -107,6 +106,8 @@ impl<'a> ToCss for Token<'a> {
                 write_numeric(value, int_value, has_sign, dest)?;
                 // Disambiguate with scientific notation.
                 let unit = &**unit;
+                // TODO(emilio): This doesn't handle e.g. 100E1m, which gets us
+                // an unit of "E1m"...
                 if unit == "e" || unit == "E" || unit.starts_with("e-") || unit.starts_with("E-") {
                     dest.write_str("\\65 ")?;
                     serialize_name(&unit[1..], dest)?;
@@ -340,34 +341,8 @@ macro_rules! impl_tocss_for_int {
             where
                 W: fmt::Write,
             {
-                struct AssumeUtf8<W: fmt::Write>(W);
-
-                impl<W: fmt::Write> io::Write for AssumeUtf8<W> {
-                    #[inline]
-                    fn write_all(&mut self, buf: &[u8]) -> io::Result<()> {
-                        // Safety: itoa only emits ASCII, which is also well-formed UTF-8.
-                        debug_assert!(buf.is_ascii());
-                        self.0
-                            .write_str(unsafe { str::from_utf8_unchecked(buf) })
-                            .map_err(|_| io::ErrorKind::Other.into())
-                    }
-
-                    #[inline]
-                    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                        self.write_all(buf)?;
-                        Ok(buf.len())
-                    }
-
-                    #[inline]
-                    fn flush(&mut self) -> io::Result<()> {
-                        Ok(())
-                    }
-                }
-
-                match itoa::write(AssumeUtf8(dest), *self) {
-                    Ok(_) => Ok(()),
-                    Err(_) => Err(fmt::Error),
-                }
+                let mut buf = itoa::Buffer::new();
+                dest.write_str(buf.format(*self))
             }
         }
     };

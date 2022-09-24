@@ -16,6 +16,7 @@
 #include "mozilla/InputTaskManager.h"
 #include "mozilla/VsyncTaskManager.h"
 #include "mozilla/IOInterposer.h"
+#include "mozilla/ProfilerRunnable.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/ScopeExit.h"
@@ -25,14 +26,6 @@
 #include "nsThread.h"
 #include "prenv.h"
 #include "prsystem.h"
-#ifdef XP_WIN
-#  include "objbase.h"
-#endif
-
-#ifdef XP_WIN
-typedef HRESULT(WINAPI* SetThreadDescriptionPtr)(HANDLE hThread,
-                                                 PCWSTR lpThreadDescription);
-#endif
 
 namespace mozilla {
 
@@ -60,7 +53,7 @@ int32_t TaskController::GetPoolThreadCount() {
     nsAutoCString name;                                                      \
     (task)->GetName(name);                                                   \
     AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING_NONSENSITIVE("Task", OTHER, name); \
-    AUTO_PROFILER_MARKER_TEXT("Runnable", OTHER, {}, name);
+    AUTO_PROFILE_FOLLOWING_RUNNABLE(name);
 #else
 #  define AUTO_PROFILE_FOLLOWING_TASK(task)
 #endif
@@ -123,10 +116,6 @@ void ThreadFuncPoolThread(void* aIndex) {
   TaskController::Get()->RunPoolThread();
 }
 
-#ifdef XP_WIN
-static SetThreadDescriptionPtr sSetThreadDescriptionFunc = nullptr;
-#endif
-
 bool TaskController::InitializeInternal() {
   InputTaskManager::Init();
   VsyncTaskManager::Init();
@@ -136,12 +125,6 @@ bool TaskController::InitializeInternal() {
   mMTBlockingProcessingRunnable = NS_NewRunnableFunction(
       "TaskController::ExecutePendingMTTasks()",
       []() { TaskController::Get()->ProcessPendingMTTask(true); });
-
-#ifdef XP_WIN
-  sSetThreadDescriptionFunc =
-      reinterpret_cast<SetThreadDescriptionPtr>(::GetProcAddress(
-          ::GetModuleHandle(L"Kernel32.dll"), "SetThreadDescription"));
-#endif
 
   return true;
 }
@@ -161,9 +144,8 @@ constexpr PRUint32 sBaseStackSize = 2048 * 1024 - 2 * 4096;
 // of that stack is significantly less than what we expect.  To offset TSan
 // stealing our stack space from underneath us, double the default.
 //
-// Note that we don't need this for ASan/MOZ_ASAN because ASan doesn't require
-// all the thread-specific state that TSan does.
-#if defined(MOZ_TSAN)
+// Similarly, ASan requires more stack space due to red-zones.
+#if defined(MOZ_TSAN) || defined(MOZ_ASAN)
 constexpr PRUint32 sStackSize = 2 * sBaseStackSize;
 #else
 constexpr PRUint32 sStackSize = sBaseStackSize;
@@ -227,23 +209,10 @@ void TaskController::RunPoolThread() {
   // to post events themselves.
   RefPtr<Task> lastTask;
 
-#ifdef XP_WIN
-  nsAutoString threadWName;
-  threadWName.AppendLiteral(u"TaskController Thread #");
-  threadWName.AppendInt(static_cast<int64_t>(mThreadPoolIndex));
-
-  if (sSetThreadDescriptionFunc) {
-    sSetThreadDescriptionFunc(
-        ::GetCurrentThread(),
-        reinterpret_cast<const WCHAR*>(threadWName.BeginReading()));
-  }
-  ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-#endif
-
   nsAutoCString threadName;
-  threadName.AppendLiteral("TaskController Thread #");
+  threadName.AppendLiteral("TaskController #");
   threadName.AppendInt(static_cast<int64_t>(mThreadPoolIndex));
-  PROFILER_REGISTER_THREAD(threadName.BeginReading());
+  AUTO_PROFILER_REGISTER_THREAD(threadName.BeginReading());
 
   MutexAutoLock lock(mGraphMutex);
   while (true) {
@@ -278,6 +247,14 @@ void TaskController::RunPoolThread() {
         mThreadableTasks.erase(task->mIterator);
         task->mIterator = mThreadableTasks.end();
         task->mInProgress = true;
+
+        if (!mThreadableTasks.empty()) {
+          // Ensure at least one additional thread is woken up if there are
+          // more threadable tasks to process. Notifying all threads at once
+          // isn't actually better for performance since they all need the
+          // GraphMutex to proceed anyway.
+          mThreadPoolCV.Notify();
+        }
 
         bool taskCompleted = false;
         {
@@ -342,10 +319,6 @@ void TaskController::RunPoolThread() {
       mThreadPoolCV.Wait();
     }
   }
-
-#ifdef XP_WIN
-  ::CoUninitialize();
-#endif
 }
 
 void TaskController::AddTask(already_AddRefed<Task>&& aTask) {
@@ -665,8 +638,14 @@ bool TaskController::HasMainThreadPendingTasks() {
   return false;
 }
 
+uint64_t TaskController::PendingMainthreadTaskCountIncludingSuspended() {
+  MutexAutoLock lock(mGraphMutex);
+  return mMainThreadTasks.size();
+}
+
 bool TaskController::ExecuteNextTaskOnlyMainThreadInternal(
     const MutexAutoLock& aProofOfLock) {
+  mGraphMutex.AssertCurrentThreadOwns();
   // Block to make it easier to jump to our cleanup.
   bool taskRan = false;
   do {
@@ -721,6 +700,8 @@ bool TaskController::ExecuteNextTaskOnlyMainThreadInternal(
     mIdleTaskManager->State().ForgetPendingTaskGuarantee();
 
     if (mMainThreadTasks.empty()) {
+      ++mRunOutOfMTTasksCounter;
+
       // XXX the IdlePeriodState API demands we have a MutexAutoUnlock for it.
       // Otherwise we could perhaps just do this after we exit the locked block,
       // by pushing the lock down into this method.  Though it's not clear that
@@ -736,6 +717,8 @@ bool TaskController::ExecuteNextTaskOnlyMainThreadInternal(
 
 bool TaskController::DoExecuteNextTaskOnlyMainThreadInternal(
     const MutexAutoLock& aProofOfLock) {
+  mGraphMutex.AssertCurrentThreadOwns();
+
   nsCOMPtr<nsIThread> mainIThread;
   NS_GetMainThread(getter_AddRefs(mainIThread));
 
@@ -875,12 +858,10 @@ bool TaskController::DoExecuteNextTaskOnlyMainThreadInternal(
         task->mDependencies.clear();
 
         if (!mThreadableTasks.empty()) {
-          // Since this could have multiple dependencies thare are not
-          // restricted to the main thread. Let's wake up our thread pool.
-          // There is a cost to this, it's possible we will want to wake up
-          // only as many threads as we have unblocked tasks, but we currently
-          // have no way to determine that easily.
-          mThreadPoolCV.NotifyAll();
+          // We're going to wake up a single thread in our pool. This thread
+          // is responsible for waking up additional threads in the situation
+          // where more than one task became available.
+          mThreadPoolCV.Notify();
         }
       }
 

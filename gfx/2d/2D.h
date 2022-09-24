@@ -136,6 +136,8 @@ struct DrawOptions {
                                      operation. */
 };
 
+struct StoredStrokeOptions;
+
 /**
  * This structure is used to send stroke options that are used in stroking
  * operations.
@@ -168,7 +170,45 @@ struct StrokeOptions {
                                   stroking begins. */
   JoinStyle mLineJoin;       //!< Join style used for joining lines.
   CapStyle mLineCap;         //!< Cap style used for capping lines.
+
+  StoredStrokeOptions* Clone() const;
+
+  bool operator==(const StrokeOptions& aOther) const {
+    return mLineWidth == aOther.mLineWidth &&
+           mMiterLimit == aOther.mMiterLimit &&
+           mDashLength == aOther.mDashLength &&
+           (!mDashLength || (mDashPattern && aOther.mDashPattern &&
+                             !memcmp(mDashPattern, aOther.mDashPattern,
+                                     mDashLength * sizeof(Float)))) &&
+           mDashOffset == aOther.mDashOffset && mLineJoin == aOther.mLineJoin &&
+           mLineCap == aOther.mLineCap;
+  }
 };
+
+/**
+ * Heap-allocated variation of StrokeOptions that ensures dash patterns are
+ * properly allocated and destroyed even if the source was stack-allocated.
+ */
+struct StoredStrokeOptions : public StrokeOptions {
+  explicit StoredStrokeOptions(const StrokeOptions& aOptions)
+      : StrokeOptions(aOptions) {
+    if (mDashLength) {
+      Float* pattern = new Float[mDashLength];
+      memcpy(pattern, mDashPattern, mDashLength * sizeof(Float));
+      mDashPattern = pattern;
+    }
+  }
+
+  ~StoredStrokeOptions() {
+    if (mDashPattern) {
+      delete[] mDashPattern;
+    }
+  }
+};
+
+inline StoredStrokeOptions* StrokeOptions::Clone() const {
+  return new StoredStrokeOptions(*this);
+}
 
 /**
  * This structure supplies additional options for calls to DrawSurface.
@@ -190,11 +230,28 @@ struct DrawSurfaceOptions {
 };
 
 /**
+ * ShadowOptions supplies options necessary for describing the appearance of a
+ * a shadow in draw calls that use shadowing.
+ */
+struct ShadowOptions {
+  explicit ShadowOptions(const DeviceColor& aColor = DeviceColor(0.0f, 0.0f,
+                                                                 0.0f),
+                         const Point& aOffset = Point(), Float aSigma = 0.0f)
+      : mColor(aColor), mOffset(aOffset), mSigma(aSigma) {}
+
+  DeviceColor mColor; /**< Color of the drawn shadow. */
+  Point mOffset;      /**< Offset of the shadow. */
+  Float mSigma;       /**< Sigma used for the Gaussian filter kernel. */
+
+  int32_t BlurRadius() const;
+};
+
+/**
  * This class is used to store gradient stops, it can only be used with a
  * matching DrawTarget. Not adhering to this condition will make a draw call
  * fail.
  */
-class GradientStops : public external::AtomicRefCounted<GradientStops> {
+class GradientStops : public SupportsThreadSafeWeakPtr<GradientStops> {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(GradientStops)
   virtual ~GradientStops() = default;
@@ -218,8 +275,36 @@ class Pattern {
 
   virtual PatternType GetType() const = 0;
 
+  /** Instantiate a new clone with the same pattern type and values. Any
+   * internal strong references will be converted to weak references. */
+  virtual Pattern* CloneWeak() const { return nullptr; }
+
+  /** Whether the pattern holds an internal weak reference. */
+  virtual bool IsWeak() const { return false; }
+
+  /** Whether any internal weak references still point to a target. */
+  virtual bool IsValid() const { return true; }
+
+  /** Determine if the pattern type and values exactly match. */
+  virtual bool operator==(const Pattern& aOther) const = 0;
+
+  bool operator!=(const Pattern& aOther) const { return !(*this == aOther); }
+
  protected:
   Pattern() = default;
+
+  // Utility functions to check if a weak reference is still valid.
+  template <typename T>
+  static inline bool IsRefValid(const RefPtr<T>& aPtr) {
+    // RefPtrs are always valid.
+    return true;
+  }
+
+  template <typename T>
+  static inline bool IsRefValid(const ThreadSafeWeakPtr<T>& aPtr) {
+    // Weak refs are only valid if they aren't dead.
+    return !aPtr.IsDead();
+  }
 };
 
 class ColorPattern : public Pattern {
@@ -230,6 +315,16 @@ class ColorPattern : public Pattern {
 
   PatternType GetType() const override { return PatternType::COLOR; }
 
+  Pattern* CloneWeak() const override { return new ColorPattern(mColor); }
+
+  bool operator==(const Pattern& aOther) const override {
+    if (aOther.GetType() != PatternType::COLOR) {
+      return false;
+    }
+    const ColorPattern& other = static_cast<const ColorPattern&>(aOther);
+    return mColor == other.mColor;
+  }
+
   DeviceColor mColor;
 };
 
@@ -238,103 +333,201 @@ class ColorPattern : public Pattern {
  * stored in a separate object and are backend dependent. This class itself
  * may be used on the stack.
  */
-class LinearGradientPattern : public Pattern {
+template <template <typename> typename REF = RefPtr>
+class LinearGradientPatternT : public Pattern {
+  typedef LinearGradientPatternT<ThreadSafeWeakPtr> Weak;
+
  public:
   /// For constructor parameter description, see member data documentation.
-  LinearGradientPattern(const Point& aBegin, const Point& aEnd,
-                        already_AddRefed<GradientStops> aStops,
-                        const Matrix& aMatrix = Matrix())
-      : mBegin(aBegin), mEnd(aEnd), mStops(aStops), mMatrix(aMatrix) {}
+  LinearGradientPatternT(const Point& aBegin, const Point& aEnd,
+                         RefPtr<GradientStops> aStops,
+                         const Matrix& aMatrix = Matrix())
+      : mBegin(aBegin),
+        mEnd(aEnd),
+        mStops(std::move(aStops)),
+        mMatrix(aMatrix) {}
 
   PatternType GetType() const override { return PatternType::LINEAR_GRADIENT; }
 
-  Point mBegin;  //!< Start of the linear gradient
-  Point mEnd;    /**< End of the linear gradient - NOTE: In the case
-                      of a zero length gradient it will act as the
-                      color of the last stop. */
-  RefPtr<GradientStops>
-      mStops;     /**< GradientStops object for this gradient, this
-                       should match the backend type of the draw
-                       target this pattern will be used with. */
-  Matrix mMatrix; /**< A matrix that transforms the pattern into
-                       user space */
+  Pattern* CloneWeak() const override {
+    return new Weak(mBegin, mEnd, do_AddRef(mStops), mMatrix);
+  }
+
+  bool IsWeak() const override {
+    return std::is_same<decltype(*this), Weak>::value;
+  }
+
+  bool IsValid() const override { return IsRefValid(mStops); }
+
+  template <template <typename> typename T>
+  bool operator==(const LinearGradientPatternT<T>& aOther) const {
+    return mBegin == aOther.mBegin && mEnd == aOther.mEnd &&
+           mStops == aOther.mStops && mMatrix.ExactlyEquals(aOther.mMatrix);
+  }
+
+  bool operator==(const Pattern& aOther) const override {
+    if (aOther.GetType() != PatternType::LINEAR_GRADIENT) {
+      return false;
+    }
+    return aOther.IsWeak()
+               ? *this == static_cast<const Weak&>(aOther)
+               : *this == static_cast<const LinearGradientPatternT<>&>(aOther);
+  }
+
+  Point mBegin;              //!< Start of the linear gradient
+  Point mEnd;                /**< End of the linear gradient - NOTE: In the case
+                                  of a zero length gradient it will act as the
+                                  color of the last stop. */
+  REF<GradientStops> mStops; /**< GradientStops object for this gradient, this
+                                  should match the backend type of the draw
+                                  target this pattern will be used with. */
+  Matrix mMatrix;            /**< A matrix that transforms the pattern into
+                                  user space */
 };
+
+typedef LinearGradientPatternT<> LinearGradientPattern;
 
 /**
  * This class is used for Radial Gradient Patterns, the gradient stops are
  * stored in a separate object and are backend dependent. This class itself
  * may be used on the stack.
  */
-class RadialGradientPattern : public Pattern {
+template <template <typename> typename REF = RefPtr>
+class RadialGradientPatternT : public Pattern {
+  typedef RadialGradientPatternT<ThreadSafeWeakPtr> Weak;
+
  public:
   /// For constructor parameter description, see member data documentation.
-  RadialGradientPattern(const Point& aCenter1, const Point& aCenter2,
-                        Float aRadius1, Float aRadius2,
-                        already_AddRefed<GradientStops> aStops,
-                        const Matrix& aMatrix = Matrix())
+  RadialGradientPatternT(const Point& aCenter1, const Point& aCenter2,
+                         Float aRadius1, Float aRadius2,
+                         RefPtr<GradientStops> aStops,
+                         const Matrix& aMatrix = Matrix())
       : mCenter1(aCenter1),
         mCenter2(aCenter2),
         mRadius1(aRadius1),
         mRadius2(aRadius2),
-        mStops(aStops),
+        mStops(std::move(aStops)),
         mMatrix(aMatrix) {}
 
   PatternType GetType() const override { return PatternType::RADIAL_GRADIENT; }
 
-  Point mCenter1;  //!< Center of the inner (focal) circle.
-  Point mCenter2;  //!< Center of the outer circle.
-  Float mRadius1;  //!< Radius of the inner (focal) circle.
-  Float mRadius2;  //!< Radius of the outer circle.
-  RefPtr<GradientStops>
-      mStops;      /**< GradientStops object for this gradient, this
-                        should match the backend type of the draw target
-                        this pattern will be used with. */
+  Pattern* CloneWeak() const override {
+    return new Weak(mCenter1, mCenter2, mRadius1, mRadius2, do_AddRef(mStops),
+                    mMatrix);
+  }
+
+  bool IsWeak() const override {
+    return std::is_same<decltype(*this), Weak>::value;
+  }
+
+  bool IsValid() const override { return IsRefValid(mStops); }
+
+  template <template <typename> typename T>
+  bool operator==(const RadialGradientPatternT<T>& aOther) const {
+    return mCenter1 == aOther.mCenter1 && mCenter2 == aOther.mCenter2 &&
+           mRadius1 == aOther.mRadius1 && mRadius2 == aOther.mRadius2 &&
+           mStops == aOther.mStops && mMatrix.ExactlyEquals(aOther.mMatrix);
+  }
+
+  bool operator==(const Pattern& aOther) const override {
+    if (aOther.GetType() != PatternType::RADIAL_GRADIENT) {
+      return false;
+    }
+    return aOther.IsWeak()
+               ? *this == static_cast<const Weak&>(aOther)
+               : *this == static_cast<const RadialGradientPatternT<>&>(aOther);
+  }
+
+  Point mCenter1;            //!< Center of the inner (focal) circle.
+  Point mCenter2;            //!< Center of the outer circle.
+  Float mRadius1;            //!< Radius of the inner (focal) circle.
+  Float mRadius2;            //!< Radius of the outer circle.
+  REF<GradientStops> mStops; /**< GradientStops object for this gradient, this
+                                  should match the backend type of the draw
+                                target this pattern will be used with. */
   Matrix mMatrix;  //!< A matrix that transforms the pattern into user space
 };
+
+typedef RadialGradientPatternT<> RadialGradientPattern;
 
 /**
  * This class is used for Conic Gradient Patterns, the gradient stops are
  * stored in a separate object and are backend dependent. This class itself
  * may be used on the stack.
  */
-class ConicGradientPattern : public Pattern {
+template <template <typename> typename REF = RefPtr>
+class ConicGradientPatternT : public Pattern {
+  typedef ConicGradientPatternT<ThreadSafeWeakPtr> Weak;
+
  public:
   /// For constructor parameter description, see member data documentation.
-  ConicGradientPattern(const Point& aCenter, Float aAngle, Float aStartOffset,
-                       Float aEndOffset, already_AddRefed<GradientStops> aStops,
-                       const Matrix& aMatrix = Matrix())
+  ConicGradientPatternT(const Point& aCenter, Float aAngle, Float aStartOffset,
+                        Float aEndOffset, RefPtr<GradientStops> aStops,
+                        const Matrix& aMatrix = Matrix())
       : mCenter(aCenter),
         mAngle(aAngle),
         mStartOffset(aStartOffset),
         mEndOffset(aEndOffset),
-        mStops(aStops),
+        mStops(std::move(aStops)),
         mMatrix(aMatrix) {}
 
   PatternType GetType() const override { return PatternType::CONIC_GRADIENT; }
 
-  Point mCenter;       //!< Center of the gradient
-  Float mAngle;        //!< Start angle of gradient
-  Float mStartOffset;  // Offset of first stop
-  Float mEndOffset;    // Offset of last stop
-  RefPtr<GradientStops>
-      mStops;      /**< GradientStops object for this gradient, this
-                        should match the backend type of the draw target
-                        this pattern will be used with. */
+  Pattern* CloneWeak() const override {
+    return new Weak(mCenter, mAngle, mStartOffset, mEndOffset,
+                    do_AddRef(mStops), mMatrix);
+  }
+
+  bool IsWeak() const override {
+    return std::is_same<decltype(*this), Weak>::value;
+  }
+
+  bool IsValid() const override { return IsRefValid(mStops); }
+
+  template <template <typename> typename T>
+  bool operator==(const ConicGradientPatternT<T>& aOther) const {
+    return mCenter == aOther.mCenter && mAngle == aOther.mAngle &&
+           mStartOffset == aOther.mStartOffset &&
+           mEndOffset == aOther.mEndOffset && mStops == aOther.mStops &&
+           mMatrix.ExactlyEquals(aOther.mMatrix);
+  }
+
+  bool operator==(const Pattern& aOther) const override {
+    if (aOther.GetType() != PatternType::CONIC_GRADIENT) {
+      return false;
+    }
+    return aOther.IsWeak()
+               ? *this == static_cast<const Weak&>(aOther)
+               : *this == static_cast<const ConicGradientPatternT<>&>(aOther);
+  }
+
+  Point mCenter;             //!< Center of the gradient
+  Float mAngle;              //!< Start angle of gradient
+  Float mStartOffset;        // Offset of first stop
+  Float mEndOffset;          // Offset of last stop
+  REF<GradientStops> mStops; /**< GradientStops object for this gradient, this
+                                  should match the backend type of the draw
+                                target this pattern will be used with. */
   Matrix mMatrix;  //!< A matrix that transforms the pattern into user space
 };
+
+typedef ConicGradientPatternT<> ConicGradientPattern;
 
 /**
  * This class is used for Surface Patterns, they wrap a surface and a
  * repetition mode for the surface. This may be used on the stack.
  */
-class SurfacePattern : public Pattern {
+template <template <typename> typename REF = RefPtr>
+class SurfacePatternT : public Pattern {
+  typedef SurfacePatternT<ThreadSafeWeakPtr> Weak;
+
  public:
   /// For constructor parameter description, see member data documentation.
-  SurfacePattern(SourceSurface* aSourceSurface, ExtendMode aExtendMode,
-                 const Matrix& aMatrix = Matrix(),
-                 SamplingFilter aSamplingFilter = SamplingFilter::GOOD,
-                 const IntRect& aSamplingRect = IntRect())
-      : mSurface(aSourceSurface),
+  SurfacePatternT(RefPtr<SourceSurface> aSourceSurface, ExtendMode aExtendMode,
+                  const Matrix& aMatrix = Matrix(),
+                  SamplingFilter aSamplingFilter = SamplingFilter::GOOD,
+                  const IntRect& aSamplingRect = IntRect())
+      : mSurface(std::move(aSourceSurface)),
         mExtendMode(aExtendMode),
         mSamplingFilter(aSamplingFilter),
         mMatrix(aMatrix),
@@ -342,9 +535,37 @@ class SurfacePattern : public Pattern {
 
   PatternType GetType() const override { return PatternType::SURFACE; }
 
-  RefPtr<SourceSurface> mSurface;  //!< Surface to use for drawing
-  ExtendMode mExtendMode; /**< This determines how the image is extended
-                               outside the bounds of the image */
+  Pattern* CloneWeak() const override {
+    return new Weak(do_AddRef(mSurface), mExtendMode, mMatrix, mSamplingFilter,
+                    mSamplingRect);
+  }
+
+  bool IsWeak() const override {
+    return std::is_same<decltype(*this), Weak>::value;
+  }
+
+  bool IsValid() const override { return IsRefValid(mSurface); }
+
+  template <template <typename> typename T>
+  bool operator==(const SurfacePatternT<T>& aOther) const {
+    return mSurface == aOther.mSurface && mExtendMode == aOther.mExtendMode &&
+           mSamplingFilter == aOther.mSamplingFilter &&
+           mMatrix.ExactlyEquals(aOther.mMatrix) &&
+           mSamplingRect.IsEqualEdges(aOther.mSamplingRect);
+  }
+
+  bool operator==(const Pattern& aOther) const override {
+    if (aOther.GetType() != PatternType::SURFACE) {
+      return false;
+    }
+    return aOther.IsWeak()
+               ? *this == static_cast<const Weak&>(aOther)
+               : *this == static_cast<const SurfacePatternT<>&>(aOther);
+  }
+
+  REF<SourceSurface> mSurface;  //!< Surface to use for drawing
+  ExtendMode mExtendMode;       /**< This determines how the image is extended
+                                     outside the bounds of the image */
   SamplingFilter
       mSamplingFilter;  //!< Resampling filter for resampling the image.
   Matrix mMatrix;       //!< Transforms the pattern into user space
@@ -354,8 +575,9 @@ class SurfacePattern : public Pattern {
                               specified. */
 };
 
+typedef SurfacePatternT<> SurfacePattern;
+
 class StoredPattern;
-class DrawTargetCaptureImpl;
 
 static const int32_t kReasonableSurfaceSize = 8192;
 
@@ -369,7 +591,7 @@ static const int32_t kReasonableSurfaceSize = 8192;
  * used on random threads now. This will be fixed in the future. Eventually
  * all SourceSurface should be thread-safe.
  */
-class SourceSurface : public external::AtomicRefCounted<SourceSurface> {
+class SourceSurface : public SupportsThreadSafeWeakPtr<SourceSurface> {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(SourceSurface)
   virtual ~SourceSurface() = default;
@@ -485,14 +707,7 @@ class SourceSurface : public external::AtomicRefCounted<SourceSurface> {
   void RemoveUserData(UserDataKey* key) { mUserData.RemoveAndDestroy(key); }
 
  protected:
-  friend class DrawTargetCaptureImpl;
   friend class StoredPattern;
-
-  // This is for internal use, it ensures the SourceSurface's data remains
-  // valid during the lifetime of the SourceSurface.
-  // @todo XXX - We need something better here :(. But we may be able to get rid
-  // of CreateWrappingDataSourceSurface in the future.
-  virtual void GuaranteePersistance() {}
 
   UserData mUserData;
 };
@@ -759,6 +974,14 @@ class Path : public external::AtomicRefCounted<Path> {
   virtual Rect GetStrokedBounds(const StrokeOptions& aStrokeOptions,
                                 const Matrix& aTransform = Matrix()) const = 0;
 
+  /** Gets conservative bounds for the path, optionally stroked or transformed.
+   * This function will prioritize speed of computation over tightness of the
+   * computed bounds if the backend supports the distinction.
+   */
+  virtual Rect GetFastBounds(
+      const Matrix& aTransform = Matrix(),
+      const StrokeOptions* aStrokeOptions = nullptr) const;
+
   /** Take the contents of this path and stream it to another sink, this works
    * regardless of the backend that might be used for the destination sink.
    */
@@ -867,16 +1090,16 @@ class SharedFTFace : public external::AtomicRefCounted<SharedFTFace> {
    * If no owner is given, then the user should avoid modifying any state on
    * the face so as not to invalidate the prior owner's modification.
    */
-  bool Lock(void* aOwner = nullptr) {
+  bool Lock(const void* aOwner = nullptr) CAPABILITY_ACQUIRE(mLock) {
     mLock.Lock();
     return !aOwner || mLastLockOwner.exchange(aOwner) == aOwner;
   }
-  void Unlock() { mLock.Unlock(); }
+  void Unlock() CAPABILITY_RELEASE(mLock) { mLock.Unlock(); }
 
   /** Should be called when a lock owner is destroyed so that we don't have
    * a dangling pointer to a destroyed owner.
    */
-  void ForgetLockOwner(void* aOwner) {
+  void ForgetLockOwner(const void* aOwner) {
     if (aOwner) {
       mLastLockOwner.compareExchange(aOwner, nullptr);
     }
@@ -889,14 +1112,13 @@ class SharedFTFace : public external::AtomicRefCounted<SharedFTFace> {
   // Remember the last owner of the lock, even after unlocking, to allow users
   // to avoid reinitializing state on the FT face if the last owner hasn't
   // changed by the next time it is locked with the same owner.
-  Atomic<void*> mLastLockOwner;
+  Atomic<const void*> mLastLockOwner;
 };
 #endif
 
 class UnscaledFont : public SupportsThreadSafeWeakPtr<UnscaledFont> {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(UnscaledFont)
-  MOZ_DECLARE_THREADSAFEWEAKREFERENCE_TYPENAME(UnscaledFont)
 
   virtual ~UnscaledFont();
 
@@ -948,7 +1170,6 @@ class UnscaledFont : public SupportsThreadSafeWeakPtr<UnscaledFont> {
 class ScaledFont : public SupportsThreadSafeWeakPtr<ScaledFont> {
  public:
   MOZ_DECLARE_REFCOUNTED_VIRTUAL_TYPENAME(ScaledFont)
-  MOZ_DECLARE_THREADSAFEWEAKREFERENCE_TYPENAME(ScaledFont)
 
   virtual ~ScaledFont();
 
@@ -993,6 +1214,8 @@ class ScaledFont : public SupportsThreadSafeWeakPtr<ScaledFont> {
   virtual bool CanSerialize() { return false; }
 
   virtual bool HasVariationSettings() { return false; }
+
+  virtual bool MayUseBitmaps() { return false; }
 
   void AddUserData(UserDataKey* key, void* userData, void (*destroy)(void*)) {
     mUserData.Add(key, userData, destroy);
@@ -1053,8 +1276,6 @@ class NativeFontResource
   size_t mDataLength;
 };
 
-class DrawTargetCapture;
-
 /** This is the main class used for all the drawing. It is created through the
  * factory and accepts drawing commands. The results of drawing to a target
  * may be used either through a Snapshot or by flushing the target and directly
@@ -1075,12 +1296,12 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
   virtual BackendType GetBackendType() const = 0;
 
   virtual bool IsRecording() const { return false; }
-  virtual bool IsCaptureDT() const { return false; }
 
   /**
    * Method to generate hyperlink in PDF output (with appropriate backend).
    */
   virtual void Link(const char* aDestination, const Rect& aRect) {}
+  virtual void Destination(const char* aDestination, const Point& aPoint) {}
 
   /**
    * Returns a SourceSurface which is a snapshot of the current contents of the
@@ -1124,15 +1345,6 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
   virtual void Flush() = 0;
 
   /**
-   * Realize a DrawTargetCapture onto the draw target.
-   *
-   * @param aSource Capture DrawTarget to draw
-   * @param aTransform Transform to apply when replaying commands
-   */
-  virtual void DrawCapturedDT(DrawTargetCapture* aCaptureDT,
-                              const Matrix& aTransform);
-
-  /**
    * Draw a surface to the draw target. Possibly doing partial drawing or
    * applying scaling. No sampling happens outside the source.
    *
@@ -1157,10 +1369,7 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
    * This is considered fallible, and replaying this without making the surface
    * available to the replay will just skip the draw.
    */
-  virtual void DrawDependentSurface(
-      uint64_t aId, const Rect& aDest,
-      const DrawSurfaceOptions& aSurfOptions = DrawSurfaceOptions(),
-      const DrawOptions& aOptions = DrawOptions()) {
+  virtual void DrawDependentSurface(uint64_t aId, const Rect& aDest) {
     MOZ_CRASH("GFX: DrawDependentSurface");
   }
 
@@ -1185,16 +1394,28 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
    *
    * @param aSurface Source surface to draw.
    * @param aDest Destination point that this drawing operation should draw to.
-   * @param aColor Color of the drawn shadow
-   * @param aOffset Offset of the shadow
-   * @param aSigma Sigma used for the guassian filter kernel
+   * @param aShadow Description of shadow to be drawn.
    * @param aOperator Composition operator used
    */
   virtual void DrawSurfaceWithShadow(SourceSurface* aSurface,
                                      const Point& aDest,
-                                     const DeviceColor& aColor,
-                                     const Point& aOffset, Float aSigma,
+                                     const ShadowOptions& aShadow,
                                      CompositionOp aOperator) = 0;
+
+  /**
+   * Draws a shadow for the specified path, which may be optionally stroked.
+   *
+   * @param aPath The path to use for the shadow geometry.
+   * @param aPattern The pattern to use for filling the path.
+   * @param aShadow Description of shadow to be drawn.
+   * @param aOptions General drawing options to apply to drawing the path.
+   * @param aStrokeOptions Stroking parameters that control stroking of path
+   * geometry, if supplied.
+   */
+  virtual void DrawShadow(const Path* aPath, const Pattern& aPattern,
+                          const ShadowOptions& aShadow,
+                          const DrawOptions& aOptions = DrawOptions(),
+                          const StrokeOptions* aStrokeOptions = nullptr);
 
   /**
    * Clear a rectangle on the draw target to transparent black. This will
@@ -1622,7 +1843,6 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
    */
   virtual void* GetNativeSurface(NativeSurfaceType aType) { return nullptr; }
 
-  virtual bool IsDualDrawTarget() const { return false; }
   virtual bool IsTiledDrawTarget() const { return false; }
   virtual bool SupportsRegionClipping() const { return true; }
 
@@ -1683,14 +1903,6 @@ class DrawTarget : public external::AtomicRefCounted<DrawTarget> {
   bool mPermitSubpixelAA : 1;
 
   SurfaceFormat mFormat;
-};
-
-class DrawTargetCapture : public DrawTarget {
- public:
-  bool IsCaptureDT() const override { return true; }
-
-  virtual bool IsEmpty() const = 0;
-  virtual void Dump() = 0;
 };
 
 class DrawEventRecorder : public RefCounted<DrawEventRecorder> {
@@ -1775,35 +1987,9 @@ class GFX2D_API Factory {
                                                        SurfaceFormat aFormat);
 
   /**
-   * Create a simple PathBuilder, which uses SKIA backend. If USE_SKIA is not
-   * defined, this returns nullptr;
+   * Create a simple PathBuilder, which uses SKIA backend.
    */
   static already_AddRefed<PathBuilder> CreateSimplePathBuilder();
-
-  /**
-   * Create a DrawTarget that captures the drawing commands to eventually be
-   * replayed onto the DrawTarget provided. An optional byte size can be
-   * provided as a limit for the CaptureCommandList. When the limit is reached,
-   * the CaptureCommandList will be replayed to the target and then cleared.
-   *
-   * @param aSize Size of the area this DT will capture.
-   * @param aFlushBytes The byte limit at which to flush the CaptureCommandList
-   */
-  static already_AddRefed<DrawTargetCapture> CreateCaptureDrawTargetForTarget(
-      gfx::DrawTarget* aTarget, size_t aFlushBytes = 0);
-
-  /**
-   * Create a DrawTarget that captures the drawing commands and can be replayed
-   * onto a compatible DrawTarget afterwards.
-   *
-   * @param aSize Size of the area this DT will capture.
-   */
-  static already_AddRefed<DrawTargetCapture> CreateCaptureDrawTarget(
-      BackendType aBackend, const IntSize& aSize, SurfaceFormat aFormat);
-
-  static already_AddRefed<DrawTargetCapture> CreateCaptureDrawTargetForData(
-      BackendType aBackend, const IntSize& aSize, SurfaceFormat aFormat,
-      int32_t aStride, size_t aSurfaceAllocationSize);
 
   static already_AddRefed<DrawTarget> CreateRecordingDrawTarget(
       DrawEventRecorder* aRecorder, DrawTarget* aDT, IntRect aRect);
@@ -1816,7 +2002,8 @@ class GFX2D_API Factory {
   static already_AddRefed<ScaledFont> CreateScaledFontForMacFont(
       CGFontRef aCGFont, const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
       const DeviceColor& aFontSmoothingBackgroundColor,
-      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false);
+      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false,
+      bool aHasColorGlyphs = false);
 #endif
 
 #ifdef MOZ_WIDGET_GTK
@@ -1896,11 +2083,6 @@ class GFX2D_API Factory {
   static void CopyDataSourceSurface(DataSourceSurface* aSource,
                                     DataSourceSurface* aDest);
 
-  static already_AddRefed<DrawEventRecorder> CreateEventRecorderForFile(
-      const char_type* aFilename);
-
-  static void SetGlobalEventRecorder(DrawEventRecorder* aRecorder);
-
   static uint32_t GetMaxSurfaceSize(BackendType aType);
 
   static LogForwarder* GetLogForwarder() {
@@ -1913,20 +2095,6 @@ class GFX2D_API Factory {
  public:
   static void PurgeAllCaches();
 
-  static already_AddRefed<DrawTarget> CreateDualDrawTarget(DrawTarget* targetA,
-                                                           DrawTarget* targetB);
-
-  static already_AddRefed<SourceSurface> CreateDualSourceSurface(
-      SourceSurface* sourceA, SourceSurface* sourceB);
-
-  /*
-   * This creates a new tiled DrawTarget. When a tiled drawtarget is used the
-   * drawing is distributed over number of tiles which may each hold an
-   * individual offset. The tiles in the set must each have the same backend
-   * and format.
-   */
-  static already_AddRefed<DrawTarget> CreateTiledDrawTarget(
-      const TileSet& aTileSet);
   static already_AddRefed<DrawTarget> CreateOffsetDrawTarget(
       DrawTarget* aDrawTarget, IntPoint aTileOrigin);
 
@@ -1939,10 +2107,8 @@ class GFX2D_API Factory {
   static bool mBGRSubpixelOrder;
 
  public:
-#ifdef USE_SKIA
   static already_AddRefed<DrawTarget> CreateDrawTargetWithSkCanvas(
       SkCanvas* aCanvas);
-#endif
 
 #ifdef MOZ_ENABLE_FREETYPE
   static void SetFTLibrary(FT_Library aFTLibrary);
@@ -2001,9 +2167,7 @@ class GFX2D_API Factory {
   static already_AddRefed<ScaledFont> CreateScaledFontForDWriteFont(
       IDWriteFontFace* aFontFace, const gfxFontStyle* aStyle,
       const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
-      bool aUseEmbeddedBitmap, int aRenderingMode,
-      IDWriteRenderingParams* aParams, Float aGamma, Float aContrast,
-      Float aClearTypeLevel);
+      bool aUseEmbeddedBitmap, bool aUseMultistrikeBold, bool aGDIForced);
 
   static already_AddRefed<ScaledFont> CreateScaledFontForGDIFont(
       const void* aLogFont, const RefPtr<UnscaledFont>& aUnscaledFont,
@@ -2012,13 +2176,15 @@ class GFX2D_API Factory {
   static void SetSystemTextQuality(uint8_t aQuality);
 
   static already_AddRefed<DataSourceSurface>
-  CreateBGRA8DataSourceSurfaceForD3D11Texture(ID3D11Texture2D* aSrcTexture);
+  CreateBGRA8DataSourceSurfaceForD3D11Texture(ID3D11Texture2D* aSrcTexture,
+                                              uint32_t aArrayIndex = 0);
 
   static bool ReadbackTexture(layers::TextureData* aDestCpuTexture,
                               ID3D11Texture2D* aSrcTexture);
 
   static bool ReadbackTexture(DataSourceSurface* aDestCpuTexture,
-                              ID3D11Texture2D* aSrcTexture);
+                              ID3D11Texture2D* aSrcTexture,
+                              uint32_t aArrayIndex = 0);
 
  private:
   static StaticRefPtr<ID2D1Device> mD2D1Device;
@@ -2035,7 +2201,8 @@ class GFX2D_API Factory {
   // DestTextureT can be TextureData or DataSourceSurface.
   template <typename DestTextureT>
   static bool ConvertSourceAndRetryReadback(DestTextureT* aDestCpuTexture,
-                                            ID3D11Texture2D* aSrcTexture);
+                                            ID3D11Texture2D* aSrcTexture,
+                                            uint32_t aArrayIndex = 0);
 
  protected:
   // This guards access to the singleton devices above, as well as the
@@ -2047,9 +2214,6 @@ class GFX2D_API Factory {
 
   friend class DrawTargetD2D1;
 #endif  // WIN32
-
- private:
-  static DrawEventRecorder* mRecorder;
 };
 
 class MOZ_RAII AutoSerializeWithMoz2D final {

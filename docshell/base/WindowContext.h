@@ -13,6 +13,7 @@
 #include "mozilla/dom/MaybeDiscarded.h"
 #include "mozilla/dom/SyncedContext.h"
 #include "mozilla/dom/UserActivation.h"
+#include "nsDOMNavigationTiming.h"
 #include "nsILoadInfo.h"
 #include "nsWrapperCache.h"
 
@@ -87,6 +88,9 @@ class BrowsingContextGroup;
   /* Whether the corresponding document has `loading='lazy'`             \
    * images; It won't become false if the image becomes non-lazy */      \
   FIELD(HadLazyLoadImage, bool)                                          \
+  /* Whether any of the windows in the subtree rooted at this window has \
+   * active peer connections or not (only set on the top window). */     \
+  FIELD(HasActivePeerConnections, bool)                                  \
   /* Whether we can execute scripts in this WindowContext. Has no effect \
    * unless scripts are also allowed in the BrowsingContext. */          \
   FIELD(AllowJavascript, bool)                                           \
@@ -99,7 +103,7 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   MOZ_DECL_SYNCED_CONTEXT(WindowContext, MOZ_EACH_WC_FIELD)
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(WindowContext)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(WindowContext)
 
  public:
   static already_AddRefed<WindowContext> GetById(uint64_t aInnerWindowId);
@@ -113,7 +117,12 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   uint64_t OuterWindowId() const { return mOuterWindowId; }
   bool IsDiscarded() const { return mIsDiscarded; }
 
-  bool IsCached() const;
+  // Returns `true` if this WindowContext is the current WindowContext in its
+  // BrowsingContext.
+  bool IsCurrent() const;
+
+  // Returns `true` if this WindowContext is currently in the BFCache.
+  bool IsInBFCache();
 
   // Returns `true` if this WindowContext is currently in the BFCache.
   bool IsInBFCache();
@@ -182,6 +191,10 @@ class WindowContext : public nsISupports, public nsWrapperCache {
   // activation and the transient user gesture activation haven't yet timed
   // out.
   bool HasValidTransientUserGestureActivation();
+
+  // Reture timestamp of last user gesture in milliseconds relative to
+  // navigation start timestamp.
+  DOMHighResTimeStamp LastUserGestureTimeStamp();
 
   // Return true if the corresponding window has valid transient user gesture
   // activation and the transient user gesture activation had been consumed
@@ -288,6 +301,8 @@ class WindowContext : public nsISupports, public nsWrapperCache {
               ContentParent* aSource);
   void DidSet(FieldIndex<IDX_AllowJavascript>, bool aOldValue);
 
+  bool CanSet(FieldIndex<IDX_HasActivePeerConnections>, bool, ContentParent*);
+
   void DidSet(FieldIndex<IDX_HasReportedShadowDOMUsage>, bool aOldValue);
 
   void DidSet(FieldIndex<IDX_SHEntryHasUserInteraction>, bool aOldValue);
@@ -346,20 +361,18 @@ extern template class syncedcontext::Transaction<WindowContext>;
 namespace ipc {
 template <>
 struct IPDLParamTraits<dom::MaybeDiscarded<dom::WindowContext>> {
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const dom::MaybeDiscarded<dom::WindowContext>& aParam);
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor,
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
                    dom::MaybeDiscarded<dom::WindowContext>* aResult);
 };
 
 template <>
 struct IPDLParamTraits<dom::WindowContext::IPCInitializer> {
-  static void Write(IPC::Message* aMessage, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const dom::WindowContext::IPCInitializer& aInitializer);
 
-  static bool Read(const IPC::Message* aMessage, PickleIterator* aIterator,
-                   IProtocol* aActor,
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
                    dom::WindowContext::IPCInitializer* aInitializer);
 };
 }  // namespace ipc

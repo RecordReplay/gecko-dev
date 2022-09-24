@@ -25,8 +25,10 @@ in ``mozilla-central``. You will need to get set up as a contributor to
 Firefox in order to contribute to GeckoView. To get set up with
 ``mozilla-central``, follow the `Quick Start Guide for Git
 Users <mc-quick-start.html>`_, or the `Contributing to the Mozilla code
-base <https://developer.mozilla.org/docs/Mozilla/Developer_guide/Introduction>`_
-guide on `MDN <https://developer.mozilla.org/>`_ for Mercurial users.
+base <https://firefox-source-docs.mozilla.org/setup/contributing_code.html>`_
+guide and `Firefox Contributors’ Quick Reference
+<https://firefox-source-docs.mozilla.org/contributing/contribution_quickref.html>`_
+for Mercurial users.
 
 Once you have a copy of ``mozilla-central``, you will need to build
 GeckoView.
@@ -83,15 +85,6 @@ Build Using Android Studio
 
 -  Install `Android
    Studio <https://developer.android.com/studio/install>`_.
--  Disable Instant Run. This is because Fennec and the Geckoview Example
-   app cannot deploy with Instant Run on.
-
-   -  Select Android Studio > Preferences from the menu bar
-   -  Navigate to Build, Execution, Deployment > Instant Run.
-   -  Uncheck the box that reads
-      ``Enable Instant Run to hot swap code/resource changes on deploy``.
-
-   |alt text|
 -  Choose File->Open from the toolbar
 -  Navigate to the root of your ``mozilla-central`` source directory and
    click “Open”
@@ -103,17 +96,12 @@ Build Using Android Studio
 -  Wait for the project to index and gradle to sync. Once synced, the
    workspace will reconfigure to display the different projects.
 
-   -  annotations contains custom annotations used inside GeckoView and
-      Fennec.
-   -  app is Fennec - Firefox for Android. Here is where you will find
-      code specific to that app.
+   -  annotations contains custom Java annotations used inside GeckoView
+   -  app contains geckoview build settings and omnijar. omnijar contains
+      the parts of Gecko and GeckoView that are not written in Java or Kotlin
    -  geckoview is the GeckoView project. Here is all the Java files
       related to GeckoView
    -  geckoview_example is an example browser built using GeckoView.
-   -  omnijar contains the parts of Gecko and GeckoView that are not
-      written in Java or Kotlin
-   -  thirdparty contains third party code that Fennec and GeckoView
-      use.
 
    |alt text 1|
 
@@ -125,6 +113,30 @@ means you will need to run ``mach build`` yourself to pick up changes to
 native code. `Bug
 1509539 <https://bugzilla.mozilla.org/show_bug.cgi?id=1509539>`_ tracks
 making Android Studio and Gradle do this automatically.
+
+Custom mozconfig with Android Studio
+------------------------------------
+
+Out of the box, Android Studio will use the default mozconfig file, normally
+located at ``mozconfig`` in the root directory of your ``mozilla-central``
+checkout.
+
+To make Android Studio use a mozconfig in a custom location, you can add the
+following to your ``local.properties``:
+
+::
+
+   mozilla-central.mozconfig=relative/path/to/mozconfig
+
+Note that, when running mach from the command line, this value will be ignored,
+and the mozconfig from the mach environment will be used instead.
+
+To override the mozconfig used by mach, you can use the `MOZCONFIG` environment
+variable, for example:
+
+::
+
+   MOZCONFIG=debug.mozconfig ./mach build
 
 Performing a bug fix
 --------------------
@@ -193,7 +205,7 @@ number e.g.
      not `about:config` should be available.
      ([bug 1540065]({{bugzilla}}1540065))
 
-   [71.12]: {{javadoc_uri}}/GeckoRuntimeSettings.Builder.html#aboutConfigEnabled-boolean-
+   [71.12]: {{javadoc_uri}}/GeckoRuntimeSettings.Builder.html#aboutConfigEnabled(boolean)
 
 Submitting to the ``try`` server
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -204,10 +216,10 @@ do this using Mozilla’s ``try`` server. To submit a GeckoView patch to
 
 .. code:: bash
 
-   ./mach try fuzzy -q "android"
+   ./mach try auto
 
-This will run all of the Android test suite. If your patch passes on
-``try`` you can be (fairly) confident that it will land successfully
+This will automatically select tests to run from our suite. If your patch
+passes on ``try`` you can be (fairly) confident that it will land successfully
 after review.
 
 Tagging a reviewer
@@ -220,9 +232,9 @@ review your patch, put their Phabricator handle against the
 If you don’t know who to tag for a review in the Phabricator submission
 message, leave the field blank and, after submission, follow the link to
 the patch in Phabricator and scroll to the bottom of the screen until
-you see the comment box. 
+you see the comment box.
 
-- Select the ``Add Action`` drop down and pick the ``Change Reviewers`` option. 
+- Select the ``Add Action`` drop down and pick the ``Change Reviewers`` option.
 - In the presented box, add ``geckoview-reviewers``. Selecting this group as the reviewer will notify all the members of the GeckoView team there is a patch to review.
 - Click ``Submit`` to submit the reviewer change request.
 
@@ -258,9 +270,9 @@ Dependency substiting your local GeckoView into a Mozilla project
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Most GeckoView-consuming projects produced by Mozilla support dependency
-substitution via ``local.properties``. These projects include: 
+substitution via ``local.properties``. These projects include:
 
-- `Fenix <https://github.com/mozilla-mobile/fenix>`_ 
+- `Fenix <https://github.com/mozilla-mobile/fenix>`_
 - `reference-browser <https://github.com/mozilla-mobile/reference-browser>`_
 - `android-components <https://github.com/mozilla-mobile/android-components>`_
 - `Firefox Reality <https://github.com/MozillaReality/FirefoxReality>`_

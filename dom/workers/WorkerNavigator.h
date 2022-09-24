@@ -29,20 +29,22 @@ class Instance;
 namespace dom {
 class StorageManager;
 class MediaCapabilities;
+class LockManager;
 
 namespace network {
 class Connection;
 }  // namespace network
 
 class WorkerNavigator final : public nsWrapperCache {
-  typedef struct workerinternals::RuntimeService::NavigatorProperties
-      NavigatorProperties;
+  using NavigatorProperties =
+      workerinternals::RuntimeService::NavigatorProperties;
 
   NavigatorProperties mProperties;
   RefPtr<StorageManager> mStorageManager;
   RefPtr<network::Connection> mConnection;
   RefPtr<dom::MediaCapabilities> mMediaCapabilities;
   RefPtr<webgpu::Instance> mWebGpu;
+  RefPtr<dom::LockManager> mLocks;
   bool mOnline;
 
   WorkerNavigator(const NavigatorProperties& aProperties, bool aOnline);
@@ -50,7 +52,7 @@ class WorkerNavigator final : public nsWrapperCache {
 
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(WorkerNavigator)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(WorkerNavigator)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(WorkerNavigator)
 
   static already_AddRefed<WorkerNavigator> Create(bool aOnLine);
 
@@ -102,6 +104,8 @@ class WorkerNavigator final : public nsWrapperCache {
   dom::MediaCapabilities* MediaCapabilities();
 
   webgpu::Instance* Gpu();
+
+  dom::LockManager* Locks();
 };
 
 }  // namespace dom

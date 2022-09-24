@@ -259,10 +259,7 @@ PlacesViewBase.prototype = {
     window.updateCommands("places");
 
     // Ensure that an existing "Show Other Bookmarks" item is removed before adding it
-    // again. This item should only be added when gBookmarksToolbar2h2020 is true, but
-    // its possible the pref could be toggled off in the same window. This results in
-    // the "Show Other Bookmarks" menu item still being visible even when the pref is
-    // set to false.
+    // again.
     let existingOtherBookmarksItem = aPopup.querySelector(
       "#show-other-bookmarks_PersonalToolbar"
     );
@@ -273,33 +270,26 @@ PlacesViewBase.prototype = {
     );
     // Add the View menu for the Bookmarks Toolbar and "Show Other Bookmarks" menu item
     // if the click originated from the Bookmarks Toolbar.
-    if (gBookmarksToolbar2h2020) {
-      let existingSubmenu = aPopup.querySelector("#toggle_PersonalToolbar");
-      existingSubmenu?.remove();
-      let bookmarksToolbar = document.getElementById("PersonalToolbar");
-      if (bookmarksToolbar?.contains(aPopup.triggerNode)) {
-        manageBookmarksMenu.removeAttribute("hidden");
+    let existingSubmenu = aPopup.querySelector("#toggle_PersonalToolbar");
+    existingSubmenu?.remove();
+    let bookmarksToolbar = document.getElementById("PersonalToolbar");
+    if (bookmarksToolbar?.contains(aPopup.triggerNode)) {
+      manageBookmarksMenu.removeAttribute("hidden");
 
-        let menu = BookmarkingUI.buildBookmarksToolbarSubmenu(bookmarksToolbar);
-        aPopup.insertBefore(menu, manageBookmarksMenu);
+      let menu = BookmarkingUI.buildBookmarksToolbarSubmenu(bookmarksToolbar);
+      aPopup.insertBefore(menu, manageBookmarksMenu);
 
-        if (
-          aPopup.triggerNode.id === "OtherBookmarks" ||
-          aPopup.triggerNode.id === "PlacesChevron" ||
-          aPopup.triggerNode.id === "PlacesToolbarItems" ||
-          aPopup.triggerNode.parentNode.id === "PlacesToolbarItems"
-        ) {
-          let otherBookmarksMenuItem = BookmarkingUI.buildShowOtherBookmarksMenuItem();
+      if (
+        aPopup.triggerNode.id === "OtherBookmarks" ||
+        aPopup.triggerNode.id === "PlacesChevron" ||
+        aPopup.triggerNode.id === "PlacesToolbarItems" ||
+        aPopup.triggerNode.parentNode.id === "PlacesToolbarItems"
+      ) {
+        let otherBookmarksMenuItem = BookmarkingUI.buildShowOtherBookmarksMenuItem();
 
-          if (otherBookmarksMenuItem) {
-            aPopup.insertBefore(
-              otherBookmarksMenuItem,
-              menu.nextElementSibling
-            );
-          }
+        if (otherBookmarksMenuItem) {
+          aPopup.insertBefore(otherBookmarksMenuItem, menu.nextElementSibling);
         }
-      } else {
-        manageBookmarksMenu.setAttribute("hidden", "true");
       }
     } else {
       manageBookmarksMenu.setAttribute("hidden", "true");
@@ -964,7 +954,7 @@ PlacesToolbar.prototype = {
   _cbEvents: [
     "dragstart",
     "dragover",
-    "dragexit",
+    "dragleave",
     "dragend",
     "drop",
     "mousemove",
@@ -1246,8 +1236,8 @@ PlacesToolbar.prototype = {
       case "dragover":
         this._onDragOver(aEvent);
         break;
-      case "dragexit":
-        this._onDragExit(aEvent);
+      case "dragleave":
+        this._onDragLeave(aEvent);
         break;
       case "dragend":
         this._onDragEnd(aEvent);
@@ -1347,7 +1337,7 @@ PlacesToolbar.prototype = {
           if (icon) {
             child.setAttribute("image", icon);
           }
-          child.style.visibility = "visible";
+          child.style.removeProperty("visibility");
         }
       }
 
@@ -1706,10 +1696,6 @@ PlacesToolbar.prototype = {
     if (aTimer == this._updateNodesVisibilityTimer) {
       this._updateNodesVisibilityTimer = null;
       this._updateNodesVisibilityTimerCallback();
-    } else if (aTimer == this._ibTimer) {
-      // * Timer to turn off indicator bar.
-      this._dropIndicator.collapsed = true;
-      this._ibTimer = null;
     } else if (aTimer == this._overFolder.openTimer) {
       // * Timer to open a menubutton that's being dragged over.
       // Set the autoopen attribute on the folder's menupopup so that
@@ -1771,16 +1757,15 @@ PlacesToolbar.prototype = {
         this._allowPopupShowing = false;
       }
     }
+    if (target._placesNode?.uri) {
+      PlacesUIUtils.setupSpeculativeConnection(target._placesNode.uri, window);
+    }
   },
 
   _cleanupDragDetails: function PT__cleanupDragDetails() {
     // Called on dragend and drop.
     PlacesControllerDragHelper.currentDropTarget = null;
     this._draggedElt = null;
-    if (this._ibTimer) {
-      this._ibTimer.cancel();
-    }
-
     this._dropIndicator.collapsed = true;
   },
 
@@ -1836,11 +1821,6 @@ PlacesToolbar.prototype = {
       this._dropIndicator.collapsed = true;
       aEvent.stopPropagation();
       return;
-    }
-
-    if (this._ibTimer) {
-      this._ibTimer.cancel();
-      this._ibTimer = null;
     }
 
     if (dropPoint.folderElt || aEvent.originalTarget == this._chevron) {
@@ -1920,16 +1900,10 @@ PlacesToolbar.prototype = {
     aEvent.stopPropagation();
   },
 
-  _onDragExit: function PT__onDragExit(aEvent) {
+  _onDragLeave(aEvent) {
     PlacesControllerDragHelper.currentDropTarget = null;
 
-    // Set timer to turn off indicator bar (if we turn it off
-    // here, dragenter might be called immediately after, creating
-    // flicker).
-    if (this._ibTimer) {
-      this._ibTimer.cancel();
-    }
-    this._ibTimer = this._setTimer(10);
+    this._dropIndicator.collapsed = true;
 
     // If we hovered over a folder, close it now.
     if (this._overFolder.elt) {
@@ -2022,7 +1996,7 @@ function PlacesMenu(aPopupShowingEvent, aPlace, aOptions) {
   this._viewElt._placesView = this;
   this._addEventListeners(this._rootElt, ["popupshowing", "popuphidden"], true);
   this._addEventListeners(window, ["unload"], false);
-
+  this._addEventListeners(this._rootElt, ["mousedown"], false);
   if (AppConstants.platform === "macosx") {
     // Must walk up to support views in sub-menus, like Bookmarks Toolbar menu.
     for (let elt = this._viewElt.parentNode; elt; elt = elt.parentNode) {
@@ -2051,6 +2025,7 @@ PlacesMenu.prototype = {
       true
     );
     this._removeEventListeners(window, ["unload"], false);
+    this._removeEventListeners(this._rootElt, ["mousedown"], false);
 
     PlacesViewBase.prototype.uninit.apply(this, arguments);
   },
@@ -2065,6 +2040,9 @@ PlacesMenu.prototype = {
         break;
       case "popuphidden":
         this._onPopupHidden(aEvent);
+        break;
+      case "mousedown":
+        this._onMouseDown(aEvent);
         break;
     }
   },
@@ -2088,6 +2066,15 @@ PlacesMenu.prototype = {
     // when the folder closes because it is no longer applicable.
     popup.removeAttribute("autoopened");
     popup.removeAttribute("dragstart");
+  },
+
+  // We don't have a facility for catch "mousedown" events on the native
+  // Mac menus because Mac doesn't expose it
+  _onMouseDown(aEvent) {
+    let target = aEvent.target;
+    if (target._placesNode?.uri) {
+      PlacesUIUtils.setupSpeculativeConnection(target._placesNode.uri, window);
+    }
   },
 };
 

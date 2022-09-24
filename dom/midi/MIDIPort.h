@@ -16,8 +16,7 @@
 
 struct JSContext;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Promise;
 class MIDIPortInfo;
@@ -55,8 +54,8 @@ class MIDIPort : public DOMEventTargetHelper,
   MIDIPortDeviceState State() const;
   bool SysexEnabled() const;
 
-  already_AddRefed<Promise> Open();
-  already_AddRefed<Promise> Close();
+  already_AddRefed<Promise> Open(ErrorResult& aError);
+  already_AddRefed<Promise> Close(ErrorResult& aError);
 
   // MIDIPorts observe the death of their parent MIDIAccess object, and delete
   // their reference accordingly.
@@ -64,6 +63,7 @@ class MIDIPort : public DOMEventTargetHelper,
 
   void FireStateChangeEvent();
 
+  virtual void StateChange();
   virtual void Receive(const nsTArray<MIDIMessage>& aMsg);
 
   // This object holds a pointer to its corresponding IPC MIDIPortChild actor.
@@ -71,11 +71,18 @@ class MIDIPort : public DOMEventTargetHelper,
   void UnsetIPCPort();
 
   IMPL_EVENT_HANDLER(statechange)
+
+  void DisconnectFromOwner() override;
+  const nsString& StableId();
+
  protected:
   // IPC Actor corresponding to this class
   RefPtr<MIDIPortChild> mPort;
 
  private:
+  void KeepAliveOnStatechange();
+  void DontKeepAliveOnStatechange();
+
   // MIDIAccess object that created this MIDIPort object, which we need for
   // firing port connection events. There is a chance this MIDIPort object can
   // outlive its parent MIDIAccess object, so this is a weak reference that must
@@ -89,9 +96,10 @@ class MIDIPort : public DOMEventTargetHelper,
   // Promise object generated on Close() call, that needs to be resolved once
   // the platform specific Close() function has completed.
   RefPtr<Promise> mClosingPromise;
+  // If true this object will be kept alive even without direct JS references
+  bool mKeepAlive;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_MIDIPort_h

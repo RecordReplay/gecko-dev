@@ -54,20 +54,6 @@ interface FrameLoader {
   readonly attribute boolean isRemoteFrame;
 
   /**
-   * Activate remote frame.
-   * Throws an exception with non-remote frames.
-   */
-  [Throws]
-  void activateRemoteFrame();
-
-  /**
-   * Deactivate remote frame.
-   * Throws an exception with non-remote frames.
-   */
-  [Throws]
-  void deactivateRemoteFrame();
-
-  /**
    * Activate event forwarding from client (remote frame) to parent.
    */
   [Throws]
@@ -75,13 +61,6 @@ interface FrameLoader {
 
   // Note, when frameloaders are swapped, also messageManagers are swapped.
   readonly attribute MessageSender? messageManager;
-
-  /**
-   * Request that the next time a remote layer transaction has been
-   * received by the Compositor, a MozAfterRemoteFrame event be sent
-   * to the window.
-   */
-  void requestNotifyAfterRemotePaint();
 
   /**
    * Force a remote browser to recompute its dimension and screen position.
@@ -94,7 +73,7 @@ interface FrameLoader {
    * Returns a promise that resolves when all session store data has been
    * flushed.
    */
-  [Throws]
+  [NewObject]
   Promise<void> requestTabStateFlush();
 
   /**
@@ -123,14 +102,13 @@ interface FrameLoader {
    *   preview document with a new print settings object.
    * @return A Promise that resolves with a PrintPreviewSuccessInfo on success.
    */
-  [ChromeOnly, Throws]
+  [NewObject]
   Promise<unsigned long> printPreview(nsIPrintSettings aPrintSettings,
                                       BrowsingContext? aSourceBrowsingContext);
 
   /**
    * Inform the print preview document that we're done with it.
    */
-  [ChromeOnly]
   void exitPrintPreview();
 
   /**
@@ -210,6 +188,12 @@ interface mixin WebBrowserPersistable
                         nsIWebBrowserPersistDocumentReceiver aRecv);
 };
 
+enum PrintPreviewOrientation {
+    "landscape",
+    "portrait",
+    "unspecified"
+};
+
 /**
  * Interface for the object that's used to resolve the Promise returned from
  * FrameLoader.printPreview() if that method successfully creates the print
@@ -245,6 +229,11 @@ dictionary PrintPreviewSuccessInfo {
    * Whether the previewed document has a selection itself.
    */
   boolean hasSelfSelection = false;
+
+  /**
+   * Specified orientation of the document, or "unspecified".
+   */
+  PrintPreviewOrientation orientation = "unspecified";
 };
 
 FrameLoader includes WebBrowserPersistable;

@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFETileElement.h"
 #include "mozilla/dom/SVGFETileElementBinding.h"
 #include "mozilla/SVGFilterInstance.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FETile)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFETileElement::WrapNode(JSContext* aCx,
                                      JS::Handle<JSObject*> aGivenProto) {
@@ -62,5 +63,12 @@ SVGElement::StringAttributesInfo SVGFETileElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+nsresult SVGFETileElement::BindToTree(BindContext& aCtx, nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feTile);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
+}  // namespace mozilla::dom

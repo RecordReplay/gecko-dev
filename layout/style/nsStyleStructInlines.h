@@ -97,6 +97,10 @@ bool nsStyleDisplay::IsFixedPosContainingBlockForNonSVGTextFrames(
   // should return FIXPOS_CB_NON_SVG for will-change.
   NS_ASSERTION(aStyle.StyleDisplay() == this, "unexpected aStyle");
 
+  if (aStyle.IsRootElementStyle()) {
+    return false;
+  }
+
   if (mWillChange.bits & mozilla::StyleWillChangeBits::FIXPOS_CB_NON_SVG) {
     return true;
   }
@@ -155,6 +159,14 @@ bool nsStyleDisplay::IsAbsPosContainingBlock(
          !mozilla::SVGUtils::IsInSVGTextSubtree(aContextFrame);
 }
 
+bool nsStyleDisplay::IsRelativelyOrStickyPositioned(
+    const nsIFrame* aContextFrame) const {
+  NS_ASSERTION(aContextFrame->StyleDisplay() == this,
+               "unexpected aContextFrame");
+  return IsRelativelyOrStickyPositionedStyle() &&
+         !mozilla::SVGUtils::IsInSVGTextSubtree(aContextFrame);
+}
+
 bool nsStyleDisplay::IsRelativelyPositioned(
     const nsIFrame* aContextFrame) const {
   NS_ASSERTION(aContextFrame->StyleDisplay() == this,
@@ -176,17 +188,6 @@ bool nsStyleDisplay::IsAbsolutelyPositioned(
                "unexpected aContextFrame");
   return IsAbsolutelyPositionedStyle() &&
          !mozilla::SVGUtils::IsInSVGTextSubtree(aContextFrame);
-}
-
-mozilla::StylePointerEvents nsStyleUI::GetEffectivePointerEvents(
-    nsIFrame* aFrame) const {
-  if (aFrame->GetContent() && !aFrame->GetContent()->GetParent()) {
-    // The root frame is not allowed to have pointer-events: none, or else
-    // no frames could be hit test against and scrolling the viewport would
-    // not work.
-    return mozilla::StylePointerEvents::Auto;
-  }
-  return mPointerEvents;
 }
 
 bool nsStyleBackground::HasLocalBackground() const {

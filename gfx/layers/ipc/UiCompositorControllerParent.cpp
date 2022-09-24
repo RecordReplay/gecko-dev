@@ -7,7 +7,6 @@
 
 #if defined(MOZ_WIDGET_ANDROID)
 #  include "apz/src/APZCTreeManager.h"
-#  include "mozilla/layers/AsyncCompositionManager.h"
 #endif
 #include <utility>
 
@@ -19,7 +18,6 @@
 #include "mozilla/layers/Compositor.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
 #include "mozilla/layers/CompositorThread.h"
-#include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/layers/UiCompositorControllerMessageTypes.h"
 #include "mozilla/layers/WebRenderBridgeParent.h"
 
@@ -97,7 +95,7 @@ UiCompositorControllerParent::RecvInvalidateAndRender() {
           mRootLayerTreeId);
   if (parent) {
     parent->Invalidate();
-    parent->ScheduleComposition();
+    parent->ScheduleComposition(wr::RenderReasons::OTHER);
   }
   return IPC_OK();
 }
@@ -128,14 +126,7 @@ mozilla::ipc::IPCResult UiCompositorControllerParent::RecvDefaultClearColor(
   LayerTreeState* state =
       CompositorBridgeParent::GetIndirectShadowTree(mRootLayerTreeId);
 
-  if (state && state->mLayerManager) {
-    Compositor* compositor = state->mLayerManager->GetCompositor();
-    if (compositor) {
-      // Android Color is ARGB which is apparently unusual.
-      compositor->SetDefaultClearColor(
-          gfx::DeviceColor::UnusualFromARGB(aColor));
-    }
-  } else if (state && state->mWrBridge) {
+  if (state && state->mWrBridge) {
     state->mWrBridge->SetClearColor(gfx::DeviceColor::UnusualFromARGB(aColor));
   }
 
@@ -148,13 +139,9 @@ UiCompositorControllerParent::RecvRequestScreenPixels() {
   LayerTreeState* state =
       CompositorBridgeParent::GetIndirectShadowTree(mRootLayerTreeId);
 
-  if (state && state->mLayerManager && state->mParent) {
-    state->mLayerManager->RequestScreenPixels(this);
-    state->mParent->Invalidate();
-    state->mParent->ScheduleComposition();
-  } else if (state && state->mWrBridge) {
+  if (state && state->mWrBridge) {
     state->mWrBridge->RequestScreenPixels(this);
-    state->mWrBridge->ScheduleForcedGenerateFrame();
+    state->mWrBridge->ScheduleForcedGenerateFrame(wr::RenderReasons::OTHER);
   }
 #endif  // defined(MOZ_WIDGET_ANDROID)
 
@@ -219,8 +206,7 @@ void UiCompositorControllerParent::NotifyUpdateScreenMetrics(
 #if defined(MOZ_WIDGET_ANDROID)
   // TODO: Need to handle different x-and y-scales.
   CSSToScreenScale scale = ViewTargetAs<ScreenPixel>(
-      aMetrics.mZoom.ToScaleFactor(),
-      PixelCastJustification::ScreenIsParentLayerForRoot);
+      aMetrics.mZoom, PixelCastJustification::ScreenIsParentLayerForRoot);
   ScreenPoint scrollOffset = aMetrics.mVisualScrollOffset * scale;
   CompositorThread()->Dispatch(NewRunnableMethod<ScreenPoint, CSSToScreenScale>(
       "UiCompositorControllerParent::SendRootFrameMetrics", this,

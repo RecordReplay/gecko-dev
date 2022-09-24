@@ -19,14 +19,13 @@ class ChildProfilerController;
 namespace mozilla {
 namespace net {
 
+class ProxyAutoConfigChild;
 class SocketProcessBridgeParent;
 class BackgroundDataBridgeParent;
 
 // The IPC actor implements PSocketProcessChild in child process.
 // This is allocated and kept alive by SocketProcessImpl.
-class SocketProcessChild final
-    : public PSocketProcessChild,
-      public mozilla::ipc::ChildToParentStreamActorManager {
+class SocketProcessChild final : public PSocketProcessChild {
  public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(SocketProcessChild)
 
@@ -67,27 +66,18 @@ class SocketProcessChild final
 
   already_AddRefed<PHttpTransactionChild> AllocPHttpTransactionChild();
 
-  PFileDescriptorSetChild* AllocPFileDescriptorSetChild(
-      const FileDescriptor& fd);
-  bool DeallocPFileDescriptorSetChild(PFileDescriptorSetChild* aActor);
-
-  PChildToParentStreamChild* AllocPChildToParentStreamChild();
-  bool DeallocPChildToParentStreamChild(PChildToParentStreamChild* aActor);
-  PParentToChildStreamChild* AllocPParentToChildStreamChild();
-  bool DeallocPParentToChildStreamChild(PParentToChildStreamChild* aActor);
-
   void CleanUp();
   void DestroySocketProcessBridgeParent(ProcessId aId);
 
-  PChildToParentStreamChild* SendPChildToParentStreamConstructor(
-      PChildToParentStreamChild* aActor) override;
-  PFileDescriptorSetChild* SendPFileDescriptorSetConstructor(
-      const FileDescriptor& aFD) override;
   already_AddRefed<PHttpConnectionMgrChild> AllocPHttpConnectionMgrChild(
       const HttpHandlerInitArgs& aArgs);
   mozilla::ipc::IPCResult RecvUpdateDeviceModelId(const nsCString& aModelId);
   mozilla::ipc::IPCResult RecvOnHttpActivityDistributorActivated(
       const bool& aIsActivated);
+  mozilla::ipc::IPCResult RecvOnHttpActivityDistributorObserveProxyResponse(
+      const bool& aIsEnabled);
+  mozilla::ipc::IPCResult RecvOnHttpActivityDistributorObserveConnection(
+      const bool& aIsEnabled);
 
   already_AddRefed<PInputChannelThrottleQueueChild>
   AllocPInputChannelThrottleQueueChild(const uint32_t& aMeanBytesPerSecond,
@@ -99,12 +89,12 @@ class SocketProcessChild final
   bool IsShuttingDown() { return mShuttingDown; }
 
   already_AddRefed<PDNSRequestChild> AllocPDNSRequestChild(
-      const nsCString& aHost, const nsCString& aTrrServer,
+      const nsCString& aHost, const nsCString& aTrrServer, const int32_t& aPort,
       const uint16_t& aType, const OriginAttributes& aOriginAttributes,
       const uint32_t& aFlags);
   mozilla::ipc::IPCResult RecvPDNSRequestConstructor(
       PDNSRequestChild* aActor, const nsCString& aHost,
-      const nsCString& aTrrServer, const uint16_t& aType,
+      const nsCString& aTrrServer, const int32_t& aPort, const uint16_t& aType,
       const OriginAttributes& aOriginAttributes,
       const uint32_t& aFlags) override;
 
@@ -132,14 +122,28 @@ class SocketProcessChild final
   mozilla::ipc::IPCResult RecvNotifyObserver(const nsCString& aTopic,
                                              const nsString& aData);
 
-  virtual already_AddRefed<PRemoteLazyInputStreamChild>
-  AllocPRemoteLazyInputStreamChild(const nsID& aID, const uint64_t& aSize);
-
   mozilla::ipc::IPCResult RecvGetSocketData(GetSocketDataResolver&& aResolve);
   mozilla::ipc::IPCResult RecvGetDNSCacheEntries(
       GetDNSCacheEntriesResolver&& aResolve);
   mozilla::ipc::IPCResult RecvGetHttpConnectionData(
       GetHttpConnectionDataResolver&& aResolve);
+
+  mozilla::ipc::IPCResult RecvInitProxyAutoConfigChild(
+      Endpoint<PProxyAutoConfigChild>&& aEndpoint);
+
+  mozilla::ipc::IPCResult RecvRecheckIPConnectivity();
+  mozilla::ipc::IPCResult RecvRecheckDNS();
+
+  mozilla::ipc::IPCResult RecvFlushFOGData(FlushFOGDataResolver&& aResolver);
+
+  mozilla::ipc::IPCResult RecvTestTriggerMetrics(
+      TestTriggerMetricsResolver&& aResolve);
+
+#if defined(XP_WIN)
+  mozilla::ipc::IPCResult RecvGetUntrustedModulesData(
+      GetUntrustedModulesDataResolver&& aResolver);
+  mozilla::ipc::IPCResult RecvUnblockUntrustedModulesThread();
+#endif  // defined(XP_WIN)
 
  protected:
   friend class SocketProcessImpl;
@@ -155,7 +159,7 @@ class SocketProcessChild final
 
   bool mShuttingDown{false};
   // Protect the table below.
-  Mutex mMutex{"SocketProcessChild::mMutex"};
+  Mutex mMutex MOZ_UNANNOTATED{"SocketProcessChild::mMutex"};
   nsTHashMap<uint64_t, RefPtr<BackgroundDataBridgeParent>>
       mBackgroundDataBridgeMap;
 };

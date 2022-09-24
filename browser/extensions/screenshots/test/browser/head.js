@@ -19,6 +19,7 @@ const gScreenshotUISelectors = {
   visiblePageButton: "button.visible",
   previewIframe: "#firefox-screenshots-preview-iframe",
   copyButton: "button.highlight-button-copy",
+  downloadButton: "button.highlight-button-download",
 };
 
 class ScreenshotsHelper {
@@ -213,7 +214,7 @@ async function getImageSizeFromClipboard(browser) {
   });
 }
 
-add_task(async function common_initialize() {
+add_setup(async function common_initialize() {
   // Ensure Screenshots is initially enabled for all tests
   const addon = await AddonManager.getAddonByID("screenshots@mozilla.org");
   const isEnabled = addon.enabled;

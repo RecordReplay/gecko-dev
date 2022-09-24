@@ -19,14 +19,7 @@ export const Themes = props => {
                 key={theme + label}
                 text={typeof tooltip === "object" ? tooltip : {}}
               >
-                <label
-                  className={`theme${
-                    theme === props.activeTheme && !props.design
-                      ? " selected"
-                      : ""
-                  }`}
-                  title={theme + label}
-                >
+                <label className="theme" title={theme + label}>
                   <Localized
                     text={typeof description === "object" ? description : {}}
                   >
@@ -37,21 +30,16 @@ export const Themes = props => {
                       checked={theme === props.activeTheme}
                       className="sr-only input"
                       onClick={props.handleAction}
-                      data-l10n-attrs="aria-description"
                     />
                   </Localized>
                   <div
                     className={`icon ${
-                      theme === props.activeTheme && props.design
-                        ? " selected"
-                        : ""
+                      theme === props.activeTheme ? " selected" : ""
                     } ${theme}`}
                   />
-                  {label && (
-                    <Localized text={label}>
-                      <div className="text" />
-                    </Localized>
-                  )}
+                  <Localized text={label}>
+                    <div className="text" />
+                  </Localized>
                 </label>
               </Localized>
             )

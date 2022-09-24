@@ -5,8 +5,9 @@ const TEST_URI =
   "data:text/html;charset=utf-8," + "<p>browser_target-from-url.js</p>";
 
 const { DevToolsLoader } = ChromeUtils.import(
-  "resource://devtools/shared/Loader.jsm"
+  "resource://devtools/shared/loader/Loader.jsm"
 );
+const { createCommandsDictionary } = require("devtools/shared/commands/index");
 const {
   descriptorFromURL,
 } = require("devtools/client/framework/descriptor-from-url");
@@ -40,11 +41,12 @@ add_task(async function() {
   }
 
   info("Test tab");
-  let windowId = window.docShell.outerWindowID;
-  windowId = browser.outerWindowID;
   descriptor = await descriptorFromURL(
-    new URL("http://foo?type=tab&id=" + windowId)
+    new URL("http://foo?type=tab&id=" + browser.browserId)
   );
+  const commands = await createCommandsDictionary(descriptor);
+  // Descriptor's getTarget will only work if the TargetCommand watches for the first top target
+  await commands.targetCommand.startListening();
   target = await descriptor.getTarget();
   assertTarget(target, TEST_URI);
   await descriptor.client.close();
@@ -56,7 +58,7 @@ add_task(async function() {
   } catch (e) {
     is(
       e.message,
-      "descriptorFromURL, tab with outerWindowID '10000' doesn't exist"
+      "descriptorFromURL, tab with browserId '10000' doesn't exist"
     );
   }
 

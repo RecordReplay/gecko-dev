@@ -10,6 +10,7 @@
 #include "mozilla/ArrayAlgorithm.h"
 #include "mozilla/Casting.h"
 #include "mozilla/Logging.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/Telemetry.h"
 #include "nsCOMArray.h"
 #include "nsComponentManagerUtils.h"
@@ -120,8 +121,7 @@ nsresult BackgroundFileSaver::Init() {
 NS_IMETHODIMP
 BackgroundFileSaver::GetObserver(nsIBackgroundFileSaverObserver** aObserver) {
   NS_ENSURE_ARG_POINTER(aObserver);
-  *aObserver = mObserver;
-  NS_IF_ADDREF(*aObserver);
+  *aObserver = do_AddRef(mObserver).take();
   return NS_OK;
 }
 
@@ -200,7 +200,8 @@ BackgroundFileSaver::EnableSha256() {
   nsresult rv;
   nsCOMPtr<nsISupports> nssDummy = do_GetService("@mozilla.org/psm;1", &rv);
   NS_ENSURE_SUCCESS(rv, rv);
-  mSha256Enabled = true;
+  MutexAutoLock lock(mLock);
+  mSha256Enabled = true;  // this will be read by the worker thread
   return NS_OK;
 }
 
@@ -224,6 +225,7 @@ BackgroundFileSaver::EnableSignatureInfo() {
   nsresult rv;
   nsCOMPtr<nsISupports> nssDummy = do_GetService("@mozilla.org/psm;1", &rv);
   NS_ENSURE_SUCCESS(rv, rv);
+  MutexAutoLock lock(mLock);
   mSignatureInfoEnabled = true;
   return NS_OK;
 }
@@ -338,9 +340,17 @@ nsresult BackgroundFileSaver::ProcessAttention() {
   // If mAsyncCopyContext is not null, we interrupt the copy and re-enter
   // through AsyncCopyCallback.  This allows us to check if, for instance, we
   // should rename the target file.  We will then restart the copy if needed.
-  if (mAsyncCopyContext) {
-    NS_CancelAsyncCopy(mAsyncCopyContext, NS_ERROR_ABORT);
-    return NS_OK;
+
+  // mAsyncCopyContext is only written on the worker thread (which we are on)
+  MOZ_ASSERT(!NS_IsMainThread());
+  {
+    // Even though we're the only thread that writes this, we have to take the
+    // lock
+    MutexAutoLock lock(mLock);
+    if (mAsyncCopyContext) {
+      NS_CancelAsyncCopy(mAsyncCopyContext, NS_ERROR_ABORT);
+      return NS_OK;
+    }
   }
   // Use the current shared state to determine the next operation to execute.
   rv = ProcessStateChange();
@@ -512,6 +522,10 @@ nsresult BackgroundFileSaver::ProcessStateChange() {
     if (rv != NS_ERROR_FILE_NOT_FOUND) {
       NS_ENSURE_SUCCESS(rv, rv);
 
+      // Try to clean up the inputStream if an error occurs.
+      auto closeGuard =
+          mozilla::MakeScopeExit([&] { Unused << inputStream->Close(); });
+
       char buffer[BUFFERED_IO_SIZE];
       while (true) {
         uint32_t count;
@@ -523,11 +537,21 @@ nsresult BackgroundFileSaver::ProcessStateChange() {
           break;
         }
 
-        nsresult rv =
-            mDigest->Update(BitwiseCast<unsigned char*, char*>(buffer), count);
+        rv = mDigest->Update(BitwiseCast<unsigned char*, char*>(buffer), count);
         NS_ENSURE_SUCCESS(rv, rv);
+
+        // The pending resume operation may have been cancelled by the control
+        // thread while the worker thread was reading in the existing file.
+        // Abort reading in the original file in that case, as the digest will
+        // be discarded anyway.
+        MutexAutoLock lock(mLock);
+        if (NS_FAILED(mStatus)) {
+          return NS_ERROR_ABORT;
+        }
       }
 
+      // Close explicitly to handle any errors.
+      closeGuard.release();
       rv = inputStream->Close();
       NS_ENSURE_SUCCESS(rv, rv);
     }
@@ -601,12 +625,11 @@ nsresult BackgroundFileSaver::ProcessStateChange() {
 bool BackgroundFileSaver::CheckCompletion() {
   nsresult rv;
 
-  MOZ_ASSERT(!mAsyncCopyContext,
-             "Should not be copying when checking completion conditions.");
-
   bool failed = true;
   {
     MutexAutoLock lock(mLock);
+    MOZ_ASSERT(!mAsyncCopyContext,
+               "Should not be copying when checking completion conditions.");
 
     if (mComplete) {
       return true;

@@ -8,7 +8,6 @@
 
 #include "ProfileBuffer.h"
 #include "ProfiledThreadData.h"
-#include "ThreadInfo.h"
 
 #include "mozilla/ProfileJSONWriter.h"
 
@@ -71,30 +70,30 @@ ProfilerBacktrace::ProfilerBacktrace(
 
 ProfilerBacktrace::~ProfilerBacktrace() { MOZ_COUNT_DTOR(ProfilerBacktrace); }
 
-int ProfilerBacktrace::StreamJSON(SpliceableJSONWriter& aWriter,
-                                  const mozilla::TimeStamp& aProcessStartTime,
-                                  UniqueStacks& aUniqueStacks) {
-  int processedThreadId = 0;
+ProfilerThreadId ProfilerBacktrace::StreamJSON(
+    SpliceableJSONWriter& aWriter, const mozilla::TimeStamp& aProcessStartTime,
+    UniqueStacks& aUniqueStacks) {
+  ProfilerThreadId processedThreadId;
 
   // Unlike ProfiledThreadData::StreamJSON, we don't need to call
   // ProfileBuffer::AddJITInfoForRange because ProfileBuffer does not contain
   // any JitReturnAddr entries. For synchronous samples, JIT frames get expanded
   // at sample time.
   if (mProfileBuffer) {
-    processedThreadId =
-        StreamSamplesAndMarkers(mName.c_str(), 0, *mProfileBuffer, aWriter,
-                                ""_ns, ""_ns, aProcessStartTime,
-                                /* aRegisterTime */ mozilla::TimeStamp(),
-                                /* aUnregisterTime */ mozilla::TimeStamp(),
-                                /* aSinceTime */ 0, aUniqueStacks);
+    processedThreadId = StreamSamplesAndMarkers(
+        mName.c_str(), ProfilerThreadId{}, *mProfileBuffer, aWriter, ""_ns,
+        ""_ns, aProcessStartTime,
+        /* aRegisterTime */ mozilla::TimeStamp(),
+        /* aUnregisterTime */ mozilla::TimeStamp(),
+        /* aSinceTime */ 0, aUniqueStacks, mozilla::ProgressLogger{});
   } else if (mProfileChunkedBuffer) {
     ProfileBuffer profileBuffer(*mProfileChunkedBuffer);
-    processedThreadId =
-        StreamSamplesAndMarkers(mName.c_str(), 0, profileBuffer, aWriter, ""_ns,
-                                ""_ns, aProcessStartTime,
-                                /* aRegisterTime */ mozilla::TimeStamp(),
-                                /* aUnregisterTime */ mozilla::TimeStamp(),
-                                /* aSinceTime */ 0, aUniqueStacks);
+    processedThreadId = StreamSamplesAndMarkers(
+        mName.c_str(), ProfilerThreadId{}, profileBuffer, aWriter, ""_ns, ""_ns,
+        aProcessStartTime,
+        /* aRegisterTime */ mozilla::TimeStamp(),
+        /* aUnregisterTime */ mozilla::TimeStamp(),
+        /* aSinceTime */ 0, aUniqueStacks, mozilla::ProgressLogger{});
   }
   // If there are no buffers, the backtrace is empty and nothing is streamed.
 

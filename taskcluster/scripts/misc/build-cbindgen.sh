@@ -3,14 +3,11 @@ set -x -e -v
 
 # Needed by osx-cross-linker.
 export TARGET="$1"
+COMPRESS_EXT=zst
 
 case "$(uname -s)" in
-Linux)
-    COMPRESS_EXT=xz
-    ;;
-MINGW*)
+MINGW*|MSYS*)
     UPLOAD_DIR=$PWD/public/build
-    COMPRESS_EXT=bz2
 
     . $GECKO_PATH/taskcluster/scripts/misc/vs-setup.sh
 
@@ -20,14 +17,10 @@ esac
 
 cd $GECKO_PATH
 
-if [ -n "$TOOLTOOL_MANIFEST" ]; then
-  . taskcluster/scripts/misc/tooltool-download.sh
-fi
-
 # OSX cross builds are a bit harder
 case "$TARGET" in
 *-apple-darwin)
-  export PATH="$MOZ_FETCHES_DIR/llvm-dsymutil/bin:$PATH"
+  export PATH="$MOZ_FETCHES_DIR/clang/bin:$PATH"
   export PATH="$MOZ_FETCHES_DIR/cctools/bin:$PATH"
   export RUSTFLAGS="-C linker=$GECKO_PATH/taskcluster/scripts/misc/osx-cross-linker"
   if test "$TARGET" = "aarch64-apple-darwin"; then
@@ -36,8 +29,8 @@ case "$TARGET" in
   ;;
 x86_64-unknown-linux-gnu)
   export CC="$MOZ_FETCHES_DIR/clang/bin/clang"
-  export CFLAGS_x86_64_unknown_linux_gnu="--sysroot=$MOZ_FETCHES_DIR/sysroot"
-  export RUSTFLAGS="-C linker=$CC -C link-arg=--sysroot=$MOZ_FETCHES_DIR/sysroot"
+  export CFLAGS_x86_64_unknown_linux_gnu="--sysroot=$MOZ_FETCHES_DIR/sysroot-x86_64-linux-gnu"
+  export RUSTFLAGS="-C linker=$CC -C link-arg=--sysroot=$MOZ_FETCHES_DIR/sysroot-x86_64-linux-gnu"
   ;;
 esac
 
@@ -49,7 +42,7 @@ cargo build --verbose --release --target "$TARGET"
 
 mkdir cbindgen
 cp target/$TARGET/release/cbindgen* cbindgen/
-tar -acf cbindgen.tar.$COMPRESS_EXT cbindgen
+tar -c cbindgen | python3 $GECKO_PATH/taskcluster/scripts/misc/zstdpy > cbindgen.tar.$COMPRESS_EXT
 mkdir -p $UPLOAD_DIR
 cp cbindgen.tar.$COMPRESS_EXT $UPLOAD_DIR
 

@@ -93,7 +93,6 @@ class Perftest(object):
         post_startup_delay=POST_DELAY_DEFAULT,
         interrupt_handler=None,
         e10s=True,
-        enable_webrender=False,
         results_handler_class=RaptorResultsHandler,
         device_name=None,
         disable_perf_tuning=False,
@@ -103,10 +102,13 @@ class Perftest(object):
         environment={},
         project="mozilla-central",
         verbose=False,
+        python=None,
         **kwargs
     ):
+        self._remote_test_root = None
         self._dirs_to_remove = []
         self.verbose = verbose
+        self.page_count = []
 
         # Override the magic --host HOST_IP with the value of the environment variable.
         if host == "HOST_IP":
@@ -135,9 +137,8 @@ class Perftest(object):
             "is_release_build": is_release_build,
             "enable_control_server_wait": memory_test or cpu_test,
             "e10s": e10s,
-            "enable_webrender": enable_webrender,
             "device_name": device_name,
-            "enable_fission": extra_prefs.get("fission.autostart", False),
+            "fission": extra_prefs.get("fission.autostart", True),
             "disable_perf_tuning": disable_perf_tuning,
             "conditioned_profile": conditioned_profile,
             "chimera": chimera,
@@ -203,11 +204,6 @@ class Perftest(object):
             else:
                 self.post_startup_delay = post_startup_delay
 
-        if self.config["enable_webrender"]:
-            self.config["environment"]["MOZ_WEBRENDER"] = "1"
-        else:
-            self.config["environment"]["MOZ_WEBRENDER"] = "0"
-
         LOG.info("Post startup delay set to %d ms" % self.post_startup_delay)
         LOG.info("main raptor init, config is: %s" % str(self.config))
         self.build_browser_profile()
@@ -223,6 +219,10 @@ class Perftest(object):
     @property
     def is_localhost(self):
         return self.config.get("host") in ("localhost", "127.0.0.1")
+
+    @property
+    def android_external_storage(self):
+        return "/sdcard/test_root/"
 
     @property
     def conditioned_profile_copy(self):
@@ -268,6 +268,7 @@ class Perftest(object):
             visible=True,
             force_new=True,
             skip_logs=True,
+            remote_test_root=self.android_external_storage,
         )
 
         if self.config.get("is_release_build", False):
@@ -392,7 +393,12 @@ class Perftest(object):
             LOG.info("Merging profile: {}".format(path))
             self.profile.merge(path)
 
-        if self.config["extra_prefs"].get("fission.autostart", False):
+        if self.config["extra_prefs"].get("fission.autostart", True):
+            self.config["extra_prefs"].update(
+                {
+                    "fission.autostart": True,
+                }
+            )
             LOG.info("Enabling fission via browser preferences")
             LOG.info("Browser preferences: {}".format(self.config["extra_prefs"]))
         self.profile.set_preferences(self.config["extra_prefs"])
@@ -483,6 +489,7 @@ class Perftest(object):
 
         self.config["raptor_json_path"] = raptor_json_path
         self.config["artifact_dir"] = self.artifact_dir
+        self.config["page_count"] = self.page_count
         res = self.results_handler.summarize_and_output(self.config, tests, test_names)
 
         # gecko profiling symbolication
@@ -513,46 +520,6 @@ class Perftest(object):
     def get_page_timeout_list(self):
         return self.results_handler.page_timeout_list
 
-    def get_recording_paths(self, test):
-        recordings = test.get("playback_recordings")
-
-        if recordings:
-            recording_paths = []
-            proxy_dir = self.playback.mozproxy_dir
-
-            for recording in recordings.split():
-                if not recording:
-                    continue
-                recording_paths.append(os.path.join(proxy_dir, recording))
-
-            return recording_paths
-
-    def log_recording_dates(self, test):
-        _recording_paths = self.get_recording_paths(test)
-        if _recording_paths is None:
-            LOG.info(
-                "No playback recordings specified in the test; so not getting recording info"
-            )
-            return
-
-        for r in _recording_paths:
-            json_path = "{}.json".format(r.split(".")[0])
-
-            if os.path.exists(json_path):
-                with open(json_path) as f:
-                    recording_date = json.loads(f.read()).get("recording_date")
-
-                    if recording_date is not None:
-                        LOG.info(
-                            "Playback recording date: {} ".format(
-                                recording_date.split(" ")[0]
-                            )
-                        )
-                    else:
-                        LOG.info("Playback recording date not available")
-            else:
-                LOG.info("Playback recording information not available")
-
     def delete_proxy_settings_from_profile(self):
         # Must delete the proxy settings from the profile if running
         # the test with a host different from localhost.
@@ -571,7 +538,7 @@ class Perftest(object):
         self.config.update(
             {
                 "playback_tool": test.get("playback"),
-                "playback_version": test.get("playback_version", "4.0.4"),
+                "playback_version": test.get("playback_version", "7.0.4"),
                 "playback_files": [
                     os.path.join(playback_dir, test.get("playback_pageset_manifest"))
                 ],
@@ -584,8 +551,6 @@ class Perftest(object):
 
         # let's start it!
         self.playback.start()
-
-        self.log_recording_dates(test)
 
     def _init_gecko_profiling(self, test):
         LOG.info("initializing gecko profiler")
@@ -760,8 +725,6 @@ class PerftestDesktop(Perftest):
 
     def __init__(self, *args, **kwargs):
         super(PerftestDesktop, self).__init__(*args, **kwargs)
-        if self.config["enable_webrender"]:
-            self.config["environment"]["MOZ_ACCELERATED"] = "1"
 
     def setup_chrome_args(self, test):
         """Sets up chrome/chromium cmd-line arguments.

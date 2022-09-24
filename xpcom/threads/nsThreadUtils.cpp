@@ -18,6 +18,7 @@
 #include "prsystem.h"
 
 #include "nsThreadManager.h"
+#include "TaskController.h"
 
 #ifdef XP_WIN
 #  include <windows.h>
@@ -39,8 +40,6 @@ static mozilla::LazyLogModule sEventDispatchAndRunLog("events");
   MOZ_LOG_TEST(sEventDispatchAndRunLog, mozilla::LogLevel::Error)
 
 using namespace mozilla;
-
-NS_IMPL_ISUPPORTS(TailDispatchingTarget, nsIEventTarget, nsISerialEventTarget)
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
 
@@ -137,10 +136,10 @@ PrioritizableRunnable::GetPriority(uint32_t* aPriority) {
   return NS_OK;
 }
 
-already_AddRefed<nsIRunnable> mozilla::CreateMediumHighRunnable(
+already_AddRefed<nsIRunnable> mozilla::CreateRenderBlockingRunnable(
     already_AddRefed<nsIRunnable>&& aRunnable) {
   nsCOMPtr<nsIRunnable> runnable = new PrioritizableRunnable(
-      std::move(aRunnable), nsIRunnablePriority::PRIORITY_MEDIUMHIGH);
+      std::move(aRunnable), nsIRunnablePriority::PRIORITY_RENDER_BLOCKING);
   return runnable.forget();
 }
 
@@ -480,7 +479,10 @@ void NS_SetCurrentThreadName(const char* aName) {
 #else
   PR_SetCurrentThreadName(aName);
 #endif
-  CrashReporter::SetCurrentThreadName(aName);
+  if (nsThreadManager::get().IsNSThread()) {
+    nsThread* thread = nsThreadManager::get().GetCurrentThread();
+    thread->SetThreadNameInternal(nsDependentCString(aName));
+  }
 }
 
 nsIThread* NS_GetCurrentThread() {
@@ -698,22 +700,12 @@ extern "C" {
 // via the xpcom/rust/moz_task crate, which wraps them in safe Rust functions
 // that enable Rust code to get/create threads and dispatch runnables on them.
 
-nsresult NS_GetCurrentThreadEventTarget(nsIEventTarget** aResult) {
-  nsCOMPtr<nsIEventTarget> target = mozilla::GetCurrentEventTarget();
-  if (!target) {
-    return NS_ERROR_UNEXPECTED;
-  }
-  target.forget(aResult);
-  return NS_OK;
+nsresult NS_GetCurrentThreadRust(nsIThread** aResult) {
+  return NS_GetCurrentThread(aResult);
 }
 
-nsresult NS_GetMainThreadEventTarget(nsIEventTarget** aResult) {
-  nsCOMPtr<nsIEventTarget> target = mozilla::GetMainThreadEventTarget();
-  if (!target) {
-    return NS_ERROR_UNEXPECTED;
-  }
-  target.forget(aResult);
-  return NS_OK;
+nsresult NS_GetMainThreadRust(nsIThread** aResult) {
+  return NS_GetMainThread(aResult);
 }
 
 // NS_NewNamedThread's aStackSize parameter has the default argument
@@ -728,8 +720,8 @@ nsresult NS_NewNamedThreadWithDefaultStackSize(const nsACString& aName,
   return NS_NewNamedThread(aName, aResult, aEvent);
 }
 
-bool NS_IsCurrentThread(nsIEventTarget* aThread) {
-  return aThread->IsOnCurrentThread();
+bool NS_IsOnCurrentThread(nsIEventTarget* aTarget) {
+  return aTarget->IsOnCurrentThread();
 }
 
 nsresult NS_DispatchBackgroundTask(nsIRunnable* aEvent,

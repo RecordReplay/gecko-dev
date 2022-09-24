@@ -353,6 +353,16 @@
   font-size: 12px;
 }
 
+.network-monitor #response-panel .notificationbox .notification[data-key="CORS-error"].notification[data-type="info"] {
+  background-color: var(--theme-selection-background-hover);
+}
+
+.network-monitor #response-panel .notification[data-key="CORS-error"] .notificationInner .messageText {
+  white-space: normal;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
 /* Timings tabpanel */
 
 .network-monitor .timings-container {
@@ -446,21 +456,14 @@
   direction: ltr;
 }
 
-.network-monitor .stack-trace .frame-link-source,
-.network-monitor .message-location .frame-link-source {
+.network-monitor .stack-trace .frame-link-source {
   /* Makes the file name truncated (and ellipsis shown) on the left side */
   direction: rtl;
+  unicode-bidi: embed;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: end;
-}
-
-.network-monitor .stack-trace .frame-link-source-inner,
-.network-monitor .message-location .frame-link-source-inner {
-  /* Enforce LTR direction for the file name - fixes bug 1290056 */
-  direction: ltr;
-  unicode-bidi: embed;
 }
 
 .network-monitor .stack-trace .frame-link-function-display-name {
@@ -496,12 +499,12 @@
 
 /* Custom request panel */
 
-.network-monitor .custom-request-panel {
+.network-monitor .custom-request-panel, .http-custom-request-panel {
   height: 100%;
   background-color: var(--theme-sidebar-background);
 }
 
-.theme-dark .network-monitor .custom-request-panel {
+.theme-dark .network-monitor .custom-request-panel, .http-custom-request-panel {
   color: var(--theme-selection-color);
 }
 
@@ -509,7 +512,7 @@
   font-weight: 600;
 }
 
-.network-monitor .custom-request-panel textarea {
+.network-monitor .custom-request-panel, .http-custom-request-panel textarea {
   resize: none;
   font: message-box;
   font-size: var(--theme-body-font-size);
@@ -518,11 +521,16 @@
 .network-monitor .custom-header,
 .network-monitor .custom-method-and-url,
 .network-monitor .custom-request,
-.network-monitor .custom-section {
+.network-monitor .custom-section,
+.network-monitor .http-custom-header,
+.network-monitor .http-custom-method-and-url,
+.network-monitor .http-custom-request,
+.network-monitor .http-custom-section {
   display: flex;
 }
 
-.network-monitor .custom-header {
+.network-monitor .custom-header,
+.network-monitor .http-custom-header {
   flex-grow: 1;
   font-size: 1.1em;
   padding-top: 4px;
@@ -533,13 +541,32 @@
   margin-top: 0.5em;
 }
 
+.network-monitor .http-custom-section {
+  flex-direction: column;
+}
+
 .network-monitor .custom-method-value {
   width: 4.5em;
 }
 
-.network-monitor .custom-url-value {
+.network-monitor .http-custom-method-value{
+  width: 6.0em;
+}
+
+.network-monitor .custom-url-value,
+.network-monitor .http-custom-url-value {
   flex-grow: 1;
   margin-inline-start: 6px;
+}
+
+.network-monitor #response-panel .notification[data-key="xssi-string-removed-info-box"] {
+  background-color: var(--theme-selection-background-hover);
+}
+
+.network-monitor #response-panel .notification[data-key="xssi-string-removed-info-box"] .notificationInner .messageText {
+  white-space: normal;
+  padding-top: 8px;
+  padding-bottom: 8px;
 }
 
 #timings-panel .learn-more-link {

@@ -6,8 +6,7 @@
 
 #include "proxy/DeadObjectProxy.h"
 
-#include "jsapi.h"
-
+#include "js/ErrorReport.h"           // JS_ReportErrorNumberASCII
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "vm/JSFunction.h"            // XXXefaust Bug 1064662
 #include "vm/ProxyObject.h"
@@ -89,12 +88,6 @@ bool DeadObjectProxy::construct(JSContext* cx, HandleObject wrapper,
 
 bool DeadObjectProxy::nativeCall(JSContext* cx, IsAcceptableThis test,
                                  NativeImpl impl, const CallArgs& args) const {
-  ReportDead(cx);
-  return false;
-}
-
-bool DeadObjectProxy::hasInstance(JSContext* cx, HandleObject proxy,
-                                  MutableHandleValue v, bool* bp) const {
   ReportDead(cx);
   return false;
 }

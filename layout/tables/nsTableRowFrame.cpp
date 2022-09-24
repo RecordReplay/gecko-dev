@@ -357,7 +357,7 @@ void nsTableRowFrame::DidResize() {
 
           // ...unless relative positioning is in effect, in which case the
           // cell may have been moved away from the row's block-start
-          if (cellFrame->IsRelativelyPositioned()) {
+          if (cellFrame->IsRelativelyOrStickyPositioned()) {
             // Find out where the cell would have been without relative
             // positioning.
             LogicalPoint oldNormalPos =
@@ -899,7 +899,7 @@ void nsTableRowFrame::ReflowChildren(nsPresContext* aPresContext,
       if (kidReflowInput) {
         // We reflowed. Apply relative positioning in the normal way.
         flags = ReflowChildFlags::ApplyRelativePositioning;
-      } else if (kidFrame->IsRelativelyPositioned()) {
+      } else if (kidFrame->IsRelativelyOrStickyPositioned()) {
         // We didn't reflow.  Do the positioning part of what
         // MovePositionBy does internally.  (This codepath should really
         // be merged into the else below if we can.)
@@ -1388,8 +1388,9 @@ void nsTableRowFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                       bool aRebuildDisplayItems) {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
   if (GetTableFrame()->IsBorderCollapse()) {
+    const bool rebuild = StaticPrefs::layout_display_list_retain_sc();
     GetParent()->InvalidateFrameWithRect(InkOverflowRect() + GetPosition(),
-                                         aDisplayItemKey, false);
+                                         aDisplayItemKey, rebuild);
   }
 }
 
@@ -1402,7 +1403,7 @@ void nsTableRowFrame::InvalidateFrameWithRect(const nsRect& aRect,
   // we get an inactive layer created and this is computed
   // within FrameLayerBuilder
   GetParent()->InvalidateFrameWithRect(aRect + GetPosition(), aDisplayItemKey,
-                                       false);
+                                       aRebuildDisplayItems);
 }
 
 /* ----- global methods ----- */

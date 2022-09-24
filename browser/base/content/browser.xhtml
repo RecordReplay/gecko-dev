@@ -23,18 +23,16 @@
 <?xml-stylesheet href="chrome://browser/content/places/places.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/content/usercontext/usercontext.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/" type="text/css"?>
+#ifdef XP_WIN
+<?xml-stylesheet href="chrome://browser/skin/browser-aero.css" type="text/css"?>
+#endif
+
 <?xml-stylesheet href="chrome://browser/skin/controlcenter/panel.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/customizableui/panelUI.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/downloads/downloads.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/searchbar.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/places/tree-icons.css" type="text/css"?>
 <?xml-stylesheet href="chrome://browser/skin/places/editBookmark.css" type="text/css"?>
-
-# All DTD information is stored in a separate file so that it can be shared by
-# hiddenWindowMac.xhtml.
-<!DOCTYPE window [
-#include browser-doctype.inc
-]>
 
 <html id="main-window"
         xmlns:html="http://www.w3.org/1999/xhtml"
@@ -63,6 +61,7 @@
         persist="screenX screenY width height sizemode"
         data-l10n-sync="true">
 <head>
+  <link rel="localization" href="browser/search.ftl"/>
   <link rel="localization" href="branding/brand.ftl"/>
   <link rel="localization" href="browser/branding/sync-brand.ftl"/>
   <link rel="localization" href="browser/branding/brandings.ftl"/>
@@ -73,12 +72,19 @@
   <link rel="localization" href="browser/menubar.ftl"/>
   <link rel="localization" href="browser/protectionsPanel.ftl"/>
   <link rel="localization" href="browser/appmenu.ftl"/>
+  <link rel="localization" href="browser/panelUI.ftl"/>
   <link rel="localization" href="preview/interventions.ftl"/>
   <link rel="localization" href="browser/sidebarMenu.ftl"/>
   <link rel="localization" href="browser/allTabsMenu.ftl"/>
   <link rel="localization" href="browser/places.ftl"/>
   <link rel="localization" href="toolkit/printing/printUI.ftl"/>
   <link rel="localization" href="browser/tabbrowser.ftl"/>
+  <link rel="localization" href="preview/firefoxSuggest.ftl"/>
+  <link rel="localization" href="browser/toolbarContextMenu.ftl"/>
+  <link rel="localization" href="browser/screenshots.ftl"/>
+#ifdef NIGHTLY_BUILD
+  <link rel="localization" href="preview/firefoxView.ftl"/>
+#endif
 
   <title data-l10n-id="browser-main-window-title"></title>
 
@@ -136,9 +142,7 @@
   <html:template id="window-modal-dialog-template">
     <vbox class="dialogTemplate dialogOverlay" align="center" topmost="true">
       <hbox class="dialogBox">
-        <browser class="dialogFrame"
-                 autoscroll="false"
-                 disablehistory="true"/>
+        <browser class="dialogFrame" autoscroll="false" disablehistory="true"/>
       </hbox>
     </vbox>
   </html:template>

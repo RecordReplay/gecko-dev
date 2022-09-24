@@ -29,7 +29,7 @@ Using Mercurial bundles
 
 If you are worried that your Internet connection is not fast or robust
 enough to download such a large amount of data all in one go without
-being interrupted and cannot clone using the command given above, then you are recommended to try :ref:`Mercurial bundles <Mercurial bundles>`. If interrupted, they can be resumed (continued without downloading 
+being interrupted and cannot clone using the command given above, then you are recommended to try :ref:`Mercurial bundles <Mercurial bundles>`. If interrupted, they can be resumed (continued without downloading
 from the beginning) if the app you're using to download supports it. For
 example, in Firefox you would right click on the download and select
 `Resume` once your connection to the Internet was reestablished.
@@ -67,8 +67,7 @@ If you don't have the Firefox source code available, you should edit your Mercur
     [defaults]
     commit = -v
 
-On Windows, these settings can be added to `$HOME\.hgrc` or `$HOME\Mercurial.ini`, or, if you'd like global settings, `C:\mozilla-build\hg\Mercurial.ini`
-or `C:\Program Files\Mercurial\Mercurial.ini.` On UNIX-like systems, they should be in your `$HOME/.hgrc` file.
+These settings can be added to ``$HOME/.hgrc`` (Linux/macOS) or ``$HOME\Mercurial.ini`` (Windows).
 
 You can configure the editor to use for commit messages using the `editor` option in the `[ui]` section or by setting the `EDITOR` environment variable.
 
@@ -162,11 +161,9 @@ There's a number of extensions you can enable. See http://mercurial.selenic.com/
 
 #. color - Colorize terminal output
 #. histedit - Provides git rebase --interactive behavior.
-#. progress - Draw progress bars on long-running operations.
 #. rebase - Ability to easily rebase patches on top of other heads.
 #. evolve - Enable and enhance the inprogress ChangesetEvolution work.
 #. firefoxtree - Enhances the interaction with Firefox repositories.
-#. transplant - Easily move patches between repositories, branches, etc.
 
 These can all be turned on by just adding this to your `.hgrc` file:
 
@@ -176,10 +173,8 @@ These can all be turned on by just adding this to your `.hgrc` file:
     color =
     rebase =
     histedit =
-    progress =
     firefoxtree =
     evolve =
-    transplant =
 
 In addition, there are some 3rd party extensions that are incredibly
 useful for basic development:
@@ -187,18 +182,10 @@ useful for basic development:
 `mozext <https://hg.mozilla.org/hgcustom/version-control-tools/file/default/hgext/mozext>`__
    Mozilla-specific functionality to aid in developing Firefox/Gecko.
 
-`trychooser <https://github.com/pbiggar/trychooser>`__
-   Automatically creates a try commit message and then pushes changes to
-   Mozilla's Try infrastructure. Just run:
-
-.. code-block:: shell
-
-    hg trychooser
-
 Configuring the try repository
 ------------------------------
 
-About `Try Server <Try Server>`__.
+About :ref:`Pushing to Try <Pushing to Try>`.
 
 Learning to use Mercurial
 -------------------------

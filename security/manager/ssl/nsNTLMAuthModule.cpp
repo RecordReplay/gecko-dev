@@ -22,10 +22,7 @@
 #include "mozilla/Telemetry.h"
 #include "nsCOMPtr.h"
 #include "nsComponentManagerUtils.h"
-#include "nsICryptoHMAC.h"
 #include "nsICryptoHash.h"
-#include "nsIKeyModule.h"
-#include "nsKeyModule.h"
 #include "nsNativeCharsetUtils.h"
 #include "nsNetCID.h"
 #include "nsUnicharUtils.h"
@@ -184,10 +181,11 @@ static void LogBuf(const char* tag, const uint8_t* buf, uint32_t bufLen) {
     snprintf(line + len, sizeof(line) - len, "   ");
     for (i = 0; i < count; ++i) {
       len = strlen(line);
-      if (isprint(buf[i]))
+      if (isprint(buf[i])) {
         snprintf(line + len, sizeof(line) - len, "%c", buf[i]);
-      else
+      } else {
         snprintf(line + len, sizeof(line) - len, ".");
+      }
     }
     PR_LogPrint("%s\n", line);
 
@@ -407,17 +405,19 @@ static nsresult ParseType2Msg(const void* inBuf, uint32_t inLen,
   //
   if (inLen < NTLM_TYPE2_HEADER_LEN) return NS_ERROR_UNEXPECTED;
 
-  auto cursor = static_cast<const uint8_t*>(inBuf);
+  const auto* cursor = static_cast<const uint8_t*>(inBuf);
 
   // verify NTLMSSP signature
-  if (memcmp(cursor, NTLM_SIGNATURE, sizeof(NTLM_SIGNATURE)) != 0)
+  if (memcmp(cursor, NTLM_SIGNATURE, sizeof(NTLM_SIGNATURE)) != 0) {
     return NS_ERROR_UNEXPECTED;
+  }
 
   cursor += sizeof(NTLM_SIGNATURE);
 
   // verify Type-2 marker
-  if (memcmp(cursor, NTLM_TYPE2_MARKER, sizeof(NTLM_TYPE2_MARKER)) != 0)
+  if (memcmp(cursor, NTLM_TYPE2_MARKER, sizeof(NTLM_TYPE2_MARKER)) != 0) {
     return NS_ERROR_UNEXPECTED;
+  }
 
   cursor += sizeof(NTLM_TYPE2_MARKER);
 
@@ -488,7 +488,7 @@ static nsresult GenerateType3Msg(const nsString& domain,
   // inBuf contains Type-2 msg (the challenge) from server
   MOZ_ASSERT(NS_IsMainThread());
   nsresult rv;
-  Type2Msg msg;
+  Type2Msg msg{};
 
   rv = ParseType2Msg(inBuf, inLen, &msg);
   if (NS_FAILED(rv)) return rv;
@@ -497,8 +497,7 @@ static nsresult GenerateType3Msg(const nsString& domain,
 
   // There is no negotiation for NTLMv2, so we just do it unless we are forced
   // by explict user configuration to use the older DES-based cryptography.
-  bool ntlmv2 =
-      mozilla::StaticPrefs::network_auth_force_generic_ntlm_v1() == false;
+  bool ntlmv2 = !mozilla::StaticPrefs::network_auth_force_generic_ntlm_v1();
 
   // temporary buffers for unicode strings
 #ifdef IS_BIG_ENDIAN
@@ -594,10 +593,6 @@ static nsresult GenerateType3Msg(const nsString& domain,
   if (ntlmv2) {
     // NTLMv2 mode, the default
     nsString userUpper, domainUpper;
-    nsAutoCString ntlmHashStr;
-    nsAutoCString ntlmv2HashStr;
-    nsAutoCString lmv2ResponseStr;
-    nsAutoCString ntlmv2ResponseStr;
 
     // temporary buffers for unicode strings
     nsAutoString ucsDomainUpperBuf;
@@ -630,49 +625,24 @@ static nsresult GenerateType3Msg(const nsString& domain,
 #endif
 
     NTLM_Hash(password, ntlmHash);
-    ntlmHashStr = nsAutoCString(
-        mozilla::BitwiseCast<const char*, const uint8_t*>(ntlmHash),
-        NTLM_HASH_LEN);
 
-    nsCOMPtr<nsIKeyObjectFactory> keyFactory =
-        do_CreateInstance(NS_KEYMODULEOBJECTFACTORY_CONTRACTID, &rv);
-
+    HMAC ntlmv2HashHmac;
+    rv = ntlmv2HashHmac.Begin(SEC_OID_MD5, Span(ntlmHash, NTLM_HASH_LEN));
     if (NS_FAILED(rv)) {
       return rv;
     }
-
-    nsCOMPtr<nsIKeyObject> ntlmKey =
-        do_CreateInstance(NS_KEYMODULEOBJECT_CONTRACTID, &rv);
+    rv = ntlmv2HashHmac.Update(static_cast<const uint8_t*>(userUpperPtr),
+                               userUpperLen);
     if (NS_FAILED(rv)) {
       return rv;
     }
-
-    rv = keyFactory->KeyFromString(nsIKeyObject::HMAC, ntlmHashStr,
-                                   getter_AddRefs(ntlmKey));
+    rv = ntlmv2HashHmac.Update(static_cast<const uint8_t*>(domainUpperPtr),
+                               domainUpperLen);
     if (NS_FAILED(rv)) {
       return rv;
     }
-
-    nsCOMPtr<nsICryptoHMAC> hasher =
-        do_CreateInstance(NS_CRYPTO_HMAC_CONTRACTID, &rv);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Init(nsICryptoHMAC::MD5, ntlmKey);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv =
-        hasher->Update(static_cast<const uint8_t*>(userUpperPtr), userUpperLen);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Update(static_cast<const uint8_t*>(domainUpperPtr),
-                        domainUpperLen);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Finish(false, ntlmv2HashStr);
+    nsTArray<uint8_t> ntlmv2Hash;
+    rv = ntlmv2HashHmac.End(ntlmv2Hash);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -680,41 +650,30 @@ static nsresult GenerateType3Msg(const nsString& domain,
     uint8_t client_random[NTLM_CHAL_LEN];
     PK11_GenerateRandom(client_random, NTLM_CHAL_LEN);
 
-    nsCOMPtr<nsIKeyObject> ntlmv2Key =
-        do_CreateInstance(NS_KEYMODULEOBJECT_CONTRACTID, &rv);
+    HMAC lmv2ResponseHmac;
+    rv = lmv2ResponseHmac.Begin(SEC_OID_MD5, Span(ntlmv2Hash));
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    rv = lmv2ResponseHmac.Update(msg.challenge, NTLM_CHAL_LEN);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    rv = lmv2ResponseHmac.Update(client_random, NTLM_CHAL_LEN);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+    nsTArray<uint8_t> lmv2Response;
+    rv = lmv2ResponseHmac.End(lmv2Response);
     if (NS_FAILED(rv)) {
       return rv;
     }
 
-    // Prepare the LMv2 response
-    rv = keyFactory->KeyFromString(nsIKeyObject::HMAC, ntlmv2HashStr,
-                                   getter_AddRefs(ntlmv2Key));
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    rv = hasher->Init(nsICryptoHMAC::MD5, ntlmv2Key);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Update(msg.challenge, NTLM_CHAL_LEN);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Update(client_random, NTLM_CHAL_LEN);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-    rv = hasher->Finish(false, lmv2ResponseStr);
-    if (NS_FAILED(rv)) {
-      return rv;
-    }
-
-    if (lmv2ResponseStr.Length() != NTLMv2_HASH_LEN) {
+    if (lmv2Response.Length() != NTLMv2_HASH_LEN) {
       return NS_ERROR_UNEXPECTED;
     }
 
-    memcpy(lmResp, lmv2ResponseStr.get(), NTLMv2_HASH_LEN);
+    memcpy(lmResp, lmv2Response.Elements(), NTLMv2_HASH_LEN);
     memcpy(lmResp + NTLMv2_HASH_LEN, client_random, NTLM_CHAL_LEN);
 
     memset(ntlmv2_blob1, 0, NTLMv2_BLOB1_LEN);
@@ -729,32 +688,34 @@ static nsresult GenerateType3Msg(const nsString& domain,
     mozilla::LittleEndian::writeUint64(&ntlmv2_blob1[8], nt_time);
     PK11_GenerateRandom(&ntlmv2_blob1[16], NTLM_CHAL_LEN);
 
-    rv = hasher->Init(nsICryptoHMAC::MD5, ntlmv2Key);
+    HMAC ntlmv2ResponseHmac;
+    rv = ntlmv2ResponseHmac.Begin(SEC_OID_MD5, Span(ntlmv2Hash));
     if (NS_FAILED(rv)) {
       return rv;
     }
-    rv = hasher->Update(msg.challenge, NTLM_CHAL_LEN);
+    rv = ntlmv2ResponseHmac.Update(msg.challenge, NTLM_CHAL_LEN);
     if (NS_FAILED(rv)) {
       return rv;
     }
-    rv = hasher->Update(ntlmv2_blob1, NTLMv2_BLOB1_LEN);
+    rv = ntlmv2ResponseHmac.Update(ntlmv2_blob1, NTLMv2_BLOB1_LEN);
     if (NS_FAILED(rv)) {
       return rv;
     }
-    rv = hasher->Update(msg.targetInfo, msg.targetInfoLen);
+    rv = ntlmv2ResponseHmac.Update(msg.targetInfo, msg.targetInfoLen);
     if (NS_FAILED(rv)) {
       return rv;
     }
-    rv = hasher->Finish(false, ntlmv2ResponseStr);
+    nsTArray<uint8_t> ntlmv2Response;
+    rv = ntlmv2ResponseHmac.End(ntlmv2Response);
     if (NS_FAILED(rv)) {
       return rv;
     }
 
-    if (ntlmv2ResponseStr.Length() != NTLMv2_RESP_LEN) {
+    if (ntlmv2Response.Length() != NTLMv2_RESP_LEN) {
       return NS_ERROR_UNEXPECTED;
     }
 
-    memcpy(ntlmv2Resp, ntlmv2ResponseStr.get(), NTLMv2_RESP_LEN);
+    memcpy(ntlmv2Resp, ntlmv2Response.Elements(), NTLMv2_RESP_LEN);
     ntlmRespLen = NTLMv2_RESP_LEN + NTLMv2_BLOB1_LEN;
     ntlmRespLen += msg.targetInfoLen;
     if (!ntlmRespLen.isValid()) {
@@ -790,7 +751,7 @@ static nsresult GenerateType3Msg(const nsString& domain,
       return rv;
     }
 
-    auto sessionHash = mozilla::BitwiseCast<const uint8_t*, const char*>(
+    const auto* sessionHash = mozilla::BitwiseCast<const uint8_t*, const char*>(
         sessionHashString.get());
 
     LogBuf("NTLM2 effective key: ", sessionHash, 8);
@@ -916,9 +877,9 @@ nsresult nsNTLMAuthModule::InitTest() {
 }
 
 NS_IMETHODIMP
-nsNTLMAuthModule::Init(const char* /*serviceName*/, uint32_t serviceFlags,
-                       const char16_t* domain, const char16_t* username,
-                       const char16_t* password) {
+nsNTLMAuthModule::Init(const nsACString& serviceName, uint32_t serviceFlags,
+                       const nsAString& domain, const nsAString& username,
+                       const nsAString& password) {
   MOZ_ASSERT((serviceFlags & ~nsIAuthModule::REQ_PROXY_AUTH) ==
                  nsIAuthModule::REQ_DEFAULT,
              "Unexpected service flags");
@@ -1001,10 +962,11 @@ nsNTLMAuthModule::Wrap(const void* inToken, uint32_t inTokenLen,
 static uint8_t des_setkeyparity(uint8_t x) {
   if ((((x >> 7) ^ (x >> 6) ^ (x >> 5) ^ (x >> 4) ^ (x >> 3) ^ (x >> 2) ^
         (x >> 1)) &
-       0x01) == 0)
+       0x01) == 0) {
     x |= 0x01;
-  else
+  } else {
     x &= 0xfe;
+  }
   return x;
 }
 

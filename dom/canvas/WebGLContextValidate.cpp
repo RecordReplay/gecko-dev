@@ -285,21 +285,6 @@ bool WebGLContext::InitAndValidateGL(FailureReason* const out_failReason) {
   mCanLoseContextInForeground =
       StaticPrefs::webgl_can_lose_context_in_foreground();
 
-  // These are the default values, see 6.2 State tables in the
-  // OpenGL ES 2.0.25 spec.
-  mDriverColorMask = mColorWriteMask;
-  mColorClearValue[0] = 0.f;
-  mColorClearValue[1] = 0.f;
-  mColorClearValue[2] = 0.f;
-  mColorClearValue[3] = 0.f;
-  mDepthWriteMask = true;
-  mDepthClearValue = 1.f;
-  mStencilClearValue = 0;
-  mStencilRefFront = 0;
-  mStencilRefBack = 0;
-
-  mLineWidth = 1.0;
-
   /*
   // Technically, we should be setting mStencil[...] values to
   // `allOnes`, but either ANGLE breaks or the SGX540s on Try break.
@@ -326,23 +311,7 @@ bool WebGLContext::InitAndValidateGL(FailureReason* const out_failReason) {
   AssertUintParamCorrect(gl, LOCAL_GL_STENCIL_BACK_WRITEMASK,
                          mStencilWriteMaskBack);
 
-  mDitherEnabled = true;
-  mRasterizerDiscardEnabled = false;
-  mScissorTestEnabled = false;
-
-  mDepthTestEnabled = 0;
-  mDriverDepthTest = false;
-  mStencilTestEnabled = 0;
-  mDriverStencilTest = false;
-
-  mGenerateMipmapHint = LOCAL_GL_DONT_CARE;
-
   // Bindings, etc.
-  mActiveTexture = 0;
-  mDefaultFB_DrawBuffer0 = LOCAL_GL_BACK;
-  mDefaultFB_ReadBuffer = LOCAL_GL_BACK;
-
-  mWebGLError = LOCAL_GL_NO_ERROR;
 
   mBound2DTextures.Clear();
   mBoundCubeMapTextures.Clear();
@@ -557,12 +526,6 @@ bool WebGLContext::InitAndValidateGL(FailureReason* const out_failReason) {
 
   if (IsWebGL2() && !InitWebGL2(out_failReason)) {
     // Todo: Bug 898404: Only allow WebGL2 on GL>=3.0 on desktop GL.
-    return false;
-  }
-
-  if (!gl->IsSupported(gl::GLFeature::vertex_array_object)) {
-    *out_failReason = {"FEATURE_FAILURE_WEBGL_VAOS",
-                       "Requires vertex_array_object."};
     return false;
   }
 

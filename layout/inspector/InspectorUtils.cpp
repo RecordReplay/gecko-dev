@@ -35,6 +35,7 @@
 #include "nsColor.h"
 #include "mozilla/ServoStyleSet.h"
 #include "nsLayoutUtils.h"
+#include "nsNameSpaceManager.h"
 #include "nsStyleUtil.h"
 #include "nsQueryObject.h"
 #include "mozilla/ServoBindings.h"
@@ -52,12 +53,37 @@ using namespace mozilla::dom;
 namespace mozilla {
 namespace dom {
 
+static already_AddRefed<const ComputedStyle> GetCleanComputedStyleForElement(
+    dom::Element* aElement, PseudoStyleType aPseudo) {
+  MOZ_ASSERT(aElement);
+
+  Document* doc = aElement->GetComposedDoc();
+  if (!doc) {
+    return nullptr;
+  }
+
+  PresShell* presShell = doc->GetPresShell();
+  if (!presShell) {
+    return nullptr;
+  }
+
+  nsPresContext* presContext = presShell->GetPresContext();
+  if (!presContext) {
+    return nullptr;
+  }
+
+  presContext->EnsureSafeToHandOutCSSRules();
+
+  return nsComputedDOMStyle::GetComputedStyle(aElement, aPseudo);
+}
+
 /* static */
 void InspectorUtils::GetAllStyleSheets(GlobalObject& aGlobalObject,
                                        Document& aDocument, bool aDocumentOnly,
                                        nsTArray<RefPtr<StyleSheet>>& aResult) {
   // Get the agent, then user and finally xbl sheets in the style set.
   PresShell* presShell = aDocument.GetPresShell();
+  nsTHashSet<StyleSheet*> sheetSet;
 
   if (presShell) {
     ServoStyleSet* styleSet = presShell->StyleSet();
@@ -76,8 +102,8 @@ void InspectorUtils::GetAllStyleSheets(GlobalObject& aGlobalObject,
     AutoTArray<StyleSheet*, 32> nonDocumentSheets;
     styleSet->AppendAllNonDocumentAuthorSheets(nonDocumentSheets);
 
-    // The non-document stylesheet array can't have duplicates right now, but it
-    // could once we include adopted stylesheets.
+    // The non-document stylesheet array can have duplicates due to adopted
+    // stylesheets.
     nsTHashSet<StyleSheet*> sheetSet;
     for (StyleSheet* sheet : nonDocumentSheets) {
       if (sheetSet.EnsureInserted(sheet)) {
@@ -91,9 +117,11 @@ void InspectorUtils::GetAllStyleSheets(GlobalObject& aGlobalObject,
     aResult.AppendElement(aDocument.SheetAt(i));
   }
 
-  // FIXME(emilio, bug 1617948): This doesn't deal with adopted stylesheets, and
-  // it should. It should also handle duplicates correctly when it does, see
-  // above.
+  for (auto& sheet : aDocument.AdoptedStyleSheets()) {
+    if (sheetSet.EnsureInserted(sheet)) {
+      aResult.AppendElement(sheet);
+    }
+  }
 }
 
 bool InspectorUtils::IsIgnorableWhitespace(CharacterData& aDataNode) {
@@ -155,13 +183,14 @@ already_AddRefed<nsINodeList> InspectorUtils::GetChildrenForNode(
 void InspectorUtils::GetCSSStyleRules(
     GlobalObject& aGlobalObject, Element& aElement, const nsAString& aPseudo,
     bool aIncludeVisitedStyle, nsTArray<RefPtr<BindingStyleRule>>& aResult) {
-  RefPtr<nsAtom> pseudoElt;
-  if (!aPseudo.IsEmpty()) {
-    pseudoElt = NS_Atomize(aPseudo);
+  Maybe<PseudoStyleType> type = nsCSSPseudoElements::GetPseudoType(
+      aPseudo, CSSEnabledState::ForAllContent);
+  if (!type) {
+    return;
   }
 
-  RefPtr<ComputedStyle> computedStyle =
-      GetCleanComputedStyleForElement(&aElement, pseudoElt);
+  RefPtr<const ComputedStyle> computedStyle =
+      GetCleanComputedStyleForElement(&aElement, *type);
   if (!computedStyle) {
     // This can fail for elements that are not in the document or
     // if the document they're in doesn't have a presshell.  Bail out.
@@ -570,31 +599,6 @@ uint64_t InspectorUtils::GetContentState(GlobalObject& aGlobalObject,
 }
 
 /* static */
-already_AddRefed<ComputedStyle> InspectorUtils::GetCleanComputedStyleForElement(
-    dom::Element* aElement, nsAtom* aPseudo) {
-  MOZ_ASSERT(aElement);
-
-  Document* doc = aElement->GetComposedDoc();
-  if (!doc) {
-    return nullptr;
-  }
-
-  PresShell* presShell = doc->GetPresShell();
-  if (!presShell) {
-    return nullptr;
-  }
-
-  nsPresContext* presContext = presShell->GetPresContext();
-  if (!presContext) {
-    return nullptr;
-  }
-
-  presContext->EnsureSafeToHandOutCSSRules();
-
-  return nsComputedDOMStyle::GetComputedStyle(aElement, aPseudo);
-}
-
-/* static */
 void InspectorUtils::GetUsedFontFaces(GlobalObject& aGlobalObject,
                                       nsRange& aRange, uint32_t aMaxRanges,
                                       bool aSkipCollapsedWhitespace,
@@ -623,10 +627,14 @@ void InspectorUtils::GetCSSPseudoElementNames(GlobalObject& aGlobalObject,
       static_cast<size_t>(PseudoStyleType::CSSPseudoElementsEnd);
   for (size_t i = 0; i < kPseudoCount; ++i) {
     PseudoStyleType type = static_cast<PseudoStyleType>(i);
-    if (nsCSSPseudoElements::IsEnabled(type, CSSEnabledState::ForAllContent)) {
-      nsAtom* atom = nsCSSPseudoElements::GetPseudoAtom(type);
-      aResult.AppendElement(nsDependentAtomString(atom));
+    if (!nsCSSPseudoElements::IsEnabled(type, CSSEnabledState::ForAllContent)) {
+      continue;
     }
+    auto& string = *aResult.AppendElement();
+    // Use two semi-colons (though internally we use one).
+    string.Append(u':');
+    nsAtom* atom = nsCSSPseudoElements::GetPseudoAtom(type);
+    string.Append(nsDependentAtomString(atom));
   }
 }
 
@@ -689,8 +697,8 @@ bool InspectorUtils::IsCustomElementName(GlobalObject&, const nsAString& aName,
   }
 
   int32_t namespaceID;
-  nsContentUtils::NameSpaceManager()->RegisterNameSpace(aNamespaceURI,
-                                                        namespaceID);
+  nsNameSpaceManager::GetInstance()->RegisterNameSpace(aNamespaceURI,
+                                                       namespaceID);
 
   RefPtr<nsAtom> nameElt = NS_Atomize(aName);
   return nsContentUtils::IsCustomElementName(nameElt, namespaceID);

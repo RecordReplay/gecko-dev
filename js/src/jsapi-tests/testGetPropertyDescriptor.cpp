@@ -2,7 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "js/PropertyDescriptor.h"  // JS::FromPropertyDescriptor
+#include "js/CallAndConstruct.h"  // JS::IsCallable
+#include "js/PropertyAndElement.h"
+#include "js/PropertyDescriptor.h"  // JS::FromPropertyDescriptor, JS_GetPropertyDescriptor
 #include "js/RootingAPI.h"
 #include "jsapi-tests/tests.h"
 

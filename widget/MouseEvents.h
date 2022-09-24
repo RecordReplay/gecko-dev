@@ -591,7 +591,7 @@ class WidgetWheelEvent : public WidgetMouseEventBase {
   enum ScrollType : uint8_t {
     SCROLL_DEFAULT,
     SCROLL_SYNCHRONOUSLY,
-    SCROLL_ASYNCHRONOUSELY,
+    SCROLL_ASYNCHRONOUSLY,
     SCROLL_SMOOTHLY
   };
   ScrollType mScrollType;
@@ -686,9 +686,6 @@ class WidgetWheelEvent : public WidgetMouseEventBase {
 class WidgetPointerEvent : public WidgetMouseEvent {
   friend class mozilla::dom::PBrowserParent;
   friend class mozilla::dom::PBrowserChild;
-
-  WidgetPointerEvent()
-      : mWidth(1), mHeight(1), mIsPrimary(true), mFromTouchEvent(false) {}
 
  public:
   virtual WidgetPointerEvent* AsPointerEvent() override { return this; }

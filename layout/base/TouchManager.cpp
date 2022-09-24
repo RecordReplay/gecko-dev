@@ -10,6 +10,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/EventTarget.h"
 #include "mozilla/PresShell.h"
+#include "nsIContent.h"
 #include "nsIFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsView.h"
@@ -19,7 +20,7 @@ using namespace mozilla::dom;
 
 namespace mozilla {
 
-nsTHashMap<nsUint32HashKey, TouchManager::TouchInfo>*
+StaticAutoPtr<nsTHashMap<nsUint32HashKey, TouchManager::TouchInfo>>
     TouchManager::sCaptureTouchList;
 layers::LayersId TouchManager::sCaptureTouchLayersId;
 
@@ -33,7 +34,6 @@ void TouchManager::InitializeStatics() {
 /*static*/
 void TouchManager::ReleaseStatics() {
   NS_ASSERTION(sCaptureTouchList, "ReleaseStatics called without Initialize!");
-  delete sCaptureTouchList;
   sCaptureTouchList = nullptr;
 }
 
@@ -49,7 +49,7 @@ void TouchManager::Destroy() {
 }
 
 static nsIContent* GetNonAnonymousAncestor(EventTarget* aTarget) {
-  nsCOMPtr<nsIContent> content(do_QueryInterface(aTarget));
+  nsIContent* content = nsIContent::FromEventTargetOrNull(aTarget);
   if (content && content->IsInNativeAnonymousSubtree()) {
     content = content->FindFirstNonChromeOnlyAccessContent();
   }
@@ -59,7 +59,8 @@ static nsIContent* GetNonAnonymousAncestor(EventTarget* aTarget) {
 /*static*/
 void TouchManager::EvictTouchPoint(RefPtr<Touch>& aTouch,
                                    Document* aLimitToDocument) {
-  nsCOMPtr<nsINode> node(do_QueryInterface(aTouch->mOriginalTarget));
+  nsCOMPtr<nsINode> node(
+      nsINode::FromEventTargetOrNull(aTouch->mOriginalTarget));
   if (node) {
     Document* doc = node->GetComposedDoc();
     if (doc && (!aLimitToDocument || aLimitToDocument == doc)) {
@@ -410,7 +411,7 @@ already_AddRefed<nsIContent> TouchManager::GetAnyCapturedTouchTarget() {
     if (touch) {
       EventTarget* target = touch->GetTarget();
       if (target) {
-        result = do_QueryInterface(target);
+        result = nsIContent::FromEventTargetOrNull(target);
         break;
       }
     }

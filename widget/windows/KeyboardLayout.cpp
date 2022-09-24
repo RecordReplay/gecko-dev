@@ -46,6 +46,12 @@
 #  define MAPVK_VK_TO_VSC_EX (4)
 #endif
 
+// For collecting other people's log, tell them `MOZ_LOG=KeyboardHandler:4,sync`
+// rather than `MOZ_LOG=KeyboardHandler:5,sync` since using `5` may create too
+// big file.
+// Therefore you shouldn't use `LogLevel::Verbose` for logging usual behavior.
+mozilla::LazyLogModule gKeyLog("KeyboardHandler");
+
 namespace mozilla {
 namespace widget {
 
@@ -413,21 +419,21 @@ static const nsCString GetCharacterCodeName(WPARAM aCharCode) {
       return "ZERO WIDTH NO-BREAK SPACE (0xFEFF)"_ns;
     default: {
       if (aCharCode < ' ' || (aCharCode >= 0x80 && aCharCode < 0xA0)) {
-        return nsPrintfCString("control (0x%04X)", aCharCode);
+        return nsPrintfCString("control (0x%04zX)", aCharCode);
       }
       if (NS_IS_HIGH_SURROGATE(aCharCode)) {
-        return nsPrintfCString("high surrogate (0x%04X)", aCharCode);
+        return nsPrintfCString("high surrogate (0x%04zX)", aCharCode);
       }
       if (NS_IS_LOW_SURROGATE(aCharCode)) {
-        return nsPrintfCString("low surrogate (0x%04X)", aCharCode);
+        return nsPrintfCString("low surrogate (0x%04zX)", aCharCode);
       }
       return IS_IN_BMP(aCharCode)
                  ? nsPrintfCString(
-                       "'%s' (0x%04X)",
+                       "'%s' (0x%04zX)",
                        NS_ConvertUTF16toUTF8(nsAutoString(aCharCode)).get(),
                        aCharCode)
                  : nsPrintfCString(
-                       "'%s' (0x%08X)",
+                       "'%s' (0x%08zX)",
                        NS_ConvertUTF16toUTF8(nsAutoString(aCharCode)).get(),
                        aCharCode);
     }
@@ -549,7 +555,7 @@ static const nsCString GetMessageName(UINT aMessage) {
 
 static const nsCString GetVirtualKeyCodeName(WPARAM aVK) {
   if (aVK >= ArrayLength(kVirtualKeyName)) {
-    return nsPrintfCString("Invalid (0x%08X)", aVK);
+    return nsPrintfCString("Invalid (0x%08zX)", aVK);
   }
   return nsCString(kVirtualKeyName[aVK]);
 }
@@ -661,7 +667,7 @@ static const nsCString GetAppCommandName(WPARAM aCommand) {
     case APPCOMMAND_VOLUME_UP:
       return "APPCOMMAND_VOLUME_UP"_ns;
     default:
-      return nsPrintfCString("Unknown app command (0x%08X)", aCommand);
+      return nsPrintfCString("Unknown app command (0x%08zX)", aCommand);
   }
 }
 
@@ -674,7 +680,8 @@ static const nsCString GetAppCommandDeviceName(LPARAM aDevice) {
     case FAPPCOMMAND_OEM:
       return "FAPPCOMMAND_OEM"_ns;
     default:
-      return nsPrintfCString("Unknown app command device (0x%04X)", aDevice);
+      return nsPrintfCString("Unknown app command device (0x%04" PRIXLPTR ")",
+                             aDevice);
   }
 };
 
@@ -717,7 +724,7 @@ class MOZ_STACK_CLASS GetAppCommandKeysName final : public nsAutoCString {
     }
     if (aKeys) {
       MaybeAppendSeparator();
-      AppendPrintf("Unknown Flags (0x%04X)", aKeys);
+      AppendPrintf("Unknown Flags (0x%04zX)", aKeys);
     }
     if (IsEmpty()) {
       AssignLiteral("none (0x0000)");
@@ -743,7 +750,8 @@ static const nsCString ToString(const MSG& aMSG) {
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP:
       result.AppendPrintf(
-          "virtual keycode=%s, repeat count=%d, "
+          "virtual keycode=%s, repeat count=%" PRIdLPTR
+          ", "
           "scancode=0x%02X, extended key=%s, "
           "context code=%s, previous key state=%s, "
           "transition state=%s",
@@ -759,7 +767,8 @@ static const nsCString ToString(const MSG& aMSG) {
     case WM_SYSCHAR:
     case WM_SYSDEADCHAR:
       result.AppendPrintf(
-          "character code=%s, repeat count=%d, "
+          "character code=%s, repeat count=%" PRIdLPTR
+          ", "
           "scancode=0x%02X, extended key=%s, "
           "context code=%s, previous key state=%s, "
           "transition state=%s",
@@ -772,14 +781,15 @@ static const nsCString ToString(const MSG& aMSG) {
       break;
     case WM_APPCOMMAND:
       result.AppendPrintf(
-          "window handle=0x%p, app command=%s, device=%s, dwKeys=%s",
+          "window handle=0x%zx, app command=%s, device=%s, dwKeys=%s",
           aMSG.wParam,
           GetAppCommandName(GET_APPCOMMAND_LPARAM(aMSG.lParam)).get(),
           GetAppCommandDeviceName(GET_DEVICE_LPARAM(aMSG.lParam)).get(),
           GetAppCommandKeysName(GET_KEYSTATE_LPARAM(aMSG.lParam)).get());
       break;
     default:
-      result.AppendPrintf("wParam=%u, lParam=%u", aMSG.wParam, aMSG.lParam);
+      result.AppendPrintf("wParam=%zu, lParam=%" PRIdLPTR, aMSG.wParam,
+                          aMSG.lParam);
       break;
   }
   result.AppendPrintf(", hwnd=0x%p", aMSG.hwnd);
@@ -1234,9 +1244,7 @@ const MSG NativeKey::sEmptyMSG = {};
 MSG NativeKey::sLastKeyOrCharMSG = {};
 MSG NativeKey::sLastKeyMSG = {};
 
-LazyLogModule sNativeKeyLogger("NativeKeyWidgets");
-
-NativeKey::NativeKey(nsWindowBase* aWidget, const MSG& aMessage,
+NativeKey::NativeKey(nsWindow* aWidget, const MSG& aMessage,
                      const ModifierKeyState& aModKeyState,
                      HKL aOverrideKeyboardLayout,
                      nsTArray<FakeCharMsg>* aFakeCharMsgs)
@@ -1265,7 +1273,7 @@ NativeKey::NativeKey(nsWindowBase* aWidget, const MSG& aMessage,
       mCanIgnoreModifierStateAtKeyPress(true),
       mFakeCharMsgs(aFakeCharMsgs && aFakeCharMsgs->Length() ? aFakeCharMsgs
                                                              : nullptr) {
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p NativeKey::NativeKey(aWidget=0x%p { GetWindowHandle()=0x%p }, "
            "aMessage=%s, aModKeyState=%s), sLatestInstance=0x%p",
            this, aWidget, aWidget->GetWindowHandle(), ToString(aMessage).get(),
@@ -1292,8 +1300,8 @@ NativeKey::NativeKey(nsWindowBase* aWidget, const MSG& aMessage,
     InitWithKeyOrChar();
   }
 
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
-          ("%p   NativeKey::NativeKey(), mKeyboardLayout=0x%08X, "
+  MOZ_LOG(gKeyLog, LogLevel::Info,
+          ("%p   NativeKey::NativeKey(), mKeyboardLayout=0x%p, "
            "mFocusedWndBeforeDispatch=0x%p, mDOMKeyCode=%s, "
            "mKeyNameIndex=%s, mCodeNameIndex=%s, mModKeyState=%s, "
            "mVirtualKeyCode=%s, mOriginalVirtualKeyCode=%s, "
@@ -1525,7 +1533,7 @@ void NativeKey::InitWithKeyOrChar() {
         // XXX Do we need to make mReceivedMsg an array?
         MOZ_ASSERT(IsEmptyMSG(mLastInstance->mReceivedMsg));
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::InitWithKeyOrChar(), WARNING, detecting another "
              "instance is trying to remove a char message, so, this instance "
              "should do nothing, mLastInstance=0x%p, mRemovingMsg=%s, "
@@ -1588,7 +1596,7 @@ void NativeKey::InitWithKeyOrChar() {
       if (charMsg.message == WM_NULL) {
         continue;
       }
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::InitWithKeyOrChar(), removed char message, %s",
                this, ToString(charMsg).get()));
       Unused << NS_WARN_IF(charMsg.hwnd != mMsg.hwnd);
@@ -1663,7 +1671,7 @@ void NativeKey::InitCommittedCharsAndModifiersWithFollowingCharMessages() {
 }
 
 NativeKey::~NativeKey() {
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+  MOZ_LOG(gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::~NativeKey(), destroyed", this));
   if (mIsOverridingKeyboardLayout) {
     KeyboardLayout* keyboardLayout = KeyboardLayout::GetInstance();
@@ -1894,7 +1902,7 @@ void NativeKey::RemoveFollowingOddCharMessages() {
       continue;
     }
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::RemoveFollowingOddCharMessages(), removed odd char "
          "message, %s",
          this, ToString(msg).get()));
@@ -1965,6 +1973,7 @@ uint32_t NativeKey::GetKeyLocation() const {
     case VK_CONTROL:
     case VK_MENU:
       NS_WARNING("Failed to decide the key location?");
+      [[fallthrough]];
 
     default:
       return eKeyLocationStandard;
@@ -2019,15 +2028,12 @@ nsEventStatus NativeKey::InitKeyEvent(
       if (mCharMessageHasGone) {
         aKeyEvent.PreventDefaultBeforeDispatch(CrossProcessForwarding::eAllow);
       }
-      [[fallthrough]];
-    case eKeyDownOnPlugin:
       aKeyEvent.mKeyCode = mDOMKeyCode;
       // Unique id for this keydown event and its associated keypress.
       sUniqueKeyEventId++;
       aKeyEvent.mUniqueId = sUniqueKeyEventId;
       break;
     case eKeyUp:
-    case eKeyUpOnPlugin:
       aKeyEvent.mKeyCode = mDOMKeyCode;
       // Set defaultPrevented of the key event if the VK_MENU is not a system
       // key release, so that the menu bar does not trigger.  This helps avoid
@@ -2064,7 +2070,7 @@ nsEventStatus NativeKey::InitKeyEvent(
   KeyboardLayout::NotifyIdleServiceOfUserActivity();
 
   MOZ_LOG(
-      sNativeKeyLogger, LogLevel::Info,
+      gKeyLog, LogLevel::Info,
       ("%p   NativeKey::InitKeyEvent(), initialized, aKeyEvent={ "
        "mMessage=%s, mKeyNameIndex=%s, mKeyValue=\"%s\", mCodeNameIndex=%s, "
        "mKeyCode=%s, mLocation=%s, mModifiers=%s, DefaultPrevented()=%s }",
@@ -2149,7 +2155,7 @@ bool NativeKey::DispatchCommandEvent(uint32_t aEventCommand) const {
       break;
     default:
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Info,
+          gKeyLog, LogLevel::Info,
           ("%p   NativeKey::DispatchCommandEvent(), doesn't dispatch command "
            "event",
            this));
@@ -2158,14 +2164,14 @@ bool NativeKey::DispatchCommandEvent(uint32_t aEventCommand) const {
   WidgetCommandEvent appCommandEvent(true, command, mWidget);
 
   mWidget->InitEvent(appCommandEvent);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::DispatchCommandEvent(), dispatching "
            "%s app command event...",
            this, nsAtomCString(command).get()));
   bool ok =
-      mWidget->DispatchWindowEvent(&appCommandEvent) || mWidget->Destroyed();
+      mWidget->DispatchWindowEvent(appCommandEvent) || mWidget->Destroyed();
   MOZ_LOG(
-      sNativeKeyLogger, LogLevel::Info,
+      gKeyLog, LogLevel::Info,
       ("%p   NativeKey::DispatchCommandEvent(), dispatched app command event, "
        "result=%s, mWidget->Destroyed()=%s",
        this, GetBoolName(ok), GetBoolName(mWidget->Destroyed())));
@@ -2175,7 +2181,7 @@ bool NativeKey::DispatchCommandEvent(uint32_t aEventCommand) const {
 bool NativeKey::HandleAppCommandMessage() const {
   // If the widget has gone, we should do nothing.
   if (mWidget->Destroyed()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Warning,
+    MOZ_LOG(gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::HandleAppCommandMessage(), WARNING, not handled "
              "due to "
              "destroyed the widget",
@@ -2212,19 +2218,19 @@ bool NativeKey::HandleAppCommandMessage() const {
   if (dispatchKeyEvent) {
     nsresult rv = mDispatcher->BeginNativeInputTransaction();
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+      MOZ_LOG(gKeyLog, LogLevel::Error,
               ("%p   NativeKey::HandleAppCommandMessage(), FAILED due to "
                "BeginNativeInputTransaction() failure",
                this));
       return true;
     }
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleAppCommandMessage(), initializing keydown "
              "event...",
              this));
     WidgetKeyboardEvent keydownEvent(true, eKeyDown, mWidget);
     nsEventStatus status = InitKeyEvent(keydownEvent, mModKeyState);
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleAppCommandMessage(), tries to dispatch "
              "keydown event...",
              this));
@@ -2232,7 +2238,7 @@ bool NativeKey::HandleAppCommandMessage() const {
     //       continue to handle the command.
     if (!mDispatcher->DispatchKeyboardEvent(eKeyDown, keydownEvent, status,
                                             const_cast<NativeKey*>(this))) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleAppCommandMessage(), keydown event isn't "
                "dispatched",
                this));
@@ -2241,14 +2247,14 @@ bool NativeKey::HandleAppCommandMessage() const {
       return true;
     }
     consumed = status == nsEventStatus_eConsumeNoDefault;
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleAppCommandMessage(), keydown event was "
              "dispatched, consumed=%s",
              this, GetBoolName(consumed)));
     sDispatchedKeyOfAppCommand = mVirtualKeyCode;
     if (mWidget->Destroyed()) {
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Info,
+          gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleAppCommandMessage(), keydown event caused "
            "destroying the widget",
            this));
@@ -2312,24 +2318,24 @@ bool NativeKey::HandleAppCommandMessage() const {
       WidgetContentCommandEvent contentCommandEvent(true, contentCommandMessage,
                                                     mWidget);
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Info,
+          gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleAppCommandMessage(), dispatching %s event...",
            this, ToChar(contentCommandMessage)));
-      mWidget->DispatchWindowEvent(&contentCommandEvent);
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      mWidget->DispatchWindowEvent(contentCommandEvent);
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleAppCommandMessage(), dispatched %s event",
                this, ToChar(contentCommandMessage)));
       consumed = true;
 
       if (mWidget->Destroyed()) {
-        MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+        MOZ_LOG(gKeyLog, LogLevel::Info,
                 ("%p   NativeKey::HandleAppCommandMessage(), %s event caused "
                  "destroying the widget",
                  this, ToChar(contentCommandMessage)));
         return true;
       }
     } else {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleAppCommandMessage(), doesn't dispatch "
                "content "
                "command event",
@@ -2343,19 +2349,19 @@ bool NativeKey::HandleAppCommandMessage() const {
     MOZ_ASSERT(!mWidget->Destroyed());
     nsresult rv = mDispatcher->BeginNativeInputTransaction();
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+      MOZ_LOG(gKeyLog, LogLevel::Error,
               ("%p   NativeKey::HandleAppCommandMessage(), FAILED due to "
                "BeginNativeInputTransaction() failure",
                this));
       return true;
     }
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleAppCommandMessage(), initializing keyup "
              "event...",
              this));
     WidgetKeyboardEvent keyupEvent(true, eKeyUp, mWidget);
     nsEventStatus status = InitKeyEvent(keyupEvent, mModKeyState);
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleAppCommandMessage(), dispatching keyup "
              "event...",
              this));
@@ -2364,12 +2370,12 @@ bool NativeKey::HandleAppCommandMessage() const {
     mDispatcher->DispatchKeyboardEvent(eKeyUp, keyupEvent, status,
                                        const_cast<NativeKey*>(this));
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::HandleAppCommandMessage(), dispatched keyup event",
          this));
     if (mWidget->Destroyed()) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
-              ("%p   NativeKey::HandleAppCommandMessage(), %s event caused "
+      MOZ_LOG(gKeyLog, LogLevel::Info,
+              ("%p   NativeKey::HandleAppCommandMessage(), keyup event caused "
                "destroying the widget",
                this));
       return true;
@@ -2391,7 +2397,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     // The multimedia key event has already been dispatch from
     // HandleAppCommandMessage().
     sDispatchedKeyOfAppCommand = 0;
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), doesn't dispatch keydown "
              "event due to already dispatched from HandleAppCommandMessage(), ",
              this));
@@ -2402,7 +2408,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   }
 
   if (IsReservedBySystem()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), doesn't dispatch keydown "
              "event because the key combination is reserved by the system",
              this));
@@ -2415,7 +2421,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   // If the widget has gone, we should do nothing.
   if (mWidget->Destroyed()) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Warning,
+        gKeyLog, LogLevel::Warning,
         ("%p   NativeKey::HandleKeyDownMessage(), WARNING, not handled due to "
          "destroyed the widget",
          this));
@@ -2430,7 +2436,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
       !RedirectedKeyDownMessageManager::IsRedirectedMessage(mMsg)) {
     nsresult rv = mDispatcher->BeginNativeInputTransaction();
     if (NS_WARN_IF(NS_FAILED(rv))) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+      MOZ_LOG(gKeyLog, LogLevel::Error,
               ("%p   NativeKey::HandleKeyDownMessage(), FAILED due to "
                "BeginNativeInputTransaction() failure",
                this));
@@ -2439,7 +2445,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
 
     bool isIMEEnabled = WinUtils::IsIMEEnabled(mWidget->GetInputContext());
 
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+    MOZ_LOG(gKeyLog, LogLevel::Debug,
             ("%p   NativeKey::HandleKeyDownMessage(), initializing keydown "
              "event...",
              this));
@@ -2447,7 +2453,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     WidgetKeyboardEvent keydownEvent(true, eKeyDown, mWidget);
     nsEventStatus status = InitKeyEvent(keydownEvent, mModKeyState);
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::HandleKeyDownMessage(), dispatching keydown event...",
          this));
     bool dispatched = mDispatcher->DispatchKeyboardEvent(
@@ -2459,7 +2465,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
       // If the keydown event wasn't fired, there must be composition.
       // we don't need to do anything anymore.
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Info,
+          gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleKeyDownMessage(), doesn't dispatch keypress "
            "event(s) because keydown event isn't dispatched actually",
            this));
@@ -2468,7 +2474,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     defaultPrevented = status == nsEventStatus_eConsumeNoDefault;
 
     if (mWidget->Destroyed() || IsFocusedWindowChanged()) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleKeyDownMessage(), keydown event caused "
                "destroying the widget",
                this));
@@ -2476,7 +2482,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     }
 
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::HandleKeyDownMessage(), dispatched keydown event, "
          "dispatched=%s, defaultPrevented=%s",
          this, GetBoolName(dispatched), GetBoolName(defaultPrevented)));
@@ -2507,13 +2513,13 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
 
       RedirectedKeyDownMessageManager::WillRedirect(mMsg, defaultPrevented);
 
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleKeyDownMessage(), redirecting %s...",
                this, ToString(mMsg).get()));
 
       ::SendInput(1, &keyinput, sizeof(keyinput));
 
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::HandleKeyDownMessage(), redirected %s", this,
                ToString(mMsg).get()));
 
@@ -2523,7 +2529,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
       return true;
     }
   } else {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), received a redirected %s",
              this, ToString(mMsg).get()));
 
@@ -2543,7 +2549,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   // shouldn't dispatch keypress event.
   if (mOriginalVirtualKeyCode == VK_PROCESSKEY &&
       !IsFollowedByPrintableCharOrSysCharMessage()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), not dispatching keypress "
              "event because the key was already handled by IME, "
              "defaultPrevented=%s",
@@ -2552,7 +2558,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   }
 
   if (defaultPrevented) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), not dispatching keypress "
              "event because preceding keydown event was consumed",
              this));
@@ -2566,7 +2572,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   // If mCommittedCharsAndModifiers was initialized with following char
   // messages, we should dispatch keypress events with its information.
   if (IsFollowedByPrintableCharOrSysCharMessage()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), tries to be dispatching "
              "keypress events with retrieved char messages...",
              this));
@@ -2576,7 +2582,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   // If we won't be getting a WM_CHAR, WM_SYSCHAR or WM_DEADCHAR, synthesize a
   // keypress for almost all keys
   if (NeedsToHandleWithoutFollowingCharMessages()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), tries to be dispatching "
              "keypress events...",
              this));
@@ -2586,7 +2592,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   // If WM_KEYDOWN of VK_PACKET isn't followed by WM_CHAR, we don't need to
   // dispatch keypress events.
   if (mVirtualKeyCode == VK_PACKET) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), not dispatching keypress "
              "event "
              "because the key is VK_PACKET and there are no char messages",
@@ -2599,7 +2605,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     // If this is simple KeyDown event but next message is not WM_CHAR,
     // this event may not input text, so we should ignore this event.
     // See bug 314130.
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), not dispatching keypress "
              "event "
              "because the key event is simple printable key's event but not "
@@ -2610,7 +2616,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
   }
 
   if (mIsDeadKey) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyDownMessage(), not dispatching keypress "
              "event "
              "because the key is a dead key and not followed by char messages",
@@ -2618,7 +2624,7 @@ bool NativeKey::HandleKeyDownMessage(bool* aEventDispatched) const {
     return false;
   }
 
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleKeyDownMessage(), tries to be dispatching "
            "keypress events due to no following char messages...",
            this));
@@ -2642,7 +2648,7 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
   if ((IsCharOrSysCharMessage(mMsg) || IsEnterKeyPressCharMessage(mMsg)) &&
       IsAnotherInstanceRemovingCharMessage()) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Warning,
+        gKeyLog, LogLevel::Warning,
         ("%p   NativeKey::HandleCharMessage(), WARNING, does nothing because "
          "the message should be handled in another instance removing this "
          "message",
@@ -2654,7 +2660,7 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
   // If the key combinations is reserved by the system, we shouldn't dispatch
   // eKeyPress event for it and passes the message to next wndproc.
   if (IsReservedBySystem()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleCharMessage(), doesn't dispatch keypress "
              "event because the key combination is reserved by the system",
              this));
@@ -2663,7 +2669,7 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
 
   // If the widget has gone, we should do nothing.
   if (mWidget->Destroyed()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Warning,
+    MOZ_LOG(gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::HandleCharMessage(), WARNING, not handled due to "
              "destroyed the widget",
              this));
@@ -2689,7 +2695,7 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
     // case, DispatchKeyPressEventsWithoutCharMessage() dispatches eKeyPress
     // instead of this method.
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::HandleCharMessage(), doesn't dispatch keypress "
          "event because received a control character input without WM_KEYDOWN",
          this));
@@ -2710,14 +2716,14 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
   }
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+    MOZ_LOG(gKeyLog, LogLevel::Error,
             ("%p   NativeKey::HandleCharMessage(), FAILED due to "
              "BeginNativeInputTransaction() failure",
              this));
     return true;
   }
 
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+  MOZ_LOG(gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::HandleCharMessage(), initializing keypress "
            "event...",
            this));
@@ -2732,7 +2738,7 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
     modKeyState.Unset(MODIFIER_ALT | MODIFIER_CONTROL);
   }
   nsEventStatus status = InitKeyEvent(keypressEvent, modKeyState);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleCharMessage(), dispatching keypress event...",
            this));
   bool dispatched = mDispatcher->MaybeDispatchKeypressEvents(
@@ -2741,14 +2747,14 @@ bool NativeKey::HandleCharMessage(const MSG& aCharMsg,
     *aEventDispatched = dispatched;
   }
   if (mWidget->Destroyed()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleCharMessage(), keypress event caused "
              "destroying the widget",
              this));
     return true;
   }
   bool consumed = status == nsEventStatus_eConsumeNoDefault;
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleCharMessage(), dispatched keypress event, "
            "dispatched=%s, consumed=%s",
            this, GetBoolName(dispatched), GetBoolName(consumed)));
@@ -2765,7 +2771,7 @@ bool NativeKey::HandleKeyUpMessage(bool* aEventDispatched) const {
   // If the key combinations is reserved by the system, we shouldn't dispatch
   // eKeyUp event for it and passes the message to next wndproc.
   if (IsReservedBySystem()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyUpMessage(), doesn't dispatch keyup "
              "event because the key combination is reserved by the system",
              this));
@@ -2775,7 +2781,7 @@ bool NativeKey::HandleKeyUpMessage(bool* aEventDispatched) const {
   // If the widget has gone, we should do nothing.
   if (mWidget->Destroyed()) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Warning,
+        gKeyLog, LogLevel::Warning,
         ("%p   NativeKey::HandleKeyUpMessage(), WARNING, not handled due to "
          "destroyed the widget",
          this));
@@ -2784,19 +2790,19 @@ bool NativeKey::HandleKeyUpMessage(bool* aEventDispatched) const {
 
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+    MOZ_LOG(gKeyLog, LogLevel::Error,
             ("%p   NativeKey::HandleKeyUpMessage(), FAILED due to "
              "BeginNativeInputTransaction() failure",
              this));
     return true;
   }
 
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+  MOZ_LOG(gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::HandleKeyUpMessage(), initializing keyup event...",
            this));
   WidgetKeyboardEvent keyupEvent(true, eKeyUp, mWidget);
   nsEventStatus status = InitKeyEvent(keyupEvent, mModKeyState);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleKeyUpMessage(), dispatching keyup event...",
            this));
   bool dispatched = mDispatcher->DispatchKeyboardEvent(
@@ -2805,14 +2811,14 @@ bool NativeKey::HandleKeyUpMessage(bool* aEventDispatched) const {
     *aEventDispatched = dispatched;
   }
   if (mWidget->Destroyed()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::HandleKeyUpMessage(), keyup event caused "
              "destroying the widget",
              this));
     return true;
   }
   bool consumed = status == nsEventStatus_eConsumeNoDefault;
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::HandleKeyUpMessage(), dispatched keyup event, "
            "dispatched=%s, consumed=%s",
            this, GetBoolName(dispatched), GetBoolName(consumed)));
@@ -2958,7 +2964,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
   if (!WinUtils::PeekMessage(&nextKeyMsg, mMsg.hwnd, WM_KEYFIRST, WM_KEYLAST,
                              PM_NOREMOVE | PM_NOYIELD) ||
       !IsCharMessage(nextKeyMsg)) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Verbose,
+    MOZ_LOG(gKeyLog, LogLevel::Debug,
             ("%p   NativeKey::GetFollowingCharMessage(), there are no char "
              "messages",
              this));
@@ -2992,7 +2998,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         // the widget.  Let's discard it for now.
         if (mReceivedMsg.hwnd != nextKeyMsg.hwnd) {
           MOZ_LOG(
-              sNativeKeyLogger, LogLevel::Warning,
+              gKeyLog, LogLevel::Warning,
               ("%p   NativeKey::GetFollowingCharMessage(), WARNING, received a "
                "char message during removing it from the queue, but it's for "
                "different window, mReceivedMsg=%s, nextKeyMsg=%s, "
@@ -3011,7 +3017,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
             mReceivedMsg.wParam != nextKeyMsg.wParam ||
             mReceivedMsg.lParam != nextKeyMsg.lParam) {
           MOZ_LOG(
-              sNativeKeyLogger, LogLevel::Warning,
+              gKeyLog, LogLevel::Warning,
               ("%p   NativeKey::GetFollowingCharMessage(), WARNING, received a "
                "char message during removing it from the queue, but it's "
                "differnt from what trying to remove from the queue, "
@@ -3019,13 +3025,13 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
                this, ToString(mReceivedMsg).get(), ToString(nextKeyMsg).get(),
                ToString(kFoundCharMsg).get()));
         } else {
-          MOZ_LOG(sNativeKeyLogger, LogLevel::Verbose,
-                  ("%p   NativeKey::GetFollowingCharMessage(), succeeded to "
-                   "retrieve "
-                   "next char message via another instance, aCharMsg=%s, "
-                   "kFoundCharMsg=%s",
-                   this, ToString(mReceivedMsg).get(),
-                   ToString(kFoundCharMsg).get()));
+          MOZ_LOG(
+              gKeyLog, LogLevel::Debug,
+              ("%p   NativeKey::GetFollowingCharMessage(), succeeded to "
+               "retrieve next char message via another instance, aCharMsg=%s, "
+               "kFoundCharMsg=%s",
+               this, ToString(mReceivedMsg).get(),
+               ToString(kFoundCharMsg).get()));
         }
         aCharMsg = mReceivedMsg;
         return true;
@@ -3036,7 +3042,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       if (!WinUtils::PeekMessage(&nextKeyMsgInAllWindows, 0, WM_KEYFIRST,
                                  WM_KEYLAST, PM_NOREMOVE | PM_NOYIELD)) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message, but it's already gone from all message "
              "queues, nextKeyMsg=%s, kFoundCharMsg=%s",
@@ -3048,7 +3054,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       if (nextKeyMsgInAllWindows.hwnd != mMsg.hwnd) {
         aCharMsg = nextKeyMsgInAllWindows;
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message, but found in another message queue, "
              "nextKeyMsgInAllWindows=%s, nextKeyMsg=%s, kFoundCharMsg=%s",
@@ -3060,7 +3066,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       // may have already been consumed or canceled.
       if (!IsCharMessage(nextKeyMsgInAllWindows)) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message and next key message becomes non-char "
              "message, nextKeyMsgInAllWindows=%s, nextKeyMsg=%s, "
@@ -3077,7 +3083,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       // next char message should be handled as an orphan char message later.
       if (!IsSamePhysicalKeyMessage(nextKeyMsgInAllWindows, kFoundCharMsg)) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message and next key message becomes differnt "
              "key's "
@@ -3094,13 +3100,13 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       // we should retry to remove the new message with PeekMessage() again.
       if (nextKeyMsgInAllWindows.message != nextKeyMsg.message) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message due to message change, let's retry to "
-             "remove the message with newly found char message, ",
-             "nextKeyMsgInAllWindows=%s, nextKeyMsg=%s, kFoundCharMsg=%s", this,
-             ToString(nextKeyMsgInAllWindows).get(), ToString(nextKeyMsg).get(),
-             ToString(kFoundCharMsg).get()));
+             "remove the message with newly found char message, "
+             "nextKeyMsgInAllWindows=%s, nextKeyMsg=%s, kFoundCharMsg=%s",
+             this, ToString(nextKeyMsgInAllWindows).get(),
+             ToString(nextKeyMsg).get(), ToString(kFoundCharMsg).get()));
         nextKeyMsg = nextKeyMsgInAllWindows;
         continue;
       }
@@ -3115,7 +3121,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       if (WinUtils::GetMessage(&removedMsg, mMsg.hwnd, nextKeyMsg.message,
                                nextKeyMsg.message)) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message, but succeeded with GetMessage(), "
              "removedMsg=%s, kFoundCharMsg=%s",
@@ -3128,7 +3134,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       // as inputting no characters and already consumed.
       else if (i > 0) {
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message, but removed %d WM_NULL messages",
              this, i));
@@ -3140,7 +3146,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         mCharMessageHasGone = true;
         return false;
       }
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+      MOZ_LOG(gKeyLog, LogLevel::Error,
               ("%p   NativeKey::GetFollowingCharMessage(), FAILED, lost target "
                "message to remove, nextKeyMsg=%s",
                this, ToString(nextKeyMsg).get()));
@@ -3149,12 +3155,12 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     if (doCrash) {
       nsPrintfCString info(
           "\nPeekMessage() failed to remove char message! "
-          "\nActive keyboard layout=0x%08X (%s), "
+          "\nActive keyboard layout=0x%p (%s), "
           "\nHandling message: %s, InSendMessageEx()=%s, "
           "\nFound message: %s, "
           "\nWM_NULL has been removed: %d, "
           "\nNext key message in all windows: %s, "
-          "time=%d, ",
+          "time=%ld, ",
           KeyboardLayout::GetActiveLayout(),
           KeyboardLayout::GetActiveLayoutName().get(), ToString(mMsg).get(),
           GetResultOfInSendMessageEx().get(), ToString(kFoundCharMsg).get(), i,
@@ -3162,7 +3168,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
       CrashReporter::AppendAppNotesToCrashReport(info);
       MSG nextMsg;
       if (WinUtils::PeekMessage(&nextMsg, 0, 0, 0, PM_NOREMOVE | PM_NOYIELD)) {
-        nsPrintfCString info("\nNext message in all windows: %s, time=%d",
+        nsPrintfCString info("\nNext message in all windows: %s, time=%ld",
                              ToString(nextMsg).get(), nextMsg.time);
         CrashReporter::AppendAppNotesToCrashReport(info);
       } else {
@@ -3179,10 +3185,11 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     // layouts.  So, it might be possible in desktop application or it really
     // occurs with some odd keyboard layouts which perhaps hook API.
     if (removedMsg.message == WM_NULL) {
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Warning,
+      MOZ_LOG(gKeyLog, LogLevel::Warning,
               ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
-               "remove a char message, instead, removed WM_NULL message, ",
-               "removedMsg=%s", this, ToString(removedMsg).get()));
+               "remove a char message, instead, removed WM_NULL message, "
+               "removedMsg=%s",
+               this, ToString(removedMsg).get()));
       // Check if there is the message which we're trying to remove.
       MSG newNextKeyMsg;
       if (!WinUtils::PeekMessage(&newNextKeyMsg, mMsg.hwnd, WM_KEYFIRST,
@@ -3190,7 +3197,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         // If there is no key message, we should mark this keydown as consumed
         // because the key operation may have already been handled or canceled.
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message because it's gone during removing it from "
              "the queue, nextKeyMsg=%s, kFoundCharMsg=%s",
@@ -3205,7 +3212,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         // keydown as consumed because the key operation may have already been
         // handled or canceled.
         MOZ_LOG(
-            sNativeKeyLogger, LogLevel::Warning,
+            gKeyLog, LogLevel::Warning,
             ("%p   NativeKey::GetFollowingCharMessage(), WARNING, failed to "
              "remove a char message because it's gone during removing it from "
              "the queue, nextKeyMsg=%s, newNextKeyMsg=%s, kFoundCharMsg=%s",
@@ -3217,7 +3224,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         return false;
       }
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Debug,
+          gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::GetFollowingCharMessage(), there is the message "
            "which is being tried to be removed from the queue, trying again...",
            this));
@@ -3229,7 +3236,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     // input.  So, let's ignore the strange char message.
     if (removedMsg.message == nextKeyMsg.message && !removedMsg.wParam) {
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Warning,
+          gKeyLog, LogLevel::Warning,
           ("%p   NativeKey::GetFollowingCharMessage(), WARNING, succeeded to "
            "remove a char message, but the removed message's wParam is 0, "
            "removedMsg=%s",
@@ -3241,7 +3248,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     if (MayBeSameCharMessage(removedMsg, nextKeyMsg)) {
       aCharMsg = removedMsg;
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Verbose,
+          gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::GetFollowingCharMessage(), succeeded to retrieve "
            "next char message, aCharMsg=%s",
            this, ToString(aCharMsg).get()));
@@ -3256,7 +3263,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         IsSamePhysicalKeyMessage(removedMsg, nextKeyMsg)) {
       aCharMsg = removedMsg;
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Warning,
+          gKeyLog, LogLevel::Warning,
           ("%p   NativeKey::GetFollowingCharMessage(), WARNING, succeeded to "
            "remove a char message, but the removed message was changed from "
            "the found message except their scancode, aCharMsg=%s, "
@@ -3273,7 +3280,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
         WinUtils::GetScanCode(nextKeyMsg.lParam) == 0xFF) {
       aCharMsg = removedMsg;
       MOZ_LOG(
-          sNativeKeyLogger, LogLevel::Warning,
+          gKeyLog, LogLevel::Warning,
           ("%p   NativeKey::GetFollowingCharMessage(), WARNING, succeeded to "
            "remove a char message, but the removed message was changed from "
            "the found message but the found message was odd, so, ignoring the "
@@ -3288,7 +3295,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     //       in lParam may be changed from 0 to something.  The changed value
     //       is different from the scan code of handling keydown message.
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Error,
+        gKeyLog, LogLevel::Error,
         ("%p   NativeKey::GetFollowingCharMessage(), FAILED, removed message "
          "is really different from what we have already found, removedMsg=%s, "
          "nextKeyMsg=%s, kFoundCharMsg=%s",
@@ -3296,7 +3303,7 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
          ToString(kFoundCharMsg).get()));
     nsPrintfCString info(
         "\nPeekMessage() removed unexpcted char message! "
-        "\nActive keyboard layout=0x%08X (%s), "
+        "\nActive keyboard layout=0x%p (%s), "
         "\nHandling message: %s, InSendMessageEx()=%s, "
         "\nFound message: %s, "
         "\nRemoved message: %s, ",
@@ -3333,13 +3340,13 @@ bool NativeKey::GetFollowingCharMessage(MSG& aCharMsg) {
     MOZ_CRASH("PeekMessage() removed unexpected message");
   }
   MOZ_LOG(
-      sNativeKeyLogger, LogLevel::Error,
+      gKeyLog, LogLevel::Error,
       ("%p   NativeKey::GetFollowingCharMessage(), FAILED, removed messages "
        "are all WM_NULL, nextKeyMsg=%s",
        this, ToString(nextKeyMsg).get()));
   nsPrintfCString info(
       "\nWe lost following char message! "
-      "\nActive keyboard layout=0x%08X (%s), "
+      "\nActive keyboard layout=0x%p (%s), "
       "\nHandling message: %s, InSendMessageEx()=%s, \n"
       "Found message: %s, removed a lot of WM_NULL",
       KeyboardLayout::GetActiveLayout(),
@@ -3459,14 +3466,14 @@ bool NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages() const {
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Error,
+        gKeyLog, LogLevel::Error,
         ("%p   NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages(), "
          "FAILED due to BeginNativeInputTransaction() failure",
          this));
     return true;
   }
   WidgetKeyboardEvent keypressEvent(true, eKeyPress, mWidget);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+  MOZ_LOG(gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages(), "
            "initializing keypress event...",
            this));
@@ -3480,7 +3487,7 @@ bool NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages() const {
   // messages because we need to set each message to each eKeyPress event.
   bool needsCallback = mFollowingCharMsgs.Length() > 1;
   nsEventStatus status = InitKeyEvent(keypressEvent, modKeyState);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages(), "
            "dispatching keypress event(s)...",
            this));
@@ -3488,14 +3495,14 @@ bool NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages() const {
       keypressEvent, status, const_cast<NativeKey*>(this), needsCallback);
   if (mWidget->Destroyed()) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages(), "
          "keypress event(s) caused destroying the widget",
          this));
     return true;
   }
   bool consumed = status == nsEventStatus_eConsumeNoDefault;
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::DispatchKeyPressEventsWithRetrievedCharMessages(), "
            "dispatched keypress event(s), dispatched=%s, consumed=%s",
            this, GetBoolName(dispatched), GetBoolName(consumed)));
@@ -3509,7 +3516,7 @@ bool NativeKey::DispatchKeyPressEventsWithoutCharMessage() const {
 
   nsresult rv = mDispatcher->BeginNativeInputTransaction();
   if (NS_WARN_IF(NS_FAILED(rv))) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Error,
+    MOZ_LOG(gKeyLog, LogLevel::Error,
             ("%p   NativeKey::DispatchKeyPressEventsWithoutCharMessage(), "
              "FAILED due "
              "to BeginNativeInputTransaction() failure",
@@ -3522,13 +3529,13 @@ bool NativeKey::DispatchKeyPressEventsWithoutCharMessage() const {
       mUnshiftedString.IsEmpty()) {
     keypressEvent.mKeyCode = mDOMKeyCode;
   }
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Debug,
+  MOZ_LOG(gKeyLog, LogLevel::Debug,
           ("%p   NativeKey::DispatchKeyPressEventsWithoutCharMessage(), "
            "initializing "
            "keypress event...",
            this));
   nsEventStatus status = InitKeyEvent(keypressEvent, mModKeyState);
-  MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("%p   NativeKey::DispatchKeyPressEventsWithoutCharMessage(), "
            "dispatching "
            "keypress event(s)...",
@@ -3536,7 +3543,7 @@ bool NativeKey::DispatchKeyPressEventsWithoutCharMessage() const {
   bool dispatched = mDispatcher->MaybeDispatchKeypressEvents(
       keypressEvent, status, const_cast<NativeKey*>(this));
   if (mWidget->Destroyed()) {
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::DispatchKeyPressEventsWithoutCharMessage(), "
              "keypress event(s) caused destroying the widget",
              this));
@@ -3544,7 +3551,7 @@ bool NativeKey::DispatchKeyPressEventsWithoutCharMessage() const {
   }
   bool consumed = status == nsEventStatus_eConsumeNoDefault;
   MOZ_LOG(
-      sNativeKeyLogger, LogLevel::Info,
+      gKeyLog, LogLevel::Info,
       ("%p   NativeKey::DispatchKeyPressEventsWithoutCharMessage(), dispatched "
        "keypress event(s), dispatched=%s, consumed=%s",
        this, GetBoolName(dispatched), GetBoolName(consumed)));
@@ -3567,9 +3574,9 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
         //     WM_SYSCHAR with a printable character and such message are
         //     generated by a keydown).  So, let's ignore such case until
         //     we'd get some bug reports.
-        MOZ_LOG(sNativeKeyLogger, LogLevel::Warning,
+        MOZ_LOG(gKeyLog, LogLevel::Warning,
                 ("%p   NativeKey::WillDispatchKeyboardEvent(), WARNING, "
-                 "ignoring %uth message due to non-printable char message, %s",
+                 "ignoring %zuth message due to non-printable char message, %s",
                  this, i + 1, ToString(mFollowingCharMsgs[i]).get()));
         continue;
       }
@@ -3587,7 +3594,7 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
                         MODIFIER_ALTGRAPH | MODIFIER_CAPSLOCK);
       modKeyState.Set(mCommittedCharsAndModifiers.ModifiersAt(aIndex));
       modKeyState.InitInputEvent(aKeyboardEvent);
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::WillDispatchKeyboardEvent(), "
                "setting %uth modifier state to %s",
                this, aIndex + 1, ToString(modKeyState).get()));
@@ -3601,7 +3608,7 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
   size_t skipUnshiftedChars = longestLength - mUnshiftedString.Length();
   if (aIndex >= longestLength) {
     MOZ_LOG(
-        sNativeKeyLogger, LogLevel::Info,
+        gKeyLog, LogLevel::Info,
         ("%p   NativeKey::WillDispatchKeyboardEvent(), does nothing for %uth "
          "%s event",
          this, aIndex + 1, ToChar(aKeyboardEvent.mMessage)));
@@ -3641,7 +3648,7 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
       modKeyState.Set(
           mInputtingStringAndModifiers.ModifiersAt(aIndex - skipUniChars));
       modKeyState.InitInputEvent(aKeyboardEvent);
-      MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+      MOZ_LOG(gKeyLog, LogLevel::Info,
               ("%p   NativeKey::WillDispatchKeyboardEvent(), "
                "setting %uth modifier state to %s",
                this, aIndex + 1, ToString(modKeyState).get()));
@@ -3654,7 +3661,7 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
     // compatibility rather than inputting character without the modifiers.
     // Therefore, we need to modify mCharCode value here.
     aKeyboardEvent.SetCharCode(uniChar);
-    MOZ_LOG(sNativeKeyLogger, LogLevel::Info,
+    MOZ_LOG(gKeyLog, LogLevel::Info,
             ("%p   NativeKey::WillDispatchKeyboardEvent(), "
              "setting %uth charCode to %s",
              this, aIndex + 1, GetCharacterCodeName(uniChar).get()));
@@ -3740,12 +3747,6 @@ void NativeKey::WillDispatchKeyboardEvent(WidgetKeyboardEvent& aKeyboardEvent,
 
 KeyboardLayout* KeyboardLayout::sInstance = nullptr;
 nsIUserIdleServiceInternal* KeyboardLayout::sIdleService = nullptr;
-
-// This log is very noisy if you don't want to retrieve the mapping table
-// of specific keyboard layout.  LogLevel::Debug and LogLevel::Verbose are
-// used to log the layout mapping.  If you need to log some behavior of
-// KeyboardLayout class, you should use LogLevel::Info or lower level.
-LazyLogModule sKeyboardLayoutLogger("KeyboardLayoutWidgets");
 
 // static
 KeyboardLayout* KeyboardLayout::GetInstance() {
@@ -4208,9 +4209,9 @@ nsCString KeyboardLayout::GetLayoutName(HKL aLayout) const {
   // language) or 0xEYYYXXXX (IMM-IME), we can retrieve its name simply.
   if (layout < 0xA000 || (layout & 0xF000) == 0xE000) {
     nsAutoString key(kKeyboardLayouts);
-    key.AppendPrintf("%08X", layout < 0xA000
-                                 ? layout
-                                 : reinterpret_cast<uintptr_t>(aLayout));
+    key.AppendPrintf("%08" PRIXPTR, layout < 0xA000
+                                        ? layout
+                                        : reinterpret_cast<uintptr_t>(aLayout));
     wchar_t buf[256];
     if (NS_WARN_IF(!WinUtils::GetRegistryKey(
             HKEY_LOCAL_MACHINE, key.get(), L"Layout Text", buf, sizeof(buf)))) {
@@ -4221,7 +4222,7 @@ nsCString KeyboardLayout::GetLayoutName(HKL aLayout) const {
 
   if (NS_WARN_IF((layout & 0xF000) != 0xF000)) {
     nsCString result;
-    result.AppendPrintf("Odd HKL: 0x%08X",
+    result.AppendPrintf("Odd HKL: 0x%08" PRIXPTR,
                         reinterpret_cast<uintptr_t>(aLayout));
     return result;
   }
@@ -4293,8 +4294,8 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
   mKeyboardLayout = aLayout;
   mHasAltGr = false;
 
-  MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Info,
-          ("KeyboardLayout::LoadLayout(aLayout=0x%08X (%s))", aLayout,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
+          ("KeyboardLayout::LoadLayout(aLayout=0x%p (%s))", aLayout,
            GetLayoutName(aLayout).get()));
 
   BYTE kbdState[256];
@@ -4340,7 +4341,7 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
         NS_ASSERTION(ret == 2, "Expecting twice repeated dead-key character");
         mVirtualKeys[vki].SetDeadChar(shiftState, deadChar[0]);
 
-        MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Debug,
+        MOZ_LOG(gKeyLog, LogLevel::Verbose,
                 ("  %s (%d): DeadChar(%s, %s) (ret=%d)",
                  kVirtualKeyName[virtualKey], vki,
                  GetShiftStateName(shiftState).get(),
@@ -4351,7 +4352,7 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
           shiftStatesWithBaseChars |= (1 << shiftState);
         }
         mVirtualKeys[vki].SetNormalChars(shiftState, uniChars, ret);
-        MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Verbose,
+        MOZ_LOG(gKeyLog, LogLevel::Verbose,
                 ("  %s (%d): NormalChar(%s, %s) (ret=%d)",
                  kVirtualKeyName[virtualKey], vki,
                  GetShiftStateName(shiftState).get(),
@@ -4364,7 +4365,7 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
       if (!mHasAltGr && ret > 0 && isAltGr &&
           mVirtualKeys[vki].IsChangedByAltGr(shiftState)) {
         mHasAltGr = true;
-        MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Info,
+        MOZ_LOG(gKeyLog, LogLevel::Info,
                 ("  Found a key (%s) changed by AltGr: %s -> %s (%s) (ret=%d)",
                  kVirtualKeyName[virtualKey],
                  GetCharacterCodeNames(
@@ -4407,10 +4408,10 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
 
   ::SetKeyboardState(originalKbdState);
 
-  if (MOZ_LOG_TEST(sKeyboardLayoutLogger, LogLevel::Verbose)) {
+  if (MOZ_LOG_TEST(gKeyLog, LogLevel::Verbose)) {
     static const UINT kExtendedScanCode[] = {0x0000, 0xE000};
     static const UINT kMapType = MAPVK_VSC_TO_VK_EX;
-    MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Verbose,
+    MOZ_LOG(gKeyLog, LogLevel::Verbose,
             ("Logging virtual keycode values for scancode (0x%p)...",
              mKeyboardLayout));
     for (uint32_t i = 0; i < ArrayLength(kExtendedScanCode); i++) {
@@ -4418,13 +4419,13 @@ void KeyboardLayout::LoadLayout(HKL aLayout) {
         UINT scanCode = kExtendedScanCode[i] + j;
         UINT virtualKeyCode =
             ::MapVirtualKeyEx(scanCode, kMapType, mKeyboardLayout);
-        MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Verbose,
+        MOZ_LOG(gKeyLog, LogLevel::Verbose,
                 ("0x%04X, %s", scanCode, kVirtualKeyName[virtualKeyCode]));
       }
     }
   }
 
-  MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Info,
+  MOZ_LOG(gKeyLog, LogLevel::Info,
           ("  AltGr key is %s in %s", mHasAltGr ? "found" : "not found",
            GetLayoutName(aLayout).get()));
 }
@@ -4647,7 +4648,7 @@ uint32_t KeyboardLayout::GetDeadKeyCombinations(
                   deadKeyActive =
                       EnsureDeadKeyActive(false, aDeadKey, aDeadKeyKbdState);
                   if (NS_WARN_IF(deadKeyActive)) {
-                    MOZ_LOG(sKeyboardLayoutLogger, LogLevel::Error,
+                    MOZ_LOG(gKeyLog, LogLevel::Error,
                             ("  failed to deactivating the dead-key state..."));
                     break;
                   }
@@ -4675,7 +4676,7 @@ uint32_t KeyboardLayout::GetDeadKeyCombinations(
               }
             }
             MOZ_LOG(
-                sKeyboardLayoutLogger, LogLevel::Debug,
+                gKeyLog, LogLevel::Verbose,
                 ("  %s -> %s (%d): DeadKeyEntry(%s, %s) (ret=%d)",
                  kVirtualKeyName[aDeadKey], kVirtualKeyName[virtualKey], vki,
                  GetCharacterCodeNames(compositeChars, 1).get(),
@@ -4691,7 +4692,7 @@ uint32_t KeyboardLayout::GetDeadKeyCombinations(
             //    dead-key and base character combination.
             deadKeyActive = false;
             MOZ_LOG(
-                sKeyboardLayoutLogger, LogLevel::Verbose,
+                gKeyLog, LogLevel::Verbose,
                 ("  %s -> %s (%d): Unsupport dead key type(%s) (ret=%d)",
                  kVirtualKeyName[aDeadKey], kVirtualKeyName[virtualKey], vki,
                  ret <= 0
@@ -5085,9 +5086,9 @@ CodeNameIndex KeyboardLayout::ConvertScanCodeToCodeNameIndex(UINT aScanCode) {
 }
 
 nsresult KeyboardLayout::SynthesizeNativeKeyEvent(
-    nsWindowBase* aWidget, int32_t aNativeKeyboardLayout,
-    int32_t aNativeKeyCode, uint32_t aModifierFlags,
-    const nsAString& aCharacters, const nsAString& aUnmodifiedCharacters) {
+    nsWindow* aWidget, int32_t aNativeKeyboardLayout, int32_t aNativeKeyCode,
+    uint32_t aModifierFlags, const nsAString& aCharacters,
+    const nsAString& aUnmodifiedCharacters) {
   UINT keyboardLayoutListCount = ::GetKeyboardLayoutList(0, nullptr);
   NS_ASSERTION(keyboardLayoutListCount > 0,
                "One keyboard layout must be installed at least");

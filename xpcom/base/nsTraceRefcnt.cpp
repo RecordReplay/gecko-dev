@@ -10,6 +10,7 @@
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Path.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/StaticPtr.h"
 #include "nsXPCOMPrivate.h"
 #include "nscore.h"
@@ -21,7 +22,6 @@
 #include "nsTArray.h"
 #include "nsTHashtable.h"
 #include "prenv.h"
-#include "plstr.h"
 #include "prlink.h"
 #include "nsCRT.h"
 #include <math.h>
@@ -32,6 +32,7 @@
 
 #include "nsXULAppAPI.h"
 #ifdef XP_WIN
+#  include <io.h>
 #  include <process.h>
 #  define getpid _getpid
 #else
@@ -193,25 +194,26 @@ struct nsTraceRefcntStats {
 };
 
 #ifdef DEBUG
-static const char kStaticCtorDtorWarning[] =
-    "XPCOM objects created/destroyed from static ctor/dtor";
-
-static void AssertActivityIsLegal() {
+static void AssertActivityIsLegal(const char* aType, const char* aAction) {
   if (gActivityTLS == BAD_TLS_INDEX || PR_GetThreadPrivate(gActivityTLS)) {
+    char buf[1024];
+    SprintfLiteral(buf, "XPCOM object %s %s from static ctor/dtor", aType,
+                   aAction);
+
     if (PR_GetEnv("MOZ_FATAL_STATIC_XPCOM_CTORS_DTORS")) {
-      MOZ_CRASH_UNSAFE(kStaticCtorDtorWarning);
+      MOZ_CRASH_UNSAFE_PRINTF("%s", buf);
     } else {
-      NS_WARNING(kStaticCtorDtorWarning);
+      NS_WARNING(buf);
     }
   }
 }
-#  define ASSERT_ACTIVITY_IS_LEGAL \
-    do {                           \
-      AssertActivityIsLegal();     \
+#  define ASSERT_ACTIVITY_IS_LEGAL(type_, action_) \
+    do {                                           \
+      AssertActivityIsLegal(type_, action_);       \
     } while (0)
 #else
-#  define ASSERT_ACTIVITY_IS_LEGAL \
-    do {                           \
+#  define ASSERT_ACTIVITY_IS_LEGAL(type_, action_) \
+    do {                                           \
     } while (0)
 #endif  // DEBUG
 
@@ -226,12 +228,12 @@ class BloatEntry {
   BloatEntry(const char* aClassName, uint32_t aClassSize)
       : mClassSize(aClassSize), mStats() {
     MOZ_ASSERT(strlen(aClassName) > 0, "BloatEntry name must be non-empty");
-    mClassName = PL_strdup(aClassName);
+    mClassName = aClassName;
     mStats.Clear();
     mTotalLeaked = 0;
   }
 
-  ~BloatEntry() { PL_strfree(mClassName); }
+  ~BloatEntry() = default;
 
   uint32_t GetClassSize() { return (uint32_t)mClassSize; }
   const char* GetClassName() { return mClassName; }
@@ -289,7 +291,7 @@ class BloatEntry {
   }
 
  protected:
-  char* mClassName;
+  const char* mClassName;
   // mClassSize is stored as a double because of the way we compute the avg
   // class size for total bloat.
   double mClassSize;
@@ -310,8 +312,8 @@ static BloatEntry* GetBloatEntry(const char* aTypeName,
   BloatEntry* entry = gBloatView->Get(aTypeName);
   if (!entry && aInstanceSize > 0) {
     entry = gBloatView
-                ->InsertOrUpdate(
-                    aTypeName, MakeUnique<BloatEntry>(aTypeName, aInstanceSize))
+                ->InsertOrUpdate(aTypeName, mozilla::MakeUnique<BloatEntry>(
+                                                aTypeName, aInstanceSize))
                 .get();
   } else {
     MOZ_ASSERT(
@@ -376,10 +378,10 @@ template <>
 class nsDefaultComparator<BloatEntry*, BloatEntry*> {
  public:
   bool Equals(BloatEntry* const& aEntry1, BloatEntry* const& aEntry2) const {
-    return PL_strcmp(aEntry1->GetClassName(), aEntry2->GetClassName()) == 0;
+    return strcmp(aEntry1->GetClassName(), aEntry2->GetClassName()) == 0;
   }
   bool LessThan(BloatEntry* const& aEntry1, BloatEntry* const& aEntry2) const {
-    return PL_strcmp(aEntry1->GetClassName(), aEntry2->GetClassName()) < 0;
+    return strcmp(aEntry1->GetClassName(), aEntry2->GetClassName()) < 0;
   }
 };
 
@@ -466,7 +468,7 @@ static intptr_t GetSerialNumber(void* aPtr, bool aCreate, void* aFirstFramePC) {
           "it.");
     }
 
-    auto& record = entry.Insert(MakeUnique<SerialNumberRecord>());
+    auto& record = entry.Insert(mozilla::MakeUnique<SerialNumberRecord>());
     WalkTheStackSavingLocations(record->allocationStack, aFirstFramePC);
     if (gLogJSStacks) {
       record->SaveJSStack();
@@ -833,7 +835,7 @@ static void LogDMDFile() {
     return;
   }
 
-  nsPrintfCString fileName("%sdmd-%d.log.gz", dmdFilePrefix,
+  nsPrintfCString fileName("%sdmd-%" PRIPID ".log.gz", dmdFilePrefix,
                            base::GetCurrentProcId());
   FILE* logFile = fopen(fileName.get(), "w");
   if (NS_WARN_IF(!logFile)) {
@@ -884,7 +886,7 @@ void LogTerm() {
 EXPORT_XPCOM_API(MOZ_NEVER_INLINE void)
 NS_LogAddRef(void* aPtr, nsrefcnt aRefcnt, const char* aClass,
              uint32_t aClassSize) {
-  ASSERT_ACTIVITY_IS_LEGAL;
+  ASSERT_ACTIVITY_IS_LEGAL(aClass, "addrefed");
   if (!gInitialized) {
     InitTraceLog();
   }
@@ -937,7 +939,7 @@ NS_LogAddRef(void* aPtr, nsrefcnt aRefcnt, const char* aClass,
 
 EXPORT_XPCOM_API(MOZ_NEVER_INLINE void)
 NS_LogRelease(void* aPtr, nsrefcnt aRefcnt, const char* aClass) {
-  ASSERT_ACTIVITY_IS_LEGAL;
+  ASSERT_ACTIVITY_IS_LEGAL(aClass, "released");
   if (!gInitialized) {
     InitTraceLog();
   }
@@ -994,7 +996,7 @@ NS_LogRelease(void* aPtr, nsrefcnt aRefcnt, const char* aClass) {
 
 EXPORT_XPCOM_API(MOZ_NEVER_INLINE void)
 NS_LogCtor(void* aPtr, const char* aType, uint32_t aInstanceSize) {
-  ASSERT_ACTIVITY_IS_LEGAL;
+  ASSERT_ACTIVITY_IS_LEGAL(aType, "constructed");
   if (!gInitialized) {
     InitTraceLog();
   }
@@ -1030,7 +1032,7 @@ NS_LogCtor(void* aPtr, const char* aType, uint32_t aInstanceSize) {
 
 EXPORT_XPCOM_API(MOZ_NEVER_INLINE void)
 NS_LogDtor(void* aPtr, const char* aType, uint32_t aInstanceSize) {
-  ASSERT_ACTIVITY_IS_LEGAL;
+  ASSERT_ACTIVITY_IS_LEGAL(aType, "destroyed");
   if (!gInitialized) {
     InitTraceLog();
   }

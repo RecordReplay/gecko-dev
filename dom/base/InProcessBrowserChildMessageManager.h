@@ -15,7 +15,6 @@
 #include "nsCOMPtr.h"
 #include "nsIScriptContext.h"
 #include "nsIScriptObjectPrincipal.h"
-#include "nsIScriptContext.h"
 #include "nsDocShell.h"
 #include "nsCOMArray.h"
 #include "nsWeakReference.h"
@@ -39,7 +38,7 @@ class InProcessBrowserChildMessageManager final
       public nsIInProcessContentFrameMessageManager,
       public nsSupportsWeakReference,
       public mozilla::dom::ipc::MessageManagerCallback {
-  typedef mozilla::dom::ipc::StructuredCloneData StructuredCloneData;
+  using StructuredCloneData = mozilla::dom::ipc::StructuredCloneData;
 
  private:
   InProcessBrowserChildMessageManager(nsDocShell* aShell, nsIContent* aOwner,

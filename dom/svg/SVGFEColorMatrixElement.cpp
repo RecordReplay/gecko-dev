@@ -8,6 +8,8 @@
 
 #include "DOMSVGAnimatedNumberList.h"
 #include "mozilla/dom/SVGFEColorMatrixElementBinding.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 #define NUM_ENTRIES_IN_4x5_MATRIX 20
 
@@ -15,8 +17,7 @@ NS_IMPL_NS_NEW_SVG_ELEMENT(FEColorMatrix)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEColorMatrixElement::WrapNode(JSContext* aCx,
                                             JS::Handle<JSObject*> aGivenProto) {
@@ -106,6 +107,15 @@ bool SVGFEColorMatrixElement::AttributeAffectsRendering(
            aAttribute == nsGkAtoms::values));
 }
 
+nsresult SVGFEColorMatrixElement::BindToTree(BindContext& aCtx,
+                                             nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feColorMatrix);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -124,5 +134,4 @@ SVGFEColorMatrixElement::GetNumberListInfo() {
                                   ArrayLength(sNumberListInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

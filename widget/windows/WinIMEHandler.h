@@ -7,7 +7,7 @@
 #define WinIMEHandler_h_
 
 #include "nscore.h"
-#include "nsWindowBase.h"
+#include "nsWindow.h"
 #include "npapi.h"
 #include <windows.h>
 #include <inputscope.h>
@@ -144,7 +144,7 @@ class IMEHandler final {
   /**
    * Associate or disassociate IME context to/from the aWindowBase.
    */
-  static void AssociateIMEContext(nsWindowBase* aWindowBase, bool aEnable);
+  static void AssociateIMEContext(nsWindow* aWindowBase, bool aEnable);
 
   /**
    * Called when the window is created.
@@ -221,6 +221,7 @@ class IMEHandler final {
   static bool IsInTabletMode();
   static bool AutoInvokeOnScreenKeyboardInDesktopMode();
   static bool NeedsToAssociateIMC();
+  static bool NeedsSearchInputScope();
 
   /**
    * Show the Windows on-screen keyboard. Only allowed for

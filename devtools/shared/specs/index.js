@@ -44,6 +44,11 @@ const Types = (exports.__TypesForTests = [
     front: "devtools/client/fronts/array-buffer",
   },
   {
+    types: ["blackboxing"],
+    spec: "devtools/shared/specs/blackboxing",
+    front: "devtools/client/fronts/blackboxing",
+  },
+  {
     types: ["breakpoint-list"],
     spec: "devtools/shared/specs/breakpoint-list",
     front: "devtools/client/fronts/breakpoint-list",
@@ -102,11 +107,6 @@ const Types = (exports.__TypesForTests = [
     types: ["frame"],
     spec: "devtools/shared/specs/frame",
     front: "devtools/client/fronts/frame",
-  },
-  {
-    types: ["framerate"],
-    spec: "devtools/shared/specs/framerate",
-    front: "devtools/client/fronts/framerate",
   },
   /* heap snapshot has old fashion client and no front */
   {
@@ -184,16 +184,6 @@ const Types = (exports.__TypesForTests = [
     types: ["perf"],
     spec: "devtools/shared/specs/perf",
     front: "devtools/client/fronts/perf",
-  },
-  {
-    types: ["performance"],
-    spec: "devtools/shared/specs/performance",
-    front: "devtools/client/fronts/performance",
-  },
-  {
-    types: ["performance-recording"],
-    spec: "devtools/shared/specs/performance-recording",
-    front: "devtools/client/fronts/performance-recording",
   },
   {
     types: ["preference"],
@@ -294,18 +284,8 @@ const Types = (exports.__TypesForTests = [
     front: "devtools/client/fronts/target-configuration",
   },
   {
-    types: ["browsingContextTarget"],
-    spec: "devtools/shared/specs/targets/browsing-context",
-    front: "devtools/client/fronts/targets/browsing-context",
-  },
-  {
     types: ["contentProcessTarget"],
     spec: "devtools/shared/specs/targets/content-process",
-    front: null,
-  },
-  {
-    types: ["frameTarget"],
-    spec: "devtools/shared/specs/targets/frame",
     front: null,
   },
   {
@@ -317,6 +297,11 @@ const Types = (exports.__TypesForTests = [
     types: ["webExtensionTarget"],
     spec: "devtools/shared/specs/targets/webextension",
     front: null,
+  },
+  {
+    types: ["windowGlobalTarget"],
+    spec: "devtools/shared/specs/targets/window-global",
+    front: "devtools/client/fronts/targets/window-global",
   },
   {
     types: ["workerTarget"],

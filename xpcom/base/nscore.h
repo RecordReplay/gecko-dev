@@ -151,19 +151,6 @@
 
 #define XPCOM_API(type) NS_EXTERN_C type
 
-#if (defined(DEBUG) || defined(FORCE_BUILD_REFCNT_LOGGING))
-/* Make refcnt logging part of the build. This doesn't mean that
- * actual logging will occur (that requires a separate enable; see
- * nsTraceRefcnt and nsISupportsImpl.h for more information).  */
-#  define NS_BUILD_REFCNT_LOGGING
-#endif
-
-/* If NO_BUILD_REFCNT_LOGGING is defined then disable refcnt logging
- * in the build. This overrides FORCE_BUILD_REFCNT_LOGGING. */
-#if defined(NO_BUILD_REFCNT_LOGGING)
-#  undef NS_BUILD_REFCNT_LOGGING
-#endif
-
 /* If a program allocates memory for the lifetime of the app, it doesn't make
  * sense to touch memory pages and free that memory at shutdown,
  * unless we are running leak stats.
@@ -234,16 +221,17 @@ struct UnusedZero<nsresult> {
 }  // namespace detail
 
 template <typename T>
-class MOZ_MUST_USE_TYPE GenericErrorResult;
+class GenericErrorResult;
 template <>
-class MOZ_MUST_USE_TYPE GenericErrorResult<nsresult>;
+class GenericErrorResult<nsresult>;
 
 struct Ok;
 template <typename V, typename E>
 class Result;
 
 // Allow MOZ_TRY to handle `nsresult` values.
-inline Result<Ok, nsresult> ToResult(nsresult aValue);
+template <typename E = nsresult>
+inline Result<Ok, E> ToResult(nsresult aValue);
 }  // namespace mozilla
 
 /*

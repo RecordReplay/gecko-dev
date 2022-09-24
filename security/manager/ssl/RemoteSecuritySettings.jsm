@@ -13,42 +13,21 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
-const { X509 } = ChromeUtils.import(
-  "resource://gre/modules/psm/X509.jsm",
-  null
-);
+const { X509 } = ChromeUtils.import("resource://gre/modules/psm/X509.jsm");
 
-const INTERMEDIATES_BUCKET_PREF =
-  "security.remote_settings.intermediates.bucket";
-const INTERMEDIATES_CHECKED_SECONDS_PREF =
-  "security.remote_settings.intermediates.checked";
-const INTERMEDIATES_COLLECTION_PREF =
-  "security.remote_settings.intermediates.collection";
+const SECURITY_STATE_BUCKET = "security-state";
+const SECURITY_STATE_SIGNER = "onecrl.content-signature.mozilla.org";
+
 const INTERMEDIATES_DL_PER_POLL_PREF =
   "security.remote_settings.intermediates.downloads_per_poll";
 const INTERMEDIATES_DL_PARALLEL_REQUESTS =
   "security.remote_settings.intermediates.parallel_downloads";
 const INTERMEDIATES_ENABLED_PREF =
   "security.remote_settings.intermediates.enabled";
-const INTERMEDIATES_SIGNER_PREF =
-  "security.remote_settings.intermediates.signer";
 const LOGLEVEL_PREF = "browser.policies.loglevel";
 
-const ONECRL_BUCKET_PREF = "services.settings.security.onecrl.bucket";
-const ONECRL_COLLECTION_PREF = "services.settings.security.onecrl.collection";
-const ONECRL_SIGNER_PREF = "services.settings.security.onecrl.signer";
-const ONECRL_CHECKED_PREF = "services.settings.security.onecrl.checked";
-
-const CRLITE_FILTERS_BUCKET_PREF =
-  "security.remote_settings.crlite_filters.bucket";
-const CRLITE_FILTERS_CHECKED_SECONDS_PREF =
-  "security.remote_settings.crlite_filters.checked";
-const CRLITE_FILTERS_COLLECTION_PREF =
-  "security.remote_settings.crlite_filters.collection";
 const CRLITE_FILTERS_ENABLED_PREF =
   "security.remote_settings.crlite_filters.enabled";
-const CRLITE_FILTERS_SIGNER_PREF =
-  "security.remote_settings.crlite_filters.signer";
 
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 
@@ -83,15 +62,15 @@ function bytesToString(bytes) {
   return String.fromCharCode.apply(null, bytes);
 }
 
-class CRLiteState {
-  constructor(subject, spkiHash, state) {
-    this.subject = subject;
-    this.spkiHash = spkiHash;
-    this.state = state;
+class CRLiteCoverage {
+  constructor(b64LogID, minTimestamp, maxTimestamp) {
+    this.b64LogID = b64LogID;
+    this.minTimestamp = minTimestamp;
+    this.maxTimestamp = maxTimestamp;
   }
 }
-CRLiteState.prototype.QueryInterface = ChromeUtils.generateQI([
-  "nsICRLiteState",
+CRLiteCoverage.prototype.QueryInterface = ChromeUtils.generateQI([
+  "nsICRLiteCoverage",
 ]);
 
 class CertInfo {
@@ -247,14 +226,10 @@ var RemoteSecuritySettings = {
    * @returns {Object} intantiated clients for security remote settings.
    */
   init() {
-    const OneCRLBlocklistClient = RemoteSettings(
-      Services.prefs.getCharPref(ONECRL_COLLECTION_PREF),
-      {
-        bucketNamePref: ONECRL_BUCKET_PREF,
-        lastCheckTimePref: ONECRL_CHECKED_PREF,
-        signerName: Services.prefs.getCharPref(ONECRL_SIGNER_PREF),
-      }
-    );
+    const OneCRLBlocklistClient = RemoteSettings("onecrl", {
+      bucketName: SECURITY_STATE_BUCKET,
+      signerName: SECURITY_STATE_SIGNER,
+    });
     OneCRLBlocklistClient.on("sync", updateCertBlocklist);
 
     let IntermediatePreloadsClient = new IntermediatePreloads();
@@ -274,15 +249,11 @@ var RemoteSecuritySettings = {
 
 class IntermediatePreloads {
   constructor() {
-    this.client = RemoteSettings(
-      Services.prefs.getCharPref(INTERMEDIATES_COLLECTION_PREF),
-      {
-        bucketNamePref: INTERMEDIATES_BUCKET_PREF,
-        lastCheckTimePref: INTERMEDIATES_CHECKED_SECONDS_PREF,
-        signerName: Services.prefs.getCharPref(INTERMEDIATES_SIGNER_PREF),
-        localFields: ["cert_import_complete"],
-      }
-    );
+    this.client = RemoteSettings("intermediates", {
+      bucketName: SECURITY_STATE_BUCKET,
+      signerName: SECURITY_STATE_SIGNER,
+      localFields: ["cert_import_complete"],
+    });
 
     this.client.on("sync", this.onSync.bind(this));
     Services.obs.addObserver(
@@ -429,40 +400,6 @@ class IntermediatePreloads {
 
     log.debug(`Removing ${deleted.length} Intermediate certificates`);
     await this.removeCerts(deleted);
-    let hasPriorCRLiteData = await hasPriorData(
-      Ci.nsICertStorage.DATA_TYPE_CRLITE
-    );
-    if (!hasPriorCRLiteData) {
-      deleted = [];
-      updated = [];
-      created = current;
-    }
-    const toAdd = created.concat(updated.map(u => u.new));
-    let entries = [];
-    for (let entry of deleted) {
-      entries.push(
-        new CRLiteState(
-          entry.subjectDN,
-          entry.pubKeyHash,
-          Ci.nsICertStorage.STATE_UNSET
-        )
-      );
-    }
-    for (let entry of toAdd) {
-      entries.push(
-        new CRLiteState(
-          entry.subjectDN,
-          entry.pubKeyHash,
-          entry.crlite_enrolled
-            ? Ci.nsICertStorage.STATE_ENFORCE
-            : Ci.nsICertStorage.STATE_UNSET
-        )
-      );
-    }
-    let certStorage = Cc["@mozilla.org/security/certstorage;1"].getService(
-      Ci.nsICertStorage
-    );
-    await new Promise(resolve => certStorage.setCRLiteState(entries, resolve));
   }
 
   /**
@@ -544,15 +481,11 @@ function compareFilters(filterA, filterB) {
 
 class CRLiteFilters {
   constructor() {
-    this.client = RemoteSettings(
-      Services.prefs.getCharPref(CRLITE_FILTERS_COLLECTION_PREF),
-      {
-        bucketNamePref: CRLITE_FILTERS_BUCKET_PREF,
-        lastCheckTimePref: CRLITE_FILTERS_CHECKED_SECONDS_PREF,
-        signerName: Services.prefs.getCharPref(CRLITE_FILTERS_SIGNER_PREF),
-        localFields: ["loaded_into_cert_storage"],
-      }
-    );
+    this.client = RemoteSettings("cert-revocations", {
+      bucketName: SECURITY_STATE_BUCKET,
+      signerName: SECURITY_STATE_SIGNER,
+      localFields: ["loaded_into_cert_storage"],
+    });
 
     Services.obs.addObserver(
       this.onObservePollEnd.bind(this),
@@ -647,7 +580,7 @@ class CRLiteFilters {
     for (let filter of filtersToDownload) {
       try {
         // If we've already downloaded this, the backend should just grab it from its cache.
-        let localURI = await this.client.attachments.download(filter);
+        let localURI = await this.client.attachments.downloadToDisk(filter);
         let buffer = await (await fetch(localURI)).arrayBuffer();
         let bytes = new Uint8Array(buffer);
         log.debug(`Downloaded ${filter.details.name}: ${bytes.length} bytes`);
@@ -666,10 +599,23 @@ class CRLiteFilters {
         log.warn("trying to install more than one full CRLite filter?");
       }
       let filter = fullFiltersDownloaded[0];
-      let timestamp = Math.floor(filter.effectiveTimestamp / 1000);
-      log.debug(`setting CRLite filter timestamp to ${timestamp}`);
+
+      let coverage = [];
+      if (filter.coverage) {
+        for (let entry of filter.coverage) {
+          coverage.push(
+            new CRLiteCoverage(
+              entry.logID,
+              entry.minTimestamp,
+              entry.maxTimestamp
+            )
+          );
+        }
+      }
+      let enrollment = filter.enrolledIssuers ? filter.enrolledIssuers : [];
+
       await new Promise(resolve => {
-        certList.setFullCRLiteFilter(filter.bytes, timestamp, rv => {
+        certList.setFullCRLiteFilter(filter.bytes, enrollment, coverage, rv => {
           log.debug(`setFullCRLiteFilter: ${rv}`);
           resolve();
         });

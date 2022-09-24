@@ -47,6 +47,32 @@ const VISITED_INVALID_PROPERTIES = allCssPropertiesExcept([
   "text-emphasis-color",
 ]);
 
+// Set of node names which are always treated as replaced elements:
+const REPLACED_ELEMENTS_NAMES = new Set([
+  "audio",
+  "br",
+  "button",
+  "canvas",
+  "embed",
+  "hr",
+  "iframe",
+  // Inputs are generally replaced elements. E.g. checkboxes and radios are replaced
+  // unless they have `appearance: none`. However unconditionally treating them
+  // as replaced is enough for our purpose here, and avoids extra complexity that
+  // will likely not be necessary in most cases.
+  "input",
+  "math",
+  "object",
+  "picture",
+  // Select is a replaced element if it has `size<=1` or no size specified, but
+  // unconditionally treating it as replaced is enough for our purpose here, and
+  // avoids extra complexity that will likely not be necessary in most cases.
+  "select",
+  "svg",
+  "textarea",
+  "video",
+]);
+
 class InactivePropertyHelper {
   /**
    * A list of rules for when CSS properties have no effect.
@@ -155,7 +181,7 @@ class InactivePropertyHelper {
         invalidProperties: ["align-self", "place-self", "order"],
         when: () =>
           !this.gridItem && !this.flexItem && !this.isAbsPosGridElement(),
-        fixId: "inactive-css-not-grid-or-flex-item-fix-2",
+        fixId: "inactive-css-not-grid-or-flex-item-fix-3",
         msgId: "inactive-css-not-grid-or-flex-item",
         numFixProps: 4,
       },
@@ -169,7 +195,6 @@ class InactivePropertyHelper {
           "row-gap",
           // grid-*-gap are supported legacy shorthands for the corresponding *-gap properties.
           // See https://drafts.csswg.org/css-align-3/#gap-legacy for more information.
-          "grid-gap",
           "grid-row-gap",
         ],
         when: () => !this.gridContainer && !this.flexContainer,
@@ -195,6 +220,7 @@ class InactivePropertyHelper {
         invalidProperties: [
           "column-gap",
           "gap",
+          "grid-gap",
           // grid-*-gap are supported legacy shorthands for the corresponding *-gap properties.
           // See https://drafts.csswg.org/css-align-3/#gap-legacy for more information.
           "grid-column-gap",
@@ -837,39 +863,12 @@ class InactivePropertyHelper {
    * elements.
    */
   get replaced() {
-    // The <applet> element was removed in Gecko 56 so we can ignore them.
-    // These are always treated as replaced elements:
-    if (
-      this.nodeNameOneOf([
-        "audio",
-        "br",
-        "button",
-        "canvas",
-        "embed",
-        "hr",
-        "iframe",
-        // Inputs are generally replaced elements. E.g. checkboxes and radios are replaced
-        // unless they have `appearance: none`. However unconditionally treating them
-        // as replaced is enough for our purpose here, and avoids extra complexity that
-        // will likely not be necessary in most cases.
-        "input",
-        "math",
-        "object",
-        "picture",
-        // Select is a replaced element if it has `size<=1` or no size specified, but
-        // unconditionally treating it as replaced is enough for our purpose here, and
-        // avoids extra complexity that will likely not be necessary in most cases.
-        "select",
-        "svg",
-        "textarea",
-        "video",
-      ])
-    ) {
+    if (REPLACED_ELEMENTS_NAMES.has(this.localName)) {
       return true;
     }
 
     // img tags are replaced elements only when the image has finished loading.
-    if (this.nodeName === "img" && this.node.complete) {
+    if (this.localName === "img" && this.node.complete) {
       return true;
     }
 
@@ -877,12 +876,12 @@ class InactivePropertyHelper {
   }
 
   /**
-   * Return the current node's nodeName.
+   * Return the current node's localName.
    *
    * @returns {String}
    */
-  get nodeName() {
-    return this.node.nodeName ? this.node.nodeName.toLowerCase() : null;
+  get localName() {
+    return this.node.localName;
   }
 
   /**
@@ -897,17 +896,6 @@ class InactivePropertyHelper {
    */
   get isSvg() {
     return this.node.namespaceURI === "http://www.w3.org/2000/svg";
-  }
-
-  /**
-   * Check if the current node's nodeName matches a value inside the value array.
-   *
-   * @param {Array} values
-   *        Array of values to compare against.
-   * @returns {Boolean}
-   */
-  nodeNameOneOf(values) {
-    return values.includes(this.nodeName);
   }
 
   /**
@@ -1107,8 +1095,6 @@ class InactivePropertyHelper {
   }
 }
 
-exports.inactivePropertyHelper = new InactivePropertyHelper();
-
 /**
  * Returns all CSS property names except given properties.
  *
@@ -1141,3 +1127,10 @@ function allCssPropertiesExcept(propertiesToIgnore) {
 function computedStyle(node, window = node.ownerGlobal) {
   return window.getComputedStyle(node);
 }
+
+const inactivePropertyHelper = new InactivePropertyHelper();
+
+// The only public method from this module is `isPropertyUsed`.
+exports.isPropertyUsed = inactivePropertyHelper.isPropertyUsed.bind(
+  inactivePropertyHelper
+);

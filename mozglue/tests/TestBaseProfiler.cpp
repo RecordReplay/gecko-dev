@@ -7,7 +7,12 @@
 #include "BaseProfiler.h"
 
 #include "mozilla/Attributes.h"
+#include "mozilla/BaseAndGeckoProfilerDetail.h"
 #include "mozilla/BaseProfileJSONWriter.h"
+#include "mozilla/BaseProfilerDetail.h"
+#include "mozilla/FloatingPoint.h"
+#include "mozilla/ProgressLogger.h"
+#include "mozilla/ProportionValue.h"
 
 #ifdef MOZ_GECKO_PROFILER
 #  include "mozilla/BaseProfilerMarkerTypes.h"
@@ -30,9 +35,7 @@
 #  include <process.h>
 #else
 #  include <errno.h>
-#  include <string.h>
 #  include <time.h>
-#  include <unistd.h>
 #endif
 
 #include <algorithm>
@@ -42,6 +45,838 @@
 #include <thread>
 #include <type_traits>
 #include <utility>
+
+void TestProfilerUtils() {
+  printf("TestProfilerUtils...\n");
+
+  {
+    using mozilla::baseprofiler::BaseProfilerProcessId;
+    using Number = BaseProfilerProcessId::NumberType;
+    static constexpr Number scMaxNumber = std::numeric_limits<Number>::max();
+
+    static_assert(
+        BaseProfilerProcessId{}.ToNumber() == 0,
+        "These tests assume that the unspecified process id number is 0; "
+        "if this fails, please update these tests accordingly");
+
+    static_assert(!BaseProfilerProcessId{}.IsSpecified());
+    static_assert(!BaseProfilerProcessId::FromNumber(0).IsSpecified());
+    static_assert(BaseProfilerProcessId::FromNumber(1).IsSpecified());
+    static_assert(BaseProfilerProcessId::FromNumber(123).IsSpecified());
+    static_assert(BaseProfilerProcessId::FromNumber(scMaxNumber).IsSpecified());
+
+    static_assert(BaseProfilerProcessId::FromNumber(Number(1)).ToNumber() ==
+                  Number(1));
+    static_assert(BaseProfilerProcessId::FromNumber(Number(123)).ToNumber() ==
+                  Number(123));
+    static_assert(BaseProfilerProcessId::FromNumber(scMaxNumber).ToNumber() ==
+                  scMaxNumber);
+
+    static_assert(BaseProfilerProcessId{} == BaseProfilerProcessId{});
+    static_assert(BaseProfilerProcessId::FromNumber(Number(123)) ==
+                  BaseProfilerProcessId::FromNumber(Number(123)));
+    static_assert(BaseProfilerProcessId{} !=
+                  BaseProfilerProcessId::FromNumber(Number(123)));
+    static_assert(BaseProfilerProcessId::FromNumber(Number(123)) !=
+                  BaseProfilerProcessId{});
+    static_assert(BaseProfilerProcessId::FromNumber(Number(123)) !=
+                  BaseProfilerProcessId::FromNumber(scMaxNumber));
+    static_assert(BaseProfilerProcessId::FromNumber(scMaxNumber) !=
+                  BaseProfilerProcessId::FromNumber(Number(123)));
+
+    // Verify trivial-copyability by memcpy'ing to&from same-size storage.
+    static_assert(std::is_trivially_copyable_v<BaseProfilerProcessId>);
+    BaseProfilerProcessId pid;
+    MOZ_RELEASE_ASSERT(!pid.IsSpecified());
+    Number pidStorage;
+    static_assert(sizeof(pidStorage) == sizeof(pid));
+    // Copy from BaseProfilerProcessId to storage. Note: We cannot assume that
+    // this is equal to what ToNumber() gives us. All we can do is verify that
+    // copying from storage back to BaseProfilerProcessId works as expected.
+    std::memcpy(&pidStorage, &pid, sizeof(pidStorage));
+    BaseProfilerProcessId pid2 = BaseProfilerProcessId::FromNumber(2);
+    MOZ_RELEASE_ASSERT(pid2.IsSpecified());
+    std::memcpy(&pid2, &pidStorage, sizeof(pid));
+    MOZ_RELEASE_ASSERT(!pid2.IsSpecified());
+
+    pid = BaseProfilerProcessId::FromNumber(123);
+    std::memcpy(&pidStorage, &pid, sizeof(pidStorage));
+    pid2 = BaseProfilerProcessId{};
+    MOZ_RELEASE_ASSERT(!pid2.IsSpecified());
+    std::memcpy(&pid2, &pidStorage, sizeof(pid));
+    MOZ_RELEASE_ASSERT(pid2.IsSpecified());
+    MOZ_RELEASE_ASSERT(pid2.ToNumber() == 123);
+
+    // No conversions to/from numbers.
+    static_assert(!std::is_constructible_v<BaseProfilerProcessId, Number>);
+    static_assert(!std::is_assignable_v<BaseProfilerProcessId, Number>);
+    static_assert(!std::is_constructible_v<Number, BaseProfilerProcessId>);
+    static_assert(!std::is_assignable_v<Number, BaseProfilerProcessId>);
+
+    static_assert(
+        std::is_same_v<
+            decltype(mozilla::baseprofiler::profiler_current_process_id()),
+            BaseProfilerProcessId>);
+    MOZ_RELEASE_ASSERT(
+        mozilla::baseprofiler::profiler_current_process_id().IsSpecified());
+  }
+
+  {
+    mozilla::baseprofiler::profiler_init_main_thread_id();
+
+    using mozilla::baseprofiler::BaseProfilerThreadId;
+    using Number = BaseProfilerThreadId::NumberType;
+    static constexpr Number scMaxNumber = std::numeric_limits<Number>::max();
+
+    static_assert(
+        BaseProfilerThreadId{}.ToNumber() == 0,
+        "These tests assume that the unspecified thread id number is 0; "
+        "if this fails, please update these tests accordingly");
+
+    static_assert(!BaseProfilerThreadId{}.IsSpecified());
+    static_assert(!BaseProfilerThreadId::FromNumber(0).IsSpecified());
+    static_assert(BaseProfilerThreadId::FromNumber(1).IsSpecified());
+    static_assert(BaseProfilerThreadId::FromNumber(123).IsSpecified());
+    static_assert(BaseProfilerThreadId::FromNumber(scMaxNumber).IsSpecified());
+
+    static_assert(BaseProfilerThreadId::FromNumber(Number(1)).ToNumber() ==
+                  Number(1));
+    static_assert(BaseProfilerThreadId::FromNumber(Number(123)).ToNumber() ==
+                  Number(123));
+    static_assert(BaseProfilerThreadId::FromNumber(scMaxNumber).ToNumber() ==
+                  scMaxNumber);
+
+    static_assert(BaseProfilerThreadId{} == BaseProfilerThreadId{});
+    static_assert(BaseProfilerThreadId::FromNumber(Number(123)) ==
+                  BaseProfilerThreadId::FromNumber(Number(123)));
+    static_assert(BaseProfilerThreadId{} !=
+                  BaseProfilerThreadId::FromNumber(Number(123)));
+    static_assert(BaseProfilerThreadId::FromNumber(Number(123)) !=
+                  BaseProfilerThreadId{});
+    static_assert(BaseProfilerThreadId::FromNumber(Number(123)) !=
+                  BaseProfilerThreadId::FromNumber(scMaxNumber));
+    static_assert(BaseProfilerThreadId::FromNumber(scMaxNumber) !=
+                  BaseProfilerThreadId::FromNumber(Number(123)));
+
+    // Verify trivial-copyability by memcpy'ing to&from same-size storage.
+    static_assert(std::is_trivially_copyable_v<BaseProfilerThreadId>);
+    BaseProfilerThreadId tid;
+    MOZ_RELEASE_ASSERT(!tid.IsSpecified());
+    Number tidStorage;
+    static_assert(sizeof(tidStorage) == sizeof(tid));
+    // Copy from BaseProfilerThreadId to storage. Note: We cannot assume that
+    // this is equal to what ToNumber() gives us. All we can do is verify that
+    // copying from storage back to BaseProfilerThreadId works as expected.
+    std::memcpy(&tidStorage, &tid, sizeof(tidStorage));
+    BaseProfilerThreadId tid2 = BaseProfilerThreadId::FromNumber(2);
+    MOZ_RELEASE_ASSERT(tid2.IsSpecified());
+    std::memcpy(&tid2, &tidStorage, sizeof(tid));
+    MOZ_RELEASE_ASSERT(!tid2.IsSpecified());
+
+    tid = BaseProfilerThreadId::FromNumber(Number(123));
+    std::memcpy(&tidStorage, &tid, sizeof(tidStorage));
+    tid2 = BaseProfilerThreadId{};
+    MOZ_RELEASE_ASSERT(!tid2.IsSpecified());
+    std::memcpy(&tid2, &tidStorage, sizeof(tid));
+    MOZ_RELEASE_ASSERT(tid2.IsSpecified());
+    MOZ_RELEASE_ASSERT(tid2.ToNumber() == Number(123));
+
+    // No conversions to/from numbers.
+    static_assert(!std::is_constructible_v<BaseProfilerThreadId, Number>);
+    static_assert(!std::is_assignable_v<BaseProfilerThreadId, Number>);
+    static_assert(!std::is_constructible_v<Number, BaseProfilerThreadId>);
+    static_assert(!std::is_assignable_v<Number, BaseProfilerThreadId>);
+
+    static_assert(std::is_same_v<
+                  decltype(mozilla::baseprofiler::profiler_current_thread_id()),
+                  BaseProfilerThreadId>);
+    BaseProfilerThreadId mainTestThreadId =
+        mozilla::baseprofiler::profiler_current_thread_id();
+    MOZ_RELEASE_ASSERT(mainTestThreadId.IsSpecified());
+
+    BaseProfilerThreadId mainThreadId =
+        mozilla::baseprofiler::profiler_main_thread_id();
+    MOZ_RELEASE_ASSERT(mainThreadId.IsSpecified());
+
+    MOZ_RELEASE_ASSERT(mainThreadId == mainTestThreadId,
+                       "Test should run on the main thread");
+    MOZ_RELEASE_ASSERT(mozilla::baseprofiler::profiler_is_main_thread());
+
+    std::thread testThread([&]() {
+      const BaseProfilerThreadId testThreadId =
+          mozilla::baseprofiler::profiler_current_thread_id();
+      MOZ_RELEASE_ASSERT(testThreadId.IsSpecified());
+      MOZ_RELEASE_ASSERT(testThreadId != mainThreadId);
+      MOZ_RELEASE_ASSERT(!mozilla::baseprofiler::profiler_is_main_thread());
+    });
+    testThread.join();
+  }
+
+  // No conversions between processes and threads.
+  static_assert(
+      !std::is_constructible_v<mozilla::baseprofiler::BaseProfilerThreadId,
+                               mozilla::baseprofiler::BaseProfilerProcessId>);
+  static_assert(
+      !std::is_assignable_v<mozilla::baseprofiler::BaseProfilerThreadId,
+                            mozilla::baseprofiler::BaseProfilerProcessId>);
+  static_assert(
+      !std::is_constructible_v<mozilla::baseprofiler::BaseProfilerProcessId,
+                               mozilla::baseprofiler::BaseProfilerThreadId>);
+  static_assert(
+      !std::is_assignable_v<mozilla::baseprofiler::BaseProfilerProcessId,
+                            mozilla::baseprofiler::BaseProfilerThreadId>);
+
+  printf("TestProfilerUtils done\n");
+}
+
+void TestBaseAndProfilerDetail() {
+  printf("TestBaseAndProfilerDetail...\n");
+
+  {
+    using mozilla::profiler::detail::FilterHasPid;
+
+    const auto pid123 =
+        mozilla::baseprofiler::BaseProfilerProcessId::FromNumber(123);
+    MOZ_RELEASE_ASSERT(FilterHasPid("pid:123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid(" ", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid=123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:123 ", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid: 123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:0123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:0000000000000000000000123", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:12", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:1234", pid123));
+    MOZ_RELEASE_ASSERT(!FilterHasPid("pid:0", pid123));
+
+    using PidNumber = mozilla::baseprofiler::BaseProfilerProcessId::NumberType;
+    const PidNumber maxNumber = std::numeric_limits<PidNumber>::max();
+    const auto maxPid =
+        mozilla::baseprofiler::BaseProfilerProcessId::FromNumber(maxNumber);
+    const std::string maxPidString = "pid:" + std::to_string(maxNumber);
+    MOZ_RELEASE_ASSERT(FilterHasPid(maxPidString.c_str(), maxPid));
+
+    const std::string tooBigPidString = maxPidString + "0";
+    MOZ_RELEASE_ASSERT(!FilterHasPid(tooBigPidString.c_str(), maxPid));
+  }
+
+  {
+    using mozilla::profiler::detail::FiltersExcludePid;
+    const auto pid123 =
+        mozilla::baseprofiler::BaseProfilerProcessId::FromNumber(123);
+
+    MOZ_RELEASE_ASSERT(
+        !FiltersExcludePid(mozilla::Span<const char*>{}, pid123));
+
+    {
+      const char* const filters[] = {"main"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"main", "pid:123"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"main", "pid:456"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"pid:123"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"pid:123", "pid:456"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"pid:456", "pid:123"};
+      MOZ_RELEASE_ASSERT(!FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"pid:456"};
+      MOZ_RELEASE_ASSERT(FiltersExcludePid(filters, pid123));
+    }
+
+    {
+      const char* const filters[] = {"pid:456", "pid:789"};
+      MOZ_RELEASE_ASSERT(FiltersExcludePid(filters, pid123));
+    }
+  }
+
+  printf("TestBaseAndProfilerDetail done\n");
+}
+
+void TestSharedMutex() {
+  printf("TestSharedMutex...\n");
+
+  mozilla::baseprofiler::detail::BaseProfilerSharedMutex sm;
+
+  // First round of minimal tests in this thread.
+
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+
+  sm.LockExclusive();
+  MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+  sm.UnlockExclusive();
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+
+  sm.LockShared();
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+  sm.UnlockShared();
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+
+  {
+    mozilla::baseprofiler::detail::BaseProfilerAutoLockExclusive exclusiveLock{
+        sm};
+    MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+  }
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+
+  {
+    mozilla::baseprofiler::detail::BaseProfilerAutoLockShared sharedLock{sm};
+    MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+  }
+  MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+
+  // The following will run actions between two threads, to verify that
+  // exclusive and shared locks work as expected.
+
+  // These actions will happen from top to bottom.
+  // This will test all possible lock interactions.
+  enum NextAction {                  // State of the lock:
+    t1Starting,                      // (x=exclusive, s=shared, ?=blocked)
+    t2Starting,                      // t1 t2
+    t1LockExclusive,                 // x
+    t2LockExclusiveAndBlock,         // x  x? - Can't have two exclusives.
+    t1UnlockExclusive,               //    x
+    t2UnblockedAfterT1Unlock,        //    x
+    t1LockSharedAndBlock,            // s? x - Can't have shared during excl
+    t2UnlockExclusive,               // s
+    t1UnblockedAfterT2Unlock,        // s
+    t2LockShared,                    // s  s - Can have multiple shared locks
+    t1UnlockShared,                  //    s
+    t2StillLockedShared,             //    s
+    t1LockExclusiveAndBlock,         // x? s - Can't have excl during shared
+    t2UnlockShared,                  // x
+    t1UnblockedAfterT2UnlockShared,  // x
+    t2CheckAfterT1Lock,              // x
+    t1LastUnlockExclusive,           // (unlocked)
+    done
+  };
+
+  // Each thread will repeatedly read this `nextAction`, and run actions that
+  // target it...
+  std::atomic<NextAction> nextAction{static_cast<NextAction>(0)};
+  // ... and advance to the next available action (which should usually be for
+  // the other thread).
+  auto AdvanceAction = [&nextAction]() {
+    MOZ_RELEASE_ASSERT(nextAction <= done);
+    nextAction = static_cast<NextAction>(static_cast<int>(nextAction) + 1);
+  };
+
+  std::thread t1{[&]() {
+    for (;;) {
+      switch (nextAction) {
+        case t1Starting:
+          AdvanceAction();
+          break;
+        case t1LockExclusive:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          sm.LockExclusive();
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case t1UnlockExclusive:
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          // Advance first, before unlocking, so that t2 sees the new state.
+          AdvanceAction();
+          sm.UnlockExclusive();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          break;
+        case t1LockSharedAndBlock:
+          // Advance action before attempting to lock after t2's exclusive lock.
+          AdvanceAction();
+          sm.LockShared();
+          // We will only acquire the lock after t1 unlocks.
+          MOZ_RELEASE_ASSERT(nextAction == t1UnblockedAfterT2Unlock);
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case t1UnlockShared:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          // Advance first, before unlocking, so that t2 sees the new state.
+          AdvanceAction();
+          sm.UnlockShared();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          break;
+        case t1LockExclusiveAndBlock:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          // Advance action before attempting to lock after t2's shared lock.
+          AdvanceAction();
+          sm.LockExclusive();
+          // We will only acquire the lock after t2 unlocks.
+          MOZ_RELEASE_ASSERT(nextAction == t1UnblockedAfterT2UnlockShared);
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case t1LastUnlockExclusive:
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          // Advance first, before unlocking, so that t2 sees the new state.
+          AdvanceAction();
+          sm.UnlockExclusive();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          break;
+        case done:
+          return;
+        default:
+          // Ignore other actions intended for t2.
+          break;
+      }
+    }
+  }};
+
+  std::thread t2{[&]() {
+    for (;;) {
+      switch (nextAction) {
+        case t2Starting:
+          AdvanceAction();
+          break;
+        case t2LockExclusiveAndBlock:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          // Advance action before attempting to lock after t1's exclusive lock.
+          AdvanceAction();
+          sm.LockExclusive();
+          // We will only acquire the lock after t1 unlocks.
+          MOZ_RELEASE_ASSERT(nextAction == t2UnblockedAfterT1Unlock);
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case t2UnlockExclusive:
+          MOZ_RELEASE_ASSERT(sm.IsLockedExclusiveOnCurrentThread());
+          // Advance first, before unlocking, so that t1 sees the new state.
+          AdvanceAction();
+          sm.UnlockExclusive();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          break;
+        case t2LockShared:
+          sm.LockShared();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case t2StillLockedShared:
+          AdvanceAction();
+          break;
+        case t2UnlockShared:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          // Advance first, before unlocking, so that t1 sees the new state.
+          AdvanceAction();
+          sm.UnlockShared();
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          break;
+        case t2CheckAfterT1Lock:
+          MOZ_RELEASE_ASSERT(!sm.IsLockedExclusiveOnCurrentThread());
+          AdvanceAction();
+          break;
+        case done:
+          return;
+        default:
+          // Ignore other actions intended for t1.
+          break;
+      }
+    }
+  }};
+
+  t1.join();
+  t2.join();
+
+  printf("TestSharedMutex done\n");
+}
+
+void TestProportionValue() {
+  printf("TestProportionValue...\n");
+
+  using mozilla::ProportionValue;
+
+#define STATIC_ASSERT_EQ(a, b) \
+  static_assert((a) == (b));   \
+  MOZ_RELEASE_ASSERT((a) == (b));
+
+#define STATIC_ASSERT(e) STATIC_ASSERT_EQ(e, true)
+
+  // Conversion from&to double.
+  STATIC_ASSERT_EQ(ProportionValue().ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(0.0).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(0.5).ToDouble(), 0.5);
+  STATIC_ASSERT_EQ(ProportionValue(1.0).ToDouble(), 1.0);
+
+  // Clamping.
+  STATIC_ASSERT_EQ(
+      ProportionValue(std::numeric_limits<double>::min()).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(
+      ProportionValue(std::numeric_limits<long double>::min()).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(-1.0).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(-0.01).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(-0.0).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ(ProportionValue(1.01).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ(
+      ProportionValue(std::numeric_limits<double>::max()).ToDouble(), 1.0);
+
+  // User-defined literal.
+  {
+    using namespace mozilla::literals::ProportionValue_literals;
+    STATIC_ASSERT_EQ(0_pc, ProportionValue(0.0));
+    STATIC_ASSERT_EQ(0._pc, ProportionValue(0.0));
+    STATIC_ASSERT_EQ(50_pc, ProportionValue(0.5));
+    STATIC_ASSERT_EQ(50._pc, ProportionValue(0.5));
+    STATIC_ASSERT_EQ(100_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(100._pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(101_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(100.01_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(1000_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(1000._pc, ProportionValue(1.0));
+  }
+  {
+    // ProportionValue_literals is an inline namespace of mozilla::literals, so
+    // it's optional.
+    using namespace mozilla::literals;
+    STATIC_ASSERT_EQ(0_pc, ProportionValue(0.0));
+    STATIC_ASSERT_EQ(0._pc, ProportionValue(0.0));
+    STATIC_ASSERT_EQ(50_pc, ProportionValue(0.5));
+    STATIC_ASSERT_EQ(50._pc, ProportionValue(0.5));
+    STATIC_ASSERT_EQ(100_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(100._pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(101_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(100.01_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(1000_pc, ProportionValue(1.0));
+    STATIC_ASSERT_EQ(1000._pc, ProportionValue(1.0));
+  }
+
+  // Invalid construction, conversion to double NaN.
+  MOZ_RELEASE_ASSERT(mozilla::IsNaN(ProportionValue::MakeInvalid().ToDouble()));
+
+  using namespace mozilla::literals::ProportionValue_literals;
+
+  // Conversion to&from underlying integral number.
+  STATIC_ASSERT_EQ(
+      ProportionValue::FromUnderlyingType((0_pc).ToUnderlyingType()).ToDouble(),
+      0.0);
+  STATIC_ASSERT_EQ(
+      ProportionValue::FromUnderlyingType((50_pc).ToUnderlyingType())
+          .ToDouble(),
+      0.5);
+  STATIC_ASSERT_EQ(
+      ProportionValue::FromUnderlyingType((100_pc).ToUnderlyingType())
+          .ToDouble(),
+      1.0);
+  STATIC_ASSERT(ProportionValue::FromUnderlyingType(
+                    ProportionValue::MakeInvalid().ToUnderlyingType())
+                    .IsInvalid());
+
+  // IsExactlyZero.
+  STATIC_ASSERT(ProportionValue().IsExactlyZero());
+  STATIC_ASSERT((0_pc).IsExactlyZero());
+  STATIC_ASSERT(!(50_pc).IsExactlyZero());
+  STATIC_ASSERT(!(100_pc).IsExactlyZero());
+  STATIC_ASSERT(!ProportionValue::MakeInvalid().IsExactlyZero());
+
+  // IsExactlyOne.
+  STATIC_ASSERT(!ProportionValue().IsExactlyOne());
+  STATIC_ASSERT(!(0_pc).IsExactlyOne());
+  STATIC_ASSERT(!(50_pc).IsExactlyOne());
+  STATIC_ASSERT((100_pc).IsExactlyOne());
+  STATIC_ASSERT(!ProportionValue::MakeInvalid().IsExactlyOne());
+
+  // IsValid.
+  STATIC_ASSERT(ProportionValue().IsValid());
+  STATIC_ASSERT((0_pc).IsValid());
+  STATIC_ASSERT((50_pc).IsValid());
+  STATIC_ASSERT((100_pc).IsValid());
+  STATIC_ASSERT(!ProportionValue::MakeInvalid().IsValid());
+
+  // IsInvalid.
+  STATIC_ASSERT(!ProportionValue().IsInvalid());
+  STATIC_ASSERT(!(0_pc).IsInvalid());
+  STATIC_ASSERT(!(50_pc).IsInvalid());
+  STATIC_ASSERT(!(100_pc).IsInvalid());
+  STATIC_ASSERT(ProportionValue::MakeInvalid().IsInvalid());
+
+  // Addition.
+  STATIC_ASSERT_EQ((0_pc + 0_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((0_pc + 100_pc).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((100_pc + 0_pc).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((100_pc + 100_pc).ToDouble(), 1.0);
+  STATIC_ASSERT((ProportionValue::MakeInvalid() + 50_pc).IsInvalid());
+  STATIC_ASSERT((50_pc + ProportionValue::MakeInvalid()).IsInvalid());
+
+  // Subtraction.
+  STATIC_ASSERT_EQ((0_pc - 0_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((0_pc - 100_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((100_pc - 0_pc).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((100_pc - 100_pc).ToDouble(), 0.0);
+  STATIC_ASSERT((ProportionValue::MakeInvalid() - 50_pc).IsInvalid());
+  STATIC_ASSERT((50_pc - ProportionValue::MakeInvalid()).IsInvalid());
+
+  // Multiplication.
+  STATIC_ASSERT_EQ((0_pc * 0_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((0_pc * 100_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((50_pc * 50_pc).ToDouble(), 0.25);
+  STATIC_ASSERT_EQ((50_pc * 100_pc).ToDouble(), 0.5);
+  STATIC_ASSERT_EQ((100_pc * 50_pc).ToDouble(), 0.5);
+  STATIC_ASSERT_EQ((100_pc * 0_pc).ToDouble(), 0.0);
+  STATIC_ASSERT_EQ((100_pc * 100_pc).ToDouble(), 1.0);
+  STATIC_ASSERT((ProportionValue::MakeInvalid() * 50_pc).IsInvalid());
+  STATIC_ASSERT((50_pc * ProportionValue::MakeInvalid()).IsInvalid());
+
+  // Division by a positive integer value.
+  STATIC_ASSERT_EQ((100_pc / 1u).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((100_pc / 2u).ToDouble(), 0.5);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(6u) / 2u).ToUnderlyingType(), 3u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(5u) / 2u).ToUnderlyingType(), 2u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(1u) / 2u).ToUnderlyingType(), 0u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(0u) / 2u).ToUnderlyingType(), 0u);
+  STATIC_ASSERT((100_pc / 0u).IsInvalid());
+  STATIC_ASSERT((ProportionValue::MakeInvalid() / 2u).IsInvalid());
+
+  // Multiplication by a positive integer value.
+  STATIC_ASSERT_EQ((100_pc * 1u).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((50_pc * 1u).ToDouble(), 0.5);
+  STATIC_ASSERT_EQ((50_pc * 2u).ToDouble(), 1.0);
+  STATIC_ASSERT_EQ((50_pc * 3u).ToDouble(), 1.0);  // Clamped.
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(1u) * 2u).ToUnderlyingType(), 2u);
+  STATIC_ASSERT((ProportionValue::MakeInvalid() * 2u).IsInvalid());
+
+  // Verifying PV - u < (PV / u) * u <= PV, with n=3, PV between 6 and 9 :
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(6u) / 3u).ToUnderlyingType(), 2u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(7u) / 3u).ToUnderlyingType(), 2u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(8u) / 3u).ToUnderlyingType(), 2u);
+  STATIC_ASSERT_EQ(
+      (ProportionValue::FromUnderlyingType(9u) / 3u).ToUnderlyingType(), 3u);
+
+  // Direct comparisons.
+  STATIC_ASSERT_EQ(0_pc, 0_pc);
+  STATIC_ASSERT(0_pc == 0_pc);
+  STATIC_ASSERT(!(0_pc == 100_pc));
+  STATIC_ASSERT(0_pc != 100_pc);
+  STATIC_ASSERT(!(0_pc != 0_pc));
+  STATIC_ASSERT(0_pc < 100_pc);
+  STATIC_ASSERT(!(0_pc < 0_pc));
+  STATIC_ASSERT(0_pc <= 0_pc);
+  STATIC_ASSERT(0_pc <= 100_pc);
+  STATIC_ASSERT(!(100_pc <= 0_pc));
+  STATIC_ASSERT(100_pc > 0_pc);
+  STATIC_ASSERT(!(100_pc > 100_pc));
+  STATIC_ASSERT(100_pc >= 0_pc);
+  STATIC_ASSERT(100_pc >= 100_pc);
+  STATIC_ASSERT(!(0_pc >= 100_pc));
+  // 0.5 is binary-friendly, so we can double it and compare it exactly.
+  STATIC_ASSERT_EQ(50_pc + 50_pc, 100_pc);
+
+#undef STATIC_ASSERT_EQ
+
+  printf("TestProportionValue done\n");
+}
+
+template <typename Arg0, typename... Args>
+bool AreAllEqual(Arg0&& aArg0, Args&&... aArgs) {
+  return ((aArg0 == aArgs) && ...);
+}
+
+void TestProgressLogger() {
+  printf("TestProgressLogger...\n");
+
+  using mozilla::ProgressLogger;
+  using mozilla::ProportionValue;
+  using namespace mozilla::literals::ProportionValue_literals;
+
+  auto progressRefPtr = mozilla::MakeRefPtr<ProgressLogger::SharedProgress>();
+  MOZ_RELEASE_ASSERT(progressRefPtr);
+  MOZ_RELEASE_ASSERT(progressRefPtr->Progress().IsExactlyZero());
+
+  {
+    ProgressLogger pl(progressRefPtr, "Started", "All done");
+    MOZ_RELEASE_ASSERT(progressRefPtr->Progress().IsExactlyZero());
+    MOZ_RELEASE_ASSERT(pl.GetGlobalProgress().IsExactlyZero());
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                   pl.GetLastGlobalLocation(), "Started"));
+
+    // At this top level, the scale is 1:1.
+    pl.SetLocalProgress(10_pc, "Top 10%");
+    MOZ_RELEASE_ASSERT(
+        AreAllEqual(progressRefPtr->Progress(), pl.GetGlobalProgress(), 10_pc));
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                   pl.GetLastGlobalLocation(), "Top 10%"));
+
+    pl.SetLocalProgress(0_pc, "Restarted");
+    MOZ_RELEASE_ASSERT(
+        AreAllEqual(progressRefPtr->Progress(), pl.GetGlobalProgress(), 0_pc));
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                   pl.GetLastGlobalLocation(), "Restarted"));
+
+    {
+      // Create a sub-logger for the whole global range. Notice that this is
+      // moving the current progress back to 0.
+      ProgressLogger plSub1 =
+          pl.CreateSubLoggerFromTo(0_pc, "Sub1 started", 100_pc, "Sub1 ended");
+      MOZ_RELEASE_ASSERT(progressRefPtr->Progress().IsExactlyZero());
+      MOZ_RELEASE_ASSERT(pl.GetGlobalProgress().IsExactlyZero());
+      MOZ_RELEASE_ASSERT(plSub1.GetGlobalProgress().IsExactlyZero());
+      MOZ_RELEASE_ASSERT(AreAllEqual(
+          progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+          plSub1.GetLastGlobalLocation(), "Sub1 started"));
+
+      // At this level, the scale is still 1:1.
+      plSub1.SetLocalProgress(10_pc, "Sub1 10%");
+      MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->Progress(),
+                                     pl.GetGlobalProgress(),
+                                     plSub1.GetGlobalProgress(), 10_pc));
+      MOZ_RELEASE_ASSERT(AreAllEqual(
+          progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+          plSub1.GetLastGlobalLocation(), "Sub1 10%"));
+
+      {
+        // Create a sub-logger half the global range.
+        //   0              0.25   0.375    0.5    0.625    0.75             1
+        //   |---------------|-------|-------|-------|-------|---------------|
+        // plSub2:           0      0.25    0.5     0.75     1
+        ProgressLogger plSub2 = plSub1.CreateSubLoggerFromTo(
+            25_pc, "Sub2 started", 75_pc, "Sub2 ended");
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->Progress(), pl.GetGlobalProgress(),
+            plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(), 25_pc));
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+            plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+            "Sub2 started"));
+
+        plSub2.SetLocalProgress(25_pc, "Sub2 25%");
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->Progress(), pl.GetGlobalProgress(),
+            plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(), 37.5_pc));
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+            plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+            "Sub2 25%"));
+
+        plSub2.SetLocalProgress(50_pc, "Sub2 50%");
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->Progress(), pl.GetGlobalProgress(),
+            plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(), 50_pc));
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+            plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+            "Sub2 50%"));
+
+        {
+          // Create a sub-logger half the parent range.
+          //   0              0.25   0.375    0.5    0.625    0.75             1
+          //   |---------------|-------|-------|-------|-------|---------------|
+          // plSub2:           0      0.25    0.5     0.75     1
+          // plSub3:                           0      0.5      1
+          ProgressLogger plSub3 = plSub2.CreateSubLoggerTo(
+              "Sub3 started", 100_pc, ProgressLogger::NO_LOCATION_UPDATE);
+          MOZ_RELEASE_ASSERT(AreAllEqual(
+              progressRefPtr->Progress(), pl.GetGlobalProgress(),
+              plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(),
+              plSub3.GetGlobalProgress(), 50_pc));
+          MOZ_RELEASE_ASSERT(AreAllEqual(
+              progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+              plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+              plSub3.GetLastGlobalLocation(), "Sub3 started"));
+
+          plSub3.SetLocalProgress(50_pc, "Sub3 50%");
+          MOZ_RELEASE_ASSERT(AreAllEqual(
+              progressRefPtr->Progress(), pl.GetGlobalProgress(),
+              plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(),
+              plSub3.GetGlobalProgress(), 62.5_pc));
+          MOZ_RELEASE_ASSERT(AreAllEqual(
+              progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+              plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+              plSub3.GetLastGlobalLocation(), "Sub3 50%"));
+        }  // End of plSub3
+
+        // When plSub3 ends, progress moves to its 100%, which is also plSub2's
+        // 100%, which is plSub1's and the global progress of 75%
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->Progress(), pl.GetGlobalProgress(),
+            plSub1.GetGlobalProgress(), plSub2.GetGlobalProgress(), 75_pc));
+        // But location is still at the last explicit update.
+        MOZ_RELEASE_ASSERT(AreAllEqual(
+            progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+            plSub1.GetLastGlobalLocation(), plSub2.GetLastGlobalLocation(),
+            "Sub3 50%"));
+      }  // End of plSub2
+
+      MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->Progress(),
+                                     pl.GetGlobalProgress(),
+                                     plSub1.GetGlobalProgress(), 75_pc));
+      MOZ_RELEASE_ASSERT(AreAllEqual(
+          progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+          plSub1.GetLastGlobalLocation(), "Sub2 ended"));
+    }  // End of plSub1
+
+    MOZ_RELEASE_ASSERT(progressRefPtr->Progress().IsExactlyOne());
+    MOZ_RELEASE_ASSERT(pl.GetGlobalProgress().IsExactlyOne());
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                   pl.GetLastGlobalLocation(), "Sub1 ended"));
+
+    const auto loopStart = 75_pc;
+    const auto loopEnd = 87.5_pc;
+    const uint32_t loopCount = 8;
+    uint32_t expectedIndex = 0u;
+    auto expectedIterationStart = loopStart;
+    const auto iterationIncrement = (loopEnd - loopStart) / loopCount;
+    for (auto&& [index, loopPL] : pl.CreateLoopSubLoggersFromTo(
+             loopStart, loopEnd, loopCount, "looping...")) {
+      MOZ_RELEASE_ASSERT(index == expectedIndex);
+      ++expectedIndex;
+      MOZ_RELEASE_ASSERT(
+          AreAllEqual(progressRefPtr->Progress(), pl.GetGlobalProgress(),
+                      loopPL.GetGlobalProgress(), expectedIterationStart));
+      MOZ_RELEASE_ASSERT(AreAllEqual(
+          progressRefPtr->LastLocation(), pl.GetLastGlobalLocation(),
+          loopPL.GetLastGlobalLocation(), "looping..."));
+
+      loopPL.SetLocalProgress(50_pc, "half");
+      MOZ_RELEASE_ASSERT(loopPL.GetGlobalProgress() ==
+                         expectedIterationStart + iterationIncrement / 2u);
+      MOZ_RELEASE_ASSERT(
+          AreAllEqual(progressRefPtr->Progress(), pl.GetGlobalProgress(),
+                      loopPL.GetGlobalProgress(),
+                      expectedIterationStart + iterationIncrement / 2u));
+      MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                     pl.GetLastGlobalLocation(),
+                                     loopPL.GetLastGlobalLocation(), "half"));
+
+      expectedIterationStart = expectedIterationStart + iterationIncrement;
+    }
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->Progress(),
+                                   pl.GetGlobalProgress(),
+                                   expectedIterationStart));
+    MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(),
+                                   pl.GetLastGlobalLocation(), "looping..."));
+  }  // End of pl
+  MOZ_RELEASE_ASSERT(progressRefPtr->Progress().IsExactlyOne());
+  MOZ_RELEASE_ASSERT(AreAllEqual(progressRefPtr->LastLocation(), "All done"));
+
+  printf("TestProgressLogger done\n");
+}
 
 #ifdef MOZ_GECKO_PROFILER
 
@@ -64,9 +899,8 @@ MOZ_MAYBE_UNUSED static void SleepMilli(unsigned aMilliseconds) {
 }
 
 MOZ_MAYBE_UNUSED static void WaitUntilTimeStampChanges(
-    const mozilla::TimeStamp& aTimeStampToCompare =
-        mozilla::TimeStamp::NowUnfuzzed()) {
-  while (aTimeStampToCompare == mozilla::TimeStamp::NowUnfuzzed()) {
+    const mozilla::TimeStamp& aTimeStampToCompare = mozilla::TimeStamp::Now()) {
+  while (aTimeStampToCompare == mozilla::TimeStamp::Now()) {
     SleepMilli(1);
   }
 }
@@ -310,6 +1144,90 @@ void TestLEB128() {
   }
 
   printf("TestLEB128 done\n");
+}
+
+struct StringWriteFunc : public JSONWriteFunc {
+  std::string mString;
+
+  void Write(const mozilla::Span<const char>& aStr) override {
+    mString.append(aStr.data(), aStr.size());
+  }
+};
+
+void CheckJSON(mozilla::baseprofiler::SpliceableJSONWriter& aWriter,
+               const char* aExpected, int aLine) {
+  const std::string& actual =
+      static_cast<StringWriteFunc*>(aWriter.WriteFunc())->mString;
+  if (strcmp(aExpected, actual.c_str()) != 0) {
+    fprintf(stderr,
+            "---- EXPECTED ---- (line %d)\n<<<%s>>>\n"
+            "---- ACTUAL ----\n<<<%s>>>\n",
+            aLine, aExpected, actual.c_str());
+    MOZ_RELEASE_ASSERT(false, "expected and actual output don't match");
+  }
+}
+
+void TestJSONTimeOutput() {
+  printf("TestJSONTimeOutput...\n");
+
+#  define TEST(in, out)                                        \
+    do {                                                       \
+      mozilla::baseprofiler::SpliceableJSONWriter writer(      \
+          mozilla::MakeUnique<StringWriteFunc>());             \
+      writer.Start(mozilla::JSONWriter::SingleLineStyle);      \
+      writer.TimeDoubleMsProperty("time_ms", (in));            \
+      writer.End();                                            \
+      CheckJSON(writer, "{\"time_ms\": " out "}\n", __LINE__); \
+    } while (false);
+
+  TEST(0, "0");
+
+  TEST(0.000'000'1, "0");
+  TEST(0.000'000'4, "0");
+  TEST(0.000'000'499, "0");
+  TEST(0.000'000'5, "0.000001");
+  TEST(0.000'001, "0.000001");
+  TEST(0.000'01, "0.00001");
+  TEST(0.000'1, "0.0001");
+  TEST(0.001, "0.001");
+  TEST(0.01, "0.01");
+  TEST(0.1, "0.1");
+  TEST(1, "1");
+  TEST(2, "2");
+  TEST(10, "10");
+  TEST(100, "100");
+  TEST(1'000, "1000");
+  TEST(10'000, "10000");
+  TEST(100'000, "100000");
+  TEST(1'000'000, "1000000");
+  // 2^53-2 ns in ms. 2^53-1 is the highest integer value representable in
+  // double, -1 again because we're adding 0.5 before truncating.
+  // That's 104 days, after which the nanosecond precision would decrease.
+  TEST(9'007'199'254.740'990, "9007199254.74099");
+
+  TEST(-0.000'000'1, "0");
+  TEST(-0.000'000'4, "0");
+  TEST(-0.000'000'499, "0");
+  TEST(-0.000'000'5, "-0.000001");
+  TEST(-0.000'001, "-0.000001");
+  TEST(-0.000'01, "-0.00001");
+  TEST(-0.000'1, "-0.0001");
+  TEST(-0.001, "-0.001");
+  TEST(-0.01, "-0.01");
+  TEST(-0.1, "-0.1");
+  TEST(-1, "-1");
+  TEST(-2, "-2");
+  TEST(-10, "-10");
+  TEST(-100, "-100");
+  TEST(-1'000, "-1000");
+  TEST(-10'000, "-10000");
+  TEST(-100'000, "-100000");
+  TEST(-1'000'000, "-1000000");
+  TEST(-9'007'199'254.740'990, "-9007199254.74099");
+
+#  undef TEST
+
+  printf("TestJSONTimeOutput done\n");
 }
 
 template <uint8_t byte, uint8_t... tail>
@@ -1010,8 +1928,7 @@ static void TestControlledChunkManagerUpdate() {
   MOZ_RELEASE_ASSERT(!update1.IsFinal());
 
   auto CreateBiggerChunkAfter = [](const ProfileBufferChunk& aChunkToBeat) {
-    while (TimeStamp::NowUnfuzzed() <=
-           aChunkToBeat.ChunkHeader().mDoneTimeStamp) {
+    while (TimeStamp::Now() <= aChunkToBeat.ChunkHeader().mDoneTimeStamp) {
       ::SleepMilli(1);
     }
     auto chunk = ProfileBufferChunk::Create(aChunkToBeat.BufferBytes() * 2);
@@ -1238,8 +2155,6 @@ static void TestControlledChunkManagerWithLocalLimit() {
   MOZ_RELEASE_ASSERT(!!chunk,
                      "First chunk immediate request should always work");
   const auto chunkActualBufferBytes = chunk->BufferBytes();
-  // Keep address, for later checks.
-  const uintptr_t chunk1Address = reinterpret_cast<uintptr_t>(chunk.get());
   MOZ_RELEASE_ASSERT(updateCount == 1,
                      "GetChunk should have triggered an update");
   MOZ_RELEASE_ASSERT(
@@ -1265,8 +2180,6 @@ static void TestControlledChunkManagerWithLocalLimit() {
   ProfileBufferChunk::Length previousUnreleasedBytes = chunk->BufferBytes();
   ProfileBufferChunk::Length previousReleasedBytes = 0;
   TimeStamp previousOldestDoneTimeStamp;
-
-  unsigned chunk1ReuseCount = 0;
 
   // We will do enough loops to go through the maximum size a number of times.
   const unsigned Rollovers = 3;
@@ -1312,8 +2225,8 @@ static void TestControlledChunkManagerWithLocalLimit() {
 
     // Make sure the "Done" timestamp below cannot be the same as from the
     // previous loop.
-    const TimeStamp now = TimeStamp::NowUnfuzzed();
-    while (TimeStamp::NowUnfuzzed() == now) {
+    const TimeStamp now = TimeStamp::Now();
+    while (TimeStamp::Now() == now) {
       ::SleepMilli(1);
     }
 
@@ -1349,10 +2262,6 @@ static void TestControlledChunkManagerWithLocalLimit() {
 
     // And cycle to the new chunk.
     chunk = std::move(newChunk);
-
-    if (reinterpret_cast<uintptr_t>(chunk.get()) == chunk1Address) {
-      ++chunk1ReuseCount;
-    }
   }
 
   // Enough testing! Clean-up.
@@ -1595,6 +2504,12 @@ static void TestChunkedBuffer() {
   MOZ_RELEASE_ASSERT(result == 6);
   MOZ_RELEASE_ASSERT(read == 1);
 
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(ProfileBufferIndex{}));
+  MOZ_RELEASE_ASSERT(
+      cb.IsIndexInCurrentChunk(blockIndex.ConvertToProfileBufferIndex()));
+  MOZ_RELEASE_ASSERT(cb.IsIndexInCurrentChunk(cb.GetState().mRangeEnd - 1));
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(cb.GetState().mRangeEnd));
+
   // No changes after reads.
   VERIFY_PCB_START_END_PUSHED_CLEARED_FAILED(
       cb, 1, 1 + ULEB128Size(sizeof(test)) + sizeof(test), 1, 0, 0);
@@ -1671,6 +2586,11 @@ static void TestChunkedBuffer() {
   uint64_t clearedAfterPuts = stateAfterPuts.mClearedBlockCount;
   MOZ_RELEASE_ASSERT(clearedAfterPuts > 0);
   MOZ_RELEASE_ASSERT(stateAfterPuts.mFailedPutBytes == 0);
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(ProfileBufferIndex{}));
+  MOZ_RELEASE_ASSERT(
+      !cb.IsIndexInCurrentChunk(blockIndex.ConvertToProfileBufferIndex()));
+  MOZ_RELEASE_ASSERT(
+      !cb.IsIndexInCurrentChunk(firstBlockIndex.ConvertToProfileBufferIndex()));
 
   // Read extant numbers, which should at least follow each other.
   read = 0;
@@ -1766,6 +2686,11 @@ static void TestChunkedBuffer() {
   MOZ_RELEASE_ASSERT(stateAfterClear.mPushedBlockCount == 0);
   MOZ_RELEASE_ASSERT(stateAfterClear.mClearedBlockCount == 0);
   MOZ_RELEASE_ASSERT(stateAfterClear.mFailedPutBytes == 0);
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(ProfileBufferIndex{}));
+  MOZ_RELEASE_ASSERT(
+      !cb.IsIndexInCurrentChunk(blockIndex.ConvertToProfileBufferIndex()));
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(stateAfterClear.mRangeEnd - 1));
+  MOZ_RELEASE_ASSERT(!cb.IsIndexInCurrentChunk(stateAfterClear.mRangeEnd));
 
   // Start writer threads.
   constexpr int ThreadCount = 32;
@@ -3338,73 +4263,66 @@ void TestProfilerStringView() {
   };
 
   // Literal empty string.
-  MOZ_RELEASE_ASSERT(BSV(empty).Data());
-  MOZ_RELEASE_ASSERT(BSV(empty).Data()[0] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(empty).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(empty).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(BSV(empty).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(empty).IsReference());
 
   // Literal non-empty string.
-  MOZ_RELEASE_ASSERT(BSV(hi).Data());
-  MOZ_RELEASE_ASSERT(BSV(hi).Data()[0] == CHAR('h'));
-  MOZ_RELEASE_ASSERT(BSV(hi).Data()[1] == CHAR('i'));
-  MOZ_RELEASE_ASSERT(BSV(hi).Data()[2] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(hi).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(hi).AsSpan().Elements());
+  MOZ_RELEASE_ASSERT(BSV(hi).AsSpan().Elements()[0] == CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(hi).AsSpan().Elements()[1] == CHAR('i'));
   MOZ_RELEASE_ASSERT(BSV(hi).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(hi).IsReference());
 
   // std::string_view to a literal empty string.
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Data()[0] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).Length() == 0);
+  MOZ_RELEASE_ASSERT(
+      BSV(std::basic_string_view<CHAR>(empty)).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>(empty)).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(empty)).IsReference());
 
   // std::string_view to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[0] ==
-                     CHAR('h'));
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[1] ==
-                     CHAR('i'));
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Data()[2] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).AsSpan().Elements());
+  MOZ_RELEASE_ASSERT(
+      BSV(std::basic_string_view<CHAR>(hi)).AsSpan().Elements()[0] ==
+      CHAR('h'));
+  MOZ_RELEASE_ASSERT(
+      BSV(std::basic_string_view<CHAR>(hi)).AsSpan().Elements()[1] ==
+      CHAR('i'));
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>(hi)).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>(hi)).IsReference());
 
   // Default std::string_view points at nullptr, ProfilerStringView converts it
   // to the literal empty string.
-  MOZ_RELEASE_ASSERT(!std::basic_string_view<CHAR>().data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Data()[0] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).Length() == 0);
+  MOZ_RELEASE_ASSERT(!std::basic_string_view<CHAR>().data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string_view<CHAR>()).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string_view<CHAR>()).IsReference());
 
   // std::string to a literal empty string.
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Data()[0] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>(empty)).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(empty)).IsReference());
 
   // std::string to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[0] == CHAR('h'));
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[1] == CHAR('i'));
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Data()[2] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).AsSpan().Elements());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).AsSpan().Elements()[0] ==
+                     CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).AsSpan().Elements()[1] ==
+                     CHAR('i'));
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>(hi)).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>(hi)).IsReference());
 
   // Default std::string contains an empty null-terminated string.
-  MOZ_RELEASE_ASSERT(std::basic_string<CHAR>().data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Data());
-  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Data()[0] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).Length() == 0);
+  MOZ_RELEASE_ASSERT(std::basic_string<CHAR>().data());
+  MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(!BSV(std::basic_string<CHAR>()).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(std::basic_string<CHAR>()).IsReference());
 
@@ -3426,36 +4344,34 @@ void TestProfilerStringView() {
   };
 
   // FakeNsTString to nullptr.
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Data());
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Data()[0] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(nullptr, 0, true)).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(nullptr, 0, true)).IsReference());
 
   // FakeNsTString to a literal empty string.
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Data());
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Data()[0] ==
-                     CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).Length() == 0);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).AsSpan().IsEmpty());
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(empty, 0, true)).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(empty, 0, true)).IsReference());
 
   // FakeNsTString to a literal non-empty string.
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data());
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[0] == CHAR('h'));
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[1] == CHAR('i'));
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Data()[2] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).AsSpan().Elements());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).AsSpan().Elements()[0] ==
+                     CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).AsSpan().Elements()[1] ==
+                     CHAR('i'));
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, true)).IsLiteral());
   MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(hi, 2, true)).IsReference());
 
   // FakeNsTString to a non-literal non-empty string.
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data());
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[0] == CHAR('h'));
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[1] == CHAR('i'));
-  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Data()[2] == CHAR('\0'));
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).Length() == 2);
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).AsSpan().Elements());
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).AsSpan().Elements()[0] ==
+                     CHAR('h'));
+  MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).AsSpan().Elements()[1] ==
+                     CHAR('i'));
   MOZ_RELEASE_ASSERT(!BSV(FakeNsTString(hi, 2, false)).IsLiteral());
   MOZ_RELEASE_ASSERT(BSV(FakeNsTString(hi, 2, false)).IsReference());
 
@@ -3473,59 +4389,83 @@ void TestProfilerStringView() {
     cb.ReadEach([&](ProfileBufferEntryReader& aER) {
       ++read;
       auto bsv = aER.ReadObject<ProfilerStringView<CHAR>>();
-      MOZ_RELEASE_ASSERT(bsv.Data());
-      MOZ_RELEASE_ASSERT(bsv.Data()[0] == CHAR('h'));
-      MOZ_RELEASE_ASSERT(bsv.Data()[1] == CHAR('i'));
-      MOZ_RELEASE_ASSERT(bsv.Data()[2] == CHAR('\0'));
       MOZ_RELEASE_ASSERT(bsv.Length() == 2);
+      MOZ_RELEASE_ASSERT(bsv.AsSpan().Elements());
+      MOZ_RELEASE_ASSERT(bsv.AsSpan().Elements()[0] == CHAR('h'));
+      MOZ_RELEASE_ASSERT(bsv.AsSpan().Elements()[1] == CHAR('i'));
       MOZ_RELEASE_ASSERT(bsv.IsLiteral());
       MOZ_RELEASE_ASSERT(!bsv.IsReference());
       outerBSV = std::move(bsv);
     });
     MOZ_RELEASE_ASSERT(read == 1);
-    MOZ_RELEASE_ASSERT(outerBSV.Data());
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[0] == CHAR('h'));
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[1] == CHAR('i'));
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[2] == CHAR('\0'));
     MOZ_RELEASE_ASSERT(outerBSV.Length() == 2);
+    MOZ_RELEASE_ASSERT(outerBSV.AsSpan().Elements());
+    MOZ_RELEASE_ASSERT(outerBSV.AsSpan().Elements()[0] == CHAR('h'));
+    MOZ_RELEASE_ASSERT(outerBSV.AsSpan().Elements()[1] == CHAR('i'));
     MOZ_RELEASE_ASSERT(outerBSV.IsLiteral());
     MOZ_RELEASE_ASSERT(!outerBSV.IsReference());
   }
 
+  MOZ_RELEASE_ASSERT(cb.GetState().mRangeStart == 1u);
+
   cb.Clear();
 
   // Non-literal string, content is serialized.
-  std::basic_string<CHAR> hiString(hi);
-  MOZ_RELEASE_ASSERT(cb.PutObject(BSV(hiString)));
+
+  // We'll try to write 4 strings, such that the 4th one will cross into the
+  // next chunk.
+  unsigned guessedChunkBytes = unsigned(cb.GetState().mRangeStart) - 1u;
+  static constexpr unsigned stringCount = 4u;
+  const unsigned stringSize =
+      guessedChunkBytes / stringCount / sizeof(CHAR) + 3u;
+
+  std::basic_string<CHAR> longString;
+  longString.reserve(stringSize);
+  for (unsigned i = 0; i < stringSize; ++i) {
+    longString += CHAR('0' + i);
+  }
+
+  for (unsigned i = 0; i < stringCount; ++i) {
+    MOZ_RELEASE_ASSERT(cb.PutObject(BSV(longString)));
+  }
+
   {
     unsigned read = 0;
     ProfilerStringView<CHAR> outerBSV;
     cb.ReadEach([&](ProfileBufferEntryReader& aER) {
       ++read;
-      auto bsv = aER.ReadObject<ProfilerStringView<CHAR>>();
-      MOZ_RELEASE_ASSERT(bsv.Data());
-      MOZ_RELEASE_ASSERT(bsv.Data() != hiString.data());
-      MOZ_RELEASE_ASSERT(bsv.Data()[0] == CHAR('h'));
-      MOZ_RELEASE_ASSERT(bsv.Data()[1] == CHAR('i'));
-      MOZ_RELEASE_ASSERT(bsv.Data()[2] == CHAR('\0'));
-      MOZ_RELEASE_ASSERT(bsv.Length() == 2);
-      // Special ownership case, neither a literal nor a reference!
-      MOZ_RELEASE_ASSERT(!bsv.IsLiteral());
-      MOZ_RELEASE_ASSERT(!bsv.IsReference());
-      // Test move of ownership.
-      outerBSV = std::move(bsv);
-      // NOLINTNEXTLINE(bugprone-use-after-move, clang-analyzer-cplusplus.Move)
-      MOZ_RELEASE_ASSERT(bsv.Length() == 0);
+      {
+        auto bsv = aER.ReadObject<ProfilerStringView<CHAR>>();
+        MOZ_RELEASE_ASSERT(bsv.Length() == stringSize);
+        MOZ_RELEASE_ASSERT(bsv.AsSpan().Elements());
+        for (unsigned i = 0; i < stringSize; ++i) {
+          MOZ_RELEASE_ASSERT(bsv.AsSpan().Elements()[i] == CHAR('0' + i));
+          longString += '0' + i;
+        }
+        MOZ_RELEASE_ASSERT(!bsv.IsLiteral());
+        // The first 3 should be references (because they fit in one chunk, so
+        // they can be referenced directly), which the 4th one have to be copied
+        // out of two chunks and stitched back together.
+        MOZ_RELEASE_ASSERT(bsv.IsReference() == (read != 4));
+
+        // Test move of ownership.
+        outerBSV = std::move(bsv);
+        // After a move, references stay complete, while a non-reference had a
+        // buffer that has been moved out.
+        // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move)
+        MOZ_RELEASE_ASSERT(bsv.Length() == ((read != 4) ? stringSize : 0));
+      }
+
+      MOZ_RELEASE_ASSERT(outerBSV.Length() == stringSize);
+      MOZ_RELEASE_ASSERT(outerBSV.AsSpan().Elements());
+      for (unsigned i = 0; i < stringSize; ++i) {
+        MOZ_RELEASE_ASSERT(outerBSV.AsSpan().Elements()[i] == CHAR('0' + i));
+        longString += '0' + i;
+      }
+      MOZ_RELEASE_ASSERT(!outerBSV.IsLiteral());
+      MOZ_RELEASE_ASSERT(outerBSV.IsReference() == (read != 4));
     });
-    MOZ_RELEASE_ASSERT(read == 1);
-    MOZ_RELEASE_ASSERT(outerBSV.Data());
-    MOZ_RELEASE_ASSERT(outerBSV.Data() != hiString.data());
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[0] == CHAR('h'));
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[1] == CHAR('i'));
-    MOZ_RELEASE_ASSERT(outerBSV.Data()[2] == CHAR('\0'));
-    MOZ_RELEASE_ASSERT(outerBSV.Length() == 2);
-    MOZ_RELEASE_ASSERT(!outerBSV.IsLiteral());
-    MOZ_RELEASE_ASSERT(!outerBSV.IsReference());
+    MOZ_RELEASE_ASSERT(read == 4);
   }
 
   if constexpr (std::is_same_v<CHAR, char>) {
@@ -3539,6 +4479,7 @@ void TestProfilerDependencies() {
   TestPowerOfTwoMask();
   TestPowerOfTwo();
   TestLEB128();
+  TestJSONTimeOutput();
   TestChunk();
   TestChunkManagerSingle();
   TestChunkManagerWithLocalLimit();
@@ -3580,7 +4521,7 @@ MOZ_NEVER_INLINE unsigned long long Fibonacci(unsigned long long n) {
   if (DEPTH < 5 && sStopFibonacci) {
     return 1'000'000'000;
   }
-  TimeStamp start = TimeStamp::NowUnfuzzed();
+  TimeStamp start = TimeStamp::Now();
   static constexpr size_t MAX_MARKER_DEPTH = 10;
   unsigned long long f2 = Fibonacci<NextDepth(DEPTH)>(n - 2);
   if (DEPTH == 0) {
@@ -3596,9 +4537,9 @@ MOZ_NEVER_INLINE unsigned long long Fibonacci(unsigned long long n) {
 }
 
 void TestProfiler() {
-  printf("TestProfiler starting -- pid: %d, tid: %d\n",
-         baseprofiler::profiler_current_process_id(),
-         baseprofiler::profiler_current_thread_id());
+  printf("TestProfiler starting -- pid: %" PRIu64 ", tid: %" PRIu64 "\n",
+         uint64_t(baseprofiler::profiler_current_process_id().ToNumber()),
+         uint64_t(baseprofiler::profiler_current_thread_id().ToNumber()));
   // ::SleepMilli(10000);
 
   TestProfilerDependencies();
@@ -3611,7 +4552,7 @@ void TestProfiler() {
     MOZ_RELEASE_ASSERT(!baseprofiler::profiler_thread_is_being_profiled());
     MOZ_RELEASE_ASSERT(!baseprofiler::profiler_thread_is_sleeping());
 
-    const int mainThreadId =
+    const baseprofiler::BaseProfilerThreadId mainThreadId =
         mozilla::baseprofiler::profiler_current_thread_id();
 
     MOZ_RELEASE_ASSERT(mozilla::baseprofiler::profiler_main_thread_id() ==
@@ -3619,7 +4560,7 @@ void TestProfiler() {
     MOZ_RELEASE_ASSERT(mozilla::baseprofiler::profiler_is_main_thread());
 
     std::thread testThread([&]() {
-      const int testThreadId =
+      const baseprofiler::BaseProfilerThreadId testThreadId =
           mozilla::baseprofiler::profiler_current_thread_id();
       MOZ_RELEASE_ASSERT(testThreadId != mainThreadId);
 
@@ -3634,8 +4575,7 @@ void TestProfiler() {
     // Profile all registered threads.
     MOZ_RELEASE_ASSERT(filters.append(""));
     const uint32_t features = baseprofiler::ProfilerFeature::Leaf |
-                              baseprofiler::ProfilerFeature::StackWalk |
-                              baseprofiler::ProfilerFeature::Threads;
+                              baseprofiler::ProfilerFeature::StackWalk;
     baseprofiler::profiler_start(baseprofiler::BASE_PROFILER_DEFAULT_ENTRIES,
                                  BASE_PROFILER_DEFAULT_INTERVAL, features,
                                  filters.begin(), filters.length());
@@ -3784,6 +4724,8 @@ void TestProfiler() {
 
     printf("baseprofiler_pause()...\n");
     baseprofiler::profiler_pause();
+
+    MOZ_RELEASE_ASSERT(!baseprofiler::profiler_thread_is_being_profiled());
 
     Maybe<baseprofiler::ProfilerBufferInfo> info =
         baseprofiler::profiler_get_buffer_info();
@@ -4027,7 +4969,8 @@ void TestUniqueJSONStrings() {
       ujs.WriteElement(writer, "external1");
       ujs.WriteElement(writer, "external0");
     }
-    UJS ujsCopy(ujs, mozilla::JSONWriter::SingleLineStyle);
+    UJS ujsCopy(ujs, mozilla::ProgressLogger{},
+                mozilla::JSONWriter::SingleLineStyle);
     VerifyUniqueStringContents(
         [](SCJW& aWriter, UJS& aUniqueStrings) {
           aUniqueStrings.WriteElement(aWriter, "string0");
@@ -4069,12 +5012,16 @@ void StreamMarkers(const mozilla::ProfileChunkedBuffer& aBuffer,
           aEntryReader.ReadObject<mozilla::ProfileBufferEntryKind>();
       MOZ_RELEASE_ASSERT(entryKind == mozilla::ProfileBufferEntryKind::Marker);
 
-      const bool success =
-          mozilla::base_profiler_markers_detail::DeserializeAfterKindAndStream(
-              aEntryReader, aWriter, 0, [&](mozilla::ProfileChunkedBuffer&) {
-                aWriter.StringElement("Real backtrace would be here");
-              });
-      MOZ_RELEASE_ASSERT(success);
+      mozilla::base_profiler_markers_detail::DeserializeAfterKindAndStream(
+          aEntryReader,
+          [&](const mozilla::baseprofiler::BaseProfilerThreadId&) {
+            return &aWriter;
+          },
+          [&](mozilla::ProfileChunkedBuffer&) {
+            aWriter.StringElement("Real backtrace would be here");
+          },
+          [&](mozilla::base_profiler_markers_detail::Streaming::
+                  DeserializerTag) {});
     });
   }
   aWriter.EndArray();
@@ -4166,8 +5113,14 @@ void TestMarkerThreadId() {
   MOZ_RELEASE_ASSERT(!MarkerThreadId::MainThread().IsUnspecified());
   MOZ_RELEASE_ASSERT(!MarkerThreadId::CurrentThread().IsUnspecified());
 
-  MOZ_RELEASE_ASSERT(!MarkerThreadId{42}.IsUnspecified());
-  MOZ_RELEASE_ASSERT(MarkerThreadId{42}.ThreadId() == 42);
+  MOZ_RELEASE_ASSERT(!MarkerThreadId{
+      mozilla::baseprofiler::BaseProfilerThreadId::FromNumber(42)}
+                          .IsUnspecified());
+  MOZ_RELEASE_ASSERT(
+      MarkerThreadId{
+          mozilla::baseprofiler::BaseProfilerThreadId::FromNumber(42)}
+          .ThreadId()
+          .ToNumber() == 42);
 
   // We'll assume that this test runs in the main thread (which should be true
   // when called from the `main` function).
@@ -4250,10 +5203,10 @@ void TestUserMarker() {
     }
     static mozilla::MarkerSchema MarkerTypeDisplay() {
       using MS = mozilla::MarkerSchema;
-      MS schema{MS::Location::markerChart, MS::Location::markerTable};
+      MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
       schema.SetTooltipLabel("tooltip for test-minimal");
-      schema.AddKeyLabelFormatSearchable("text", "Text", MS::Format::string,
-                                         MS::Searchable::searchable);
+      schema.AddKeyLabelFormatSearchable("text", "Text", MS::Format::String,
+                                         MS::Searchable::Searchable);
       return schema;
     }
   };
@@ -4268,17 +5221,18 @@ void TestUserMarker() {
 
   MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
       buffer, "test2", mozilla::baseprofiler::category::OTHER_Profiling,
-      mozilla::MarkerThreadId(123), MarkerTypeTestMinimal{},
-      std::string("ThreadId(123)")));
+      mozilla::MarkerThreadId(
+          mozilla::baseprofiler::BaseProfilerThreadId::FromNumber(123)),
+      MarkerTypeTestMinimal{}, std::string("ThreadId(123)")));
 
-  auto start = mozilla::TimeStamp::NowUnfuzzed();
+  auto start = mozilla::TimeStamp::Now();
 
   MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
       buffer, "test2", mozilla::baseprofiler::category::OTHER_Profiling,
       mozilla::MarkerTiming::InstantAt(start), MarkerTypeTestMinimal{},
       std::string("InstantAt(start)")));
 
-  auto then = mozilla::TimeStamp::NowUnfuzzed();
+  auto then = mozilla::TimeStamp::Now();
 
   MOZ_RELEASE_ASSERT(mozilla::baseprofiler::AddMarkerToBuffer(
       buffer, "test2", mozilla::baseprofiler::category::OTHER_Profiling,
@@ -4351,9 +5305,10 @@ void TestPredefinedMarkers() {
 }
 
 void TestProfilerMarkers() {
-  printf("TestProfilerMarkers -- pid: %d, tid: %d\n",
-         mozilla::baseprofiler::profiler_current_process_id(),
-         mozilla::baseprofiler::profiler_current_thread_id());
+  printf(
+      "TestProfilerMarkers -- pid: %" PRIu64 ", tid: %" PRIu64 "\n",
+      uint64_t(mozilla::baseprofiler::profiler_current_process_id().ToNumber()),
+      uint64_t(mozilla::baseprofiler::profiler_current_thread_id().ToNumber()));
   // ::SleepMilli(10000);
 
   TestUniqueJSONStrings();
@@ -4431,12 +5386,17 @@ int main()
 #endif  // defined(XP_WIN)
 {
 #ifdef MOZ_GECKO_PROFILER
-  printf("BaseTestProfiler -- pid: %d, tid: %d\n",
-         baseprofiler::profiler_current_process_id(),
-         baseprofiler::profiler_current_thread_id());
+  printf("BaseTestProfiler -- pid: %" PRIu64 ", tid: %" PRIu64 "\n",
+         uint64_t(baseprofiler::profiler_current_process_id().ToNumber()),
+         uint64_t(baseprofiler::profiler_current_thread_id().ToNumber()));
   // ::SleepMilli(10000);
 #endif  // MOZ_GECKO_PROFILER
 
+  TestProfilerUtils();
+  TestBaseAndProfilerDetail();
+  TestSharedMutex();
+  TestProportionValue();
+  TestProgressLogger();
   // Note that there are two `TestProfiler{,Markers}` functions above, depending
   // on whether MOZ_GECKO_PROFILER is #defined.
   TestProfiler();

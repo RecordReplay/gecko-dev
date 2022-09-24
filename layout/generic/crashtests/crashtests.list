@@ -305,7 +305,7 @@ load 455171-3.html
 load 455643-1.xhtml
 load 457375.html
 load 457380-1.html
-asserts(1) asserts-if(Android,0-1) load 459968.html # bug 1067022
+load 459968.html
 load 460910-1.xml
 load 461294-1.html
 load 462968.xhtml
@@ -338,7 +338,7 @@ load 477731-1.html
 load 477928.html
 load 478131-1.html
 load 478170-1.html
-load 478185-1.html
+asserts(1591-3980) load 478185-1.html
 load 478504.html
 asserts-if(!Android,0-1) load 479938-1.html # Bug 575011
 load 480345-1.html
@@ -451,7 +451,7 @@ load 656130-2.html
 load 660416.html
 load 665853.html
 load 667025.html
-load 673770.html
+asserts(3-9) load 673770.html # nested multicols and bogus sizes, e.g. Init: bad caller: height WAS 2147478130
 load 679933-1.html
 load 681489-1.html
 load 682649-1.html
@@ -483,7 +483,7 @@ load 765409.html
 asserts(0-200) load 765621.html # bug 703550
 asserts(0-200) load 767765.html # bug 407550, bug 871758, and various nscoord_MAX related asserts
 load 769120.html
-asserts(0-2) load 769303-1.html # bug 1123979
+load 769303-1.html
 load 769303-2.html
 load 777838.html
 load 783228.html
@@ -495,7 +495,7 @@ load 790252-2.html
 load 790260-1.html
 test-pref(font.size.inflation.emPerLine,15) load 791601.xhtml
 test-pref(font.size.inflation.minTwips,120) load 794693.html
-asserts(1) asserts-if(Android,0-1) load 798020-1.html
+load 798020-1.html
 load 798235-1.html
 load 799207-1.html
 load 799207-2.html
@@ -508,7 +508,7 @@ load 810726.html
 load 812822-1.html
 load 812879-1.html
 load 812879-2.html
-asserts-if(winWidget,4-26) load 812893.html # bug 1581653
+asserts-if(winWidget,0-42) load 812893.html # bug 1581653
 load 814995.html
 load 822910.xhtml
 load 824297-1.html
@@ -531,7 +531,7 @@ asserts-if(Android,2) asserts-if(Android&&asyncPan,4) asserts-if(!Android,4) loa
 load 847211-1.html
 load 849603.html
 load 849987.html
-asserts(0-12) load 850931.html # bug 569193
+asserts(8-46) load 850931.html # nested multicols, inner multicol has column-width 1 app unit ...
 load 851396-1.html
 load 854263-1.html
 load 862185.html
@@ -567,8 +567,8 @@ load 1001258-1.html
 load 1001994.html
 skip-if(ThreadSanitizer) load chrome://reftest/content/crashtests/layout/generic/crashtests/1003441.xhtml
 load 1015562.html
-asserts(1-2) load 1015563-1.html
-asserts(1-2) load 1015563-2.html
+load 1015563-1.html
+load 1015563-2.html
 load 1015844.html
 asserts-if(Android,0-358) pref(font.size.inflation.minTwips,200) load 1032450.html # Bug 1607658
 load 1032613-1.svg
@@ -578,7 +578,7 @@ load 1039454-1.html
 load 1042489.html
 load 1054010-1.html
 load 1058954-1.html
-skip-if(verify&&isDebugBuild&&(gtkWidget||OSX)) load 1059138-1.html
+load 1059138-1.html
 load 1102175-2.html
 load 1134531.html
 load 1134667.html
@@ -701,7 +701,7 @@ load 1474768.html
 load 1478178.html
 load 1483972.html
 load 1486457.html
-asserts(6) load 1488762-1.html # asserts from integer overflow & bogus sizes
+asserts(1-4) load 1488762-1.html # asserts from integer overflow & bogus sizes
 load 1489287.html
 load 1489863.html
 load 1489770.html
@@ -728,7 +728,7 @@ load 1542441.html
 load 1544060-1.html
 load 1544060-2.html
 pref(layout.css.grid-template-subgrid-value.enabled,true) load 1553824.html
-load 1554824.html
+asserts(26-42) load 1554824.html # extreme sizes, column-width: 0em
 load 1555142.html
 load 1560349.html
 load 1560397.html
@@ -777,7 +777,7 @@ load 1638906.html
 load 1640028.html
 load 1640051.html
 load 1640275.html
-pref(layout.accessiblecaret.enabled,true) asserts(16-18) load 1644819.html # bug 1688115
+pref(layout.accessiblecaret.enabled,true) asserts(16-26) load 1644819.html # bug 1688115
 load 1645549-1.html
 load 1648577.html
 load 1652618.html
@@ -788,11 +788,18 @@ load 1666592.html
 load 1670336.html
 load 1676970.html
 HTTP load 1677518-1.html
+load 1679794.html
 load 1680406.html
 load 1681788.html
+pref(layout.css.grid-item-baxis-measurement.enabled,true) load 1682686-1.html
+pref(layout.css.grid-item-baxis-measurement.enabled,true) load 1682686-2.html
 HTTP load 1682882.html
 load 1683126.html
 load 1697262-1.html
 pref(layout.css.aspect-ratio.enabled,true) load 1682032.html
 pref(layout.css.aspect-ratio.enabled,true) load 1699263.html
 pref(layout.css.aspect-ratio.enabled,true) load 1699468.html
+load 1728319.html
+asserts(2-8) load 1730506.html # asserts from integer overflow & bogus sizes
+asserts(1-4) load 1730570.html # asserts from integer overflow & bogus sizes
+load 1734015.html

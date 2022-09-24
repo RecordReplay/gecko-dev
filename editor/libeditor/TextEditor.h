@@ -7,6 +7,7 @@
 #define mozilla_TextEditor_h
 
 #include "mozilla/EditorBase.h"
+#include "mozilla/EditorForwards.h"
 #include "mozilla/TextControlState.h"
 #include "mozilla/UniquePtr.h"
 
@@ -25,10 +26,6 @@ class nsISelectionController;
 class nsITransferable;
 
 namespace mozilla {
-class DeleteNodeTransaction;
-class InsertNodeTransaction;
-enum class EditSubAction : int32_t;
-
 namespace dom {
 class Selection;
 }  // namespace dom
@@ -105,6 +102,7 @@ class TextEditor final : public EditorBase,
   NS_DECL_NSINAMED
 
   // Overrides of nsIEditor
+  MOZ_CAN_RUN_SCRIPT NS_IMETHOD InsertLineBreak() final;
   NS_IMETHOD GetTextLength(uint32_t* aCount) final;
   MOZ_CAN_RUN_SCRIPT NS_IMETHOD Paste(int32_t aClipboardType) final {
     const nsresult rv = TextEditor::PasteAsAction(aClipboardType, true);
@@ -246,6 +244,19 @@ class TextEditor final : public EditorBase,
     }
   }
 
+  dom::Text* GetTextNode() {
+    MOZ_DIAGNOSTIC_ASSERT(GetRoot());
+    MOZ_DIAGNOSTIC_ASSERT(GetRoot()->GetFirstChild());
+    MOZ_DIAGNOSTIC_ASSERT(GetRoot()->GetFirstChild()->IsText());
+    if (MOZ_UNLIKELY(!GetRoot() || !GetRoot()->GetFirstChild())) {
+      return nullptr;
+    }
+    return GetRoot()->GetFirstChild()->GetAsText();
+  }
+  const dom::Text* GetTextNode() const {
+    return const_cast<TextEditor*>(this)->GetTextNode();
+  }
+
  protected:  // May be called by friends.
   /****************************************************************************
    * Some friend classes are allowed to call the following protected methods.
@@ -262,6 +273,11 @@ class TextEditor final : public EditorBase,
       bool aSuppressTransaction) final;
   using EditorBase::RemoveAttributeOrEquivalent;
   using EditorBase::SetAttributeOrEquivalent;
+
+  /**
+   * InsertLineBreakAsSubAction() inserts a line break.
+   */
+  [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult InsertLineBreakAsSubAction();
 
   /**
    * Replace existed string with aString.  Caller must guarantee that there
@@ -417,12 +433,13 @@ class TextEditor final : public EditorBase,
   void HandleNewLinesInStringForSingleLineEditor(nsString& aString) const;
 
   [[nodiscard]] MOZ_CAN_RUN_SCRIPT EditActionResult HandleInsertText(
-      EditSubAction aEditSubAction, const nsAString& aInsertionString) final;
+      EditSubAction aEditSubAction, const nsAString& aInsertionString,
+      SelectionHandling aSelectionHandling) final;
 
   [[nodiscard]] MOZ_CAN_RUN_SCRIPT nsresult InsertDroppedDataTransferAsAction(
       AutoEditActionDataSetter& aEditActionData,
       dom::DataTransfer& aDataTransfer, const EditorDOMPoint& aDroppedAt,
-      dom::Document* aSrcDocument) final;
+      nsIPrincipal* aSourcePrincipal) final;
 
   /**
    * HandleDeleteSelectionInternal() is a helper method of

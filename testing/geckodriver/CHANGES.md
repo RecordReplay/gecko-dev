@@ -1,14 +1,171 @@
-Change log
-==========
+<!-- markdownlint-disable MD024 -->
+# Change log
 
 All notable changes to this program are documented in this file.
 
-0.29.1  (2021-04-09), `970ef713fe58`)
--------------------------------------
+## 0.31.0  (2022-04-11, `b617178ef491`)
 
 ### Known problems
 
-- _macOS 10.15 (Catalina):_
+- _Firefox running in Linux Sandbox (e.g. Snap package):_
+
+  Using geckodriver to launch Firefox inside a sandbox -- for example
+  a Firefox distribution using Snap or Flatpak -- can fail with a
+  "Profile not found" error if the sandbox restricts Firefox's ability
+  to access the system temporary directory. geckodriver uses the
+  temporary directory to store Firefox profiles created during the run.
+
+  This issue can be worked around by using the `--profile-root`
+  command line option or setting the `TMPDIR` environment variable to
+  a location that both Firefox and geckodriver have read/write access
+  to e.g.:
+
+  % mkdir $HOME/tmp
+  % geckodriver --profile-root=~/tmp
+
+  or
+
+  % TMPDIR=$HOME/tmp geckodriver
+
+  Alternatively, geckodriver may be used with a Firefox install that
+  is not packaged inside a sandboxed e.g. from [mozilla.org].
+
+- _macOS 10.15 (Catalina) and later:_
+
+  Due to the requirement from Apple that all programs must be
+  notarized, geckodriver will not work on Catalina if you manually
+  download it through another notarized program, such as Firefox.
+
+  Whilst we are working on a repackaging fix for this problem, you can
+  find more details on how to work around this issue in the [macOS
+  notarization] section of the documentation.
+
+### Added
+
+- Users with the [Rust] toolchain installed can now build and install
+  geckodriver from [crates.io] using Cargo:
+
+  % cargo install geckodriver
+
+- Support for [Get Element Shadow Root]
+
+  Implemented by [David Burns].
+
+  The standardised WebDriver [Get Element Shadow Root] endpoint provides a way
+  to retrieve the Shadow Root of a given web element. This endpoint is
+  supported by geckodriver when using Firefox version ≥96.
+
+- Support for additional hosts and origins
+
+  Users can now specify a list of allowed `Host` and `Origin` headers for
+  incoming requests using the [`--allow-hosts`] and [`--allow-origins`] command
+  line options, respectively. When such a flag is provided, exactly the given
+  values will be permitted.
+
+  By default any request with an `Origin` header is rejected, and only requests
+  containing the bound hostname (specified via `--host`), or an IP address,
+  in the Host header are allowed. These configuration options are
+  designed to support scenarios where geckodriver is running on a different
+  network node to the host e.g. some container based setups.
+
+### Fixed
+
+- Geckodriver lets Marionette itself select a system allocated port, so that
+  it's no longer required to specify a fixed port when using a custom Firefox
+  profile. This is done by reading the `MarionetteActivePort` file of the
+  Firefox profile in-use. This helps to avoid port collisions when multiple
+  Firefox instances are run in parallel.
+
+- It's no longer possible to specify both the `androidPackage` and `binary`
+  capabilities togther within [`moz:firefoxOptions`] because these capabilites
+  are mutually exclusive.
+
+## 0.30.0  (2021-09-16, `d372710b98a6`)
+
+### Security Fixes
+
+- CVE-2021-4138
+
+  Fixed a DNS rebinding issues by enforcing a stricter `Host` header check.
+
+  Reported by Gabriel Corona.
+
+  - Improved `Host` header checks to reject requests not sent to a well-known
+    local hostname or IP, or the server-specified hostname.
+
+### Known problems
+
+- geckodriver restricts connections to local IP addresses. This can interfere
+  with deployments in which geckodriver is running on a different network node
+  to the tests e.g. some container or virtual-machine based setups.
+
+- _macOS 10.15 (Catalina) and later:_
+
+  Due to the requirement from Apple that all programs must be
+  notarized, geckodriver will not work on Catalina if you manually
+  download it through another notarized program, such as Firefox.
+
+  Whilst we are working on a repackaging fix for this problem, you can
+  find more details on how to work around this issue in the [macOS
+  notarization] section of the documentation.
+
+- _Android:_
+
+  For releases of Firefox 89.0 and earlier Marionette will only be enabled in
+  GeckoView based applications when the Firefox preference
+  `devtools.debugger.remote-enabled` is set to `true` via [`moz:firefoxOptions`].
+
+### Added
+
+- Support for WebDriver clients to opt in to WebDriver BiDi.
+
+  Introduced the new boolean capability [`webSocketUrl`] that can be used by
+  WebDriver clients to opt in to a bidirectional connection. A string capability
+  with the same name will be returned by [`NewSession`], which contains the
+  WebSocket URL of the newly created WebDriver session in the form of:
+  `ws://host:port/session/<session id>`.
+
+  When running on Android a port forward will be set on the host machine,
+  which is using the exact same port as on the device.
+
+  All the supported WebDriver BiDi commands depend on the version of
+  Firefox, and not geckodriver. The first commands will be shipped in
+  Firefox 94.
+
+- It's now possible to set additional preferences when a custom profile has been
+  specified. At the end of the session they will be removed.
+
+### Fixed
+
+- Added validation that the `--host` argument resolves to a local IP address.
+
+- Limit the `--foreground` argument of Firefox to MacOS only.
+
+- Increased Marionette handshake timeout to not fail for slow connections.
+
+- `Marionette:Quit` is no longer sent twice during session deletion.
+
+- When deleting a session that was attached to an already running browser
+  instance, the browser is not getting closed anymore.
+
+- Android
+
+  - Starting Firefox on Android from a Windows based host will now succeed as
+    we are using the correct Unix path separator to construct on-device paths.
+
+  - Arguments as specified in [`moz:firefoxOptions`] are now used when starting
+    Firefox.
+
+  - Port forwards set for Marionette and the WebSocket server (WebDriver BiDi)
+    are now correctly removed when geckodriver exits.
+
+  - The test root folder is now removed when geckodriver exists.
+
+## 0.29.1  (2021-04-09, `970ef713fe58`)
+
+### Known problems
+
+- _macOS 10.15 (Catalina) and later:_
 
   Due to the requirement from Apple that all programs must be
   notarized, geckodriver will not work on Catalina if you manually
@@ -21,7 +178,7 @@ All notable changes to this program are documented in this file.
 - _Android:_
 
   Marionette will only be enabled in GeckoView based applications when the
-  Firefox preference `devtools.debugger.remote-enabled` is set to `True` via
+  Firefox preference `devtools.debugger.remote-enabled` is set to `true` via
   [`moz:firefoxOptions`]. This will be fixed in the Firefox 90 release for
   Android.
 
@@ -52,13 +209,11 @@ All notable changes to this program are documented in this file.
   anymore unless there is a strong reason. It will be removed in a future
   release.
 
-
-0.29.0  (2021-01-14, `cf6956a5ec8e`)
-------------------------------------
+## 0.29.0  (2021-01-14, `cf6956a5ec8e`)
 
 ### Known problems
 
-- _macOS 10.15 (Catalina):_
+- _macOS 10.15 (Catalina) and later:_
 
   Due to the requirement from Apple that all programs must be
   notarized, geckodriver will not work on Catalina if you manually
@@ -71,7 +226,7 @@ All notable changes to this program are documented in this file.
 - _Android:_
 
   Marionette will only be enabled in GeckoView based applications when the
-  Firefox preference `devtools.debugger.remote-enabled` is set to `True` via
+  Firefox preference `devtools.debugger.remote-enabled` is set to `true` via
   [`moz:firefoxOptions`]. This will be fixed in one of the upcoming Firefox
   for Android releases.
 
@@ -84,7 +239,7 @@ All notable changes to this program are documented in this file.
 
 ### Added
 
-- Introduced the new boolean capability `moz:debuggerAddress` that can be used
+- Introduced the new boolean capability [`moz:debuggerAddress`] that can be used
   to opt-in to the experimental Chrome DevTools Protocol (CDP) implementation.
   A string capability with the same name will be returned by [`NewSession`],
   which contains the `host:port` combination of the HTTP server that can be
@@ -93,12 +248,11 @@ All notable changes to this program are documented in this file.
   Note: For this experimental feature the site-isolation support of
   Firefox aka [Fission] will be not available.
 
-0.28.0  (2020-11-03, `c00d2b6acd3f`)
-------------------------------------
+## 0.28.0  (2020-11-03, `c00d2b6acd3f`)
 
 ### Known problems
 
-- _macOS 10.15 (Catalina):_
+- _macOS 10.15 (Catalina) and later:_
 
   Due to the requirement from Apple that all programs must be
   notarized, geckodriver will not work on Catalina if you manually
@@ -111,7 +265,7 @@ All notable changes to this program are documented in this file.
 - _Android:_
 
   Marionette will only be enabled in GeckoView based applications when the
-  Firefox preference `devtools.debugger.remote-enabled` is set to `True` via
+  Firefox preference `devtools.debugger.remote-enabled` is set to `true` via
   [`moz:firefoxOptions`]. This will be fixed in one of the upcoming Firefox
   for Android releases.
 
@@ -143,12 +297,16 @@ All notable changes to this program are documented in this file.
 - Since Firefox 72 extension commands for finding an element’s anonymous children
   and querying its attributes are no longer needed, and have been removed.
 
-0.27.0  (2020-07-27, `7b8c4f32cdde`)
-------------------------------------
+## 0.27.0  (2020-07-27, `7b8c4f32cdde`)
 
 ### Security Fixes
 
 - CVE-2020-15660
+
+  Improved validation of incoming requests to prevent remote
+  requests being treated as local.
+
+  Reported by Gabriel Corona.
 
   - Added additional checks on the `Content-Type` header for `POST`
     requests to disallow `application/x-www-form-urlencoded`,
@@ -160,7 +318,7 @@ All notable changes to this program are documented in this file.
 
 ### Known problems
 
-- _macOS 10.15 (Catalina):_
+- _macOS 10.15 (Catalina) and later:_
 
   Due to the requirement from Apple that all programs must be
   notarized, geckodriver will not work on Catalina if you manually
@@ -173,7 +331,7 @@ All notable changes to this program are documented in this file.
 - _Android:_
 
   Marionette will only be enabled in GeckoView based applications when the
-  Firefox preference `devtools.debugger.remote-enabled` is set to `True` via
+  Firefox preference `devtools.debugger.remote-enabled` is set to `true` via
   [`moz:firefoxOptions`]. This will be fixed in one of the upcoming Firefox
   for Android releases.
 
@@ -203,25 +361,24 @@ All notable changes to this program are documented in this file.
 
 - _Android:_
 
-  * Firefox running on Android devices can now be controlled from a Windows host.
+  - Firefox running on Android devices can now be controlled from a Windows host.
 
-  * Setups with multiple connected Android devices are now supported.
+  - Setups with multiple connected Android devices are now supported.
 
-  * Improved cleanup of configuration files. This prevents crashes if
+  - Improved cleanup of configuration files. This prevents crashes if
     the application is started manually after launching it through
     geckodriver.
 
 - Windows and Linux binaries are again statically linked.
 
-0.26.0  (2019-10-12, `e9783a644016'`)
--------------------------------------
+## 0.26.0  (2019-10-12, `e9783a644016'`)
 
 Note that with this release the minimum recommended Firefox version
 has changed to Firefox ≥60.
 
 ### Known problems
 
-- _macOS 10.15 (Catalina):_
+- _macOS 10.15 (Catalina) and later:_
 
   Due to the recent requirement from Apple that all programs must
   be notarized, geckodriver will not work on Catalina if you manually
@@ -240,7 +397,7 @@ has changed to Firefox ≥60.
 - _Android:_
 
   Marionette will only be enabled in GeckoView based applications when the
-  Firefox preference `devtools.debugger.remote-enabled` is set to `True` via
+  Firefox preference `devtools.debugger.remote-enabled` is set to `true` via
   [`moz:firefoxOptions`]. This will be fixed in one of the upcoming Firefox
   for Android releases.
 
@@ -296,9 +453,7 @@ has changed to Firefox ≥60.
   to start a session with a malformed capabilities configuration
   will now return the [`invalid argument`] error consistently.
 
-
-0.25.0 (2019-09-09, `bdb64cf16b68`)
------------------------------------
+## 0.25.0 (2019-09-09, `bdb64cf16b68`)
 
 __Note to Windows users!__
 With this release you must have the [Microsoft Visual Studio redistributable runtime]
@@ -390,9 +545,7 @@ with this particular release that we intend to release a fix for soon.
   `firefox` binary on Linux.  Now it supports different BSD flavours
   as well.
 
-
-0.24.0 (2019-01-28, `917474f3473e`)
------------------------------------
+## 0.24.0 (2019-01-28, `917474f3473e`)
 
 ### Added
 
@@ -427,13 +580,12 @@ with this particular release that we intend to release a fix for soon.
 
 - ARMv7 HF builds have been discontinued
 
-  We [announced](https://lists.mozilla.org/pipermail/tools-marionette/2018-September/000035.html)
-  back in September 2018 that we would stop building for ARM,
+  We announced back in September 2018 that we would stop building for ARM,
   but builds can be self-serviced by building from source.
 
   To cross-compile from another host system, you can use this command:
 
-  	% cargo build --target armv7-unknown-linux-gnueabihf
+   % cargo build --target armv7-unknown-linux-gnueabihf
 
 ### Changed
 
@@ -461,9 +613,7 @@ with this particular release that we intend to release a fix for soon.
 - Fixed a regression in the [Take Element Screenshot] to not screenshot
   the viewport, but the requested element.
 
-
-0.23.0 (2018-10-03)
--------------------
+## 0.23.0 (2018-10-03)
 
 This release contains a number of fixes for regressions introduced
 in 0.22.0, where we shipped a significant refactoring to the way
@@ -517,9 +667,7 @@ geckodriver internally dealt with JSON serialisation.
   git repository is now limited to 12 characters, as it is when
   building from an hg checkout.  This ensures reproducible builds.
 
-
-0.22.0 (2018-09-15)
--------------------
+## 0.22.0 (2018-09-15)
 
 This release marks an important milestone on the path towards
 a stable release of geckodriver.  Large portions of geckodriver
@@ -594,17 +742,15 @@ to the standard.
   [Jeremy Lempereur].
 
 - Many documentation improvements, now published on
-  https://firefox-source-docs.mozilla.org/testing/geckodriver/.
+  <https://firefox-source-docs.mozilla.org/testing/geckodriver/>.
 
-
-0.21.0 (2018-06-15)
--------------------
+## 0.21.0 (2018-06-15)
 
 Note that with this release of geckodriver the minimum recommended
 Firefox and Selenium versions have changed:
 
-  - Firefox 57 (and greater)
-  - Selenium 3.11 (and greater)
+- Firefox 57 (and greater)
+- Selenium 3.11 (and greater)
 
 ### Added
 
@@ -666,9 +812,7 @@ Firefox and Selenium versions have changed:
 - When stdout and stderr is redirected by geckodriver, a bug prevented
   the redirections from taking effect.
 
-
-0.20.1 (2018-04-06)
--------------------
+## 0.20.1 (2018-04-06)
 
 ### Fixed
 
@@ -682,9 +826,7 @@ Firefox and Selenium versions have changed:
   The regression should not have caused any functional problems, but
   the termination cause and the exit status are now reported correctly.
 
-
-0.20.0 (2018-03-08)
--------------------
+## 0.20.0 (2018-03-08)
 
 ### Added
 
@@ -728,9 +870,7 @@ Firefox and Selenium versions have changed:
 
 - Improved error messages for malformed capability values.
 
-
-0.19.1 (2017-10-30)
--------------------
+## 0.19.1 (2017-10-30)
 
 ### Changed
 
@@ -750,11 +890,10 @@ Firefox and Selenium versions have changed:
 - Removed obsolete `socksUsername` and `socksPassword` proxy
   configuration keys because neither were picked up or recognised
 
-
-0.19.0 (2017-09-16)
--------------------
+## 0.19.0 (2017-09-16)
 
 Note that with geckodriver 0.19.0 the following versions are recommended:
+
 - Firefox 55.0 (and greater)
 - Selenium 3.5 (and greater)
 
@@ -816,9 +955,7 @@ Note that with geckodriver 0.19.0 the following versions are recommended:
   - `marionette.defaultPrefs.port`
   - `marionette.logging`
 
-
-0.18.0 (2017-07-10)
--------------------
+## 0.18.0 (2017-07-10)
 
 ### Changed
 
@@ -850,9 +987,7 @@ Note that with geckodriver 0.19.0 the following versions are recommended:
 
 - Linux x86 (i686-unknown-linux-musl) builds are fixed
 
-
-0.17.0 (2017-06-09)
--------------------
+## 0.17.0 (2017-06-09)
 
 ### Added
 
@@ -890,9 +1025,7 @@ Note that with geckodriver 0.19.0 the following versions are recommended:
 - Use [`SessionNotCreated`] error instead of [`UnknownError`] if there
   is no current session
 
-
-0.16.1 (2017-04-26)
--------------------
+## 0.16.1 (2017-04-26)
 
 ### Fixed
 
@@ -903,9 +1036,7 @@ Note that with geckodriver 0.19.0 the following versions are recommended:
 - Session is now ended when closing the last Firefox window (fixes
   [#613](https://github.com/mozilla/geckodriver/issues/613))
 
-
-0.16.0 (2017-04-21)
--------------------
+## 0.16.0 (2017-04-21)
 
 Note that geckodriver v0.16.0 is only compatible with Selenium 3.4
 and greater.
@@ -991,9 +1122,7 @@ and greater.
 
 - Improved log messages to the HTTPD
 
-
-0.15.0 (2017-03-08)
--------------------
+## 0.15.0 (2017-03-08)
 
 ### Added
 
@@ -1019,9 +1148,7 @@ and greater.
 - Aligned the data structure accepted by the [Set Timeouts] command with
   the WebDriver specification
 
-
-0.14.0 (2017-01-31)
--------------------
+## 0.14.0 (2017-01-31)
 
 ### Changed
 
@@ -1038,9 +1165,7 @@ and greater.
 - HTTPD now returns correct response headers for `Content-Type` and
   `Cache-Control` thanks to [Mike Pennisi]
 
-
-0.13.0 (2017-01-06)
--------------------
+## 0.13.0 (2017-01-06)
 
 ### Changed
 
@@ -1061,9 +1186,7 @@ and greater.
 - Check for single-character key codes in action sequences now counts
   characters instead of bytes
 
-
-0.12.0 (2017-01-03)
--------------------
+## 0.12.0 (2017-01-03)
 
 ### Added
 
@@ -1107,17 +1230,13 @@ and greater.
 
 - Included capabilities example in the [README]
 
-
-0.11.1 (2016-10-10)
--------------------
+## 0.11.1 (2016-10-10)
 
 ### Fixed
 
 - Version number in binary now reflects the release version
 
-
-0.11.0 (2016-10-10)
--------------------
+## 0.11.0 (2016-10-10)
 
 ### Added
 
@@ -1186,9 +1305,7 @@ and greater.
   which means a tab with an upgrade notice is not displayed when launching
   a new Firefox version
 
-
-0.10.0 (2016-08-02)
--------------------
+## 0.10.0 (2016-08-02)
 
 ### Changed
 
@@ -1205,9 +1322,7 @@ and greater.
 
 - Grammar fix in [README]
 
-
-0.9.0 (2016-06-30)
-------------------
+## 0.9.0 (2016-06-30)
 
 ### Added
 
@@ -1239,9 +1354,7 @@ and greater.
 
 - Introduced a changelog (this)
 
-
-0.8.0 (2016-06-07)
-------------------
+## 0.8.0 (2016-06-07)
 
 ### Added
 
@@ -1268,9 +1381,7 @@ and greater.
 
 - FIx typo in error message for parsing errors
 
-
-0.7.1 (2016-04-27)
-------------------
+## 0.7.1 (2016-04-27)
 
 ### Added
 
@@ -1293,9 +1404,7 @@ and greater.
 
 - Squash rustc 1.6 warnings by using `std::thread::sleep(dur: Duration)`
 
-
-0.6.2 (2016-01-20)
-------------------
+## 0.6.2 (2016-01-20)
 
 ### Added
 
@@ -1307,9 +1416,7 @@ and greater.
 
 - Enable CPOWs in Marionette
 
-
-0.6.0 (2016-01-12)
-------------------
+## 0.6.0 (2016-01-12)
 
 ### Added
 
@@ -1325,9 +1432,7 @@ and greater.
 
 - Update dependencies
 
-
-0.5.0 (2015-12-10)
-------------------
+## 0.5.0 (2015-12-10)
 
 ### Changed
 
@@ -1339,17 +1444,13 @@ and greater.
 
 - Update dependencies
 
-
-0.4.2 (2015-10-02)
-------------------
+## 0.4.2 (2015-10-02)
 
 ### Changed
 
 - Skip compiling optional items in hyper
 
-
-0.4.1 (2015-10-02)
-------------------
+## 0.4.1 (2015-10-02)
 
 ### Changed
 
@@ -1357,9 +1458,7 @@ and greater.
 
 - Update dependencies
 
-
-0.4.0 (2015-09-28)
-------------------
+## 0.4.0 (2015-09-28)
 
 ### Added
 
@@ -1389,17 +1488,13 @@ and greater.
 
 - Fix example in documentation from @vladikoff
 
-
-0.3.0 (2015-08-17)
-------------------
+## 0.3.0 (2015-08-17)
 
 ### Added
 
 - Add support for finding elements in subtrees
 
-
-0.2.0 (2015-05-20)
-------------------
+## 0.2.0 (2015-05-20)
 
 ### Added
 
@@ -1435,9 +1530,7 @@ and greater.
 
 - Handle null id for switching to frame more correctly
 
-
-0.1.0 (2015-04-09)
-------------------
+## 0.1.0 (2015-04-09)
 
 ### Added
 
@@ -1486,11 +1579,10 @@ and greater.
 
 - Squash compile warnings
 
-
-
 [README]: https://github.com/mozilla/geckodriver/blob/master/README.md
 [Browser Toolbox]: https://developer.mozilla.org/en-US/docs/Tools/Browser_Toolbox
 [WebDriver conformance]: https://wpt.fyi/results/webdriver/tests?label=experimental
+[`webSocketUrl`]: https://developer.mozilla.org/en-US/docs/Web/WebDriver/Capabilities/webSocketUrl
 [`moz:firefoxOptions`]: https://developer.mozilla.org/en-US/docs/Web/WebDriver/Capabilities/firefoxOptions
 [`moz:debuggerAddress`]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Capabilities.html#moz-debuggeraddress
 [Microsoft Visual Studio redistributable runtime]: https://support.microsoft.com/en-us/help/2977003/the-latest-supported-visual-c-downloads
@@ -1498,8 +1590,12 @@ and greater.
 [Fission]: https://wiki.mozilla.org/Project_Fission
 [Capabilities]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Capabilities.html
 [Flags]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Flags.html
+[`--allow-hosts`]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Flags.html#code-allow-hosts-var-allow-hosts-var-code
+[`--allow-origins`]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Flags.html#code-allow-origins-var-allow-origins-var-code
 [enable remote debugging on the Android device]: https://developers.google.com/web/tools/chrome-devtools/remote-debugging
 [macOS notarization]: https://firefox-source-docs.mozilla.org/testing/geckodriver/Notarization.html
+[Rust]: https://rustup.rs/
+[mozilla.org] https://www.mozilla.org/firefox/
 
 [`CloseWindowResponse`]: https://docs.rs/webdriver/newest/webdriver/response/struct.CloseWindowResponse.html
 [`CookieResponse`]: https://docs.rs/webdriver/newest/webdriver/response/struct.CookieResponse.html
@@ -1541,6 +1637,7 @@ and greater.
 [Actions]: https://w3c.github.io/webdriver/webdriver-spec.html#actions
 [Delete Session]: https://w3c.github.io/webdriver/webdriver-spec.html#delete-session
 [Element Click]: https://w3c.github.io/webdriver/webdriver-spec.html#element-click
+[Get Element Shadow Root]: https://w3c.github.io/webdriver/#get-element-shadow-root
 [Get Timeouts]: https://w3c.github.io/webdriver/webdriver-spec.html#get-timeouts
 [Get Window Rect]: https://w3c.github.io/webdriver/webdriver-spec.html#get-window-rect
 [insecure certificate]: https://w3c.github.io/webdriver/webdriver-spec.html#dfn-insecure-certificate
@@ -1556,6 +1653,7 @@ and greater.
 [WebDriver errors]: https://w3c.github.io/webdriver/webdriver-spec.html#handling-errors
 
 [Bastien Orivel]: https://github.com/Eijebong
+[David Burns]: https://github.com/AutomatedTester
 [Jason Juang]: https://github.com/juangj
 [Jeremy Lempereur]: https://github.com/o0Ignition0o
 [Joshua Bruning]: https://github.com/joshbruning

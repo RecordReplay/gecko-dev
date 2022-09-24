@@ -12,9 +12,12 @@
 #include "mozilla/rlbox/rlbox_config.h"
 
 #ifdef MOZ_WASM_SANDBOXING_HUNSPELL
-#  include "mozilla/rlbox/rlbox_lucet_sandbox.hpp"
+// Include the generated header file so that we are able to resolve the symbols
+// in the wasm binary
+#  include "rlbox.wasm.h"
+#  define RLBOX_USE_STATIC_CALLS() rlbox_wasm2c_sandbox_lookup_symbol
+#  include "mozilla/rlbox/rlbox_wasm2c_sandbox.hpp"
 #else
-// Extra configuration for no-op sandbox
 #  define RLBOX_USE_STATIC_CALLS() rlbox_noop_sandbox_lookup_symbol
 #  include "mozilla/rlbox/rlbox_noop_sandbox.hpp"
 #endif
@@ -26,7 +29,9 @@
 
 class RLBoxHunspell {
  public:
-  RLBoxHunspell(const nsAutoCString& affpath, const nsAutoCString& dpath);
+  static RLBoxHunspell* Create(const nsCString& affpath,
+                               const nsCString& dpath);
+
   ~RLBoxHunspell();
 
   int spell(const std::string& stdWord);
@@ -35,7 +40,18 @@ class RLBoxHunspell {
   std::vector<std::string> suggest(const std::string& word);
 
  private:
-  rlbox_sandbox_hunspell mSandbox;
+  struct RLBoxDeleter {
+    void operator()(rlbox_sandbox_hunspell* sandbox) {
+      sandbox->destroy_sandbox();
+      delete sandbox;
+    }
+  };
+
+  RLBoxHunspell(
+      mozilla::UniquePtr<rlbox_sandbox_hunspell, RLBoxDeleter> aSandbox,
+      const nsCString& affpath, const nsCString& dpath);
+
+  mozilla::UniquePtr<rlbox_sandbox_hunspell, RLBoxDeleter> mSandbox;
   sandbox_callback_hunspell<hunspell_create_filemgr_t*> mCreateFilemgr;
   sandbox_callback_hunspell<hunspell_get_line_t*> mGetLine;
   sandbox_callback_hunspell<hunspell_get_line_num_t*> mGetLineNum;

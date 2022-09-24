@@ -3,8 +3,6 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import { getCallStackFrames } from "../getCallStackFrames";
-import { pullAt } from "lodash";
-import { insertResources, createInitial } from "../../utils/resource";
 
 describe("getCallStackFrames selector", () => {
   describe("library annotation", () => {
@@ -15,13 +13,16 @@ describe("getCallStackFrames selector", () => {
           { location: { sourceId: "source2" } },
           { location: { sourceId: "source2" } },
         ],
-        sources: insertResources(createInitial(), [
-          { id: "source1", url: "webpack:///src/App.js" },
-          {
-            id: "source2",
-            url:
-              "webpack:///foo/node_modules/react-dom/lib/ReactCompositeComponent.js",
-          },
+        sources: new Map([
+          ["source1", { id: "source1", url: "webpack:///src/App.js" }],
+          [
+            "source2",
+            {
+              id: "source2",
+              url:
+                "webpack:///foo/node_modules/react-dom/lib/ReactCompositeComponent.js",
+            },
+          ],
         ]),
         selectedSource: {
           id: "sourceId-originalSource",
@@ -127,21 +128,30 @@ describe("getCallStackFrames selector", () => {
 
       const state = {
         frames: [...preAwaitGroup, ...postAwaitGroup],
-        sources: insertResources(createInitial(), [
-          { id: "app", url: "webpack///app.js" },
-          { id: "bundle", url: "https://foo.com/bundle.js" },
-          {
-            id: "regenerator",
-            url: "webpack:///foo/node_modules/regenerator-runtime/runtime.js",
-          },
-          {
-            id: "microtask",
-            url: "webpack:///foo/node_modules/core-js/modules/_microtask.js",
-          },
-          {
-            id: "promise",
-            url: "webpack///foo/node_modules/core-js/modules/es6.promise.js",
-          },
+        sources: new Map([
+          ["app", { id: "app", url: "webpack///app.js" }],
+          ["bundle", { id: "bundle", url: "https://foo.com/bundle.js" }],
+          [
+            "regenerator",
+            {
+              id: "regenerator",
+              url: "webpack:///foo/node_modules/regenerator-runtime/runtime.js",
+            },
+          ],
+          [
+            "microtask",
+            {
+              id: "microtask",
+              url: "webpack:///foo/node_modules/core-js/modules/_microtask.js",
+            },
+          ],
+          [
+            "promise",
+            {
+              id: "promise",
+              url: "webpack///foo/node_modules/core-js/modules/es6.promise.js",
+            },
+          ],
         ]),
         selectedSource: {
           id: "sourceId-originalSource",
@@ -155,25 +165,9 @@ describe("getCallStackFrames selector", () => {
         state.selectedSource
       );
 
-      const babelFrames = pullAt(frames, [
-        1,
-        2,
-        3,
-        4,
-        5,
-        6,
-        7,
-        8,
-        10,
-        11,
-        12,
-        13,
-        14,
-        15,
-        16,
-        17,
-      ]);
-      const otherFrames = frames;
+      // frames from 1-8 and 10-17 are babel frames.
+      const babelFrames = [...frames.slice(1, 7), ...frames.slice(10, 7)];
+      const otherFrames = frames.filter(frame => !babelFrames.includes(frame));
 
       expect(babelFrames).toEqual(
         Array(babelFrames.length).fill(

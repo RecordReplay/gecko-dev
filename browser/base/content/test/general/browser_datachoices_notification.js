@@ -6,14 +6,12 @@
 
 // Pass an empty scope object to the import to prevent "leaked window property"
 // errors in tests.
-var Preferences = ChromeUtils.import(
-  "resource://gre/modules/Preferences.jsm",
-  {}
-).Preferences;
-var TelemetryReportingPolicy = ChromeUtils.import(
-  "resource://gre/modules/TelemetryReportingPolicy.jsm",
-  {}
-).TelemetryReportingPolicy;
+var { Preferences } = ChromeUtils.import(
+  "resource://gre/modules/Preferences.jsm"
+);
+var { TelemetryReportingPolicy } = ChromeUtils.import(
+  "resource://gre/modules/TelemetryReportingPolicy.jsm"
+);
 
 const PREF_BRANCH = "datareporting.policy.";
 const PREF_FIRST_RUN = "toolkit.telemetry.reportingpolicy.firstRun";
@@ -31,19 +29,18 @@ const TEST_POLICY_VERSION = 37;
 
 function fakeShowPolicyTimeout(set, clear) {
   let reportingPolicy = ChromeUtils.import(
-    "resource://gre/modules/TelemetryReportingPolicy.jsm",
-    null
+    "resource://gre/modules/TelemetryReportingPolicy.jsm"
   ).Policy;
   reportingPolicy.setShowInfobarTimeout = set;
   reportingPolicy.clearShowInfobarTimeout = clear;
 }
 
 function sendSessionRestoredNotification() {
-  let reportingPolicyImpl = ChromeUtils.import(
-    "resource://gre/modules/TelemetryReportingPolicy.jsm",
-    null
-  ).TelemetryReportingPolicyImpl;
-  reportingPolicyImpl.observe(null, "sessionstore-windows-restored", null);
+  let reportingPolicy = ChromeUtils.import(
+    "resource://gre/modules/TelemetryReportingPolicy.jsm"
+  ).Policy;
+
+  reportingPolicy.fakeSessionRestoreNotification();
 }
 
 /**
@@ -116,7 +113,7 @@ var checkInfobarButton = async function(aNotification) {
   await promiseNextTick();
 };
 
-add_task(async function setup() {
+add_setup(async function() {
   const isFirstRun = Preferences.get(PREF_FIRST_RUN, true);
   const bypassNotification = Preferences.get(PREF_BYPASS_NOTIFICATION, true);
   const currentPolicyVersion = Preferences.get(PREF_CURRENT_POLICY_VERSION, 1);

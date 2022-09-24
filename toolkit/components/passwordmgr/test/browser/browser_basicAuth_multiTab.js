@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-"use-strict";
+"use strict";
 
 /**
  * Tests that can show multiple auth prompts in different tabs and handle them
@@ -80,7 +80,7 @@ async function testTabAuthed(expectAuthed, { tab, loadPromise, authOptions }) {
   is(pass, expectAuthed ? authOptions.pass : "", "Sent correct password");
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     // This test relies on tab auth prompts.
     set: [["prompts.modalType.httpAuth", Services.prompt.MODAL_TYPE_TAB]],

@@ -6,7 +6,6 @@
 #include "HostWebGLContext.h"
 
 #include "CompositableHost.h"
-#include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/LayersSurfaces.h"
 
 #include "MozFramebuffer.h"
@@ -33,7 +32,7 @@ namespace mozilla {
 
 // -
 
-static StaticMutex sContextSetLock;
+static StaticMutex sContextSetLock MOZ_UNANNOTATED;
 
 static std::unordered_set<HostWebGLContext*>& DeferredStaticContextSet() {
   static std::unordered_set<HostWebGLContext*> sContextSet;

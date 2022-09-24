@@ -27,13 +27,14 @@ class VideoBridgeParent final : public PVideoBridgeParent,
 
   static void Open(Endpoint<PVideoBridgeParent>&& aEndpoint,
                    VideoBridgeSource aSource);
+  static void Shutdown();
 
   TextureHost* LookupTexture(uint64_t aSerial);
 
   // PVideoBridgeParent
   void ActorDestroy(ActorDestroyReason aWhy) override;
   PTextureParent* AllocPTextureParent(const SurfaceDescriptor& aSharedData,
-                                      const ReadLockDescriptor& aReadLock,
+                                      ReadLockDescriptor& aReadLock,
                                       const LayersBackend& aLayersBackend,
                                       const TextureFlags& aFlags,
                                       const uint64_t& aSerial);
@@ -65,6 +66,7 @@ class VideoBridgeParent final : public PVideoBridgeParent,
   void Bind(Endpoint<PVideoBridgeParent>&& aEndpoint);
 
   void ActorDealloc() override;
+  void ReleaseCompositorThread();
 
   // This keeps us alive until ActorDestroy(), at which point we do a
   // deferred destruction of ourselves.

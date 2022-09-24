@@ -104,6 +104,16 @@ const POLICIES_TESTS = [
     },
   },
 
+  // POLICY: GoToIntranetSiteForSingleWordEntryInAddressBar
+  {
+    policies: {
+      GoToIntranetSiteForSingleWordEntryInAddressBar: true,
+    },
+    lockedPrefs: {
+      "browser.fixup.dns_first_for_single_words": true,
+    },
+  },
+
   // POLICY: OverrideFirstRunPage
   {
     policies: { OverrideFirstRunPage: "https://www.example.com/" },
@@ -810,7 +820,7 @@ const POLICIES_TESTS = [
       "security.ssl3.rsa_aes_256_gcm_sha384": true,
       "security.ssl3.rsa_aes_128_sha": true,
       "security.ssl3.rsa_aes_256_sha": true,
-      "security.ssl3.rsa_des_ede3_sha": true,
+      "security.ssl3.deprecated.rsa_des_ede3_sha": true,
     },
   },
 
@@ -853,7 +863,7 @@ const POLICIES_TESTS = [
       "security.ssl3.rsa_aes_256_gcm_sha384": false,
       "security.ssl3.rsa_aes_128_sha": false,
       "security.ssl3.rsa_aes_256_sha": false,
-      "security.ssl3.rsa_des_ede3_sha": false,
+      "security.ssl3.deprecated.rsa_des_ede3_sha": false,
     },
   },
 
@@ -935,7 +945,6 @@ const POLICIES_TESTS = [
       "network.cookie.cookieBehavior.pbmode": 5,
     },
   },
-
   {
     policies: {
       Cookies: {
@@ -947,6 +956,15 @@ const POLICIES_TESTS = [
     lockedPrefs: {
       "network.cookie.cookieBehavior": 5,
       "network.cookie.cookieBehavior.pbmode": 0,
+    },
+  },
+
+  {
+    policies: {
+      UseSystemPrintDialog: true,
+    },
+    lockedPrefs: {
+      "print.prefer_system_dialog": true,
     },
   },
 ];

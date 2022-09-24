@@ -17,7 +17,7 @@
 
 // conflicts with #include of scoped_ptr.h
 #undef FF
-#include "webrtc/modules/video_capture/video_capture_defines.h"
+#include "modules/video_capture/video_capture_defines.h"
 
 namespace mozilla {
 
@@ -79,10 +79,9 @@ class CamerasSingleton {
     Mutex().AssertCurrentThreadOwns();
     return singleton().mCamerasChildThread;
   }
-
-  static bool InShutdown() { return singleton().mInShutdown; }
-
-  static void StartShutdown() { singleton().mInShutdown = true; }
+  // The mutex is not held because mCameras is known not to be modified
+  // concurrently when this is asserted.
+  static void AssertNoChild() { MOZ_ASSERT(!singleton().mCameras); }
 
  private:
   CamerasSingleton();
@@ -106,7 +105,6 @@ class CamerasSingleton {
   // will be before actual destruction.
   CamerasChild* mCameras;
   nsCOMPtr<nsIThread> mCamerasChildThread;
-  Atomic<bool> mInShutdown;
 };
 
 // Get a pointer to a CamerasChild object we can use to do IPC with.
@@ -157,7 +155,7 @@ class CamerasChild final : public PCamerasChild {
   // these are response messages to our outgoing requests
   mozilla::ipc::IPCResult RecvReplyNumberOfCaptureDevices(const int&) override;
   mozilla::ipc::IPCResult RecvReplyNumberOfCapabilities(const int&) override;
-  mozilla::ipc::IPCResult RecvReplyAllocateCaptureDevice(const int&) override;
+  mozilla::ipc::IPCResult RecvReplyAllocateCapture(const int&) override;
   mozilla::ipc::IPCResult RecvReplyGetCaptureCapability(
       const VideoCaptureCapability& capability) override;
   mozilla::ipc::IPCResult RecvReplyGetCaptureDevice(
@@ -173,25 +171,24 @@ class CamerasChild final : public PCamerasChild {
   int NumberOfCaptureDevices(CaptureEngine aCapEngine);
   int NumberOfCapabilities(CaptureEngine aCapEngine,
                            const char* deviceUniqueIdUTF8);
-  int ReleaseCaptureDevice(CaptureEngine aCapEngine, const int capture_id);
+  int ReleaseCapture(CaptureEngine aCapEngine, const int capture_id);
   int StartCapture(CaptureEngine aCapEngine, const int capture_id,
-                   webrtc::VideoCaptureCapability& capability,
+                   const webrtc::VideoCaptureCapability& capability,
                    FrameRelay* func);
   int FocusOnSelectedSource(CaptureEngine aCapEngine, const int capture_id);
   int StopCapture(CaptureEngine aCapEngine, const int capture_id);
-  int AllocateCaptureDevice(CaptureEngine aCapEngine, const char* unique_idUTF8,
-                            const unsigned int unique_idUTF8Length,
-                            int& capture_id, uint64_t aWindowID);
+  // Returns a non-negative capture identifier or -1 on failure.
+  int AllocateCapture(CaptureEngine aCapEngine, const char* unique_idUTF8,
+                      uint64_t aWindowID);
   int GetCaptureCapability(CaptureEngine aCapEngine, const char* unique_idUTF8,
                            const unsigned int capability_number,
-                           webrtc::VideoCaptureCapability& capability);
+                           webrtc::VideoCaptureCapability* capability);
   int GetCaptureDevice(CaptureEngine aCapEngine, unsigned int list_number,
                        char* device_nameUTF8,
                        const unsigned int device_nameUTF8Length,
                        char* unique_idUTF8,
                        const unsigned int unique_idUTF8Length,
                        bool* scary = nullptr);
-  void ShutdownAll();
   int EnsureInitialized(CaptureEngine aCapEngine);
 
   template <typename This>
@@ -226,12 +223,10 @@ class CamerasChild final : public PCamerasChild {
   void AddCallback(const CaptureEngine aCapEngine, const int capture_id,
                    FrameRelay* render);
   void RemoveCallback(const CaptureEngine aCapEngine, const int capture_id);
-  void ShutdownParent();
-  void ShutdownChild();
 
   nsTArray<CapturerElement> mCallbacks;
   // Protects the callback arrays
-  Mutex mCallbackMutex;
+  Mutex mCallbackMutex MOZ_UNANNOTATED;
 
   bool mIPCIsAlive;
 
@@ -243,16 +238,18 @@ class CamerasChild final : public PCamerasChild {
   // request. The Notify on receiving the response will then unblock
   // both waiters and one will be guaranteed to get the wrong result.
   // Take this one before taking mReplyMonitor.
-  Mutex mRequestMutex;
-  // Hold to wait for an async response to our calls
-  Monitor mReplyMonitor;
+  Mutex mRequestMutex MOZ_UNANNOTATED;
+  // Hold to wait for an async response to our calls *and* until the
+  // user of LockAndDispatch<> has read the data out. This is done by
+  // keeping the LockAndDispatch object alive.
+  Monitor mReplyMonitor MOZ_UNANNOTATED;
   // Async response valid?
   bool mReceivedReply;
   // Async responses data contents;
   bool mReplySuccess;
   const int mZero;
   int mReplyInteger;
-  webrtc::VideoCaptureCapability mReplyCapability;
+  webrtc::VideoCaptureCapability* mReplyCapability = nullptr;
   nsCString mReplyDeviceName;
   nsCString mReplyDeviceID;
   bool mReplyScary;

@@ -22,8 +22,7 @@
 #include "nsIFile.h"
 #include "mozilla/MozPromise.h"
 
-namespace mozilla {
-namespace gmp {
+namespace mozilla::gmp {
 
 class GMPCapability {
  public:
@@ -168,6 +167,9 @@ class GMPParent final
   bool DeallocPGMPTimerParent(PGMPTimerParent* aActor);
 
   mozilla::ipc::IPCResult RecvPGMPContentChildDestroyed();
+
+  mozilla::ipc::IPCResult RecvFOGData(ByteBuf&& aBuf);
+
   bool IsUsed() {
     return mGMPContentChildCount > 0 || !mGetContentParentPromises.IsEmpty();
   }
@@ -240,7 +242,6 @@ class GMPParent final
   const nsCOMPtr<nsISerialEventTarget> mMainThread;
 };
 
-}  // namespace gmp
-}  // namespace mozilla
+}  // namespace mozilla::gmp
 
 #endif  // GMPParent_h_

@@ -5,7 +5,7 @@
 "use strict";
 
 const EventEmitter = require("devtools/shared/event-emitter");
-const { Cu } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
 const HeapAnalysesClient = require("devtools/shared/heapsnapshot/HeapAnalysesClient");
 
 function MemoryPanel(iframeWindow, toolbox, commands) {
@@ -13,8 +13,8 @@ function MemoryPanel(iframeWindow, toolbox, commands) {
   this._toolbox = toolbox;
   this._commands = commands;
 
-  const { BrowserLoader } = Cu.import(
-    "resource://devtools/client/shared/browser-loader.js"
+  const { BrowserLoader } = ChromeUtils.import(
+    "resource://devtools/shared/loader/browser-loader.js"
   );
   const browserRequire = BrowserLoader({
     baseURI: "resource://devtools/client/memory/",
@@ -32,12 +32,12 @@ MemoryPanel.prototype = {
     this.panelWin.gToolbox = this._toolbox;
     this.panelWin.gHeapAnalysesClient = new HeapAnalysesClient();
 
-    await this.initializer.initialize();
+    await this.initializer.initialize(this._commands);
 
-    await this._commands.targetCommand.watchTargets(
-      [this._commands.targetCommand.TYPES.FRAME],
-      this._onTargetAvailable
-    );
+    await this._commands.targetCommand.watchTargets({
+      types: [this._commands.targetCommand.TYPES.FRAME],
+      onAvailable: this._onTargetAvailable,
+    });
 
     return this;
   },
@@ -59,10 +59,10 @@ MemoryPanel.prototype = {
     }
     this._destroyed = true;
 
-    this._commands.targetCommand.unwatchTargets(
-      [this._commands.targetCommand.TYPES.FRAME],
-      this._onTargetAvailable
-    );
+    this._commands.targetCommand.unwatchTargets({
+      types: [this._commands.targetCommand.TYPES.FRAME],
+      onAvailable: this._onTargetAvailable,
+    });
 
     this.initializer.destroy();
 

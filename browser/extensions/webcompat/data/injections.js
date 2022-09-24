@@ -122,30 +122,16 @@ const AVAILABLE_INJECTIONS = [
     customFunc: "noSniffFix",
   },
   {
-    id: "bug1561371",
-    platform: "android",
-    domain: "mail.google.com",
-    bug: "1561371",
+    id: "bug1768243",
+    platform: "desktop",
+    domain: "cloud.google.com",
+    bug: "1768243",
     contentScripts: {
-      matches: ["*://mail.google.com/*"],
+      matches: ["*://cloud.google.com/terms/*"],
       css: [
         {
           file:
-            "injections/css/bug1561371-mail.google.com-allow-horizontal-scrolling.css",
-        },
-      ],
-    },
-  },
-  {
-    id: "bug1570119",
-    platform: "desktop",
-    domain: "teamcoco.com",
-    bug: "1570119",
-    contentScripts: {
-      matches: ["*://teamcoco.com/*"],
-      css: [
-        {
-          file: "injections/css/bug1570119-teamcoco.com-scrollbar-width.css",
+            "injections/css/bug1768243-cloud.google.com-allow-table-scrolling.css",
         },
       ],
     },
@@ -203,20 +189,6 @@ const AVAILABLE_INJECTIONS = [
     },
   },
   {
-    id: "bug1610016",
-    platform: "android",
-    domain: "gaana.com",
-    bug: "1610016",
-    contentScripts: {
-      matches: ["https://gaana.com/*"],
-      css: [
-        {
-          file: "injections/css/bug1610016-gaana.com-input-position-fix.css",
-        },
-      ],
-    },
-  },
-  {
     id: "bug1610358",
     platform: "android",
     domain: "pcloud.com",
@@ -256,20 +228,6 @@ const AVAILABLE_INJECTIONS = [
         {
           file:
             "injections/css/bug1644830-missingmail.usps.com-checkboxes-not-visible.css",
-        },
-      ],
-    },
-  },
-  {
-    id: "bug1645064",
-    platform: "desktop",
-    domain: "s-kanava.fi",
-    bug: "1645064",
-    contentScripts: {
-      matches: ["https://www.s-kanava.fi/*"],
-      css: [
-        {
-          file: "injections/css/bug1645064-s-kanava.fi-invisible-charts.css",
         },
       ],
     },
@@ -332,21 +290,6 @@ const AVAILABLE_INJECTIONS = [
     },
   },
   {
-    id: "bug1666771",
-    platform: "desktop",
-    domain: "zillow.com",
-    bug: "1666771",
-    contentScripts: {
-      allFrames: true,
-      matches: ["*://*.zillow.com/*"],
-      css: [
-        {
-          file: "injections/css/bug1666771-zilow-map-overdraw.css",
-        },
-      ],
-    },
-  },
-  {
     id: "bug1631811",
     platform: "all",
     domain: "datastudio.google.com",
@@ -376,17 +319,24 @@ const AVAILABLE_INJECTIONS = [
     },
   },
   {
-    id: "bug1704653",
-    platform: "all",
-    domain: "tsky.in",
-    bug: "1704653",
+    id: "bug1731825",
+    platform: "desktop",
+    domain: "Office 365 email handling prompt",
+    bug: "1731825",
     contentScripts: {
-      matches: ["*://tsky.in/*"],
-      css: [
+      matches: [
+        "*://*.live.com/*",
+        "*://*.office.com/*",
+        "*://*.sharepoint.com/*",
+        "*://*.office365.com/*",
+      ],
+      js: [
         {
-          file: "injections/css/bug1704653-tsky.in-clear-float.css",
+          file:
+            "injections/js/bug1731825-office365-email-handling-prompt-autohide.js",
         },
       ],
+      allFrames: true,
     },
   },
   {
@@ -439,45 +389,191 @@ const AVAILABLE_INJECTIONS = [
     },
   },
   {
-    id: "bug1712843",
-    platform: "all",
-    domain: "snaptik.app",
-    bug: "1712843",
+    id: "bug1722955",
+    platform: "android",
+    domain: "frontgate.com",
+    bug: "1722955",
     contentScripts: {
-      matches: ["*://snaptik.app/*"],
-      css: [
-        {
-          file:
-            "injections/css/bug1712843-snaptik.app-fix-text-input-alignment.css",
-        },
-      ],
-    },
-  },
-  {
-    id: "bug1714612",
-    platform: "all",
-    domain: "www.rfi.it",
-    bug: "1714612",
-    contentScripts: {
-      matches: ["*://www.rfi.it/*"],
+      matches: ["*://*.frontgate.com/*"],
       js: [
         {
-          file: "injections/js/bug1714612-www.rfi.it-outertext.js",
+          file: "lib/ua_helpers.js",
+        },
+        {
+          file: "injections/js/bug1722955-frontgate.com-ua-override.js",
         },
       ],
       allFrames: true,
     },
   },
   {
-    id: "bug1719870",
-    platform: "desktop",
-    domain: "lcbo.com",
-    bug: "1719870",
+    id: "bug1724764",
+    platform: "android",
+    domain: "amextravel.com",
+    bug: "1724764",
     contentScripts: {
-      matches: ["*://*.lcbo.com/*"],
+      matches: ["*://*.amextravel.com/*"],
+      js: [
+        {
+          file: "injections/js/bug1724764-amextravel.com-window-print.js",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1724868",
+    platform: "android",
+    domain: "news.yahoo.co.jp",
+    bug: "1724868",
+    contentScripts: {
+      matches: ["*://news.yahoo.co.jp/articles/*", "*://s.yimg.jp/*"],
+      js: [
+        {
+          file: "injections/js/bug1724868-news.yahoo.co.jp-ua-override.js",
+        },
+      ],
+      allFrames: true,
+    },
+  },
+  {
+    id: "bug1741234",
+    platform: "all",
+    domain: "patient.alphalabs.ca",
+    bug: "1741234",
+    contentScripts: {
+      matches: ["*://patient.alphalabs.ca/*"],
       css: [
         {
-          file: "injections/css/bug1719870-lcbo.com-table-clearfix.css",
+          file: "injections/css/bug1741234-patient.alphalabs.ca-height-fix.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1743614",
+    platform: "android",
+    domain: "storytel.com",
+    bug: "1743614",
+    contentScripts: {
+      matches: ["*://*.storytel.com/*"],
+      css: [
+        {
+          file: "injections/css/bug1743614-storytel.com-flex-min-width.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1751022",
+    platform: "android",
+    domain: "chotot.com",
+    bug: "1751022",
+    contentScripts: {
+      matches: ["*://*.chotot.com/*"],
+      css: [
+        {
+          file: "injections/css/bug1751022-chotot.com-image-width-fix.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1754473",
+    platform: "android",
+    domain: "m.intl.taobao.com",
+    bug: "1754473",
+    contentScripts: {
+      matches: ["*://m.intl.taobao.com/*"],
+      css: [
+        {
+          file:
+            "injections/css/bug1754473-m.intl.taobao.com-number-arrow-buttons-overlapping-fix.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1748455",
+    platform: "android",
+    domain: "reddit.com",
+    bug: "1748455",
+    contentScripts: {
+      matches: ["*://*.reddit.com/*"],
+      css: [
+        {
+          file:
+            "injections/css/bug1748455-reddit.com-gallery-image-width-fix.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1756692",
+    platform: "android",
+    domain: "zee5.com",
+    bug: "1756692",
+    contentScripts: {
+      matches: ["*://www.zee5.com/*"],
+      js: [
+        {
+          file: "injections/js/bug1756692-effectiveType-shim.js",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1739489",
+    platform: "desktop",
+    domain: "draft.js",
+    bug: "1739489",
+    contentScripts: {
+      matches: ["*://draftjs.org/*", "*://www.facebook.com/*"],
+      js: [
+        {
+          file: "injections/js/bug1739489-draftjs-beforeinput.js",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1765947",
+    platform: "android",
+    domain: "veniceincoming.com",
+    bug: "1765947",
+    contentScripts: {
+      matches: ["*://veniceincoming.com/*"],
+      css: [
+        {
+          file: "injections/css/bug1765947-veniceincoming.com-left-fix.css",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug11769762",
+    platform: "all",
+    domain: "tiktok.com",
+    bug: "1769762",
+    contentScripts: {
+      matches: ["https://www.tiktok.com/*"],
+      js: [
+        {
+          file: "injections/js/bug1769762-tiktok.com-plugins-shim.js",
+        },
+      ],
+    },
+  },
+  {
+    id: "bug1770962",
+    platform: "all",
+    domain: "coldwellbankerhomes.com",
+    bug: "1770962",
+    contentScripts: {
+      matches: ["*://*.coldwellbankerhomes.com/*"],
+      css: [
+        {
+          file:
+            "injections/css/bug1770962-coldwellbankerhomes.com-image-height.css",
         },
       ],
     },

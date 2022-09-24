@@ -172,7 +172,14 @@ void AppProcessBuilder::InitAppProcess(int* argcp, char*** argvp) {
   ReplaceArguments(argcp, argvp);
 }
 
-static void handle_sigchld(int s) { waitpid(-1, nullptr, WNOHANG); }
+static void handle_sigchld(int s) {
+  while (true) {
+    if (waitpid(-1, nullptr, WNOHANG) <= 0) {
+      // On error, or no process changed state.
+      break;
+    }
+  }
+}
 
 static void InstallChildSignalHandler() {
   // Since content processes are not children of the chrome process
@@ -237,6 +244,7 @@ bool LaunchApp(const std::vector<std::string>& argv,
   EnvironmentArray envp = BuildEnvironmentArray(options.env_map);
   mozilla::ipc::FileDescriptorShuffle shuffle;
   if (!shuffle.Init(options.fds_to_remap)) {
+    CHROMIUM_LOG(WARNING) << "FileDescriptorShuffle::Init failed";
     return false;
   }
 
@@ -262,7 +270,10 @@ bool LaunchApp(const std::vector<std::string>& argv,
   pid_t pid = fork();
 #endif
 
-  if (pid < 0) return false;
+  if (pid < 0) {
+    CHROMIUM_LOG(WARNING) << "fork() failed: " << strerror(errno);
+    return false;
+  }
 
   if (pid == 0) {
     // In the child:

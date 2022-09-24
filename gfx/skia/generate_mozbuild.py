@@ -79,7 +79,6 @@ DEFINES['SK_OUTLINE_EMBOLDEN_DIVISOR'] = 48
 CXXFLAGS += [
     '-Wno-deprecated-declarations',
     '-Wno-overloaded-virtual',
-    '-Wno-shadow',
     '-Wno-sign-compare',
     '-Wno-unreachable-code',
     '-Wno-unused-function',
@@ -98,7 +97,9 @@ if CONFIG['CC_TYPE'] in ('clang', 'clang-cl'):
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('gtk', 'android'):
-    CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+    LOCAL_INCLUDES += [
+        "/gfx/cairo/cairo/src",
+    ]
     CXXFLAGS += CONFIG['CAIRO_FT_CFLAGS']
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gtk':

@@ -97,6 +97,7 @@ add_task(async function testPrefSettings() {
       ["privacy.query_stripping.enabled", true],
       ["privacy.query_stripping.strip_list", ""],
       ["privacy.query_stripping.allow_list", ""],
+      ["privacy.query_stripping.testing", true],
     ],
   });
 
@@ -165,12 +166,13 @@ add_task(async function testRemoteSettings() {
       ["privacy.query_stripping.enabled", true],
       ["privacy.query_stripping.strip_list", ""],
       ["privacy.query_stripping.allow_list", ""],
+      ["privacy.query_stripping.testing", true],
     ],
   });
 
   // Add initial empty record.
-  let db = await RemoteSettings(COLLECTION_NAME).db;
-  await db.importChanges({}, 42, []);
+  let db = RemoteSettings(COLLECTION_NAME).db;
+  await db.importChanges({}, Date.now(), []);
 
   // Test if the observer been called when adding to the service.
   let updateEvent = new UpdateEvent();
@@ -195,7 +197,7 @@ add_task(async function testRemoteSettings() {
       current: [
         {
           id: "1",
-          last_modified: 100000000000000000001,
+          last_modified: 1000000000000001,
           stripList: ["remote_query1", "remote_query2"],
           allowList: [],
         },
@@ -222,7 +224,7 @@ add_task(async function testRemoteSettings() {
       current: [
         {
           id: "2",
-          last_modified: 100000000000000000002,
+          last_modified: 1000000000000002,
           stripList: ["remote_query1", "remote_query2"],
           allowList: ["example.net"],
         },

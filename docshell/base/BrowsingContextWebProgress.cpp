@@ -4,6 +4,7 @@
 
 #include "BrowsingContextWebProgress.h"
 #include "mozilla/dom/CanonicalBrowsingContext.h"
+#include "mozilla/ErrorNames.h"
 #include "mozilla/Logging.h"
 #include "nsCOMPtr.h"
 #include "nsIWebProgressListener.h"
@@ -65,6 +66,16 @@ NS_IMETHODIMP BrowsingContextWebProgress::RemoveProgressListener(
   }
 
   return mListenerInfoList.RemoveElement(listener) ? NS_OK : NS_ERROR_FAILURE;
+}
+
+NS_IMETHODIMP BrowsingContextWebProgress::GetBrowsingContextXPCOM(
+    BrowsingContext** aBrowsingContext) {
+  NS_IF_ADDREF(*aBrowsingContext = mCurrentBrowsingContext);
+  return NS_OK;
+}
+
+BrowsingContext* BrowsingContextWebProgress::GetBrowsingContext() {
+  return mCurrentBrowsingContext;
 }
 
 NS_IMETHODIMP BrowsingContextWebProgress::GetDOMWindow(
@@ -256,7 +267,7 @@ BrowsingContextWebProgress::OnLocationChange(nsIWebProgress* aWebProgress,
                                              uint32_t aFlags) {
   MOZ_LOG(
       gBCWebProgressLog, LogLevel::Info,
-      ("OnProgressChange(%s, %s, %s, %s) on %s",
+      ("OnLocationChange(%s, %s, %s, %s) on %s",
        DescribeWebProgress(aWebProgress).get(), DescribeRequest(aRequest).get(),
        aLocation ? aLocation->GetSpecOrDefault().get() : "<null>",
        DescribeWebProgressFlags(aFlags, "LOCATION_CHANGE_"_ns).get(),
@@ -316,6 +327,12 @@ BrowsingContextWebProgress::OnContentBlockingEvent(nsIWebProgress* aWebProgress,
                              listener->OnContentBlockingEvent(aWebProgress,
                                                               aRequest, aEvent);
                            });
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BrowsingContextWebProgress::GetDocumentRequest(nsIRequest** aRequest) {
+  NS_IF_ADDREF(*aRequest = mLoadingDocumentRequest);
   return NS_OK;
 }
 

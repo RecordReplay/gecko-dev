@@ -16,8 +16,7 @@
 
 class nsRefreshDriver;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * L10nMutations manage observing roots for localization
@@ -31,6 +30,7 @@ class L10nMutations final : public nsStubMutationObserver,
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(L10nMutations, nsIMutationObserver)
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTAPPENDED
   NS_DECL_NSIMUTATIONOBSERVER_CONTENTINSERTED
+  NS_DECL_NSIMUTATIONOBSERVER_CONTENTREMOVED
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
 
   explicit L10nMutations(DOMLocalization* aDOMLocalization);
@@ -64,7 +64,6 @@ class L10nMutations final : public nsStubMutationObserver,
 
  protected:
   bool mObserving = false;
-  bool mRefreshObserver = false;
   RefPtr<nsRefreshDriver> mRefreshDriver;
   DOMLocalization* mDOMLocalization;
 
@@ -84,7 +83,6 @@ class L10nMutations final : public nsStubMutationObserver,
   bool IsInRoots(nsINode* aNode);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_l10n_L10nMutations_h__

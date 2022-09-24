@@ -60,8 +60,7 @@ DEFINE_ASYNC(HostWebGLContext::DeleteTexture)
 DEFINE_ASYNC(HostWebGLContext::DeleteTransformFeedback)
 DEFINE_ASYNC(HostWebGLContext::DeleteVertexArray)
 
-DEFINE_ASYNC(HostWebGLContext::Disable)
-DEFINE_ASYNC(HostWebGLContext::Enable)
+DEFINE_ASYNC(HostWebGLContext::SetEnabled)
 DEFINE_ASYNC(HostWebGLContext::GenerateError)
 DEFINE_ASYNC(HostWebGLContext::Resize)
 DEFINE_ASYNC(HostWebGLContext::RequestExtension)
@@ -145,6 +144,8 @@ DEFINE_ASYNC(HostWebGLContext::EndQuery)
 DEFINE_ASYNC(HostWebGLContext::QueryCounter)
 DEFINE_ASYNC(HostWebGLContext::SetFramebufferIsInOpaqueRAF)
 DEFINE_ASYNC(HostWebGLContext::ClearVRSwapChain)
+DEFINE_ASYNC(HostWebGLContext::CopyToSwapChain)
+DEFINE_ASYNC(HostWebGLContext::EndOfFrame)
 
 #undef DEFINE_ASYNC
 #undef DEFINE_METHOD_DISPATCHER

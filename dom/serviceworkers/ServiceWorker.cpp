@@ -24,7 +24,6 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StorageAccess.h"
-#include "nsGlobalWindowInner.h"
 
 #ifdef XP_WIN
 #  undef PostMessage
@@ -33,8 +32,7 @@
 using mozilla::ErrorResult;
 using namespace mozilla::dom;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 bool ServiceWorkerVisible(JSContext* aCx, JSObject* aObj) {
   if (NS_IsMainThread()) {
@@ -66,7 +64,7 @@ ServiceWorker::ServiceWorker(nsIGlobalObject* aGlobal,
   MOZ_DIAGNOSTIC_ASSERT(aGlobal);
   MOZ_DIAGNOSTIC_ASSERT(mInner);
 
-  KeepAliveIfHasListenersFor(u"statechange"_ns);
+  KeepAliveIfHasListenersFor(nsGkAtoms::onstatechange);
 
   // The error event handler is required by the spec currently, but is not used
   // anywhere.  Don't keep the object alive in that case.
@@ -143,7 +141,7 @@ void ServiceWorker::MaybeDispatchStateChangeEvent() {
   // more statechange events will occur.  We can allow the DOM
   // object to GC if script is not holding it alive.
   if (mLastNotifiedState == ServiceWorkerState::Redundant) {
-    IgnoreKeepAliveIfHasListenersFor(u"statechange"_ns);
+    IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onstatechange);
   }
 }
 
@@ -166,7 +164,10 @@ void ServiceWorker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   }
 
   auto storageAllowed = StorageAllowedForWindow(window);
-  if (storageAllowed != StorageAccess::eAllow) {
+  if (storageAllowed != StorageAccess::eAllow &&
+      (!StaticPrefs::privacy_partition_serviceWorkers() ||
+       !StoragePartitioningEnabled(
+           storageAllowed, window->GetExtantDoc()->CookieJarSettings()))) {
     ServiceWorkerManager::LocalizeAndReportToAllClients(
         mDescriptor.Scope(), "ServiceWorkerPostMessageStorageError",
         nsTArray<nsString>{NS_ConvertUTF8toUTF16(mDescriptor.Scope())});
@@ -223,7 +224,7 @@ void ServiceWorker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
 }
 
 void ServiceWorker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                                const PostMessageOptions& aOptions,
+                                const StructuredSerializeOptions& aOptions,
                                 ErrorResult& aRv) {
   PostMessage(aCx, aMessage, aOptions.mTransfer, aRv);
 }
@@ -252,5 +253,4 @@ void ServiceWorker::MaybeAttachToRegistration(
   mRegistration = aRegistration;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

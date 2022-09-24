@@ -42,9 +42,7 @@ function getToolbarNodeForItemGuid(aItemGuid) {
 }
 
 function waitForLoad(browser, url) {
-  return BrowserTestUtils.browserLoaded(browser, false, url).then(() => {
-    return BrowserTestUtils.loadURI(browser, "about:blank");
-  });
+  return BrowserTestUtils.browserLoaded(browser, false, url);
 }
 
 function waitForNewTab(url, inBackground) {
@@ -67,7 +65,7 @@ function waitForNewTab(url, inBackground) {
   });
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   await PlacesUtils.bookmarks.eraseEverything();
   let bookmarks = await Promise.all(
     TEST_PAGES.map((url, index) => {

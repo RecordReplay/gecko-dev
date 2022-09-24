@@ -51,7 +51,6 @@ const KNOWN_ERROR_TITLE_IDS = new Set([
   "nssFailure2-title",
   "csp-xfo-error-title",
   "corruptedContentError-title",
-  "remoteXUL-title",
   "sslv3Used-title",
   "inadequateSecurityError-title",
   "blockedByPolicy-title",
@@ -81,12 +80,17 @@ const KNOWN_ERROR_TITLE_IDS = new Set([
 
 let searchParams = new URLSearchParams(document.documentURI.split("?")[1]);
 
-// Set to true on init if the error code is nssBadCert.
-let gIsCertError;
+let gErrorCode = searchParams.get("e");
 
-function getErrorCode() {
-  return searchParams.get("e");
-}
+let gIsCertError = gErrorCode == "nssBadCert";
+
+// If the location of the favicon changes, FAVICON_CERTERRORPAGE_URL and/or
+// FAVICON_ERRORPAGE_URL in toolkit/components/places/nsFaviconService.idl
+// should also be updated.
+document.getElementById("favicon").href =
+  gIsCertError || gErrorCode == "nssFailure2"
+    ? "chrome://global/skin/icons/warning.svg"
+    : "chrome://global/skin/icons/info.svg";
 
 function getCSSClass() {
   return searchParams.get("s");
@@ -105,18 +109,9 @@ function retryThis(buttonEl) {
   buttonEl.disabled = true;
 }
 
-function toggleDisplay(node) {
-  const toggle = {
-    "": "block",
-    none: "block",
-    block: "none",
-  };
-  return (node.style.display = toggle[node.style.display]);
-}
-
 function showBlockingErrorReporting() {
   // Display blocking error reporting UI for XFO error and CSP error.
-  document.getElementById("blockingErrorReporting").style.display = "block";
+  document.getElementById("blockingErrorReporting").hidden = false;
 }
 
 function showPrefChangeContainer() {
@@ -131,16 +126,18 @@ function showPrefChangeContainer() {
   setFocus("#prefResetButton", "beforeend");
 }
 
-function showTls10Container() {
-  const panel = document.getElementById("enableTls10Container");
-  panel.style.display = "block";
-  document.getElementById("netErrorButtonContainer").style.display = "none";
-  const button = document.getElementById("enableTls10Button");
-  button.addEventListener("click", function enableTls10(e) {
-    RPMSetBoolPref("security.tls.version.enable-deprecated", true);
-    retryThis(button);
-  });
-  setFocus("#enableTls10Button", "beforeend");
+function toggleCertErrorDebugInfoVisibility(shouldShow) {
+  let debugInfo = document.getElementById("certificateErrorDebugInformation");
+  let copyButton = document.getElementById("copyToClipboardTop");
+
+  if (shouldShow === undefined) {
+    shouldShow = debugInfo.hidden;
+  }
+  debugInfo.hidden = !shouldShow;
+  if (shouldShow) {
+    copyButton.scrollIntoView({ block: "start", behavior: "smooth" });
+    copyButton.focus();
+  }
 }
 
 function setupAdvancedButton() {
@@ -156,13 +153,12 @@ function setupAdvancedButton() {
     .addEventListener("click", togglePanelVisibility);
 
   function togglePanelVisibility() {
-    toggleDisplay(panel);
+    panel.hidden = !panel.hidden;
     if (gIsCertError) {
       // Toggling the advanced panel must ensure that the debugging
       // information panel is hidden as well, since it's opened by the
       // error code link in the advanced panel.
-      var div = document.getElementById("certificateErrorDebugInformation");
-      div.style.display = "none";
+      toggleCertErrorDebugInfoVisibility(false);
     }
 
     if (panel.style.display == "block") {
@@ -177,12 +173,7 @@ function setupAdvancedButton() {
   }
 
   if (getCSSClass() == "expertBadCert") {
-    toggleDisplay(document.getElementById("badCertAdvancedPanel"));
-    // Toggling the advanced panel must ensure that the debugging
-    // information panel is hidden as well, since it's opened by the
-    // error code link in the advanced panel.
-    var div = document.getElementById("certificateErrorDebugInformation");
-    div.style.display = "none";
+    panel.hidden = false;
   }
 
   disallowCertOverridesIfNeeded();
@@ -257,28 +248,11 @@ function initPage() {
     });
   }
 
-  var err = getErrorCode();
-  // List of error pages with an illustration.
-  let illustratedErrors = [
-    "malformedURI",
-    "dnsNotFound",
-    "connectionFailure",
-    "netInterrupt",
-    "netTimeout",
-    "netReset",
-    "netOffline",
-  ];
-  if (
-    illustratedErrors.includes(err) &&
-    !RPMGetBoolPref("browser.proton.enabled")
-  ) {
-    document.body.classList.add("illustrated", err);
-  }
+  var err = gErrorCode;
   if (err == "blockedByPolicy") {
     document.body.classList.add("blocked");
   }
 
-  gIsCertError = err == "nssBadCert";
   // Only worry about captive portals if this is a cert error.
   let showCaptivePortalUI = isCaptive() && gIsCertError;
   if (showCaptivePortalUI) {
@@ -324,7 +298,6 @@ function initPage() {
       initPageCaptivePortal();
     } else {
       initPageCertError();
-      updateContainerPosition();
     }
 
     initCertErrorPageActions();
@@ -350,12 +323,6 @@ function initPage() {
   // remove undisplayed errors to avoid bug 39098
   var errContainer = document.getElementById("errorContainer");
   errContainer.remove();
-
-  if (err == "remoteXUL") {
-    // Remove the "Try again" button for remote XUL errors given that
-    // it is useless.
-    document.getElementById("netErrorButtonContainer").style.display = "none";
-  }
 
   let learnMoreLink = document.getElementById("learnMoreLink");
   learnMoreLink.setAttribute("href", baseURL + "connection-not-secure");
@@ -396,51 +363,33 @@ function initPage() {
     document.getElementById("learnMoreContainer").style.display = "block";
 
     const errorCode = document.getNetErrorInfo().errorCodeString;
-    const isTlsVersionError =
-      errorCode == "SSL_ERROR_UNSUPPORTED_VERSION" ||
-      errorCode == "SSL_ERROR_PROTOCOL_VERSION_ALERT";
-    const tls10OverrideEnabled = RPMGetBoolPref(
-      "security.tls.version.enable-deprecated"
-    );
 
     if (
-      isTlsVersionError &&
-      !tls10OverrideEnabled &&
-      !RPMPrefIsLocked("security.tls.version.min")
+      errorCode == "SSL_ERROR_UNSUPPORTED_VERSION" ||
+      errorCode == "SSL_ERROR_PROTOCOL_VERSION_ALERT"
     ) {
-      // security.tls.* prefs may be reset by the user when they
-      // encounter an error, so it's important that this has a
-      // different pref branch.
-      const showOverride = RPMGetBoolPref(
-        "security.certerrors.tls.version.show-override",
-        true
-      );
+      document.getElementById("tlsVersionNotice").hidden = false;
+    }
 
-      // This is probably a TLS 1.0 server; offer to re-enable.
-      if (showOverride) {
-        showTls10Container();
-      }
-    } else {
-      const hasPrefStyleError = [
-        "interrupted", // This happens with subresources that are above the max tls
-        "SSL_ERROR_NO_CIPHERS_SUPPORTED",
-        "SSL_ERROR_NO_CYPHER_OVERLAP",
-        "SSL_ERROR_PROTOCOL_VERSION_ALERT",
-        "SSL_ERROR_SSL_DISABLED",
-        "SSL_ERROR_UNSUPPORTED_VERSION",
-      ].some(substring => {
-        return substring == errorCode;
+    const hasPrefStyleError = [
+      "interrupted", // This happens with subresources that are above the max tls
+      "SSL_ERROR_NO_CIPHERS_SUPPORTED",
+      "SSL_ERROR_NO_CYPHER_OVERLAP",
+      "SSL_ERROR_PROTOCOL_VERSION_ALERT",
+      "SSL_ERROR_SSL_DISABLED",
+      "SSL_ERROR_UNSUPPORTED_VERSION",
+    ].some(substring => {
+      return substring == errorCode;
+    });
+
+    if (hasPrefStyleError) {
+      RPMAddMessageListener("HasChangedCertPrefs", msg => {
+        if (msg.data.hasChangedCertPrefs) {
+          // Configuration overrides might have caused this; offer to reset.
+          showPrefChangeContainer();
+        }
       });
-
-      if (hasPrefStyleError) {
-        RPMAddMessageListener("HasChangedCertPrefs", msg => {
-          if (msg.data.hasChangedCertPrefs) {
-            // Configuration overrides might have caused this; offer to reset.
-            showPrefChangeContainer();
-          }
-        });
-        RPMSendAsyncMessage("GetChangedCertPrefs");
-      }
+      RPMSendAsyncMessage("GetChangedCertPrefs");
     }
   }
 
@@ -494,7 +443,7 @@ function reportBlockingError() {
     return;
   }
 
-  let err = getErrorCode();
+  let err = gErrorCode;
   // Ensure we only deal with XFO and CSP here.
   if (!["xfoBlocked", "cspBlocked"].includes(err)) {
     return;
@@ -521,8 +470,11 @@ function reportBlockingError() {
     csp_header,
   };
 
+  // Trimming the tail colon symbol.
+  let scheme = document.location.protocol.slice(0, -1);
+
   RPMSendAsyncMessage("ReportBlockingError", {
-    scheme: document.location.protocol,
+    scheme,
     host: document.location.host,
     port: parseInt(document.location.port) || -1,
     path: document.location.pathname,
@@ -585,28 +537,6 @@ async function setNetErrorMessageFromCode() {
   document.l10n.setAttributes(desc2, "cert-error-code-prefix", {
     error: errorCodeStr,
   });
-}
-
-// This function centers the error container after its content updates.
-// It is currently duplicated in NetErrorChild.jsm to avoid having to do
-// async communication to the page that would result in flicker.
-// TODO(johannh): Get rid of this duplication.
-function updateContainerPosition() {
-  let textContainer = document.getElementById("text-container");
-  // Using the vh CSS property our margin adapts nicely to window size changes.
-  // Unfortunately, this doesn't work correctly in iframes, which is why we need
-  // to manually compute the height there.
-  if (window.parent == window) {
-    textContainer.style.marginTop = `calc(50vh - ${textContainer.clientHeight /
-      2}px)`;
-  } else {
-    let offset =
-      document.documentElement.clientHeight / 2 -
-      textContainer.clientHeight / 2;
-    if (offset > 0) {
-      textContainer.style.marginTop = `${offset}px`;
-    }
-  }
 }
 
 function initPageCaptivePortal() {
@@ -793,7 +723,7 @@ function setCertErrorDetails(event) {
   let es = document.getElementById("errorWhatToDoText");
   let errWhatToDoTitle = document.getElementById("edd_nssBadCert");
   let est = document.getElementById("errorWhatToDoTitleText");
-  let error = getErrorCode();
+  let error = gErrorCode;
 
   if (error == "sslv3Used") {
     learnMoreLink.setAttribute("href", baseURL + "sslv3-error-messages");
@@ -829,7 +759,6 @@ function setCertErrorDetails(event) {
         // eslint-disable-next-line no-unsanitized/property
         est.innerHTML = errWhatToDoTitle.innerHTML;
       }
-      updateContainerPosition();
       break;
 
     // This error code currently only exists for the Symantec distrust
@@ -854,7 +783,6 @@ function setCertErrorDetails(event) {
       );
 
       learnMoreLink.href = baseURL + "symantec-warning";
-      updateContainerPosition();
       break;
 
     case "MOZILLA_PKIX_ERROR_MITM_DETECTED":
@@ -887,8 +815,6 @@ function setCertErrorDetails(event) {
       es.innerHTML = errWhatToDo.innerHTML;
       // eslint-disable-next-line no-unsanitized/property
       est.innerHTML = errWhatToDoTitle.innerHTML;
-
-      updateContainerPosition();
       break;
 
     case "MOZILLA_PKIX_ERROR_SELF_SIGNED_CERT":
@@ -952,7 +878,7 @@ function setCertErrorDetails(event) {
         "wrongSystemTime_systemDate1"
       ).textContent = systemDate;
       if (clockSkew) {
-        document.body.classList.add("illustrated", "clockSkewError");
+        document.body.classList.add("clockSkewError");
         document.l10n.setAttributes(titleElement, "clockSkewError-title");
         let clockErrDesc = document.getElementById("ed_clockSkewError");
         desc = document.getElementById("errorShortDescText");
@@ -961,10 +887,6 @@ function setCertErrorDetails(event) {
           // eslint-disable-next-line no-unsanitized/property
           desc.innerHTML = clockErrDesc.innerHTML;
         }
-        let errorPageContainer = document.getElementById("errorPageContainer");
-        let textContainer = document.getElementById("text-container");
-        errorPageContainer.style.backgroundPosition = `left top calc(50vh - ${textContainer.clientHeight /
-          2}px)`;
       } else {
         let targetElems = document.querySelectorAll(
           "#wrongSystemTime_systemDate2"
@@ -1014,26 +936,8 @@ function setCertErrorDetails(event) {
           est.textContent = errWhatToDoTitle.textContent;
           est.style.fontWeight = "bold";
         }
-        updateContainerPosition();
       }
       break;
-  }
-
-  // Add slightly more alarming UI unless there are indicators that
-  // show that the error is harmless or can not be skipped anyway.
-  let cssClass = getCSSClass();
-  // Don't alarm users when they can't continue to the website anyway...
-  if (
-    cssClass != "badStsCert" &&
-    // Errors in iframes can't be skipped either...
-    window.parent == window &&
-    // Also don't bother if it's just the user's clock being off...
-    !clockSkew &&
-    // Symantec distrust is likely harmless as well.
-    failedCertInfo.errorCodeString !=
-      "MOZILLA_PKIX_ERROR_ADDITIONAL_POLICY_CONSTRAINT_FAILED"
-  ) {
-    document.body.classList.add("caution");
   }
 }
 
@@ -1069,7 +973,7 @@ async function setTechnicalDetailsOnCertError(
   }
 
   let cssClass = getCSSClass();
-  let error = getErrorCode();
+  let error = gErrorCode;
 
   let hostString = HOST_NAME;
   let port = document.location.port;
@@ -1186,10 +1090,7 @@ async function setTechnicalDetailsOnCertError(
             // Toggling the advanced panel must ensure that the debugging
             // information panel is hidden as well, since it's opened by the
             // error code link in the advanced panel.
-            let div = document.getElementById(
-              "certificateErrorDebugInformation"
-            );
-            div.style.display = "none";
+            toggleCertErrorDebugInfoVisibility(false);
           }
         }
 
@@ -1237,6 +1138,7 @@ async function setTechnicalDetailsOnCertError(
       id: "errorCode",
       "data-l10n-name": "error-code-link",
       "data-telemetry-id": "error_code_link",
+      href: "#certificateErrorDebugInformation",
     },
     false
   );
@@ -1256,10 +1158,8 @@ function handleErrorCodeClick(event) {
   if (event.target.id !== "errorCode") {
     return;
   }
-
-  let debugInfo = document.getElementById("certificateErrorDebugInformation");
-  debugInfo.style.display = "block";
-  debugInfo.scrollIntoView({ block: "start", behavior: "smooth" });
+  event.preventDefault();
+  toggleCertErrorDebugInfoVisibility();
   recordClickTelemetry(event);
 }
 

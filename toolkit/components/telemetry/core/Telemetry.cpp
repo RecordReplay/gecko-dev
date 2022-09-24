@@ -24,11 +24,15 @@
 #include "jsfriendapi.h"
 #include "js/Array.h"  // JS::NewArrayObject
 #include "js/GCAPI.h"
+#include "js/PropertyAndElement.h"  // JS_DefineElement, JS_DefineProperty
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/BackgroundHangMonitor.h"
+#ifdef MOZ_BACKGROUNDTASKS
+#  include "mozilla/BackgroundTasks.h"
+#endif
 #include "mozilla/Components.h"
 #include "mozilla/DataMutex.h"
 #include "mozilla/DebugOnly.h"
@@ -173,7 +177,7 @@ class TelemetryImpl final : public nsITelemetry, public nsIMemoryReporter {
   static StaticDataMutex<TelemetryImpl*> sTelemetry;
   AutoHashtable<SlowSQLEntryType> mPrivateSQL;
   AutoHashtable<SlowSQLEntryType> mSanitizedSQL;
-  Mutex mHashMutex;
+  Mutex mHashMutex MOZ_UNANNOTATED;
   Atomic<bool, SequentiallyConsistent> mCanRecordBase;
   Atomic<bool, SequentiallyConsistent> mCanRecordExtended;
 
@@ -1143,6 +1147,12 @@ already_AddRefed<nsITelemetry> TelemetryImpl::CreateTelemetryInstance() {
       // (e.g. garbage collections).
       !recordreplay::IsRecordingOrReplaying()) {
     useTelemetry = true;
+  }
+#endif
+#ifdef MOZ_BACKGROUNDTASKS
+  if (BackgroundTasks::IsBackgroundTaskMode()) {
+    // Background tasks collect per-task metrics with Glean.
+    useTelemetry = false;
   }
 #endif
 

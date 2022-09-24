@@ -6,12 +6,18 @@
 
 #include "AbortController.h"
 #include "AbortSignal.h"
+#include "js/Value.h"
 #include "mozilla/dom/AbortControllerBinding.h"
+#include "mozilla/dom/BindingUtils.h"
+#include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/HoldDropJSObjects.h"
 
 namespace mozilla::dom {
 
-NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(AbortController, mGlobal, mSignal)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_WITH_JS_MEMBERS(AbortController,
+                                                      (mGlobal, mSignal),
+                                                      (mReason))
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(AbortController)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(AbortController)
@@ -35,7 +41,9 @@ already_AddRefed<AbortController> AbortController::Constructor(
 }
 
 AbortController::AbortController(nsIGlobalObject* aGlobal)
-    : mGlobal(aGlobal), mAborted(false) {}
+    : mGlobal(aGlobal), mAborted(false), mReason(JS::UndefinedHandleValue) {
+  mozilla::HoldJSObjects(this);
+}
 
 JSObject* AbortController::WrapObject(JSContext* aCx,
                                       JS::Handle<JSObject*> aGivenProto) {
@@ -46,13 +54,14 @@ nsIGlobalObject* AbortController::GetParentObject() const { return mGlobal; }
 
 AbortSignal* AbortController::Signal() {
   if (!mSignal) {
-    mSignal = new AbortSignal(mGlobal, mAborted);
+    JS::Rooted<JS::Value> reason(RootingCx(), mReason);
+    mSignal = new AbortSignal(mGlobal, mAborted, reason);
   }
 
   return mSignal;
 }
 
-void AbortController::Abort() {
+void AbortController::Abort(JSContext* aCx, JS::Handle<JS::Value> aReason) {
   if (mAborted) {
     return;
   }
@@ -60,8 +69,12 @@ void AbortController::Abort() {
   mAborted = true;
 
   if (mSignal) {
-    mSignal->SignalAbort();
+    mSignal->SignalAbort(aReason);
+  } else {
+    mReason = aReason;
   }
 }
+
+AbortController::~AbortController() { mozilla::DropJSObjects(this); }
 
 }  // namespace mozilla::dom

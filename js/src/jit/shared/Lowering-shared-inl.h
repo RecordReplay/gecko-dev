@@ -494,14 +494,16 @@ LAllocation LIRGeneratorShared::useAnyOrInt32Constant(MDefinition* mir) {
 }
 
 LAllocation LIRGeneratorShared::useRegisterOrZero(MDefinition* mir) {
-  if (mir->isConstant() && mir->toConstant()->isInt32(0)) {
+  if (mir->isConstant() &&
+      (mir->toConstant()->isInt32(0) || mir->toConstant()->isInt64(0))) {
     return LAllocation();
   }
   return useRegister(mir);
 }
 
 LAllocation LIRGeneratorShared::useRegisterOrZeroAtStart(MDefinition* mir) {
-  if (mir->isConstant() && mir->toConstant()->isInt32(0)) {
+  if (mir->isConstant() &&
+      (mir->toConstant()->isInt32(0) || mir->toConstant()->isInt64(0))) {
     return LAllocation();
   }
   return useRegisterAtStart(mir);
@@ -516,7 +518,8 @@ LAllocation LIRGeneratorShared::useRegisterOrNonDoubleConstant(
   return useRegister(mir);
 }
 
-#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64)
+#if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_ARM64) || \
+    defined(JS_CODEGEN_LOONG64)
 LAllocation LIRGeneratorShared::useAnyOrConstant(MDefinition* mir) {
   return useRegisterOrConstant(mir);
 }
@@ -858,6 +861,27 @@ LInt64Allocation LIRGeneratorShared::useInt64RegisterOrConstant(
 #endif
   }
   return useInt64Register(mir, useAtStart);
+}
+
+LInt64Allocation LIRGeneratorShared::useInt64RegisterAtStart(MDefinition* mir) {
+  return useInt64Register(mir, /* useAtStart = */ true);
+}
+
+LInt64Allocation LIRGeneratorShared::useInt64RegisterOrConstantAtStart(
+    MDefinition* mir) {
+  return useInt64RegisterOrConstant(mir, /* useAtStart = */ true);
+}
+
+LInt64Allocation LIRGeneratorShared::useInt64OrConstantAtStart(
+    MDefinition* mir) {
+  return useInt64OrConstant(mir, /* useAtStart = */ true);
+}
+
+void LIRGeneratorShared::lowerConstantDouble(double d, MInstruction* mir) {
+  define(new (alloc()) LDouble(d), mir);
+}
+void LIRGeneratorShared::lowerConstantFloat32(float f, MInstruction* mir) {
+  define(new (alloc()) LFloat32(f), mir);
 }
 
 }  // namespace jit

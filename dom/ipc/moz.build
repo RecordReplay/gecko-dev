@@ -13,9 +13,14 @@ XPIDL_SOURCES += [
     "nsIDOMProcessChild.idl",
     "nsIDOMProcessParent.idl",
     "nsIHangReport.idl",
+    "nsILoginDetectionService.idl",
 ]
 
 XPIDL_MODULE = "dom"
+
+XPCOM_MANIFESTS += [
+    "components.conf",
+]
 
 EXTRA_JS_MODULES += [
     "ManifestMessagesChild.jsm",
@@ -53,11 +58,13 @@ EXPORTS.mozilla.dom += [
     "FilePickerParent.h",
     "InProcessChild.h",
     "InProcessParent.h",
+    "LoginDetectionService.h",
     "MaybeDiscarded.h",
     "MemoryReportRequest.h",
     "NativeThreadId.h",
     "PermissionMessageUtils.h",
     "ProcessActor.h",
+    "ProcessIsolation.h",
     "PropertyBagUtils.h",
     "ReferrerInfoUtils.h",
     "RefMessageBodyService.h",
@@ -72,7 +79,9 @@ EXPORTS.mozilla.dom += [
     "URLClassifierParent.h",
     "UserActivationIPCUtils.h",
     "VsyncChild.h",
+    "VsyncMainChild.h",
     "VsyncParent.h",
+    "VsyncWorkerChild.h",
     "WindowGlobalActor.h",
     "WindowGlobalChild.h",
     "WindowGlobalParent.h",
@@ -105,12 +114,14 @@ UNIFIED_SOURCES += [
     "DocShellMessageUtils.cpp",
     "FilePickerParent.cpp",
     "InProcessImpl.cpp",
+    "LoginDetectionService.cpp",
     "MemMapSnapshot.cpp",
     "MemoryReportRequest.cpp",
     "MMPrinter.cpp",
     "PermissionMessageUtils.cpp",
     "PreallocatedProcessManager.cpp",
     "ProcessActor.cpp",
+    "ProcessIsolation.cpp",
     "ProcessPriorityManager.cpp",
     "PropertyBagUtils.cpp",
     "ReferrerInfoUtils.cpp",
@@ -133,8 +144,9 @@ UNIFIED_SOURCES += [
 SOURCES += [
     "ContentChild.cpp",
     "ProcessHangMonitor.cpp",
-    "VsyncChild.cpp",
+    "VsyncMainChild.cpp",
     "VsyncParent.cpp",
+    "VsyncWorkerChild.cpp",
 ]
 
 PREPROCESSED_IPDL_SOURCES += [
@@ -235,10 +247,8 @@ MOCHITEST_CHROME_MANIFESTS += ["tests/chrome.ini"]
 MOCHITEST_MANIFESTS += ["tests/mochitest.ini"]
 XPCSHELL_TESTS_MANIFESTS += ["tests/xpcshell.ini"]
 
-CXXFLAGS += CONFIG["TK_CFLAGS"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
 
 if CONFIG["FUZZING"] and CONFIG["FUZZING_INTERFACES"]:
     TEST_DIRS += ["fuzztest"]

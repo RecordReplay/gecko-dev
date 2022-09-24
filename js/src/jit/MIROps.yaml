@@ -319,6 +319,9 @@
 - name: ApplyArray
   gen_boilerplate: false
 
+- name: ConstructArgs
+  gen_boilerplate: false
+
 - name: ConstructArray
   gen_boilerplate: false
 
@@ -378,9 +381,6 @@
 - name: AssertShape
   gen_boilerplate: false
 
-- name: CreateThisWithTemplate
-  gen_boilerplate: false
-
 # Caller-side allocation of |this| for |new|:
 # Constructs |this| when possible, else MagicValue(JS_IS_CONSTRUCTING).
 - name: CreateThis
@@ -400,6 +400,9 @@
   gen_boilerplate: false
 
 - name: GetInlinedArgument
+  gen_boilerplate: false
+
+- name: GetInlinedArgumentHole
   gen_boilerplate: false
 
 - name: GetArgumentsObjectArg
@@ -431,6 +434,27 @@
   congruent_to: if_operands_equal
   alias_set: custom
 
+# Load |arguments[index]| from a mapped or unmapped arguments object. Bails out
+# if any elements were overridden or deleted. Returns undefined if the index is
+# out of bounds.
+- name: LoadArgumentsObjectArgHole
+  operands:
+    argsObject: Object
+    index: Int32
+  result_type: Value
+  guard: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: InArgumentsObjectArg
+  operands:
+    argsObject: Object
+    index: Int32
+  result_type: Boolean
+  guard: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
 # Load |arguments.length|. Bails out if the length has been overriden.
 - name: ArgumentsObjectLength
   operands:
@@ -443,6 +467,15 @@
   # a normal property load, so we can treat this operation like any other
   # property read.
   alias_set: custom
+
+# Create an array from an arguments object.
+- name: ArrayFromArgumentsObject
+  operands:
+    argsObject: Object
+  arguments:
+    shape: Shape*
+  result_type: Object
+  possibly_calls: true
 
 # Guard that the given flags are not set on the arguments object.
 - name: GuardArgumentsObjectFlags
@@ -573,6 +606,19 @@
 - name: TypeOf
   gen_boilerplate: false
 
+- name: TypeOfName
+  operands:
+    input: Int32
+  result_type: String
+  movable: true
+  folds_to: custom
+  congruent_to: if_operands_equal
+  alias_set: none
+  can_recover: true
+
+- name: TypeOfIs
+  gen_boilerplate: false
+
 - name: ToAsyncIter
   operands:
     iterator: Object
@@ -656,7 +702,7 @@
 
 - name: Random
   result_type: Double
-  alias_set: none
+  alias_set: custom
   possibly_calls: true
   compute_range: custom
   can_recover: custom
@@ -783,7 +829,6 @@
     separator: String
   result_type: Object
   possibly_calls: true
-  congruent_to: if_operands_equal
   # Although this instruction returns a new array, we don't have to mark
   # it as store instruction, see also MNewArray.
   alias_set: none
@@ -808,16 +853,6 @@
     name: PropertyName*
   result_type: Value
   possibly_calls: true
-
-# Load an arrow function's |new.target| value.
-- name: ArrowNewTarget
-  operands:
-    callee: Object
-  result_type: Value
-  movable: true
-  congruent_to: if_operands_equal
-  # An arrow function's lexical |this| value is immutable.
-  alias_set: none
 
 - name: Phi
   gen_boilerplate: false
@@ -955,12 +990,10 @@
 - name: DynamicImport
   operands:
     specifier: Value
+    options: Value
   result_type: Object
 
 - name: Lambda
-  gen_boilerplate: false
-
-- name: LambdaArrow
   gen_boilerplate: false
 
 - name: FunctionWithProto
@@ -1190,6 +1223,44 @@
   result_type: Object
   possibly_calls: true
 
+# Array.prototype.slice on an arguments object.
+- name: ArgumentsSlice
+  operands:
+    object: Object
+    begin: Int32
+    end: Int32
+  arguments:
+    templateObj: JSObject*
+    initialHeap: gc::InitialHeap
+  result_type: Object
+  possibly_calls: true
+
+# Array.prototype.slice on an arguments object.
+- name: FrameArgumentsSlice
+  operands:
+    begin: Int32
+    count: Int32
+  arguments:
+    templateObj: JSObject*
+    initialHeap: gc::InitialHeap
+  result_type: Object
+  alias_set: none
+  possibly_calls: true
+
+# Array.prototype.slice on an inlined arguments object.
+- name: InlineArgumentsSlice
+  gen_boilerplate: false
+
+- name: NormalizeSliceTerm
+  operands:
+    value: Int32
+    length: Int32
+  result_type: Int32
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+  folds_to: custom
+
 # MArrayJoin doesn't override |getAliasSet()|, because Array.prototype.join
 # might coerce the elements of the Array to strings. This coercion might
 # cause the evaluation of JavaScript code.
@@ -1246,9 +1317,9 @@
 - name: HomeObjectSuperBase
   operands:
     homeObject: Object
-  result_type: Object
-  # May throw if [[Prototype]] is null
-  guard: true
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
   alias_set: custom
 
 - name: GetPropSuperCache
@@ -1276,7 +1347,6 @@
   guard: true
   movable: true
   congruent_to: custom
-  folds_to: custom
   alias_set: custom
 
 - name: GuardProto
@@ -1465,6 +1535,16 @@
   folds_to: custom
   alias_set: none
 
+- name: GuardIsNotObject
+  operands:
+    value: Value
+  result_type: Value
+  guard: true
+  movable: true
+  congruent_to: if_operands_equal
+  folds_to: custom
+  alias_set: none
+
 - name: GuardFunctionFlags
   gen_boilerplate: false
 
@@ -1611,6 +1691,15 @@
   possibly_calls: true
   alias_set: custom
 
+- name: NewVarEnvironmentObject
+  operands:
+    enclosing: Object
+  arguments:
+    scope: VarScope*
+  result_type: Object
+  possibly_calls: true
+  alias_set: none
+
 - name: HomeObject
   operands:
     function: Object
@@ -1633,6 +1722,14 @@
   possibly_calls: true
   alias_set: custom
 
+- name: AddSlotAndCallAddPropHook
+  operands:
+    object: Object
+    value: Value
+  arguments:
+    shape: Shape*
+  possibly_calls: true
+
 - name: StoreDynamicSlot
   gen_boilerplate: false
 
@@ -1646,7 +1743,6 @@
     name: PropertyName*
   result_type: Value
   possibly_calls: true
-  alias_set: none
 
 - name: DeleteProperty
   operands: 
@@ -1678,6 +1774,11 @@
 
 - name: GetDOMMember
   gen_boilerplate: false
+
+- name: ValueToIterator
+  operands:
+    value: Value
+  result_type: Object
 
 # Load the private value expando from a DOM proxy. The target is stored in the
 # proxy object's private slot.
@@ -1750,7 +1851,7 @@
 - name: OptimizeSpreadCallCache
   operands:
     value: Value
-  result_type: Boolean
+  result_type: Value
 
 - name: IteratorMore
   operands:
@@ -1777,6 +1878,12 @@
 
 - name: GuardElementNotHole
   gen_boilerplate: false
+
+- name: NewPrivateName
+  arguments:
+    name: JSAtom*
+  result_type: Symbol
+  possibly_calls: true
 
 - name: CheckPrivateFieldCache
   gen_boilerplate: false
@@ -1814,6 +1921,21 @@
   # write to the argument frames. We create an arguments object in that case.
   alias_set: none
 
+# This MIR instruction is used to get an argument from the actual arguments.
+# Returns undefined if |index| is larger-or-equals to |length|. Bails out if
+# |index| is negative.
+- name: GetFrameArgumentHole
+  operands:
+    index: Int32
+    length: Int32
+  result_type: Value
+  guard: true
+  movable: true
+  congruent_to: if_operands_equal
+  # This instruction is never aliased, because ops like JSOp::SetArg don't
+  # write to the argument frames. We create an arguments object in that case.
+  alias_set: none
+
 - name: NewTarget
   result_type: Value
   movable: true
@@ -1829,6 +1951,7 @@
   result_type: Object
   possibly_calls: true
   alias_set: none
+  can_recover: true
 
 - name: PostWriteBarrier
   gen_boilerplate: false
@@ -1891,6 +2014,9 @@
 - name: GuardToClass
   gen_boilerplate: false
 
+- name: GuardToFunction
+  gen_boilerplate: false
+
 - name: IsArray
   gen_boilerplate: false
 
@@ -1915,7 +2041,8 @@
     thisValue: Value
   result_type: Value
   guard: true
-  alias_set: none
+  folds_to: custom
+  alias_set: custom
 
 - name: CheckThis
   operands: 
@@ -1923,7 +2050,7 @@
   result_type: Value
   guard: true
   folds_to: custom
-  alias_set: none
+  alias_set: custom
 
 - name: AsyncResolve
   operands:
@@ -1955,7 +2082,7 @@
   result_type: Value
   guard: true
   folds_to: custom
-  alias_set: none
+  alias_set: custom
 
 - name: Generator
   gen_boilerplate: false
@@ -2069,6 +2196,8 @@
   operands: 
     callee: Object
   result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
   alias_set: custom
 
 - name: InitHomeObject
@@ -2240,10 +2369,223 @@
 - name: RecordReplayAssertValue
   gen_boilerplate: false
 
+- name: GuardNonGCThing
+  operands:
+    input: Value
+  result_type: Value
+  guard: true
+  movable: true
+  congruent_to: if_operands_equal
+  folds_to: custom
+  alias_set: none
+
+- name: ToHashableNonGCThing
+  operands:
+    input: Value
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+
+- name: ToHashableString
+  operands:
+    input: String
+  result_type: String
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+  possibly_calls: true
+
+- name: ToHashableValue
+  operands:
+    input: Value
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+  possibly_calls: true
+
+- name: HashNonGCThing
+  operands:
+    input: Value
+  result_type: Int32
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+
+- name: HashString
+  operands:
+    input: String
+  result_type: Int32
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+
+- name: HashSymbol
+  operands:
+    input: Symbol
+  result_type: Int32
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+
+- name: HashBigInt
+  operands:
+    input: BigInt
+  result_type: Int32
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: none
+
+- name: HashObject
+  operands:
+    set: Object
+    input: Value
+  result_type: Int32
+  # In contrast to the previous hash operations, we can't move this
+  # instruction, because the hashcode is computed from the object's address,
+  # which can change when the object is moved by the GC.
+  movable: false
+  alias_set: none
+
+- name: HashValue
+  operands:
+    set: Object
+    input: Value
+  result_type: Int32
+  movable: false
+  alias_set: none
+
+- name: SetObjectHasNonBigInt
+  operands:
+    set: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: SetObjectHasBigInt
+  operands:
+    set: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: SetObjectHasValue
+  operands:
+    set: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: SetObjectHasValueVMCall
+  operands:
+    set: Object
+    value: Value
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+  possibly_calls: true
+
+- name: MapObjectHasNonBigInt
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectHasBigInt
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectHasValue
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectHasValueVMCall
+  operands:
+    map: Object
+    value: Value
+  result_type: Boolean
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+  possibly_calls: true
+
+- name: MapObjectGetNonBigInt
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectGetBigInt
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectGetValue
+  operands:
+    map: Object
+    value: Value
+    hash: Int32
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+
+- name: MapObjectGetValueVMCall
+  operands:
+    map: Object
+    value: Value
+  result_type: Value
+  movable: true
+  congruent_to: if_operands_equal
+  alias_set: custom
+  possibly_calls: true
+
 - name: WasmNeg
   gen_boilerplate: false
 
-- name: WasmLoadTls
+- name: WasmBinaryBitwise
+  gen_boilerplate: false
+
+- name: WasmLoadInstance
+  gen_boilerplate: false
+
+- name: WasmStoreInstance
   gen_boilerplate: false
 
 - name: WasmHeapBase
@@ -2310,6 +2652,9 @@
 - name: WasmLoadGlobalCell
   gen_boilerplate: false
 
+- name: WasmLoadTableElement
+  gen_boilerplate: false
+
 - name: WasmStoreGlobalVar
   gen_boilerplate: false
 
@@ -2320,6 +2665,9 @@
   gen_boilerplate: false
 
 - name: WasmDerivedPointer
+  gen_boilerplate: false
+
+- name: WasmDerivedIndexPointer
   gen_boilerplate: false
 
 - name: WasmStoreRef
@@ -2352,7 +2700,13 @@
 - name: WasmStackResult
   gen_boilerplate: false
 
-- name: WasmCall
+- name: WasmCallCatchable
+  gen_boilerplate: false
+
+- name: WasmCallUncatchable
+  gen_boilerplate: false
+
+- name: WasmCallLandingPrePad
   gen_boilerplate: false
 
 - name: WasmSelect
@@ -2362,9 +2716,6 @@
   gen_boilerplate: false
 
 - name: Rotate
-  gen_boilerplate: false
-
-- name: WasmBitselectSimd128
   gen_boilerplate: false
 
 - name: WasmBinarySimd128
@@ -2393,7 +2744,7 @@
     lhs: Simd128
     rhs: Simd128
   arguments:
-    control: SimdConstant
+    shuffle: SimdShuffle
   type_policy: none
   result_type: Simd128
   movable: true
@@ -2416,6 +2767,9 @@
   alias_set: none
   clone: true
 
+- name: WasmTernarySimd128
+  gen_boilerplate: false
+
 - name: WasmScalarToSimd128
   gen_boilerplate: false
 
@@ -2432,4 +2786,16 @@
   gen_boilerplate: false
 
 - name: IonToWasmCall
+  gen_boilerplate: false
+
+- name: WasmLoadObjectField
+  gen_boilerplate: false
+
+- name: WasmLoadObjectDataField
+  gen_boilerplate: false
+
+- name: WasmStoreObjectDataField
+  gen_boilerplate: false
+
+- name: WasmStoreObjectDataRefField
   gen_boilerplate: false

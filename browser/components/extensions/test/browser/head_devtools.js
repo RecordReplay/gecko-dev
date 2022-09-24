@@ -14,7 +14,7 @@
 ChromeUtils.defineModuleGetter(
   this,
   "loader",
-  "resource://devtools/shared/Loader.jsm"
+  "resource://devtools/shared/loader/Loader.jsm"
 );
 XPCOMUtils.defineLazyGetter(this, "gDevTools", () => {
   const { gDevTools } = loader.require("devtools/client/framework/devtools");
@@ -37,7 +37,7 @@ async function registerBlankToolboxPanel() {
     id: TOOLBOX_BLANK_PANEL_ID,
     url: "about:blank",
     label: "Blank Tool",
-    isTargetSupported() {
+    isToolSupported() {
       return true;
     },
     build(iframeWindow, toolbox) {
@@ -78,19 +78,9 @@ async function openToolboxForTab(tab, panelId = TOOLBOX_BLANK_PANEL_ID) {
 }
 
 async function closeToolboxForTab(tab) {
-  const toolbox = await gDevTools.getToolboxForTab(tab);
-  const target = toolbox.target;
-  const { url, outerWindowID } = target.form;
-
   await gDevTools.closeToolboxForTab(tab);
-  await target.destroy();
-
-  info(
-    `Developer toolbox closed for target ${JSON.stringify({
-      url,
-      outerWindowID,
-    })}`
-  );
+  const tabUrl = tab.linkedBrowser.currentURI.spec;
+  info(`Developer toolbox closed for tab "${tabUrl}"`);
 }
 
 function assertDevToolsExtensionEnabled(uuid, enabled) {

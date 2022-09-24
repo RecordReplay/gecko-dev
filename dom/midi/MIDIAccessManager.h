@@ -11,8 +11,7 @@
 #include "mozilla/dom/MIDITypes.h"
 #include "mozilla/Observer.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class MIDIAccess;
 class MIDIManagerChild;
@@ -46,11 +45,13 @@ class MIDIAccessManager final {
   // True if manager singleton has been created
   static bool IsRunning();
   // Send device connection updates to all known MIDIAccess objects.
-  void Update(const MIDIPortList& aEvent);
+  void Update(const MIDIPortList& aPortList);
   // Adds a device update observer (usually a MIDIAccess object)
   bool AddObserver(Observer<MIDIPortList>* aObserver);
   // Removes a device update observer (usually a MIDIAccess object)
   void RemoveObserver(Observer<MIDIPortList>* aObserver);
+  // Requests the service to update the list of devices
+  void SendRefresh();
 
  private:
   MIDIAccessManager();
@@ -69,7 +70,6 @@ class MIDIAccessManager final {
   RefPtr<MIDIManagerChild> mChild;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_MIDIAccessManager_h

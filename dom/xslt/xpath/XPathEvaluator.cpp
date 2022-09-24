@@ -26,8 +26,7 @@
 #include "txIXPathContext.h"
 #include "txURIUtils.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // txIParseContext implementation
 class XPathEvaluatorParseContext : public txIParseContext {
@@ -171,7 +170,7 @@ nsresult XPathEvaluatorParseContext::resolveNamespacePrefix(nsAtom* aPrefix,
   }
 
   // get the namespaceID for the URI
-  return nsContentUtils::NameSpaceManager()->RegisterNameSpace(ns, aID);
+  return nsNameSpaceManager::GetInstance()->RegisterNameSpace(ns, aID);
 }
 
 nsresult XPathEvaluatorParseContext::resolveFunctionCall(nsAtom* aName,
@@ -186,5 +185,4 @@ bool XPathEvaluatorParseContext::caseInsensitiveNameTests() {
 
 void XPathEvaluatorParseContext::SetErrorOffset(uint32_t aOffset) {}
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
-const TEST_URI = `data:text/html;charset=utf8,<script>console.group('hello')</script>`;
+const TEST_URI = `data:text/html;charset=utf8,<!DOCTYPE html><script>console.group('hello')</script>`;
 
 add_task(async function() {
   // Enable persist logs
@@ -12,21 +12,21 @@ add_task(async function() {
     "Open the console and wait for the console.group message to be rendered"
   );
   const hud = await openNewTabAndConsole(TEST_URI);
-  await waitFor(() => findMessage(hud, "hello", ".startGroup"));
+  await waitFor(() => findConsoleAPIMessage(hud, "hello", ".startGroup"));
 
   info("Refresh tab several times and check for correct message indentation");
   for (let i = 0; i < 5; i++) {
-    await refreshTabAndCheckIndent(hud);
+    await reloadBrowserAndCheckIndent(hud);
   }
 });
 
-async function refreshTabAndCheckIndent(hud) {
-  const onMessage = waitForMessage(hud, "hello", ".startGroup");
-  await refreshTab();
+async function reloadBrowserAndCheckIndent(hud) {
+  const onMessage = waitForMessageByType(hud, "hello", ".startGroup");
+  await reloadBrowser();
   const { node } = await onMessage;
 
   is(
-    node.querySelector(".indent").getAttribute("data-indent"),
+    node.getAttribute("data-indent"),
     "0",
     "The message has the expected indent"
   );

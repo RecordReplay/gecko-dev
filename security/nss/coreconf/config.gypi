@@ -136,6 +136,7 @@
     'coverage%': 0,
     'softfp_cflags%': '',
     'enable_draft_hpke%': 0,
+    'force_integrated_as%': 0,
   },
   'target_defaults': {
     # Settings specific to targets should go here.
@@ -370,7 +371,7 @@
               '_DEFAULT_SOURCE', # for <endian.h> functions, strdup, realpath, and getentropy
               '_BSD_SOURCE', # for the above in glibc <= 2.19
               '_POSIX_SOURCE', # for <signal.h>
-              'SQL_MEASURE_USE_TEMP_DIR', # use tmpdir for the access calls
+              'SDB_MEASURE_USE_TEMP_DIR', # use tmpdir for the access calls
             ],
           }],
           [ 'OS=="dragonfly" or OS=="freebsd"', {

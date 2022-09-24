@@ -6,8 +6,10 @@
 
 #ifdef ACCESSIBILITY
 #  include "mozilla/a11y/DocAccessibleParent.h"
+#  include "nsAccessibilityService.h"
 #endif
 
+#include "mozilla/Monitor.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/dom/BrowserBridgeParent.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -34,6 +36,8 @@ nsresult BrowserBridgeParent::InitWithProcess(
     const WindowGlobalInit& aWindowInit, uint32_t aChromeFlags, TabId aTabId) {
   MOZ_ASSERT(!CanSend(),
              "This should be called before the object is connected to IPC");
+  MOZ_DIAGNOSTIC_ASSERT(!aContentParent->IsLaunching());
+  MOZ_DIAGNOSTIC_ASSERT(!aContentParent->IsDead());
 
   RefPtr<CanonicalBrowsingContext> browsingContext =
       CanonicalBrowsingContext::Get(aWindowInit.context().mBrowsingContextId);
@@ -45,6 +49,10 @@ nsresult BrowserBridgeParent::InitWithProcess(
       !browsingContext->GetBrowserParent(),
       "BrowsingContext must have had previous BrowserParent cleared");
 
+  MOZ_DIAGNOSTIC_ASSERT(
+      aParentBrowser->Manager() != aContentParent,
+      "Cannot create OOP iframe in the same process as its parent document");
+
   // Unfortunately, due to the current racy destruction of BrowsingContext
   // instances when Fission is enabled, while `browsingContext` may not be
   // discarded, an ancestor might be.
@@ -54,12 +62,8 @@ nsresult BrowserBridgeParent::InitWithProcess(
   //
   // FIXME: We should never have a non-discarded BrowsingContext with discarded
   // ancestors. (bug 1634759)
-  CanonicalBrowsingContext* ancestor = browsingContext->GetParent();
-  while (ancestor) {
-    if (NS_WARN_IF(ancestor->IsDiscarded())) {
-      return NS_ERROR_UNEXPECTED;
-    }
-    ancestor = ancestor->GetParent();
+  if (NS_WARN_IF(!browsingContext->AncestorsAreCurrent())) {
+    return NS_ERROR_UNEXPECTED;
   }
 
   // Ensure that our content process is subscribed to our newly created
@@ -81,6 +85,9 @@ nsresult BrowserBridgeParent::InitWithProcess(
   }
 
   ContentProcessManager* cpm = ContentProcessManager::GetSingleton();
+  if (!cpm) {
+    return NS_ERROR_UNEXPECTED;
+  }
   cpm->RegisterRemoteFrame(browserParent);
 
   RefPtr<WindowGlobalParent> windowParent =
@@ -95,6 +102,9 @@ nsresult BrowserBridgeParent::InitWithProcess(
     MOZ_ASSERT(false, "WindowGlobal Open Endpoint Failed");
     return NS_ERROR_FAILURE;
   }
+
+  MOZ_DIAGNOSTIC_ASSERT(!browsingContext->IsDiscarded(),
+                        "bc cannot have become discarded");
 
   // Tell the content process to set up its PBrowserChild.
   bool ok = aContentParent->SendConstructBrowser(
@@ -138,10 +148,13 @@ void BrowserBridgeParent::Destroy() {
     mBrowserParent->SetBrowserBridgeParent(nullptr);
     mBrowserParent = nullptr;
   }
+  if (CanSend()) {
+    Unused << Send__delete__(this);
+  }
 }
 
 IPCResult BrowserBridgeParent::RecvShow(const OwnerShowInfo& aOwnerInfo) {
-  mBrowserParent->AttachLayerManager();
+  mBrowserParent->AttachWindowRenderer();
   Unused << mBrowserParent->SendShow(mBrowserParent->GetShowInfo(), aOwnerInfo);
   return IPC_OK();
 }
@@ -189,6 +202,11 @@ IPCResult BrowserBridgeParent::RecvRenderLayers(
 IPCResult BrowserBridgeParent::RecvNavigateByKey(
     const bool& aForward, const bool& aForDocumentNavigation) {
   Unused << mBrowserParent->SendNavigateByKey(aForward, aForDocumentNavigation);
+  return IPC_OK();
+}
+
+IPCResult BrowserBridgeParent::RecvBeginDestroy() {
+  Destroy();
   return IPC_OK();
 }
 
@@ -252,10 +270,26 @@ a11y::DocAccessibleParent* BrowserBridgeParent::GetDocAccessibleParent() {
 
 IPCResult BrowserBridgeParent::RecvSetEmbedderAccessible(
     PDocAccessibleParent* aDoc, uint64_t aID) {
-  MOZ_ASSERT(!mEmbedderAccessibleDoc || mEmbedderAccessibleDoc == aDoc,
-             "Embedder document shouldn't change");
+#  if defined(ANDROID)
+  MonitorAutoLock mal(nsAccessibilityService::GetAndroidMonitor());
+#  endif
+  MOZ_ASSERT(aDoc || mEmbedderAccessibleDoc,
+             "Embedder doc shouldn't be cleared if it wasn't set");
+  MOZ_ASSERT(!mEmbedderAccessibleDoc || !aDoc || mEmbedderAccessibleDoc == aDoc,
+             "Embedder doc shouldn't change from one doc to another");
+  if (!aDoc && mEmbedderAccessibleDoc &&
+      !mEmbedderAccessibleDoc->IsShutdown()) {
+    // We're clearing the embedder doc, so remove the pending child doc addition
+    // (if any).
+    mEmbedderAccessibleDoc->RemovePendingOOPChildDoc(this);
+  }
   mEmbedderAccessibleDoc = static_cast<a11y::DocAccessibleParent*>(aDoc);
   mEmbedderAccessibleID = aID;
+  if (!aDoc) {
+    MOZ_ASSERT(!aID);
+    return IPC_OK();
+  }
+  MOZ_ASSERT(aID);
   if (GetDocAccessibleParent()) {
     // The embedded DocAccessibleParent has already been created. This can
     // happen if, for example, an iframe is hidden and then shown or

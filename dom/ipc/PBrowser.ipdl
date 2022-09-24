@@ -12,11 +12,8 @@ include protocol PDocAccessible;
 #endif
 include protocol PFilePicker;
 include protocol PRemotePrintJob;
-include protocol PChildToParentStream;
-include protocol PParentToChildStream;
-include protocol PFileDescriptorSet;
-include protocol PRemoteLazyInputStream;
 include protocol PPaymentRequest;
+include protocol PSessionStore;
 include protocol PWindowGlobal;
 include protocol PBrowserBridge;
 include protocol PVsync;
@@ -46,7 +43,6 @@ include "mozilla/ipc/URIUtils.h";
 
 using struct nsID from "nsID.h";
 using mozilla::gfx::Matrix4x4 from "mozilla/gfx/Matrix.h";
-using mozilla::gfx::MaybeMatrix4x4 from "mozilla/gfx/Matrix.h";
 using mozilla::gfx::SurfaceFormat from "mozilla/gfx/Types.h";
 using mozilla::LayoutDeviceIntPoint from "Units.h";
 using mozilla::LayoutDevicePoint from "Units.h";
@@ -58,7 +54,6 @@ using struct mozilla::layers::ScrollableLayerGuid from "mozilla/layers/Scrollabl
 using struct mozilla::layers::ZoomConstraints from "mozilla/layers/ZoomConstraints.h";
 using mozilla::layers::LayersId from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::LayersObserverEpoch from "mozilla/layers/LayersTypes.h";
-using mozilla::layers::MaybeZoomConstraints from "mozilla/layers/ZoomConstraints.h";
 using mozilla::layers::GeckoContentController_TapType from "mozilla/layers/GeckoContentControllerTypes.h";
 using ScrollableLayerGuid::ViewID from "mozilla/layers/ScrollableLayerGuid.h";
 using struct mozilla::void_t from "mozilla/ipc/IPCCore.h";
@@ -85,16 +80,16 @@ using mozilla::layers::CompositorOptions from "mozilla/layers/CompositorOptions.
 using mozilla::CSSToScreenScale from "Units.h";
 using mozilla::CommandInt from "mozilla/EventForwards.h";
 using nsIWidget::TouchPointerState from "nsIWidget.h";
-using nsIWidget::TouchpadPinchPhase from "nsIWidget.h";
+using nsIWidget::TouchpadGesturePhase from "nsIWidget.h";
 using nsCursor from "nsIWidget.h";
 using struct LookAndFeelInt from "mozilla/widget/WidgetMessageUtils.h";
 using class mozilla::dom::MessagePort from "mozilla/dom/MessagePort.h";
 using class mozilla::dom::ipc::StructuredCloneData from "mozilla/dom/ipc/StructuredCloneData.h";
+using mozilla::dom::MaybeDiscardedWindowContext from "mozilla/dom/WindowContext.h";
 using mozilla::EventMessage from "mozilla/EventForwards.h";
 using nsEventStatus from "mozilla/EventForwards.h";
 using mozilla::Modifiers from "mozilla/EventForwards.h";
 using struct mozilla::widget::CandidateWindowPosition from "ipc/nsGUIEventIPC.h";
-using class mozilla::NativeEventData from "ipc/nsGUIEventIPC.h";
 using struct mozilla::FontRange from "ipc/nsGUIEventIPC.h";
 using mozilla::a11y::IAccessibleHolder from "mozilla/a11y/IPCTypes.h";
 using mozilla::OriginAttributes from "mozilla/ipc/BackgroundUtils.h";
@@ -110,6 +105,7 @@ using mozilla::dom::EmbedderElementEventType from "mozilla/dom/TabMessageTypes.h
 [RefCounted] using class nsDocShellLoadState from "nsDocShellLoadState.h";
 using mozilla::IntrinsicSize from "nsIFrame.h";
 using mozilla::AspectRatio from "mozilla/AspectRatio.h";
+using mozilla::NativeKeyBindingsType from "mozilla/NativeKeyBindingsType.h";
 
 namespace mozilla {
 namespace dom {
@@ -168,6 +164,9 @@ struct PrintPreviewResultInfo
   bool hasSelection;
   // Whether there's a selection in the previewed page, excluding its subframes.
   bool hasSelfSelection;
+  // If present, indicates if the page should be printed landscape when true or
+  // portrait when false;
+  bool? printLandscape;
 };
 
 /**
@@ -177,7 +176,7 @@ struct PrintPreviewResultInfo
  * See `dom/docs/Fission-IPC-Diagram.svg` for an overview of the DOM IPC
  * actors.
  */
-nested(upto inside_cpow) sync refcounted protocol PBrowser
+[NestedUpTo=inside_cpow] sync protocol PBrowser
 {
     manager PContent;
 
@@ -189,6 +188,7 @@ nested(upto inside_cpow) sync refcounted protocol PBrowser
 
     manages PFilePicker;
     manages PPaymentRequest;
+    manages PSessionStore;
     manages PWindowGlobal;
     manages PBrowserBridge;
     manages PVsync;
@@ -224,7 +224,15 @@ parent:
      */
     sync DispatchFocusToTopLevelWindow();
 
-parent:
+    /**
+     * When the child process unsuppresses painting, we send the message for the
+     * parent process to start painting the new document, if it's still painting
+     * the old one.
+     */
+    [Priority=control] async DidUnsuppressPainting();
+
+    async DidUnsuppressPaintingNormalPriority();
+
     /**
      * When child sends this message, parent should move focus to
      * the next or previous focusable element or document.
@@ -478,7 +486,7 @@ parent:
     /**
      * Retrieves edit commands for the key combination represented by aEvent.
      *
-     * @param aType       One of nsIWidget::NativeKeyBindingsType.
+     * @param aType       One of NativeKeyBindingsType.
      * @param aEvent      KeyboardEvent which represents a key combination.
      *                    Note that this must be a trusted event.
      * @return            Array of edit commands which should be executed in
@@ -514,7 +522,7 @@ parent:
                                      double aPointerPressure,
                                      uint32_t aPointerOrientation,
                                      uint64_t aObserverId);
-    async SynthesizeNativeTouchPadPinch(TouchpadPinchPhase aEventPhase,
+    async SynthesizeNativeTouchPadPinch(TouchpadGesturePhase aEventPhase,
                                         float aScale,
                                         LayoutDeviceIntPoint aPoint,
                                         int32_t aModifierFlags);
@@ -529,9 +537,15 @@ parent:
                                    uint32_t aRotation,
                                    int32_t aTiltX,
                                    int32_t aTiltY,
+                                   int32_t aButton,
                                    uint64_t aObserverId);
     async SynthesizeNativeTouchpadDoubleTap(LayoutDeviceIntPoint aPoint,
                                             uint32_t aModifierFlags);
+    async SynthesizeNativeTouchpadPan(TouchpadGesturePhase aEventPhase,
+                                      LayoutDeviceIntPoint aPoint,
+                                      double aDeltaX, double aDeltaY,
+                                      int32_t aModifierFlags,
+                                      uint64_t aObserverId);
 
     async LockNativePointer();
     async UnlockNativePointer();
@@ -569,9 +583,6 @@ parent:
 
     async NavigationFinished();
 
-    async SessionStoreUpdate(nsCString? aDocShellCaps, bool? aPrivatedMode,
-                             bool aNeedCollectSHistory, uint32_t aEpoch);
-
     async IntrinsicSizeOrRatioChanged(IntrinsicSize? aIntrinsicSize,
                                       AspectRatio? aIntrinsicRatio);
 
@@ -589,9 +600,8 @@ parent:
 
 child:
     async NativeSynthesisResponse(uint64_t aObserverId, nsCString aResponse);
-    async UpdateEpoch(uint32_t aEpoch);
     async UpdateSHistory();
-    async CloneDocumentTreeIntoSelf(MaybeDiscardedBrowsingContext aBc, PrintData aPrintData);
+    async CloneDocumentTreeIntoSelf(MaybeDiscardedBrowsingContext aBc, PrintData aPrintData) returns(bool aSuccess);
     async UpdateRemotePrintSettings(PrintData aPrintData);
 
     /**
@@ -600,15 +610,6 @@ child:
     [Priority=input] async ReleaseAllPointerCapture();
 
 parent:
-
-    /**
-     * Child informs the parent that the graphics objects are ready for
-     * compositing.  This is sent when all pending changes have been
-     * sent to the compositor and are ready to be shown on the next composite.
-     * @see PCompositor
-     * @see RequestNotifyAfterRemotePaint
-     */
-    async RemotePaintIsReady();
 
     /**
      * Child informs the parent that the content is ready to handle input
@@ -647,7 +648,8 @@ parent:
                             uint32_t stride, SurfaceFormat format,
                             LayoutDeviceIntRect dragRect,
                             nsIPrincipal principal, nsIContentSecurityPolicy csp,
-                            CookieJarSettingsArgs cookieJarSettings);
+                            CookieJarSettingsArgs cookieJarSettings,
+                            MaybeDiscardedWindowContext sourceWindowContext);
 
     // After a compositor reset, it is necessary to reconnect each layers ID to
     // the compositor of the widget that will render those layers. Note that
@@ -679,6 +681,8 @@ parent:
                              int32_t aAppUnitsPerDevPixel);
 
     async SetAllowDeprecatedTls(bool value);
+
+    async ShowDynamicToolbar();
 
 child:
     /**
@@ -714,7 +718,7 @@ child:
 
     async SizeModeChanged(nsSizeMode sizeMode);
 
-    async ChildToParentMatrix(MaybeMatrix4x4 aMatrix,
+    async ChildToParentMatrix(Matrix4x4? aMatrix,
                               ScreenRect aRemoteDocumentRect);
 
     async SetIsUnderHiddenEmbedderElement(bool aIsUnderHiddenEmbedderElement);
@@ -931,14 +935,6 @@ child:
     async NavigateByKey(bool aForward, bool aForDocumentNavigation);
 
     /**
-     * The parent (chrome thread) requests that the child inform it when
-     * the graphics objects are ready to display.
-     * @see PCompositor
-     * @see RemotePaintIsReady
-     */
-    async RequestNotifyAfterRemotePaint();
-
-    /**
      * Tell the child that the UI resolution changed for the containing
      * window.
      * To avoid some sync messages from child to parent, we also send the dpi
@@ -1031,6 +1027,9 @@ parent:
 
     /** Fetches the visited status for an array of URIs (Android-only). */
     async QueryVisitedState(nsIURI[] aURIs);
+
+    /** Create a session store for a browser child. */
+    async PSessionStore();
 
     /**
      * Construct a new WindowGlobal for an existing global in the content process

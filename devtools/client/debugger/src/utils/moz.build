@@ -7,7 +7,6 @@ DIRS += [
     "breakpoint",
     "editor",
     "pause",
-    "resource",
     "sources-tree",
 ]
 
@@ -40,6 +39,7 @@ CompiledModules(
     "quick-open.js",
     "result-list.js",
     "selected-location.js",
+    "shallow-equal.js",
     "source-maps.js",
     "source-queue.js",
     "source.js",
@@ -47,7 +47,6 @@ CompiledModules(
     "task.js",
     "telemetry.js",
     "text.js",
-    "timings.js",
     "ui.js",
     "url.js",
     "utils.js",

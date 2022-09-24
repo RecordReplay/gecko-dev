@@ -9,13 +9,15 @@
 
 #include "InputUtils.h"
 
+static ScrollGenerationCounter sGenerationCounter;
+
 TEST_F(APZCBasicTester, Overzoom) {
   // the visible area of the document in CSS pixels is x=10 y=0 w=100 h=100
   FrameMetrics fm;
   fm.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
   fm.SetScrollableRect(CSSRect(0, 0, 125, 150));
   fm.SetVisualScrollOffset(CSSPoint(10, 0));
-  fm.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  fm.SetZoom(CSSToParentLayerScale(1.0));
   fm.SetIsRootContent(true);
   apzc->SetFrameMetrics(fm);
 
@@ -26,7 +28,7 @@ TEST_F(APZCBasicTester, Overzoom) {
   PinchWithPinchInputAndCheckStatus(apzc, ScreenIntPoint(50, 50), 0.5, true);
 
   fm = apzc->GetFrameMetrics();
-  EXPECT_EQ(0.8f, fm.GetZoom().ToScaleFactor().scale);
+  EXPECT_EQ(0.8f, fm.GetZoom().scale);
   // bug 936721 - PGO builds introduce rounding error so
   // use a fuzzy match instead
   EXPECT_LT(std::abs(fm.GetVisualScrollOffset().x), 1e-5);
@@ -61,11 +63,11 @@ TEST_F(APZCBasicTester, ComplexTransform) {
   RefPtr<TestAsyncPanZoomController> childApzc =
       new TestAsyncPanZoomController(LayersId{0}, mcc, tm);
 
-  const char* layerTreeSyntax = "c(c)";
+  const char* treeShape = "x(x)";
   // LayerID                     0 1
-  nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(IntRect(0, 0, 300, 300)),
-      nsIntRegion(IntRect(0, 0, 150, 300)),
+  LayerIntRegion layerVisibleRegion[] = {
+      LayerIntRect(0, 0, 300, 300),
+      LayerIntRect(0, 0, 150, 300),
   };
   Matrix4x4 transforms[] = {
       Matrix4x4(),
@@ -78,10 +80,8 @@ TEST_F(APZCBasicTester, ComplexTransform) {
       2.0f, 1.0f,
       1.0f);  // this is the 2.0 x-axis CSS transform on the child layer
 
-  nsTArray<RefPtr<Layer> > layers;
-  RefPtr<LayerManager> lm;
-  RefPtr<Layer> root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion,
-                                       transforms, lm, layers);
+  auto layers = TestWRScrollData::Create(treeShape, *updater,
+                                         layerVisibleRegion, transforms);
 
   ScrollMetadata metadata;
   FrameMetrics& metrics = metadata.GetMetrics();
@@ -90,9 +90,9 @@ TEST_F(APZCBasicTester, ComplexTransform) {
   metrics.SetVisualScrollOffset(CSSPoint(10, 10));
   metrics.SetLayoutViewport(CSSRect(10, 10, 8, 8));
   metrics.SetScrollableRect(CSSRect(0, 0, 50, 50));
-  metrics.SetCumulativeResolution(LayoutDeviceToLayerScale2D(2, 2));
+  metrics.SetCumulativeResolution(LayoutDeviceToLayerScale(2));
   metrics.SetPresShellResolution(2.0f);
-  metrics.SetZoom(CSSToParentLayerScale2D(6, 6));
+  metrics.SetZoom(CSSToParentLayerScale(6));
   metrics.SetDevPixelsPerCSSPixel(CSSToLayoutDeviceScale(3));
   metrics.SetScrollId(ScrollableLayerGuid::START_SCROLL_ID);
 
@@ -100,8 +100,8 @@ TEST_F(APZCBasicTester, ComplexTransform) {
   FrameMetrics& childMetrics = childMetadata.GetMetrics();
   childMetrics.SetScrollId(ScrollableLayerGuid::START_SCROLL_ID + 1);
 
-  layers[0]->SetScrollMetadata(metadata);
-  layers[1]->SetScrollMetadata(childMetadata);
+  layers[0]->AppendScrollMetadata(layers, metadata);
+  layers[1]->AppendScrollMetadata(layers, childMetadata);
 
   ParentLayerPoint pointOut;
   AsyncTransform viewTransformOut;
@@ -230,7 +230,8 @@ TEST_F(APZCBasicTester, ResumeInterruptedTouchDrag_Bug1592435) {
   mainThreadOffset.y -= 5;
   metadata = apzc->GetScrollMetadata();
   metadata.GetMetrics().SetVisualDestination(mainThreadOffset);
-  metadata.GetMetrics().SetScrollGeneration(ScrollGeneration::New());
+  metadata.GetMetrics().SetScrollGeneration(
+      sGenerationCounter.NewMainThreadGeneration());
   metadata.GetMetrics().SetVisualScrollUpdateType(FrameMetrics::eMainThread);
   scrollUpdates.Clear();
   metadata.SetScrollUpdates(scrollUpdates);
@@ -256,7 +257,7 @@ TEST_F(APZCBasicTester, RelativeScrollOffset) {
   FrameMetrics& metrics = metadata.GetMetrics();
   metrics.SetScrollableRect(CSSRect(0, 0, 1000, 1000));
   metrics.SetLayoutViewport(CSSRect(100, 100, 100, 100));
-  metrics.SetZoom(CSSToParentLayerScale2D(2.0, 2.0));
+  metrics.SetZoom(CSSToParentLayerScale(2.0));
   metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
   metrics.SetVisualScrollOffset(CSSPoint(120, 120));
   metrics.SetIsRootContent(true);
@@ -290,7 +291,7 @@ TEST_F(APZCBasicTester, MultipleSmoothScrollsSmooth) {
   FrameMetrics& metrics = metadata.GetMetrics();
   metrics.SetScrollableRect(CSSRect(0, 0, 100, 10000));
   metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
-  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetZoom(CSSToParentLayerScale(1.0));
   metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
   metrics.SetVisualScrollOffset(CSSPoint(0, 0));
   metrics.SetIsRootContent(true);
@@ -359,6 +360,78 @@ TEST_F(APZCBasicTester, MultipleSmoothScrollsSmooth) {
   }
 }
 
+class APZCSmoothScrollTester : public APZCBasicTester {
+ public:
+  // Test that a smooth scroll animation correctly handles its destination
+  // being updated by a relative scroll delta.
+  void TestSmoothScrollDestinationUpdate() {
+    // Set up scroll frame. Starting scroll position is (0, 0).
+    ScrollMetadata metadata;
+    FrameMetrics& metrics = metadata.GetMetrics();
+    metrics.SetScrollableRect(CSSRect(0, 0, 100, 10000));
+    metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
+    metrics.SetZoom(CSSToParentLayerScale(1.0));
+    metrics.SetCompositionBounds(ParentLayerRect(0, 0, 100, 100));
+    metrics.SetVisualScrollOffset(CSSPoint(0, 0));
+    metrics.SetIsRootContent(true);
+    apzc->SetFrameMetrics(metrics);
+
+    // Start smooth scroll via main-thread request.
+    nsTArray<ScrollPositionUpdate> scrollUpdates;
+    scrollUpdates.AppendElement(ScrollPositionUpdate::NewPureRelativeScroll(
+        ScrollOrigin::Other, ScrollMode::Smooth,
+        CSSPoint::ToAppUnits(CSSPoint(0, 1000))));
+    metadata.SetScrollUpdates(scrollUpdates);
+    metrics.SetScrollGeneration(scrollUpdates.LastElement().GetGeneration());
+    apzc->NotifyLayersUpdated(metadata, false, true);
+
+    // Sample the smooth scroll animation until we get past y=500.
+    apzc->AssertStateIsSmoothScroll();
+    float y = 0;
+    while (y < 500) {
+      SampleAnimationOneFrame();
+      y = apzc->GetFrameMetrics().GetVisualScrollOffset().y;
+    }
+
+    // Send a relative scroll of y = -400.
+    scrollUpdates.Clear();
+    scrollUpdates.AppendElement(ScrollPositionUpdate::NewRelativeScroll(
+        CSSPoint::ToAppUnits(CSSPoint(0, 500)),
+        CSSPoint::ToAppUnits(CSSPoint(0, 100))));
+    metadata.SetScrollUpdates(scrollUpdates);
+    metrics.SetScrollGeneration(scrollUpdates.LastElement().GetGeneration());
+    apzc->NotifyLayersUpdated(metadata, false, false);
+
+    // Verify the relative scroll was applied but didn't cancel the animation.
+    float y2 = apzc->GetFrameMetrics().GetVisualScrollOffset().y;
+    ASSERT_EQ(y2, y - 400);
+    apzc->AssertStateIsSmoothScroll();
+
+    // Sample the animation again and check that it respected the relative
+    // scroll.
+    SampleAnimationOneFrame();
+    float y3 = apzc->GetFrameMetrics().GetVisualScrollOffset().y;
+    ASSERT_GT(y3, y2);
+    ASSERT_LT(y3, 500);
+
+    // Continue animation until done and check that it ended up at a correctly
+    // adjusted destination.
+    apzc->AdvanceAnimationsUntilEnd();
+    float y4 = apzc->GetFrameMetrics().GetVisualScrollOffset().y;
+    ASSERT_EQ(y4, 600);  // 1000 (initial destination) - 400 (relative scroll)
+  }
+};
+
+TEST_F(APZCSmoothScrollTester, SmoothScrollDestinationUpdateBezier) {
+  SCOPED_GFX_PREF_BOOL("general.smoothScroll.msdPhysics.enabled", false);
+  TestSmoothScrollDestinationUpdate();
+}
+
+TEST_F(APZCSmoothScrollTester, SmoothScrollDestinationUpdateMsd) {
+  SCOPED_GFX_PREF_BOOL("general.smoothScroll.msdPhysics.enabled", true);
+  TestSmoothScrollDestinationUpdate();
+}
+
 TEST_F(APZCBasicTester, ZoomAndScrollableRectChangeAfterZoomChange) {
   // We want to check that a small scrollable rect change (which causes us to
   // reclamp our scroll position, including in the sampled state) does not move
@@ -375,14 +448,14 @@ TEST_F(APZCBasicTester, ZoomAndScrollableRectChangeAfterZoomChange) {
   metrics.SetScrollableRect(CSSRect(0, 0, 100, 1000));
   metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
   metrics.SetVisualScrollOffset(CSSPoint(0, 0));
-  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetZoom(CSSToParentLayerScale(1.0));
   metrics.SetIsRootContent(true);
   apzc->SetFrameMetrics(metrics);
 
   MakeApzcZoomable();
 
   // Zoom to right side.
-  ZoomTarget zoomTarget{CSSRect(75, 25, 25, 25), Nothing()};
+  ZoomTarget zoomTarget{CSSRect(75, 25, 25, 25)};
   apzc->ZoomToRect(zoomTarget, 0);
 
   // Run the animation to completion, should take 250ms/16.67ms = 15 frames, but
@@ -394,7 +467,7 @@ TEST_F(APZCBasicTester, ZoomAndScrollableRectChangeAfterZoomChange) {
   EXPECT_FALSE(apzc->IsAsyncZooming());
 
   // Zoom out.
-  ZoomTarget zoomTarget2{CSSRect(0, 0, 100, 100), Nothing()};
+  ZoomTarget zoomTarget2{CSSRect(0, 0, 100, 100)};
   apzc->ZoomToRect(zoomTarget2, 0);
 
   // Run the animation a few times to get it going.
@@ -444,14 +517,14 @@ TEST_F(APZCBasicTester, ZoomToRectAndCompositionBoundsChange) {
   metrics.SetScrollableRect(CSSRect(0, 0, 100, 1000));
   metrics.SetLayoutViewport(CSSRect(0, 0, 100, 100));
   metrics.SetVisualScrollOffset(CSSPoint(0, 0));
-  metrics.SetZoom(CSSToParentLayerScale2D(1.0, 1.0));
+  metrics.SetZoom(CSSToParentLayerScale(1.0));
   metrics.SetIsRootContent(true);
   apzc->SetFrameMetrics(metrics);
 
   MakeApzcZoomable();
 
   // Start a zoom to a rect.
-  ZoomTarget zoomTarget{CSSRect(25, 25, 25, 25), Nothing()};
+  ZoomTarget zoomTarget{CSSRect(25, 25, 25, 25)};
   apzc->ZoomToRect(zoomTarget, 0);
 
   // Run the animation a few times to get it going.

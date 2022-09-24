@@ -109,7 +109,7 @@ PerformanceTimingData::PerformanceTimingData(nsITimedChannel* aChannel,
       mDecodedBodySize(0),
       mRedirectCount(0),
       mAllRedirectsSameOrigin(true),
-      mReportCrossOriginRedirect(true),
+      mAllRedirectsPassTAO(true),
       mSecureConnection(false),
       mTimingAllowed(true),
       mInitialized(false) {
@@ -205,6 +205,67 @@ PerformanceTimingData::PerformanceTimingData(nsITimedChannel* aChannel,
   }
 }
 
+PerformanceTimingData::PerformanceTimingData(
+    const IPCPerformanceTimingData& aIPCData)
+    : mNextHopProtocol(aIPCData.nextHopProtocol()),
+      mAsyncOpen(aIPCData.asyncOpen()),
+      mRedirectStart(aIPCData.redirectStart()),
+      mRedirectEnd(aIPCData.redirectEnd()),
+      mDomainLookupStart(aIPCData.domainLookupStart()),
+      mDomainLookupEnd(aIPCData.domainLookupEnd()),
+      mConnectStart(aIPCData.connectStart()),
+      mSecureConnectionStart(aIPCData.secureConnectionStart()),
+      mConnectEnd(aIPCData.connectEnd()),
+      mRequestStart(aIPCData.requestStart()),
+      mResponseStart(aIPCData.responseStart()),
+      mCacheReadStart(aIPCData.cacheReadStart()),
+      mResponseEnd(aIPCData.responseEnd()),
+      mCacheReadEnd(aIPCData.cacheReadEnd()),
+      mWorkerStart(aIPCData.workerStart()),
+      mWorkerRequestStart(aIPCData.workerRequestStart()),
+      mWorkerResponseEnd(aIPCData.workerResponseEnd()),
+      mZeroTime(aIPCData.zeroTime()),
+      mFetchStart(aIPCData.fetchStart()),
+      mEncodedBodySize(aIPCData.encodedBodySize()),
+      mTransferSize(aIPCData.transferSize()),
+      mDecodedBodySize(aIPCData.decodedBodySize()),
+      mRedirectCount(aIPCData.redirectCount()),
+      mAllRedirectsSameOrigin(aIPCData.allRedirectsSameOrigin()),
+      mAllRedirectsPassTAO(aIPCData.allRedirectsPassTAO()),
+      mSecureConnection(aIPCData.secureConnection()),
+      mTimingAllowed(aIPCData.timingAllowed()),
+      mInitialized(aIPCData.initialized()) {
+  for (const auto& serverTimingData : aIPCData.serverTiming()) {
+    RefPtr<nsServerTiming> timing = new nsServerTiming();
+    timing->SetName(serverTimingData.name());
+    timing->SetDuration(serverTimingData.duration());
+    timing->SetDescription(serverTimingData.description());
+    mServerTiming.AppendElement(timing);
+  }
+}
+
+IPCPerformanceTimingData PerformanceTimingData::ToIPC() {
+  nsTArray<IPCServerTiming> ipcServerTiming;
+  for (auto& serverTimingData : mServerTiming) {
+    nsAutoCString name;
+    Unused << serverTimingData->GetName(name);
+    double duration = 0;
+    Unused << serverTimingData->GetDuration(&duration);
+    nsAutoCString description;
+    Unused << serverTimingData->GetDescription(description);
+    ipcServerTiming.AppendElement(IPCServerTiming(name, duration, description));
+  }
+  return IPCPerformanceTimingData(
+      ipcServerTiming, mNextHopProtocol, mAsyncOpen, mRedirectStart,
+      mRedirectEnd, mDomainLookupStart, mDomainLookupEnd, mConnectStart,
+      mSecureConnectionStart, mConnectEnd, mRequestStart, mResponseStart,
+      mCacheReadStart, mResponseEnd, mCacheReadEnd, mWorkerStart,
+      mWorkerRequestStart, mWorkerResponseEnd, mZeroTime, mFetchStart,
+      mEncodedBodySize, mTransferSize, mDecodedBodySize, mRedirectCount,
+      mAllRedirectsSameOrigin, mAllRedirectsPassTAO, mSecureConnection,
+      mTimingAllowed, mInitialized);
+}
+
 void PerformanceTimingData::SetPropertiesFromHttpChannel(
     nsIHttpChannel* aHttpChannel, nsITimedChannel* aChannel) {
   MOZ_ASSERT(aHttpChannel);
@@ -221,9 +282,7 @@ void PerformanceTimingData::SetPropertiesFromHttpChannel(
   }
 
   mTimingAllowed = CheckAllowedOrigin(aHttpChannel, aChannel);
-  bool redirectsPassCheck = false;
-  aChannel->GetAllRedirectsPassTimingAllowCheck(&redirectsPassCheck);
-  mReportCrossOriginRedirect = mTimingAllowed && redirectsPassCheck;
+  aChannel->GetAllRedirectsPassTimingAllowCheck(&mAllRedirectsPassTAO);
 
   aChannel->GetNativeServerTiming(mServerTiming);
 }
@@ -292,16 +351,22 @@ uint8_t PerformanceTimingData::GetRedirectCount() const {
   return mRedirectCount;
 }
 
-bool PerformanceTimingData::ShouldReportCrossOriginRedirect() const {
+bool PerformanceTimingData::ShouldReportCrossOriginRedirect(
+    bool aEnsureSameOriginAndIgnoreTAO) const {
   if (!StaticPrefs::dom_enable_performance() || !IsInitialized() ||
       nsContentUtils::ShouldResistFingerprinting()) {
+    return false;
+  }
+
+  if (!mTimingAllowed || mRedirectCount == 0) {
     return false;
   }
 
   // If the redirect count is 0, or if one of the cross-origin
   // redirects doesn't have the proper Timing-Allow-Origin header,
   // then RedirectStart and RedirectEnd will be set to zero
-  return (mRedirectCount != 0) && mReportCrossOriginRedirect;
+  return aEnsureSameOriginAndIgnoreTAO ? mAllRedirectsSameOrigin
+                                       : mAllRedirectsPassTAO;
 }
 
 DOMHighResTimeStamp PerformanceTimingData::AsyncOpenHighRes(

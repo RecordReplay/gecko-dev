@@ -125,7 +125,7 @@ class BasePrincipal : public nsJSPrincipals {
   NS_IMETHOD CheckMayLoadWithReporting(nsIURI* uri,
                                        bool allowIfInheritsPrincipal,
                                        uint64_t innerWindowID) final;
-  NS_IMETHOD GetAddonPolicy(nsISupports** aResult) final;
+  NS_IMETHOD GetAddonPolicy(extensions::WebExtensionPolicy** aResult) final;
   NS_IMETHOD GetIsNullPrincipal(bool* aResult) override;
   NS_IMETHOD GetIsContentPrincipal(bool* aResult) override;
   NS_IMETHOD GetIsExpandedPrincipal(bool* aResult) override;
@@ -133,6 +133,7 @@ class BasePrincipal : public nsJSPrincipals {
   NS_IMETHOD GetScheme(nsACString& aScheme) override;
   NS_IMETHOD SchemeIs(const char* aScheme, bool* aResult) override;
   NS_IMETHOD IsURIInPrefList(const char* aPref, bool* aResult) override;
+  NS_IMETHOD IsURIInList(const nsACString& aList, bool* aResult) override;
   NS_IMETHOD IsL10nAllowed(nsIURI* aURI, bool* aResult) override;
   NS_IMETHOD GetAboutModuleFlags(uint32_t* flags) override;
   NS_IMETHOD GetIsAddonOrExpandedAddonPrincipal(bool* aResult) override;
@@ -160,8 +161,7 @@ class BasePrincipal : public nsJSPrincipals {
   NS_IMETHOD IsThirdPartyPrincipal(nsIPrincipal* uri, bool* aRes) override;
   NS_IMETHOD IsThirdPartyChannel(nsIChannel* aChannel, bool* aRes) override;
   NS_IMETHOD GetIsOriginPotentiallyTrustworthy(bool* aResult) override;
-  NS_IMETHOD IsSameOrigin(nsIURI* aURI, bool aIsPrivateWin,
-                          bool* aRes) override;
+  NS_IMETHOD IsSameOrigin(nsIURI* aURI, bool* aRes) override;
   NS_IMETHOD GetPrefLightCacheKey(nsIURI* aURI, bool aWithCredentials,
                                   const OriginAttributes& aOriginAttributes,
                                   nsACString& _retval) override;
@@ -180,6 +180,9 @@ class BasePrincipal : public nsJSPrincipals {
 
   NS_IMETHOD GetNextSubDomainPrincipal(
       nsIPrincipal** aNextSubDomainPrincipal) override;
+
+  NS_IMETHOD GetPrecursorPrincipal(nsIPrincipal** aPrecursor) override;
+
   nsresult ToJSON(nsACString& aJSON);
   static already_AddRefed<BasePrincipal> FromJSON(const nsACString& aJSON);
   // Method populates a passed Json::Value with serializable fields
@@ -285,6 +288,8 @@ class BasePrincipal : public nsJSPrincipals {
   uint32_t GetOriginSuffixHash() const { return mOriginSuffix->hash(); }
 
   virtual nsresult GetSiteIdentifier(SiteIdentifier& aSite) = 0;
+
+  bool IsLoopbackHost();
 
  protected:
   BasePrincipal(PrincipalKind aKind, const nsACString& aOriginNoSuffix,

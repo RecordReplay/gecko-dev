@@ -9,6 +9,7 @@
     <head>
         <meta charset="utf-8">
         <meta http-equiv="Content-Security-Policy" content="default-src chrome:; object-src 'none'">
+        <meta name="color-scheme" content="light dark">
         <title data-l10n-id="about-networking-title"></title>
         <link rel="stylesheet" href="chrome://global/skin/aboutNetworking.css">
         <script src="chrome://global/content/aboutNetworking.js"></script>
@@ -76,7 +77,7 @@
                       <tr>
                           <th data-l10n-id="about-networking-host"></th>
                           <th data-l10n-id="about-networking-port"></th>
-                          <th data-l10n-id="about-networking-tcp"></th>
+                          <th data-l10n-id="about-networking-type"></th>
                           <th data-l10n-id="about-networking-active"></th>
                           <th data-l10n-id="about-networking-sent"></th>
                           <th data-l10n-id="about-networking-received"></th>
@@ -99,6 +100,7 @@
                 <thead>
                       <tr>
                           <th data-l10n-id="about-networking-dns-trr-url"></th>
+                          <th data-l10n-id="about-networking-dns-trr-mode"></th>
                       </tr>
                   </thead>
                   <tbody id="dns_trr_url"></tbody>
@@ -115,6 +117,7 @@
                           <th data-l10n-id="about-networking-addresses"></th>
                           <th data-l10n-id="about-networking-expires"></th>
                           <th data-l10n-id="about-networking-originAttributesSuffix"></th>
+                          <th data-l10n-id="about-networking-flags"></th>
                       </tr>
                   </thead>
                   <tbody id="dns_content"></tbody>
@@ -261,7 +264,7 @@
             <br>
 
             <p id="log-tutorial" data-l10n-id="about-networking-log-tutorial">
-              <a data-l10n-name="logging" href="https://developer.mozilla.org/docs/Mozilla/Debugging/HTTP_logging"></a>
+              <a data-l10n-name="logging" href="https://firefox-source-docs.mozilla.org/networking/http/logging.html"></a>
             </p>
           </div>
 

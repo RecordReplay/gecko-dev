@@ -17,6 +17,7 @@
 #include "lib/jxl/common.h"
 #include "lib/jxl/enc_butteraugli_comparator.h"
 #include "lib/jxl/enc_butteraugli_pnorm.h"
+#include "lib/jxl/enc_color_management.h"
 #include "lib/jxl/enc_external_image.h"
 #include "lib/jxl/image_bundle.h"
 #include "lib/jxl/memory_manager_internal.h"
@@ -35,10 +36,6 @@ void SetMetadataFromPixelFormat(const JxlPixelFormat* pixel_format,
       metadata->SetFloat16Samples();
       potential_alpha_bits = 16;
       break;
-    case JXL_TYPE_UINT32:
-      metadata->SetUintSamples(32);
-      potential_alpha_bits = 16;
-      break;
     case JXL_TYPE_UINT16:
       metadata->SetUintSamples(16);
       potential_alpha_bits = 16;
@@ -47,10 +44,8 @@ void SetMetadataFromPixelFormat(const JxlPixelFormat* pixel_format,
       metadata->SetUintSamples(8);
       potential_alpha_bits = 8;
       break;
-    case JXL_TYPE_BOOLEAN:
-      metadata->SetUintSamples(2);
-      potential_alpha_bits = 2;
-      break;
+    default:
+      JXL_ABORT("Unhandled JxlDataType");
   }
   if (pixel_format->num_channels == 2 || pixel_format->num_channels == 4) {
     metadata->SetAlphaBits(potential_alpha_bits);
@@ -77,8 +72,7 @@ struct JxlButteraugliApiStruct {
   // Number of nits that correspond to 1.0f input values.
   float intensity_target = jxl::kDefaultIntensityTarget;
 
-  bool approximate_border = false;
-
+  JxlCmsInterface cms;
   JxlMemoryManager memory_manager;
   std::unique_ptr<jxl::ThreadPool> thread_pool{nullptr};
 };
@@ -94,6 +88,7 @@ JxlButteraugliApi* JxlButteraugliApiCreate(
   if (!alloc) return nullptr;
   // Placement new constructor on allocated memory
   JxlButteraugliApi* ret = new (alloc) JxlButteraugliApi();
+  ret->cms = jxl::GetJxlCms();
   ret->memory_manager = local_memory_manager;
   return ret;
 }
@@ -115,9 +110,10 @@ void JxlButteraugliApiSetIntensityTarget(JxlButteraugliApi* api, float v) {
 
 void JxlButteraugliApiDestroy(JxlButteraugliApi* api) {
   if (api) {
+    JxlMemoryManager local_memory_manager = api->memory_manager;
     // Call destructor directly since custom free function is used.
     api->~JxlButteraugliApi();
-    jxl::MemoryManagerFree(&api->memory_manager, api);
+    jxl::MemoryManagerFree(&local_memory_manager, api);
   }
 }
 
@@ -166,9 +162,8 @@ JxlButteraugliResult* JxlButteraugliCompute(
   result->params.hf_asymmetry = api->hf_asymmetry;
   result->params.xmul = api->xmul;
   result->params.intensity_target = api->intensity_target;
-  result->params.approximate_border = api->approximate_border;
-  jxl::ButteraugliDistance(orig_ib, dist_ib, result->params, &result->distmap,
-                           api->thread_pool.get());
+  jxl::ButteraugliDistance(orig_ib, dist_ib, result->params, api->cms,
+                           &result->distmap, api->thread_pool.get());
 
   return result;
 }
@@ -200,8 +195,9 @@ float JxlButteraugliResultGetMaxDistance(const JxlButteraugliResult* result) {
 
 void JxlButteraugliResultDestroy(JxlButteraugliResult* result) {
   if (result) {
+    JxlMemoryManager local_memory_manager = result->memory_manager;
     // Call destructor directly since custom free function is used.
     result->~JxlButteraugliResult();
-    jxl::MemoryManagerFree(&result->memory_manager, result);
+    jxl::MemoryManagerFree(&local_memory_manager, result);
   }
 }

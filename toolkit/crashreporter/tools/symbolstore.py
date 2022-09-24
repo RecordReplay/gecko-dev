@@ -524,7 +524,9 @@ class Dumper:
         return ""
 
     # subclasses override this if they want to support this
-    def CopyDebug(self, file, debug_file, guid, code_file, code_id):
+    def CopyExeAndDebugInfo(self, file, debug_file, guid, code_file, code_id):
+        """This function will copy a library or executable and the file holding the
+        debug information to |symbol_path|"""
         pass
 
     def Process(self, file_to_process, count_ctors=False):
@@ -567,20 +569,10 @@ class Dumper:
         try:
             cmd = self.dump_syms_cmdline(file, arch, dsymbundle=dsymbundle)
             print(" ".join(cmd), file=sys.stderr)
-            # We're interested in `stderr` in the case that something goes
-            # wrong with dump_syms, but we don't want to use
-            # `stderr=subprocess.PIPE` here, as that can land us in a
-            # deadlock when we try to read only from `stdout`, below.  The
-            # Python documentation recommends using `communicate()` in such
-            # cases, but `stderr` can be rather large, and we don't want to
-            # waste time accumulating all of it in the non-error case.  So we
-            # completely ignore `stderr` here and capture it separately,
-            # below.
             proc = subprocess.Popen(
                 cmd,
                 universal_newlines=True,
                 stdout=subprocess.PIPE,
-                stderr=open(os.devnull, "wb"),
             )
             try:
                 module_line = next(proc.stdout)
@@ -658,7 +650,10 @@ class Dumper:
                 f.close()
                 retcode = proc.wait()
                 if retcode != 0:
-                    raise RuntimeError("dump_syms failed with error code %d" % retcode)
+                    raise RuntimeError(
+                        "dump_syms failed with error code %d while processing %s\n"
+                        % (retcode, file)
+                    )
                 # we output relative paths so callers can get a list of what
                 # was generated
                 print(rel_path)
@@ -669,22 +664,17 @@ class Dumper:
                     )
                 # only copy debug the first time if we have multiple architectures
                 if self.copy_debug and arch_num == 0:
-                    self.CopyDebug(file, debug_file, guid, code_file, code_id)
+                    self.CopyExeAndDebugInfo(file, debug_file, guid, code_file, code_id)
             else:
                 # For some reason, we didn't see the MODULE line as the first
-                # line of output.  It's very possible that the interesting error
-                # message(s) are on stderr, so let's re-execute the process and
-                # capture the entirety of stderr.
-                proc = subprocess.Popen(
-                    cmd, stdout=open(os.devnull, "wb"), stderr=subprocess.PIPE
-                )
-                (_, dumperr) = proc.communicate()
-                retcode = proc.returncode
+                # line of output, this is strictly required so fail irrespective
+                # of the process' return code.
+                retcode = proc.wait()
                 message = [
                     "dump_syms failed to produce the expected output",
+                    "file: %s" % file,
                     "return code: %d" % retcode,
                     "first line of output: %s" % module_line,
-                    "stderr: %s" % dumperr,
                 ]
                 raise RuntimeError("\n----------\n".join(message))
         except Exception as e:
@@ -764,12 +754,13 @@ class Dumper_Win32(Dumper):
                 return True
         return False
 
-    def CopyDebug(self, file, debug_file, guid, code_file, code_id):
-        file = locate_pdb(file)
+    def CopyExeAndDebugInfo(self, file, debug_file, guid, code_file, code_id):
+        """This function will copy the executable or dll and pdb files to |symbol_path|"""
+        pdb_file = locate_pdb(file)
 
         rel_path = os.path.join(debug_file, guid, debug_file).replace("\\", "/")
         full_path = os.path.normpath(os.path.join(self.symbol_path, rel_path))
-        shutil.copyfile(file, full_path)
+        shutil.copyfile(pdb_file, full_path)
         print(rel_path)
 
         # Copy the binary file as well
@@ -828,7 +819,7 @@ class Dumper_Linux(Dumper):
             return self.RunFileCommand(file).startswith("ELF")
         return False
 
-    def CopyDebug(self, file, debug_file, guid, code_file, code_id):
+    def CopyExeAndDebugInfo(self, file, debug_file, guid, code_file, code_id):
         # We want to strip out the debug info, and add a
         # .gnu_debuglink section to the object, so the debugger can
         # actually load our debug info later.
@@ -977,7 +968,7 @@ class Dumper_Mac(Dumper):
         print("Finished processing %s in %.2fs" % (file, elapsed), file=sys.stderr)
         return dsymbundle
 
-    def CopyDebug(self, file, debug_file, guid, code_file, code_id):
+    def CopyExeAndDebugInfo(self, file, debug_file, guid, code_file, code_id):
         """ProcessFile has already produced a dSYM bundle, so we should just
         copy that to the destination directory. However, we'll package it
         into a .tar because it's a bundle, so it's a directory. |file| here is

@@ -12,8 +12,9 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.BuildConfig
+import org.mozilla.geckoview.GeckoRuntime
+import org.mozilla.geckoview.GeckoSession.ContentDelegate
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.IgnoreCrash
-import org.mozilla.geckoview.test.util.Callbacks
 
 
 @RunWith(AndroidJUnit4::class)
@@ -24,7 +25,7 @@ class ContentCrashTest : BaseSessionTest() {
     @Before
     fun setup() {
         assertTrue(client.connect(env.defaultTimeoutMillis))
-        client.setEvalNextCrashDump(/* expectFatal */ false)
+        client.setEvalNextCrashDump(GeckoRuntime.CRASHED_PROCESS_TYPE_FOREGROUND_CHILD)
     }
 
     @IgnoreCrash
@@ -37,7 +38,7 @@ class ContentCrashTest : BaseSessionTest() {
         assumeThat(sessionRule.env.isIsolatedProcess, Matchers.equalTo(false))
 
         mainSession.loadUri(CONTENT_CRASH_URL)
-        mainSession.waitUntilCalled(Callbacks.ContentDelegate::class, "onCrash")
+        mainSession.waitUntilCalled(ContentDelegate::class, "onCrash")
 
         // This test is really slow so we allow double the usual timeout
         var evalResult = client.getEvalResult(env.defaultTimeoutMillis * 2)

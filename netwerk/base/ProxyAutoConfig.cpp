@@ -15,9 +15,11 @@
 #include "nsIURLParser.h"
 #include "nsJSUtils.h"
 #include "jsfriendapi.h"
+#include "js/CallAndConstruct.h"          // JS_CallFunctionName
 #include "js/CompilationAndEvaluation.h"  // JS::Compile
 #include "js/ContextOptions.h"
 #include "js/Initialization.h"
+#include "js/PropertyAndElement.h"  // JS_DefineFunctions, JS_GetProperty
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::Source{Ownership,Text}
 #include "js/Utility.h"
@@ -26,7 +28,12 @@
 #include "nsITimer.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/SpinEventLoopUntil.h"
+#include "mozilla/ipc/Endpoint.h"
 #include "mozilla/net/DNS.h"
+#include "mozilla/net/SocketProcessChild.h"
+#include "mozilla/net/SocketProcessParent.h"
+#include "mozilla/net/ProxyAutoConfigChild.h"
+#include "mozilla/net/ProxyAutoConfigParent.h"
 #include "mozilla/Utf8.h"  // mozilla::Utf8Unit
 #include "nsServiceManagerUtils.h"
 #include "nsNetCID.h"
@@ -49,239 +56,8 @@ namespace net {
 // Per ProxyAutoConfig::Init, this data must be ASCII.
 
 static const char sAsciiPacUtils[] =
-    "function dnsDomainIs(host, domain) {\n"
-    "    return (host.length >= domain.length &&\n"
-    "            host.substring(host.length - domain.length) == domain);\n"
-    "}\n"
-    ""
-    "function dnsDomainLevels(host) {\n"
-    "    return host.split('.').length - 1;\n"
-    "}\n"
-    ""
-    "function isValidIpAddress(ipchars) {\n"
-    "    var matches = "
-    "/^(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})\\.(\\d{1,3})$/.exec(ipchars);\n"
-    "    if (matches == null) {\n"
-    "        return false;\n"
-    "    } else if (matches[1] > 255 || matches[2] > 255 || \n"
-    "               matches[3] > 255 || matches[4] > 255) {\n"
-    "        return false;\n"
-    "    }\n"
-    "    return true;\n"
-    "}\n"
-    ""
-    "function convert_addr(ipchars) {\n"
-    "    var bytes = ipchars.split('.');\n"
-    "    var result = ((bytes[0] & 0xff) << 24) |\n"
-    "                 ((bytes[1] & 0xff) << 16) |\n"
-    "                 ((bytes[2] & 0xff) <<  8) |\n"
-    "                  (bytes[3] & 0xff);\n"
-    "    return result;\n"
-    "}\n"
-    ""
-    "function isInNet(ipaddr, pattern, maskstr) {\n"
-    "    if (!isValidIpAddress(pattern) || !isValidIpAddress(maskstr)) {\n"
-    "        return false;\n"
-    "    }\n"
-    "    if (!isValidIpAddress(ipaddr)) {\n"
-    "        ipaddr = dnsResolve(ipaddr);\n"
-    "        if (ipaddr == null) {\n"
-    "            return false;\n"
-    "        }\n"
-    "    }\n"
-    "    var host = convert_addr(ipaddr);\n"
-    "    var pat  = convert_addr(pattern);\n"
-    "    var mask = convert_addr(maskstr);\n"
-    "    return ((host & mask) == (pat & mask));\n"
-    "    \n"
-    "}\n"
-    ""
-    "function isPlainHostName(host) {\n"
-    "    return (host.search('(\\\\.)|:') == -1);\n"
-    "}\n"
-    ""
-    "function isResolvable(host) {\n"
-    "    var ip = dnsResolve(host);\n"
-    "    return (ip != null);\n"
-    "}\n"
-    ""
-    "function localHostOrDomainIs(host, hostdom) {\n"
-    "    return (host == hostdom) ||\n"
-    "           (hostdom.lastIndexOf(host + '.', 0) == 0);\n"
-    "}\n"
-    ""
-    "function shExpMatch(url, pattern) {\n"
-    "   pattern = pattern.replace(/\\./g, '\\\\.');\n"
-    "   pattern = pattern.replace(/\\*/g, '.*');\n"
-    "   pattern = pattern.replace(/\\?/g, '.');\n"
-    "   var newRe = new RegExp('^'+pattern+'$');\n"
-    "   return newRe.test(url);\n"
-    "}\n"
-    ""
-    "var wdays = {SUN: 0, MON: 1, TUE: 2, WED: 3, THU: 4, FRI: 5, SAT: 6};\n"
-    "var months = {JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, "
-    "AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11};\n"
-    ""
-    "function weekdayRange() {\n"
-    "    function getDay(weekday) {\n"
-    "        if (weekday in wdays) {\n"
-    "            return wdays[weekday];\n"
-    "        }\n"
-    "        return -1;\n"
-    "    }\n"
-    "    var date = new Date();\n"
-    "    var argc = arguments.length;\n"
-    "    var wday;\n"
-    "    if (argc < 1)\n"
-    "        return false;\n"
-    "    if (arguments[argc - 1] == 'GMT') {\n"
-    "        argc--;\n"
-    "        wday = date.getUTCDay();\n"
-    "    } else {\n"
-    "        wday = date.getDay();\n"
-    "    }\n"
-    "    var wd1 = getDay(arguments[0]);\n"
-    "    var wd2 = (argc == 2) ? getDay(arguments[1]) : wd1;\n"
-    "    return (wd1 == -1 || wd2 == -1) ? false\n"
-    "                                    : (wd1 <= wd2) ? (wd1 <= wday && wday "
-    "<= wd2)\n"
-    "                                                   : (wd2 >= wday || wday "
-    ">= wd1);\n"
-    "}\n"
-    ""
-    "function dateRange() {\n"
-    "    function getMonth(name) {\n"
-    "        if (name in months) {\n"
-    "            return months[name];\n"
-    "        }\n"
-    "        return -1;\n"
-    "    }\n"
-    "    var date = new Date();\n"
-    "    var argc = arguments.length;\n"
-    "    if (argc < 1) {\n"
-    "        return false;\n"
-    "    }\n"
-    "    var isGMT = (arguments[argc - 1] == 'GMT');\n"
-    "\n"
-    "    if (isGMT) {\n"
-    "        argc--;\n"
-    "    }\n"
-    "    // function will work even without explict handling of this case\n"
-    "    if (argc == 1) {\n"
-    "        var tmp = parseInt(arguments[0]);\n"
-    "        if (isNaN(tmp)) {\n"
-    "            return ((isGMT ? date.getUTCMonth() : date.getMonth()) ==\n"
-    "                     getMonth(arguments[0]));\n"
-    "        } else if (tmp < 32) {\n"
-    "            return ((isGMT ? date.getUTCDate() : date.getDate()) == "
-    "tmp);\n"
-    "        } else { \n"
-    "            return ((isGMT ? date.getUTCFullYear() : date.getFullYear()) "
-    "==\n"
-    "                     tmp);\n"
-    "        }\n"
-    "    }\n"
-    "    var year = date.getFullYear();\n"
-    "    var date1, date2;\n"
-    "    date1 = new Date(year,  0,  1,  0,  0,  0);\n"
-    "    date2 = new Date(year, 11, 31, 23, 59, 59);\n"
-    "    var adjustMonth = false;\n"
-    "    for (var i = 0; i < (argc >> 1); i++) {\n"
-    "        var tmp = parseInt(arguments[i]);\n"
-    "        if (isNaN(tmp)) {\n"
-    "            var mon = getMonth(arguments[i]);\n"
-    "            date1.setMonth(mon);\n"
-    "        } else if (tmp < 32) {\n"
-    "            adjustMonth = (argc <= 2);\n"
-    "            date1.setDate(tmp);\n"
-    "        } else {\n"
-    "            date1.setFullYear(tmp);\n"
-    "        }\n"
-    "    }\n"
-    "    for (var i = (argc >> 1); i < argc; i++) {\n"
-    "        var tmp = parseInt(arguments[i]);\n"
-    "        if (isNaN(tmp)) {\n"
-    "            var mon = getMonth(arguments[i]);\n"
-    "            date2.setMonth(mon);\n"
-    "        } else if (tmp < 32) {\n"
-    "            date2.setDate(tmp);\n"
-    "        } else {\n"
-    "            date2.setFullYear(tmp);\n"
-    "        }\n"
-    "    }\n"
-    "    if (adjustMonth) {\n"
-    "        date1.setMonth(date.getMonth());\n"
-    "        date2.setMonth(date.getMonth());\n"
-    "    }\n"
-    "    if (isGMT) {\n"
-    "    var tmp = date;\n"
-    "        tmp.setFullYear(date.getUTCFullYear());\n"
-    "        tmp.setMonth(date.getUTCMonth());\n"
-    "        tmp.setDate(date.getUTCDate());\n"
-    "        tmp.setHours(date.getUTCHours());\n"
-    "        tmp.setMinutes(date.getUTCMinutes());\n"
-    "        tmp.setSeconds(date.getUTCSeconds());\n"
-    "        date = tmp;\n"
-    "    }\n"
-    "    return (date1 <= date2) ? (date1 <= date) && (date <= date2)\n"
-    "                            : (date2 >= date) || (date >= date1);\n"
-    "}\n"
-    ""
-    "function timeRange() {\n"
-    "    var argc = arguments.length;\n"
-    "    var date = new Date();\n"
-    "    var isGMT= false;\n"
-    ""
-    "    if (argc < 1) {\n"
-    "        return false;\n"
-    "    }\n"
-    "    if (arguments[argc - 1] == 'GMT') {\n"
-    "        isGMT = true;\n"
-    "        argc--;\n"
-    "    }\n"
-    "\n"
-    "    var hour = isGMT ? date.getUTCHours() : date.getHours();\n"
-    "    var date1, date2;\n"
-    "    date1 = new Date();\n"
-    "    date2 = new Date();\n"
-    "\n"
-    "    if (argc == 1) {\n"
-    "        return (hour == arguments[0]);\n"
-    "    } else if (argc == 2) {\n"
-    "        return ((arguments[0] <= hour) && (hour <= arguments[1]));\n"
-    "    } else {\n"
-    "        switch (argc) {\n"
-    "        case 6:\n"
-    "            date1.setSeconds(arguments[2]);\n"
-    "            date2.setSeconds(arguments[5]);\n"
-    "        case 4:\n"
-    "            var middle = argc >> 1;\n"
-    "            date1.setHours(arguments[0]);\n"
-    "            date1.setMinutes(arguments[1]);\n"
-    "            date2.setHours(arguments[middle]);\n"
-    "            date2.setMinutes(arguments[middle + 1]);\n"
-    "            if (middle == 2) {\n"
-    "                date2.setSeconds(59);\n"
-    "            }\n"
-    "            break;\n"
-    "        default:\n"
-    "          throw 'timeRange: bad number of arguments'\n"
-    "        }\n"
-    "    }\n"
-    "\n"
-    "    if (isGMT) {\n"
-    "        date.setFullYear(date.getUTCFullYear());\n"
-    "        date.setMonth(date.getUTCMonth());\n"
-    "        date.setDate(date.getUTCDate());\n"
-    "        date.setHours(date.getUTCHours());\n"
-    "        date.setMinutes(date.getUTCMinutes());\n"
-    "        date.setSeconds(date.getUTCSeconds());\n"
-    "    }\n"
-    "    return (date1 <= date2) ? (date1 <= date) && (date <= date2)\n"
-    "                            : (date2 >= date) || (date >= date1);\n"
-    "\n"
-    "}\n"
-    "";
+#include "ascii_pac_utils.inc"
+    ;
 
 // sRunning is defined for the helper functions only while the
 // Javascript engine is running and the PAC object cannot be deleted
@@ -356,7 +132,7 @@ class PACResolver final : public nsIDNSListener,
   nsCOMPtr<nsIDNSRecord> mResponse;
   nsCOMPtr<nsITimer> mTimer;
   nsCOMPtr<nsIEventTarget> mMainThreadEventTarget;
-  Mutex mMutex;
+  Mutex mMutex MOZ_UNANNOTATED;
 
  private:
   ~PACResolver() = default;
@@ -364,6 +140,21 @@ class PACResolver final : public nsIDNSListener,
 NS_IMPL_ISUPPORTS(PACResolver, nsIDNSListener, nsITimerCallback, nsINamed)
 
 static void PACLogToConsole(nsString& aMessage) {
+  if (XRE_IsSocketProcess()) {
+    auto task = [message(aMessage)]() {
+      SocketProcessChild* child = SocketProcessChild::GetSingleton();
+      if (child) {
+        Unused << child->SendOnConsoleMessage(message);
+      }
+    };
+    if (NS_IsMainThread()) {
+      task();
+    } else {
+      NS_DispatchToMainThread(NS_NewRunnableFunction("PACLogToConsole", task));
+    }
+    return;
+  }
+
   nsCOMPtr<nsIConsoleService> consoleService =
       do_GetService(NS_CONSOLESERVICE_CONTRACTID);
   if (!consoleService) return;
@@ -469,7 +260,7 @@ bool ProxyAutoConfig::ResolveAddress(const nsCString& aHostName,
   // Spin the event loop of the pac thread until lookup is complete.
   // nsPACman is responsible for keeping a queue and only allowing
   // one PAC execution at a time even when it is called re-entrantly.
-  SpinEventLoopUntil([&, helper, this]() {
+  SpinEventLoopUntil("ProxyAutoConfig::ResolveAddress"_ns, [&, helper, this]() {
     if (!helper->mRequest) {
       return true;
     }
@@ -515,8 +306,17 @@ static bool PACDnsResolve(JSContext* cx, unsigned int argc, JS::Value* vp) {
 
   if (!args.requireAtLeast(cx, "dnsResolve", 1)) return false;
 
-  JS::Rooted<JSString*> arg1(cx, JS::ToString(cx, args[0]));
-  if (!arg1) return false;
+  // Previously we didn't check the type of the argument, so just converted it
+  // to string. A badly written PAC file oculd pass null or undefined here
+  // which could lead to odd results if there are any hosts called "null"
+  // on the network. See bug 1724345 comment 6.
+  if (!args[0].isString()) {
+    args.rval().setNull();
+    return true;
+  }
+
+  JS::RootedString arg1(cx);
+  arg1 = args[0].toString();
 
   nsAutoJSString hostName;
   nsAutoCString dottedDecimal;
@@ -682,10 +482,11 @@ void ProxyAutoConfig::SetThreadLocalIndex(uint32_t index) {
   RunningIndex() = index;
 }
 
-nsresult ProxyAutoConfig::Init(const nsCString& aPACURI,
-                               const nsCString& aPACScriptData,
-                               bool aIncludePath, uint32_t aExtraHeapSize,
-                               nsIEventTarget* aEventTarget) {
+nsresult ProxyAutoConfig::ConfigurePAC(const nsCString& aPACURI,
+                                       const nsCString& aPACScriptData,
+                                       bool aIncludePath,
+                                       uint32_t aExtraHeapSize,
+                                       nsIEventTarget* aEventTarget) {
   mShutdown = false;  // Shutdown needs to be called prior to destruction
 
   mPACURI = aPACURI;
@@ -807,6 +608,15 @@ nsresult ProxyAutoConfig::SetupJS() {
   mPACURI.Truncate();
 
   return NS_OK;
+}
+
+void ProxyAutoConfig::GetProxyForURIWithCallback(
+    const nsCString& aTestURI, const nsCString& aTestHost,
+    std::function<void(nsresult aStatus, const nsACString& aResult)>&&
+        aCallback) {
+  nsAutoCString result;
+  nsresult status = GetProxyForURI(aTestURI, aTestHost, result);
+  aCallback(status, result);
 }
 
 nsresult ProxyAutoConfig::GetProxyForURI(const nsCString& aTestURI,
@@ -1046,6 +856,76 @@ bool ProxyAutoConfig::MyIPAddress(const JS::CallArgs& aArgs) {
 
   aArgs.rval().setString(dottedDecimalString);
   return true;
+}
+
+RemoteProxyAutoConfig::RemoteProxyAutoConfig() = default;
+
+RemoteProxyAutoConfig::~RemoteProxyAutoConfig() = default;
+
+nsresult RemoteProxyAutoConfig::Init(nsIThread* aPACThread) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  SocketProcessParent* socketProcessParent =
+      SocketProcessParent::GetSingleton();
+  if (!socketProcessParent) {
+    return NS_ERROR_NOT_AVAILABLE;
+  }
+
+  ipc::Endpoint<PProxyAutoConfigParent> parent;
+  ipc::Endpoint<PProxyAutoConfigChild> child;
+  nsresult rv = PProxyAutoConfig::CreateEndpoints(
+      base::GetCurrentProcId(), socketProcessParent->OtherPid(), &parent,
+      &child);
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  Unused << socketProcessParent->SendInitProxyAutoConfigChild(std::move(child));
+  mProxyAutoConfigParent = new ProxyAutoConfigParent();
+  return aPACThread->Dispatch(
+      NS_NewRunnableFunction("ProxyAutoConfigParent::ProxyAutoConfigParent",
+                             [proxyAutoConfigParent(mProxyAutoConfigParent),
+                              endpoint{std::move(parent)}]() mutable {
+                               proxyAutoConfigParent->Init(std::move(endpoint));
+                             }));
+}
+
+nsresult RemoteProxyAutoConfig::ConfigurePAC(const nsCString& aPACURI,
+                                             const nsCString& aPACScriptData,
+                                             bool aIncludePath,
+                                             uint32_t aExtraHeapSize,
+                                             nsIEventTarget*) {
+  Unused << mProxyAutoConfigParent->SendConfigurePAC(
+      aPACURI, aPACScriptData, aIncludePath, aExtraHeapSize);
+  return NS_OK;
+}
+
+void RemoteProxyAutoConfig::Shutdown() { mProxyAutoConfigParent->Close(); }
+
+void RemoteProxyAutoConfig::GC() {
+  // Do nothing. GC would be performed when there is not pending query in socket
+  // process.
+}
+
+void RemoteProxyAutoConfig::GetProxyForURIWithCallback(
+    const nsCString& aTestURI, const nsCString& aTestHost,
+    std::function<void(nsresult aStatus, const nsACString& aResult)>&&
+        aCallback) {
+  if (!mProxyAutoConfigParent->CanSend()) {
+    return;
+  }
+
+  mProxyAutoConfigParent->SendGetProxyForURI(
+      aTestURI, aTestHost,
+      [aCallback](Tuple<nsresult, nsCString>&& aResult) {
+        nsresult status;
+        nsCString result;
+        Tie(status, result) = aResult;
+        aCallback(status, result);
+      },
+      [aCallback](mozilla::ipc::ResponseRejectReason&& aReason) {
+        aCallback(NS_ERROR_FAILURE, ""_ns);
+      });
 }
 
 }  // namespace net

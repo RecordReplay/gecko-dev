@@ -164,7 +164,7 @@ class ImageBridgeChild final : public PImageBridgeChild,
   base::ProcessId GetParentPid() const override { return OtherPid(); }
 
   PTextureChild* AllocPTextureChild(
-      const SurfaceDescriptor& aSharedData, const ReadLockDescriptor& aReadLock,
+      const SurfaceDescriptor& aSharedData, ReadLockDescriptor& aReadLock,
       const LayersBackend& aLayersBackend, const TextureFlags& aFlags,
       const uint64_t& aSerial,
       const wr::MaybeExternalImageId& aExternalImageId);
@@ -240,9 +240,6 @@ class ImageBridgeChild final : public PImageBridgeChild,
    */
   void UseTextures(CompositableClient* aCompositable,
                    const nsTArray<TimedTextureClient>& aTextures) override;
-  void UseComponentAlphaTextures(CompositableClient* aCompositable,
-                                 TextureClient* aClientOnBlack,
-                                 TextureClient* aClientOnWhite) override;
 
   void ReleaseCompositable(const CompositableHandle& aHandle) override;
 
@@ -269,18 +266,6 @@ class ImageBridgeChild final : public PImageBridgeChild,
   void RemoveTextureFromCompositable(CompositableClient* aCompositable,
                                      TextureClient* aTexture) override;
 
-  void UseTiledLayerBuffer(
-      CompositableClient* aCompositable,
-      const SurfaceDescriptorTiles& aTileLayerDescriptor) override {
-    MOZ_CRASH("should not be called");
-  }
-
-  void UpdateTextureRegion(CompositableClient* aCompositable,
-                           const ThebesBufferData& aThebesBufferData,
-                           const nsIntRegion& aUpdatedRegion) override {
-    MOZ_CRASH("should not be called");
-  }
-
   // ISurfaceAllocator
 
   /**
@@ -305,10 +290,9 @@ class ImageBridgeChild final : public PImageBridgeChild,
   bool DeallocShmem(mozilla::ipc::Shmem& aShmem) override;
 
   PTextureChild* CreateTexture(
-      const SurfaceDescriptor& aSharedData, const ReadLockDescriptor& aReadLock,
+      const SurfaceDescriptor& aSharedData, ReadLockDescriptor&& aReadLock,
       LayersBackend aLayersBackend, TextureFlags aFlags, uint64_t aSerial,
-      wr::MaybeExternalImageId& aExternalImageId,
-      nsISerialEventTarget* aTarget = nullptr) override;
+      wr::MaybeExternalImageId& aExternalImageId) override;
 
   bool IsSameProcess() const override;
 
@@ -370,18 +354,11 @@ class ImageBridgeChild final : public PImageBridgeChild,
   /**
    * Mapping from async compositable IDs to image containers.
    */
-  Mutex mContainerMapLock;
+  Mutex mContainerMapLock MOZ_UNANNOTATED;
   std::unordered_map<uint64_t, RefPtr<ImageContainerListener>>
       mImageContainerListeners;
   RefPtr<ImageContainerListener> FindListener(
       const CompositableHandle& aHandle);
-
-#if defined(XP_WIN)
-  /**
-   * Used for checking if D3D11Device is updated.
-   */
-  RefPtr<ID3D11Device> mImageDevice;
-#endif
 };
 
 }  // namespace layers

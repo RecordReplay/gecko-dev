@@ -10,6 +10,7 @@
 #include "mozilla/StaticPrefs_gfx.h"
 #include "gfxFontConstants.h"
 #include "gfxFontUtils.h"
+#include "gfxHarfBuzzShaper.h"
 #include <algorithm>
 #include <dlfcn.h>
 
@@ -41,7 +42,8 @@ gfxFT2FontBase::gfxFT2FontBase(
 
 gfxFT2FontBase::~gfxFT2FontBase() { mFTFace->ForgetLockOwner(this); }
 
-FT_Face gfxFT2FontBase::LockFTFace() {
+FT_Face gfxFT2FontBase::LockFTFace() const
+    CAPABILITY_ACQUIRE(mFTFace) NO_THREAD_SAFETY_ANALYSIS {
   if (!mFTFace->Lock(this)) {
     FT_Set_Transform(mFTFace->GetFace(), nullptr, nullptr);
 
@@ -51,25 +53,9 @@ FT_Face gfxFT2FontBase::LockFTFace() {
   return mFTFace->GetFace();
 }
 
-void gfxFT2FontBase::UnlockFTFace() { mFTFace->Unlock(); }
-
-gfxFT2FontEntryBase::CmapCacheSlot* gfxFT2FontEntryBase::GetCmapCacheSlot(
-    uint32_t aCharCode) {
-  // This cache algorithm and size is based on what is done in
-  // cairo_scaled_font_text_to_glyphs and pango_fc_font_real_get_glyph.  I
-  // think the concept is that adjacent characters probably come mostly from
-  // one Unicode block.  This assumption is probably not so valid with
-  // scripts with large character sets as used for East Asian languages.
-  if (!mCmapCache) {
-    mCmapCache = mozilla::MakeUnique<CmapCacheSlot[]>(kNumCmapCacheSlots);
-
-    // Invalidate slot 0 by setting its char code to something that would
-    // never end up in slot 0.  All other slots are already invalid
-    // because they have mCharCode = 0 and a glyph for char code 0 will
-    // always be in the slot 0.
-    mCmapCache[0].mCharCode = 1;
-  }
-  return &mCmapCache[aCharCode % kNumCmapCacheSlots];
+void gfxFT2FontBase::UnlockFTFace() const
+    CAPABILITY_RELEASE(mFTFace) NO_THREAD_SAFETY_ANALYSIS {
+  mFTFace->Unlock();
 }
 
 static FT_ULong GetTableSizeFromFTFace(SharedFTFace* aFace,
@@ -107,17 +93,44 @@ nsresult gfxFT2FontEntryBase::CopyFaceTable(SharedFTFace* aFace,
   return NS_OK;
 }
 
-uint32_t gfxFT2FontBase::GetGlyph(uint32_t aCharCode) {
-  // FcFreeTypeCharIndex needs to lock the FT_Face and can end up searching
-  // through all the postscript glyph names in the font.  Therefore use a
-  // lightweight cache, which is stored on the font entry.
-  auto* slot = static_cast<gfxFT2FontEntryBase*>(mFontEntry.get())
-                   ->GetCmapCacheSlot(aCharCode);
-  if (slot->mCharCode != aCharCode) {
-    slot->mCharCode = aCharCode;
-    slot->mGlyphIndex = gfxFT2LockedFace(this).GetGlyph(aCharCode);
+uint32_t gfxFT2FontEntryBase::GetGlyph(uint32_t aCharCode,
+                                       gfxFT2FontBase* aFont) {
+  const uint32_t slotIndex = aCharCode % kNumCmapCacheSlots;
+  {
+    // Try to read a cached entry without taking an exclusive lock.
+    AutoReadLock lock(mLock);
+    if (mCmapCache) {
+      const auto& slot = mCmapCache[slotIndex];
+      if (slot.mCharCode == aCharCode) {
+        return slot.mGlyphIndex;
+      }
+    }
   }
-  return slot->mGlyphIndex;
+
+  // Create/update the charcode-to-glyphid cache.
+  AutoWriteLock lock(mLock);
+
+  // This cache algorithm and size is based on what is done in
+  // cairo_scaled_font_text_to_glyphs and pango_fc_font_real_get_glyph.  I
+  // think the concept is that adjacent characters probably come mostly from
+  // one Unicode block.  This assumption is probably not so valid with
+  // scripts with large character sets as used for East Asian languages.
+  if (!mCmapCache) {
+    mCmapCache = mozilla::MakeUnique<CmapCacheSlot[]>(kNumCmapCacheSlots);
+
+    // Invalidate slot 0 by setting its char code to something that would
+    // never end up in slot 0.  All other slots are already invalid
+    // because they have mCharCode = 0 and a glyph for char code 0 will
+    // always be in the slot 0.
+    mCmapCache[0].mCharCode = 1;
+  }
+
+  auto& slot = mCmapCache[slotIndex];
+  if (slot.mCharCode != aCharCode) {
+    slot.mCharCode = aCharCode;
+    slot.mGlyphIndex = gfxFT2LockedFace(aFont).GetGlyph(aCharCode);
+  }
+  return slot.mGlyphIndex;
 }
 
 // aScale is intended for a 16.16 x/y_scale of an FT_Size_Metrics
@@ -158,7 +171,7 @@ static inline gfxRect ScaleGlyphBounds(const IntRect& aBounds,
  * exists.  aWidth/aBounds is only set when this returns a non-zero glyph id.
  * This is just for use during initialization, and doesn't use the width cache.
  */
-uint32_t gfxFT2FontBase::GetCharExtents(char aChar, gfxFloat* aWidth,
+uint32_t gfxFT2FontBase::GetCharExtents(uint32_t aChar, gfxFloat* aWidth,
                                         gfxRect* aBounds) {
   FT_UInt gid = GetGlyph(aChar);
   int32_t width;
@@ -220,7 +233,7 @@ void gfxFT2FontBase::InitMetrics() {
 
   if (FontSizeAdjust::Tag(mStyle.sizeAdjustBasis) !=
           FontSizeAdjust::Tag::None &&
-      mStyle.sizeAdjust >= 0.0 && mFTSize == 0.0) {
+      mStyle.sizeAdjust >= 0.0 && GetAdjustedSize() > 0.0 && mFTSize == 0.0) {
     // If font-size-adjust is in effect, we need to get metrics in order to
     // determine the aspect ratio, then compute the final adjusted size and
     // re-initialize metrics.
@@ -249,7 +262,7 @@ void gfxFT2FontBase::InitMetrics() {
       case FontSizeAdjust::Tag::IcHeight: {
         bool vertical = FontSizeAdjust::Tag(mStyle.sizeAdjustBasis) ==
                         FontSizeAdjust::Tag::IcHeight;
-        gfxFloat advance = GetCharAdvance(0x6C34, vertical);
+        gfxFloat advance = GetCharAdvance(kWaterIdeograph, vertical);
         aspect = advance > 0.0 ? advance / mAdjustedSize : 1.0;
         break;
       }
@@ -257,7 +270,7 @@ void gfxFT2FontBase::InitMetrics() {
     if (aspect > 0.0) {
       // If we created a shaper above (to measure glyphs), discard it so we
       // get a new one for the adjusted scaling.
-      mHarfBuzzShaper = nullptr;
+      delete mHarfBuzzShaper.exchange(nullptr);
       mAdjustedSize = mStyle.GetAdjustedSize(aspect);
       // Ensure the FT_Face will be reconfigured for the new size next time we
       // need to use it.
@@ -294,6 +307,7 @@ void gfxFT2FontBase::InitMetrics() {
     mMetrics.maxAdvance = spaceWidth;
     mMetrics.aveCharWidth = spaceWidth;
     mMetrics.zeroWidth = spaceWidth;
+    mMetrics.ideographicWidth = emHeight;
     const gfxFloat xHeight = 0.5 * emHeight;
     mMetrics.xHeight = xHeight;
     mMetrics.capHeight = mMetrics.maxAscent;
@@ -304,6 +318,7 @@ void gfxFT2FontBase::InitMetrics() {
     mMetrics.strikeoutSize = underlineSize;
 
     SanitizeMetrics(&mMetrics, false);
+    UnlockFTFace();
     return;
   }
 
@@ -468,6 +483,12 @@ void gfxFT2FontBase::InitMetrics() {
     mMetrics.zeroWidth = -1.0;  // indicates not found
   }
 
+  if (GetCharExtents(kWaterIdeograph, &width)) {
+    mMetrics.ideographicWidth = width;
+  } else {
+    mMetrics.ideographicWidth = -1.0;
+  }
+
   // If we didn't get a usable x-height or cap-height above, try measuring
   // specific glyphs. This can be affected by hinting, leading to erratic
   // behavior across font sizes and system configuration, so we prefer to
@@ -531,17 +552,14 @@ void gfxFT2FontBase::InitMetrics() {
     //    printf("font name: %s %f\n", NS_ConvertUTF16toUTF8(GetName()).get(), GetStyle()->size);
     //    printf ("pango font %s\n", pango_font_description_to_string (pango_font_describe (font)));
 
-    fprintf (stderr, "Font: %s\n", NS_ConvertUTF16toUTF8(GetName()).get());
+    fprintf (stderr, "Font: %s\n", GetName().get());
     fprintf (stderr, "    emHeight: %f emAscent: %f emDescent: %f\n", mMetrics.emHeight, mMetrics.emAscent, mMetrics.emDescent);
     fprintf (stderr, "    maxAscent: %f maxDescent: %f\n", mMetrics.maxAscent, mMetrics.maxDescent);
     fprintf (stderr, "    internalLeading: %f externalLeading: %f\n", mMetrics.externalLeading, mMetrics.internalLeading);
     fprintf (stderr, "    spaceWidth: %f aveCharWidth: %f xHeight: %f\n", mMetrics.spaceWidth, mMetrics.aveCharWidth, mMetrics.xHeight);
+    fprintf (stderr, "    ideographicWidth: %f\n", mMetrics.ideographicWidth);
     fprintf (stderr, "    uOff: %f uSize: %f stOff: %f stSize: %f\n", mMetrics.underlineOffset, mMetrics.underlineSize, mMetrics.strikeoutOffset, mMetrics.strikeoutSize);
 #endif
-}
-
-const gfxFont::Metrics& gfxFT2FontBase::GetHorizontalMetrics() {
-  return mMetrics;
 }
 
 uint32_t gfxFT2FontBase::GetGlyph(uint32_t unicode,
@@ -584,7 +602,7 @@ bool gfxFT2FontBase::ShouldRoundXOffset(cairo_t* aCairo) const {
                    gfx_text_subpixel_position_force_enabled_AtStartup()));
 }
 
-FT_Vector gfxFT2FontBase::GetEmboldenStrength(FT_Face aFace) {
+FT_Vector gfxFT2FontBase::GetEmboldenStrength(FT_Face aFace) const {
   FT_Vector strength = {0, 0};
   if (!mEmbolden) {
     return strength;
@@ -615,7 +633,7 @@ FT_Vector gfxFT2FontBase::GetEmboldenStrength(FT_Face aFace) {
 }
 
 bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
-                                       IntRect* aBounds) {
+                                       IntRect* aBounds) const {
   gfxFT2LockedFace face(this);
   MOZ_ASSERT(face.get());
   if (!face.get()) {
@@ -628,6 +646,17 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
   if (!aBounds) {
     flags |= FT_LOAD_ADVANCE_ONLY;
   }
+
+  // Whether to disable subpixel positioning
+  bool roundX = ShouldRoundXOffset(nullptr);
+
+  // Workaround for FT_Load_Glyph not setting linearHoriAdvance for SVG glyphs.
+  // See https://gitlab.freedesktop.org/freetype/freetype/-/issues/1156.
+  if (!roundX &&
+      GetFontEntry()->HasFontTable(TRUETYPE_TAG('S', 'V', 'G', ' '))) {
+    flags &= ~FT_LOAD_COLOR;
+  }
+
   if (Factory::LoadFTGlyph(face.get(), aGID, flags) != FT_Err_Ok) {
     // FT_Face was somehow broken/invalid? Don't try to access glyph slot.
     // This probably shouldn't happen, but does: see bug 1440938.
@@ -637,8 +666,6 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
 
   // Whether to interpret hinting settings (i.e. not printing)
   bool hintMetrics = ShouldHintMetrics();
-  // Whether to disable subpixel positioning
-  bool roundX = ShouldRoundXOffset(nullptr);
   // No hinting disables X and Y hinting. Light disables only X hinting.
   bool unhintedY = (mFTLoadFlags & FT_LOAD_NO_HINTING) != 0;
   bool unhintedX =
@@ -702,7 +729,19 @@ bool gfxFT2FontBase::GetFTGlyphExtents(uint16_t aGID, int32_t* aAdvance,
  * FreeType for the glyph extents and initialize the glyph metrics.
  */
 const gfxFT2FontBase::GlyphMetrics& gfxFT2FontBase::GetCachedGlyphMetrics(
-    uint16_t aGID, IntRect* aBounds) {
+    uint16_t aGID, IntRect* aBounds) const {
+  {
+    // Try to read cached metrics without exclusive locking.
+    AutoReadLock lock(mLock);
+    if (mGlyphMetrics) {
+      if (auto metrics = mGlyphMetrics->Lookup(aGID)) {
+        return metrics.Data();
+      }
+    }
+  }
+
+  // We need to create/update the cache.
+  AutoWriteLock lock(mLock);
   if (!mGlyphMetrics) {
     mGlyphMetrics =
         mozilla::MakeUnique<nsTHashMap<nsUint32HashKey, GlyphMetrics>>(128);
@@ -721,12 +760,8 @@ const gfxFT2FontBase::GlyphMetrics& gfxFT2FontBase::GetCachedGlyphMetrics(
   });
 }
 
-int32_t gfxFT2FontBase::GetGlyphWidth(uint16_t aGID) {
-  return GetCachedGlyphMetrics(aGID).mAdvance;
-}
-
 bool gfxFT2FontBase::GetGlyphBounds(uint16_t aGID, gfxRect* aBounds,
-                                    bool aTight) {
+                                    bool aTight) const {
   IntRect bounds;
   const GlyphMetrics& metrics = GetCachedGlyphMetrics(aGID, &bounds);
   if (!metrics.HasValidBounds()) {

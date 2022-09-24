@@ -67,17 +67,13 @@ nsresult UDPSocketChild::Bind(nsIUDPSocketInternal* aSocket,
                               nsIPrincipal* aPrincipal, const nsACString& aHost,
                               uint16_t aPort, bool aAddressReuse,
                               bool aLoopback, uint32_t recvBufferSize,
-                              uint32_t sendBufferSize,
-                              nsISerialEventTarget* aMainThreadEventTarget) {
+                              uint32_t sendBufferSize) {
   UDPSOCKET_LOG(
       ("%s: %s:%u", __FUNCTION__, PromiseFlatCString(aHost).get(), aPort));
 
   NS_ENSURE_ARG(aSocket);
 
   if (NS_IsMainThread()) {
-    if (aMainThreadEventTarget) {
-      gNeckoChild->SetEventTargetForActor(this, aMainThreadEventTarget);
-    }
     if (!gNeckoChild->SendPUDPSocketConstructor(this, aPrincipal,
                                                 mFilterName)) {
       return NS_ERROR_FAILURE;
@@ -146,13 +142,15 @@ nsresult UDPSocketChild::SendBinaryStream(const nsACString& aHost,
                                           nsIInputStream* aStream) {
   NS_ENSURE_ARG(aStream);
 
-  mozilla::ipc::AutoIPCStream autoStream;
-  autoStream.Serialize(aStream, static_cast<mozilla::dom::ContentChild*>(
-                                    gNeckoChild->Manager()));
+  mozilla::ipc::IPCStream stream;
+  if (NS_WARN_IF(!mozilla::ipc::SerializeIPCStream(do_AddRef(aStream), stream,
+                                                   /* aAllowLazy */ false))) {
+    return NS_ERROR_UNEXPECTED;
+  }
 
   UDPSOCKET_LOG(
       ("%s: %s:%u", __FUNCTION__, PromiseFlatCString(aHost).get(), aPort));
-  SendOutgoingData(UDPData(autoStream.TakeValue()),
+  SendOutgoingData(UDPData(stream),
                    UDPSocketAddr(UDPAddressInfo(nsCString(aHost), aPort)));
 
   return NS_OK;

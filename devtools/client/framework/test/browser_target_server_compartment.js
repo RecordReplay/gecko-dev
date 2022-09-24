@@ -36,8 +36,9 @@ async function testChromeTab() {
     Services.obs.addObserver(observe, "devtools-thread-ready");
   });
 
-  const descriptor = await TabDescriptorFactory.createDescriptorForTab(tab);
-  const target = await descriptor.getTarget();
+  const commands = await CommandsFactory.forTab(tab);
+  await commands.targetCommand.startListening();
+  const target = commands.targetCommand.targetFront;
 
   const threadFront = await target.attachThread();
 
@@ -65,7 +66,7 @@ async function testChromeTab() {
     Services.obs.addObserver(observe, "devtools:loader:destroy");
   });
 
-  await descriptor.destroy();
+  await commands.destroy();
 
   // Wait for the dedicated loader used for DevToolsServer to be destroyed
   // in order to prevent leak reports on try
@@ -75,7 +76,7 @@ async function testChromeTab() {
 // Test that Main process Target can debug chrome scripts
 async function testMainProcess() {
   const { DevToolsLoader } = ChromeUtils.import(
-    "resource://devtools/shared/Loader.jsm"
+    "resource://devtools/shared/loader/Loader.jsm"
   );
   const customLoader = new DevToolsLoader({
     invisibleToDebugger: true,
@@ -105,7 +106,6 @@ async function testMainProcess() {
 
   const targetDescriptor = await client.mainRoot.getMainProcess();
   const target = await targetDescriptor.getTarget();
-  await target.attach();
 
   const threadFront = await target.attachThread();
   const { sources } = await threadFront.getSources();

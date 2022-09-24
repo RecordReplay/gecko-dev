@@ -47,12 +47,12 @@ uint64_t ProfileBuffer::AddEntry(const ProfileBufferEntry& aEntry) {
 
 /* static */
 ProfileBufferBlockIndex ProfileBuffer::AddThreadIdEntry(
-    ProfileChunkedBuffer& aProfileChunkedBuffer, int aThreadId) {
+    ProfileChunkedBuffer& aProfileChunkedBuffer, ProfilerThreadId aThreadId) {
   return AddEntry(aProfileChunkedBuffer,
                   ProfileBufferEntry::ThreadId(aThreadId));
 }
 
-uint64_t ProfileBuffer::AddThreadIdEntry(int aThreadId) {
+uint64_t ProfileBuffer::AddThreadIdEntry(ProfilerThreadId aThreadId) {
   return AddThreadIdEntry(mEntries, aThreadId).ConvertToProfileBufferIndex();
 }
 
@@ -156,11 +156,17 @@ void ProfileBuffer::CollectOverheadStats(double aSamplingTimeMs,
   mCountersUs.Count(counters);
   mThreadsUs.Count(threads);
 
-  AddEntry(ProfileBufferEntry::ProfilerOverheadTime(aSamplingTimeMs));
-  AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(locking));
-  AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(cleaning));
-  AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(counters));
-  AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(threads));
+  static const bool sRecordSamplingOverhead = []() {
+    const char* recordOverheads = getenv("MOZ_PROFILER_RECORD_OVERHEADS");
+    return recordOverheads && recordOverheads[0] != '\0';
+  }();
+  if (sRecordSamplingOverhead) {
+    AddEntry(ProfileBufferEntry::ProfilerOverheadTime(aSamplingTimeMs));
+    AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(locking));
+    AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(cleaning));
+    AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(counters));
+    AddEntry(ProfileBufferEntry::ProfilerOverheadDuration(threads));
+  }
 }
 
 ProfilerBufferInfo ProfileBuffer::GetProfilerBufferInfo() const {

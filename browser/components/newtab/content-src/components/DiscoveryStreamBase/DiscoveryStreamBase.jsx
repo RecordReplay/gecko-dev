@@ -10,11 +10,10 @@ import { DSMessage } from "content-src/components/DiscoveryStreamComponents/DSMe
 import { DSPrivacyModal } from "content-src/components/DiscoveryStreamComponents/DSPrivacyModal/DSPrivacyModal";
 import { DSSignup } from "content-src/components/DiscoveryStreamComponents/DSSignup/DSSignup";
 import { DSTextPromo } from "content-src/components/DiscoveryStreamComponents/DSTextPromo/DSTextPromo";
-import { Hero } from "content-src/components/DiscoveryStreamComponents/Hero/Hero";
 import { Highlights } from "content-src/components/DiscoveryStreamComponents/Highlights/Highlights";
 import { HorizontalRule } from "content-src/components/DiscoveryStreamComponents/HorizontalRule/HorizontalRule";
-import { List } from "content-src/components/DiscoveryStreamComponents/List/List";
 import { Navigation } from "content-src/components/DiscoveryStreamComponents/Navigation/Navigation";
+import { PrivacyLink } from "content-src/components/DiscoveryStreamComponents/PrivacyLink/PrivacyLink";
 import React from "react";
 import { SectionTitle } from "content-src/components/DiscoveryStreamComponents/SectionTitle/SectionTitle";
 import { selectLayoutRender } from "content-src/lib/selectLayoutRender";
@@ -159,6 +158,8 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             link_text={component.header && component.header.link_text}
             link_url={component.header && component.header.link_url}
             icon={component.header && component.header.icon}
+            essentialReadsHeader={component.essentialReadsHeader}
+            editorsPicksHeader={component.editorsPicksHeader}
           />
         );
       case "SectionTitle":
@@ -168,11 +169,13 @@ export class _DiscoveryStreamBase extends React.PureComponent {
           <Navigation
             dispatch={this.props.dispatch}
             links={component.properties.links}
+            extraLinks={component.properties.extraLinks}
             alignment={component.properties.alignment}
             display_variant={component.properties.display_variant}
             explore_topics={component.properties.explore_topics}
             header={component.header}
             locale={this.props.App.locale}
+            newFooterSection={component.newFooterSection}
             privacyNoticeURL={component.properties.privacyNoticeURL}
           />
         );
@@ -188,6 +191,7 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             type={component.type}
             items={component.properties.items}
             cta_variant={component.cta_variant}
+            pocket_button_enabled={component.pocketButtonEnabled}
             display_engagement_labels={ENGAGEMENT_LABEL_ENABLED}
             dismissible={this.props.DiscoveryStream.isCollectionDismissible}
             dispatch={this.props.dispatch}
@@ -203,43 +207,36 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             display_variant={component.properties.display_variant}
             data={component.data}
             feed={component.feed}
+            widgets={component.widgets}
             border={component.properties.border}
             type={component.type}
             dispatch={this.props.dispatch}
             items={component.properties.items}
+            hybridLayout={component.properties.hybridLayout}
+            hideCardBackground={component.properties.hideCardBackground}
+            fourCardLayout={component.properties.fourCardLayout}
+            hideDescriptions={component.properties.hideDescriptions}
+            compactGrid={component.properties.compactGrid}
+            compactImages={component.properties.compactImages}
+            imageGradient={component.properties.imageGradient}
+            newSponsoredLabel={component.properties.newSponsoredLabel}
+            titleLines={component.properties.titleLines}
+            descLines={component.properties.descLines}
+            essentialReadsHeader={component.properties.essentialReadsHeader}
+            editorsPicksHeader={component.properties.editorsPicksHeader}
+            readTime={component.properties.readTime}
+            loadMore={component.loadMore}
+            lastCardMessageEnabled={component.lastCardMessageEnabled}
+            saveToPocketCard={component.saveToPocketCard}
             cta_variant={component.cta_variant}
+            pocket_button_enabled={component.pocketButtonEnabled}
             display_engagement_labels={ENGAGEMENT_LABEL_ENABLED}
-          />
-        );
-      case "Hero":
-        return (
-          <Hero
-            subComponentType={embedWidth >= 9 ? `cards` : `list`}
-            feed={component.feed}
-            title={component.header && component.header.title}
-            data={component.data}
-            border={component.properties.border}
-            type={component.type}
-            dispatch={this.props.dispatch}
-            items={component.properties.items}
           />
         );
       case "HorizontalRule":
         return <HorizontalRule />;
-      case "List":
-        return (
-          <List
-            data={component.data}
-            feed={component.feed}
-            fullWidth={component.properties.full_width}
-            hasBorders={component.properties.border === "border"}
-            hasImages={component.properties.has_images}
-            hasNumbers={component.properties.has_numbers}
-            items={component.properties.items}
-            type={component.type}
-            header={component.header}
-          />
-        );
+      case "PrivacyLink":
+        return <PrivacyLink properties={component.properties} />;
       default:
         return <div>{component.type}</div>;
     }
@@ -253,11 +250,12 @@ export class _DiscoveryStreamBase extends React.PureComponent {
   }
 
   render() {
+    const { locale } = this.props;
     // Select layout render data by adding spocs and position to recommendations
     const { layoutRender } = selectLayoutRender({
       state: this.props.DiscoveryStream,
       prefs: this.props.Prefs.values,
-      locale: this.props.locale,
+      locale,
     });
     const { config } = this.props.DiscoveryStream;
 
@@ -302,6 +300,28 @@ export class _DiscoveryStreamBase extends React.PureComponent {
       },
     };
 
+    const privacyLinkComponent = extractComponent("PrivacyLink");
+    let learnMore = {
+      link: {
+        href: message.header.link_url,
+        message: message.header.link_text,
+      },
+    };
+    let sectionTitle = message.header.title;
+    let subTitle = "";
+
+    // If we're in one of these experiments, override the default message.
+    // For now this is English only.
+    if (message.essentialReadsHeader || message.editorsPicksHeader) {
+      learnMore = null;
+      subTitle = "Recommended By Pocket";
+      if (message.essentialReadsHeader) {
+        sectionTitle = "Today’s Essential Reads";
+      } else if (message.editorsPicksHeader) {
+        sectionTitle = "Editor’s Picks";
+      }
+    }
+
     // Render a DS-style TopSites then the rest if any in a collapsible section
     return (
       <React.Fragment>
@@ -327,18 +347,13 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             className="ds-layout"
             collapsed={topStories.pref.collapsed}
             dispatch={this.props.dispatch}
-            icon={topStories.icon}
             id={topStories.id}
             isFixed={true}
-            learnMore={{
-              link: {
-                href: message.header.link_url,
-                message: message.header.link_text,
-              },
-            }}
+            learnMore={learnMore}
             privacyNoticeURL={topStories.privacyNoticeURL}
             showPrefName={topStories.pref.feed}
-            title={message.header.title}
+            title={sectionTitle}
+            subTitle={subTitle}
             eventSource="CARDGRID"
           >
             {this.renderLayout(layoutRender)}
@@ -350,6 +365,13 @@ export class _DiscoveryStreamBase extends React.PureComponent {
             components: [{ type: "Highlights" }],
           },
         ])}
+        {privacyLinkComponent &&
+          this.renderLayout([
+            {
+              width: 12,
+              components: [privacyLinkComponent],
+            },
+          ])}
       </React.Fragment>
     );
   }

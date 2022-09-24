@@ -27,7 +27,7 @@ const actionTypes = {
   INITIALIZE: "INITIALIZE",
   MESSAGE_CLOSE: "MESSAGE_CLOSE",
   MESSAGE_OPEN: "MESSAGE_OPEN",
-  MESSAGE_UPDATE_PAYLOAD: "MESSAGE_UPDATE_PAYLOAD",
+  CSS_MESSAGE_ADD_MATCHING_ELEMENTS: "CSS_MESSAGE_ADD_MATCHING_ELEMENTS",
   MESSAGE_REMOVE: "MESSAGE_REMOVE",
   MESSAGES_ADD: "MESSAGES_ADD",
   MESSAGES_CLEAR: "MESSAGES_CLEAR",
@@ -84,11 +84,8 @@ const prefs = {
       EDITOR_WIDTH: "input.editorWidth",
       // Show the Editor onboarding UI
       EDITOR_ONBOARDING: "devtools.webconsole.input.editorOnboarding",
-      // Show the Input Context the selector in the browser toolbox
-      CONTEXT_SELECTOR_BROWSER_TOOLBOX: "devtools.webconsole.input.context",
-      // Show the Input Context the selector in the content toolbox
-      CONTEXT_SELECTOR_CONTENT_TOOLBOX:
-        "devtools.contenttoolbox.webconsole.input.context",
+      // Show the Input Context the selector
+      CONTEXT_SELECTOR: "devtools.webconsole.input.context",
     },
     FEATURES: {
       // We use the same pref to enable the sidebar on webconsole and browser console.
@@ -173,6 +170,7 @@ const chromeRDPEnums = {
     // output anything (e.g. `console.time()` calls).
     NULL_MESSAGE: "nullMessage",
     NAVIGATION_MARKER: "navigationMarker",
+    SIMPLE_TABLE: "simpleTable",
   },
   MESSAGE_LEVEL: {
     LOG: "log",

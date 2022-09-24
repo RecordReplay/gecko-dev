@@ -12,8 +12,7 @@
 #include "frontend/TDZCheckCache.h"
 #include "js/friend/ErrorMessages.h"  // JSMSG_*
 #include "vm/EnvironmentObject.h"     // ClassBodyLexicalEnvironmentObject
-#include "vm/GlobalObject.h"
-#include "vm/WellKnownAtom.h"  // js_*_str
+#include "vm/WellKnownAtom.h"         // js_*_str
 
 using namespace js;
 using namespace js::frontend;
@@ -50,7 +49,7 @@ bool EmitterScope::checkEnvironmentChainLength(BytecodeEmitter* bce) {
   uint32_t hops;
   if (EmitterScope* emitterScope = enclosing(&bce)) {
     hops = emitterScope->environmentChainLength_;
-  } else if (bce->compilationState.input.enclosingScope) {
+  } else if (!bce->compilationState.input.enclosingScope.isNull()) {
     hops =
         bce->compilationState.scopeContext.enclosingScopeEnvironmentChainLength;
   } else {
@@ -1007,7 +1006,7 @@ uint32_t EmitterScope::CountEnclosingCompilationEnvironments(
   return environments;
 }
 
-bool EmitterScope::lookupPrivate(BytecodeEmitter* bce,
+void EmitterScope::lookupPrivate(BytecodeEmitter* bce,
                                  TaggedParserAtomIndex name, NameLocation& loc,
                                  mozilla::Maybe<NameLocation>& brandLoc) {
   loc = lookup(bce, name);
@@ -1065,7 +1064,7 @@ bool EmitterScope::lookupPrivate(BytecodeEmitter* bce,
     } else {
       brandLoc = Nothing();
     }
-    return true;
+    return;
   }
 
   if (loc.bindingKind() == BindingKind::PrivateMethod) {
@@ -1085,7 +1084,6 @@ bool EmitterScope::lookupPrivate(BytecodeEmitter* bce,
   } else {
     brandLoc = Nothing();
   }
-  return true;
 }
 
 Maybe<NameLocation> EmitterScope::locationBoundInScope(

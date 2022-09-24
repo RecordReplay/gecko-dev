@@ -7,6 +7,7 @@
 #ifndef nsFrameSelection_h___
 #define nsFrameSelection_h___
 
+#include "mozilla/intl/BidiEmbeddingLevel.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
@@ -25,7 +26,7 @@
 
 class nsRange;
 
-#define BIDI_LEVEL_UNDEFINED 0x80
+#define BIDI_LEVEL_UNDEFINED mozilla::intl::BidiEmbeddingLevel(0x80)
 
 //----------------------------------------------------------------------
 
@@ -172,7 +173,8 @@ struct MOZ_STACK_CLASS nsPeekOffsetStruct {
 
 struct nsPrevNextBidiLevels {
   void SetData(nsIFrame* aFrameBefore, nsIFrame* aFrameAfter,
-               nsBidiLevel aLevelBefore, nsBidiLevel aLevelAfter) {
+               mozilla::intl::BidiEmbeddingLevel aLevelBefore,
+               mozilla::intl::BidiEmbeddingLevel aLevelAfter) {
     mFrameBefore = aFrameBefore;
     mFrameAfter = aFrameAfter;
     mLevelBefore = aLevelBefore;
@@ -180,8 +182,8 @@ struct nsPrevNextBidiLevels {
   }
   nsIFrame* mFrameBefore;
   nsIFrame* mFrameAfter;
-  nsBidiLevel mLevelBefore;
-  nsBidiLevel mLevelAfter;
+  mozilla::intl::BidiEmbeddingLevel mLevelBefore;
+  mozilla::intl::BidiEmbeddingLevel mLevelAfter;
 };
 
 namespace mozilla {
@@ -435,6 +437,7 @@ class nsFrameSelection final {
    * that frame.
    *
    * @param aNode input parameter for the node to look at
+   *              TODO: Make this `const nsIContent*` for `ContentEventHandler`.
    * @param aOffset offset into above node.
    * @param aReturnOffset will contain offset into frame.
    */
@@ -474,12 +477,13 @@ class nsFrameSelection final {
   void SetHint(CaretAssociateHint aHintRight) { mCaret.mHint = aHintRight; }
   CaretAssociateHint GetHint() const { return mCaret.mHint; }
 
-  void SetCaretBidiLevelAndMaybeSchedulePaint(nsBidiLevel aLevel);
+  void SetCaretBidiLevelAndMaybeSchedulePaint(
+      mozilla::intl::BidiEmbeddingLevel aLevel);
 
   /**
    * GetCaretBidiLevel gets the caret bidi level.
    */
-  nsBidiLevel GetCaretBidiLevel() const;
+  mozilla::intl::BidiEmbeddingLevel GetCaretBidiLevel() const;
 
   /**
    * UndefineCaretBidiLevel sets the caret bidi level to "undefined".
@@ -694,7 +698,7 @@ class nsFrameSelection final {
    * @param aFrameOut will hold the frame returned
    */
   nsresult GetFrameFromLevel(nsIFrame* aFrameIn, nsDirection aDirection,
-                             nsBidiLevel aBidiLevel,
+                             mozilla::intl::BidiEmbeddingLevel aBidiLevel,
                              nsIFrame** aFrameOut) const;
 
   /**
@@ -724,14 +728,23 @@ class nsFrameSelection final {
   nsFrameSelection(mozilla::PresShell* aPresShell, nsIContent* aLimiter,
                    bool aAccessibleCaretEnabled);
 
-  void StartBatchChanges();
-
-  MOZ_CAN_RUN_SCRIPT_BOUNDARY
   /**
+   * @param aRequesterFuncName function name which wants to start the batch.
+   * This won't be stored nor exposed to selection listeners etc, used only for
+   * logging.
+   */
+  void StartBatchChanges(const char* aRequesterFuncName);
+
+  /**
+   * @param aRequesterFuncName function name which wants to end the batch.
+   * This won't be stored nor exposed to selection listeners etc, used only for
+   * logging.
    * @param aReasons potentially multiple of the reasons defined in
    * nsISelectionListener.idl
    */
-  void EndBatchChanges(int16_t aReasons = nsISelectionListener::NO_REASON);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void EndBatchChanges(
+      const char* aRequesterFuncName,
+      int16_t aReasons = nsISelectionListener::NO_REASON);
 
   mozilla::PresShell* GetPresShell() const { return mPresShell; }
 
@@ -815,6 +828,8 @@ class nsFrameSelection final {
     mSelectionChangeReasons = nsISelectionListener::NO_REASON;
     return retval;
   }
+
+  nsSelectionAmount GetCaretMoveAmount() { return mCaretMoveAmount; }
 
   bool IsUserSelectionReason() const {
     return (mSelectionChangeReasons &
@@ -1034,12 +1049,13 @@ class nsFrameSelection final {
   int16_t mSelectionChangeReasons = nsISelectionListener::NO_REASON;
   // For visual display purposes.
   int16_t mDisplaySelection = nsISelectionController::SELECTION_OFF;
+  nsSelectionAmount mCaretMoveAmount = eSelectNoAmount;
 
   struct Caret {
     // Hint to tell if the selection is at the end of this line or beginning of
     // next.
     CaretAssociateHint mHint = mozilla::CARET_ASSOCIATE_BEFORE;
-    nsBidiLevel mBidiLevel = BIDI_LEVEL_UNDEFINED;
+    mozilla::intl::BidiEmbeddingLevel mBidiLevel = BIDI_LEVEL_UNDEFINED;
 
     bool IsVisualMovement(bool aContinueSelection,
                           CaretMovementStyle aMovementStyle) const;
@@ -1047,7 +1063,8 @@ class nsFrameSelection final {
 
   Caret mCaret;
 
-  nsBidiLevel mKbdBidiLevel = NSBIDI_LTR;
+  mozilla::intl::BidiEmbeddingLevel mKbdBidiLevel =
+      mozilla::intl::BidiEmbeddingLevel::LTR();
 
   class DesiredCaretPos {
    public:

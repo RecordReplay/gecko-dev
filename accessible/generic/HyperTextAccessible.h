@@ -7,6 +7,7 @@
 #define mozilla_a11y_HyperTextAccessible_h__
 
 #include "AccessibleWrap.h"
+#include "mozilla/a11y/HyperTextAccessibleBase.h"
 #include "nsIAccessibleText.h"
 #include "nsIAccessibleTypes.h"
 #include "nsIFrame.h"  // only for nsSelectionAmount
@@ -27,6 +28,7 @@ class Selection;
 
 namespace a11y {
 
+class TextLeafPoint;
 class TextRange;
 
 struct DOMPoint {
@@ -37,24 +39,17 @@ struct DOMPoint {
   int32_t idx;
 };
 
-// This character marks where in the text returned via Text interface,
-// that embedded object characters exist
-const char16_t kEmbeddedObjectChar = 0xfffc;
-const char16_t kImaginaryEmbeddedObjectChar = ' ';
-const char16_t kForcedNewLineChar = '\n';
-
 /**
  * Special Accessible that knows how contain both text and embedded objects
  */
-class HyperTextAccessible : public AccessibleWrap {
+class HyperTextAccessible : public AccessibleWrap,
+                            public HyperTextAccessibleBase {
  public:
   HyperTextAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
   NS_INLINE_DECL_REFCOUNTING_INHERITED(HyperTextAccessible, AccessibleWrap)
 
   // LocalAccessible
-  virtual nsAtom* LandmarkRole() const override;
-  virtual int32_t GetLevelInternal() override;
   virtual already_AddRefed<AccAttributes> NativeAttributes() override;
   virtual mozilla::a11y::role NativeRole() const override;
   virtual uint64_t NativeState() const override;
@@ -78,31 +73,9 @@ class HyperTextAccessible : public AccessibleWrap {
   // HyperLinkAccessible
 
   /**
-   * Return link count within this hypertext accessible.
-   */
-  uint32_t LinkCount() { return EmbeddedChildCount(); }
-
-  /**
    * Return link accessible at the given index.
    */
-  LocalAccessible* LinkAt(uint32_t aIndex) {
-    return GetEmbeddedChildAt(aIndex);
-  }
-
-  /**
-   * Return index for the given link accessible.
-   */
-  int32_t LinkIndexOf(LocalAccessible* aLink) {
-    return GetIndexOfEmbeddedChild(aLink);
-  }
-
-  /**
-   * Return link accessible at the given text offset.
-   */
-  int32_t LinkIndexAtOffset(uint32_t aOffset) {
-    LocalAccessible* child = GetChildAtOffset(aOffset);
-    return child ? LinkIndexOf(child) : -1;
-  }
+  LocalAccessible* LinkAt(uint32_t aIndex) { return EmbeddedChildAt(aIndex); }
 
   //////////////////////////////////////////////////////////////////////////////
   // HyperTextAccessible: DOM point to text offset conversions.
@@ -118,9 +91,9 @@ class HyperTextAccessible : public AccessibleWrap {
    *                       if -1 just look directly for the node
    *                       if >=0 and aNode is text, this represents a char
    * offset if >=0 and aNode is not text, this represents a child node offset
-   * @param aIsEndOffset  [in] if true, then then this offset is not inclusive.
-   * The character indicated by the offset returned is at [offset - 1]. This
-   * means if the passed-in offset is really in a descendant, then the offset
+   * @param aIsEndOffset  [in] if true, then this offset is not inclusive. The
+   * character indicated by the offset returned is at [offset - 1]. This means
+   * if the passed-in offset is really in a descendant, then the offset
    * returned will come just after the relevant embedded object characer. If
    * false, then the offset is inclusive. The character indicated by the offset
    * returned is at [offset]. If the passed-in offset in inside a descendant,
@@ -147,31 +120,7 @@ class HyperTextAccessible : public AccessibleWrap {
   //////////////////////////////////////////////////////////////////////////////
   // TextAccessible
 
-  /**
-   * Return character count within the hypertext accessible.
-   */
-  uint32_t CharacterCount() const { return GetChildOffset(ChildCount()); }
-
-  /**
-   * Get a character at the given offset (don't support magic offsets).
-   */
-  bool CharAt(int32_t aOffset, nsAString& aChar,
-              int32_t* aStartOffset = nullptr, int32_t* aEndOffset = nullptr) {
-    NS_ASSERTION(!aStartOffset == !aEndOffset,
-                 "Offsets should be both defined or both undefined!");
-
-    int32_t childIdx = GetChildIndexAtOffset(aOffset);
-    if (childIdx == -1) return false;
-
-    LocalAccessible* child = LocalChildAt(childIdx);
-    child->AppendTextTo(aChar, aOffset - GetChildOffset(childIdx), 1);
-
-    if (aStartOffset && aEndOffset) {
-      *aStartOffset = aOffset;
-      *aEndOffset = aOffset + aChar.Length();
-    }
-    return true;
-  }
+  using HyperTextAccessibleBase::CharAt;
 
   char16_t CharAt(int32_t aOffset) {
     nsAutoString charAtOffset;
@@ -191,99 +140,46 @@ class HyperTextAccessible : public AccessibleWrap {
    */
   bool IsLineEndCharAt(int32_t aOffset) { return IsCharAt(aOffset, '\n'); }
 
-  /**
-   * Return text between given offsets.
-   */
-  void TextSubstring(int32_t aStartOffset, int32_t aEndOffset,
-                     nsAString& aText);
+  virtual void TextBeforeOffset(int32_t aOffset,
+                                AccessibleTextBoundary aBoundaryType,
+                                int32_t* aStartOffset, int32_t* aEndOffset,
+                                nsAString& aText) override;
+  virtual void TextAtOffset(int32_t aOffset,
+                            AccessibleTextBoundary aBoundaryType,
+                            int32_t* aStartOffset, int32_t* aEndOffset,
+                            nsAString& aText) override;
+  virtual void TextAfterOffset(int32_t aOffset,
+                               AccessibleTextBoundary aBoundaryType,
+                               int32_t* aStartOffset, int32_t* aEndOffset,
+                               nsAString& aText) override;
 
-  /**
-   * Return text before/at/after the given offset corresponding to
-   * the boundary type.
-   */
-  void TextBeforeOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                        int32_t* aStartOffset, int32_t* aEndOffset,
-                        nsAString& aText);
-  void TextAtOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                    int32_t* aStartOffset, int32_t* aEndOffset,
-                    nsAString& aText);
-  void TextAfterOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                       int32_t* aStartOffset, int32_t* aEndOffset,
-                       nsAString& aText);
+  virtual already_AddRefed<AccAttributes> TextAttributes(
+      bool aIncludeDefAttrs, int32_t aOffset, int32_t* aStartOffset,
+      int32_t* aEndOffset) override;
 
-  /**
-   * Return text attributes for the given text range.
-   */
-  already_AddRefed<AccAttributes> TextAttributes(bool aIncludeDefAttrs,
-                                                 int32_t aOffset,
-                                                 int32_t* aStartOffset,
-                                                 int32_t* aEndOffset);
+  virtual already_AddRefed<AccAttributes> DefaultTextAttributes() override;
 
-  /**
-   * Return text attributes applied to the accessible.
-   */
-  already_AddRefed<AccAttributes> DefaultTextAttributes();
+  virtual void InvalidateCachedHyperTextOffsets() override { mOffsets.Clear(); }
 
-  /**
-   * Return text offset of the given child accessible within hypertext
-   * accessible.
-   *
-   * @param  aChild           [in] accessible child to get text offset for
-   * @param  aInvalidateAfter [in, optional] indicates whether invalidate
-   *                           cached offsets for next siblings of the child
-   */
-  int32_t GetChildOffset(const LocalAccessible* aChild,
-                         bool aInvalidateAfter = false) const {
-    int32_t index = GetIndexOf(aChild);
-    return index == -1 ? -1 : GetChildOffset(index, aInvalidateAfter);
-  }
+  // HyperTextAccessibleBase provides an overload which takes an Accessible.
+  using HyperTextAccessibleBase::GetChildOffset;
 
-  /**
-   * Return text offset for the child accessible index.
-   */
-  int32_t GetChildOffset(uint32_t aChildIndex,
-                         bool aInvalidateAfter = false) const;
-
-  /**
-   * Return child accessible at the given text offset.
-   *
-   * @param  aOffset  [in] the given text offset
-   */
-  int32_t GetChildIndexAtOffset(uint32_t aOffset) const;
-
-  /**
-   * Return child accessible at the given text offset.
-   *
-   * @param  aOffset  [in] the given text offset
-   */
-  LocalAccessible* GetChildAtOffset(uint32_t aOffset) const {
+  virtual LocalAccessible* GetChildAtOffset(uint32_t aOffset) const override {
     return LocalChildAt(GetChildIndexAtOffset(aOffset));
   }
-
-  /**
-   * Return true if the given offset/range is valid.
-   */
-  bool IsValidOffset(int32_t aOffset);
-  bool IsValidRange(int32_t aStartOffset, int32_t aEndOffset);
 
   /**
    * Return an offset at the given point.
    */
   int32_t OffsetAtPoint(int32_t aX, int32_t aY, uint32_t aCoordType);
 
-  /**
-   * Return a rect of the given text range relative given coordinate system.
-   */
-  nsIntRect TextBounds(
+  LayoutDeviceIntRect TextBounds(
       int32_t aStartOffset, int32_t aEndOffset,
       uint32_t aCoordType =
-          nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE);
+          nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE) override;
 
-  /**
-   * Return a rect for character at given offset relative given coordinate
-   * system.
-   */
-  nsIntRect CharBounds(int32_t aOffset, uint32_t aCoordType) {
+  LayoutDeviceIntRect CharBounds(int32_t aOffset,
+                                 uint32_t aCoordType) override {
     int32_t endOffset = aOffset == static_cast<int32_t>(CharacterCount())
                             ? aOffset
                             : aOffset + 1;
@@ -293,7 +189,7 @@ class HyperTextAccessible : public AccessibleWrap {
   /**
    * Get/set caret offset, if no caret then -1.
    */
-  int32_t CaretOffset() const;
+  virtual int32_t CaretOffset() const override;
   void SetCaretOffset(int32_t aOffset);
 
   /**
@@ -312,15 +208,14 @@ class HyperTextAccessible : public AccessibleWrap {
   mozilla::LayoutDeviceIntRect GetCaretRect(nsIWidget** aWidget);
 
   /**
-   * Return selected regions count within the accessible.
+   * Return true if caret is at end of line.
    */
-  int32_t SelectionCount();
+  bool IsCaretAtEndOfLine() const;
 
-  /**
-   * Return the start and end offset of the specified selection.
-   */
-  bool SelectionBoundsAt(int32_t aSelectionNum, int32_t* aStartOffset,
-                         int32_t* aEndOffset);
+  virtual int32_t SelectionCount() override;
+
+  virtual bool SelectionBoundsAt(int32_t aSelectionNum, int32_t* aStartOffset,
+                                 int32_t* aEndOffset) override;
 
   /*
    * Changes the start and end offset of the specified selection.
@@ -362,11 +257,7 @@ class HyperTextAccessible : public AccessibleWrap {
    */
   void EnclosingRange(TextRange& aRange) const;
 
-  /**
-   * Return an array of disjoint ranges for selected text within the text
-   * control or the document this accessible belongs to.
-   */
-  void SelectionRanges(nsTArray<TextRange>* aRanges) const;
+  virtual void SelectionRanges(nsTArray<TextRange>* aRanges) const override;
 
   /**
    * Return an array of disjoint ranges of visible text within the text control
@@ -417,19 +308,9 @@ class HyperTextAccessible : public AccessibleWrap {
   // HyperTextAccessible
 
   /**
-   * Transform magic offset into text offset.
-   */
-  index_t ConvertMagicOffset(int32_t aOffset) const;
-
-  /**
    * Adjust an offset the caret stays at to get a text by line boundary.
    */
   uint32_t AdjustCaretOffset(uint32_t aOffset) const;
-
-  /**
-   * Return true if caret is at end of line.
-   */
-  bool IsCaretAtEndOfLine() const;
 
   /**
    * Return true if the given offset points to terminal empty line if any.
@@ -487,11 +368,13 @@ class HyperTextAccessible : public AccessibleWrap {
                       EWordMovementType aWordMovementType = eDefaultBehavior);
 
   /**
-   * Return the boundaries of the substring in case of textual frame or
-   * frame boundaries in case of non textual frame, offsets are ignored.
+   * Return the boundaries (in dev pixels) of the substring in case of textual
+   * frame or frame boundaries in case of non textual frame, offsets are
+   * ignored.
    */
-  nsIntRect GetBoundsInFrame(nsIFrame* aFrame, uint32_t aStartRenderedOffset,
-                             uint32_t aEndRenderedOffset);
+  LayoutDeviceIntRect GetBoundsInFrame(nsIFrame* aFrame,
+                                       uint32_t aStartRenderedOffset,
+                                       uint32_t aEndRenderedOffset);
 
   // Selection helpers
 
@@ -528,7 +411,7 @@ class HyperTextAccessible : public AccessibleWrap {
    * @param aEndOffset        [in, out] the end offset
    * @param aAttributes       [out, optional] result attributes
    */
-  void GetSpellTextAttr(nsINode* aNode, int32_t aNodeOffset,
+  void GetSpellTextAttr(nsINode* aNode, uint32_t aNodeOffset,
                         uint32_t* aStartOffset, uint32_t* aEndOffset,
                         AccAttributes* aAttributes);
 
@@ -538,11 +421,21 @@ class HyperTextAccessible : public AccessibleWrap {
    */
   void SetMathMLXMLRoles(AccAttributes* aAttributes);
 
+  // HyperTextAccessibleBase
+  virtual const Accessible* Acc() const override { return this; }
+
+  virtual const nsTArray<int32_t>& GetCachedHyperTextOffsets() const override {
+    if (mOffsets.IsEmpty()) {
+      BuildCachedHyperTextOffsets(mOffsets);
+    }
+    return mOffsets;
+  }
+
  private:
   /**
    * End text offsets array.
    */
-  mutable nsTArray<uint32_t> mOffsets;
+  mutable nsTArray<int32_t> mOffsets;
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -550,6 +443,10 @@ class HyperTextAccessible : public AccessibleWrap {
 
 inline HyperTextAccessible* LocalAccessible::AsHyperText() {
   return IsHyperText() ? static_cast<HyperTextAccessible*>(this) : nullptr;
+}
+
+inline HyperTextAccessibleBase* LocalAccessible::AsHyperTextBase() {
+  return AsHyperText();
 }
 
 }  // namespace a11y

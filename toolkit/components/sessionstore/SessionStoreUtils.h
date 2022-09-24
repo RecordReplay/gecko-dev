@@ -8,8 +8,8 @@
 #define mozilla_dom_SessionStoreUtils_h
 
 #include "mozilla/Attributes.h"
+#include "mozilla/IntegerRange.h"
 #include "mozilla/dom/BindingDeclarations.h"
-#include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/SessionStoreUtilsBinding.h"
 #include "SessionStoreData.h"
 #include "SessionStoreRestoreData.h"
@@ -74,8 +74,8 @@ class SessionStoreUtils {
   static void RestoreScrollPosition(nsGlobalWindowInner& aWindow,
                                     const nsCString& aScrollPosition);
 
-  static void CollectFormData(Document* aDocument,
-                              sessionstore::FormData& aFormData);
+  static uint32_t CollectFormData(Document* aDocument,
+                                  sessionstore::FormData& aFormData);
 
   /*
     @param aDocument: DOMDocument instance to obtain form data for.
@@ -102,17 +102,17 @@ class SessionStoreUtils {
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   static bool RestoreFormData(const GlobalObject& aGlobal, Document& aDocument,
                               const CollectedData& aData);
-  static void RestoreFormData(
+  MOZ_CAN_RUN_SCRIPT static void RestoreFormData(
       Document& aDocument, const nsString& aInnerHTML,
       const nsTArray<SessionStoreRestoreData::Entry>& aEntries);
 
   static void ComposeInputData(const nsTArray<CollectedInputDataValue>& aData,
                                InputElementData& ret);
 
-  static already_AddRefed<nsISessionStoreRestoreData>
+  MOZ_CAN_RUN_SCRIPT static already_AddRefed<nsISessionStoreRestoreData>
   ConstructSessionStoreRestoreData(const GlobalObject& aGlobal);
 
-  static already_AddRefed<Promise> InitializeRestore(
+  MOZ_CAN_RUN_SCRIPT static already_AddRefed<Promise> InitializeRestore(
       const GlobalObject& aGlobal, CanonicalBrowsingContext& aContext,
       nsISessionStoreRestoreData* aData, ErrorResult& aError);
 
@@ -139,14 +139,44 @@ class SessionStoreUtils {
       const nsTArray<SSCacheCopy>& aValues,
       Record<nsCString, Record<nsString, nsString>>& aStorage);
 
-  static void ResetSessionStore(BrowsingContext* aContext);
-
 #if defined(MOZ_WIDGET_ANDROID) || defined(MOZ_THUNDERBIRD) || \
     defined(MOZ_SUITE)
   static constexpr bool NATIVE_LISTENER = false;
 #else
   static constexpr bool NATIVE_LISTENER = true;
 #endif
+
+  static bool CopyProperty(JSContext* aCx, JS::HandleObject aDst,
+                           JS::HandleObject aSrc, const nsAString& aName);
+
+  template <typename T>
+  static bool CopyChildren(JSContext* aCx, JS::HandleObject aDst,
+                           const nsTArray<RefPtr<T>>& aChildren) {
+    if (!aChildren.IsEmpty()) {
+      JS::RootedObject children(aCx,
+                                JS::NewArrayObject(aCx, aChildren.Length()));
+
+      for (const auto index : IntegerRange(aChildren.Length())) {
+        if (!aChildren[index]) {
+          continue;
+        }
+
+        JS::RootedObject object(aCx);
+        aChildren[index]->ToJSON(aCx, &object);
+
+        if (!JS_DefineElement(aCx, children, index, object, JSPROP_ENUMERATE)) {
+          return false;
+        }
+      }
+
+      if (!JS_DefineProperty(aCx, aDst, "children", children,
+                             JSPROP_ENUMERATE)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
 };
 
 }  // namespace dom

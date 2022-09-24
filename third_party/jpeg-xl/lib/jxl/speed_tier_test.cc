@@ -51,6 +51,14 @@ JXL_GTEST_INSTANTIATE_TEST_SUITE_P(
                                         /*shrink8=*/true},
                     SpeedTierTestParams{SpeedTier::kCheetah,
                                         /*shrink8=*/false},
+                    SpeedTierTestParams{SpeedTier::kThunder,
+                                        /*shrink8=*/true},
+                    SpeedTierTestParams{SpeedTier::kThunder,
+                                        /*shrink8=*/false},
+                    SpeedTierTestParams{SpeedTier::kLightning,
+                                        /*shrink8=*/true},
+                    SpeedTierTestParams{SpeedTier::kLightning,
+                                        /*shrink8=*/false},
                     SpeedTierTestParams{SpeedTier::kFalcon,
                                         /*shrink8=*/true},
                     SpeedTierTestParams{SpeedTier::kFalcon,
@@ -77,7 +85,7 @@ JXL_GTEST_INSTANTIATE_TEST_SUITE_P(
 
 TEST_P(SpeedTierTest, Roundtrip) {
   const PaddedBytes orig =
-      ReadTestData("wesaturate/500px/u76c0g_bliznaca_srgb8.png");
+      ReadTestData("third_party/wesaturate/500px/u76c0g_bliznaca_srgb8.png");
   CodecInOut io;
   ThreadPoolInternal pool(8);
   ASSERT_TRUE(SetFromBytes(Span<const uint8_t>(orig), &io, &pool));
@@ -96,7 +104,7 @@ TEST_P(SpeedTierTest, Roundtrip) {
   test::Roundtrip(&io, cparams, dparams, nullptr, &io2);
 
   // Can be 2.2 in non-hare mode.
-  EXPECT_LE(ButteraugliDistance(io, io2, cparams.ba_params,
+  EXPECT_LE(ButteraugliDistance(io, io2, cparams.ba_params, GetJxlCms(),
                                 /*distmap=*/nullptr, /*pool=*/nullptr),
             2.8);
 }

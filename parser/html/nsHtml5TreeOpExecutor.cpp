@@ -22,6 +22,7 @@
 #include "mozilla/StaticPrefs_view_source.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/css/Loader.h"
+#include "mozilla/fallible.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsError.h"
@@ -140,7 +141,8 @@ nsHtml5TreeOpExecutor::~nsHtml5TreeOpExecutor() {
       }
     }
   }
-  NS_ASSERTION(mOpQueue.IsEmpty(), "Somehow there's stuff in the op queue.");
+  NS_ASSERTION(NS_FAILED(mBroken) || mOpQueue.IsEmpty(),
+               "Somehow there's stuff in the op queue.");
 }
 
 // nsIContentSink
@@ -150,8 +152,7 @@ nsHtml5TreeOpExecutor::WillParse() {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-NS_IMETHODIMP
-nsHtml5TreeOpExecutor::WillBuildModel(nsDTDMode aDTDMode) {
+nsresult nsHtml5TreeOpExecutor::WillBuildModel() {
   mDocument->AddObserver(this);
   WillBuildModelImpl();
   GetDocument()->BeginLoad();
@@ -298,8 +299,7 @@ nsHtml5TreeOpExecutor::DidBuildModel(bool aTerminated) {
                 Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::TldInitial);
           }
           break;
-        // Deliberately no final version of ASCII
-        case kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8:
+        case kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8InitialWasASCII:
           if (plain) {
             LOGCHARDETNG(("TEXT::UtfFinal"));
             Telemetry::AccumulateCategorical(
@@ -323,6 +323,19 @@ nsHtml5TreeOpExecutor::DidBuildModel(bool aTerminated) {
                     GenericFinal);
           }
           break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8GenericInitialWasASCII:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::GenericFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    GenericFinalA);
+          } else {
+            LOGCHARDETNG(("HTML::GenericFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    GenericFinalA);
+          }
+          break;
         case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Content:
           if (plain) {
             LOGCHARDETNG(("TEXT::ContentFinal"));
@@ -336,6 +349,19 @@ nsHtml5TreeOpExecutor::DidBuildModel(bool aTerminated) {
                     ContentFinal);
           }
           break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8ContentInitialWasASCII:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::ContentFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::
+                    ContentFinalA);
+          } else {
+            LOGCHARDETNG(("HTML::ContentFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::
+                    ContentFinalA);
+          }
+          break;
         case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD:
           if (plain) {
             LOGCHARDETNG(("TEXT::TldFinal"));
@@ -345,6 +371,17 @@ nsHtml5TreeOpExecutor::DidBuildModel(bool aTerminated) {
             LOGCHARDETNG(("HTML::TldFinal"));
             Telemetry::AccumulateCategorical(
                 Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::TldFinal);
+          }
+          break;
+        case kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLDInitialWasASCII:
+          if (plain) {
+            LOGCHARDETNG(("TEXT::TldFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_TEXT::TldFinalA);
+          } else {
+            LOGCHARDETNG(("HTML::TldFinalA"));
+            Telemetry::AccumulateCategorical(
+                Telemetry::LABELS_ENCODING_DETECTION_OUTCOME_HTML::TldFinalA);
           }
           break;
         default:
@@ -382,10 +419,8 @@ nsHtml5TreeOpExecutor::WillInterrupt() {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 
-NS_IMETHODIMP
-nsHtml5TreeOpExecutor::WillResume() {
+void nsHtml5TreeOpExecutor::WillResume() {
   MOZ_ASSERT_UNREACHABLE("Don't call. For interface compat only.");
-  return NS_ERROR_NOT_IMPLEMENTED;
 }
 
 NS_IMETHODIMP
@@ -410,7 +445,7 @@ nsISupports* nsHtml5TreeOpExecutor::GetTarget() {
 }
 
 nsresult nsHtml5TreeOpExecutor::MarkAsBroken(nsresult aReason) {
-  NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
+  MOZ_ASSERT(NS_IsMainThread(), "Wrong thread!");
   mBroken = aReason;
   if (mStreamParser) {
     mStreamParser->Terminate();
@@ -445,7 +480,7 @@ static bool BackgroundFlushCallback(TimeStamp /*aDeadline*/) {
 }
 
 void nsHtml5TreeOpExecutor::ContinueInterruptedParsingAsync() {
-  if (!mDocument || !mDocument->IsInBackgroundWindow()) {
+  if (mDocument && !mDocument->IsInBackgroundWindow()) {
     nsCOMPtr<nsIRunnable> flusher = new nsHtml5ExecutorReflusher(this);
     if (NS_FAILED(
             mDocument->Dispatch(TaskCategory::Network, flusher.forget()))) {
@@ -465,11 +500,12 @@ void nsHtml5TreeOpExecutor::ContinueInterruptedParsingAsync() {
     gBackgroundFlushRunner = IdleTaskRunner::Create(
         &BackgroundFlushCallback,
         "nsHtml5TreeOpExecutor::BackgroundFlushCallback",
-        0,    // Start looking for idle time immediately.
-        250,  // The hard deadline: 250ms.
-        StaticPrefs::content_sink_interactive_parse_time() /
-            1000,               // Required budget.
-        true,                   // repeating
+        0,  // Start looking for idle time immediately.
+        TimeDuration::FromMilliseconds(250),  // The hard deadline.
+        TimeDuration::FromMicroseconds(
+            StaticPrefs::content_sink_interactive_parse_time()),  // Required
+                                                                  // budget.
+        true,                                                     // repeating
         [] { return false; });  // MayStopProcessing
   }
 }
@@ -575,7 +611,12 @@ void nsHtml5TreeOpExecutor::RunFlushLoop() {
       nsTArray<nsHtml5SpeculativeLoad> speculativeLoadQueue;
       MOZ_RELEASE_ASSERT(mFlushState == eNotFlushing,
                          "mOpQueue modified during flush.");
-      mStage.MoveOpsAndSpeculativeLoadsTo(mOpQueue, speculativeLoadQueue);
+      if (!mStage.MoveOpsAndSpeculativeLoadsTo(mOpQueue,
+                                               speculativeLoadQueue)) {
+        MarkAsBroken(nsresult::NS_ERROR_OUT_OF_MEMORY);
+        return;
+      }
+
       // Make sure speculative loads never start after the corresponding
       // normal loads for the same URLs.
       nsHtml5SpeculativeLoad* start = speculativeLoadQueue.Elements();
@@ -799,6 +840,20 @@ nsresult nsHtml5TreeOpExecutor::FlushDocumentWrite() {
   return rv;
 }
 
+void nsHtml5TreeOpExecutor::CommitToInternalEncoding() {
+  if (MOZ_UNLIKELY(!mParser || !mStreamParser)) {
+    // An extension terminated the parser from a HTTP observer.
+    ClearOpQueue();  // clear in order to be able to assert in destructor
+    return;
+  }
+  mStreamParser->ContinueAfterScriptsOrEncodingCommitment(nullptr, nullptr,
+                                                          false);
+}
+
+[[nodiscard]] bool nsHtml5TreeOpExecutor::TakeOpsFromStage() {
+  return mStage.MoveOpsTo(mOpQueue);
+}
+
 // copied from HTML content sink
 bool nsHtml5TreeOpExecutor::IsScriptEnabled() {
   // Note that if we have no document or no docshell or no global or whatnot we
@@ -906,6 +961,21 @@ void nsHtml5TreeOpExecutor::Start() {
   mStarted = true;
 }
 
+void nsHtml5TreeOpExecutor::UpdateCharsetSource(
+    nsCharsetSource aCharsetSource) {
+  if (mDocument) {
+    mDocument->SetDocumentCharacterSetSource(aCharsetSource);
+  }
+}
+
+void nsHtml5TreeOpExecutor::SetDocumentCharsetAndSource(
+    NotNull<const Encoding*> aEncoding, nsCharsetSource aCharsetSource) {
+  if (mDocument) {
+    mDocument->SetDocumentCharacterSetSource(aCharsetSource);
+    mDocument->SetDocumentCharacterSet(aEncoding);
+  }
+}
+
 void nsHtml5TreeOpExecutor::NeedsCharsetSwitchTo(
     NotNull<const Encoding*> aEncoding, int32_t aSource, uint32_t aLineNumber) {
   nsHtml5AutoPauseUpdate autoPause(this);
@@ -925,17 +995,8 @@ void nsHtml5TreeOpExecutor::NeedsCharsetSwitchTo(
   }
   // if the charset switch was accepted, mDocShell has called Terminate() on the
   // parser by now
-
   if (!mParser) {
-    // success
-    if (aSource == kCharsetFromMetaTag) {
-      MaybeComplainAboutCharset("EncLateMetaReload", false, aLineNumber);
-    }
     return;
-  }
-
-  if (aSource == kCharsetFromMetaTag) {
-    MaybeComplainAboutCharset("EncLateMetaTooLate", true, aLineNumber);
   }
 
   GetParser()->ContinueAfterFailedCharsetSwitch();
@@ -944,38 +1005,29 @@ void nsHtml5TreeOpExecutor::NeedsCharsetSwitchTo(
 void nsHtml5TreeOpExecutor::MaybeComplainAboutCharset(const char* aMsgId,
                                                       bool aError,
                                                       uint32_t aLineNumber) {
-  if (mAlreadyComplainedAboutCharset) {
-    return;
-  }
-  // The EncNoDeclaration case for advertising iframes is so common that it
-  // would result is way too many errors. The iframe case doesn't matter
-  // when the ad is an image or a Flash animation anyway. When the ad is
-  // textual, a misrendered ad probably isn't a huge loss for users.
-  // Let's suppress the message in this case.
-  // This means that errors about other different-origin iframes in mashups
-  // are lost as well, but generally, the site author isn't in control of
-  // the embedded different-origin pages anyway and can't fix problems even
-  // if alerted about them.
-  if (!strcmp(aMsgId, "EncNoDeclaration") && mDocShell) {
-    dom::BrowsingContext* const bc = mDocShell->GetBrowsingContext();
-    if (bc && bc->GetParent()) {
+  // Encoding errors don't count towards already complaining
+  if (!(!strcmp(aMsgId, "EncError") || !strcmp(aMsgId, "EncErrorFrame") ||
+        !strcmp(aMsgId, "EncErrorFramePlain"))) {
+    if (mAlreadyComplainedAboutCharset) {
       return;
     }
+    mAlreadyComplainedAboutCharset = true;
   }
-  mAlreadyComplainedAboutCharset = true;
   nsContentUtils::ReportToConsole(
       aError ? nsIScriptError::errorFlag : nsIScriptError::warningFlag,
       "HTML parser"_ns, mDocument, nsContentUtils::eHTMLPARSER_PROPERTIES,
       aMsgId, nsTArray<nsString>(), nullptr, u""_ns, aLineNumber);
 }
 
-void nsHtml5TreeOpExecutor::ComplainAboutBogusProtocolCharset(Document* aDoc) {
+void nsHtml5TreeOpExecutor::ComplainAboutBogusProtocolCharset(
+    Document* aDoc, bool aUnrecognized) {
   NS_ASSERTION(!mAlreadyComplainedAboutCharset,
                "How come we already managed to complain?");
   mAlreadyComplainedAboutCharset = true;
-  nsContentUtils::ReportToConsole(nsIScriptError::errorFlag, "HTML parser"_ns,
-                                  aDoc, nsContentUtils::eHTMLPARSER_PROPERTIES,
-                                  "EncProtocolUnsupported");
+  nsContentUtils::ReportToConsole(
+      nsIScriptError::errorFlag, "HTML parser"_ns, aDoc,
+      nsContentUtils::eHTMLPARSER_PROPERTIES,
+      aUnrecognized ? "EncProtocolUnsupported" : "EncProtocolReplacement");
 }
 
 void nsHtml5TreeOpExecutor::MaybeComplainAboutDeepTree(uint32_t aLineNumber) {
@@ -994,11 +1046,11 @@ nsHtml5Parser* nsHtml5TreeOpExecutor::GetParser() {
   return static_cast<nsHtml5Parser*>(mParser.get());
 }
 
-void nsHtml5TreeOpExecutor::MoveOpsFrom(
+[[nodiscard]] bool nsHtml5TreeOpExecutor::MoveOpsFrom(
     nsTArray<nsHtml5TreeOperation>& aOpQueue) {
   MOZ_RELEASE_ASSERT(mFlushState == eNotFlushing,
                      "Ops added to mOpQueue during tree op execution.");
-  mOpQueue.AppendElements(std::move(aOpQueue));
+  return !!mOpQueue.AppendElements(std::move(aOpQueue), mozilla::fallible_t());
 }
 
 void nsHtml5TreeOpExecutor::ClearOpQueue() {
@@ -1262,11 +1314,44 @@ void nsHtml5TreeOpExecutor::SetSpeculationBase(const nsAString& aURL) {
     // the first one wins
     return;
   }
-  auto encoding = mDocument->GetDocumentCharacterSet();
-  DebugOnly<nsresult> rv = NS_NewURI(getter_AddRefs(mSpeculationBaseURI), aURL,
-                                     encoding, mDocument->GetDocumentURI());
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Failed to create a URI");
 
+  auto encoding = mDocument->GetDocumentCharacterSet();
+  nsCOMPtr<nsIURI> newBaseURI;
+  DebugOnly<nsresult> rv = NS_NewURI(getter_AddRefs(newBaseURI), aURL, encoding,
+                                     mDocument->GetDocumentURI());
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "Failed to create a URI");
+  if (!newBaseURI) {
+    return;
+  }
+
+  // Check the document's CSP usually delivered via the CSP header.
+  if (nsCOMPtr<nsIContentSecurityPolicy> csp = mDocument->GetCsp()) {
+    // base-uri should not fallback to the default-src and preloads should not
+    // trigger violation reports.
+    bool cspPermitsBaseURI = true;
+    nsresult rv = csp->Permits(
+        nullptr, nullptr, newBaseURI,
+        nsIContentSecurityPolicy::BASE_URI_DIRECTIVE, true /* aSpecific */,
+        false /* aSendViolationReports */, &cspPermitsBaseURI);
+    if (NS_FAILED(rv) || !cspPermitsBaseURI) {
+      return;
+    }
+  }
+
+  // Also check the CSP discovered from the <meta> tag during speculative
+  // parsing.
+  if (nsCOMPtr<nsIContentSecurityPolicy> csp = mDocument->GetPreloadCsp()) {
+    bool cspPermitsBaseURI = true;
+    nsresult rv = csp->Permits(
+        nullptr, nullptr, newBaseURI,
+        nsIContentSecurityPolicy::BASE_URI_DIRECTIVE, true /* aSpecific */,
+        false /* aSendViolationReports */, &cspPermitsBaseURI);
+    if (NS_FAILED(rv) || !cspPermitsBaseURI) {
+      return;
+    }
+  }
+
+  mSpeculationBaseURI = newBaseURI;
   mDocument->Preloads().SetSpeculationBase(mSpeculationBaseURI);
 }
 
@@ -1276,10 +1361,6 @@ void nsHtml5TreeOpExecutor::UpdateReferrerInfoFromMeta(
 }
 
 void nsHtml5TreeOpExecutor::AddSpeculationCSP(const nsAString& aCSP) {
-  if (!StaticPrefs::security_csp_enable()) {
-    return;
-  }
-
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 
   nsresult rv = NS_OK;
@@ -1290,8 +1371,7 @@ void nsHtml5TreeOpExecutor::AddSpeculationCSP(const nsAString& aCSP) {
     NS_ENSURE_SUCCESS_VOID(rv);
   }
 
-  // please note that meta CSPs and CSPs delivered through a header need
-  // to be joined together.
+  // Please note that multiple meta CSPs need to be joined together.
   rv = preloadCsp->AppendPolicy(
       aCSP,
       false,  // csp via meta tag can not be report only

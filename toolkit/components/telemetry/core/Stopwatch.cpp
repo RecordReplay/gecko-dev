@@ -9,18 +9,19 @@
 #include "TelemetryHistogram.h"
 #include "TelemetryUserInteraction.h"
 
+#include "js/MapAndSet.h"
+#include "js/WeakMap.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/HangAnnotations.h"
+#include "mozilla/ProfilerMarkers.h"
 #include "mozilla/DataMutex.h"
 #include "mozilla/TimeStamp.h"
-#include "GeckoProfiler.h"
 #include "nsHashKeys.h"
 #include "nsContentUtils.h"
 #include "nsPrintfCString.h"
 #include "nsQueryObject.h"
-#include "nsRefPtrHashtable.h"
 #include "nsString.h"
 #include "xpcpublic.h"
 
@@ -381,7 +382,7 @@ int32_t Timers::Finish(JSContext* aCx, const nsAString& aHistogram,
   } else {
     rv = TelemetryHistogram::Accumulate(histogram.get(), delta);
   }
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsCString markerText = histogram;
     if (!aKey.IsVoid()) {
       markerText.AppendLiteral(":");
@@ -529,7 +530,7 @@ bool Timers::FinishUserInteraction(
     return false;
   }
 
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsAutoCString markerText(timer->GetBHRAnnotationValue());
     if (aAdditionalText.WasPassed()) {
       markerText.Append(",");

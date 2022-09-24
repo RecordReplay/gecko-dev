@@ -59,13 +59,12 @@ nsConsoleService::MessageElement::~MessageElement() = default;
 
 nsConsoleService::nsConsoleService()
     : mCurrentSize(0),
+      // XXX grab this from a pref!
+      // hm, but worry about circularity, bc we want to be able to report
+      // prefs errs...
+      mMaximumSize(250),
       mDeliveringMessage(false),
       mLock("nsConsoleService.mLock") {
-  // XXX grab this from a pref!
-  // hm, but worry about circularity, bc we want to be able to report
-  // prefs errs...
-  mMaximumSize = 250;
-
 #ifdef XP_WIN
   // This environment variable controls whether the console service
   // should be prevented from putting output to the attached debugger.
@@ -263,12 +262,12 @@ LogMessageRunnable::Run() {
 // nsIConsoleService methods
 NS_IMETHODIMP
 nsConsoleService::LogMessage(nsIConsoleMessage* aMessage) {
-  return LogMessageWithMode(aMessage, OutputToLog);
+  return LogMessageWithMode(aMessage, nsIConsoleService::OutputToLog);
 }
 
 // This can be called off the main thread.
 nsresult nsConsoleService::LogMessageWithMode(
-    nsIConsoleMessage* aMessage, nsConsoleService::OutputMode aOutputMode) {
+    nsIConsoleMessage* aMessage, nsIConsoleService::OutputMode aOutputMode) {
   if (!aMessage) {
     return NS_ERROR_INVALID_ARG;
   }

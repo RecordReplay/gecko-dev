@@ -15,16 +15,16 @@ add_task(async function test_saveBookmarksToJSONFile_and_create() {
   });
 
   // Test saveBookmarksToJSONFile()
-  let backupFile = OS.Path.join(OS.Constants.Path.tmpDir, "bookmarks.json");
+  let backupFile = PathUtils.join(PathUtils.tempDir, "bookmarks.json");
 
   let nodeCount = await PlacesBackups.saveBookmarksToJSONFile(backupFile, true);
   Assert.ok(nodeCount > 0);
-  Assert.ok(await OS.File.exists(backupFile));
+  Assert.ok(await IOUtils.exists(backupFile));
 
   // Ensure the backup would be copied to our backups folder when the original
   // backup is saved somewhere else.
   let recentBackup = await PlacesBackups.getMostRecentBackup();
-  let matches = OS.Path.basename(recentBackup).match(
+  let matches = PathUtils.filename(recentBackup).match(
     PlacesBackups.filenamesRegex
   );
   Assert.equal(matches[2], nodeCount);
@@ -40,12 +40,14 @@ add_task(async function test_saveBookmarksToJSONFile_and_create() {
 
   let mostRecentBackupFile = await PlacesBackups.getMostRecentBackup();
   Assert.notEqual(mostRecentBackupFile, null);
-  matches = OS.Path.basename(recentBackup).match(PlacesBackups.filenamesRegex);
+  matches = PathUtils.filename(recentBackup).match(
+    PlacesBackups.filenamesRegex
+  );
   Assert.equal(matches[2], nodeCount);
   Assert.equal(matches[3].length, 24);
 
   // Cleanup
-  await OS.File.remove(backupFile);
+  await IOUtils.remove(backupFile);
   await PlacesBackups.create(0);
   await PlacesUtils.bookmarks.remove(bookmark);
 });

@@ -16,6 +16,11 @@ with Files("Finder*.jsm"):
 with Files("KeyPressEventModelCheckerChild.jsm"):
     BUG_COMPONENT = ("Core", "DOM: Events")
 
+with Files("PictureInPictureChild.jsm"):
+    BUG_COMPONENT = ("Toolkit", "Picture-in-Picture")
+
+SPHINX_TREES["actors"] = "docs"
+
 TESTING_JS_MODULES += [
     "TestProcessActorChild.jsm",
     "TestProcessActorParent.jsm",
@@ -37,6 +42,8 @@ FINAL_TARGET_FILES.actors += [
     "BackgroundThumbnailsChild.jsm",
     "BrowserElementChild.jsm",
     "BrowserElementParent.jsm",
+    "ContentMetaChild.jsm",
+    "ContentMetaParent.jsm",
     "ControllersChild.jsm",
     "ControllersParent.jsm",
     "DateTimePickerChild.jsm",

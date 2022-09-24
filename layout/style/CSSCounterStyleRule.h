@@ -12,8 +12,7 @@
 
 struct RawServoCounterStyleRule;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class CSSCounterStyleRule final : public css::Rule {
  public:
@@ -27,17 +26,21 @@ class CSSCounterStyleRule final : public css::Rule {
   CSSCounterStyleRule(const CSSCounterStyleRule& aCopy) = delete;
   ~CSSCounterStyleRule() = default;
 
+  template <typename Func>
+  void ModifyRule(Func);
+
  public:
   bool IsCCLeaf() const final;
 
   const RawServoCounterStyleRule* Raw() const { return mRawRule.get(); }
+  void SetRawAfterClone(RefPtr<RawServoCounterStyleRule>);
 
 #ifdef DEBUG
   void List(FILE* out = stdout, int32_t aIndent = 0) const final;
 #endif
 
   // WebIDL interface
-  uint16_t Type() const override;
+  StyleCssRuleType Type() const override;
   void GetCssText(nsACString& aCssText) const override;
   void GetName(nsAString& aName);
   void SetName(const nsAString& aName);
@@ -55,7 +58,6 @@ class CSSCounterStyleRule final : public css::Rule {
   RefPtr<RawServoCounterStyleRule> mRawRule;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_CSSCounterStyleRule_h

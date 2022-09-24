@@ -1,3 +1,5 @@
+#![allow(clippy::identity_op)]
+
 use std::{
     char::from_u32 as char_from_u32,
     fmt::{Display, Formatter, Result as FmtResult},
@@ -14,15 +16,16 @@ const INT_CHAR: u8 = 1 << 0; // [0-9A-Fa-f_]
 const FLOAT_CHAR: u8 = 1 << 1; // [0-9\.Ee+-]
 const IDENT_FIRST_CHAR: u8 = 1 << 2; // [A-Za-z_]
 const IDENT_OTHER_CHAR: u8 = 1 << 3; // [A-Za-z_0-9]
-const WHITESPACE_CHAR: u8 = 1 << 4; // [\n\t\r ]
+const IDENT_RAW_CHAR: u8 = 1 << 4; // [A-Za-z_0-9\.+-]
+const WHITESPACE_CHAR: u8 = 1 << 5; // [\n\t\r ]
 
 // We encode each char as belonging to some number of these categories.
-const DIGIT: u8 = INT_CHAR | FLOAT_CHAR | IDENT_OTHER_CHAR; // [0-9]
-const ABCDF: u8 = INT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR; // [ABCDFabcdf]
-const UNDER: u8 = INT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR; // [_]
-const E____: u8 = INT_CHAR | FLOAT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR; // [Ee]
-const G2Z__: u8 = IDENT_FIRST_CHAR | IDENT_OTHER_CHAR; // [G-Zg-z]
-const PUNCT: u8 = FLOAT_CHAR; // [\.+-]
+const DIGIT: u8 = INT_CHAR | FLOAT_CHAR | IDENT_OTHER_CHAR | IDENT_RAW_CHAR; // [0-9]
+const ABCDF: u8 = INT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR | IDENT_RAW_CHAR; // [ABCDFabcdf]
+const UNDER: u8 = INT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR | IDENT_RAW_CHAR; // [_]
+const E____: u8 = INT_CHAR | FLOAT_CHAR | IDENT_FIRST_CHAR | IDENT_OTHER_CHAR | IDENT_RAW_CHAR; // [Ee]
+const G2Z__: u8 = IDENT_FIRST_CHAR | IDENT_OTHER_CHAR | IDENT_RAW_CHAR; // [G-Zg-z]
+const PUNCT: u8 = FLOAT_CHAR | IDENT_RAW_CHAR; // [\.+-]
 const WS___: u8 = WHITESPACE_CHAR; // [\t\n\r ]
 const _____: u8 = 0; // everything else
 
@@ -67,12 +70,16 @@ const fn is_float_char(c: u8) -> bool {
     ENCODINGS[c as usize] & FLOAT_CHAR != 0
 }
 
-const fn is_ident_first_char(c: u8) -> bool {
+pub const fn is_ident_first_char(c: u8) -> bool {
     ENCODINGS[c as usize] & IDENT_FIRST_CHAR != 0
 }
 
-const fn is_ident_other_char(c: u8) -> bool {
+pub const fn is_ident_other_char(c: u8) -> bool {
     ENCODINGS[c as usize] & IDENT_OTHER_CHAR != 0
+}
+
+const fn is_ident_raw_char(c: u8) -> bool {
+    ENCODINGS[c as usize] & IDENT_RAW_CHAR != 0
 }
 
 const fn is_whitespace_char(c: u8) -> bool {
@@ -209,7 +216,7 @@ impl<'a> Bytes<'a> {
             }
 
             Ok(num_acc)
-        };
+        }
 
         let res = if sign > 0 {
             calc_num(&*self, s, base, T::checked_add_ext)
@@ -227,7 +234,7 @@ impl<'a> Bytes<'a> {
         // Instead, this code checks if a f64 fits inside an f32.
         #[allow(clippy::float_cmp)]
         fn any_float(f: f64) -> Result<AnyNum> {
-            if f == f as f32 as f64 {
+            if f == f64::from(f as f32) {
                 Ok(AnyNum::F32(f as f32))
             } else {
                 Ok(AnyNum::F64(f))
@@ -245,19 +252,19 @@ impl<'a> Bytes<'a> {
 
             any_float(f)
         } else {
-            let max_u8 = std::u8::MAX as u128;
-            let max_u16 = std::u16::MAX as u128;
-            let max_u32 = std::u32::MAX as u128;
-            let max_u64 = std::u64::MAX as u128;
+            let max_u8 = u128::from(std::u8::MAX);
+            let max_u16 = u128::from(std::u16::MAX);
+            let max_u32 = u128::from(std::u32::MAX);
+            let max_u64 = u128::from(std::u64::MAX);
 
-            let min_i8 = std::i8::MIN as i128;
-            let max_i8 = std::i8::MAX as i128;
-            let min_i16 = std::i16::MIN as i128;
-            let max_i16 = std::i16::MAX as i128;
-            let min_i32 = std::i32::MIN as i128;
-            let max_i32 = std::i32::MAX as i128;
-            let min_i64 = std::i64::MIN as i128;
-            let max_i64 = std::i64::MAX as i128;
+            let min_i8 = i128::from(std::i8::MIN);
+            let max_i8 = i128::from(std::i8::MAX);
+            let min_i16 = i128::from(std::i16::MIN);
+            let max_i16 = i128::from(std::i16::MAX);
+            let min_i32 = i128::from(std::i32::MIN);
+            let max_i32 = i128::from(std::i32::MAX);
+            let min_i64 = i128::from(std::i64::MIN);
+            let max_i64 = i128::from(std::i64::MAX);
 
             if is_signed {
                 match self.signed_integer::<i128>() {
@@ -528,34 +535,41 @@ impl<'a> Bytes<'a> {
     }
 
     pub fn identifier(&mut self) -> Result<&'a [u8]> {
-        let bytes = self.identifier_len()?;
-        let ident = &self.bytes[..bytes];
-        let _ = self.advance(bytes);
+        let next = self.peek_or_eof()?;
+        if !is_ident_first_char(next) {
+            return self.err(ErrorCode::ExpectedIdentifier);
+        }
+
+        // If the next two bytes signify the start of a raw string literal,
+        // return an error.
+        let length = if next == b'r' {
+            match self
+                .bytes
+                .get(1)
+                .ok_or_else(|| self.error(ErrorCode::Eof))?
+            {
+                b'"' => return self.err(ErrorCode::ExpectedIdentifier),
+                b'#' => {
+                    let after_next = self.bytes.get(2).cloned().unwrap_or_default();
+                    //Note: it's important to check this before advancing forward, so that
+                    // the value-type deserializer can fall back to parsing it differently.
+                    if !is_ident_raw_char(after_next) {
+                        return self.err(ErrorCode::ExpectedIdentifier);
+                    }
+                    // skip "r#"
+                    let _ = self.advance(2);
+                    self.next_bytes_contained_in(is_ident_raw_char)
+                }
+                _ => self.next_bytes_contained_in(is_ident_other_char),
+            }
+        } else {
+            self.next_bytes_contained_in(is_ident_other_char)
+        };
+
+        let ident = &self.bytes[..length];
+        let _ = self.advance(length);
 
         Ok(ident)
-    }
-
-    pub fn identifier_len(&self) -> Result<usize> {
-        let next = self.peek_or_eof()?;
-        if is_ident_first_char(next) {
-            // If the next two bytes signify the start of a raw string literal,
-            // return an error.
-            if next == b'r' {
-                let second = self
-                    .bytes
-                    .get(1)
-                    .ok_or_else(|| self.error(ErrorCode::Eof))?;
-                if *second == b'"' || *second == b'#' {
-                    return self.err(ErrorCode::ExpectedIdentifier);
-                }
-            }
-
-            let bytes = self.next_bytes_contained_in(is_ident_other_char);
-
-            Ok(bytes)
-        } else {
-            self.err(ErrorCode::ExpectedIdentifier)
-        }
     }
 
     pub fn next_bytes_contained_in(&self, allowed: fn(u8) -> bool) -> usize {
@@ -587,7 +601,7 @@ impl<'a> Bytes<'a> {
     }
 
     pub fn skip_ws(&mut self) -> Result<()> {
-        while self.peek().map_or(false, |c| is_whitespace_char(c)) {
+        while self.peek().map_or(false, is_whitespace_char) {
             let _ = self.advance_single();
         }
 
@@ -776,7 +790,7 @@ impl<'a> Bytes<'a> {
 
                     let byte = self.decode_hex(byte)?;
                     bytes <<= 4;
-                    bytes |= byte as u32;
+                    bytes |= u32::from(byte);
 
                     num_digits += 1;
                 }

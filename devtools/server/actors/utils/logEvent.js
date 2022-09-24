@@ -45,10 +45,14 @@ function logEvent({ threadActor, frame, level, expression, bindings }) {
     return undefined;
   }
 
-  const completion = frame.evalWithBindings(expression, {
-    displayName,
-    ...bindings,
-  });
+  const completion = frame.evalWithBindings(
+    expression,
+    {
+      displayName,
+      ...bindings,
+    },
+    { hideFromDebugger: true }
+  );
 
   let value;
   if (!completion) {
@@ -77,7 +81,7 @@ function logEvent({ threadActor, frame, level, expression, bindings }) {
   };
 
   const targetActor = threadActor._parent;
-  // Note that only BrowsingContextTarget actor support resource watcher
+  // Note that only WindowGlobalTarget actor support resource watcher
   // This is still missing for worker and content processes
   const consoleMessageWatcher = getResourceWatcher(
     targetActor,

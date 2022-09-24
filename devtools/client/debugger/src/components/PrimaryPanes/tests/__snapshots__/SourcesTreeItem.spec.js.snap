@@ -25,6 +25,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -61,6 +62,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         },
         "name": "one.js",
@@ -80,6 +82,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -132,6 +135,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               },
               "name": "one.js",
@@ -153,6 +157,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -194,6 +199,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -209,7 +215,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -229,6 +234,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "name": "one.js",
@@ -248,6 +254,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -285,6 +292,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -327,6 +335,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "url",
+          "thread": "FakeThread",
           "url": "url",
         },
         "name": "one.js",
@@ -347,6 +356,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -400,6 +410,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "url",
+                "thread": "FakeThread",
                 "url": "url",
               },
               "name": "one.js",
@@ -422,6 +433,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -463,6 +475,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -483,7 +496,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -504,6 +516,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "url",
+        "thread": "FakeThread",
         "url": "url",
       },
       "name": "one.js",
@@ -524,6 +537,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -561,6 +575,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -598,6 +613,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "url",
+          "thread": "FakeThread",
           "url": "url",
         },
         "name": "root",
@@ -618,6 +634,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -671,6 +688,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "url",
+                "thread": "FakeThread",
                 "url": "url",
               },
               "name": "root",
@@ -693,6 +711,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -734,6 +753,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -749,7 +769,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -770,6 +789,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "url",
+        "thread": "FakeThread",
         "url": "url",
       },
       "name": "root",
@@ -790,6 +810,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -859,6 +880,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -923,6 +945,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -965,7 +988,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -995,6 +1017,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -1065,6 +1088,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -1130,6 +1154,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -1172,7 +1197,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -1203,6 +1227,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -1356,7 +1381,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -1444,6 +1468,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -1507,6 +1532,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -1549,7 +1575,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -1578,6 +1603,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -1647,6 +1673,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -1712,6 +1739,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -1755,7 +1783,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -1785,6 +1812,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -1935,7 +1963,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2106,7 +2133,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2195,6 +2221,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -2259,6 +2286,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -2301,7 +2329,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2331,6 +2358,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -2400,6 +2428,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -2465,6 +2494,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -2508,7 +2538,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2538,6 +2567,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -2607,6 +2637,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -2670,6 +2701,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -2712,7 +2744,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2741,6 +2772,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -2800,6 +2832,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         },
         "name": "one.js",
@@ -2820,6 +2853,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -2872,6 +2906,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               },
               "name": "one.js",
@@ -2894,6 +2929,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -2936,7 +2972,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -2956,6 +2991,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "name": "one.js",
@@ -2976,6 +3012,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -3036,6 +3073,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "url",
+          "thread": "FakeThread",
           "url": "url",
         },
         "name": "one.js",
@@ -3056,6 +3094,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -3109,6 +3148,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "url",
+                "thread": "FakeThread",
                 "url": "url",
               },
               "name": "one.js",
@@ -3131,6 +3171,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -3173,7 +3214,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -3194,6 +3234,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "url",
+        "thread": "FakeThread",
         "url": "url",
       },
       "name": "one.js",
@@ -3214,6 +3255,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -3251,6 +3293,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -3287,6 +3330,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "url",
+          "thread": "FakeThread",
           "url": "url",
         },
         "name": "one.js",
@@ -3307,6 +3351,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -3359,6 +3404,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "url",
+                "thread": "FakeThread",
                 "url": "url",
               },
               "name": "one.js",
@@ -3381,6 +3427,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -3422,6 +3469,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -3437,7 +3485,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -3457,6 +3504,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "url",
+        "thread": "FakeThread",
         "url": "url",
       },
       "name": "one.js",
@@ -3477,6 +3525,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -3514,6 +3563,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -3552,6 +3602,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         },
         "name": "one.js",
@@ -3571,6 +3622,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -3625,6 +3677,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               },
               "name": "one.js",
@@ -3646,6 +3699,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -3687,6 +3741,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -3702,7 +3757,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -3724,6 +3778,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "name": "one.js",
@@ -3743,6 +3798,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [
@@ -3780,6 +3836,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "http://mdn.com/one.js",
+          "thread": "FakeThread",
           "url": "http://mdn.com/one.js",
         }
       }
@@ -3816,6 +3873,7 @@ Object {
           "isPrettyPrinted": false,
           "isWasm": false,
           "relativeUrl": "url",
+          "thread": "FakeThread",
           "url": "url",
         },
         "name": "external%20file",
@@ -3836,6 +3894,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "http://mdn.com/one.js",
+        "thread": "FakeThread",
         "url": "http://mdn.com/one.js",
       },
       "threads": Array [
@@ -3888,6 +3947,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "url",
+                "thread": "FakeThread",
                 "url": "url",
               },
               "name": "external%20file",
@@ -3910,6 +3970,7 @@ Object {
               "isPrettyPrinted": false,
               "isWasm": false,
               "relativeUrl": "http://mdn.com/one.js",
+              "thread": "FakeThread",
               "url": "http://mdn.com/one.js",
             }
           }
@@ -3951,6 +4012,7 @@ Object {
                 "isPrettyPrinted": false,
                 "isWasm": false,
                 "relativeUrl": "http://mdn.com/one.js",
+                "thread": "FakeThread",
                 "url": "http://mdn.com/one.js",
               }
             }
@@ -3966,7 +4028,6 @@ Object {
         "_workInProgressHook": null,
       },
     },
-    Symbol(enzyme.__setState__): [Function],
   },
   "props": Object {
     "blackBoxSources": [MockFunction],
@@ -3986,6 +4047,7 @@ Object {
         "isPrettyPrinted": false,
         "isWasm": false,
         "relativeUrl": "url",
+        "thread": "FakeThread",
         "url": "url",
       },
       "name": "external%20file",
@@ -4006,6 +4068,7 @@ Object {
       "isPrettyPrinted": false,
       "isWasm": false,
       "relativeUrl": "http://mdn.com/one.js",
+      "thread": "FakeThread",
       "url": "http://mdn.com/one.js",
     },
     "threads": Array [

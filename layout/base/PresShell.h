@@ -20,6 +20,7 @@
 #include "mozilla/ArenaObjectID.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/FlushType.h"
+#include "mozilla/Logging.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ScrollTypes.h"
 #include "mozilla/StaticPtr.h"
@@ -48,6 +49,9 @@
 #include "nsTHashSet.h"
 #include "nsThreadUtils.h"
 #include "nsWeakReference.h"
+#ifdef ACCESSIBILITY
+#  include "nsAccessibilityService.h"
+#endif
 
 class AutoPointerEventTargetUpdater;
 class AutoWeakFrame;
@@ -60,8 +64,6 @@ class nsAutoCauseReflowNotifier;
 class nsCanvasFrame;
 class nsCaret;
 class nsCSSFrameConstructor;
-class nsDisplayList;
-class nsDisplayListBuilder;
 class nsDocShell;
 class nsFrameSelection;
 class nsIDocShell;
@@ -90,6 +92,10 @@ class ZoomConstraintsClient;
 struct nsCallbackEventRequest;
 
 namespace mozilla {
+class nsDisplayList;
+class nsDisplayListBuilder;
+class FallbackRenderer;
+
 class AccessibleCaretEventHub;
 class EventStates;
 class GeckoMVMContext;
@@ -357,6 +363,15 @@ class PresShell final : public nsStubDocumentObserver,
    */
   bool InRDMPane();
 
+#if defined(MOZ_WIDGET_ANDROID)
+  /**
+   * If the dynamic toolbar is not expanded, notify the app to do so.
+   */
+  void MaybeNotifyShowDynamicToolbar();
+#endif  // defined(MOZ_WIDGET_ANDROID)
+
+  void RefreshZoomConstraintsForScreenSizeChange();
+
  private:
   /**
    * This is what ResizeReflowIgnoreOverride does when not shrink-wrapping (that
@@ -473,9 +488,16 @@ class PresShell final : public nsStubDocumentObserver,
    * Destroy the frames for aElement, and reconstruct them asynchronously if
    * needed.
    *
-   * Note that this may destroy frames for an ancestor instead.
+   * Note that this may destroy frames for an arbitrary ancestor, depending on
+   * the frame tree structure.
    */
   void DestroyFramesForAndRestyle(Element* aElement);
+
+  /**
+   * Called when a ShadowRoot will be attached to an element (and thus the flat
+   * tree children will go away).
+   */
+  void ShadowRootWillBeAttached(Element& aElement);
 
   /**
    * Handles all the layout stuff needed when the slot assignment for an element
@@ -684,6 +706,8 @@ class PresShell final : public nsStubDocumentObserver,
    */
   bool IsPaintingSuppressed() const { return mPaintingSuppressed; }
 
+  void TryUnsuppressPaintingSoon();
+
   void UnsuppressPainting();
   void InitPaintSuppressionTimer();
   void CancelPaintSuppressionTimer();
@@ -854,12 +878,17 @@ class PresShell final : public nsStubDocumentObserver,
    * bug 488242, bug 476557 and other bugs mentioned there.
    */
   void SetCanvasBackground(nscolor aColor) { mCanvasBackgroundColor = aColor; }
-  nscolor GetCanvasBackground() { return mCanvasBackgroundColor; }
+  nscolor GetCanvasBackground() const { return mCanvasBackgroundColor; }
 
   /**
-   * Use the current frame tree (if it exists) to update the background
-   * color of the most recently drawn canvas.
+   * Use the current frame tree (if it exists) to update the background color of
+   * the most recently drawn canvas.
    */
+  struct CanvasBackground {
+    nscolor mColor = 0;
+    bool mCSSSpecified = false;
+  };
+  CanvasBackground ComputeCanvasBackground() const;
   void UpdateCanvasBackground();
 
   /**
@@ -886,7 +915,9 @@ class PresShell final : public nsStubDocumentObserver,
   }
 
   void ActivenessMaybeChanged();
+  // See ComputeActiveness() for details of these two booleans.
   bool IsActive() const { return mIsActive; }
+  bool IsInActiveTab() const { return mIsInActiveTab; }
 
   /**
    * Keep track of how many times this presshell has been rendered to
@@ -912,10 +943,10 @@ class PresShell final : public nsStubDocumentObserver,
   already_AddRefed<nsIContent> GetFocusedContentInOurWindow() const;
 
   /**
-   * Get the layer manager for the widget of the root view, if it has
+   * Get the window renderer for the widget of the root view, if it has
    * one.
    */
-  LayerManager* GetLayerManager();
+  WindowRenderer* GetWindowRenderer();
 
   /**
    * Return true iff there is a widget rendering this presShell and that
@@ -1251,15 +1282,23 @@ class PresShell final : public nsStubDocumentObserver,
   // Widget notificiations
   void WindowSizeMoveDone();
 
-  void ThemeChanged(widget::ThemeChangeKind aChangeKind) {
-    mPresContext->ThemeChanged(aChangeKind);
-  }
-
   void BackingScaleFactorChanged() { mPresContext->UIResolutionChangedSync(); }
 
+  /**
+   * Does any painting work required to update retained paint state, and pushes
+   * it the compositor (if any). Requests a composite, either by scheduling a
+   * remote composite, or invalidating the widget so that we get a call to
+   * SyncPaintFallback from the widget paint event.
+   */
   MOZ_CAN_RUN_SCRIPT
-  void Paint(nsView* aViewToPaint, const nsRegion& aDirtyRegion,
-             PaintFlags aFlags);
+  void PaintAndRequestComposite(nsView* aView, PaintFlags aFlags);
+
+  /**
+   * Does an immediate paint+composite using the FallbackRenderer (which must
+   * be the current WindowRenderer for the root frame's widget).
+   */
+  MOZ_CAN_RUN_SCRIPT
+  void SyncPaintFallback(nsView* aView);
 
   /**
    * Notify that we're going to call Paint with PaintFlags::PaintLayers
@@ -1273,12 +1312,8 @@ class PresShell final : public nsStubDocumentObserver,
   /**
    * Ensures that the refresh driver is running, and schedules a view
    * manager flush on the next tick.
-   *
-   * @param aType PaintType::DelayedCompress : Schedule a paint to be executed
-   * after a delay, and put FrameLayerBuilder in 'compressed' mode that avoids
-   * short cut optimizations.
    */
-  void ScheduleViewManagerFlush(PaintType aType = PaintType::Default);
+  void ScheduleViewManagerFlush();
 
   // caret handling
   NS_IMETHOD SetCaretEnabled(bool aInEnable) override;
@@ -1456,8 +1491,12 @@ class PresShell final : public nsStubDocumentObserver,
   bool SetVisualViewportOffset(const nsPoint& aScrollOffset,
                                const nsPoint& aPrevLayoutScrollPos);
 
+  void ResetVisualViewportOffset();
   nsPoint GetVisualViewportOffset() const {
-    return mVisualViewportOffset.valueOr(nsPoint());
+    if (mVisualViewportOffset.isSome()) {
+      return *mVisualViewportOffset;
+    }
+    return GetLayoutViewportOffset();
   }
   bool IsVisualViewportOffsetSet() const {
     return mVisualViewportOffset.isSome();
@@ -1540,8 +1579,6 @@ class PresShell final : public nsStubDocumentObserver,
           AddCanvasBackgroundColorFlags::None);
 
   size_t SizeOfTextRuns(MallocSizeOf aMallocSizeOf) const;
-
-  void SetNextPaintCompressed() { mNextPaintCompressed = true; }
 
   static PresShell* GetShellForEventTarget(nsIFrame* aFrame,
                                            nsIContent* aContent);
@@ -1705,9 +1742,15 @@ class PresShell final : public nsStubDocumentObserver,
  private:
   ~PresShell();
 
-  void SetIsActive(bool aIsActive);
-  bool ShouldBeActive() const;
+  void SetIsActive(bool aIsActive, bool aIsInActiveTab);
+  struct Activeness {
+    bool mShouldBeActive = false;
+    bool mIsInActiveTab = false;
+  };
+  Activeness ComputeActiveness() const;
 
+  MOZ_CAN_RUN_SCRIPT
+  void PaintInternal(nsView* aViewToPaint, PaintInternalFlags aFlags);
 
   /**
    * Refresh observer management.
@@ -1723,15 +1766,27 @@ class PresShell final : public nsStubDocumentObserver,
 
   void RecordAlloc(void* aPtr) {
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    MOZ_DIAGNOSTIC_ASSERT(!mAllocatedPointers.Contains(aPtr));
-    mAllocatedPointers.Insert(aPtr);
+    if (!mAllocatedPointers) {
+      return;  // Hash set was presumably freed to avert OOM.
+    }
+    MOZ_DIAGNOSTIC_ASSERT(!mAllocatedPointers->Contains(aPtr));
+    if (!mAllocatedPointers->Insert(aPtr, fallible)) {
+      // Yikes! We're nearly out of memory, and this insertion would've pushed
+      // us over the ledge. At this point, we discard & stop using this set,
+      // since we don't have enough memory to keep it accurate from this point
+      // onwards. Hopefully this helps relieve the memory pressure a bit, too.
+      mAllocatedPointers = nullptr;
+    }
 #endif
   }
 
   void RecordFree(void* aPtr) {
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-    MOZ_DIAGNOSTIC_ASSERT(mAllocatedPointers.Contains(aPtr));
-    mAllocatedPointers.Remove(aPtr);
+    if (!mAllocatedPointers) {
+      return;  // Hash set was presumably freed to avert OOM.
+    }
+    MOZ_DIAGNOSTIC_ASSERT(mAllocatedPointers->Contains(aPtr));
+    mAllocatedPointers->Remove(aPtr);
 #endif
   }
 
@@ -1842,6 +1897,13 @@ class PresShell final : public nsStubDocumentObserver,
     ~AutoSaveRestoreRenderingState() {
       mPresShell->mRenderingStateFlags = mOldState.mRenderingStateFlags;
       mPresShell->mResolution = mOldState.mResolution;
+#ifdef ACCESSIBILITY
+      if (nsAccessibilityService* accService =
+              PresShell::GetAccessibilityService()) {
+        accService->NotifyOfResolutionChange(mPresShell,
+                                             mPresShell->GetResolution());
+      }
+#endif
     }
 
     PresShell* mPresShell;
@@ -2732,7 +2794,9 @@ class PresShell final : public nsStubDocumentObserver,
 
   PresShell* GetRootPresShell() const;
 
-  nscolor GetDefaultBackgroundColorToDraw();
+  bool IsTransparentContainerElement() const;
+  ColorScheme DefaultBackgroundColorScheme() const;
+  nscolor GetDefaultBackgroundColorToDraw() const;
 
   //////////////////////////////////////////////////////////////////////////////
   // Approximate frame visibility tracking implementation.
@@ -2790,8 +2854,8 @@ class PresShell final : public nsStubDocumentObserver,
   // mDocument and mPresContext should've never been cleared nor swapped with
   // another instance while PresShell instance is alive so that it's safe to
   // call their can-run- script methods without local RefPtr variables.
-  RefPtr<Document> const mDocument;
-  RefPtr<nsPresContext> const mPresContext;
+  MOZ_KNOWN_LIVE RefPtr<Document> const mDocument;
+  MOZ_KNOWN_LIVE RefPtr<nsPresContext> const mPresContext;
   // The document's style set owns it but we maintain a ref, may be null.
   RefPtr<StyleSheet> mPrefStyleSheet;
   UniquePtr<nsCSSFrameConstructor> mFrameConstructor;
@@ -2819,9 +2883,14 @@ class PresShell final : public nsStubDocumentObserver,
   nsCOMPtr<nsITimer> mReflowContinueTimer;
 
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
-  // We track allocated pointers in a debug-only hashtable to assert against
-  // missing/double frees.
-  nsTHashSet<void*> mAllocatedPointers;
+  // We track allocated pointers in a diagnostic hash set, to assert against
+  // missing/double frees. This set is allocated infallibly in the PresShell
+  // constructor's initialization list. The set can get quite large, so we use
+  // fallible allocation when inserting into it; and if these operations ever
+  // fail, then we just get rid of the set and stop using this diagnostic from
+  // that point on.  (There's not much else we can do, when the set grows
+  // larger than the available memory.)
+  UniquePtr<nsTHashSet<void*>> mAllocatedPointers;
 #endif
 
   // A list of stack weak frames. This is a pointer to the last item in the
@@ -2896,8 +2965,6 @@ class PresShell final : public nsStubDocumentObserver,
   // or all frames are constructed, we won't paint anything but
   // our <body> background and scrollbars.
   nsCOMPtr<nsITimer> mPaintSuppressionTimer;
-
-  nsCOMPtr<nsITimer> mDelayedPaintTimer;
 
   // Information about live content (which still stay in DOM tree).
   // Used in case we need re-dispatch event after sending pointer event,
@@ -3053,6 +3120,7 @@ class PresShell final : public nsStubDocumentObserver,
   bool mIgnoreFrameDestruction : 1;
 
   bool mIsActive : 1;
+  bool mIsInActiveTab : 1;
   bool mFrozen : 1;
   bool mIsFirstPaint : 1;
   bool mObservesMutationsForPrint : 1;
@@ -3097,8 +3165,6 @@ class PresShell final : public nsStubDocumentObserver,
 
   bool mApproximateFrameVisibilityVisited : 1;
 
-  bool mNextPaintCompressed : 1;
-
   bool mHasCSSBackgroundColor : 1;
 
   // Whether the last chrome-only escape key event is consumed.
@@ -3132,6 +3198,8 @@ class PresShell final : public nsStubDocumentObserver,
   // Set to true if mMouseLocation is set by a mouse event which is synthesized
   // for tests.
   bool mMouseLocationWasSetBySynthesizedMouseEventForTests : 1;
+
+  bool mHasTriedFastUnsuppress : 1;
 
   struct CapturingContentInfo final {
     CapturingContentInfo()

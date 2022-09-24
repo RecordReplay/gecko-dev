@@ -109,8 +109,18 @@ async function verifyPickerPosition(browsingContext, inputId) {
       msg + ": " + got + " should be equal(-ish) to " + exp
     );
   }
-  is_close(helper.panel.screenX, inputRect.left, "datepicker x position");
-  is_close(helper.panel.screenY, inputRect.bottom, "datepicker y position");
+  const marginLeft = parseFloat(getComputedStyle(helper.panel).marginLeft);
+  const marginTop = parseFloat(getComputedStyle(helper.panel).marginTop);
+  is_close(
+    helper.panel.screenX - marginLeft,
+    inputRect.left,
+    "datepicker x position"
+  );
+  is_close(
+    helper.panel.screenY - marginTop,
+    inputRect.bottom,
+    "datepicker y position"
+  );
 }
 
 let helper = new DateTimeTestHelper();
@@ -705,20 +715,8 @@ add_task(async function test_datepicker_abs_min() {
 add_task(async function test_datepicker_handling_user_input() {
   await helper.openPicker(`data:text/html, <input type="date">`);
 
-  let changeEventPromise = SpecialPowers.spawn(
-    helper.tab.linkedBrowser,
-    [],
-    async () => {
-      let input = content.document.querySelector("input");
-      await ContentTaskUtils.waitForEvent(input, "change", false, e => {
-        ok(
-          content.window.windowUtils.isHandlingUserInput,
-          "isHandlingUserInput should be true"
-        );
-        return true;
-      });
-    }
-  );
+  let changeEventPromise = helper.promiseChange();
+
   // Click the first item (top-left corner) of the calendar
   helper.click(helper.getElement(DAYS_VIEW).children[0]);
   await changeEventPromise;
@@ -780,6 +778,191 @@ add_task(async function test_datepicker_abs_max() {
     ],
     "275760-09"
   );
+
+  await helper.tearDown();
+});
+
+/**
+ * Ensure datetime-local picker closes when focus moves to a time input.
+ */
+add_task(async function test_datetime_focus_to_input() {
+  await helper.openPicker(
+    `data:text/html,<input id=datetime type=datetime-local>`
+  );
+  let browser = helper.tab.linkedBrowser;
+  await verifyPickerPosition(browser, "datetime");
+
+  isnot(helper.panel.state, "closed", "Panel should be visible");
+
+  let closed = helper.promisePickerClosed();
+
+  // Move to the time section by pressing tab.
+  for (let i = 0; i < 3; ++i) {
+    await BrowserTestUtils.synthesizeKey("KEY_Tab", {}, browser);
+  }
+
+  await closed;
+
+  ok(true, "Panel should be closed now");
+
+  // The input should still be focused.
+  let isFocused = await SpecialPowers.spawn(browser, [], () => {
+    return content.document.querySelector("#datetime").matches(":focus");
+  });
+
+  ok(isFocused, "<input> should still be focused");
+
+  await helper.tearDown();
+});
+
+// Bug 1726546
+add_task(async function test_datetime_local_min() {
+  const inputValue = "2016-12-15T04:00";
+  const inputMin = "2016-12-05T12:22";
+  const inputMax = "2016-12-25T12:22";
+
+  await helper.openPicker(
+    `data:text/html,<input type="datetime-local" value="${inputValue}" min="${inputMin}" max="${inputMax}">`
+  );
+
+  Assert.deepEqual(
+    getCalendarClassList(),
+    mergeArrays(calendarClasslist_201612, [
+      // R denotes out-of-range
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+      [R],
+    ]),
+    "2016-12 with min & max"
+  );
+
+  await helper.tearDown();
+});
+
+// Bug 1726546
+add_task(async function test_datetime_local_min_select_invalid() {
+  const inputValue = "2016-12-15T05:00";
+  const inputMin = "2016-12-05T12:22";
+  const inputMax = "2016-12-25T12:22";
+
+  await helper.openPicker(
+    `data:text/html,<input type="datetime-local" value="${inputValue}" min="${inputMin}" max="${inputMax}">`
+  );
+
+  let changePromise = helper.promiseChange();
+
+  // Select the minimum day (the 5th, which is the 9th child).
+  // The date becomes invalid (we select 2016-12-05T05:00).
+  helper.click(helper.getElement(DAYS_VIEW).children[8]);
+
+  await changePromise;
+
+  let [value, invalid] = await SpecialPowers.spawn(
+    helper.tab.linkedBrowser,
+    [],
+    async () => {
+      let input = content.document.querySelector("input");
+      return [input.value, input.matches(":invalid")];
+    }
+  );
+
+  is(value, "2016-12-05T05:00", "Value should've changed");
+  ok(invalid, "input should be now invalid");
+
+  await helper.tearDown();
+});
+
+/**
+ * Test that date picker opens to the minium valid date when the value property is lower than the min property
+ */
+add_task(async function test_datepicker_value_lower_than_min() {
+  const date = new Date();
+  const inputValue = "2001-02-03";
+  const minValue = "2004-05-06";
+  const maxValue = "2007-08-09";
+
+  await helper.openPicker(
+    `data:text/html, <input type='date' value="${inputValue}" min="${minValue}" max="${maxValue}">`
+  );
+
+  if (date.getMonth() === new Date().getMonth()) {
+    Assert.equal(
+      helper.getElement(MONTH_YEAR).textContent,
+      DATE_FORMAT(new Date(minValue))
+    );
+  } else {
+    Assert.ok(
+      true,
+      "Skipping datepicker value lower than min test if month changes when opening picker."
+    );
+  }
+
+  await helper.tearDown();
+});
+
+/**
+ * Test that date picker opens to the maximum valid date when the value property is higher than the max property
+ */
+add_task(async function test_datepicker_value_higher_than_max() {
+  const date = new Date();
+  const minValue = "2001-02-03";
+  const maxValue = "2004-05-06";
+  const inputValue = "2007-08-09";
+
+  await helper.openPicker(
+    `data:text/html, <input type='date' value="${inputValue}" min="${minValue}" max="${maxValue}">`
+  );
+
+  if (date.getMonth() === new Date().getMonth()) {
+    Assert.equal(
+      helper.getElement(MONTH_YEAR).textContent,
+      DATE_FORMAT(new Date(maxValue))
+    );
+  } else {
+    Assert.ok(
+      true,
+      "Skipping datepicker value higher than max test if month changes when opening picker."
+    );
+  }
 
   await helper.tearDown();
 });

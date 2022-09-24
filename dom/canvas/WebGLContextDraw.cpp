@@ -330,7 +330,17 @@ static bool DoSetsIntersect(const std::set<T>& a, const std::set<T>& b) {
   std::vector<T> intersection;
   std::set_intersection(a.begin(), a.end(), b.begin(), b.end(),
                         std::back_inserter(intersection));
-  return bool(intersection.size());
+  return !intersection.empty();
+}
+
+template <size_t N>
+static size_t FindFirstOne(const std::bitset<N>& bs) {
+  MOZ_ASSERT(bs.any());
+  // We don't need this to be fast, so don't bother with CLZ intrinsics.
+  for (const auto i : IntegerRange(N)) {
+    if (bs[i]) return i;
+  }
+  return -1;
 }
 
 const webgl::CachedDrawFetchLimits* ValidateDraw(WebGLContext* const webgl,
@@ -339,12 +349,16 @@ const webgl::CachedDrawFetchLimits* ValidateDraw(WebGLContext* const webgl,
   if (!webgl->BindCurFBForDraw()) return nullptr;
 
   const auto& fb = webgl->mBoundDrawFramebuffer;
-  if (fb && webgl->mBlendEnabled) {
+  if (fb) {
     const auto& info = *fb->GetCompletenessInfo();
-    if (info.hasFloat32) {
+    const auto isF32WithBlending = info.isAttachmentF32 & webgl->mBlendEnabled;
+    if (isF32WithBlending.any()) {
       if (!webgl->IsExtensionEnabled(WebGLExtensionID::EXT_float_blend)) {
+        const auto first = FindFirstOne(isF32WithBlending);
         webgl->ErrorInvalidOperation(
-            "Float32 blending requires EXT_float_blend.");
+            "Attachment %u is float32 with blending enabled, which requires "
+            "EXT_float_blend.",
+            uint32_t(first));
         return nullptr;
       }
       webgl->WarnIfImplicit(WebGLExtensionID::EXT_float_blend);
@@ -420,14 +434,7 @@ const webgl::CachedDrawFetchLimits* ValidateDraw(WebGLContext* const webgl,
   const auto fnValidateFragOutputType =
       [&](const uint8_t loc, const webgl::TextureBaseType dstBaseType) {
         const auto itr = fragOutputs.find(loc);
-        if (MOZ_UNLIKELY(itr == fragOutputs.end())) {
-          webgl->ErrorInvalidOperation(
-              "Program has no frag output at location %u, but"
-              " destination draw buffer has an attached"
-              " image.",
-              uint32_t(loc));
-          return false;
-        }
+        MOZ_DIAGNOSTIC_ASSERT(itr != fragOutputs.end());
 
         const auto& info = itr->second;
         const auto& srcBaseType = info.baseType;
@@ -445,9 +452,15 @@ const webgl::CachedDrawFetchLimits* ValidateDraw(WebGLContext* const webgl,
 
   if (!webgl->mRasterizerDiscardEnabled) {
     uint8_t fbZLayerCount = 1;
+    auto hasAttachment = std::bitset<webgl::kMaxDrawBuffers>(1);
+    auto drawBufferEnabled = std::bitset<webgl::kMaxDrawBuffers>();
     if (fb) {
+      drawBufferEnabled = fb->DrawBufferEnabled();
       const auto& info = *fb->GetCompletenessInfo();
       fbZLayerCount = info.zLayerCount;
+      hasAttachment = info.hasAttachment;
+    } else {
+      drawBufferEnabled[0] = (webgl->mDefaultFB_DrawBuffer0 == LOCAL_GL_BACK);
     }
 
     if (fbZLayerCount != linkInfo->zLayerCount) {
@@ -457,19 +470,40 @@ const webgl::CachedDrawFetchLimits* ValidateDraw(WebGLContext* const webgl,
       return nullptr;
     }
 
-    if (webgl->mColorWriteMask) {
+    const auto writable =
+        hasAttachment & drawBufferEnabled & webgl->mColorWriteMaskNonzero;
+    if (writable.any()) {
+      // Do we have any undefined outputs with real attachments that
+      // aren't masked-out by color write mask or drawBuffers?
+      const auto wouldWriteUndefined = ~linkInfo->hasOutput & writable;
+      if (wouldWriteUndefined.any()) {
+        const auto first = FindFirstOne(wouldWriteUndefined);
+        webgl->ErrorInvalidOperation(
+            "Program has no frag output at location %u, the"
+            " destination draw buffer has an attached"
+            " image, and its color write mask is not all false,"
+            " and DRAW_BUFFER%u is not NONE.",
+            uint32_t(first), uint32_t(first));
+        return nullptr;
+      }
+
+      const auto outputWrites = linkInfo->hasOutput & writable;
+
       if (fb) {
         for (const auto& attach : fb->ColorDrawBuffers()) {
           const auto i =
               uint8_t(attach->mAttachmentPoint - LOCAL_GL_COLOR_ATTACHMENT0);
+          if (!outputWrites[i]) continue;
           const auto& imageInfo = attach->GetImageInfo();
           if (!imageInfo) continue;
           const auto& dstBaseType = imageInfo->mFormat->format->baseType;
           if (!fnValidateFragOutputType(i, dstBaseType)) return nullptr;
         }
       } else {
-        if (!fnValidateFragOutputType(0, webgl::TextureBaseType::Float))
-          return nullptr;
+        if (outputWrites[0]) {
+          if (!fnValidateFragOutputType(0, webgl::TextureBaseType::Float))
+            return nullptr;
+        }
       }
     }
   }
@@ -619,7 +653,7 @@ void WebGLContext::DrawArraysInstanced(GLenum mode, GLint first,
                                        GLsizei vertCount,
                                        GLsizei instanceCount) {
   const FuncScope funcScope(*this, "drawArraysInstanced");
-  AUTO_PROFILER_LABEL("WebGLContext::DrawArraysInstanced", GRAPHICS);
+  // AUTO_PROFILER_LABEL("WebGLContext::DrawArraysInstanced", GRAPHICS);
   if (IsContextLost()) return;
   const gl::GLContext::TlsScope inTls(gl);
 
@@ -678,7 +712,6 @@ void WebGLContext::DrawArraysInstanced(GLenum mode, GLint first,
   {
     ScopedDrawCallWrapper wrapper(*this);
     if (vertCount && instanceCount) {
-      AUTO_PROFILER_LABEL("glDrawArraysInstanced", GRAPHICS);
       if (HasInstancedDrawing(*this)) {
         gl->fDrawArraysInstanced(mode, first, vertCount, instanceCount);
       } else {
@@ -796,7 +829,7 @@ void WebGLContext::DrawElementsInstanced(GLenum mode, GLsizei indexCount,
                                          GLenum type, WebGLintptr byteOffset,
                                          GLsizei instanceCount) {
   const FuncScope funcScope(*this, "drawElementsInstanced");
-  AUTO_PROFILER_LABEL("WebGLContext::DrawElementsInstanced", GRAPHICS);
+  // AUTO_PROFILER_LABEL("WebGLContext::DrawElementsInstanced", GRAPHICS);
   if (IsContextLost()) return;
 
   const gl::GLContext::TlsScope inTls(gl);
@@ -878,7 +911,6 @@ void WebGLContext::DrawElementsInstanced(GLenum mode, GLsizei indexCount,
       }
 
       if (indexCount && instanceCount) {
-        AUTO_PROFILER_LABEL("glDrawElementsInstanced", GRAPHICS);
         if (HasInstancedDrawing(*this)) {
           if (MOZ_UNLIKELY(collapseToDrawArrays)) {
             gl->fDrawArraysInstanced(mode, 0, 1, instanceCount);
@@ -1029,7 +1061,7 @@ bool WebGLContext::DoFakeVertexAttrib0(const uint64_t totalVertCount) {
   ////
 
   const auto bytesPerVert = sizeof(mFakeVertexAttrib0Data);
-  const auto checked_dataSize = CheckedUint32(totalVertCount) * bytesPerVert;
+  const auto checked_dataSize = CheckedInt<intptr_t>(totalVertCount) * bytesPerVert;
   if (!checked_dataSize.isValid()) {
     ErrorOutOfMemory(
         "Integer overflow trying to construct a fake vertex attrib 0"
@@ -1042,8 +1074,17 @@ bool WebGLContext::DoFakeVertexAttrib0(const uint64_t totalVertCount) {
   const auto dataSize = checked_dataSize.value();
 
   if (mFakeVertexAttrib0BufferObjectSize < dataSize) {
+    gl::GLContext::LocalErrorScope errorScope(*gl);
+
     gl->fBufferData(LOCAL_GL_ARRAY_BUFFER, dataSize, nullptr,
                     LOCAL_GL_DYNAMIC_DRAW);
+
+    const auto err = errorScope.GetError();
+    if (err) {
+      ErrorOutOfMemory("Failed to allocate fake vertex attrib 0 data: %zi bytes", dataSize);
+      return false;
+    }
+
     mFakeVertexAttrib0BufferObjectSize = dataSize;
     mFakeVertexAttrib0DataDefined = false;
   }
@@ -1062,7 +1103,7 @@ bool WebGLContext::DoFakeVertexAttrib0(const uint64_t totalVertCount) {
 
   ////
 
-  const UniqueBuffer data(malloc(dataSize));
+  const auto data = UniqueBuffer::Take(malloc(dataSize));
   if (!data) {
     ErrorOutOfMemory("Failed to allocate fake vertex attrib 0 array.");
     return false;

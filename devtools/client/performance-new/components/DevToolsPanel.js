@@ -14,9 +14,15 @@
  */
 
 /**
- * @typedef {StateProps} Props
+ * @typedef {Object} OwnProps
+ * @property {import("../@types/perf").PerfFront} perfFront
+ * @property {import("../@types/perf").OnProfileReceived} onProfileReceived
+ * @property {() => void} onEditSettingsLinkClicked
+ */
+
+/**
+ * @typedef {StateProps & OwnProps} Props
  * @typedef {import("../@types/perf").State} StoreState
- * @typedef {import("../@types/perf").PanelWindow} PanelWindow
  */
 
 "use strict";
@@ -52,21 +58,28 @@ const selectors = require("devtools/client/performance-new/store/selectors");
  */
 class DevToolsPanel extends PureComponent {
   render() {
-    const { isSupportedPlatform } = this.props;
+    const {
+      isSupportedPlatform,
+      perfFront,
+      onProfileReceived,
+      onEditSettingsLinkClicked,
+    } = this.props;
 
     if (isSupportedPlatform === null) {
       // We don't know yet if this is a supported platform, wait for a response.
       return null;
     }
 
-    return div(
-      { className: `perf perf-devtools` },
+    return [
       OnboardingMessage(),
-      RecordingButton(),
-      Description(),
-      hr({ className: "perf-presets-hr" }),
-      DevToolsPresetSelection()
-    );
+      div(
+        { className: `perf perf-devtools` },
+        RecordingButton({ perfFront, onProfileReceived }),
+        Description(),
+        hr({ className: "perf-presets-hr" }),
+        DevToolsPresetSelection({ onEditSettingsLinkClicked })
+      ),
+    ];
   }
 }
 

@@ -14,7 +14,6 @@
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/RadioGroupManager.h"
 #include "nsCOMPtr.h"
-#include "nsIForm.h"
 #include "nsIFormControl.h"
 #include "nsGenericHTMLElement.h"
 #include "nsIRadioGroupContainer.h"
@@ -32,12 +31,13 @@ namespace mozilla {
 class EventChainPostVisitor;
 class EventChainPreVisitor;
 namespace dom {
+class DialogFormSubmission;
 class HTMLFormControlsCollection;
+class HTMLFormSubmission;
 class HTMLImageElement;
 class FormData;
 
 class HTMLFormElement final : public nsGenericHTMLElement,
-                              public nsIForm,
                               public nsIRadioGroupContainer,
                               RadioGroupManager {
   friend class HTMLFormControlsCollection;
@@ -53,11 +53,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
 
-  // nsIForm
-  NS_IMETHOD_(nsIFormControl*) GetElementAt(int32_t aIndex) const override;
-  NS_IMETHOD_(uint32_t) GetElementCount() const override;
-  NS_IMETHOD_(int32_t) IndexOfControl(nsIFormControl* aControl) override;
-  NS_IMETHOD_(nsIFormControl*) GetDefaultSubmitElement() const override;
+  int32_t IndexOfContent(nsIContent* aContent);
+  nsGenericHTMLFormElement* GetDefaultSubmitElement() const;
 
   // nsIRadioGroupContainer
   void SetCurrentRadioButton(const nsAString& aName,
@@ -204,19 +201,19 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   bool ImplicitSubmissionIsDisabled() const;
 
   /**
-   * Check whether a given nsIFormControl is the last single line input control
-   * that is not disabled. aControl is expected to not be null.
+   * Check whether a given nsGenericHTMLFormElement is the last single line
+   * input control that is not disabled. aElement is expected to not be null.
    */
-  bool IsLastActiveElement(const nsIFormControl* aControl) const;
+  bool IsLastActiveElement(const nsGenericHTMLFormElement* aElement) const;
 
   /**
-   * Check whether a given nsIFormControl is the default submit
+   * Check whether a given nsGenericHTMLFormElement is the default submit
    * element.  This is different from just comparing to
    * GetDefaultSubmitElement() in certain situations inside an update
-   * when GetDefaultSubmitElement() might not be up to date.  aControl
+   * when GetDefaultSubmitElement() might not be up to date. aElement
    * is expected to not be null.
    */
-  bool IsDefaultSubmitElement(const nsIFormControl* aControl) const;
+  bool IsDefaultSubmitElement(const nsGenericHTMLFormElement* aElement) const;
 
   /**
    * Flag the form to know that a button or image triggered scripted form
@@ -227,8 +224,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   void OnSubmitClickEnd();
 
   /**
-   * This method will update the form validity so the submit controls states
-   * will be updated (for -moz-submit-invalid pseudo-class).
+   * This method will update the form validity.
+   *
    * This method has to be called by form elements whenever their validity state
    * or status regarding constraint validation changes.
    *
@@ -239,16 +236,6 @@ class HTMLFormElement final : public nsGenericHTMLElement,
    * @param aElementValidityState the new validity state of the element
    */
   void UpdateValidity(bool aElementValidityState);
-
-  /**
-   * Returns the form validity based on the last UpdateValidity() call.
-   *
-   * @return Whether the form was valid the last time UpdateValidity() was
-   * called.
-   *
-   * @note This method may not return the *current* validity state!
-   */
-  bool GetValidity() const { return !mInvalidElementsCount; }
 
   /**
    * This method check the form validity and make invalid form elements send
@@ -270,7 +257,8 @@ class HTMLFormElement final : public nsGenericHTMLElement,
    *
    * @param aFormData the form data object
    */
-  nsresult ConstructEntryList(FormData* aFormData);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult ConstructEntryList(FormData* aFormData);
 
   /**
    * Whether the submission of this form has been ever prevented because of
@@ -372,7 +360,7 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   MOZ_CAN_RUN_SCRIPT void RequestSubmit(nsGenericHTMLElement* aSubmitter,
                                         ErrorResult& aRv);
 
-  void Reset();
+  MOZ_CAN_RUN_SCRIPT void Reset();
 
   bool CheckValidity() { return CheckFormValidity(nullptr); }
 
@@ -556,10 +544,6 @@ class HTMLFormElement final : public nsGenericHTMLElement,
 
   /** The pending submission object */
   UniquePtr<HTMLFormSubmission> mPendingSubmission;
-  /** The request currently being submitted */
-  nsCOMPtr<nsIRequest> mSubmittingRequest;
-  /** The web progress object we are currently listening to */
-  nsWeakPtr mWebProgress;
 
   /** The target browsing context, if any. */
   RefPtr<BrowsingContext> mTargetContext;
@@ -601,7 +585,6 @@ class HTMLFormElement final : public nsGenericHTMLElement,
   /**
    * Number of invalid and candidate for constraint validation elements in the
    * form the last time UpdateValidity has been called.
-   * @note Should only be used by UpdateValidity() and GetValidity()!
    */
   int32_t mInvalidElementsCount;
 

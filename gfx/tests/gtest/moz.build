@@ -14,8 +14,8 @@ UNIFIED_SOURCES += [
     "TestBufferRotation.cpp",
     "TestColorNames.cpp",
     "TestConfigManager.cpp",
+    "TestCoord.cpp",
     "TestGfxWidgets.cpp",
-    "TestLayers.cpp",
     "TestMatrix.cpp",
     "TestMoz2D.cpp",
     "TestPolygon.cpp",
@@ -35,9 +35,7 @@ if not (CONFIG["OS_TARGET"] == "WINNT" and CONFIG["CPU_ARCH"] == "aarch64"):
 
 if CONFIG["OS_TARGET"] != "Android":
     UNIFIED_SOURCES += [
-        "TestCompositor.cpp",
         "TestRect.cpp",
-        "TestTextureCompatibility.cpp",
     ]
 
 UNIFIED_SOURCES += [
@@ -77,6 +75,7 @@ include("/ipc/chromium/chromium-config.mozbuild")
 LOCAL_INCLUDES += [
     "/gfx/2d",
     "/gfx/2d/unittest",
+    "/gfx/cairo/cairo/src",
     "/gfx/config",
     "/gfx/layers",
     "/gfx/ots/src",
@@ -84,8 +83,3 @@ LOCAL_INCLUDES += [
 ]
 
 FINAL_LIBRARY = "xul-gtest"
-
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

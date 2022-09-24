@@ -247,7 +247,7 @@ if (!window.FB) {
     const oldWindowOpen = window.open;
     window.open = function(href, name, params) {
       try {
-        const url = new URL(href);
+        const url = new URL(href, window.location.href);
         if (
           url.protocol === "https:" &&
           (url.hostname === "m.facebook.com" ||
@@ -521,8 +521,7 @@ if (!window.FB) {
       cb?.call(this);
     },
     ui(params, fn) {
-      const { display, method } = params;
-      if (display === "popup" && method === "permissions.oauth") {
+      if (params.method === "permissions.oauth") {
         window.FB.login(fn, params);
       }
     },

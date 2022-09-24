@@ -5,11 +5,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/DelayedRunnable.h"
+#include "mozilla/Atomics.h"
+#include "mozilla/RefPtr.h"
+#include "mozilla/TaskQueue.h"
 
 #include "gtest/gtest.h"
 #include "MediaTimer.h"
 #include "mozilla/media/MediaUtils.h"
 #include "VideoUtils.h"
+
+using mozilla::Atomic;
+using mozilla::MakeRefPtr;
+using mozilla::Monitor;
+using mozilla::MonitorAutoLock;
+using mozilla::TaskQueue;
 
 namespace {
 struct ReleaseDetector {
@@ -32,8 +41,9 @@ struct ReleaseDetector {
 TEST(DelayedRunnable, TaskQueueShutdownLeak)
 {
   Atomic<bool> active{false};
-  auto taskQueue =
-      MakeRefPtr<TaskQueue>(GetMediaThreadPool(MediaThreadType::SUPERVISOR));
+  auto taskQueue = TaskQueue::Create(
+      GetMediaThreadPool(mozilla::MediaThreadType::SUPERVISOR),
+      "TestDelayedRunnable TaskQueueShutdownLeak");
   taskQueue->DelayedDispatch(
       NS_NewRunnableFunction(__func__, [release = ReleaseDetector(&active)] {}),
       60e3 /* 1 minute */);
@@ -85,7 +95,7 @@ TEST(DelayedRunnable, BackgroundTaskQueueShutdownTask)
 
   // Leak the queue, so it gets cleaned up by xpcom-shutdown.
   nsISerialEventTarget* tq = taskQueue.forget().take();
-  Unused << tq;
+  mozilla::Unused << tq;
 }
 
 /*
@@ -101,19 +111,23 @@ TEST(DelayedRunnable, nsThreadShutdownTask)
 
   // Leak the thread, so it gets cleaned up by xpcom-shutdown.
   nsIThread* t = thread.forget().take();
-  Unused << t;
+  mozilla::Unused << t;
 }
 
 TEST(DelayedRunnable, TimerFiresBeforeRunnableRuns)
 {
-  RefPtr<SharedThreadPool> pool = SharedThreadPool::Get("Test Pool"_ns);
-  auto tailTaskQueue1 = MakeRefPtr<TaskQueue>(
-      do_AddRef(pool), /* aSupportsTailDispatch = */ true);
-  auto tailTaskQueue2 = MakeRefPtr<TaskQueue>(
-      do_AddRef(pool), /* aSupportsTailDispatch = */ true);
-  auto noTailTaskQueue = MakeRefPtr<TaskQueue>(
-      do_AddRef(pool), /* aSupportsTailDispatch = */ false);
-  Monitor outerMonitor(__func__);
+  RefPtr<mozilla::SharedThreadPool> pool =
+      mozilla::SharedThreadPool::Get("Test Pool"_ns);
+  auto tailTaskQueue1 =
+      TaskQueue::Create(do_AddRef(pool), "TestDelayedRunnable tailTaskQueue1",
+                        /* aSupportsTailDispatch = */ true);
+  auto tailTaskQueue2 =
+      TaskQueue::Create(do_AddRef(pool), "TestDelayedRunnable tailTaskQueue2",
+                        /* aSupportsTailDispatch = */ true);
+  auto noTailTaskQueue =
+      TaskQueue::Create(do_AddRef(pool), "TestDelayedRunnable noTailTaskQueue",
+                        /* aSupportsTailDispatch = */ false);
+  Monitor outerMonitor MOZ_UNANNOTATED(__func__);
   MonitorAutoLock lock(outerMonitor);
   MOZ_ALWAYS_SUCCEEDS(
       tailTaskQueue1->Dispatch(NS_NewRunnableFunction(__func__, [&] {
@@ -123,10 +137,10 @@ TEST(DelayedRunnable, TimerFiresBeforeRunnableRuns)
         EXPECT_TRUE(tailTaskQueue1->RequiresTailDispatch(tailTaskQueue2));
         tailTaskQueue2->DelayedDispatch(
             NS_NewRunnableFunction(__func__, [&] {}), 1);
-        Monitor innerMonitor(__func__);
+        Monitor innerMonitor MOZ_UNANNOTATED(__func__);
         MonitorAutoLock lock(innerMonitor);
-        auto timer = MakeRefPtr<MediaTimer>();
-        timer->WaitFor(TimeDuration::FromMilliseconds(1), __func__)
+        auto timer = MakeRefPtr<mozilla::MediaTimer>();
+        timer->WaitFor(mozilla::TimeDuration::FromMilliseconds(1), __func__)
             ->Then(noTailTaskQueue, __func__, [&] {
               MonitorAutoLock lock(innerMonitor);
               innerMonitor.NotifyAll();

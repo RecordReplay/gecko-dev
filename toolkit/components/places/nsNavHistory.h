@@ -8,7 +8,6 @@
 
 #include "nsINavHistoryService.h"
 
-#include "nsICollation.h"
 #include "nsIStringBundle.h"
 #include "nsITimer.h"
 #include "nsMaybeWeakPtr.h"
@@ -23,12 +22,9 @@
 #include "Database.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/intl/Collator.h"
+#include "mozilla/UniquePtr.h"
 #include "mozIStorageVacuumParticipant.h"
-
-#ifdef XP_WIN
-#  include "WinUtils.h"
-#  include <wincrypt.h>
-#endif
 
 #define QUERYUPDATE_TIME 0
 #define QUERYUPDATE_SIMPLE 1
@@ -167,7 +163,7 @@ class nsNavHistory final : public nsSupportsWeakReference,
    * objects for places components.
    */
   nsIStringBundle* GetBundle();
-  nsICollation* GetCollation();
+  const mozilla::intl::Collator* GetCollator();
   void GetStringFromName(const char* aName, nsACString& aResult);
   void GetAgeInDaysString(int32_t aInt, const char* aName, nsACString& aResult);
   static void GetMonthName(const PRExplodedTime& aTime, nsACString& aResult);
@@ -354,17 +350,6 @@ class nsNavHistory final : public nsSupportsWeakReference,
   static void StoreLastInsertedId(const nsACString& aTable,
                                   const int64_t aLastInsertedId);
 
-#ifdef XP_WIN
-  /**
-   * Get the cached HCRYPTPROV initialized in the nsNavHistory constructor.
-   */
-  nsresult GetCryptoProvider(HCRYPTPROV& aCryptoProvider) const {
-    NS_ENSURE_STATE(mCryptoProviderInitialized);
-    aCryptoProvider = mCryptoProvider;
-    return NS_OK;
-  }
-#endif
-
   static nsresult FilterResultSet(
       nsNavHistoryQueryResultNode* aParentNode,
       const nsCOMArray<nsNavHistoryResultNode>& aSet,
@@ -432,7 +417,7 @@ class nsNavHistory final : public nsSupportsWeakReference,
 
   // localization
   nsCOMPtr<nsIStringBundle> mBundle;
-  nsCOMPtr<nsICollation> mCollation;
+  mozilla::UniquePtr<const mozilla::intl::Collator> mCollator;
 
   // recent events
   typedef nsTHashMap<nsCStringHashKey, int64_t> RecentEventHash;
@@ -489,13 +474,6 @@ class nsNavHistory final : public nsSupportsWeakReference,
 
   int64_t mLastCachedStartOfDay;
   int64_t mLastCachedEndOfDay;
-
-  // Used to cache the call to CryptAcquireContext, which is expensive
-  // when called thousands of times
-#ifdef XP_WIN
-  HCRYPTPROV mCryptoProvider;
-  bool mCryptoProviderInitialized;
-#endif
 };
 
 #define PLACES_URI_PREFIX "place:"

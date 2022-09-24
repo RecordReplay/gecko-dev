@@ -6,6 +6,7 @@
 
 #include "CrossProcessPaint.h"
 
+#include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/ContentProcessManager.h"
 #include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/dom/BrowserParent.h"
@@ -120,17 +121,28 @@ PaintFragment PaintFragment::Record(dom::BrowsingContext* aBc,
 
   RenderDocumentFlags renderDocFlags = RenderDocumentFlags::None;
   if (!(aFlags & CrossProcessPaintFlags::DrawView)) {
-    renderDocFlags = (RenderDocumentFlags::IgnoreViewportScrolling |
-                      RenderDocumentFlags::ResetViewportScrolling |
-                      RenderDocumentFlags::DocumentRelative);
+    renderDocFlags |= RenderDocumentFlags::IgnoreViewportScrolling |
+                      RenderDocumentFlags::DocumentRelative;
+    if (aFlags & CrossProcessPaintFlags::ResetScrollPosition) {
+      renderDocFlags |= RenderDocumentFlags::ResetViewportScrolling;
+    }
+  }
+  if (aFlags & CrossProcessPaintFlags::UseHighQualityScaling) {
+    renderDocFlags |= RenderDocumentFlags::UseHighQualityScaling;
   }
 
   // Perform the actual rendering
   {
     nsRect r = CSSPixel::ToAppUnits(rect);
 
+    // This matches what nsDeviceContext::CreateRenderingContext does.
+    if (presContext->IsPrintingOrPrintPreview()) {
+      dt->AddUserData(&sDisablePixelSnapping, (void*)0x1, nullptr);
+    }
+
     RefPtr<gfxContext> thebes = gfxContext::CreateOrNull(dt);
     thebes->SetMatrix(Matrix::Scaling(aScale, aScale));
+    thebes->SetCrossProcessPaintScale(aScale);
     RefPtr<PresShell> presShell = presContext->PresShell();
     Unused << presShell->RenderDocument(r, renderDocFlags, aBackgroundColor,
                                         thebes);
@@ -204,7 +216,8 @@ bool CrossProcessPaint::Start(dom::WindowGlobalParent* aRoot,
 
   dom::TabId rootId = GetTabId(aRoot);
 
-  RefPtr<CrossProcessPaint> resolver = new CrossProcessPaint(aScale, rootId);
+  RefPtr<CrossProcessPaint> resolver =
+      new CrossProcessPaint(aScale, rootId, aFlags);
   RefPtr<CrossProcessPaint::ResolvePromise> promise;
 
   if (aRoot->IsInProcess()) {
@@ -288,7 +301,7 @@ RefPtr<CrossProcessPaint::ResolvePromise> CrossProcessPaint::Start(
     nsTHashSet<uint64_t>&& aDependencies) {
   MOZ_ASSERT(!aDependencies.IsEmpty());
   RefPtr<CrossProcessPaint> resolver =
-      new CrossProcessPaint(1.0, dom::TabId(0));
+      new CrossProcessPaint(1.0, dom::TabId(0), CrossProcessPaintFlags::None);
 
   RefPtr<CrossProcessPaint::ResolvePromise> promise = resolver->Init();
 
@@ -304,8 +317,9 @@ RefPtr<CrossProcessPaint::ResolvePromise> CrossProcessPaint::Start(
   return promise;
 }
 
-CrossProcessPaint::CrossProcessPaint(float aScale, dom::TabId aRoot)
-    : mRoot{aRoot}, mScale{aScale}, mPendingFragments{0} {}
+CrossProcessPaint::CrossProcessPaint(float aScale, dom::TabId aRoot,
+                                     CrossProcessPaintFlags aFlags)
+    : mRoot{aRoot}, mScale{aScale}, mPendingFragments{0}, mFlags{aFlags} {}
 
 CrossProcessPaint::~CrossProcessPaint() = default;
 
@@ -354,13 +368,18 @@ void CrossProcessPaint::LostFragment(dom::WindowGlobalParent* aWGP) {
 
 void CrossProcessPaint::QueueDependencies(
     const nsTHashSet<uint64_t>& aDependencies) {
+  dom::ContentProcessManager* cpm = dom::ContentProcessManager::GetSingleton();
+  if (!cpm) {
+    CPP_LOG(
+        "Skipping QueueDependencies with no"
+        " current ContentProcessManager.\n");
+    return;
+  }
   for (const auto& key : aDependencies) {
     auto dependency = dom::TabId(key);
 
-    // Get the current WindowGlobalParent of the remote browser that was marked
+    // Get the current BrowserParent of the remote browser that was marked
     // as a dependency
-    dom::ContentProcessManager* cpm =
-        dom::ContentProcessManager::GetSingleton();
     dom::ContentParentId cpId = cpm->GetTabProcessId(dependency);
     RefPtr<dom::BrowserParent> browser =
         cpm->GetBrowserParentByProcessAndTabId(cpId, dependency);
@@ -370,17 +389,11 @@ void CrossProcessPaint::QueueDependencies(
               (uint64_t)dependency);
       continue;
     }
-    RefPtr<dom::WindowGlobalParent> wgp =
-        browser->GetBrowsingContext()->GetCurrentWindowGlobal();
 
-    if (!wgp) {
-      CPP_LOG("Skipping dependency %" PRIu64 " with no current WGP.\n",
-              (uint64_t)dependency);
-      continue;
-    }
-
-    // TODO: Apply some sort of clipping to visible bounds here (Bug 1562720)
-    QueuePaint(wgp, Nothing());
+    // Note that if the remote document is currently being cloned, it's possible
+    // that the BrowserParent isn't the one for the cloned document, but the
+    // BrowsingContext should be persisted/consistent.
+    QueuePaint(browser->GetBrowsingContext());
   }
 }
 
@@ -390,11 +403,56 @@ void CrossProcessPaint::QueuePaint(dom::WindowGlobalParent* aWGP,
                                    CrossProcessPaintFlags aFlags) {
   MOZ_ASSERT(!mReceivedFragments.Contains(GetTabId(aWGP)));
 
-  CPP_LOG("Queueing paint for %p.\n", aWGP);
+  CPP_LOG("Queueing paint for WindowGlobalParent(%p).\n", aWGP);
 
   aWGP->DrawSnapshotInternal(this, aRect, mScale, aBackgroundColor,
                              (uint32_t)aFlags);
   mPendingFragments += 1;
+}
+
+void CrossProcessPaint::QueuePaint(dom::CanonicalBrowsingContext* aBc) {
+  RefPtr<GenericNonExclusivePromise> clonePromise = aBc->GetClonePromise();
+
+  if (!clonePromise) {
+    RefPtr<dom::WindowGlobalParent> wgp = aBc->GetCurrentWindowGlobal();
+    if (!wgp) {
+      CPP_LOG("Skipping BrowsingContext(%p) with no current WGP.\n", aBc);
+      return;
+    }
+
+    // TODO: Apply some sort of clipping to visible bounds here (Bug 1562720)
+    QueuePaint(wgp, Nothing(), NS_RGBA(0, 0, 0, 0), GetFlagsForDependencies());
+    return;
+  }
+
+  CPP_LOG("Queueing paint for BrowsingContext(%p).\n", aBc);
+  // In the case it's still in the process of cloning the remote document, we
+  // should defer the snapshot request after the cloning has been finished.
+  mPendingFragments += 1;
+  clonePromise->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [self = RefPtr{this}, bc = RefPtr{aBc}]() {
+        RefPtr<dom::WindowGlobalParent> wgp = bc->GetCurrentWindowGlobal();
+        if (!wgp) {
+          CPP_LOG("Skipping BrowsingContext(%p) with no current WGP.\n",
+                  bc.get());
+          return;
+        }
+        MOZ_ASSERT(!self->mReceivedFragments.Contains(GetTabId(wgp)));
+
+        // TODO: Apply some sort of clipping to visible bounds here (Bug
+        // 1562720)
+        wgp->DrawSnapshotInternal(self, Nothing(), self->mScale,
+                                  NS_RGBA(0, 0, 0, 0),
+                                  (uint32_t)self->GetFlagsForDependencies());
+      },
+      [self = RefPtr{this}]() {
+        CPP_LOG(
+            "Abort painting for BrowsingContext(%p) because cloning remote "
+            "document failed.\n",
+            self.get());
+        self->Clear(NS_ERROR_FAILURE);
+      });
 }
 
 void CrossProcessPaint::Clear(nsresult aStatus) {

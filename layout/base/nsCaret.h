@@ -9,6 +9,7 @@
 #ifndef nsCaret_h__
 #define nsCaret_h__
 
+#include "mozilla/intl/BidiEmbeddingLevel.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/dom/Selection.h"
 #include "nsCoord.h"
@@ -18,7 +19,6 @@
 #include "nsPoint.h"
 #include "nsRect.h"
 
-class nsDisplayListBuilder;
 class nsFrameSelection;
 class nsIContent;
 class nsIFrame;
@@ -144,6 +144,12 @@ class nsCaret final : public nsISelectionListener {
    */
   nsIFrame* GetPaintGeometry(nsRect* aRect);
   /**
+   * Same as the overload above, but returns the caret and hook rects
+   * separately, and also computes the color if requested.
+   */
+  nsIFrame* GetPaintGeometry(nsRect* aCaretRect, nsRect* aHookRect,
+                             nscolor* aCaretColor = nullptr);
+  /**
    * A simple wrapper around GetGeometry. Does not take any caret state into
    * account other than the current selection.
    */
@@ -174,7 +180,8 @@ class nsCaret final : public nsISelectionListener {
                                nsRect* aRect);
   static nsIFrame* GetCaretFrameForNodeOffset(
       nsFrameSelection* aFrameSelection, nsIContent* aContentNode,
-      int32_t aOffset, CaretAssociationHint aFrameHint, uint8_t aBidiLevel,
+      int32_t aOffset, CaretAssociationHint aFrameHint,
+      mozilla::intl::BidiEmbeddingLevel aBidiLevel,
       nsIFrame** aReturnUnadjustedFrame, int32_t* aReturnOffset);
   static nsRect GetGeometryForFrame(nsIFrame* aFrame, int32_t aFrameOffset,
                                     nscoord* aBidiIndicatorSize);
@@ -194,10 +201,6 @@ class nsCaret final : public nsISelectionListener {
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
-  nsIFrame* GetFrame(int32_t* aContentOffset);
-  void ComputeCaretRects(nsIFrame* aFrame, int32_t aFrameOffset,
-                         nsRect* aCaretRect, nsRect* aHookRect);
-
  protected:
   static void CaretBlinkCallback(nsITimer* aTimer, void* aClosure);
 
@@ -212,6 +215,8 @@ class nsCaret final : public nsISelectionListener {
   };
   static Metrics ComputeMetrics(nsIFrame* aFrame, int32_t aOffset,
                                 nscoord aCaretHeight);
+  void ComputeCaretRects(nsIFrame* aFrame, int32_t aFrameOffset,
+                         nsRect* aCaretRect, nsRect* aHookRect);
 
   // Returns true if we should not draw the caret because of XUL menu popups.
   // The caret should be hidden if:

@@ -11,10 +11,10 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
-  BookmarkPanelHub: "resource://activity-stream/lib/BookmarkPanelHub.jsm",
   SnippetsTestMessageProvider:
     "resource://activity-stream/lib/SnippetsTestMessageProvider.jsm",
   PanelTestProvider: "resource://activity-stream/lib/PanelTestProvider.jsm",
+  Spotlight: "resource://activity-stream/lib/Spotlight.jsm",
   ToolbarBadgeHub: "resource://activity-stream/lib/ToolbarBadgeHub.jsm",
   ToolbarPanelHub: "resource://activity-stream/lib/ToolbarPanelHub.jsm",
   MomentsPageHub: "resource://activity-stream/lib/MomentsPageHub.jsm",
@@ -30,9 +30,11 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Downloader: "resource://services-settings/Attachments.jsm",
   RemoteL10n: "resource://activity-stream/lib/RemoteL10n.jsm",
   ExperimentAPI: "resource://nimbus/ExperimentAPI.jsm",
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
   SpecialMessageActions:
     "resource://messaging-system/lib/SpecialMessageActions.jsm",
   TargetingContext: "resource://messaging-system/targeting/Targeting.jsm",
+  Utils: "resource://services-settings/Utils.jsm",
   MacAttribution: "resource:///modules/MacAttribution.jsm",
 });
 XPCOMUtils.defineLazyServiceGetters(this, {
@@ -76,10 +78,9 @@ const LOCAL_MESSAGE_PROVIDERS = {
 const STARTPAGE_VERSION = "6";
 
 // Remote Settings
-const RS_SERVER_PREF = "services.settings.server";
 const RS_MAIN_BUCKET = "main";
 const RS_COLLECTION_L10N = "ms-language-packs"; // "ms" stands for Messaging System
-const RS_PROVIDERS_WITH_L10N = ["cfr", "cfr-fxa", "whats-new-panel"];
+const RS_PROVIDERS_WITH_L10N = ["cfr"];
 const RS_FLUENT_VERSION = "v1";
 const RS_FLUENT_RECORD_PREFIX = `cfr-${RS_FLUENT_VERSION}`;
 const RS_DOWNLOAD_MAX_RETRIES = 2;
@@ -90,6 +91,7 @@ const JEXL_PROVIDER_CACHE = new Set(["snippets"]);
 
 // To observe the app locale change notification.
 const TOPIC_INTL_LOCALE_CHANGED = "intl:app-locales-changed";
+const TOPIC_EXPERIMENT_FORCE_ENROLLED = "nimbus:force-enroll";
 // To observe the pref that controls if ASRouter should use the remote Fluent files for l10n.
 const USE_REMOTE_L10N_PREF =
   "browser.newtabpage.activity-stream.asrouter.useRemoteL10n";
@@ -97,7 +99,7 @@ const USE_REMOTE_L10N_PREF =
 // Experiment groups that need to report the reach event in Messaging-Experiments.
 // If you're adding new groups to it, make sure they're also added in the
 // `messaging_experiments.reach.objects` defined in "toolkit/components/telemetry/Events.yaml"
-const REACH_EVENT_GROUPS = ["cfr", "moments-page"];
+const REACH_EVENT_GROUPS = ["cfr", "moments-page", "infobar", "spotlight"];
 const REACH_EVENT_CATEGORY = "messaging_experiments";
 const REACH_EVENT_METHOD = "reach";
 
@@ -129,21 +131,6 @@ const MessageLoaderUtils = {
    */
   _localLoader(provider) {
     return provider.messages;
-  },
-
-  async _localJsonLoader(provider) {
-    let payload;
-    try {
-      payload = await (
-        await fetch(provider.location, {
-          credentials: "omit",
-        })
-      ).json();
-    } catch (e) {
-      return [];
-    }
-
-    return payload.messages;
   },
 
   async _remoteLoaderCache(storage) {
@@ -259,7 +246,7 @@ const MessageLoaderUtils = {
    * _remoteSettingsLoader - Loads messages for a RemoteSettings provider
    *
    * Note:
-   * 1). Both "cfr" and "cfr-fxa" require the Fluent file for l10n, so there is
+   * 1). The "cfr" provider requires the Fluent file for l10n, so there is
    * another file downloading phase for those two providers after their messages
    * are successfully fetched from Remote Settings. Currently, they share the same
    * attachment of the record "${RS_FLUENT_RECORD_PREFIX}-${locale}" in the
@@ -290,21 +277,10 @@ const MessageLoaderUtils = {
           );
         } else if (
           RS_PROVIDERS_WITH_L10N.includes(provider.id) &&
-          (RemoteL10n.isLocaleSupported(Services.locale.appLocaleAsBCP47) ||
-            // While it's not a valid locale, "und" is commonly observed on
-            // Linux platforms. Per l10n team, it's reasonable to fallback to
-            // "en-US", therefore, we should allow the fetch for it.
-            Services.locale.appLocaleAsBCP47 === "und")
+          RemoteL10n.isLocaleSupported(MessageLoaderUtils.locale)
         ) {
-          let locale = Services.locale.appLocaleAsBCP47;
-          // Fallback to "en-US" if locale is "und"
-          if (locale === "und") {
-            locale = "en-US";
-          }
-          const recordId = `${RS_FLUENT_RECORD_PREFIX}-${locale}`;
-          const kinto = new KintoHttpClient(
-            Services.prefs.getStringPref(RS_SERVER_PREF)
-          );
+          const recordId = `${RS_FLUENT_RECORD_PREFIX}-${MessageLoaderUtils.locale}`;
+          const kinto = new KintoHttpClient(Utils.SERVER_URL);
           const record = await kinto
             .bucket(RS_MAIN_BUCKET)
             .collection(RS_COLLECTION_L10N)
@@ -312,10 +288,12 @@ const MessageLoaderUtils = {
           if (record && record.data) {
             const downloader = new Downloader(
               RS_MAIN_BUCKET,
-              RS_COLLECTION_L10N
+              RS_COLLECTION_L10N,
+              "browser",
+              "newtab"
             );
             // Await here in order to capture the exceptions for reporting.
-            await downloader.download(record.data, {
+            await downloader.downloadToDisk(record.data, {
               retries: RS_DOWNLOAD_MAX_RETRIES,
             });
             RemoteL10n.reloadL10n();
@@ -343,29 +321,22 @@ const MessageLoaderUtils = {
     return RemoteSettings(bucket).get();
   },
 
-  async _experimentsAPILoader(provider, options) {
-    await ExperimentAPI.ready();
-
+  async _experimentsAPILoader(provider) {
     let experiments = [];
     for (const featureId of provider.messageGroups) {
-      let experimentData = ExperimentAPI.getExperiment({ featureId });
+      let FeatureAPI = NimbusFeatures[featureId];
+      let experimentData = ExperimentAPI.getExperimentMetaData({
+        featureId,
+      });
       // Not enrolled in any experiment for this feature, we can skip
       if (!experimentData) {
         continue;
       }
 
-      // If the feature is not enabled there is no message to send back.
-      // Other branches might be enabled so we check those as well in case we
-      // need to send a reach ping.
-      let featureData = experimentData.branch.feature;
-      if (featureData.enabled) {
-        experiments.push({
-          forExposureEvent: {
-            experimentSlug: experimentData.slug,
-            branchSlug: experimentData.branch.slug,
-          },
-          ...featureData.value,
-        });
+      let message = FeatureAPI.getAllVariables();
+
+      if (message?.id) {
+        experiments.push(message);
       }
 
       if (!REACH_EVENT_GROUPS.includes(featureId)) {
@@ -378,8 +349,11 @@ const MessageLoaderUtils = {
       const branches =
         (await ExperimentAPI.getAllBranches(experimentData.slug)) || [];
       for (const branch of branches) {
-        let branchValue = branch.feature.value;
-        if (branch.slug !== experimentData.branch.slug && branchValue.trigger) {
+        let branchValue = branch[featureId].value;
+        if (
+          branch.slug !== experimentData.branch.slug &&
+          branchValue?.trigger
+        ) {
           experiments.push({
             forReachEvent: { sent: false, group: featureId },
             experimentSlug: experimentData.slug,
@@ -418,8 +392,6 @@ const MessageLoaderUtils = {
         return this._remoteLoader;
       case "remote-settings":
         return this._remoteSettingsLoader;
-      case "json":
-        return this._localJsonLoader;
       case "remote-experiments":
         return this._experimentsAPILoader;
       case "local":
@@ -515,6 +487,26 @@ const MessageLoaderUtils = {
       await storage.set(MessageLoaderUtils.REMOTE_LOADER_CACHE_KEY, cache);
     }
   },
+
+  /**
+   * The locale to use for RemoteL10n.
+   *
+   * This may map the app's actual locale into something that RemoteL10n
+   * supports.
+   */
+  get locale() {
+    const localeMap = {
+      "ja-JP-macos": "ja-JP-mac",
+
+      // While it's not a valid locale, "und" is commonly observed on
+      // Linux platforms. Per l10n team, it's reasonable to fallback to
+      // "en-US", therefore, we should allow the fetch for it.
+      und: "en-US",
+    };
+
+    const locale = Services.locale.appLocaleAsBCP47;
+    return localeMap[locale] ?? locale;
+  },
 };
 
 this.MessageLoaderUtils = MessageLoaderUtils;
@@ -558,6 +550,9 @@ class _ASRouter {
     this.isUnblockedMessage = this.isUnblockedMessage.bind(this);
     this.unblockAll = this.unblockAll.bind(this);
     this.forceWNPanel = this.forceWNPanel.bind(this);
+    this._onExperimentForceEnrolled = this._onExperimentForceEnrolled.bind(
+      this
+    );
     Services.telemetry.setEventRecordingEnabled(REACH_EVENT_CATEGORY, true);
   }
 
@@ -766,12 +761,16 @@ class _ASRouter {
   /**
    * loadMessagesFromAllProviders - Loads messages from all providers if they require updates.
    *                                Checks the .lastUpdated field on each provider to see if updates are needed
+   * @param toUpdate  An optional list of providers to update. This overrides
+   *                  the checks to determine which providers to update.
    * @memberof _ASRouter
    */
-  async loadMessagesFromAllProviders() {
-    const needsUpdate = this.state.providers.filter(provider =>
-      MessageLoaderUtils.shouldProviderUpdate(provider)
-    );
+  async loadMessagesFromAllProviders(toUpdate = undefined) {
+    const needsUpdate = Array.isArray(toUpdate)
+      ? toUpdate
+      : this.state.providers.filter(provider =>
+          MessageLoaderUtils.shouldProviderUpdate(provider)
+        );
     await this.loadAllMessageGroups();
     // Don't do extra work if we don't need any updates
     if (needsUpdate.length) {
@@ -892,11 +891,6 @@ class _ASRouter {
 
     ASRouterPreferences.init();
     ASRouterPreferences.addListener(this.onPrefChange);
-    BookmarkPanelHub.init(
-      this.handleMessageRequest,
-      this.addImpression,
-      this.sendTelemetry
-    );
     ToolbarBadgeHub.init(this.waitForInitialized, {
       handleMessageRequest: this.handleMessageRequest,
       addImpression: this.addImpression,
@@ -940,6 +934,10 @@ class _ASRouter {
 
     SpecialMessageActions.blockMessageById = this.blockMessageById;
     Services.obs.addObserver(this._onLocaleChanged, TOPIC_INTL_LOCALE_CHANGED);
+    Services.obs.addObserver(
+      this._onExperimentForceEnrolled,
+      TOPIC_EXPERIMENT_FORCE_ENROLLED
+    );
     Services.prefs.addObserver(USE_REMOTE_L10N_PREF, this);
     // sets .initialized to true and resolves .waitForInitialized promise
     this._finishInitializing();
@@ -957,7 +955,6 @@ class _ASRouter {
 
     ASRouterPreferences.removeListener(this.onPrefChange);
     ASRouterPreferences.uninit();
-    BookmarkPanelHub.uninit();
     ToolbarPanelHub.uninit();
     ToolbarBadgeHub.uninit();
     MomentsPageHub.uninit();
@@ -969,6 +966,10 @@ class _ASRouter {
     Services.obs.removeObserver(
       this._onLocaleChanged,
       TOPIC_INTL_LOCALE_CHANGED
+    );
+    Services.obs.removeObserver(
+      this._onExperimentForceEnrolled,
+      TOPIC_EXPERIMENT_FORCE_ENROLLED
     );
     Services.prefs.removeObserver(USE_REMOTE_L10N_PREF, this);
     // If we added any CFR recommendations, they need to be removed
@@ -1197,11 +1198,6 @@ class _ASRouter {
           );
         }
         break;
-      case "fxa_bookmark_panel":
-        if (force) {
-          BookmarkPanelHub.forceShowMessage(browser, message);
-        }
-        break;
       case "toolbar_badge":
         ToolbarBadgeHub.registerBadgeNotificationListener(message, { force });
         break;
@@ -1210,6 +1206,9 @@ class _ASRouter {
         break;
       case "infobar":
         InfoBar.showInfoBarMessage(browser, message, this.dispatchCFRAction);
+        break;
+      case "spotlight":
+        Spotlight.showSpotlightDialog(browser, message, this.dispatchCFRAction);
         break;
     }
 
@@ -1463,6 +1462,18 @@ class _ASRouter {
     }));
   }
 
+  resetMessageState() {
+    const newMessageImpressions = {};
+    for (let { id } of this.state.messages) {
+      newMessageImpressions[id] = [];
+    }
+    // Update storage
+    this._storage.set("messageImpressions", newMessageImpressions);
+    return this.setState(() => ({
+      messageImpressions: newMessageImpressions,
+    }));
+  }
+
   _validPreviewEndpoint(url) {
     try {
       const endpoint = new URL(url);
@@ -1608,6 +1619,40 @@ class _ASRouter {
     return this.loadMessagesFromAllProviders();
   }
 
+  async sendPBNewTabMessage({ tabId, hideDefault }) {
+    let message = null;
+
+    await this.loadMessagesFromAllProviders();
+
+    // If message has hideDefault property set to true
+    // remove from state all pb_newtab messages with type default
+    if (hideDefault) {
+      await this.setState(state => ({
+        messages: state.messages.filter(
+          m => !(m.template === "pb_newtab" && m.type === "default")
+        ),
+      }));
+    }
+
+    const telemetryObject = { tabId };
+    TelemetryStopwatch.start("MS_MESSAGE_REQUEST_TIME_MS", telemetryObject);
+    message = await this.handleMessageRequest({
+      template: "pb_newtab",
+    });
+    TelemetryStopwatch.finish("MS_MESSAGE_REQUEST_TIME_MS", telemetryObject);
+
+    // Format urls if any are defined
+    ["infoLinkUrl", "promoLinkUrl"].forEach(key => {
+      if (message?.content?.[key]) {
+        message.content[key] = Services.urlFormatter.formatURL(
+          message.content[key]
+        );
+      }
+    });
+
+    return { message };
+  }
+
   async sendNewTabMessage({ endpoint, tabId, browser }) {
     let message;
 
@@ -1681,16 +1726,19 @@ class _ASRouter {
       }
     }
 
-    // Exposure events only apply to messages that come from the
-    // messaging-experiments provider
-    if (nonReachMessages.length && nonReachMessages[0].forExposureEvent) {
-      ExperimentAPI.recordExposureEvent({
-        // Any message processed by ASRouter will report the exposure event
-        // as `cfr`
-        featureId: "cfr",
-        // experimentSlug and branchSlug
-        ...nonReachMessages[0].forExposureEvent,
-      });
+    if (nonReachMessages.length) {
+      // Map from message template to Nimbus feature
+      let featureMap = {
+        cfr_doorhanger: "cfr",
+        spotlight: "spotlight",
+        infobar: "infobar",
+        update_action: "moments-page",
+        pb_newtab: "pbNewtab",
+      };
+      let feature = featureMap[nonReachMessages[0].template];
+      if (feature) {
+        NimbusFeatures[feature].recordExposureEvent({ once: true });
+      }
     }
 
     return this.routeCFRMessage(
@@ -1722,6 +1770,17 @@ class _ASRouter {
     panel.setAttribute("noautohide", false);
     // Removing the button is enough to close the panel.
     await ToolbarPanelHub._hideToolbarButton(win);
+  }
+
+  async _onExperimentForceEnrolled(subject, topic, data) {
+    const experimentProvider = this.state.providers.find(
+      p => p.id === "messaging-experiments"
+    );
+    if (!experimentProvider.enabled) {
+      return;
+    }
+
+    await this.loadMessagesFromAllProviders([experimentProvider]);
   }
 }
 this._ASRouter = _ASRouter;

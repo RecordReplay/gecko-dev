@@ -28,9 +28,8 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 });
 
 XPCOMUtils.defineLazyGetter(this, "PageMenuChild", () => {
-  let tmp = {};
-  ChromeUtils.import("resource://gre/modules/PageMenu.jsm", tmp);
-  return new tmp.PageMenuChild();
+  let pageMenu = ChromeUtils.import("resource://gre/modules/PageMenu.jsm");
+  return new pageMenu.PageMenuChild();
 });
 
 let contextMenus = new WeakMap();
@@ -139,6 +138,19 @@ class ContextMenuChild extends JSWindowActorChild {
                   "contextmenu",
                   1
                 );
+                let args = {
+                  method: "contextMenu",
+                  firstTimeToggle: (!Services.prefs.getBoolPref(
+                    "media.videocontrols.picture-in-picture.video-toggle.has-used"
+                  )).toString(),
+                };
+                Services.telemetry.recordEvent(
+                  "pictureinpicture",
+                  "opened_method",
+                  "method",
+                  null,
+                  args
+                );
                 let event = new this.contentWindow.CustomEvent(
                   "MozTogglePictureInPicture",
                   {
@@ -157,6 +169,12 @@ class ContextMenuChild extends JSWindowActorChild {
       case "ContextMenu:ReloadFrame": {
         let target = ContentDOMReference.resolve(message.data.targetIdentifier);
         target.ownerDocument.location.reload(message.data.forceReload);
+        break;
+      }
+
+      case "ContextMenu:ToggleRevealPassword": {
+        let target = ContentDOMReference.resolve(message.data.targetIdentifier);
+        target.revealPassword = !target.revealPassword;
         break;
       }
 
@@ -359,6 +377,7 @@ class ContextMenuChild extends JSWindowActorChild {
       this.context.linkProtocol &&
       !(
         this.context.linkProtocol == "mailto" ||
+        this.context.linkProtocol == "tel" ||
         this.context.linkProtocol == "javascript" ||
         this.context.linkProtocol == "news" ||
         this.context.linkProtocol == "snews"
@@ -376,7 +395,7 @@ class ContextMenuChild extends JSWindowActorChild {
       if (node.nodeType == node.TEXT_NODE) {
         // Add this text to our collection.
         text += " " + node.data;
-      } else if (node instanceof this.contentWindow.HTMLImageElement) {
+      } else if (this.contentWindow.HTMLImageElement.isInstance(node)) {
         // If it has an "alt" attribute, add that.
         let altText = node.getAttribute("alt");
         if (altText && altText != "") {
@@ -444,11 +463,11 @@ class ContextMenuChild extends JSWindowActorChild {
   }
 
   _isTargetATextBox(node) {
-    if (node instanceof this.contentWindow.HTMLInputElement) {
+    if (this.contentWindow.HTMLInputElement.isInstance(node)) {
       return node.mozIsTextField(false);
     }
 
-    return node instanceof this.contentWindow.HTMLTextAreaElement;
+    return this.contentWindow.HTMLTextAreaElement.isInstance(node);
   }
 
   /**
@@ -507,7 +526,7 @@ class ContextMenuChild extends JSWindowActorChild {
     return false;
   }
 
-  handleEvent(aEvent) {
+  async handleEvent(aEvent) {
     contextMenus.set(this.browsingContext, this);
 
     let defaultPrevented = aEvent.defaultPrevented;
@@ -645,7 +664,6 @@ class ContextMenuChild extends JSWindowActorChild {
       referrerInfo,
       editFlags,
       principal,
-      spellInfo,
       contentType,
       docLocation,
       loginFillInfo,
@@ -692,6 +710,15 @@ class ContextMenuChild extends JSWindowActorChild {
     // instead.
     aEvent.stopPropagation();
 
+    data.spellInfo = null;
+    if (!spellInfo) {
+      this.sendAsyncMessage("contextmenu", data);
+      return;
+    }
+
+    try {
+      data.spellInfo = await spellInfo;
+    } catch (ex) {}
     this.sendAsyncMessage("contextmenu", data);
   }
 
@@ -762,8 +789,8 @@ class ContextMenuChild extends JSWindowActorChild {
     const context = this.context;
 
     context.timeStamp = aEvent.timeStamp;
-    context.screenX = aEvent.screenX;
-    context.screenY = aEvent.screenY;
+    context.screenXDevPx = aEvent.screenX * this.contentWindow.devicePixelRatio;
+    context.screenYDevPx = aEvent.screenY * this.contentWindow.devicePixelRatio;
     context.mozInputSource = aEvent.mozInputSource;
 
     let node = aEvent.composedTarget;
@@ -773,9 +800,9 @@ class ContextMenuChild extends JSWindowActorChild {
     if (node.containingShadowRoot?.isUAWidget()) {
       const host = node.containingShadowRoot.host;
       if (
-        host instanceof this.contentWindow.HTMLMediaElement ||
-        host instanceof this.contentWindow.HTMLEmbedElement ||
-        host instanceof this.contentWindow.HTMLObjectElement
+        this.contentWindow.HTMLMediaElement.isInstance(host) ||
+        this.contentWindow.HTMLEmbedElement.isInstance(host) ||
+        this.contentWindow.HTMLObjectElement.isInstance(host)
       ) {
         node = host;
       }
@@ -846,9 +873,11 @@ class ContextMenuChild extends JSWindowActorChild {
     context.onLink = false;
     context.onLoadedImage = false;
     context.onMailtoLink = false;
+    context.onTelLink = false;
     context.onMozExtLink = false;
     context.onNumeric = false;
     context.onPassword = false;
+    context.passwordRevealed = false;
     context.onSaveableLink = false;
     context.onSpellcheckable = false;
     context.onTextInput = false;
@@ -876,7 +905,8 @@ class ContextMenuChild extends JSWindowActorChild {
 
     // Check if we are in the PDF Viewer.
     context.inPDFViewer =
-      context.target.ownerDocument.nodePrincipal.origin == "resource://pdf.js";
+      context.target.ownerDocument.nodePrincipal.originNoSuffix ==
+      "resource://pdf.js";
 
     // Check if we are in a synthetic document (stand alone image, video, etc.).
     context.inSyntheticDoc = context.target.ownerDocument.mozSyntheticDocument;
@@ -943,10 +973,10 @@ class ContextMenuChild extends JSWindowActorChild {
         imageText: context.target.title || context.target.alt,
       };
       const { SVGAnimatedLength } = context.target.ownerGlobal;
-      if (context.imageInfo.height instanceof SVGAnimatedLength) {
+      if (SVGAnimatedLength.isInstance(context.imageInfo.height)) {
         context.imageInfo.height = context.imageInfo.height.animVal.value;
       }
-      if (context.imageInfo.width instanceof SVGAnimatedLength) {
+      if (SVGAnimatedLength.isInstance(context.imageInfo.width)) {
         context.imageInfo.width = context.imageInfo.width.animVal.value;
       }
 
@@ -965,6 +995,16 @@ class ContextMenuChild extends JSWindowActorChild {
       ) {
         context.onCompletedImage = true;
       }
+
+      // The URL of the image before redirects is the currentURI.  This is
+      // intended to be used for "Copy Image Link".
+      context.originalMediaURL = (() => {
+        let currentURI = context.target.currentURI?.spec;
+        if (currentURI && this._isMediaURLReusable(currentURI)) {
+          return currentURI;
+        }
+        return "";
+      })();
 
       // The actual URL the image was loaded from (after redirects) is the
       // currentRequestFinalURI.  We should use that as the URL for purposes of
@@ -993,9 +1033,11 @@ class ContextMenuChild extends JSWindowActorChild {
           descURL
         );
       }
-    } else if (context.target instanceof this.contentWindow.HTMLCanvasElement) {
+    } else if (
+      this.contentWindow.HTMLCanvasElement.isInstance(context.target)
+    ) {
       context.onCanvas = true;
-    } else if (context.target instanceof this.contentWindow.HTMLVideoElement) {
+    } else if (this.contentWindow.HTMLVideoElement.isInstance(context.target)) {
       const mediaURL = context.target.currentSrc || context.target.src;
 
       if (this._isMediaURLReusable(mediaURL)) {
@@ -1021,7 +1063,7 @@ class ContextMenuChild extends JSWindowActorChild {
       } else {
         context.onVideo = true;
       }
-    } else if (context.target instanceof this.contentWindow.HTMLAudioElement) {
+    } else if (this.contentWindow.HTMLAudioElement.isInstance(context.target)) {
       context.onAudio = true;
       const mediaURL = context.target.currentSrc || context.target.src;
 
@@ -1040,6 +1082,8 @@ class ContextMenuChild extends JSWindowActorChild {
       context.onNumeric = (editFlags & SpellCheckHelper.NUMERIC) !== 0;
       context.onEditable = (editFlags & SpellCheckHelper.EDITABLE) !== 0;
       context.onPassword = (editFlags & SpellCheckHelper.PASSWORD) !== 0;
+      context.passwordRevealed =
+        context.onPassword && context.target.revealPassword;
       context.onSpellcheckable =
         (editFlags & SpellCheckHelper.SPELLCHECKABLE) !== 0;
 
@@ -1050,7 +1094,7 @@ class ContextMenuChild extends JSWindowActorChild {
       }
 
       context.onKeywordField = editFlags & SpellCheckHelper.KEYWORD;
-    } else if (context.target instanceof this.contentWindow.HTMLHtmlElement) {
+    } else if (this.contentWindow.HTMLHtmlElement.isInstance(context.target)) {
       const bodyElt = context.target.ownerDocument.body;
 
       if (bodyElt) {
@@ -1099,12 +1143,13 @@ class ContextMenuChild extends JSWindowActorChild {
           // Be consistent with what hrefAndLinkNodeForClickEvent
           // does in browser.js
           (this._isXULTextLinkLabel(elem) ||
-            (elem instanceof this.contentWindow.HTMLAnchorElement &&
+            (this.contentWindow.HTMLAnchorElement.isInstance(elem) &&
               elem.href) ||
-            (elem instanceof this.contentWindow.SVGAElement &&
+            (this.contentWindow.SVGAElement.isInstance(elem) &&
               (elem.href || elem.hasAttributeNS(XLINK_NS, "href"))) ||
-            (elem instanceof this.contentWindow.HTMLAreaElement && elem.href) ||
-            elem instanceof this.contentWindow.HTMLLinkElement ||
+            (this.contentWindow.HTMLAreaElement.isInstance(elem) &&
+              elem.href) ||
+            this.contentWindow.HTMLLinkElement.isInstance(elem) ||
             elem.getAttributeNS(XLINK_NS, "type") == "simple")
         ) {
           // Target is a link or a descendant of a link.
@@ -1117,6 +1162,7 @@ class ContextMenuChild extends JSWindowActorChild {
           context.linkTextStr = this._getLinkText();
           context.linkProtocol = this._getLinkProtocol();
           context.onMailtoLink = context.linkProtocol == "mailto";
+          context.onTelLink = context.linkProtocol == "tel";
           context.onMozExtLink = context.linkProtocol == "moz-extension";
           context.onSaveableLink = this._isLinkSaveable(context.link);
 

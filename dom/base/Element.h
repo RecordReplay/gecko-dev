@@ -31,6 +31,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/PseudoStyleType.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/Result.h"
 #include "mozilla/RustCell.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/BorrowedAttrInfo.h"
@@ -112,6 +113,7 @@ struct URLValue;
 }  // namespace css
 namespace dom {
 struct CustomElementData;
+struct SetHTMLOptions;
 struct GetAnimationsOptions;
 struct ScrollIntoViewOptions;
 struct ScrollToOptions;
@@ -126,6 +128,7 @@ class DOMMatrixReadOnly;
 class Element;
 class ElementOrCSSPseudoElement;
 class Promise;
+class Sanitizer;
 class ShadowRoot;
 class UnrestrictedDoubleOrKeyframeAnimationOptions;
 template <typename T>
@@ -165,8 +168,12 @@ enum {
   // style of an element is up-to-date, even during the same restyle process.
   ELEMENT_HANDLED_SNAPSHOT = ELEMENT_FLAG_BIT(3),
 
+  // If this flag is set on an element, that means that it is a HTML datalist
+  // element or has a HTML datalist element ancestor.
+  ELEMENT_IS_DATALIST_OR_HAS_DATALIST_ANCESTOR = ELEMENT_FLAG_BIT(4),
+
   // Remaining bits are for subclasses
-  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 4
+  ELEMENT_TYPE_SPECIFIC_BITS_OFFSET = NODE_TYPE_SPECIFIC_BITS_OFFSET + 5
 };
 
 #undef ELEMENT_FLAG_BIT
@@ -294,6 +301,8 @@ class Element : public FragmentOrElement {
   /**
    * Make focus on this element.
    */
+  // TODO: Convert Focus() to MOZ_CAN_RUN_SCRIPT and get rid of the
+  //       kungFuDeathGrip in it.
   MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual void Focus(const FocusOptions& aOptions,
                                                  const CallerType aCallerType,
                                                  ErrorResult& aError);
@@ -301,7 +310,7 @@ class Element : public FragmentOrElement {
   /**
    * Show blur and clear focus.
    */
-  virtual void Blur(mozilla::ErrorResult& aError);
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual void Blur(mozilla::ErrorResult& aError);
 
   /**
    * The style state of this element. This is the real state of the element
@@ -572,7 +581,7 @@ class Element : public FragmentOrElement {
    *
    * @param aData The custom element data.
    */
-  void SetCustomElementData(CustomElementData* aData);
+  void SetCustomElementData(UniquePtr<CustomElementData> aData);
 
   /**
    * Gets the custom element definition used by web components custom element.
@@ -588,7 +597,7 @@ class Element : public FragmentOrElement {
    *
    * @param aDefinition The custom element definition.
    */
-  void SetCustomElementDefinition(CustomElementDefinition* aDefinition);
+  virtual void SetCustomElementDefinition(CustomElementDefinition* aDefinition);
 
   void SetDefined(bool aSet) {
     if (aSet) {
@@ -1051,10 +1060,11 @@ class Element : public FragmentOrElement {
 #endif
 
   /**
-   * Append to aOutDescription a short (preferably one line) string
-   * describing the element.
+   * Append to aOutDescription a string describing the element and its
+   * attributes.
+   * If aShort is true, only the id and class attributes will be listed.
    */
-  void Describe(nsAString& aOutDescription) const;
+  void Describe(nsAString& aOutDescription, bool aShort = false) const;
 
   /*
    * Attribute Mapping Helpers
@@ -1267,12 +1277,16 @@ class Element : public FragmentOrElement {
                                             ErrorResult& aError);
   bool CanAttachShadowDOM() const;
 
+  enum class DelegatesFocus : bool { No, Yes };
+
   already_AddRefed<ShadowRoot> AttachShadowWithoutNameChecks(
-      ShadowRootMode aMode);
+      ShadowRootMode aMode, DelegatesFocus = DelegatesFocus::No,
+      SlotAssignmentMode aSlotAssignmentMode = SlotAssignmentMode::Named);
 
   // Attach UA Shadow Root if it is not attached.
   enum class NotifyUAWidgetSetup : bool { No, Yes };
-  void AttachAndSetUAShadowRoot(NotifyUAWidgetSetup = NotifyUAWidgetSetup::Yes);
+  void AttachAndSetUAShadowRoot(NotifyUAWidgetSetup = NotifyUAWidgetSetup::Yes,
+                                DelegatesFocus = DelegatesFocus::No);
 
   // Dispatch an event to UAWidgetsChild, triggering construction
   // or onchange callback on the existing widget.
@@ -1299,10 +1313,14 @@ class Element : public FragmentOrElement {
   }
 
  private:
+  // DO NOT USE THIS FUNCTION directly in C++. This function is supposed to be
+  // called from JS. Use PresShell::ScrollContentIntoView instead.
   MOZ_CAN_RUN_SCRIPT void ScrollIntoView(const ScrollIntoViewOptions& aOptions);
 
  public:
   MOZ_CAN_RUN_SCRIPT
+  // DO NOT USE THIS FUNCTION directly in C++. This function is supposed to be
+  // called from JS. Use PresShell::ScrollContentIntoView instead.
   void ScrollIntoView(const BooleanOrScrollIntoViewOptions& aObject);
   MOZ_CAN_RUN_SCRIPT void Scroll(double aXScroll, double aYScroll);
   MOZ_CAN_RUN_SCRIPT void Scroll(const ScrollToOptions& aOptions);
@@ -1329,6 +1347,11 @@ class Element : public FragmentOrElement {
   MOZ_CAN_RUN_SCRIPT int32_t ClientHeight() {
     return CSSPixel::FromAppUnits(GetClientAreaRect().Height()).Rounded();
   }
+
+  MOZ_CAN_RUN_SCRIPT int32_t ScreenX();
+  MOZ_CAN_RUN_SCRIPT int32_t ScreenY();
+  MOZ_CAN_RUN_SCRIPT already_AddRefed<nsIScreen> GetScreen();
+
   MOZ_CAN_RUN_SCRIPT int32_t ScrollTopMin();
   MOZ_CAN_RUN_SCRIPT int32_t ScrollTopMax();
   MOZ_CAN_RUN_SCRIPT int32_t ScrollLeftMin();
@@ -1383,6 +1406,9 @@ class Element : public FragmentOrElement {
   void SetOuterHTML(const nsAString& aOuterHTML, ErrorResult& aError);
   void InsertAdjacentHTML(const nsAString& aPosition, const nsAString& aText,
                           ErrorResult& aError);
+
+  void SetHTML(const nsAString& aInnerHTML, const SetHTMLOptions& aOptions,
+               ErrorResult& aError);
 
   //----------------------------------------
 
@@ -1465,7 +1491,7 @@ class Element : public FragmentOrElement {
     return slots ? slots->mAttributeMap.get() : nullptr;
   }
 
-  virtual void RecompileScriptEventListeners() {}
+  void RecompileScriptEventListeners();
 
   /**
    * Get the attr info for the given namespace ID and attribute name.  The
@@ -1656,11 +1682,15 @@ class Element : public FragmentOrElement {
    * @param aKeyCausesActivation - if true then element should be activated
    * @param aIsTrustedEvent - if true then event that is cause of accesskey
    *                          execution is trusted.
-   * @return true if the focus was changed.
+   * @return an error if the element isn't able to handle the accesskey (caller
+   *         would look for the next element to handle it).
+   *         a boolean indicates whether the focus moves to the element after
+   *         the element handles the accesskey.
    */
-  MOZ_CAN_RUN_SCRIPT virtual bool PerformAccesskey(bool aKeyCausesActivation,
-                                                   bool aIsTrustedEvent) {
-    return false;
+  MOZ_CAN_RUN_SCRIPT
+  virtual Result<bool, nsresult> PerformAccesskey(bool aKeyCausesActivation,
+                                                  bool aIsTrustedEvent) {
+    return Err(NS_ERROR_NOT_IMPLEMENTED);
   }
 
  protected:
@@ -1917,22 +1947,41 @@ class Element : public FragmentOrElement {
    * and that we are actually on a link.
    *
    * @param aVisitor event visitor
-   * @param aURI the uri of the link, set only if the return value is true [OUT]
    * @return true if we can handle the link event, false otherwise
    */
-  bool CheckHandleEventForLinksPrecondition(EventChainVisitor& aVisitor,
-                                            nsIURI** aURI) const;
+  bool CheckHandleEventForLinksPrecondition(EventChainVisitor& aVisitor) const;
 
   /**
    * Handle status bar updates before they can be cancelled.
    */
   void GetEventTargetParentForLinks(EventChainPreVisitor& aVisitor);
 
+  void DispatchChromeOnlyLinkClickEvent(EventChainPostVisitor& aVisitor);
+
   /**
    * Handle default actions for link event if the event isn't consumed yet.
    */
   MOZ_CAN_RUN_SCRIPT
   nsresult PostHandleEventForLinks(EventChainPostVisitor& aVisitor);
+
+ public:
+  /**
+   * Check if this element is a link. This matches the CSS definition of the
+   * :any-link pseudo-class.
+   */
+  bool IsLink() const {
+    return mState.HasAtLeastOneOfStates(NS_EVENT_STATE_VISITED |
+                                        NS_EVENT_STATE_UNVISITED);
+  }
+
+  /**
+   * Get a pointer to the full href URI (fully resolved and canonicalized, since
+   * it's an nsIURI object) for link elements.
+   *
+   * @return A pointer to the URI or null if the element is not a link, or it
+   *         has no HREF attribute, or the HREF attribute is an invalid URI.
+   */
+  virtual already_AddRefed<nsIURI> GetHrefURI() const { return nullptr; }
 
   /**
    * Get the target of this link element. Consumers should established that
@@ -1946,6 +1995,7 @@ class Element : public FragmentOrElement {
    */
   virtual void GetLinkTarget(nsAString& aTarget);
 
+ protected:
   enum class ReparseAttributes { No, Yes };
   /**
    * Copy attributes and state to another element
@@ -1960,7 +2010,7 @@ class Element : public FragmentOrElement {
    * content attribute name and returns the corresponding event name, to be used
    * for adding the actual event listener.
    */
-  static nsAtom* GetEventNameForAttr(nsAtom* aAttr);
+  virtual nsAtom* GetEventNameForAttr(nsAtom* aAttr);
 
   /**
    * Register/unregister this element to accesskey map if it supports accesskey.

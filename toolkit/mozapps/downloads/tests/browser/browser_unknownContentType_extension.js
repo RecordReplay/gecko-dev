@@ -13,7 +13,9 @@ const TEST_PATH = getRootDirectory(gTestPath).replace(
  * file name extensions.
  */
 add_task(async function test_download_filename_extension() {
+  forcePromptForFiles("application/octet-stream", "exe");
   let windowObserver = BrowserTestUtils.domWindowOpenedAndLoaded();
+
   let tab = await BrowserTestUtils.openNewForegroundTab({
     gBrowser,
     opening: TEST_PATH + "unknownContentType.EXE",

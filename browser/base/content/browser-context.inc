@@ -61,12 +61,10 @@
                 disabled="true"
                 data-l10n-id="text-action-spell-no-suggestions"/>
       <menuitem id="spell-add-to-dictionary"
-                label="&spellAddToDictionary.label;"
-                accesskey="&spellAddToDictionary.accesskey;"
+                data-l10n-id="text-action-spell-add-to-dictionary"
                 oncommand="InlineSpellCheckerUI.addToDictionary();"/>
       <menuitem id="spell-undo-add-to-dictionary"
-                label="&spellUndoAddToDictionary.label;"
-                accesskey="&spellUndoAddToDictionary.accesskey;"
+                data-l10n-id="text-action-spell-undo-add-to-dictionary"
                 oncommand="InlineSpellCheckerUI.undoAddToDictionary();" />
       <menuseparator id="spell-suggestions-separator"/>
       <menuitem id="context-openlinkincurrent"
@@ -74,7 +72,8 @@
                 oncommand="gContextMenu.openLinkInCurrent();"/>
 # label and data-usercontextid are dynamically set.
       <menuitem id="context-openlinkincontainertab"
-                accesskey="&openLinkCmdInTab.accesskey;"
+                data-l10n-id="main-context-menu-open-link-in-container-tab"
+                data-l10n-args='{"containerName":""}'
                 oncommand="gContextMenu.openLinkInTab(event);"/>
       <menuitem id="context-openlinkintab"
                 data-l10n-id="main-context-menu-open-link-new-tab"
@@ -107,6 +106,9 @@
       <menuitem id="context-copyemail"
                 data-l10n-id="main-context-menu-copy-email"
                 oncommand="gContextMenu.copyEmail();"/>
+      <menuitem id="context-copyphone"
+                data-l10n-id="main-context-menu-copy-phone"
+                oncommand="gContextMenu.copyPhone();"/>
       <menuitem id="context-copylink"
                 data-l10n-id="main-context-menu-copy-link-simple"
                 oncommand="gContextMenu.copyLink();"/>
@@ -298,6 +300,10 @@
       <menuitem id="context-selectall"
                 data-l10n-id="text-action-select-all"
                 command="cmd_selectAll"/>
+      <menuitem id="context-reveal-password"
+                type="checkbox"
+                data-l10n-id="main-context-menu-reveal-password"
+                oncommand="gContextMenu.toggleRevealPassword();"/>
       <menuitem id="context-print-selection"
                 data-l10n-id="main-context-menu-print-selection"
                 oncommand="gContextMenu.printSelection();"/>
@@ -345,7 +351,7 @@
           <menuitem id="context-take-frame-screenshot"
                     data-l10n-id="main-context-menu-take-frame-screenshot"
                     oncommand="gContextMenu.takeScreenshot();"/>
-          <menuseparator/>
+          <menuseparator id="context-sep-frame-screenshot"/>
           <menuitem id="context-viewframesource"
                     data-l10n-id="main-context-menu-frame-view-source"
                     oncommand="gContextMenu.viewFrameSource();"/>
@@ -361,22 +367,18 @@
       </menu>
       <menuseparator id="spell-separator"/>
       <menuitem id="spell-check-enabled"
-                label="&spellCheckToggle.label;"
+                data-l10n-id="text-action-spell-check-toggle"
                 type="checkbox"
-                accesskey="&spellCheckToggle.accesskey;"
                 oncommand="InlineSpellCheckerUI.toggleEnabled(window);"/>
       <menuitem id="spell-add-dictionaries-main"
-                label="&spellAddDictionaries.label;"
-                accesskey="&spellAddDictionaries.accesskey;"
+                data-l10n-id="text-action-spell-add-dictionaries"
                 oncommand="gContextMenu.addDictionaries();"/>
       <menu id="spell-dictionaries"
-            label="&spellDictionaries.label;"
-            accesskey="&spellDictionaries.accesskey;">
+            data-l10n-id="text-action-spell-dictionaries">
           <menupopup id="spell-dictionaries-menu">
               <menuseparator id="spell-language-separator"/>
               <menuitem id="spell-add-dictionaries"
-                        label="&spellAddDictionaries.label;"
-                        accesskey="&spellAddDictionaries.accesskey;"
+                        data-l10n-id="text-action-spell-add-dictionaries"
                         oncommand="gContextMenu.addDictionaries();"/>
           </menupopup>
       </menu>

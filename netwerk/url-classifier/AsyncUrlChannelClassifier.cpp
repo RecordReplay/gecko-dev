@@ -76,7 +76,7 @@ class URIData {
 
  private:
   URIData();
-  ~URIData();
+  ~URIData() = default;
 
   nsCOMPtr<nsIURI> mURI;
   nsCString mURISpec;
@@ -116,8 +116,6 @@ nsresult URIData::Create(nsIURI* aURI, nsIURI* aInnermostURI,
 }
 
 URIData::URIData() { MOZ_ASSERT(NS_IsMainThread()); }
-
-URIData::~URIData() { NS_ReleaseOnMainThread("URIData:mURI", mURI.forget()); }
 
 bool URIData::IsEqual(nsIURI* aURI) const {
   MOZ_ASSERT(NS_IsMainThread());
@@ -333,7 +331,7 @@ nsresult FeatureData::Initialize(FeatureTask* aTask, nsIChannel* aChannel,
 
   rv = InitializeList(aTask, aChannel, nsIUrlClassifierFeature::entitylist,
                       mEntitylistTables);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_FAILED(rv)) {
     return rv;
   }
 
@@ -610,7 +608,7 @@ nsresult FeatureTask::Create(nsIChannel* aChannel,
   for (nsIUrlClassifierFeature* feature : features) {
     FeatureData* featureData = task->mFeatures.AppendElement();
     nsresult rv = featureData->Initialize(task, aChannel, feature);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
+    if (NS_FAILED(rv)) {
       return rv;
     }
   }
@@ -772,7 +770,7 @@ nsresult FeatureData::InitializeList(
   nsIUrlClassifierFeature::URIType URIType;
   nsresult rv = mFeature->GetURIByListType(aChannel, aListType, &URIType,
                                            getter_AddRefs(uri));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_FAILED(rv)) {
     if (UC_LOG_ENABLED()) {
       nsAutoCString errorName;
       GetErrorName(rv, errorName);
@@ -885,7 +883,7 @@ nsresult AsyncUrlChannelClassifier::CheckChannel(
   RefPtr<FeatureTask> task;
   nsresult rv =
       FeatureTask::Create(aChannel, std::move(aCallback), getter_AddRefs(task));
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_FAILED(rv)) {
     return rv;
   }
 

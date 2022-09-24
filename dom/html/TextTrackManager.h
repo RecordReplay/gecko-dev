@@ -18,6 +18,8 @@
 class nsIWebVTTParserWrapper;
 
 namespace mozilla {
+template <typename T>
+class Maybe;
 namespace dom {
 
 class HTMLMediaElement;
@@ -25,7 +27,7 @@ class HTMLMediaElement;
 class CompareTextTracks {
  private:
   HTMLMediaElement* mMediaElement;
-  int32_t TrackChildPosition(TextTrack* aTrack) const;
+  Maybe<uint32_t> TrackChildPosition(TextTrack* aTrack) const;
 
  public:
   explicit CompareTextTracks(HTMLMediaElement* aMediaElement);
@@ -146,8 +148,6 @@ class TextTrackManager final : public nsIDOMEventListener {
   void GetTextTracksOfKind(TextTrackKind aTextTrackKind,
                            nsTArray<TextTrack*>& aTextTracks);
   bool TrackIsDefault(TextTrack* aTextTrack);
-
-  void ReportTelemetryForTrack(TextTrack* aTextTrack) const;
 
   bool IsShutdown() const;
 

@@ -14,7 +14,9 @@
 #include "mozilla/MediaManager.h"
 
 #ifdef MOZ_WEBRTC
-extern mozilla::LazyLogModule gMediaManagerLog;
+namespace mozilla {
+extern LazyLogModule gMediaManagerLog;
+}
 #else
 static mozilla::LazyLogModule gMediaManagerLog("MediaManager");
 #endif
@@ -326,7 +328,7 @@ FlattenedConstraints::FlattenedConstraints(const NormalizedConstraints& aOther)
 /* static */
 bool MediaConstraintsHelper::SomeSettingsFit(
     const NormalizedConstraints& aConstraints,
-    const nsTArray<RefPtr<MediaDevice>>& aDevices) {
+    const nsTArray<RefPtr<LocalMediaDevice>>& aDevices) {
   nsTArray<const NormalizedConstraintSet*> sets;
   sets.AppendElement(&aConstraints);
 
@@ -338,44 +340,6 @@ bool MediaConstraintsHelper::SomeSettingsFit(
     }
   }
   return false;
-}
-
-template <class ValueType, class NormalizedRange>
-/* static */
-uint32_t MediaConstraintsHelper::FitnessDistance(
-    ValueType aN, const NormalizedRange& aRange) {
-  if (aRange.mMin > aN || aRange.mMax < aN) {
-    return UINT32_MAX;
-  }
-  if (aN == aRange.mIdeal.valueOr(aN)) {
-    return 0;
-  }
-  return uint32_t(
-      ValueType((std::abs(aN - aRange.mIdeal.value()) * 1000) /
-                std::max(std::abs(aN), std::abs(aRange.mIdeal.value()))));
-}
-
-template <class ValueType, class NormalizedRange>
-/* static */
-uint32_t MediaConstraintsHelper::FeasibilityDistance(
-    ValueType aN, const NormalizedRange& aRange) {
-  if (aRange.mMin > aN) {
-    return UINT32_MAX;
-  }
-  // We prefer larger resolution because now we support downscaling
-  if (aN == aRange.mIdeal.valueOr(aN)) {
-    return 0;
-  }
-
-  if (aN > aRange.mIdeal.value()) {
-    return uint32_t(
-        ValueType((std::abs(aN - aRange.mIdeal.value()) * 1000) /
-                  std::max(std::abs(aN), std::abs(aRange.mIdeal.value()))));
-  }
-
-  return 10000 + uint32_t(ValueType(
-                     (std::abs(aN - aRange.mIdeal.value()) * 1000) /
-                     std::max(std::abs(aN), std::abs(aRange.mIdeal.value()))));
 }
 
 // Fitness distance returned as integer math * 1000. Infinity = UINT32_MAX
@@ -397,7 +361,7 @@ uint32_t MediaConstraintsHelper::FitnessDistance(
 
 /* static */ const char* MediaConstraintsHelper::SelectSettings(
     const NormalizedConstraints& aConstraints,
-    nsTArray<RefPtr<MediaDevice>>& aDevices, CallerType aCallerType) {
+    nsTArray<RefPtr<LocalMediaDevice>>& aDevices, CallerType aCallerType) {
   auto& c = aConstraints;
   LogConstraints(c);
 
@@ -406,11 +370,11 @@ uint32_t MediaConstraintsHelper::FitnessDistance(
   // Stack constraintSets that pass, starting with the required one, because the
   // whole stack must be re-satisfied each time a capability-set is ruled out
   // (this avoids storing state or pushing algorithm into the lower-level code).
-  nsTArray<RefPtr<MediaDevice>> unsatisfactory;
+  nsTArray<RefPtr<LocalMediaDevice>> unsatisfactory;
   nsTArray<const NormalizedConstraintSet*> aggregateConstraints;
   aggregateConstraints.AppendElement(&c);
 
-  std::multimap<uint32_t, RefPtr<MediaDevice>> ordered;
+  std::multimap<uint32_t, RefPtr<LocalMediaDevice>> ordered;
 
   for (uint32_t i = 0; i < aDevices.Length();) {
     uint32_t distance =
@@ -437,7 +401,7 @@ uint32_t MediaConstraintsHelper::FitnessDistance(
 
   for (const auto& advanced : c.mAdvanced) {
     aggregateConstraints.AppendElement(&advanced);
-    nsTArray<RefPtr<MediaDevice>> rejects;
+    nsTArray<RefPtr<LocalMediaDevice>> rejects;
     for (uint32_t j = 0; j < aDevices.Length();) {
       uint32_t distance = aDevices[j]->GetBestFitnessDistance(
           aggregateConstraints, aCallerType);
@@ -458,7 +422,7 @@ uint32_t MediaConstraintsHelper::FitnessDistance(
 
 /* static */ const char* MediaConstraintsHelper::FindBadConstraint(
     const NormalizedConstraints& aConstraints,
-    const nsTArray<RefPtr<MediaDevice>>& aDevices) {
+    const nsTArray<RefPtr<LocalMediaDevice>>& aDevices) {
   // The spec says to report a constraint that satisfies NONE
   // of the sources. Unfortunately, this is a bit laborious to find out, and
   // requires updating as new constraints are added!
@@ -514,17 +478,17 @@ uint32_t MediaConstraintsHelper::FitnessDistance(
   return "";
 }
 
-/* static */ const char* MediaConstraintsHelper::FindBadConstraint(
+/* static */
+const char* MediaConstraintsHelper::FindBadConstraint(
     const NormalizedConstraints& aConstraints,
-    const RefPtr<MediaEngineSource>& aMediaEngineSource) {
+    const MediaDevice* aMediaDevice) {
   NormalizedConstraints c(aConstraints);
   NormalizedConstraints empty((dom::MediaTrackConstraints()));
   c.mDeviceId = empty.mDeviceId;
   c.mGroupId = empty.mGroupId;
-  AutoTArray<RefPtr<MediaDevice>, 1> devices;
-  devices.AppendElement(MakeRefPtr<MediaDevice>(aMediaEngineSource,
-                                                aMediaEngineSource->GetName(),
-                                                u""_ns, u""_ns, u""_ns));
+  AutoTArray<RefPtr<LocalMediaDevice>, 1> devices;
+  devices.EmplaceBack(
+      new LocalMediaDevice(aMediaDevice, u""_ns, u""_ns, u""_ns));
   return FindBadConstraint(c, devices);
 }
 

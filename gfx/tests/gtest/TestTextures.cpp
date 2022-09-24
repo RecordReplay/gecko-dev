@@ -16,6 +16,7 @@
 #include "mozilla/RefPtr.h"
 #include "gfx2DGlue.h"
 #include "gfxImageSurface.h"
+#include "gfxPlatform.h"
 #include "gfxTypes.h"
 #include "ImageContainer.h"
 #include "mozilla/layers/ImageDataSerializer.h"
@@ -152,24 +153,6 @@ void TestTextureClientSurface(TextureClient* texture,
 
   ASSERT_TRUE(host.get() != nullptr);
   ASSERT_EQ(host->GetFlags(), texture->GetFlags());
-
-  // host read
-
-  // XXX - this can fail because lock tries to upload the texture but it needs a
-  // Compositor to do that. We could add a DummyComposior for testing but I am
-  // not sure it'll be worth it. Maybe always test against a BasicCompositor,
-  // but the latter needs a widget...
-  if (host->Lock()) {
-    RefPtr<mozilla::gfx::DataSourceSurface> hostDataSurface =
-        host->GetAsSurface();
-
-    DataSourceSurface::ScopedMap map(hostDataSurface, DataSourceSurface::READ);
-    RefPtr<gfxImageSurface> hostSurface = new gfxImageSurface(
-        map.GetData(), hostDataSurface->GetSize(), map.GetStride(),
-        SurfaceFormatToImageFormat(hostDataSurface->GetFormat()));
-    AssertSurfacesEqual(surface, hostSurface.get());
-    host->Unlock();
-  }
 }
 
 // Same as above, for YCbCr surfaces
@@ -186,8 +169,8 @@ void TestTextureClientYCbCr(TextureClient* client, PlanarYCbCrData& ycbcrData) {
   auto bufferDesc = descriptor.get_SurfaceDescriptorBuffer();
   ASSERT_EQ(bufferDesc.desc().type(), BufferDescriptor::TYCbCrDescriptor);
   auto ycbcrDesc = bufferDesc.desc().get_YCbCrDescriptor();
-  ASSERT_EQ(ycbcrDesc.ySize(), ycbcrData.mYSize);
-  ASSERT_EQ(ycbcrDesc.cbCrSize(), ycbcrData.mCbCrSize);
+  ASSERT_EQ(ycbcrDesc.ySize(), ycbcrData.YDataSize());
+  ASSERT_EQ(ycbcrDesc.cbCrSize(), ycbcrData.CbCrDataSize());
   ASSERT_EQ(ycbcrDesc.stereoMode(), ycbcrData.mStereoMode);
 
   // host deserialization
@@ -200,14 +183,6 @@ void TestTextureClientYCbCr(TextureClient* client, PlanarYCbCrData& ycbcrData) {
 
   ASSERT_TRUE(host.get() != nullptr);
   ASSERT_EQ(host->GetFlags(), client->GetFlags());
-
-  // host read
-
-  if (host->Lock()) {
-    // This will work iff the compositor is not BasicCompositor
-    ASSERT_EQ(host->GetFormat(), mozilla::gfx::SurfaceFormat::YUV);
-    host->Unlock();
-  }
 }
 
 }  // namespace layers
@@ -259,20 +234,17 @@ TEST(Layers, TextureYCbCrSerialization)
   clientData.mYChannel = ySurface->Data();
   clientData.mCbChannel = cbSurface->Data();
   clientData.mCrChannel = crSurface->Data();
-  clientData.mYSize = ySurface->GetSize();
-  clientData.mPicSize = ySurface->GetSize();
-  clientData.mCbCrSize = cbSurface->GetSize();
+  clientData.mPictureRect = IntRect(IntPoint(0, 0), ySurface->GetSize());
   clientData.mYStride = ySurface->Stride();
   clientData.mCbCrStride = cbSurface->Stride();
   clientData.mStereoMode = StereoMode::MONO;
   clientData.mYUVColorSpace = YUVColorSpace::BT601;
   clientData.mColorDepth = ColorDepth::COLOR_8;
+  clientData.mChromaSubsampling = ChromaSubsampling::HALF_WIDTH_AND_HEIGHT;
   clientData.mYSkip = 0;
   clientData.mCbSkip = 0;
   clientData.mCrSkip = 0;
   clientData.mCrSkip = 0;
-  clientData.mPicX = 0;
-  clientData.mPicX = 0;
 
   uint32_t namespaceId = 1;
   ImageBridgeChild::InitSameProcess(namespaceId);
@@ -296,10 +268,11 @@ TEST(Layers, TextureYCbCrSerialization)
   }
 
   RefPtr<TextureClient> client = TextureClient::CreateForYCbCr(
-      imageBridge, clientData.GetPictureRect(), clientData.mYSize,
-      clientData.mYStride, clientData.mCbCrSize, clientData.mCbCrStride,
+      imageBridge, clientData.mPictureRect, clientData.YDataSize(),
+      clientData.mYStride, clientData.CbCrDataSize(), clientData.mCbCrStride,
       StereoMode::MONO, ColorDepth::COLOR_8, YUVColorSpace::BT601,
-      ColorRange::LIMITED, TextureFlags::DEALLOCATE_CLIENT);
+      ColorRange::LIMITED, clientData.mChromaSubsampling,
+      TextureFlags::DEALLOCATE_CLIENT);
 
   TestTextureClientYCbCr(client, clientData);
 

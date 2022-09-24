@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/AntiTrackingUtils.h"
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/ContentBlockingAllowList.h"
 #include "mozilla/dom/BrowsingContext.h"
@@ -21,6 +22,7 @@
 #  include "nsIProtocolHandler.h"
 #endif
 #include "nsIClassInfoImpl.h"
+#include "nsIChannel.h"
 #include "nsICookieManager.h"
 #include "nsICookieService.h"
 #include "nsIObjectInputStream.h"
@@ -157,6 +159,7 @@ CookieJarSettings::CookieJarSettings(uint32_t aCookieBehavior,
     : mCookieBehavior(aCookieBehavior),
       mIsFirstPartyIsolated(aIsFirstPartyIsolated),
       mIsOnContentBlockingAllowList(false),
+      mIsOnContentBlockingAllowListUpdated(false),
       mState(aState),
       mToBeMerged(false) {
   MOZ_ASSERT(NS_IsMainThread());
@@ -217,6 +220,26 @@ CookieJarSettings::GetLimitForeignContexts(bool* aLimitForeignContexts) {
 }
 
 NS_IMETHODIMP
+CookieJarSettings::GetBlockingAllThirdPartyContexts(
+    bool* aBlockingAllThirdPartyContexts) {
+  // XXX For non-cookie forms of storage, we handle BEHAVIOR_LIMIT_FOREIGN by
+  // simply rejecting the request to use the storage. In the future, if we
+  // change the meaning of BEHAVIOR_LIMIT_FOREIGN to be one which makes sense
+  // for non-cookie storage types, this may change.
+  *aBlockingAllThirdPartyContexts =
+      mCookieBehavior == nsICookieService::BEHAVIOR_LIMIT_FOREIGN ||
+      (!StaticPrefs::network_cookie_rejectForeignWithExceptions_enabled() &&
+       mCookieBehavior == nsICookieService::BEHAVIOR_REJECT_FOREIGN);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+CookieJarSettings::GetBlockingAllContexts(bool* aBlockingAllContexts) {
+  *aBlockingAllContexts = mCookieBehavior == nsICookieService::BEHAVIOR_REJECT;
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 CookieJarSettings::GetPartitionForeign(bool* aPartitionForeign) {
   *aPartitionForeign =
       mCookieBehavior ==
@@ -263,15 +286,9 @@ CookieJarSettings::CookiePermission(nsIPrincipal* aPrincipal,
 
   // Let's see if we know this permission.
   if (!mCookiePermissions.IsEmpty()) {
-    nsCOMPtr<nsIPrincipal> principal =
-        Permission::ClonePrincipalForPermission(aPrincipal);
-    if (NS_WARN_IF(!principal)) {
-      return NS_ERROR_FAILURE;
-    }
-
     for (const RefPtr<nsIPermission>& permission : mCookiePermissions) {
       bool match = false;
-      rv = permission->MatchesPrincipalForPermission(principal, false, &match);
+      rv = permission->Matches(aPrincipal, false, &match);
       if (NS_WARN_IF(NS_FAILED(rv)) || !match) {
         continue;
       }
@@ -470,6 +487,13 @@ void CookieJarSettings::UpdateIsOnContentBlockingAllowList(
     nsIChannel* aChannel) {
   MOZ_DIAGNOSTIC_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(aChannel);
+
+  // Early return if the flag was updated before.
+  if (mIsOnContentBlockingAllowListUpdated) {
+    return;
+  }
+  mIsOnContentBlockingAllowListUpdated = true;
+
   nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
 
   nsCOMPtr<nsIURI> uri;

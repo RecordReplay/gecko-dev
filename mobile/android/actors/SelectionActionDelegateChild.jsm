@@ -11,15 +11,40 @@ const { XPCOMUtils } = ChromeUtils.import(
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const EXPORTED_SYMBOLS = ["SelectionActionDelegateChild"];
 
+const MAGNIFIER_PREF = "layout.accessiblecaret.magnifier.enabled";
+const ACCESSIBLECARET_HEIGHT_PREF = "layout.accessiblecaret.height";
+const PREFS = [MAGNIFIER_PREF, ACCESSIBLECARET_HEIGHT_PREF];
+
 // Dispatches GeckoView:ShowSelectionAction and GeckoView:HideSelectionAction to
 // the GeckoSession on accessible caret changes.
 class SelectionActionDelegateChild extends GeckoViewActorChild {
   constructor(aModuleName, aMessageManager) {
     super(aModuleName, aMessageManager);
 
-    this._seqNo = 0;
+    this._actionCallback = () => {};
     this._isActive = false;
     this._previousMessage = "";
+
+    // Bug 1570744 - JSWindowActorChild's cannot be used as nsIObserver's
+    // directly, so we create a new function here instead to act as our
+    // nsIObserver, which forwards the notification to the observe method.
+    this._observerFunction = (subject, topic, data) => {
+      this.observe(subject, topic, data);
+    };
+    for (const pref of PREFS) {
+      Services.prefs.addObserver(pref, this._observerFunction);
+    }
+
+    this._magnifierEnabled = Services.prefs.getBoolPref(MAGNIFIER_PREF);
+    this._accessiblecaretHeight = parseFloat(
+      Services.prefs.getCharPref(ACCESSIBLECARET_HEIGHT_PREF, "0")
+    );
+  }
+
+  didDestroy() {
+    for (const pref of PREFS) {
+      Services.prefs.removeObserver(pref, this._observerFunction);
+    }
   }
 
   _actions = [
@@ -50,6 +75,16 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
       perform: _ => this._performPaste(),
     },
     {
+      id: "org.mozilla.geckoview.PASTE_AS_PLAIN_TEXT",
+      predicate: e =>
+        this._isContentHtmlEditable(e) &&
+        Services.clipboard.hasDataMatchingFlavors(
+          ["text/html"],
+          Ci.nsIClipboard.kGlobalClipboard
+        ),
+      perform: _ => this._performPasteAsPlainText(),
+    },
+    {
       id: "org.mozilla.geckoview.DELETE",
       predicate: e => !e.collapsed && e.selectionEditable,
       perform: _ => this.docShell.doCommand("cmd_delete"),
@@ -75,8 +110,10 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
         if (e.reason === "longpressonemptycontent") {
           return false;
         }
-        if (e.selectionEditable && e.target && e.target.activeElement) {
-          const element = e.target.activeElement;
+        // When on design mode, focusedElement will be null.
+        const element =
+          Services.focus.focusedElement || e.target?.activeElement;
+        if (e.selectionEditable && e.target && element) {
           let value = "";
           if (element.value) {
             value = element.value;
@@ -96,9 +133,24 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
     },
   ];
 
+  receiveMessage({ name, data }) {
+    debug`receiveMessage ${name}`;
+
+    switch (name) {
+      case "ExecuteSelectionAction": {
+        this._actionCallback(data);
+      }
+    }
+  }
+
   _performPaste() {
     this.handleEvent({ type: "pagehide" });
     this.docShell.doCommand("cmd_paste");
+  }
+
+  _performPasteAsPlainText() {
+    this.handleEvent({ type: "pagehide" });
+    this.docShell.doCommand("cmd_pasteNoFormatting");
   }
 
   _isPasswordField(aEvent) {
@@ -111,8 +163,29 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
     return (
       win &&
       win.HTMLInputElement &&
-      focus instanceof win.HTMLInputElement &&
+      win.HTMLInputElement.isInstance(focus) &&
       !focus.mozIsTextField(/* excludePassword */ true)
+    );
+  }
+
+  _isContentHtmlEditable(aEvent) {
+    if (!aEvent.selectionEditable) {
+      return false;
+    }
+
+    if (aEvent.target.designMode == "on") {
+      return true;
+    }
+
+    // focused element isn't <input> nor <textarea>
+    const win = aEvent.target.defaultView;
+    const focus = Services.focus.focusedElement;
+    return (
+      win &&
+      win.HTMLInputElement &&
+      win.HTMLTextAreaElement &&
+      !win.HTMLInputElement.isInstance(focus) &&
+      !win.HTMLTextAreaElement.isInstance(focus)
     );
   }
 
@@ -163,6 +236,25 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
     return offset;
   }
 
+  _handleMagnifier(aEvent) {
+    if (["presscaret", "dragcaret"].includes(aEvent.reason)) {
+      debug`_handleMagnifier: ${aEvent.reason}`;
+      const offset = this._getFrameOffset(aEvent);
+      this.eventDispatcher.sendRequest({
+        type: "GeckoView:ShowMagnifier",
+        clientPoint: {
+          x: aEvent.clientX + offset.left,
+          y: aEvent.clientY + offset.top - this._accessiblecaretHeight,
+        },
+      });
+    } else if (aEvent.reason == "releasecaret") {
+      debug`_handleMagnifier: ${aEvent.reason}`;
+      this.eventDispatcher.sendRequest({
+        type: "GeckoView:HideMagnifier",
+      });
+    }
+  }
+
   /**
    * Receive and act on AccessibleCarets caret state-change
    * (mozcaretstatechanged and pagehide) events.
@@ -205,6 +297,10 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
 
     debug`handleEvent: ${reason}`;
 
+    if (this._magnifierEnabled) {
+      this._handleMagnifier(aEvent);
+    }
+
     if (
       [
         "longpressonemptycontent",
@@ -221,8 +317,6 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
       const password = this._isPasswordField(aEvent);
 
       const msg = {
-        type: "GeckoView:ShowSelectionAction",
-        seqNo: this._seqNo,
         collapsed: aEvent.collapsed,
         editable: aEvent.selectionEditable,
         password,
@@ -238,42 +332,30 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
         actions: actions.map(action => action.id),
       };
 
-      try {
-        if (msg.clientRect) {
-          msg.clientRect.bottom += parseFloat(
-            Services.prefs.getCharPref("layout.accessiblecaret.height", "0")
-          );
-        }
-      } catch (e) {}
+      if (msg.clientRect) {
+        msg.clientRect.bottom += this._accessiblecaretHeight;
+      }
 
       if (this._isActive && JSON.stringify(msg) === this._previousMessage) {
         // Don't call again if we're already active and things haven't changed.
         return;
       }
 
-      msg.seqNo = ++this._seqNo;
       this._isActive = true;
       this._previousMessage = JSON.stringify(msg);
 
-      this.eventDispatcher.sendRequest(msg, {
-        onSuccess: response => {
-          if (response.seqNo !== this._seqNo) {
-            // Stale action.
-            warn`Stale response ${response.id}`;
-            return;
-          }
-          const action = actions.find(action => action.id === response.id);
-          if (action) {
-            debug`Performing ${response.id}`;
-            action.perform.call(this, aEvent, response);
-          } else {
-            warn`Invalid action ${response.id}`;
-          }
-        },
-        onError: _ => {
-          // Do nothing; we can get here if the delegate was just unregistered.
-        },
-      });
+      // We can't just listen to the response of the message because we accept
+      // multiple callbacks.
+      this._actionCallback = data => {
+        const action = actions.find(action => action.id === data.id);
+        if (action) {
+          debug`Performing ${data.id}`;
+          action.perform.call(this, aEvent);
+        } else {
+          warn`Invalid action ${data.id}`;
+        }
+      };
+      this.sendAsyncMessage("ShowSelectionAction", msg);
     } else if (
       [
         "invisibleselection",
@@ -285,7 +367,6 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
       if (!this._isActive) {
         return;
       }
-
       this._isActive = false;
 
       // Mark previous actions as stale. Don't do this for "invisibleselection"
@@ -295,13 +376,33 @@ class SelectionActionDelegateChild extends GeckoViewActorChild {
         this._seqNo++;
       }
 
-      this.eventDispatcher.sendRequest({
-        type: "GeckoView:HideSelectionAction",
-        reason,
-      });
+      this.sendAsyncMessage("HideSelectionAction", { reason });
+    } else if (reason == "dragcaret") {
+      // nothing for selection action
     } else {
       warn`Unknown reason: ${reason}`;
     }
+  }
+
+  observe(aSubject, aTopic, aData) {
+    if (aTopic != "nsPref:changed") {
+      return;
+    }
+
+    switch (aData) {
+      case ACCESSIBLECARET_HEIGHT_PREF:
+        this._accessiblecaretHeight = parseFloat(
+          Services.prefs.getCharPref(ACCESSIBLECARET_HEIGHT_PREF, "0")
+        );
+        break;
+      case MAGNIFIER_PREF:
+        this._magnifierEnabled = Services.prefs.getBoolPref(MAGNIFIER_PREF);
+        break;
+    }
+    // Reset magnifier
+    this.eventDispatcher.sendRequest({
+      type: "GeckoView:HideMagnifier",
+    });
   }
 }
 

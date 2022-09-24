@@ -39,7 +39,7 @@ namespace {
 
 #define XPCOM_SHUTDOWN_OBSERVER_TOPIC "xpcom-shutdown"
 
-typedef nsTHashMap<nsCStringHashKey, LSDatabase*> LSDatabaseHashtable;
+using LSDatabaseHashtable = nsTHashMap<nsCStringHashKey, LSDatabase*>;
 
 StaticAutoPtr<LSDatabaseHashtable> gLSDatabases;
 
@@ -142,6 +142,10 @@ void LSDatabase::NoteFinishedSnapshot(LSSnapshot* aSnapshot) {
     AllowToClose();
   }
 }
+
+// All these methods assert `!mAllowedToClose` because they shoudn't be called
+// if the database is being closed. Callers should first check the state by
+// calling `IsAlloweToClose` and eventually obtain a new database.
 
 nsresult LSDatabase::GetLength(LSObject* aObject, uint32_t* aResult) {
   AssertIsOnOwningThread();
@@ -286,10 +290,7 @@ nsresult LSDatabase::BeginExplicitSnapshot(LSObject* aObject) {
   MOZ_ASSERT(aObject);
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(!mAllowedToClose);
-
-  if (mSnapshot) {
-    return NS_ERROR_ALREADY_INITIALIZED;
-  }
+  MOZ_ASSERT(!mSnapshot);
 
   nsresult rv = EnsureSnapshot(aObject, VoidString(), /* aExplicit */ true);
   if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -299,24 +300,51 @@ nsresult LSDatabase::BeginExplicitSnapshot(LSObject* aObject) {
   return NS_OK;
 }
 
-nsresult LSDatabase::EndExplicitSnapshot(LSObject* aObject) {
+nsresult LSDatabase::CheckpointExplicitSnapshot() {
   AssertIsOnOwningThread();
-  MOZ_ASSERT(aObject);
   MOZ_ASSERT(mActor);
   MOZ_ASSERT(!mAllowedToClose);
-
-  if (!mSnapshot) {
-    return NS_ERROR_NOT_INITIALIZED;
-  }
-
+  MOZ_ASSERT(mSnapshot);
   MOZ_ASSERT(mSnapshot->Explicit());
 
-  nsresult rv = mSnapshot->End();
+  nsresult rv = mSnapshot->ExplicitCheckpoint();
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
 
   return NS_OK;
+}
+
+nsresult LSDatabase::EndExplicitSnapshot() {
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mActor);
+  MOZ_ASSERT(!mAllowedToClose);
+  MOZ_ASSERT(mSnapshot);
+  MOZ_ASSERT(mSnapshot->Explicit());
+
+  nsresult rv = mSnapshot->ExplicitEnd();
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return rv;
+  }
+
+  return NS_OK;
+}
+
+bool LSDatabase::HasSnapshot() const {
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mActor);
+  MOZ_ASSERT(!mAllowedToClose);
+
+  return !!mSnapshot;
+}
+
+int64_t LSDatabase::GetSnapshotUsage() const {
+  AssertIsOnOwningThread();
+  MOZ_ASSERT(mActor);
+  MOZ_ASSERT(!mAllowedToClose);
+  MOZ_ASSERT(mSnapshot);
+
+  return mSnapshot->GetUsage();
 }
 
 nsresult LSDatabase::EnsureSnapshot(LSObject* aObject, const nsAString& aKey,
@@ -338,8 +366,7 @@ nsresult LSDatabase::EnsureSnapshot(LSObject* aObject, const nsAString& aKey,
   bool ok = mActor->SendPBackgroundLSSnapshotConstructor(
       actor, aObject->DocumentURI(), nsString(aKey),
       /* increasePeakUsage */ true,
-      /* requestedSize */ 131072,
-      /* minSize */ 4096, &initInfo);
+      /* minSize */ 0, &initInfo);
   if (NS_WARN_IF(!ok)) {
     return NS_ERROR_FAILURE;
   }

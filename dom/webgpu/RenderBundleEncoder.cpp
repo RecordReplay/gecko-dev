@@ -13,8 +13,7 @@
 #include "ipc/WebGPUChild.h"
 #include "mozilla/webgpu/ffi/wgpu.h"
 
-namespace mozilla {
-namespace webgpu {
+namespace mozilla::webgpu {
 
 GPU_IMPL_CYCLE_COLLECTION(RenderBundleEncoder, mParent, mUsedBindGroups,
                           mUsedBuffers, mUsedPipelines, mUsedTextureViews)
@@ -29,7 +28,12 @@ void ScopedFfiBundleTraits::release(ffi::WGPURenderBundleEncoder* raw) {
 }
 
 ffi::WGPURenderBundleEncoder* CreateRenderBundleEncoder(
-    RawId aDeviceId, const dom::GPURenderBundleEncoderDescriptor& aDesc) {
+    RawId aDeviceId, const dom::GPURenderBundleEncoderDescriptor& aDesc,
+    WebGPUChild* const aBridge) {
+  if (!aBridge->CanSend()) {
+    return nullptr;
+  }
+
   ffi::WGPURenderBundleEncoderDescriptor desc = {};
   desc.sample_count = aDesc.mSampleCount;
 
@@ -39,7 +43,7 @@ ffi::WGPURenderBundleEncoder* CreateRenderBundleEncoder(
     desc.label = label.get();
   }
 
-  ffi::WGPUTextureFormat depthStencilFormat = ffi::WGPUTextureFormat_Sentinel;
+  ffi::WGPUTextureFormat depthStencilFormat = {ffi::WGPUTextureFormat_Sentinel};
   if (aDesc.mDepthStencilFormat.WasPassed()) {
     WebGPUChild::ConvertTextureFormatRef(aDesc.mDepthStencilFormat.Value(),
                                          depthStencilFormat);
@@ -48,7 +52,7 @@ ffi::WGPURenderBundleEncoder* CreateRenderBundleEncoder(
 
   std::vector<ffi::WGPUTextureFormat> colorFormats = {};
   for (const auto i : IntegerRange(aDesc.mColorFormats.Length())) {
-    ffi::WGPUTextureFormat format = ffi::WGPUTextureFormat_Sentinel;
+    ffi::WGPUTextureFormat format = {ffi::WGPUTextureFormat_Sentinel};
     WebGPUChild::ConvertTextureFormatRef(aDesc.mColorFormats[i], format);
     colorFormats.push_back(format);
   }
@@ -56,14 +60,24 @@ ffi::WGPURenderBundleEncoder* CreateRenderBundleEncoder(
   desc.color_formats = colorFormats.data();
   desc.color_formats_length = colorFormats.size();
 
-  return ffi::wgpu_device_create_render_bundle_encoder(aDeviceId, &desc);
+  ipc::ByteBuf failureAction;
+  auto* bundle = ffi::wgpu_device_create_render_bundle_encoder(
+      aDeviceId, &desc, ToFFI(&failureAction));
+  // report an error only if the operation failed
+  if (!bundle &&
+      !aBridge->SendDeviceAction(aDeviceId, std::move(failureAction))) {
+    MOZ_CRASH("IPC failure");
+  }
+  return bundle;
 }
 
 RenderBundleEncoder::RenderBundleEncoder(
     Device* const aParent, WebGPUChild* const aBridge,
     const dom::GPURenderBundleEncoderDescriptor& aDesc)
     : ChildOf(aParent),
-      mEncoder(CreateRenderBundleEncoder(aParent->mId, aDesc)) {}
+      mEncoder(CreateRenderBundleEncoder(aParent->mId, aDesc, aBridge)) {
+  mValid = mEncoder.get() != nullptr;
+}
 
 RenderBundleEncoder::~RenderBundleEncoder() { Cleanup(); }
 
@@ -148,13 +162,31 @@ void RenderBundleEncoder::DrawIndexedIndirect(const Buffer& aIndirectBuffer,
   }
 }
 
+void RenderBundleEncoder::PushDebugGroup(const nsAString& aString) {
+  if (mValid) {
+    const NS_ConvertUTF16toUTF8 utf8(aString);
+    ffi::wgpu_render_bundle_push_debug_group(mEncoder, utf8.get());
+  }
+}
+void RenderBundleEncoder::PopDebugGroup() {
+  if (mValid) {
+    ffi::wgpu_render_bundle_pop_debug_group(mEncoder);
+  }
+}
+void RenderBundleEncoder::InsertDebugMarker(const nsAString& aString) {
+  if (mValid) {
+    const NS_ConvertUTF16toUTF8 utf8(aString);
+    ffi::wgpu_render_bundle_insert_debug_marker(mEncoder, utf8.get());
+  }
+}
+
 already_AddRefed<RenderBundle> RenderBundleEncoder::Finish(
     const dom::GPURenderBundleDescriptor& aDesc) {
   RawId id = 0;
   if (mValid) {
     mValid = false;
     auto bridge = mParent->GetBridge();
-    if (bridge && bridge->IsOpen()) {
+    if (bridge && bridge->CanSend()) {
       auto* encoder = mEncoder.forget();
       MOZ_ASSERT(encoder);
       id = bridge->RenderBundleEncoderFinish(*encoder, mParent->mId, aDesc);
@@ -164,5 +196,4 @@ already_AddRefed<RenderBundle> RenderBundleEncoder::Finish(
   return bundle.forget();
 }
 
-}  // namespace webgpu
-}  // namespace mozilla
+}  // namespace mozilla::webgpu

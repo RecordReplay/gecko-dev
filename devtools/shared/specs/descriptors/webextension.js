@@ -18,6 +18,11 @@ const webExtensionDescriptorSpec = generateActorSpec({
       response: { addon: RetVal("json") },
     },
 
+    terminateBackgroundScript: {
+      request: {},
+      response: {},
+    },
+
     // @backward-compat { version 70 } The method is now called getTarget
     connect: {
       request: {},
@@ -34,6 +39,12 @@ const webExtensionDescriptorSpec = generateActorSpec({
         bypassCache: Option(0, "boolean"),
       },
       response: {},
+    },
+    getWatcher: {
+      request: {
+        isServerTargetSwitchingEnabled: Option(0, "boolean"),
+      },
+      response: RetVal("watcher"),
     },
   },
 

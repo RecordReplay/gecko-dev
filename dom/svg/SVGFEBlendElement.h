@@ -12,8 +12,7 @@
 
 nsresult NS_NewSVGFEBlendElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFEBlendElementBase = SVGFE;
 
@@ -43,6 +42,8 @@ class SVGFEBlendElement : public SVGFEBlendElementBase {
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
+  virtual nsresult BindToTree(BindContext&, nsINode& aParent) override;
+
   // WebIDL
   already_AddRefed<DOMSVGAnimatedString> In1();
   already_AddRefed<DOMSVGAnimatedString> In2();
@@ -62,7 +63,6 @@ class SVGFEBlendElement : public SVGFEBlendElementBase {
   static StringInfo sStringInfo[3];
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFEBLENDELEMENT_H_

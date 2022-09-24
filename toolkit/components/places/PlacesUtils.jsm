@@ -28,6 +28,10 @@ XPCOMUtils.defineLazyGetter(this, "MOZ_ACTION_REGEX", () => {
   return /^moz-action:([^,]+),(.*)$/;
 });
 
+XPCOMUtils.defineLazyGetter(this, "gCryptoHash", () => {
+  return Cc["@mozilla.org/security/hash;1"].createInstance(Ci.nsICryptoHash);
+});
+
 // On Mac OSX, the transferable system converts "\r\n" to "\n\n", where
 // we really just want "\n". On other platforms, the transferable system
 // converts "\r\n" to "\n".
@@ -173,6 +177,7 @@ function serializeNode(aNode) {
 const DB_URL_LENGTH_MAX = 65536;
 const DB_TITLE_LENGTH_MAX = 4096;
 const DB_DESCRIPTION_LENGTH_MAX = 256;
+const DB_SITENAME_LENGTH_MAX = 50;
 
 /**
  * Executes a boolean validate function, throwing if it returns false.
@@ -228,8 +233,8 @@ const BOOKMARK_VALIDATORS = Object.freeze({
       val =>
         (typeof val == "string" && val.length <= DB_URL_LENGTH_MAX) ||
         (val instanceof Ci.nsIURI && val.spec.length <= DB_URL_LENGTH_MAX) ||
-        (val instanceof URL && val.href.length <= DB_URL_LENGTH_MAX)
-    ).call(this, v);
+        (URL.isInstance(val) && val.href.length <= DB_URL_LENGTH_MAX)
+    )(v);
     if (typeof v === "string") {
       return new URL(v);
     }
@@ -349,6 +354,14 @@ const PAGEINFO_VALIDATORS = Object.freeze({
     }
     throw new TypeError(
       `description property of pageInfo object: ${v} must be either a string or null if provided`
+    );
+  },
+  siteName: v => {
+    if (typeof v === "string" || v === null) {
+      return v ? v.slice(0, DB_SITENAME_LENGTH_MAX) : null;
+    }
+    throw new TypeError(
+      `siteName property of pageInfo object: ${v} must be either a string or null if provided`
     );
   },
   annotations: v => {
@@ -520,7 +533,7 @@ var PlacesUtils = {
    * @return nsIURI for the given URL.
    */
   toURI(url) {
-    url = url instanceof URL ? url.href : url;
+    url = URL.isInstance(url) ? url.href : url;
 
     return NetUtil.newURI(url);
   },
@@ -584,7 +597,7 @@ var PlacesUtils = {
   parseActionUrl(url) {
     if (url instanceof Ci.nsIURI) {
       url = url.spec;
-    } else if (url instanceof URL) {
+    } else if (URL.isInstance(url)) {
       url = url.href;
     }
     // Faster bailout.
@@ -805,6 +818,7 @@ var PlacesUtils = {
   },
 
   BOOKMARK_VALIDATORS,
+  PAGEINFO_VALIDATORS,
   SYNC_BOOKMARK_VALIDATORS,
   SYNC_CHANGE_RECORD_VALIDATORS,
 
@@ -1219,7 +1233,7 @@ var PlacesUtils = {
       }
       return new URL(key);
     }
-    if (key instanceof URL) {
+    if (URL.isInstance(key)) {
       return key;
     }
     if (key instanceof Ci.nsIURI) {
@@ -1906,6 +1920,51 @@ var PlacesUtils = {
     let startIndex = 0;
     while (startIndex < array.length) {
       yield array.slice(startIndex, (startIndex += chunkLength));
+    }
+  },
+
+  /**
+   * Returns SQL placeholders to bind multiple values into an IN clause.
+   * @param {Array|number} info
+   *   Array or number of entries to create.
+   * @param {string} [prefix]
+   *   String prefix to add before the SQL param.
+   * @param {string} [suffix]
+   *   String suffix to add after the SQL param.
+   */
+  sqlBindPlaceholders(info, prefix = "", suffix = "") {
+    let length = Array.isArray(info) ? info.length : info;
+    return new Array(length).fill(prefix + "?" + suffix).join(",");
+  },
+
+  /**
+   * Run some text through md5 and return the hash.
+   * @param {string} data The string to hash.
+   * @param {string} [format] Which format of the hash to return:
+   *   - "ascii" for ascii format.
+   *   - "hex" for hex format.
+   * @returns {string} md5 hash of the input string in the required format.
+   */
+  md5(data, { format = "ascii" } = {}) {
+    gCryptoHash.init(gCryptoHash.MD5);
+
+    // Convert the data to a byte array for hashing
+    gCryptoHash.update(
+      data.split("").map(c => c.charCodeAt(0)),
+      data.length
+    );
+    switch (format) {
+      case "hex":
+        let hash = gCryptoHash.finish(false);
+        return Array.from(hash, (c, i) =>
+          hash
+            .charCodeAt(i)
+            .toString(16)
+            .padStart(2, "0")
+        ).join("");
+      case "ascii":
+      default:
+        return gCryptoHash.finish(true);
     }
   },
 };

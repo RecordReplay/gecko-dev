@@ -10,11 +10,13 @@
  */
 
 var EXPORTED_SYMBOLS = [
+  "L10nCache",
+  "SkippableTimer",
+  "TaskQueue",
   "UrlbarMuxer",
   "UrlbarProvider",
   "UrlbarQueryContext",
   "UrlbarUtils",
-  "SkippableTimer",
 ];
 
 const { XPCOMUtils } = ChromeUtils.import(
@@ -46,13 +48,14 @@ var UrlbarUtils = {
 
   // Results are categorized into groups to help the muxer compose them.  See
   // UrlbarUtils.getResultGroup.  Since result groups are stored in result
-  // buckets and result buckets are stored in prefs, additions and changes to
+  // groups and result groups are stored in prefs, additions and changes to
   // result groups may require adding UI migrations to BrowserGlue.  Be careful
   // about making trivial changes to existing groups, like renaming them,
   // because we don't want to make downgrades unnecessarily hard.
   RESULT_GROUP: {
     ABOUT_PAGES: "aboutPages",
     GENERAL: "general",
+    GENERAL_PARENT: "generalParent",
     FORM_HISTORY: "formHistory",
     HEURISTIC_AUTOFILL: "heuristicAutofill",
     HEURISTIC_ENGINE_ALIAS: "heuristicEngineAlias",
@@ -126,11 +129,11 @@ var UrlbarUtils = {
   },
 
   /**
-   * Buckets used for logging telemetry to the FX_URLBAR_SELECTED_RESULT_TYPE_2
+   * Groups used for logging telemetry to the FX_URLBAR_SELECTED_RESULT_TYPE_2
    * histogram.
    */
   SELECTED_RESULT_TYPES: {
-    autofill: 0,
+    autofill: 0, // This is currently unused.
     bookmark: 1,
     history: 2,
     keyword: 3,
@@ -147,6 +150,13 @@ var UrlbarUtils = {
     formhistory: 14,
     dynamic: 15,
     tabtosearch: 16,
+    quicksuggest: 17,
+    autofill_adaptive: 18,
+    autofill_origin: 19,
+    autofill_url: 20,
+    autofill_about: 21,
+    autofill_other: 22,
+    autofill_preloaded: 23,
     // n_values = 32, so you'll need to create a new histogram if you need more.
   },
 
@@ -197,6 +207,7 @@ var UrlbarUtils = {
   // telemetry documentation and Scalars.yaml.
   SEARCH_MODE_ENTRY: new Set([
     "bookmarkmenu",
+    "handoff",
     "keywordoffer",
     "oneoff",
     "other",
@@ -218,6 +229,19 @@ var UrlbarUtils = {
     "http:",
     "https:",
     "ftp:",
+  ],
+
+  // Valid URI schemes that are considered safe but don't contain
+  // an authority component (e.g host:port). There are many URI schemes
+  // that do not contain an authority, but these in particular have
+  // some likelihood of being entered or bookmarked by a user.
+  // `file:` is an exceptional case because an authority is optional
+  PROTOCOLS_WITHOUT_AUTHORITY: [
+    "about:",
+    "data:",
+    "file:",
+    "javascript:",
+    "view-source:",
   ],
 
   // Search mode objects corresponding to the local shortcuts in the view, in
@@ -397,7 +421,9 @@ var UrlbarUtils = {
       highlightType == this.HIGHLIGHT.SUGGESTED ? 1 : 0
     );
     let compareIgnoringDiacritics;
-    for (let { lowerCaseValue: needle } of tokens) {
+    for (let i = 0, totalTokensLength = 0; i < tokens.length; i++) {
+      const { lowerCaseValue: needle } = tokens[i];
+
       // Ideally we should never hit the empty token case, but just in case
       // the `needle` check protects us from an infinite loop.
       if (!needle) {
@@ -470,6 +496,12 @@ var UrlbarUtils = {
           }
         }
       }
+
+      totalTokensLength += needle.length;
+      if (totalTokensLength > UrlbarUtils.MAX_TEXT_LENGTH) {
+        // Limit the number of tokens to reduce calculate time.
+        break;
+      }
     }
     // Starting from the collision array, generate [start, len] tuples
     // representing the ranges to be highlighted.
@@ -494,7 +526,11 @@ var UrlbarUtils = {
    *   The reuslt's group.
    */
   getResultGroup(result) {
-    if (result.hasSuggestedIndex) {
+    if (result.group) {
+      return result.group;
+    }
+
+    if (result.hasSuggestedIndex && !result.isSuggestedIndexRelativeToGroup) {
       return UrlbarUtils.RESULT_GROUP.SUGGESTED_INDEX;
     }
     if (result.heuristic) {
@@ -538,6 +574,8 @@ var UrlbarUtils = {
         return UrlbarUtils.RESULT_GROUP.INPUT_HISTORY;
       case "PreloadedSites":
         return UrlbarUtils.RESULT_GROUP.PRELOADED;
+      case "UrlbarProviderQuickSuggest":
+        return UrlbarUtils.RESULT_GROUP.GENERAL_PARENT;
       default:
         break;
     }
@@ -666,7 +704,7 @@ var UrlbarUtils = {
         : UrlbarUtils.ICON.DEFAULT;
     }
     if (
-      url instanceof URL &&
+      URL.isInstance(url) &&
       UrlbarUtils.PROTOCOLS_WITH_ICONS.includes(url.protocol)
     ) {
       return "page-icon:" + url.href;
@@ -724,7 +762,7 @@ var UrlbarUtils = {
       return;
     }
 
-    if (urlOrEngine instanceof URL) {
+    if (URL.isInstance(urlOrEngine)) {
       urlOrEngine = urlOrEngine.href;
     }
 
@@ -857,7 +895,7 @@ var UrlbarUtils = {
         LEFT JOIN moz_inputhistory i ON i.place_id = h.id AND i.input = :input
         WHERE url_hash = hash(:url) AND url = :url
       `,
-        { url, input }
+        { url, input: input.toLowerCase() }
       );
     });
   },
@@ -923,11 +961,12 @@ var UrlbarUtils = {
   /**
    * Strips the prefix from a URL and returns the prefix and the remainder of the
    * URL.  "Prefix" is defined to be the scheme and colon, plus, if present, two
-   * slashes.  If the given string is not actually a URL, then an empty prefix and
-   * the string itself is returned.
+   * slashes.  If the given string is not actually a URL or it has a prefix
+   * we don't recognize, then an empty prefix and the string itself is returned.
    *
-   * @param {string} str The possible URL to strip.
-   * @returns {array} If `str` is a URL, then [prefix, remainder].  Otherwise, ["", str].
+   * @param   {string} str The possible URL to strip.
+   * @returns {array} If `str` is a URL with a prefix we recognize,
+   *          then [prefix, remainder].  Otherwise, ["", str].
    */
   stripURLPrefix(str) {
     let match = UrlbarTokenizer.REGEXP_PREFIX.exec(str);
@@ -936,9 +975,19 @@ var UrlbarUtils = {
     }
     let prefix = match[0];
     if (prefix.length < str.length && str[prefix.length] == " ") {
+      // A space following a prefix:
+      // e.g. "http:// some search string", "about: some search string"
       return ["", str];
     }
-    return [prefix, str.substr(prefix.length)];
+    if (
+      prefix.endsWith(":") &&
+      !UrlbarUtils.PROTOCOLS_WITHOUT_AUTHORITY.includes(prefix.toLowerCase())
+    ) {
+      // Something that looks like a URI scheme but we won't treat as one:
+      // e.g. "localhost:8888"
+      return ["", str];
+    }
+    return [prefix, str.substring(prefix.length)];
   },
 
   /**
@@ -963,7 +1012,7 @@ var UrlbarUtils = {
       userContextId: window.gBrowser.selectedBrowser.getAttribute(
         "usercontextid"
       ),
-      allowSearchSuggestions: false,
+      prohibitRemoteResults: true,
       providers: ["AliasEngines", "BookmarkKeywords", "HeuristicFallback"],
     };
     if (window.gURLBar.searchMode) {
@@ -1000,7 +1049,10 @@ var UrlbarUtils = {
       // This is not an early return because it is necessary to invoke getLogger
       // at least once before getLoggerWithMessagePrefix; it replaces a
       // method of the original logger, rather than using an actual Proxy.
-      return Log.repository.getLoggerWithMessagePrefix("urlbar", prefix + "::");
+      return Log.repository.getLoggerWithMessagePrefix(
+        "urlbar",
+        prefix + " :: "
+      );
     }
     return this._logger;
   },
@@ -1072,12 +1124,17 @@ var UrlbarUtils = {
    * @returns {boolean} true: can autofill
    */
   canAutofillURL(url, candidate, checkFragmentOnly = false) {
-    if (
-      !checkFragmentOnly &&
-      (url.length <= candidate.length ||
-        !url.toLocaleLowerCase().startsWith(candidate.toLocaleLowerCase()))
-    ) {
-      return false;
+    if (!checkFragmentOnly) {
+      if (
+        url.length <= candidate.length ||
+        !url.toLocaleLowerCase().startsWith(candidate.toLocaleLowerCase())
+      ) {
+        return false;
+      }
+
+      if (!candidate.includes("/")) {
+        return true;
+      }
     }
 
     if (!UrlbarTokenizer.REGEXP_PREFIX.test(url)) {
@@ -1133,13 +1190,25 @@ var UrlbarUtils = {
         return result.payload.suggestion ? "searchsuggestion" : "searchengine";
       case UrlbarUtils.RESULT_TYPE.URL:
         if (result.autofill) {
-          return "autofill";
+          let { type } = result.autofill;
+          if (!type) {
+            type = "other";
+            Cu.reportError(
+              new Error(
+                "`result.autofill.type` not set, falling back to 'other'"
+              )
+            );
+          }
+          return `autofill_${type}`;
         }
         if (
           result.source == UrlbarUtils.RESULT_SOURCE.OTHER_LOCAL &&
           result.heuristic
         ) {
           return "visiturl";
+        }
+        if (result.providerName == "UrlbarProviderQuickSuggest") {
+          return "quicksuggest";
         }
         return result.source == UrlbarUtils.RESULT_SOURCE.BOOKMARKS
           ? "bookmark"
@@ -1160,6 +1229,20 @@ var UrlbarUtils = {
         return "dynamic";
     }
     return "unknown";
+  },
+
+  /**
+   * Unescape the given uri to use as UI.
+   * NOTE: If the length of uri is over MAX_TEXT_LENGTH,
+   *       return the given uri as it is.
+   *
+   * @param {string} uri will be unescaped.
+   * @returns {string} Unescaped uri.
+   */
+  unEscapeURIForUI(uri) {
+    return uri.length > UrlbarUtils.MAX_TEXT_LENGTH
+      ? uri
+      : Services.textToSubURI.unEscapeURIForUI(uri);
   },
 };
 
@@ -1268,9 +1351,6 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       helpL10nId: {
         type: "string",
       },
-      helpTitle: {
-        type: "string",
-      },
       helpUrl: {
         type: "string",
       },
@@ -1283,11 +1363,20 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       isSponsored: {
         type: "boolean",
       },
+      originalUrl: {
+        type: "string",
+      },
       qsSuggestion: {
+        type: "string",
+      },
+      requestId: {
         type: "string",
       },
       sendAttributionRequest: {
         type: "boolean",
+      },
+      source: {
+        type: "string",
       },
       sponsoredAdvertiser: {
         type: "string",
@@ -1298,10 +1387,10 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       sponsoredClickUrl: {
         type: "string",
       },
-      sponsoredImpressionUrl: {
+      sponsoredIabCategory: {
         type: "string",
       },
-      sponsoredText: {
+      sponsoredImpressionUrl: {
         type: "string",
       },
       sponsoredTileId: {
@@ -1318,6 +1407,9 @@ UrlbarUtils.RESULT_PAYLOAD_SCHEMA = {
       },
       url: {
         type: "string",
+      },
+      urlTimestampIndex: {
+        type: "number",
       },
     },
   },
@@ -1504,11 +1596,11 @@ class UrlbarQueryContext {
    * @param {object} [options.searchMode]
    *   The input's current search mode.  See UrlbarInput.setSearchMode for a
    *   description.
-   * @param {boolean} [options.allowSearchSuggestions]
-   *   Whether to allow search suggestions.  This is a veto, meaning that when
-   *   false, suggestions will not be fetched, but when true, some other
-   *   condition may still prohibit suggestions, like private browsing mode.
-   *   Defaults to true.
+   * @param {boolean} [options.prohibitRemoteResults]
+   *   This provides a short-circuit override for `context.allowRemoteResults`.
+   *   If it's false, then `allowRemoteResults` will do its usual checks to
+   *   determine whether remote results are allowed. If it's true, then
+   *   `allowRemoteResults` will immediately return false. Defaults to false.
    * @param {string} [options.formHistoryName]
    *   The name under which the local form history is registered.
    */
@@ -1528,9 +1620,9 @@ class UrlbarQueryContext {
 
     // Manage optional properties of options.
     for (let [prop, checkFn, defaultValue] of [
-      ["allowSearchSuggestions", v => true, true],
       ["currentPage", v => typeof v == "string" && !!v.length],
       ["formHistoryName", v => typeof v == "string" && !!v.length],
+      ["prohibitRemoteResults", v => true, false],
       ["providers", v => Array.isArray(v) && v.length],
       ["searchMode", v => v && typeof v == "object"],
       ["sources", v => Array.isArray(v) && v.length],
@@ -1617,6 +1709,47 @@ class UrlbarQueryContext {
     }
 
     return null;
+  }
+
+  /**
+   * Returns whether results from remote services are generally allowed for the
+   * context. Callers can impose further restrictions as appropriate, but
+   * typically they should not fetch remote results if this returns false.
+   *
+   * @param {string} [searchString]
+   *   Usually this is just the context's search string, but if you need to
+   *   fetch remote results based on a modified version, you can pass it here.
+   * @returns {boolean}
+   *   Whether remote results are allowed.
+   */
+  allowRemoteResults(searchString = this.searchString) {
+    if (this.prohibitRemoteResults) {
+      return false;
+    }
+
+    // We're unlikely to get useful remote results for a single character.
+    if (searchString.length < 2) {
+      return false;
+    }
+
+    // Disallow remote results if only an origin is typed to avoid disclosing
+    // sites the user visits. This also catches partially typed origins, like
+    // mozilla.o, because the fixup check below can't validate them.
+    if (
+      this.tokens.length == 1 &&
+      this.tokens[0].type == UrlbarTokenizer.TYPE.POSSIBLE_ORIGIN
+    ) {
+      return false;
+    }
+
+    // Disallow remote results for strings containing tokens that look like URIs
+    // to avoid disclosing information about networks and passwords.
+    if (this.fixupInfo?.href && !this.fixupInfo?.isSearch) {
+      return false;
+    }
+
+    // Allow remote results.
+    return true;
   }
 }
 
@@ -1755,6 +1888,23 @@ class UrlbarProvider {
    * @abstract
    */
   pickResult(result, element) {}
+
+  /**
+   * Called when the result's block button is picked. If the provider can block
+   * the result, it should do so and return true. If the provider cannot block
+   * the result, it should return false. The meaning of "blocked" depends on the
+   * provider and the type of result.
+   *
+   * @param {UrlbarQueryContext} queryContext
+   * @param {UrlbarResult} result
+   *   The result that should be blocked.
+   * @returns {boolean}
+   *   Whether the result was blocked.
+   * @abstract
+   */
+  blockResult(queryContext, result) {
+    return false;
+  }
 
   /**
    * Called when the user starts and ends an engagement with the urlbar.
@@ -1936,6 +2086,7 @@ class SkippableTimer {
       this._timer.initWithCallback(
         () => {
           this._log(`Timed out!`, reportErrorOnTimeout);
+          this._timer = null;
           resolve();
         },
         time,
@@ -1945,16 +2096,22 @@ class SkippableTimer {
     });
 
     let firePromise = new Promise(resolve => {
-      this.fire = () => {
-        this._log(`Skipped`);
-        resolve();
-        return this.promise;
+      this.fire = async () => {
+        if (this._timer) {
+          if (!this._canceled) {
+            this._log(`Skipped`);
+          }
+          this._timer.cancel();
+          this._timer = null;
+          resolve();
+        }
+        await this.promise;
       };
     });
 
     this.promise = Promise.race([timerPromise, firePromise]).then(() => {
       // If we've been canceled, don't call back.
-      if (this._timer && callback) {
+      if (callback && !this._canceled) {
         callback();
       }
     });
@@ -1964,13 +2121,13 @@ class SkippableTimer {
    * Allows to cancel the timer and the callback won't be invoked.
    * It is not strictly necessary to await for this, the promise can just be
    * used to ensure all the internal work is complete.
-   * @returns {promise} Resolved once all the cancelation work is complete.
    */
-  cancel() {
-    this._log(`Canceling`);
-    this._timer.cancel();
-    delete this._timer;
-    return this.fire();
+  async cancel() {
+    if (this._timer) {
+      this._log(`Canceling`);
+      this._canceled = true;
+    }
+    await this.fire();
   }
 
   _log(msg, isError = false) {
@@ -1982,4 +2139,279 @@ class SkippableTimer {
       Cu.reportError(line);
     }
   }
+}
+
+/**
+ * This class implements a cache for l10n strings. Cached strings can be
+ * accessed synchronously, avoiding the asynchronicity of `data-l10n-id` and
+ * `document.l10n.setAttributes`, which can lead to text pop-in and flickering
+ * as strings are fetched from Fluent. (`document.l10n.formatValueSync` is also
+ * sync but should not be used since it may perform sync I/O.)
+ *
+ * Values stored and returned by the cache are JS objects similar to
+ * `L10nMessage` objects, not bare strings. This allows the cache to store not
+ * only l10n strings with bare values but also strings that define attributes
+ * (e.g., ".label = My label value"). See `get` for details.
+ */
+class L10nCache {
+  /**
+   * @param {Localization} l10n
+   *   A `Localization` object like `document.l10n`. This class keeps a weak
+   *   reference to this object, so the caller or something else must hold onto
+   *   it.
+   */
+  constructor(l10n) {
+    this.l10n = Cu.getWeakReference(l10n);
+    this.QueryInterface = ChromeUtils.generateQI([
+      "nsIObserver",
+      "nsISupportsWeakReference",
+    ]);
+    Services.obs.addObserver(this, "intl:app-locales-changed", true);
+  }
+
+  /**
+   * Gets a cached l10n message.
+   *
+   * @param {string} id
+   *   The string's Fluent ID.
+   * @param {object} [args]
+   *   The Fluent arguments as passed to `l10n.setAttributes`.
+   * @returns {object}
+   *   The message object or undefined if it's not cached. The message object is
+   *   similar to `L10nMessage` (defined in Localization.webidl) but its
+   *   attributes are stored differently for convenience. It looks like this:
+   *
+   *     { value, attributes }
+   *
+   *   The properties are:
+   *
+   *     {string} value
+   *       The bare value of the string. If the string does not have a bare
+   *       value (i.e., it has only attributes), this will be null.
+   *     {object} attributes
+   *       A mapping from attribute names to their values. If the string doesn't
+   *       have any attributes, this will be null.
+   *
+   *   For example, if we cache these strings from an ftl file:
+   *
+   *     foo = Foo's value
+   *     bar =
+   *       .label = Bar's label value
+   *
+   *   Then:
+   *
+   *     cache.get("foo")
+   *     // => { value: "Foo's value", attributes: null }
+   *     cache.get("bar")
+   *     // => { value: null, attributes: { label: "Bar's label value" }}
+   */
+  get(id, args = undefined) {
+    return this._messagesByKey.get(this._key(id, args));
+  }
+
+  /**
+   * Fetches a string from Fluent and caches it.
+   *
+   * @param {string} id
+   *   The string's Fluent ID.
+   * @param {object} [args]
+   *   The Fluent arguments as passed to `l10n.setAttributes`.
+   */
+  async add(id, args = undefined) {
+    let l10n = this.l10n.get();
+    if (!l10n) {
+      return;
+    }
+    let messages = await l10n.formatMessages([{ id, args }]);
+    if (!messages?.length) {
+      Cu.reportError(
+        "l10n.formatMessages returned an unexpected value for ID: " + id
+      );
+      return;
+    }
+    let message = messages[0];
+    if (message.attributes) {
+      // Convert `attributes` from an array of `{ name, value }` objects to one
+      // object mapping names to values.
+      message.attributes = message.attributes.reduce(
+        (valuesByName, { name, value }) => {
+          valuesByName[name] = value;
+          return valuesByName;
+        },
+        {}
+      );
+    }
+    this._messagesByKey.set(this._key(id, args), message);
+  }
+
+  /**
+   * Fetches and caches a string if it's not already cached. This is just a
+   * slight optimization over `add` that avoids calling into Fluent
+   * unnecessarily.
+   *
+   * @param {string} id
+   *   The string's Fluent ID.
+   * @param {object} [args]
+   *   The Fluent arguments as passed to `l10n.setAttributes`.
+   */
+  async ensure(id, args = undefined) {
+    if (!this.get(id, args)) {
+      await this.add(id, args);
+    }
+  }
+
+  /**
+   * Fetches and caches strings that aren't already cached.
+   *
+   * @param {array} idArgs
+   *   An array of `{ id, args }` objects.
+   */
+  async ensureAll(idArgs) {
+    let promises = [];
+    for (let { id, args } of idArgs) {
+      promises.push(this.ensure(id, args));
+    }
+    await Promise.all(promises);
+  }
+
+  /**
+   * Removes a cached string.
+   *
+   * @param {string} id
+   *   The string's Fluent ID.
+   * @param {object} [args]
+   *   The Fluent arguments as passed to `l10n.setAttributes`.
+   */
+  delete(id, args = undefined) {
+    this._messagesByKey.delete(this._key(id, args));
+  }
+
+  /**
+   * Removes all cached strings.
+   */
+  clear() {
+    this._messagesByKey.clear();
+  }
+
+  /**
+   * Returns the number of cached messages.
+   *
+   * @returns {number}
+   */
+  size() {
+    return this._messagesByKey.size;
+  }
+
+  /**
+   * Observer method from Services.obs.addObserver.
+   * @param {nsISupports} subject
+   * @param {string} topic
+   * @param {string} data
+   */
+  async observe(subject, topic, data) {
+    switch (topic) {
+      case "intl:app-locales-changed": {
+        await this.l10n.ready;
+        this.clear();
+        break;
+      }
+    }
+  }
+
+  /**
+   * Cache keys => cached message objects
+   */
+  _messagesByKey = new Map();
+
+  /**
+   * Returns a cache key for a string in `_messagesByKey`.
+   *
+   * @param {string} id
+   *   The string's Fluent ID.
+   * @param {object} [args]
+   *   The Fluent arguments as passed to `l10n.setAttributes`.
+   * @returns {string}
+   *   The cache key.
+   */
+  _key(id, args) {
+    // Keys are `id` plus JSON'ed `args` values. `JSON.stringify` doesn't
+    // guarantee a particular ordering of object properties, so instead of
+    // stringifying `args` as is, sort its entries by key and then pull out the
+    // values. The final key is a JSON'ed array of `id` concatenated with the
+    // sorted-by-key `args` values.
+    let argValues = Object.entries(args || [])
+      .sort(([key1], [key2]) => key1.localeCompare(key2))
+      .map(([_, value]) => value);
+    let parts = [id].concat(argValues);
+    return JSON.stringify(parts);
+  }
+}
+
+/**
+ * This class provides a way of serializing access to a resource. It's a queue
+ * of callbacks (or "tasks") where each callback is called and awaited in order,
+ * one at a time.
+ */
+class TaskQueue {
+  /**
+   * @returns {Promise}
+   *   Resolves when the queue becomes empty. If the queue is already empty,
+   *   then a resolved promise is returned.
+   */
+  get emptyPromise() {
+    if (!this._queue.length) {
+      return Promise.resolve();
+    }
+    return new Promise(resolve => this._emptyCallbacks.push(resolve));
+  }
+
+  /**
+   * Adds a callback function to the task queue. The callback will be called
+   * after all other callbacks before it in the queue. This method returns a
+   * promise that will be resolved after awaiting the callback. The promise will
+   * be resolved with the value returned by the callback.
+   *
+   * @param {function} callback
+   *   The function to queue.
+   * @returns {Promise}
+   *   Resolved after the task queue calls and awaits `callback`. It will be
+   *   resolved with the value returned by `callback`. If `callback` throws an
+   *   error, then it will be rejected with the error.
+   */
+  queue(callback) {
+    return new Promise((resolve, reject) => {
+      this._queue.push({ callback, resolve, reject });
+      if (this._queue.length == 1) {
+        this._doNextTask();
+      }
+    });
+  }
+
+  /**
+   * Calls the next function in the task queue and recurses until the queue is
+   * empty. Once empty, all empty callback functions are called.
+   */
+  async _doNextTask() {
+    if (!this._queue.length) {
+      while (this._emptyCallbacks.length) {
+        let callback = this._emptyCallbacks.shift();
+        callback();
+      }
+      return;
+    }
+
+    let { callback, resolve, reject } = this._queue[0];
+    try {
+      let value = await callback();
+      resolve(value);
+    } catch (error) {
+      Cu.reportError(error);
+      reject(error);
+    }
+    this._queue.shift();
+    this._doNextTask();
+  }
+
+  _queue = [];
+  _emptyCallbacks = [];
 }

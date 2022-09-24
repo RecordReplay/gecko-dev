@@ -11,7 +11,10 @@
 let engine1;
 let engine2;
 
-add_task(async function setup() {
+add_setup(async () => {
+  do_get_profile();
+  Services.fog.initializeFOG();
+
   useHttpServer();
   await AddonTestUtils.promiseStartupManager();
 
@@ -38,15 +41,70 @@ add_task(async function test_defaultEngine() {
   Assert.equal((await promise).wrappedJSObject, engine1);
   Assert.equal(Services.search.defaultEngine.wrappedJSObject, engine1);
 
+  await assertGleanDefaultEngine({
+    normal: {
+      engineId: "other-Test search engine",
+      displayName: "Test search engine",
+      loadPath: "[http]localhost/test-search-engine.xml",
+      submissionUrl: "https://www.google.com/search?q=",
+      verified: "verified",
+    },
+  });
+
   promise = promiseDefaultNotification();
   Services.search.defaultEngine = engine2;
   Assert.equal((await promise).wrappedJSObject, engine2);
   Assert.equal(Services.search.defaultEngine.wrappedJSObject, engine2);
 
+  await assertGleanDefaultEngine({
+    normal: {
+      engineId: "other-A second test engine",
+      displayName: "A second test engine",
+      loadPath: "[http]localhost/a-second-test-engine.xml",
+      submissionUrl: "https://duckduckgo.com/?q=",
+      verified: "verified",
+    },
+  });
+
   promise = promiseDefaultNotification();
   Services.search.defaultEngine = engine1;
   Assert.equal((await promise).wrappedJSObject, engine1);
   Assert.equal(Services.search.defaultEngine.wrappedJSObject, engine1);
+
+  await assertGleanDefaultEngine({
+    normal: {
+      engineId: "other-Test search engine",
+      displayName: "Test search engine",
+      loadPath: "[http]localhost/test-search-engine.xml",
+      submissionUrl: "https://www.google.com/search?q=",
+      verified: "verified",
+    },
+  });
+});
+
+add_task(async function test_telemetry_empty_submission_url() {
+  let engine = await Services.search.addOpenSearchEngine(
+    gDataUrl + "../opensearch/simple.xml",
+    null
+  );
+  Services.search.defaultPrivateEngine = engine;
+
+  await assertGleanDefaultEngine({
+    normal: {
+      engineId: "other-simple",
+      displayName: "simple",
+      loadPath: "[http]localhost/simple.xml",
+      submissionUrl: "blank:",
+      verified: "verified",
+    },
+    private: {
+      engineId: "",
+      displayName: "",
+      loadPath: "",
+      submissionUrl: "blank:",
+      verified: "",
+    },
+  });
 });
 
 add_task(async function test_switch_with_invalid_overriddenBy() {

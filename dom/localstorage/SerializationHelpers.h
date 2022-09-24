@@ -23,26 +23,44 @@ struct ParamTraits<mozilla::dom::LSSnapshot::LoadState>
           mozilla::dom::LSSnapshot::LoadState::EndGuard> {};
 
 template <>
+struct ParamTraits<mozilla::dom::LSValue::CompressionType>
+    : public ContiguousEnumSerializer<
+          mozilla::dom::LSValue::CompressionType,
+          mozilla::dom::LSValue::CompressionType::UNCOMPRESSED,
+          mozilla::dom::LSValue::CompressionType::NUM_TYPES> {};
+
+static_assert(
+    0u == static_cast<uint8_t>(mozilla::dom::LSValue::ConversionType::NONE));
+template <>
+struct ParamTraits<mozilla::dom::LSValue::ConversionType>
+    : public ContiguousEnumSerializer<
+          mozilla::dom::LSValue::ConversionType,
+          mozilla::dom::LSValue::ConversionType::NONE,
+          mozilla::dom::LSValue::ConversionType::NUM_TYPES> {};
+
+template <>
 struct ParamTraits<mozilla::dom::LSValue> {
   typedef mozilla::dom::LSValue paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mBuffer);
-    WriteParam(aMsg, aParam.mUTF16Length);
-    WriteParam(aMsg, aParam.mCompressed);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.mBuffer);
+    WriteParam(aWriter, aParam.mUTF16Length);
+    WriteParam(aWriter, aParam.mConversionType);
+    WriteParam(aWriter, aParam.mCompressionType);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->mBuffer) &&
-           ReadParam(aMsg, aIter, &aResult->mUTF16Length) &&
-           ReadParam(aMsg, aIter, &aResult->mCompressed);
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return ReadParam(aReader, &aResult->mBuffer) &&
+           ReadParam(aReader, &aResult->mUTF16Length) &&
+           ReadParam(aReader, &aResult->mConversionType) &&
+           ReadParam(aReader, &aResult->mCompressionType);
   }
 
   static void Log(const paramType& aParam, std::wstring* aLog) {
     LogParam(aParam.mBuffer, aLog);
     LogParam(aParam.mUTF16Length, aLog);
-    LogParam(aParam.mCompressed, aLog);
+    LogParam(static_cast<uint8_t>(aParam.mConversionType), aLog);
+    LogParam(static_cast<uint8_t>(aParam.mCompressionType), aLog);
   }
 };
 

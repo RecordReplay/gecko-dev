@@ -17,7 +17,7 @@ use crate::renderer::{MAX_VERTEX_TEXTURE_WIDTH};
 use crate::resource_cache::{ResourceCache};
 use crate::util::{MatrixHelpers};
 use crate::prim_store::{InternablePrimitive, PrimitiveInstanceKind};
-use crate::spatial_tree::{SpatialTree, SpatialNodeIndex, ROOT_SPATIAL_NODE_INDEX};
+use crate::spatial_tree::{SpatialTree, SpatialNodeIndex};
 use crate::space::SpaceSnapper;
 use crate::util::PrimaryArc;
 
@@ -246,7 +246,6 @@ impl TextRunPrimitive {
         transform: &LayoutToWorldTransform,
         mut allow_subpixel: bool,
         raster_space: RasterSpace,
-        root_scaling_factor: f32,
         spatial_tree: &SpatialTree,
     ) -> bool {
         // If local raster space is specified, include that in the scale
@@ -257,10 +256,7 @@ impl TextRunPrimitive {
         //           will no longer be required.
         let raster_scale = raster_space.local_scale().unwrap_or(1.0).max(0.001);
 
-        // root_scaling_factor is used to scale very large pictures that establish
-        // a raster root back to something sane, thus scale the device size accordingly.
-        // to the shader it looks like a change in DPI which it already supports.
-        let dps = surface.device_pixel_scale.0 * root_scaling_factor;
+        let dps = surface.device_pixel_scale.0;
         let font_size = specified_font.size.to_f32_px();
 
         // Small floating point error can accumulate in the raster * device_pixel scale.
@@ -397,7 +393,7 @@ impl TextRunPrimitive {
         device_pixel_scale: DevicePixelScale,
         spatial_tree: &SpatialTree,
     ) -> RasterSpace {
-        let prim_spatial_node = &spatial_tree.spatial_nodes[prim_spatial_node_index.0 as usize];
+        let prim_spatial_node = spatial_tree.get_spatial_node(prim_spatial_node_index);
         if prim_spatial_node.is_ancestor_or_self_zooming {
             if low_quality_pinch_zoom {
                 // In low-quality mode, we set the scale to be 1.0. However, the device-pixel
@@ -408,12 +404,14 @@ impl TextRunPrimitive {
                 // the end of a pinch-zoom.
                 RasterSpace::Local(1.0)
             } else {
+                let root_spatial_node_index = spatial_tree.root_reference_frame_index();
+
                 // For high-quality mode, we quantize the exact scale factor as before. However,
                 // we want to _undo_ the effect of the device-pixel scale on the picture cache
                 // tiles (which changes now that they are raster roots). Divide the rounded value
                 // by the device-pixel scale so that the local -> device conversion has no effect.
                 let scale_factors = spatial_tree
-                    .get_relative_transform(prim_spatial_node_index, ROOT_SPATIAL_NODE_INDEX)
+                    .get_relative_transform(prim_spatial_node_index, root_spatial_node_index)
                     .scale_factors();
 
                 // Round the scale up to the nearest power of 2, but don't exceed 8.
@@ -423,7 +421,12 @@ impl TextRunPrimitive {
                 RasterSpace::Local(rounded_up / device_pixel_scale.0)
             }
         } else {
-            self.requested_raster_space
+            // Assume that if we have a RasterSpace::Local, it is frequently changing, in which
+            // case we want to undo the device-pixel scale, as we do above.
+            match self.requested_raster_space {
+                RasterSpace::Local(scale) => RasterSpace::Local(scale / device_pixel_scale.0),
+                RasterSpace::Screen => RasterSpace::Screen,
+            }
         }
     }
 
@@ -435,7 +438,6 @@ impl TextRunPrimitive {
         transform: &LayoutToWorldTransform,
         surface: &SurfaceInfo,
         spatial_node_index: SpatialNodeIndex,
-        root_scaling_factor: f32,
         allow_subpixel: bool,
         low_quality_pinch_zoom: bool,
         resource_cache: &mut ResourceCache,
@@ -457,14 +459,13 @@ impl TextRunPrimitive {
             transform,
             allow_subpixel,
             raster_space,
-            root_scaling_factor,
             spatial_tree,
         );
 
         if self.glyph_keys_range.is_empty() || cache_dirty {
             let subpx_dir = self.used_font.get_subpx_dir();
 
-            let dps = surface.device_pixel_scale.0 * root_scaling_factor;
+            let dps = surface.device_pixel_scale.0;
             let transform = match raster_space {
                 RasterSpace::Local(scale) => FontTransform::new(scale * dps, 0.0, 0.0, scale * dps),
                 RasterSpace::Screen => self.used_font.transform.scale(dps),

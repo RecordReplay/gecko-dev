@@ -1,56 +1,62 @@
 use super::{BackendResult, Error, Version, Writer};
 use crate::{
-    Binding, Bytes, Handle, ImageClass, ImageDimension, Interpolation, Sampling, ScalarKind,
-    ShaderStage, StorageClass, StorageFormat, Type, TypeInner,
+    AddressSpace, Binding, Bytes, Expression, Handle, ImageClass, ImageDimension, Interpolation,
+    MathFunction, Sampling, ScalarKind, ShaderStage, StorageFormat, Type, TypeInner,
 };
 use std::fmt::Write;
 
 bitflags::bitflags! {
-    /// Structure used to encode a set of additions to glsl that aren't supported by all versions
+    /// Structure used to encode additions to GLSL that aren't supported by all versions.
     pub struct Features: u32 {
-        /// Buffer storage class support
+        /// Buffer address space support.
         const BUFFER_STORAGE = 1;
         const ARRAY_OF_ARRAYS = 1 << 1;
-        /// 8 byte floats
+        /// 8 byte floats.
         const DOUBLE_TYPE = 1 << 2;
-        /// Includes support for more image formats
+        /// More image formats.
         const FULL_IMAGE_FORMATS = 1 << 3;
         const MULTISAMPLED_TEXTURES = 1 << 4;
         const MULTISAMPLED_TEXTURE_ARRAYS = 1 << 5;
         const CUBE_TEXTURES_ARRAY = 1 << 6;
         const COMPUTE_SHADER = 1 << 7;
-        /// Adds support for image load and early depth tests
+        /// Image load and early depth tests.
         const IMAGE_LOAD_STORE = 1 << 8;
         const CONSERVATIVE_DEPTH = 1 << 9;
-        /// Isn't supported in ES
-        const TEXTURE_1D = 1 << 10;
-        /// Interpolation and auxiliary qualifiers. Perspective, Flat, and
-        /// Centroid are available in all GLSL versions we support.
+        /// Interpolation and auxiliary qualifiers.
+        ///
+        /// Perspective, Flat, and Centroid are available in all GLSL versions we support.
         const NOPERSPECTIVE_QUALIFIER = 1 << 11;
         const SAMPLE_QUALIFIER = 1 << 12;
         const CLIP_DISTANCE = 1 << 13;
         const CULL_DISTANCE = 1 << 14;
+        /// Sample ID.
+        const SAMPLE_VARIABLES = 1 << 15;
+        /// Arrays with a dynamic length.
+        const DYNAMIC_ARRAY_SIZE = 1 << 16;
+        const MULTI_VIEW = 1 << 17;
+        /// Fused multiply-add.
+        const FMA = 1 << 18;
     }
 }
 
-/// Helper structure used to store the required [`Features`](Features) needed to output a
+/// Helper structure used to store the required [`Features`] needed to output a
 /// [`Module`](crate::Module)
 ///
 /// Provides helper methods to check for availability and writing required extensions
 pub struct FeaturesManager(Features);
 
 impl FeaturesManager {
-    /// Creates a new [`FeaturesManager`](FeaturesManager) instance
-    pub fn new() -> Self {
+    /// Creates a new [`FeaturesManager`] instance
+    pub const fn new() -> Self {
         Self(Features::empty())
     }
 
-    /// Adds to the list of required [`Features`](Features)
+    /// Adds to the list of required [`Features`]
     pub fn request(&mut self, features: Features) {
         self.0 |= features
     }
 
-    /// Checks that all required [`Features`](Features) are available for the specified
+    /// Checks that all required [`Features`] are available for the specified
     /// [`Version`](super::Version) otherwise returns an
     /// [`Error::MissingFeatures`](super::Error::MissingFeatures)
     pub fn check_availability(&self, version: Version) -> BackendResult {
@@ -87,14 +93,15 @@ impl FeaturesManager {
         check_feature!(IMAGE_LOAD_STORE, 130, 310);
         check_feature!(CONSERVATIVE_DEPTH, 130, 300);
         check_feature!(CONSERVATIVE_DEPTH, 130, 300);
-        // 1D textures are supported by all core versions and aren't supported by an es versions
-        // so use 0 that way the check will always be false and can be optimized away
-        check_feature!(TEXTURE_1D, 0);
         check_feature!(NOPERSPECTIVE_QUALIFIER, 130);
         check_feature!(SAMPLE_QUALIFIER, 400, 320);
         // gl_ClipDistance is supported by core versions > 1.3 and aren't supported by an es versions without extensions
         check_feature!(CLIP_DISTANCE, 130, 300);
         check_feature!(CULL_DISTANCE, 450, 300);
+        check_feature!(SAMPLE_VARIABLES, 400, 300);
+        check_feature!(DYNAMIC_ARRAY_SIZE, 430, 310);
+        check_feature!(MULTI_VIEW, 140, 310);
+        check_feature!(FMA, 400, 310);
 
         // Return an error if there are missing features
         if missing.is_empty() {
@@ -183,19 +190,44 @@ impl FeaturesManager {
             // writeln!(out, "#extension GL_EXT_clip_cull_distance : require")?;
         }
 
+        if self.0.contains(Features::SAMPLE_VARIABLES) && version.is_es() {
+            // https://www.khronos.org/registry/OpenGL/extensions/OES/OES_sample_variables.txt
+            writeln!(out, "#extension GL_OES_sample_variables : require")?;
+        }
+
+        if self.0.contains(Features::SAMPLE_VARIABLES) && version.is_es() {
+            // https://www.khronos.org/registry/OpenGL/extensions/OES/OES_sample_variables.txt
+            writeln!(out, "#extension GL_OES_sample_variables : require")?;
+        }
+
+        if self.0.contains(Features::MULTI_VIEW) {
+            // https://github.com/KhronosGroup/GLSL/blob/master/extensions/ext/GL_EXT_multiview.txt
+            writeln!(out, "#extension GL_EXT_multiview : require")?;
+        }
+
+        if self.0.contains(Features::FMA) && version.is_es() {
+            // https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_gpu_shader5.txt
+            writeln!(out, "#extension GL_EXT_gpu_shader5 : require")?;
+        }
+
         Ok(())
     }
 }
 
 impl<'a, W> Writer<'a, W> {
-    /// Helper method that searches the module for all the needed [`Features`](Features)
+    /// Helper method that searches the module for all the needed [`Features`]
     ///
     /// # Errors
-    /// If the version doesn't support any of the needed [`Features`](Features) a
+    /// If the version doesn't support any of the needed [`Features`] a
     /// [`Error::MissingFeatures`](super::Error::MissingFeatures) will be returned
     pub(super) fn collect_required_features(&mut self) -> BackendResult {
+        let ep_info = self.info.get_entry_point(self.entry_point_idx as usize);
+
         if let Some(depth_test) = self.entry_point.early_depth_test {
-            self.features.request(Features::IMAGE_LOAD_STORE);
+            // If IMAGE_LOAD_STORE is supported for this version of GLSL
+            if self.options.version.supports_early_depth_test() {
+                self.features.request(Features::IMAGE_LOAD_STORE);
+            }
 
             if depth_test.conservative.is_some() {
                 self.features.request(Features::CONSERVATIVE_DEPTH);
@@ -209,20 +241,58 @@ impl<'a, W> Writer<'a, W> {
             self.varying_required_features(result.binding.as_ref(), result.ty);
         }
 
-        if let ShaderStage::Compute = self.options.shader_stage {
+        if let ShaderStage::Compute = self.entry_point.stage {
             self.features.request(Features::COMPUTE_SHADER)
         }
 
-        for (_, ty) in self.module.types.iter() {
+        for (ty_handle, ty) in self.module.types.iter() {
             match ty.inner {
                 TypeInner::Scalar { kind, width } => self.scalar_required_features(kind, width),
                 TypeInner::Vector { kind, width, .. } => self.scalar_required_features(kind, width),
                 TypeInner::Matrix { width, .. } => {
                     self.scalar_required_features(ScalarKind::Float, width)
                 }
-                TypeInner::Array { base, .. } => {
+                TypeInner::Array { base, size, .. } => {
                     if let TypeInner::Array { .. } = self.module.types[base].inner {
                         self.features.request(Features::ARRAY_OF_ARRAYS)
+                    }
+
+                    // If the array is dynamically sized
+                    if size == crate::ArraySize::Dynamic {
+                        let mut is_used = false;
+
+                        // Check if this type is used in a global that is needed by the current entrypoint
+                        for (global_handle, global) in self.module.global_variables.iter() {
+                            // Skip unused globals
+                            if ep_info[global_handle].is_empty() {
+                                continue;
+                            }
+
+                            // If this array is the type of a global, then this array is used
+                            if global.ty == ty_handle {
+                                is_used = true;
+                                break;
+                            }
+
+                            // If the type of this global is a struct
+                            if let crate::TypeInner::Struct { ref members, .. } =
+                                self.module.types[global.ty].inner
+                            {
+                                // Check the last element of the struct to see if it's type uses
+                                // this array
+                                if let Some(last) = members.last() {
+                                    if last.ty == ty_handle {
+                                        is_used = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // If this dynamically size array is used, we need dynamic array size support
+                        if is_used {
+                            self.features.request(Features::DYNAMIC_ARRAY_SIZE);
+                        }
                     }
                 }
                 TypeInner::Image {
@@ -232,18 +302,17 @@ impl<'a, W> Writer<'a, W> {
                 } => {
                     if arrayed && dim == ImageDimension::Cube {
                         self.features.request(Features::CUBE_TEXTURES_ARRAY)
-                    } else if dim == ImageDimension::D1 {
-                        self.features.request(Features::TEXTURE_1D)
                     }
 
                     match class {
-                        ImageClass::Sampled { multi: true, .. } => {
+                        ImageClass::Sampled { multi: true, .. }
+                        | ImageClass::Depth { multi: true } => {
                             self.features.request(Features::MULTISAMPLED_TEXTURES);
                             if arrayed {
                                 self.features.request(Features::MULTISAMPLED_TEXTURE_ARRAYS);
                             }
                         }
-                        ImageClass::Storage(format) => match format {
+                        ImageClass::Storage { format, .. } => match format {
                             StorageFormat::R8Unorm
                             | StorageFormat::R8Snorm
                             | StorageFormat::R8Uint
@@ -267,26 +336,58 @@ impl<'a, W> Writer<'a, W> {
                             }
                             _ => {}
                         },
-                        _ => {}
+                        ImageClass::Sampled { multi: false, .. }
+                        | ImageClass::Depth { multi: false } => {}
                     }
                 }
                 _ => {}
             }
         }
 
-        for (_, global) in self.module.global_variables.iter() {
-            match global.class {
-                StorageClass::WorkGroup => self.features.request(Features::COMPUTE_SHADER),
-                StorageClass::Storage => self.features.request(Features::BUFFER_STORAGE),
-                StorageClass::PushConstant => return Err(Error::PushConstantNotSupported),
+        let mut push_constant_used = false;
+
+        for (handle, global) in self.module.global_variables.iter() {
+            if ep_info[handle].is_empty() {
+                continue;
+            }
+            match global.space {
+                AddressSpace::WorkGroup => self.features.request(Features::COMPUTE_SHADER),
+                AddressSpace::Storage { .. } => self.features.request(Features::BUFFER_STORAGE),
+                AddressSpace::PushConstant => {
+                    if push_constant_used {
+                        return Err(Error::MultiplePushConstants);
+                    }
+                    push_constant_used = true;
+                }
                 _ => {}
+            }
+        }
+
+        if self.options.version.supports_fma_function() {
+            let has_fma = self
+                .module
+                .functions
+                .iter()
+                .flat_map(|(_, f)| f.expressions.iter())
+                .chain(
+                    self.module
+                        .entry_points
+                        .iter()
+                        .flat_map(|e| e.function.expressions.iter()),
+                )
+                .any(|(_, e)| match *e {
+                    Expression::Math { fun, .. } if fun == MathFunction::Fma => true,
+                    _ => false,
+                });
+            if has_fma {
+                self.features.request(Features::FMA);
             }
         }
 
         self.features.check_availability(self.options.version)
     }
 
-    /// Helper method that checks the [`Features`](Features) needed by a scalar
+    /// Helper method that checks the [`Features`] needed by a scalar
     fn scalar_required_features(&mut self, kind: ScalarKind, width: Bytes) {
         if kind == ScalarKind::Float && width == 8 {
             self.features.request(Features::DOUBLE_TYPE);
@@ -303,12 +404,18 @@ impl<'a, W> Writer<'a, W> {
             _ => {
                 if let Some(binding) = binding {
                     match *binding {
-                        Binding::BuiltIn(builtin) => match builtin {
+                        Binding::BuiltIn(built_in) => match built_in {
                             crate::BuiltIn::ClipDistance => {
                                 self.features.request(Features::CLIP_DISTANCE)
                             }
                             crate::BuiltIn::CullDistance => {
                                 self.features.request(Features::CULL_DISTANCE)
+                            }
+                            crate::BuiltIn::SampleIndex => {
+                                self.features.request(Features::SAMPLE_VARIABLES)
+                            }
+                            crate::BuiltIn::ViewIndex => {
+                                self.features.request(Features::MULTI_VIEW)
                             }
                             _ => {}
                         },

@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/PresShell.h"
+#include "mozilla/dom/BrowserSessionStoreBinding.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/SessionStoreListener.h"
 #include "mozilla/dom/SessionStoreUtils.h"
@@ -44,8 +45,7 @@ ContentSessionStore::ContentSessionStore(nsIDocShell* aDocShell)
       mPrivateChanged(false),
       mIsPrivate(false),
       mDocCapChanged(false),
-      mSHistoryChanged(false),
-      mSHistoryChangedFromParent(false) {
+      mSHistoryChanged(false) {
   MOZ_ASSERT(mDocShell);
   // Check that value at startup as it might have
   // been set before the frame script was loaded.
@@ -104,11 +104,6 @@ bool ContentSessionStore::GetPrivateModeEnabled() {
 
 void ContentSessionStore::SetSHistoryChanged() {
   mSHistoryChanged = mozilla::SessionHistoryInParent();
-}
-
-// Request "collect sessionHistory" from the parent process
-void ContentSessionStore::SetSHistoryFromParentChanged() {
-  mSHistoryChangedFromParent = mozilla::SessionHistoryInParent();
 }
 
 void ContentSessionStore::OnDocumentStart() {
@@ -390,67 +385,21 @@ nsresult TabListener::Observe(nsISupports* aSubject, const char* aTopic,
   return NS_ERROR_UNEXPECTED;
 }
 
-nsCString CollectPosition(Document& aDocument) {
-  PresShell* presShell = aDocument.GetPresShell();
-  if (!presShell) {
-    return ""_ns;
-  }
-  nsPoint scrollPos = presShell->GetVisualViewportOffset();
-  int scrollX = nsPresContext::AppUnitsToIntCSSPixels(scrollPos.x);
-  int scrollY = nsPresContext::AppUnitsToIntCSSPixels(scrollPos.y);
-  if ((scrollX != 0) || (scrollY != 0)) {
-    return nsPrintfCString("%d,%d", scrollX, scrollY);
-  }
-
-  return ""_ns;
-}
-
-int CollectPositions(BrowsingContext* aBrowsingContext,
-                     nsTArray<nsCString>& aPositions,
-                     nsTArray<int32_t>& aPositionDescendants) {
-  if (aBrowsingContext->CreatedDynamically()) {
-    return 0;
-  }
-
-  nsPIDOMWindowOuter* window = aBrowsingContext->GetDOMWindow();
-  if (!window) {
-    return 0;
-  }
-
-  Document* document = window->GetDoc();
-  if (!document) {
-    return 0;
-  }
-
-  /* Collect data from current frame */
-  aPositions.AppendElement(CollectPosition(*document));
-  aPositionDescendants.AppendElement(0);
-  unsigned long currentIdx = aPositions.Length() - 1;
-
-  /* Collect data from all child frame */
-  // This is not going to work for fission. Bug 1572084 for tracking it.
-  for (auto& child : aBrowsingContext->Children()) {
-    aPositionDescendants[currentIdx] +=
-        CollectPositions(child, aPositions, aPositionDescendants);
-  }
-
-  return aPositionDescendants[currentIdx] + 1;
-}
-
-bool TabListener::ForceFlushFromParent() {
+void TabListener::ForceFlushFromParent() {
   if (!XRE_IsParentProcess()) {
-    return false;
+    return;
   }
   if (!mSessionStore) {
-    return false;
+    return;
   }
-  return UpdateSessionStore(true);
+
+  UpdateSessionStore(true);
 }
 
-bool TabListener::UpdateSessionStore(bool aIsFlush) {
+void TabListener::UpdateSessionStore(bool aIsFlush) {
   if (!aIsFlush) {
     if (!mSessionStore || !mSessionStore->UpdateNeeded()) {
-      return false;
+      return;
     }
   }
 
@@ -458,53 +407,53 @@ bool TabListener::UpdateSessionStore(bool aIsFlush) {
     BrowserChild* browserChild = BrowserChild::GetFrom(mDocShell);
     if (browserChild) {
       StopTimerForUpdate();
-      return browserChild->UpdateSessionStore();
+      browserChild->UpdateSessionStore();
     }
-    return false;
+    return;
   }
 
   BrowsingContext* context = mDocShell->GetBrowsingContext();
   if (!context) {
-    return false;
+    return;
   }
 
   uint32_t chromeFlags = 0;
   nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
   mDocShell->GetTreeOwner(getter_AddRefs(treeOwner));
   if (!treeOwner) {
-    return false;
+    return;
   }
   nsCOMPtr<nsIAppWindow> window(do_GetInterface(treeOwner));
   if (!window) {
-    return false;
+    return;
   }
   if (window && NS_FAILED(window->GetChromeFlags(&chromeFlags))) {
-    return false;
+    return;
   }
 
   UpdateSessionStoreData data;
   if (mSessionStore->IsDocCapChanged()) {
-    data.mDocShellCaps.Construct() = mSessionStore->GetDocShellCaps();
+    data.mDisallow.Construct() = mSessionStore->GetDocShellCaps();
   }
   if (mSessionStore->IsPrivateChanged()) {
     data.mIsPrivate.Construct() = mSessionStore->GetPrivateModeEnabled();
   }
 
-  nsCOMPtr<nsISessionStoreFunctions> funcs =
-      do_ImportModule("resource://gre/modules/SessionStoreFunctions.jsm");
-  if (!funcs) {
-    return false;
+  nsCOMPtr<nsISessionStoreFunctions> funcs = do_ImportModule(
+      "resource://gre/modules/SessionStoreFunctions.jsm", fallible);
+  nsCOMPtr<nsIXPConnectWrappedJS> wrapped = do_QueryInterface(funcs);
+  if (!wrapped) {
+    return;
   }
 
-  nsCOMPtr<nsIXPConnectWrappedJS> wrapped = do_QueryInterface(funcs);
   AutoJSAPI jsapi;
   if (!jsapi.Init(wrapped->GetJSObjectGlobal())) {
-    return false;
+    return;
   }
 
   JS::Rooted<JS::Value> update(jsapi.cx());
   if (!ToJSValue(jsapi.cx(), data, &update)) {
-    return false;
+    return;
   }
 
   JS::RootedValue key(jsapi.cx(), context->Canonical()->Top()->PermanentKey());
@@ -513,11 +462,10 @@ bool TabListener::UpdateSessionStore(bool aIsFlush) {
       mOwnerContent, context, key, mEpoch,
       mSessionStore->GetAndClearSHistoryChanged(), update);
   if (NS_FAILED(rv)) {
-    return false;
+    return;
   }
 
   StopTimerForUpdate();
-  return true;
 }
 
 void TabListener::RemoveListeners() {

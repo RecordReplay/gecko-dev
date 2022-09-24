@@ -38,7 +38,8 @@
 // following macros and functions, which encapsulate the most common operations
 // and thus avoid the need for many #ifdefs.
 
-#  define AUTO_BASE_PROFILER_INIT
+#  define AUTO_BASE_PROFILER_INIT \
+    ::mozilla::baseprofiler::profiler_init_main_thread_id()
 
 #  define BASE_PROFILER_REGISTER_THREAD(name)
 #  define BASE_PROFILER_UNREGISTER_THREAD()
@@ -72,6 +73,11 @@ static inline bool profiler_capture_backtrace_into(
 static inline UniquePtr<ProfileChunkedBuffer> profiler_capture_backtrace() {
   return nullptr;
 }
+
+static inline void profiler_init(void* stackTop) {}
+
+static inline void profiler_shutdown() {}
+
 }  // namespace baseprofiler
 }  // namespace mozilla
 
@@ -82,6 +88,7 @@ static inline UniquePtr<ProfileChunkedBuffer> profiler_capture_backtrace() {
 #  include "mozilla/Assertions.h"
 #  include "mozilla/Atomics.h"
 #  include "mozilla/Attributes.h"
+#  include "mozilla/BaseProfilerRAIIMacro.h"
 #  include "mozilla/Maybe.h"
 #  include "mozilla/PowerOfTwo.h"
 #  include "mozilla/TimeStamp.h"
@@ -134,7 +141,7 @@ static constexpr PowerOfTwo32 BASE_PROFILER_DEFAULT_STARTUP_ENTRIES =
 MFBT_API void profiler_init(void* stackTop);
 
 #  define AUTO_BASE_PROFILER_INIT \
-    ::mozilla::baseprofiler::AutoProfilerInit BASE_PROFILER_RAII
+    ::mozilla::baseprofiler::AutoProfilerInit PROFILER_RAII
 
 // Clean up the profiler module, stopping it if required. This function may
 // also save a shutdown profile if requested. No profiler calls should happen
@@ -214,6 +221,7 @@ MFBT_API void profiler_unregister_thread();
 MFBT_API void profiler_register_page(uint64_t aTabD, uint64_t aInnerWindowID,
                                      const std::string& aUrl,
                                      uint64_t aEmbedderInnerWindowID);
+
 // Unregister page with the profiler.
 //
 // Take a Inner Window ID and unregister the page entry that has the same ID.
@@ -228,7 +236,7 @@ MFBT_API void profiler_remove_sampled_counter(BaseProfilerCount* aCounter);
 
 // Register and unregister a thread within a scope.
 #  define AUTO_BASE_PROFILER_REGISTER_THREAD(name) \
-    ::mozilla::baseprofiler::AutoProfilerRegisterThread BASE_PROFILER_RAII(name)
+    ::mozilla::baseprofiler::AutoProfilerRegisterThread PROFILER_RAII(name)
 
 // Pause and resume the profiler. No-ops if the profiler is inactive. While
 // paused the profile will not take any samples and will not record any data
@@ -252,9 +260,9 @@ MFBT_API void profiler_thread_wake();
 
 // Mark a thread as asleep/awake within a scope.
 #  define AUTO_BASE_PROFILER_THREAD_SLEEP \
-    ::mozilla::baseprofiler::AutoProfilerThreadSleep BASE_PROFILER_RAII
+    ::mozilla::baseprofiler::AutoProfilerThreadSleep PROFILER_RAII
 #  define AUTO_BASE_PROFILER_THREAD_WAKE \
-    ::mozilla::baseprofiler::AutoProfilerThreadWake BASE_PROFILER_RAII
+    ::mozilla::baseprofiler::AutoProfilerThreadWake PROFILER_RAII
 
 //---------------------------------------------------------------------------
 // Get information from the profiler

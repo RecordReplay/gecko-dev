@@ -2,6 +2,10 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
+
+const { EnterprisePolicyTesting } = ChromeUtils.import(
+  "resource://testing-common/EnterprisePolicyTesting.jsm"
+);
 var updateService = Cc["@mozilla.org/updates/update-service;1"].getService(
   Ci.nsIApplicationUpdateService
 );
@@ -27,27 +31,15 @@ add_task(async function test_updates_post_policy() {
     "devtools dedicated disabled pref can not be updated"
   );
 
-  await expectErrorPage("about:devtools");
-  await expectErrorPage("about:devtools-toolbox");
-  await expectErrorPage("about:debugging");
+  await testPageBlockedByPolicy("about:devtools-toolbox");
+  await testPageBlockedByPolicy("about:debugging");
+  await testPageBlockedByPolicy("about:profiling");
 
   let testURL = "data:text/html;charset=utf-8,test";
   let tab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     testURL,
     false
-  );
-
-  info("Check that devtools menu items are hidden");
-  let toolsMenu = window.document.getElementById("webDeveloperMenu");
-  ok(toolsMenu.hidden, "The Web Developer item of the tools menu is hidden");
-  let hamburgerMenu = window.document.getElementById(
-    "appMenu-developer-button"
-  );
-  is(
-    hamburgerMenu,
-    null,
-    "The Web Developer item of the hamburger menu should not be available."
   );
 
   let menuButton = document.getElementById("PanelUI-menu-button");
@@ -69,13 +61,19 @@ add_task(async function test_updates_post_policy() {
   BrowserTestUtils.removeTab(tab);
 });
 
-const expectErrorPage = async function(url) {
+// Copied from ../head.js. head.js was never intended to be used with tests
+// that use a JSON file versus calling setupPolicyEngineWithJson so I have
+// to copy this function here versus including it.
+async function testPageBlockedByPolicy(page, policyJSON) {
+  if (policyJSON) {
+    await EnterprisePolicyTesting.setupPolicyEngineWithJson(policyJSON);
+  }
   await BrowserTestUtils.withNewTab(
     { gBrowser, url: "about:blank" },
     async browser => {
-      BrowserTestUtils.loadURI(browser, url);
-      await BrowserTestUtils.browserLoaded(browser, false, url, true);
-      await SpecialPowers.spawn(browser, [url], async function() {
+      BrowserTestUtils.loadURI(browser, page);
+      await BrowserTestUtils.browserLoaded(browser, false, page, true);
+      await SpecialPowers.spawn(browser, [page], async function(innerPage) {
         ok(
           content.document.documentURI.startsWith(
             "about:neterror?e=blockedByPolicy"
@@ -86,4 +84,4 @@ const expectErrorPage = async function(url) {
       });
     }
   );
-};
+}

@@ -4,6 +4,7 @@
 
 DIRS += [
     "messages",
+    "new-request",
     "previews",
     "request-blocking",
     "request-details",
@@ -13,7 +14,6 @@ DIRS += [
 
 DevToolsModules(
     "App.js",
-    "AppErrorBoundary.js",
     "CustomRequestPanel.js",
     "DropHarHandler.js",
     "MonitorPanel.js",

@@ -410,8 +410,6 @@ PopupNotifications.prototype = {
    *            will be dismissed instead of removed after running the callback.
    *          - [optional] disabled (boolean): If this is true, the button
    *            will be disabled.
-   *          - [optional] disableHighlight (boolean): If this is true, the button
-   *            will not apply the default highlight style.
    *        If null, the notification will have a default "OK" action button
    *        that can be used to dismiss the popup and secondaryActions will be ignored.
    * @param secondaryActions
@@ -503,8 +501,6 @@ PopupNotifications.prototype = {
    *                     different icons.
    *        popupIconURL:
    *                     A string. URL of the image to be displayed in the popup.
-   *                     Normally specified in CSS using list-style-image and the
-   *                     .popup-notification-icon[popupid=...] selector.
    *        learnMoreURL:
    *                     A string URL. Setting this property will make the
    *                     prompt display a "Learn More" link that, when clicked,
@@ -1025,10 +1021,6 @@ PopupNotifications.prototype = {
         popupnotification.setAttribute(
           "buttonaccesskey",
           n.mainAction.accessKey
-        );
-        popupnotification.toggleAttribute(
-          "buttonhighlight",
-          !n.mainAction.disableHighlight
         );
         popupnotification.setAttribute(
           "buttoncommand",

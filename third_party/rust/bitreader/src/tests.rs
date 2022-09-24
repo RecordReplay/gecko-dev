@@ -168,6 +168,7 @@ fn skipping_and_zero_reads() {
     assert_eq!(reader.read_u8(4).unwrap(), 0b1011);
     // Reading zero bits should be a no-op
     assert_eq!(reader.read_u8(0).unwrap(), 0b0);
+    assert_eq!(reader.read_i8(0).unwrap(), 0b0);
     assert_eq!(reader.read_u8(4).unwrap(), 0b0101);
     reader.skip(3).unwrap(); // 0b111
     assert_eq!(reader.read_u16(10).unwrap(), 0b0101010101);
@@ -281,4 +282,35 @@ fn read_slice_too_much() {
         requested: (&output.len() * 8) as u64
     });
     assert_eq!(&output, &[0u8; 4]);
+}
+
+#[test]
+fn relative_reader() {
+    let bytes = &[
+        0b0001_0010, 0b0011_0100,
+    ];
+    let mut reader = BitReader::new(bytes);
+    assert_eq!(reader.read_u8(4).unwrap(), 0b0001);
+
+    let mut relative_reader = reader.relative_reader();
+
+    assert_eq!(reader.read_u8(4).unwrap(), 0b0010);
+    assert_eq!(reader.read_u8(4).unwrap(), 0b0011);
+    assert_eq!(reader.read_u8(4).unwrap(), 0b0100);
+
+    assert_eq!(reader.read_u8(1).unwrap_err(), BitReaderError::NotEnoughData {
+        position: 16,
+        length: 16,
+        requested: 1
+    });
+
+    assert_eq!(relative_reader.read_u8(4).unwrap(), 0b0010);
+    assert_eq!(relative_reader.read_u8(4).unwrap(), 0b0011);
+    assert_eq!(relative_reader.read_u8(4).unwrap(), 0b0100);
+
+    assert_eq!(relative_reader.read_u8(1).unwrap_err(), BitReaderError::NotEnoughData {
+        position: 12,
+        length: 12,
+        requested: 1
+    });
 }

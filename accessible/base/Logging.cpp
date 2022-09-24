@@ -9,6 +9,7 @@
 #include "LocalAccessible-inl.h"
 #include "AccEvent.h"
 #include "DocAccessible.h"
+#include "DocAccessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsCoreUtils.h"
 #include "OuterDocAccessible.h"
@@ -19,8 +20,10 @@
 #include "nsIWebProgress.h"
 #include "prenv.h"
 #include "nsIDocShellTreeItem.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/StackWalk.h"
+#include "mozilla/ToString.h"
 #include "mozilla/dom/BorrowedAttrInfo.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
@@ -62,7 +65,8 @@ static ModuleRep sModuleMap[] = {{"docload", logging::eDocLoad},
                                  {"notifications", logging::eNotifications},
 
                                  {"stack", logging::eStack},
-                                 {"verbose", logging::eVerbose}};
+                                 {"verbose", logging::eVerbose},
+                                 {"cache", logging::eCache}};
 
 static void EnableLogging(const char* aModulesStr) {
   sModules = 0;
@@ -89,14 +93,23 @@ static void EnableLogging(const char* aModulesStr) {
 }
 
 static void LogDocURI(dom::Document* aDocumentNode) {
-  printf("uri: %s", aDocumentNode->GetDocumentURI()->GetSpecOrDefault().get());
+  nsIURI* uri = aDocumentNode->GetDocumentURI();
+  if (uri) {
+    printf("uri: %s", uri->GetSpecOrDefault().get());
+  } else {
+    printf("uri: null");
+  }
 }
 
 static void LogDocShellState(dom::Document* aDocumentNode) {
   printf("docshell busy: ");
+  nsCOMPtr<nsIDocShell> docShell = aDocumentNode->GetDocShell();
+  if (!docShell) {
+    printf("null docshell");
+    return;
+  }
 
   nsAutoCString docShellBusy;
-  nsCOMPtr<nsIDocShell> docShell = aDocumentNode->GetDocShell();
   nsIDocShell::BusyFlags busyFlags = nsIDocShell::BUSY_FLAGS_NONE;
   docShell->GetBusyFlags(&busyFlags);
   if (busyFlags == nsIDocShell::BUSY_FLAGS_NONE) {
@@ -115,7 +128,7 @@ static void LogDocShellState(dom::Document* aDocumentNode) {
 
 static void LogDocType(dom::Document* aDocumentNode) {
   if (aDocumentNode->IsActive()) {
-    bool isContent = nsCoreUtils::IsContentDocument(aDocumentNode);
+    bool isContent = aDocumentNode->IsContentDocument();
     printf("%s document", (isContent ? "content" : "chrome"));
   } else {
     printf("document type: [failed]");
@@ -125,6 +138,10 @@ static void LogDocType(dom::Document* aDocumentNode) {
 static void LogDocShellTree(dom::Document* aDocumentNode) {
   if (aDocumentNode->IsActive()) {
     nsCOMPtr<nsIDocShellTreeItem> treeItem(aDocumentNode->GetDocShell());
+    if (!treeItem) {
+      printf("in-process docshell hierarchy, null docshell;");
+      return;
+    }
     nsCOMPtr<nsIDocShellTreeItem> parentTreeItem;
     treeItem->GetInProcessParent(getter_AddRefs(parentTreeItem));
     nsCOMPtr<nsIDocShellTreeItem> rootTreeItem;
@@ -842,13 +859,11 @@ void logging::Address(const char* aDescr, LocalAccessible* aAcc) {
 }
 
 void logging::Node(const char* aDescr, nsINode* aNode) {
-  nsINode* parentNode = aNode ? aNode->GetParentNode() : nullptr;
-  int32_t idxInParent = parentNode ? parentNode->ComputeIndexOf(aNode) : -1;
-
+  Maybe<uint32_t> idxInParent = aNode->ComputeIndexInParentNode();
   nsAutoString nodeDesc;
   DescribeNode(aNode, nodeDesc);
-  printf("    %s: %s, idx in parent %d\n", aDescr,
-         NS_ConvertUTF16toUTF8(nodeDesc).get(), idxInParent);
+  printf("    %s: %s, idx in parent %s\n", aDescr,
+         NS_ConvertUTF16toUTF8(nodeDesc).get(), ToString(idxInParent).c_str());
 }
 
 void logging::Document(DocAccessible* aDocument) {

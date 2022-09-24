@@ -33,12 +33,10 @@ add_task(async function test_js_sandbox() {
         };
 
         const document = content.document;
-        const button = document.querySelector(
-          "[data-annotation-id='16R'] :first-child"
-        );
+        const button = document.querySelector("[data-annotation-id='16R'] a");
         button.dispatchEvent(new content.Event("click"));
 
-        const text = document.querySelector("#\\31 5R");
+        const text = document.querySelector(`[data-element-id="15R"]`);
 
         is(text.value, "test", "Text field must containt 'test' string");
 

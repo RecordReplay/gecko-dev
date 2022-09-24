@@ -6,7 +6,7 @@
 "use strict";
 
 const TEST_URI =
-  "data:text/html;charset=utf-8,Web Console HSTS invalid header test";
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console HSTS invalid header test";
 const SJS_URL =
   "https://example.com/browser/devtools/client/webconsole/" +
   "/test/browser/test_hsts-invalid-headers.sjs";
@@ -88,7 +88,7 @@ add_task(async function() {
 async function navigateAndCheckWarningMessage({ url, name, text }, hud) {
   await clearOutput(hud);
 
-  const onMessage = waitForMessage(hud, text, ".message.warn");
+  const onMessage = waitForMessageByType(hud, text, ".warn");
   await navigateTo(url);
   const { node } = await onMessage;
   ok(node, name);

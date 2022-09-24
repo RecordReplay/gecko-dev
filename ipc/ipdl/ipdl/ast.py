@@ -15,6 +15,20 @@ VSYNC_PRIORITY = 3
 MEDIUMHIGH_PRIORITY = 4
 CONTROL_PRIORITY = 5
 
+NESTED_ATTR_MAP = {
+    "not": NOT_NESTED,
+    "inside_sync": INSIDE_SYNC_NESTED,
+    "inside_cpow": INSIDE_CPOW_NESTED,
+}
+
+PRIORITY_ATTR_MAP = {
+    "normal": NORMAL_PRIORITY,
+    "input": INPUT_PRIORITY,
+    "vsync": VSYNC_PRIORITY,
+    "mediumhigh": MEDIUMHIGH_PRIORITY,
+    "control": CONTROL_PRIORITY,
+}
+
 
 class Visitor:
     def defaultVisit(self, node):
@@ -47,6 +61,8 @@ class Visitor:
     def visitStructDecl(self, struct):
         for f in struct.fields:
             f.accept(self)
+        for a in struct.attributes.values():
+            a.accept(self)
 
     def visitStructField(self, field):
         field.typespec.accept(self)
@@ -54,11 +70,12 @@ class Visitor:
     def visitUnionDecl(self, union):
         for t in union.components:
             t.accept(self)
+        for a in union.attributes.values():
+            a.accept(self)
 
     def visitUsingStmt(self, using):
         for a in using.attributes.values():
             a.accept(self)
-        pass
 
     def visitProtocol(self, p):
         for namespace in p.namespaces:
@@ -69,6 +86,8 @@ class Visitor:
             managed.accept(self)
         for msgDecl in p.messageDecls:
             msgDecl.accept(self)
+        for a in p.attributes.values():
+            a.accept(self)
 
     def visitNamespace(self, ns):
         pass
@@ -84,18 +103,26 @@ class Visitor:
             inParam.accept(self)
         for outParam in md.outParams:
             outParam.accept(self)
+        for a in md.attributes.values():
+            a.accept(self)
 
     def visitParam(self, decl):
-        pass
+        for a in decl.attributes.values():
+            a.accept(self)
 
     def visitTypeSpec(self, ts):
         pass
 
     def visitAttribute(self, a):
+        if isinstance(a.value, Node):
+            a.value.accept(self)
+
+    def visitStringLiteral(self, sl):
         pass
 
     def visitDecl(self, d):
-        pass
+        for a in d.attributes.values():
+            a.accept(self)
 
 
 class Loc:
@@ -222,8 +249,13 @@ class UsingStmt(Node):
     def isRefcounted(self):
         return "RefCounted" in self.attributes
 
-    def isMoveonly(self):
-        return "MoveOnly" in self.attributes
+    def isSendMoveOnly(self):
+        moveonly = self.attributes.get("MoveOnly")
+        return moveonly and moveonly.value in (None, "send")
+
+    def isDataMoveOnly(self):
+        moveonly = self.attributes.get("MoveOnly")
+        return moveonly and moveonly.value in (None, "data")
 
 
 # "singletons"
@@ -272,11 +304,24 @@ class Namespace(Node):
 class Protocol(NamespacedNode):
     def __init__(self, loc):
         NamespacedNode.__init__(self, loc)
+        self.attributes = {}
         self.sendSemantics = ASYNC
-        self.nested = NOT_NESTED
         self.managers = []
         self.managesStmts = []
         self.messageDecls = []
+
+    def nestedUpTo(self):
+        if "NestedUpTo" not in self.attributes:
+            return NOT_NESTED
+
+        return NESTED_ATTR_MAP.get(self.attributes["NestedUpTo"].value, NOT_NESTED)
+
+    def implAttribute(self, side):
+        assert side in ("parent", "child")
+        attr = self.attributes.get(side.capitalize() + "Impl")
+        if attr is not None:
+            return attr.value
+        return None
 
 
 class StructField(Node):
@@ -337,23 +382,13 @@ class MessageDecl(Node):
         if "Nested" not in self.attributes:
             return NOT_NESTED
 
-        return {
-            "not": NOT_NESTED,
-            "inside_sync": INSIDE_SYNC_NESTED,
-            "inside_cpow": INSIDE_CPOW_NESTED,
-        }[self.attributes["Nested"].value]
+        return NESTED_ATTR_MAP.get(self.attributes["Nested"].value, NOT_NESTED)
 
     def priority(self):
         if "Priority" not in self.attributes:
             return NORMAL_PRIORITY
 
-        return {
-            "normal": NORMAL_PRIORITY,
-            "input": INPUT_PRIORITY,
-            "vsync": VSYNC_PRIORITY,
-            "mediumhigh": MEDIUMHIGH_PRIORITY,
-            "control": CONTROL_PRIORITY,
-        }[self.attributes["Priority"].value]
+        return PRIORITY_ATTR_MAP.get(self.attributes["Priority"].value, NORMAL_PRIORITY)
 
 
 class Param(Node):
@@ -385,6 +420,15 @@ class Attribute(Node):
         Node.__init__(self, loc)
         self.name = name
         self.value = value
+
+
+class StringLiteral(Node):
+    def __init__(self, loc, value):
+        Node.__init__(self, loc)
+        self.value = value
+
+    def __str__(self):
+        return '"%s"' % self.value
 
 
 class QualifiedId:  # FIXME inherit from node?

@@ -8,6 +8,7 @@
 
 include IPCServiceWorkerDescriptor;
 include NeckoChannelParams;
+include IPCStream;
 
 include "mozilla/dom/ReferrerInfoUtils.h";
 include "mozilla/net/NeckoMessageUtils.h";
@@ -43,6 +44,7 @@ struct HttpChannelOnStartRequestArgs
   ResourceTimingStructArgs timing;
   bool allRedirectsSameOrigin;
   uint32_t? multiPartID;
+  bool isFirstPartOfMultiPart;
   bool isLastPartOfMultiPart;
   CrossOriginOpenerPolicy openerPolicy;
   nsIReferrerInfo overrideReferrerInfo;
@@ -50,6 +52,11 @@ struct HttpChannelOnStartRequestArgs
   nsCString cookie;
   bool dataFromSocketProcess;
   bool hasHTTPSRR;
+};
+
+struct HttpChannelAltDataStream
+{
+  IPCStream? altDataInputStream;
 };
 
 } // namespace ipc

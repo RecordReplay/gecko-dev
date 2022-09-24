@@ -77,6 +77,19 @@ void unsuppressedFunction() {
   GC();  // Calls GC, never within AutoSuppressGC
 }
 
+class IDL_Interface {
+ public:
+  ANNOTATE("Can run script") virtual void canScriptThis() {}
+  virtual void cannotScriptThis() {}
+  ANNOTATE("Can run script") virtual void overridden_canScriptThis() = 0;
+  virtual void overridden_cannotScriptThis() = 0;
+};
+
+class IDL_Subclass : public IDL_Interface {
+  ANNOTATE("Can run script") void overridden_canScriptThis() override {}
+  void overridden_cannotScriptThis() override {}
+};
+
 volatile static int x = 3;
 volatile static int* xp = &x;
 struct GCInDestructor {
@@ -358,6 +371,40 @@ void safevals() {
     use(unsafe13.get());
     JS_HAZ_VARIABLE_IS_GC_SAFE(unsafe13);
   }
+
+  // Check JS_HAZ_CAN_RUN_SCRIPT annotation handling.
+  IDL_Subclass sub;
+  IDL_Subclass* subp = &sub;
+  IDL_Interface* base = &sub;
+  {
+    Cell* unsafe14 = &cell;
+    base->canScriptThis();
+    use(unsafe14);
+  }
+  {
+    Cell* unsafe15 = &cell;
+    subp->canScriptThis();
+    use(unsafe15);
+  }
+  {
+    // Almost the same as the last one, except call using the actual object, not
+    // a pointer. The type is known, so there is no danger of the actual type
+    // being a subclass that has overridden the method with an implementation
+    // that calls script.
+    Cell* safe16 = &cell;
+    sub.canScriptThis();
+    use(safe16);
+  }
+  {
+    Cell* safe17 = &cell;
+    base->cannotScriptThis();
+    use(safe17);
+  }
+  {
+    Cell* safe18 = &cell;
+    subp->cannotScriptThis();
+    use(safe18);
+  }
 }
 
 // Make sure `this` is live at the beginning of a function.
@@ -367,3 +414,46 @@ class Subcell : public Cell {
     return f;  // this->f
   }
 };
+
+template <typename T>
+struct RefPtr {
+  ~RefPtr() { GC(); }
+  void forget() {}
+};
+
+Cell* refptr_test1() {
+  static Cell cell;
+  RefPtr<float> v1;
+  Cell* ref_unsafe1 = &cell;
+  return ref_unsafe1;
+}
+
+Cell* refptr_test2() {
+  static Cell cell;
+  RefPtr<float> v2;
+  Cell* ref_safe2 = &cell;
+  v2.forget();
+  return ref_safe2;
+}
+
+Cell* refptr_test3() {
+  static Cell cell;
+  RefPtr<float> v3;
+  Cell* ref_unsafe3 = &cell;
+  if (x) {
+    v3.forget();
+  }
+  return ref_unsafe3;
+}
+
+Cell* refptr_test4() {
+  static Cell cell;
+  RefPtr<int> r;
+  return &cell;  // hazard in return value
+}
+
+Cell* refptr_test5() {
+  static Cell cell;
+  RefPtr<int> r;
+  return nullptr;  // returning immobile value, so no hazard
+}

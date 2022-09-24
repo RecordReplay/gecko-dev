@@ -14,6 +14,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Region: "resource://gre/modules/Region.jsm",
   SearchUtils: "resource://gre/modules/SearchUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
 });
 
 const BinaryInputStream = Components.Constructor(
@@ -126,21 +127,36 @@ const ParamPreferenceCache = {
       SearchUtils.BROWSER_SEARCH_PREF + "param."
     );
     this.cache = new Map();
+    this.nimbusCache = new Map();
     for (let prefName of this.branch.getChildList("")) {
       this.cache.set(prefName, this.branch.getCharPref(prefName, null));
     }
     this.branch.addObserver("", this, true);
+
+    this.onNimbusUpdate = this.onNimbusUpdate.bind(this);
+    this.onNimbusUpdate();
+    NimbusFeatures.search.onUpdate(this.onNimbusUpdate);
+    NimbusFeatures.search.ready().then(this.onNimbusUpdate);
   },
 
   observe(subject, topic, data) {
     this.cache.set(data, this.branch.getCharPref(data, null));
   },
 
+  onNimbusUpdate() {
+    let extraParams = NimbusFeatures.search.getVariable("extraParams") || [];
+    for (const { key, value } of extraParams) {
+      this.nimbusCache.set(key, value);
+    }
+  },
+
   getPref(prefName) {
     if (!this.cache) {
       this.initCache();
     }
-    return this.cache.get(prefName);
+    return this.nimbusCache.has(prefName)
+      ? this.nimbusCache.get(prefName)
+      : this.cache.get(prefName);
   },
 };
 
@@ -279,26 +295,6 @@ function ParamSubstitution(paramValue, searchTerms, engine) {
           pad(date.getDate()) +
           pad(date.getHours())
         );
-      }
-
-      // {moz:distributionID} and {moz:official} seem to have little use.
-      if (name == SearchUtils.MOZ_PARAM.DIST_ID) {
-        return Services.prefs.getCharPref(
-          SearchUtils.BROWSER_SEARCH_PREF + "distributionID",
-          Services.appinfo.distributionID || ""
-        );
-      }
-
-      if (name == SearchUtils.MOZ_PARAM.OFFICIAL) {
-        if (
-          Services.prefs.getBoolPref(
-            SearchUtils.BROWSER_SEARCH_PREF + "official",
-            AppConstants.MOZ_OFFICIAL_BRANDING
-          )
-        ) {
-          return "official";
-        }
-        return "unofficial";
       }
     }
 

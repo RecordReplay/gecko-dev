@@ -7,10 +7,7 @@ const { ExperimentManager } = ChromeUtils.import(
   "resource://nimbus/lib/ExperimentManager.jsm"
 );
 
-const {
-  RemoteSettingsExperimentLoader,
-  RemoteDefaultsLoader,
-} = ChromeUtils.import(
+const { RemoteSettingsExperimentLoader } = ChromeUtils.import(
   "resource://nimbus/lib/RemoteSettingsExperimentLoader.jsm"
 );
 
@@ -54,7 +51,6 @@ add_task(async function test_init() {
   const loader = ExperimentFakes.rsLoader();
   sinon.stub(loader, "setTimer");
   sinon.stub(loader, "updateRecipes").resolves();
-  sinon.stub(RemoteDefaultsLoader, "syncRemoteDefaults");
 
   Services.prefs.setBoolPref(ENABLED_PREF, false);
   await loader.init();
@@ -68,10 +64,6 @@ add_task(async function test_init() {
   await loader.init();
   ok(loader.setTimer.calledOnce, "should call .setTimer");
   ok(loader.updateRecipes.calledOnce, "should call .updatpickeRecipes");
-  ok(
-    RemoteDefaultsLoader.syncRemoteDefaults,
-    "initialized remote defaults loader"
-  );
 });
 
 add_task(async function test_init_with_opt_in() {
@@ -134,6 +126,43 @@ add_task(async function test_updateRecipes() {
   );
 });
 
+add_task(async function test_updateRecipes_someMismatch() {
+  const loader = ExperimentFakes.rsLoader();
+
+  const PASS_FILTER_RECIPE = ExperimentFakes.recipe("foo", {
+    targeting: "true",
+  });
+  const FAIL_FILTER_RECIPE = ExperimentFakes.recipe("foo", {
+    targeting: "false",
+  });
+  sinon.stub(loader, "setTimer");
+  sinon.spy(loader, "updateRecipes");
+
+  sinon
+    .stub(loader.remoteSettingsClient, "get")
+    .resolves([PASS_FILTER_RECIPE, FAIL_FILTER_RECIPE]);
+  sinon.stub(loader.manager, "onRecipe").resolves();
+  sinon.stub(loader.manager, "onFinalize");
+
+  Services.prefs.setBoolPref(ENABLED_PREF, true);
+  await loader.init();
+  ok(loader.updateRecipes.calledOnce, "should call .updateRecipes");
+  equal(
+    loader.manager.onRecipe.callCount,
+    1,
+    "should call .onRecipe only for recipes that pass"
+  );
+  ok(loader.manager.onFinalize.calledOnce, "Should call onFinalize.");
+  ok(
+    loader.manager.onFinalize.calledWith("rs-loader", {
+      recipeMismatches: [FAIL_FILTER_RECIPE.slug],
+      invalidRecipes: [],
+      invalidBranches: [],
+    }),
+    "should call .onFinalize with the recipes that failed targeting"
+  );
+});
+
 add_task(async function test_updateRecipes_forFirstStartup() {
   const loader = ExperimentFakes.rsLoader();
   const PASS_FILTER_RECIPE = ExperimentFakes.recipe("foo", {
@@ -178,12 +207,18 @@ add_task(async function test_checkTargeting() {
     "should return true if .targeting is not defined"
   );
   equal(
-    await loader.checkTargeting({ targeting: "'foo'" }),
+    await loader.checkTargeting({
+      targeting: "'foo'",
+      slug: "test_checkTargeting",
+    }),
     true,
     "should return true for truthy expression"
   );
   equal(
-    await loader.checkTargeting({ targeting: "aPropertyThatDoesNotExist" }),
+    await loader.checkTargeting({
+      targeting: "aPropertyThatDoesNotExist",
+      slug: "test_checkTargeting",
+    }),
     false,
     "should return false for falsey expression"
   );

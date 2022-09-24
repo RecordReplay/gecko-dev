@@ -16,8 +16,7 @@
 #include "nsIPrincipal.h"
 #include "nsProxyRelease.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // static
 already_AddRefed<SharedWorkerManagerHolder> SharedWorkerManager::Create(
@@ -114,6 +113,10 @@ void SharedWorkerManager::AddActor(SharedWorkerParent* aParent) {
   MOZ_ASSERT(!mActors.Contains(aParent));
 
   mActors.AppendElement(aParent);
+
+  if (mLockCount) {
+    Unused << aParent->SendNotifyLock(true);
+  }
 
   // NB: We don't update our Suspended/Frozen state here, yet. The aParent is
   // responsible for doing so from SharedWorkerParent::ManagerCreated.
@@ -229,6 +232,22 @@ void SharedWorkerManager::ErrorReceived(const ErrorValue& aValue) {
   }
 }
 
+void SharedWorkerManager::LockNotified(bool aCreated) {
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+  MOZ_ASSERT_IF(!aCreated, mLockCount > 0);
+
+  mLockCount += aCreated ? 1 : -1;
+
+  // Notify only when we either:
+  // 1. Got a new lock when nothing were there
+  // 2. Lost all locks
+  if ((aCreated && mLockCount == 1) || !mLockCount) {
+    for (SharedWorkerParent* actor : mActors) {
+      Unused << actor->SendNotifyLock(aCreated);
+    }
+  }
+};
+
 void SharedWorkerManager::Terminated() {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
 
@@ -294,5 +313,4 @@ SharedWorkerManagerWrapper::~SharedWorkerManagerWrapper() {
                          mHolder.forget());
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

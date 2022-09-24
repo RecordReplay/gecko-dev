@@ -14,6 +14,7 @@
 #include "GPUProcessManager.h"
 #include "gfxGradientCache.h"
 #include "GfxInfoBase.h"
+#include "CanvasManagerParent.h"
 #include "VRGPUChild.h"
 #include "VRManager.h"
 #include "VRManagerParent.h"
@@ -24,6 +25,7 @@
 #include "gfxPlatform.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Components.h"
+#include "mozilla/FOGIPC.h"
 #include "mozilla/HangDetails.h"
 #include "mozilla/PerfStats.h"
 #include "mozilla/Preferences.h"
@@ -37,6 +39,7 @@
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/gfxVars.h"
+#include "mozilla/glean/GleanMetrics.h"
 #include "mozilla/image/ImageMemoryReporter.h"
 #include "mozilla/ipc/CrashReporterClient.h"
 #include "mozilla/ipc/ProcessChild.h"
@@ -55,6 +58,7 @@
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "nsDebugImpl.h"
 #include "nsIGfxInfo.h"
+#include "nsIXULRuntime.h"
 #include "nsThreadManager.h"
 #include "nscore.h"
 #include "prenv.h"
@@ -64,9 +68,11 @@
 #  include <process.h>
 #  include <windows.h>
 
+#  include "gfxDWriteFonts.h"
 #  include "gfxWindowsPlatform.h"
 #  include "mozilla/WindowsVersion.h"
 #  include "mozilla/gfx/DeviceManagerDx.h"
+#  include "mozilla/layers/TextureD3D11.h"
 #  include "mozilla/widget/WinCompositorWindowThread.h"
 #else
 #  include <unistd.h>
@@ -74,6 +80,10 @@
 #ifdef MOZ_WIDGET_GTK
 #  include <gtk/gtk.h>
 
+#  include "skia/include/ports/SkTypeface_cairo.h"
+#endif
+#ifdef ANDROID
+#  include "mozilla/layers/AndroidHardwareBuffer.h"
 #  include "skia/include/ports/SkTypeface_cairo.h"
 #endif
 #include "ChildProfilerController.h"
@@ -185,6 +195,7 @@ bool GPUParent::Init(base::ProcessId aParentPid, const char* aParentBuildID,
 #if defined(XP_WIN)
   gfxWindowsPlatform::InitMemoryReportersForGPUProcess();
   DeviceManagerDx::Init();
+  GpuProcessD3D11TextureMap::Init();
 #endif
 
   CompositorThreadHolder::Start();
@@ -222,15 +233,21 @@ void GPUParent::NotifyDeviceReset() {
   Unused << SendNotifyDeviceReset(data);
 }
 
-already_AddRefed<PAPZInputBridgeParent> GPUParent::AllocPAPZInputBridgeParent(
-    const LayersId& aLayersId) {
-  return MakeAndAddRef<APZInputBridgeParent>(aLayersId);
+void GPUParent::NotifyOverlayInfo(layers::OverlayInfo aInfo) {
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "gfx::GPUParent::NotifyOverlayInfo", [aInfo]() -> void {
+          GPUParent::GetSingleton()->NotifyOverlayInfo(aInfo);
+        }));
+    return;
+  }
+  Unused << SendNotifyOverlayInfo(aInfo);
 }
 
 mozilla::ipc::IPCResult GPUParent::RecvInit(
     nsTArray<GfxVarUpdate>&& vars, const DevicePrefs& devicePrefs,
     nsTArray<LayerTreeIdMapping>&& aMappings,
-    nsTArray<GfxInfoFeatureStatus>&& aFeatures) {
+    nsTArray<GfxInfoFeatureStatus>&& aFeatures, uint32_t aWrNamespace) {
   for (const auto& var : vars) {
     gfxVars::ApplyUpdate(var);
   }
@@ -241,7 +258,6 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
                      devicePrefs.d3d11Compositing());
   gfxConfig::Inherit(Feature::OPENGL_COMPOSITING, devicePrefs.oglCompositing());
   gfxConfig::Inherit(Feature::DIRECT2D, devicePrefs.useD2D1());
-  gfxConfig::Inherit(Feature::WEBGPU, devicePrefs.webGPU());
   gfxConfig::Inherit(Feature::D3D11_HW_ANGLE, devicePrefs.d3d11HwAngle());
 
   {  // Let the crash reporter know if we've got WR enabled or not. For other
@@ -268,7 +284,7 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
     if (DeviceManagerDx::Get()->CreateCompositorDevices() &&
         gfxVars::RemoteCanvasEnabled()) {
       if (DeviceManagerDx::Get()->CreateCanvasDevice()) {
-        MOZ_ALWAYS_TRUE(Factory::EnsureDWriteFactory());
+        gfxDWriteFont::InitDWriteSupport();
       } else {
         gfxWarning() << "Failed to create canvas device.";
       }
@@ -315,6 +331,8 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
     MOZ_ASSERT(library);
     Factory::SetFTLibrary(library);
 
+    // true to match gfxPlatform::FontHintingEnabled(). We must hardcode
+    // this value because we do not have a gfxPlatform instance.
     SkInitCairoFT(true);
   }
 
@@ -323,9 +341,29 @@ mozilla::ipc::IPCResult GPUParent::RecvInit(
   Unused << gfxInfo;
 #endif
 
+#ifdef ANDROID
+  // Ensure we have an FT library for font instantiation.
+  // This would normally be set by gfxPlatform::Init().
+  // Since we bypass that, we must do it here instead.
+  FT_Library library = Factory::NewFTLibrary();
+  MOZ_ASSERT(library);
+  Factory::SetFTLibrary(library);
+
+  // false to match gfxAndroidPlatform::FontHintingEnabled(). We must
+  // hardcode this value because we do not have a gfxPlatform instance.
+  SkInitCairoFT(false);
+
+  if (gfxVars::UseAHardwareBufferContent() ||
+      gfxVars::UseAHardwareBufferSharedSurface()) {
+    layers::AndroidHardwareBufferApi::Init();
+    layers::AndroidHardwareBufferManager::Init();
+  }
+
+#endif
+
   // Make sure to do this *after* we update gfxVars above.
   if (gfxVars::UseWebRender()) {
-    wr::RenderThread::Start();
+    wr::RenderThread::Start(aWrNamespace);
     image::ImageMemoryReporter::InitForWebRender();
   }
 #ifdef XP_WIN
@@ -416,6 +454,13 @@ mozilla::ipc::IPCResult GPUParent::RecvInitUiCompositorController(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult GPUParent::RecvInitAPZInputBridge(
+    const LayersId& aRootLayerTreeId,
+    Endpoint<PAPZInputBridgeParent>&& aEndpoint) {
+  APZInputBridgeParent::Create(aRootLayerTreeId, std::move(aEndpoint));
+  return IPC_OK();
+}
+
 mozilla::ipc::IPCResult GPUParent::RecvInitProfiler(
     Endpoint<PProfilerChild>&& aEndpoint) {
   mProfilerController = ChildProfilerController::Create(std::move(aEndpoint));
@@ -483,17 +528,12 @@ mozilla::ipc::IPCResult GPUParent::RecvGetDeviceStatus(GPUDeviceData* aOut) {
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult GPUParent::RecvSimulateDeviceReset(
-    GPUDeviceData* aOut) {
+mozilla::ipc::IPCResult GPUParent::RecvSimulateDeviceReset() {
 #if defined(XP_WIN)
   DeviceManagerDx::Get()->ForceDeviceReset(
       ForcedDeviceResetReason::COMPOSITOR_UPDATED);
-  DeviceManagerDx::Get()->MaybeResetAndReacquireDevices();
 #endif
-  if (gfxVars::UseWebRender()) {
-    wr::RenderThread::Get()->SimulateDeviceReset();
-  }
-  RecvGetDeviceStatus(aOut);
+  wr::RenderThread::Get()->SimulateDeviceReset();
   return IPC_OK();
 }
 
@@ -600,16 +640,35 @@ mozilla::ipc::IPCResult GPUParent::RecvCollectPerfStatsJSON(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult GPUParent::RecvFlushFOGData(
+    FlushFOGDataResolver&& aResolver) {
+  glean::FlushFOGData(std::move(aResolver));
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GPUParent::RecvTestTriggerMetrics(
+    TestTriggerMetricsResolver&& aResolve) {
+  mozilla::glean::test_only_ipc::a_counter.Add(nsIXULRuntime::PROCESS_TYPE_GPU);
+  aResolve(true);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult GPUParent::RecvCrashProcess() {
+  MOZ_CRASH("Deliberate GPU process crash");
+  return IPC_OK();
+}
+
 void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
   if (AbnormalShutdown == aWhy) {
     NS_WARNING("Shutting down GPU process early due to a crash!");
     ProcessChild::QuickExit();
   }
 
+  // Send the last bits of Glean data over to the main process.
+  glean::FlushFOGData(
+      [](ByteBuf&& aBuf) { glean::SendFOGData(std::move(aBuf)); });
+
 #ifndef NS_FREE_PERMANENT_DATA
-#  ifdef XP_WIN
-  wmf::MFShutdown();
-#  endif
   // No point in going through XPCOM shutdown because we don't keep persistent
   // state.
   ProcessChild::QuickExit();
@@ -618,10 +677,6 @@ void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
   // Wait until all RemoteDecoderManagerParent have closed.
   mShutdownBlockers.WaitUntilClear(10 * 1000 /* 10s timeout*/)
       ->Then(GetCurrentSerialEventTarget(), __func__, [this]() {
-#ifdef XP_WIN
-        wmf::MFShutdown();
-#endif
-
         if (mProfilerController) {
           mProfilerController->Shutdown();
           mProfilerController = nullptr;
@@ -632,6 +687,9 @@ void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
           mVsyncBridge = nullptr;
         }
         RemoteDecoderManagerParent::ShutdownVideoBridge();
+        // This could be running on either the Compositor or the Renderer
+        // thread.
+        CanvasManagerParent::Shutdown();
         CompositorThreadHolder::Shutdown();
         // There is a case that RenderThread exists when gfxVars::UseWebRender()
         // is false. This could happen when WebRender was fallbacked to
@@ -670,6 +728,7 @@ void GPUParent::ActorDestroy(ActorDestroyReason aWhy) {
 #endif
 
 #if defined(XP_WIN)
+        GpuProcessD3D11TextureMap::Shutdown();
         DeviceManagerDx::Shutdown();
 #endif
         LayerTreeOwnerTracker::Shutdown();

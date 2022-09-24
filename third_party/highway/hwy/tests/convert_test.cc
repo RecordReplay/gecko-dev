@@ -34,7 +34,10 @@ struct TestBitCast {
   template <typename T, class D>
   HWY_NOINLINE void operator()(T /*unused*/, D d) {
     const Repartition<ToT, D> dto;
-    HWY_ASSERT_EQ(Lanes(d) * sizeof(T), Lanes(dto) * sizeof(ToT));
+    const size_t N = Lanes(d);
+    const size_t Nto = Lanes(dto);
+    if (N == 0 || Nto == 0) return;
+    HWY_ASSERT_EQ(N * sizeof(T), Nto * sizeof(ToT));
     const auto vf = Iota(d, 1);
     const auto vt = BitCast(dto, vf);
     // Must return the same bits
@@ -54,17 +57,17 @@ struct TestBitCastFrom {
     TestBitCast<uint8_t>()(t, d);
     TestBitCast<uint16_t>()(t, d);
     TestBitCast<uint32_t>()(t, d);
-#if HWY_CAP_INTEGER64
+#if HWY_HAVE_INTEGER64
     TestBitCast<uint64_t>()(t, d);
 #endif
     TestBitCast<int8_t>()(t, d);
     TestBitCast<int16_t>()(t, d);
     TestBitCast<int32_t>()(t, d);
-#if HWY_CAP_INTEGER64
+#if HWY_HAVE_INTEGER64
     TestBitCast<int64_t>()(t, d);
 #endif
     TestBitCast<float>()(t, d);
-#if HWY_CAP_FLOAT64
+#if HWY_HAVE_FLOAT64
     TestBitCast<double>()(t, d);
 #endif
   }
@@ -100,38 +103,40 @@ HWY_NOINLINE void TestAllBitCast() {
   to_i32(int32_t());
   to_i32(float());
 
-#if HWY_CAP_INTEGER64
+#if HWY_HAVE_INTEGER64
   const ForPartialVectors<TestBitCast<uint64_t>> to_u64;
   to_u64(uint64_t());
   to_u64(int64_t());
-#if HWY_CAP_FLOAT64
+#if HWY_HAVE_FLOAT64
   to_u64(double());
 #endif
 
   const ForPartialVectors<TestBitCast<int64_t>> to_i64;
   to_i64(uint64_t());
   to_i64(int64_t());
-#if HWY_CAP_FLOAT64
+#if HWY_HAVE_FLOAT64
   to_i64(double());
 #endif
-#endif  // HWY_CAP_INTEGER64
+#endif  // HWY_HAVE_INTEGER64
 
   const ForPartialVectors<TestBitCast<float>> to_float;
   to_float(uint32_t());
   to_float(int32_t());
   to_float(float());
 
-#if HWY_CAP_FLOAT64
+#if HWY_HAVE_FLOAT64
   const ForPartialVectors<TestBitCast<double>> to_double;
   to_double(double());
-#if HWY_CAP_INTEGER64
+#if HWY_HAVE_INTEGER64
   to_double(uint64_t());
   to_double(int64_t());
-#endif  // HWY_CAP_INTEGER64
-#endif  // HWY_CAP_FLOAT64
+#endif  // HWY_HAVE_INTEGER64
+#endif  // HWY_HAVE_FLOAT64
 
+#if HWY_TARGET != HWY_SCALAR
   // For non-scalar vectors, we can cast all types to all.
-  ForAllTypes(ForGE128Vectors<TestBitCastFrom>());
+  ForAllTypes(ForGEVectors<64, TestBitCastFrom>());
+#endif
 }
 
 template <typename ToT>
@@ -146,7 +151,7 @@ struct TestPromoteTo {
     auto expected = AllocateAligned<ToT>(N);
 
     RandomState rng;
-    for (size_t rep = 0; rep < 200; ++rep) {
+    for (size_t rep = 0; rep < AdjustedReps(200); ++rep) {
       for (size_t i = 0; i < N; ++i) {
         const uint64_t bits = rng();
         memcpy(&from[i], &bits, sizeof(T));
@@ -160,39 +165,39 @@ struct TestPromoteTo {
 };
 
 HWY_NOINLINE void TestAllPromoteTo() {
-  const ForPartialVectors<TestPromoteTo<uint16_t>, 2> to_u16div2;
+  const ForPromoteVectors<TestPromoteTo<uint16_t>, 1> to_u16div2;
   to_u16div2(uint8_t());
 
-  const ForPartialVectors<TestPromoteTo<uint32_t>, 4> to_u32div4;
+  const ForPromoteVectors<TestPromoteTo<uint32_t>, 2> to_u32div4;
   to_u32div4(uint8_t());
 
-  const ForPartialVectors<TestPromoteTo<uint32_t>, 2> to_u32div2;
+  const ForPromoteVectors<TestPromoteTo<uint32_t>, 1> to_u32div2;
   to_u32div2(uint16_t());
 
-  const ForPartialVectors<TestPromoteTo<int16_t>, 2> to_i16div2;
+  const ForPromoteVectors<TestPromoteTo<int16_t>, 1> to_i16div2;
   to_i16div2(uint8_t());
   to_i16div2(int8_t());
 
-  const ForPartialVectors<TestPromoteTo<int32_t>, 2> to_i32div2;
+  const ForPromoteVectors<TestPromoteTo<int32_t>, 1> to_i32div2;
   to_i32div2(uint16_t());
   to_i32div2(int16_t());
 
-  const ForPartialVectors<TestPromoteTo<int32_t>, 4> to_i32div4;
+  const ForPromoteVectors<TestPromoteTo<int32_t>, 2> to_i32div4;
   to_i32div4(uint8_t());
   to_i32div4(int8_t());
 
-  // Must test f16 separately because we can only load/store/convert them.
+  // Must test f16/bf16 separately because we can only load/store/convert them.
 
-#if HWY_CAP_INTEGER64
-  const ForPartialVectors<TestPromoteTo<uint64_t>, 2> to_u64div2;
+#if HWY_HAVE_INTEGER64
+  const ForPromoteVectors<TestPromoteTo<uint64_t>, 1> to_u64div2;
   to_u64div2(uint32_t());
 
-  const ForPartialVectors<TestPromoteTo<int64_t>, 2> to_i64div2;
+  const ForPromoteVectors<TestPromoteTo<int64_t>, 1> to_i64div2;
   to_i64div2(int32_t());
 #endif
 
-#if HWY_CAP_FLOAT64
-  const ForPartialVectors<TestPromoteTo<double>, 2> to_f64div2;
+#if HWY_HAVE_FLOAT64
+  const ForPromoteVectors<TestPromoteTo<double>, 1> to_f64div2;
   to_f64div2(int32_t());
   to_f64div2(float());
 #endif
@@ -206,102 +211,6 @@ bool IsFinite(T t) {
 template <typename T, HWY_IF_NOT_FLOAT(T)>
 bool IsFinite(T /*unused*/) {
   return true;
-}
-
-template <typename ToT>
-struct TestDemoteTo {
-  template <typename T, class D>
-  HWY_NOINLINE void operator()(T /*unused*/, D from_d) {
-    static_assert(!IsFloat<ToT>(), "Use TestDemoteToFloat for float output");
-    static_assert(sizeof(T) > sizeof(ToT), "Input type must be wider");
-    const Rebind<ToT, D> to_d;
-
-    const size_t N = Lanes(from_d);
-    auto from = AllocateAligned<T>(N);
-    auto expected = AllocateAligned<ToT>(N);
-
-    // Narrower range in the wider type, for clamping before we cast
-    const T min = LimitsMin<ToT>();
-    const T max = LimitsMax<ToT>();
-
-    RandomState rng;
-    for (size_t rep = 0; rep < 1000; ++rep) {
-      for (size_t i = 0; i < N; ++i) {
-        do {
-          const uint64_t bits = rng();
-          memcpy(&from[i], &bits, sizeof(T));
-        } while (!IsFinite(from[i]));
-        expected[i] = static_cast<ToT>(std::min(std::max(min, from[i]), max));
-      }
-
-      HWY_ASSERT_VEC_EQ(to_d, expected.get(),
-                        DemoteTo(to_d, Load(from_d, from.get())));
-    }
-  }
-};
-
-HWY_NOINLINE void TestAllDemoteToInt() {
-  ForDemoteVectors<TestDemoteTo<uint8_t>, 2>()(int16_t());
-  ForDemoteVectors<TestDemoteTo<uint8_t>, 4>()(int32_t());
-
-  ForDemoteVectors<TestDemoteTo<int8_t>, 2>()(int16_t());
-  ForDemoteVectors<TestDemoteTo<int8_t>, 4>()(int32_t());
-
-  const ForDemoteVectors<TestDemoteTo<uint16_t>, 2> to_u16;
-  to_u16(int32_t());
-
-  const ForDemoteVectors<TestDemoteTo<int16_t>, 2> to_i16;
-  to_i16(int32_t());
-}
-
-HWY_NOINLINE void TestAllDemoteToMixed() {
-#if HWY_CAP_FLOAT64
-  const ForDemoteVectors<TestDemoteTo<int32_t>, 2> to_i32;
-  to_i32(double());
-#endif
-}
-
-template <typename ToT>
-struct TestDemoteToFloat {
-  template <typename T, class D>
-  HWY_NOINLINE void operator()(T /*unused*/, D from_d) {
-    // For floats, we clamp differently and cannot call LimitsMin.
-    static_assert(IsFloat<ToT>(), "Use TestDemoteTo for integer output");
-    static_assert(sizeof(T) > sizeof(ToT), "Input type must be wider");
-    const Rebind<ToT, D> to_d;
-
-    const size_t N = Lanes(from_d);
-    auto from = AllocateAligned<T>(N);
-    auto expected = AllocateAligned<ToT>(N);
-
-    RandomState rng;
-    for (size_t rep = 0; rep < 1000; ++rep) {
-      for (size_t i = 0; i < N; ++i) {
-        do {
-          const uint64_t bits = rng();
-          memcpy(&from[i], &bits, sizeof(T));
-        } while (!IsFinite(from[i]));
-        const T magn = std::abs(from[i]);
-        const T max_abs = HighestValue<ToT>();
-        // NOTE: std:: version from C++11 cmath is not defined in RVV GCC, see
-        // https://lists.freebsd.org/pipermail/freebsd-current/2014-January/048130.html
-        const T clipped = copysign(std::min(magn, max_abs), from[i]);
-        expected[i] = static_cast<ToT>(clipped);
-      }
-
-      HWY_ASSERT_VEC_EQ(to_d, expected.get(),
-                        DemoteTo(to_d, Load(from_d, from.get())));
-    }
-  }
-};
-
-HWY_NOINLINE void TestAllDemoteToFloat() {
-  // Must test f16 separately because we can only load/store/convert them.
-
-#if HWY_CAP_FLOAT64
-  const ForDemoteVectors<TestDemoteToFloat<float>, 2> to_float;
-  to_float(double());
-#endif
 }
 
 template <class D>
@@ -338,6 +247,7 @@ AlignedFreeUniquePtr<float[]> F16TestCases(D d, size_t& padded) {
 struct TestF16 {
   template <typename TF32, class DF32>
   HWY_NOINLINE void operator()(TF32 /*t*/, DF32 d32) {
+#if HWY_HAVE_FLOAT16
     size_t padded;
     auto in = F16TestCases(d32, padded);
     using TF16 = float16_t;
@@ -350,10 +260,75 @@ struct TestF16 {
       Store(DemoteTo(d16, loaded), d16, temp16.get());
       HWY_ASSERT_VEC_EQ(d32, loaded, PromoteTo(d32, Load(d16, temp16.get())));
     }
+#else
+    (void)d32;
+#endif
   }
 };
 
-HWY_NOINLINE void TestAllF16() { ForDemoteVectors<TestF16, 2>()(float()); }
+HWY_NOINLINE void TestAllF16() { ForDemoteVectors<TestF16>()(float()); }
+
+template <class D>
+AlignedFreeUniquePtr<float[]> BF16TestCases(D d, size_t& padded) {
+  const float test_cases[] = {
+      // +/- 1
+      1.0f, -1.0f,
+      // +/- 0
+      0.0f, -0.0f,
+      // near 0
+      0.25f, -0.25f,
+      // +/- integer
+      4.0f, -32.0f,
+      // positive near limit
+      3.389531389251535E38f, 1.99384199368e+38f,
+      // negative near limit
+      -3.389531389251535E38f, -1.99384199368e+38f,
+      // positive +/- delta
+      2.015625f, 3.984375f,
+      // negative +/- delta
+      -2.015625f, -3.984375f,
+  };
+  const size_t kNumTestCases = sizeof(test_cases) / sizeof(test_cases[0]);
+  const size_t N = Lanes(d);
+  padded = RoundUpTo(kNumTestCases, N);  // allow loading whole vectors
+  auto in = AllocateAligned<float>(padded);
+  auto expected = AllocateAligned<float>(padded);
+  std::copy(test_cases, test_cases + kNumTestCases, in.get());
+  std::fill(in.get() + kNumTestCases, in.get() + padded, 0.0f);
+  return in;
+}
+
+struct TestBF16 {
+  template <typename TF32, class DF32>
+  HWY_NOINLINE void operator()(TF32 /*t*/, DF32 d32) {
+#if !defined(HWY_EMULATE_SVE)
+    size_t padded;
+    auto in = BF16TestCases(d32, padded);
+    using TBF16 = bfloat16_t;
+#if HWY_TARGET == HWY_SCALAR
+    const Rebind<TBF16, DF32> dbf16;  // avoid 4/2 = 2 lanes
+#else
+    const Repartition<TBF16, DF32> dbf16;
+#endif
+    const Half<decltype(dbf16)> dbf16_half;
+    const size_t N = Lanes(d32);
+    HWY_ASSERT(Lanes(dbf16_half) <= N);
+    auto temp16 = AllocateAligned<TBF16>(N);
+
+    for (size_t i = 0; i < padded; i += N) {
+      const auto loaded = Load(d32, &in[i]);
+      const auto v16 = DemoteTo(dbf16_half, loaded);
+      Store(v16, dbf16_half, temp16.get());
+      const auto v16_loaded = Load(dbf16_half, temp16.get());
+      HWY_ASSERT_VEC_EQ(d32, loaded, PromoteTo(d32, v16_loaded));
+    }
+#else
+    (void)d32;
+#endif
+  }
+};
+
+HWY_NOINLINE void TestAllBF16() { ForShrinkableVectors<TestBF16>()(float()); }
 
 struct TestConvertU8 {
   template <typename T, class D>
@@ -367,7 +342,7 @@ struct TestConvertU8 {
 };
 
 HWY_NOINLINE void TestAllConvertU8() {
-  ForDemoteVectors<TestConvertU8, 4>()(uint32_t());
+  ForDemoteVectors<TestConvertU8, 2>()(uint32_t());
 }
 
 // Separate function to attempt to work around a compiler bug on ARM: when this
@@ -376,28 +351,88 @@ struct TestIntFromFloatHuge {
   template <typename TF, class DF>
   HWY_NOINLINE void operator()(TF /*unused*/, const DF df) {
     // Still does not work, although ARMv7 manual says that float->int
-    // saturates, i.e. chooses the nearest representable value.
-#if HWY_TARGET != HWY_NEON
+    // saturates, i.e. chooses the nearest representable value. Also causes
+    // out-of-memory for MSVC.
+#if HWY_TARGET != HWY_NEON && !HWY_COMPILER_MSVC
     using TI = MakeSigned<TF>;
     const Rebind<TI, DF> di;
 
-    // Huge positive (lvalue works around GCC bug, tested with 10.2.1, where
-    // the expected i32 value is otherwise 0x80..00).
-    const auto expected_max = Set(di, LimitsMax<TI>());
-    HWY_ASSERT_VEC_EQ(di, expected_max, ConvertTo(di, Set(df, TF(1E20))));
+    // Workaround for incorrect 32-bit GCC codegen for SSSE3 - Print-ing
+    // the expected lvalue also seems to prevent the issue.
+    const size_t N = Lanes(df);
+    auto expected = AllocateAligned<TI>(N);
 
-    // Huge negative (also lvalue for safety, but GCC bug was not triggered)
-    const auto expected_min = Set(di, LimitsMin<TI>());
-    HWY_ASSERT_VEC_EQ(di, expected_min, ConvertTo(di, Set(df, TF(-1E20))));
+    // Huge positive
+    Store(Set(di, LimitsMax<TI>()), di, expected.get());
+    HWY_ASSERT_VEC_EQ(di, expected.get(), ConvertTo(di, Set(df, TF(1E20))));
+
+    // Huge negative
+    Store(Set(di, LimitsMin<TI>()), di, expected.get());
+    HWY_ASSERT_VEC_EQ(di, expected.get(), ConvertTo(di, Set(df, TF(-1E20))));
 #else
     (void)df;
 #endif
   }
 };
 
-struct TestIntFromFloat {
+class TestIntFromFloat {
   template <typename TF, class DF>
-  HWY_NOINLINE void operator()(TF /*unused*/, const DF df) {
+  static HWY_NOINLINE void TestPowers(TF /*unused*/, const DF df) {
+    using TI = MakeSigned<TF>;
+    const Rebind<TI, DF> di;
+    constexpr size_t kBits = sizeof(TF) * 8;
+
+    // Powers of two, plus offsets to set some mantissa bits.
+    const int64_t ofs_table[3] = {0LL, 3LL << (kBits / 2), 1LL << (kBits - 15)};
+    for (int sign = 0; sign < 2; ++sign) {
+      for (size_t shift = 0; shift < kBits - 1; ++shift) {
+        for (int64_t ofs : ofs_table) {
+          const int64_t mag = (int64_t(1) << shift) + ofs;
+          const int64_t val = sign ? mag : -mag;
+          HWY_ASSERT_VEC_EQ(di, Set(di, static_cast<TI>(val)),
+                            ConvertTo(di, Set(df, static_cast<TF>(val))));
+        }
+      }
+    }
+  }
+
+  template <typename TF, class DF>
+  static HWY_NOINLINE void TestRandom(TF /*unused*/, const DF df) {
+    using TI = MakeSigned<TF>;
+    const Rebind<TI, DF> di;
+    const size_t N = Lanes(df);
+
+    // TF does not have enough precision to represent TI.
+    const double min = static_cast<double>(LimitsMin<TI>());
+    const double max = static_cast<double>(LimitsMax<TI>());
+
+    // Also check random values.
+    auto from = AllocateAligned<TF>(N);
+    auto expected = AllocateAligned<TI>(N);
+    RandomState rng;
+    for (size_t rep = 0; rep < AdjustedReps(1000); ++rep) {
+      for (size_t i = 0; i < N; ++i) {
+        do {
+          const uint64_t bits = rng();
+          memcpy(&from[i], &bits, sizeof(TF));
+        } while (!std::isfinite(from[i]));
+        if (from[i] >= max) {
+          expected[i] = LimitsMax<TI>();
+        } else if (from[i] <= min) {
+          expected[i] = LimitsMin<TI>();
+        } else {
+          expected[i] = static_cast<TI>(from[i]);
+        }
+      }
+
+      HWY_ASSERT_VEC_EQ(di, expected.get(),
+                        ConvertTo(di, Load(df, from.get())));
+    }
+  }
+
+ public:
+  template <typename TF, class DF>
+  HWY_NOINLINE void operator()(TF tf, const DF df) {
     using TI = MakeSigned<TF>;
     const Rebind<TI, DF> di;
     const size_t N = Lanes(df);
@@ -423,32 +458,8 @@ struct TestIntFromFloat {
     HWY_ASSERT_VEC_EQ(di, Iota(di, -TI(N + 1)),
                       ConvertTo(di, Iota(df, -TF(N + 1) - eps)));
 
-    // TF does not have enough precision to represent TI.
-    const double min = static_cast<double>(LimitsMin<TI>());
-    const double max = static_cast<double>(LimitsMax<TI>());
-
-    // Also check random values.
-    auto from = AllocateAligned<TF>(N);
-    auto expected = AllocateAligned<TI>(N);
-    RandomState rng;
-    for (size_t rep = 0; rep < 1000; ++rep) {
-      for (size_t i = 0; i < N; ++i) {
-        do {
-          const uint64_t bits = rng();
-          memcpy(&from[i], &bits, sizeof(TF));
-        } while (!std::isfinite(from[i]));
-        if (from[i] >= max) {
-          expected[i] = LimitsMax<TI>();
-        } else if (from[i] <= min) {
-          expected[i] = LimitsMin<TI>();
-        } else {
-          expected[i] = static_cast<TI>(from[i]);
-        }
-      }
-
-      HWY_ASSERT_VEC_EQ(di, expected.get(),
-                        ConvertTo(di, Load(df, from.get())));
-    }
+    TestPowers(tf, df);
+    TestRandom(tf, df);
   }
 };
 
@@ -458,10 +469,10 @@ HWY_NOINLINE void TestAllIntFromFloat() {
 }
 
 struct TestFloatFromInt {
-  template <typename TI, class DI>
-  HWY_NOINLINE void operator()(TI /*unused*/, const DI di) {
-    using TF = MakeFloat<TI>;
-    const Rebind<TF, DI> df;
+  template <typename TF, class DF>
+  HWY_NOINLINE void operator()(TF /*unused*/, const DF df) {
+    using TI = MakeSigned<TF>;
+    const RebindToSigned<DF> di;
     const size_t N = Lanes(df);
 
     // Integer positive
@@ -481,10 +492,7 @@ struct TestFloatFromInt {
 };
 
 HWY_NOINLINE void TestAllFloatFromInt() {
-  ForPartialVectors<TestFloatFromInt>()(int32_t());
-#if HWY_CAP_FLOAT64 && HWY_CAP_INTEGER64
-  ForPartialVectors<TestFloatFromInt>()(int64_t());
-#endif
+  ForFloatTypes(ForPartialVectors<TestFloatFromInt>());
 }
 
 struct TestI32F64 {
@@ -495,39 +503,22 @@ struct TestI32F64 {
     const size_t N = Lanes(df);
 
     // Integer positive
-    HWY_ASSERT_VEC_EQ(di, Iota(di, TI(4)), DemoteTo(di, Iota(df, TF(4.0))));
     HWY_ASSERT_VEC_EQ(df, Iota(df, TF(4.0)), PromoteTo(df, Iota(di, TI(4))));
 
     // Integer negative
-    HWY_ASSERT_VEC_EQ(di, Iota(di, -TI(N)), DemoteTo(di, Iota(df, -TF(N))));
     HWY_ASSERT_VEC_EQ(df, Iota(df, -TF(N)), PromoteTo(df, Iota(di, -TI(N))));
 
     // Above positive
-    HWY_ASSERT_VEC_EQ(di, Iota(di, TI(2)), DemoteTo(di, Iota(df, TF(2.001))));
     HWY_ASSERT_VEC_EQ(df, Iota(df, TF(2.0)), PromoteTo(df, Iota(di, TI(2))));
 
     // Below positive
-    HWY_ASSERT_VEC_EQ(di, Iota(di, TI(3)), DemoteTo(di, Iota(df, TF(3.9999))));
     HWY_ASSERT_VEC_EQ(df, Iota(df, TF(4.0)), PromoteTo(df, Iota(di, TI(4))));
 
-    const TF eps = static_cast<TF>(0.0001);
     // Above negative
-    HWY_ASSERT_VEC_EQ(di, Iota(di, -TI(N)),
-                      DemoteTo(di, Iota(df, -TF(N + 1) + eps)));
     HWY_ASSERT_VEC_EQ(df, Iota(df, TF(-4.0)), PromoteTo(df, Iota(di, TI(-4))));
 
     // Below negative
-    HWY_ASSERT_VEC_EQ(di, Iota(di, -TI(N + 1)),
-                      DemoteTo(di, Iota(df, -TF(N + 1) - eps)));
     HWY_ASSERT_VEC_EQ(df, Iota(df, TF(-2.0)), PromoteTo(df, Iota(di, TI(-2))));
-
-    // Huge positive float
-    HWY_ASSERT_VEC_EQ(di, Set(di, LimitsMax<TI>()),
-                      DemoteTo(di, Set(df, TF(1E12))));
-
-    // Huge negative float
-    HWY_ASSERT_VEC_EQ(di, Set(di, LimitsMin<TI>()),
-                      DemoteTo(di, Set(df, TF(-1E12))));
 
     // Max positive int
     HWY_ASSERT_VEC_EQ(df, Set(df, TF(LimitsMax<TI>())),
@@ -540,8 +531,8 @@ struct TestI32F64 {
 };
 
 HWY_NOINLINE void TestAllI32F64() {
-#if HWY_CAP_FLOAT64
-  ForDemoteVectors<TestI32F64, 2>()(double());
+#if HWY_HAVE_FLOAT64
+  ForDemoteVectors<TestI32F64>()(double());
 #endif
 }
 
@@ -552,17 +543,23 @@ HWY_NOINLINE void TestAllI32F64() {
 HWY_AFTER_NAMESPACE();
 
 #if HWY_ONCE
+
 namespace hwy {
 HWY_BEFORE_TEST(HwyConvertTest);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllBitCast);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllPromoteTo);
-HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllDemoteToInt);
-HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllDemoteToMixed);
-HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllDemoteToFloat);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllF16);
+HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllBF16);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllConvertU8);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllIntFromFloat);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllFloatFromInt);
 HWY_EXPORT_AND_TEST_P(HwyConvertTest, TestAllI32F64);
 }  // namespace hwy
+
+// Ought not to be necessary, but without this, no tests run on RVV.
+int main(int argc, char** argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
+}
+
 #endif

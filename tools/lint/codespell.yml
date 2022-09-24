@@ -35,7 +35,6 @@ codespell:
         - python/mach/docs/
         - python/mozlint/
         - remote/doc/
-        - remote/marionette/doc/
         - security/manager/locales/en-US/
         - services/sync/locales/en-US/
         - taskcluster/docs/
@@ -57,8 +56,10 @@ codespell:
         - tools/tryselect/
         - uriloader/docs/
     exclude:
+        - devtools/docs/contributor/tools/storage/
         - tools/lint/cpp/mingw-headers.txt
         - tools/lint/test/test_codespell.py
+        - "**/package-lock.json"
     # List of extensions coming from:
     # tools/lint/{flake8,eslint}.yml
     # tools/mach_commands.py (clang-format)
@@ -68,6 +69,7 @@ codespell:
         - js
         - jsm
         - jxs
+        - mjs
         - xml
         - html
         - xhtml

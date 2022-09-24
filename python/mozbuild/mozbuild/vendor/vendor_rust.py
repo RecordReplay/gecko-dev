@@ -9,14 +9,13 @@ import hashlib
 import io
 import logging
 import os
-import platform
 import re
 import subprocess
 import sys
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from distutils.version import LooseVersion
 from itertools import dropwhile
-from datetime import datetime
+from mozboot.util import MINIMUM_RUST_VERSION
 
 import pytoml
 import mozpack.path as mozpath
@@ -63,6 +62,36 @@ Cargo.lock to the HEAD version, run `git checkout -- Cargo.lock` or
 """
 
 
+PACKAGES_WE_ALWAYS_WANT_AN_OVERRIDE_OF = [
+    "autocfg",
+    "cmake",
+    "vcpkg",
+]
+
+
+# Historically duplicated crates. Eventually we want this list to be empty.
+# If you do need to make changes increasing the number of duplicates, please
+# add a comment as to why.
+TOLERATED_DUPES = {
+    "arrayvec": 2,
+    "base64": 3,
+    "bytes": 3,
+    "cfg-if": 2,
+    "crossbeam-deque": 2,
+    "crossbeam-epoch": 2,
+    "crossbeam-utils": 3,
+    "futures": 2,
+    "itertools": 2,
+    "libloading": 2,
+    "memmap2": 2,
+    "memoffset": 2,
+    "mio": 2,
+    "pin-project-lite": 2,
+    "target-lexicon": 2,
+    "tokio": 3,
+}
+
+
 class VendorRust(MozbuildObject):
     def get_cargo_path(self):
         try:
@@ -84,10 +113,7 @@ class VendorRust(MozbuildObject):
 
     def check_cargo_version(self, cargo):
         """
-        Ensure that cargo is new enough. cargo 1.42 fixed some issue with
-        the vendor command. cargo 1.47 similarly did so for windows, but as of
-        this writing is the current nightly, so we restrict this check only to
-        the platform it's actually required on
+        Ensure that Cargo is new enough.
         """
         out = (
             subprocess.check_output([cargo, "--version"])
@@ -97,36 +123,14 @@ class VendorRust(MozbuildObject):
         if not out.startswith("cargo"):
             return False
         version = LooseVersion(out.split()[1])
-        if platform.system() == "Windows":
-            if version >= "1.47" and "nightly" in out:
-                # parsing the date from "cargo 1.47.0-nightly (aa6872140 2020-07-23)"
-                date_format = "%Y-%m-%d"
-                req_nightly = datetime.strptime("2020-07-23", date_format)
-                nightly = datetime.strptime(
-                    out.rstrip(")").rsplit(" ", 1)[1], date_format
-                )
-                if nightly < req_nightly:
-                    self.log(
-                        logging.ERROR,
-                        "cargo_version",
-                        {},
-                        "Cargo >= 1.47.0-nightly (2020-07-23) required (update your nightly)",
-                    )
-                    return False
-            elif version < "1.47":
-                self.log(
-                    logging.ERROR,
-                    "cargo_version",
-                    {},
-                    "Cargo >= 1.47 required (install Rust 1.47 or newer)",
-                )
-                return False
-        elif version < "1.42":
+        if version < MINIMUM_RUST_VERSION:
             self.log(
                 logging.ERROR,
                 "cargo_version",
                 {},
-                "Cargo >= 1.42 required (install Rust 1.42 or newer)",
+                "Cargo >= {0} required (install Rust {0} or newer)".format(
+                    MINIMUM_RUST_VERSION
+                ),
             )
             return False
         self.log(logging.DEBUG, "cargo_version", {}, "cargo is new enough")
@@ -257,6 +261,14 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
         "BSD-3-Clause": [],
     }
 
+    # ICU4X is distributed as individual crates that all share the same LICENSE
+    # that will need to be individually added to the allow list below. We'll
+    # define the SHA256 once here, to make the review process easier as new
+    # ICU4X crates are vendored into the tree.
+    ICU4X_LICENSE_SHA256 = (
+        "02420cc1b4c26d9a3318d60fd57048d015831249a5b776a1ada75cd227e78630"
+    )
+
     # This whitelist should only be used for packages that use a
     # license-file and for which the license-file entry has been
     # reviewed.  The table is keyed by package names and maps to the
@@ -271,6 +283,22 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
         # we're whitelisting this fuchsia crate because it doesn't get built in the final
         # product but has a license-file that needs ignoring
         "fuchsia-cprng": "03b114f53e6587a398931762ee11e2395bfdba252a329940e2c8c9e81813845b",
+        # ICU4X crates, see comment above.
+        "fixed_decimal": ICU4X_LICENSE_SHA256,
+        "icu_plurals": ICU4X_LICENSE_SHA256,
+        "icu_datetime": ICU4X_LICENSE_SHA256,
+        "icu_decimal": ICU4X_LICENSE_SHA256,
+        "icu_locale_canonicalizer": ICU4X_LICENSE_SHA256,
+        "icu_locid": ICU4X_LICENSE_SHA256,
+        "icu_locid_macros": ICU4X_LICENSE_SHA256,
+        "icu_provider": ICU4X_LICENSE_SHA256,
+        "icu_provider_macros": ICU4X_LICENSE_SHA256,
+        "icu": ICU4X_LICENSE_SHA256,
+        "icu_uniset": ICU4X_LICENSE_SHA256,
+        "litemap": ICU4X_LICENSE_SHA256,
+        "writeable": ICU4X_LICENSE_SHA256,
+        "yoke": ICU4X_LICENSE_SHA256,
+        "yoke-derive": ICU4X_LICENSE_SHA256,
     }
 
     @staticmethod
@@ -291,6 +319,13 @@ Please commit or stash these changes before vendoring, or re-run with `--ignore-
         But I have no idea how you can meaningfully AND licenses, so
         we will abort if that is detected. We'll handle `/` and OR as
         equivalent and approve is any is in our approved list."""
+
+        # This specific AND combination has been reviewed for encoding_rs.
+        if (
+            license_string == "(Apache-2.0 OR MIT) AND BSD-3-Clause"
+            and package == "encoding_rs"
+        ):
+            return True
 
         if re.search(r"\s+AND", license_string):
             return False
@@ -480,8 +515,124 @@ license file's hash.
         # changes. See bug 1324462
         subprocess.check_call([cargo, "update", "-p", "gkrust"], cwd=self.topsrcdir)
 
+        with open(os.path.join(self.topsrcdir, "Cargo.lock")) as fh, open(
+            os.path.join(self.topsrcdir, "Cargo.toml")
+        ) as toml_fh:
+            cargo_lock = pytoml.load(fh)
+            cargo_toml = pytoml.load(toml_fh)
+            patches = cargo_toml.get("patch", {}).get("crates-io", {})
+            failed = False
+            for package in cargo_lock.get("patch", {}).get("unused", []):
+                self.log(
+                    logging.ERROR,
+                    "unused_patch",
+                    {"crate": package["name"]},
+                    """Unused patch in top-level Cargo.toml for {crate}.""",
+                )
+                failed = True
+
+            grouped = defaultdict(list)
+            for package in cargo_lock["package"]:
+                if package["name"] in PACKAGES_WE_ALWAYS_WANT_AN_OVERRIDE_OF:
+                    # When the in-tree version is used, there is `source` for
+                    # it in Cargo.lock, which is what we expect.
+                    if package.get("source"):
+                        self.log(
+                            logging.ERROR,
+                            "non_overridden",
+                            {
+                                "crate": package["name"],
+                                "version": package["version"],
+                                "source": package["source"],
+                            },
+                            "Crate {crate} v{version} must be overridden but isn't "
+                            "and comes from {source}.",
+                        )
+                        failed = True
+                grouped[package["name"]].append(package)
+
+            for name, packages in grouped.items():
+                num = len(packages)
+                # Allow to have crates in build/rust that provide older versions
+                # of crates based on newer ones, implying there are at least two
+                # crates with the same name, one of them being under build/rust.
+                if patches.get(name, {}).get("path", "").startswith("build/rust"):
+                    num -= 1
+                expected = TOLERATED_DUPES.get(name, 1)
+                if num > expected:
+                    self.log(
+                        logging.ERROR,
+                        "duplicate_crate",
+                        {
+                            "crate": name,
+                            "num": num,
+                            "expected": expected,
+                            "file": __file__,
+                        },
+                        "There are {num} different versions of crate {crate} "
+                        "(expected {expected}). Please void the extra duplication "
+                        "or adjust TOLERATED_DUPES in {file} if not possible.",
+                    )
+                    failed = True
+                elif num < expected and num > 1:
+                    self.log(
+                        logging.ERROR,
+                        "less_duplicate_crate",
+                        {
+                            "crate": name,
+                            "num": num,
+                            "expected": expected,
+                            "file": __file__,
+                        },
+                        "There are {num} different versions of crate {crate} "
+                        "(expected {expected}). Please adjust TOLERATED_DUPES in "
+                        "{file} to reflect this improvement.",
+                    )
+                    failed = True
+                elif num < expected and num > 0:
+                    self.log(
+                        logging.ERROR,
+                        "less_duplicate_crate",
+                        {
+                            "crate": name,
+                            "file": __file__,
+                        },
+                        "Crate {crate} is not duplicated anymore. "
+                        "Please adjust TOLERATED_DUPES in {file} to reflect this improvement.",
+                    )
+                    failed = True
+                elif name in TOLERATED_DUPES and expected <= 1:
+                    self.log(
+                        logging.ERROR,
+                        "broken_allowed_dupes",
+                        {
+                            "crate": name,
+                            "file": __file__,
+                        },
+                        "Crate {crate} is not duplicated. Remove it from "
+                        "TOLERATED_DUPES in {file}.",
+                    )
+                    failed = True
+
+            for name in TOLERATED_DUPES:
+                if name not in grouped:
+                    self.log(
+                        logging.ERROR,
+                        "outdated_allowed_dupes",
+                        {
+                            "crate": name,
+                            "file": __file__,
+                        },
+                        "Crate {crate} is not in Cargo.lock anymore. Remove it from "
+                        "TOLERATED_DUPES in {file}.",
+                    )
+                    failed = True
+
+            if failed:
+                sys.exit(1)
+
         output = subprocess.check_output(
-            [cargo, "vendor", vendor_dir], stderr=subprocess.STDOUT, cwd=self.topsrcdir
+            [cargo, "vendor", vendor_dir], cwd=self.topsrcdir
         ).decode("UTF-8")
 
         # Get the snippet of configuration that cargo vendor outputs, and

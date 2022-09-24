@@ -257,6 +257,12 @@ void SVGRenderingObserver::AttributeChanged(dom::Element* aElement,
                                             nsAtom* aAttribute,
                                             int32_t aModType,
                                             const nsAttrValue* aOldValue) {
+  if (aElement->IsInNativeAnonymousSubtree()) {
+    // Don't observe attribute changes in native-anonymous subtrees like
+    // scrollbars.
+    return;
+  }
+
   // An attribute belonging to the element that we are observing *or one of its
   // descendants* has changed.
   //
@@ -858,7 +864,10 @@ class SVGFilterObserverListForCanvasContext final
 
 void SVGFilterObserverListForCanvasContext::OnRenderingChange() {
   if (!mContext) {
-    MOZ_CRASH("GFX: This should never be called without a context");
+    NS_WARNING(
+        "GFX: This should never be called without a context, except during "
+        "cycle collection (when DetachFromContext has been called)");
+    return;
   }
   // Refresh the cached FilterDescription in mContext->CurrentState().filter.
   // If this filter is not at the top of the state stack, we'll refresh the
@@ -1723,7 +1732,8 @@ already_AddRefed<nsIURI> SVGObserverUtils::GetBaseURLForLocalRef(
 already_AddRefed<URLAndReferrerInfo> SVGObserverUtils::GetFilterURI(
     nsIFrame* aFrame, const StyleFilter& aFilter) {
   MOZ_ASSERT(!aFrame->StyleEffects()->mFilters.IsEmpty() ||
-             !aFrame->StyleEffects()->mBackdropFilters.IsEmpty());
+             !aFrame->StyleEffects()->mBackdropFilters.IsEmpty() ||
+             !aFrame->GetContent()->GetParent());
   MOZ_ASSERT(aFilter.IsUrl());
   return ResolveURLUsingLocalRef(aFrame, aFilter.AsUrl());
 }

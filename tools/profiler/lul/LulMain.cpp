@@ -799,14 +799,15 @@ class PriMap {
 // LUL                                                        //
 ////////////////////////////////////////////////////////////////
 
-#define LUL_LOG(_str)                                           \
-  do {                                                          \
-    char buf[200];                                              \
-    SprintfLiteral(buf, "LUL: pid %d tid %d lul-obj %p: %s",    \
-                   profiler_current_process_id(),               \
-                   profiler_current_thread_id(), this, (_str)); \
-    buf[sizeof(buf) - 1] = 0;                                   \
-    mLog(buf);                                                  \
+#define LUL_LOG(_str)                                                          \
+  do {                                                                         \
+    char buf[200];                                                             \
+    SprintfLiteral(buf, "LUL: pid %" PRIu64 " tid %" PRIu64 " lul-obj %p: %s", \
+                   uint64_t(profiler_current_process_id().ToNumber()),         \
+                   uint64_t(profiler_current_thread_id().ToNumber()), this,    \
+                   (_str));                                                    \
+    buf[sizeof(buf) - 1] = 0;                                                  \
+    mLog(buf);                                                                 \
   } while (0)
 
 LUL::LUL(void (*aLog)(const char*))
@@ -1421,10 +1422,7 @@ void LUL::Unwind(/*OUT*/ uintptr_t* aFramePCs,
       }
     }
 
-    // For the innermost frame, the IA value is what we need.  For all
-    // other frames, it's actually the return address, so back up one
-    // byte so as to get it into the calling instruction.
-    aFramePCs[*aFramesUsed] = ia.Value() - (*aFramesUsed == 0 ? 0 : 1);
+    aFramePCs[*aFramesUsed] = ia.Value();
     aFrameSPs[*aFramesUsed] = sp.Valid() ? sp.Value() : 0;
     (*aFramesUsed)++;
 

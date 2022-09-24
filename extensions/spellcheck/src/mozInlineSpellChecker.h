@@ -11,6 +11,7 @@
 #include "nsIEditorSpellCheck.h"
 #include "nsIInlineSpellChecker.h"
 #include "mozInlineSpellWordUtil.h"
+#include "mozilla/EditorDOMPoint.h"
 #include "mozilla/Result.h"
 #include "nsRange.h"
 #include "nsWeakReference.h"
@@ -24,6 +25,7 @@ namespace mozilla {
 class EditorBase;
 class EditorSpellCheck;
 enum class EditSubAction : int32_t;
+enum class JoinNodesDirection;
 
 namespace dom {
 class Event;
@@ -163,7 +165,7 @@ class mozInlineSpellChecker final : public nsIInlineSpellChecker,
   RefPtr<mozilla::EditorSpellCheck> mPendingSpellCheck;
 
   int32_t mNumWordsInSpellSelection;
-  int32_t mMaxNumWordsInSpellSelection;
+  const int32_t mMaxNumWordsInSpellSelection;
 
   // we need to keep track of the current text position in the document
   // so we can spell check the old word when the user clicks around the
@@ -220,10 +222,6 @@ class mozInlineSpellChecker final : public nsIInlineSpellChecker,
   // update the cached value whenever the list of available dictionaries changes
   static void UpdateCanEnableInlineSpellChecking();
 
-  nsresult OnBlur(mozilla::dom::Event* aEvent);
-  nsresult OnMouseClick(mozilla::dom::Event* aMouseEvent);
-  nsresult OnKeyPress(mozilla::dom::Event* aKeyEvent);
-
   mozInlineSpellChecker();
 
   // spell checks all of the words between two nodes
@@ -253,7 +251,7 @@ class mozInlineSpellChecker final : public nsIInlineSpellChecker,
   // helper routine to determine if a point is inside of the passed in
   // selection.
   static nsresult IsPointInSelection(mozilla::dom::Selection& aSelection,
-                                     nsINode* aNode, int32_t aOffset,
+                                     nsINode* aNode, uint32_t aOffset,
                                      nsRange** aRange);
 
   nsresult CleanupRangesInSelection(mozilla::dom::Selection* aSelection);
@@ -286,11 +284,6 @@ class mozInlineSpellChecker final : public nsIInlineSpellChecker,
   nsresult SaveCurrentSelectionPosition();
 
   nsresult ResumeCheck(mozilla::UniquePtr<mozInlineSpellStatus>&& aStatus);
-
-  // Those methods are called when mEditorBase splits a node or joins the
-  // given nodes.
-  void DidSplitNode(nsINode* aExistingRightNode, nsINode* aNewLeftNode);
-  void DidJoinNodes(nsINode& aRightNode, nsINode& aLeftNode);
 
   nsresult SpellCheckAfterEditorChange(mozilla::EditSubAction aEditSubAction,
                                        mozilla::dom::Selection& aSelection,
@@ -336,6 +329,10 @@ class mozInlineSpellChecker final : public nsIInlineSpellChecker,
 
   void StartToListenToEditSubActions() { mIsListeningToEditSubActions = true; }
   void EndListeningToEditSubActions() { mIsListeningToEditSubActions = false; }
+
+  void OnBlur(mozilla::dom::Event& aEvent);
+  void OnMouseClick(mozilla::dom::Event& aMouseEvent);
+  void OnKeyDown(mozilla::dom::Event& aKeyEvent);
 };
 
 #endif  // #ifndef mozilla_mozInlineSpellChecker_h

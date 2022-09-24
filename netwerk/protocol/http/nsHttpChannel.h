@@ -7,7 +7,6 @@
 #ifndef nsHttpChannel_h__
 #define nsHttpChannel_h__
 
-#include "DelayHttpChannelQueue.h"
 #include "HttpBaseChannel.h"
 #include "nsTArray.h"
 #include "nsICachingChannel.h"
@@ -17,6 +16,7 @@
 #include "nsIProtocolProxyCallback.h"
 #include "nsIHttpAuthenticableChannel.h"
 #include "nsIAsyncVerifyRedirectCallback.h"
+#include "nsIEarlyHintObserver.h"
 #include "nsIThreadRetargetableRequest.h"
 #include "nsIThreadRetargetableStreamListener.h"
 #include "nsWeakReference.h"
@@ -76,7 +76,7 @@ class nsHttpChannel final : public HttpBaseChannel,
                             public nsICorsPreflightCallback,
                             public nsIRaceCacheWithNetwork,
                             public nsIRequestTailUnblockCallback,
-                            public nsITimerCallback {
+                            public nsIEarlyHintObserver {
  public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIREQUESTOBSERVER
@@ -93,8 +93,8 @@ class nsHttpChannel final : public HttpBaseChannel,
   NS_DECL_NSIDNSLISTENER
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_HTTPCHANNEL_IID)
   NS_DECL_NSIRACECACHEWITHNETWORK
-  NS_DECL_NSITIMERCALLBACK
   NS_DECL_NSIREQUESTTAILUNBLOCKCALLBACK
+  NS_DECL_NSIEARLYHINTOBSERVER
 
   // nsIHttpAuthenticableChannel. We can't use
   // NS_DECL_NSIHTTPAUTHENTICABLECHANNEL because it duplicates cancel() and
@@ -159,6 +159,8 @@ class nsHttpChannel final : public HttpBaseChannel,
   NS_IMETHOD SetClassFlags(uint32_t inFlags) override;
   NS_IMETHOD AddClassFlags(uint32_t inFlags) override;
   NS_IMETHOD ClearClassFlags(uint32_t inFlags) override;
+  NS_IMETHOD SetClassOfService(ClassOfService cos) override;
+  NS_IMETHOD SetIncremental(bool incremental) override;
 
   // nsIResumableChannel
   NS_IMETHOD ResumeAt(uint64_t startPos, const nsACString& entityID) override;
@@ -189,6 +191,8 @@ class nsHttpChannel final : public HttpBaseChannel,
   NS_IMETHOD LogMimeTypeMismatch(const nsACString& aMessageName, bool aWarning,
                                  const nsAString& aURL,
                                  const nsAString& aContentType) override;
+
+  NS_IMETHOD SetEarlyHintObserver(nsIEarlyHintObserver* aObserver) override;
 
   void SetWarningReporter(HttpChannelSecurityWarningReporter* aReporter);
   HttpChannelSecurityWarningReporter* GetWarningReporter();
@@ -250,14 +254,12 @@ class nsHttpChannel final : public HttpBaseChannel,
   using ChildEndpointPromise =
       MozPromise<mozilla::ipc::Endpoint<extensions::PStreamFilterChild>, bool,
                  true>;
-  [[nodiscard]] RefPtr<ChildEndpointPromise> AttachStreamFilter(
-      base::ProcessId aChildProcessId);
+  [[nodiscard]] RefPtr<ChildEndpointPromise> AttachStreamFilter();
 
  private:  // used for alternate service validation
   RefPtr<TransactionObserver> mTransactionObserver;
 
  public:
-  void SetConnectionInfo(nsHttpConnectionInfo*);  // clones the argument
   void SetTransactionObserver(TransactionObserver* arg) {
     mTransactionObserver = arg;
   }
@@ -452,8 +454,7 @@ class nsHttpChannel final : public HttpBaseChannel,
    * Some basic consistency checks have been applied to the channel. Called
    * from ProcessSecurityHeaders.
    */
-  [[nodiscard]] nsresult ProcessHSTSHeader(nsITransportSecurityInfo* aSecInfo,
-                                           uint32_t aFlags);
+  [[nodiscard]] nsresult ProcessHSTSHeader(nsITransportSecurityInfo* aSecInfo);
 
   void InvalidateCacheEntryForLocation(const char* location);
   void AssembleCacheKey(const char* spec, uint32_t postID, nsACString& key);
@@ -505,6 +506,7 @@ class nsHttpChannel final : public HttpBaseChannel,
 
   void SetOriginHeader();
   void SetDoNotTrack();
+  void SetGlobalPrivacyControl();
 
   already_AddRefed<nsChannelClassifier> GetOrCreateChannelClassifier();
 
@@ -583,10 +585,15 @@ class nsHttpChannel final : public HttpBaseChannel,
   // Timestamp of the time the channel was suspended.
   mozilla::TimeStamp mSuspendTimestamp;
   mozilla::TimeStamp mOnCacheEntryCheckTimestamp;
-#ifdef MOZ_GECKO_PROFILER
-  // For the profiler markers
+
+  // Properties used for the profiler markers
+  // This keeps the timestamp for the start marker, to be reused for the end
+  // marker.
   mozilla::TimeStamp mLastStatusReported;
-#endif
+  // This is true when one end marker is output, so that we never output more
+  // than one.
+  bool mEndMarkerAdded = false;
+
   // Total time the channel spent suspended. This value is reported to
   // telemetry in nsHttpChannel::OnStartRequest().
   uint32_t mSuspendTotalTime{0};
@@ -728,6 +735,23 @@ class nsHttpChannel final : public HttpBaseChannel,
   // True if the channel is reading from cache.
   Atomic<bool> mIsReadingFromCache{false};
 
+  // nsITimerCallback is implemented on a subclass so that the name attribute
+  // doesn't conflict with the name attribute of the nsIRequest interface that
+  // might be present on the same object (as seen from JavaScript code).
+  class TimerCallback final : public nsITimerCallback, public nsINamed {
+   public:
+    NS_DECL_ISUPPORTS
+    NS_DECL_NSITIMERCALLBACK
+    NS_DECL_NSINAMED
+
+    explicit TimerCallback(nsHttpChannel* aChannel);
+
+   private:
+    ~TimerCallback() = default;
+
+    RefPtr<nsHttpChannel> mChannel;
+  };
+
   // These next members are only used in unit tests to delay the call to
   // cache->AsyncOpenURI in order to race the cache with the network.
   nsCOMPtr<nsITimer> mCacheOpenTimer;
@@ -774,7 +798,7 @@ class nsHttpChannel final : public HttpBaseChannel,
   bool mIgnoreCacheEntry{false};
   // Lock preventing SetupTransaction/MaybeCreateCacheEntryWhenRCWN and
   // OnCacheEntryCheck being called at the same time.
-  mozilla::Mutex mRCWNLock{"nsHttpChannel.mRCWNLock"};
+  mozilla::Mutex mRCWNLock MOZ_UNANNOTATED{"nsHttpChannel.mRCWNLock"};
 
   TimeStamp mNavigationStartTimeStamp;
 
@@ -806,6 +830,9 @@ class nsHttpChannel final : public HttpBaseChannel,
 
  private:  // cache telemetry
   bool mDidReval{false};
+
+  RefPtr<nsIEarlyHintObserver> mEarlyHintObserver;
+  Maybe<nsCString> mOpenerCallingScriptLocation;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpChannel, NS_HTTPCHANNEL_IID)

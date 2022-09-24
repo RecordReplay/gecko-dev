@@ -30,8 +30,6 @@ namespace units {
 struct RouteResult : UMemory {
     // A list of measures: a single measure for single units, multiple measures
     // for mixed units.
-    //
-    // TODO(icu-units/icu#21): figure out the right mixed unit API.
     MaybeStackVector<Measure> measures;
 
     // The output unit for this RouteResult. This may be a MIXED unit - for
@@ -109,7 +107,7 @@ namespace units {
  *
  * NOTE:
  *    the output units  and their limits will be extracted from the units preferences database by knowing
- *    the followings:
+ *    the following:
  *        - input unit
  *        - locale
  *        - usage

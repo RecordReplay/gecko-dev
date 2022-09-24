@@ -22,15 +22,17 @@ XPCOMUtils.defineLazyServiceGetter(
 );
 
 XPCOMUtils.defineLazyGetter(this, "Loader", () =>
-  ChromeUtils.import("resource://devtools/shared/Loader.jsm")
+  ChromeUtils.import("resource://devtools/shared/loader/Loader.jsm")
 );
 
 XPCOMUtils.defineLazyGetter(this, "DevToolsUtils", () =>
   Loader.require("devtools/shared/DevToolsUtils")
 );
 XPCOMUtils.defineLazyModuleGetters(this, {
-  WatchedDataHelpers:
-    "resource://devtools/server/actors/watcher/WatchedDataHelpers.jsm",
+  isWindowGlobalPartOfContext:
+    "resource://devtools/server/actors/watcher/browsing-context-helpers.jsm",
+  SessionDataHelpers:
+    "resource://devtools/server/actors/watcher/SessionDataHelpers.jsm",
 });
 
 // Name of the attribute into which we save data in `sharedData` object.
@@ -50,8 +52,8 @@ class DevToolsWorkerChild extends JSWindowActorChild {
     //       worker target on the worker thread ().
     // - forwardingPrefix: Prefix used by the JSWindowActorTransport pair to communicate
     //   between content and parent processes.
-    // - watchedData: Data (targets, resources, …) the watcher wants to be notified about.
-    //   See WatcherRegistry.getWatchedData to see the full list of properties.
+    // - sessionData: Data (targets, resources, …) the watcher wants to be notified about.
+    //   See WatcherRegistry.getSessionData to see the full list of properties.
     this._connections = new Map();
 
     this._onConnectionChange = this._onConnectionChange.bind(this);
@@ -110,24 +112,28 @@ class DevToolsWorkerChild extends JSWindowActorChild {
 
   onDOMWindowCreated() {
     const { sharedData } = Services.cpmm;
-    const watchedDataByWatcherActor = sharedData.get(SHARED_DATA_KEY_NAME);
-    if (!watchedDataByWatcherActor) {
+    const sessionDataByWatcherActor = sharedData.get(SHARED_DATA_KEY_NAME);
+    if (!sessionDataByWatcherActor) {
       throw new Error(
         "Request to instantiate the target(s) for the Worker, but `sharedData` is empty about watched targets"
       );
     }
 
     // Create one Target actor for each prefix/client which listen to workers
-    for (const [watcherActorID, watchedData] of watchedDataByWatcherActor) {
-      const { targets, connectionPrefix, browserId } = watchedData;
+    for (const [watcherActorID, sessionData] of sessionDataByWatcherActor) {
+      const { targets, connectionPrefix, sessionContext } = sessionData;
       if (
         targets.includes("worker") &&
-        shouldNotifyWindowGlobal(this.manager, browserId)
+        isWindowGlobalPartOfContext(this.manager, sessionContext, {
+          acceptInitialDocument: true,
+          forceAcceptTopLevelTarget: true,
+          acceptSameProcessIframes: true,
+        })
       ) {
         this._watchWorkerTargets({
           watcherActorID,
           parentConnectionPrefix: connectionPrefix,
-          watchedData,
+          sessionData,
         });
       }
     }
@@ -141,20 +147,26 @@ class DevToolsWorkerChild extends JSWindowActorChild {
    * @param {*} message.data
    */
   receiveMessage(message) {
-    // All messages pass `browserId` (except packet) and are expected
-    // to match shouldNotifyWindowGlobal result.
+    // All messages pass `sessionContext` (except packet) and are expected
+    // to match isWindowGlobalPartOfContext result.
     if (message.name != "DevToolsWorkerParent:packet") {
-      const { browserId } = message.data;
+      const { browserId } = message.data.sessionContext;
       // Re-check here, just to ensure that both parent and content processes agree
       // on what should or should not be watched.
       if (
         this.manager.browsingContext.browserId != browserId &&
-        !shouldNotifyWindowGlobal(this.manager, browserId)
+        !isWindowGlobalPartOfContext(
+          this.manager,
+          message.data.sessionContext,
+          {
+            acceptInitialDocument: true,
+          }
+        )
       ) {
         throw new Error(
           "Mismatch between DevToolsWorkerParent and DevToolsWorkerChild  " +
             (this.manager.browsingContext.browserId == browserId
-              ? "window global shouldn't be notified (shouldNotifyWindowGlobal mismatch)"
+              ? "window global shouldn't be notified (isWindowGlobalPartOfContext mismatch)"
               : `expected browsing context with ID ${browserId}, but got ${this.manager.browsingContext.browserId}`)
         );
       }
@@ -162,25 +174,25 @@ class DevToolsWorkerChild extends JSWindowActorChild {
 
     switch (message.name) {
       case "DevToolsWorkerParent:instantiate-already-available": {
-        const { watcherActorID, connectionPrefix, watchedData } = message.data;
+        const { watcherActorID, connectionPrefix, sessionData } = message.data;
 
         return this._watchWorkerTargets({
           watcherActorID,
           parentConnectionPrefix: connectionPrefix,
-          watchedData,
+          sessionData,
         });
       }
       case "DevToolsWorkerParent:destroy": {
         const { watcherActorID } = message.data;
         return this._destroyTargetActors(watcherActorID);
       }
-      case "DevToolsWorkerParent:addWatcherDataEntry": {
+      case "DevToolsWorkerParent:addSessionDataEntry": {
         const { watcherActorID, type, entries } = message.data;
-        return this._addWatcherDataEntry(watcherActorID, type, entries);
+        return this._addSessionDataEntry(watcherActorID, type, entries);
       }
-      case "DevToolsWorkerParent:removeWatcherDataEntry": {
+      case "DevToolsWorkerParent:removeSessionDataEntry": {
         const { watcherActorID, type, entries } = message.data;
-        return this._removeWatcherDataEntry(watcherActorID, type, entries);
+        return this._removeSessionDataEntry(watcherActorID, type, entries);
       }
       case "DevToolsWorkerParent:packet":
         return this.emit("packet-received", message);
@@ -193,7 +205,7 @@ class DevToolsWorkerChild extends JSWindowActorChild {
 
   /**
    * Instantiate targets for existing workers, watch for worker registration and listen
-   * for resources on those workers, for given connection and browserId. Targets are sent
+   * for resources on those workers, for given connection and context. Targets are sent
    * to the DevToolsWorkerParent via the DevToolsWorkerChild:workerTargetAvailable message.
    *
    * @param {Object} options
@@ -201,14 +213,14 @@ class DevToolsWorkerChild extends JSWindowActorChild {
    *        observe and create these target actors.
    * @param {String} options.parentConnectionPrefix: The prefix of the DevToolsServerConnection
    *        of the Watcher Actor. This is used to compute a unique ID for the target actor.
-   * @param {Object} options.watchedData: Data (targets, resources, …) the watcher wants
-   *        to be notified about. See WatcherRegistry.getWatchedData to see the full list
+   * @param {Object} options.sessionData: Data (targets, resources, …) the watcher wants
+   *        to be notified about. See WatcherRegistry.getSessionData to see the full list
    *        of properties.
    */
   async _watchWorkerTargets({
     watcherActorID,
     parentConnectionPrefix,
-    watchedData,
+    sessionData,
   }) {
     if (this._connections.has(watcherActorID)) {
       throw new Error(
@@ -241,7 +253,7 @@ class DevToolsWorkerChild extends JSWindowActorChild {
       connection,
       workers: [],
       forwardingPrefix,
-      watchedData,
+      sessionData,
     });
 
     await Promise.all(
@@ -309,7 +321,7 @@ class DevToolsWorkerChild extends JSWindowActorChild {
     } catch (e) {}
 
     const watcherConnectionData = this._connections.get(watcherActorID);
-    const { watchedData } = watcherConnectionData;
+    const { sessionData } = watcherConnectionData;
     const workerThreadServerForwardingPrefix = connection.allocID(
       "workerTarget"
     );
@@ -324,7 +336,8 @@ class DevToolsWorkerChild extends JSWindowActorChild {
       dbg,
       workerThreadServerForwardingPrefix,
       {
-        watchedData,
+        sessionData,
+        sessionContext: sessionData.sessionContext,
       }
     );
 
@@ -429,14 +442,14 @@ class DevToolsWorkerChild extends JSWindowActorChild {
     });
   }
 
-  async _addWatcherDataEntry(watcherActorID, type, entries) {
+  async _addSessionDataEntry(watcherActorID, type, entries) {
     const watcherConnectionData = this._connections.get(watcherActorID);
     if (!watcherConnectionData) {
       return;
     }
 
-    WatchedDataHelpers.addWatchedDataEntry(
-      watcherConnectionData.watchedData,
+    SessionDataHelpers.addSessionDataEntry(
+      watcherConnectionData.sessionData,
       type,
       entries
     );
@@ -447,7 +460,7 @@ class DevToolsWorkerChild extends JSWindowActorChild {
       workerThreadServerForwardingPrefix,
     } of watcherConnectionData.workers) {
       promises.push(
-        addWatcherDataEntryInWorkerTarget({
+        addSessionDataEntryInWorkerTarget({
           dbg,
           workerThreadServerForwardingPrefix,
           type,
@@ -458,15 +471,15 @@ class DevToolsWorkerChild extends JSWindowActorChild {
     await Promise.all(promises);
   }
 
-  _removeWatcherDataEntry(watcherActorID, type, entries) {
+  _removeSessionDataEntry(watcherActorID, type, entries) {
     const watcherConnectionData = this._connections.get(watcherActorID);
 
     if (!watcherConnectionData) {
       return;
     }
 
-    WatchedDataHelpers.removeWatchedDataEntry(
-      watcherConnectionData.watchedData,
+    SessionDataHelpers.removeSessionDataEntry(
+      watcherConnectionData.sessionData,
       type,
       entries
     );
@@ -478,7 +491,7 @@ class DevToolsWorkerChild extends JSWindowActorChild {
       if (DevToolsUtils.isWorkerDebuggerAlive(dbg)) {
         dbg.postMessage(
           JSON.stringify({
-            type: "remove-watcher-data-entry",
+            type: "remove-session-data-entry",
             forwardingPrefix: workerThreadServerForwardingPrefix,
             dataEntryType: type,
             entries,
@@ -525,38 +538,12 @@ class DevToolsWorkerChild extends JSWindowActorChild {
 }
 
 /**
- * Helper function to know if we should watch for workers on a given windowGlobal
- */
-function shouldNotifyWindowGlobal(windowGlobal, watchedBrowserId) {
-  const browsingContext = windowGlobal.browsingContext;
-
-  // If we are focusing only on a sub-tree of Browsing Element, ignore elements that are
-  // not part of it.
-  if (watchedBrowserId && browsingContext.browserId != watchedBrowserId) {
-    return false;
-  }
-
-  // `isInProcess` is always false, even if the window runs in the same process.
-  // `osPid` attribute is not set on WindowGlobalChild
-  // so it is hard to guess if the given WindowGlobal runs in this process or not,
-  // which is what we want to know here. Here is a workaround way to know it :/
-  // ---
-  // Also. It might be a bit surprising to have a DevToolsWorkerChild/JSWindowActorChild
-  // to be instantiated for WindowGlobals that aren't from this process... Is that expected?
-  if (Cu.isRemoteProxy(windowGlobal.window)) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
  * Communicate the type and entries to the Worker Target actor, via the WorkerDebugger.
  *
  * @returns {Promise} Returns a Promise that resolves once the data entry were handled
  *                    by the worker target.
  */
-function addWatcherDataEntryInWorkerTarget({
+function addSessionDataEntryInWorkerTarget({
   dbg,
   workerThreadServerForwardingPrefix,
   type,
@@ -572,7 +559,7 @@ function addWatcherDataEntryInWorkerTarget({
     const listener = {
       onMessage: message => {
         message = JSON.parse(message);
-        if (message.type === "watcher-data-entry-added") {
+        if (message.type === "session-data-entry-added") {
           resolve();
           dbg.removeListener(listener);
         }
@@ -585,7 +572,7 @@ function addWatcherDataEntryInWorkerTarget({
 
     dbg.postMessage(
       JSON.stringify({
-        type: "add-watcher-data-entry",
+        type: "add-session-data-entry",
         forwardingPrefix: workerThreadServerForwardingPrefix,
         dataEntryType: type,
         entries,

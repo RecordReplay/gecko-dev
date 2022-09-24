@@ -33,11 +33,9 @@
 // XXX Avoid including this here by moving function bodies to the cpp file.
 #include "nsIContent.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Element;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 class nsBaseContentList : public nsINodeList {
  public:
@@ -49,7 +47,7 @@ class nsBaseContentList : public nsINodeList {
 
   uint32_t Length() override { return mElements.Length(); }
 
-  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(nsBaseContentList)
+  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_WRAPPERCACHE_CLASS(nsBaseContentList)
 
   void AppendElement(nsIContent* aContent) {
     MOZ_ASSERT(aContent);

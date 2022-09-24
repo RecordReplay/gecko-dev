@@ -34,7 +34,7 @@ add_task(async function title_helpL10nId() {
   await assertIsTestResult(1);
 
   let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
-  let helpButton = result.element.row._elements.get("helpButton");
+  let helpButton = result.element.row._buttons.get("help");
   Assert.ok(helpButton, "Sanity check: help button should exist");
 
   let l10nAttrs = document.l10n.getAttributes(helpButton);
@@ -42,32 +42,6 @@ add_task(async function title_helpL10nId() {
     l10nAttrs,
     { id: helpL10nId, args: null },
     "The l10n ID attribute was correctly set"
-  );
-
-  await UrlbarTestUtils.promisePopupClose(window);
-  UrlbarProvidersManager.unregisterProvider(provider);
-});
-
-// Sets `helpTitle` on the result payload and makes sure the help button ends up
-// with a corresponding title attribute.
-add_task(async function title_helpTitle() {
-  let helpTitle = "Example help title";
-  let provider = registerTestProvider(1, { helpTitle });
-  await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    value: "example",
-    window,
-  });
-
-  await assertIsTestResult(1);
-
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
-  let helpButton = result.element.row._elements.get("helpButton");
-  Assert.ok(helpButton, "Sanity check: help button should exist");
-
-  Assert.deepEqual(
-    helpButton.getAttribute("title"),
-    helpTitle,
-    "The title attribute was correctly set"
   );
 
   await UrlbarTestUtils.promisePopupClose(window);
@@ -246,7 +220,7 @@ async function doPickTest({ pickHelpButton, useKeyboard }) {
       // Get the click target.
       let result = await UrlbarTestUtils.getDetailsOfResultAt(window, index);
       clickTarget = pickHelpButton
-        ? result.element.row._elements.get("helpButton")
+        ? result.element.row._buttons.get("help")
         : result.element.row._content;
       Assert.ok(
         clickTarget,
@@ -278,6 +252,9 @@ async function doPickTest({ pickHelpButton, useKeyboard }) {
       BrowserTestUtils.removeTab(gBrowser.selectedTab);
     }
     UrlbarProvidersManager.unregisterProvider(provider);
+
+    // Avoid showing adaptive history autofill.
+    await PlacesTestUtils.clearInputHistory();
   });
 }
 
@@ -334,7 +311,7 @@ async function assertIsTestResult(index) {
   );
 
   let { row } = result.element;
-  let helpButton = row._elements.get("helpButton");
+  let helpButton = row._buttons.get("help");
   Assert.ok(helpButton, "The result should have a help button");
   Assert.ok(helpButton.id, "Help button has an ID");
   Assert.ok(row._content.id, "Row-inner has an ID");
@@ -398,7 +375,7 @@ function assertMainPartSelected(expectedSelectedElementIndex) {
 function assertHelpButtonSelected(expectedSelectedElementIndex) {
   assertSelection(
     expectedSelectedElementIndex,
-    "urlbarView-help",
+    "urlbarView-button-help",
     "help button"
   );
 }

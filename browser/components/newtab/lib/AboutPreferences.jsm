@@ -20,10 +20,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 
 // These "section" objects are formatted in a way to be similar to the ones from
 // SectionsManager to construct the preferences view.
-const PREFS_BEFORE_SECTIONS = ({
-  newNewtabExperienceEnabled,
-  customizationMenuEnabled,
-}) => [
+const PREFS_BEFORE_SECTIONS = () => [
   {
     id: "search",
     pref: {
@@ -36,49 +33,34 @@ const PREFS_BEFORE_SECTIONS = ({
     id: "topsites",
     pref: {
       feed: "feeds.topsites",
-      titleString:
-        newNewtabExperienceEnabled || customizationMenuEnabled
-          ? "home-prefs-shortcuts-header"
-          : "home-prefs-topsites-header",
-      descString:
-        newNewtabExperienceEnabled || customizationMenuEnabled
-          ? "home-prefs-shortcuts-description"
-          : "home-prefs-topsites-description",
+      titleString: "home-prefs-shortcuts-header",
+      descString: "home-prefs-shortcuts-description",
       get nestedPrefs() {
         return Services.prefs.getBoolPref("browser.topsites.useRemoteSetting")
           ? [
               {
                 name: "showSponsoredTopSites",
-                titleString:
-                  newNewtabExperienceEnabled || customizationMenuEnabled
-                    ? "home-prefs-shortcuts-by-option-sponsored"
-                    : "home-prefs-topsites-by-option-sponsored",
+                titleString: "home-prefs-shortcuts-by-option-sponsored",
                 eventSource: "SPONSORED_TOP_SITES",
               },
             ]
           : [];
       },
     },
-    icon: "topsites",
+    icon: "chrome://browser/skin/topsites.svg",
     maxRows: 4,
     rowsPref: "topSitesRows",
     eventSource: "TOP_SITES",
   },
 ];
 
-const PREFS_AFTER_SECTIONS = ({
-  newNewtabExperienceEnabled,
-  customizationMenuEnabled,
-}) => [
+const PREFS_AFTER_SECTIONS = () => [
   {
     id: "snippets",
     pref: {
       feed: "feeds.snippets",
       titleString: "home-prefs-snippets-header",
-      descString:
-        newNewtabExperienceEnabled || customizationMenuEnabled
-          ? "home-prefs-snippets-description-new"
-          : "home-prefs-snippets-description",
+      descString: "home-prefs-snippets-description-new",
     },
     icon: "chrome://global/skin/icons/info.svg",
     eventSource: "SNIPPETS",
@@ -148,7 +130,7 @@ this.AboutPreferences = class AboutPreferences {
       sections = this.handleDiscoverySettings(sections);
     }
 
-    const featureConfig = NimbusFeatures.newtab.getValue() || {};
+    const featureConfig = NimbusFeatures.newtab.getAllVariables() || {};
 
     this.renderPreferences(window, [
       ...PREFS_BEFORE_SECTIONS(featureConfig),

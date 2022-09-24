@@ -16,7 +16,6 @@
 #include "mozilla/JSONWriter.h"
 #include "mozilla/OwningNonNull.h"
 #include "mozilla/Preferences.h"
-#include "mozilla/Components.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/Unused.h"
@@ -31,7 +30,6 @@
 #include "mozilla/dom/ServiceWorkerGlobalScopeBinding.h"
 #include "mozilla/dom/ServiceWorkerManager.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "Navigator.h"
@@ -280,15 +278,17 @@ class FocusWindowRunnable final : public Runnable {
       const nsMainThreadPtrHandle<nsPIDOMWindowInner>& aWindow)
       : Runnable("FocusWindowRunnable"), mWindow(aWindow) {}
 
-  NS_IMETHOD
-  Run() override {
+  // MOZ_CAN_RUN_SCRIPT_BOUNDARY until Runnable::Run is MOZ_CAN_RUN_SCRIPT.  See
+  // bug 1535398.
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD Run() override {
     AssertIsOnMainThread();
     if (!mWindow->IsCurrentInnerWindow()) {
       // Window has been closed, this observer is not valid anymore
       return NS_OK;
     }
 
-    nsFocusManager::FocusWindow(mWindow->GetOuterWindow(), CallerType::System);
+    nsCOMPtr<nsPIDOMWindowOuter> outerWindow = mWindow->GetOuterWindow();
+    nsFocusManager::FocusWindow(outerWindow, CallerType::System);
     return NS_OK;
   }
 };
@@ -364,8 +364,12 @@ class ReleaseNotificationRunnable final : public NotificationWorkerRunnable {
   }
 
   nsresult Cancel() override {
+    // We need to check first if cancel is called twice
+    nsresult rv = NotificationWorkerRunnable::Cancel();
+    NS_ENSURE_SUCCESS(rv, rv);
+
     mNotification->ReleaseObject();
-    return NotificationWorkerRunnable::Cancel();
+    return NS_OK;
   }
 };
 
@@ -510,7 +514,7 @@ NotificationPermissionRequest::Run() {
       break;
   }
 
-  if (!mIsHandlingUserInput &&
+  if (!mHasValidTransientUserGestureActivation &&
       !StaticPrefs::dom_webnotifications_requireuserinteraction()) {
     nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
     if (doc) {
@@ -578,7 +582,7 @@ nsresult NotificationPermissionRequest::ResolvePromise() {
     // automatically and we are not handling user input, then log a
     // warning in the current document that this happened because
     // Notifications require a user gesture.
-    if (!mIsHandlingUserInput &&
+    if (!mHasValidTransientUserGestureActivation &&
         StaticPrefs::dom_webnotifications_requireuserinteraction()) {
       nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
       if (doc) {
@@ -1125,7 +1129,9 @@ nsresult NotificationObserver::AdjustPushQuota(const char* aTopic) {
   return pushQuotaManager->NotificationForOriginClosed(origin.get());
 }
 
-NS_IMETHODIMP
+// MOZ_CAN_RUN_SCRIPT_BOUNDARY until Runnable::Run is MOZ_CAN_RUN_SCRIPT.  See
+// bug 1539845.
+MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP
 MainThreadNotificationObserver::Observe(nsISupports* aSubject,
                                         const char* aTopic,
                                         const char16_t* aData) {
@@ -1142,7 +1148,8 @@ MainThreadNotificationObserver::Observe(nsISupports* aSubject,
 
     bool doDefaultAction = notification->DispatchClickEvent();
     if (doDefaultAction) {
-      nsFocusManager::FocusWindow(window->GetOuterWindow(), CallerType::System);
+      nsCOMPtr<nsPIDOMWindowOuter> outerWindow = window->GetOuterWindow();
+      nsFocusManager::FocusWindow(outerWindow, CallerType::System);
     }
   } else if (!strcmp("alertfinished", aTopic)) {
     notification->UnpersistNotification();

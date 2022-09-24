@@ -640,6 +640,8 @@ This reports all the Pocket recommended articles (a list of `id`s) when the user
   "source": "pocket",
   "page": ["about:newtab" | "about:home" | "about:welcome" | "unknown"],
   "user_prefs": 7,
+  "window_inner_width": 1000,
+  "window_inner_height" 900,
   "experiments": {
     "experiment_1": {"branch": "control"},
     "experiment_2": {"branch": "treatment"}
@@ -664,6 +666,8 @@ This reports the user's interaction with those Pocket tiles.
     "experiment_2": {"branch": "treatment"}
   },
   "user_prefs": 7,
+  "window_inner_width": 1000,
+  "window_inner_height" 900,
 
   // "pos" is the 0-based index to record the tile's position in the Pocket section.
   // "shim" is a base64 encoded shim attached to spocs, unique to the impression from the Ad server.
@@ -671,6 +675,25 @@ This reports the user's interaction with those Pocket tiles.
 
   // A 0-based index to record which tile in the "tiles" list that the user just interacted with.
   "click|block|pocket": 0
+}
+```
+
+### Load more button ping
+
+```js
+{
+  "event": "CLICK",
+  "source": "DS_LOAD_MORE_BUTTON",
+
+  // Basic metadata
+  "action": "activity_stream_event",
+  "page": ["about:newtab" | "about:home" | "about:welcome" | "unknown"],
+  "client_id": "26288a14-5cc4-d14f-ae0a-bb01ef45be9c",
+  "session_id": "005deed0-e3e4-4c02-a041-17405fd703f6",
+  "browser_session_id": "e7e52665-7db3-f348-9918-e93160eb2ef3",
+  "addon_version": "20180710100040",
+  "locale": "en-US",
+  "user_prefs": 7
 }
 ```
 
@@ -994,6 +1017,30 @@ What's New panel client_id is reported in all the channels.
 }
 ```
 
+## Spotlight pings
+
+This reports when the user interacts with the Messaging System Spotlight component
+Similar policy applied as for the Infobar messages: client_id is reported in all
+ the channels. Currently this is only used in experiments.
+
+```
+{
+  "experiments" : {
+    "exp1" : {
+      "branch" : "treatment-a"
+    }
+  },
+  "addon_version" : "20210115035053",
+  "release_channel" : "release",
+  "locale" : "en-US",
+  "event" : ["IMPRESSION", "CLICK", "DISMISS"],
+  "client_id" : "c4beb4bf-4feb-9c4e-9587-9323b28c2e50",
+  "version" : "93",
+  "message_id" : "SPOTLIGHT_MESSAGE_93",
+  "browser_session_id" : "93714e76-9919-ca49-b697-5e7c09a1394f"
+}
+```
+
 ## Messaging-experiments pings
 
 As the new experiment platform, the Messaging experiment manager is now managing & operating all the experiments of Firefox Messaging System, including the first-run experience (about:welcome), CFR, Whats-new-panel, Moments Page, and Snippets.
@@ -1025,21 +1072,28 @@ Unlike other Activity Stream pings, this is a Firefox Events telemetry event, an
 ### Experiment attribute errors
 
 This records whether issues were encountered with any of the targeting attributes used in the experiment enrollment or message targeting.
-Two different types of events are sent: `attribute_error` and `attribute_timeout` along with the attribute that caused it.
+Two different types of events are sent: `attribute_error` and `attribute_timeout` along with the attribute that caused it. An attribute
+is a variable inside the JEXL targeting expression that is evaluated client side by the browser.
 
 ```js
-[
+{
   "messaging_experiments",
   "targeting",
   "attribute_error", // event
-  "foo" // attribute
-],
-[
+  "foo", // attribute,
+  "extra_keys": {
+    "source": "message id or experiment slug",
+  },
+},
+{
   "messaging_experiments",
   "targeting",
   "attribute_timeout", // event
-  "bar" // attribute
-]
+  "bar", // attribute,
+  "extra_keys": {
+    "source": "message id or experiment slug",
+  },
+}
 ```
 
 ## Firefox Onboarding (about:welcome) pings

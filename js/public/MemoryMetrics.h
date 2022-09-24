@@ -181,15 +181,18 @@ struct InefficientNonFlatteningStringHashPolicy {
 namespace JS {
 
 struct ClassInfo {
-#define FOR_EACH_SIZE(MACRO)                                  \
-  MACRO(Objects, GCHeapUsed, objectsGCHeap)                   \
-  MACRO(Objects, MallocHeap, objectsMallocHeapSlots)          \
-  MACRO(Objects, MallocHeap, objectsMallocHeapElementsNormal) \
-  MACRO(Objects, MallocHeap, objectsMallocHeapElementsAsmJS)  \
-  MACRO(Objects, MallocHeap, objectsMallocHeapMisc)           \
-  MACRO(Objects, NonHeap, objectsNonHeapElementsNormal)       \
-  MACRO(Objects, NonHeap, objectsNonHeapElementsShared)       \
-  MACRO(Objects, NonHeap, objectsNonHeapElementsWasm)         \
+#define FOR_EACH_SIZE(MACRO)                                     \
+  MACRO(Objects, GCHeapUsed, objectsGCHeap)                      \
+  MACRO(Objects, MallocHeap, objectsMallocHeapSlots)             \
+  MACRO(Objects, MallocHeap, objectsMallocHeapElementsNormal)    \
+  MACRO(Objects, MallocHeap, objectsMallocHeapElementsAsmJS)     \
+  MACRO(Objects, MallocHeap, objectsMallocHeapGlobalData)        \
+  MACRO(Objects, MallocHeap, objectsMallocHeapGlobalVarNamesSet) \
+  MACRO(Objects, MallocHeap, objectsMallocHeapMisc)              \
+  MACRO(Objects, NonHeap, objectsNonHeapElementsNormal)          \
+  MACRO(Objects, NonHeap, objectsNonHeapElementsShared)          \
+  MACRO(Objects, NonHeap, objectsNonHeapElementsWasm)            \
+  MACRO(Objects, NonHeap, objectsNonHeapElementsWasmShared)      \
   MACRO(Objects, NonHeap, objectsNonHeapCodeWasm)
 
   ClassInfo() = default;
@@ -222,8 +225,6 @@ struct ClassInfo {
   }
 
   FOR_EACH_SIZE(DECL_SIZE_ZERO);
-
-  size_t wasmGuardPages = 0;
 
 #undef FOR_EACH_SIZE
 };
@@ -500,6 +501,7 @@ struct RuntimeSizes {
   MACRO(_, MallocHeap, object)                      \
   MACRO(_, MallocHeap, atomsTable)                  \
   MACRO(_, MallocHeap, atomsMarkBitmaps)            \
+  MACRO(_, MallocHeap, selfHostStencil)             \
   MACRO(_, MallocHeap, contexts)                    \
   MACRO(_, MallocHeap, temporary)                   \
   MACRO(_, MallocHeap, interpreterStack)            \
@@ -509,6 +511,7 @@ struct RuntimeSizes {
   MACRO(_, MallocHeap, scriptData)                  \
   MACRO(_, MallocHeap, tracelogger)                 \
   MACRO(_, MallocHeap, wasmRuntime)                 \
+  MACRO(_, Ignore, wasmGuardPages)                  \
   MACRO(_, MallocHeap, jitLazyLink)
 
   RuntimeSizes() { allScriptSources.emplace(); }
@@ -740,7 +743,6 @@ struct RealmStats {
   MACRO(Other, MallocHeap, innerViewsTable)                \
   MACRO(Other, MallocHeap, objectMetadataTable)            \
   MACRO(Other, MallocHeap, savedStacksSet)                 \
-  MACRO(Other, MallocHeap, varNamesSet)                    \
   MACRO(Other, MallocHeap, nonSyntacticLexicalScopesTable) \
   MACRO(Other, MallocHeap, jitRealm)
 

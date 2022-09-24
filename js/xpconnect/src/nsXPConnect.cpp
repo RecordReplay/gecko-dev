@@ -70,7 +70,7 @@ const char XPC_SCRIPT_ERROR_CONTRACTID[] = "@mozilla.org/scripterror;1";
 
 /***************************************************************************/
 
-nsXPConnect::nsXPConnect() : mShuttingDown(false) {
+nsXPConnect::nsXPConnect() {
 #ifdef MOZ_GECKO_PROFILER
   JS::SetProfilingThreadCallbacks(profiler_register_thread,
                                   profiler_unregister_thread);
@@ -109,9 +109,12 @@ nsXPConnect::~nsXPConnect() {
   // XPConnect, to clean the stuff we forcibly disconnected. The forced
   // shutdown code defaults to leaking in a number of situations, so we can't
   // get by with only the second GC. :-(
-  mRuntime->GarbageCollect(JS::GCReason::XPCONNECT_SHUTDOWN);
+  //
+  // Bug 1650075: These should really pass GCOptions::Shutdown but doing that
+  // seems to cause crashes.
+  mRuntime->GarbageCollect(JS::GCOptions::Normal,
+                           JS::GCReason::XPCONNECT_SHUTDOWN);
 
-  mShuttingDown = true;
   XPCWrappedNativeScope::SystemIsBeingShutDown();
   mRuntime->SystemIsBeingShutDown();
 
@@ -119,7 +122,8 @@ nsXPConnect::~nsXPConnect() {
   // after which point we need to GC to clean everything up. We need to do
   // this before deleting the XPCJSContext, because doing so destroys the
   // maps that our finalize callback depends on.
-  mRuntime->GarbageCollect(JS::GCReason::XPCONNECT_SHUTDOWN);
+  mRuntime->GarbageCollect(JS::GCOptions::Normal,
+                           JS::GCReason::XPCONNECT_SHUTDOWN);
 
   NS_RELEASE(gSystemPrincipal);
   gScriptSecurityManager = nullptr;
@@ -560,6 +564,12 @@ nsresult InitClassesWithNewWrappedGlobal(JSContext* aJSContext,
     if (!JS_DefineProfilingFunctions(aJSContext, global)) {
       return UnexpectedFailure(NS_ERROR_OUT_OF_MEMORY);
     }
+    if (aPrincipal->IsSystemPrincipal()) {
+      if (!glean::Glean::DefineGlean(aJSContext, global) ||
+          !glean::GleanPings::DefineGleanPings(aJSContext, global)) {
+        return UnexpectedFailure(NS_ERROR_FAILURE);
+      }
+    }
   }
 
   aNewGlobal.set(global);
@@ -927,110 +937,6 @@ void SetLocationForGlobal(JSObject* global, nsIURI* locationURI) {
 
 }  // namespace xpc
 
-NS_IMETHODIMP
-nsXPConnect::WriteScript(nsIObjectOutputStream* stream, JSContext* cx,
-                         JSScript* scriptArg) {
-  RootedScript script(cx, scriptArg);
-
-  uint8_t flags = 0;  // We don't have flags anymore.
-  nsresult rv = stream->Write8(flags);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  TranscodeBuffer buffer;
-  TranscodeResult code;
-  code = EncodeScript(cx, buffer, script);
-
-  if (code != TranscodeResult::Ok) {
-    if (code == TranscodeResult::Throw) {
-      JS_ClearPendingException(cx);
-      return NS_ERROR_OUT_OF_MEMORY;
-    }
-
-    MOZ_ASSERT(IsTranscodeFailureResult(code));
-    return NS_ERROR_FAILURE;
-  }
-
-  size_t size = buffer.length();
-  if (size > UINT32_MAX) {
-    return NS_ERROR_FAILURE;
-  }
-  rv = stream->Write32(size);
-  if (NS_SUCCEEDED(rv)) {
-    // Ideally we could just pass "buffer" here.  See bug 1566574.
-    rv = stream->WriteBytes(Span(buffer.begin(), size));
-  }
-
-  return rv;
-}
-
-NS_IMETHODIMP
-nsXPConnect::ReadScript(nsIObjectInputStream* stream, JSContext* cx,
-                        const JS::ReadOnlyCompileOptions& options,
-                        JSScript** scriptp) {
-  uint8_t flags;
-  nsresult rv = stream->Read8(&flags);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  // We don't serialize mutedError-ness of scripts, which is fine as long as
-  // we only serialize system and XUL-y things. We can detect this by checking
-  // where the caller wants us to deserialize.
-  //
-  // CompilationScope() could theoretically GC, so get that out of the way
-  // before comparing to the cx global.
-  JSObject* loaderGlobal = xpc::CompilationScope();
-  MOZ_RELEASE_ASSERT(nsContentUtils::IsSystemCaller(cx) ||
-                     CurrentGlobalOrNull(cx) == loaderGlobal);
-
-  uint32_t size;
-  rv = stream->Read32(&size);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  char* data;
-  rv = stream->ReadBytes(size, &data);
-  if (NS_FAILED(rv)) {
-    return rv;
-  }
-
-  TranscodeBuffer buffer;
-  buffer.replaceRawBuffer(reinterpret_cast<uint8_t*>(data), size);
-
-  {
-    TranscodeResult code;
-    Rooted<JSScript*> script(cx);
-    code = DecodeScript(cx, options, buffer, &script);
-    if (code == TranscodeResult::Ok) {
-      *scriptp = script.get();
-    } else {
-      if (code == TranscodeResult::Throw) {
-        JS_ClearPendingException(cx);
-        return NS_ERROR_OUT_OF_MEMORY;
-      }
-
-      MOZ_ASSERT(IsTranscodeFailureResult(code));
-      return NS_ERROR_FAILURE;
-    }
-  }
-
-  return rv;
-}
-
-NS_IMETHODIMP
-nsXPConnect::GetIsShuttingDown(bool* aIsShuttingDown) {
-  if (!aIsShuttingDown) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
-  *aIsShuttingDown = mShuttingDown;
-
-  return NS_OK;
-}
-
 // static
 nsIXPConnect* nsIXPConnect::XPConnect() {
   // Do a release-mode assert that we're not doing anything significant in
@@ -1060,7 +966,7 @@ MOZ_EXPORT void DumpCompleteHeap() {
     return;
   }
 
-  nsJSContext::CycleCollectNow(alltracesListener);
+  nsJSContext::CycleCollectNow(CCReason::DUMP_HEAP, alltracesListener);
 }
 
 }  // extern "C"

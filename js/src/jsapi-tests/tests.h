@@ -16,11 +16,14 @@
 #include <string.h>
 #include <type_traits>
 
+#include "jsapi.h"
+
 #include "gc/GC.h"
 #include "js/AllocPolicy.h"
 #include "js/CharacterEncoding.h"
-#include "js/Equality.h"     // JS::SameValue
-#include "js/RegExpFlags.h"  // JS::RegExpFlags
+#include "js/Equality.h"      // JS::SameValue
+#include "js/GlobalObject.h"  // JS::DefaultGlobalClassOps
+#include "js/RegExpFlags.h"   // JS::RegExpFlags
 #include "js/Vector.h"
 #include "js/Warnings.h"  // JS::SetWarningReporter
 #include "vm/JSContext.h"
@@ -539,7 +542,7 @@ class AutoLeaveZeal {
     JS_GetGCZealBits(cx_, &zealBits_, &frequency_, &dummy);
     JS_SetGCZeal(cx_, 0, 0);
     JS::PrepareForFullGC(cx_);
-    JS::NonIncrementalGC(cx_, JS::GCOptions::Shrink, JS::GCReason::DEBUG_GC);
+    JS::NonIncrementalGC(cx_, JS::GCOptions::Normal, JS::GCReason::DEBUG_GC);
   }
   ~AutoLeaveZeal() {
     JS_SetGCZeal(cx_, 0, 0);

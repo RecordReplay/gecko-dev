@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFEMergeElement.h"
 #include "mozilla/dom/SVGFEMergeElementBinding.h"
 #include "mozilla/dom/SVGFEMergeNodeElement.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEMerge)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEMergeElement::WrapNode(JSContext* aCx,
                                       JS::Handle<JSObject*> aGivenProto) {
@@ -42,6 +43,14 @@ void SVGFEMergeElement::GetSourceImageNames(nsTArray<SVGStringInfo>& aSources) {
   }
 }
 
+nsresult SVGFEMergeElement::BindToTree(BindContext& aCtx, nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feMerge);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -50,5 +59,4 @@ SVGElement::StringAttributesInfo SVGFEMergeElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

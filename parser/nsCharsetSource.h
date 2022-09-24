@@ -6,39 +6,39 @@
 #define nsCharsetSource_h_
 
 // note: the value order defines the priority; higher numbers take priority
-enum {
+enum nsCharsetSource {
   kCharsetUninitialized,
   kCharsetFromFallback,
   kCharsetFromDocTypeDefault,  // This and up confident for XHR
-  // Start subdividing source for telementry purposes
+  // Start subdividing source for telemetry purposes
   kCharsetFromInitialAutoDetectionASCII,
   kCharsetFromInitialAutoDetectionWouldHaveBeenUTF8,
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Generic,
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8Content,
   kCharsetFromInitialAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD,
-  // Deliberately no Final version of ASCII
-  kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8,
-  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Generic,
-  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Content,
-  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD,
-  kCharsetFromFinalAutoDetectionFile,
-  // End subdividing source for telementry purposes
+  // End subdividing source for telemetry purposes
   kCharsetFromParentFrame,  // Same-origin parent takes precedence over detector
                             // to avoid breaking tests. (Also, the HTML spec
                             // says so.)
   kCharsetFromXmlDeclaration,
-  kCharsetFromMetaPrescan,  // this one and smaller: HTML5 Tentative
-  kCharsetFromMetaTag,      // this one and greater: HTML5 Confident
+  kCharsetFromMetaTag,
   kCharsetFromChannel,
   kCharsetFromOtherComponent,
-  kCharsetFromPendingUserForcedAutoDetection,  // Marker value to be upgraded
-                                               // later
   kCharsetFromInitialUserForcedAutoDetection,
+  // Start subdividing source for telemetry purposes
+  // Deliberately no Final version of ASCII
+  kCharsetFromFinalAutoDetectionWouldHaveBeenUTF8InitialWasASCII,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Generic,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8GenericInitialWasASCII,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8Content,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8ContentInitialWasASCII,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLD,
+  kCharsetFromFinalAutoDetectionWouldNotHaveBeenUTF8DependedOnTLDInitialWasASCII,
+  kCharsetFromFinalAutoDetectionFile,
+  // End subdividing source for telemetry purposes
   kCharsetFromFinalUserForcedAutoDetection,
-  kCharsetFromXmlDeclarationUtf16,        // This one is overridden by
-                                          // kCharsetFromChannel
-  kCharsetFromIrreversibleAutoDetection,  // This one is overridden by
-                                          // kCharsetFromChannel
+  kCharsetFromXmlDeclarationUtf16,  // This one is overridden by
+                                    // kCharsetFromChannel
   kCharsetFromByteOrderMark,
   kCharsetFromUtf8OnlyMime,  // For JSON, WebVTT and such
   kCharsetFromBuiltIn,       // resource: URLs

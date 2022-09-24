@@ -16,14 +16,21 @@
 #include "prenv.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Hal.h"
+#include "mozilla/ProfilerLabels.h"
+#include "mozilla/ProfilerThreadSleep.h"
 #include "mozilla/Unused.h"
+#include "mozilla/GUniquePtr.h"
 #include "mozilla/WidgetUtils.h"
-#include "GeckoProfiler.h"
 #include "nsIPowerManagerService.h"
 #ifdef MOZ_ENABLE_DBUS
+#  include <dbus/dbus-glib-lowlevel.h>
+#  include <gio/gio.h>
 #  include "WakeLockListener.h"
+#  include "nsIObserverService.h"
 #endif
 #include "gfxPlatform.h"
+#include "nsAppRunner.h"
+#include "mozilla/XREAppData.h"
 #include "ScreenHelperGTK.h"
 #include "HeadlessScreenHelper.h"
 #include "mozilla/widget/ScreenManager.h"
@@ -31,8 +38,7 @@
 #  include "nsWaylandDisplay.h"
 #endif
 
-using mozilla::LazyLogModule;
-using mozilla::Unused;
+using namespace mozilla;
 using mozilla::widget::HeadlessScreenHelper;
 using mozilla::widget::ScreenHelperGTK;
 using mozilla::widget::ScreenManager;
@@ -43,19 +49,54 @@ LazyLogModule gWidgetLog("Widget");
 LazyLogModule gWidgetDragLog("WidgetDrag");
 LazyLogModule gWidgetWaylandLog("WidgetWayland");
 LazyLogModule gWidgetPopupLog("WidgetPopup");
+LazyLogModule gWidgetVsync("WidgetVsync");
 LazyLogModule gDmabufLog("Dmabuf");
 LazyLogModule gClipboardLog("WidgetClipboard");
 
 static GPollFunc sPollFunc;
 
 // Wrapper function to disable hang monitoring while waiting in poll().
-static gint PollWrapper(GPollFD* ufds, guint nfsd, gint timeout_) {
+static gint PollWrapper(GPollFD* aUfds, guint aNfsd, gint aTimeout) {
+  if (aTimeout == 0) {
+    // When the timeout is 0, there is no wait, so no point in notifying
+    // the BackgroundHangMonitor and the profiler.
+    return (*sPollFunc)(aUfds, aNfsd, aTimeout);
+  }
+
   mozilla::BackgroundHangMonitor().NotifyWait();
   gint result;
   {
+    gint timeout = aTimeout;
+    gint64 begin = 0;
+    if (aTimeout != -1) {
+      begin = g_get_monotonic_time();
+    }
+
     AUTO_PROFILER_LABEL("PollWrapper", IDLE);
     AUTO_PROFILER_THREAD_SLEEP;
-    result = (*sPollFunc)(ufds, nfsd, timeout_);
+    do {
+      result = (*sPollFunc)(aUfds, aNfsd, timeout);
+
+      // The result will be -1 with the EINTR error if the poll was interrupted
+      // by a signal, typically the signal sent by the profiler to sample the
+      // process. We are only done waiting if we are not in that case.
+      if (result != -1 || errno != EINTR) {
+        break;
+      }
+
+      if (aTimeout != -1) {
+        // Adjust the timeout to account for the time already spent waiting.
+        gint elapsedSinceBegin = (g_get_monotonic_time() - begin) / 1000;
+        if (elapsedSinceBegin < aTimeout) {
+          timeout = aTimeout - elapsedSinceBegin;
+        } else {
+          // poll returns 0 to indicate the call timed out before any fd
+          // became ready.
+          result = 0;
+          break;
+        }
+      }
+    } while (true);
   }
   mozilla::BackgroundHangMonitor().NotifyActivity();
   return result;
@@ -107,12 +148,110 @@ gboolean nsAppShell::EventProcessorCallback(GIOChannel* source,
 }
 
 nsAppShell::~nsAppShell() {
+#ifdef MOZ_ENABLE_DBUS
+  StopDBusListening();
+#endif
   mozilla::hal::Shutdown();
 
   if (mTag) g_source_remove(mTag);
   if (mPipeFDs[0]) close(mPipeFDs[0]);
   if (mPipeFDs[1]) close(mPipeFDs[1]);
 }
+
+#ifdef MOZ_ENABLE_DBUS
+static void SessionSleepCallback(DBusGProxy* aProxy, gboolean aSuspend,
+                                 gpointer data) {
+  nsCOMPtr<nsIObserverService> observerService =
+      mozilla::services::GetObserverService();
+  if (!observerService) {
+    return;
+  }
+
+  if (aSuspend) {
+    // Post sleep_notification
+    observerService->NotifyObservers(nullptr, NS_WIDGET_SLEEP_OBSERVER_TOPIC,
+                                     nullptr);
+  } else {
+    // Post wake_notification
+    observerService->NotifyObservers(nullptr, NS_WIDGET_WAKE_OBSERVER_TOPIC,
+                                     nullptr);
+  }
+}
+
+static DBusHandlerResult ConnectionSignalFilter(DBusConnection* aConnection,
+                                                DBusMessage* aMessage,
+                                                void* aData) {
+  if (dbus_message_is_signal(aMessage, DBUS_INTERFACE_LOCAL, "Disconnected")) {
+    auto* appShell = static_cast<nsAppShell*>(aData);
+    appShell->StopDBusListening();
+    // We do not return DBUS_HANDLER_RESULT_HANDLED here because the connection
+    // might be shared and some other filters might want to do something.
+  }
+
+  return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+// Based on
+// https://github.com/lcp/NetworkManager/blob/240f47c892b4e935a3e92fc09eb15163d1fa28d8/src/nm-sleep-monitor-systemd.c
+// Use login1 to signal sleep and wake notifications.
+void nsAppShell::StartDBusListening() {
+  GUniquePtr<GError> error;
+  mDBusConnection = dbus_g_bus_get(DBUS_BUS_SYSTEM, getter_Transfers(error));
+  if (!mDBusConnection) {
+    NS_WARNING(nsPrintfCString("gds: Failed to open connection to bus %s\n",
+                               error->message)
+                   .get());
+    return;
+  }
+
+  DBusConnection* dbusConnection =
+      dbus_g_connection_get_connection(mDBusConnection);
+
+  // Make sure we do not exit the entire program if DBus connection gets
+  // lost.
+  dbus_connection_set_exit_on_disconnect(dbusConnection, false);
+
+  // Listening to signals the DBus connection is going to get so we will
+  // know when it is lost and we will be able to disconnect cleanly.
+  dbus_connection_add_filter(dbusConnection, ConnectionSignalFilter, this,
+                             nullptr);
+
+  mLogin1Proxy = dbus_g_proxy_new_for_name(
+      mDBusConnection, "org.freedesktop.login1", "/org/freedesktop/login1",
+      "org.freedesktop.login1.Manager");
+
+  if (!mLogin1Proxy) {
+    NS_WARNING("gds: error-no dbus proxy\n");
+    return;
+  }
+
+  dbus_g_proxy_add_signal(mLogin1Proxy, "PrepareForSleep", G_TYPE_BOOLEAN,
+                          G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal(mLogin1Proxy, "PrepareForSleep",
+                              G_CALLBACK(SessionSleepCallback), this, nullptr);
+}
+
+void nsAppShell::StopDBusListening() {
+  // If mDBusConnection isn't initialized, that means we are not really
+  // listening.
+  if (!mDBusConnection) {
+    return;
+  }
+  dbus_connection_remove_filter(
+      dbus_g_connection_get_connection(mDBusConnection), ConnectionSignalFilter,
+      this);
+
+  if (mLogin1Proxy) {
+    dbus_g_proxy_disconnect_signal(mLogin1Proxy, "PrepareForSleep",
+                                   G_CALLBACK(SessionSleepCallback), this);
+    g_object_unref(mLogin1Proxy);
+    mLogin1Proxy = nullptr;
+  }
+  dbus_g_connection_unref(mDBusConnection);
+  mDBusConnection = nullptr;
+}
+
+#endif
 
 nsresult nsAppShell::Init() {
   mozilla::hal::Init();
@@ -129,6 +268,8 @@ nsresult nsAppShell::Init() {
       NS_WARNING(
           "Failed to retrieve PowerManagerService, wakelocks will be broken!");
     }
+
+    StartDBusListening();
   }
 #endif
 
@@ -152,13 +293,9 @@ nsresult nsAppShell::Init() {
       // See https://bugzilla.gnome.org/show_bug.cgi?id=747634
       //
       // Only bother doing this for the parent process, since it's the one
-      // creating top-level windows. (At this point, a child process hasn't
-      // received the list of registered chrome packages, so the
-      // GetBrandShortName call would fail anyway.)
-      nsAutoString brandName;
-      mozilla::widget::WidgetUtils::GetBrandShortName(brandName);
-      if (!brandName.IsEmpty()) {
-        gdk_set_program_class(NS_ConvertUTF16toUTF8(brandName).get());
+      // creating top-level windows.
+      if (gAppData) {
+        gdk_set_program_class(gAppData->remotingName);
       }
     }
   }
@@ -244,9 +381,9 @@ void nsAppShell::ScheduleNativeEventCallback() {
 }
 
 bool nsAppShell::ProcessNextNativeEvent(bool mayWait) {
-  bool ret = g_main_context_iteration(nullptr, mayWait);
+  bool didProcessEvent = g_main_context_iteration(nullptr, mayWait);
 #ifdef MOZ_WAYLAND
   mozilla::widget::WaylandDispatchDisplays();
 #endif
-  return ret;
+  return didProcessEvent;
 }

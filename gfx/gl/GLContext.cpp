@@ -44,6 +44,7 @@
 #include "mozilla/StaticPrefs_gl.h"
 #include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/layers/BuildConstants.h"
 #include "mozilla/layers/TextureForwarder.h"  // for LayersIPCChannel
 
 #include "OGLShaderProgram.h"  // for ShaderProgramType
@@ -162,7 +163,6 @@ static const char* const sExtensionNames[] = {
     "GL_EXT_sRGB",
     "GL_EXT_sRGB_write_control",
     "GL_EXT_shader_texture_lod",
-    "GL_EXT_texture3D",
     "GL_EXT_texture_compression_bptc",
     "GL_EXT_texture_compression_dxt1",
     "GL_EXT_texture_compression_rgtc",
@@ -202,6 +202,7 @@ static const char* const sExtensionNames[] = {
     "GL_OES_depth24",
     "GL_OES_depth32",
     "GL_OES_depth_texture",
+    "GL_OES_draw_buffers_indexed",
     "GL_OES_element_index_uint",
     "GL_OES_fbo_render_mipmap",
     "GL_OES_framebuffer_object",
@@ -544,15 +545,16 @@ bool GLContext::InitImpl() {
 
   ////////////////
 
-  const std::string versionStr = (const char*)fGetString(LOCAL_GL_VERSION);
-  if (versionStr.find("OpenGL ES") == 0) {
-    mProfile = ContextProfile::OpenGLES;
-  }
-
-  if (versionStr.empty()) {
+  const auto* const versionRawStr = (const char*)fGetString(LOCAL_GL_VERSION);
+  if (!versionRawStr || !*versionRawStr) {
     // This can happen with Pernosco.
     NS_WARNING("Empty GL version string");
     return false;
+  }
+
+  const std::string versionStr = versionRawStr;
+  if (versionStr.find("OpenGL ES") == 0) {
+    mProfile = ContextProfile::OpenGLES;
   }
 
   uint32_t majorVer, minorVer;
@@ -673,7 +675,16 @@ bool GLContext::InitImpl() {
     }
   }
 
-  if (ShouldSpew()) {
+  const auto Once = []() {
+    static bool did = false;
+    if (did) return false;
+    did = true;
+    return true;
+  };
+
+  bool printRenderer = ShouldSpew();
+  printRenderer |= (kIsDebug && Once());
+  if (printRenderer) {
     printf_stderr("GL_VENDOR: %s\n", glVendorString);
     printf_stderr("mVendor: %s\n", vendorMatchStrings[size_t(mVendor)]);
     printf_stderr("GL_RENDERER: %s\n", glRendererString);
@@ -1141,7 +1152,7 @@ void GLContext::LoadMoreSymbols(const SymbolLoader& loader) {
             { (PRFuncPtr*) &mSymbols.fResumeTransformFeedback, {{ "glResumeTransformFeedbackNV" }} },
             END_SYMBOLS
         };
-        if (!fnLoadFeatureByCore(coreSymbols, extSymbols, GLFeature::texture_storage)) {
+        if (!fnLoadFeatureByCore(coreSymbols, extSymbols, GLFeature::transform_feedback2)) {
             // Also mark bind_buffer_offset as unsupported.
             MarkUnsupported(GLFeature::bind_buffer_offset);
         }
@@ -1262,6 +1273,26 @@ void GLContext::LoadMoreSymbols(const SymbolLoader& loader) {
         fnLoadFeatureByCore(coreSymbols, extSymbols, GLFeature::draw_buffers);
     }
 
+    if (IsSupported(GLFeature::draw_buffers_indexed)) {
+        const SymLoadStruct coreSymbols[] = {
+            { (PRFuncPtr*) &mSymbols.fBlendEquationSeparatei, {{ "glBlendEquationSeparatei" }} },
+            { (PRFuncPtr*) &mSymbols.fBlendFuncSeparatei, {{ "glBlendFuncSeparatei" }} },
+            { (PRFuncPtr*) &mSymbols.fColorMaski, {{ "glColorMaski" }} },
+            { (PRFuncPtr*) &mSymbols.fDisablei, {{ "glDisablei" }} },
+            { (PRFuncPtr*) &mSymbols.fEnablei, {{ "glEnablei" }} },
+            END_SYMBOLS
+        };
+        const SymLoadStruct extSymbols[] = {
+            { (PRFuncPtr*) &mSymbols.fBlendEquationSeparatei, {{ "glBlendEquationSeparateiOES" }} },
+            { (PRFuncPtr*) &mSymbols.fBlendFuncSeparatei, {{ "glBlendFuncSeparateiOES" }} },
+            { (PRFuncPtr*) &mSymbols.fColorMaski, {{ "glColorMaskiOES" }} },
+            { (PRFuncPtr*) &mSymbols.fDisablei, {{ "glDisableiOES" }} },
+            { (PRFuncPtr*) &mSymbols.fEnablei, {{ "glEnableiOES" }} },
+            END_SYMBOLS
+        };
+        fnLoadFeatureByCore(coreSymbols, extSymbols, GLFeature::draw_buffers_indexed);
+    }
+
     if (IsSupported(GLFeature::get_integer_indexed)) {
         const SymLoadStruct coreSymbols[] = {
             { (PRFuncPtr*) &mSymbols.fGetIntegeri_v, {{ "glGetIntegeri_v" }} },
@@ -1323,7 +1354,8 @@ void GLContext::LoadMoreSymbols(const SymbolLoader& loader) {
             END_SYMBOLS
         };
         const SymLoadStruct extSymbols[] = {
-            { (PRFuncPtr*) &mSymbols.fTexSubImage3D, {{ "glTexSubImage3DEXT", "glTexSubImage3DOES" }} },
+            { (PRFuncPtr*) &mSymbols.fTexImage3D, {{ "glTexImage3DOES" }} },
+            { (PRFuncPtr*) &mSymbols.fTexSubImage3D, {{ "glTexSubImage3DOES" }} },
             END_SYMBOLS
         };
         fnLoadFeatureByCore(coreSymbols, extSymbols, GLFeature::texture_3D);
@@ -2158,39 +2190,72 @@ void GLContext::fCopyTexImage2D(GLenum target, GLint level,
   AfterGLReadCall();
 }
 
-void GLContext::fGetIntegerv(GLenum pname, GLint* params) const {
+void GLContext::fGetIntegerv(const GLenum pname, GLint* const params) const {
+  const auto AssertBinding = [&](const char* const name, const GLenum binding,
+                                 const GLuint expected) {
+    if (MOZ_LIKELY(!mDebugFlags)) return;
+    GLuint actual = 0;
+    raw_fGetIntegerv(binding, (GLint*)&actual);
+    if (actual != expected) {
+      gfxCriticalError() << "Misprediction: " << name << " expected "
+                         << expected << ", was " << actual;
+    }
+  };
+
   switch (pname) {
     case LOCAL_GL_MAX_TEXTURE_SIZE:
       MOZ_ASSERT(mMaxTextureSize > 0);
       *params = mMaxTextureSize;
-      break;
+      return;
 
     case LOCAL_GL_MAX_CUBE_MAP_TEXTURE_SIZE:
       MOZ_ASSERT(mMaxCubeMapTextureSize > 0);
       *params = mMaxCubeMapTextureSize;
-      break;
+      return;
 
     case LOCAL_GL_MAX_RENDERBUFFER_SIZE:
       MOZ_ASSERT(mMaxRenderbufferSize > 0);
       *params = mMaxRenderbufferSize;
-      break;
+      return;
 
     case LOCAL_GL_VIEWPORT:
       for (size_t i = 0; i < 4; i++) {
         params[i] = mViewportRect[i];
       }
-      break;
+      return;
 
     case LOCAL_GL_SCISSOR_BOX:
       for (size_t i = 0; i < 4; i++) {
         params[i] = mScissorRect[i];
       }
+      return;
+
+    case LOCAL_GL_DRAW_FRAMEBUFFER_BINDING:
+      if (mElideDuplicateBindFramebuffers) {
+        static_assert(LOCAL_GL_DRAW_FRAMEBUFFER_BINDING ==
+                      LOCAL_GL_FRAMEBUFFER_BINDING);
+        AssertBinding("GL_DRAW_FRAMEBUFFER_BINDING",
+                      LOCAL_GL_DRAW_FRAMEBUFFER_BINDING, mCachedDrawFb);
+        *params = static_cast<GLint>(mCachedDrawFb);
+        return;
+      }
+      break;
+
+    case LOCAL_GL_READ_FRAMEBUFFER_BINDING:
+      if (mElideDuplicateBindFramebuffers) {
+        if (IsSupported(GLFeature::framebuffer_blit)) {
+          AssertBinding("GL_READ_FRAMEBUFFER_BINDING",
+                        LOCAL_GL_READ_FRAMEBUFFER_BINDING, mCachedReadFb);
+        }
+        *params = static_cast<GLint>(mCachedReadFb);
+        return;
+      }
       break;
 
     default:
-      raw_fGetIntegerv(pname, params);
       break;
   }
+  raw_fGetIntegerv(pname, params);
 }
 
 void GLContext::fReadPixels(GLint x, GLint y, GLsizei width, GLsizei height,

@@ -23,7 +23,9 @@
 #include "nsString.h"
 #include "nsTArray.h"
 #include "nsWeakReference.h"
+#include "nsXULAppAPI.h"
 #include <atomic>
+#include <functional>
 
 class nsIFile;
 
@@ -215,12 +217,16 @@ class Preferences final : public nsIPrefService,
   static nsresult Lock(const char* aPrefName);
   static nsresult Unlock(const char* aPrefName);
   static bool IsLocked(const char* aPrefName);
+  static bool IsSanitized(const char* aPrefName);
 
   // Clears user set pref. Fails if run outside the parent process.
   static nsresult ClearUser(const char* aPrefName);
 
   // Whether the pref has a user value or not.
   static bool HasUserValue(const char* aPref);
+
+  // Whether the pref has a user value or not.
+  static bool HasDefaultValue(const char* aPref);
 
   // Adds/Removes the observer for the root pref branch. See nsIPrefBranch.idl
   // for details.
@@ -394,7 +400,8 @@ class Preferences final : public nsIPrefService,
 
   // When a content process is created these methods are used to pass changed
   // prefs in bulk from the parent process, via shared memory.
-  static void SerializePreferences(nsCString& aStr);
+  static void SerializePreferences(nsCString& aStr,
+                                   bool aIsDestinationWebContentProcess);
   static void DeserializePreferences(char* aStr, size_t aPrefsLen);
 
   static mozilla::ipc::FileDescriptor EnsureSnapshot(size_t* aSize);
@@ -402,7 +409,9 @@ class Preferences final : public nsIPrefService,
 
   // When a single pref is changed in the parent process, these methods are
   // used to pass the update to content processes.
-  static void GetPreference(dom::Pref* aPref);
+  static void GetPreference(dom::Pref* aPref,
+                            const GeckoProcessType aDestinationProcessType,
+                            const nsACString& aDestinationRemoteType);
   static void SetPreference(const dom::Pref& aPref);
 
 #ifdef DEBUG
@@ -420,6 +429,9 @@ class Preferences final : public nsIPrefService,
   // preferences.
   nsresult SavePrefFileBlocking();
   nsresult SavePrefFileAsynchronous();
+
+  // If this is false, only blocking writes, on main thread are allowed.
+  bool AllowOffMainThreadSave();
 
  private:
   virtual ~Preferences();
@@ -442,8 +454,7 @@ class Preferences final : public nsIPrefService,
   nsresult SavePrefFileInternal(nsIFile* aFile, SaveMethod aSaveMethod);
   nsresult WritePrefFile(nsIFile* aFile, SaveMethod aSaveMethod);
 
-  // If this is false, only blocking writes, on main thread are allowed.
-  bool AllowOffMainThreadSave();
+  nsresult ResetUserPrefs();
 
   // Helpers for implementing
   // Register(Prefix)Callback/Unregister(Prefix)Callback.
@@ -522,6 +533,11 @@ class Preferences final : public nsIPrefService,
   // Init static members. Returns true on success.
   static bool InitStaticMembers();
 };
+
+extern Atomic<bool, Relaxed> sOmitBlocklistedPrefValues;
+extern Atomic<bool, Relaxed> sCrashOnBlocklistedPref;
+
+bool ShouldSanitizePreference(const char* aPref, bool aIsDestWebContentProcess);
 
 }  // namespace mozilla
 

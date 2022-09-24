@@ -17,6 +17,7 @@
 #include "js/Warnings.h"              // JS::WarningReporter
 #include "vm/GlobalObject.h"
 #include "vm/JSContext.h"
+#include "vm/SelfHosting.h"  // selfHosting_ErrorReporter
 
 #include "vm/JSContext-inl.h"
 
@@ -47,7 +48,7 @@ void js::CompileError::throwError(JSContext* cx) {
 }
 
 bool js::ReportExceptionClosure::operator()(JSContext* cx) {
-  cx->setPendingExceptionAndCaptureStack(exn_);
+  cx->setPendingException(exn_, ShouldCaptureStack::Always);
   return false;
 }
 
@@ -122,6 +123,11 @@ static void ReportCompileErrorImpl(JSContext* cx, js::ErrorMetadata&& metadata,
 
   if (!js::ExpandErrorArgumentsVA(cx, js::GetErrorMessage, nullptr, errorNumber,
                                   argumentsType, err, *args)) {
+    return;
+  }
+
+  if (MOZ_UNLIKELY(!cx->runtime()->hasInitializedSelfHosting())) {
+    selfHosting_ErrorReporter(err);
     return;
   }
 

@@ -2,16 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-%include ../../shared/downloads/downloads.inc.css
+@import "chrome://browser/skin/downloads/downloads.inc.css";
 
 /*** Panel and outer controls ***/
 
-#downloadsSummary:-moz-focusring {
-  outline-offset: -5px;
-}
-
-@notKeyfocus@ #downloadsSummary:-moz-focusring {
-  outline: none;
+#downloadsHistory {
+  border: 0;
 }
 
 /*** List items and similar elements in the summary ***/
@@ -20,27 +16,18 @@
   --downloads-item-height: 5.5em;
   --downloads-item-font-size-factor: 0.9;
   --downloads-item-details-opacity: 0.6;
+  --downloads-item-disabled-opacity: 0.6;
 }
 
-@notKeyfocus@ .downloadButton:-moz-focusring {
-  outline: none;
-}
+/*** Progress bars ***/
 
-@media (-moz-windows-default-theme) {
+@media (prefers-contrast) {
+  .downloadProgress {
+    background-color: -moz-Dialog;
+    border: 1px solid ButtonText;
+  }
 
-  /* Use unified color for the progressbar on default theme */
   .downloadProgress::-moz-progress-bar {
-    background-color: #3c9af8;
+    --download-progress-fill-color: SelectedItem;
   }
-
-  .downloadProgress[paused]::-moz-progress-bar {
-    background-color: #a6a6a6;
-  }
-}
-
-/*** Highlighted list items ***/
-
-@keyfocus@ @itemFocused@ {
-  outline: 1px -moz-dialogtext dotted;
-  outline-offset: -1px;
 }

@@ -85,27 +85,19 @@ bool HTMLDialogElement::IsInTopLayer() const {
 }
 
 void HTMLDialogElement::AddToTopLayerIfNeeded() {
+  MOZ_ASSERT(IsInComposedDoc());
   if (IsInTopLayer()) {
     return;
   }
 
-  Document* doc = OwnerDoc();
-  doc->TopLayerPush(this);
-  doc->SetBlockedByModalDialog(*this);
-  AddStates(NS_EVENT_STATE_MODAL_DIALOG);
+  OwnerDoc()->AddModalDialog(*this);
 }
 
 void HTMLDialogElement::RemoveFromTopLayerIfNeeded() {
   if (!IsInTopLayer()) {
     return;
   }
-  auto predictFunc = [&](Element* element) { return element == this; };
-
-  Document* doc = OwnerDoc();
-  DebugOnly<Element*> removedElement = doc->TopLayerPop(predictFunc);
-  MOZ_ASSERT(removedElement == this);
-  RemoveStates(NS_EVENT_STATE_MODAL_DIALOG);
-  doc->UnsetBlockedByModalDialog(*this);
+  OwnerDoc()->RemoveModalDialog(*this);
 }
 
 void HTMLDialogElement::StorePreviouslyFocusedElement() {
@@ -124,14 +116,12 @@ void HTMLDialogElement::UnbindFromTree(bool aNullParent) {
 
 void HTMLDialogElement::ShowModal(ErrorResult& aError) {
   if (!IsInComposedDoc()) {
-    aError.ThrowInvalidStateError("Dialog element is not connected");
-    return;
+    return aError.ThrowInvalidStateError("Dialog element is not connected");
   }
 
   if (Open()) {
-    aError.ThrowInvalidStateError(
+    return aError.ThrowInvalidStateError(
         "Dialog element already has an 'open' attribute");
-    return;
   }
 
   AddToTopLayerIfNeeded();
@@ -153,7 +143,7 @@ void HTMLDialogElement::FocusDialog() {
     doc->FlushPendingNotifications(FlushType::Frames);
   }
 
-  Element* control = nullptr;
+  Element* controlCandidate = nullptr;
   for (auto* child = GetFirstChild(); child; child = child->GetNextNode(this)) {
     auto* element = Element::FromNode(child);
     if (!element) {
@@ -165,21 +155,23 @@ void HTMLDialogElement::FocusDialog() {
     }
     if (element->HasAttr(nsGkAtoms::autofocus)) {
       // Find the first descendant of element of subject that this not inert and
-      // has autofucus attribute.
-      control = element;
+      // has autofocus attribute.
+      controlCandidate = element;
       break;
     }
-    if (!control) {
+    if (!controlCandidate) {
       // If there isn't one, then let control be the first non-inert descendant
       // element of subject, in tree order.
-      control = element;
+      controlCandidate = element;
     }
   }
 
   // If there isn't one of those either, then let control be subject.
-  if (!control) {
-    control = this;
+  if (!controlCandidate) {
+    controlCandidate = this;
   }
+
+  RefPtr<Element> control = controlCandidate;
 
   // 3) Run the focusing steps for control.
   ErrorResult rv;
@@ -189,9 +181,12 @@ void HTMLDialogElement::FocusDialog() {
     if (rv.Failed()) {
       return;
     }
-  } else if (nsFocusManager* fm = nsFocusManager::GetFocusManager()) {
-    // Clear the focus which ends up making the body gets focused
-    fm->ClearFocus(OwnerDoc()->GetWindow());
+  } else if (IsInTopLayer()) {
+    if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+      // Clear the focus which ends up making the body gets focused
+      nsCOMPtr<nsPIDOMWindowOuter> outerWindow = OwnerDoc()->GetWindow();
+      fm->ClearFocus(outerWindow);
+    }
   }
 
   // 4) Let topDocument be the active document of control's node document's

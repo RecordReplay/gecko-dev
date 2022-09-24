@@ -13,7 +13,8 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
-#include "nsContentUtils.h"
+#include "mozilla/ClearOnShutdown.h"  // PastShutdownPhase
+#include "mozilla/StaticPrefs_dom.h"
 #include "prthread.h"
 
 namespace mozilla::dom {
@@ -104,7 +105,7 @@ UniquePtr<ClientSource> ClientManager::CreateSourceInternal(
   NS_ASSERT_OWNINGTHREAD(ClientManager);
 
   nsID id;
-  nsresult rv = nsContentUtils::GenerateUUIDInPlace(id);
+  nsresult rv = nsID::GenerateUUIDInPlace(id);
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     // If we can't even get a UUID, at least make sure not to use a garbage
@@ -217,6 +218,15 @@ already_AddRefed<ClientManager> ClientManager::GetOrCreateForCurrentThread() {
   }
 
   MOZ_DIAGNOSTIC_ASSERT(cm);
+
+  if (StaticPrefs::dom_workers_testing_enabled()) {
+    // Check that the ClientManager instance associated to the current thread
+    // has not been kept alive when it was expected to have been already
+    // deallocated (e.g. due to a leak ClientManager's mShutdown can have ben
+    // set to true from its RevokeActor method but never fully deallocated and
+    // unset from the thread locals).
+    MOZ_DIAGNOSTIC_ASSERT(!cm->IsShutdown());
+  }
   return cm.forget();
 }
 
@@ -230,6 +240,12 @@ WorkerPrivate* ClientManager::GetWorkerPrivate() const {
 /* static */ bool ClientManager::ExpectOrForgetFutureSource(
     const ClientInfo& aClientInfo,
     bool (PClientManagerChild::*aMethod)(const IPCClientInfo&)) {
+  // Return earlier if called late in the XPCOM shutdown path,
+  // ClientManager would be already shutdown at the point.
+  if (NS_WARN_IF(PastShutdownPhase(ShutdownPhase::XPCOMShutdown))) {
+    return false;
+  }
+
   bool rv = true;
 
   RefPtr<ClientManager> mgr = ClientManager::GetOrCreateForCurrentThread();
@@ -322,7 +338,7 @@ Maybe<ClientInfo> ClientManager::CreateInfo(ClientType aType,
   }
 
   nsID id;
-  rv = nsContentUtils::GenerateUUIDInPlace(id);
+  rv = nsID::GenerateUUIDInPlace(id);
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return Nothing();

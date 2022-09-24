@@ -37,7 +37,7 @@ class BenchmarkRunner {
         [&]() { done = true; });
 
     // Wait until benchmark completes.
-    SpinEventLoopUntil([&]() { return done; });
+    SpinEventLoopUntil("BenchmarkRunner::Run"_ns, [&]() { return done; });
     return result;
   }
 
@@ -60,6 +60,26 @@ TEST(MediaDataDecoder, H264)
     EXPECT_GT(runner.Run(), 0u);
   }
 }
+
+// Decoding AV1 via. ffvpx is supported on Linux/Wayland only.
+#if defined(MOZ_AV1) && defined(MOZ_WAYLAND) && defined(MOZ_FFVPX) && \
+    !defined(MOZ_FFVPX_AUDIOONLY)
+TEST(MediaDataDecoder, AV1)
+{
+  if (!DecoderTraits::IsMP4SupportedType(
+          MediaContainerType(MEDIAMIMETYPE(VIDEO_MP4)),
+          /* DecoderDoctorDiagnostics* */ nullptr)) {
+    EXPECT_TRUE(true);
+  } else {
+    RefPtr<MockMediaResource> resource = new MockMediaResource("av1.mp4");
+    nsresult rv = resource->Open();
+    EXPECT_TRUE(NS_SUCCEEDED(rv));
+
+    BenchmarkRunner runner(new Benchmark(new MP4Demuxer(resource)));
+    EXPECT_GT(runner.Run(), 0u);
+  }
+}
+#endif
 
 TEST(MediaDataDecoder, VP9)
 {

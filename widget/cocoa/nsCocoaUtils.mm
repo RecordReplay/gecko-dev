@@ -26,6 +26,7 @@
 #include "nsIAppWindow.h"
 #include "nsIBaseWindow.h"
 #include "nsMenuUtilsX.h"
+#include "nsNetUtil.h"
 #include "nsToolkit.h"
 #include "nsCRT.h"
 #include "mozilla/ClearOnShutdown.h"
@@ -43,10 +44,8 @@ using namespace mozilla;
 using namespace mozilla::widget;
 
 using mozilla::dom::Promise;
-using mozilla::gfx::BackendType;
 using mozilla::gfx::DataSourceSurface;
 using mozilla::gfx::DrawTarget;
-using mozilla::gfx::Factory;
 using mozilla::gfx::SamplingFilter;
 using mozilla::gfx::IntPoint;
 using mozilla::gfx::IntRect;
@@ -54,7 +53,6 @@ using mozilla::gfx::IntSize;
 using mozilla::gfx::SurfaceFormat;
 using mozilla::gfx::SourceSurface;
 using mozilla::image::ImageRegion;
-using std::ceil;
 
 LazyLogModule gCocoaUtilsLog("nsCocoaUtils");
 #undef LOG
@@ -388,6 +386,7 @@ nsresult nsCocoaUtils::CreateNSImageFromCGImage(CGImageRef aInputImage, NSImage*
 }
 
 nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, uint32_t aWhichFrame,
+                                                       const nsPresContext* aPresContext,
                                                        const ComputedStyle* aComputedStyle,
                                                        NSImage** aResult, CGFloat scaleFactor,
                                                        bool* aIsEntirelyBlack) {
@@ -411,8 +410,8 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, ui
     MOZ_ASSERT(context);
 
     Maybe<SVGImageContext> svgContext;
-    if (aComputedStyle) {
-      SVGImageContext::MaybeStoreContextPaint(svgContext, aComputedStyle, aImage);
+    if (aPresContext && aComputedStyle) {
+      SVGImageContext::MaybeStoreContextPaint(svgContext, *aPresContext, *aComputedStyle, aImage);
     }
     mozilla::image::ImgDrawResult res =
         aImage->Draw(context, scaledSize, ImageRegion::Create(scaledSize), aWhichFrame,
@@ -450,8 +449,8 @@ nsresult nsCocoaUtils::CreateNSImageFromImageContainer(imgIContainer* aImage, ui
 }
 
 nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(
-    imgIContainer* aImage, uint32_t aWhichFrame, const ComputedStyle* aComputedStyle,
-    NSImage** aResult, bool* aIsEntirelyBlack) {
+    imgIContainer* aImage, uint32_t aWhichFrame, const nsPresContext* aPresContext,
+    const ComputedStyle* aComputedStyle, NSImage** aResult, bool* aIsEntirelyBlack) {
   int32_t width = 0, height = 0;
   aImage->GetWidth(&width);
   aImage->GetHeight(&height);
@@ -460,8 +459,8 @@ nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(
   [*aResult setSize:size];
 
   NSImage* newRepresentation = nil;
-  nsresult rv = nsCocoaUtils::CreateNSImageFromImageContainer(
-      aImage, aWhichFrame, aComputedStyle, &newRepresentation, 1.0f, aIsEntirelyBlack);
+  nsresult rv = CreateNSImageFromImageContainer(aImage, aWhichFrame, aPresContext, aComputedStyle,
+                                                &newRepresentation, 1.0f, aIsEntirelyBlack);
   if (NS_FAILED(rv) || !newRepresentation) {
     return NS_ERROR_FAILURE;
   }
@@ -471,8 +470,8 @@ nsresult nsCocoaUtils::CreateDualRepresentationNSImageFromImageContainer(
   [newRepresentation release];
   newRepresentation = nil;
 
-  rv = nsCocoaUtils::CreateNSImageFromImageContainer(aImage, aWhichFrame, aComputedStyle,
-                                                     &newRepresentation, 2.0f, aIsEntirelyBlack);
+  rv = CreateNSImageFromImageContainer(aImage, aWhichFrame, aPresContext, aComputedStyle,
+                                       &newRepresentation, 2.0f, aIsEntirelyBlack);
   if (NS_FAILED(rv) || !newRepresentation) {
     return NS_ERROR_FAILURE;
   }
@@ -516,6 +515,20 @@ NSString* nsCocoaUtils::ToNSString(const nsACString& aCString) {
   return [[[NSString alloc] initWithBytes:aCString.BeginReading()
                                    length:aCString.Length()
                                  encoding:NSUTF8StringEncoding] autorelease];
+}
+
+// static
+NSURL* nsCocoaUtils::ToNSURL(const nsAString& aURLString) {
+  nsAutoCString encodedURLString;
+  nsresult rv = NS_GetSpecWithNSURLEncoding(encodedURLString, NS_ConvertUTF16toUTF8(aURLString));
+  NS_ENSURE_SUCCESS(rv, nullptr);
+
+  NSString* encodedURLNSString = ToNSString(encodedURLString);
+  if (!encodedURLNSString) {
+    return nullptr;
+  }
+
+  return [NSURL URLWithString:encodedURLNSString];
 }
 
 // static

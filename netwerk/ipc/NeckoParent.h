@@ -30,8 +30,9 @@ class NeckoParent : public PNeckoParent {
   friend class PNeckoParent;
 
  public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(NeckoParent, override)
+
   NeckoParent();
-  virtual ~NeckoParent() = default;
 
   [[nodiscard]] static const char* GetValidatedOriginAttributes(
       const SerializedLoadContext& aSerialized, PContentParent* aBrowser,
@@ -57,6 +58,8 @@ class NeckoParent : public PNeckoParent {
   }
 
  protected:
+  virtual ~NeckoParent() = default;
+
   bool mSocketProcessBridgeInited;
 
   already_AddRefed<PHttpChannelParent> AllocPHttpChannelParent(
@@ -111,12 +114,12 @@ class NeckoParent : public PNeckoParent {
       const nsCString& aFilter) override;
   bool DeallocPUDPSocketParent(PUDPSocketParent*);
   already_AddRefed<PDNSRequestParent> AllocPDNSRequestParent(
-      const nsCString& aHost, const nsCString& aTrrServer,
+      const nsCString& aHost, const nsCString& aTrrServer, const int32_t& aPort,
       const uint16_t& aType, const OriginAttributes& aOriginAttributes,
       const uint32_t& aFlags);
   virtual mozilla::ipc::IPCResult RecvPDNSRequestConstructor(
       PDNSRequestParent* actor, const nsCString& aHost,
-      const nsCString& trrServer, const uint16_t& type,
+      const nsCString& trrServer, const int32_t& aPort, const uint16_t& type,
       const OriginAttributes& aOriginAttributes,
       const uint32_t& flags) override;
   mozilla::ipc::IPCResult RecvSpeculativeConnect(nsIURI* aURI,

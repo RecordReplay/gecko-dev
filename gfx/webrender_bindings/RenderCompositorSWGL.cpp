@@ -9,10 +9,17 @@
 #include "mozilla/gfx/Logging.h"
 #include "mozilla/widget/CompositorWidget.h"
 
+#ifdef MOZ_WIDGET_GTK
+#  include "mozilla/WidgetUtilsGtk.h"
+#endif
+
 namespace mozilla {
 using namespace gfx;
 
 namespace wr {
+
+extern LazyLogModule gRenderThreadLog;
+#define LOG(...) MOZ_LOG(gRenderThreadLog, LogLevel::Debug, (__VA_ARGS__))
 
 /* static */
 UniquePtr<RenderCompositor> RenderCompositorSWGL::Create(
@@ -29,9 +36,12 @@ RenderCompositorSWGL::RenderCompositorSWGL(
     const RefPtr<widget::CompositorWidget>& aWidget, void* aContext)
     : RenderCompositor(aWidget), mContext(aContext) {
   MOZ_ASSERT(mContext);
+  LOG("RenderCompositorSWGL::RenderCompositorSWGL()");
 }
 
 RenderCompositorSWGL::~RenderCompositorSWGL() {
+  LOG("RenderCompositorSWGL::~RenderCompositorSWGL()");
+
   wr_swgl_destroy_context(mContext);
 }
 
@@ -265,8 +275,14 @@ void RenderCompositorSWGL::GetCompositorCapabilities(
   // Always support a single update rect for SwCompositor
   aCaps->max_update_rects = 1;
 
-  // When the window contents may be damaged, we need to force a full redraw.
+  // On uncomposited desktops such as X11 without compositor or Window 7 with
+  // Aero disabled we need to force a full redraw when the window contents may
+  // be damaged.
+#ifdef MOZ_WIDGET_GTK
+  aCaps->redraw_on_invalidation = widget::GdkIsX11Display();
+#else
   aCaps->redraw_on_invalidation = true;
+#endif
 }
 
 }  // namespace wr

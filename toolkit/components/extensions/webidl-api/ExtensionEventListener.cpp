@@ -59,11 +59,11 @@ class SendResponseCallback final : public nsISupports {
     // Create a promise monitor that invalidates the sendResponse
     // callback if the promise has been already resolved or rejected.
     mPromiseListener = new dom::DomPromiseListener(
-        mPromise,
         [self = RefPtr{this}](JSContext* aCx, JS::Handle<JS::Value> aValue) {
           self->Cleanup();
         },
         [self = RefPtr{this}](nsresult aError) { self->Cleanup(); });
+    mPromise->AppendNativeHandler(mPromiseListener);
   }
 
   void Cleanup(bool aIsDestroying = false) {
@@ -73,11 +73,9 @@ class SendResponseCallback final : public nsISupports {
     }
 
     NS_WARNING("SendResponseCallback::Cleanup");
-    // Override the promise listener's resolvers to release the
+    // Clear the promise listener's resolvers to release the
     // RefPtr captured by the ones initially set.
-    mPromiseListener->SetResolvers(
-        [](JSContext* aCx, JS::Handle<JS::Value> aValue) {},
-        [](nsresult aError) {});
+    mPromiseListener->Clear();
     mPromiseListener = nullptr;
 
     if (mPromise) {
@@ -166,11 +164,12 @@ NS_IMPL_ISUPPORTS(ExtensionEventListener, mozIExtensionEventListener)
 
 // static
 already_AddRefed<ExtensionEventListener> ExtensionEventListener::Create(
-    nsIGlobalObject* aGlobal, dom::Function* aCallback,
-    CleanupCallback&& aCleanupCallback, ErrorResult& aRv) {
+    nsIGlobalObject* aGlobal, ExtensionBrowser* aExtensionBrowser,
+    dom::Function* aCallback, CleanupCallback&& aCleanupCallback,
+    ErrorResult& aRv) {
   MOZ_ASSERT(dom::IsCurrentThreadRunningWorker());
   RefPtr<ExtensionEventListener> extCb =
-      new ExtensionEventListener(aGlobal, aCallback);
+      new ExtensionEventListener(aGlobal, aExtensionBrowser, aCallback);
 
   auto* workerPrivate = dom::GetCurrentThreadWorkerPrivate();
   MOZ_ASSERT(workerPrivate);
@@ -281,11 +280,19 @@ NS_IMETHODIMP ExtensionEventListener::CallListener(
   }
 
   if (apiObjectType != APIObjectType::NONE) {
-    // Prepend the apiObjectDescriptor data to the call arguments,
+    bool prependArgument = false;
+    aCallOptions->GetApiObjectPrepended(&prependArgument);
+    // Prepend or append the apiObjectDescriptor data to the call arguments,
     // the worker runnable will convert that into an API object
     // instance on the worker thread.
-    if (!args.InsertElementAt(0, std::move(apiObjectDescriptor), fallible)) {
-      return NS_ERROR_OUT_OF_MEMORY;
+    if (prependArgument) {
+      if (!args.InsertElementAt(0, std::move(apiObjectDescriptor), fallible)) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
+    } else {
+      if (!args.AppendElement(std::move(apiObjectDescriptor), fallible)) {
+        return NS_ERROR_OUT_OF_MEMORY;
+      }
     }
   }
 
@@ -334,6 +341,11 @@ bool ExtensionListenerCallWorkerRunnable::WorkerRun(
   MOZ_ASSERT(aWorkerPrivate == mWorkerPrivate);
   auto global = mListener->GetGlobalObject();
   if (NS_WARN_IF(!global)) {
+    return true;
+  }
+
+  RefPtr<ExtensionBrowser> extensionBrowser = mListener->GetExtensionBrowser();
+  if (NS_WARN_IF(!extensionBrowser)) {
     return true;
   }
 
@@ -392,7 +404,9 @@ bool ExtensionListenerCallWorkerRunnable::WorkerRun(
     // one element.
     MOZ_ASSERT(!argsSequence.IsEmpty());
 
-    JS::Rooted<JS::Value> apiObjectDescriptor(aCx, argsSequence.ElementAt(0));
+    uint32_t apiObjectIdx = mAPIObjectPrepended ? 0 : argsSequence.Length() - 1;
+    JS::Rooted<JS::Value> apiObjectDescriptor(
+        aCx, argsSequence.ElementAt(apiObjectIdx));
     JS::Rooted<JS::Value> apiObjectValue(aCx);
 
     // We only expect the object type to be RUNTIME_PORT at the moment,
@@ -400,7 +414,7 @@ bool ExtensionListenerCallWorkerRunnable::WorkerRun(
     // some specific API may need.
     MOZ_ASSERT(mAPIObjectType == APIObjectType::RUNTIME_PORT);
     RefPtr<ExtensionPort> port =
-        ExtensionPort::Create(global, apiObjectDescriptor, rv);
+        extensionBrowser->GetPort(apiObjectDescriptor, rv);
     if (NS_WARN_IF(rv.Failed())) {
       retPromise->MaybeReject(rv.StealNSResult());
       return true;
@@ -411,7 +425,7 @@ bool ExtensionListenerCallWorkerRunnable::WorkerRun(
       return true;
     }
 
-    argsSequence.ReplaceElementAt(0, apiObjectValue);
+    argsSequence.ReplaceElementAt(apiObjectIdx, apiObjectValue);
   }
 
   // Create callback argument and append it to the call arguments.
@@ -664,12 +678,12 @@ void ExtensionListenerCallPromiseResultHandler::WorkerRunCallback(
 }
 
 void ExtensionListenerCallPromiseResultHandler::ResolvedCallback(
-    JSContext* aCx, JS::Handle<JS::Value> aValue) {
+    JSContext* aCx, JS::Handle<JS::Value> aValue, ErrorResult& aRv) {
   WorkerRunCallback(aCx, aValue, PromiseCallbackType::Resolve);
 }
 
 void ExtensionListenerCallPromiseResultHandler::RejectedCallback(
-    JSContext* aCx, JS::Handle<JS::Value> aValue) {
+    JSContext* aCx, JS::Handle<JS::Value> aValue, ErrorResult& aRv) {
   WorkerRunCallback(aCx, aValue, PromiseCallbackType::Reject);
 }
 

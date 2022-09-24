@@ -172,7 +172,7 @@ extern "C" const char* __tsan_default_suppressions() {
          // No Upstream Bug Filed!
          //
          // Probably benign - sqlite has a few optimizations where it does
-         // racy reads and then does properly synchornized integrity checks
+         // racy reads and then does properly synchronized integrity checks
          // afterwards. Some concern of compiler optimizations messing this
          // up due to "volatile" being too weak for this.
          "race:third_party/sqlite3/*\n"
@@ -184,7 +184,10 @@ extern "C" const char* __tsan_default_suppressions() {
          // fix already up for review.
          "race:StrongRuleNode::ensure_child\n"
          // No Bug - permanent
-         // Upstream Bug: https://github.com/rayon-rs/rayon/issues/812
+         // Upstream Bugs:
+         //
+         //  * https://github.com/rayon-rs/rayon/issues/812
+         //  * https://github.com/crossbeam-rs/crossbeam/issues/589
          //
          // Probably a false-positive from crossbeam's deque not being
          // understood by tsan.
@@ -192,6 +195,7 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:crossbeam_deque*::push\n"
          "race:crossbeam_deque*::write\n"
          "race:crossbeam_deque*::read\n"
+         "race:crossbeam_deque*::steal\n"
 
 
 
@@ -199,6 +203,19 @@ extern "C" const char* __tsan_default_suppressions() {
 
          // The rest of these suppressions are miscellaneous issues in gecko
          // that should be investigated and ideally fixed.
+
+         // Bug 1671574 - Permanent
+         // The StartupCache thread intentionally races with the main thread to
+         // trigger OS-level paging. It is never joined with the main thread.
+         "thread:StartupCache\n"
+
+         // Bug 1734262 - Permanent
+         // When spawning async processes, we create a helper thread to wait for
+         // the process to terminate in order to asynchronously report the exit
+         // code to Gecko. This thread waits on a syscall for the process to end,
+         // which means there's no easy way to cancel and join it during Gecko
+         // shutdown. Suppress thread leak reports for this thread.
+         "thread:CreateMonitorThread\n"
 
          // Bug 1601600
          "race:SkARGB32_Blitter\n"
@@ -208,27 +225,15 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:Clamp_S32_D32_nofilter_trans_shaderproc\n"
          "race:SkSpriteBlitter_Memcpy\n"
 
-         // Bug 1606651
-         "race:nsPluginTag::nsPluginTag\n"
-         "race:nsFakePluginTag\n"
-
          // Bug 1606800
          "race:CallInitFunc\n"
 
          // Bug 1606803
          "race:ipv6_is_present\n"
 
-         // Bug 1615017
-         "race:CacheFileMetadata::SetHash\n"
-         "race:CacheFileMetadata::OnDataWritten\n"
-
          // Bug 1615123
          "race:_dl_deallocate_tls\n"
          "race:__libc_memalign\n"
-
-         // Bug 1664535
-         "race:setNeedsIncrementalBarrier\n"
-         "race:needsIncrementalBarrier\n"
 
          // Bug 1664803
          "race:Sampler::sSigHandlerCoordinator\n"
@@ -258,21 +263,6 @@ extern "C" const char* __tsan_default_suppressions() {
          "race:VRShMem::PullBrowserState\n"
          "race:VRShMem::PushBrowserState\n"
 
-         // Bug 1674776
-         "race:DocumentTimeline::GetCurrentTimeAsDuration\n"
-
-         // Bug 1680285
-         "race:style::traversal::note_children\n"
-         "race:style::matching::MatchMethods::apply_selector_flags\n"
-
-         // Bug 1607588
-         "race:nssToken_Destroy\n"
-         "race:nssSlot_GetToken\n"
-
-         // Bug 1683417
-         "race:DataChannelConnection::SetSignals\n"
-         "race:DataChannelConnection::SetReady\n"
-
          // Bug 1682951
          "race:storage::Connection::Release\n"
 
@@ -289,12 +279,16 @@ extern "C" const char* __tsan_default_suppressions() {
 
          "race:mozilla::gl::MesaMemoryLeakWorkaround\n"
 
+         // Bug 1733908
+         "race:js::wasm::Code::bestTier\n"
+         "race:js::wasm::Code::commitTier2\n"
+         "race:js::wasm::Code::setTier2\n"
+         "race:js::wasm::Code::setAndBorrowTier2\n"
 
-         // Bug 1723321
-         "race:mozilla::layers::AsyncPanZoomController::AsyncPanZoomController\n"
-
-         // Bug 1723170
-         "race:mozilla::layers::APZCTreeManager::NewAPZCInstance\n"
+         // Bug 1755449
+         // The Glean init thread is used to perform I/O and other blocking operations.
+         // It is never joined with the main thread, but this is being re-evaluated.
+         "thread:glean::initialize\n"
 
       // End of suppressions.
       ;  // Please keep this semicolon.

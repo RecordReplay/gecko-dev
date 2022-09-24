@@ -210,12 +210,11 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 },
             ],
             [
-                ["--enable-webrender"],
+                ["--threads"],
                 {
-                    "action": "store_true",
-                    "dest": "enable_webrender",
-                    "default": False,
-                    "help": "Enable the WebRender compositor in Gecko.",
+                    "action": "store",
+                    "dest": "threads",
+                    "help": "Number of total chunks",
                 },
             ],
             [
@@ -303,6 +302,24 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                     "default": False,
                     "dest": "timeout_as_pass",
                     "help": "treat harness level timeout as a pass",
+                },
+            ],
+            [
+                ["--disable-fission"],
+                {
+                    "action": "store_true",
+                    "default": False,
+                    "dest": "disable_fission",
+                    "help": "do not run tests with fission enabled.",
+                },
+            ],
+            [
+                ["--conditioned-profile"],
+                {
+                    "action": "store_true",
+                    "default": False,
+                    "dest": "conditioned_profile",
+                    "help": "run tests with a conditioned profile",
                 },
             ],
         ]
@@ -589,6 +606,14 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                         level=WARNING,
                     )
 
+            # do not add --disable fission if we don't have --disable-e10s
+            if c["disable_fission"] and suite_category not in [
+                "gtest",
+                "cppunittest",
+                "jittest",
+            ]:
+                base_cmd.append("--disable-fission")
+
             # Ignore chunking if we have user specified test paths
             if not (self.verify_enabled or self.per_test_coverage):
                 test_paths = self._get_mozharness_test_paths(suite_category, suite)
@@ -616,8 +641,8 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
             if c["headless"]:
                 base_cmd.append("--headless")
 
-            if c["enable_webrender"]:
-                base_cmd.append("--enable-webrender")
+            if c.get("threads"):
+                base_cmd.extend(["--threads", c["threads"]])
 
             if c.get("threads"):
                 base_cmd.extend(["--threads", c["threads"]])
@@ -639,6 +664,9 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
             if c["crash_as_pass"]:
                 base_cmd.append("--crash-as-pass")
+
+            if c["conditioned_profile"]:
+                base_cmd.append("--conditioned-profile")
 
             # set pluginsPath
             abs_res_plugins_dir = os.path.join(abs_res_dir, "plugins")
@@ -720,6 +748,7 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
             "mochitest": [
                 ("plain.*", "mochitest"),
                 ("browser-chrome.*", "browser-chrome"),
+                ("mochitest-browser-a11y.*", "browser-a11y"),
                 ("mochitest-devtools-chrome.*", "devtools-chrome"),
                 ("chrome", "chrome"),
             ],

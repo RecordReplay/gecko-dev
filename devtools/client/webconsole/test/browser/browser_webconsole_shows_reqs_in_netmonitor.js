@@ -4,13 +4,13 @@
 "use strict";
 
 const TEST_URI =
-  "data:text/html;charset=utf8,Test that the web console " +
+  "data:text/html;charset=utf8,<!DOCTYPE html>Test that the web console " +
   "displays requests that have been recorded in the " +
   "netmonitor, even if the console hadn't opened yet.";
 
 const TEST_FILE = "test-network-request.html";
 const TEST_PATH =
-  "http://example.com/browser/devtools/client/webconsole/test/browser/" +
+  "https://example.com/browser/devtools/client/webconsole/test/browser/" +
   TEST_FILE;
 
 const NET_PREF = "devtools.webconsole.filter.net";
@@ -41,7 +41,7 @@ add_task(async function() {
 
   // We can't use `waitForMessages` here because the `new-messages` event
   // can be emitted before we get the `hud`.
-  await waitFor(() => findMessage(hud, TEST_PATH));
+  await waitFor(() => findMessageByType(hud, TEST_PATH, ".network"));
 
   ok(true, "The network message was found in the console");
 });

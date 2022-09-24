@@ -5,8 +5,6 @@
 
 #include "lib/jxl/quantizer.h"
 
-#include <random>
-
 #include "gtest/gtest.h"
 #include "lib/jxl/base/span.h"
 #include "lib/jxl/common.h"
@@ -28,8 +26,8 @@ TEST(QuantizerTest, QuantizerParams) {
     p.global_scale = i;
     size_t extension_bits = 0, total_bits = 0;
     EXPECT_TRUE(Bundle::CanEncode(p, &extension_bits, &total_bits));
-    EXPECT_EQ(0, extension_bits);
-    EXPECT_GE(total_bits, 4);
+    EXPECT_EQ(0u, extension_bits);
+    EXPECT_GE(total_bits, 4u);
   }
 }
 
@@ -60,11 +58,9 @@ TEST(QuantizerTest, BitStreamRoundtripRandomQuant) {
   Quantizer quantizer1(&dequant);
   ImageI raw_quant_field(qxsize, qysize);
   quantizer1.SetQuant(0.17f, 0.17f, &raw_quant_field);
-  std::mt19937_64 rng;
-  std::uniform_int_distribution<> uniform(1, 256);
   float quant_dc = 0.17f;
   ImageF qf(qxsize, qysize);
-  RandomFillImage(&qf, 1.0f);
+  RandomFillImage(&qf, 0.0f, 1.0f);
   quantizer1.SetQuantField(quant_dc, qf, &raw_quant_field);
   BitWriter writer;
   EXPECT_TRUE(quantizer1.Encode(&writer, 0, nullptr));

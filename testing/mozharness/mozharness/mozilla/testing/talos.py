@@ -208,21 +208,12 @@ class Talos(
                 },
             ],
             [
-                ["--enable-webrender"],
+                ["--disable-fission"],
                 {
-                    "action": "store_true",
-                    "dest": "enable_webrender",
-                    "default": False,
-                    "help": "Enable the WebRender compositor in Gecko.",
-                },
-            ],
-            [
-                ["--enable-fission"],
-                {
-                    "action": "store_true",
-                    "dest": "enable_fission",
-                    "default": False,
-                    "help": "Enable Fission (site isolation) in Gecko.",
+                    "action": "store_false",
+                    "dest": "fission",
+                    "default": True,
+                    "help": "Disable Fission (site isolation) in Gecko.",
                 },
             ],
             [
@@ -233,6 +224,15 @@ class Talos(
                     "dest": "extra_prefs",
                     "default": [],
                     "help": "Set a browser preference. May be used multiple times.",
+                },
+            ],
+            [
+                ["--skip-preflight"],
+                {
+                    "action": "store_true",
+                    "dest": "skip_preflight",
+                    "default": False,
+                    "help": "skip preflight commands to prepare machine.",
                 },
             ],
         ]
@@ -271,6 +271,7 @@ class Talos(
 
         self.run_local = self.config.get("run_local")
         self.installer_url = self.config.get("installer_url")
+        self.test_packages_url = self.config.get("test_packages_url")
         self.talos_json_url = self.config.get("talos_json_url")
         self.talos_json = self.config.get("talos_json")
         self.talos_json_config = self.config.get("talos_json_config")
@@ -448,7 +449,7 @@ class Talos(
             return self.webextensions_zip
 
     def get_suite_from_test(self):
-        """ Retrieve the talos suite name from a given talos test name."""
+        """Retrieve the talos suite name from a given talos test name."""
         # running locally, single test name provided instead of suite; go through tests and
         # find suite name
         suite_name = None
@@ -473,8 +474,14 @@ class Talos(
             self.fatal("Talos json config not found, cannot verify suite")
         return suite_name
 
+    def query_suite_extra_prefs(self):
+        if self.query_talos_json_config() and self.suite is not None:
+            return self.talos_json_config["suites"][self.suite].get("extra_prefs", [])
+
+        return []
+
     def validate_suite(self):
-        """ Ensure suite name is a valid talos suite. """
+        """Ensure suite name is a valid talos suite."""
         if self.query_talos_json_config() and self.suite is not None:
             if self.suite not in self.talos_json_config.get("suites"):
                 self.fatal(
@@ -522,19 +529,21 @@ class Talos(
             options += self.config["talos_extra_options"]
         if self.config.get("code_coverage", False):
             options.extend(["--code-coverage"])
+
+        # Add extra_prefs defined by individual test suites in talos.json
+        extra_prefs = self.query_suite_extra_prefs()
+        # Add extra_prefs from the configuration
         if self.config["extra_prefs"]:
-            options.extend(
-                ["--setpref={}".format(p) for p in self.config["extra_prefs"]]
-            )
-        if self.config["enable_webrender"]:
-            options.extend(["--enable-webrender"])
-        # enabling fission can come from the --enable-fission cmd line argument; or in CI
+            extra_prefs.extend(self.config["extra_prefs"])
+
+        options.extend(["--setpref={}".format(p) for p in extra_prefs])
+
+        # disabling fission can come from the --disable-fission cmd line argument; or in CI
         # it comes from a taskcluster transform which adds a --setpref for fission.autostart
-        if (
-            self.config["enable_fission"]
-            or "fission.autostart=true" in self.config["extra_prefs"]
-        ):
-            options.extend(["--enable-fission"])
+        if (not self.config["fission"]) or "fission.autostart=false" in self.config[
+            "extra_prefs"
+        ]:
+            options.extend(["--disable-fission"])
 
         return options
 

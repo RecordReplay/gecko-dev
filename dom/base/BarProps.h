@@ -18,6 +18,7 @@
 #include "nsWrapperCache.h"
 #include "nsPIDOMWindow.h"
 #include "mozilla/dom/BindingDeclarations.h"
+#include "mozilla/dom/BrowsingContext.h"
 
 class nsGlobalWindowInner;
 class nsIWebBrowserChrome;
@@ -34,7 +35,7 @@ class BarProp : public nsISupports, public nsWrapperCache {
   explicit BarProp(nsGlobalWindowInner* aWindow);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(BarProp)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(BarProp)
 
   nsPIDOMWindowInner* GetParentObject() const;
 
@@ -47,11 +48,15 @@ class BarProp : public nsISupports, public nsWrapperCache {
  protected:
   virtual ~BarProp();
 
-  bool GetVisibleByFlag(uint32_t aChromeFlag, ErrorResult& aRv);
+  bool GetVisibleByIsPopup();
+  bool GetVisibleByFlag(uint32_t aChromeFlag, CallerType aCallerType,
+                        ErrorResult& aRv);
   void SetVisibleByFlag(bool aVisible, uint32_t aChromeFlag,
                         CallerType aCallerType, ErrorResult& aRv);
 
   already_AddRefed<nsIWebBrowserChrome> GetBrowserChrome();
+
+  BrowsingContext* GetBrowsingContext();
 
   RefPtr<nsGlobalWindowInner> mDOMWindow;
 };

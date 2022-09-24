@@ -18,12 +18,12 @@ class nsProtectedAuthThread : public nsIProtectedAuthThread {
  private:
   mozilla::Mutex mMutex;
 
-  nsCOMPtr<nsIRunnable> mNotifyObserver;
+  nsCOMPtr<nsIRunnable> mNotifyObserver GUARDED_BY(mMutex);
 
-  bool mIAmRunning;
-  bool mLoginReady;
+  bool mIAmRunning GUARDED_BY(mMutex);
+  bool mLoginReady GUARDED_BY(mMutex);
 
-  PRThread* mThreadHandle;
+  PRThread* mThreadHandle;  // MainThread only
 
   // Slot to do authentication on
   PK11SlotInfo* mSlot;

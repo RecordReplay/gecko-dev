@@ -17,12 +17,10 @@ add_task(async function test_main_process_crash() {
     do_crash(
       function() {
         // TelemetrySession setup will trigger the session annotation
-        let scope = {};
-        ChromeUtils.import(
-          "resource://gre/modules/TelemetryController.jsm",
-          scope
+        let { TelemetryController } = ChromeUtils.import(
+          "resource://gre/modules/TelemetryController.jsm"
         );
-        scope.TelemetryController.testSetup();
+        TelemetryController.testSetup();
         crashType = CrashTestUtils.CRASH_MOZ_CRASH;
         crashReporter.annotateCrashReport("ShutdownProgress", "event-test");
       },
@@ -38,7 +36,12 @@ add_task(async function test_main_process_crash() {
   let crashes = await cm.getCrashes();
   Assert.equal(crashes.length, 1);
   let crash = crashes[0];
-  Assert.ok(crash.isOfType(cm.PROCESS_TYPE_MAIN, cm.CRASH_TYPE_CRASH));
+  Assert.ok(
+    crash.isOfType(
+      cm.processTypes[Ci.nsIXULRuntime.PROCESS_TYPE_DEFAULT],
+      cm.CRASH_TYPE_CRASH
+    )
+  );
   Assert.equal(crash.id + ".dmp", basename, "ID recorded properly");
   Assert.equal(crash.metadata.ShutdownProgress, "event-test");
   Assert.ok("TelemetrySessionId" in crash.metadata);

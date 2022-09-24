@@ -63,7 +63,6 @@ class ChromeMessageSender;
 class ContentParent;
 class Document;
 class Element;
-class TabListener;
 class InProcessBrowserChildMessageManager;
 class MessageSender;
 class ProcessMessageManager;
@@ -72,8 +71,9 @@ class MutableTabContext;
 class BrowserBridgeChild;
 class RemoteBrowser;
 struct RemotenessOptions;
-struct RemotenessChangeOptions;
-class SessionStoreChangeListener;
+struct NavigationIsolationOptions;
+class SessionStoreChild;
+class SessionStoreParent;
 
 namespace ipc {
 class StructuredCloneData;
@@ -105,13 +105,13 @@ class nsFrameLoader final : public nsStubMutationObserver,
   friend class AutoResetInShow;
   friend class AutoResetInFrameSwap;
   friend class nsFrameLoaderOwner;
-  typedef mozilla::dom::Document Document;
-  typedef mozilla::dom::Element Element;
-  typedef mozilla::dom::BrowserParent BrowserParent;
-  typedef mozilla::dom::BrowserBridgeChild BrowserBridgeChild;
-  typedef mozilla::dom::BrowsingContext BrowsingContext;
-  typedef mozilla::dom::BrowsingContextGroup BrowsingContextGroup;
-  typedef mozilla::dom::Promise Promise;
+  using Document = mozilla::dom::Document;
+  using Element = mozilla::dom::Element;
+  using BrowserParent = mozilla::dom::BrowserParent;
+  using BrowserBridgeChild = mozilla::dom::BrowserBridgeChild;
+  using BrowsingContext = mozilla::dom::BrowsingContext;
+  using BrowsingContextGroup = mozilla::dom::BrowsingContextGroup;
+  using Promise = mozilla::dom::Promise;
 
  public:
   // Called by Frame Elements to create a new FrameLoader.
@@ -123,13 +123,13 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // FrameLoaders.
   static already_AddRefed<nsFrameLoader> Recreate(
       Element* aOwner, BrowsingContext* aContext, BrowsingContextGroup* aGroup,
-      const mozilla::dom::RemotenessChangeOptions& aRemotenessOptions,
+      const mozilla::dom::NavigationIsolationOptions& aRemotenessOptions,
       bool aIsRemote, bool aNetworkCreated, bool aPreserveContext);
 
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_FRAMELOADER_IID)
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsFrameLoader)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(nsFrameLoader)
 
   NS_DECL_NSIMUTATIONOBSERVER_ATTRIBUTECHANGED
   nsresult CheckForRecursiveLoad(nsIURI* aURI);
@@ -211,14 +211,8 @@ class nsFrameLoader final : public nsStubMutationObserver,
    */
   void Destroy(bool aForProcessSwitch = false);
 
-  void ActivateRemoteFrame(mozilla::ErrorResult& aRv);
-
-  void DeactivateRemoteFrame(mozilla::ErrorResult& aRv);
-
   void ActivateFrameEvent(const nsAString& aType, bool aCapture,
                           mozilla::ErrorResult& aRv);
-
-  void RequestNotifyAfterRemotePaint();
 
   void RequestUpdatePosition(mozilla::ErrorResult& aRv);
 
@@ -409,11 +403,19 @@ class nsFrameLoader final : public nsStubMutationObserver,
   void ConfigRemoteProcess(const nsACString& aRemoteType,
                            mozilla::dom::ContentParent* aContentParent);
 
-  void MaybeNotifyCrashed(mozilla::dom::BrowsingContext* aBrowsingContext,
-                          mozilla::dom::ContentParentId aChildID,
-                          mozilla::ipc::MessageChannel* aChannel);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void MaybeNotifyCrashed(
+      mozilla::dom::BrowsingContext* aBrowsingContext,
+      mozilla::dom::ContentParentId aChildID,
+      mozilla::ipc::MessageChannel* aChannel);
 
   void FireErrorEvent();
+
+  mozilla::dom::SessionStoreChild* GetSessionStoreChild() {
+    return mSessionStoreChild;
+  }
+
+  mozilla::dom::SessionStoreParent* GetSessionStoreParent();
 
  private:
   nsFrameLoader(mozilla::dom::Element* aOwner,
@@ -524,12 +526,14 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // Holds the last known size of the frame.
   mozilla::ScreenIntSize mLazySize;
 
-  RefPtr<mozilla::dom::TabListener> mSessionStoreListener;
-
-  RefPtr<mozilla::dom::SessionStoreChangeListener> mSessionStoreChangeListener;
+  // Actor for collecting session store data from content children. This will be
+  // cleared and set to null eagerly when taking down the frameloader to break
+  // refcounted cycles early.
+  RefPtr<mozilla::dom::SessionStoreChild> mSessionStoreChild;
 
   nsCString mRemoteType;
 
+  bool mInitialized : 1;
   bool mDepthTooGreat : 1;
   bool mIsTopLevelContent : 1;
   bool mDestroyCalled : 1;
@@ -556,10 +560,6 @@ class nsFrameLoader final : public nsStubMutationObserver,
   // When an out-of-process nsFrameLoader crashes, an event is fired on the
   // frame. To ensure this is only fired once, this bit is checked.
   bool mTabProcessCrashFired : 1;
-
-  // True when we're within the scope of MaybeNotifyCrashed, for detecting
-  // when we recurse back into ourselves from JS event listeners
-  bool mNotifyingCrash : 1;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsFrameLoader, NS_FRAMELOADER_IID)

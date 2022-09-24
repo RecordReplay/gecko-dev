@@ -36,9 +36,17 @@ let TestTabUnloaderMethods = {
     return /\bwebrtc\b/.test(tab.keywords) ? weight : 0;
   },
 
+  isPrivate(tab, weight) {
+    return /\bprivate\b/.test(tab.keywords) ? weight : 0;
+  },
+
   getMinTabCount() {
     // Use a low number for testing.
     return 3;
+  },
+
+  getNow() {
+    return 100;
   },
 
   *iterateProcesses(tab) {
@@ -47,7 +55,7 @@ let TestTabUnloaderMethods = {
     }
   },
 
-  async calculateMemoryUsage(tabs, processMap) {
+  async calculateMemoryUsage(processMap, tabs) {
     let memory = tabs[0].memory;
     for (let pid of processMap.keys()) {
       processMap.get(pid).memory = memory ? memory[pid - 1] : 1;
@@ -69,7 +77,7 @@ let unloadTests = [
   {
     tabs: ["1 selected", "2 selected", "3 selected"],
     process: ["1", "2", "3"],
-    result: "", // when there are no non-discardable tabs, an empty list is returned
+    result: "0,1,2",
   },
   {
     tabs: ["1 selected", "2", "3"],
@@ -112,7 +120,7 @@ let unloadTests = [
   },
   {
     tabs: ["1", "2 selected", "3", "4 media", "5", "6"],
-    result: "0,2,4,5,3,1",
+    result: "0,2,4,5,1,3",
   },
   {
     tabs: ["1 media", "2 selected media", "3", "4 media", "5", "6"],
@@ -131,7 +139,25 @@ let unloadTests = [
       "5 media pinned",
       "6 selected",
     ],
-    result: "2,0,3,1,4,5",
+    result: "2,0,3,5,1,4",
+  },
+  {
+    tabs: [
+      "10 selected",
+      "20 private",
+      "30 webrtc",
+      "40 pictureinpicture",
+      "50 loading pinned",
+      "60",
+    ],
+    result: "5,4,0,1,2,3",
+  },
+  {
+    // Since TestTabUnloaderMethods.getNow() returns 100 and the test
+    // passes minInactiveDuration = 0 to TabUnloader.getSortedTabs(),
+    // tab 200 and 300 are excluded from the result.
+    tabs: ["300", "10", "50", "100", "200"],
+    result: "1,2,3",
   },
   {
     tabs: ["1", "2", "3", "4", "5", "6"],
@@ -361,6 +387,23 @@ let unloadTests = [
     memory: ["4000", "1800", "1000"],
     result: "0,1,2,4,3,5,6,7",
   },
+  {
+    // The tab "1" contains 4 frames, but its uniqueCount is 1 because
+    // all of those frames are backed by the process "1".  As a result,
+    // TabUnloader puts the tab "1" first based on the last access time.
+    tabs: ["1", "2", "3", "4", "5"],
+    process: ["1,1,1,1", "2", "3", "3", "3"],
+    memory: ["100", "100", "100"],
+    result: "0,1,2,3,4",
+  },
+  {
+    // The uniqueCount of the tab "1", "2", and "3" is 1, 2, and 3,
+    // respectively.  As a result the first three tabs are sorted as 2,1,0.
+    tabs: ["1", "2", "3", "4", "5", "6"],
+    process: ["1,7,1,7,1,1,7,1", "7,3,7,2", "4,5,7,4,6,7", "7", "7", "7"],
+    memory: ["100", "100", "100", "100", "100", "100", "100"],
+    result: "2,1,0,3,4,5",
+  },
 ];
 
 let globalBrowser = {
@@ -390,7 +433,10 @@ add_task(async function doTests() {
     TestTabUnloaderMethods.iterateTabs = iterateTabs;
 
     let expectedOrder = "";
-    let sortedTabs = await TabUnloader.getSortedTabs(TestTabUnloaderMethods);
+    const sortedTabs = await TabUnloader.getSortedTabs(
+      0,
+      TestTabUnloaderMethods
+    );
     for (let tab of sortedTabs) {
       if (expectedOrder) {
         expectedOrder += ",";

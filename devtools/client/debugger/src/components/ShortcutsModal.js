@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import React, { Component } from "react";
+import PropTypes from "prop-types";
 import Modal from "./shared/Modal";
 import classnames from "classnames";
 import { formatKeyShortcut } from "../utils/text";
@@ -10,6 +11,14 @@ import { formatKeyShortcut } from "../utils/text";
 import "./ShortcutsModal.css";
 
 export class ShortcutsModal extends Component {
+  static get propTypes() {
+    return {
+      additionalClass: PropTypes.string.isRequired,
+      enabled: PropTypes.bool.isRequired,
+      handleClose: PropTypes.func.isRequired,
+    };
+  }
+
   renderPrettyCombos(combo) {
     return combo
       .split(" ")
@@ -69,10 +78,6 @@ export class ShortcutsModal extends Component {
         {this.renderShorcutItem(
           L10N.getStr("shortcuts.fileSearch2"),
           formatKeyShortcut(L10N.getStr("sources.search.key2"))
-        )}
-        {this.renderShorcutItem(
-          L10N.getStr("shortcuts.searchAgain2"),
-          formatKeyShortcut(L10N.getStr("sourceSearch.search.again.key3"))
         )}
         {this.renderShorcutItem(
           L10N.getStr("shortcuts.projectSearch2"),

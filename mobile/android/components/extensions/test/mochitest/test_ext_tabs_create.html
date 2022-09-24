@@ -15,12 +15,13 @@
 
 add_task(async function() {
   await SpecialPowers.pushPrefEnv({
-    set: [["privacy.userContext.enabled", true]],
+    set: [
+      ["privacy.userContext.enabled", true],
+      ["dom.security.https_first", false],
+    ],
   });
   const extension = ExtensionTestUtils.loadExtension({
-    useAddonManager: "permanent",
     manifest: {
-      "applications": { "gecko": { "id": "tabs-create@tests.mozilla.org" } },
       "permissions": ["tabs", "cookies"],
 
       "background": {"page": "bg/background.html"},

@@ -6,7 +6,7 @@
 
 /*
  * Descriptor Actor that represents a Tab in the parent process. It
- * launches a FrameTargetActor in the content process to do the real work and tunnels the
+ * launches a WindowGlobalTargetActor in the content process to do the real work and tunnels the
  * data.
  *
  * See devtools/docs/backend/actor-hierarchy.md for more details.
@@ -25,6 +25,9 @@ loader.lazyImporter(
 const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
 const { tabDescriptorSpec } = require("devtools/shared/specs/descriptors/tab");
 const { AppConstants } = require("resource://gre/modules/AppConstants.jsm");
+const {
+  createBrowserElementSessionContext,
+} = require("devtools/server/actors/watcher/session-context");
 
 loader.lazyRequireGetter(
   this,
@@ -36,7 +39,7 @@ loader.lazyRequireGetter(
 /**
  * Creates a target actor proxy for handling requests to a single browser frame.
  * Both <xul:browser> and <iframe mozbrowser> are supported.
- * This actor is a shim that connects to a FrameTargetActor in a remote browser process.
+ * This actor is a shim that connects to a WindowGlobalTargetActor in a remote browser process.
  * All RDP packets get forwarded using the message manager.
  *
  * @param connection The main RDP connection.
@@ -52,6 +55,7 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
   form() {
     const form = {
       actor: this.actorID,
+      browserId: this._browser.browserId,
       browsingContextID:
         this._browser && this._browser.browsingContext
           ? this._browser.browsingContext.id
@@ -179,9 +183,15 @@ const TabDescriptorActor = ActorClassWithSpec(tabDescriptorSpec, {
    * already exists or will be created. It also helps knowing when they
    * are destroyed.
    */
-  getWatcher() {
+  getWatcher(config) {
     if (!this.watcher) {
-      this.watcher = new WatcherActor(this.conn, { browser: this._browser });
+      this.watcher = new WatcherActor(
+        this.conn,
+        createBrowserElementSessionContext(this._browser, {
+          isServerTargetSwitchingEnabled: config.isServerTargetSwitchingEnabled,
+          isPopupDebuggingEnabled: config.isPopupDebuggingEnabled,
+        })
+      );
       this.manage(this.watcher);
     }
     return this.watcher;

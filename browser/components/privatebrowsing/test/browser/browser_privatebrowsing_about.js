@@ -15,18 +15,20 @@ XPCOMUtils.defineLazyGetter(this, "UrlbarTestUtils", () => {
 });
 
 /**
- * Clicks the given link and checks this opens the given URI in the same tab.
+ * Clicks the given link and checks this opens the given URI in the new tab.
  *
  * This function does not return to the previous page.
  */
 async function testLinkOpensUrl({ win, tab, elementId, expectedUrl }) {
-  let loadedPromise = BrowserTestUtils.browserLoaded(tab);
+  let loadedPromise = BrowserTestUtils.waitForNewTab(win.gBrowser, url =>
+    url.startsWith(expectedUrl)
+  );
   await SpecialPowers.spawn(tab, [elementId], async function(elemId) {
     content.document.getElementById(elemId).click();
   });
   await loadedPromise;
   is(
-    tab.currentURI.spec,
+    win.gBrowser.selectedBrowser.currentURI.spec,
     expectedUrl,
     `Clicking ${elementId} opened ${expectedUrl} in the same tab.`
   );
@@ -35,9 +37,14 @@ async function testLinkOpensUrl({ win, tab, elementId, expectedUrl }) {
 let expectedEngineAlias;
 let expectedIconURL;
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
-    set: [["browser.search.separatePrivateDefault", true]],
+    set: [
+      ["browser.search.separatePrivateDefault", true],
+      // Enable suggestions in this test. Otherwise, the behaviour of the
+      // content search box changes.
+      ["browser.search.suggest.enabled", true],
+    ],
   });
 
   const originalPrivateDefault = await Services.search.getDefaultPrivate();
@@ -192,4 +199,62 @@ add_task(async function test_search_handoff_on_paste() {
   is(win.gURLBar.value, "words", "Urlbar has search text");
 
   await BrowserTestUtils.closeWindow(win);
+});
+
+/**
+ * Tests that handoff enters search mode when suggestions are disabled.
+ */
+add_task(async function test_search_handoff_search_mode() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["browser.urlbar.suggest.searches", false]],
+  });
+
+  let { win, tab } = await openAboutPrivateBrowsing();
+
+  await SpecialPowers.spawn(tab, [], async function() {
+    let btn = content.document.getElementById("search-handoff-button");
+    btn.click();
+    ok(btn.classList.contains("focused"), "in-content search has focus styles");
+  });
+  ok(urlBarHasHiddenFocus(win), "Urlbar has hidden focus");
+
+  // Expect two searches, one to enter search mode and then another in search
+  // mode.
+  let searchPromise = UrlbarTestUtils.promiseSearchComplete(win);
+
+  await new Promise(r => EventUtils.synthesizeKey("f", {}, win, r));
+  await SpecialPowers.spawn(tab, [], async function() {
+    ok(
+      content.document
+        .getElementById("search-handoff-button")
+        .classList.contains("disabled"),
+      "in-content search is disabled"
+    );
+  });
+  await searchPromise;
+  ok(urlBarHasNormalFocus(win), "Urlbar has normal focus");
+  await UrlbarTestUtils.assertSearchMode(win, {
+    engineName: "DuckDuckGo",
+    source: UrlbarUtils.RESULT_SOURCE.SEARCH,
+    entry: "handoff",
+  });
+  is(win.gURLBar.value, "f", "url bar has search text");
+
+  // Close the popup.
+  await UrlbarTestUtils.exitSearchMode(win);
+  await UrlbarTestUtils.promisePopupClose(win);
+
+  // Hitting ESC should reshow the in-content search
+  await new Promise(r => EventUtils.synthesizeKey("KEY_Escape", {}, win, r));
+  await SpecialPowers.spawn(tab, [], async function() {
+    ok(
+      !content.document
+        .getElementById("search-handoff-button")
+        .classList.contains("disabled"),
+      "in-content search is not disabled"
+    );
+  });
+
+  await BrowserTestUtils.closeWindow(win);
+  await SpecialPowers.popPrefEnv();
 });

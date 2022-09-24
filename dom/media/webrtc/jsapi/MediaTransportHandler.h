@@ -48,6 +48,7 @@ class MediaTransportHandler {
   explicit MediaTransportHandler(nsISerialEventTarget* aCallbackThread)
       : mCallbackThread(aCallbackThread) {}
 
+  // Exposed so we can synchronously validate ICE servers from PeerConnection
   static nsresult ConvertIceServers(
       const nsTArray<dom::RTCIceServer>& aIceServers,
       std::vector<NrIceStunServer>* aStunServers,
@@ -63,8 +64,9 @@ class MediaTransportHandler {
   virtual void EnterPrivateMode() = 0;
   virtual void ExitPrivateMode() = 0;
 
-  virtual nsresult CreateIceCtx(const std::string& aName,
-                                const nsTArray<dom::RTCIceServer>& aIceServers,
+  virtual void CreateIceCtx(const std::string& aName) = 0;
+
+  virtual nsresult SetIceConfig(const nsTArray<dom::RTCIceServer>& aIceServers,
                                 dom::RTCIceTransportPolicy aIcePolicy) = 0;
 
   // We will probably be able to move the proxy lookup stuff into
@@ -74,7 +76,7 @@ class MediaTransportHandler {
   virtual void EnsureProvisionalTransport(const std::string& aTransportId,
                                           const std::string& aLocalUfrag,
                                           const std::string& aLocalPwd,
-                                          size_t aComponentCount) = 0;
+                                          int aComponentCount) = 0;
 
   virtual void SetTargetForDefaultLocalAddressLookup(
       const std::string& aTargetIp, uint16_t aTargetPort) = 0;

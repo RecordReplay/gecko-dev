@@ -28,9 +28,10 @@ class nsWindowRoot final : public nsPIWindowRoot {
 
   bool ComputeDefaultWantsUntrusted(mozilla::ErrorResult& aRv) final;
 
-  bool DispatchEvent(mozilla::dom::Event& aEvent,
-                     mozilla::dom::CallerType aCallerType,
-                     mozilla::ErrorResult& aRv) override;
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY bool DispatchEvent(
+      mozilla::dom::Event& aEvent, mozilla::dom::CallerType aCallerType,
+      mozilla::ErrorResult& aRv) override;
 
   void GetEventTargetParent(mozilla::EventChainPreVisitor& aVisitor) override;
 
@@ -63,7 +64,7 @@ class nsWindowRoot final : public nsPIWindowRoot {
 
   JSObject* WrapObject(JSContext*, JS::Handle<JSObject*> aGivenProto) override;
 
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsWindowRoot)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(nsWindowRoot)
 
   void AddBrowser(nsIRemoteTab* aBrowser) override;
   void RemoveBrowser(nsIRemoteTab* aBrowser) override;
@@ -94,7 +95,7 @@ class nsWindowRoot final : public nsPIWindowRoot {
 
   // The BrowserParents that are currently registered with this top-level
   // window.
-  typedef nsTHashSet<RefPtr<nsIWeakReference>> WeakBrowserTable;
+  using WeakBrowserTable = nsTHashSet<RefPtr<nsIWeakReference>>;
   WeakBrowserTable mWeakBrowsers;
 };
 

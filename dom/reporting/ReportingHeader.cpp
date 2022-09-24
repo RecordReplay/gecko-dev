@@ -8,6 +8,7 @@
 
 #include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject
 #include "js/JSON.h"
+#include "js/PropertyAndElement.h"  // JS_GetElement
 #include "mozilla/dom/ReportingBinding.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SimpleGlobalObject.h"
@@ -31,8 +32,7 @@
 #define REPORTING_PURGE_ALL "reporting:purge-all"
 #define REPORTING_PURGE_HOST "reporting:purge-host"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -731,6 +731,12 @@ ReportingHeader::Notify(nsITimer* aTimer) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+ReportingHeader::GetName(nsACString& aName) {
+  aName.AssignLiteral("ReportingHeader");
+  return NS_OK;
+}
+
 void ReportingHeader::MaybeCreateCleanupTimer() {
   if (mCleanupTimer) {
     return;
@@ -764,10 +770,10 @@ NS_INTERFACE_MAP_BEGIN(ReportingHeader)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_ADDREF(ReportingHeader)
 NS_IMPL_RELEASE(ReportingHeader)
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

@@ -8,6 +8,7 @@
 #define NSSCertDBTrustDomain_h
 
 #include "CertVerifier.h"
+#include "CRLiteTimestamp.h"
 #include "ScopedNSSTypes.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/TimeStamp.h"
@@ -77,6 +78,18 @@ bool LoadOSClientCertsModule(const nsCString& dir);
 extern const char* kOSClientCertsModuleName;
 
 /**
+ * Loads the IPC client certs module.
+ *
+ * @param dir
+ *        The path to the directory containing the module. This should be the
+ *        same as where all of the other gecko libraries live.
+ * @return true if the module was successfully loaded, false otherwise.
+ */
+bool LoadIPCClientCertsModule(const nsCString& dir);
+
+extern const char* kIPCClientCertsModuleName;
+
+/**
  * Unloads the loadable roots module and os client certs module, if loaded.
  */
 void UnloadUserModules();
@@ -131,12 +144,11 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
       unsigned int minRSABits, ValidityCheckingMode validityCheckingMode,
       CertVerifier::SHA1Mode sha1Mode,
       NetscapeStepUpPolicy netscapeStepUpPolicy, CRLiteMode crliteMode,
-      uint64_t crliteCTMergeDelaySeconds,
       const OriginAttributes& originAttributes,
       const Vector<mozilla::pkix::Input>& thirdPartyRootInputs,
       const Vector<mozilla::pkix::Input>& thirdPartyIntermediateInputs,
       const Maybe<nsTArray<nsTArray<uint8_t>>>& extraCertificates,
-      /*out*/ UniqueCERTCertList& builtChain,
+      /*out*/ nsTArray<nsTArray<uint8_t>>& builtChain,
       /*optional*/ PinningTelemetryInfo* pinningTelemetryInfo = nullptr,
       /*optional*/ const char* hostname = nullptr);
 
@@ -159,16 +171,23 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
       mozilla::pkix::EndEntityOrCA endEntityOrCA,
       unsigned int modulusSizeInBits) override;
 
-  virtual Result VerifyRSAPKCS1SignedDigest(
-      const mozilla::pkix::SignedDigest& signedDigest,
+  virtual Result VerifyRSAPKCS1SignedData(
+      mozilla::pkix::Input data, mozilla::pkix::DigestAlgorithm digestAlgorithm,
+      mozilla::pkix::Input signature,
+      mozilla::pkix::Input subjectPublicKeyInfo) override;
+
+  virtual Result VerifyRSAPSSSignedData(
+      mozilla::pkix::Input data, mozilla::pkix::DigestAlgorithm digestAlgorithm,
+      mozilla::pkix::Input signature,
       mozilla::pkix::Input subjectPublicKeyInfo) override;
 
   virtual Result CheckECDSACurveIsAcceptable(
       mozilla::pkix::EndEntityOrCA endEntityOrCA,
       mozilla::pkix::NamedCurve curve) override;
 
-  virtual Result VerifyECDSASignedDigest(
-      const mozilla::pkix::SignedDigest& signedDigest,
+  virtual Result VerifyECDSASignedData(
+      mozilla::pkix::Input data, mozilla::pkix::DigestAlgorithm digestAlgorithm,
+      mozilla::pkix::Input signature,
       mozilla::pkix::Input subjectPublicKeyInfo) override;
 
   virtual Result DigestBuf(mozilla::pkix::Input item,
@@ -217,9 +236,21 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
   mozilla::pkix::Input GetSCTListFromCertificate() const;
   mozilla::pkix::Input GetSCTListFromOCSPStapling() const;
 
+  bool GetIsBuiltChainRootBuiltInRoot() const;
+
   bool GetIsErrorDueToDistrustedCAPolicy() const;
 
  private:
+  Result CheckCRLiteStash(
+      const nsTArray<uint8_t>& issuerSubjectPublicKeyInfoBytes,
+      const nsTArray<uint8_t>& serialNumberBytes);
+  Result CheckCRLite(
+      const nsTArray<uint8_t>& issuerBytes,
+      const nsTArray<uint8_t>& issuerSubjectPublicKeyInfoBytes,
+      const nsTArray<uint8_t>& serialNumberBytes,
+      const nsTArray<RefPtr<nsICRLiteTimestamp>>& crliteTimestamps,
+      bool& filterCoversCertificate);
+
   enum EncodedResponseSource {
     ResponseIsFromNetwork = 1,
     ResponseWasStapled = 2
@@ -233,8 +264,8 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
   Result SynchronousCheckRevocationWithServer(
       const mozilla::pkix::CertID& certID, const nsCString& aiaLocation,
       mozilla::pkix::Time time, uint16_t maxOCSPLifetimeInDays,
-      const Result cachedResponseResult,
-      const Result stapledOCSPResponseResult);
+      const Result cachedResponseResult, const Result stapledOCSPResponseResult,
+      const bool crliteFilterCoversCertificate, const Result crliteResult);
   Result HandleOCSPFailure(const Result cachedResponseResult,
                            const Result stapledOCSPResponseResult,
                            const Result error);
@@ -251,14 +282,14 @@ class NSSCertDBTrustDomain : public mozilla::pkix::TrustDomain {
   CertVerifier::SHA1Mode mSHA1Mode;
   NetscapeStepUpPolicy mNetscapeStepUpPolicy;
   CRLiteMode mCRLiteMode;
-  uint64_t mCRLiteCTMergeDelaySeconds;
   bool mSawDistrustedCAByPolicyError;
   const OriginAttributes& mOriginAttributes;
   const Vector<mozilla::pkix::Input>& mThirdPartyRootInputs;  // non-owning
   const Vector<mozilla::pkix::Input>&
       mThirdPartyIntermediateInputs;                             // non-owning
   const Maybe<nsTArray<nsTArray<uint8_t>>>& mExtraCertificates;  // non-owning
-  UniqueCERTCertList& mBuiltChain;                               // non-owning
+  nsTArray<nsTArray<uint8_t>>& mBuiltChain;                      // non-owning
+  bool mIsBuiltChainRootBuiltInRoot;
   PinningTelemetryInfo* mPinningTelemetryInfo;
   const char* mHostname;  // non-owning - only used for pinning checks
   nsCOMPtr<nsICertStorage> mCertStorage;

@@ -84,21 +84,23 @@ var openInspectorSidebarTab = async function(id) {
  * @return a promise that resolves when the inspector is ready and the rule view
  * is visible and ready
  */
-function openRuleView() {
-  return openInspector().then(data => {
-    const view = data.inspector.getPanel("ruleview").view;
+async function openRuleView() {
+  const { inspector, toolbox, highlighterTestFront } = await openInspector();
 
-    // Replace the view to use a custom debounce function that can be triggered manually
-    // through an additional ".flush()" property.
-    view.debounce = manualDebounce();
+  const ruleViewPanel = inspector.getPanel("ruleview");
+  await ruleViewPanel.readyPromise;
+  const view = ruleViewPanel.view;
 
-    return {
-      toolbox: data.toolbox,
-      inspector: data.inspector,
-      highlighterTestFront: data.highlighterTestFront,
-      view,
-    };
-  });
+  // Replace the view to use a custom debounce function that can be triggered manually
+  // through an additional ".flush()" property.
+  view.debounce = manualDebounce();
+
+  return {
+    toolbox,
+    inspector,
+    highlighterTestFront,
+    view,
+  };
 }
 
 /**
@@ -244,8 +246,16 @@ var selectNode = async function(
   info("Selecting the node for '" + selector + "'");
   const nodeFront = await getNodeFront(selector, inspector);
   const updated = inspector.once("inspector-updated");
+
+  const { ELEMENT_NODE } = require("devtools/shared/dom-node-constants");
+  const onSelectionCssSelectorsUpdated =
+    nodeFront?.nodeType == ELEMENT_NODE
+      ? inspector.once("selection-css-selectors-updated")
+      : null;
+
   inspector.selection.setNodeFront(nodeFront, { reason, isSlotted });
   await updated;
+  await onSelectionCssSelectorsUpdated;
 };
 
 /**
@@ -265,6 +275,8 @@ async function getNodeFrontInFrames(selectors, inspector) {
   let walker = inspector.walker;
   let rootNode = walker.rootNode;
 
+  // clone the array since `selectors` could be used from callsite after.
+  selectors = [...selectors];
   // Extract the last selector from the provided array of selectors.
   const nodeSelector = selectors.pop();
 
@@ -276,26 +288,26 @@ async function getNodeFrontInFrames(selectors, inspector) {
     const url = walker.targetFront.url;
     info(`Find the frame element for selector ${frameSelector} in ${url}`);
 
-    const frameFront = await walker.querySelector(rootNode, frameSelector);
+    const frameNodeFront = await walker.querySelector(rootNode, frameSelector);
 
-    // For a remote frame, connect to the corresponding frame target.
+    // If needed, connect to the corresponding frame target.
     // Otherwise, reuse the current targetFront.
-    let frameTarget = frameFront.targetFront;
-    if (frameFront.remoteFrame) {
-      info("Connect to remote frame and retrieve the targetFront");
-      frameTarget = await frameFront.connectToRemoteFrame();
+    let frameTarget = frameNodeFront.targetFront;
+    if (frameNodeFront.useChildTargetToFetchChildren) {
+      info("Connect to frame and retrieve the targetFront");
+      frameTarget = await frameNodeFront.connectToFrame();
     }
 
     walker = (await frameTarget.getFront("inspector")).walker;
 
-    if (frameFront.remoteFrame) {
-      // For remote frames or browser elements, use the walker's rootNode.
+    if (frameNodeFront.useChildTargetToFetchChildren) {
+      // For frames or browser elements, use the walker's rootNode.
       rootNode = walker.rootNode;
     } else {
       // For same-process frames, select the document front as the root node.
       // It is a different node from the walker's rootNode.
       info("Retrieve the children of the frame to find the document node");
-      const { nodes } = await walker.children(frameFront);
+      const { nodes } = await walker.children(frameNodeFront);
       rootNode = nodes.find(n => n.nodeType === Node.DOCUMENT_NODE);
     }
   }

@@ -67,7 +67,6 @@ const startupPhases = {
         "resource://gre/modules/NewTabUtils.jsm",
         "resource://gre/modules/PageThumbs.jsm",
         "resource://gre/modules/PlacesUtils.jsm",
-        "resource://gre/modules/Promise.jsm", // imported by devtools during _delayedStartup
         "resource://gre/modules/Preferences.jsm",
         "resource://gre/modules/Sqlite.jsm",
       ]),
@@ -114,6 +113,7 @@ const startupPhases = {
       modules: new Set([
         "resource://gre/modules/AsyncPrefs.jsm",
         "resource://gre/modules/LoginManagerContextMenu.jsm",
+        "resource://gre/modules/osfile.jsm",
         "resource://pdf.js/PdfStreamConverter.jsm",
       ]),
     },

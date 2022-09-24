@@ -40,6 +40,7 @@
 #include "nsIURIMutator.h"
 #include "nsIWritablePropertyBag2.h"
 #include "nsReadLine.h"
+#include "nsTHashSet.h"
 #include "nsToolkitCompsCID.h"
 
 using namespace mozilla::dom;
@@ -47,7 +48,7 @@ using namespace mozilla::dom;
 namespace mozilla {
 
 #define PERMISSIONS_FILE_NAME "permissions.sqlite"
-#define HOSTS_SCHEMA_VERSION 11
+#define HOSTS_SCHEMA_VERSION 12
 
 // Default permissions are read from a URL - this is the preference we read
 // to find that URL. If not set, don't use any default permissions.
@@ -165,31 +166,29 @@ bool IsOAForceStripPermission(const nsACString& aType) {
   return false;
 }
 
-/**
- * Strip origin attributes depending on pref state
- * @param aForceStrip If true, strips user context and private browsing id,
- * ignoring stripping prefs.
- * @param aOriginAttributes object to strip.
- */
-void MaybeStripOAs(bool aForceStrip, OriginAttributes& aOriginAttributes) {
-  uint32_t flags = 0;
+// Array of permission prefixes which should be isolated only by site.
+// These site-scoped permissions are stored under their site's principal.
+// GetAllForPrincipal also needs to look for these especially.
+static constexpr std::array<nsLiteralCString, 1> kSiteScopedPermissions = {
+    {"3rdPartyStorage^"_ns}};
 
-  if (aForceStrip || !StaticPrefs::permissions_isolateBy_privateBrowsing()) {
-    flags |= OriginAttributes::STRIP_PRIVATE_BROWSING_ID;
+bool IsSiteScopedPermission(const nsACString& aType) {
+  if (aType.IsEmpty()) {
+    return false;
   }
-
-  if (aForceStrip || !StaticPrefs::permissions_isolateBy_userContext()) {
-    flags |= OriginAttributes::STRIP_USER_CONTEXT_ID;
+  for (const auto& perm : kSiteScopedPermissions) {
+    if (aType.Length() >= perm.Length() &&
+        Substring(aType, 0, perm.Length()) == perm) {
+      return true;
+    }
   }
-
-  if (flags != 0) {
-    aOriginAttributes.StripAttributes(flags);
-  }
+  return false;
 }
 
 void OriginAppendOASuffix(OriginAttributes aOriginAttributes,
                           bool aForceStripOA, nsACString& aOrigin) {
-  MaybeStripOAs(aForceStripOA, aOriginAttributes);
+  PermissionManager::MaybeStripOriginAttributes(aForceStripOA,
+                                                aOriginAttributes);
 
   nsAutoCString oaSuffix;
   aOriginAttributes.CreateSuffix(oaSuffix);
@@ -210,11 +209,29 @@ nsresult GetOriginFromPrincipal(nsIPrincipal* aPrincipal, bool aForceStripOA,
   NS_ENSURE_SUCCESS(rv, rv);
 
   OriginAttributes attrs;
-  if (!attrs.PopulateFromSuffix(suffix)) {
-    return NS_ERROR_FAILURE;
-  }
+  NS_ENSURE_TRUE(attrs.PopulateFromSuffix(suffix), NS_ERROR_FAILURE);
 
   OriginAppendOASuffix(attrs, aForceStripOA, aOrigin);
+
+  return NS_OK;
+}
+
+// Returns the site of the principal, including OA, given a principal.
+nsresult GetSiteFromPrincipal(nsIPrincipal* aPrincipal, bool aForceStripOA,
+                              nsACString& aSite) {
+  nsresult rv = aPrincipal->GetSiteOriginNoSuffix(aSite);
+  // The principal may belong to the about:blank content viewer, so this can be
+  // expected to fail.
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  nsAutoCString suffix;
+  rv = aPrincipal->GetOriginSuffix(suffix);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  OriginAttributes attrs;
+  NS_ENSURE_TRUE(attrs.PopulateFromSuffix(suffix), NS_ERROR_FAILURE);
+
+  OriginAppendOASuffix(attrs, aForceStripOA, aSite);
 
   return NS_OK;
 }
@@ -241,7 +258,7 @@ nsresult GetPrincipalFromOrigin(const nsACString& aOrigin, bool aForceStripOA,
     return NS_ERROR_FAILURE;
   }
 
-  MaybeStripOAs(aForceStripOA, attrs);
+  PermissionManager::MaybeStripOriginAttributes(aForceStripOA, attrs);
 
   nsCOMPtr<nsIURI> uri;
   nsresult rv = NS_NewURI(getter_AddRefs(uri), originNoSuffix);
@@ -555,14 +572,19 @@ bool IsPersistentExpire(uint32_t aExpire, const nsACString& aType) {
 PermissionManager::PermissionKey*
 PermissionManager::PermissionKey::CreateFromPrincipal(nsIPrincipal* aPrincipal,
                                                       bool aForceStripOA,
+                                                      bool scopeToSite,
                                                       nsresult& aResult) {
-  nsAutoCString origin;
-  aResult = GetOriginFromPrincipal(aPrincipal, aForceStripOA, origin);
+  nsAutoCString keyString;
+  if (scopeToSite) {
+    aResult = GetSiteFromPrincipal(aPrincipal, aForceStripOA, keyString);
+  } else {
+    aResult = GetOriginFromPrincipal(aPrincipal, aForceStripOA, keyString);
+  }
   if (NS_WARN_IF(NS_FAILED(aResult))) {
     return nullptr;
   }
 
-  return new PermissionKey(origin);
+  return new PermissionKey(keyString);
 }
 
 PermissionManager::PermissionKey*
@@ -739,11 +761,13 @@ nsresult PermissionManager::OpenDatabase(nsIFile* aPermissionsFile) {
   }
   // cache a connection to the hosts database
   if (mMemoryOnlyDB) {
-    rv =
-        storage->OpenSpecialDatabase(kMozStorageMemoryStorageKey, VoidCString(),
-                                     getter_AddRefs(data->mDBConn));
+    rv = storage->OpenSpecialDatabase(
+        kMozStorageMemoryStorageKey, VoidCString(),
+        mozIStorageService::CONNECTION_DEFAULT, getter_AddRefs(data->mDBConn));
   } else {
-    rv = storage->OpenDatabase(aPermissionsFile, getter_AddRefs(data->mDBConn));
+    rv = storage->OpenDatabase(aPermissionsFile,
+                               mozIStorageService::CONNECTION_DEFAULT,
+                               getter_AddRefs(data->mDBConn));
   }
   return rv;
 }
@@ -1340,6 +1364,84 @@ nsresult PermissionManager::TryInitDB(bool aRemoveFile,
             "SUBSTR(type, 0, 18) == \"storageAccessAPI^\";"));
         NS_ENSURE_SUCCESS(rv, rv);
 
+        rv = data->mDBConn->SetSchemaVersion(11);
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+        // fall through to the next upgrade
+        [[fallthrough]];
+
+      case 11: {
+        // Migrate 3rdPartyStorage keys to a site scope
+        rv = data->mDBConn->BeginTransaction();
+        NS_ENSURE_SUCCESS(rv, rv);
+        nsCOMPtr<mozIStorageStatement> updateStmt;
+        rv = data->mDBConn->CreateStatement(
+            nsLiteralCString("UPDATE moz_perms SET origin = ?2 WHERE id = ?1"),
+            getter_AddRefs(updateStmt));
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        nsCOMPtr<mozIStorageStatement> deleteStmt;
+        rv = data->mDBConn->CreateStatement(
+            nsLiteralCString("DELETE FROM moz_perms WHERE id = ?1"),
+            getter_AddRefs(deleteStmt));
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        nsCOMPtr<mozIStorageStatement> selectStmt;
+        rv = data->mDBConn->CreateStatement(
+            nsLiteralCString("SELECT id, origin, type FROM moz_perms WHERE "
+                             " SUBSTR(type, 0, 17) == \"3rdPartyStorage^\""),
+            getter_AddRefs(selectStmt));
+        NS_ENSURE_SUCCESS(rv, rv);
+
+        nsTHashSet<nsCStringHashKey> deduplicationSet;
+        bool hasResult;
+        while (NS_SUCCEEDED(selectStmt->ExecuteStep(&hasResult)) && hasResult) {
+          int64_t id;
+          rv = selectStmt->GetInt64(0, &id);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          nsCString origin;
+          rv = selectStmt->GetUTF8String(1, origin);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          nsCString type;
+          rv = selectStmt->GetUTF8String(2, type);
+          NS_ENSURE_SUCCESS(rv, rv);
+
+          nsCOMPtr<nsIURI> uri;
+          rv = NS_NewURI(getter_AddRefs(uri), origin);
+          if (NS_FAILED(rv)) {
+            continue;
+          }
+          nsCString site;
+          rv = nsEffectiveTLDService::GetInstance()->GetSite(uri, site);
+          if (NS_WARN_IF(NS_FAILED(rv))) {
+            continue;
+          }
+
+          nsCString deduplicationKey =
+              nsPrintfCString("%s,%s", site.get(), type.get());
+          if (deduplicationSet.Contains(deduplicationKey)) {
+            rv = deleteStmt->BindInt64ByIndex(0, id);
+            NS_ENSURE_SUCCESS(rv, rv);
+
+            rv = deleteStmt->Execute();
+            NS_ENSURE_SUCCESS(rv, rv);
+          } else {
+            deduplicationSet.Insert(deduplicationKey);
+            rv = updateStmt->BindInt64ByIndex(0, id);
+            NS_ENSURE_SUCCESS(rv, rv);
+            rv = updateStmt->BindUTF8StringByIndex(1, site);
+            NS_ENSURE_SUCCESS(rv, rv);
+
+            rv = updateStmt->Execute();
+            NS_ENSURE_SUCCESS(rv, rv);
+          }
+        }
+        rv = data->mDBConn->CommitTransaction();
+        NS_ENSURE_SUCCESS(rv, rv);
+
         rv = data->mDBConn->SetSchemaVersion(HOSTS_SCHEMA_VERSION);
         NS_ENSURE_SUCCESS(rv, rv);
       }
@@ -1515,6 +1617,39 @@ bool PermissionManager::HasExpired(uint32_t aExpireType, int64_t aExpireTime) {
 }
 
 NS_IMETHODIMP
+PermissionManager::AddFromPrincipalAndPersistInPrivateBrowsing(
+    nsIPrincipal* aPrincipal, const nsACString& aType, uint32_t aPermission) {
+  ENSURE_NOT_CHILD_PROCESS;
+  NS_ENSURE_ARG_POINTER(aPrincipal);
+  // We don't add the system principal because it actually has no URI and we
+  // always allow action for them.
+  if (aPrincipal->IsSystemPrincipal()) {
+    return NS_OK;
+  }
+
+  // Null principals can't meaningfully have persisted permissions attached to
+  // them, so we don't allow adding permissions for them.
+  if (aPrincipal->GetIsNullPrincipal()) {
+    return NS_OK;
+  }
+
+  // Permissions may not be added to expanded principals.
+  if (IsExpandedPrincipal(aPrincipal)) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  // A modificationTime of zero will cause AddInternal to use now().
+  int64_t modificationTime = 0;
+
+  return AddInternal(aPrincipal, aType, aPermission, 0,
+                     nsIPermissionManager::EXPIRE_NEVER,
+                     /* aExpireTime */ 0, modificationTime, eNotify, eWriteToDB,
+                     /* aIgnoreSessionPermissions */ false,
+                     /* aOriginString*/ nullptr,
+                     /* aAllowPersistInPrivateBrowsing */ true);
+}
+
+NS_IMETHODIMP
 PermissionManager::AddFromPrincipal(nsIPrincipal* aPrincipal,
                                     const nsACString& aType,
                                     uint32_t aPermission, uint32_t aExpireType,
@@ -1561,7 +1696,8 @@ nsresult PermissionManager::AddInternal(
     int64_t aID, uint32_t aExpireType, int64_t aExpireTime,
     int64_t aModificationTime, NotifyOperationType aNotifyOperation,
     DBOperationType aDBOperation, const bool aIgnoreSessionPermissions,
-    const nsACString* aOriginString) {
+    const nsACString* aOriginString,
+    const bool aAllowPersistInPrivateBrowsing) {
   MOZ_ASSERT(NS_IsMainThread());
 
   EnsureReadCompleted();
@@ -1576,19 +1712,25 @@ nsresult PermissionManager::AddInternal(
       // Use the origin string provided by the caller.
       origin = *aOriginString;
     } else {
-      // Compute it from the principal provided.
-      rv = GetOriginFromPrincipal(aPrincipal, IsOAForceStripPermission(aType),
+      if (IsSiteScopedPermission(aType)) {
+        rv = GetSiteFromPrincipal(aPrincipal, IsOAForceStripPermission(aType),
                                   origin);
+      } else {
+        // Compute it from the principal provided.
+        rv = GetOriginFromPrincipal(aPrincipal, IsOAForceStripPermission(aType),
+                                    origin);
+      }
       NS_ENSURE_SUCCESS(rv, rv);
     }
   }
 
-  // For private browsing only store permissions for the session. Except for
-  // default permissions which are stored in-memory only and imported each
-  // startup. We also allow setting persistent UKNOWN_ACTION, to support
-  // removing default private browsing permissions.
-  if (aID != cIDPermissionIsDefault && aPermission != UNKNOWN_ACTION &&
-      aExpireType != EXPIRE_SESSION) {
+  // Unless the caller sets aAllowPersistInPrivateBrowsing, only store
+  // permissions for the session in Private Browsing. Except for default
+  // permissions which are stored in-memory only and imported each startup. We
+  // also allow setting persistent UKNOWN_ACTION, to support removing default
+  // private browsing permissions.
+  if (!aAllowPersistInPrivateBrowsing && aID != cIDPermissionIsDefault &&
+      aPermission != UNKNOWN_ACTION && aExpireType != EXPIRE_SESSION) {
     uint32_t privateBrowsingId =
         nsScriptSecurityManager::DEFAULT_PRIVATE_BROWSING_ID;
     nsresult rv = aPrincipal->GetPrivateBrowsingId(&privateBrowsingId);
@@ -1626,7 +1768,8 @@ nsresult PermissionManager::AddInternal(
   // When an entry already exists, PutEntry will return that, instead
   // of adding a new one
   RefPtr<PermissionKey> key = PermissionKey::CreateFromPrincipal(
-      aPrincipal, IsOAForceStripPermission(aType), rv);
+      aPrincipal, IsOAForceStripPermission(aType),
+      IsSiteScopedPermission(aType), rv);
   if (!key) {
     MOZ_ASSERT(NS_FAILED(rv));
     return rv;
@@ -2299,6 +2442,10 @@ NS_IMETHODIMP PermissionManager::GetAll(
 NS_IMETHODIMP PermissionManager::GetAllByTypeSince(
     const nsACString& aPrefix, int64_t aSince,
     nsTArray<RefPtr<nsIPermission>>& aResult) {
+  // Check that aSince is a reasonable point in time, not in the future
+  if (aSince > (PR_Now() / PR_USEC_PER_MSEC)) {
+    return NS_ERROR_INVALID_ARG;
+  }
   return GetPermissionEntries(
       [&](const PermissionEntry& aPermEntry) {
         return mTypeArray[aPermEntry.mType].Equals(aPrefix) &&
@@ -2316,17 +2463,12 @@ NS_IMETHODIMP PermissionManager::GetAllWithTypePrefix(
       aResult);
 }
 
-NS_IMETHODIMP
-PermissionManager::GetAllForPrincipal(
-    nsIPrincipal* aPrincipal, nsTArray<RefPtr<nsIPermission>>& aResult) {
-  aResult.Clear();
-  EnsureReadCompleted();
-
-  MOZ_ASSERT(PermissionAvailable(aPrincipal, ""_ns));
-
+nsresult PermissionManager::GetAllForPrincipalHelper(
+    nsIPrincipal* aPrincipal, bool aSiteScopePermissions,
+    nsTArray<RefPtr<nsIPermission>>& aResult) {
   nsresult rv;
-  RefPtr<PermissionKey> key =
-      PermissionKey::CreateFromPrincipal(aPrincipal, false, rv);
+  RefPtr<PermissionKey> key = PermissionKey::CreateFromPrincipal(
+      aPrincipal, false, aSiteScopePermissions, rv);
   if (!key) {
     MOZ_ASSERT(NS_FAILED(rv));
     return rv;
@@ -2334,7 +2476,8 @@ PermissionManager::GetAllForPrincipal(
   PermissionHashKey* entry = mPermissionTable.GetEntry(key);
 
   nsTArray<PermissionEntry> strippedPerms;
-  rv = GetStripPermsForPrincipal(aPrincipal, strippedPerms);
+  rv = GetStripPermsForPrincipal(aPrincipal, aSiteScopePermissions,
+                                 strippedPerms);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -2350,6 +2493,13 @@ PermissionManager::GetAllForPrincipal(
       // because we're iterating over a lot of permissions.
       // It will be removed as part of the daily maintenance later.
       if (HasExpired(permEntry.mExpireType, permEntry.mExpireTime)) {
+        continue;
+      }
+
+      // Make sure that we only get site scoped permissions if this
+      // helper is being invoked for that purpose.
+      if (aSiteScopePermissions !=
+          IsSiteScopedPermission(mTypeArray[permEntry.mType])) {
         continue;
       }
 
@@ -2388,6 +2538,23 @@ PermissionManager::GetAllForPrincipal(
   }
 
   return NS_OK;
+}
+
+NS_IMETHODIMP
+PermissionManager::GetAllForPrincipal(
+    nsIPrincipal* aPrincipal, nsTArray<RefPtr<nsIPermission>>& aResult) {
+  nsresult rv;
+  aResult.Clear();
+  EnsureReadCompleted();
+
+  MOZ_ASSERT(PermissionAvailable(aPrincipal, ""_ns));
+
+  // First, append the non-site-scoped permissions.
+  rv = GetAllForPrincipalHelper(aPrincipal, false, aResult);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  // Second, append the site-scoped permissions.
+  return GetAllForPrincipalHelper(aPrincipal, true, aResult);
 }
 
 NS_IMETHODIMP PermissionManager::Observe(nsISupports* aSubject,
@@ -2472,19 +2639,28 @@ nsresult PermissionManager::RemovePermissionsWithAttributes(
 }
 
 nsresult PermissionManager::GetStripPermsForPrincipal(
-    nsIPrincipal* aPrincipal, nsTArray<PermissionEntry>& aResult) {
+    nsIPrincipal* aPrincipal, bool aSiteScopePermissions,
+    nsTArray<PermissionEntry>& aResult) {
   aResult.Clear();
   aResult.SetCapacity(kStripOAPermissions.size());
 
+#ifdef __clang__
+#  pragma clang diagnostic push
+#  pragma clang diagnostic ignored "-Wunreachable-code-return"
+#endif
   // No special strip permissions
   if (kStripOAPermissions.empty()) {
     return NS_OK;
   }
+#ifdef __clang__
+#  pragma clang diagnostic pop
+#endif
 
   nsresult rv;
-  // Create a key for the principal, but strip any origin attributes
-  RefPtr<PermissionKey> key =
-      PermissionKey::CreateFromPrincipal(aPrincipal, true, rv);
+  // Create a key for the principal, but strip any origin attributes.
+  // The key must be created aware of whether or not we are scoping to site.
+  RefPtr<PermissionKey> key = PermissionKey::CreateFromPrincipal(
+      aPrincipal, true, aSiteScopePermissions, rv);
   if (!key) {
     MOZ_ASSERT(NS_FAILED(rv));
     return rv;
@@ -2496,6 +2672,14 @@ nsresult PermissionManager::GetStripPermsForPrincipal(
   }
 
   for (const auto& permType : kStripOAPermissions) {
+    // if the permission type's site scoping does not match this function call,
+    // we don't care about it, so continue.
+    // As of time of writing, this never happens when aSiteScopePermissions
+    // is true because there is no common permission between kStripOAPermissions
+    // and kSiteScopedPermissions
+    if (aSiteScopePermissions != IsSiteScopedPermission(permType)) {
+      continue;
+    }
     int32_t index = GetTypeIndex(permType, false);
     if (index == -1) {
       continue;
@@ -2539,7 +2723,8 @@ PermissionManager::PermissionHashKey* PermissionManager::GetPermissionHashKey(
 
   nsresult rv;
   RefPtr<PermissionKey> key = PermissionKey::CreateFromPrincipal(
-      aPrincipal, IsOAForceStripPermission(mTypeArray[aType]), rv);
+      aPrincipal, IsOAForceStripPermission(mTypeArray[aType]),
+      IsSiteScopedPermission(mTypeArray[aType]), rv);
   if (!key) {
     return nullptr;
   }
@@ -2959,7 +3144,7 @@ bool PermissionManager::GetPermissionsFromOriginOrKey(
     if (aOrigin.IsEmpty()) {
       // We can't check for individual OA strip perms here.
       // Don't force strip origin attributes.
-      GetKeyForOrigin(entry.GetKey()->mOrigin, false, permissionKey);
+      GetKeyForOrigin(entry.GetKey()->mOrigin, false, false, permissionKey);
 
       // If the keys don't match, and we aren't getting the default "" key, then
       // we can exit early. We have to keep looking if we're getting the default
@@ -3054,7 +3239,9 @@ void PermissionManager::SetPermissionsWithKey(
 
 /* static */
 void PermissionManager::GetKeyForOrigin(const nsACString& aOrigin,
-                                        bool aForceStripOA, nsACString& aKey) {
+                                        bool aForceStripOA,
+                                        bool aSiteScopePermissions,
+                                        nsACString& aKey) {
   aKey.Truncate();
 
   // We only key origins for http, https, and ftp URIs. All origins begin with
@@ -3077,7 +3264,7 @@ void PermissionManager::GetKeyForOrigin(const nsACString& aOrigin,
     return;
   }
 
-  MaybeStripOAs(aForceStripOA, attrs);
+  MaybeStripOriginAttributes(aForceStripOA, attrs);
 
 #ifdef DEBUG
   // Parse the origin string into a principal, and extract some useful
@@ -3090,6 +3277,19 @@ void PermissionManager::GetKeyForOrigin(const nsACString& aOrigin,
   MOZ_ASSERT(dbgPrincipal->OriginAttributesRef() == attrs);
 #endif
 
+  // If it is needed, turn the origin into its site-origin
+  if (aSiteScopePermissions) {
+    nsCOMPtr<nsIURI> uri;
+    nsresult rv = NS_NewURI(getter_AddRefs(uri), aKey);
+    if (!NS_WARN_IF(NS_FAILED(rv))) {
+      nsCString site;
+      rv = nsEffectiveTLDService::GetInstance()->GetSite(uri, site);
+      if (!NS_WARN_IF(NS_FAILED(rv))) {
+        aKey = site;
+      }
+    }
+  }
+
   // Append the stripped suffix to the output origin key.
   nsAutoCString suffix;
   attrs.CreateSuffix(suffix);
@@ -3099,6 +3299,7 @@ void PermissionManager::GetKeyForOrigin(const nsACString& aOrigin,
 /* static */
 void PermissionManager::GetKeyForPrincipal(nsIPrincipal* aPrincipal,
                                            bool aForceStripOA,
+                                           bool aSiteScopePermissions,
                                            nsACString& aKey) {
   nsAutoCString origin;
   nsresult rv = aPrincipal->GetOrigin(origin);
@@ -3106,7 +3307,7 @@ void PermissionManager::GetKeyForPrincipal(nsIPrincipal* aPrincipal,
     aKey.Truncate();
     return;
   }
-  GetKeyForOrigin(origin, aForceStripOA, aKey);
+  GetKeyForOrigin(origin, aForceStripOA, aSiteScopePermissions, aKey);
 }
 
 /* static */
@@ -3119,7 +3320,8 @@ void PermissionManager::GetKeyForPermission(nsIPrincipal* aPrincipal,
     return;
   }
 
-  GetKeyForPrincipal(aPrincipal, IsOAForceStripPermission(aType), aKey);
+  GetKeyForPrincipal(aPrincipal, IsOAForceStripPermission(aType),
+                     IsSiteScopedPermission(aType), aKey);
 }
 
 /* static */
@@ -3135,7 +3337,16 @@ PermissionManager::GetAllKeysForPrincipal(nsIPrincipal* aPrincipal) {
         pairs.AppendElement(std::make_pair(""_ns, ""_ns));
     // We can't check for individual OA strip perms here.
     // Don't force strip origin attributes.
-    GetKeyForPrincipal(prin, false, pair->first);
+    GetKeyForPrincipal(prin, false, false, pair->first);
+
+    // On origins with a derived key set to an empty string
+    // (basically any non-web URI scheme), we want to make sure
+    // to return earlier, and leave [("", "")] as the resulting
+    // pairs (but still run the same debug assertions near the
+    // end of this method).
+    if (pair->first.IsEmpty()) {
+      break;
+    }
 
     Unused << GetOriginFromPrincipal(prin, false, pair->second);
     prin = prin->GetNextSubDomainPrincipal();
@@ -3442,6 +3653,8 @@ nsresult PermissionManager::ImportLatestDefaults() {
       attrs.mPrivateBrowsingId = 1;
       nsCOMPtr<nsIPrincipal> pbPrincipal =
           BasePrincipal::Cast(principal)->CloneForcingOriginAttributes(attrs);
+      // May return nullptr if clone fails.
+      NS_ENSURE_TRUE(pbPrincipal, NS_ERROR_FAILURE);
 
       rv = AddInternal(pbPrincipal, entry.mType, entry.mPermission,
                        cIDPermissionIsDefault,
@@ -3667,6 +3880,23 @@ nsCOMPtr<nsIAsyncShutdownClient> PermissionManager::GetAsyncShutdownBarrier()
   MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(rv));
 
   return client;
+}
+
+void PermissionManager::MaybeStripOriginAttributes(
+    bool aForceStrip, OriginAttributes& aOriginAttributes) {
+  uint32_t flags = 0;
+
+  if (aForceStrip || !StaticPrefs::permissions_isolateBy_privateBrowsing()) {
+    flags |= OriginAttributes::STRIP_PRIVATE_BROWSING_ID;
+  }
+
+  if (aForceStrip || !StaticPrefs::permissions_isolateBy_userContext()) {
+    flags |= OriginAttributes::STRIP_USER_CONTEXT_ID;
+  }
+
+  if (flags != 0) {
+    aOriginAttributes.StripAttributes(flags);
+  }
 }
 
 }  // namespace mozilla

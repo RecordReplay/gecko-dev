@@ -117,9 +117,8 @@ var PlacesBackups = {
       if (this._backupFolder) {
         return this._backupFolder;
       }
-      let profileDir = await PathUtils.getProfileDir();
       let backupsDirPath = PathUtils.join(
-        profileDir,
+        PathUtils.profileDir,
         this.profileRelativeFolderPath
       );
       await IOUtils.makeDirectory(backupsDirPath);
@@ -175,6 +174,13 @@ var PlacesBackups = {
 
       return this._backupFiles;
     })();
+  },
+
+  /**
+   * Invalidates the internal cache for testing purposes.
+   */
+  invalidateCache() {
+    this._backupFiles = null;
   },
 
   /**
@@ -255,6 +261,37 @@ var PlacesBackups = {
   },
 
   /**
+   * Returns whether a recent enough backup exists, using these heuristic: if
+   * a backup exists, it should be newer than the last browser session date,
+   * otherwise it should not be older than maxDays.
+   * If the backup is older than the last session, the calculated time is
+   * reported to telemetry.
+   *
+   * @param [maxDays] The maximum number of days a backup can be old.
+   */
+  async hasRecentBackup({ maxDays = 3 } = {}) {
+    let lastBackupFile = await PlacesBackups.getMostRecentBackup();
+    if (!lastBackupFile) {
+      return false;
+    }
+    let lastBackupTime = PlacesBackups.getDateForFile(lastBackupFile);
+    let profileLastUse = Services.appinfo.replacedLockTime || Date.now();
+    if (lastBackupTime > profileLastUse) {
+      return true;
+    }
+    let backupAge = Math.round((profileLastUse - lastBackupTime) / 86400000);
+    // Telemetry the age of the last available backup.
+    try {
+      Services.telemetry
+        .getHistogramById("PLACES_BACKUPS_DAYSFROMLAST")
+        .add(backupAge);
+    } catch (ex) {
+      Cu.reportError(new Error("Unable to report telemetry."));
+    }
+    return backupAge <= maxDays;
+  },
+
+  /**
    * Serializes bookmarks using JSON, and writes to the supplied file.
    *
    * @param aFilePath
@@ -268,8 +305,7 @@ var PlacesBackups = {
     );
 
     let backupFolderPath = await this.getBackupFolder();
-    let profileDir = await PathUtils.getProfileDir();
-    if (profileDir == backupFolderPath) {
+    if (PathUtils.profileDir == backupFolderPath) {
       // We are creating a backup in the default backups folder,
       // so just update the internal cache.
       if (!this._backupFiles) {

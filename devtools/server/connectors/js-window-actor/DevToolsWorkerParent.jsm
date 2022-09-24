@@ -5,7 +5,9 @@
 "use strict";
 
 var EXPORTED_SYMBOLS = ["DevToolsWorkerParent"];
-const { loader } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { loader } = ChromeUtils.import(
+  "resource://devtools/shared/loader/Loader.jsm"
+);
 const { EventEmitter } = ChromeUtils.import(
   "resource://gre/modules/EventEmitter.jsm"
 );
@@ -48,14 +50,14 @@ class DevToolsWorkerParent extends JSWindowActorParent {
   }
 
   /**
-   * Request the content process to create Worker Targets if workers matching the browserId
+   * Request the content process to create Worker Targets if workers matching the context
    * are already available.
    */
   async instantiateWorkerTargets({
     watcherActorID,
     connectionPrefix,
-    browserId,
-    watchedData,
+    sessionContext,
+    sessionData,
   }) {
     try {
       await this.sendQuery(
@@ -63,8 +65,8 @@ class DevToolsWorkerParent extends JSWindowActorParent {
         {
           watcherActorID,
           connectionPrefix,
-          browserId,
-          watchedData,
+          sessionContext,
+          sessionData,
         }
       );
     } catch (e) {
@@ -78,26 +80,27 @@ class DevToolsWorkerParent extends JSWindowActorParent {
     }
   }
 
-  destroyWorkerTargets({ watcher, browserId }) {
+  destroyWorkerTargets({ watcherActorID, sessionContext }) {
     return this.sendAsyncMessage("DevToolsWorkerParent:destroy", {
-      watcherActorID: watcher.actorID,
-      browserId,
+      watcherActorID: watcherActorID,
+      sessionContext,
     });
   }
 
   /**
    * Communicate to the content process that some data have been added.
    */
-  async addWatcherDataEntry({ watcherActorID, type, entries }) {
+  async addSessionDataEntry({ watcherActorID, sessionContext, type, entries }) {
     try {
-      await this.sendQuery("DevToolsWorkerParent:addWatcherDataEntry", {
+      await this.sendQuery("DevToolsWorkerParent:addSessionDataEntry", {
         watcherActorID,
+        sessionContext,
         type,
         entries,
       });
     } catch (e) {
       console.warn(
-        "Failed to add watcher data entry for worker targets in browsing context",
+        "Failed to add session data entry for worker targets in browsing context",
         this.browsingContext.id,
         "and watcher actor id",
         watcherActorID
@@ -109,9 +112,10 @@ class DevToolsWorkerParent extends JSWindowActorParent {
   /**
    * Communicate to the content process that some data have been removed.
    */
-  removeWatcherDataEntry({ watcherActorID, type, entries }) {
-    this.sendAsyncMessage("DevToolsWorkerParent:removeWatcherDataEntry", {
+  removeSessionDataEntry({ watcherActorID, sessionContext, type, entries }) {
+    this.sendAsyncMessage("DevToolsWorkerParent:removeSessionDataEntry", {
       watcherActorID,
+      sessionContext,
       type,
       entries,
     });

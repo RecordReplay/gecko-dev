@@ -182,9 +182,8 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=964646
 <script type="application/javascript">
 "use strict";
 
-const { AppConstants } = SpecialPowers.Cu.import(
-  "resource://gre/modules/AppConstants.jsm",
-  {}
+const { AppConstants } = SpecialPowers.ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
 );
 /** Test for css3-animations running on the compositor thread (Bug 964646) **/
  
@@ -2427,12 +2426,12 @@ addAsyncAnimTest(async function() {
   gDiv.style.backgroundColor = "rgb(0, 255, 0)";
   await waitForPaintsFlushed();
 
-  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.TodoCompositor,
           "background-color transition starting with current-color runs on " +
           "compositor thread");
 
   advance_clock(5000);
-  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.TodoCompositor,
           "background-color on compositor at 5s");
 
   done_div();
@@ -2452,20 +2451,20 @@ addAsyncAnimTest(async function() {
 
   await waitForPaintsFlushed();
 
-  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.TodoCompositor,
           "background-color animation starting with current-color runs on " +
           "compositor thread");
 
   advance_clock(500);
 
-  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.TodoCompositor,
           "background-color on compositor at 5s");
 
   // Change the parent's color in the middle of the animation.
   parent.style.color = "rgb(0, 0, 255)";
   await waitForPaintsFlushed();
 
-  omta_todo_is("background-color", "rgb(0, 128, 128)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(0, 128, 128)", RunningOn.TodoCompositor,
           "background-color on compositor is reflected by the parent's " +
           "color change");
 
@@ -2493,13 +2492,13 @@ addAsyncAnimTest(async function() {
   gDiv.animate({ backgroundColor: [ "currentColor", "rgb(0, 255, 0)" ] }, 1000);
   await waitForPaintsFlushed();
 
-  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(255, 0, 0)", RunningOn.TodoCompositor,
           "background-color animation starting with current-color runs on " +
           "compositor thread");
 
   advance_clock(500);
 
-  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.ToDoCompositor,
+  omta_todo_is("background-color", "rgb(128, 128, 0)", RunningOn.TodoCompositor,
           "background-color on compositor at 5s");
 
   const topLocation =

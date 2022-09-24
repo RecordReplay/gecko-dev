@@ -20,11 +20,10 @@
 
 "use strict";
 
-var ios = Cc["@mozilla.org/network/io-service;1"].getService(Ci.nsIIOService);
+var ios = Services.io;
 var pps = Cc["@mozilla.org/network/protocol-proxy-service;1"].getService();
-var prefs = Cc["@mozilla.org/preferences-service;1"].getService(
-  Ci.nsIPrefBranch
-);
+var prefs = Services.prefs;
+var again = true;
 
 /**
  * Test nsIProtocolHandler that allows proxying, but doesn't allow HTTP
@@ -50,10 +49,9 @@ TestProtocolHandler.prototype = {
 
 function TestProtocolHandlerFactory() {}
 TestProtocolHandlerFactory.prototype = {
-  createInstance(delegate, iid) {
+  createInstance(iid) {
     return new TestProtocolHandler().QueryInterface(iid);
   },
-  lockFactory(lock) {},
 };
 
 function register_test_protocol_handler() {
@@ -923,6 +921,7 @@ function run_failed_script_test() {
 }
 
 var directFilter;
+const TEST_URI = "http://127.0.0.1:7247/";
 
 function failed_script_callback(pi) {
   // we should go direct
@@ -939,7 +938,7 @@ function failed_script_callback(pi) {
   obs.addObserver(directFilterListener, "http-on-modify-request");
 
   var ssm = Services.scriptSecurityManager;
-  let uri = "http://127.0.0.1:7247";
+  let uri = TEST_URI;
   var chan = NetUtil.newChannel({
     uri,
     loadingPrincipal: ssm.createContentPrincipal(Services.io.newURI(uri), {}),
@@ -977,6 +976,10 @@ var directFilterListener = {
       subject instanceof Ci.nsIHttpChannel &&
       subject instanceof Ci.nsIProxiedChannel
     ) {
+      info("check proxy in observe uri=" + subject.URI.spec);
+      if (subject.URI.spec != TEST_URI) {
+        return;
+      }
       check_proxy(subject.proxyInfo, "http", "127.0.0.1", 7246, 0, 0, false);
       this.onModifyRequestCalled = true;
     }
@@ -1042,12 +1045,35 @@ function localhost_callback(pi) {
   Assert.equal(pi, null); // no proxy!
 
   prefs.setIntPref("network.proxy.type", 0);
-  do_test_finished();
+
+  if (mozinfo.socketprocess_networking && again) {
+    info("run test again");
+    again = false;
+    cleanUp();
+    prefs.setBoolPref("network.proxy.parse_pac_on_socket_process", true);
+    run_filter_test();
+  } else {
+    cleanUp();
+    do_test_finished();
+  }
+}
+
+function cleanUp() {
+  prefs.clearUserPref("network.proxy.type");
+  prefs.clearUserPref("network.proxy.http");
+  prefs.clearUserPref("network.proxy.http_port");
+  prefs.clearUserPref("network.proxy.socks");
+  prefs.clearUserPref("network.proxy.socks_port");
+  prefs.clearUserPref("network.proxy.autoconfig_url");
+  prefs.clearUserPref("network.proxy.proxy_over_tls");
+  prefs.clearUserPref("network.proxy.no_proxies_on");
+  prefs.clearUserPref("network.proxy.parse_pac_on_socket_process");
 }
 
 function run_test() {
   register_test_protocol_handler();
 
+  prefs.setBoolPref("network.proxy.parse_pac_on_socket_process", false);
   // start of asynchronous test chain
   run_filter_test();
   do_test_pending();

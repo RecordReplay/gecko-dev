@@ -7,6 +7,7 @@
 
 const { DevToolsClient } = require("devtools/client/devtools-client");
 const { DevToolsServer } = require("devtools/server/devtools-server");
+const { createCommandsDictionary } = require("devtools/shared/commands/index");
 
 const TEST_URL = `data:text/html;charset=utf-8,<div id="test"></div>`;
 
@@ -19,9 +20,23 @@ add_task(async function() {
 
   const tabDescriptors = await mainRoot.listTabs();
 
+  const concurrentCommands = [];
+  for (const descriptor of tabDescriptors) {
+    concurrentCommands.push(
+      (async () => {
+        const commands = await createCommandsDictionary(descriptor);
+        // Descriptor's getTarget will only work if the TargetCommand watches for the first top target
+        await commands.targetCommand.startListening();
+      })()
+    );
+  }
+  info("Instantiate all tab's commands and initialize their TargetCommand");
+  await Promise.all(concurrentCommands);
+
   await testGetTargetWithConcurrentCalls(tabDescriptors, tabTarget => {
-    // Tab Target is attached when it has a console front.
-    return !!tabTarget.getCachedFront("console");
+    // We only call BrowsingContextTargetFront.attach and not TargetMixin.attachAndInitThread.
+    // So very few things are done.
+    return !!tabTarget.targetForm?.traits;
   });
 
   await client.close();
@@ -40,8 +55,9 @@ add_task(async function() {
   // happens between the instantiation of ContentProcessTarget and its call to attach() from getTarget
   // function.
   await testGetTargetWithConcurrentCalls(processes, processTarget => {
-    // Content Process Target is attached when it has a console front.
-    return !!processTarget.getCachedFront("console");
+    // We only call ContentProcessTargetFront.attach and not TargetMixin.attachAndInitThread.
+    // So nothing is done for content process targets.
+    return true;
   });
 
   await client.close();

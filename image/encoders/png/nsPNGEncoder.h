@@ -39,9 +39,10 @@ class nsPNGEncoder final : public imgIEncoder {
   ~nsPNGEncoder();
   nsresult ParseOptions(const nsAString& aOptions, bool* useTransparency,
                         bool* skipFirstFrame, uint32_t* numAnimatedFrames,
-                        uint32_t* numIterations, uint32_t* frameDispose,
-                        uint32_t* frameBlend, uint32_t* frameDelay,
-                        uint32_t* offsetX, uint32_t* offsetY);
+                        uint32_t* numIterations, int* zlibLevel, int* filters,
+                        uint32_t* frameDispose, uint32_t* frameBlend,
+                        uint32_t* frameDelay, uint32_t* offsetX,
+                        uint32_t* offsetY);
   void ConvertHostARGBRow(const uint8_t* aSrc, uint8_t* aDest,
                           uint32_t aPixelWidth, bool aUseTransparency);
   void StripAlpha(const uint8_t* aSrc, uint8_t* aDest, uint32_t aPixelWidth);
@@ -73,6 +74,6 @@ class nsPNGEncoder final : public imgIEncoder {
   // append-only while we read from it (that it is not realloced) and to
   // ensure that only one thread dispatches a callback for each call to
   // AsyncWait.
-  ReentrantMonitor mReentrantMonitor;
+  ReentrantMonitor mReentrantMonitor MOZ_UNANNOTATED;
 };
 #endif  // mozilla_image_encoders_png_nsPNGEncoder_h

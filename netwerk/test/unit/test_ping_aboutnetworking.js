@@ -45,16 +45,14 @@ function test_sockets(serverSocket) {
     }
     Assert.notEqual(index, -1);
     Assert.equal(data.sockets[index].port, serverSocket.port);
-    Assert.equal(data.sockets[index].tcp, 1);
+    Assert.equal(data.sockets[index].type, "TCP");
 
     do_test_finished();
   });
 }
 
 function run_test() {
-  var ps = Cc["@mozilla.org/preferences-service;1"].getService(
-    Ci.nsIPrefBranch
-  );
+  var ps = Services.prefs;
   // disable network changed events to avoid the the risk of having the dns
   // cache getting flushed behind our back
   ps.setBoolPref("network.notify.changed", false);

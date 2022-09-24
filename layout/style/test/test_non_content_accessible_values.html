@@ -6,15 +6,17 @@
 <script>
 const NON_CONTENT_ACCESSIBLE_VALUES = {
   "color": [
-    "-moz-gtk-buttonactivetext",
+    "-moz-buttonactivetext",
+    "-moz-buttonactiveface",
+    "-moz-buttondisabledface",
+    "-moz-disabledfield",
     "-moz-colheaderhovertext",
     "-moz-colheadertext",
-    "-moz-system-color(highlight, light)",
-    "-moz-system-color(highlight, dark)",
-    "text-select-foreground",
-    "text-select-background",
-    "text-select-background-disabled",
-    "text-select-background-attention",
+    "-moz-nativevisitedhyperlinktext",
+    "text-select-disabled-background",
+    "text-select-attention-background",
+    "text-select-attention-foreground",
+    "-moz-autofill-background",
   ],
   "display": [
     "-moz-deck",
@@ -121,6 +123,9 @@ const NON_CONTENT_ACCESSIBLE_VALUES = {
   ],
   "line-height": [
     "-moz-block-height",
+  ],
+  "text-align": [
+    "-moz-center-or-inherit",
   ],
 };
 

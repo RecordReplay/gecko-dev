@@ -2,15 +2,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* globals browser, getStrings, selectorLoader, analytics, communication, catcher, log, makeUuid, auth, senderror, startBackground, blobConverters, startSelectionWithOnboarding */
+/* globals browser, getStrings, selectorLoader, analytics, communication, catcher, log, senderror, startBackground, blobConverters, startSelectionWithOnboarding */
 
 "use strict";
 
 this.main = (function() {
   const exports = {};
-  const pngToJpegCutoff = 2500000;
 
-  const { sendEvent, incrementCount } = analytics;
+  const { incrementCount } = analytics;
 
   const manifest = browser.runtime.getManifest();
   let backend;
@@ -35,23 +34,10 @@ this.main = (function() {
     }
   }
 
-  function setIconActive(active) {
-    let windowIDPromise = browser.windows.getLastFocused().then(windowInfo => {
-      return windowInfo.id;
-    });
-    windowIDPromise.then(id => {
-      return browser.experiments.screenshots.setIcon(active, id);
-    });
-  }
-
   function toggleSelector(tab) {
     return analytics
       .refreshTelemetryPref()
       .then(() => selectorLoader.toggle(tab.id))
-      .then(active => {
-        setIconActive(active);
-        return active;
-      })
       .catch(error => {
         if (
           error.message &&
@@ -74,7 +60,7 @@ this.main = (function() {
     _startShotFlow(tab, "context-menu");
   });
 
-  exports.onCommand = catcher.watchFunction(tab => {
+  exports.onShortcut = catcher.watchFunction(tab => {
     _startShotFlow(tab, "keyboard-shortcut");
   });
 
@@ -91,17 +77,9 @@ this.main = (function() {
     }
 
     catcher.watchPromise(
-      toggleSelector(tab)
-        .then(active => {
-          let event = "start-shot";
-          if (inputType !== "context-menu") {
-            event = active ? "start-shot" : "cancel-shot";
-          }
-          sendEvent(event, inputType, { incognito: tab.incognito });
-        })
-        .catch(error => {
-          throw error;
-        })
+      toggleSelector(tab).catch(error => {
+        throw error;
+      })
     );
   };
 
@@ -155,46 +133,25 @@ this.main = (function() {
     return getStrings(ids.map(id => ({ id })));
   });
 
-  communication.register("sendEvent", (sender, ...args) => {
-    catcher.watchPromise(sendEvent(...args));
-    // We don't wait for it to complete:
-    return null;
+  communication.register("captureTelemetry", (sender, ...args) => {
+    catcher.watchPromise(incrementCount(...args));
   });
 
   communication.register("openShot", async (sender, { url, copied }) => {
     if (copied) {
-      const id = makeUuid();
+      const id = crypto.randomUUID();
       const [title, message] = await getStrings([
         { id: "screenshots-notification-link-copied-title" },
         { id: "screenshots-notification-link-copied-details" },
       ]);
       return browser.notifications.create(id, {
         type: "basic",
-        iconUrl: "../icons/copied-notification.svg",
+        iconUrl: "chrome://browser/content/screenshots/copied-notification.svg",
         title,
         message,
       });
     }
     return null;
-  });
-
-  // This is used for truncated full page downloads and copy to clipboards.
-  // Those longer operations need to display an animated spinner/loader, so
-  // it's preferable to perform toDataURL() in the background.
-  communication.register("canvasToDataURL", (sender, imageData) => {
-    const canvas = document.createElement("canvas");
-    canvas.width = imageData.width;
-    canvas.height = imageData.height;
-    canvas.getContext("2d").putImageData(imageData, 0, 0);
-    let dataUrl = canvas.toDataURL();
-    if (dataUrl.length > pngToJpegCutoff) {
-      const jpegDataUrl = canvas.toDataURL("image/jpeg");
-      if (jpegDataUrl.length < dataUrl.length) {
-        // Only use the JPEG if it is actually smaller
-        dataUrl = jpegDataUrl;
-      }
-    }
-    return dataUrl;
   });
 
   communication.register("copyShotToClipboard", async (sender, blob) => {
@@ -209,7 +166,7 @@ this.main = (function() {
     catcher.watchPromise(incrementCount("copy"));
     return browser.notifications.create({
       type: "basic",
-      iconUrl: "../icons/copied-notification.svg",
+      iconUrl: "chrome://browser/content/screenshots/copied-notification.svg",
       title,
       message,
     });
@@ -249,10 +206,6 @@ this.main = (function() {
           downloadId = id;
         });
     });
-  });
-
-  communication.register("closeSelector", sender => {
-    setIconActive(false);
   });
 
   communication.register("abortStartShot", () => {

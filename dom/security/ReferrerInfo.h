@@ -42,8 +42,7 @@ class nsHttpChannel;
 
 using mozilla::Maybe;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * The ReferrerInfo class holds the raw referrer and potentially a referrer
@@ -88,6 +87,9 @@ class ReferrerInfo : public nsIReferrerInfo {
   // create an copy of the ReferrerInfo with new original referrer
   already_AddRefed<ReferrerInfo> CloneWithNewOriginalReferrer(
       nsIURI* aOriginalReferrer) const;
+
+  // Record the telemetry for the referrer policy.
+  void RecordTelemetry(nsIHttpChannel* aChannel);
 
   /*
    * Helper function to create a new ReferrerInfo object from other. We will not
@@ -179,6 +181,11 @@ class ReferrerInfo : public nsIReferrerInfo {
    * do that in cases where we're going to use this information later on.
    */
   static bool IsCrossOriginRequest(nsIHttpChannel* aChannel);
+
+  /**
+   * Returns true if the given channel is cross-site request.
+   */
+  static bool IsCrossSiteRequest(nsIHttpChannel* aChannel);
 
   /**
    * Returns true if the given channel is suppressed by Referrer-Policy header
@@ -383,6 +390,20 @@ class ReferrerInfo : public nsIReferrerInfo {
                                   TrimmingPolicy aTrimmingPolicy,
                                   nsACString& aResult) const;
 
+  /**
+   * Returns true if we should ignore less restricted referrer policies,
+   * including 'unsafe_url', 'no_referrer_when_downgrade' and
+   * 'origin_when_cross_origin', for the given channel. We only apply this
+   * restriction for cross-site requests. For the same-site request, we will
+   * still allow overriding the default referrer policy with less restricted
+   * one.
+   *
+   * Note that the channel triggered by the system and the extension will be
+   * exempt from this restriction.
+   */
+  bool ShouldIgnoreLessRestrictedPolicies(
+      nsIHttpChannel* aChannel, const ReferrerPolicyEnum aPolicy) const;
+
   /*
    *  Limit referrer length using the following ruleset:
    *   - If the length of referrer URL is over max length, strip down to origin.
@@ -421,6 +442,12 @@ class ReferrerInfo : public nsIReferrerInfo {
 
   ReferrerPolicyEnum mPolicy;
 
+  // The referrer policy that has been set originally for the channel. Note that
+  // the policy may have been overridden by the default referrer policy, so we
+  // need to keep track of this if we need to recover the original referrer
+  // policy.
+  ReferrerPolicyEnum mOriginalPolicy;
+
   // Indicates if the referrer should be sent or not even when it's available
   // (default is true).
   bool mSendReferrer;
@@ -435,9 +462,14 @@ class ReferrerInfo : public nsIReferrerInfo {
 
   // Store a computed referrer for a given channel
   Maybe<nsCString> mComputedReferrer;
+
+#ifdef DEBUG
+  // Indicates if the telemetry has been recorded. This is used to make sure the
+  // telemetry will be only recored once.
+  bool mTelemetryRecorded = false;
+#endif  // DEBUG
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_ReferrerInfo_h

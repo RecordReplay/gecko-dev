@@ -8,7 +8,9 @@
 #include "nsDirIndexParser.h"
 
 #include "mozilla/ArrayUtils.h"
+#include "mozilla/ClearOnShutdown.h"
 #include "mozilla/Encoding.h"
+#include "mozilla/StaticPtr.h"
 #include "prprf.h"
 #include "nsCRT.h"
 #include "nsDirIndex.h"
@@ -25,6 +27,8 @@ struct EncodingProp {
   const char* const mKey;
   NotNull<const Encoding*> mValue;
 };
+
+static StaticRefPtr<nsITextToSubURI> gTextToSubURI;
 
 static const EncodingProp localesFallbacks[] = {
     {"ar", WINDOWS_1256_ENCODING}, {"ba", WINDOWS_1251_ENCODING},
@@ -90,22 +94,17 @@ nsresult nsDirIndexParser::Init() {
   auto encoding = GetFTPFallbackEncodingDoNotAddNewCallersToThisFunction();
   encoding->Name(mEncoding);
 
-  nsresult rv;
-  // XXX not threadsafe
-  if (gRefCntParser++ == 0) {
-    rv = CallGetService(NS_ITEXTTOSUBURI_CONTRACTID, &gTextToSubURI);
-  } else {
-    rv = NS_OK;
+  nsresult rv = NS_OK;
+  if (!gTextToSubURI) {
+    nsCOMPtr<nsITextToSubURI> service =
+        do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
+    if (NS_SUCCEEDED(rv)) {
+      gTextToSubURI = service;
+      ClearOnShutdown(&gTextToSubURI);
+    }
   }
 
   return rv;
-}
-
-nsDirIndexParser::~nsDirIndexParser() {
-  // XXX not threadsafe
-  if (--gRefCntParser == 0) {
-    NS_IF_RELEASE(gTextToSubURI);
-  }
 }
 
 NS_IMETHODIMP
@@ -116,7 +115,7 @@ nsDirIndexParser::SetListener(nsIDirIndexListener* aListener) {
 
 NS_IMETHODIMP
 nsDirIndexParser::GetListener(nsIDirIndexListener** aListener) {
-  NS_IF_ADDREF(*aListener = mListener.get());
+  *aListener = do_AddRef(mListener).take();
   return NS_OK;
 }
 
@@ -151,7 +150,7 @@ NS_IMETHODIMP
 nsDirIndexParser::OnStopRequest(nsIRequest* aRequest, nsresult aStatusCode) {
   // Finish up
   if (mBuf.Length() > (uint32_t)mLineStart) {
-    ProcessData(aRequest, nullptr);
+    ProcessData(aRequest);
   }
 
   return NS_OK;
@@ -165,9 +164,6 @@ nsDirIndexParser::Field nsDirIndexParser::gFieldTable[] = {
     {"Content-Type", FIELD_CONTENTTYPE},
     {"File-Type", FIELD_FILETYPE},
     {nullptr, FIELD_UNKNOWN}};
-
-nsrefcnt nsDirIndexParser::gRefCntParser = 0;
-nsITextToSubURI* nsDirIndexParser::gTextToSubURI = nullptr;
 
 void nsDirIndexParser::ParseFormat(const char* aFormatStr) {
   // Parse a "200" format line, and remember the fields and their
@@ -281,10 +277,10 @@ void nsDirIndexParser::ParseData(nsIDirIndex* aIdx, char* aDataStr,
 
         nsAutoString entryuri;
 
-        if (gTextToSubURI) {
+        if (RefPtr<nsITextToSubURI> textToSub = gTextToSubURI) {
           nsAutoString result;
-          if (NS_SUCCEEDED(gTextToSubURI->UnEscapeAndConvert(
-                  mEncoding, filename, result))) {
+          if (NS_SUCCEEDED(
+                  textToSub->UnEscapeAndConvert(mEncoding, filename, result))) {
             if (!result.IsEmpty()) {
               aIdx->SetLocation(filename);
               if (!mHasDescription) aIdx->SetDescription(result);
@@ -371,18 +367,13 @@ nsDirIndexParser::OnDataAvailable(nsIRequest* aRequest, nsIInputStream* aStream,
   //       work on other strings.
   mBuf.SetLength(len + count);
 
-  return ProcessData(aRequest, nullptr);
+  return ProcessData(aRequest);
 }
 
-nsresult nsDirIndexParser::ProcessData(nsIRequest* aRequest,
-                                       nsISupports* aCtxt) {
+nsresult nsDirIndexParser::ProcessData(nsIRequest* aRequest) {
   if (!mListener) return NS_ERROR_FAILURE;
 
-  int32_t numItems = 0;
-
   while (true) {
-    ++numItems;
-
     int32_t eol = mBuf.FindCharInSet("\n\r", mLineStart);
     if (eol < 0) break;
     mBuf.SetCharAt(char16_t('\0'), eol);
@@ -405,7 +396,7 @@ nsresult nsDirIndexParser::ProcessData(nsIRequest* aRequest,
 
             char* value = ((char*)buf) + 4;
             nsUnescape(value);
-            mListener->OnInformationAvailable(aRequest, aCtxt,
+            mListener->OnInformationAvailable(aRequest,
                                               NS_ConvertUTF8toUTF16(value));
 
           } else if (buf[2] == '2' && buf[3] == ':') {
@@ -423,7 +414,7 @@ nsresult nsDirIndexParser::ProcessData(nsIRequest* aRequest,
             nsCOMPtr<nsIDirIndex> idx = new nsDirIndex();
 
             ParseData(idx, ((char*)buf) + 4, lineLen - 4);
-            mListener->OnIndexAvailable(aRequest, aCtxt, idx);
+            mListener->OnIndexAvailable(aRequest, idx);
           }
         }
       } else if (buf[0] == '3') {

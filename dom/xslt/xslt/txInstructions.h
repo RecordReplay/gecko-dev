@@ -23,7 +23,15 @@ class txInstruction : public txObject {
  public:
   MOZ_COUNTED_DEFAULT_CTOR(txInstruction)
 
-  MOZ_COUNTED_DTOR_OVERRIDE(txInstruction)
+  ~txInstruction() override {
+    MOZ_COUNT_DTOR(txInstruction);
+
+    mozilla::UniquePtr<txInstruction> next(std::move(mNext));
+    while (next) {
+      mozilla::UniquePtr<txInstruction> destroy(std::move(next));
+      next = std::move(destroy->mNext);
+    }
+  }
 
   virtual nsresult execute(txExecutionState& aEs) = 0;
 
@@ -229,11 +237,11 @@ class txPushNewContext : public txInstruction {
 
   TX_DECL_TXINSTRUCTION
 
-  nsresult addSort(mozilla::UniquePtr<Expr>&& aSelectExpr,
-                   mozilla::UniquePtr<Expr>&& aLangExpr,
-                   mozilla::UniquePtr<Expr>&& aDataTypeExpr,
-                   mozilla::UniquePtr<Expr>&& aOrderExpr,
-                   mozilla::UniquePtr<Expr>&& aCaseOrderExpr);
+  void addSort(mozilla::UniquePtr<Expr>&& aSelectExpr,
+               mozilla::UniquePtr<Expr>&& aLangExpr,
+               mozilla::UniquePtr<Expr>&& aDataTypeExpr,
+               mozilla::UniquePtr<Expr>&& aOrderExpr,
+               mozilla::UniquePtr<Expr>&& aCaseOrderExpr);
 
   struct SortKey {
     mozilla::UniquePtr<Expr> mSelectExpr;

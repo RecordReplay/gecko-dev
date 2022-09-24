@@ -20,11 +20,10 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Security-Policy" content="default-src chrome:; object-src 'none'" />
+    <meta name="color-scheme" content="light dark" />
     <title>&loadError.label;</title>
     <link rel="stylesheet" href="chrome://browser/skin/aboutNetError.css" type="text/css" media="all" />
-    <!-- If the location of the favicon is changed here, the FAVICON_ERRORPAGE_URL symbol in
-         toolkit/components/places/src/nsFaviconService.h should be updated. -->
-    <link rel="icon" id="favicon" href="chrome://global/skin/icons/info.svg"/>
+    <link rel="icon" id="favicon"/>
     <link rel="localization" href="browser/aboutCertError.ftl" />
     <link rel="localization" href="browser/nsserrors.ftl" />
     <link rel="localization" href="branding/brand.ftl"/>
@@ -69,7 +68,6 @@
         <div id="ed_mitm">&certerror.mitm.longDesc;</div>
         <div id="ed_cspBlocked">&cspBlocked.longDesc;</div>
         <div id="ed_xfoBlocked">&xfoBlocked.longDesc;</div>
-        <div id="ed_remoteXUL">&remoteXUL.longDesc;</div>
         <div id="ed_corruptedContentErrorv2">&corruptedContentErrorv2.longDesc;</div>
         <div id="ed_sslv3Used">&sslv3Used.longDesc2;</div>
         <div id="ed_inadequateSecurityError">&inadequateSecurityError.longDesc;</div>
@@ -110,7 +108,7 @@
     <div id="errorPageContainer" class="container">
       <div id="text-container">
         <!-- Error Title -->
-        <div class="title noIllustration">
+        <div class="title">
           <h1 class="title-text"/>
         </div>
 
@@ -143,6 +141,10 @@
           <!-- Long Description (Note: See netError.dtd for used XHTML tags) -->
           <div id="errorLongDesc" />
 
+          <div id="tlsVersionNotice" hidden="true">
+            <p data-l10n-id="cert-error-old-tls-version"></p>
+          </div>
+
           <div id="learnMoreContainer">
             <p><a id="learnMoreLink" target="_blank" rel="noopener noreferrer" data-telemetry-id="learn_more_link">&errorReporting.learnMore;</a></p>
           </div>
@@ -151,14 +153,6 @@
             <p><a id="openInNewWindowButton" target="_blank" rel="noopener noreferrer">
             <button class="primary" data-l10n-id="open-in-new-window-for-csp-or-xfo-error"></button></a></p>
           </div>
-        </div>
-
-        <!-- UI to temporarily re-enable TLS 1.0 and 1.1.
-             This should be removed after March 2020, see bug 1579285.  -->
-        <div id="enableTls10Container" class="button-container">
-          <p>&enableTls10.longDesc;</p>
-          <p>&enableTls10.note;</p>
-          <button id="enableTls10Button" class="primary">&enableTls10.label;</button>
         </div>
 
         <!-- UI for option to report certificate errors to Mozilla. Removed on
@@ -181,7 +175,7 @@
       </div>
 
       <div id="advancedPanelContainer">
-        <div id="badCertAdvancedPanel" class="advanced-panel">
+        <div id="badCertAdvancedPanel" class="advanced-panel" hidden="">
           <p id="badCertTechnicalInfo"/>
           <a id="viewCertificate" href="javascript:void(0)">&viewCertificate.label;</a>
           <div id="advancedPanelButtonContainer" class="button-container">
@@ -193,14 +187,14 @@
           </div>
         </div>
 
-        <div id="blockingErrorReporting">
+        <div id="blockingErrorReporting" class="advanced-panel" hidden="">
             <p class="toggle-container-with-text">
                 <input type="checkbox" id="automaticallyReportBlockingInFuture" role="checkbox"/>
                 <label for="automaticallyReportBlockingInFuture" >&errorReporting.automatic2;</label>
             </p>
         </div>
 
-        <div id="certificateErrorDebugInformation">
+        <div id="certificateErrorDebugInformation" class="advanced-panel" hidden="">
           <button id="copyToClipboardTop" data-telemetry-id="clipboard_button_top">&certerror.copyToClipboard.label;</button>
           <div id="certificateErrorText"/>
           <button id="copyToClipboardBottom" data-telemetry-id="clipboard_button_bot">&certerror.copyToClipboard.label;</button>

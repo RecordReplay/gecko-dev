@@ -8,17 +8,14 @@
 // launched background task, etc.  This is an easy way to ensure that tasks are running concurrently
 // without requiring concurrency primitives.
 add_task(async function test_backgroundtask_unique_profile() {
-  let sentinel = Cc["@mozilla.org/uuid-generator;1"]
-    .getService(Ci.nsIUUIDGenerator)
-    .generateUUID()
-    .toString();
+  let sentinel = Services.uuid.generateUUID().toString();
   sentinel = sentinel.substring(1, sentinel.length - 1);
 
   let count = 3;
   let stdoutLines = [];
   let exitCode = await do_backgroundtask("unique_profile", {
     extraArgs: [sentinel, count.toString()],
-    stdoutLines,
+    onStdoutLine: line => stdoutLines.push(line),
   });
   Assert.equal(0, exitCode);
 

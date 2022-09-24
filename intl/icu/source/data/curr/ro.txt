@@ -1105,7 +1105,6 @@ ro{
         ZMW{"ZK"}
     }
     Currencies%variant{
-        GEL{"₾"}
         TRY{"TL"}
     }
     CurrencyPlurals{
@@ -1633,6 +1632,11 @@ ro{
             few{"dolari liberieni"}
             one{"dolar liberian"}
             other{"dolari liberieni"}
+        }
+        LSL{
+            few{"maloti leshotieni"}
+            one{"maloti leshotieni"}
+            other{"maloti leshotieni"}
         }
         LTL{
             few{"lite lituaniene"}

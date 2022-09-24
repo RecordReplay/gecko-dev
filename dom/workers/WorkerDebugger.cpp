@@ -4,11 +4,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "WorkerDebugger.h"
-
 #include "mozilla/dom/BrowsingContext.h"
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/MessageEventBinding.h"
+#include "mozilla/dom/RemoteWorkerChild.h"
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/PerformanceUtils.h"
@@ -18,17 +17,16 @@
 #include "ScriptLoader.h"
 #include "WorkerCommon.h"
 #include "WorkerError.h"
-#include "WorkerPrivate.h"
 #include "WorkerRunnable.h"
-#include "WorkerScope.h"
+#include "WorkerDebugger.h"
+
 #if defined(XP_WIN)
 #  include <processthreadsapi.h>  // for GetCurrentProcessId()
 #else
 #  include <unistd.h>  // for getpid()
 #endif                 // defined(XP_WIN)
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -548,8 +546,10 @@ RefPtr<PerformanceInfoPromise> WorkerDebugger::ReportPerformanceInfo() {
   }
 
   // We need to keep a ref on workerPrivate, passed to the promise,
-  // to make sure it's still aloive when collecting the info.
-  RefPtr<WorkerPrivate> workerRef = mWorkerPrivate;
+  // to make sure it's still aloive when collecting the info
+  // (and CheckedUnsafePtr does not convert directly to RefPtr).
+  WorkerPrivate* workerPtr = mWorkerPrivate;
+  RefPtr<WorkerPrivate> workerRef = workerPtr;
   RefPtr<AbstractThread> mainThread = AbstractThread::MainThread();
 
   return CollectMemoryInfo(top, mainThread)
@@ -568,5 +568,4 @@ RefPtr<PerformanceInfoPromise> WorkerDebugger::ReportPerformanceInfo() {
           });
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

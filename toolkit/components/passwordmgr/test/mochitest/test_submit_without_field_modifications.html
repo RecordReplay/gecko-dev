@@ -5,7 +5,6 @@
   <title>Don't send onFormSubmit message on navigation if the user did not interact
     with the login fields</title>
   <script type="text/javascript" src="/tests/SimpleTest/SimpleTest.js"></script>
-  <script type="text/javascript" src="/tests/SimpleTest/AddTask.js"></script>
   <script type="text/javascript" src="pwmgr_common.js"></script>
   <link rel="stylesheet" type="text/css" href="/tests/SimpleTest/test.css" />
 </head>
@@ -19,7 +18,9 @@
 
 <pre id="test"></pre>
 <script>
-const { TestUtils } = SpecialPowers.Cu.import("resource://testing-common/TestUtils.jsm");
+const { TestUtils } = SpecialPowers.ChromeUtils.import(
+  "resource://testing-common/TestUtils.jsm"
+);
 SimpleTest.requestFlakyTimeout("Giving a chance for the unexpected popup to show");
 
 const EXAMPLE_COM = window.location.origin + "/tests/toolkit/components/passwordmgr/test/mochitest/";

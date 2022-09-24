@@ -9,18 +9,16 @@ import re
 import sys
 from collections import defaultdict
 
-from mozboot.util import get_state_dir
+import mozpack.path as mozpath
+from mach.util import get_state_dir
 from mozbuild.base import MozbuildObject
 from mozpack.files import FileFinder
 from moztest.resolve import TestResolver, TestManifestLoader, get_suite_definition
-
-import taskgraph
-from taskgraph.generator import TaskGraphGenerator
-from taskgraph.parameters import (
-    ParameterMismatch,
-    parameters_loader,
-)
+from taskgraph.parameters import ParameterMismatch, parameters_loader
 from taskgraph.taskgraph import TaskGraph
+
+import gecko_taskgraph
+from gecko_taskgraph.generator import TaskGraphGenerator
 
 here = os.path.abspath(os.path.dirname(__file__))
 build = MozbuildObject.from_environment(cwd=here)
@@ -82,10 +80,12 @@ def generate_tasks(params=None, full=False, disable_target_task_filter=False):
         },
     )
     root = os.path.join(build.topsrcdir, "taskcluster", "ci")
-    taskgraph.fast = True
+    gecko_taskgraph.fast = True
     generator = TaskGraphGenerator(root_dir=root, parameters=params)
 
-    cache_dir = os.path.join(get_state_dir(srcdir=True), "cache", "taskgraph")
+    cache_dir = os.path.join(
+        get_state_dir(specific_to_topsrcdir=True), "cache", "taskgraph"
+    )
     key = cache_key(attr, generator.parameters, disable_target_task_filter)
     cache = os.path.join(cache_dir, key)
 
@@ -173,8 +173,11 @@ def resolve_tests_by_suite(paths):
         if test_path is None:
             continue
         found_path = None
+        manifest_relpath = None
+        if "manifest_relpath" in test:
+            manifest_relpath = mozpath.normpath(test["manifest_relpath"])
         for path in remaining_paths_by_suite[key]:
-            if test_path.startswith(path) or test.get("manifest_relpath") == path:
+            if test_path.startswith(path) or manifest_relpath == path:
                 found_path = path
                 break
         if found_path:

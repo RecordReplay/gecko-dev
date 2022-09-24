@@ -25,8 +25,6 @@
 using namespace js;
 using namespace js::frontend;
 
-using mozilla::Maybe;
-
 bool SwitchEmitter::TableGenerator::addNumber(int32_t caseValue) {
   if (isInvalid()) {
     return true;
@@ -108,15 +106,13 @@ uint32_t SwitchEmitter::TableGenerator::tableLength() const {
 
 SwitchEmitter::SwitchEmitter(BytecodeEmitter* bce) : bce_(bce) {}
 
-bool SwitchEmitter::emitDiscriminant(const Maybe<uint32_t>& switchPos) {
+bool SwitchEmitter::emitDiscriminant(uint32_t switchPos) {
   MOZ_ASSERT(state_ == State::Start);
   switchPos_ = switchPos;
 
-  if (switchPos_) {
-    // Ensure that the column of the switch statement is set properly.
-    if (!bce_->updateSourceCoordNotes(*switchPos_)) {
-      return false;
-    }
+  // Ensure that the column of the switch statement is set properly.
+  if (!bce_->updateSourceCoordNotes(switchPos_)) {
+    return false;
   }
 
   state_ = State::Discriminant;
@@ -407,4 +403,12 @@ bool SwitchEmitter::emitEnd() {
 
   state_ = State::End;
   return true;
+}
+
+InternalSwitchEmitter::InternalSwitchEmitter(BytecodeEmitter* bce)
+    : SwitchEmitter(bce) {
+#ifdef DEBUG
+  // Skip emitDiscriminant (see the comment above InternalSwitchEmitter)
+  state_ = State::Discriminant;
+#endif
 }

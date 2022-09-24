@@ -22,6 +22,7 @@ using struct mozilla::layers::TextureInfo from "mozilla/layers/CompositorTypes.h
 using mozilla::layers::CompositionPayload from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::wr::BuiltDisplayListDescriptor from "mozilla/webrender/webrender_ffi.h";
+using mozilla::wr::RenderReasons from "mozilla/webrender/webrender_ffi.h";
 using mozilla::wr::IdNamespace from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::MaybeIdNamespace from "mozilla/webrender/WebRenderTypes.h";
 using mozilla::wr::ExternalImageKeyPair from "mozilla/webrender/WebRenderTypes.h";
@@ -35,6 +36,7 @@ using mozilla::VsyncId from "mozilla/VsyncDispatcher.h";
 namespace mozilla {
 namespace layers {
 
+[ManualDealloc, ParentImpl=virtual]
 sync protocol PWebRenderBridge
 {
   manager PCompositorBridge;
@@ -67,10 +69,11 @@ parent:
   sync GetSnapshot(PTexture texture) returns (bool aNeedsYFlip);
   async SetLayersObserverEpoch(LayersObserverEpoch childEpoch);
   async ClearCachedResources();
+  async SetDefaultClearColor(uint32_t aColor);
   // Invalidate rendered frame
   async InvalidateRenderedFrame();
   // Schedule a composite if one isn't already scheduled.
-  async ScheduleComposite();
+  async ScheduleComposite(RenderReasons aReasons);
   // Save the frame capture to disk
   async Capture();
 

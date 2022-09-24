@@ -73,9 +73,10 @@ bool PretenuringNursery::canCreateAllocSite() {
          allocSitesCreated < MaxAllocSitesPerMinorGC;
 }
 
-size_t PretenuringNursery::doPretenuring(GCRuntime* gc, bool validPromotionRate,
-                                         double promotionRate,
-                                         bool reportInfo) {
+size_t PretenuringNursery::doPretenuring(GCRuntime* gc, JS::GCReason reason,
+                                         bool validPromotionRate,
+                                         double promotionRate, bool reportInfo,
+                                         size_t reportThreshold) {
   mozilla::Maybe<AutoGCSession> session;
 
   size_t sitesActive = 0;
@@ -99,7 +100,7 @@ size_t PretenuringNursery::doPretenuring(GCRuntime* gc, bool validPromotionRate,
   }
 
   if (reportInfo) {
-    AllocSite::printInfoHeader();
+    AllocSite::printInfoHeader(reason, promotionRate);
   }
 
   AllocSite* site = allocatedSites;
@@ -145,7 +146,7 @@ size_t PretenuringNursery::doPretenuring(GCRuntime* gc, bool validPromotionRate,
       }
     }
 
-    if (reportInfo) {
+    if (reportInfo && site->allocCount() >= reportThreshold) {
       site->printInfo(hasPromotionRate, promotionRate, wasInvalidated);
     }
 
@@ -154,16 +155,13 @@ size_t PretenuringNursery::doPretenuring(GCRuntime* gc, bool validPromotionRate,
     site = next;
   }
 
-  // Optimized sites don't end up on the list if it is only used from optimized
-  // JIT code so process them here.
+  // Catch-all sites don't end up on the list if they are only used from
+  // optimized JIT code, so process them here.
   for (ZonesIter zone(gc, SkipAtoms); !zone.done(); zone.next()) {
-    AllocSite* site = zone->optimizedAllocSite();
-    if (site->hasNurseryAllocations()) {
-      if (reportInfo) {
-        site->printInfo(false, 0.0, false);
-      }
-      site->resetNurseryAllocations();
-    }
+    reportAndResetCatchAllSite(zone->unknownAllocSite(), reportInfo,
+                               reportThreshold);
+    reportAndResetCatchAllSite(zone->optimizedAllocSite(), reportInfo,
+                               reportThreshold);
   }
 
   if (reportInfo) {
@@ -180,25 +178,39 @@ size_t PretenuringNursery::doPretenuring(GCRuntime* gc, bool validPromotionRate,
   return sitesPretenured;
 }
 
-bool AllocSite::invalidateScript(GCRuntime* gc) {
-  CancelOffThreadIonCompile(script_);
+void PretenuringNursery::reportAndResetCatchAllSite(AllocSite* site,
+                                                    bool reportInfo,
+                                                    size_t reportThreshold) {
+  if (!site->hasNurseryAllocations()) {
+    return;
+  }
 
-  if (!script_->hasIonScript()) {
+  if (reportInfo && site->allocCount() >= reportThreshold) {
+    site->printInfo(false, 0.0, false);
+  }
+
+  site->resetNurseryAllocations();
+}
+
+bool AllocSite::invalidateScript(GCRuntime* gc) {
+  CancelOffThreadIonCompile(script());
+
+  if (!script()->hasIonScript()) {
     return false;
   }
 
   if (invalidationLimitReached()) {
-    MOZ_ASSERT(state_ == State::Unknown);
+    MOZ_ASSERT(state() == State::Unknown);
     return false;
   }
 
   invalidationCount++;
   if (invalidationLimitReached()) {
-    state_ = State::Unknown;
+    setState(State::Unknown);
   }
 
   JSContext* cx = gc->rt->mainContextFromOwnThread();
-  jit::Invalidate(cx, script_,
+  jit::Invalidate(cx, script(),
                   /* resetUses = */ false,
                   /* cancelOffThread = */ true);
   return true;
@@ -247,31 +259,31 @@ void AllocSite::updateStateOnMinorGC(double promotionRate) {
   // to avoid pretenuring sites that we've recently observed being short-lived.
 
   if (invalidationLimitReached()) {
-    MOZ_ASSERT(state_ == State::Unknown);
+    MOZ_ASSERT(state() == State::Unknown);
     return;
   }
 
   bool highPromotionRate = promotionRate >= 0.9;
 
-  switch (state_) {
+  switch (state()) {
     case State::Unknown:
       if (highPromotionRate) {
-        state_ = State::LongLived;
+        setState(State::LongLived);
       } else {
-        state_ = State::ShortLived;
+        setState(State::ShortLived);
       }
       break;
 
     case State::ShortLived: {
       if (highPromotionRate) {
-        state_ = State::Unknown;
+        setState(State::Unknown);
       }
       break;
     }
 
     case State::LongLived: {
       if (!highPromotionRate) {
-        state_ = State::Unknown;
+        setState(State::Unknown);
       }
       break;
     }
@@ -280,18 +292,19 @@ void AllocSite::updateStateOnMinorGC(double promotionRate) {
 
 bool AllocSite::maybeResetState() {
   if (invalidationLimitReached()) {
-    MOZ_ASSERT(state_ == State::Unknown);
+    MOZ_ASSERT(state() == State::Unknown);
     return false;
   }
 
   invalidationCount++;
-  state_ = State::Unknown;
+  setState(State::Unknown);
   return true;
 }
 
 void AllocSite::trace(JSTracer* trc) {
-  if (script_) {
-    TraceManuallyBarrieredEdge(trc, &script_, "AllocSite script");
+  if (JSScript* s = script()) {
+    TraceManuallyBarrieredEdge(trc, &s, "AllocSite script");
+    setScript(s);
   }
 }
 
@@ -344,8 +357,10 @@ bool PretenuringZone::shouldResetPretenuredAllocSites() {
 }
 
 /* static */
-void AllocSite::printInfoHeader() {
-  fprintf(stderr, "Pretenuring info after minor GC:\n");
+void AllocSite::printInfoHeader(JS::GCReason reason, double promotionRate) {
+  fprintf(stderr,
+          "Pretenuring info after %s minor GC with %4.1f%% promotion rate:\n",
+          ExplainGCReason(reason), promotionRate * 100.0);
 }
 
 /* static */
@@ -401,7 +416,7 @@ void AllocSite::printInfo(bool hasPromotionRate, double promotionRate,
 }
 
 const char* AllocSite::stateName() const {
-  switch (state_) {
+  switch (state()) {
     case State::ShortLived:
       return "ShortLived";
     case State::Unknown:

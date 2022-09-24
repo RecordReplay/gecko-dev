@@ -15,7 +15,7 @@ LOCAL_INCLUDES += [
     "/netwerk/dns",  # For nsDNSService2.h
     "/third_party/libsrtp/src/include",
     "/third_party/libwebrtc",
-    "/third_party/libwebrtc/webrtc",
+    "/third_party/libwebrtc/third_party/abseil-cpp",
 ]
 
 UNIFIED_SOURCES += [
@@ -25,14 +25,16 @@ UNIFIED_SOURCES += [
     "PacketDumper.cpp",
     "PeerConnectionCtx.cpp",
     "PeerConnectionImpl.cpp",
-    "PeerConnectionMedia.cpp",
     "RTCDtlsTransport.cpp",
     "RTCDTMFSender.cpp",
     "RTCRtpReceiver.cpp",
+    "RTCRtpSender.cpp",
+    "RTCRtpTransceiver.cpp",
     "RTCStatsIdGenerator.cpp",
     "RTCStatsReport.cpp",
-    "TransceiverImpl.cpp",
     "WebrtcGlobalInformation.cpp",
 ]
 
 FINAL_LIBRARY = "xul"
+
+REQUIRES_UNIFIED_BUILD = True

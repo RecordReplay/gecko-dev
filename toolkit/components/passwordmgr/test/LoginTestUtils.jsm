@@ -502,16 +502,16 @@ LoginTestUtils.recipes = {
   },
 };
 
-LoginTestUtils.masterPassword = {
-  masterPassword: "omgsecret!",
+LoginTestUtils.primaryPassword = {
+  primaryPassword: "omgsecret!",
 
-  _set(enable) {
+  _set(enable, stayLoggedIn) {
     let oldPW, newPW;
     if (enable) {
       oldPW = "";
-      newPW = this.masterPassword;
+      newPW = this.primaryPassword;
     } else {
-      oldPW = this.masterPassword;
+      oldPW = this.primaryPassword;
       newPW = "";
     }
     try {
@@ -526,7 +526,9 @@ LoginTestUtils.masterPassword = {
         token.checkPassword(oldPW);
         dump("MP change from " + oldPW + " to " + newPW + "\n");
         token.changePassword(oldPW, newPW);
-        token.logoutSimple();
+        if (!stayLoggedIn) {
+          token.logoutSimple();
+        }
       }
     } catch (e) {
       dump(
@@ -535,8 +537,8 @@ LoginTestUtils.masterPassword = {
     }
   },
 
-  enable() {
-    this._set(true);
+  enable(stayLoggedIn = false) {
+    this._set(true, stayLoggedIn);
   },
 
   disable() {
@@ -630,22 +632,17 @@ LoginTestUtils.remoteSettings = {
   async setupWebsitesWithSharedCredentials(
     relatedRealms = [["other-example.com", "example.com", "example.co.uk"]]
   ) {
-    let db = await RemoteSettings(this.relatedRealmsCollection).db;
+    let db = RemoteSettings(this.relatedRealmsCollection).db;
     await db.clear();
     await db.create({
       id: "some-fake-ID-abc",
       relatedRealms,
     });
-    await db.importChanges({}, 1234567);
+    await db.importChanges({}, Date.now());
   },
   async cleanWebsitesWithSharedCredentials() {
-    let db = await RemoteSettings(this.relatedRealmsCollection).db;
-    await db.clear();
-    await db.importChanges({}, 1234);
-  },
-  async updateTimestamp() {
-    let db = await RemoteSettings(this.relatedRealmsCollection).db;
-    await db.importChanges({}, 12345678);
+    let db = RemoteSettings(this.relatedRealmsCollection).db;
+    await db.importChanges({}, Date.now(), [], { clear: true });
   },
   improvedPasswordRulesCollection: "password-rules",
 
@@ -653,7 +650,7 @@ LoginTestUtils.remoteSettings = {
     origin = "example.com",
     rules = "minlength: 6; maxlength: 16; required: lower, upper; required: digit; required: [&<>'\"!#$%(),:;=?[^`{|}~]]; max-consecutive: 2;"
   ) {
-    let db = await RemoteSettings(this.improvedPasswordRulesCollection).db;
+    let db = RemoteSettings(this.improvedPasswordRulesCollection).db;
     await db.clear();
     await db.create({
       id: "some-fake-ID",
@@ -665,11 +662,10 @@ LoginTestUtils.remoteSettings = {
       Domain: origin,
       "password-rules": rules,
     });
-    await db.importChanges({}, 1234567);
+    await db.importChanges({}, Date.now());
   },
   async cleanImprovedPasswordRules() {
-    let db = await RemoteSettings(this.improvedPasswordRulesCollection).db;
-    await db.clear();
-    await db.importChanges({}, 1234);
+    let db = RemoteSettings(this.improvedPasswordRulesCollection).db;
+    await db.importChanges({}, Date.now(), [], { clear: true });
   },
 };

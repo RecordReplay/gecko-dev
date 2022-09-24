@@ -11,9 +11,8 @@ include protocol PTransportProvider;
 include IPCStream;
 include NeckoChannelParams;
 
-include protocol PFileDescriptorSet; //FIXME: bug #792908
-include protocol PChildToParentStream; //FIXME: bug #792908
-include protocol PParentToChildStream; //FIXME: bug #792908
+include "mozilla/net/WebSocketChannelParent.h";
+include "mozilla/net/WebSocketChannelChild.h";
 
 using class IPC::SerializedLoadContext from "SerializedLoadContext.h";
 [RefCounted] using class nsIURI from "mozilla/ipc/URIUtils.h";
@@ -21,6 +20,7 @@ using class IPC::SerializedLoadContext from "SerializedLoadContext.h";
 namespace mozilla {
 namespace net {
 
+[ManualDealloc, ChildImpl="WebSocketChannelChild", ParentImpl="WebSocketChannelParent"]
 async protocol PWebSocket
 {
   manager PNecko;
@@ -29,6 +29,7 @@ parent:
   // Forwarded methods corresponding to methods on nsIWebSocketChannel
   async AsyncOpen(nsIURI aURI,
                   nsCString aOrigin,
+                  OriginAttributes aOriginAttributes,
                   uint64_t aInnerWindowID,
                   nsCString aProtocol,
                   bool aSecure,

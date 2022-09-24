@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFEGaussianBlurElement.h"
 #include "mozilla/dom/SVGFEGaussianBlurElementBinding.h"
 #include "mozilla/SVGFilterInstance.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEGaussianBlur)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEGaussianBlurElement::WrapNode(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -89,6 +90,15 @@ void SVGFEGaussianBlurElement::GetSourceImageNames(
   aSources.AppendElement(SVGStringInfo(&mStringAttributes[IN1], this));
 }
 
+nsresult SVGFEGaussianBlurElement::BindToTree(BindContext& aCtx,
+                                              nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feGaussianBlur);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -103,5 +113,4 @@ SVGElement::StringAttributesInfo SVGFEGaussianBlurElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

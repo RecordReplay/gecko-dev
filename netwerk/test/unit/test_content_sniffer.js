@@ -21,14 +21,8 @@ var isNosniff = false;
  */
 var sniffer = {
   QueryInterface: ChromeUtils.generateQI(["nsIFactory", "nsIContentSniffer"]),
-  createInstance: function sniffer_ci(outer, iid) {
-    if (outer) {
-      throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-    }
+  createInstance: function sniffer_ci(iid) {
     return this.QueryInterface(iid);
-  },
-  lockFactory: function sniffer_lockf(lock) {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
   },
 
   getMIMETypeFromContent(request, data, length) {
@@ -140,9 +134,7 @@ function run_test_iteration(index) {
   if (sniffing_enabled && index == 2) {
     // Register our sniffer only here
     // This also makes sure that dynamic registration is working
-    var catMan = Cc["@mozilla.org/categorymanager;1"].getService(
-      Ci.nsICategoryManager
-    );
+    var catMan = Services.catMan;
     catMan.nsICategoryManager.addCategoryEntry(
       categoryName,
       "unit test",

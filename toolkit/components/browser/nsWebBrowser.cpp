@@ -31,6 +31,7 @@
 #include "nsComponentManagerUtils.h"
 #include "nsDocShell.h"
 #include "nsServiceManagerUtils.h"
+#include "WindowRenderer.h"
 
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/BrowsingContext.h"
@@ -130,9 +131,9 @@ already_AddRefed<nsWebBrowser> nsWebBrowser::Create(
   // get the system default window background colour
   //
   // TODO(emilio): Can we get the color-scheme from somewhere here?
-  browser->mBackgroundColor = LookAndFeel::Color(
-      LookAndFeel::ColorID::WindowBackground, LookAndFeel::ColorScheme::Light,
-      LookAndFeel::UseStandins::No);
+  browser->mBackgroundColor =
+      LookAndFeel::Color(LookAndFeel::ColorID::Window, ColorScheme::Light,
+                         LookAndFeel::UseStandins::No);
 
   // HACK ALERT - this registration registers the nsDocShellTreeOwner as a
   // nsIWebBrowserListener so it can setup its MouseListener in one of the
@@ -809,6 +810,8 @@ nsWebBrowser::SaveDocument(nsISupports* aDocumentish, nsISupports* aFile,
   nsresult rv;
   mPersist = do_CreateInstance(NS_WEBBROWSERPERSIST_CONTRACTID, &rv);
   NS_ENSURE_SUCCESS(rv, rv);
+  RefPtr<nsIWebBrowserPersist> localPersist(mPersist);
+  Unused << localPersist;
   mPersist->SetProgressListener(this);
   mPersist->SetPersistFlags(mPersistFlags);
   mPersist->GetCurrentState(&mPersistCurrentState);
@@ -1138,21 +1141,6 @@ void nsWebBrowser::EnsureDocShellTreeOwner() {
   mDocShellTreeOwner->WebBrowser(this);
 }
 
-static void DrawPaintedLayer(PaintedLayer* aLayer, gfxContext* aContext,
-                             const nsIntRegion& aRegionToDraw,
-                             const nsIntRegion& aDirtyRegion,
-                             DrawRegionClip aClip,
-                             const nsIntRegion& aRegionToInvalidate,
-                             void* aCallbackData) {
-  DrawTarget& aDrawTarget = *aContext->GetDrawTarget();
-
-  ColorPattern color(ToDeviceColor(*static_cast<nscolor*>(aCallbackData)));
-  nsIntRect dirtyRect = aRegionToDraw.GetBounds();
-  aDrawTarget.FillRect(
-      Rect(dirtyRect.X(), dirtyRect.Y(), dirtyRect.Width(), dirtyRect.Height()),
-      color);
-}
-
 void nsWebBrowser::WindowActivated() {
 #if defined(DEBUG_smaug)
   RefPtr<dom::Document> document = mDocShell->GetDocument();
@@ -1177,34 +1165,31 @@ void nsWebBrowser::WindowDeactivated() {
 
 bool nsWebBrowser::PaintWindow(nsIWidget* aWidget,
                                LayoutDeviceIntRegion aRegion) {
-  LayerManager* layerManager = aWidget->GetLayerManager();
-  NS_ASSERTION(layerManager, "Must be in paint event");
-
-  layerManager->BeginTransaction();
-  RefPtr<PaintedLayer> root = layerManager->CreatePaintedLayer();
-  if (root) {
-    nsIntRect dirtyRect = aRegion.GetBounds().ToUnknownRect();
-    root->SetVisibleRegion(LayerIntRegion::FromUnknownRegion(dirtyRect));
-    layerManager->SetRoot(root);
+  WindowRenderer* renderer = aWidget->GetWindowRenderer();
+  NS_ASSERTION(renderer, "Must be in paint event");
+  if (FallbackRenderer* fallback = renderer->AsFallback()) {
+    if (fallback->BeginTransaction()) {
+      fallback->EndTransactionWithColor(aRegion.GetBounds().ToUnknownRect(),
+                                        ToDeviceColor(mBackgroundColor));
+    }
+    return true;
   }
-
-  layerManager->EndTransaction(DrawPaintedLayer, &mBackgroundColor);
-  return true;
+  return false;
 }
 
 void nsWebBrowser::FocusActivate(uint64_t aActionId) {
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
-  if (fm && window) {
-    fm->WindowRaised(window, aActionId);
+  if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow()) {
+      fm->WindowRaised(window, aActionId);
+    }
   }
 }
 
 void nsWebBrowser::FocusDeactivate(uint64_t aActionId) {
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow();
-  if (fm && window) {
-    fm->WindowLowered(window, aActionId);
+  if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> window = GetWindow()) {
+      fm->WindowLowered(window, aActionId);
+    }
   }
 }
 

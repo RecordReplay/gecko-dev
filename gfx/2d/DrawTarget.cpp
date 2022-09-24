@@ -5,11 +5,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "2D.h"
+#include "Blur.h"
 #include "Logging.h"
 #include "PathHelpers.h"
+#include "SourceSurfaceRawData.h"
 #include "Tools.h"
-
-#include "DrawTargetCapture.h"
 
 #include "BufferEdgePad.h"
 #include "BufferUnrotate.h"
@@ -157,17 +157,6 @@ static void ComputeLinearRGBLuminanceMask(
   }
 }
 
-void DrawTarget::DrawCapturedDT(DrawTargetCapture* aCaptureDT,
-                                const Matrix& aTransform) {
-  if (aTransform.HasNonIntegerTranslation()) {
-    gfxWarning() << "Non integer translations are not supported for "
-                    "DrawCaptureDT at this time!";
-    return;
-  }
-  static_cast<DrawTargetCaptureImpl*>(aCaptureDT)
-      ->ReplayToDrawTarget(this, aTransform);
-}
-
 void DrawTarget::PushDeviceSpaceClipRects(const IntRect* aRects,
                                           uint32_t aCount) {
   Matrix oldTransform = GetTransform();
@@ -218,9 +207,9 @@ already_AddRefed<SourceSurface> DrawTarget::IntoLuminanceSource(
   }
 
   // Create alpha channel mask for output
-  RefPtr<DataSourceSurface> destMaskSurface =
-      Factory::CreateDataSourceSurface(size, SurfaceFormat::A8);
-  if (!destMaskSurface) {
+  RefPtr<SourceSurfaceAlignedRawData> destMaskSurface =
+      new SourceSurfaceAlignedRawData;
+  if (!destMaskSurface->Init(size, SurfaceFormat::A8, false, 0)) {
     return nullptr;
   }
   DataSourceSurface::MappedSurface destMap;
@@ -283,6 +272,62 @@ bool DrawTarget::Unrotate(IntPoint aRotation) {
     return true;
   }
   return false;
+}
+
+int32_t ShadowOptions::BlurRadius() const {
+  return AlphaBoxBlur::CalculateBlurRadius(Point(mSigma, mSigma)).width;
+}
+
+void DrawTarget::DrawShadow(const Path* aPath, const Pattern& aPattern,
+                            const ShadowOptions& aShadow,
+                            const DrawOptions& aOptions,
+                            const StrokeOptions* aStrokeOptions) {
+  // Get the approximate bounds of the source path
+  Rect bounds = aPath->GetFastBounds(GetTransform(), aStrokeOptions);
+  if (bounds.IsEmpty()) {
+    return;
+  }
+  // Inflate the bounds by the blur radius
+  bounds += aShadow.mOffset;
+  int32_t blurRadius = aShadow.BlurRadius();
+  bounds.Inflate(blurRadius);
+  bounds.RoundOut();
+  // Check if the bounds intersect the viewport
+  Rect viewport(GetRect());
+  viewport.Inflate(blurRadius);
+  bounds = bounds.Intersect(viewport);
+  IntRect intBounds;
+  if (bounds.IsEmpty() || !bounds.ToIntRect(&intBounds) ||
+      !CanCreateSimilarDrawTarget(intBounds.Size(), SurfaceFormat::A8)) {
+    return;
+  }
+  // Create a draw target for drawing the shadow mask with enough room for blur
+  RefPtr<DrawTarget> shadowTarget = CreateShadowDrawTarget(
+      intBounds.Size(), SurfaceFormat::A8, aShadow.mSigma);
+  if (shadowTarget) {
+    // See bug 1524554.
+    shadowTarget->ClearRect(Rect());
+  }
+  if (!shadowTarget || !shadowTarget->IsValid()) {
+    return;
+  }
+  // Draw the path into the target for the initial shadow mask
+  Point offset = Point(intBounds.TopLeft()) - aShadow.mOffset;
+  shadowTarget->SetTransform(GetTransform().PostTranslate(-offset));
+  DrawOptions shadowDrawOptions(
+      aOptions.mAlpha, CompositionOp::OP_OVER,
+      blurRadius > 1 ? AntialiasMode::NONE : aOptions.mAntialiasMode);
+  if (aStrokeOptions) {
+    shadowTarget->Stroke(aPath, aPattern, *aStrokeOptions, shadowDrawOptions);
+  } else {
+    shadowTarget->Fill(aPath, aPattern, shadowDrawOptions);
+  }
+  RefPtr<SourceSurface> snapshot = shadowTarget->Snapshot();
+  // Finally, hand a snapshot of the mask to DrawSurfaceWithShadow for the
+  // final shadow blur
+  if (snapshot) {
+    DrawSurfaceWithShadow(snapshot, offset, aShadow, aOptions.mCompositionOp);
+  }
 }
 
 }  // namespace gfx

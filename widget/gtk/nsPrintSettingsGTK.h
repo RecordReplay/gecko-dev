@@ -33,6 +33,10 @@ class nsPrintSettingsGTK : public nsPrintSettings {
   nsPrintSettingsGTK();
   explicit nsPrintSettingsGTK(const PrintSettingsInitializer& aSettings);
 
+  static nsPrintSettingsGTK* From(nsIPrintSettings* aPrintSettings) {
+    return static_cast<nsPrintSettingsGTK*>(aPrintSettings);
+  }
+
   // We're overriding these methods because we want to read/write with GTK
   // objects, not local variables. This allows a simpler settings implementation
   // between Gecko and GTK.
@@ -96,8 +100,6 @@ class nsPrintSettingsGTK : public nsPrintSettings {
   NS_IMETHOD SetPaperSizeUnit(int16_t aPaperSizeUnit) override;
 
   NS_IMETHOD GetEffectivePageSize(double* aWidth, double* aHeight) override;
-
-  NS_IMETHOD SetupSilentPrinting() override;
 
   NS_IMETHOD SetPageRanges(const nsTArray<int32_t>&) override;
   NS_IMETHOD GetPageRanges(nsTArray<int32_t>&) override;

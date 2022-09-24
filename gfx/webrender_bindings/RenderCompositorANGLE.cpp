@@ -41,10 +41,13 @@
 namespace mozilla {
 namespace wr {
 
+extern LazyLogModule gRenderThreadLog;
+#define LOG(...) MOZ_LOG(gRenderThreadLog, LogLevel::Debug, (__VA_ARGS__))
+
 /* static */
 UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
     const RefPtr<widget::CompositorWidget>& aWidget, nsACString& aError) {
-  const auto& gl = RenderThread::Get()->SingletonGL(aError);
+  RefPtr<gl::GLContext> gl = RenderThread::Get()->SingletonGL(aError);
   if (!gl) {
     if (aError.IsEmpty()) {
       aError.Assign("RcANGLE(no shared GL)"_ns);
@@ -55,7 +58,7 @@ UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
   }
 
   UniquePtr<RenderCompositorANGLE> compositor =
-      MakeUnique<RenderCompositorANGLE>(aWidget);
+      MakeUnique<RenderCompositorANGLE>(aWidget, std::move(gl));
   if (!compositor->Initialize(aError)) {
     return nullptr;
   }
@@ -63,8 +66,10 @@ UniquePtr<RenderCompositor> RenderCompositorANGLE::Create(
 }
 
 RenderCompositorANGLE::RenderCompositorANGLE(
-    const RefPtr<widget::CompositorWidget>& aWidget)
+    const RefPtr<widget::CompositorWidget>& aWidget,
+    RefPtr<gl::GLContext>&& aGL)
     : RenderCompositor(aWidget),
+      mGL(aGL),
       mEGLConfig(nullptr),
       mEGLSurface(nullptr),
       mUseTripleBuffering(false),
@@ -72,27 +77,24 @@ RenderCompositorANGLE::RenderCompositorANGLE(
       mUseNativeCompositor(true),
       mUsePartialPresent(false),
       mFullRender(false),
-      mDisablingNativeCompositor(false) {}
+      mDisablingNativeCompositor(false) {
+  MOZ_ASSERT(mGL);
+  LOG("RenderCompositorANGLE::RenderCompositorANGLE()");
+}
 
 RenderCompositorANGLE::~RenderCompositorANGLE() {
+  LOG("RenderCompositorANGLE::~RenderCompositorANGLE()");
+
   DestroyEGLSurface();
   MOZ_ASSERT(!mEGLSurface);
 }
 
 ID3D11Device* RenderCompositorANGLE::GetDeviceOfEGLDisplay(nsACString& aError) {
-  const auto& gl = RenderThread::Get()->SingletonGL(aError);
-  if (!gl) {
-    if (aError.IsEmpty()) {
-      aError.Assign("RcANGLE(no shared GL in get device)"_ns);
-    } else {
-      aError.Append("(GetDevice)"_ns);
-    }
-    return nullptr;
-  }
-  const auto& gle = gl::GLContextEGL::Cast(gl);
+  const auto& gle = gl::GLContextEGL::Cast(mGL);
   const auto& egl = gle->mEgl;
   MOZ_ASSERT(egl);
-  if (!egl || !egl->mLib->IsExtensionSupported(gl::EGLLibExtension::EXT_device_query)) {
+  if (!egl ||
+      !egl->mLib->IsExtensionSupported(gl::EGLLibExtension::EXT_device_query)) {
     aError.Assign("RcANGLE(no EXT_device_query support)"_ns);
     return nullptr;
   }
@@ -111,27 +113,6 @@ ID3D11Device* RenderCompositorANGLE::GetDeviceOfEGLDisplay(nsACString& aError) {
   return device;
 }
 
-bool RenderCompositorANGLE::ShutdownEGLLibraryIfNecessary(nsACString& aError) {
-  const auto& displayDevice = GetDeviceOfEGLDisplay(aError);
-  RefPtr<ID3D11Device> device =
-      gfx::DeviceManagerDx::Get()->GetCompositorDevice();
-
-  // When DeviceReset is handled by GPUProcessManager/GPUParent,
-  // CompositorDevice is updated to a new device. EGLDisplay also needs to be
-  // updated, since EGLDisplay uses DeviceManagerDx::mCompositorDevice on ANGLE
-  // WebRender use case. EGLDisplay could be updated when Renderer count becomes
-  // 0. It is ensured by GPUProcessManager during handling DeviceReset.
-  // GPUChild::RecvNotifyDeviceReset() destroys all CompositorSessions before
-  // re-creating them.
-
-  if ((!displayDevice || device.get() != displayDevice) &&
-      RenderThread::Get()->RendererCount() == 0) {
-    // Shutdown GLLibraryEGL for updating EGLDisplay.
-    RenderThread::Get()->ClearSingletonGL();
-  }
-  return true;
-}
-
 bool RenderCompositorANGLE::Initialize(nsACString& aError) {
   // TODO(aosmond): This causes us to lose WebRender because it is unable to
   // distinguish why we failed and retry once the reset is complete. This does
@@ -142,27 +123,12 @@ bool RenderCompositorANGLE::Initialize(nsACString& aError) {
     return false;
   }
 
-  // Update device if necessary.
-  if (!ShutdownEGLLibraryIfNecessary(aError)) {
-    aError.Append("(Shutdown EGL)"_ns);
-    return false;
-  }
-  const auto gl = RenderThread::Get()->SingletonGL(aError);
-  if (!gl) {
-    if (aError.IsEmpty()) {
-      aError.Assign("RcANGLE(no shared GL post maybe shutdown)"_ns);
-    } else {
-      aError.Append("(Initialize)"_ns);
-    }
-    return false;
-  }
-
   // Force enable alpha channel to make sure ANGLE use correct framebuffer
   // formart
-  const auto& gle = gl::GLContextEGL::Cast(gl);
+  const auto& gle = gl::GLContextEGL::Cast(mGL);
   const auto& egl = gle->mEgl;
   if (!gl::CreateConfig(*egl, &mEGLConfig, /* bpp */ 32,
-                        /* enableDepthBuffer */ false, gl->IsGLES())) {
+                        /* enableDepthBuffer */ false, mGL->IsGLES())) {
     aError.Assign("RcANGLE(create EGLConfig failed)"_ns);
     return false;
   }
@@ -180,11 +146,17 @@ bool RenderCompositorANGLE::Initialize(nsACString& aError) {
     return false;
   }
 
+  // Disable native compositor when fast snapshot is needed.
+  // Taking snapshot of native compositor is very slow on Windows.
+  if (mWidget->GetCompositorOptions().NeedFastSnaphot()) {
+    mUseNativeCompositor = false;
+  }
+
   // Create DCLayerTree when DirectComposition is used.
   if (gfx::gfxVars::UseWebRenderDCompWin()) {
     HWND compositorHwnd = GetCompositorHwnd();
     if (compositorHwnd) {
-      mDCLayerTree = DCLayerTree::Create(gl, mEGLConfig, mDevice, mCtx,
+      mDCLayerTree = DCLayerTree::Create(mGL, mEGLConfig, mDevice, mCtx,
                                          compositorHwnd, aError);
       if (!mDCLayerTree) {
         return false;
@@ -336,7 +308,7 @@ bool RenderCompositorANGLE::CreateSwapChain(nsACString& aError) {
                                               getter_AddRefs(mSwapChain));
     if (FAILED(hr)) {
       aError.Assign(
-          nsPrintfCString("RcANGLE(swap chain create failed %x)", hr));
+          nsPrintfCString("RcANGLE(swap chain create failed %lx)", hr));
       return false;
     }
 
@@ -695,8 +667,7 @@ bool RenderCompositorANGLE::CreateEGLSurface() {
 
   const auto buffer = reinterpret_cast<EGLClientBuffer>(backBuf.get());
 
-  const auto gl = RenderThread::Get()->SingletonGL();
-  const auto& gle = gl::GLContextEGL::Cast(gl);
+  const auto& gle = gl::GLContextEGL::Cast(mGL);
   const auto& egl = gle->mEgl;
   const EGLSurface surface = egl->fCreatePbufferFromClientBuffer(
       LOCAL_EGL_D3D_TEXTURE_ANGLE, buffer, mEGLConfig, pbuffer_attribs);
@@ -941,6 +912,7 @@ void RenderCompositorANGLE::EnableNativeCompositor(bool aEnable) {
   // XXX Re-enable native compositor is not handled yet.
   MOZ_RELEASE_ASSERT(!mDisablingNativeCompositor);
   MOZ_RELEASE_ASSERT(!aEnable);
+  LOG("RenderCompositorANGLE::EnableNativeCompositor() aEnable %d", aEnable);
 
   if (!UseCompositor()) {
     return;

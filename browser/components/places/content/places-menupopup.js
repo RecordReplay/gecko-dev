@@ -10,10 +10,6 @@
 // This is loaded into all XUL windows. Wrap in a block to prevent
 // leaking to window scope.
 {
-  const { AppConstants } = ChromeUtils.import(
-    "resource://gre/modules/AppConstants.jsm"
-  );
-
   /**
    * This class handles the custom element for the places popup menu.
    */
@@ -27,11 +23,11 @@
         "dragstart",
         "drop",
         "dragover",
-        "dragexit",
+        "dragleave",
         "dragend",
       ];
       for (let event_name of event_names) {
-        this.addEventListener(event_name, ev => this[`on_${event_name}`](ev));
+        this.addEventListener(event_name, this);
       }
     }
 
@@ -45,7 +41,7 @@
         <arrowscrollbox class="menupopup-arrowscrollbox" flex="1" orient="vertical"
                         exportparts="scrollbox: arrowscrollbox-scrollbox"
                         smoothscroll="false" part="arrowscrollbox content">
-          <html:slot></html:slot>
+          <html:slot/>
         </arrowscrollbox>
       </hbox>
     `;
@@ -364,24 +360,13 @@
     }
 
     on_DOMMenuItemActive(event) {
+      if (super.on_DOMMenuItemActive) {
+        super.on_DOMMenuItemActive(event);
+      }
+
       let elt = event.target;
       if (elt.parentNode != this) {
         return;
-      }
-
-      if (AppConstants.platform === "macosx") {
-        // XXX: The following check is a temporary hack until bug 420033 is
-        // resolved.
-        let parentElt = elt.parent;
-        while (parentElt) {
-          if (
-            parentElt.id == "bookmarksMenuPopup" ||
-            parentElt.id == "goPopup"
-          ) {
-            return;
-          }
-          parentElt = parentElt.parentNode;
-        }
       }
 
       if (window.XULBrowserWindow) {
@@ -538,7 +523,7 @@
       event.stopPropagation();
     }
 
-    on_dragexit(event) {
+    on_dragleave(event) {
       PlacesControllerDragHelper.currentDropTarget = null;
       this.removeAttribute("dragover");
 
@@ -590,40 +575,12 @@
         "popupshowing",
         "popuppositioned",
         "popupshown",
-        "transitionend",
         "popuphiding",
         "popuphidden",
       ];
       for (let event_name of event_names) {
-        this.addEventListener(event_name, ev => this[`on_${event_name}`](ev));
+        this.addEventListener(event_name, this);
       }
-    }
-
-    static get inheritedAttributes() {
-      return {
-        ".panel-arrowcontent": "align,dir,orient,pack",
-      };
-    }
-
-    get markup() {
-      return `
-      <html:link rel="stylesheet" href="chrome://global/skin/global.css"/>
-      <vbox class="panel-arrowcontainer" flex="1">
-        <box class="panel-arrowbox" part="arrowbox">
-          <image class="panel-arrow" part="arrow"/>
-        </box>
-        <box class="panel-arrowcontent" part="arrowcontent" flex="1">
-          <vbox part="drop-indicator-bar" hidden="true">
-            <image part="drop-indicator"/>
-          </vbox>
-          <arrowscrollbox class="menupopup-arrowscrollbox" flex="1"
-                          orient="vertical" smoothscroll="false"
-                          part="arrowscrollbox content">
-            <html:slot/>
-          </arrowscrollbox>
-        </box>
-      </vbox>
-    `;
     }
 
     connectedCallback() {
@@ -637,92 +594,45 @@
       this.setAttribute("flip", "both");
       this.setAttribute("side", "top");
       this.setAttribute("position", "bottomcenter topright");
-      this.style.pointerEvents = "none";
     }
 
-    get container() {
-      return this.shadowRoot.querySelector(".panel-arrowcontainer");
-    }
-    get arrowbox() {
-      return this.shadowRoot.querySelector(".panel-arrowbox");
-    }
-    get arrow() {
-      return this.shadowRoot.querySelector(".panel-arrow");
-    }
-
-    adjustArrowPosition(event) {
-      let arrow = this.arrow;
-
-      let anchor = this.anchorNode;
-      if (!anchor) {
-        arrow.hidden = true;
+    _setSideAttribute(event) {
+      if (!this.anchorNode) {
         return;
       }
 
-      let container = this.container;
-      let arrowbox = this.arrowbox;
-
       var position = event.alignmentPosition;
-      var offset = event.alignmentOffset;
-
-      this.setAttribute("arrowposition", position);
-
-      // if this panel has a "sliding" arrow, we may have previously set margins...
-      arrowbox.style.removeProperty("transform");
       if (position.indexOf("start_") == 0 || position.indexOf("end_") == 0) {
-        container.setAttribute("orient", "horizontal");
-        arrowbox.setAttribute("orient", "vertical");
-        if (position.indexOf("_after") > 0) {
-          arrowbox.setAttribute("pack", "end");
-        } else {
-          arrowbox.setAttribute("pack", "start");
-        }
-        arrowbox.style.transform = "translate(0, " + -offset + "px)";
-
         // The assigned side stays the same regardless of direction.
         let isRTL = this.matches(":-moz-locale-dir(rtl)");
 
         if (position.indexOf("start_") == 0) {
-          container.style.MozBoxDirection = "reverse";
           this.setAttribute("side", isRTL ? "left" : "right");
         } else {
-          container.style.removeProperty("-moz-box-direction");
           this.setAttribute("side", isRTL ? "right" : "left");
         }
       } else if (
         position.indexOf("before_") == 0 ||
         position.indexOf("after_") == 0
       ) {
-        container.removeAttribute("orient");
-        arrowbox.removeAttribute("orient");
-        if (position.indexOf("_end") > 0) {
-          arrowbox.setAttribute("pack", "end");
-        } else {
-          arrowbox.setAttribute("pack", "start");
-        }
-        arrowbox.style.transform = "translate(" + -offset + "px, 0)";
-
         if (position.indexOf("before_") == 0) {
-          container.style.MozBoxDirection = "reverse";
           this.setAttribute("side", "bottom");
         } else {
-          container.style.removeProperty("-moz-box-direction");
           this.setAttribute("side", "top");
         }
       }
-
-      arrow.hidden = false;
     }
 
     on_popupshowing(event) {
       if (event.target == this) {
         this.setAttribute("animate", "open");
+        this.style.pointerEvents = "none";
       }
     }
 
     on_popuppositioned(event) {
       if (event.target == this) {
-        this.adjustArrowPosition(event);
+        this._setSideAttribute(event);
       }
     }
 
@@ -732,35 +642,7 @@
       }
 
       this.setAttribute("panelopen", "true");
-      let disablePointerEvents;
-      if (!this.hasAttribute("disablepointereventsfortransition")) {
-        let cs = getComputedStyle(this.container);
-        let transitionProp = cs.transitionProperty;
-        let transitionTime = parseFloat(cs.transitionDuration);
-        disablePointerEvents =
-          (transitionProp.includes("transform") || transitionProp == "all") &&
-          transitionTime > 0;
-        this.setAttribute(
-          "disablepointereventsfortransition",
-          disablePointerEvents
-        );
-      } else {
-        disablePointerEvents =
-          this.getAttribute("disablepointereventsfortransition") == "true";
-      }
-      if (!disablePointerEvents) {
-        this.style.removeProperty("pointer-events");
-      }
-    }
-
-    on_transitionend(event) {
-      if (
-        event.originalTarget.classList.contains("panel-arrowcontainer") &&
-        (event.propertyName == "transform" ||
-          event.propertyName == "-moz-window-transform")
-      ) {
-        this.style.removeProperty("pointer-events");
-      }
+      this.style.removeProperty("pointer-events");
     }
 
     on_popuphiding(event) {
@@ -772,9 +654,6 @@
     on_popuphidden(event) {
       if (event.target == this) {
         this.removeAttribute("panelopen");
-        if (this.getAttribute("disablepointereventsfortransition") == "true") {
-          this.style.pointerEvents = "none";
-        }
         this.removeAttribute("animate");
       }
     }

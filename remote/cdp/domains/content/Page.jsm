@@ -6,19 +6,10 @@
 
 var EXPORTED_SYMBOLS = ["Page"];
 
-const { XPCOMUtils } = ChromeUtils.import(
-  "resource://gre/modules/XPCOMUtils.jsm"
-);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 const { ContentProcessDomain } = ChromeUtils.import(
   "chrome://remote/content/cdp/domains/ContentProcessDomain.jsm"
-);
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "uuidGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
 );
 
 const {
@@ -64,14 +55,8 @@ class Page extends ContentProcessDomain {
 
   async enable() {
     if (!this.enabled) {
-      this.session.contextObserver.on(
-        "docshell-created",
-        this._onFrameAttached
-      );
-      this.session.contextObserver.on(
-        "docshell-destroyed",
-        this._onFrameDetached
-      );
+      this.session.contextObserver.on("frame-attached", this._onFrameAttached);
+      this.session.contextObserver.on("frame-detached", this._onFrameDetached);
       this.session.contextObserver.on(
         "frame-navigated",
         this._onFrameNavigated
@@ -91,6 +76,10 @@ class Page extends ContentProcessDomain {
       this.chromeEventHandler.addEventListener("DOMContentLoaded", this, {
         mozSystemGroup: true,
       });
+      this.chromeEventHandler.addEventListener("hashchange", this, {
+        mozSystemGroup: true,
+        capture: true,
+      });
       this.chromeEventHandler.addEventListener("load", this, {
         mozSystemGroup: true,
         capture: true,
@@ -105,14 +94,8 @@ class Page extends ContentProcessDomain {
 
   disable() {
     if (this.enabled) {
-      this.session.contextObserver.off(
-        "docshell-created",
-        this._onFrameAttached
-      );
-      this.session.contextObserver.off(
-        "docshell-destroyed",
-        this._onFrameDetached
-      );
+      this.session.contextObserver.off("frame-attached", this._onFrameAttached);
+      this.session.contextObserver.off("frame-detached", this._onFrameDetached);
       this.session.contextObserver.off(
         "frame-navigated",
         this._onFrameNavigated
@@ -131,6 +114,10 @@ class Page extends ContentProcessDomain {
       });
       this.chromeEventHandler.removeEventListener("DOMContentLoaded", this, {
         mozSystemGroup: true,
+      });
+      this.chromeEventHandler.removeEventListener("hashchange", this, {
+        mozSystemGroup: true,
+        capture: true,
       });
       this.chromeEventHandler.removeEventListener("load", this, {
         mozSystemGroup: true,
@@ -194,7 +181,7 @@ class Page extends ContentProcessDomain {
     if (worldName) {
       this.worldsToEvaluateOnLoad.add(worldName);
     }
-    const identifier = uuidGen
+    const identifier = Services.uuid
       .generateUUID()
       .toString()
       .slice(1, -1);
@@ -269,8 +256,8 @@ class Page extends ContentProcessDomain {
     return this.content.location.href;
   }
 
-  _onFrameAttached(name, { id }) {
-    const bc = BrowsingContext.get(id);
+  _onFrameAttached(name, { frameId, window }) {
+    const bc = BrowsingContext.get(frameId);
 
     // Don't emit for top-level browsing contexts
     if (!bc.parent) {
@@ -279,19 +266,26 @@ class Page extends ContentProcessDomain {
 
     // TODO: Use a unique identifier for frames (bug 1605359)
     this.emit("Page.frameAttached", {
-      frameId: bc.id.toString(),
+      frameId: frameId.toString(),
       parentFrameId: bc.parent.id.toString(),
       stack: null,
     });
 
-    const loaderId = this.frameIdToLoaderId.get(bc.id);
-    const timestamp = Date.now() / 1000;
-    this.emit("Page.frameStartedLoading", { frameId: bc.id.toString() });
-    this.emitLifecycleEvent(bc.id, loaderId, "init", timestamp);
+    // Usually both events are emitted when the "pagehide" event is received.
+    // But this wont happen for a new window or frame when the initial
+    // about:blank page has already loaded, and is being replaced with the
+    // final document.
+    if (!window.document.isInitialDocument) {
+      this.emit("Page.frameStartedLoading", { frameId: frameId.toString() });
+
+      const loaderId = this.frameIdToLoaderId.get(frameId);
+      const timestamp = Date.now() / 1000;
+      this.emitLifecycleEvent(frameId, loaderId, "init", timestamp);
+    }
   }
 
-  _onFrameDetached(name, { id }) {
-    const bc = BrowsingContext.get(id);
+  _onFrameDetached(name, { frameId }) {
+    const bc = BrowsingContext.get(frameId);
 
     // Don't emit for top-level browsing contexts
     if (!bc.parent) {
@@ -299,7 +293,7 @@ class Page extends ContentProcessDomain {
     }
 
     // TODO: Use a unique identifier for frames (bug 1605359)
-    this.emit("Page.frameDetached", { frameId: bc.id.toString() });
+    this.emit("Page.frameDetached", { frameId: frameId.toString() });
   }
 
   _onFrameNavigated(name, { frameId }) {
@@ -346,10 +340,14 @@ class Page extends ContentProcessDomain {
 
   handleEvent({ type, target }) {
     const timestamp = Date.now() / 1000;
-    const frameId = target.defaultView.docShell.browsingContext.id;
-    const isFrame = !!target.defaultView.docShell.browsingContext.parent;
+
+    // Some events such as "hashchange" use the window as the target, while
+    // others have a document.
+    const win = Window.isInstance(target) ? target : target.defaultView;
+    const frameId = win.docShell.browsingContext.id;
+    const isFrame = !!win.docShell.browsingContext.parent;
     const loaderId = this.frameIdToLoaderId.get(frameId);
-    const url = target.location.href;
+    const url = win.location.href;
 
     switch (type) {
       case "DOMContentLoaded":
@@ -364,6 +362,13 @@ class Page extends ContentProcessDomain {
         );
         break;
 
+      case "hashchange":
+        this.emit("Page.navigatedWithinDocument", {
+          frameId: frameId.toString(),
+          url,
+        });
+        break;
+
       case "pagehide":
         // Maybe better to bound to "unload" once we can register for this event
         this.emit("Page.frameStartedLoading", { frameId: frameId.toString() });
@@ -375,12 +380,6 @@ class Page extends ContentProcessDomain {
           this.emit("Page.loadEventFired", { timestamp });
         }
         this.emitLifecycleEvent(frameId, loaderId, "load", timestamp);
-
-        // Todo: Only to be emitted for hashchange events (bug 1636453)
-        this.emit("Page.navigatedWithinDocument", {
-          frameId: frameId.toString(),
-          url,
-        });
 
         // XXX this should most likely be sent differently
         this.emit("Page.frameStoppedLoading", { frameId: frameId.toString() });
@@ -411,7 +410,9 @@ class Page extends ContentProcessDomain {
   }
 
   _devicePixelRatio() {
-    return this.content.devicePixelRatio;
+    return (
+      this.content.browsingContext.overrideDPPX || this.content.devicePixelRatio
+    );
   }
 
   _getFrameDetails({ context, id }) {

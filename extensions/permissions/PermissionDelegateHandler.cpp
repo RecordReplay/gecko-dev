@@ -28,7 +28,7 @@ typedef PermissionDelegateHandler::PermissionDelegateInfo DelegateInfo;
 // Particular type of permissions to care about. We decide cases by case and
 // give various types of controls over each of these.
 static const DelegateInfo sPermissionsMap[] = {
-    // Permissions API map
+    // Permissions API map. All permission names have to be in lowercase.
     {"geo", u"geolocation", DelegatePolicy::eDelegateUseFeaturePolicy},
     // The same with geo, but we support both to save some conversions between
     // "geo" and "geolocation"
@@ -187,7 +187,7 @@ bool PermissionDelegateHandler::HasFeaturePolicyAllowed(
 }
 
 bool PermissionDelegateHandler::HasPermissionDelegated(
-    const nsACString& aType) {
+    const nsACString& aType) const {
   MOZ_ASSERT(mDocument);
 
   // System principal should have right to make permission request
@@ -345,7 +345,9 @@ void PermissionDelegateHandler::UpdateDelegatedPermission(
 
   const DelegateInfo* info =
       GetPermissionDelegateInfo(NS_ConvertUTF8toUTF16(aType));
-  NS_ENSURE_TRUE_VOID(info);
+  if (!info) {
+    return;
+  }
   size_t idx = std::distance(sPermissionsMap, info);
 
   WindowContext::Transaction txn;

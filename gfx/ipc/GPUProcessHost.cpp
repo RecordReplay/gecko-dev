@@ -7,12 +7,17 @@
 #include "GPUProcessHost.h"
 #include "chrome/common/process_watcher.h"
 #include "gfxPlatform.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/gfx/GPUChild.h"
 #include "mozilla/gfx/Logging.h"
+#include "mozilla/layers/SynchronousTask.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_layers.h"
 #include "VRGPUChild.h"
 #include "mozilla/ipc/ProcessUtils.h"
+#ifdef MOZ_WIDGET_ANDROID
+#  include "mozilla/java/GeckoProcessManagerWrappers.h"
+#endif
 
 namespace mozilla {
 namespace gfx {
@@ -38,7 +43,8 @@ bool GPUProcessHost::Launch(StringVector aExtraOpts) {
   MOZ_ASSERT(!gfxPlatform::IsHeadless());
 
   mPrefSerializer = MakeUnique<ipc::SharedPreferenceSerializer>();
-  if (!mPrefSerializer->SerializeToSharedMemory()) {
+  if (!mPrefSerializer->SerializeToSharedMemory(GeckoProcessType_GPU,
+                                                /* remoteType */ ""_ns)) {
     return false;
   }
   mPrefSerializer->AddSharedPrefCmdLineArgs(*this, aExtraOpts);
@@ -82,7 +88,7 @@ bool GPUProcessHost::WaitForLaunch() {
   return result;
 }
 
-void GPUProcessHost::OnChannelConnected(int32_t peer_pid) {
+void GPUProcessHost::OnChannelConnected(base::ProcessId peer_pid) {
   MOZ_ASSERT(!NS_IsMainThread());
 
   GeckoChildProcessHost::OnChannelConnected(peer_pid);
@@ -143,6 +149,22 @@ void GPUProcessHost::InitAfterConnect(bool aSucceeded) {
     MOZ_ASSERT(rv);
 
     mGPUChild->Init();
+
+#ifdef MOZ_WIDGET_ANDROID
+    nsCOMPtr<nsIEventTarget> launcherThread(GetIPCLauncher());
+    MOZ_ASSERT(launcherThread);
+    layers::SynchronousTask task(
+        "GeckoProcessManager::GetCompositorSurfaceManager");
+
+    launcherThread->Dispatch(NS_NewRunnableFunction(
+        "GeckoProcessManager::GetCompositorSurfaceManager", [&]() {
+          layers::AutoCompleteTask complete(&task);
+          mCompositorSurfaceManager =
+              java::GeckoProcessManager::GetCompositorSurfaceManager();
+        }));
+
+    task.Wait();
+#endif
   }
 
   if (mListener) {
@@ -150,7 +172,7 @@ void GPUProcessHost::InitAfterConnect(bool aSucceeded) {
   }
 }
 
-void GPUProcessHost::Shutdown() {
+void GPUProcessHost::Shutdown(bool aUnexpectedShutdown) {
   MOZ_ASSERT(!mShutdownRequested);
 
   mListener = nullptr;
@@ -159,6 +181,10 @@ void GPUProcessHost::Shutdown() {
     // OnChannelClosed uses this to check if the shutdown was expected or
     // unexpected.
     mShutdownRequested = true;
+
+    if (aUnexpectedShutdown) {
+      mGPUChild->OnUnexpectedShutdown();
+    }
 
     // The channel might already be closed if we got here unexpectedly.
     if (!mChannelClosed) {
@@ -204,7 +230,7 @@ void GPUProcessHost::OnChannelClosed() {
 
 void GPUProcessHost::KillHard(const char* aReason) {
   ProcessHandle handle = GetChildProcessHandle();
-  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER, false)) {
+  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER)) {
     NS_WARNING("failed to kill subprocess!");
   }
 
@@ -214,6 +240,8 @@ void GPUProcessHost::KillHard(const char* aReason) {
 uint64_t GPUProcessHost::GetProcessToken() const { return mProcessToken; }
 
 void GPUProcessHost::KillProcess() { KillHard("DiagnosticKill"); }
+
+void GPUProcessHost::CrashProcess() { mGPUChild->SendCrashProcess(); }
 
 void GPUProcessHost::DestroyProcess() {
   // Cancel all tasks. We don't want anything triggering after our caller
@@ -226,6 +254,13 @@ void GPUProcessHost::DestroyProcess() {
   GetCurrentSerialEventTarget()->Dispatch(
       NS_NewRunnableFunction("DestroyProcessRunnable", [this] { Destroy(); }));
 }
+
+#ifdef MOZ_WIDGET_ANDROID
+java::CompositorSurfaceManager::Param
+GPUProcessHost::GetCompositorSurfaceManager() {
+  return mCompositorSurfaceManager;
+}
+#endif
 
 }  // namespace gfx
 }  // namespace mozilla

@@ -69,6 +69,7 @@ type_policies = {
     "BigInt": "BigIntPolicy",
     "Double": "DoublePolicy",
     "String": "StringPolicy",
+    "Symbol": "SymbolPolicy",
 }
 
 
@@ -108,6 +109,7 @@ gc_pointer_types = [
     "GetterSetter*",
     "JSAtom*",
     "ClassBodyScope*",
+    "VarScope*",
     "NamedLambdaObject*",
     "RegExpObject*",
     "JSScript*",

@@ -6,7 +6,7 @@ use api::{AlphaType, PremultipliedColorF, YuvFormat, YuvRangedColorSpace};
 use api::units::*;
 use crate::composite::CompositeFeatures;
 use crate::segment::EdgeAaSegmentMask;
-use crate::spatial_tree::{SpatialTree, ROOT_SPATIAL_NODE_INDEX, SpatialNodeIndex};
+use crate::spatial_tree::{SpatialTree, SpatialNodeIndex};
 use crate::gpu_cache::{GpuCacheAddress, GpuDataRequest};
 use crate::internal_types::FastHashMap;
 use crate::prim_store::ClipData;
@@ -55,6 +55,16 @@ impl ZBufferIdGenerator {
         self.next += 1;
         id
     }
+}
+
+#[derive(Clone, Debug)]
+#[repr(C)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub struct CopyInstance {
+    pub src_rect: DeviceRect,
+    pub dst_rect: DeviceRect,
+    pub dst_texture_size: DeviceSize,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -224,6 +234,7 @@ pub struct ClipMaskInstance {
 }
 
 // 16 bytes per instance should be enough for anyone!
+#[repr(C)]
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
@@ -534,12 +545,15 @@ impl From<SplitCompositeInstance> for PrimitiveInstanceData {
 }
 
 bitflags! {
+    // Note: This can use up to 12 bits due to how it will
+    // be packed in the instance data.
+
     /// Flags that define how the common brush shader
     /// code should process this instance.
     #[cfg_attr(feature = "capture", derive(Serialize))]
     #[cfg_attr(feature = "replay", derive(Deserialize))]
     #[derive(MallocSizeOf)]
-    pub struct BrushFlags: u8 {
+    pub struct BrushFlags: u16 {
         /// Apply perspective interpolation to UVs
         const PERSPECTIVE_INTERPOLATION = 1;
         /// Do interpolation relative to segment rect,
@@ -557,6 +571,9 @@ bitflags! {
         const SEGMENT_NINEPATCH_MIDDLE = 64;
         /// The extra segment data is a texel rect.
         const SEGMENT_TEXEL_RECT = 128;
+        /// Whether to force the anti-aliasing when the primitive
+        /// is axis-aligned.
+        const FORCE_AA = 256;
     }
 }
 
@@ -579,8 +596,8 @@ impl From<BrushInstance> for PrimitiveInstanceData {
                 ((instance.render_task_address.0 as i32) << 16)
                 | instance.clip_task_address.0 as i32,
                 instance.segment_index
-                | ((instance.edge_flags.bits() as i32) << 16)
-                | ((instance.brush_flags.bits() as i32) << 24),
+                | ((instance.brush_flags.bits() as i32) << 16)
+                | ((instance.edge_flags.bits() as i32) << 28),
                 instance.resource_address,
             ]
         }
@@ -695,11 +712,20 @@ pub struct TransformPalette {
 }
 
 impl TransformPalette {
-    pub fn new(count: usize) -> Self {
+    pub fn new(
+        count: usize,
+    ) -> Self {
         let _ = VECS_PER_TRANSFORM;
+
+        let mut transforms = Vec::with_capacity(count);
+        let mut metadata = Vec::with_capacity(count);
+
+        transforms.push(TransformData::invalid());
+        metadata.push(TransformMetadata::invalid());
+
         TransformPalette {
-            transforms: vec![TransformData::invalid(); count],
-            metadata: vec![TransformMetadata::invalid(); count],
+            transforms,
+            metadata,
             map: FastHashMap::default(),
         }
     }
@@ -708,30 +734,13 @@ impl TransformPalette {
         self.transforms
     }
 
-    pub fn set_world_transform(
-        &mut self,
-        index: SpatialNodeIndex,
-        transform: LayoutToWorldTransform,
-    ) {
-        register_transform(
-            &mut self.metadata,
-            &mut self.transforms,
-            index,
-            ROOT_SPATIAL_NODE_INDEX,
-            // We know the root picture space == world space
-            transform.with_destination::<PicturePixel>(),
-        );
-    }
-
     fn get_index(
         &mut self,
         child_index: SpatialNodeIndex,
         parent_index: SpatialNodeIndex,
         spatial_tree: &SpatialTree,
     ) -> usize {
-        if parent_index == ROOT_SPATIAL_NODE_INDEX {
-            child_index.0 as usize
-        } else if child_index == parent_index {
+        if child_index == parent_index {
             0
         } else {
             let key = RelativeTransformKey {
@@ -755,8 +764,6 @@ impl TransformPalette {
                     register_transform(
                         metadata,
                         transforms,
-                        child_index,
-                        parent_index,
                         transform,
                     )
                 })
@@ -778,6 +785,23 @@ impl TransformPalette {
             to_index,
             spatial_tree,
         );
+        let transform_kind = self.metadata[index].transform_kind as u32;
+        TransformPaletteId(
+            (index as u32) |
+            (transform_kind << 24)
+        )
+    }
+
+    pub fn get_custom(
+        &mut self,
+        transform: LayoutToPictureTransform,
+    ) -> TransformPaletteId {
+        let index = register_transform(
+            &mut self.metadata,
+            &mut self.transforms,
+            transform,
+        );
+
         let transform_kind = self.metadata[index].transform_kind as u32;
         TransformPaletteId(
             (index as u32) |
@@ -852,8 +876,6 @@ impl ImageSource {
 fn register_transform(
     metadatas: &mut Vec<TransformMetadata>,
     transforms: &mut Vec<TransformData>,
-    from_index: SpatialNodeIndex,
-    to_index: SpatialNodeIndex,
     transform: LayoutToPictureTransform,
 ) -> usize {
     // TODO: refactor the calling code to not even try
@@ -870,17 +892,11 @@ fn register_transform(
         inv_transform,
     };
 
-    if to_index == ROOT_SPATIAL_NODE_INDEX {
-        let index = from_index.0 as usize;
-        metadatas[index] = metadata;
-        transforms[index] = data;
-        index
-    } else {
-        let index = transforms.len();
-        metadatas.push(metadata);
-        transforms.push(data);
-        index
-    }
+    let index = transforms.len();
+    metadatas.push(metadata);
+    transforms.push(data);
+
+    index
 }
 
 pub fn get_shader_opacity(opacity: f32) -> i32 {

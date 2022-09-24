@@ -8,12 +8,6 @@ const TEST_DOCUMENT = "target_configuration_test_doc.sjs";
 const TEST_URI = URL_ROOT_COM_SSL + TEST_DOCUMENT;
 
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
-  });
-
   // Disable click hold and double tap zooming as it might interfere with the test
   await pushPref("ui.click_hold_context_menus", false);
   await pushPref("apz.allow_double_tap_zooming", false);
@@ -80,10 +74,10 @@ add_task(async function() {
   await otherTargetCommand.startListening();
   // Watch targets so we wait for server communication to settle (e.g. attach calls), as
   // this could cause intermittent failures.
-  await otherTargetCommand.watchTargets(
-    [otherTargetCommand.TYPES.FRAME],
-    () => {}
-  );
+  await otherTargetCommand.watchTargets({
+    types: [otherTargetCommand.TYPES.FRAME],
+    onAvailable: () => {},
+  });
 
   // Let's update the configuration with this commands instance to make sure we hit the TargetConfigurationActor
   await otherTargetConfigurationCommand.updateConfiguration({

@@ -634,25 +634,25 @@ void MathMLElement::MapMathMLAttributesInto(
                                        "tailed",
                                        "looped",
                                        "stretched"};
-    static const int32_t values[MOZ_ARRAY_LENGTH(sizes)] = {
-        NS_MATHML_MATHVARIANT_NORMAL,
-        NS_MATHML_MATHVARIANT_BOLD,
-        NS_MATHML_MATHVARIANT_ITALIC,
-        NS_MATHML_MATHVARIANT_BOLD_ITALIC,
-        NS_MATHML_MATHVARIANT_SCRIPT,
-        NS_MATHML_MATHVARIANT_BOLD_SCRIPT,
-        NS_MATHML_MATHVARIANT_FRAKTUR,
-        NS_MATHML_MATHVARIANT_DOUBLE_STRUCK,
-        NS_MATHML_MATHVARIANT_BOLD_FRAKTUR,
-        NS_MATHML_MATHVARIANT_SANS_SERIF,
-        NS_MATHML_MATHVARIANT_BOLD_SANS_SERIF,
-        NS_MATHML_MATHVARIANT_SANS_SERIF_ITALIC,
-        NS_MATHML_MATHVARIANT_SANS_SERIF_BOLD_ITALIC,
-        NS_MATHML_MATHVARIANT_MONOSPACE,
-        NS_MATHML_MATHVARIANT_INITIAL,
-        NS_MATHML_MATHVARIANT_TAILED,
-        NS_MATHML_MATHVARIANT_LOOPED,
-        NS_MATHML_MATHVARIANT_STRETCHED};
+    static const StyleMathVariant values[MOZ_ARRAY_LENGTH(sizes)] = {
+        StyleMathVariant::Normal,
+        StyleMathVariant::Bold,
+        StyleMathVariant::Italic,
+        StyleMathVariant::BoldItalic,
+        StyleMathVariant::Script,
+        StyleMathVariant::BoldScript,
+        StyleMathVariant::Fraktur,
+        StyleMathVariant::DoubleStruck,
+        StyleMathVariant::BoldFraktur,
+        StyleMathVariant::SansSerif,
+        StyleMathVariant::BoldSansSerif,
+        StyleMathVariant::SansSerifItalic,
+        StyleMathVariant::SansSerifBoldItalic,
+        StyleMathVariant::Monospace,
+        StyleMathVariant::Initial,
+        StyleMathVariant::Tailed,
+        StyleMathVariant::Looped,
+        StyleMathVariant::Stretched};
     for (uint32_t i = 0; i < ArrayLength(sizes); ++i) {
       if (str.LowerCaseEqualsASCII(sizes[i])) {
         aDecls.SetKeywordValue(eCSSProperty__moz_math_variant, values[i]);
@@ -833,15 +833,11 @@ void MathMLElement::SetIncrementScriptLevel(bool aIncrementScriptLevel,
   UpdateState(true);
 }
 
-int32_t MathMLElement::TabIndexDefault() {
-  nsCOMPtr<nsIURI> uri;
-  return IsLink(getter_AddRefs(uri)) ? 0 : -1;
-}
+int32_t MathMLElement::TabIndexDefault() { return IsLink() ? 0 : -1; }
 
 // XXX Bug 1586011: Share logic with other element classes.
 bool MathMLElement::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) {
-  Document* doc = GetComposedDoc();
-  if (!doc || doc->HasFlag(NODE_IS_EDITABLE)) {
+  if (!IsInComposedDoc() || IsInDesignMode()) {
     // In designMode documents we only allow focusing the document.
     if (aTabIndex) {
       *aTabIndex = -1;
@@ -854,8 +850,7 @@ bool MathMLElement::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) {
     *aTabIndex = tabIndex;
   }
 
-  nsCOMPtr<nsIURI> uri;
-  if (!IsLink(getter_AddRefs(uri))) {
+  if (!IsLink()) {
     // If a tabindex is specified at all we're focusable
     return GetTabIndexAttrValue().isSome();
   }
@@ -880,126 +875,21 @@ bool MathMLElement::IsFocusableInternal(int32_t* aTabIndex, bool aWithMouse) {
   return true;
 }
 
-bool MathMLElement::IsLink(nsIURI** aURI) const {
-  bool hasHref = false;
-  const nsAttrValue* href = mAttrs.GetAttr(nsGkAtoms::href, kNameSpaceID_None);
-  if (href) {
-    // MathML href
-    // The REC says: "When user agents encounter MathML elements with both href
-    // and xlink:href attributes, the href attribute should take precedence."
-    hasHref = true;
-  } else if (!StaticPrefs::mathml_xlink_disabled()) {
-    // To be a clickable XLink for styling and interaction purposes, we require:
-    //
-    //   xlink:href    - must be set
-    //   xlink:type    - must be unset or set to "" or set to "simple"
-    //   xlink:show    - must be unset or set to "", "new" or "replace"
-    //   xlink:actuate - must be unset or set to "" or "onRequest"
-    //
-    // For any other values, we're either not a *clickable* XLink, or the end
-    // result is poorly specified. Either way, we return false.
-
-    static Element::AttrValuesArray sTypeVals[] = {nsGkAtoms::_empty,
-                                                   nsGkAtoms::simple, nullptr};
-
-    static Element::AttrValuesArray sShowVals[] = {
-        nsGkAtoms::_empty, nsGkAtoms::_new, nsGkAtoms::replace, nullptr};
-
-    static Element::AttrValuesArray sActuateVals[] = {
-        nsGkAtoms::_empty, nsGkAtoms::onRequest, nullptr};
-
-    // Optimization: check for href first for early return
-    href = mAttrs.GetAttr(nsGkAtoms::href, kNameSpaceID_XLink);
-    if (href &&
-        FindAttrValueIn(kNameSpaceID_XLink, nsGkAtoms::type, sTypeVals,
-                        eCaseMatters) != Element::ATTR_VALUE_NO_MATCH &&
-        FindAttrValueIn(kNameSpaceID_XLink, nsGkAtoms::show, sShowVals,
-                        eCaseMatters) != Element::ATTR_VALUE_NO_MATCH &&
-        FindAttrValueIn(kNameSpaceID_XLink, nsGkAtoms::actuate, sActuateVals,
-                        eCaseMatters) != Element::ATTR_VALUE_NO_MATCH) {
-      OwnerDoc()->WarnOnceAbout(
-          dom::DeprecatedOperations::eMathML_DeprecatedXLinkAttribute);
-      hasHref = true;
-    }
-  }
-
-  if (hasHref) {
-    // Get absolute URI
-    nsAutoString hrefStr;
-    href->ToString(hrefStr);
-    nsContentUtils::NewURIWithDocumentCharset(aURI, hrefStr, OwnerDoc(),
-                                              GetBaseURI());
-    // must promise out param is non-null if we return true
-    return !!*aURI;
-  }
-
-  *aURI = nullptr;
-  return false;
-}
-
-void MathMLElement::GetLinkTarget(nsAString& aTarget) {
-  if (StaticPrefs::mathml_xlink_disabled()) {
-    MathMLElementBase::GetLinkTarget(aTarget);
-    return;
-  }
-
-  const nsAttrValue* target =
-      mAttrs.GetAttr(nsGkAtoms::target, kNameSpaceID_XLink);
-  if (target) {
-    OwnerDoc()->WarnOnceAbout(
-        dom::DeprecatedOperations::eMathML_DeprecatedXLinkAttribute);
-    target->ToString(aTarget);
-  }
-
-  if (aTarget.IsEmpty()) {
-    static Element::AttrValuesArray sShowVals[] = {nsGkAtoms::_new,
-                                                   nsGkAtoms::replace, nullptr};
-
-    bool hasDeprecatedShowAttribute = true;
-    switch (FindAttrValueIn(kNameSpaceID_XLink, nsGkAtoms::show, sShowVals,
-                            eCaseMatters)) {
-      case ATTR_MISSING:
-        hasDeprecatedShowAttribute = false;
-        break;
-      case 0:
-        aTarget.AssignLiteral("_blank");
-        return;
-      case 1:
-        return;
-    }
-    if (hasDeprecatedShowAttribute) {
-      OwnerDoc()->WarnOnceAbout(
-          dom::DeprecatedOperations::eMathML_DeprecatedXLinkAttribute);
-    }
-    OwnerDoc()->GetBaseTarget(aTarget);
-  }
-}
-
 already_AddRefed<nsIURI> MathMLElement::GetHrefURI() const {
-  nsCOMPtr<nsIURI> hrefURI;
-  return IsLink(getter_AddRefs(hrefURI)) ? hrefURI.forget() : nullptr;
-}
-
-// XXX Bug 1586014: Share logic with other element classes.
-void MathMLElement::RecompileScriptEventListeners() {
-  int32_t i, count = mAttrs.AttrCount();
-  for (i = 0; i < count; ++i) {
-    const nsAttrName* name = mAttrs.AttrNameAt(i);
-
-    // Eventlistenener-attributes are always in the null namespace
-    if (!name->IsAtom()) {
-      continue;
-    }
-
-    nsAtom* attr = name->Atom();
-    if (!IsEventAttributeName(attr)) {
-      continue;
-    }
-
-    nsAutoString value;
-    GetAttr(kNameSpaceID_None, attr, value);
-    SetEventHandler(GetEventNameForAttr(attr), value, true);
+  // MathML href
+  // The REC says: "When user agents encounter MathML elements with both href
+  // and xlink:href attributes, the href attribute should take precedence."
+  const nsAttrValue* href = mAttrs.GetAttr(nsGkAtoms::href, kNameSpaceID_None);
+  if (!href) {
+    return nullptr;
   }
+  // Get absolute URI
+  nsAutoString hrefStr;
+  href->ToString(hrefStr);
+  nsCOMPtr<nsIURI> hrefURI;
+  nsContentUtils::NewURIWithDocumentCharset(getter_AddRefs(hrefURI), hrefStr,
+                                            OwnerDoc(), GetBaseURI());
+  return hrefURI.forget();
 }
 
 bool MathMLElement::IsEventAttributeNameInternal(nsAtom* aName) {
@@ -1031,15 +921,7 @@ nsresult MathMLElement::AfterSetAttr(int32_t aNameSpaceID, nsAtom* aName,
   // We will need the updated attribute value because notifying the document
   // that content states have changed will call IntrinsicState, which will try
   // to get updated information about the visitedness from Link.
-  if (aName == nsGkAtoms::href && (aNameSpaceID == kNameSpaceID_None ||
-                                   (!StaticPrefs::mathml_xlink_disabled() &&
-                                    aNameSpaceID == kNameSpaceID_XLink))) {
-    if (aValue && aNameSpaceID == kNameSpaceID_XLink) {
-      OwnerDoc()->WarnOnceAbout(
-          dom::DeprecatedOperations::eMathML_DeprecatedXLinkAttribute);
-    }
-    // Note: When unsetting href, there may still be another href since there
-    // are 2 possible namespaces.
+  if (aName == nsGkAtoms::href && aNameSpaceID == kNameSpaceID_None) {
     Link::ResetLinkState(aNotify, aValue || Link::ElementHasHref());
   }
 

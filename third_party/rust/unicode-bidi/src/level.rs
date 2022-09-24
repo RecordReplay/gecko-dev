@@ -13,7 +13,9 @@
 //!
 //! <http://www.unicode.org/reports/tr9/#BD2>
 
-use std::convert::{From, Into};
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+use core::convert::{From, Into};
 
 use super::char_data::BidiClass;
 
@@ -28,7 +30,7 @@ use super::char_data::BidiClass;
 ///
 /// <http://www.unicode.org/reports/tr9/#BD2>
 #[derive(Copy, Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Level(u8);
 
 pub const LTR_LEVEL: Level = Level(0);
@@ -328,7 +330,8 @@ mod tests {
     #[test]
     fn test_into() {
         let level = Level::rtl();
-        assert_eq!(1u8, level.into());
+        let number: u8 = level.into();
+        assert_eq!(1u8, number);
     }
 
     #[test]
@@ -356,8 +359,8 @@ mod tests {
 
 #[cfg(all(feature = "serde", test))]
 mod serde_tests {
-    use serde_test::{Token, assert_tokens};
     use super::*;
+    use serde_test::{assert_tokens, Token};
 
     #[test]
     fn test_statics() {

@@ -10,7 +10,7 @@ const kExtensionID = "searchignore@mozilla.com";
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   IgnoreLists: "resource://gre/modules/IgnoreLists.jsm",
-  Promise: "resource://gre/modules/Promise.jsm",
+  PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   RemoteSettings: "resource://services-settings/remote-settings.js",
   RemoteSettingsClient: "resource://services-settings/RemoteSettingsClient.jsm",
   sinon: "resource://testing-common/Sinon.jsm",
@@ -49,7 +49,7 @@ add_task(async function test_ignoreList_basic_get() {
 });
 
 add_task(async function test_ignoreList_reentry() {
-  let promise = Promise.defer();
+  let promise = PromiseUtils.defer();
   getStub.resetHistory();
   getStub.onFirstCall().returns(promise.promise);
 
@@ -160,8 +160,8 @@ add_task(async function test_ignoreList_updates() {
 
 add_task(async function test_ignoreList_db_modification() {
   // Fill the database with some values that we can use to test that it is cleared.
-  const db = await RemoteSettings(IGNORELIST_KEY).db;
-  await db.importChanges({}, 42, IGNORELIST_TEST_DATA, { clear: true });
+  const db = RemoteSettings(IGNORELIST_KEY).db;
+  await db.importChanges({}, Date.now(), IGNORELIST_TEST_DATA, { clear: true });
 
   // Stub the get() so that the first call simulates a signature error, and
   // the second simulates success reading from the dump.
@@ -190,8 +190,8 @@ add_task(async function test_ignoreList_db_modification() {
 
 add_task(async function test_ignoreList_db_modification_never_succeeds() {
   // Fill the database with some values that we can use to test that it is cleared.
-  const db = await RemoteSettings(IGNORELIST_KEY).db;
-  await db.importChanges({}, 42, IGNORELIST_TEST_DATA, { clear: true });
+  const db = RemoteSettings(IGNORELIST_KEY).db;
+  await db.importChanges({}, Date.now(), IGNORELIST_TEST_DATA, { clear: true });
 
   // Now simulate the condition where for some reason we never get a
   // valid result.

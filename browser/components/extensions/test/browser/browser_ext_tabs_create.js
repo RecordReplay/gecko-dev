@@ -11,11 +11,14 @@ add_task(async function test_create_options() {
 
   // TODO: Multiple windows.
 
-  // Using pre-loaded new tab pages interferes with onUpdated events.
-  // It probably shouldn't.
-  SpecialPowers.setBoolPref("browser.newtab.preload", false);
-  registerCleanupFunction(() => {
-    SpecialPowers.clearUserPref("browser.newtab.preload");
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      // Using pre-loaded new tab pages interferes with onUpdated events.
+      // It probably shouldn't.
+      ["browser.newtab.preload", false],
+      // Some test cases below load http and check the behavior of https-first.
+      ["dom.security.https_first", true],
+    ],
   });
 
   let extension = ExtensionTestUtils.loadExtension({
@@ -47,26 +50,31 @@ add_task(async function test_create_options() {
             // 'selected' is marked as unsupported in schema, so we've removed it.
             // For more details, see bug 1337509
             selected: undefined,
+            mutedInfo: {
+              muted: false,
+              extensionId: undefined,
+              reason: undefined,
+            },
           };
 
           let tests = [
             {
-              create: { url: "http://example.com/" },
-              result: { url: "http://example.com/" },
+              create: { url: "https://example.com/" },
+              result: { url: "https://example.com/" },
             },
             {
-              create: { url: "view-source:http://example.com/" },
-              result: { url: "view-source:http://example.com/" },
+              create: { url: "view-source:https://example.com/" },
+              result: { url: "view-source:https://example.com/" },
             },
             {
               create: { url: "blank.html" },
               result: { url: browser.runtime.getURL("bg/blank.html") },
             },
             {
-              create: { url: "http://example.com/", openInReaderMode: true },
+              create: { url: "https://example.com/", openInReaderMode: true },
               result: {
                 url: `about:reader?url=${encodeURIComponent(
-                  "http://example.com/"
+                  "https://example.com/"
                 )}`,
               },
             },
@@ -109,6 +117,45 @@ add_task(async function test_create_options() {
             {
               create: { index: 9999 },
               result: { index: 2 },
+            },
+            {
+              // https-first redirects http to https.
+              create: { url: "http://example.com/" },
+              result: { url: "https://example.com/" },
+            },
+            {
+              // https-first redirects http to https.
+              create: { url: "view-source:http://example.com/" },
+              result: { url: "view-source:https://example.com/" },
+            },
+            {
+              // Despite https-first, the about:reader URL does not change.
+              create: { url: "http://example.com/", openInReaderMode: true },
+              result: {
+                url: `about:reader?url=${encodeURIComponent(
+                  "http://example.com/"
+                )}`,
+              },
+            },
+            {
+              create: { muted: true },
+              result: {
+                mutedInfo: {
+                  muted: true,
+                  extensionId: browser.runtime.id,
+                  reason: "extension",
+                },
+              },
+            },
+            {
+              create: { muted: false },
+              result: {
+                mutedInfo: {
+                  muted: false,
+                  extensionId: undefined,
+                  reason: undefined,
+                },
+              },
             },
           ];
 
@@ -160,11 +207,21 @@ add_task(async function test_create_options() {
                 continue;
               }
 
-              browser.test.assertEq(
-                expected[key],
-                tab[key],
-                `Expected value for tab.${key}`
-              );
+              if (key === "mutedInfo") {
+                for (let key of Object.keys(expected.mutedInfo)) {
+                  browser.test.assertEq(
+                    expected.mutedInfo[key],
+                    tab.mutedInfo[key],
+                    `Expected value for tab.mutedInfo.${key}`
+                  );
+                }
+              } else {
+                browser.test.assertEq(
+                  expected[key],
+                  tab[key],
+                  `Expected value for tab.${key}`
+                );
+              }
             }
 
             let updated = await updatedPromise;

@@ -1,6 +1,7 @@
 # cubeb-coreaudio-rs
 
-[![Build Status](https://travis-ci.com/ChunMinChang/cubeb-coreaudio-rs.svg?branch=trailblazer)](https://travis-ci.com/ChunMinChang/cubeb-coreaudio-rs)
+[![CircleCI](https://circleci.com/gh/mozilla/cubeb-coreaudio-rs.svg?style=svg)](https://circleci.com/gh/mozilla/cubeb-coreaudio-rs)
+[![Build & Test](https://github.com/mozilla/cubeb-coreaudio-rs/actions/workflows/test.yml/badge.svg)](https://github.com/mozilla/cubeb-coreaudio-rs/actions/workflows/test.yml)
 
 *Rust* implementation of [Cubeb][cubeb] on [the MacOS platform][cubeb-au].
 
@@ -19,7 +20,7 @@ This is now the _Firefox_'s default audio backend on *Mac OS*.
 
 Run the following command:
 ```sh
-curl https://raw.githubusercontent.com/ChunMinChang/cubeb-coreaudio-rs/trailblazer/build-audiounit-rust-in-cubeb.sh | sh
+curl https://raw.githubusercontent.com/mozilla/cubeb-coreaudio-rs/trailblazer/build-audiounit-rust-in-cubeb.sh | sh
 ```
 
 ### Other
@@ -38,7 +39,7 @@ The tests that may affect others are marked `#[ignore]`.
 They will be run by `cargo test ... -- --ignored ...`
 after finishing normal tests.
 Most of the tests are executed in `run_tests.sh`.
-Only those tests commented with *FIXIT* are left.
+Only those tests commented with *FIXME* are left.
 
 ### Git Hooks
 
@@ -125,8 +126,8 @@ See [todo list][todo]
 - [plain-translation-from-c][from-c]: The code is rewritten from C code on a line-by-line basis
 - [ocs-disposal][ocs-disposal]: The first version that replace our custom mutex by Rust Mutex
 
-[cubeb]: https://github.com/kinetiknz/cubeb "Cross platform audio library"
-[cubeb-au]: https://github.com/kinetiknz/cubeb/blob/master/src/cubeb_audiounit.cpp "Cubeb AudioUnit"
+[cubeb]: https://github.com/mozilla/cubeb "Cross platform audio library"
+[cubeb-au]: https://github.com/mozilla/cubeb/blob/master/src/cubeb_audiounit.cpp "Cubeb AudioUnit"
 
 [chg-buf-sz]: https://cs.chromium.org/chromium/src/media/audio/mac/audio_manager_mac.cc?l=982-989&rcl=0207eefb445f9855c2ed46280cb835b6f08bdb30 "issue on changing buffer size"
 
@@ -135,6 +136,6 @@ See [todo list][todo]
 [bmo1572273]: https://bugzilla.mozilla.org/show_bug.cgi?id=1572273
 [bmo1572273-c13]: https://bugzilla.mozilla.org/show_bug.cgi?id=1572273#c13
 
-[from-c]: https://github.com/ChunMinChang/cubeb-coreaudio-rs/tree/plain-translation-from-c
-[ocs-disposal]: https://github.com/ChunMinChang/cubeb-coreaudio-rs/tree/ocs-disposal
-[trailblazer]: https://github.com/ChunMinChang/cubeb-coreaudio-rs/tree/trailblazer
+[from-c]: https://github.com/mozilla/cubeb-coreaudio-rs/tree/plain-translation-from-c
+[ocs-disposal]: https://github.com/mozilla/cubeb-coreaudio-rs/tree/ocs-disposal
+[trailblazer]: https://github.com/mozilla/cubeb-coreaudio-rs/tree/trailblazer

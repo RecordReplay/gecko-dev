@@ -5,8 +5,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "jsapi.h"
-
+#include "js/GlobalObject.h"  // JS_NewGlobalObject
+#include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_GetProperty, JS_SetProperty
 #include "js/RootingAPI.h"
 #include "js/SliceBudget.h"
 #include "jsapi-tests/tests.h"
@@ -74,7 +74,7 @@ static bool ConstructCCW(JSContext* cx, const JSClass* globalClasp,
 }
 
 class CCWTestTracer final : public JS::CallbackTracer {
-  void onChild(const JS::GCCellPtr& thing) override {
+  void onChild(JS::GCCellPtr thing) override {
     numberOfThingsTraced++;
 
     printf("*thingp         = %p\n", thing.asCell());

@@ -4,13 +4,14 @@
 "use strict";
 
 // Check expanding/collapsing object inspector in the console when text is selected.
-const TEST_URI = "data:text/html;charset=utf8,<h1>test Object Inspector</h1>";
+const TEST_URI =
+  "data:text/html;charset=utf8,<!DOCTYPE html><h1>test Object Inspector</h1>";
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
 
   const label = "oi-test";
-  const onLoggedMessage = waitForMessage(hud, label);
+  const onLoggedMessage = waitForMessageByType(hud, label, ".console-api");
   await SpecialPowers.spawn(gBrowser.selectedBrowser, [label], function(str) {
     content.wrappedJSObject.console.log(str, [1, 2, 3]);
   });

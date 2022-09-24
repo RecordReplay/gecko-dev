@@ -23,7 +23,7 @@ job-defaults:
             - 'build/build-clang/build-clang.py'
     fetches:
         fetch:
-            - clang-12
+            - clang-14
 
 linux64-clang-tidy:
     index:
@@ -36,12 +36,9 @@ linux64-clang-tidy:
             - 'build/build-clang/clang-tidy-linux64.json'
         resources:
             - 'build/build-clang/clang-tidy-linux64.json'
-    run-on-projects:
-        - trunk
     fetches:
         toolchain:
-            - linux64-binutils
-            - linux64-gcc-7
+            - linux64-clang-14
             - linux64-toolchain-sysroot
 
 macosx64-clang-tidy:
@@ -56,15 +53,11 @@ macosx64-clang-tidy:
             - 'build/build-clang/clang-tidy-macosx64.json'
         resources:
             - 'build/build-clang/clang-tidy-macosx64.json'
-    run-on-projects:
-        - trunk
     fetches:
         toolchain:
-            - linux64-binutils
-            - linux64-cctools-port-clang-12
-            - linux64-clang-12-macosx-cross
-            - linux64-gcc-7
-            - macosx64-sdk-10.12
+            - linux64-cctools-port
+            - linux64-clang-14
+            - macosx64-sdk-11.0
 
 macosx64-arch64-clang-tidy:
     index:
@@ -81,14 +74,10 @@ macosx64-arch64-clang-tidy:
             - 'build/build-clang/clang-tidy-macosx64.json'
         resources:
             - 'build/build-clang/clang-tidy-macosx64.json'
-    run-on-projects:
-        - trunk
     fetches:
         toolchain:
-            - linux64-binutils
-            - linux64-cctools-port-clang-12
-            - linux64-clang-12-macosx-cross
-            - linux64-gcc-7
+            - linux64-cctools-port
+            - linux64-clang-14
             - macosx64-sdk-11.0
 
 win64-clang-tidy:
@@ -101,21 +90,18 @@ win64-clang-tidy:
     worker-type: b-win2012
     worker:
         max-run-time: 7200
-        env:
-            TOOLTOOL_MANIFEST: "browser/config/tooltool-manifests/vs2017-15.8.manifest"
     run:
         script: build-clang.sh
         arguments:
             - 'build/build-clang/clang-tidy-win64.json'
         resources:
             - 'build/build-clang/clang-tidy-win64.json'
-        tooltool-downloads: internal
-    run-on-projects:
-        - trunk
     fetches:
         fetch:
             - cmake
             - ninja
+        toolchain:
+            - win64-vs2019
 
 linux64-clang-tidy-external:
     attributes:
@@ -141,6 +127,5 @@ linux64-clang-tidy-external:
         fetch:
             - civet-source
         toolchain:
-            - linux64-binutils
-            - linux64-gcc-7
+            - linux64-clang-14
             - linux64-toolchain-sysroot

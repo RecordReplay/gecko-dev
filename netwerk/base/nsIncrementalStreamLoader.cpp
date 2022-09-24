@@ -20,10 +20,7 @@ nsIncrementalStreamLoader::Init(nsIIncrementalStreamLoaderObserver* observer) {
   return NS_OK;
 }
 
-nsresult nsIncrementalStreamLoader::Create(nsISupports* aOuter, REFNSIID aIID,
-                                           void** aResult) {
-  if (aOuter) return NS_ERROR_NO_AGGREGATION;
-
+nsresult nsIncrementalStreamLoader::Create(REFNSIID aIID, void** aResult) {
   RefPtr<nsIncrementalStreamLoader> it = new nsIncrementalStreamLoader();
   return it->QueryInterface(aIID, aResult);
 }
@@ -41,7 +38,7 @@ nsIncrementalStreamLoader::GetNumBytesRead(uint32_t* aNumBytes) {
 /* readonly attribute nsIRequest request; */
 NS_IMETHODIMP
 nsIncrementalStreamLoader::GetRequest(nsIRequest** aRequest) {
-  NS_IF_ADDREF(*aRequest = mRequest);
+  *aRequest = do_AddRef(mRequest).take();
   return NS_OK;
 }
 

@@ -21,7 +21,7 @@
 #include "nsWindow.h"
 #include "WinUtils.h"
 #include "nsIWindowsRegKey.h"
-#include "nsIWindowsUIUtils.h"
+#include "WindowsUIUtils.h"
 
 #ifdef ACCESSIBILITY
 #  include "nsAccessibilityService.h"
@@ -163,7 +163,7 @@ bool IMEHandler::ProcessMessage(nsWindow* aWindow, UINT aMessage,
   // behavior without native caret.  Therefore, we shouldn't put native caret
   // as far as possible.
   if (!sHasNativeCaretBeenRequested && aMessage == WM_GETOBJECT &&
-      static_cast<DWORD>(aLParam) == OBJID_CARET) {
+      static_cast<LONG>(aLParam) == OBJID_CARET) {
     // So, when we receive first WM_GETOBJECT for OBJID_CARET, let's start to
     // create native caret for such applications.
     sHasNativeCaretBeenRequested = true;
@@ -466,7 +466,7 @@ void IMEHandler::SetInputContext(nsWindow* aWindow, InputContext& aInputContext,
 }
 
 // static
-void IMEHandler::AssociateIMEContext(nsWindowBase* aWindowBase, bool aEnable) {
+void IMEHandler::AssociateIMEContext(nsWindow* aWindowBase, bool aEnable) {
   IMEContext context(aWindowBase);
   if (aEnable) {
     context.AssociateDefaultContext();
@@ -551,7 +551,7 @@ void IMEHandler::OnKeyboardLayoutChanged() {
 
   // If there is no TSFTextStore which has focus, i.e., no editor has focus,
   // nothing to do here.
-  nsWindowBase* windowBase = TSFTextStore::GetEnabledWindowBase();
+  nsWindow* windowBase = TSFTextStore::GetEnabledWindowBase();
   if (!windowBase) {
     return;
   }
@@ -661,7 +661,7 @@ void IMEHandler::AppendInputScopeFromInputmode(const nsAString& aInputmode,
     return;
   }
   if (aInputmode.EqualsLiteral("search")) {
-    if (!aScopes.Contains(IS_SEARCH)) {
+    if (NeedsSearchInputScope() && !aScopes.Contains(IS_SEARCH)) {
       aScopes.AppendElement(IS_SEARCH);
     }
     return;
@@ -677,7 +677,9 @@ void IMEHandler::AppendInputScopeFromType(const nsAString& aHTMLInputType,
     return;
   }
   if (aHTMLInputType.EqualsLiteral("search")) {
-    aScopes.AppendElement(IS_SEARCH);
+    if (NeedsSearchInputScope()) {
+      aScopes.AppendElement(IS_SEARCH);
+    }
     return;
   }
   if (aHTMLInputType.EqualsLiteral("email")) {
@@ -716,6 +718,13 @@ void IMEHandler::AppendInputScopeFromType(const nsAString& aHTMLInputType,
 }
 
 // static
+bool IMEHandler::NeedsSearchInputScope() {
+  return !(Preferences::GetBool(
+               "intl.tsf.hack.atok.search_input_scope_disabled", false) &&
+           TSFTextStore::IsATOKActive());
+}
+
+// static
 bool IMEHandler::IsOnScreenKeyboardSupported() {
 #ifdef NIGHTLY_BUILD
   if (FxRWindowManager::GetInstance()->IsFxRWindow(sFocusedWindow)) {
@@ -730,7 +739,7 @@ bool IMEHandler::IsOnScreenKeyboardSupported() {
   // On Windows 10 we require tablet mode, unless the user has set the relevant
   // Windows setting to enable the on-screen keyboard in desktop mode.
   // We might be disabled specifically on Win8(.1), so we check that afterwards.
-  if (IsWin10OrLater()) {
+  if (IsWin10OrLater() && !IsWin11OrLater()) {
     if (!IsInTabletMode() && !AutoInvokeOnScreenKeyboardInDesktopMode()) {
       return false;
     }
@@ -935,15 +944,7 @@ bool IMEHandler::IsKeyboardPresentOnSlate() {
 
 // static
 bool IMEHandler::IsInTabletMode() {
-  nsCOMPtr<nsIWindowsUIUtils> uiUtils(
-      do_GetService("@mozilla.org/windows-ui-utils;1"));
-  if (NS_WARN_IF(!uiUtils)) {
-    Preferences::SetString(kOskDebugReason,
-                           L"IITM: nsIWindowsUIUtils not available.");
-    return false;
-  }
-  bool isInTabletMode = false;
-  uiUtils->GetInTabletMode(&isInTabletMode);
+  bool isInTabletMode = WindowsUIUtils::GetInTabletMode();
   if (isInTabletMode) {
     Preferences::SetString(kOskDebugReason, L"IITM: GetInTabletMode=true.");
   } else {
@@ -1069,7 +1070,7 @@ bool IMEHandler::MaybeCreateNativeCaret(nsWindow* aWindow) {
   options.mRelativeToInsertionPoint = true;
   queryCaretRectEvent.InitForQueryCaretRect(0, options);
 
-  aWindow->DispatchWindowEvent(&queryCaretRectEvent);
+  aWindow->DispatchWindowEvent(queryCaretRectEvent);
   if (NS_WARN_IF(queryCaretRectEvent.Failed())) {
     return false;
   }

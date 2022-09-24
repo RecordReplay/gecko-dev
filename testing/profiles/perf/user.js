@@ -34,6 +34,7 @@ user_pref("browser.safebrowsing.provider.google4.updateURL", "http://127.0.0.1/s
 user_pref("browser.safebrowsing.provider.mozilla.gethashURL", "http://127.0.0.1/safebrowsing-dummy/gethash");
 user_pref("browser.safebrowsing.provider.mozilla.updateURL", "http://127.0.0.1/safebrowsing-dummy/update");
 user_pref("browser.shell.checkDefaultBrowser", false);
+user_pref("browser.startup.couldRestoreSession.count", -1);
 user_pref("browser.tabs.remote.autostart", true);
 user_pref("browser.warnOnQuit", false);
 user_pref("datareporting.healthreport.documentServerURI", "http://127.0.0.1/healthreport/");
@@ -87,5 +88,18 @@ user_pref("security.enable_java", false);
 user_pref("security.fileuri.strict_origin_policy", false);
 user_pref("toolkit.telemetry.server", "https://127.0.0.1/telemetry-dummy/");
 user_pref("telemetry.fog.test.localhost_port", -1);
+// The telemetry system sometimes uses a separate program to send telemetry
+// pings, particularly in the case when Firefox is shutting down. The prefs above
+// prevent telemetry from being sent anywhere useful, but even so the process would
+// still be launched. Because performance tests start and stop the browser in rapid
+// succession, the pingsender calls from the previous test can run simultaneously with
+// the next test, increasing the system resource load and skewing the
+// results. So we just silently skip the pingsender invocation during perf tests.
+user_pref("toolkit.telemetry.testing.suppressPingsender", true);
 user_pref("startup.homepage_welcome_url", "");
 user_pref("startup.homepage_welcome_url.additional", "");
+// Ensures that system principal triggered about:blank load within the current
+// process to avoid performing process switches in the middle of warm load
+// tests (bug 1725270). Can be removed once non-about:blank intermediate pages
+// are used instead (bug 1724261).
+user_pref("browser.tabs.remote.systemTriggeredAboutBlankAnywhere", true);

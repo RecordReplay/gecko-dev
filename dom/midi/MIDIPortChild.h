@@ -7,11 +7,10 @@
 #ifndef mozilla_dom_MIDIPortChild_h
 #define mozilla_dom_MIDIPortChild_h
 
-#include "mozilla/dom/PMIDIPortChild.h"
 #include "mozilla/dom/MIDIPortInterface.h"
+#include "mozilla/dom/PMIDIPortChild.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class MIDIPort;
 class MIDIPortInfo;
@@ -34,6 +33,8 @@ class MIDIPortChild final : public PMIDIPortChild, public MIDIPortInterface {
 
   MIDIPortChild(const MIDIPortInfo& aPortInfo, bool aSysexEnabled,
                 MIDIPort* aPort);
+  nsresult GenerateStableId(const nsACString& aOrigin);
+  const nsString& StableId() { return mStableId; };
   // virtual void Shutdown() override;
   void SetActorAlive();
 
@@ -44,9 +45,9 @@ class MIDIPortChild final : public PMIDIPortChild, public MIDIPortInterface {
   // Pointer to the DOM object this actor represents. The actor cannot outlive
   // the DOM object.
   MIDIPort* mDOMPort;
+  nsString mStableId;
   bool mActorWasAlive;
 };
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif

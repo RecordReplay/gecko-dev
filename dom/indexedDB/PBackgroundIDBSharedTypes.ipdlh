@@ -4,10 +4,6 @@
 
 include protocol PBackgroundIDBDatabaseFile;
 include protocol PBackgroundMutableFile;
-include protocol PChildToParentStream; // FIXME: bug 792908
-include protocol PFileDescriptorSet; // FIXME: bug 792908
-include protocol PParentToChildStream; // FIXME: bug 792908
-include protocol PRemoteLazyInputStream; // FIXME: bug 792908
 
 include DOMTypes;
 include IPCBlob;
@@ -35,7 +31,7 @@ using class mozilla::dom::indexedDB::KeyPath
 using mozilla::dom::quota::PersistenceType
   from "mozilla/dom/quota/PersistenceType.h";
 
-[MoveOnly] using mozilla::SerializedStructuredCloneBuffer
+[MoveOnly=data] using mozilla::SerializedStructuredCloneBuffer
   from "mozilla/ipc/SerializedStructuredCloneBuffer.h";
 
 namespace mozilla {

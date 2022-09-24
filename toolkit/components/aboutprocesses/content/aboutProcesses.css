@@ -86,6 +86,39 @@ td.type:dir(rtl), td.favicon:dir(rtl) {
 td:first-child {
   text-overflow: ellipsis;
 }
+
+.profiler-icon {
+  background: url("chrome://devtools/skin/images/tool-profiler.svg") no-repeat center;
+  display: inline-block;
+  height: 100%;
+  width: 16px;
+  padding: 5px 7px;
+  /* The -10px is -5 to undo the td padding and -5 to undo the padding here. */
+  margin: -10px 3px;
+  -moz-context-properties: fill, fill-opacity;
+  fill-opacity: 0.9;
+  fill: currentColor;
+}
+.profiler-icon:hover {
+  background-color: var(--in-content-button-background-hover);
+}
+
+.profiler-icon:hover:active {
+  background-color: var(--in-content-button-background-active);
+  fill-opacity: 1;
+}
+
+.profiler-icon:not(.profiler-active) {
+  transform: scaleX(-1);
+}
+
+.profiler-active {
+  fill: var(--in-content-accent-color);
+}
+td:not(:hover) > .profiler-icon:not(.profiler-active) {
+  display: none;
+}
+
 .twisty {
   position: relative;
 }
@@ -142,30 +175,19 @@ tr[selected] > td {
 .clickable:dir(rtl) {
   background-position-x: left 4px;
 }
-.asc,
-.desc {
+
+.arrow-up,
+.arrow-down {
   -moz-context-properties: fill;
   fill: currentColor;
 }
-/*
-  Linux has conventions opposite to Windows, macOS on the direction of arrows
-  when sorting.
-*/
-%ifdef XP_LINUX
-.asc {
-  background-image: url(chrome://global/skin/icons/arrow-up-12.svg);
+
+.arrow-up {
+  background-image: url("chrome://global/skin/icons/arrow-up-12.svg");
 }
-.desc {
-  background-image: url(chrome://global/skin/icons/arrow-down-12.svg);
+.arrow-down {
+  background-image: url("chrome://global/skin/icons/arrow-down-12.svg");
 }
-%else
-.asc {
-  background-image: url(chrome://global/skin/icons/arrow-down-12.svg);
-}
-.desc {
-  background-image: url(chrome://global/skin/icons/arrow-up-12.svg);
-}
-%endif
 
 th.clickable:hover {
   background-color: var(--in-content-button-background-hover);
@@ -225,4 +247,13 @@ tr:is([selected], :hover):not(.killing) > .close-icon {
 tr.separate-from-previous-process-group {
   border-top: dotted 1px var(--in-content-box-border-color);
   margin-top: -1px;
+}
+
+/* Graphical view of CPU use. */
+.cpu {
+  --bar-width: 0;
+  background: linear-gradient(to left, var(--blue-40) calc(var(--bar-width) * 1%), transparent calc(var(--bar-width) * 1%));
+}
+.cpu:dir(rtl) {
+  background: linear-gradient(to right, var(--blue-40) calc(var(--bar-width) * 1%), transparent calc(var(--bar-width) * 1%));
 }

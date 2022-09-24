@@ -1,54 +1,18 @@
-// Copyright 2018 Kyle Mayes
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: Apache-2.0
 
 extern crate glob;
 
 use std::path::{Path, PathBuf};
 
+use glob::Pattern;
+
 use common;
 
-/// Returns the name of an LLVM or Clang library from a path to such a library.
-fn get_library_name(path: &Path) -> Option<String> {
-    path.file_stem().map(|p| {
-        let string = p.to_string_lossy();
-        if string.starts_with("lib") {
-            string[3..].to_owned()
-        } else {
-            string.to_string()
-        }
-    })
-}
+//================================================
+// Searching
+//================================================
 
-/// Returns the LLVM libraries required to link to `libclang` statically.
-fn get_llvm_libraries() -> Vec<String> {
-    common::run_llvm_config(&["--libs"])
-        .unwrap()
-        .split_whitespace()
-        .filter_map(|p| {
-            // Depending on the version of `llvm-config` in use, listed
-            // libraries may be in one of two forms, a full path to the library
-            // or simply prefixed with `-l`.
-            if p.starts_with("-l") {
-                Some(p[2..].into())
-            } else {
-                get_library_name(Path::new(p))
-            }
-        })
-        .collect()
-}
-
-/// Clang libraries required to link to `libclang` 3.5 and later statically.
+/// Clang static libraries required to link to `libclang` 3.5 and later.
 const CLANG_LIBRARIES: &[&str] = &[
     "clang",
     "clangAST",
@@ -65,13 +29,44 @@ const CLANG_LIBRARIES: &[&str] = &[
     "clangSerialization",
 ];
 
-/// Returns the Clang libraries required to link to `libclang` statically.
+/// Gets the name of an LLVM or Clang static library from a path.
+fn get_library_name(path: &Path) -> Option<String> {
+    path.file_stem().map(|p| {
+        let string = p.to_string_lossy();
+        if let Some(name) = string.strip_prefix("lib") {
+            name.to_owned()
+        } else {
+            string.to_string()
+        }
+    })
+}
+
+/// Gets the LLVM static libraries required to link to `libclang`.
+fn get_llvm_libraries() -> Vec<String> {
+    common::run_llvm_config(&["--libs"])
+        .unwrap()
+        .split_whitespace()
+        .filter_map(|p| {
+            // Depending on the version of `llvm-config` in use, listed
+            // libraries may be in one of two forms, a full path to the library
+            // or simply prefixed with `-l`.
+            if let Some(path) = p.strip_prefix("-l") {
+                Some(path.into())
+            } else {
+                get_library_name(Path::new(p))
+            }
+        })
+        .collect()
+}
+
+/// Gets the Clang static libraries required to link to `libclang`.
 fn get_clang_libraries<P: AsRef<Path>>(directory: P) -> Vec<String> {
-    let pattern = directory
-        .as_ref()
-        .join("libclang*.a")
-        .to_string_lossy()
-        .to_string();
+    // Escape the directory in case it contains characters that have special
+    // meaning in glob patterns (e.g., `[` or `]`).
+    let directory = Pattern::escape(directory.as_ref().to_str().unwrap());
+    let directory = Path::new(&directory);
+
+    let pattern = directory.join("libclang*.a").to_str().unwrap().to_owned();
     if let Ok(libraries) = glob::glob(&pattern) {
         libraries
             .filter_map(|l| l.ok().and_then(|l| get_library_name(&l)))
@@ -81,7 +76,8 @@ fn get_clang_libraries<P: AsRef<Path>>(directory: P) -> Vec<String> {
     }
 }
 
-/// Returns a directory containing `libclang` static libraries.
+/// Finds a directory containing LLVM and Clang static libraries and returns the
+/// path to that directory.
 fn find() -> PathBuf {
     let name = if cfg!(target_os = "windows") {
         "libclang.lib"
@@ -97,7 +93,11 @@ fn find() -> PathBuf {
     }
 }
 
-/// Find and link to `libclang` statically.
+//================================================
+// Linking
+//================================================
+
+/// Finds and links to `libclang` static libraries.
 pub fn link() {
     let cep = common::CommandErrorPrinter::default();
 
@@ -130,7 +130,7 @@ pub fn link() {
     // MSVC doesn't need this, as it tracks dependencies inside `.lib` files.
     if cfg!(target_os = "freebsd") {
         println!("cargo:rustc-flags=-l ffi -l ncursesw -l c++ -l z");
-    } else if cfg!(target_os = "linux") {
+    } else if cfg!(any(target_os = "haiku", target_os = "linux")) {
         println!("cargo:rustc-flags=-l ffi -l ncursesw -l stdc++ -l z");
     } else if cfg!(target_os = "macos") {
         println!("cargo:rustc-flags=-l ffi -l ncurses -l c++ -l z");

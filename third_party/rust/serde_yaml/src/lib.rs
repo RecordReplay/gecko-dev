@@ -13,7 +13,7 @@
 //! is a pure Rust YAML 1.2 implementation.
 //!
 //! [Serde]: https://github.com/serde-rs/serde
-//! [YAML]: http://yaml.org
+//! [YAML]: https://yaml.org/
 //! [yaml-rust]: https://github.com/chyh1990/yaml-rust
 //!
 //! # Examples
@@ -65,21 +65,32 @@
 //! }
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/serde_yaml/0.8.17")]
+#![doc(html_root_url = "https://docs.rs/serde_yaml/0.8.24")]
 #![deny(missing_docs)]
 // Suppressed clippy_pedantic lints
 #![allow(
+    // buggy
+    clippy::iter_not_returning_iterator, // https://github.com/rust-lang/rust-clippy/issues/8285
+    clippy::question_mark, // https://github.com/rust-lang/rust-clippy/issues/7859
     // private Deserializer::next
     clippy::should_implement_trait,
     // things are often more readable this way
     clippy::cast_lossless,
+    clippy::if_not_else,
+    clippy::manual_assert,
+    clippy::match_same_arms,
     clippy::module_name_repetitions,
     clippy::needless_pass_by_value,
     clippy::option_if_let_else,
+    clippy::redundant_else,
     clippy::single_match_else,
     // code is acceptable
+    clippy::blocks_in_if_conditions,
     clippy::cast_possible_wrap,
     clippy::cast_precision_loss,
+    clippy::doc_markdown,
+    clippy::items_after_statements,
+    clippy::return_self_not_must_use,
     // noisy
     clippy::missing_errors_doc,
     clippy::must_use_candidate,

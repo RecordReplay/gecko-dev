@@ -36,27 +36,38 @@ struct ID3D11Texture2D;
 class MacIOSurface;
 #endif
 
+#ifdef MOZ_WIDGET_ANDROID
+#  include "mozilla/java/GeckoSurfaceTextureWrappers.h"
+#endif
+
 namespace mozilla {
 
 namespace layers {
 class Image;
 class GPUVideoImage;
+struct PlanarYCbCrData;
 class PlanarYCbCrImage;
 class SurfaceDescriptor;
+class SurfaceDescriptorBuffer;
 
 #ifdef XP_WIN
 class D3D11ShareHandleImage;
+class D3D11TextureIMFSampleImage;
 class D3D11YCbCrImage;
 class SurfaceDescriptorD3D10;
 class SurfaceDescriptorDXGIYCbCr;
 #endif
 
 #ifdef MOZ_WIDGET_ANDROID
-class SurfaceTextureImage;
+class SurfaceTextureDescriptor;
 #endif
 
 #ifdef XP_MACOSX
 class MacIOSurfaceImage;
+#endif
+
+#ifdef MOZ_WAYLAND
+class DMABUFSurfaceImage;
 #endif
 }  // namespace layers
 
@@ -168,15 +179,18 @@ class GLBlitHelper final {
   const DrawBlitProg* CreateDrawBlitProg(const DrawBlitProg::Key& key) const;
 
  public:
-  bool BlitImage(layers::PlanarYCbCrImage* yuvImage,
-                 const gfx::IntSize& destSize, OriginPos destOrigin);
+  bool BlitPlanarYCbCr(const layers::PlanarYCbCrData&,
+                       const gfx::IntSize& destSize, OriginPos destOrigin);
 #ifdef MOZ_WIDGET_ANDROID
-  // Blit onto the current FB.
-  bool BlitImage(layers::SurfaceTextureImage* stImage,
-                 const gfx::IntSize& destSize, OriginPos destOrigin) const;
+  bool Blit(const java::GeckoSurfaceTexture::Ref& surfaceTexture,
+            const gfx::IntSize& destSize, const OriginPos destOrigin) const;
 #endif
 #ifdef XP_MACOSX
   bool BlitImage(layers::MacIOSurfaceImage* srcImage,
+                 const gfx::IntSize& destSize, OriginPos destOrigin) const;
+#endif
+#ifdef MOZ_WAYLAND
+  bool BlitImage(layers::DMABUFSurfaceImage* srcImage,
                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
 #endif
 
@@ -204,9 +218,10 @@ class GLBlitHelper final {
                             GLenum srcTarget = LOCAL_GL_TEXTURE_2D,
                             GLenum destTarget = LOCAL_GL_TEXTURE_2D) const;
 
-  void DrawBlitTextureToFramebuffer(
-      GLuint srcTex, const gfx::IntSize& srcSize, const gfx::IntSize& destSize,
-      GLenum srcTarget = LOCAL_GL_TEXTURE_2D) const;
+  void DrawBlitTextureToFramebuffer(GLuint srcTex, const gfx::IntSize& srcSize,
+                                    const gfx::IntSize& destSize,
+                                    GLenum srcTarget = LOCAL_GL_TEXTURE_2D,
+                                    bool srcIsBGRA = false) const;
 
   bool BlitImageToFramebuffer(layers::Image* srcImage,
                               const gfx::IntSize& destSize,
@@ -224,6 +239,8 @@ class GLBlitHelper final {
 #ifdef XP_WIN
   // GLBlitHelperD3D.cpp:
   bool BlitImage(layers::D3D11ShareHandleImage* srcImage,
+                 const gfx::IntSize& destSize, OriginPos destOrigin) const;
+  bool BlitImage(layers::D3D11TextureIMFSampleImage* srcImage,
                  const gfx::IntSize& destSize, OriginPos destOrigin) const;
   bool BlitImage(layers::D3D11YCbCrImage* srcImage,
                  const gfx::IntSize& destSize, OriginPos destOrigin) const;

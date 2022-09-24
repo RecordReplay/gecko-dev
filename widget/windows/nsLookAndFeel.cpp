@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsLookAndFeel.h"
+#include <stdint.h>
 #include <windows.h>
 #include <shellapi.h>
 #include "nsStyleConsts.h"
@@ -11,6 +12,7 @@
 #include "nsUXThemeConstants.h"
 #include "nsWindowsHelpers.h"
 #include "WinUtils.h"
+#include "WindowsUIUtils.h"
 #include "mozilla/FontPropertyTypes.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/WindowsVersion.h"
@@ -19,25 +21,6 @@
 
 using namespace mozilla;
 using namespace mozilla::widget;
-
-// static
-LookAndFeel::OperatingSystemVersion nsLookAndFeel::GetOperatingSystemVersion() {
-  static OperatingSystemVersion version = OperatingSystemVersion::Unknown;
-
-  if (version != OperatingSystemVersion::Unknown) {
-    return version;
-  }
-
-  if (IsWin10OrLater()) {
-    version = OperatingSystemVersion::Windows10;
-  } else if (IsWin8OrLater()) {
-    version = OperatingSystemVersion::Windows8;
-  } else {
-    version = OperatingSystemVersion::Windows7;
-  }
-
-  return version;
-}
 
 static nsresult GetColorFromTheme(nsUXThemeClass cls, int32_t aPart,
                                   int32_t aState, int32_t aPropId,
@@ -107,58 +90,25 @@ void nsLookAndFeel::NativeInit() { EnsureInit(); }
 
 /* virtual */
 void nsLookAndFeel::RefreshImpl() {
-  nsXPLookAndFeel::RefreshImpl();
   mInitialized = false;  // Fetch system colors next time they're used.
+  nsXPLookAndFeel::RefreshImpl();
 }
 
-nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
+nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme aScheme,
                                        nscolor& aColor) {
   EnsureInit();
+
+  if (aScheme == ColorScheme::Dark) {
+    if (auto color = GenericDarkColor(aID)) {
+      aColor = *color;
+      return NS_OK;
+    }
+  }
 
   nsresult res = NS_OK;
 
   int idx;
   switch (aID) {
-    case ColorID::WindowBackground:
-      idx = COLOR_WINDOW;
-      break;
-    case ColorID::WindowForeground:
-      idx = COLOR_WINDOWTEXT;
-      break;
-    case ColorID::WidgetBackground:
-      idx = COLOR_BTNFACE;
-      break;
-    case ColorID::WidgetForeground:
-      idx = COLOR_BTNTEXT;
-      break;
-    case ColorID::WidgetSelectBackground:
-      idx = COLOR_HIGHLIGHT;
-      break;
-    case ColorID::WidgetSelectForeground:
-      idx = COLOR_HIGHLIGHTTEXT;
-      break;
-    case ColorID::Widget3DHighlight:
-      idx = COLOR_BTNHIGHLIGHT;
-      break;
-    case ColorID::Widget3DShadow:
-      idx = COLOR_BTNSHADOW;
-      break;
-    case ColorID::TextBackground:
-      idx = COLOR_WINDOW;
-      break;
-    case ColorID::TextForeground:
-      idx = COLOR_WINDOWTEXT;
-      break;
-    case ColorID::TextSelectBackground:
-    case ColorID::IMESelectedRawTextBackground:
-    case ColorID::IMESelectedConvertedTextBackground:
-      idx = COLOR_HIGHLIGHT;
-      break;
-    case ColorID::TextSelectForeground:
-    case ColorID::IMESelectedRawTextForeground:
-    case ColorID::IMESelectedConvertedTextForeground:
-      idx = COLOR_HIGHLIGHTTEXT;
-      break;
     case ColorID::IMERawInputBackground:
     case ColorID::IMEConvertedTextBackground:
       aColor = NS_TRANSPARENT;
@@ -194,6 +144,8 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       break;
     case ColorID::Buttonface:
     case ColorID::MozButtonhoverface:
+    case ColorID::MozButtonactiveface:
+    case ColorID::MozButtondisabledface:
       idx = COLOR_BTNFACE;
       break;
     case ColorID::Buttonhighlight:
@@ -204,17 +156,26 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       break;
     case ColorID::Buttontext:
     case ColorID::MozButtonhovertext:
+    case ColorID::MozButtonactivetext:
       idx = COLOR_BTNTEXT;
       break;
     case ColorID::Captiontext:
       idx = COLOR_CAPTIONTEXT;
       break;
+    case ColorID::MozCellhighlighttext:
+      aColor = NS_RGB(0, 0, 0);
+      return NS_OK;
+    case ColorID::MozCellhighlight:
+      aColor = NS_RGB(206, 206, 206);
+      return NS_OK;
     case ColorID::Graytext:
       idx = COLOR_GRAYTEXT;
       break;
     case ColorID::Highlight:
-    case ColorID::MozHtmlCellhighlight:
+    case ColorID::Selecteditem:
     case ColorID::MozMenuhover:
+    case ColorID::IMESelectedRawTextBackground:
+    case ColorID::IMESelectedConvertedTextBackground:
       idx = COLOR_HIGHLIGHT;
       break;
     case ColorID::MozMenubarhovertext:
@@ -223,15 +184,17 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
                                                    : COLOR_MENUTEXT;
         break;
       }
-      // Fall through
+      [[fallthrough]];
     case ColorID::MozMenuhovertext:
       if (mHasColorMenuHoverText) {
         aColor = mColorMenuHoverText;
         return NS_OK;
       }
-      // Fall through
+      [[fallthrough]];
     case ColorID::Highlighttext:
-    case ColorID::MozHtmlCellhighlighttext:
+    case ColorID::Selecteditemtext:
+    case ColorID::IMESelectedRawTextForeground:
+    case ColorID::IMESelectedConvertedTextForeground:
       idx = COLOR_HIGHLIGHTTEXT;
       break;
     case ColorID::Inactiveborder:
@@ -269,6 +232,7 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       idx = COLOR_3DHIGHLIGHT;
       break;
     case ColorID::Threedlightshadow:
+    case ColorID::MozDisabledfield:
       idx = COLOR_3DLIGHT;
       break;
     case ColorID::Threedshadow:
@@ -294,7 +258,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       idx = COLOR_WINDOWTEXT;
       break;
     case ColorID::MozDialog:
-    case ColorID::MozCellhighlight:
       idx = COLOR_3DFACE;
       break;
     case ColorID::MozAccentColor:
@@ -329,7 +292,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       idx = COLOR_WINDOWTEXT;
       break;
     case ColorID::MozDialogtext:
-    case ColorID::MozCellhighlighttext:
     case ColorID::MozColheadertext:
     case ColorID::MozColheaderhovertext:
       idx = COLOR_WINDOWTEXT;
@@ -344,7 +306,6 @@ nsresult nsLookAndFeel::NativeGetColor(ColorID aID, ColorScheme,
       idx = COLOR_HOTLIGHT;
       break;
     default:
-      NS_WARNING("Unknown color for nsLookAndFeel");
       idx = COLOR_WINDOW;
       res = NS_ERROR_FAILURE;
       break;
@@ -369,6 +330,18 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::CaretBlinkTime:
       aResult = static_cast<int32_t>(::GetCaretBlinkTime());
       break;
+    case IntID::CaretBlinkCount: {
+      int32_t timeout = GetSystemParam(SPI_GETCARETTIMEOUT, 5000);
+      auto blinkTime = ::GetCaretBlinkTime();
+      if (timeout <= 0 || blinkTime <= 0) {
+        aResult = -1;
+        break;
+      }
+      // 2 * blinkTime because this integer is a full blink cycle.
+      aResult = std::ceil(float(timeout) / (2.0f * float(blinkTime)));
+      break;
+    }
+
     case IntID::CaretWidth:
       aResult = 1;
       break;
@@ -435,18 +408,6 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
     case IntID::WindowsDefaultTheme:
       aResult = nsUXThemeData::IsDefaultWindowTheme();
       break;
-    case IntID::WindowsThemeIdentifier:
-      aResult = nsUXThemeData::GetNativeThemeId();
-      break;
-    case IntID::OperatingSystemVersionIdentifier: {
-      aResult = int32_t(GetOperatingSystemVersion());
-      break;
-    }
-
-    case IntID::MacGraphiteTheme:
-      aResult = 0;
-      res = NS_ERROR_NOT_IMPLEMENTED;
-      break;
     case IntID::DWMCompositor:
       aResult = gfxWindowsPlatform::GetPlatform()->DwmCompositionEnabled();
       break;
@@ -504,7 +465,7 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
                 break;
               case ABE_TOP:
                 aResult = NS_ALERT_TOP;
-                // fall through for the right-to-left handling.
+                [[fallthrough]];
               case ABE_BOTTOM:
                 // If the task bar is right-to-left,
                 // move the origin to the left
@@ -531,10 +492,13 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
       aResult = 0;
       break;
     case IntID::SwipeAnimationEnabled:
-      aResult = 0;
+      // Forcibly enable the swipe animation on Windows. It doesn't matter on
+      // platforms where "Drag two fingers to scroll" isn't supported since on
+      // the platforms we will never generate any swipe gesture events.
+      aResult = 1;
       break;
     case IntID::UseOverlayScrollbars:
-      aResult = false;
+      aResult = WindowsUIUtils::ComputeOverlayScrollbars();
       break;
     case IntID::AllowOverlayScrollbarsOverlap:
       aResult = 0;
@@ -578,6 +542,9 @@ nsresult nsLookAndFeel::NativeGetInt(IntID aID, int32_t& aResult) {
           static_cast<int32_t>(widget::WinUtils::GetAllPointerCapabilities());
       break;
     }
+    case IntID::TouchDeviceSupportPresent:
+      aResult = WinUtils::IsTouchDeviceSupportPresent() ? 1 : 0;
+      break;
     default:
       aResult = 0;
       res = NS_ERROR_FAILURE;

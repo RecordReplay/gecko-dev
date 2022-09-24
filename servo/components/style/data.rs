@@ -159,6 +159,9 @@ pub struct ElementStyles {
     pub pseudos: EagerPseudoStyles,
 }
 
+// There's one of these per rendered elements so it better be small.
+size_of_test!(ElementStyles, 16);
+
 impl ElementStyles {
     /// Returns the primary style.
     pub fn get_primary(&self) -> Option<&Arc<ComputedValues>> {
@@ -179,13 +182,20 @@ impl ElementStyles {
     pub fn uses_viewport_units(&self) -> bool {
         use crate::computed_value_flags::ComputedValueFlags;
 
-        if self.primary().flags.intersects(ComputedValueFlags::USES_VIEWPORT_UNITS) {
+        if self
+            .primary()
+            .flags
+            .intersects(ComputedValueFlags::USES_VIEWPORT_UNITS)
+        {
             return true;
         }
 
         for pseudo_style in self.pseudos.as_array() {
             if let Some(ref pseudo_style) = pseudo_style {
-                if pseudo_style.flags.intersects(ComputedValueFlags::USES_VIEWPORT_UNITS) {
+                if pseudo_style
+                    .flags
+                    .intersects(ComputedValueFlags::USES_VIEWPORT_UNITS)
+                {
                     return true;
                 }
             }
@@ -241,6 +251,9 @@ pub struct ElementData {
     /// Flags.
     pub flags: ElementDataFlags,
 }
+
+// There's one of these per rendered elements so it better be small.
+size_of_test!(ElementData, 24);
 
 /// The kind of restyle that a single element should do.
 #[derive(Debug)]

@@ -9,7 +9,9 @@
 
 #include "gc/WeakMap.h"
 #include "gc/Zone.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_DefinePropertyById
 #include "js/Proxy.h"
+#include "js/WeakMap.h"
 #include "jsapi-tests/tests.h"
 
 using namespace js;
@@ -279,8 +281,9 @@ bool TestJSWeakMapWithGrayUnmarking(MarkKeyOrDelegate markKey,
     // Start an incremental GC and run until gray roots have been pushed onto
     // the mark stack.
     JS::PrepareForFullGC(cx);
+    js::SliceBudget budget(TimeBudget(1000000));
     JS::StartIncrementalGC(cx, JS::GCOptions::Normal, JS::GCReason::DEBUG_GC,
-                           1000000);
+                           budget);
     MOZ_ASSERT(cx->runtime()->gc.state() == gc::State::Sweep);
     MOZ_ASSERT(cx->zone()->gcState() == Zone::MarkBlackAndGray);
 
@@ -407,8 +410,9 @@ bool TestInternalWeakMapWithGrayUnmarking(CellColor keyMarkColor,
     // Start an incremental GC and run until gray roots have been pushed onto
     // the mark stack.
     JS::PrepareForFullGC(cx);
+    js::SliceBudget budget(TimeBudget(1000000));
     JS::StartIncrementalGC(cx, JS::GCOptions::Normal, JS::GCReason::DEBUG_GC,
-                           1000000);
+                           budget);
     MOZ_ASSERT(cx->runtime()->gc.state() == gc::State::Sweep);
     MOZ_ASSERT(cx->zone()->gcState() == Zone::MarkBlackAndGray);
 
@@ -659,10 +663,11 @@ void RemoveGrayRootTracer() {
   JS_SetGrayGCRootsTracer(cx, nullptr, nullptr);
 }
 
-static void TraceGrayRoots(JSTracer* trc, void* data) {
+static bool TraceGrayRoots(JSTracer* trc, SliceBudget& budget, void* data) {
   auto grayRoots = static_cast<GrayRoots*>(data);
   TraceEdge(trc, &grayRoots->grayRoot1, "gray root 1");
   TraceEdge(trc, &grayRoots->grayRoot2, "gray root 2");
+  return true;
 }
 
 JSObject* AllocPlainObject() {

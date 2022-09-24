@@ -6,7 +6,25 @@
 #define __nsLookAndFeel
 
 #include "nsXPLookAndFeel.h"
-#include "AndroidBridge.h"
+
+namespace mozilla {
+// The order and number of the members in this structure must correspond
+// to the attrsAppearance array in GeckoAppShell.getSystemColors()
+struct AndroidSystemColors {
+  nscolor textColorPrimary;
+  nscolor textColorPrimaryInverse;
+  nscolor textColorSecondary;
+  nscolor textColorSecondaryInverse;
+  nscolor textColorTertiary;
+  nscolor textColorTertiaryInverse;
+  nscolor textColorHighlight;
+  nscolor colorForeground;
+  nscolor colorBackground;
+  nscolor panelColorForeground;
+  nscolor panelColorBackground;
+  nscolor colorAccent;
+};
+}  // namespace mozilla
 
 class nsLookAndFeel final : public nsXPLookAndFeel {
  public:
@@ -20,9 +38,9 @@ class nsLookAndFeel final : public nsXPLookAndFeel {
   nsresult NativeGetColor(ColorID, ColorScheme, nscolor& aResult) override;
   bool NativeGetFont(FontID aID, nsString& aName,
                      gfxFontStyle& aStyle) override;
-  virtual bool GetEchoPasswordImpl() override;
-  virtual uint32_t GetPasswordMaskDelayImpl() override;
-  virtual char16_t GetPasswordCharacterImpl() override;
+  bool GetEchoPasswordImpl() override;
+  uint32_t GetPasswordMaskDelayImpl() override;
+  char16_t GetPasswordCharacterImpl() override;
 
  protected:
   bool mInitializedSystemColors = false;

@@ -30,8 +30,6 @@ class gfxVarReceiver;
   _(BrowserTabsRemoteAutostart, bool, false)                       \
   _(ContentBackend, BackendType, BackendType::NONE)                \
   _(SoftwareBackend, BackendType, BackendType::NONE)               \
-  _(TileSize, IntSize, IntSize(-1, -1))                            \
-  _(UseXRender, bool, false)                                       \
   _(OffscreenFormat, gfxImageFormat,                               \
     mozilla::gfx::SurfaceFormat::X8R8G8B8_UINT32)                  \
   _(RequiresAcceleratedGLContextForCompositorOGL, bool, false)     \
@@ -49,22 +47,31 @@ class gfxVarReceiver;
   _(UseWebRenderCompositor, bool, false)                           \
   _(UseWebRenderProgramBinaryDisk, bool, false)                    \
   _(UseWebRenderOptimizedShaders, bool, false)                     \
-  _(UseWebRenderMultithreading, bool, false)                       \
   _(UseWebRenderScissoredCacheClears, bool, true)                  \
   _(WebRenderProfilerUI, nsCString, nsCString())                   \
   _(WebglAllowCoreProfile, bool, true)                             \
   _(WebglAllowWindowsNativeGl, bool, false)                        \
   _(WebRenderMaxPartialPresentRects, int32_t, 0)                   \
   _(WebRenderDebugFlags, int32_t, 0)                               \
+  _(WebRenderBoolParameters, int32_t, 0)                           \
   _(WebRenderBatchingLookback, int32_t, 10)                        \
+  _(WebRenderBlobTileSize, int32_t, 256)                           \
+  _(WebRenderBatchedUploadThreshold, int32_t, 512 * 512)           \
   _(UseSoftwareWebRender, bool, false)                             \
   _(AllowSoftwareWebRenderD3D11, bool, false)                      \
   _(ScreenDepth, int32_t, 0)                                       \
   _(GREDirectory, nsString, nsString())                            \
   _(ProfDirectory, nsString, nsString())                           \
-  _(UseOMTP, bool, false)                                          \
   _(AllowD3D11KeyedMutex, bool, false)                             \
+  _(SwapIntervalGLX, bool, false)                                  \
+  _(SwapIntervalEGL, bool, false)                                  \
   _(SystemTextQuality, int32_t, 5 /* CLEARTYPE_QUALITY */)         \
+  _(SystemTextClearTypeLevel, float, 1.0f)                         \
+  _(SystemTextEnhancedContrast, float, 1.0f)                       \
+  _(SystemTextGamma, float, 2.2f)                                  \
+  _(SystemTextPixelGeometry, int32_t, 1 /* pixel geometry RGB */)  \
+  _(SystemTextRenderingMode, int32_t, 0)                           \
+  _(SystemGDIGamma, float, 1.4f)                                   \
   _(LayersWindowRecordingPath, nsCString, nsCString())             \
   _(RemoteCanvasEnabled, bool, false)                              \
   _(UseDoubleBufferingWithCompositor, bool, false)                 \
@@ -77,7 +84,14 @@ class gfxVarReceiver;
   _(UseEGL, bool, false)                                           \
   _(DrmRenderDevice, nsCString, nsCString())                       \
   _(UseDMABuf, bool, false)                                        \
-  _(WebRenderRequiresHardwareDriver, bool, false)
+  _(UseVAAPI, bool, false)                                         \
+  _(WebRenderRequiresHardwareDriver, bool, false)                  \
+  _(SupportsThreadsafeGL, bool, false)                             \
+  _(OffscreenCanvasDomainAllowlist, nsCString, nsCString())        \
+  _(AllowWebGPU, bool, false)                                      \
+  _(UseVP8HwDecode, bool, false)                                   \
+  _(UseVP9HwDecode, bool, false)                                   \
+  _(HwDecodedVideoZeroCopy, bool, false)
 
 /* Add new entries above this line. */
 

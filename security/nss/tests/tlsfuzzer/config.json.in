@@ -32,14 +32,6 @@
                 ]
             },
             {
-                "name" : "test-tls13-empty-alert.py",
-                "arguments": [
-                    "-p", "@PORT@"
-                ],
-                "comment": "https://bugzilla.mozilla.org/show_bug.cgi?id=1471656",
-                "exp_pass": false
-            },
-            {
                 "name" : "test-tls13-ffdhe-sanity.py",
                 "arguments": [
                     "-p", "@PORT@"
@@ -120,14 +112,6 @@
                 ]
             },
             {
-                "name" : "test-tls13-signature-algorithms.py",
-                "arguments": [
-                    "-p", "@PORT@"
-                ],
-                "comment": "https://bugzilla.mozilla.org/show_bug.cgi?id=1482386",
-                "exp_pass": false
-            },
-            {
                 "name" : "test-tls13-unrecognised-groups.py",
                 "arguments": [
                     "-p", "@PORT@", "--cookie"
@@ -157,6 +141,31 @@
                     "-e", "Protocol (3, 2) in SSLv2 compatible ClientHello",
                     "-e", "Protocol (3, 3) in SSLv2 compatible ClientHello",
                     "-e", "Protocol (3, 0)"
+                ]
+            },
+            {
+                "name" : "test-tls13-zero-content-type.py",
+                "comment": "https://bugzilla.mozilla.org/show_bug.cgi?id=1662515",
+                "arguments": [
+                    "-p", "@PORT@"
+                ]
+            }
+        ]
+    },
+    {
+        "server_command": [
+            "@SELFSERV@", "-w", "nss", "-d", "@SERVERDIR@",
+            "-n", "rsa-pss", "-J", "rsa_pss_rsae_sha512", "-p", "@PORT@"
+        ],
+        "server_hostname": "@HOSTADDR@",
+        "server_port": @PORT@,
+        "tests" : [
+            {
+                "name" : "test-tls13-signature-algorithms.py",
+                "comment": "https://bugzilla.mozilla.org/show_bug.cgi?id=1482386",
+                "exp_pass": false,
+                "arguments": [
+                    "-p", "$PORT@"
                 ]
             }
         ]

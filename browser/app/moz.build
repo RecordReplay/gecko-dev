@@ -53,6 +53,11 @@ LOCAL_INCLUDES += [
     "/xpcom/build",
 ]
 
+# The pthred_create() interposer needs to be linked as early as possible so
+# that it will appear before libpthread when resolving symbols.
+if CONFIG["OS_ARCH"] == "Linux" and CONFIG["MOZ_CRASHREPORTER"]:
+    USE_LIBS += ["pthread_create_interposer"]
+
 if CONFIG["LIBFUZZER"]:
     USE_LIBS += ["fuzzer"]
     LOCAL_INCLUDES += [
@@ -78,7 +83,12 @@ if CONFIG["OS_ARCH"] == "WINNT":
     LOCAL_INCLUDES += [
         "/browser/app/winlauncher",
     ]
+    OS_LIBS += [
+        "advapi32",
+        "uuid",
+    ]
     DELAYLOAD_DLLS += [
+        "advapi32.dll",
         "oleaut32.dll",
         "ole32.dll",
         "rpcrt4.dll",
@@ -94,9 +104,13 @@ if CONFIG["OS_ARCH"] == "WINNT":
         libpath_flag + OBJDIR + "/winlauncher/freestanding",
     ]
 
-if CONFIG["MOZ_SANDBOX"] and CONFIG["OS_ARCH"] == "Darwin":
-    USE_LIBS += [
-        "mozsandbox",
+    # Don't build firefox.exe with CETCOMPAT, because we need to be able to
+    # only enable it for processes that are not using JIT in xul.dll.
+    LINK_FLAGS["CETCOMPAT"] = []
+
+if CONFIG["OS_ARCH"] == "Darwin":
+    OS_LIBS += [
+        "-framework CoreFoundation",
     ]
 
 if CONFIG["MOZ_SANDBOX"] and CONFIG["OS_ARCH"] == "WINNT":
@@ -110,9 +124,13 @@ if CONFIG["MOZ_SANDBOX"] and CONFIG["OS_ARCH"] == "WINNT":
         "sandbox_s",
     ]
 
+    OS_LIBS += [
+        "winmm",
+    ]
     DELAYLOAD_DLLS += [
         "winmm.dll",
         "user32.dll",
+        "usp10.dll",
     ]
 
 # Control the default heap size.
@@ -143,7 +161,7 @@ if CONFIG["MOZ_LINUX_32_SSE2_STARTUP_ERROR"]:
         "-mfpmath=387",
     ]
 
-for icon in ("firefox", "document", "newwindow", "newtab", "pbmode"):
+for icon in ("firefox", "document", "newwindow", "newtab", "pbmode", "document_pdf"):
     DEFINES[icon.upper() + "_ICO"] = '"%s/%s/%s.ico"' % (
         TOPSRCDIR,
         CONFIG["MOZ_BRANDING_DIRECTORY"],

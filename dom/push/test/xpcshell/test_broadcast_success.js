@@ -3,10 +3,11 @@
 
 "use strict";
 
-const { PushDB, PushService, PushServiceWebSocket } = serviceExports;
+// Create the profile directory early to ensure pushBroadcastService
+// is initialized with the correct path
+do_get_profile();
 const { BroadcastService } = ChromeUtils.import(
-  "resource://gre/modules/PushBroadcastService.jsm",
-  null
+  "resource://gre/modules/PushBroadcastService.jsm"
 );
 const { JSONFile } = ChromeUtils.import("resource://gre/modules/JSONFile.jsm");
 
@@ -23,7 +24,6 @@ const userAgentID = "bd744428-f125-436a-b6d0-dd0c9845837f";
 const channelID = "0ef2ad4a-6c49-41ad-af6e-95d2425276bf";
 
 function run_test() {
-  do_get_profile();
   setPrefs({
     userAgentID,
     alwaysConnect: true,

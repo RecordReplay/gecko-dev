@@ -201,21 +201,27 @@ bool DocAccessibleChild::SendFocusEvent(const uint64_t& aID,
 
 bool DocAccessibleChild::SendCaretMoveEvent(const uint64_t& aID,
                                             const int32_t& aOffset,
-                                            const bool& aIsSelectionCollapsed) {
+                                            const bool& aIsSelectionCollapsed,
+                                            const bool& aIsAtEndOfLine,
+                                            const int32_t& aGranularity) {
   return SendCaretMoveEvent(aID, GetCaretRectFor(aID), aOffset,
-                            aIsSelectionCollapsed);
+                            aIsSelectionCollapsed, aIsAtEndOfLine,
+                            aGranularity);
 }
 
 bool DocAccessibleChild::SendCaretMoveEvent(
     const uint64_t& aID, const LayoutDeviceIntRect& aCaretRect,
-    const int32_t& aOffset, const bool& aIsSelectionCollapsed) {
+    const int32_t& aOffset, const bool& aIsSelectionCollapsed,
+    const bool& aIsAtEndOfLine, const int32_t& aGranularity) {
   if (IsConstructedInParentProcess()) {
-    return PDocAccessibleChild::SendCaretMoveEvent(aID, aCaretRect, aOffset,
-                                                   aIsSelectionCollapsed);
+    return PDocAccessibleChild::SendCaretMoveEvent(
+        aID, aCaretRect, aOffset, aIsSelectionCollapsed, aIsAtEndOfLine,
+        aGranularity);
   }
 
   PushDeferredEvent(MakeUnique<SerializedCaretMove>(
-      this, aID, aCaretRect, aOffset, aIsSelectionCollapsed));
+      this, aID, aCaretRect, aOffset, aIsSelectionCollapsed, aIsAtEndOfLine,
+      aGranularity));
   return true;
 }
 
@@ -313,9 +319,10 @@ ipc::IPCResult DocAccessibleChild::RecvRestoreFocus() {
 
 void DocAccessibleChild::SetEmbedderOnBridge(dom::BrowserBridgeChild* aBridge,
                                              uint64_t aID) {
+  DocAccessibleChild* doc = aID ? this : nullptr;
   if (IsConstructedInParentProcess()) {
     MOZ_ASSERT(CanSend());
-    aBridge->SendSetEmbedderAccessible(this, aID);
+    aBridge->SetEmbedderAccessible(doc, aID);
     return;
   }
   // Even though this doesn't fire an event, we must ensure this is sent in
@@ -323,7 +330,7 @@ void DocAccessibleChild::SetEmbedderOnBridge(dom::BrowserBridgeChild* aBridge,
   // we are notified about parent process construction. Otherwise, the
   // parent process might bind a child document to the wrong accessible if
   // ids get reused.
-  PushDeferredEvent(MakeUnique<SerializedSetEmbedder>(aBridge, this, aID));
+  PushDeferredEvent(MakeUnique<SerializedSetEmbedder>(aBridge, doc, aID));
 }
 
 }  // namespace a11y

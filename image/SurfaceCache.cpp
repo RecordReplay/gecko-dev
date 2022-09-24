@@ -60,7 +60,7 @@ class SurfaceCacheImpl;
 static StaticRefPtr<SurfaceCacheImpl> sInstance;
 
 // The mutex protecting the surface cache.
-static OrderedStaticMutex sInstanceMutex;
+static OrderedStaticMutex sInstanceMutex MOZ_UNANNOTATED;
 
 // We need to initialize the mutex on a consistent thread when recording/replaying.
 void RecordReplayInitializeSurfaceCacheMutex() {
@@ -141,6 +141,10 @@ class CachedSurface {
     return mProvider->Surface();
   }
 
+  DrawableSurface GetDrawableSurfaceEvenIfPlaceholder() const {
+    return mProvider->Surface();
+  }
+
   void SetLocked(bool aLocked) {
     if (IsPlaceholder()) {
       return;  // Can't lock a placeholder.
@@ -182,6 +186,8 @@ class CachedSurface {
     return aMallocSizeOf(this) + aMallocSizeOf(mProvider.get());
   }
 
+  void InvalidateRecording() { mProvider->InvalidateRecording(); }
+
   // A helper type used by SurfaceCacheImpl::CollectSizeOfSurfaces.
   struct MOZ_STACK_CLASS SurfaceMemoryReport {
     SurfaceMemoryReport(nsTArray<SurfaceMemoryCounter>& aCounters,
@@ -199,10 +205,10 @@ class CachedSurface {
       // for surfaces with PlaybackType::eAnimated.)
       aCachedSurface->mProvider->AddSizeOfExcludingThis(
           mMallocSizeOf, [&](ISurfaceProvider::AddSizeOfCbData& aMetadata) {
-            SurfaceMemoryCounter counter(
-                aCachedSurface->GetSurfaceKey(), aMetadata.mSurface,
-                aCachedSurface->IsLocked(), aCachedSurface->CannotSubstitute(),
-                aIsFactor2, aMetadata.mFinished);
+            SurfaceMemoryCounter counter(aCachedSurface->GetSurfaceKey(),
+                                         aCachedSurface->IsLocked(),
+                                         aCachedSurface->CannotSubstitute(),
+                                         aIsFactor2, aMetadata.mFinished);
 
             counter.Values().SetDecodedHeap(aMetadata.mHeapBytes);
             counter.Values().SetDecodedNonHeap(aMetadata.mNonHeapBytes);
@@ -282,8 +288,14 @@ class ImageSurfaceCache {
   [[nodiscard]] bool Insert(NotNull<CachedSurface*> aSurface) {
     MOZ_ASSERT(!mLocked || aSurface->IsPlaceholder() || aSurface->IsLocked(),
                "Inserting an unlocked surface for a locked image");
-    return mSurfaces.InsertOrUpdate(aSurface->GetSurfaceKey(),
-                                    RefPtr<CachedSurface>{aSurface}, fallible);
+    const auto& surfaceKey = aSurface->GetSurfaceKey();
+    if (surfaceKey.Region()) {
+      // We don't allow substitutes for surfaces with regions, so we don't want
+      // to allow factor of 2 mode pruning to release these surfaces.
+      aSurface->SetCannotSubstitute();
+    }
+    return mSurfaces.InsertOrUpdate(surfaceKey, RefPtr<CachedSurface>{aSurface},
+                                    fallible);
   }
 
   already_AddRefed<CachedSurface> Remove(NotNull<CachedSurface*> aSurface) {
@@ -332,6 +344,10 @@ class ImageSurfaceCache {
       if (exactMatch->IsDecoded()) {
         return MakeTuple(exactMatch.forget(), MatchType::EXACT, IntSize());
       }
+    } else if (aIdealKey.Region()) {
+      // We cannot substitute if we have a region. Allow it to create an exact
+      // match.
+      return MakeTuple(exactMatch.forget(), MatchType::NOT_FOUND, IntSize());
     } else if (!mFactor2Mode) {
       // If no exact match is found, and we are not in factor of 2 mode, then
       // we know that we will trigger a decode because at best we will provide
@@ -359,8 +375,8 @@ class ImageSurfaceCache {
       NotNull<CachedSurface*> current = WrapNotNull(value);
       const SurfaceKey& currentKey = current->GetSurfaceKey();
 
-      // We never match a placeholder.
-      if (current->IsPlaceholder()) {
+      // We never match a placeholder or a surface with a region.
+      if (current->IsPlaceholder() || currentKey.Region()) {
         continue;
       }
       // Matching the playback type and SVG context is required.
@@ -467,17 +483,6 @@ class ImageSurfaceCache {
       return;
     }
 
-    // Get our native size. While we know the image should be fully decoded,
-    // if it is an SVG, it is valid to have a zero size. We can't do compacting
-    // in that case because we need to know the width/height ratio to define a
-    // candidate set.
-    IntSize nativeSize;
-    if (NS_FAILED(image->GetWidth(&nativeSize.width)) ||
-        NS_FAILED(image->GetHeight(&nativeSize.height)) ||
-        nativeSize.IsEmpty()) {
-      return;
-    }
-
     // We have a valid size, we can change modes.
     mFactor2Mode = true;
   }
@@ -536,6 +541,28 @@ class ImageSurfaceCache {
     AfterMaybeRemove();
   }
 
+  template <typename Function>
+  bool Invalidate(Function&& aRemoveCallback) {
+    // Remove all non-blob recordings from the cache. Invalidate any blob
+    // recordings.
+    bool foundRecording = false;
+    for (auto iter = mSurfaces.Iter(); !iter.Done(); iter.Next()) {
+      NotNull<CachedSurface*> current = WrapNotNull(iter.UserData());
+
+      if (current->GetSurfaceKey().Flags() & SurfaceFlags::RECORD_BLOB) {
+        foundRecording = true;
+        current->InvalidateRecording();
+        continue;
+      }
+
+      aRemoveCallback(current);
+      iter.Remove();
+    }
+
+    AfterMaybeRemove();
+    return foundRecording;
+  }
+
   IntSize SuggestedSize(const IntSize& aSize) const {
     IntSize suggestedSize = SuggestedSizeInternal(aSize);
     if (mIsVectorImage) {
@@ -565,15 +592,19 @@ class ImageSurfaceCache {
     if (NS_FAILED(image->GetWidth(&factorSize.width)) ||
         NS_FAILED(image->GetHeight(&factorSize.height)) ||
         factorSize.IsEmpty()) {
-      // We should not have entered factor of 2 mode without a valid size, and
-      // several successfully decoded surfaces. Note that valid vector images
-      // may have a default size of 0x0, and those are not yet supported.
-      MOZ_ASSERT_UNREACHABLE("Expected valid native size!");
-      return aSize;
-    }
-
-    if (image->GetOrientation().SwapsWidthAndHeight()) {
-      std::swap(factorSize.width, factorSize.height);
+      // Valid vector images may have a default size of 0x0. In that case, just
+      // assume a default size of 100x100 and apply the intrinsic ratio if
+      // available. If our guess was too small, don't use factor-of-scaling.
+      MOZ_ASSERT(mIsVectorImage);
+      factorSize = IntSize(100, 100);
+      Maybe<AspectRatio> aspectRatio = image->GetIntrinsicRatio();
+      if (aspectRatio && *aspectRatio) {
+        factorSize.width =
+            NSToIntRound(aspectRatio->ApplyToFloat(float(factorSize.height)));
+        if (factorSize.IsEmpty()) {
+          return aSize;
+        }
+      }
     }
 
     if (mIsVectorImage) {
@@ -1026,7 +1057,8 @@ class SurfaceCacheImpl final : public nsIMemoryReporter {
     MOZ_ASSERT_IF(
         matchType == MatchType::SUBSTITUTE_BECAUSE_NOT_FOUND ||
             matchType == MatchType::SUBSTITUTE_BECAUSE_PENDING,
-        surface->GetSurfaceKey().SVGContext() == aSurfaceKey.SVGContext() &&
+        surface->GetSurfaceKey().Region() == aSurfaceKey.Region() &&
+            surface->GetSurfaceKey().SVGContext() == aSurfaceKey.SVGContext() &&
             surface->GetSurfaceKey().Playback() == aSurfaceKey.Playback() &&
             surface->GetSurfaceKey().Flags() == aSurfaceKey.Flags());
 
@@ -1142,6 +1174,24 @@ class SurfaceCacheImpl final : public nsIMemoryReporter {
     MaybeRemoveEmptyCache(aImageKey, cache);
   }
 
+  bool InvalidateImage(const ImageKey aImageKey,
+                       const OrderedStaticMutexAutoLock& aAutoLock) {
+    RefPtr<ImageSurfaceCache> cache = GetImageCache(aImageKey);
+    if (!cache) {
+      return false;  // No cached surfaces for this image, so nothing to do.
+    }
+
+    bool rv = cache->Invalidate(
+        [this, &aAutoLock](NotNull<CachedSurface*> aSurface) -> void {
+          StopTracking(aSurface, /* aIsTracked */ true, aAutoLock);
+          // Individual surfaces must be freed outside the lock.
+          mCachedSurfacesDiscard.AppendElement(aSurface);
+        });
+
+    MaybeRemoveEmptyCache(aImageKey, cache);
+    return rv;
+  }
+
   void DiscardAll(const OrderedStaticMutexAutoLock& aAutoLock) {
     // Remove in order of cost because mCosts is an array and the other data
     // structures are all hash tables. Note that locked surfaces are not
@@ -1182,6 +1232,21 @@ class SurfaceCacheImpl final : public nsIMemoryReporter {
                    const OrderedStaticMutexAutoLock& aAutoLock) {
     MOZ_ASSERT(aDiscard.IsEmpty());
     aDiscard = std::move(mCachedSurfacesDiscard);
+  }
+
+  already_AddRefed<CachedSurface> GetSurfaceForResetAnimation(
+      const ImageKey aImageKey, const SurfaceKey& aSurfaceKey,
+      const StaticMutexAutoLock& aAutoLock) {
+    RefPtr<CachedSurface> surface;
+
+    RefPtr<ImageSurfaceCache> cache = GetImageCache(aImageKey);
+    if (!cache) {
+      // No cached surfaces for this image.
+      return surface.forget();
+    }
+
+    surface = cache->Lookup(aSurfaceKey, /* aForAccess = */ false);
+    return surface.forget();
   }
 
   void LockSurface(NotNull<CachedSurface*> aSurface,
@@ -1339,8 +1404,9 @@ class SurfaceCacheImpl final : public nsIMemoryReporter {
     bool needsDispatch = mReleasingImagesOnMainThread.IsEmpty();
     mReleasingImagesOnMainThread.AppendElement(image);
 
-    if (!needsDispatch) {
-      // There is already a ongoing task for ClearReleasingImages().
+    if (!needsDispatch || gXPCOMThreadsShutDown) {
+      // Either there is already a ongoing task for ClearReleasingImages() or
+      // it's too late in shutdown to dispatch.
       return;
     }
 
@@ -1727,6 +1793,20 @@ void SurfaceCache::PruneImage(const ImageKey aImageKey) {
 }
 
 /* static */
+bool SurfaceCache::InvalidateImage(const ImageKey aImageKey) {
+  nsTArray<RefPtr<CachedSurface>> discard;
+  bool rv = false;
+  {
+    StaticMutexAutoLock lock(sInstanceMutex);
+    if (sInstance) {
+      rv = sInstance->InvalidateImage(aImageKey, lock);
+      sInstance->TakeDiscard(discard, lock);
+    }
+  }
+  return rv;
+}
+
+/* static */
 void SurfaceCache::DiscardAll() {
   nsTArray<RefPtr<CachedSurface>> discard;
   {
@@ -1734,6 +1814,39 @@ void SurfaceCache::DiscardAll() {
     if (sInstance) {
       sInstance->DiscardAll(lock);
       sInstance->TakeDiscard(discard, lock);
+    }
+  }
+}
+
+/* static */
+void SurfaceCache::ResetAnimation(const ImageKey aImageKey,
+                                  const SurfaceKey& aSurfaceKey) {
+  RefPtr<CachedSurface> surface;
+  nsTArray<RefPtr<CachedSurface>> discard;
+  {
+    StaticMutexAutoLock lock(sInstanceMutex);
+    if (!sInstance) {
+      return;
+    }
+
+    surface =
+        sInstance->GetSurfaceForResetAnimation(aImageKey, aSurfaceKey, lock);
+    sInstance->TakeDiscard(discard, lock);
+  }
+
+  // Calling Reset will acquire the AnimationSurfaceProvider::mFramesMutex
+  // mutex. In other places we acquire the mFramesMutex then call into the
+  // surface cache (acquiring the surface cache mutex), so that determines a
+  // lock order which we must obey by calling Reset after releasing the surface
+  // cache mutex.
+  if (surface) {
+    DrawableSurface drawableSurface =
+        surface->GetDrawableSurfaceEvenIfPlaceholder();
+    if (drawableSurface) {
+      MOZ_ASSERT(surface->GetSurfaceKey() == aSurfaceKey,
+                 "ResetAnimation() not returning an exact match?");
+
+      drawableSurface.Reset();
     }
   }
 }
@@ -1821,6 +1934,12 @@ void SurfaceCache::ReleaseImageOnMainThread(
     already_AddRefed<image::Image> aImage, bool aAlwaysProxy) {
   if (NS_IsMainThread() && !aAlwaysProxy) {
     RefPtr<image::Image> image = std::move(aImage);
+    return;
+  }
+
+  // Don't try to dispatch the release after shutdown, we'll just leak the
+  // runnable.
+  if (gXPCOMThreadsShutDown) {
     return;
   }
 

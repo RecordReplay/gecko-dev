@@ -32,8 +32,6 @@
 
 #include "nsServiceManagerUtils.h"
 #include "nsIInputStream.h"
-#include "nsIObserverService.h"
-#include "nsIObserver.h"
 #include "nsIPrefBranch.h"
 #include "nsIPrefService.h"
 #include "mozilla/Services.h"
@@ -49,6 +47,7 @@
 #include "mozilla/Unused.h"
 #include "mozilla/dom/RTCDataChannelBinding.h"
 #include "mozilla/dom/RTCStatsReportBinding.h"
+#include "mozilla/media/MediaUtils.h"
 #ifdef MOZ_PEERCONNECTION
 #  include "transport/runnable_utils.h"
 #  include "jsapi/MediaTransportHandler.h"
@@ -95,24 +94,35 @@ static void debug_printf(const char* format, ...) {
   }
 }
 
-class DataChannelRegistry : public nsIObserver {
+class DataChannelRegistry {
  public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(DataChannelRegistry)
 
   static uintptr_t Register(DataChannelConnection* aConnection) {
     StaticMutexAutoLock lock(sInstanceMutex);
-    if (NS_WARN_IF(!Instance())) {
-      return 0;
-    }
-    return Instance()->RegisterImpl(aConnection);
+    uintptr_t result = EnsureInstance()->RegisterImpl(aConnection);
+    DC_DEBUG(
+        ("Registering connection %p as ulp %p", aConnection, (void*)result));
+    return result;
   }
 
   static void Deregister(uintptr_t aId) {
-    StaticMutexAutoLock lock(sInstanceMutex);
-    if (NS_WARN_IF(!Instance())) {
-      return;
+    RefPtr<DataChannelRegistry> maybeTrash;
+
+    {
+      StaticMutexAutoLock lock(sInstanceMutex);
+      DC_DEBUG(("Deregistering connection ulp = %p", (void*)aId));
+      if (NS_WARN_IF(!Instance())) {
+        return;
+      }
+      Instance()->DeregisterImpl(aId);
+      if (Instance()->Empty()) {
+        // Unset singleton inside mutex lock, but don't call Shutdown until we
+        // unlock, since that involves calling into libusrsctp, which invites
+        // deadlock.
+        maybeTrash = Instance().forget();
+      }
     }
-    Instance()->DeregisterImpl(aId);
   }
 
   static RefPtr<DataChannelConnection> Lookup(uintptr_t aId) {
@@ -127,65 +137,27 @@ class DataChannelRegistry : public nsIObserver {
   // This is a singleton class, so don't let just anyone create one of these
   DataChannelRegistry() {
     ASSERT_WEBRTC(NS_IsMainThread());
-    nsCOMPtr<nsIObserverService> observerService =
-        mozilla::services::GetObserverService();
-    if (!observerService) return;
-
-    nsresult rv =
-        observerService->AddObserver(this, "xpcom-will-shutdown", false);
-    MOZ_ASSERT(rv == NS_OK);
-    (void)rv;
-    // TODO(bug 1646716): usrsctp_finish is racy, so we init in the c'tor.
+    mShutdownBlocker = media::ShutdownBlockingTicket::Create(
+        u"DataChannelRegistry::mShutdownBlocker"_ns,
+        NS_LITERAL_STRING_FROM_CSTRING(__FILE__), __LINE__);
     InitUsrSctp();
   }
 
   static RefPtr<DataChannelRegistry>& Instance() {
-    // Lazy-create static registry.
-    static RefPtr<DataChannelRegistry> sRegistry = new DataChannelRegistry;
+    static RefPtr<DataChannelRegistry> sRegistry;
     return sRegistry;
   }
 
-  NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
-                     const char16_t* aData) override {
+  static RefPtr<DataChannelRegistry>& EnsureInstance() {
     ASSERT_WEBRTC(NS_IsMainThread());
-    if (strcmp(aTopic, "xpcom-will-shutdown") == 0) {
-      RefPtr<DataChannelRegistry> self = this;
-      {
-        StaticMutexAutoLock lock(sInstanceMutex);
-        Instance() = nullptr;
-      }
-
-      // |self| is the only reference now
-
-      if (NS_WARN_IF(!mConnections.empty())) {
-        MOZ_ASSERT(false);
-        mConnections.clear();
-      }
-
-      // TODO(bug 1646716): usrsctp_finish is racy, so we wait until xpcom
-      // shutdown for this.
-      DeinitUsrSctp();
-      nsCOMPtr<nsIObserverService> observerService =
-          mozilla::services::GetObserverService();
-      if (NS_WARN_IF(!observerService)) {
-        return NS_ERROR_FAILURE;
-      }
-
-      nsresult rv =
-          observerService->RemoveObserver(this, "xpcom-will-shutdown");
-      MOZ_ASSERT(rv == NS_OK);
-      (void)rv;
+    if (!Instance()) {
+      Instance() = new DataChannelRegistry();
     }
-
-    return NS_OK;
+    return Instance();
   }
 
   uintptr_t RegisterImpl(DataChannelConnection* aConnection) {
     ASSERT_WEBRTC(NS_IsMainThread());
-    // TODO(bug 1646716): usrsctp_finish is racy, so we init in the c'tor.
-    // if (mConnections.empty()) {
-    //  InitUsrSctp();
-    //}
     mConnections.emplace(mNextId, aConnection);
     return mNextId++;
   }
@@ -193,29 +165,36 @@ class DataChannelRegistry : public nsIObserver {
   void DeregisterImpl(uintptr_t aId) {
     ASSERT_WEBRTC(NS_IsMainThread());
     mConnections.erase(aId);
-    // TODO(bug 1646716): usrsctp_finish is racy, so we wait until xpcom
-    // shutdown for this.
-    // if (mConnections.empty()) {
-    //  DeinitUsrSctp();
-    //}
   }
+
+  bool Empty() const { return mConnections.empty(); }
 
   RefPtr<DataChannelConnection> LookupImpl(uintptr_t aId) {
     auto it = mConnections.find(aId);
     if (NS_WARN_IF(it == mConnections.end())) {
+      DC_DEBUG(("Can't find connection ulp %p", (void*)aId));
       return nullptr;
     }
     return it->second;
   }
 
-  virtual ~DataChannelRegistry() = default;
+  virtual ~DataChannelRegistry() {
+    ASSERT_WEBRTC(NS_IsMainThread());
+
+    if (NS_WARN_IF(!mConnections.empty())) {
+      MOZ_ASSERT(false);
+      mConnections.clear();
+    }
+
+    DeinitUsrSctp();
+  }
 
 #ifdef SCTP_DTLS_SUPPORTED
   static int SctpDtlsOutput(void* addr, void* buffer, size_t length,
                             uint8_t tos, uint8_t set_df) {
     uintptr_t id = reinterpret_cast<uintptr_t>(addr);
     RefPtr<DataChannelConnection> connection = DataChannelRegistry::Lookup(id);
-    if (NS_WARN_IF(!connection)) {
+    if (NS_WARN_IF(!connection) || connection->InShutdown()) {
       return 0;
     }
     return connection->SctpDtlsOutput(addr, buffer, length, tos, set_df);
@@ -223,12 +202,13 @@ class DataChannelRegistry : public nsIObserver {
 #endif
 
   void InitUsrSctp() {
-    DC_DEBUG(("sctp_init"));
-#ifdef MOZ_PEERCONNECTION
-    usrsctp_init(0, DataChannelRegistry::SctpDtlsOutput, debug_printf);
-#else
+#ifndef MOZ_PEERCONNECTION
     MOZ_CRASH("Trying to use SCTP/DTLS without dom/media/webrtc/transport");
 #endif
+
+    DC_DEBUG(("Calling usrsctp_init %p", this));
+
+    usrsctp_init(0, DataChannelRegistry::SctpDtlsOutput, debug_printf);
 
     // Set logging to SCTP:LogLevel::Debug to get SCTP debugs
     if (MOZ_LOG_TEST(gSCTPLog, LogLevel::Debug)) {
@@ -255,18 +235,17 @@ class DataChannelRegistry : public nsIObserver {
   }
 
   void DeinitUsrSctp() {
-    DC_DEBUG(("Shutting down SCTP"));
+    DC_DEBUG(("Calling usrsctp_finish %p", this));
     usrsctp_finish();
   }
 
   uintptr_t mNextId = 1;
   std::map<uintptr_t, RefPtr<DataChannelConnection>> mConnections;
-  static StaticMutex sInstanceMutex;
+  UniquePtr<media::ShutdownBlockingTicket> mShutdownBlocker;
+  static StaticMutex sInstanceMutex MOZ_UNANNOTATED;
 };
 
 StaticMutex DataChannelRegistry::sInstanceMutex;
-
-NS_IMPL_ISUPPORTS(DataChannelRegistry, nsIObserver);
 
 OutgoingMsg::OutgoingMsg(struct sctp_sendv_spa& info, const uint8_t* data,
                          size_t length)
@@ -305,7 +284,12 @@ static int receive_cb(struct socket* sock, union sctp_sockstore addr,
   uintptr_t id = reinterpret_cast<uintptr_t>(ulp_info);
   RefPtr<DataChannelConnection> connection = DataChannelRegistry::Lookup(id);
   if (!connection) {
-    MOZ_ASSERT(false);
+    // Unfortunately, we can get callbacks after calling
+    // usrsctp_close(socket), so we need to simply ignore them if we've
+    // already killed the DataChannelConnection object
+    DC_DEBUG((
+        "Ignoring receive callback for terminated Connection ulp=%p, %zu bytes",
+        ulp_info, datalen));
     return 0;
   }
   return connection->ReceiveCallback(sock, data, datalen, rcv, flags);
@@ -332,9 +316,12 @@ static RefPtr<DataChannelConnection> GetConnectionFromSocket(
   return connection;
 }
 
-// called when the buffer empties to the threshold value
+// Called when the buffer empties to the threshold value.  This is called
+// from SctpDtlsInput() through the sctp stack.  SctpDtlsInput() calls
+// usrsctp_conninput() under lock
 static int threshold_event(struct socket* sock, uint32_t sb_free) {
   RefPtr<DataChannelConnection> connection = GetConnectionFromSocket(sock);
+  connection->mLock.AssertCurrentThreadOwns();
   if (connection) {
     connection->SendDeferredMessages();
   } else {
@@ -345,14 +332,15 @@ static int threshold_event(struct socket* sock, uint32_t sb_free) {
 
 DataChannelConnection::~DataChannelConnection() {
   DC_DEBUG(("Deleting DataChannelConnection %p", (void*)this));
-  // This may die on the MainThread, or on the STS thread
+  // This may die on the MainThread, or on the STS thread, or on an
+  // sctp thread if we were in a callback when the DOM side shut things down.
   ASSERT_WEBRTC(mState == CLOSED);
   MOZ_ASSERT(!mMasterSocket);
   MOZ_ASSERT(mPending.GetSize() == 0);
 
   if (!IsSTSThread()) {
-    ASSERT_WEBRTC(NS_IsMainThread());
-
+    // We may be on MainThread *or* on an sctp thread (being called from
+    // receive_cb() or SctpDtlsOutput())
     if (mInternalIOThread) {
       // Avoid spinning the event thread from here (which if we're mainthread
       // is in the event loop already)
@@ -401,8 +389,10 @@ void DataChannelConnection::Destroy() {
   mSocket = nullptr;
   mMasterSocket = nullptr;  // also a flag that we've Destroyed this connection
 
-  // We can't get any more new callbacks from the SCTP library
-  // All existing callbacks have refs to DataChannelConnection
+  // We can't get any more *new* callbacks from the SCTP library
+
+  // All existing callbacks have refs to DataChannelConnection - however,
+  // we need to handle their destroying the object off mainthread/STS
 
   // nsDOMDataChannel objects have refs to DataChannels that have refs to us
 }
@@ -420,6 +410,7 @@ void DataChannelConnection::DestroyOnSTS(struct socket* aMasterSocket,
       ("Deregistered %p from the SCTP stack.", reinterpret_cast<void*>(mId)));
 #ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   mShutdown = true;
+  DC_DEBUG(("Shutting down connection %p, id %p", this, (void*)mId));
 #endif
 
   disconnect_all();
@@ -627,9 +618,11 @@ error_cleanup:
   return false;
 }
 
+// Only called on MainThread, mMaxMessageSize is read on other threads
 void DataChannelConnection::SetMaxMessageSize(bool aMaxMessageSizeSet,
                                               uint64_t aMaxMessageSize) {
-  MutexAutoLock lock(mLock);  // TODO: Needed?
+  ASSERT_WEBRTC(NS_IsMainThread());
+  MutexAutoLock lock(mLock);
 
   if (mMaxMessageSizeSet && !aMaxMessageSizeSet) {
     // Don't overwrite already set MMS with default values
@@ -676,7 +669,10 @@ void DataChannelConnection::SetMaxMessageSize(bool aMaxMessageSizeSet,
             aMaxMessageSize != mMaxMessageSize ? "yes" : "no"));
 }
 
-uint64_t DataChannelConnection::GetMaxMessageSize() { return mMaxMessageSize; }
+uint64_t DataChannelConnection::GetMaxMessageSize() {
+  MutexAutoLock lock(mLock);
+  return mMaxMessageSize;
+}
 
 void DataChannelConnection::AppendStatsToReport(
     const UniquePtr<dom::RTCStatsCollection>& aReport,
@@ -802,7 +798,10 @@ bool DataChannelConnection::ConnectToTransport(const std::string& aTransportId,
 
 void DataChannelConnection::SetSignals(const std::string& aTransportId) {
   ASSERT_WEBRTC(IsSTSThread());
-  mTransportId = aTransportId;
+  {
+    MutexAutoLock lock(mLock);
+    mTransportId = aTransportId;
+  }
   mTransportHandler->SignalPacketReceived.connect(
       this, &DataChannelConnection::SctpDtlsInput);
   mTransportHandler->SignalStateChange.connect(
@@ -819,6 +818,7 @@ void DataChannelConnection::SetSignals(const std::string& aTransportId) {
 
 void DataChannelConnection::TransportStateChange(
     const std::string& aTransportId, TransportLayer::State aState) {
+  ASSERT_WEBRTC(IsSTSThread());
   if (aTransportId == mTransportId) {
     if (aState == TransportLayer::TS_OPEN) {
       DC_DEBUG(("Transport is open!"));
@@ -940,6 +940,7 @@ void DataChannelConnection::ProcessQueuedOpens() {
 
 void DataChannelConnection::SctpDtlsInput(const std::string& aTransportId,
                                           const MediaPacket& packet) {
+  MutexAutoLock lock(mLock);
   if ((packet.type() != MediaPacket::SCTP) || (mTransportId != aTransportId)) {
     return;
   }
@@ -954,7 +955,6 @@ void DataChannelConnection::SctpDtlsInput(const std::string& aTransportId,
     }
   }
   // Pass the data to SCTP
-  MutexAutoLock lock(mLock);
   usrsctp_conninput(reinterpret_cast<void*>(mId), packet.data(), packet.len(),
                     0);
 }
@@ -974,8 +974,6 @@ void DataChannelConnection::SendPacket(std::unique_ptr<MediaPacket>&& packet) {
 int DataChannelConnection::SctpDtlsOutput(void* addr, void* buffer,
                                           size_t length, uint8_t tos,
                                           uint8_t set_df) {
-  MOZ_DIAGNOSTIC_ASSERT(!mShutdown);
-
   if (MOZ_LOG_TEST(gSCTPLog, LogLevel::Debug)) {
     char* buf;
 
@@ -1554,9 +1552,8 @@ void DataChannelConnection::HandleOpenRequestMessage(
     Dispatch(NS_NewRunnableFunction(
         "DataChannelConnection::HandleOpenRequestMessage",
         [channel, connection = RefPtr<DataChannelConnection>(this)]() {
-          MutexAutoLock mLock(connection->mLock);
           // Close the channel on failure
-          connection->CloseInt(channel);
+          connection->Close(channel);
         }));
     return;
   }
@@ -1570,6 +1567,7 @@ void DataChannelConnection::DeliverQueuedData(uint16_t stream) {
   mLock.AssertCurrentThreadOwns();
 
   mQueuedData.RemoveElementsBy([stream, this](const auto& dataItem) {
+    mLock.AssertCurrentThreadOwns();
     const bool match = dataItem->mStream == stream;
     if (match) {
       DC_DEBUG(("Delivering queued data for stream %u, length %u", stream,
@@ -1656,7 +1654,7 @@ void DataChannelConnection::HandleDataMessage(const void* data, size_t length,
     DC_ERROR(("DataChannel: Cannot handle message of size %zu (max=%" PRIu32
               ")",
               length, UINT32_MAX));
-    CloseInt(channel);
+    CloseLocked(channel);
     return;
   }
 #endif
@@ -1723,7 +1721,7 @@ void DataChannelConnection::HandleDataMessage(const void* data, size_t length,
          "closing channel"));
     channel->mRecvBuffer.Truncate(0);
     channel->mFlags |= DATA_CHANNEL_FLAGS_CLOSING_TOO_LARGE;
-    CloseInt(channel);
+    CloseLocked(channel);
     return;
   }
   if (!(bufferFlags & DATA_CHANNEL_BUFFER_MESSAGE_FLAGS_COMPLETE)) {
@@ -2134,10 +2132,16 @@ void DataChannelConnection::HandleSendFailedEvent(
   if (ssfe->ssfe_flags & ~(SCTP_DATA_SENT | SCTP_DATA_UNSENT)) {
     DC_DEBUG(("(flags = %x) ", ssfe->ssfe_flags));
   }
-  DC_DEBUG(
-      ("message with PPID = %u, SID = %d, flags: 0x%04x due to error = 0x%08x",
-       ntohl(ssfe->ssfe_info.snd_ppid), ssfe->ssfe_info.snd_sid,
-       ssfe->ssfe_info.snd_flags, ssfe->ssfe_error));
+#ifdef XP_WIN
+#  define PRIPPID "lu"
+#else
+#  define PRIPPID "u"
+#endif
+  DC_DEBUG(("message with PPID = %" PRIPPID
+            ", SID = %d, flags: 0x%04x due to error = 0x%08x",
+            ntohl(ssfe->ssfe_info.snd_ppid), ssfe->ssfe_info.snd_sid,
+            ssfe->ssfe_info.snd_flags, ssfe->ssfe_error));
+#undef PRIPPID
   n = ssfe->ssfe_length - sizeof(struct sctp_send_failed_event);
   for (i = 0; i < n; ++i) {
     DC_DEBUG((" 0x%02x", ssfe->ssfe_data[i]));
@@ -2379,9 +2383,9 @@ void DataChannelConnection::HandleNotification(
   }
 }
 
-int DataChannelConnection::ReceiveCallback(struct socket* sock, void* data,
-                                           size_t datalen,
-                                           struct sctp_rcvinfo rcv, int flags) {
+int DataChannelConnection::ReceiveCallback(
+    struct socket* sock, void* data, size_t datalen, struct sctp_rcvinfo rcv,
+    int flags) NO_THREAD_SAFETY_ANALYSIS {
   ASSERT_WEBRTC(!NS_IsMainThread());
   DC_DEBUG(("In ReceiveCallback"));
 
@@ -2403,12 +2407,12 @@ int DataChannelConnection::ReceiveCallback(struct socket* sock, void* data,
     if (locked) {
       mLock.Unlock();
     }
+    // sctp allocates 'data' with malloc(), and expects the receiver to free
+    // it (presumably with free).
+    // XXX future optimization: try to deliver messages without an internal
+    // alloc/copy, and if so delay the free until later.
+    free(data);
   }
-  // sctp allocates 'data' with malloc(), and expects the receiver to free
-  // it (presumably with free).
-  // XXX future optimization: try to deliver messages without an internal
-  // alloc/copy, and if so delay the free until later.
-  free(data);
   // usrsctp defines the callback as returning an int, but doesn't use it
   return 1;
 }
@@ -2418,6 +2422,7 @@ already_AddRefed<DataChannel> DataChannelConnection::Open(
     bool inOrder, uint32_t prValue, DataChannelListener* aListener,
     nsISupports* aContext, bool aExternalNegotiated, uint16_t aStream) {
   ASSERT_WEBRTC(NS_IsMainThread());
+  MutexAutoLock lock(mLock);  // OpenFinish assumes this
   if (!aExternalNegotiated) {
     if (mAllocateEven.isSome()) {
       aStream = FindFreeStream();
@@ -2467,7 +2472,6 @@ already_AddRefed<DataChannel> DataChannelConnection::Open(
       prValue, inOrder, aExternalNegotiated, aListener, aContext));
   mChannels.Insert(channel);
 
-  MutexAutoLock lock(mLock);  // OpenFinish assumes this
   return OpenFinish(channel.forget());
 }
 
@@ -2743,7 +2747,6 @@ int DataChannelConnection::SendDataMsgInternalOrBuffer(DataChannel& channel,
   info.sendv_sndinfo.snd_flags = SCTP_EOR;
   info.sendv_sndinfo.snd_ppid = htonl(ppid);
 
-  MutexAutoLock lock(mLock);  // Need to protect mFlags... :(
   // Unordered?
   // To avoid problems where an in-order OPEN is lost and an
   // out-of-order data message "beats" it, require data to be in-order
@@ -2793,6 +2796,7 @@ int DataChannelConnection::SendDataMsg(DataChannel& channel,
                                        uint32_t ppidFinal) {
   // We *really* don't want to do this from main thread! - and
   // SendDataMsgInternalOrBuffer avoids blocking.
+  mLock.AssertCurrentThreadOwns();
 
   if (mMaxMessageSize != 0 && len > mMaxMessageSize) {
     DC_ERROR(("Message rejected, too large (%zu > %" PRIu64 ")", len,
@@ -2835,6 +2839,7 @@ class ReadBlobRunnable : public Runnable {
 
 // Returns a POSIX error code.
 int DataChannelConnection::SendBlob(uint16_t stream, nsIInputStream* aBlob) {
+  MutexAutoLock lock(mLock);
   RefPtr<DataChannel> channel = mChannels.Get(stream);
   if (NS_WARN_IF(!channel)) {
     return EINVAL;  // TODO: Find a better error code
@@ -2976,6 +2981,7 @@ int DataChannelConnection::SendDataMsgCommon(uint16_t stream,
 
   auto& channel = *channelPtr;
   int err = 0;
+  MutexAutoLock lock(mLock);
   if (isBinary) {
     err = SendDataMsg(channel, data, len, DATA_CHANNEL_PPID_BINARY_PARTIAL,
                       DATA_CHANNEL_PPID_BINARY);
@@ -3001,12 +3007,12 @@ void DataChannelConnection::Stop() {
 
 void DataChannelConnection::Close(DataChannel* aChannel) {
   MutexAutoLock lock(mLock);
-  CloseInt(aChannel);
+  CloseLocked(aChannel);
 }
 
 // So we can call Close() with the lock already held
 // Called from someone who holds a ref via ::Close(), or from ~DataChannel
-void DataChannelConnection::CloseInt(DataChannel* aChannel) {
+void DataChannelConnection::CloseLocked(DataChannel* aChannel) {
   MOZ_ASSERT(aChannel);
   RefPtr<DataChannel> channel(aChannel);  // make sure it doesn't go away on us
 
@@ -3049,18 +3055,16 @@ void DataChannelConnection::CloseInt(DataChannel* aChannel) {
 
 void DataChannelConnection::CloseAll() {
   DC_DEBUG(("Closing all channels (connection %p)", (void*)this));
-  // Don't need to lock here
 
   // Make sure no more channels will be opened
-  {
-    MutexAutoLock lock(mLock);
-    SetReadyState(CLOSED);
-  }
+  MutexAutoLock lock(mLock);
+  SetReadyState(CLOSED);
 
   // Close current channels
   // If there are runnables, they hold a strong ref and keep the channel
   // and/or connection alive (even if in a CLOSED state)
   for (auto& channel : mChannels.GetAll()) {
+    MutexAutoUnlock lock(mLock);
     channel->Close();
   }
 
@@ -3069,11 +3073,11 @@ void DataChannelConnection::CloseAll() {
   while (nullptr != (channel = mPending.PopFront())) {
     DC_DEBUG(("closing pending channel %p, stream %u", channel.get(),
               channel->mStream));
+    MutexAutoUnlock lock(mLock);
     channel->Close();  // also releases the ref on each iteration
   }
   // It's more efficient to let the Resets queue in shutdown and then
   // SendOutgoingStreamReset() here.
-  MutexAutoLock lock(mLock);
   SendOutgoingStreamReset();
 }
 
@@ -3344,7 +3348,7 @@ dom::Nullable<uint16_t> DataChannel::GetMaxRetransmits() const {
   return dom::Nullable<uint16_t>();
 }
 
-uint32_t DataChannel::GetBufferedAmountLowThreshold() {
+uint32_t DataChannel::GetBufferedAmountLowThreshold() const {
   return mBufferedThreshold;
 }
 

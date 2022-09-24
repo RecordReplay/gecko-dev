@@ -32,7 +32,7 @@ loader.lazyRequireGetter(
 loader.lazyRequireGetter(this, "events", "devtools/shared/event-emitter");
 loader.lazyRequireGetter(
   this,
-  ["getCurrentZoom", "isWindowIncluded", "isRemoteFrame"],
+  ["getCurrentZoom", "isWindowIncluded", "isFrameWithChildTarget"],
   "devtools/shared/layout/utils",
   true
 );
@@ -880,7 +880,10 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
       // remote frame target should emit RDP events (hovered/picked/...). And
       // all other WalkerActor for intermediate iframe and top level document
       // targets should stay silent.
-      isRemoteFrame(event.originalTarget || event.target)
+      isFrameWithChildTarget(
+        this.targetActor,
+        event.originalTarget || event.target
+      )
     );
   },
 
@@ -1066,13 +1069,8 @@ const AccessibleWalkerActor = ActorClassWithSpec(accessibleWalkerSpec, {
     return accessible;
   },
 
-  /**
-   * When RDM is used, users can set custom DPR values that are different from the device
-   * they are using. Store true screenPixelsPerCSSPixel value to be able to use accessible
-   * highlighter features correctly.
-   */
   get pixelRatio() {
-    return this.rootWin.windowUtils.screenPixelsPerCSSPixelNoOverride;
+    return this.rootWin.devicePixelRatio;
   },
 
   /**

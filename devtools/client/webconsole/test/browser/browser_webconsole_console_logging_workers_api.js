@@ -23,7 +23,7 @@ async function testWorkerMessage(directConnectionToWorkerThread = false) {
   const hud = await openNewTabAndConsole(TEST_URI);
 
   const cachedMessage = await waitFor(() =>
-    findMessage(hud, "initial-message-from-worker")
+    findConsoleAPIMessage(hud, "initial-message-from-worker")
   );
   ok(true, "We get the cached message from the worker");
 
@@ -50,7 +50,9 @@ async function testWorkerMessage(directConnectionToWorkerThread = false) {
     content.wrappedJSObject.logFromWorker("live-message");
   });
 
-  const liveMessage = await waitFor(() => findMessage(hud, "log-from-worker"));
+  const liveMessage = await waitFor(() =>
+    findConsoleAPIMessage(hud, "log-from-worker")
+  );
   ok(true, "We get the cached message from the worker");
 
   ok(
@@ -75,12 +77,43 @@ async function testWorkerMessage(directConnectionToWorkerThread = false) {
     });
 
     const symbolMessage = await waitFor(() =>
-      findMessage(hud, 'Symbol("logged-symbol-from-worker")')
+      findConsoleAPIMessage(hud, 'Symbol("logged-symbol-from-worker")')
     );
     ok(symbolMessage, "Symbol logged from worker is visible in the console");
   }
 
-  const onMessagesCleared = hud.ui.once("messages-cleared");
-  await clearOutput(hud);
-  await onMessagesCleared;
+  info("Click on the clear button and wait for messages to be removed");
+  hud.ui.window.document.querySelector(".devtools-clear-icon").click();
+  await waitFor(
+    () =>
+      !findConsoleAPIMessage(hud, "initial-message-from-worker") &&
+      !findConsoleAPIMessage(hud, "log-from-worker")
+  );
+  ok(true, "Messages were removed");
+
+  info("Close and reopen the console to check messages were cleared properly");
+  await closeConsole();
+  const toolbox = await openToolboxForTab(gBrowser.selectedTab, "webconsole");
+  const newHud = toolbox.getCurrentPanel().hud;
+
+  info(
+    "Log a message and wait for it to appear so older messages would have been displayed"
+  );
+  const onSmokeMessage = waitForMessageByType(newHud, "smoke", ".console-api");
+  SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {
+    content.wrappedJSObject.console.log("smoke");
+  });
+  await onSmokeMessage;
+
+  is(
+    findConsoleAPIMessage(newHud, "initial-message-from-worker"),
+    undefined,
+    "Message cache was cleared"
+  );
+  is(
+    findConsoleAPIMessage(newHud, "log-from-worker"),
+    undefined,
+    "Live message were cleared as well"
+  );
+  await closeTabAndToolbox();
 }

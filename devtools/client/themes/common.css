@@ -22,7 +22,13 @@
   --searchbox-no-match-stroke-color: var(--red-60);
 }
 
+:root.theme-light {
+  color-scheme: light;
+}
+
 :root.theme-dark {
+  color-scheme: dark;
+
   --tab-line-hover-color: rgba(255,255,255,.2);
   --toggle-thumb-color: var(--grey-40);
   --toggle-track-color: var(--grey-60);
@@ -454,7 +460,7 @@ checkbox:-moz-focusring {
 }
 
 .devtools-button.devtools-feature-callout::after {
-  content: url("chrome://browser/skin/badge-blue.svg");
+  content: url("chrome://global/skin/icons/badge-blue.svg");
   width: 14px;
   height: 14px;
   display: block;

@@ -62,19 +62,20 @@
 
 "use strict";
 
-const { components, Cc, Ci, Cu } = require("chrome");
+const ChromeUtils = require("ChromeUtils");
+const { components, Cc, Ci } = require("chrome");
 loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const Services = require("Services");
 
 loader.lazyGetter(this, "certDecoder", () => {
-  const { asn1js } = Cu.import(
+  const { asn1js } = ChromeUtils.import(
     "chrome://global/content/certviewer/asn1js_bundle.js"
   );
-  const { pkijs } = Cu.import(
+  const { pkijs } = ChromeUtils.import(
     "chrome://global/content/certviewer/pkijs_bundle.js"
   );
-  const { pvutils } = Cu.import(
+  const { pvutils } = ChromeUtils.import(
     "chrome://global/content/certviewer/pvutils_bundle.js"
   );
 
@@ -82,7 +83,7 @@ loader.lazyGetter(this, "certDecoder", () => {
   const { Certificate } = pkijs.pkijs;
   const { fromBase64, stringToArrayBuffer } = pvutils.pvutils;
 
-  const { certDecoderInitializer } = Cu.import(
+  const { certDecoderInitializer } = ChromeUtils.import(
     "chrome://global/content/certviewer/certDecoder.js"
   );
   const { parse, pemToDER } = certDecoderInitializer(
@@ -262,7 +263,11 @@ var NetworkHelper = {
       // TODO: bug 802246 - getWindowForRequest() throws on b2g: there is no
       // associatedWindow property.
     }
-    return null;
+    // On some request notificationCallbacks and loadGroup are both null,
+    // so that we can't retrieve any nsILoadContext interface.
+    // Fallback on nsILoadInfo to try to retrieve the request's window.
+    // (this is covered by test_network_get.html and its CSS request)
+    return request.loadInfo.loadingDocument?.defaultView;
   },
 
   /**
@@ -552,9 +557,14 @@ var NetworkHelper = {
    * @param object securityInfo
    *        The securityInfo object of a request. If null channel is assumed
    *        to be insecure.
+   * @param object originAttributes
+   *        The OriginAttributes of the request.
    * @param object httpActivity
    *        The httpActivity object for the request with at least members
    *        { private, hostname }.
+   * @param Map decodedCertificateCache
+   *        A Map of certificate fingerprints to decoded certificates, to avoid
+   *        repeatedly decoding previously-seen certificates.
    *
    * @return object
    *         Returns an object containing following members:
@@ -578,7 +588,12 @@ var NetworkHelper = {
    *            - weaknessReasons: list of reasons that cause the request to be
    *                               considered weak. See getReasonsForWeakness.
    */
-  parseSecurityInfo: async function(securityInfo, httpActivity) {
+  parseSecurityInfo: async function(
+    securityInfo,
+    originAttributes,
+    httpActivity,
+    decodedCertificateCache
+  ) {
     const info = {
       state: "insecure",
     };
@@ -672,7 +687,10 @@ var NetworkHelper = {
       );
 
       // Certificate.
-      info.cert = await this.parseCertificateInfo(securityInfo.serverCert);
+      info.cert = await this.parseCertificateInfo(
+        securityInfo.serverCert,
+        decodedCertificateCache
+      );
 
       // Certificate transparency status.
       info.certificateTransparency = securityInfo.certificateTransparencyStatus;
@@ -686,20 +704,13 @@ var NetworkHelper = {
           "@mozilla.org/security/publickeypinningservice;1"
         ].getService(Ci.nsIPublicKeyPinningService);
 
-        // SiteSecurityService uses different storage if the channel is
-        // private. Thus we must give isSecureURI correct flags or we
-        // might get incorrect results.
-        const flags = httpActivity.private
-          ? Ci.nsISocketProvider.NO_PERMANENT_STORAGE
-          : 0;
-
         if (!uri) {
           // isSecureURI only cares about the host, not the scheme.
           const host = httpActivity.hostname;
           uri = Services.io.newURI("https://" + host);
         }
 
-        info.hsts = sss.isSecureURI(uri, flags);
+        info.hsts = sss.isSecureURI(uri, originAttributes);
         info.hpkp = pkps.hostHasPins(uri);
       } else {
         DevToolsUtils.reportException(
@@ -723,6 +734,9 @@ var NetworkHelper = {
    *
    * @param nsIX509Cert cert
    *        The certificate to extract the information from.
+   * @param Map decodedCertificateCache
+   *        A Map of certificate fingerprints to decoded certificates, to avoid
+   *        repeatedly decoding previously-seen certificates.
    * @return object
    *         An object with following format:
    *           {
@@ -732,7 +746,7 @@ var NetworkHelper = {
    *             fingerprint: { sha1, sha256 }
    *           }
    */
-  parseCertificateInfo: async function(cert) {
+  parseCertificateInfo: async function(cert, decodedCertificateCache) {
     function getDNComponent(dn, componentType) {
       for (const [type, value] of dn.entries) {
         if (type == componentType) {
@@ -744,9 +758,14 @@ var NetworkHelper = {
 
     const info = {};
     if (cert) {
-      const parsedCert = await certDecoder.parse(
-        certDecoder.pemToDER(cert.getBase64DERString())
-      );
+      const certHash = cert.sha256Fingerprint;
+      let parsedCert = decodedCertificateCache.get(certHash);
+      if (!parsedCert) {
+        parsedCert = await certDecoder.parse(
+          certDecoder.pemToDER(cert.getBase64DERString())
+        );
+        decodedCertificateCache.set(certHash, parsedCert);
+      }
       info.subject = {
         commonName: getDNComponent(parsedCert.subject, "Common Name"),
         organization: getDNComponent(parsedCert.subject, "Organization"),

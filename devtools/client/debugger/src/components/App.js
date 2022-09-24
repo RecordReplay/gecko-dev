@@ -21,6 +21,8 @@ import {
 } from "../selectors";
 
 const KeyShortcuts = require("devtools/client/shared/key-shortcuts");
+const SplitBox = require("devtools/client/shared/components/splitter/SplitBox");
+const AppErrorBoundary = require("devtools/client/shared/components/AppErrorBoundary");
 
 import Services from "devtools-services";
 const shortcuts = new KeyShortcuts({ window });
@@ -39,7 +41,6 @@ import "./App.css";
 
 import "./shared/menu.css";
 
-import SplitBox from "devtools-splitter";
 import ProjectSearch from "./ProjectSearch";
 import PrimaryPanes from "./PrimaryPanes";
 import Editor from "./Editor";
@@ -59,8 +60,28 @@ class App extends Component {
     };
   }
 
+  static get propTypes() {
+    return {
+      activeSearch: PropTypes.oneOf(["file", "project"]),
+      closeActiveSearch: PropTypes.func.isRequired,
+      closeProjectSearch: PropTypes.func.isRequired,
+      closeQuickOpen: PropTypes.func.isRequired,
+      endPanelCollapsed: PropTypes.bool.isRequired,
+      fluentBundles: PropTypes.array.isRequired,
+      openQuickOpen: PropTypes.func.isRequired,
+      orientation: PropTypes.oneOf(["horizontal", "vertical"]).isRequired,
+      quickOpenEnabled: PropTypes.bool.isRequired,
+      selectedSource: PropTypes.object,
+      setActiveSearch: PropTypes.func.isRequired,
+      setOrientation: PropTypes.func.isRequired,
+      startPanelCollapsed: PropTypes.bool.isRequired,
+      toolboxDoc: PropTypes.object.isRequired,
+    };
+  }
+
   getChildContext() {
     return {
+      fluentBundles: this.props.fluentBundles,
       toolboxDoc: this.props.toolboxDoc,
       shortcuts,
       l10n: L10N,
@@ -87,7 +108,7 @@ class App extends Component {
     );
 
     shortcuts.on("Escape", this.onEscape);
-    shortcuts.on("Cmd+/", this.onCommandSlash);
+    shortcuts.on("CmdOrCtrl+/", this.onCommandSlash);
   }
 
   componentWillUnmount() {
@@ -107,6 +128,7 @@ class App extends Component {
     shortcuts.off(L10N.getStr("gotoLineModal.key3"), this.toggleQuickOpenModal);
 
     shortcuts.off("Escape", this.onEscape);
+    shortcuts.off("CmdOrCtrl+/", this.onCommandSlash);
   }
 
   onEscape = e => {
@@ -275,16 +297,21 @@ class App extends Component {
     const { quickOpenEnabled } = this.props;
     return (
       <div className={classnames("debugger")}>
-        <A11yIntention>
-          {this.renderLayout()}
-          {quickOpenEnabled === true && (
-            <QuickOpenModal
-              shortcutsModalEnabled={this.state.shortcutsModalEnabled}
-              toggleShortcutsModal={() => this.toggleShortcutsModal()}
-            />
-          )}
-          {this.renderShortcutsModal()}
-        </A11yIntention>
+        <AppErrorBoundary
+          componentName="Debugger"
+          panel={L10N.getStr("ToolboxDebugger.label")}
+        >
+          <A11yIntention>
+            {this.renderLayout()}
+            {quickOpenEnabled === true && (
+              <QuickOpenModal
+                shortcutsModalEnabled={this.state.shortcutsModalEnabled}
+                toggleShortcutsModal={() => this.toggleShortcutsModal()}
+              />
+            )}
+            {this.renderShortcutsModal()}
+          </A11yIntention>
+        </AppErrorBoundary>
       </div>
     );
   }
@@ -294,6 +321,7 @@ App.childContextTypes = {
   toolboxDoc: PropTypes.object,
   shortcuts: PropTypes.object,
   l10n: PropTypes.object,
+  fluentBundles: PropTypes.array,
 };
 
 const mapStateToProps = state => ({

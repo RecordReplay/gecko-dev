@@ -45,12 +45,15 @@ class ThreadTargetSink {
   // After this method is called, no more events can be posted.
   virtual void Disconnect(const MutexAutoLock& aProofOfLock) = 0;
 
-  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
+  virtual nsresult RegisterShutdownTask(nsITargetShutdownTask* aTask) = 0;
+  virtual nsresult UnregisterShutdownTask(nsITargetShutdownTask* aTask) = 0;
+
+  size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) {
     return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
   }
 
-  virtual size_t SizeOfExcludingThis(
-      mozilla::MallocSizeOf aMallocSizeOf) const = 0;
+  // Not const because overrides may need to take a lock
+  virtual size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) = 0;
 
  protected:
   virtual ~ThreadTargetSink() = default;
@@ -80,9 +83,12 @@ class SynchronizedEventQueue : public ThreadTargetSink {
   void RemoveObserver(nsIThreadObserver* aObserver);
   const nsTObserverArray<nsCOMPtr<nsIThreadObserver>>& EventObservers();
 
-  size_t SizeOfExcludingThis(
-      mozilla::MallocSizeOf aMallocSizeOf) const override {
-    return mEventObservers.ShallowSizeOfExcludingThis(aMallocSizeOf);
+  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) override {
+    // Normally we'd return
+    // mEventObservers.ShallowSizeOfExcludingThis(aMallocSizeOf); However,
+    // mEventObservers may be being mutated on another thread, and we don't lock
+    // around access, so locking here wouldn't help.  They're small, so
+    return 0;
   }
 
   /**
@@ -106,6 +112,12 @@ class SynchronizedEventQueue : public ThreadTargetSink {
    * queue.
    */
   virtual void PopEventQueue(nsIEventTarget* aTarget) = 0;
+
+  /**
+   * Flush the list of shutdown tasks which were previously registered.  After
+   * this is called, new shutdown tasks cannot be registered.
+   */
+  virtual void RunShutdownTasks() = 0;
 
  protected:
   virtual ~SynchronizedEventQueue() = default;

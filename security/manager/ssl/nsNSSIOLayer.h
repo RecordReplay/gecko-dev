@@ -15,6 +15,7 @@
 #include "nsTHashMap.h"
 #include "nsIProxyInfo.h"
 #include "nsISSLSocketControl.h"
+#include "nsITlsHandshakeListener.h"
 #include "nsNSSCertificate.h"
 #include "nsTHashtable.h"
 #include "sslt.h"
@@ -25,6 +26,9 @@ namespace psm {
 class SharedSSLState;
 }  // namespace psm
 }  // namespace mozilla
+
+const uint32_t kIPCClientCertsSlotTypeModern = 1;
+const uint32_t kIPCClientCertsSlotTypeLegacy = 2;
 
 using mozilla::OriginAttributes;
 
@@ -72,6 +76,9 @@ class nsNSSSocketInfo final : public CommonSocketControl {
   NS_IMETHOD SetEchConfig(const nsACString& aEchConfig) override;
   NS_IMETHOD GetPeerId(nsACString& aResult) override;
   NS_IMETHOD GetRetryEchConfig(nsACString& aEchConfig) override;
+  NS_IMETHOD DisableEarlyData(void) override;
+  NS_IMETHOD SetHandshakeCallbackListener(
+      nsITlsHandshakeCallbackListener* callback) override;
 
   PRStatus CloseSocketAndDestroy();
 
@@ -185,7 +192,6 @@ class nsNSSSocketInfo final : public CommonSocketControl {
 
   nsCString mEsniTxt;
   nsCString mEchConfig;
-  nsCString mPeerId;
   bool mEarlyDataAccepted;
   bool mDenyClientCert;
   bool mFalseStartCallbackCalled;
@@ -240,6 +246,8 @@ class nsNSSSocketInfo final : public CommonSocketControl {
   // rest of the session. This is normally used when you have per
   // socket tls flags overriding session wide defaults.
   RefPtr<mozilla::psm::SharedSSLState> mOwningSharedRef;
+
+  nsCOMPtr<nsITlsHandshakeCallbackListener> mTlsHandshakeCallback;
 };
 
 // This class is used to store the needed information for invoking the client
@@ -330,7 +338,7 @@ class nsSSLIOLayerHelpers {
   uint16_t mVersionFallbackLimit;
 
  private:
-  mozilla::Mutex mutex;
+  mozilla::Mutex mutex MOZ_UNANNOTATED;
   nsCOMPtr<nsIObserver> mPrefObserver;
   uint32_t mTlsFlags;
 };
@@ -349,11 +357,22 @@ nsresult nsSSLIOLayerAddToSocket(int32_t family, const char* host, int32_t port,
                                  bool forSTARTTLS, uint32_t flags,
                                  uint32_t tlsFlags);
 
+extern "C" {
+using FindObjectsCallback = void (*)(uint8_t type, size_t id_len,
+                                     const uint8_t* id, size_t data_len,
+                                     const uint8_t* data, uint32_t slotType,
+                                     void* ctx);
+void DoFindObjects(FindObjectsCallback cb, void* ctx);
+using SignCallback = void (*)(size_t data_len, const uint8_t* data, void* ctx);
+void DoSign(size_t cert_len, const uint8_t* cert, size_t data_len,
+            const uint8_t* data, size_t params_len, const uint8_t* params,
+            SignCallback cb, void* ctx);
+}
+
 SECStatus DoGetClientAuthData(ClientAuthInfo&& info,
                               const mozilla::UniqueCERTCertificate& serverCert,
                               nsTArray<nsTArray<uint8_t>>&& collectedCANames,
                               mozilla::UniqueCERTCertificate& outCert,
-                              mozilla::UniqueSECKEYPrivateKey& outKey,
                               mozilla::UniqueCERTCertList& outBuiltChain);
 
 #endif  // nsNSSIOLayer_h

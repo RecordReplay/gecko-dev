@@ -607,6 +607,9 @@ nsresult nsAppShellService::JustCreateTopWindow(
   if (aChromeMask & nsIWebBrowserChrome::CHROME_FISSION_WINDOW)
     widgetInitData.mFissionWindow = true;
 
+  if (aChromeMask & nsIWebBrowserChrome::CHROME_REMOTE_WINDOW)
+    widgetInitData.mHasRemoteContent = true;
+
 #ifdef MOZ_WIDGET_GTK
   // Linux/Gtk PIP window support. It's Chrome Toplevel window, always on top
   // and without any bar.
@@ -707,6 +710,10 @@ nsresult nsAppShellService::JustCreateTopWindow(
 
   widgetInitData.mRTL = LocaleService::GetInstance()->IsAppLocaleRTL();
 
+  if (aChromeMask & nsIWebBrowserChrome::CHROME_PRIVATE_WINDOW) {
+    widgetInitData.mIsPrivate = true;
+  }
+
   nsresult rv =
       window->Initialize(parent, center ? aParent : nullptr, aInitialWidth,
                          aInitialHeight, aIsHiddenWindow, widgetInitData);
@@ -758,12 +765,14 @@ nsresult nsAppShellService::JustCreateTopWindow(
       // Use the subject (or system) principal as the storage principal too
       // until the new window finishes navigating and gets a real storage
       // principal.
-      rv = docShell->CreateAboutBlankContentViewer(principal, principal,
-                                                   /* aCsp = */ nullptr);
+      rv = docShell->CreateAboutBlankContentViewer(
+          principal, principal, /* aCsp = */ nullptr, /* aBaseURI = */ nullptr,
+          /* aIsInitialDocument = */ true);
       NS_ENSURE_SUCCESS(rv, rv);
       RefPtr<Document> doc = docShell->GetDocument();
       NS_ENSURE_TRUE(!!doc, NS_ERROR_FAILURE);
-      doc->SetIsInitialDocument(true);
+      MOZ_ASSERT(doc->IsInitialDocument(),
+                 "Document should be an initial document");
     }
 
     // Begin loading the URL provided.

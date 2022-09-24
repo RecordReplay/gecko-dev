@@ -16,10 +16,7 @@
 #include "nsIFrame.h"
 #include <type_traits>
 
-namespace mozilla {
-namespace dom {
-
-namespace SVGGeometryProperty {
+namespace mozilla::dom::SVGGeometryProperty {
 namespace ResolverTypes {
 struct LengthPercentNoAuto {};
 struct LengthPercentRXY {};
@@ -127,7 +124,9 @@ float ResolveImpl(ComputedStyle const& aStyle, SVGElement* aElement,
     // https://svgwg.org/svg2-draft/embedded.html#ImageElement
 
     SVGImageFrame* imgf = do_QueryFrame(aElement->GetPrimaryFrame());
-    MOZ_ASSERT(imgf);
+    if (!imgf) {
+      return 0.f;
+    }
 
     using Other = typename Tag::CounterPart;
     auto const& valueOther = aStyle.StylePosition()->*Other::Getter;
@@ -236,8 +235,8 @@ bool DoForComputedStyle(const SVGElement* aElement, Func aFunc) {
     return true;
   }
 
-  if (RefPtr<ComputedStyle> computedStyle =
-          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement, nullptr)) {
+  if (RefPtr<const ComputedStyle> computedStyle =
+          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement)) {
     aFunc(computedStyle.get());
     return true;
   }
@@ -275,8 +274,6 @@ nsCSSPropertyID AttrEnumToCSSPropId(const SVGElement* aElement,
 bool IsNonNegativeGeometryProperty(nsCSSPropertyID aProp);
 bool ElementMapsLengthsToStyle(SVGElement const* aElement);
 
-}  // namespace SVGGeometryProperty
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::SVGGeometryProperty
 
 #endif  // DOM_SVG_SVGGEOMETRYPROPERTY_H_

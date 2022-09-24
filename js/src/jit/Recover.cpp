@@ -6,11 +6,11 @@
 
 #include "jit/Recover.h"
 
-#include "jsapi.h"
 #include "jsmath.h"
 
 #include "builtin/RegExp.h"
 #include "builtin/String.h"
+#include "jit/Bailouts.h"
 #include "jit/CompileInfo.h"
 #include "jit/Ion.h"
 #include "jit/JitSpewer.h"
@@ -27,7 +27,6 @@
 #include "vm/StringType.h"
 
 #include "vm/Interpreter-inl.h"
-#include "vm/NativeObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -62,76 +61,58 @@ bool MResumePoint::writeRecoverData(CompactBufferWriter& writer) const {
   writer.writeUnsigned(uint32_t(RInstruction::Recover_ResumePoint));
 
   MBasicBlock* bb = block();
-  JSFunction* fun = bb->info().funMaybeLazy();
+  bool hasFun = bb->info().hasFunMaybeLazy();
+  uint32_t nargs = bb->info().nargs();
   JSScript* script = bb->info().script();
   uint32_t exprStack = stackDepth() - bb->info().ninvoke();
 
 #ifdef DEBUG
   // Ensure that all snapshot which are encoded can safely be used for
   // bailouts.
-  if (GetJitContext()->cx) {
-    uint32_t stackDepth;
-    bool reachablePC;
-    jsbytecode* bailPC = pc();
-
-    if (mode() == MResumePoint::ResumeAfter) {
-      bailPC = GetNextPc(pc());
-    }
-
-    if (!ReconstructStackDepth(GetJitContext()->cx, script, bailPC, &stackDepth,
-                               &reachablePC)) {
+  if (JSContext* cx = GetJitContext()->cx) {
+    if (!AssertBailoutStackDepth(cx, script, pc(), mode(), exprStack)) {
       return false;
-    }
-
-    if (reachablePC) {
-      JSOp bailOp = JSOp(*bailPC);
-      if (bailOp == JSOp::FunCall) {
-        // For fun.call(this, ...); the reconstructStackDepth will
-        // include the this. When inlining that is not included.  So the
-        // exprStackSlots will be one less.
-        MOZ_ASSERT(stackDepth - exprStack <= 1);
-      } else {
-        // With accessors, we have different stack depths depending on
-        // whether or not we inlined the accessor, as the inlined stack
-        // contains a callee function that should never have been there
-        // and we might just be capturing an uneventful property site,
-        // in which case there won't have been any violence.
-        MOZ_ASSERT_IF(!IsIonInlinableGetterOrSetterOp(bailOp),
-                      exprStack == stackDepth);
-      }
     }
   }
 #endif
+
+  uint32_t formalArgs = CountArgSlots(script, hasFun, nargs);
 
   // Test if we honor the maximum of arguments at all times.  This is a sanity
   // check and not an algorithm limit. So check might be a bit too loose.  +4
   // to account for scope chain, return value, this value and maybe
   // arguments_object.
-  MOZ_ASSERT(CountArgSlots(script, fun) < SNAPSHOT_MAX_NARGS + 4);
+  MOZ_ASSERT(formalArgs < SNAPSHOT_MAX_NARGS + 4);
 
 #ifdef JS_JITSPEW
   uint32_t implicit = StartArgSlot(script);
 #endif
-  uint32_t formalArgs = CountArgSlots(script, fun);
   uint32_t nallocs = formalArgs + script->nfixed() + exprStack;
 
   JitSpew(JitSpew_IonSnapshots,
           "Starting frame; implicit %u, formals %u, fixed %zu, exprs %u",
           implicit, formalArgs - implicit, script->nfixed(), exprStack);
 
-  uint32_t pcoff = script->pcToOffset(pc());
-  JitSpew(JitSpew_IonSnapshots, "Writing pc offset %u, nslots %u", pcoff,
-          nallocs);
-  writer.writeUnsigned(pcoff);
+  uint32_t pcOff = script->pcToOffset(pc());
+  JitSpew(JitSpew_IonSnapshots, "Writing pc offset %u, mode %s, nslots %u",
+          pcOff, ResumeModeToString(mode()), nallocs);
+
+  uint32_t pcOffAndMode =
+      (pcOff << RResumePoint::PCOffsetShift) | uint32_t(mode());
+  MOZ_RELEASE_ASSERT((pcOffAndMode >> RResumePoint::PCOffsetShift) == pcOff,
+                     "pcOff doesn't fit in pcOffAndMode");
+  writer.writeUnsigned(pcOffAndMode);
+
   writer.writeUnsigned(nallocs);
   return true;
 }
 
 RResumePoint::RResumePoint(CompactBufferReader& reader) {
-  pcOffset_ = reader.readUnsigned();
+  pcOffsetAndMode_ = reader.readUnsigned();
   numOperands_ = reader.readUnsigned();
-  JitSpew(JitSpew_IonSnapshots, "Read RResumePoint (pc offset %u, nslots %u)",
-          pcOffset_, numOperands_);
+  JitSpew(JitSpew_IonSnapshots,
+          "Read RResumePoint (pc offset %u, mode %s, nslots %u)", pcOffset(),
+          ResumeModeToString(mode()), numOperands_);
 }
 
 bool RResumePoint::recover(JSContext* cx, SnapshotIterator& iter) const {
@@ -139,6 +120,9 @@ bool RResumePoint::recover(JSContext* cx, SnapshotIterator& iter) const {
 }
 
 bool MBitNot::writeRecoverData(CompactBufferWriter& writer) const {
+  // 64-bit int bitnots exist only when compiling wasm; they exist neither for
+  // JS nor asm.js.  So we don't expect them here.
+  MOZ_ASSERT(type() != MIRType::Int64);
   MOZ_ASSERT(canRecoverOnBailout());
   writer.writeUnsigned(uint32_t(RInstruction::Recover_BitNot));
   return true;
@@ -1417,10 +1401,26 @@ bool MTypeOf::writeRecoverData(CompactBufferWriter& writer) const {
 RTypeOf::RTypeOf(CompactBufferReader& reader) {}
 
 bool RTypeOf::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedValue v(cx, iter.read());
+  JS::Value v = iter.read();
 
-  RootedValue result(cx, StringValue(TypeOfOperation(v, cx->runtime())));
-  iter.storeInstructionResult(result);
+  iter.storeInstructionResult(Int32Value(TypeOfValue(v)));
+  return true;
+}
+
+bool MTypeOfName::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_TypeOfName));
+  return true;
+}
+
+RTypeOfName::RTypeOfName(CompactBufferReader& reader) {}
+
+bool RTypeOfName::recover(JSContext* cx, SnapshotIterator& iter) const {
+  int32_t type = iter.read().toInt32();
+  MOZ_ASSERT(JSTYPE_UNDEFINED <= type && type < JSTYPE_LIMIT);
+
+  JSString* name = TypeName(JSType(type), *cx->runtime()->commonNames);
+  iter.storeInstructionResult(StringValue(name));
   return true;
 }
 
@@ -1494,32 +1494,24 @@ bool RTruncateToInt32::recover(JSContext* cx, SnapshotIterator& iter) const {
 
 bool MNewObject::writeRecoverData(CompactBufferWriter& writer) const {
   MOZ_ASSERT(canRecoverOnBailout());
+
   writer.writeUnsigned(uint32_t(RInstruction::Recover_NewObject));
-  MOZ_ASSERT(Mode(uint8_t(mode_)) == mode_);
-  writer.writeByte(uint8_t(mode_));
+
+  // Recover instructions are only supported if we have a template object.
+  MOZ_ASSERT(mode_ == MNewObject::ObjectCreate);
   return true;
 }
 
-RNewObject::RNewObject(CompactBufferReader& reader) {
-  mode_ = MNewObject::Mode(reader.readByte());
-}
+RNewObject::RNewObject(CompactBufferReader& reader) {}
 
 bool RNewObject::recover(JSContext* cx, SnapshotIterator& iter) const {
   RootedObject templateObject(cx, &iter.read().toObject());
   RootedValue result(cx);
-  JSObject* resultObject = nullptr;
 
-  // See CodeGenerator::visitNewObjectVMCall
-  switch (mode_) {
-    case MNewObject::ObjectLiteral:
-      resultObject = NewObjectOperationWithTemplate(cx, templateObject);
-      break;
-    case MNewObject::ObjectCreate:
-      resultObject =
-          ObjectCreateWithTemplate(cx, templateObject.as<PlainObject>());
-      break;
-  }
-
+  // See CodeGenerator::visitNewObjectVMCall.
+  // Note that recover instructions are only used if mode == ObjectCreate.
+  JSObject* resultObject =
+      ObjectCreateWithTemplate(cx, templateObject.as<PlainObject>());
   if (!resultObject) {
     return false;
   }
@@ -1687,31 +1679,6 @@ bool RNewIterator::recover(JSContext* cx, SnapshotIterator& iter) const {
   return true;
 }
 
-bool MCreateThisWithTemplate::writeRecoverData(
-    CompactBufferWriter& writer) const {
-  MOZ_ASSERT(canRecoverOnBailout());
-  writer.writeUnsigned(uint32_t(RInstruction::Recover_CreateThisWithTemplate));
-  return true;
-}
-
-RCreateThisWithTemplate::RCreateThisWithTemplate(CompactBufferReader& reader) {}
-
-bool RCreateThisWithTemplate::recover(JSContext* cx,
-                                      SnapshotIterator& iter) const {
-  RootedObject templateObject(cx, &iter.read().toObject());
-
-  // See CodeGenerator::visitCreateThisWithTemplate
-  JSObject* resultObject = CreateThisWithTemplate(cx, templateObject);
-  if (!resultObject) {
-    return false;
-  }
-
-  RootedValue result(cx);
-  result.setObject(*resultObject);
-  iter.storeInstructionResult(result);
-  return true;
-}
-
 bool MLambda::writeRecoverData(CompactBufferWriter& writer) const {
   MOZ_ASSERT(canRecoverOnBailout());
   writer.writeUnsigned(uint32_t(RInstruction::Recover_Lambda));
@@ -1725,30 +1692,6 @@ bool RLambda::recover(JSContext* cx, SnapshotIterator& iter) const {
   RootedFunction fun(cx, &iter.read().toObject().as<JSFunction>());
 
   JSObject* resultObject = js::Lambda(cx, fun, scopeChain);
-  if (!resultObject) {
-    return false;
-  }
-
-  RootedValue result(cx);
-  result.setObject(*resultObject);
-  iter.storeInstructionResult(result);
-  return true;
-}
-
-bool MLambdaArrow::writeRecoverData(CompactBufferWriter& writer) const {
-  MOZ_ASSERT(canRecoverOnBailout());
-  writer.writeUnsigned(uint32_t(RInstruction::Recover_LambdaArrow));
-  return true;
-}
-
-RLambdaArrow::RLambdaArrow(CompactBufferReader& reader) {}
-
-bool RLambdaArrow::recover(JSContext* cx, SnapshotIterator& iter) const {
-  RootedObject scopeChain(cx, &iter.read().toObject());
-  RootedValue newTarget(cx, iter.read());
-  RootedFunction fun(cx, &iter.read().toObject().as<JSFunction>());
-
-  JSObject* resultObject = js::LambdaArrow(cx, fun, scopeChain, newTarget);
   if (!resultObject) {
     return false;
   }
@@ -2074,5 +2017,35 @@ bool RCreateInlinedArgumentsObject::recover(JSContext* cx,
   }
 
   iter.storeInstructionResult(JS::ObjectValue(*result));
+  return true;
+}
+
+bool MRest::writeRecoverData(CompactBufferWriter& writer) const {
+  MOZ_ASSERT(canRecoverOnBailout());
+  writer.writeUnsigned(uint32_t(RInstruction::Recover_Rest));
+  writer.writeUnsigned(numFormals());
+  return true;
+}
+
+RRest::RRest(CompactBufferReader& reader) {
+  numFormals_ = reader.readUnsigned();
+}
+
+bool RRest::recover(JSContext* cx, SnapshotIterator& iter) const {
+  JitFrameLayout* frame = iter.frame();
+
+  uint32_t numActuals = iter.read().toInt32();
+  MOZ_ASSERT(numActuals == frame->numActualArgs());
+
+  uint32_t numFormals = numFormals_;
+
+  uint32_t length = std::max(numActuals, numFormals) - numFormals;
+  Value* src = frame->argv() + numFormals + 1;  // +1 to skip |this|.
+  JSObject* rest = jit::InitRestParameter(cx, length, src, nullptr);
+  if (!rest) {
+    return false;
+  }
+
+  iter.storeInstructionResult(ObjectValue(*rest));
   return true;
 }

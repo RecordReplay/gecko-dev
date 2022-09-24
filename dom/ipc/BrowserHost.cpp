@@ -53,8 +53,10 @@ nsILoadContext* BrowserHost::GetLoadContext() const {
   return loadContext;
 }
 
+bool BrowserHost::CanRecv() const { return mRoot && mRoot->CanRecv(); }
+
 a11y::DocAccessibleParent* BrowserHost::GetTopLevelDocAccessible() const {
-  return mRoot->GetTopLevelDocAccessible();
+  return mRoot ? mRoot->GetTopLevelDocAccessible() : nullptr;
 }
 
 void BrowserHost::LoadURL(nsDocShellLoadState* aLoadState) {
@@ -117,8 +119,7 @@ BrowserHost::SetRenderLayers(bool aRenderLayers) {
   if (!mRoot) {
     return NS_OK;
   }
-  ProcessPriorityManager::ActivityChanged(GetBrowsingContext()->Canonical(),
-                                          aRenderLayers);
+
   mRoot->SetRenderLayers(aRenderLayers);
   return NS_OK;
 }
@@ -126,17 +127,29 @@ BrowserHost::SetRenderLayers(bool aRenderLayers) {
 /* readonly attribute boolean hasLayers; */
 NS_IMETHODIMP
 BrowserHost::GetHasLayers(bool* aHasLayers) {
+  *aHasLayers = mRoot && mRoot->GetHasLayers();
+  return NS_OK;
+}
+
+/* attribute boolean priorityHint; */
+NS_IMETHODIMP
+BrowserHost::SetPriorityHint(bool aPriorityHint) {
   if (!mRoot) {
-    *aHasLayers = false;
     return NS_OK;
   }
-  *aHasLayers = mRoot->GetHasLayers();
+  mRoot->SetPriorityHint(aPriorityHint);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BrowserHost::GetPriorityHint(bool* aPriorityHint) {
+  *aPriorityHint = mRoot && mRoot->GetPriorityHint();
   return NS_OK;
 }
 
 /* void resolutionChanged (); */
 NS_IMETHODIMP
-BrowserHost::NotifyResolutionChanged(void) {
+BrowserHost::NotifyResolutionChanged() {
   if (!mRoot) {
     return NS_OK;
   }
@@ -148,12 +161,13 @@ BrowserHost::NotifyResolutionChanged(void) {
 
 /* void deprioritize (); */
 NS_IMETHODIMP
-BrowserHost::Deprioritize(void) {
+BrowserHost::Deprioritize() {
   if (!mRoot) {
     return NS_OK;
   }
-  ProcessPriorityManager::ActivityChanged(GetBrowsingContext()->Canonical(),
-                                          /* aIsActive = */ false);
+  auto* bc = GetBrowsingContext()->Canonical();
+  ProcessPriorityManager::BrowserPriorityChanged(bc,
+                                                 /* aPriority = */ false);
   return NS_OK;
 }
 
@@ -198,6 +212,18 @@ BrowserHost::GetOsPid(int32_t* aOsPid) {
   return NS_OK;
 }
 
+/* readonly attribute BrowsingContext browsingContext; */
+NS_IMETHODIMP
+BrowserHost::GetBrowsingContext(BrowsingContext** aBc) {
+  if (!mRoot) {
+    *aBc = nullptr;
+    return NS_OK;
+  }
+  RefPtr<BrowsingContext> bc = mRoot->GetBrowsingContext();
+  bc.forget(aBc);
+  return NS_OK;
+}
+
 /* readonly attribute boolean hasPresented; */
 NS_IMETHODIMP
 BrowserHost::GetHasPresented(bool* aHasPresented) {
@@ -236,30 +262,6 @@ BrowserHost::CreateAboutBlankContentViewer(
 
   Unused << mRoot->SendCreateAboutBlankContentViewer(aPrincipal,
                                                      aPartitionedPrincipal);
-  return NS_OK;
-}
-
-/* boolean startApzAutoscroll (in float aAnchorX, in float aAnchorY, in nsViewID
- * aScrollId, in uint32_t aPresShellId); */
-NS_IMETHODIMP
-BrowserHost::StartApzAutoscroll(float aAnchorX, float aAnchorY,
-                                nsViewID aScrollId, uint32_t aPresShellId,
-                                bool* _retval) {
-  if (!mRoot) {
-    return NS_OK;
-  }
-  *_retval =
-      mRoot->StartApzAutoscroll(aAnchorX, aAnchorY, aScrollId, aPresShellId);
-  return NS_OK;
-}
-
-/* void stopApzAutoscroll (in nsViewID aScrollId, in uint32_t aPresShellId); */
-NS_IMETHODIMP
-BrowserHost::StopApzAutoscroll(nsViewID aScrollId, uint32_t aPresShellId) {
-  if (!mRoot) {
-    return NS_OK;
-  }
-  mRoot->StopApzAutoscroll(aScrollId, aPresShellId);
   return NS_OK;
 }
 

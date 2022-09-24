@@ -148,6 +148,7 @@ mozilla::LazyLogModule ApplicationReputationService::prlog(
 const char* const ApplicationReputationService::kNonBinaryExecutables[] = {
     ".ad",
     ".air",
+    ".fileloc",
     ".inetloc",
 };
 
@@ -589,6 +590,7 @@ class PendingDBLookup;
 // This class is private to ApplicationReputationService.
 class PendingLookup final : public nsIStreamListener,
                             public nsITimerCallback,
+                            public nsINamed,
                             public nsIObserver,
                             public nsSupportsWeakReference {
  public:
@@ -596,6 +598,7 @@ class PendingLookup final : public nsIStreamListener,
   NS_DECL_NSIREQUESTOBSERVER
   NS_DECL_NSISTREAMLISTENER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
   NS_DECL_NSIOBSERVER
 
   // Constructor and destructor.
@@ -681,9 +684,8 @@ class PendingLookup final : public nsIStreamListener,
 
   // Wrapper function for nsIStreamListener.onStopRequest to make it easy to
   // guarantee calling the callback
-  nsresult OnStopRequestInternal(nsIRequest* aRequest, nsISupports* aContext,
-                                 nsresult aResult, uint32_t& aVerdict,
-                                 Reason& aReason);
+  nsresult OnStopRequestInternal(nsIRequest* aRequest, nsresult aResult,
+                                 uint32_t& aVerdict, Reason& aReason);
 
   // Return the hex-encoded hash of the whole URI.
   nsresult GetSpecHash(nsACString& aSpec, nsACString& hexEncodedHash);
@@ -877,7 +879,8 @@ PendingDBLookup::HandleEvent(const nsACString& tables) {
 }
 
 NS_IMPL_ISUPPORTS(PendingLookup, nsIStreamListener, nsIRequestObserver,
-                  nsIObserver, nsISupportsWeakReference, nsITimerCallback)
+                  nsIObserver, nsISupportsWeakReference, nsITimerCallback,
+                  nsINamed)
 
 PendingLookup::PendingLookup(nsIApplicationReputationQuery* aQuery,
                              nsIApplicationReputationCallback* aCallback)
@@ -1710,6 +1713,12 @@ PendingLookup::Notify(nsITimer* aTimer) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+PendingLookup::GetName(nsACString& aName) {
+  aName.AssignLiteral("PendingLookup");
+  return NS_OK;
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 // nsIObserver implementation
 NS_IMETHODIMP
@@ -1769,14 +1778,12 @@ PendingLookup::OnStopRequest(nsIRequest* aRequest, nsresult aResult) {
 
   uint32_t verdict = nsIApplicationReputationService::VERDICT_SAFE;
   Reason reason = Reason::NotSet;
-  nsresult rv =
-      OnStopRequestInternal(aRequest, nullptr, aResult, verdict, reason);
+  nsresult rv = OnStopRequestInternal(aRequest, aResult, verdict, reason);
   OnComplete(verdict, reason, rv);
   return rv;
 }
 
 nsresult PendingLookup::OnStopRequestInternal(nsIRequest* aRequest,
-                                              nsISupports* aContext,
                                               nsresult aResult,
                                               uint32_t& aVerdict,
                                               Reason& aReason) {
@@ -1961,5 +1968,12 @@ nsresult ApplicationReputationService::QueryReputationInternal(
 nsresult ApplicationReputationService::IsBinary(const nsACString& aFileName,
                                                 bool* aBinary) {
   *aBinary = ::IsBinary(aFileName);
+  return NS_OK;
+}
+
+nsresult ApplicationReputationService::IsExecutable(const nsACString& aFileName,
+                                                    bool* aExecutable) {
+  *aExecutable =
+      ::IsFileType(aFileName, sExecutableExts, ArrayLength(sExecutableExts));
   return NS_OK;
 }

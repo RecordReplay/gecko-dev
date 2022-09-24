@@ -48,7 +48,7 @@ var UrlbarTokenizer = {
   // Regex matching a percent encoded char at the beginning of a string.
   REGEXP_PERCENT_ENCODED_START: /^(%[0-9a-f]{2}){2,}/i,
   // Regex matching scheme and colon, plus, if present, two slashes.
-  REGEXP_PREFIX: /^[a-z]+:(?:\/){0,2}/i,
+  REGEXP_PREFIX: /^[a-z-]+:(?:\/){0,2}/i,
 
   TYPE: {
     TEXT: 1,
@@ -284,47 +284,47 @@ function splitString(searchString) {
   let tokens = trimmed.startsWith("data:")
     ? [trimmed]
     : trimmed.split(UrlbarTokenizer.REGEXP_SPACES);
-  let accumulator = [];
-  let hasRestrictionToken = tokens.some(t => CHAR_TO_TYPE_MAP.has(t));
-  let chars = Array.from(CHAR_TO_TYPE_MAP.keys()).join("");
-  logger.debug("Restriction chars", chars);
-  for (let i = 0; i < tokens.length; ++i) {
-    // If there is no separate restriction token, it's possible we have to split
-    // a token, if it's the first one and it includes a leading restriction char
-    // or it's the last one and it includes a trailing restriction char.
-    // This allows to not require the user to add artificial whitespaces to
-    // enforce restrictions, for example typing questions would restrict to
-    // search results.
-    let token = tokens[i];
-    if (!hasRestrictionToken && token.length > 1) {
-      // Check for an unambiguous restriction char at the beginning of the
-      // first token, or at the end of the last token. We only count trailing
-      // restriction chars if they are the search restriction char, which is
-      // "?". This is to allow for a typed question to yield only search results.
-      if (
-        i == 0 &&
-        chars.includes(token[0]) &&
-        !UrlbarTokenizer.REGEXP_PERCENT_ENCODED_START.test(token)
-      ) {
-        hasRestrictionToken = true;
-        accumulator.push(token[0]);
-        accumulator.push(token.slice(1));
-        continue;
-      } else if (
-        i == tokens.length - 1 &&
-        token[token.length - 1] == UrlbarTokenizer.RESTRICT.SEARCH &&
-        !UrlbarTokenizer.looksLikeUrl(token, { requirePath: true })
-      ) {
-        hasRestrictionToken = true;
-        accumulator.push(token.slice(0, token.length - 1));
-        accumulator.push(token[token.length - 1]);
-        continue;
-      }
-    }
-    accumulator.push(token);
+
+  if (!tokens.length) {
+    return tokens;
   }
-  logger.info("Found tokens", accumulator);
-  return accumulator;
+
+  // If there is no separate restriction token, it's possible we have to split
+  // a token, if it's the first one and it includes a leading restriction char
+  // or it's the last one and it includes a trailing restriction char.
+  // This allows to not require the user to add artificial whitespaces to
+  // enforce restrictions, for example typing questions would restrict to
+  // search results.
+  const hasRestrictionToken = tokens.some(t => CHAR_TO_TYPE_MAP.has(t));
+  if (hasRestrictionToken) {
+    return tokens;
+  }
+
+  // Check for an unambiguous restriction char at the beginning of the first
+  // token, or at the end of the last token. We only count trailing restriction
+  // chars if they are the search restriction char, which is "?". This is to
+  // allow for a typed question to yield only search results.
+  const firstToken = tokens[0];
+  if (
+    CHAR_TO_TYPE_MAP.has(firstToken[0]) &&
+    !UrlbarTokenizer.REGEXP_PERCENT_ENCODED_START.test(firstToken)
+  ) {
+    tokens[0] = firstToken.substring(1);
+    tokens.splice(0, 0, firstToken[0]);
+    return tokens;
+  }
+
+  const lastIndex = tokens.length - 1;
+  const lastToken = tokens[lastIndex];
+  if (
+    lastToken[lastToken.length - 1] == UrlbarTokenizer.RESTRICT.SEARCH &&
+    !UrlbarTokenizer.looksLikeUrl(lastToken, { requirePath: true })
+  ) {
+    tokens[lastIndex] = lastToken.substring(0, lastToken.length - 1);
+    tokens.push(lastToken[lastToken.length - 1]);
+  }
+
+  return tokens;
 }
 
 /**

@@ -4,19 +4,11 @@
 # to compile your changes.
 
 scripts:
-  # Run the activity-stream mochitests
-  mochitest: (cd $npm_package_config_mc_dir && ./mach mochitest browser/components/newtab/test/browser --headless)
-
-  # Run the activity-stream mochitests with the browser toolbox debugger.
-  # Often handy in combination with adding a "debugger" statement in your
-  # mochitest somewhere.
-  mochitest-debug: (cd $npm_package_config_mc_dir && ./mach mochitest --jsdebugger browser/components/newtab/test/browser)
-
   # bundle: Build all assets for activity stream
   bundle:
-    webpack: webpack --config webpack.system-addon.config.js
+    webpack: webpack-cli --config webpack.system-addon.config.js
     css: sass content-src/styles:css --no-source-map
-    welcomeBundle: webpack --config webpack.aboutwelcome.config.js
+    welcomeBundle: webpack-cli --config webpack.aboutwelcome.config.js
     welcomeCss: sass content-src/aboutwelcome:aboutwelcome/content --no-source-map
     html: rimraf prerendered && node ./bin/render-activity-stream-html.js
 
@@ -40,7 +32,7 @@ scripts:
 
   tddmc: karma start karma.mc.config.js --tdd
 
-  debugcoverage: open logs/coverage/index.html
+  debugcoverage: open logs/coverage/lcov-report/index.html
 
   # lint: Run various linters with mach or local dev dependencies
   lint:

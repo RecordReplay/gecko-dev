@@ -1,15 +1,38 @@
-/* global PKT_PANEL_OVERLAY:false */
-/* import-globals-from messages.js */
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this file,
+ * You can obtain one at http://mozilla.org/MPL/2.0/. */
+/* global RPMGetStringPref:false */
+
+import HomeOverlay from "./home/overlay.js";
+import SignupOverlay from "./signup/overlay.js";
+import SavedOverlay from "./saved/overlay.js";
+import StyleGuideOverlay from "./style-guide/overlay.js";
+import pktPanelMessaging from "./messages.js";
 
 var PKT_PANEL = function() {};
 
 PKT_PANEL.prototype = {
-  init() {
-    if (this.inited) {
-      return;
-    }
-    this.panelId = pktPanelMessaging.panelIdFromURL(window.location.href);
-    this.overlay = new PKT_PANEL_OVERLAY();
+  initHome() {
+    this.overlay = new HomeOverlay();
+    this.init();
+  },
+
+  initSignup() {
+    this.overlay = new SignupOverlay();
+    this.init();
+  },
+
+  initSaved() {
+    this.overlay = new SavedOverlay();
+    this.init();
+  },
+
+  initStyleGuide() {
+    this.overlay = new StyleGuideOverlay();
+    this.init();
+  },
+
+  setupObservers() {
     this.setupMutationObserver();
     // Mutation observer isn't always enough for fast loading, static pages.
     // Sometimes the mutation observer fires before the page is totally visible.
@@ -18,16 +41,14 @@ PKT_PANEL.prototype = {
     // So in this case, we have a backup intersection observer that fires when
     // the page is first visible, and thus, the page is going to guarantee a height.
     this.setupIntersectionObserver();
+  },
 
+  init() {
+    if (this.inited) {
+      return;
+    }
+    this.setupObservers();
     this.inited = true;
-  },
-
-  addMessageListener(messageId, callback) {
-    pktPanelMessaging.addMessageListener(messageId, this.panelId, callback);
-  },
-
-  sendMessage(messageId, payload, callback) {
-    pktPanelMessaging.sendMessage(messageId, this.panelId, payload, callback);
   },
 
   resizeParent() {
@@ -40,7 +61,7 @@ PKT_PANEL.prototype = {
     // We rely on intersection observer to do the
     // resize for 0 height loads.
     if (clientHeight) {
-      thePKT_PANEL.sendMessage("PKT_resizePanel", {
+      pktPanelMessaging.sendMessage("PKT_resizePanel", {
         width: document.body.clientWidth,
         height: clientHeight,
       });
@@ -87,22 +108,11 @@ PKT_PANEL.prototype = {
   },
 
   create() {
-    this.overlay.create();
+    const pockethost =
+      RPMGetStringPref("extensions.pocket.site") || "getpocket.com";
+    this.overlay.create({ pockethost });
   },
 };
 
-function onDOMLoaded() {
-  if (!window.thePKT_PANEL) {
-    var thePKT_PANEL = new PKT_PANEL();
-    /* global thePKT_PANEL */
-    window.thePKT_PANEL = thePKT_PANEL;
-    thePKT_PANEL.init();
-  }
-  window.thePKT_PANEL.create();
-}
-
-if (document.readyState != `loading`) {
-  onDOMLoaded();
-} else {
-  document.addEventListener(`DOMContentLoaded`, onDOMLoaded);
-}
+window.PKT_PANEL = PKT_PANEL;
+window.pktPanelMessaging = pktPanelMessaging;

@@ -35,8 +35,7 @@ namespace hal {
 class BatteryInformation;
 }
 
-namespace dom {
-namespace quota {
+namespace dom::quota {
 
 class QuotaChild;
 class QuotaManager;
@@ -44,7 +43,7 @@ class QuotaManager;
 class QuotaManagerService final : public nsIQuotaManagerService,
                                   public nsIObserver,
                                   public hal::BatteryObserver {
-  typedef mozilla::ipc::PBackgroundChild PBackgroundChild;
+  using PBackgroundChild = mozilla::ipc::PBackgroundChild;
 
   class BackgroundCreateCallback;
   class PendingRequestInfo;
@@ -97,8 +96,7 @@ class QuotaManagerService final : public nsIQuotaManagerService,
   void Notify(const hal::BatteryInformation& aBatteryInfo) override;
 };
 
-}  // namespace quota
-}  // namespace dom
+}  // namespace dom::quota
 }  // namespace mozilla
 
 #endif /* mozilla_dom_quota_QuotaManagerService_h */

@@ -64,8 +64,7 @@ class nsNodeSupportsWeakRefTearoff final : public nsISupportsWeakReference {
  * A generic base class for DOM elements and document fragments,
  * implementing many nsIContent, nsINode and Element methods.
  */
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ShadowRoot;
 
@@ -97,7 +96,6 @@ class FragmentOrElement : public nsIContent {
   virtual uint32_t TextLength() const override;
   virtual bool TextIsOnlyWhitespace() override;
   virtual bool ThreadSafeTextIsOnlyWhitespace() const override;
-  virtual bool IsLink(nsIURI** aURI) const override;
 
   virtual void DestroyContent() override;
   virtual void SaveSubtreeState() override;
@@ -118,13 +116,14 @@ class FragmentOrElement : public nsIContent {
   static void FireNodeInserted(Document* aDoc, nsINode* aParent,
                                nsTArray<nsCOMPtr<nsIContent> >& aNodes);
 
-  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_INHERITED(
+  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_WRAPPERCACHE_CLASS_INHERITED(
       FragmentOrElement, nsIContent)
 
   /**
    * Fire a DOMNodeRemoved mutation event for all children of this node
+   * TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
    */
-  void FireNodeRemovedForChildren();
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void FireNodeRemovedForChildren();
 
   static void ClearContentUnbinder();
   static bool CanSkip(nsINode* aNode, bool aRemovingAllowed);
@@ -197,7 +196,7 @@ class FragmentOrElement : public nsIContent {
     /**
      * Web components custom element data.
      */
-    RefPtr<CustomElementData> mCustomElementData;
+    UniquePtr<CustomElementData> mCustomElementData;
   };
 
   class nsDOMSlots : public nsIContent::nsContentSlots {
@@ -306,8 +305,7 @@ class FragmentOrElement : public nsIContent {
   friend class ::ContentUnbinder;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #define NS_ELEMENT_INTERFACE_TABLE_TO_MAP_SEGUE               \
   if (NS_SUCCEEDED(rv)) return rv;                            \

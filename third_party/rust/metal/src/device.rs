@@ -5,19 +5,15 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
+use super::*;
+
 use block::{Block, ConcreteBlock};
-use cocoa_foundation::base::id;
-use cocoa_foundation::foundation::NSUInteger;
 use foreign_types::ForeignType;
 use objc::runtime::{Object, NO, YES};
 
-use super::*;
+use std::{ffi::CStr, os::raw::c_char, path::Path, ptr};
 
-use std::ffi::CStr;
-use std::os::raw::c_char;
-use std::path::Path;
-use std::ptr;
-
+// Available on macOS 10.11+, iOS 8.0+, tvOS 9.0+
 #[allow(non_camel_case_types)]
 #[repr(u64)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
@@ -49,14 +45,17 @@ pub enum MTLFeatureSet {
 
     macOS_GPUFamily1_v1 = 10000,
     macOS_GPUFamily1_v2 = 10001,
-    //macOS_ReadWriteTextureTier2 = 10002, TODO: Uncomment when feature tables updated
+    // Available on macOS 10.12+
+    macOS_ReadWriteTextureTier2 = 10002,
     macOS_GPUFamily1_v3 = 10003,
     macOS_GPUFamily1_v4 = 10004,
     macOS_GPUFamily2_v1 = 10005,
 }
 
+// Available on macOS 10.15+, iOS 13.0+
 #[repr(i64)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[non_exhaustive]
 pub enum MTLGPUFamily {
     Common1 = 3001,
     Common2 = 3002,
@@ -67,6 +66,9 @@ pub enum MTLGPUFamily {
     Apple4 = 1004,
     Apple5 = 1005,
     Apple6 = 1006,
+    Apple7 = 1007,
+    Apple8 = 1008,
+    Apple9 = 1009,
     Mac1 = 2001,
     Mac2 = 2002,
     MacCatalyst1 = 4001,
@@ -134,7 +136,7 @@ impl MTLFeatureSet {
             tvOS_GPUFamily1_v3 | tvOS_GPUFamily2_v1 => 11,
             tvOS_GPUFamily1_v4 | tvOS_GPUFamily2_v2 => 12,
             macOS_GPUFamily1_v1 => 11,
-            macOS_GPUFamily1_v2 => 12,
+            macOS_GPUFamily1_v2 | macOS_ReadWriteTextureTier2 => 12,
             macOS_GPUFamily1_v3 => 13,
             macOS_GPUFamily1_v4 | macOS_GPUFamily2_v1 => 14,
         }
@@ -143,10 +145,20 @@ impl MTLFeatureSet {
     fn gpu_family(&self) -> u32 {
         use MTLFeatureSet::*;
         match self {
-            iOS_GPUFamily1_v1 | iOS_GPUFamily1_v2 | iOS_GPUFamily1_v3 | iOS_GPUFamily1_v4
-            | iOS_GPUFamily1_v5 | tvOS_GPUFamily1_v1 | tvOS_GPUFamily1_v2 | tvOS_GPUFamily1_v3
-            | tvOS_GPUFamily1_v4 | macOS_GPUFamily1_v1 | macOS_GPUFamily1_v2
-            | macOS_GPUFamily1_v3 | macOS_GPUFamily1_v4 => 1,
+            iOS_GPUFamily1_v1
+            | iOS_GPUFamily1_v2
+            | iOS_GPUFamily1_v3
+            | iOS_GPUFamily1_v4
+            | iOS_GPUFamily1_v5
+            | tvOS_GPUFamily1_v1
+            | tvOS_GPUFamily1_v2
+            | tvOS_GPUFamily1_v3
+            | tvOS_GPUFamily1_v4
+            | macOS_GPUFamily1_v1
+            | macOS_GPUFamily1_v2
+            | macOS_ReadWriteTextureTier2
+            | macOS_GPUFamily1_v3
+            | macOS_GPUFamily1_v4 => 1,
             iOS_GPUFamily2_v1 | iOS_GPUFamily2_v2 | iOS_GPUFamily2_v3 | iOS_GPUFamily2_v4
             | iOS_GPUFamily2_v5 | tvOS_GPUFamily2_v1 | tvOS_GPUFamily2_v2 | macOS_GPUFamily2_v1 => {
                 2
@@ -160,9 +172,16 @@ impl MTLFeatureSet {
     fn version(&self) -> u32 {
         use MTLFeatureSet::*;
         match self {
-            iOS_GPUFamily1_v1 | iOS_GPUFamily2_v1 | iOS_GPUFamily3_v1 | iOS_GPUFamily4_v1
-            | iOS_GPUFamily5_v1 | macOS_GPUFamily1_v1 | macOS_GPUFamily2_v1
-            | tvOS_GPUFamily1_v1 | tvOS_GPUFamily2_v1 => 1,
+            iOS_GPUFamily1_v1
+            | iOS_GPUFamily2_v1
+            | iOS_GPUFamily3_v1
+            | iOS_GPUFamily4_v1
+            | iOS_GPUFamily5_v1
+            | macOS_GPUFamily1_v1
+            | macOS_GPUFamily2_v1
+            | macOS_ReadWriteTextureTier2
+            | tvOS_GPUFamily1_v1
+            | tvOS_GPUFamily2_v1 => 1,
             iOS_GPUFamily1_v2 | iOS_GPUFamily2_v2 | iOS_GPUFamily3_v2 | iOS_GPUFamily4_v2
             | macOS_GPUFamily1_v2 | tvOS_GPUFamily1_v2 | tvOS_GPUFamily2_v2 => 2,
             iOS_GPUFamily1_v3 | iOS_GPUFamily2_v3 | iOS_GPUFamily3_v3 | macOS_GPUFamily1_v3
@@ -1396,10 +1415,17 @@ pub enum MTLSparseTextureRegionAlignmentMode {
 }
 
 bitflags! {
-    struct MTLPipelineOption: NSUInteger {
+    /// Options that determine how Metal prepares the pipeline.
+    pub struct MTLPipelineOption: NSUInteger {
+        /// Do not provide any reflection information.
         const None                      = 0;
+        /// An option that requests argument information for buffers, textures, and threadgroup memory.
         const ArgumentInfo              = 1 << 0;
+        /// An option that requests detailed buffer type information for buffer arguments.
         const BufferTypeInfo            = 1 << 1;
+        /// An option that specifies that Metal should create the pipeline state object only if the
+        /// compiled shader is present inside the binary archive.
+        ///
         /// Only available on (macos(11.0), ios(14.0))
         const FailOnBinaryArchiveMiss   = 1 << 2;
     }
@@ -1421,9 +1447,9 @@ extern "C" {
 }
 
 #[allow(non_camel_case_types)]
-type dispatch_data_t = id;
+type dispatch_data_t = *mut Object;
 #[allow(non_camel_case_types)]
-pub type dispatch_queue_t = id;
+pub type dispatch_queue_t = *mut Object;
 #[allow(non_camel_case_types)]
 type dispatch_block_t = *const Block<(), ()>;
 
@@ -1705,16 +1731,12 @@ impl DeviceRef {
         src: &str,
         options: &CompileOptionsRef,
     ) -> Result<Library, String> {
-        use cocoa_foundation::base::nil as cocoa_nil;
-        use cocoa_foundation::foundation::NSString as cocoa_NSString;
-
+        let source = nsstring_from_str(src);
         unsafe {
-            let source = cocoa_NSString::alloc(cocoa_nil).init_str(src);
             let mut err: *mut Object = ptr::null_mut();
             let library: *mut MTLLibrary = msg_send![self, newLibraryWithSource:source
                                                                         options:options
                                                                           error:&mut err];
-            let () = msg_send![source, release];
             if !err.is_null() {
                 let desc: *mut Object = msg_send![err, localizedDescription];
                 let compile_error: *const c_char = msg_send![desc, UTF8String];
@@ -1732,18 +1754,12 @@ impl DeviceRef {
     }
 
     pub fn new_library_with_file<P: AsRef<Path>>(&self, file: P) -> Result<Library, String> {
-        use cocoa_foundation::base::nil as cocoa_nil;
-        use cocoa_foundation::foundation::NSString as cocoa_NSString;
-
+        let filename = nsstring_from_str(file.as_ref().to_string_lossy().as_ref());
         unsafe {
-            let filename =
-                cocoa_NSString::alloc(cocoa_nil).init_str(file.as_ref().to_string_lossy().as_ref());
-
             let library: *mut MTLLibrary = try_objc! { err =>
                 msg_send![self, newLibraryWithFile:filename.as_ref()
                                              error:&mut err]
             };
-
             Ok(Library::from_ptr(library))
         }
     }
@@ -1824,44 +1840,27 @@ impl DeviceRef {
         }
     }
 
+    /// Synchronously creates a render pipeline state object and associated reflection information.
     pub fn new_render_pipeline_state_with_reflection(
         &self,
         descriptor: &RenderPipelineDescriptorRef,
-        reflection: &RenderPipelineReflectionRef,
-    ) -> Result<RenderPipelineState, String> {
+        reflection_options: MTLPipelineOption,
+    ) -> Result<(RenderPipelineState, RenderPipelineReflection), String> {
         unsafe {
-            let reflection_options =
-                MTLPipelineOption::ArgumentInfo | MTLPipelineOption::BufferTypeInfo;
-
+            let mut reflection: *mut Object = ptr::null_mut();
             let pipeline_state: *mut MTLRenderPipelineState = try_objc! { err =>
                 msg_send![self, newRenderPipelineStateWithDescriptor:descriptor
                                                              options:reflection_options
-                                                          reflection:reflection
+                                                          reflection:&mut reflection
                                                                error:&mut err]
             };
 
-            Ok(RenderPipelineState::from_ptr(pipeline_state))
-        }
-    }
+            let state = RenderPipelineState::from_ptr(pipeline_state);
 
-    /// Useful for debugging binary archives.
-    pub fn new_render_pipeline_state_with_fail_on_binary_archive_miss(
-        &self,
-        descriptor: &RenderPipelineDescriptorRef,
-    ) -> Result<RenderPipelineState, String> {
-        unsafe {
-            let pipeline_options = MTLPipelineOption::FailOnBinaryArchiveMiss;
+            let () = msg_send![reflection, retain];
+            let reflection = RenderPipelineReflection::from_ptr(reflection as _);
 
-            let reflection: *mut MTLRenderPipelineReflection = std::ptr::null_mut();
-
-            let pipeline_state: *mut MTLRenderPipelineState = try_objc! { err =>
-                msg_send![self, newRenderPipelineStateWithDescriptor:descriptor
-                                                             options:pipeline_options
-                                                          reflection:reflection
-                                                               error:&mut err]
-            };
-
-            Ok(RenderPipelineState::from_ptr(pipeline_state))
+            Ok((state, reflection))
         }
     }
 
@@ -1907,10 +1906,50 @@ impl DeviceRef {
         }
     }
 
+    /// Synchronously creates a compute pipeline state object and associated reflection information,
+    /// using a compute pipeline descriptor.
+    pub fn new_compute_pipeline_state_with_reflection(
+        &self,
+        descriptor: &ComputePipelineDescriptorRef,
+        reflection_options: MTLPipelineOption,
+    ) -> Result<(ComputePipelineState, ComputePipelineReflection), String> {
+        unsafe {
+            let mut reflection: *mut Object = ptr::null_mut();
+            let pipeline_state: *mut MTLComputePipelineState = try_objc! { err =>
+                msg_send![self, newComputePipelineStateWithDescriptor:descriptor
+                                                             options:reflection_options
+                                                          reflection:&mut reflection
+                                                               error:&mut err]
+            };
+
+            let state = ComputePipelineState::from_ptr(pipeline_state);
+
+            let () = msg_send![reflection, retain];
+            let reflection = ComputePipelineReflection::from_ptr(reflection as _);
+
+            Ok((state, reflection))
+        }
+    }
+
     pub fn new_buffer(&self, length: u64, options: MTLResourceOptions) -> Buffer {
         unsafe {
             msg_send![self, newBufferWithLength:length
                                         options:options]
+        }
+    }
+
+    pub fn new_buffer_with_bytes_no_copy(
+        &self,
+        bytes: *const std::ffi::c_void,
+        length: NSUInteger,
+        options: MTLResourceOptions,
+        deallocator: Option<&Block<(*const std::ffi::c_void, NSUInteger), ()>>,
+    ) -> Buffer {
+        unsafe {
+            msg_send![self, newBufferWithBytesNoCopy:bytes
+                length:length
+                options:options
+                deallocator:deallocator]
         }
     }
 

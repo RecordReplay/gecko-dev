@@ -264,6 +264,19 @@ already_AddRefed<nsIEventTarget> imgRequestProxy::GetEventTarget() const {
   return target.forget();
 }
 
+bool imgRequestProxy::HasDecodedPixels() {
+  if (IsValidating()) {
+    return false;
+  }
+
+  RefPtr<Image> image = GetImage();
+  if (image) {
+    return image->HasDecodedPixels();
+  }
+
+  return false;
+}
+
 nsresult imgRequestProxy::DispatchWithTargetIfAvailable(
     already_AddRefed<nsIRunnable> aEvent) {
   LOG_FUNC(gImgLog, "imgRequestProxy::DispatchWithTargetIfAvailable");
@@ -273,12 +286,13 @@ nsresult imgRequestProxy::DispatchWithTargetIfAvailable(
   // rather we need to (e.g. we are in the wrong scheduler group context).
   // As such, we do not set mHadDispatch for telemetry purposes.
   if (mEventTarget) {
-    mEventTarget->Dispatch(CreateMediumHighRunnable(std::move(aEvent)),
+    mEventTarget->Dispatch(CreateRenderBlockingRunnable(std::move(aEvent)),
                            NS_DISPATCH_NORMAL);
     return NS_OK;
   }
 
-  return NS_DispatchToMainThread(CreateMediumHighRunnable(std::move(aEvent)));
+  return NS_DispatchToMainThread(
+      CreateRenderBlockingRunnable(std::move(aEvent)));
 }
 
 void imgRequestProxy::AddToOwner(Document* aLoadingDocument) {
@@ -681,15 +695,15 @@ imgRequestProxy::GetImage(imgIContainer** aImage) {
 }
 
 NS_IMETHODIMP
-imgRequestProxy::GetProducerId(uint32_t* aId) {
+imgRequestProxy::GetProviderId(uint32_t* aId) {
   NS_ENSURE_TRUE(aId, NS_ERROR_NULL_POINTER);
 
   nsCOMPtr<imgIContainer> image;
   nsresult rv = GetImage(getter_AddRefs(image));
   if (NS_SUCCEEDED(rv)) {
-    *aId = image->GetProducerId();
+    *aId = image->GetProviderId();
   } else {
-    *aId = layers::kContainerProducerID_Invalid;
+    *aId = 0;
   }
 
   return NS_OK;
@@ -758,6 +772,16 @@ imgRequestProxy::GetMimeType(char** aMimeType) {
 
   *aMimeType = NS_xstrdup(type);
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+imgRequestProxy::GetFileName(nsACString& aFileName) {
+  if (!GetOwner()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  GetOwner()->GetFileName(aFileName);
   return NS_OK;
 }
 

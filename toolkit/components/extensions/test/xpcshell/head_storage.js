@@ -125,21 +125,22 @@ function test_sync_reloading_extensions_works() {
     const extensionId = "my-extension-id@1";
 
     function loadExtension() {
-      function background() {
-        browser.storage.sync.set({ a: "b" }).then(() => {
-          browser.test.notifyPass("set-works");
-        });
+      async function background() {
+        browser.test.sendMessage(
+          "initialItems",
+          await browser.storage.sync.get(null)
+        );
+        await browser.storage.sync.set({ a: "b" });
+        browser.test.notifyPass("set-works");
       }
 
-      return ExtensionTestUtils.loadExtension(
-        {
-          manifest: {
-            permissions: ["storage"],
-          },
-          background: `(${background})()`,
+      return ExtensionTestUtils.loadExtension({
+        manifest: {
+          applications: { gecko: { id: extensionId } },
+          permissions: ["storage"],
         },
-        extensionId
-      );
+        background: `(${background})()`,
+      });
     }
 
     ok(
@@ -150,12 +151,26 @@ function test_sync_reloading_extensions_works() {
     let extension1 = loadExtension();
 
     await extension1.startup();
+
+    Assert.deepEqual(
+      await extension1.awaitMessage("initialItems"),
+      {},
+      "No stored items at first"
+    );
+
     await extension1.awaitFinish("set-works");
     await extension1.unload();
 
     let extension2 = loadExtension();
 
     await extension2.startup();
+
+    Assert.deepEqual(
+      await extension2.awaitMessage("initialItems"),
+      { a: "b" },
+      "Stored items available after restart"
+    );
+
     await extension2.awaitFinish("set-works");
     await extension2.unload();
   }
@@ -1224,4 +1239,92 @@ async function test_contentscript_storage(storageType) {
 
   await extension.unload();
   await contentPage.close();
+}
+
+async function test_storage_change_event_page(areaName) {
+  async function testOnChanged(targetIsStorageArea) {
+    function backgroundTestStorageTopNamespace(areaName) {
+      browser.storage.onChanged.addListener((changes, area) => {
+        browser.test.assertEq(area, areaName, "Expected areaName");
+        browser.test.assertEq(
+          JSON.stringify(changes),
+          `{"storageKey":{"newValue":"newStorageValue"}}`,
+          "Expected changes"
+        );
+        browser.test.sendMessage("onChanged_was_fired");
+      });
+    }
+    function backgroundTestStorageAreaNamespace(areaName) {
+      browser.storage[areaName].onChanged.addListener((changes, ...args) => {
+        browser.test.assertEq(args.length, 0, "no more args after changes");
+        browser.test.assertEq(
+          JSON.stringify(changes),
+          `{"storageKey":{"newValue":"newStorageValue"}}`,
+          `Expected changes via ${areaName}.onChanged event`
+        );
+        browser.test.sendMessage("onChanged_was_fired");
+      });
+    }
+    let background, onChangedName;
+    if (targetIsStorageArea) {
+      // Test storage.local.onChanged / storage.sync.onChanged.
+      background = backgroundTestStorageAreaNamespace;
+      onChangedName = `${areaName}.onChanged`;
+    } else {
+      background = backgroundTestStorageTopNamespace;
+      onChangedName = "onChanged";
+    }
+    let extension = ExtensionTestUtils.loadExtension({
+      manifest: {
+        permissions: ["storage"],
+        background: { persistent: false },
+      },
+      background: `(${background})("${areaName}")`,
+      files: {
+        "trigger-change.html": `
+          <!DOCTYPE html><meta charset="utf-8">
+          <script src="trigger-change.js"></script>
+        `,
+        "trigger-change.js": async () => {
+          let areaName = location.search.slice(1);
+          await browser.storage[areaName].set({
+            storageKey: "newStorageValue",
+          });
+          browser.test.sendMessage("tried_to_trigger_change");
+        },
+      },
+    });
+    await extension.startup();
+    assertPersistentListeners(extension, "storage", onChangedName, {
+      primed: false,
+    });
+
+    await extension.terminateBackground();
+    assertPersistentListeners(extension, "storage", onChangedName, {
+      primed: true,
+    });
+
+    // Now trigger the event
+    let contentPage = await ExtensionTestUtils.loadContentPage(
+      `moz-extension://${extension.uuid}/trigger-change.html?${areaName}`
+    );
+    await extension.awaitMessage("tried_to_trigger_change");
+    await contentPage.close();
+    await extension.awaitMessage("onChanged_was_fired");
+
+    assertPersistentListeners(extension, "storage", onChangedName, {
+      primed: false,
+    });
+    await extension.unload();
+  }
+
+  async function testFn() {
+    // Test browser.storage.onChanged.addListener
+    await testOnChanged(/* targetIsStorageArea */ false);
+    // Test browser.storage.local.onChanged.addListener
+    // and browser.storage.sync.onChanged.addListener, depending on areaName.
+    await testOnChanged(/* targetIsStorageArea */ true);
+  }
+
+  return runWithPrefs([["extensions.eventPages.enabled", true]], testFn);
 }

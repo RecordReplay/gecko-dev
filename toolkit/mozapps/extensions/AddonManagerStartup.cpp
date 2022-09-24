@@ -10,7 +10,9 @@
 #include "jsfriendapi.h"
 #include "js/Array.h"  // JS::IsArrayObject
 #include "js/ArrayBuffer.h"
+#include "js/Exception.h"
 #include "js/JSON.h"
+#include "js/PropertyAndElement.h"  // JS_GetProperty, JS_SetProperty
 #include "js/TracingAPI.h"
 #include "xpcpublic.h"
 

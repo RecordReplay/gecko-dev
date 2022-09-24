@@ -138,7 +138,7 @@ class LoginManagerPrompter {
   ) {
     log.debug("promptToSavePassword");
     let inPrivateBrowsing = PrivateBrowsingUtils.isBrowserPrivate(aBrowser);
-    LoginManagerPrompter._showLoginCaptureDoorhanger(
+    let notification = LoginManagerPrompter._showLoginCaptureDoorhanger(
       aBrowser,
       aLogin,
       "password-save",
@@ -153,6 +153,13 @@ class LoginManagerPrompter {
       }
     );
     Services.obs.notifyObservers(aLogin, "passwordmgr-prompt-save");
+
+    return {
+      dismiss() {
+        let { PopupNotifications } = aBrowser.ownerGlobal.wrappedJSObject;
+        PopupNotifications.remove(notification);
+      },
+    };
   }
 
   /**
@@ -491,13 +498,13 @@ class LoginManagerPrompter {
           type == "password-save" &&
           !Services.policies.isAllowed("removeMasterPassword")
         ) {
-          if (!LoginHelper.isMasterPasswordSet()) {
+          if (!LoginHelper.isPrimaryPasswordSet()) {
             browser.ownerGlobal.openDialog(
               "chrome://mozapps/content/preferences/changemp.xhtml",
               "",
               "centerscreen,chrome,modal,titlebar"
             );
-            if (!LoginHelper.isMasterPasswordSet()) {
+            if (!LoginHelper.isPrimaryPasswordSet()) {
               return;
             }
           }
@@ -600,9 +607,7 @@ class LoginManagerPrompter {
           // visible icon as the anchor.
           const anchor = browser.ownerDocument.getElementById("identity-icon");
           log.debug("Showing the ConfirmationHint");
-          anchor.ownerGlobal.ConfirmationHint.show(anchor, "loginRemoved", {
-            hideArrow: true,
-          });
+          anchor.ownerGlobal.ConfirmationHint.show(anchor, "loginRemoved");
         },
       });
     }
@@ -703,7 +708,7 @@ class LoginManagerPrompter {
                 toggleBtn.setAttribute("accesskey", togglePasswordAccessKey);
 
                 let hideToggle =
-                  LoginHelper.isMasterPasswordSet() ||
+                  LoginHelper.isPrimaryPasswordSet() ||
                   // Don't show the toggle when the login was autofilled
                   !!autoFilledLoginGuid ||
                   // Dismissed-by-default prompts should still show the toggle.
@@ -771,8 +776,6 @@ class LoginManagerPrompter {
       showOptions
     );
 
-    mainAction.disableHighlight = true;
-
     let notification = PopupNotifications.show(
       browser,
       notificationID,
@@ -788,6 +791,8 @@ class LoginManagerPrompter {
       log.debug("Showing the ConfirmationHint");
       anchor.ownerGlobal.ConfirmationHint.show(anchor, "passwordSaved");
     }
+
+    return notification;
   }
 
   /**
@@ -842,7 +847,7 @@ class LoginManagerPrompter {
       messageStringID = "updateLoginMsgAddUsername2";
     }
 
-    LoginManagerPrompter._showLoginCaptureDoorhanger(
+    let notification = LoginManagerPrompter._showLoginCaptureDoorhanger(
       aBrowser,
       login,
       "password-change",
@@ -865,6 +870,13 @@ class LoginManagerPrompter {
       "passwordmgr-prompt-change",
       oldGUID
     );
+
+    return {
+      dismiss() {
+        let { PopupNotifications } = aBrowser.ownerGlobal.wrappedJSObject;
+        PopupNotifications.remove(notification);
+      },
+    };
   }
 
   /**

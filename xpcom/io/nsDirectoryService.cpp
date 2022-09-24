@@ -55,6 +55,19 @@ nsresult nsDirectoryService::GetCurrentProcessDirectory(nsIFile** aFile)
   }
 
   if (!mXCurProcD) {
+#if defined(ANDROID)
+    // Some callers relying on this fallback make assumptions that don't
+    // hold on Android for BinaryPath::GetFile, so use GRE_HOME instead.
+    const char* greHome = getenv("GRE_HOME");
+    if (!greHome) {
+      return NS_ERROR_FAILURE;
+    }
+    nsresult rv = NS_NewNativeLocalFile(nsDependentCString(greHome), true,
+                                        getter_AddRefs(mXCurProcD));
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+#else
     nsCOMPtr<nsIFile> file;
     if (NS_SUCCEEDED(BinaryPath::GetFile(getter_AddRefs(file)))) {
       nsresult rv = file->GetParent(getter_AddRefs(mXCurProcD));
@@ -62,6 +75,7 @@ nsresult nsDirectoryService::GetCurrentProcessDirectory(nsIFile** aFile)
         return rv;
       }
     }
+#endif
   }
   return mXCurProcD->Clone(aFile);
 }  // GetCurrentProcessDirectory()
@@ -70,13 +84,9 @@ StaticRefPtr<nsDirectoryService> nsDirectoryService::gService;
 
 nsDirectoryService::nsDirectoryService() : mHashtable(128) {}
 
-nsresult nsDirectoryService::Create(nsISupports* aOuter, REFNSIID aIID,
-                                    void** aResult) {
+nsresult nsDirectoryService::Create(REFNSIID aIID, void** aResult) {
   if (NS_WARN_IF(!aResult)) {
     return NS_ERROR_INVALID_ARG;
-  }
-  if (NS_WARN_IF(aOuter)) {
-    return NS_ERROR_NO_AGGREGATION;
   }
 
   if (!gService) {
@@ -362,33 +372,29 @@ nsDirectoryService::GetFile(const char* aProp, bool* aPersistent,
   }
 #if defined(MOZ_WIDGET_COCOA)
   else if (inAtom == nsGkAtoms::DirectoryService_SystemDirectory) {
-    rv = GetOSXFolderType(kClassicDomain, kSystemFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_SystemDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_UserLibDirectory) {
-    rv = GetOSXFolderType(kUserDomain, kDomainLibraryFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_UserLibDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::Home) {
-    rv = GetOSXFolderType(kUserDomain, kDomainTopLevelFolderType,
-                          getter_AddRefs(localFile));
+    rv =
+        GetSpecialSystemDirectory(Mac_HomeDirectory, getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_DefaultDownloadDirectory) {
-    rv = GetOSXFolderType(kUserDomain, kDownloadsFolderType,
-                          getter_AddRefs(localFile));
-    if (NS_FAILED(rv)) {
-      rv = GetOSXFolderType(kUserDomain, kDesktopFolderType,
-                            getter_AddRefs(localFile));
-    }
+    rv = GetSpecialSystemDirectory(Mac_DefaultDownloadDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_OS_DesktopDirectory) {
-    rv = GetOSXFolderType(kUserDomain, kDesktopFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_UserDesktopDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_LocalApplicationsDirectory) {
-    rv = GetOSXFolderType(kLocalDomain, kApplicationsFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_LocalApplicationsDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_UserPreferencesDirectory) {
-    rv = GetOSXFolderType(kUserDomain, kPreferencesFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_UserPreferencesDirectory,
+                                   getter_AddRefs(localFile));
   } else if (inAtom == nsGkAtoms::DirectoryService_PictureDocumentsDirectory) {
-    rv = GetOSXFolderType(kUserDomain, kPictureDocumentsFolderType,
-                          getter_AddRefs(localFile));
+    rv = GetSpecialSystemDirectory(Mac_PictureDocumentsDirectory,
+                                   getter_AddRefs(localFile));
   }
 #elif defined(XP_WIN)
   else if (inAtom == nsGkAtoms::DirectoryService_SystemDirectory) {

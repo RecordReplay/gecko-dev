@@ -79,7 +79,7 @@ fails == anim-fillcolor-1.svg      anim-standard-ref.svg # bug 436296
 == anim-fillopacity-1css.svg  anim-standard-ref.svg
 == anim-fillopacity-1xml.svg  anim-standard-ref.svg
 
-fuzzy-if(skiaContent,0-1,0-3600) == anim-opacity-01.svg lime.svg
+fuzzy(0-1,0-3600) == anim-opacity-01.svg lime.svg
 
 == anim-height-done-1a.svg anim-standard-ref.svg
 == anim-height-done-1b.svg anim-standard-ref.svg
@@ -112,7 +112,7 @@ fuzzy-if(skiaContent,0-1,0-3600) == anim-opacity-01.svg lime.svg
 == anim-pathLength-01.svg anim-pathLength-01-ref.svg
 
 # animate some <number-optional-number> attributes:
-fuzzy-if(skiaContent,0-1,0-600) == anim-feGaussianBlur-01.svg lime.svg
+fuzzy(0-1,0-600) == anim-feGaussianBlur-01.svg lime.svg
 
 # animate some <integer> attributes:
 == anim-feTurbulence-numOctaves-01.svg anim-feTurbulence-numOctaves-01-ref.svg
@@ -122,7 +122,8 @@ fuzzy-if(skiaContent,0-1,0-600) == anim-feGaussianBlur-01.svg lime.svg
 
 # animate some <angle> attributes:
 == anim-marker-orient-01.svg lime.svg
-== anim-marker-orient-02.svg lime.svg
+# The test fails intermittently if this pref is enabled, see bug 1768650.
+pref(gfx.webrender.svg-images,false) == anim-marker-orient-02.svg lime.svg
 
 #animate points list:
 == anim-polygon-points-01.svg anim-polygon-points-01-ref.svg
@@ -165,7 +166,7 @@ fuzzy-if(Android,0-4,0-1) == anim-svg-viewBox-01.svg lime.svg
 == anim-paintserver-1.svg anim-paintserver-1-ref.svg
 
 # animate attributes on text content children
-random-if(/^Windows\x20NT\x206\.1/.test(http.oscpu)) == anim-text-attr-01.svg anim-text-attr-01-ref.svg # Bug 1392106
+== anim-text-attr-01.svg anim-text-attr-01-ref.svg
 
 # animate where the base value is non-interpolatable but will be replaced anyway
 == anim-fill-overpaintserver-1.svg lime.svg
@@ -207,7 +208,7 @@ fails == anim-strokecolor-1.svg anim-standard-ref.svg # bug 436296
 == anim-targethref-9.svg anim-standard-ref.svg
 == anim-targethref-10.svg anim-standard-ref.svg
 
-random-if(/^Windows\x20NT\x206\.1/.test(http.oscpu)) == anim-text-rotate-01.svg anim-text-rotate-01-ref.svg # Bug 1392106
+== anim-text-rotate-01.svg anim-text-rotate-01-ref.svg
 == anim-feFuncR-tableValues-01.svg anim-feFuncR-tableValues-01-ref.svg
 
 skip == anim-text-x-y-dx-dy-01.svg anim-text-x-y-dx-dy-01-ref.svg # bug 579588
@@ -235,7 +236,7 @@ skip == anim-text-x-y-dx-dy-01.svg anim-text-x-y-dx-dy-01-ref.svg # bug 579588
 
 # Test we don't rely on HasAttr to see if an attribute has been set
 == anim-rect-rxry-1.svg anim-rect-rxry-1-ref.svg
-fuzzy-if(webrender,0-1,0-350) == anim-pattern-attr-presence-01.svg anim-pattern-attr-presence-01-ref.svg
+fuzzy(0-1,0-350) == anim-pattern-attr-presence-01.svg anim-pattern-attr-presence-01-ref.svg
 fails == anim-pattern-attr-presence-02.svg anim-pattern-attr-presence-02-ref.svg
 # ^ bug 621651
 fuzzy-if(cocoaWidget&&layersGPUAccelerated,0-1,0-2) == anim-gradient-attr-presence-01.svg anim-gradient-attr-presence-01-ref.svg
@@ -290,7 +291,7 @@ pref(privacy.reduceTimerPrecision,false) == anim-display-in-g-element.svg lime.s
 == anim-change-display-none-for-dynamically-appended-elem.html lime.html
 == anim-change-display-block-for-dynamically-appended-elem.html anim-standard-ref.html
 
-fuzzy(0-63,0-146) fuzzy-if(skiaContent,0-31,0-308) fuzzy-if(webrender,0-31,0-308) == anim-clipPath-viewBox.svg anim-clipPath-viewBox-ref.svg
+fuzzy(0-31,0-308) == anim-clipPath-viewBox.svg anim-clipPath-viewBox-ref.svg
 
 # Test animations for overflow.
 == anim-overflow-shorthand.svg anim-overflow-shorthand-ref.svg

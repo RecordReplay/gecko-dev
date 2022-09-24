@@ -104,7 +104,7 @@ class MOZ_STACK_CLASS DocInfo final {
 
 class MozDocumentMatcher : public nsISupports, public nsWrapperCache {
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MozDocumentMatcher)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(MozDocumentMatcher)
 
   using MatchGlobArray = nsTArray<RefPtr<MatchGlob>>;
 
@@ -115,10 +115,6 @@ class MozDocumentMatcher : public nsISupports, public nsWrapperCache {
   bool Matches(const DocInfo& aDoc) const;
   bool MatchesURI(const URLInfo& aURL) const;
 
-  bool MatchesLoadInfo(const URLInfo& aURL, nsILoadInfo* aLoadInfo) const {
-    return Matches({aURL, aLoadInfo});
-  }
-
   bool MatchesWindowGlobal(dom::WindowGlobalChild& aWindow) const;
 
   WebExtensionPolicy* GetExtension() { return mExtension; }
@@ -127,6 +123,7 @@ class MozDocumentMatcher : public nsISupports, public nsWrapperCache {
   const WebExtensionPolicy* Extension() const { return mExtension; }
 
   bool AllFrames() const { return mAllFrames; }
+  bool CheckPermissions() const { return mCheckPermissions; }
   bool MatchAboutBlank() const { return mMatchAboutBlank; }
 
   MatchPatternSet* Matches() { return mMatches; }
@@ -143,6 +140,10 @@ class MozDocumentMatcher : public nsISupports, public nsWrapperCache {
   }
 
   Nullable<uint64_t> GetFrameID() const { return mFrameID; }
+
+  void GetOriginAttributesPatterns(JSContext* aCx,
+                                   JS::MutableHandle<JS::Value> aVal,
+                                   ErrorResult& aError) const;
 
   WebExtensionPolicy* GetParentObject() const { return mExtension; }
   virtual JSObject* WrapObject(JSContext* aCx,
@@ -169,8 +170,10 @@ class MozDocumentMatcher : public nsISupports, public nsWrapperCache {
   Nullable<MatchGlobSet> mExcludeGlobs;
 
   bool mAllFrames;
+  bool mCheckPermissions;
   Nullable<uint64_t> mFrameID;
   bool mMatchAboutBlank;
+  Nullable<dom::Sequence<OriginAttributesPattern>> mOriginAttributesPatterns;
 
  private:
   template <typename T, typename U>

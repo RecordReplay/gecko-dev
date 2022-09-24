@@ -11,7 +11,6 @@
 #include "mozilla/hal_sandbox/PHalParent.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/BrowserChild.h"
-#include "mozilla/fallback/FallbackScreenConfiguration.h"
 #include "mozilla/EnumeratedRange.h"
 #include "mozilla/Observer.h"
 #include "mozilla/Unused.h"
@@ -70,22 +69,24 @@ void GetCurrentNetworkInformation(NetworkInformation* aNetworkInfo) {
   Hal()->SendGetCurrentNetworkInformation(aNetworkInfo);
 }
 
-void EnableScreenConfigurationNotifications() {
-  Hal()->SendEnableScreenConfigurationNotifications();
-}
-
-void DisableScreenConfigurationNotifications() {
-  Hal()->SendDisableScreenConfigurationNotifications();
-}
-
-void GetCurrentScreenConfiguration(ScreenConfiguration* aScreenConfiguration) {
-  fallback::GetCurrentScreenConfiguration(aScreenConfiguration);
-}
-
-bool LockScreenOrientation(const hal::ScreenOrientation& aOrientation) {
-  bool allowed;
-  Hal()->SendLockScreenOrientation(aOrientation, &allowed);
-  return allowed;
+RefPtr<GenericNonExclusivePromise> LockScreenOrientation(
+    const hal::ScreenOrientation& aOrientation) {
+  return Hal()
+      ->SendLockScreenOrientation(aOrientation)
+      ->Then(GetCurrentSerialEventTarget(), __func__,
+             [](const mozilla::MozPromise<nsresult, ipc::ResponseRejectReason,
+                                          true>::ResolveOrRejectValue& aValue) {
+               if (aValue.IsResolve()) {
+                 if (NS_SUCCEEDED(aValue.ResolveValue())) {
+                   return GenericNonExclusivePromise::CreateAndResolve(
+                       true, __func__);
+                 }
+                 return GenericNonExclusivePromise::CreateAndReject(
+                     aValue.ResolveValue(), __func__);
+               }
+               return GenericNonExclusivePromise::CreateAndReject(
+                   NS_ERROR_FAILURE, __func__);
+             });
 }
 
 void UnlockScreenOrientation() { Hal()->SendUnlockScreenOrientation(); }
@@ -136,15 +137,13 @@ class HalParent : public PHalParent,
                   public BatteryObserver,
                   public NetworkObserver,
                   public ISensorObserver,
-                  public WakeLockObserver,
-                  public ScreenConfigurationObserver {
+                  public WakeLockObserver {
  public:
   virtual void ActorDestroy(ActorDestroyReason aWhy) override {
     // NB: you *must* unconditionally unregister your observer here,
     // if it *may* be registered below.
     hal::UnregisterBatteryObserver(this);
     hal::UnregisterNetworkObserver(this);
-    hal::UnregisterScreenConfigurationObserver(this);
     for (auto sensor : MakeEnumeratedRange(NUM_SENSOR_TYPE)) {
       hal::UnregisterSensorObserver(sensor, this);
     }
@@ -218,37 +217,32 @@ class HalParent : public PHalParent,
     Unused << SendNotifyNetworkChange(aNetworkInfo);
   }
 
-  virtual mozilla::ipc::IPCResult RecvEnableScreenConfigurationNotifications()
-      override {
-    // Screen configuration is used to implement CSS and DOM
-    // properties, so all content already has access to this.
-    hal::RegisterScreenConfigurationObserver(this);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult RecvDisableScreenConfigurationNotifications()
-      override {
-    hal::UnregisterScreenConfigurationObserver(this);
-    return IPC_OK();
-  }
-
   virtual mozilla::ipc::IPCResult RecvLockScreenOrientation(
-      const ScreenOrientation& aOrientation, bool* aAllowed) override {
+      const ScreenOrientation& aOrientation,
+      LockScreenOrientationResolver&& aResolve) override {
     // FIXME/bug 777980: unprivileged content may only lock
     // orientation while fullscreen.  We should check whether the
     // request comes from an actor in a process that might be
     // fullscreen.  We don't have that information currently.
-    *aAllowed = hal::LockScreenOrientation(aOrientation);
+
+    hal::LockScreenOrientation(aOrientation)
+        ->Then(
+            GetMainThreadSerialEventTarget(), __func__,
+            [aResolve](const GenericNonExclusivePromise::ResolveOrRejectValue&
+                           aValue) {
+              if (aValue.IsResolve()) {
+                MOZ_ASSERT(aValue.ResolveValue());
+                aResolve(NS_OK);
+                return;
+              }
+              aResolve(aValue.RejectValue());
+            });
     return IPC_OK();
   }
 
   virtual mozilla::ipc::IPCResult RecvUnlockScreenOrientation() override {
     hal::UnlockScreenOrientation();
     return IPC_OK();
-  }
-
-  void Notify(const ScreenConfiguration& aScreenConfiguration) override {
-    Unused << SendNotifyScreenConfigurationChange(aScreenConfiguration);
   }
 
   virtual mozilla::ipc::IPCResult RecvEnableSensorNotifications(
@@ -326,12 +320,6 @@ class HalChild : public PHalChild {
   virtual mozilla::ipc::IPCResult RecvNotifyWakeLockChange(
       const WakeLockInformation& aWakeLockInfo) override {
     hal::NotifyWakeLockChange(aWakeLockInfo);
-    return IPC_OK();
-  }
-
-  virtual mozilla::ipc::IPCResult RecvNotifyScreenConfigurationChange(
-      const ScreenConfiguration& aScreenConfiguration) override {
-    hal::NotifyScreenConfigurationChange(aScreenConfiguration);
     return IPC_OK();
   }
 };

@@ -9,7 +9,7 @@ include protocol PSocketProcess;
 namespace mozilla {
 namespace net {
 
-async refcounted protocol PNativeDNSResolverOverride
+async protocol PNativeDNSResolverOverride
 {
   manager PSocketProcess;
 

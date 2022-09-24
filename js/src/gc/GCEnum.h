@@ -107,7 +107,6 @@ enum class GCAbortReason {
   _(IonScript)                             \
   _(ArgumentsData)                         \
   _(RareArgumentsData)                     \
-  _(RegExpStatics)                         \
   _(RegExpSharedBytecode)                  \
   _(RegExpSharedNamedCaptureData)          \
   _(TypedArrayElements)                    \
@@ -127,9 +126,9 @@ enum class GCAbortReason {
   _(WasmResolveResponseClosure)            \
   _(WasmModule)                            \
   _(WasmTableTable)                        \
-  _(WasmExceptionTag)                      \
-  _(WasmExceptionType)                     \
-  _(WasmRuntimeExceptionTag)               \
+  _(WasmExceptionData)                     \
+  _(WasmTagType)                           \
+  _(WasmRttValueChildren)                  \
   _(FileObjectFile)                        \
   _(Debugger)                              \
   _(DebuggerFrameGeneratorInfo)            \
@@ -143,7 +142,9 @@ enum class GCAbortReason {
   _(FinalizationRecordVector)              \
   _(ZoneAllocPolicy)                       \
   _(SharedArrayRawBuffer)                  \
-  _(XDRBufferElements)
+  _(XDRBufferElements)                     \
+  _(GlobalObjectData)                      \
+  _(ProxyExternalValueArray)
 
 #define JS_FOR_EACH_MEMORY_USE(_)  \
   JS_FOR_EACH_PUBLIC_MEMORY_USE(_) \

@@ -7,6 +7,11 @@
 "use strict";
 
 add_task(async function() {
+  await SpecialPowers.pushPrefEnv({
+    // Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
+    set: [["network.cookie.sameSite.laxByDefault", false]],
+  });
+
   const URL_IFRAME = buildURLWithContent(
     "example.net",
     `<h1>iframe</h1>` + `<script>document.cookie = "lorem=ipsum";</script>`
@@ -24,12 +29,12 @@ add_task(async function() {
   const doc = gPanelWindow.document;
 
   // check that both hosts appear in the storage tree
-  checkTree(doc, ["cookies", "http://example.com"]);
-  checkTree(doc, ["cookies", "http://example.net"]);
+  checkTree(doc, ["cookies", "https://example.com"]);
+  checkTree(doc, ["cookies", "https://example.net"]);
   // check the table for values
-  await selectTreeItem(["cookies", "http://example.com"]);
+  await selectTreeItem(["cookies", "https://example.com"]);
   checkCookieData("foo", "bar");
-  await selectTreeItem(["cookies", "http://example.net"]);
+  await selectTreeItem(["cookies", "https://example.net"]);
   checkCookieData("lorem", "ipsum");
 
   info("Add more cookies");
@@ -48,6 +53,8 @@ add_task(async function() {
   checkCookieData("lorem2", "ipsum2");
 
   // check that the new data is shown in the table for the top-level document
-  await selectTreeItem(["cookies", "http://example.com"]);
+  await selectTreeItem(["cookies", "https://example.com"]);
   checkCookieData("foo2", "bar2");
+
+  SpecialPowers.clearUserPref("network.cookie.sameSite.laxByDefault");
 });

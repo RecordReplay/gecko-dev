@@ -41,12 +41,6 @@ namespace mozilla::dom {
 using namespace mozilla::dom::indexedDB;
 using namespace mozilla::ipc;
 
-namespace {
-
-NS_DEFINE_IID(kIDBRequestIID, PRIVATE_IDBREQUEST_IID);
-
-}  // namespace
-
 IDBRequest::IDBRequest(IDBDatabase* aDatabase)
     : DOMEventTargetHelper(aDatabase),
       mLoggingSerialNumber(0),
@@ -274,7 +268,7 @@ DOMException* IDBRequest::GetError(ErrorResult& aRv) {
   return mError;
 }
 
-NS_IMPL_CYCLE_COLLECTION_MULTI_ZONE_JSHOLDER_CLASS(IDBRequest)
+NS_IMPL_CYCLE_COLLECTION_CLASS(IDBRequest)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(IDBRequest,
                                                   DOMEventTargetHelper)
@@ -302,7 +296,7 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(IDBRequest, DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(IDBRequest)
-  if (aIID.Equals(kIDBRequestIID)) {
+  if (aIID.Equals(NS_GET_IID(mozilla::dom::detail::PrivateIDBRequest))) {
     foundInterface = this;
   } else
 NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)

@@ -5,7 +5,9 @@
 
 #include "nsPrinterCUPS.h"
 
+#include "mozilla/gfx/2D.h"
 #include "mozilla/GkRustUtils.h"
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_print.h"
 #include "nsTHashtable.h"
 #include "nsPaper.h"
@@ -14,6 +16,7 @@
 #include "plstr.h"
 
 using namespace mozilla;
+using MarginDouble = mozilla::gfx::MarginDouble;
 
 // Requested attributes for IPP requests, just the CUPS version now.
 static constexpr Array<const char* const, 1> requestedAttributes{
@@ -149,8 +152,7 @@ bool nsPrinterCUPS::SupportsColor() const {
 
 bool nsPrinterCUPS::SupportsCollation() const {
   // We can't depend on cupsGetIntegerOption existing.
-  const char* const value = mShim.cupsGetOption(
-      "printer-type", mPrinter->num_options, mPrinter->options);
+  const char* const value = FindCUPSOption("printer-type");
   if (!value) {
     return false;
   }
@@ -348,6 +350,92 @@ nsPrinterCUPS::PrinterInfoLock nsPrinterCUPS::TryEnsurePrinterInfo(
     lock->mTriedInitWithDefault = true;
   } else {
     lock->mTriedInitWithConnection = true;
+  }
+
+  MOZ_ASSERT(mPrinter);
+
+  // httpGetAddress was only added in CUPS 2.0, and some systems still use
+  // CUPS 1.7.
+  if (aConnection && MOZ_LIKELY(mShim.httpGetAddress && mShim.httpAddrPort)) {
+    // This is a workaround for the CUPS Bug seen in bug 1691347.
+    // This is to avoid a null string being passed to strstr in CUPS. The path
+    // in CUPS that leads to this is as follows:
+    //
+    // In cupsCopyDestInfo, CUPS_DEST_FLAG_DEVICE is set when the connection is
+    // not null (same as CUPS_HTTP_DEFAULT), the print server is not the same
+    // as our hostname and is not path-based (starts with a '/'), or the IPP
+    // port is different than the global server IPP port.
+    //
+    // https://github.com/apple/cups/blob/c9da6f63b263faef5d50592fe8cf8056e0a58aa2/cups/dest-options.c#L718-L722
+    //
+    // In _cupsGetDestResource, CUPS fetches the IPP options "device-uri" and
+    // "printer-uri-supported". Note that IPP options are returned as null when
+    // missing.
+    //
+    // https://github.com/apple/cups/blob/23c45db76a8520fd6c3b1d9164dbe312f1ab1481/cups/dest.c#L1138-L1141
+    //
+    // If the CUPS_DEST_FLAG_DEVICE is set or the "printer-uri-supported"
+    // option is not set, CUPS checks for "._tcp" in the "device-uri" option
+    // without doing a NULL-check first.
+    //
+    // https://github.com/apple/cups/blob/23c45db76a8520fd6c3b1d9164dbe312f1ab1481/cups/dest.c#L1144
+    //
+    // If we find that those branches will be taken, don't actually fetch the
+    // CUPS data and instead just return an empty printer info.
+
+    const char* const serverNameBytes = mShim.cupsServer();
+
+    if (MOZ_LIKELY(serverNameBytes)) {
+      const nsDependentCString serverName{serverNameBytes};
+
+      // We only need enough characters to determine equality with serverName.
+      // + 2 because we need one byte for the null-character, and we also want
+      // to get more characters of the host name than the server name if
+      // possible. Otherwise, if the hostname starts with the same text as the
+      // entire server name, it would compare equal when it's not.
+      const size_t hostnameMemLength = serverName.Length() + 2;
+      auto hostnameMem = MakeUnique<char[]>(hostnameMemLength);
+
+      // We don't expect httpGetHostname to return null when a connection is
+      // passed, but it's better not to make assumptions.
+      const char* const hostnameBytes = mShim.httpGetHostname(
+          aConnection, hostnameMem.get(), hostnameMemLength);
+
+      if (MOZ_LIKELY(hostnameBytes)) {
+        const nsDependentCString hostname{hostnameBytes};
+
+        // Attempt to match the condional at
+        // https://github.com/apple/cups/blob/c9da6f63b263faef5d50592fe8cf8056e0a58aa2/cups/dest-options.c#L718
+        //
+        // To find the result of the comparison CUPS performs of
+        // `strcmp(http->hostname, cg->server)`, we use httpGetHostname to try
+        // to get the value of `http->hostname`, but this isn't quite the same.
+        // For local addresses, httpGetHostName will normalize the result to be
+        // localhost", rather than the actual value of `http->hostname`.
+        //
+        // https://github.com/apple/cups/blob/2201569857f225c9874bfae19713ffb2f4bdfdeb/cups/http-addr.c#L794-L818
+        //
+        // Because of this, if both serverName and hostname equal "localhost",
+        // then the actual hostname might be a different local address that CUPS
+        // normalized in httpGetHostName, and `http->hostname` won't be equal to
+        // `cg->server` in CUPS.
+        const bool namesMightNotMatch =
+            hostname != serverName || hostname == "localhost";
+        const bool portsDiffer =
+            mShim.httpAddrPort(mShim.httpGetAddress(aConnection)) !=
+            mShim.ippPort();
+        const bool cupsDestDeviceFlag =
+            (namesMightNotMatch && serverName[0] != '/') || portsDiffer;
+
+        // Match the conditional at
+        // https://github.com/apple/cups/blob/23c45db76a8520fd6c3b1d9164dbe312f1ab1481/cups/dest.c#L1144
+        // but if device-uri is null do not call into CUPS.
+        if ((cupsDestDeviceFlag || !FindCUPSOption("printer-uri-supported")) &&
+            !FindCUPSOption("device-uri")) {
+          return lock;
+        }
+      }
+    }
   }
 
   // All CUPS calls that take the printer info do null-checks internally, so we

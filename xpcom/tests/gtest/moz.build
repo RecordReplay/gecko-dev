@@ -24,7 +24,9 @@ UNIFIED_SOURCES += [
     "TestFile.cpp",
     "TestGCPostBarriers.cpp",
     "TestID.cpp",
+    "TestIDUtils.cpp",
     "TestInputStreamLengthHelper.cpp",
+    "TestJSHolderMap.cpp",
     "TestLogCommandLineHandler.cpp",
     "TestLogging.cpp",
     "TestMemoryPressure.cpp",
@@ -37,13 +39,13 @@ UNIFIED_SOURCES += [
     "TestNSPRLogModulesParser.cpp",
     "TestObserverArray.cpp",
     "TestObserverService.cpp",
+    "TestOwningNonNull.cpp",
     "TestPLDHash.cpp",
     "TestPriorityQueue.cpp",
     "TestQueue.cpp",
     "TestRacingServiceManager.cpp",
     "TestRecursiveMutex.cpp",
     "TestRWLock.cpp",
-    "TestSeekableStreamWrapper.cpp",
     "TestSegmentedBuffer.cpp",
     "TestSlicedInputStream.cpp",
     "TestSmallArrayLRUCache.cpp",
@@ -66,6 +68,7 @@ UNIFIED_SOURCES += [
     "TestTimeStamp.cpp",
     "TestTokenizer.cpp",
     "TestUTF.cpp",
+    "TestVariant.cpp",
 ]
 
 if CONFIG["OS_TARGET"] != "Android":
@@ -112,6 +115,17 @@ else:
         "TestFilePreferencesUnix.cpp",
     ]
 
+if CONFIG["OS_TARGET"] == "Darwin":
+    UNIFIED_SOURCES += [
+        "TestAvailableMemoryWatcherMac.cpp",
+        "TestMacNSURLEscaping.mm",
+    ]
+
+if CONFIG["OS_TARGET"] == "Linux":
+    UNIFIED_SOURCES += [
+        "TestAvailableMemoryWatcherLinux.cpp",
+    ]
+
 if (
     CONFIG["WRAP_STL_INCLUDES"]
     and CONFIG["CC_TYPE"] != "clang-cl"
@@ -123,8 +137,12 @@ if (
 
 # Compile TestAllocReplacement separately so Windows headers don't pollute
 # the global namespace for other files.
+if CONFIG["MOZ_MEMORY"]:
+    SOURCES += [
+        "TestAllocReplacement.cpp",
+    ]
+
 SOURCES += [
-    "TestAllocReplacement.cpp",
     "TestCOMArray.cpp",
     "TestCOMPtr.cpp",  # Redefines IFoo and IBar
     "TestHashtables.cpp",  # Redefines IFoo
@@ -133,6 +151,7 @@ SOURCES += [
 
 LOCAL_INCLUDES += [
     "../../base",
+    "/toolkit/components/telemetry/tests/gtest",
 ]
 
 GeneratedFile(

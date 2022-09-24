@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import React, { Component } from "react";
+import PropTypes from "prop-types";
 import { connect } from "../../utils/connect";
 import classnames from "classnames";
 import { features } from "../../utils/prefs";
@@ -20,9 +21,10 @@ import { getValue } from "../../utils/expressions";
 import { getGrip, getFront } from "../../utils/evaluation-result";
 
 import { CloseButton } from "../shared/Button";
-import { debounce } from "lodash";
 
 import "./Expressions.css";
+
+const { debounce } = require("devtools/shared/debounce");
 
 const { ObjectInspector } = objectInspector;
 
@@ -35,6 +37,27 @@ class Expressions extends Component {
       editIndex: -1,
       inputValue: "",
       focused: false,
+    };
+  }
+
+  static get propTypes() {
+    return {
+      addExpression: PropTypes.func.isRequired,
+      autocomplete: PropTypes.func.isRequired,
+      autocompleteMatches: PropTypes.array,
+      clearAutocomplete: PropTypes.func.isRequired,
+      clearExpressionError: PropTypes.func.isRequired,
+      cx: PropTypes.object.isRequired,
+      deleteExpression: PropTypes.func.isRequired,
+      expressionError: PropTypes.bool.isRequired,
+      expressions: PropTypes.array.isRequired,
+      highlightDomElement: PropTypes.func.isRequired,
+      onExpressionAdded: PropTypes.func.isRequired,
+      openElementInInspector: PropTypes.func.isRequired,
+      openLink: PropTypes.any.isRequired,
+      showInput: PropTypes.bool.isRequired,
+      unHighlightDomElement: PropTypes.func.isRequired,
+      updateExpression: PropTypes.func.isRequired,
     };
   }
 
@@ -141,6 +164,10 @@ class Expressions extends Component {
     this.props.clearExpressionError();
   };
 
+  createElement = element => {
+    return document.createElement(element);
+  };
+
   onFocus = () => {
     this.setState({ focused: true });
   };
@@ -221,6 +248,7 @@ class Expressions extends Component {
             autoExpandDepth={0}
             disableWrap={true}
             openLink={openLink}
+            createElement={this.createElement}
             onDoubleClick={(items, { depth }) => {
               if (depth === 0) {
                 this.editExpression(expression, index);
@@ -231,6 +259,7 @@ class Expressions extends Component {
             onDOMNodeMouseOver={grip => highlightDomElement(grip)}
             onDOMNodeMouseOut={grip => unHighlightDomElement(grip)}
             shouldRenderTooltip={true}
+            mayUseCustomFormatter={true}
           />
           <div className="expression-container__close-btn">
             <CloseButton

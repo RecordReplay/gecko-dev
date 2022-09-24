@@ -10,6 +10,7 @@
 #include "base/string_util.h"
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/GeckoArgs.h"
 #include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/ipc/IOThreadChild.h"
 
@@ -48,63 +49,28 @@ bool SocketProcessImpl::Init(int aArgc, char* aArgv[]) {
   LoadLibraryW(L"nss3.dll");
   LoadLibraryW(L"softokn3.dll");
   LoadLibraryW(L"freebl3.dll");
+  LoadLibraryW(L"ipcclientcerts.dll");
+  LoadLibraryW(L"winmm.dll");
   mozilla::SandboxTarget::Instance()->StartSandbox();
 #elif defined(__OpenBSD__) && defined(MOZ_SANDBOX)
   PR_LoadLibrary("libnss3.so");
   PR_LoadLibrary("libsoftokn3.so");
   PR_LoadLibrary("libfreebl3.so");
+  PR_LoadLibrary("libipcclientcerts.so");
   StartOpenBSDSandbox(GeckoProcessType_Socket);
 #endif
-  char* parentBuildID = nullptr;
-  char* prefsHandle = nullptr;
-  char* prefMapHandle = nullptr;
-  char* prefsLen = nullptr;
-  char* prefMapSize = nullptr;
 
-  for (int i = 1; i < aArgc; i++) {
-    if (!aArgv[i]) {
-      continue;
-    }
-
-    if (strcmp(aArgv[i], "-parentBuildID") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-
-      parentBuildID = aArgv[i];
-
-#ifdef XP_WIN
-    } else if (strcmp(aArgv[i], "-prefsHandle") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      prefsHandle = aArgv[i];
-    } else if (strcmp(aArgv[i], "-prefMapHandle") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      prefMapHandle = aArgv[i];
-#endif
-    } else if (strcmp(aArgv[i], "-prefsLen") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      prefsLen = aArgv[i];
-    } else if (strcmp(aArgv[i], "-prefMapSize") == 0) {
-      if (++i == aArgc) {
-        return false;
-      }
-      prefMapSize = aArgv[i];
-    }
-  }
-
-  ipc::SharedPreferenceDeserializer deserializer;
-  if (!deserializer.DeserializeFromSharedMemory(prefsHandle, prefMapHandle,
-                                                prefsLen, prefMapSize)) {
+  Maybe<const char*> parentBuildID =
+      geckoargs::sParentBuildID.Get(aArgc, aArgv);
+  if (parentBuildID.isNothing()) {
     return false;
   }
 
-  return mSocketProcessChild.Init(ParentPid(), parentBuildID,
+  if (!ProcessChild::InitPrefs(aArgc, aArgv)) {
+    return false;
+  }
+
+  return mSocketProcessChild.Init(ParentPid(), *parentBuildID,
                                   IOThreadChild::TakeInitialPort());
 }
 

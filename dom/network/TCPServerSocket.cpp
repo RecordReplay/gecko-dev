@@ -60,12 +60,8 @@ nsresult TCPServerSocket::Init() {
   }
 
   if (XRE_GetProcessType() == GeckoProcessType_Content) {
-    nsCOMPtr<nsISerialEventTarget> target;
-    if (nsCOMPtr<nsIGlobalObject> global = GetOwnerGlobal()) {
-      target = global->EventTargetFor(TaskCategory::Other);
-    }
-    mServerBridgeChild = new TCPServerSocketChild(this, mPort, mBacklog,
-                                                  mUseArrayBuffers, target);
+    mServerBridgeChild =
+        new TCPServerSocketChild(this, mPort, mBacklog, mUseArrayBuffers);
     return NS_OK;
   }
 
@@ -103,7 +99,7 @@ already_AddRefed<TCPServerSocket> TCPServerSocket::Constructor(
   return socket.forget();
 }
 
-uint16_t TCPServerSocket::LocalPort() { return mPort; }
+uint16_t TCPServerSocket::LocalPort() const { return mPort; }
 
 void TCPServerSocket::Close() {
   if (mServerBridgeChild) {

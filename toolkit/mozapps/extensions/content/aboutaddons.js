@@ -5,7 +5,7 @@
 /* import-globals-from aboutaddonsCommon.js */
 /* import-globals-from abuse-reports.js */
 /* import-globals-from view-controller.js */
-/* global MozXULElement, windowRoot */
+/* global windowRoot */
 
 "use strict";
 
@@ -13,6 +13,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
   AMTelemetry: "resource://gre/modules/AddonManager.jsm",
+  BuiltInThemes: "resource:///modules/BuiltInThemes.jsm",
   ClientID: "resource://gre/modules/ClientID.jsm",
   DeferredTask: "resource://gre/modules/DeferredTask.jsm",
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
@@ -32,17 +33,18 @@ XPCOMUtils.defineLazyGetter(this, "brandBundle", () => {
     "chrome://branding/locale/brand.properties"
   );
 });
-XPCOMUtils.defineLazyGetter(this, "extBundle", function() {
-  return Services.strings.createBundle(
-    "chrome://mozapps/locale/extensions/extensions.properties"
-  );
-});
 XPCOMUtils.defineLazyGetter(this, "extensionStylesheets", () => {
   const { ExtensionParent } = ChromeUtils.import(
     "resource://gre/modules/ExtensionParent.jsm"
   );
   return ExtensionParent.extensionStylesheets;
 });
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "manifestV3enabled",
+  "extensions.manifestV3.enabled"
+);
 
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
@@ -78,24 +80,6 @@ XPCOMUtils.defineLazyPreferenceGetter(
 const PLUGIN_ICON_URL = "chrome://global/skin/icons/plugin.svg";
 const EXTENSION_ICON_URL =
   "chrome://mozapps/skin/extensions/extensionGeneric.svg";
-const BUILTIN_THEME_PREVIEWS = new Map([
-  [
-    "default-theme@mozilla.org",
-    "chrome://mozapps/content/extensions/default-theme.svg",
-  ],
-  [
-    "firefox-compact-light@mozilla.org",
-    "chrome://mozapps/content/extensions/firefox-compact-light.svg",
-  ],
-  [
-    "firefox-compact-dark@mozilla.org",
-    "chrome://mozapps/content/extensions/firefox-compact-dark.svg",
-  ],
-  [
-    "firefox-alpenglow@mozilla.org",
-    "chrome://mozapps/content/extensions/firefox-alpenglow.svg",
-  ],
-]);
 
 const PERMISSION_MASKS = {
   enable: AddonManager.PERM_CAN_ENABLE,
@@ -251,7 +235,7 @@ AddonManagerListenerHandler.addListener(AddonCardListenerHandler);
 function isAbuseReportSupported(addon) {
   return (
     ABUSE_REPORT_ENABLED &&
-    ["extension", "theme"].includes(addon.type) &&
+    AbuseReporter.isSupportedAddonType(addon.type) &&
     !(addon.isBuiltin || addon.isSystem)
   );
 }
@@ -272,30 +256,20 @@ function isInState(install, state) {
 
 async function getAddonMessageInfo(addon) {
   const { name } = addon;
-  const appName = brandBundle.GetStringFromName("brandShortName");
   const { STATE_BLOCKED, STATE_SOFTBLOCKED } = Ci.nsIBlocklistService;
-
-  const formatString = (name, args) =>
-    extBundle.formatStringFromName(
-      `details.notification.${name}`,
-      args,
-      args.length
-    );
-  const getString = name =>
-    extBundle.GetStringFromName(`details.notification.${name}`);
 
   if (addon.blocklistState === STATE_BLOCKED) {
     return {
-      linkText: getString("blocked.link"),
       linkUrl: await addon.getBlocklistURL(),
-      message: formatString("blocked", [name]),
+      messageId: "details-notification-blocked",
+      messageArgs: { name },
       type: "error",
     };
   } else if (isDisabledUnsigned(addon)) {
     return {
-      linkText: getString("unsigned.link"),
       linkUrl: SUPPORT_URL + "unsigned-addons",
-      message: formatString("unsignedAndDisabled", [name, appName]),
+      messageId: "details-notification-unsigned-and-disabled",
+      messageArgs: { name },
       type: "error",
     };
   } else if (
@@ -304,30 +278,28 @@ async function getAddonMessageInfo(addon) {
       addon.blocklistState !== STATE_SOFTBLOCKED)
   ) {
     return {
-      message: formatString("incompatible", [
-        name,
-        appName,
-        Services.appinfo.version,
-      ]),
+      messageId: "details-notification-incompatible",
+      messageArgs: { name, version: Services.appinfo.version },
       type: "warning",
     };
   } else if (!isCorrectlySigned(addon)) {
     return {
-      linkText: getString("unsigned.link"),
       linkUrl: SUPPORT_URL + "unsigned-addons",
-      message: formatString("unsigned", [name, appName]),
+      messageId: "details-notification-unsigned",
+      messageArgs: { name },
       type: "warning",
     };
   } else if (addon.blocklistState === STATE_SOFTBLOCKED) {
     return {
-      linkText: getString("softblocked.link"),
       linkUrl: await addon.getBlocklistURL(),
-      message: formatString("softblocked", [name]),
+      messageId: "details-notification-softblocked",
+      messageArgs: { name },
       type: "warning",
     };
   } else if (addon.isGMPlugin && !addon.isInstalled && addon.isActive) {
     return {
-      message: formatString("gmpPending", [name]),
+      messageId: "details-notification-gmp-pending",
+      messageArgs: { name },
       type: "warning",
     };
   }
@@ -468,8 +440,12 @@ function nl2br(text) {
  *          The URL of the best fitting screenshot, if any.
  */
 function getScreenshotUrlForAddon(addon) {
-  if (BUILTIN_THEME_PREVIEWS.has(addon.id)) {
-    return BUILTIN_THEME_PREVIEWS.get(addon.id);
+  if (addon.id == "default-theme@mozilla.org") {
+    return "chrome://mozapps/content/extensions/default-theme/preview.svg";
+  }
+  const builtInThemePreview = BuiltInThemes.previewForBuiltInThemeId(addon.id);
+  if (builtInThemePreview) {
+    return builtInThemePreview;
   }
 
   let { screenshots } = addon;
@@ -776,14 +752,6 @@ class PanelList extends HTMLElement {
     let leftOffset;
     let leftAlignX = anchorLeft;
     let rightAlignX = anchorLeft + anchorWidth - panelWidth;
-    if (!Services.prefs.getBoolPref("browser.proton.enabled")) {
-      // NOTE: Remove arrow from HTML template when this branch is removed.
-      // The tip of the arrow is 25px from the edge of the panel,
-      // but 26px looks right.
-      let arrowOffset = 26;
-      leftAlignX += anchorWidth / 2 - arrowOffset;
-      rightAlignX += -anchorWidth / 2 + arrowOffset;
-    }
 
     if (Services.locale.isAppLocaleRTL) {
       // Prefer aligning on the right.
@@ -1832,12 +1800,6 @@ class CategoriesBox extends customElements.get("button-group") {
   }
 
   async initialize() {
-    let addonTypesObjects = AddonManager.addonTypes;
-    let addonTypes = new Set();
-    for (let type in addonTypesObjects) {
-      addonTypes.add(type);
-    }
-
     let hiddenTypes = new Set([]);
 
     for (let button of this.children) {
@@ -1845,7 +1807,7 @@ class CategoriesBox extends customElements.get("button-group") {
       button.hidden =
         !button.isVisible || (defaultHidden && this.shouldHideCategory(name));
 
-      if (defaultHidden && addonTypes.has(name)) {
+      if (defaultHidden && AddonManager.hasAddonType(name)) {
         hiddenTypes.add(name);
       }
     }
@@ -2260,25 +2222,6 @@ class FiveStarRating extends HTMLElement {
 }
 customElements.define("five-star-rating", FiveStarRating);
 
-class ContentSelectDropdown extends HTMLElement {
-  connectedCallback() {
-    if (this.children.length) {
-      return;
-    }
-    // This creates the menulist and menupopup elements needed for the inline
-    // browser to support <select> elements and context menus.
-    this.appendChild(
-      MozXULElement.parseXULToFragment(`
-      <menulist popuponly="true" id="ContentSelectDropdown" hidden="true">
-        <menupopup rolluponmousewheel="true" activateontab="true"
-                   position="after_start" level="parent"/>
-      </menulist>
-    `)
-    );
-  }
-}
-customElements.define("content-select-dropdown", ContentSelectDropdown);
-
 class ProxyContextMenu extends HTMLElement {
   openPopupAtScreen(...args) {
     // prettier-ignore
@@ -2376,7 +2319,6 @@ class InlineOptionsBrowser extends HTMLElement {
     browser.setAttribute("id", "addon-inline-options");
     browser.setAttribute("transparent", "true");
     browser.setAttribute("forcemessagemanager", "true");
-    browser.setAttribute("selectmenulist", "ContentSelectDropdown");
     browser.setAttribute("autocompletepopup", "PopupAutoComplete");
 
     // The outer about:addons document listens for key presses to focus
@@ -2585,19 +2527,35 @@ class AddonPermissionsList extends HTMLElement {
 
   async render() {
     let appName = brandBundle.GetStringFromName("brandShortName");
+
+    let empty = { origins: [], permissions: [] };
+    let requiredPerms = { ...(this.addon.userPermissions ?? empty) };
+    let optionalPerms = { ...(this.addon.optionalPermissions ?? empty) };
+    let grantedPerms = await ExtensionPermissions.get(this.addon.id);
+
+    if (manifestV3enabled) {
+      // If optional permissions include <all_urls>, extension can request and
+      // be granted permission for individual sites not listed in the manifest.
+      // Include them as well in the optional origins list.
+      optionalPerms.origins = [
+        ...optionalPerms.origins,
+        ...grantedPerms.origins.filter(o => !requiredPerms.origins.includes(o)),
+      ];
+    }
+
     let permissions = Extension.formatPermissionStrings(
       {
-        permissions: this.addon.userPermissions,
-        optionalPermissions: this.addon.optionalPermissions,
+        permissions: requiredPerms,
+        optionalPermissions: optionalPerms,
         appName,
       },
-      browserBundle
+      browserBundle,
+      { buildOptionalOrigins: manifestV3enabled }
     );
     let optionalEntries = [
       ...Object.entries(permissions.optionalPermissions),
       ...Object.entries(permissions.optionalOrigins),
     ];
-    let perms = await ExtensionPermissions.get(this.addon.id);
 
     this.textContent = "";
     let frag = importTemplate("addon-permissions-list");
@@ -2614,6 +2572,7 @@ class AddonPermissionsList extends HTMLElement {
         list.appendChild(item);
       }
     }
+
     if (optionalEntries.length) {
       let section = frag.querySelector(".addon-permissions-optional");
       section.hidden = false;
@@ -2640,7 +2599,10 @@ class AddonPermissionsList extends HTMLElement {
 
         toggle.setAttribute("permission-type", type);
         toggle.setAttribute("type", "checkbox");
-        if (perms.permissions.includes(perm) || perms.origins.includes(perm)) {
+        if (
+          grantedPerms.permissions.includes(perm) ||
+          grantedPerms.origins.includes(perm)
+        ) {
           toggle.checked = true;
           item.classList.add("permission-checked");
         }
@@ -2660,6 +2622,48 @@ class AddonPermissionsList extends HTMLElement {
   }
 }
 customElements.define("addon-permissions-list", AddonPermissionsList);
+
+class AddonSitePermissionsList extends HTMLElement {
+  setAddon(addon) {
+    this.addon = addon;
+    this.render();
+  }
+
+  async render() {
+    let appName = brandBundle.GetStringFromName("brandShortName");
+    let permissions = Extension.formatPermissionStrings(
+      {
+        sitePermissions: this.addon.sitePermissions,
+        siteOrigin: this.addon.siteOrigin,
+        appName,
+      },
+      browserBundle
+    );
+
+    this.textContent = "";
+    let frag = importTemplate("addon-sitepermissions-list");
+
+    if (permissions.msgs.length) {
+      let section = frag.querySelector(".addon-permissions-required");
+      section.hidden = false;
+      let list = section.querySelector(".addon-permissions-list");
+      let header = section.querySelector(".permission-header");
+      document.l10n.setAttributes(header, "addon-sitepermissions-required", {
+        hostname: new URL(this.addon.siteOrigin).hostname,
+      });
+
+      for (let msg of permissions.msgs) {
+        let item = document.createElement("li");
+        item.classList.add("permission-info", "permission-checked");
+        item.appendChild(document.createTextNode(msg));
+        list.appendChild(item);
+      }
+    }
+
+    this.appendChild(frag);
+  }
+}
+customElements.define("addon-sitepermissions-list", AddonSitePermissionsList);
 
 class AddonDetails extends HTMLElement {
   connectedCallback() {
@@ -2800,6 +2804,14 @@ class AddonDetails extends HTMLElement {
     this.permissionsList = this.querySelector("addon-permissions-list");
     this.permissionsList.setAddon(addon);
 
+    // Set the add-on for the sitepermissions section.
+    this.sitePermissionsList = this.querySelector("addon-sitepermissions-list");
+    if (addon.type == "sitepermission") {
+      this.sitePermissionsList.setAddon(addon);
+    }
+    this.querySelector(".addon-detail-sitepermissions").hidden =
+      addon.type !== "sitepermission";
+
     // Set the add-on for the preferences section.
     this.inlineOptions = this.querySelector("inline-options-browser");
     this.inlineOptions.setAddon(addon);
@@ -2821,7 +2833,7 @@ class AddonDetails extends HTMLElement {
     );
 
     // By default, all private browsing rows are hidden. Possibly show one.
-    if (addon.type != "extension") {
+    if (addon.type != "extension" && addon.type != "sitepermission") {
       // All add-addons of this type are allowed in private browsing mode, so
       // do not show any UI.
     } else if (addon.incognito == "not_allowed") {
@@ -3014,11 +3026,12 @@ class AddonCard extends HTMLElement {
       }
       permissions = [permission];
     } else if (type == "origin") {
-      if (
-        action == "add" &&
-        !addon.optionalPermissions.origins.includes(permission)
-      ) {
-        throw new Error("origin missing from manifest");
+      if (action === "add") {
+        let { origins } = addon.optionalPermissions;
+        let patternSet = new MatchPatternSet(origins, { ignorePath: true });
+        if (!patternSet.subsumes(new MatchPattern(permission))) {
+          throw new Error("origin missing from manifest");
+        }
       }
       origins = [permission];
     } else {
@@ -3304,7 +3317,8 @@ class AddonCard extends HTMLElement {
 
     // Update the name.
     let name = this.addonNameEl;
-    if (addon.isActive) {
+    let setDisabledStyle = !(addon.isActive || addon.type === "theme");
+    if (!setDisabledStyle) {
       name.textContent = addon.name;
       name.removeAttribute("data-l10n-id");
     } else {
@@ -3323,7 +3337,10 @@ class AddonCard extends HTMLElement {
           toggleDisabledButton,
           `${toggleDisabledAction}-addon-button`
         );
-      } else if (addon.type === "extension") {
+      } else if (
+        addon.type === "extension" ||
+        addon.type === "sitepermission"
+      ) {
         toggleDisabledButton.checked = !addon.userDisabled;
       }
     }
@@ -3352,7 +3369,10 @@ class AddonCard extends HTMLElement {
     }
 
     // Set the private browsing badge visibility.
-    if (addon.type == "extension" && addon.incognito != "not_allowed") {
+    if (
+      addon.incognito != "not_allowed" &&
+      (addon.type == "extension" || addon.type == "sitepermission")
+    ) {
       // Keep update synchronous, the badge can appear later.
       isAllowedInPrivateBrowsing(addon).then(isAllowed => {
         card.querySelector(
@@ -3385,25 +3405,39 @@ class AddonCard extends HTMLElement {
   }
 
   async updateMessage() {
-    let { addon, card } = this;
-    let messageBar = card.querySelector(".addon-card-message");
-    let link = messageBar.querySelector("button");
+    const messageBar = this.card.querySelector(".addon-card-message");
 
-    let { message, type = "", linkText, linkUrl } = await getAddonMessageInfo(
-      addon
-    );
+    const {
+      linkUrl,
+      messageId,
+      messageArgs,
+      type = "",
+    } = await getAddonMessageInfo(this.addon);
 
-    if (message) {
-      messageBar.querySelector("span").textContent = message;
-      messageBar.setAttribute("type", type);
-      if (linkText) {
-        link.textContent = linkText;
+    if (messageId) {
+      document.l10n.pauseObserving();
+      document.l10n.setAttributes(
+        messageBar.querySelector("span"),
+        messageId,
+        messageArgs
+      );
+
+      const link = messageBar.querySelector("button");
+      if (linkUrl) {
+        document.l10n.setAttributes(link, `${messageId}-link`);
         link.setAttribute("url", linkUrl);
+        link.hidden = false;
+      } else {
+        link.hidden = true;
       }
-    }
 
-    messageBar.hidden = !message;
-    link.hidden = !linkText;
+      document.l10n.resumeObserving();
+      await document.l10n.translateFragment(messageBar);
+      messageBar.setAttribute("type", type);
+      messageBar.hidden = false;
+    } else {
+      messageBar.hidden = true;
+    }
   }
 
   showPrefs() {
@@ -3426,17 +3460,17 @@ class AddonCard extends HTMLElement {
       throw new Error("addon-card must be initialized with setAddon()");
     }
 
-    let headingId = ExtensionCommon.makeWidgetId(`${addon.name}-heading`);
-    this.setAttribute("aria-labelledby", headingId);
     this.setAttribute("addon-id", addon.id);
 
     this.card = importTemplate("card").firstElementChild;
+    let headingId = ExtensionCommon.makeWidgetId(`${addon.id}-heading`);
+    this.card.setAttribute("aria-labelledby", headingId);
 
     // Remove the toggle-disabled button(s) based on type.
     if (addon.type != "theme") {
       this.card.querySelector(".theme-enable-button").remove();
     }
-    if (addon.type != "extension") {
+    if (addon.type != "extension" && addon.type != "sitepermission") {
       this.card.querySelector(".extension-enable-button").remove();
     }
 
@@ -3444,6 +3478,7 @@ class AddonCard extends HTMLElement {
     let headingLevel = this.expanded ? "h1" : "h3";
     let nameHeading = document.createElement(headingLevel);
     nameHeading.classList.add("addon-name");
+    nameHeading.id = headingId;
     if (!this.expanded) {
       let name = document.createElement("a");
       name.classList.add("addon-name-link");
@@ -3875,6 +3910,10 @@ class AddonList extends HTMLElement {
     let type = this.type == "all" ? null : [this.type];
     let addons = await AddonManager.getAddonsByTypes(type);
 
+    if (type == "theme") {
+      await BuiltInThemes.ensureBuiltInThemes();
+    }
+
     // Put the add-ons into the sections, an add-on goes in the first section
     // that it matches the filterFn for. It might not go in any section.
     let sectionedAddons = this.sections.map(() => []);
@@ -3892,8 +3931,9 @@ class AddonList extends HTMLElement {
     }
 
     // Sort the add-ons in each section.
-    for (let section of sectionedAddons) {
-      section.sort(this.sortByFn);
+    for (let [index, section] of sectionedAddons.entries()) {
+      let sortByFn = this.sections[index].sortByFn || this.sortByFn;
+      section.sort(sortByFn);
     }
 
     return sectionedAddons;
@@ -3945,27 +3985,47 @@ class AddonList extends HTMLElement {
   }
 
   createSectionHeading(headingIndex) {
-    let { headingId } = this.sections[headingIndex];
+    let { headingId, subheadingId } = this.sections[headingIndex];
+    let frag = document.createDocumentFragment();
     let heading = document.createElement("h2");
     heading.classList.add("list-section-heading");
     document.l10n.setAttributes(heading, headingId);
-    return heading;
+    frag.append(heading);
+
+    if (subheadingId) {
+      let subheading = document.createElement("h3");
+      subheading.classList.add("list-section-subheading");
+      heading.className = "header-name";
+      document.l10n.setAttributes(subheading, subheadingId);
+      frag.append(subheading);
+    }
+
+    return frag;
   }
 
   createEmptyListMessage() {
+    let emptyMessage = "list-empty-get-extensions-message";
+    let linkPref = "extensions.getAddons.link.url";
+
+    if (this.sections && this.sections.length) {
+      if (this.sections[0].headingId == "locale-enabled-heading") {
+        emptyMessage = "list-empty-get-language-packs-message";
+        linkPref = "browser.dictionaries.download.url";
+      } else if (this.sections[0].headingId == "dictionary-enabled-heading") {
+        emptyMessage = "list-empty-get-dictionaries-message";
+        linkPref = "browser.dictionaries.download.url";
+      }
+    }
+
     let messageContainer = document.createElement("p");
     messageContainer.id = "empty-addons-message";
     let a = document.createElement("a");
-    a.href = Services.urlFormatter.formatURLPref(
-      "extensions.getAddons.link.url"
-    );
+    a.href = Services.urlFormatter.formatURLPref(linkPref);
     a.setAttribute("target", "_blank");
     a.setAttribute("data-l10n-name", "get-extensions");
-    document.l10n.setAttributes(
-      messageContainer,
-      "list-empty-get-extensions-message",
-      { domain: a.hostname }
-    );
+    document.l10n.setAttributes(messageContainer, emptyMessage, {
+      domain: a.hostname,
+    });
     messageContainer.appendChild(a);
     return messageContainer;
   }
@@ -4502,7 +4562,7 @@ class RecommendedThemesFooter extends HTMLElement {
     let action = event.target.getAttribute("action");
     switch (action) {
       case "open-amo":
-        openAmoInTab(this);
+        openAmoInTab(this, "themes");
         break;
     }
   }
@@ -4579,15 +4639,18 @@ customElements.define("discovery-pane", DiscoveryPane);
 
 // Define views
 gViewController.defineView("list", async type => {
-  if (!(type in AddonManager.addonTypes)) {
+  if (!AddonManager.hasAddonType(type)) {
     return null;
   }
 
-  let frag = document.createDocumentFragment();
+  // If monochromatic themes are enabled and any are builtin to Firefox, we
+  // display those themes together in a separate subsection.
 
+  let frag = document.createDocumentFragment();
   let list = document.createElement("addon-list");
   list.type = type;
-  list.setSections([
+
+  let sections = [
     {
       headingId: type + "-enabled-heading",
       filterFn: addon =>
@@ -4596,10 +4659,46 @@ gViewController.defineView("list", async type => {
     {
       headingId: type + "-disabled-heading",
       filterFn: addon =>
-        !addon.hidden && !addon.isActive && !isPending(addon, "uninstall"),
+        !addon.hidden &&
+        !addon.isActive &&
+        !isPending(addon, "uninstall") &&
+        // For performance related details about this check see the
+        // documentation for themeIsExpired in BuiltInThemeConfig.jsm.
+        (!BuiltInThemes.isMonochromaticTheme(addon.id) ||
+          BuiltInThemes.isRetainedExpiredTheme(addon.id)),
     },
-  ]);
+  ];
+  list.setSections(sections);
   frag.appendChild(list);
+
+  const areColorwayThemesInstalled = async () =>
+    (await AddonManager.getAllAddons()).some(
+      addon =>
+        BuiltInThemes.isMonochromaticTheme(addon.id) &&
+        !BuiltInThemes.themeIsExpired(addon.id)
+    );
+  if (type == "theme" && (await areColorwayThemesInstalled())) {
+    let monochromaticList = document.createElement("addon-list");
+    monochromaticList.classList.add("monochromatic-addon-list");
+    monochromaticList.type = type;
+    monochromaticList.setSections([
+      {
+        headingId: type + "-monochromatic-heading",
+        subheadingId: type + "-monochromatic-subheading",
+        filterFn: addon =>
+          !addon.hidden &&
+          BuiltInThemes.isMonochromaticTheme(addon.id) &&
+          !BuiltInThemes.themeIsExpired(addon.id),
+        sortByFn: (theme1, theme2) => {
+          return (
+            BuiltInThemes.monochromaticSortIndices.get(theme1.id) -
+            BuiltInThemes.monochromaticSortIndices.get(theme2.id)
+          );
+        },
+      },
+    ]);
+    frag.appendChild(monochromaticList);
+  }
 
   // Show recommendations for themes and extensions.
   if (
@@ -4726,7 +4825,7 @@ function getTelemetryViewName(el) {
 /**
  * @param {Element} el The button element.
  */
-function openAmoInTab(el) {
+function openAmoInTab(el, path) {
   // The element is a button but opens a URL, so record as link.
   AMTelemetry.recordLinkEvent({
     object: "aboutAddons",
@@ -4738,6 +4837,11 @@ function openAmoInTab(el) {
   let amoUrl = Services.urlFormatter.formatURLPref(
     "extensions.getAddons.link.url"
   );
+
+  if (path) {
+    amoUrl += path;
+  }
+
   amoUrl = formatUTMParams("find-more-link-bottom", amoUrl);
   windowRoot.ownerGlobal.openTrustedLinkIn(amoUrl, "tab");
 }

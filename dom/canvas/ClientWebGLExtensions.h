@@ -19,7 +19,7 @@ class ClientWebGLExtensionBase : public nsWrapperCache {
 
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(ClientWebGLExtensionBase)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(ClientWebGLExtensionBase)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(ClientWebGLExtensionBase)
 
  protected:
   explicit ClientWebGLExtensionBase(ClientWebGLContext& context)
@@ -359,6 +359,66 @@ class ClientWebGLExtensionMultiview : public ClientWebGLExtensionBase {
     }
     mContext->FramebufferTextureMultiview(target, attachment, texture, level,
                                           baseViewIndex, numViews);
+  }
+};
+
+class ClientWebGLExtensionDrawBuffersIndexed : public ClientWebGLExtensionBase {
+ public:
+  virtual JSObject* WrapObject(JSContext* cx,
+                               JS::Handle<JSObject*> givenProto) override;
+  explicit ClientWebGLExtensionDrawBuffersIndexed(ClientWebGLContext&);
+
+  void EnableiOES(const GLenum target, const GLuint buf) const {
+    if (MOZ_UNLIKELY(!mContext)) {
+      AutoJsWarning("enableiOES: Extension is `invalidated`.");
+      return;
+    }
+    mContext->SetEnabledI(target, Some(buf), true);
+  }
+
+  void DisableiOES(const GLenum target, const GLuint buf) const {
+    if (MOZ_UNLIKELY(!mContext)) {
+      AutoJsWarning("disableiOES: Extension is `invalidated`.");
+      return;
+    }
+    mContext->SetEnabledI(target, Some(buf), false);
+  }
+
+  void BlendEquationiOES(const GLuint buf, const GLenum mode) const {
+    BlendEquationSeparateiOES(buf, mode, mode);
+  }
+
+  void BlendEquationSeparateiOES(const GLuint buf, const GLenum modeRgb,
+                                 const GLenum modeAlpha) const {
+    if (MOZ_UNLIKELY(!mContext)) {
+      AutoJsWarning("blendEquationSeparateiOES: Extension is `invalidated`.");
+      return;
+    }
+    mContext->BlendEquationSeparateI(Some(buf), modeRgb, modeAlpha);
+  }
+
+  void BlendFunciOES(const GLuint buf, const GLenum src,
+                     const GLenum dst) const {
+    BlendFuncSeparateiOES(buf, src, dst, src, dst);
+  }
+
+  void BlendFuncSeparateiOES(const GLuint buf, const GLenum srcRgb,
+                             const GLenum dstRgb, const GLenum srcAlpha,
+                             const GLenum dstAlpha) const {
+    if (MOZ_UNLIKELY(!mContext)) {
+      AutoJsWarning("blendFuncSeparateiOES: Extension is `invalidated`.");
+      return;
+    }
+    mContext->BlendFuncSeparateI(Some(buf), srcRgb, dstRgb, srcAlpha, dstAlpha);
+  }
+
+  void ColorMaskiOES(const GLuint buf, const bool r, const bool g, const bool b,
+                     const bool a) const {
+    if (MOZ_UNLIKELY(!mContext)) {
+      AutoJsWarning("colorMaskiOES: Extension is `invalidated`.");
+      return;
+    }
+    mContext->ColorMaskI(Some(buf), r, g, b, a);
   }
 };
 

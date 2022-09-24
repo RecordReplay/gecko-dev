@@ -31,14 +31,6 @@ pub fn as_c_void<T: Unpin>(pin: &mut Pin<Box<T>>) -> *mut c_void {
     (Pin::into_inner(pin.as_mut()) as *mut T).cast()
 }
 
-// This holds the length of the slice, not the slice itself.
-#[derive(Default, Debug)]
-struct RecordLength {
-    epoch: Epoch,
-    ct: ContentType,
-    len: usize,
-}
-
 /// A slice of the output.
 #[derive(Default)]
 pub struct Record {
@@ -177,14 +169,16 @@ impl AgentIoInput {
     fn read_input(&mut self, buf: *mut u8, count: usize) -> Res<usize> {
         let amount = min(self.available, count);
         if amount == 0 {
-            unsafe { PR_SetError(nspr::PR_WOULD_BLOCK_ERROR, 0) };
+            unsafe {
+                PR_SetError(nspr::PR_WOULD_BLOCK_ERROR, 0);
+            }
             return Err(Error::NoDataAvailable);
         }
 
         let src = unsafe { std::slice::from_raw_parts(self.input, amount) };
         qtrace!([self], "read {}", hex(src));
         let dst = unsafe { std::slice::from_raw_parts_mut(buf, amount) };
-        dst.copy_from_slice(&src);
+        dst.copy_from_slice(src);
         self.input = self.input.wrapping_add(amount);
         self.available -= amount;
         Ok(amount)

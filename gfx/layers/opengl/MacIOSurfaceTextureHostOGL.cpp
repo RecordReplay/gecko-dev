@@ -31,66 +31,6 @@ MacIOSurfaceTextureHostOGL::~MacIOSurfaceTextureHostOGL() {
   MOZ_COUNT_DTOR(MacIOSurfaceTextureHostOGL);
 }
 
-GLTextureSource* MacIOSurfaceTextureHostOGL::CreateTextureSourceForPlane(
-    size_t aPlane) {
-  MOZ_ASSERT(mSurface);
-
-  GLuint textureHandle;
-  gl::GLContext* gl = mProvider->GetGLContext();
-  gl->fGenTextures(1, &textureHandle);
-  gl->fBindTexture(LOCAL_GL_TEXTURE_RECTANGLE_ARB, textureHandle);
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_RECTANGLE_ARB, LOCAL_GL_TEXTURE_WRAP_T,
-                     LOCAL_GL_CLAMP_TO_EDGE);
-  gl->fTexParameteri(LOCAL_GL_TEXTURE_RECTANGLE_ARB, LOCAL_GL_TEXTURE_WRAP_S,
-                     LOCAL_GL_CLAMP_TO_EDGE);
-
-  gfx::SurfaceFormat readFormat = gfx::SurfaceFormat::UNKNOWN;
-  mSurface->CGLTexImageIOSurface2D(
-      gl, gl::GLContextCGL::Cast(gl)->GetCGLContext(), aPlane, &readFormat);
-  // With compositorOGL, we doesn't support the yuv interleaving format yet.
-  MOZ_ASSERT(readFormat != gfx::SurfaceFormat::YUV422);
-
-  return new GLTextureSource(
-      mProvider, textureHandle, LOCAL_GL_TEXTURE_RECTANGLE_ARB,
-      gfx::IntSize(mSurface->GetDevicePixelWidth(aPlane),
-                   mSurface->GetDevicePixelHeight(aPlane)),
-      readFormat);
-}
-
-bool MacIOSurfaceTextureHostOGL::Lock() {
-  if (!gl() || !gl()->MakeCurrent() || !mSurface) {
-    return false;
-  }
-
-  if (!mTextureSource) {
-    mTextureSource = CreateTextureSourceForPlane(0);
-
-    RefPtr<TextureSource> prev = mTextureSource;
-    for (size_t i = 1; i < mSurface->GetPlaneCount(); i++) {
-      RefPtr<TextureSource> next = CreateTextureSourceForPlane(i);
-      prev->SetNextSibling(next);
-      prev = next;
-    }
-  }
-  return true;
-}
-
-void MacIOSurfaceTextureHostOGL::SetTextureSourceProvider(
-    TextureSourceProvider* aProvider) {
-  if (!aProvider || !aProvider->GetGLContext()) {
-    mTextureSource = nullptr;
-    mProvider = nullptr;
-    return;
-  }
-
-  if (mProvider != aProvider) {
-    // Cannot share GL texture identifiers across compositors.
-    mTextureSource = nullptr;
-  }
-
-  mProvider = aProvider;
-}
-
 gfx::SurfaceFormat MacIOSurfaceTextureHostOGL::GetFormat() const {
   if (!mSurface) {
     return gfx::SurfaceFormat::UNKNOWN;
@@ -113,9 +53,7 @@ gfx::IntSize MacIOSurfaceTextureHostOGL::GetSize() const {
                       mSurface->GetDevicePixelHeight());
 }
 
-gl::GLContext* MacIOSurfaceTextureHostOGL::gl() const {
-  return mProvider ? mProvider->GetGLContext() : nullptr;
-}
+gl::GLContext* MacIOSurfaceTextureHostOGL::gl() const { return nullptr; }
 
 gfx::YUVColorSpace MacIOSurfaceTextureHostOGL::GetYUVColorSpace() const {
   if (!mSurface) {
@@ -137,7 +75,7 @@ void MacIOSurfaceTextureHostOGL::CreateRenderTexture(
   RefPtr<wr::RenderTextureHost> texture =
       new wr::RenderMacIOSurfaceTextureHost(GetMacIOSurface());
 
-  wr::RenderThread::Get()->RegisterExternalImage(wr::AsUint64(aExternalImageId),
+  wr::RenderThread::Get()->RegisterExternalImage(aExternalImageId,
                                                  texture.forget());
 }
 
@@ -154,7 +92,8 @@ uint32_t MacIOSurfaceTextureHostOGL::NumSubTextures() {
     case gfx::SurfaceFormat::YUV422: {
       return 1;
     }
-    case gfx::SurfaceFormat::NV12: {
+    case gfx::SurfaceFormat::NV12:
+    case gfx::SurfaceFormat::P010: {
       return 2;
     }
     default: {
@@ -215,6 +154,21 @@ void MacIOSurfaceTextureHostOGL::PushResourceUpdates(
       (aResources.*method)(aImageKeys[1], descriptor1, aExtID, imageType, 1);
       break;
     }
+    case gfx::SurfaceFormat::P010: {
+      MOZ_ASSERT(aImageKeys.length() == 2);
+      MOZ_ASSERT(mSurface->GetPlaneCount() == 2);
+      wr::ImageDescriptor descriptor0(
+          gfx::IntSize(mSurface->GetDevicePixelWidth(0),
+                       mSurface->GetDevicePixelHeight(0)),
+          gfx::SurfaceFormat::A16);
+      wr::ImageDescriptor descriptor1(
+          gfx::IntSize(mSurface->GetDevicePixelWidth(1),
+                       mSurface->GetDevicePixelHeight(1)),
+          gfx::SurfaceFormat::R16G16);
+      (aResources.*method)(aImageKeys[0], descriptor0, aExtID, imageType, 0);
+      (aResources.*method)(aImageKeys[1], descriptor1, aExtID, imageType, 1);
+      break;
+    }
     default: {
       MOZ_ASSERT_UNREACHABLE("unexpected to be called");
     }
@@ -234,11 +188,11 @@ void MacIOSurfaceTextureHostOGL::PushDisplayItems(
       MOZ_ASSERT(mSurface->GetPlaneCount() == 0);
       // We disable external compositing for RGB surfaces for now until
       // we've tested support more thoroughly. Bug 1667917.
-      aBuilder.PushImage(aBounds, aClip, true, aFilter, aImageKeys[0],
+      aBuilder.PushImage(aBounds, aClip, true, false, aFilter, aImageKeys[0],
                          !(mFlags & TextureFlags::NON_PREMULTIPLIED),
                          wr::ColorF{1.0f, 1.0f, 1.0f, 1.0f},
                          preferCompositorSurface,
-                         /* aSupportsExternalCompositing */ false);
+                         /* aSupportsExternalCompositing */ true);
       break;
     }
     case gfx::SurfaceFormat::YUV422: {
@@ -256,11 +210,19 @@ void MacIOSurfaceTextureHostOGL::PushDisplayItems(
     case gfx::SurfaceFormat::NV12: {
       MOZ_ASSERT(aImageKeys.length() == 2);
       MOZ_ASSERT(mSurface->GetPlaneCount() == 2);
-      // Those images can only be generated at present by the Apple H264 decoder
-      // which only supports 8 bits color depth.
       aBuilder.PushNV12Image(
           aBounds, aClip, true, aImageKeys[0], aImageKeys[1],
           wr::ColorDepth::Color8, wr::ToWrYuvColorSpace(GetYUVColorSpace()),
+          wr::ToWrColorRange(GetColorRange()), aFilter, preferCompositorSurface,
+          /* aSupportsExternalCompositing */ true);
+      break;
+    }
+    case gfx::SurfaceFormat::P010: {
+      MOZ_ASSERT(aImageKeys.length() == 2);
+      MOZ_ASSERT(mSurface->GetPlaneCount() == 2);
+      aBuilder.PushP010Image(
+          aBounds, aClip, true, aImageKeys[0], aImageKeys[1],
+          wr::ColorDepth::Color10, wr::ToWrYuvColorSpace(GetYUVColorSpace()),
           wr::ToWrColorRange(GetColorRange()), aFilter, preferCompositorSurface,
           /* aSupportsExternalCompositing */ true);
       break;

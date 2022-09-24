@@ -488,7 +488,7 @@ nsresult DecodedStream::Start(const TimeUnit& aStartTime,
   MOZ_ASSERT(mStartTime.isNothing(), "playback already started.");
 
   AUTO_PROFILER_LABEL(FUNCTION_SIGNATURE, MEDIA_PLAYBACK);
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("StartTime=%" PRId64,
                                  aStartTime.ToMicroseconds());
     PLAYBACK_PROFILER_MARKER(markerString);
@@ -606,7 +606,7 @@ void DecodedStream::Stop() {
   AssertOwnerThread();
   MOZ_ASSERT(mStartTime.isSome(), "playback not started.");
 
-  TRACE();
+  TRACE("DecodedStream::Stop");
   LOG_DS(LogLevel::Debug, "Stop()");
 
   DisconnectListener();
@@ -648,7 +648,7 @@ void DecodedStream::DestroyData(UniquePtr<DecodedStreamData>&& aData) {
     return;
   }
 
-  TRACE();
+  TRACE("DecodedStream::DestroyData");
   mOutputListener.Disconnect();
 
   aData->Close();
@@ -665,7 +665,7 @@ void DecodedStream::SetPlaying(bool aPlaying) {
     return;
   }
 
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("Playing=%s", aPlaying ? "true" : "false");
     PLAYBACK_PROFILER_MARKER(markerString);
   }
@@ -675,7 +675,7 @@ void DecodedStream::SetPlaying(bool aPlaying) {
 
 void DecodedStream::SetVolume(double aVolume) {
   AssertOwnerThread();
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("Volume=%f", aVolume);
     PLAYBACK_PROFILER_MARKER(markerString);
   }
@@ -690,7 +690,7 @@ void DecodedStream::SetVolume(double aVolume) {
 
 void DecodedStream::SetPlaybackRate(double aPlaybackRate) {
   AssertOwnerThread();
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("PlaybackRate=%f", aPlaybackRate);
     PLAYBACK_PROFILER_MARKER(markerString);
   }
@@ -705,7 +705,7 @@ void DecodedStream::SetPlaybackRate(double aPlaybackRate) {
 
 void DecodedStream::SetPreservesPitch(bool aPreservesPitch) {
   AssertOwnerThread();
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("PreservesPitch=%s",
                                  aPreservesPitch ? "true" : "false");
     PLAYBACK_PROFILER_MARKER(markerString);
@@ -735,7 +735,7 @@ void DecodedStream::SendAudio(const PrincipalHandle& aPrincipalHandle) {
     return;
   }
 
-  TRACE();
+  TRACE("DecodedStream::SendAudio");
   // It's OK to hold references to the AudioData because AudioData
   // is ref-counted.
   AutoTArray<RefPtr<AudioData>, 10> audio;
@@ -856,7 +856,7 @@ void DecodedStream::ResetAudio() {
     return;
   }
 
-  TRACE();
+  TRACE("DecodedStream::ResetAudio");
   mData->mAudioTrack->ClearFutureData();
   if (const RefPtr<AudioData>& v = mAudioQueue.PeekFront()) {
     mData->mNextAudioTime = v->mTime;
@@ -875,7 +875,7 @@ void DecodedStream::ResetVideo(const PrincipalHandle& aPrincipalHandle) {
     return;
   }
 
-  TRACE();
+  TRACE("DecodedStream::ResetVideo");
   TrackTime cleared = mData->mVideoTrack->ClearFutureData();
   mData->mVideoTrackWritten -= cleared;
   if (mData->mHaveSentFinishVideo && cleared > 0) {
@@ -925,7 +925,7 @@ void DecodedStream::SendVideo(const PrincipalHandle& aPrincipalHandle) {
     return;
   }
 
-  TRACE();
+  TRACE("DecodedStream::SendVideo");
   VideoSegment output;
   AutoTArray<RefPtr<VideoData>, 10> video;
 
@@ -1053,7 +1053,7 @@ void DecodedStream::SendData() {
 
 TimeUnit DecodedStream::GetEndTime(TrackType aType) const {
   AssertOwnerThread();
-  TRACE();
+  TRACE("DecodedStream::GetEndTime");
   if (aType == TrackInfo::kAudioTrack && mInfo.HasAudio() && mData) {
     auto t = mStartTime.ref() +
              FramesToTimeUnit(mData->mAudioFramesWritten, mInfo.mAudio.mRate);
@@ -1066,9 +1066,9 @@ TimeUnit DecodedStream::GetEndTime(TrackType aType) const {
   return TimeUnit::Zero();
 }
 
-TimeUnit DecodedStream::GetPosition(TimeStamp* aTimeStamp) const {
+TimeUnit DecodedStream::GetPosition(TimeStamp* aTimeStamp) {
   AssertOwnerThread();
-  TRACE();
+  TRACE("DecodedStream::GetPosition");
   // This is only called after MDSM starts playback. So mStartTime is
   // guaranteed to be something.
   MOZ_ASSERT(mStartTime.isSome());
@@ -1088,7 +1088,7 @@ void DecodedStream::NotifyOutput(int64_t aTime) {
   mLastOutputTime = time;
   auto currentTime = GetPosition();
 
-  if (profiler_can_accept_markers()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     nsPrintfCString markerString("OutputTime=%" PRId64,
                                  currentTime.ToMicroseconds());
     PLAYBACK_PROFILER_MARKER(markerString);
@@ -1108,7 +1108,7 @@ void DecodedStream::NotifyOutput(int64_t aTime) {
 
 void DecodedStream::PlayingChanged() {
   AssertOwnerThread();
-  TRACE();
+  TRACE("DecodedStream::PlayingChanged");
 
   if (!mPlaying) {
     // On seek or pause we discard future frames.

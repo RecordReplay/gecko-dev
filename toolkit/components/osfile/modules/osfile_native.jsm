@@ -10,21 +10,18 @@
 
 var EXPORTED_SYMBOLS = ["read", "writeAtomic"];
 
-var SharedAll = ChromeUtils.import(
-  "resource://gre/modules/osfile/osfile_shared_allthreads.jsm",
-  null
+var { Constants } = ChromeUtils.import(
+  "resource://gre/modules/osfile/osfile_shared_allthreads.jsm"
 );
 
-var SysAll = {};
-if (SharedAll.Constants.Win) {
-  ChromeUtils.import(
-    "resource://gre/modules/osfile/osfile_win_allthreads.jsm",
-    SysAll
+var SysAll;
+if (Constants.Win) {
+  SysAll = ChromeUtils.import(
+    "resource://gre/modules/osfile/osfile_win_allthreads.jsm"
   );
-} else if (SharedAll.Constants.libc) {
-  ChromeUtils.import(
-    "resource://gre/modules/osfile/osfile_unix_allthreads.jsm",
-    SysAll
+} else if (Constants.libc) {
+  SysAll = ChromeUtils.import(
+    "resource://gre/modules/osfile/osfile_unix_allthreads.jsm"
   );
 } else {
   throw new Error("I am neither under Windows nor under a Posix system");

@@ -148,7 +148,7 @@ nsHtml5TreeOperation::~nsHtml5TreeOperation() {
 
     void operator()(const opDoneCreatingElement& aOperation) {}
 
-    void operator()(const opSetDocumentCharset& aOperation) {}
+    void operator()(const opUpdateCharsetSource& aOperation) {}
 
     void operator()(const opCharsetSwitchTo& aOperation) {}
 
@@ -639,22 +639,18 @@ nsIContent* nsHtml5TreeOperation::CreateMathMLElement(
 
 void nsHtml5TreeOperation::SetFormElement(nsIContent* aNode,
                                           nsIContent* aParent) {
-  nsCOMPtr<nsIFormControl> formControl(do_QueryInterface(aNode));
-  RefPtr<dom::HTMLImageElement> domImageElement =
-      dom::HTMLImageElement::FromNodeOrNull(aNode);
-  // NS_ASSERTION(formControl, "Form-associated element did not implement
-  // nsIFormControl.");
-  // TODO: uncomment the above line when img doesn't cause an issue (bug
-  // 1558793)
   RefPtr<dom::HTMLFormElement> formElement =
       dom::HTMLFormElement::FromNodeOrNull(aParent);
   NS_ASSERTION(formElement,
                "The form element doesn't implement HTMLFormElement.");
-  // Avoid crashing on <img>
+  nsCOMPtr<nsIFormControl> formControl(do_QueryInterface(aNode));
   if (formControl &&
+      formControl->ControlType() !=
+          FormControlType::FormAssociatedCustomElement &&
       !aNode->AsElement()->HasAttr(kNameSpaceID_None, nsGkAtoms::form)) {
     formControl->SetForm(formElement);
-  } else if (domImageElement) {
+  } else if (HTMLImageElement* domImageElement =
+                 dom::HTMLImageElement::FromNodeOrNull(aNode)) {
     domImageElement->SetForm(formElement);
   }
 }
@@ -984,10 +980,8 @@ nsresult nsHtml5TreeOperation::Perform(nsHtml5TreeOpExecutor* aBuilder,
       return NS_OK;
     }
 
-    nsresult operator()(const opSetDocumentCharset& aOperation) {
-      auto encoding = WrapNotNull(aOperation.mEncoding);
-      mBuilder->SetDocumentCharsetAndSource(encoding,
-                                            aOperation.mCharsetSource);
+    nsresult operator()(const opUpdateCharsetSource& aOperation) {
+      mBuilder->UpdateCharsetSource(aOperation.mCharsetSource);
       return NS_OK;
     }
 

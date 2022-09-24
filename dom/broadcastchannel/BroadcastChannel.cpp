@@ -15,7 +15,6 @@
 #include "mozilla/dom/ipc/StructuredCloneData.h"
 #include "mozilla/dom/RefMessageBodyService.h"
 #include "mozilla/dom/SharedMessageBody.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerRunnable.h"
@@ -23,9 +22,7 @@
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/StorageAccess.h"
-#include "nsContentUtils.h"
 
-#include "nsIBFCacheEntry.h"
 #include "nsICookieJarSettings.h"
 #include "mozilla/dom/Document.h"
 
@@ -128,7 +125,7 @@ BroadcastChannel::BroadcastChannel(nsIGlobalObject* aGlobal,
       mState(StateActive),
       mPortUUID(aPortUUID) {
   MOZ_ASSERT(aGlobal);
-  KeepAliveIfHasListenersFor(u"message"_ns);
+  KeepAliveIfHasListenersFor(nsGkAtoms::onmessage);
 }
 
 BroadcastChannel::~BroadcastChannel() {
@@ -151,7 +148,7 @@ already_AddRefed<BroadcastChannel> BroadcastChannel::Constructor(
   }
 
   nsID portUUID = {};
-  aRv = nsContentUtils::GenerateUUIDInPlace(portUUID);
+  aRv = nsID::GenerateUUIDInPlace(portUUID);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -198,7 +195,7 @@ already_AddRefed<BroadcastChannel> BroadcastChannel::Constructor(
     }
 
     nsAutoCString originNoSuffix8;
-    aRv = storagePrincipal->GetOriginNoSuffix(originNoSuffix8);
+    aRv = storagePrincipal->GetAsciiOrigin(originNoSuffix8);
     if (NS_WARN_IF(aRv.Failed())) {
       return nullptr;
     }
@@ -265,7 +262,7 @@ already_AddRefed<BroadcastChannel> BroadcastChannel::Constructor(
   MOZ_ASSERT(bc->mActor);
 
   bc->mActor->SetParent(bc);
-  bc->mOriginNoSuffix = originNoSuffix;
+  bc->mOriginForEvents = originNoSuffix;
 
   return bc.forget();
 }
@@ -343,7 +340,7 @@ void BroadcastChannel::Shutdown() {
     mActor = nullptr;
   }
 
-  IgnoreKeepAliveIfHasListenersFor(u"message"_ns);
+  IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onmessage);
 }
 
 void BroadcastChannel::RemoveDocFromBFCache() {
@@ -413,7 +410,7 @@ void BroadcastChannel::MessageReceived(const MessageData& aData) {
   RootedDictionary<MessageEventInit> init(cx);
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mOrigin = mOriginNoSuffix;
+  init.mOrigin = mOriginForEvents;
   init.mData = value;
 
   RefPtr<MessageEvent> event =
@@ -433,7 +430,7 @@ void BroadcastChannel::DispatchError(JSContext* aCx) {
   RootedDictionary<MessageEventInit> init(aCx);
   init.mBubbles = false;
   init.mCancelable = false;
-  init.mOrigin = mOriginNoSuffix;
+  init.mOrigin = mOriginForEvents;
 
   RefPtr<Event> event =
       MessageEvent::Constructor(this, u"messageerror"_ns, init);

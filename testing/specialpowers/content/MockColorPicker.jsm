@@ -9,6 +9,11 @@ ChromeUtils.defineModuleGetter(
   "WrapPrivileged",
   "resource://specialpowers/WrapPrivileged.jsm"
 );
+ChromeUtils.defineModuleGetter(
+  this,
+  "Services",
+  "resource://gre/modules/Services.jsm"
+);
 
 const Cm = Components.manager;
 
@@ -18,19 +23,11 @@ Cu.crashIfNotInAutomation();
 
 var registrar = Cm.QueryInterface(Ci.nsIComponentRegistrar);
 var oldClassID = "";
-var newClassID = Cc["@mozilla.org/uuid-generator;1"]
-  .getService(Ci.nsIUUIDGenerator)
-  .generateUUID();
+var newClassID = Services.uuid.generateUUID();
 var newFactory = function(window) {
   return {
-    createInstance(aOuter, aIID) {
-      if (aOuter) {
-        throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-      }
+    createInstance(aIID) {
       return new MockColorPickerInstance(window).QueryInterface(aIID);
-    },
-    lockFactory(aLock) {
-      throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
     },
     QueryInterface: ChromeUtils.generateQI(["nsIFactory"]),
   };

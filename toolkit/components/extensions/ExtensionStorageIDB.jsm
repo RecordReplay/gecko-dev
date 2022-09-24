@@ -21,13 +21,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   OS: "resource://gre/modules/osfile.jsm",
 });
 
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "quotaManagerService",
-  "@mozilla.org/dom/quota-manager-service;1",
-  "nsIQuotaManagerService"
-);
-
 // The userContextID reserved for the extension storage (its purpose is ensuring that the IndexedDB
 // storage used by the browser.storage.local API is not directly accessible from the extension code,
 // it is defined and reserved as "userContextIdInternal.webextStorageLocal" in ContextualIdentityService.jsm).
@@ -85,7 +78,7 @@ var ErrorsTelemetry = {
     }
 
     if (
-      error instanceof DOMException ||
+      DOMException.isInstance(error) ||
       error instanceof DataMigrationAbortedError
     ) {
       if (error.name.length > 80) {
@@ -749,7 +742,7 @@ this.ExtensionStorageIDB = {
 
   persist(storagePrincipal) {
     return new Promise((resolve, reject) => {
-      const request = quotaManagerService.persist(storagePrincipal);
+      const request = Services.qms.persist(storagePrincipal);
       request.callback = () => {
         if (request.resultCode === Cr.NS_OK) {
           resolve();
@@ -816,7 +809,7 @@ this.ExtensionStorageIDB = {
 
     let errorMessage;
 
-    if (error instanceof DOMException) {
+    if (DOMException.isInstance(error)) {
       switch (error.name) {
         case "DataCloneError":
           errorMessage = String(error);

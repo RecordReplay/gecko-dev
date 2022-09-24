@@ -176,10 +176,6 @@ class MOZ_STACK_CLASS ProfilerStringView {
     return mStringView;
   }
 
-  [[nodiscard]] constexpr const CHAR* Data() const {
-    return mStringView.data();
-  }
-
   [[nodiscard]] constexpr size_t Length() const { return mStringView.length(); }
 
   [[nodiscard]] constexpr bool IsLiteral() const {
@@ -190,9 +186,10 @@ class MOZ_STACK_CLASS ProfilerStringView {
   }
   // No `IsOwned...()` because it's a secret, only used internally!
 
-  [[nodiscard]] operator Span<const CHAR>() const {
-    return Span<const CHAR>(Data(), Length());
+  [[nodiscard]] Span<const CHAR> AsSpan() const {
+    return Span<const CHAR>(mStringView.data(), mStringView.length());
   }
+  [[nodiscard]] operator Span<const CHAR>() const { return AsSpan(); }
 
  private:
   enum class Ownership { Literal, Reference, OwnedThroughStringView };
@@ -277,7 +274,9 @@ class MarkerThreadId {
   constexpr MarkerThreadId() = default;
 
   // Constructor from a given thread id.
-  constexpr explicit MarkerThreadId(int aThreadId) : mThreadId(aThreadId) {}
+  constexpr explicit MarkerThreadId(
+      baseprofiler::BaseProfilerThreadId aThreadId)
+      : mThreadId(aThreadId) {}
 
   // Use the current thread's id.
   static MarkerThreadId CurrentThread() {
@@ -290,12 +289,16 @@ class MarkerThreadId {
     return MarkerThreadId(baseprofiler::profiler_main_thread_id());
   }
 
-  [[nodiscard]] constexpr int ThreadId() const { return mThreadId; }
+  [[nodiscard]] constexpr baseprofiler::BaseProfilerThreadId ThreadId() const {
+    return mThreadId;
+  }
 
-  [[nodiscard]] constexpr bool IsUnspecified() const { return mThreadId == 0; }
+  [[nodiscard]] constexpr bool IsUnspecified() const {
+    return !mThreadId.IsSpecified();
+  }
 
  private:
-  int mThreadId = 0;
+  baseprofiler::BaseProfilerThreadId mThreadId;
 };
 
 // This marker option contains marker timing information.
@@ -313,9 +316,7 @@ class MarkerTiming {
     return MarkerTiming{aTime, TimeStamp{}, MarkerTiming::Phase::Instant};
   }
 
-  static MarkerTiming InstantNow() {
-    return InstantAt(TimeStamp::NowUnfuzzed());
-  }
+  static MarkerTiming InstantNow() { return InstantAt(TimeStamp::Now()); }
 
   static MarkerTiming Interval(const TimeStamp& aStartTime,
                                const TimeStamp& aEndTime) {
@@ -326,24 +327,22 @@ class MarkerTiming {
   }
 
   static MarkerTiming IntervalUntilNowFrom(const TimeStamp& aStartTime) {
-    return Interval(aStartTime, TimeStamp::NowUnfuzzed());
+    return Interval(aStartTime, TimeStamp::Now());
   }
 
-  static MarkerTiming IntervalStart(
-      const TimeStamp& aTime = TimeStamp::NowUnfuzzed()) {
+  static MarkerTiming IntervalStart(const TimeStamp& aTime = TimeStamp::Now()) {
     MOZ_ASSERT(!aTime.IsNull(), "Time is null for an interval start marker.");
     return MarkerTiming{aTime, TimeStamp{}, MarkerTiming::Phase::IntervalStart};
   }
 
-  static MarkerTiming IntervalEnd(
-      const TimeStamp& aTime = TimeStamp::NowUnfuzzed()) {
+  static MarkerTiming IntervalEnd(const TimeStamp& aTime = TimeStamp::Now()) {
     MOZ_ASSERT(!aTime.IsNull(), "Time is null for an interval end marker.");
     return MarkerTiming{TimeStamp{}, aTime, MarkerTiming::Phase::IntervalEnd};
   }
 
   // Set the interval end in this timing.
   // If there was already a start time, this makes it a full interval.
-  void SetIntervalEnd(const TimeStamp& aTime = TimeStamp::NowUnfuzzed()) {
+  void SetIntervalEnd(const TimeStamp& aTime = TimeStamp::Now()) {
     MOZ_ASSERT(!aTime.IsNull(), "Time is null for an interval end marker.");
     mEndTime = aTime;
     mPhase = mStartTime.IsNull() ? Phase::IntervalEnd : Phase::Interval;
@@ -383,6 +382,14 @@ class MarkerTiming {
   [[nodiscard]] uint8_t GetPhase() const {
     MOZ_ASSERT(!IsUnspecified());
     return static_cast<uint8_t>(mPhase);
+  }
+
+  // This is a constructor for Rust FFI bindings. It must not be used outside of
+  // this! Please see the other static constructors above.
+  static void UnsafeConstruct(MarkerTiming* aMarkerTiming,
+                              const TimeStamp& aStartTime,
+                              const TimeStamp& aEndTime, Phase aPhase) {
+    new (aMarkerTiming) MarkerTiming{aStartTime, aEndTime, aPhase};
   }
 
  private:
@@ -499,6 +506,11 @@ class MarkerStack {
   static MarkerStack TakeBacktrace(
       UniquePtr<ProfileChunkedBuffer>&& aExternalChunkedBuffer) {
     return MarkerStack(std::move(aExternalChunkedBuffer));
+  }
+
+  // Construct with the given capture options.
+  static MarkerStack WithCaptureOptions(StackCaptureOptions aCaptureOptions) {
+    return MarkerStack(aCaptureOptions);
   }
 
   [[nodiscard]] StackCaptureOptions CaptureOptions() const {
@@ -673,20 +685,20 @@ class JSONWriter;
 class MarkerSchema {
  public:
   enum class Location : unsigned {
-    markerChart,
-    markerTable,
+    MarkerChart,
+    MarkerTable,
     // This adds markers to the main marker timeline in the header.
-    timelineOverview,
+    TimelineOverview,
     // In the timeline, this is a section that breaks out markers that are
     // related to memory. When memory counters are enabled, this is its own
     // track, otherwise it is displayed with the main thread.
-    timelineMemory,
+    TimelineMemory,
     // This adds markers to the IPC timeline area in the header.
-    timelineIPC,
+    TimelineIPC,
     // This adds markers to the FileIO timeline area in the header.
-    timelineFileIO,
+    TimelineFileIO,
     // TODO - This is not supported yet.
-    stackChart
+    StackChart
   };
 
   // Used as constructor parameter, to explicitly specify that the location (and
@@ -699,46 +711,46 @@ class MarkerSchema {
     // String types.
 
     // Show the URL, and handle PII sanitization
-    url,
+    Url,
     // Show the file path, and handle PII sanitization.
-    filePath,
+    FilePath,
     // Important, do not put URL or file path information here, as it will not
     // be sanitized. Please be careful with including other types of PII here as
     // well.
     // e.g. "Label: Some String"
-    string,
+    String,
 
     // ----------------------------------------------------
     // Numeric types
 
     // For time data that represents a duration of time.
     // e.g. "Label: 5s, 5ms, 5μs"
-    duration,
+    Duration,
     // Data that happened at a specific time, relative to the start of the
     // profile. e.g. "Label: 15.5s, 20.5ms, 30.5μs"
-    time,
+    Time,
     // The following are alternatives to display a time only in a specific unit
     // of time.
-    seconds,       // "Label: 5s"
-    milliseconds,  // "Label: 5ms"
-    microseconds,  // "Label: 5μs"
-    nanoseconds,   // "Label: 5ns"
+    Seconds,       // "Label: 5s"
+    Milliseconds,  // "Label: 5ms"
+    Microseconds,  // "Label: 5μs"
+    Nanoseconds,   // "Label: 5ns"
     // e.g. "Label: 5.55mb, 5 bytes, 312.5kb"
-    bytes,
+    Bytes,
     // This should be a value between 0 and 1.
     // "Label: 50%"
-    percentage,
+    Percentage,
     // The integer should be used for generic representations of numbers.
     // Do not use it for time information.
     // "Label: 52, 5,323, 1,234,567"
-    integer,
+    Integer,
     // The decimal should be used for generic representations of numbers.
     // Do not use it for time information.
     // "Label: 52.23, 0.0054, 123,456.78"
-    decimal
+    Decimal
   };
 
-  enum class Searchable { notSearchable, searchable };
+  enum class Searchable { NotSearchable, Searchable };
 
   // Marker schema, with a non-empty list of locations where markers should be
   // shown.
@@ -747,6 +759,11 @@ class MarkerSchema {
   template <typename... Locations>
   explicit MarkerSchema(Location aLocation, Locations... aLocations)
       : mLocations{aLocation, aLocations...} {}
+
+  // Alternative constructor for MarkerSchema.
+  explicit MarkerSchema(const mozilla::MarkerSchema::Location* aLocations,
+                        size_t aLength)
+      : mLocations(aLocations, aLocations + aLength) {}
 
   // Marker schema for types that have special frontend handling.
   // Nothing else should be set in this case.

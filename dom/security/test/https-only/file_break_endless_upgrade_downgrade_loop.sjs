@@ -25,6 +25,9 @@ const REDIRECT_JS = `
 const REDIRECT_302 =
   "http://example.com/tests/dom/security/test/https-only/file_break_endless_upgrade_downgrade_loop.sjs?test3b";
 
+const REDIRECT_302_DIFFERENT_PATH =
+  "http://example.com/tests/dom/security/test/https-only/file_user_gesture.html";
+
 function handleRequest(request, response) {
   // avoid confusing cache behaviour
   response.setHeader("Cache-Control", "no-cache", false);
@@ -34,7 +37,7 @@ function handleRequest(request, response) {
   // get upgraded, then we rather fall through and display unexpected content.
   if (request.scheme === "https") {
     let query = request.queryString;
-   
+
     if (query === "test1a") {
       response.write(REDIRECT_META);
       return;
@@ -50,9 +53,15 @@ function handleRequest(request, response) {
       response.setHeader("Location", REDIRECT_302, false);
       return;
     }
+
+    if (query === "test4a") {
+      response.setStatusLine("1.1", 302, "Found");
+      response.setHeader("Location", REDIRECT_302_DIFFERENT_PATH, false);
+      return;
+    }
   }
 
   // we should never get here, just in case,
   // let's return something unexpected
-  response.write("<html><body>DO NOT DISPLAY THIS</body></html>")
+  response.write("<html><body>DO NOT DISPLAY THIS</body></html>");
 }

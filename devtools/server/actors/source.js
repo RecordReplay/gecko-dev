@@ -4,13 +4,10 @@
 
 "use strict";
 
-const { Cu } = require("chrome");
 const {
   setBreakpointAtEntryPoints,
 } = require("devtools/server/actors/breakpoint");
 const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
-const DevToolsUtils = require("devtools/shared/DevToolsUtils");
-const { assert } = DevToolsUtils;
 const { sourceSpec } = require("devtools/shared/specs/source");
 const {
   resolveSourceURL,
@@ -33,20 +30,31 @@ loader.lazyRequireGetter(
   true
 );
 
-loader.lazyRequireGetter(this, "Services");
-loader.lazyGetter(
+loader.lazyRequireGetter(
   this,
-  "WebExtensionPolicy",
-  () => Cu.getGlobalForObject(Cu).WebExtensionPolicy
+  "DevToolsUtils",
+  "devtools/shared/DevToolsUtils"
 );
+
+loader.lazyRequireGetter(this, "Services");
 
 const windowsDrive = /^([a-zA-Z]:)/;
 
 function getSourceURL(source, window) {
-  // Some eval sources have URLs, but we want to explcitly ignore those because
+  // Some eval sources have URLs, but we want to explicitly ignore those because
   // they are generally useless strings like "eval" or "debugger eval code".
-  const resourceURL =
-    (getDebuggerSourceURL(source) || "").split(" -> ").pop() || null;
+  let resourceURL = getDebuggerSourceURL(source) || "";
+
+  // Strip out eventual stack trace stored in Source's url.
+  // (not clear if that still happens)
+  resourceURL = resourceURL.split(" -> ").pop();
+
+  // Debugger.Source.url attribute may be of the form:
+  //   "http://example.com/foo line 10 > inlineScript"
+  // because of the following function `js::FormatIntroducedFilename`:
+  // https://searchfox.org/mozilla-central/rev/253ae246f642fe9619597f44de3b087f94e45a2d/js/src/vm/JSScript.cpp#1816-1846
+  // This isn't so easy to reproduce, but browser_dbg-breakpoints-popup.js's testPausedInTwoPopups covers this
+  resourceURL = resourceURL.replace(/ line \d+ > .*$/, "");
 
   // A "//# sourceURL=" pragma should basically be treated as a source file's
   // full URL, so that is what we want to use as the base if it is present.
@@ -72,7 +80,8 @@ function getSourceURL(source, window) {
     }
   }
 
-  return result;
+  // Avoid returning empty string and return null if no URL is found
+  return result || null;
 }
 
 /**
@@ -142,7 +151,7 @@ const SourceActor = ActorClassWithSpec(sourceSpec, {
             }
           }
         } catch (e) {
-          // Ignore
+          console.warn(`Failed to find extension name for ${this.url} : ${e}`);
         }
       }
     }
@@ -179,6 +188,7 @@ const SourceActor = ActorClassWithSpec(sourceSpec, {
       ),
       sourceMapURL: source.sourceMapURL,
       introductionType,
+      isInlineSource: this._isInlineSource,
     };
   },
 
@@ -198,7 +208,7 @@ const SourceActor = ActorClassWithSpec(sourceSpec, {
     if (this._isWasm) {
       const wasm = this._source.binary;
       const buffer = wasm.buffer;
-      assert(
+      DevToolsUtils.assert(
         wasm.byteOffset === 0 && wasm.byteLength === buffer.byteLength,
         "Typed array from wasm source binary must cover entire buffer"
       );

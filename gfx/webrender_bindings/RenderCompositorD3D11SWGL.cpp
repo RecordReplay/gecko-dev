@@ -10,7 +10,6 @@
 
 #include "mozilla/widget/CompositorWidget.h"
 #include "mozilla/layers/Effects.h"
-#include "mozilla/layers/LayerManagerComposite.h"
 #include "mozilla/webrender/RenderD3D11TextureHost.h"
 #include "RenderCompositorRecordedFrame.h"
 
@@ -18,6 +17,9 @@ namespace mozilla {
 using namespace layers;
 
 namespace wr {
+
+extern LazyLogModule gRenderThreadLog;
+#define LOG(...) MOZ_LOG(gRenderThreadLog, LogLevel::Debug, (__VA_ARGS__))
 
 RenderCompositorD3D11SWGL::UploadMode
 RenderCompositorD3D11SWGL::GetUploadMode() {
@@ -49,16 +51,13 @@ UniquePtr<RenderCompositor> RenderCompositorD3D11SWGL::Create(
     return nullptr;
   }
 
-  RefPtr<CompositorD3D11> compositor =
-      MakeAndAddRef<CompositorD3D11>(nullptr, aWidget);
+  RefPtr<CompositorD3D11> compositor = MakeAndAddRef<CompositorD3D11>(aWidget);
   nsCString log;
   if (!compositor->Initialize(&log)) {
     gfxCriticalNote << "Failed to initialize CompositorD3D11 for SWGL: "
                     << log.get();
     return nullptr;
   }
-  compositor->UseForSoftwareWebRender();
-
   return MakeUnique<RenderCompositorD3D11SWGL>(compositor, aWidget, ctx);
 }
 
@@ -66,10 +65,14 @@ RenderCompositorD3D11SWGL::RenderCompositorD3D11SWGL(
     CompositorD3D11* aCompositor,
     const RefPtr<widget::CompositorWidget>& aWidget, void* aContext)
     : RenderCompositorLayersSWGL(aCompositor, aWidget, aContext) {
+  LOG("RenderCompositorD3D11SWGL::RenderCompositorD3D11SWGL()");
+
   mSyncObject = GetCompositorD3D11()->GetSyncObject();
 }
 
-RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL() {}
+RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL() {
+  LOG("RenderCompositorD3D11SWGL::~RenderCompositorD3D11SWGL()");
+}
 
 bool RenderCompositorD3D11SWGL::BeginFrame() {
   if (!RenderCompositorLayersSWGL::BeginFrame()) {

@@ -10,9 +10,11 @@ DEFINES["ENABLE_SET_CUBEB_BACKEND"] = True
 
 LOCAL_INCLUDES += [
     "/dom/media/mediasink",
-    "/dom/media/webrtc/common/",
+    "/dom/media/systemservices",
+    "/dom/media/webrtc",
+    "/dom/media/webrtc/common",
     "/third_party/libwebrtc",
-    "/third_party/libwebrtc/webrtc",
+    "/third_party/libwebrtc/third_party/abseil-cpp",
 ]
 
 UNIFIED_SOURCES += [
@@ -23,6 +25,7 @@ UNIFIED_SOURCES += [
     "TestAudioCompactor.cpp",
     "TestAudioDecoderInputTrack.cpp",
     "TestAudioDriftCorrection.cpp",
+    "TestAudioInputSource.cpp",
     "TestAudioMixer.cpp",
     "TestAudioPacketizer.cpp",
     "TestAudioRingBuffer.cpp",
@@ -33,8 +36,10 @@ UNIFIED_SOURCES += [
     "TestBitWriter.cpp",
     "TestBlankVideoDataCreator.cpp",
     "TestBufferReader.cpp",
+    "TestCubebInputStream.cpp",
     "TestDataMutex.cpp",
     "TestDecoderBenchmark.cpp",
+    "TestDeviceInputTrack.cpp",
     "TestDriftCompensation.cpp",
     "TestDynamicResampler.cpp",
     "TestGMPUtils.cpp",
@@ -52,27 +57,23 @@ UNIFIED_SOURCES += [
     "TestMuxer.cpp",
     "TestOggWriter.cpp",
     "TestOpusParser.cpp",
+    "TestPacer.cpp",
     "TestRust.cpp",
     "TestTimeUnit.cpp",
     "TestVideoSegment.cpp",
+    "TestVideoTrackEncoder.cpp",
     "TestVideoUtils.cpp",
     "TestVPXDecoding.cpp",
     "TestWebMBuffered.cpp",
+    "TestWebMWriter.cpp",
+    "WaitFor.cpp",
+    "YUVBufferGenerator.cpp",
 ]
-
-if CONFIG["MOZ_WEBM_ENCODER"]:
-    UNIFIED_SOURCES += [
-        "TestVideoTrackEncoder.cpp",
-        "TestWebMWriter.cpp",
-        "YUVBufferGenerator.cpp",
-    ]
-    LOCAL_INCLUDES += [
-        "/gfx/2d/",
-    ]
 
 if CONFIG["MOZ_WEBRTC"]:
     UNIFIED_SOURCES += [
         "TestAudioInputProcessing.cpp",
+        "TestRTCStatsTimestampMaker.cpp",
     ]
 
 if CONFIG["OS_TARGET"] != "Android":
@@ -89,6 +90,7 @@ if CONFIG["MOZ_WEBRTC"] and CONFIG["OS_TARGET"] != "Android":
     ]
 
 TEST_HARNESS_FILES.gtest += [
+    "../test/av1.mp4",
     "../test/gizmo-frag.mp4",
     "../test/gizmo.mp4",
     "../test/vp9cake.webm",
@@ -123,13 +125,11 @@ LOCAL_INCLUDES += [
     "/dom/media/platforms",
     "/dom/media/platforms/agnostic",
     "/dom/media/webrtc",
+    "/gfx/2d/",
     "/security/certverifier",
 ]
 
 FINAL_LIBRARY = "xul-gtest"
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
 
 if CONFIG["CC_TYPE"] in ("clang", "clang-cl"):
     CXXFLAGS += [

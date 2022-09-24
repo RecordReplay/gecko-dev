@@ -32,10 +32,14 @@ def get_default_config(topsrcdir, strings_path):
                 "path": topsrcdir,
                 "url": "https://hg.mozilla.org/mozilla-unified/",
                 "heads": {
+                    # This list of repositories is ordered, starting with the
+                    # one with the most recent content (central) to the oldest
+                    # (ESR). In case two ESR versions are supported, the oldest
+                    # ESR goes last (e.g. esr78 goes after esr91).
                     "central": "mozilla-central",
                     "beta": "releases/mozilla-beta",
                     "release": "releases/mozilla-release",
-                    "esr78": "releases/mozilla-esr78",
+                    "esr102": "releases/mozilla-esr102",
                 },
                 "config_files": [
                     "browser/locales/l10n.toml",
@@ -44,11 +48,16 @@ def get_default_config(topsrcdir, strings_path):
             },
             "comm-central": {
                 "path": topsrcdir / "comm",
+                "post-clobber": True,
                 "url": "https://hg.mozilla.org/comm-central/",
                 "heads": {
+                    # This list of repositories is ordered, starting with the
+                    # one with the most recent content (central) to the oldest
+                    # (ESR). In case two ESR versions are supported, the oldest
+                    # ESR goes last (e.g. esr78 goes after esr91).
                     "comm": "comm-central",
                     "comm-beta": "releases/comm-beta",
-                    "comm-esr78": "releases/comm-esr78",
+                    "comm-esr102": "releases/comm-esr102",
                 },
                 "config_files": [
                     "comm/calendar/locales/l10n.toml",

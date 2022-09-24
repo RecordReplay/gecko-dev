@@ -7,15 +7,15 @@ include protocol PGMPContent;
 include GMPTypes;
 
 include "GMPMessageUtils.h";
+include "ChromiumCDMParent.h";
 
-using cdm::HdcpVersion from "gmp-sanitized-cdm-exports.h";
-
-include "GMPMessageUtils.h";
+using cdm::HdcpVersion from "GMPSanitizedExports.h";
 
 namespace mozilla {
 namespace gmp {
 
-async refcounted protocol PChromiumCDM
+[ChildImpl=virtual, ParentImpl="ChromiumCDMParent"]
+async protocol PChromiumCDM
 {
   manager PGMPContent;
 child:

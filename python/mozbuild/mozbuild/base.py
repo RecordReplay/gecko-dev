@@ -14,6 +14,7 @@ import six
 import subprocess
 import sys
 import errno
+from pathlib import Path
 
 from mach.mixin.process import ProcessExecutionMixin
 from mozboot.mozconfig import MozconfigFindException
@@ -25,6 +26,7 @@ from mozversioncontrol import (
     HgRepository,
     InvalidRepoPath,
     MissingConfigureInfo,
+    MissingVCSTool,
 )
 
 from .backend.configenvironment import (
@@ -37,11 +39,15 @@ from .mozconfig import (
     MozconfigLoadException,
     MozconfigLoader,
 )
-from .pythonutil import find_python3_executable
 from .util import (
     memoize,
     memoized_property,
 )
+
+try:
+    import psutil
+except Exception:
+    psutil = None
 
 
 def ancestors(path):
@@ -181,24 +187,19 @@ class MozbuildObject(ProcessExecutionMixin):
                 topsrcdir, topobjdir, mozconfig = load_mozinfo(mozinfo_path)
                 break
 
-            # We choose an arbitrary file as an indicator that this is a
-            # srcdir. We go with ourself because why not!
-            our_path = os.path.join(
-                dir_path, "python", "mozbuild", "mozbuild", "base.py"
-            )
-            if os.path.isfile(our_path):
-                topsrcdir = dir_path
-                break
-
-        # See if we're running from a Python virtualenv that's inside an objdir.
-        mozinfo_path = os.path.join(os.path.dirname(sys.prefix), "../mozinfo.json")
-        if detect_virtualenv_mozinfo and os.path.isfile(mozinfo_path):
-            topsrcdir, topobjdir, mozconfig = load_mozinfo(mozinfo_path)
+        if not topsrcdir:
+            # See if we're running from a Python virtualenv that's inside an objdir.
+            # sys.prefix would look like "$objdir/_virtualenvs/$virtualenv/".
+            # Note that virtualenv-based objdir detection work for instrumented builds,
+            # because they aren't created in the scoped "instrumentated" objdir.
+            # However, working-directory-ancestor-based objdir resolution should fully
+            # cover that case.
+            mozinfo_path = os.path.join(sys.prefix, "..", "..", "mozinfo.json")
+            if detect_virtualenv_mozinfo and os.path.isfile(mozinfo_path):
+                topsrcdir, topobjdir, mozconfig = load_mozinfo(mozinfo_path)
 
         if not topsrcdir:
-            topsrcdir = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "..", "..", "..")
-            )
+            topsrcdir = str(Path(__file__).parent.parent.parent.parent.resolve())
 
         topsrcdir = mozpath.normsep(topsrcdir)
         if topobjdir:
@@ -284,14 +285,17 @@ class MozbuildObject(ProcessExecutionMixin):
 
     @property
     def virtualenv_manager(self):
-        from .virtualenv import VirtualenvManager
+        from mach.site import CommandSiteManager
+        from mozboot.util import get_state_dir
 
         if self._virtualenv_manager is None:
-            self._virtualenv_manager = VirtualenvManager(
+            self._virtualenv_manager = CommandSiteManager.from_environment(
                 self.topsrcdir,
-                os.path.join(self.topobjdir, "_virtualenvs", self._virtualenv_name),
-                sys.stdout,
-                os.path.join(self.topsrcdir, "build", "build_virtualenv_packages.txt"),
+                lambda: get_state_dir(
+                    specific_to_topsrcdir=True, topsrcdir=self.topsrcdir
+                ),
+                self._virtualenv_name,
+                os.path.join(self.topobjdir, "_virtualenvs"),
             )
 
         return self._virtualenv_manager
@@ -448,7 +452,11 @@ class MozbuildObject(ProcessExecutionMixin):
         # If we don't have a configure context, fall back to auto-detection.
         try:
             return get_repository_from_build_config(self)
-        except (BuildEnvironmentNotFoundException, MissingConfigureInfo):
+        except (
+            BuildEnvironmentNotFoundException,
+            MissingConfigureInfo,
+            MissingVCSTool,
+        ):
             pass
 
         return get_repository_object(self.topsrcdir)
@@ -533,25 +541,6 @@ class MozbuildObject(ProcessExecutionMixin):
             )
 
         return BuildReader(config, finder=finder)
-
-    @memoized_property
-    def python3(self):
-        """Obtain info about a Python 3 executable.
-
-        Returns a tuple of an executable path and its version (as a tuple).
-        Either both entries will have a value or both will be None.
-        """
-        # Search configured build info first. Then fall back to system.
-        try:
-            subst = self.substs
-
-            if "PYTHON3" in subst:
-                version = tuple(map(int, subst["PYTHON3_VERSION"].split(".")))
-                return subst["PYTHON3"], version
-        except BuildEnvironmentNotFoundException:
-            pass
-
-        return find_python3_executable()
 
     def is_clobber_needed(self):
         if not os.path.exists(self.topobjdir):
@@ -722,7 +711,6 @@ class MozbuildObject(ProcessExecutionMixin):
         target=None,
         log=True,
         srcdir=False,
-        allow_parallel=True,
         line_handler=None,
         append_env=None,
         explicit_env=None,
@@ -732,6 +720,7 @@ class MozbuildObject(ProcessExecutionMixin):
         print_directory=True,
         pass_thru=False,
         num_jobs=0,
+        job_size=0,
         keep_going=False,
     ):
         """Invoke make.
@@ -776,20 +765,24 @@ class MozbuildObject(ProcessExecutionMixin):
                 else:
                     args.append(flag)
 
-        if allow_parallel:
-            if num_jobs > 0:
-                args.append("-j%d" % num_jobs)
-            else:
-                args.append("-j%d" % multiprocessing.cpu_count())
-        elif num_jobs > 0:
-            args.append("MOZ_PARALLEL_BUILD=%d" % num_jobs)
-        elif os.environ.get("MOZ_LOW_PARALLELISM_BUILD"):
+        if num_jobs == 0:
+            if job_size == 0:
+                job_size = 2.0 if self.substs.get("CC_TYPE") == "gcc" else 1.0  # GiB
+
             cpus = multiprocessing.cpu_count()
-            jobs = max(1, int(0.75 * cpus))
-            print(
-                "  Low parallelism requested: using %d jobs for %d cores" % (jobs, cpus)
-            )
-            args.append("MOZ_PARALLEL_BUILD=%d" % jobs)
+            if not psutil or not job_size:
+                num_jobs = cpus
+            else:
+                mem_gb = psutil.virtual_memory().total / 1024 ** 3
+                from_mem = round(mem_gb / job_size)
+                num_jobs = max(1, min(cpus, from_mem))
+                print(
+                    "  Parallelism determined by memory: using %d jobs for %d cores "
+                    "based on %.1f GiB RAM and estimated job size of %.1f GiB"
+                    % (num_jobs, cpus, mem_gb, job_size)
+                )
+
+        args.append("-j%d" % num_jobs)
 
         if ignore_errors:
             args.append("-k")
@@ -863,7 +856,6 @@ class MozbuildObject(ProcessExecutionMixin):
         )
 
     def activate_virtualenv(self):
-        self.virtualenv_manager.ensure()
         self.virtualenv_manager.activate()
 
     def _set_log_level(self, verbose):
@@ -888,7 +880,7 @@ class MachCommandBase(MozbuildObject):
     without having to change everything that inherits from it.
     """
 
-    def __init__(self, context, virtualenv_name=None, metrics=None):
+    def __init__(self, context, virtualenv_name=None, metrics=None, no_auto_log=False):
         # Attempt to discover topobjdir through environment detection, as it is
         # more reliable than mozconfig when cwd is inside an objdir.
         topsrcdir = context.topdir
@@ -962,7 +954,7 @@ class MachCommandBase(MozbuildObject):
             fileno = getattr(sys.stdout, "fileno", lambda: None)()
         except io.UnsupportedOperation:
             fileno = None
-        if fileno and os.isatty(fileno) and not getattr(self, "NO_AUTO_LOG", False):
+        if fileno and os.isatty(fileno) and not no_auto_log:
             self._ensure_state_subdir_exists(".")
             logfile = self._get_state_filename("last_log.json")
             try:

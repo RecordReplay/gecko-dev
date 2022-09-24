@@ -11,10 +11,19 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use crate::connection::State;
+use crate::quic_datagrams::DatagramTracking;
 use crate::stream_id::{StreamId, StreamType};
-use crate::AppError;
+use crate::{AppError, Stats};
 use neqo_common::event::Provider as EventProvider;
 use neqo_crypto::ResumptionToken;
+
+#[derive(Debug, PartialOrd, Ord, PartialEq, Eq)]
+pub enum OutgoingDatagramOutcome {
+    DroppedTooBig,
+    DroppedQueueFull,
+    Lost,
+    Acked,
+}
 
 #[derive(Debug, PartialOrd, Ord, PartialEq, Eq)]
 pub enum ConnectionEvent {
@@ -35,21 +44,21 @@ pub enum ConnectionEvent {
     },
     /// New bytes available for reading.
     RecvStreamReadable {
-        stream_id: u64,
+        stream_id: StreamId,
     },
     /// Peer reset the stream.
     RecvStreamReset {
-        stream_id: u64,
+        stream_id: StreamId,
         app_error: AppError,
     },
     /// Peer has sent STOP_SENDING
     SendStreamStopSending {
-        stream_id: u64,
+        stream_id: StreamId,
         app_error: AppError,
     },
     /// Peer has acked everything sent on the stream.
     SendStreamComplete {
-        stream_id: u64,
+        stream_id: StreamId,
     },
     /// Peer increased MAX_STREAMS
     SendStreamCreatable {
@@ -62,6 +71,12 @@ pub enum ConnectionEvent {
     /// Any data written to streams needs to be written again.
     ZeroRttRejected,
     ResumptionToken(ResumptionToken),
+    Datagram(Vec<u8>),
+    OutgoingDatagramOutcome {
+        id: u64,
+        outcome: OutgoingDatagramOutcome,
+    },
+    IncomingDatagramDropped,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -84,9 +99,7 @@ impl ConnectionEvents {
     }
 
     pub fn recv_stream_readable(&self, stream_id: StreamId) {
-        self.insert(ConnectionEvent::RecvStreamReadable {
-            stream_id: stream_id.as_u64(),
-        });
+        self.insert(ConnectionEvent::RecvStreamReadable { stream_id });
     }
 
     pub fn recv_stream_reset(&self, stream_id: StreamId, app_error: AppError) {
@@ -94,7 +107,7 @@ impl ConnectionEvents {
         self.remove(|evt| matches!(evt, ConnectionEvent::RecvStreamReadable { stream_id: x } if *x == stream_id.as_u64()));
 
         self.insert(ConnectionEvent::RecvStreamReset {
-            stream_id: stream_id.as_u64(),
+            stream_id,
             app_error,
         });
     }
@@ -105,10 +118,10 @@ impl ConnectionEvents {
 
     pub fn send_stream_stop_sending(&self, stream_id: StreamId, app_error: AppError) {
         // If stopped, no longer writable.
-        self.remove(|evt| matches!(evt, ConnectionEvent::SendStreamWritable { stream_id: x } if *x == stream_id.as_u64()));
+        self.remove(|evt| matches!(evt, ConnectionEvent::SendStreamWritable { stream_id: x } if *x == stream_id));
 
         self.insert(ConnectionEvent::SendStreamStopSending {
-            stream_id: stream_id.as_u64(),
+            stream_id,
             app_error,
         });
     }
@@ -118,9 +131,7 @@ impl ConnectionEvents {
 
         self.remove(|evt| matches!(evt, ConnectionEvent::SendStreamStopSending { stream_id: x, .. } if *x == stream_id.as_u64()));
 
-        self.insert(ConnectionEvent::SendStreamComplete {
-            stream_id: stream_id.as_u64(),
-        });
+        self.insert(ConnectionEvent::SendStreamComplete { stream_id });
     }
 
     pub fn send_stream_creatable(&self, stream_type: StreamType) {
@@ -150,6 +161,53 @@ impl ConnectionEvents {
     pub fn recv_stream_complete(&self, stream_id: StreamId) {
         // If stopped, no longer readable.
         self.remove(|evt| matches!(evt, ConnectionEvent::RecvStreamReadable { stream_id: x } if *x == stream_id.as_u64()));
+    }
+
+    // The number of datagrams in the events queue is limited to max_queued_datagrams.
+    // This function ensure this and deletes the oldest datagrams if needed.
+    fn check_datagram_queued(&self, max_queued_datagrams: usize, stats: &mut Stats) {
+        let mut q = self.events.borrow_mut();
+        let mut remove = None;
+        if q.iter()
+            .filter(|evt| matches!(evt, ConnectionEvent::Datagram(_)))
+            .count()
+            == max_queued_datagrams
+        {
+            if let Some(d) = q
+                .iter()
+                .rev()
+                .enumerate()
+                .filter(|(_, evt)| matches!(evt, ConnectionEvent::Datagram(_)))
+                .take(1)
+                .next()
+            {
+                remove = Some(d.0);
+            }
+        }
+        if let Some(r) = remove {
+            q.remove(r);
+            q.push_back(ConnectionEvent::IncomingDatagramDropped);
+            stats.incoming_datagram_dropped += 1;
+        }
+    }
+
+    pub fn add_datagram(&self, max_queued_datagrams: usize, data: &[u8], stats: &mut Stats) {
+        self.check_datagram_queued(max_queued_datagrams, stats);
+        self.events
+            .borrow_mut()
+            .push_back(ConnectionEvent::Datagram(data.to_vec()));
+    }
+
+    pub fn datagram_outcome(
+        &self,
+        dgram_tracker: &DatagramTracking,
+        outcome: OutgoingDatagramOutcome,
+    ) {
+        if let DatagramTracking::Id(id) = dgram_tracker {
+            self.events
+                .borrow_mut()
+                .push_back(ConnectionEvent::OutgoingDatagramOutcome { id: *id, outcome });
+        }
     }
 
     fn insert(&self, event: ConnectionEvent) {
@@ -225,7 +283,7 @@ mod tests {
         assert_eq!(
             events[0],
             ConnectionEvent::SendStreamStopSending {
-                stream_id: 8,
+                stream_id: StreamId::new(8),
                 app_error: 55
             }
         );

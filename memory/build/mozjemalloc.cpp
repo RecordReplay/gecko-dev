@@ -52,40 +52,60 @@
 //
 // Allocation requests are rounded up to the nearest size class, and no record
 // of the original request size is maintained.  Allocations are broken into
-// categories according to size class.  Assuming runtime defaults, 4 kB pages
-// and a 16 byte quantum on a 32-bit system, the size classes in each category
-// are as follows:
+// categories according to size class.  Assuming runtime defaults, the size
+// classes in each category are as follows (for x86, x86_64 and Apple Silicon):
 //
-//   |=====================================|
-//   | Category | Subcategory    |    Size |
-//   |=====================================|
-//   | Small    | Tiny           |       4 |
-//   |          |                |       8 |
-//   |          |----------------+---------|
-//   |          | Quantum-spaced |      16 |
-//   |          |                |      32 |
-//   |          |                |      48 |
-//   |          |                |     ... |
-//   |          |                |     480 |
-//   |          |                |     496 |
-//   |          |                |     512 |
-//   |          |----------------+---------|
-//   |          | Sub-page       |    1 kB |
-//   |          |                |    2 kB |
-//   |=====================================|
-//   | Large                     |    4 kB |
-//   |                           |    8 kB |
-//   |                           |   12 kB |
-//   |                           |     ... |
-//   |                           | 1012 kB |
-//   |                           | 1016 kB |
-//   |                           | 1020 kB |
-//   |=====================================|
-//   | Huge                      |    1 MB |
-//   |                           |    2 MB |
-//   |                           |    3 MB |
-//   |                           |     ... |
-//   |=====================================|
+//   |======================================================================|
+//   | Category | Subcategory    |     x86 |  x86_64 | Mac x86_64 | Mac ARM |
+//   |---------------------------+---------+---------+------------+---------|
+//   | Word size                 |  32 bit |  64 bit |     64 bit |  64 bit |
+//   | Page size                 |    4 Kb |    4 Kb |       4 Kb |   16 Kb |
+//   |======================================================================|
+//   | Small    | Tiny           |    4/-w |      -w |          - |       - |
+//   |          |                |       8 |    8/-w |          8 |       8 |
+//   |          |----------------+---------|---------|------------|---------|
+//   |          | Quantum-spaced |      16 |      16 |         16 |      16 |
+//   |          |                |      32 |      32 |         32 |      32 |
+//   |          |                |      48 |      48 |         48 |      48 |
+//   |          |                |     ... |     ... |        ... |     ... |
+//   |          |                |     480 |     480 |        480 |     480 |
+//   |          |                |     496 |     496 |        496 |     496 |
+//   |          |----------------+---------|---------|------------|---------|
+//   |          | Quantum-wide-  |     512 |     512 |          - |       - |
+//   |          | spaced         |     768 |     768 |          - |       - |
+//   |          |                |     ... |     ... |          - |       - |
+//   |          |                |    3584 |    3584 |          - |       - |
+//   |          |                |    3840 |    3840 |          - |       - |
+//   |          |----------------+---------|---------|------------|---------|
+//   |          | Sub-page       |       - |       - |        512 |     512 |
+//   |          |                |       - |       - |       1024 |    1024 |
+//   |          |                |       - |       - |       2048 |    2048 |
+//   |          |                |       - |       - |            |    4096 |
+//   |          |                |       - |       - |            |    8 kB |
+//   |============================================================|=========|
+//   | Large                     |    4 kB |    4 kB |       4 kB |       - |
+//   |                           |    8 kB |    8 kB |       8 kB |       - |
+//   |                           |   12 kB |   12 kB |      12 kB |       - |
+//   |                           |   16 kB |   16 kB |      16 kB |   16 kB |
+//   |                           |     ... |     ... |        ... |       - |
+//   |                           |   32 kB |   32 kB |      32 kB |   32 kB |
+//   |                           |     ... |     ... |        ... |     ... |
+//   |                           | 1008 kB | 1008 kB |    1008 kB | 1008 kB |
+//   |                           | 1012 kB | 1012 kB |    1012 kB |       - |
+//   |                           | 1016 kB | 1016 kB |    1016 kB |       - |
+//   |                           | 1020 kB | 1020 kB |    1020 kB |       - |
+//   |======================================================================|
+//   | Huge                      |    1 MB |    1 MB |       1 MB |    1 MB |
+//   |                           |    2 MB |    2 MB |       2 MB |    2 MB |
+//   |                           |    3 MB |    3 MB |       3 MB |    3 MB |
+//   |                           |     ... |     ... |        ... |     ... |
+//   |======================================================================|
+//
+// Legend:
+//   n:    Size class exists for this platform.
+//   n/-w: This size class doesn't exist on Windows (see kMinTinyClass).
+//   -:    This size class doesn't exist for this platform.
+//   ...:  Size classes follow a pattern here.
 //
 // NOTE: Due to Mozilla bug 691003, we cannot reserve less than one word for an
 // allocation on Linux or Mac.  So on 32-bit *nix, the smallest bucket size is
@@ -183,8 +203,9 @@ using namespace mozilla;
 // depending on kernel configuration, so they are opted out by default.
 // Debug builds are opted out too, for test coverage.
 #ifndef MOZ_DEBUG
-#  if !defined(__ia64__) && !defined(__sparc__) && !defined(__mips__) && \
-      !defined(__aarch64__) && !defined(__powerpc__) && !defined(XP_MACOSX)
+#  if !defined(__ia64__) && !defined(__sparc__) && !defined(__mips__) &&       \
+      !defined(__aarch64__) && !defined(__powerpc__) && !defined(XP_MACOSX) && \
+      !defined(__loongarch__)
 #    define MALLOC_STATIC_PAGESIZE 1
 #  endif
 #endif
@@ -378,6 +399,10 @@ struct arena_chunk_t {
 // negatively affect performance.
 static const size_t kCacheLineSize = 64;
 
+// Our size classes are inclusive ranges of memory sizes.  By describing the
+// minimums and how memory is allocated in each range the maximums can be
+// calculated.
+
 // Smallest size class to support.  On Windows the smallest allocation size
 // must be 8 bytes on 32-bit, 16 bytes on 64-bit.  On Linux and Mac, even
 // malloc(1) must reserve a word's worth of memory (see Mozilla bug 691003).
@@ -390,28 +415,52 @@ static const size_t kMinTinyClass = sizeof(void*);
 // Maximum tiny size class.
 static const size_t kMaxTinyClass = 8;
 
-// Amount (quantum) separating quantum-spaced size classes.
-static const size_t kQuantum = 16;
-static const size_t kQuantumMask = kQuantum - 1;
-
 // Smallest quantum-spaced size classes. It could actually also be labelled a
 // tiny allocation, and is spaced as such from the largest tiny size class.
 // Tiny classes being powers of 2, this is twice as large as the largest of
 // them.
 static const size_t kMinQuantumClass = kMaxTinyClass * 2;
+static const size_t kMinQuantumWideClass = 512;
+#ifdef XP_MACOSX
+static const size_t kMinSubPageClass = 512;
+#else
+static const size_t kMinSubPageClass = 4_KiB;
+#endif
 
-// Largest quantum-spaced size classes.
-static const size_t kMaxQuantumClass = 512;
+// Amount (quantum) separating quantum-spaced size classes.
+static const size_t kQuantum = 16;
+static const size_t kQuantumMask = kQuantum - 1;
+static const size_t kQuantumWide = 256;
+static const size_t kQuantumWideMask = kQuantumWide - 1;
+
+static const size_t kMaxQuantumClass = kMinQuantumWideClass - kQuantum;
+static const size_t kMaxQuantumWideClass = kMinSubPageClass - kQuantumWide;
+
+// We can optimise some divisions to shifts if these are powers of two.
+static_assert(mozilla::IsPowerOfTwo(kQuantum),
+              "kQuantum is not a power of two");
+static_assert(mozilla::IsPowerOfTwo(kQuantumWide),
+              "kQuantumWide is not a power of two");
 
 static_assert(kMaxQuantumClass % kQuantum == 0,
               "kMaxQuantumClass is not a multiple of kQuantum");
+static_assert(kMaxQuantumWideClass % kQuantumWide == 0,
+              "kMaxQuantumWideClass is not a multiple of kQuantumWide");
+static_assert(kQuantum < kQuantumWide,
+              "kQuantum must be smaller than kQuantumWide");
+static_assert(mozilla::IsPowerOfTwo(kMinSubPageClass),
+              "kMinSubPageClass is not a power of two");
 
 // Number of (2^n)-spaced tiny classes.
 static const size_t kNumTinyClasses =
-    LOG2(kMinQuantumClass) - LOG2(kMinTinyClass);
+    LOG2(kMaxTinyClass) - LOG2(kMinTinyClass) + 1;
 
-// Number of quantum-spaced classes.
-static const size_t kNumQuantumClasses = kMaxQuantumClass / kQuantum;
+// Number of quantum-spaced classes.  We add kQuantum(Max) before subtracting to
+// avoid underflow when a class is empty (Max<Min).
+static const size_t kNumQuantumClasses =
+    (kMaxQuantumClass + kQuantum - kMinQuantumClass) / kQuantum;
+static const size_t kNumQuantumWideClasses =
+    (kMaxQuantumWideClass + kQuantumWide - kMinQuantumWideClass) / kQuantumWide;
 
 // Size and alignment of memory chunks that are allocated by the OS's virtual
 // memory system.
@@ -424,11 +473,19 @@ static const size_t kChunkSizeMask = kChunkSize - 1;
 // Platform specific page size conditions copied from js/public/HeapAPI.h
 #  if defined(__powerpc64__)
 static const size_t gPageSize = 64_KiB;
+#  elif defined(__loongarch64)
+static const size_t gPageSize = 16_KiB;
 #  else
 static const size_t gPageSize = 4_KiB;
 #  endif
+static const size_t gRealPageSize = gPageSize;
 
 #else
+// When MALLOC_OPTIONS contains one or several `P`s, the page size used
+// across the allocator is multiplied by 2 for each `P`, but we also keep
+// the real page size for code paths that need it. gPageSize is thus a
+// power of two greater or equal to gRealPageSize.
+static size_t gRealPageSize;
 static size_t gPageSize;
 #endif
 
@@ -444,6 +501,7 @@ static size_t gPageSize;
     MACRO_CALL(                                                            \
         MOZ_PASTE_PREFIX_AND_ARG_COUNT(GLOBAL_ASSERT_HELPER, __VA_ARGS__), \
         (__VA_ARGS__))
+#  define GLOBAL_CONSTEXPR constexpr
 #else
 #  define DECLARE_GLOBAL(type, name) static type name;
 #  define DEFINE_GLOBALS static void DefineGlobals() {
@@ -451,6 +509,7 @@ static size_t gPageSize;
 #  define DEFINE_GLOBAL(type)
 #  define GLOBAL_LOG2 FloorLog2
 #  define GLOBAL_ASSERT MOZ_RELEASE_ASSERT
+#  define GLOBAL_CONSTEXPR
 #endif
 
 DECLARE_GLOBAL(size_t, gMaxSubPageClass)
@@ -462,15 +521,23 @@ DECLARE_GLOBAL(size_t, gChunkHeaderNumPages)
 DECLARE_GLOBAL(size_t, gMaxLargeClass)
 
 DEFINE_GLOBALS
-// Largest sub-page size class.
-DEFINE_GLOBAL(size_t) gMaxSubPageClass = gPageSize / 2;
+
+// Largest sub-page size class, or zero if there are none
+DEFINE_GLOBAL(size_t)
+gMaxSubPageClass = gPageSize / 2 >= kMinSubPageClass ? gPageSize / 2 : 0;
 
 // Max size class for bins.
-#define gMaxBinClass gMaxSubPageClass
+#define gMaxBinClass \
+  (gMaxSubPageClass ? gMaxSubPageClass : kMaxQuantumWideClass)
 
-// Number of (2^n)-spaced sub-page bins.
+// Number of sub-page bins.
 DEFINE_GLOBAL(uint8_t)
-gNumSubPageClasses = GLOBAL_LOG2(gMaxSubPageClass) - LOG2(kMaxQuantumClass);
+gNumSubPageClasses = []() GLOBAL_CONSTEXPR -> uint8_t {
+  if GLOBAL_CONSTEXPR (gMaxSubPageClass != 0) {
+    return FloorLog2(gMaxSubPageClass) - LOG2(kMinSubPageClass) + 1;
+  }
+  return 0;
+}();
 
 DEFINE_GLOBAL(uint8_t) gPageSize2Pow = GLOBAL_LOG2(gPageSize);
 DEFINE_GLOBAL(size_t) gPageSizeMask = gPageSize - 1;
@@ -478,13 +545,13 @@ DEFINE_GLOBAL(size_t) gPageSizeMask = gPageSize - 1;
 // Number of pages in a chunk.
 DEFINE_GLOBAL(size_t) gChunkNumPages = kChunkSize >> gPageSize2Pow;
 
-// Number of pages necessary for a chunk header.
+// Number of pages necessary for a chunk header plus a guard page.
 DEFINE_GLOBAL(size_t)
 gChunkHeaderNumPages =
-    ((sizeof(arena_chunk_t) + sizeof(arena_chunk_map_t) * (gChunkNumPages - 1) +
-      gPageSizeMask) &
-     ~gPageSizeMask) >>
-    gPageSize2Pow;
+    1 + (((sizeof(arena_chunk_t) +
+           sizeof(arena_chunk_map_t) * (gChunkNumPages - 1) + gPageSizeMask) &
+          ~gPageSizeMask) >>
+         gPageSize2Pow);
 
 // One chunk, minus the header, minus a guard page
 DEFINE_GLOBAL(size_t)
@@ -495,9 +562,17 @@ gMaxLargeClass =
 GLOBAL_ASSERT(1ULL << gPageSize2Pow == gPageSize,
               "Page size is not a power of two");
 GLOBAL_ASSERT(kQuantum >= sizeof(void*));
-GLOBAL_ASSERT(kQuantum <= gPageSize);
+GLOBAL_ASSERT(kQuantum <= kQuantumWide);
+GLOBAL_ASSERT(!kNumQuantumWideClasses ||
+              kQuantumWide <= (kMinSubPageClass - kMaxQuantumClass));
+
+GLOBAL_ASSERT(kQuantumWide <= kMaxQuantumClass);
+
+GLOBAL_ASSERT(gMaxSubPageClass >= kMinSubPageClass || gMaxSubPageClass == 0);
+GLOBAL_ASSERT(gMaxLargeClass >= gMaxSubPageClass);
 GLOBAL_ASSERT(kChunkSize >= gPageSize);
 GLOBAL_ASSERT(kQuantum * 4 <= kChunkSize);
+
 END_GLOBALS
 
 // Recycle at most 128 MiB of chunks. This means we retain at most
@@ -521,13 +596,19 @@ static size_t opt_dirty_max = DIRTY_MAX_DEFAULT;
 
 // Return the smallest quantum multiple that is >= a.
 #define QUANTUM_CEILING(a) (((a) + (kQuantumMask)) & ~(kQuantumMask))
+#define QUANTUM_WIDE_CEILING(a) \
+  (((a) + (kQuantumWideMask)) & ~(kQuantumWideMask))
+
+// Return the smallest sub page-size  that is >= a.
+#define SUBPAGE_CEILING(a) (RoundUpPow2(a))
 
 // Return the smallest pagesize multiple that is >= s.
 #define PAGE_CEILING(s) (((s) + gPageSizeMask) & ~gPageSizeMask)
 
 // Number of all the small-allocated classes
-#define NUM_SMALL_CLASSES \
-  (kNumTinyClasses + kNumQuantumClasses + gNumSubPageClasses)
+#define NUM_SMALL_CLASSES                                          \
+  (kNumTinyClasses + kNumQuantumClasses + kNumQuantumWideClasses + \
+   gNumSubPageClasses)
 
 // ***************************************************************************
 // MALLOC_DECOMMIT and MALLOC_DOUBLE_PURGE are mutually exclusive.
@@ -551,7 +632,7 @@ static bool malloc_initialized;
 static Atomic<bool, SequentiallyConsistent> malloc_initialized;
 #endif
 
-static StaticMutex gInitLock = {STATIC_MUTEX_INIT};
+static StaticMutex gInitLock MOZ_UNANNOTATED = {STATIC_MUTEX_INIT};
 
 // ***************************************************************************
 // Statistics data structures.
@@ -653,6 +734,7 @@ class SizeClass {
   enum ClassType {
     Tiny,
     Quantum,
+    QuantumWide,
     SubPage,
     Large,
   };
@@ -664,9 +746,12 @@ class SizeClass {
     } else if (aSize <= kMaxQuantumClass) {
       mType = Quantum;
       mSize = QUANTUM_CEILING(aSize);
+    } else if (aSize <= kMaxQuantumWideClass) {
+      mType = QuantumWide;
+      mSize = QUANTUM_WIDE_CEILING(aSize);
     } else if (aSize <= gMaxSubPageClass) {
       mType = SubPage;
-      mSize = RoundUpPow2(aSize);
+      mSize = SUBPAGE_CEILING(aSize);
     } else if (aSize <= gMaxLargeClass) {
       mType = Large;
       mSize = PAGE_CEILING(aSize);
@@ -719,7 +804,7 @@ class AddressRadixTree {
   static_assert(kBitsAtLevel1 + (kHeight - 1) * kBitsPerLevel == Bits,
                 "AddressRadixTree parameters don't work out");
 
-  Mutex mLock;
+  Mutex mLock MOZ_UNANNOTATED;
   void** mRoot;
 
  public:
@@ -873,7 +958,10 @@ struct arena_bin_t {
   //   304  12 KiB    320  12 KiB    336   4 KiB    352   8 KiB
   //   368   4 KiB    384   8 KiB    400  20 KiB    416  16 KiB
   //   432  12 KiB    448   4 KiB    464  16 KiB    480   8 KiB
-  //   496  20 KiB    512  32 KiB   1024  64 KiB   2048 128 KiB
+  //   496  20 KiB    512  32 KiB    768  16 KiB   1024  64 KiB
+  //  1280  24 KiB   1536  32 KiB   1792  16 KiB   2048 128 KiB
+  //  2304  16 KiB   2560  48 KiB   2816  36 KiB   3072  64 KiB
+  //  3328  36 KiB   3584  32 KiB   3840  64 KiB
   inline void Init(SizeClass aSizeClass);
 };
 
@@ -892,7 +980,7 @@ struct arena_t {
   arena_id_t mId;
 
   // All operations on this arena require that lock be locked.
-  Mutex mLock;
+  Mutex mLock MOZ_UNANNOTATED;
 
   arena_stats_t mStats;
 
@@ -967,8 +1055,12 @@ struct arena_t {
   //       33  |  496 |
   //       34  |  512 |
   //   --------+------+
-  //       35  | 1024 |
-  //       36  | 2048 |
+  //       35  |  768 |
+  //       36  | 1024 |
+  //           :      :
+  //           :      :
+  //       46  | 3584 |
+  //       47  | 3840 |
   //   --------+------+
   arena_bin_t mBins[1];  // Dynamically sized.
 
@@ -1113,7 +1205,7 @@ class ArenaCollection {
 
   inline arena_t* GetDefault() { return mDefaultArena; }
 
-  Mutex mLock;
+  Mutex mLock MOZ_UNANNOTATED;
 
  private:
   inline arena_t* GetByIdInternal(arena_id_t aArenaId, bool aIsPrivate);
@@ -1131,7 +1223,7 @@ static ArenaCollection gArenas;
 static AddressRadixTree<(sizeof(void*) << 3) - LOG2(kChunkSize)> gChunkRTree;
 
 // Protects chunk-related data structures.
-static Mutex chunks_mtx;
+static Mutex chunks_mtx MOZ_UNANNOTATED;
 
 // Trees of chunks that were previously allocated (trees differ only in node
 // ordering).  These are used when allocating chunks, in an attempt to re-use
@@ -1141,7 +1233,7 @@ static RedBlackTree<extent_node_t, ExtentTreeSzTrait> gChunksBySize;
 static RedBlackTree<extent_node_t, ExtentTreeTrait> gChunksByAddress;
 
 // Protects huge allocation-related data structures.
-static Mutex huge_mtx;
+static Mutex huge_mtx MOZ_UNANNOTATED;
 
 // Tree of chunks that are stand-alone huge allocations.
 static RedBlackTree<extent_node_t, ExtentTreeTrait> huge;
@@ -1161,7 +1253,7 @@ static void* base_pages;
 static void* base_next_addr;
 static void* base_next_decommitted;
 static void* base_past_addr;  // Addr immediately past base_pages.
-static Mutex base_mtx;
+static Mutex base_mtx MOZ_UNANNOTATED;
 static size_t base_mapped;
 static size_t base_committed;
 
@@ -1727,7 +1819,7 @@ static void* chunk_alloc_mmap_slow(size_t size, size_t alignment) {
   void *ret, *pages;
   size_t alloc_size, leadsize;
 
-  alloc_size = size + alignment - gPageSize;
+  alloc_size = size + alignment - gRealPageSize;
   // Beware size_t wrap-around.
   if (alloc_size < size) {
     return nullptr;
@@ -2151,37 +2243,73 @@ inline void* arena_t::ArenaRunRegAlloc(arena_run_t* aRun, arena_bin_t* aBin) {
   return nullptr;
 }
 
+// To divide by a number D that is not a power of two we multiply by (2^21 /
+// D) and then right shift by 21 positions.
+//
+//   X / D
+//
+// becomes
+//
+//   (X * size_invs[D - 3]) >> SIZE_INV_SHIFT
+//
+// Where D is d/Q and Q is a constant factor.
+template <unsigned Q, unsigned Max>
+struct FastDivide {
+  static_assert(IsPowerOfTwo(Q), "q must be a power-of-two");
+
+  // We don't need FastDivide when dividing by a power-of-two. So when we set
+  // the range (min_divisor - max_divisor inclusive) we can avoid powers-of-two.
+
+  // Because Q is a power of two Q*3 is the first not-power-of-two.
+  static const unsigned min_divisor = Q * 3;
+  static const unsigned max_divisor =
+      mozilla::IsPowerOfTwo(Max) ? Max - Q : Max;
+  // +1 because this range is inclusive.
+  static const unsigned num_divisors = (max_divisor - min_divisor) / Q + 1;
+
+  static const unsigned inv_shift = 21;
+
+  static constexpr unsigned inv(unsigned s) {
+    return ((1U << inv_shift) / (s * Q)) + 1;
+  }
+
+  static unsigned divide(size_t num, unsigned div) {
+    // clang-format off
+    static const unsigned size_invs[] = {
+      inv(3),
+      inv(4),  inv(5),  inv(6),  inv(7),
+      inv(8),  inv(9),  inv(10), inv(11),
+      inv(12), inv(13), inv(14), inv(15),
+      inv(16), inv(17), inv(18), inv(19),
+      inv(20), inv(21), inv(22), inv(23),
+      inv(24), inv(25), inv(26), inv(27),
+      inv(28), inv(29), inv(30), inv(31)
+    };
+    // clang-format on
+
+    // If the divisor is valid (min is below max) then the size_invs array must
+    // be large enough.
+    static_assert(!(min_divisor < max_divisor) ||
+                      num_divisors <= sizeof(size_invs) / sizeof(unsigned),
+                  "num_divisors does not match array size");
+
+    MOZ_ASSERT(div >= min_divisor);
+    MOZ_ASSERT(div <= max_divisor);
+    MOZ_ASSERT(div % Q == 0);
+
+    // If Q isn't a power of two this optimisation would be pointless, we expect
+    // /Q to be reduced to a shift, but we asserted this above.
+    const unsigned idx = div / Q - 3;
+    MOZ_ASSERT(idx < sizeof(size_invs) / sizeof(unsigned));
+    return (num * size_invs[idx]) >> inv_shift;
+  }
+};
+
 static inline void arena_run_reg_dalloc(arena_run_t* run, arena_bin_t* bin,
                                         void* ptr, size_t size) {
-  // To divide by a number D that is not a power of two we multiply
-  // by (2^21 / D) and then right shift by 21 positions.
-  //
-  //   X / D
-  //
-  // becomes
-  //
-  //   (X * size_invs[(D / kQuantum) - 3]) >> SIZE_INV_SHIFT
-
-#define SIZE_INV_SHIFT 21
-#define SIZE_INV(s) (((1U << SIZE_INV_SHIFT) / (s * kQuantum)) + 1)
-  // clang-format off
-  static const unsigned size_invs[] = {
-    SIZE_INV(3),
-    SIZE_INV(4), SIZE_INV(5), SIZE_INV(6), SIZE_INV(7),
-    SIZE_INV(8), SIZE_INV(9), SIZE_INV(10), SIZE_INV(11),
-    SIZE_INV(12),SIZE_INV(13), SIZE_INV(14), SIZE_INV(15),
-    SIZE_INV(16),SIZE_INV(17), SIZE_INV(18), SIZE_INV(19),
-    SIZE_INV(20),SIZE_INV(21), SIZE_INV(22), SIZE_INV(23),
-    SIZE_INV(24),SIZE_INV(25), SIZE_INV(26), SIZE_INV(27),
-    SIZE_INV(28),SIZE_INV(29), SIZE_INV(30), SIZE_INV(31)
-  };
-  // clang-format on
   unsigned diff, regind, elm, bit;
 
   MOZ_DIAGNOSTIC_ASSERT(run->mMagic == ARENA_RUN_MAGIC);
-  static_assert(
-      ((sizeof(size_invs)) / sizeof(unsigned)) + 3 >= kNumQuantumClasses,
-      "size_invs doesn't have enough values");
 
   // Avoid doing division with a variable divisor if possible.  Using
   // actual division here can reduce allocator throughput by over 20%!
@@ -2189,16 +2317,20 @@ static inline void arena_run_reg_dalloc(arena_run_t* run, arena_bin_t* bin,
       (unsigned)((uintptr_t)ptr - (uintptr_t)run - bin->mRunFirstRegionOffset);
   if (mozilla::IsPowerOfTwo(size)) {
     regind = diff >> FloorLog2(size);
-  } else if (size <= ((sizeof(size_invs) / sizeof(unsigned)) * kQuantum) + 2) {
-    regind = size_invs[(size / kQuantum) - 3] * diff;
-    regind >>= SIZE_INV_SHIFT;
   } else {
-    // size_invs isn't large enough to handle this size class, so
-    // calculate regind using actual division.  This only happens
-    // if the user increases small_max via the 'S' runtime
-    // configuration option.
-    regind = diff / size;
-  };
+    SizeClass sc(size);
+    switch (sc.Type()) {
+      case SizeClass::Quantum:
+        regind = FastDivide<kQuantum, kMaxQuantumClass>::divide(diff, size);
+        break;
+      case SizeClass::QuantumWide:
+        regind =
+            FastDivide<kQuantumWide, kMaxQuantumWideClass>::divide(diff, size);
+        break;
+      default:
+        regind = diff / size;
+    }
+  }
   MOZ_DIAGNOSTIC_ASSERT(diff == regind * size);
   MOZ_DIAGNOSTIC_ASSERT(regind < bin->mRunNumRegions);
 
@@ -2210,8 +2342,6 @@ static inline void arena_run_reg_dalloc(arena_run_t* run, arena_bin_t* bin,
   MOZ_RELEASE_ASSERT((run->mRegionsMask[elm] & (1U << bit)) == 0,
                      "Double-free?");
   run->mRegionsMask[elm] |= (1U << bit);
-#undef SIZE_INV
-#undef SIZE_INV_SHIFT
 }
 
 bool arena_t::SplitRun(arena_run_t* aRun, size_t aSize, bool aLarge,
@@ -2343,31 +2473,40 @@ void arena_t::InitChunk(arena_chunk_t* aChunk, bool aZeroed) {
   aChunk->ndirty = 0;
 
   // Initialize the map to contain one maximal free untouched run.
-#ifdef MALLOC_DECOMMIT
   arena_run_t* run = (arena_run_t*)(uintptr_t(aChunk) +
                                     (gChunkHeaderNumPages << gPageSize2Pow));
-#endif
 
-  for (i = 0; i < gChunkHeaderNumPages; i++) {
+  // Clear the bits for the real header pages.
+  for (i = 0; i < gChunkHeaderNumPages - 1; i++) {
     aChunk->map[i].bits = 0;
   }
-  aChunk->map[i].bits = gMaxLargeClass | flags;
-  for (i++; i < gChunkNumPages - 2; i++) {
+  // Mark the leading guard page (last header page) as decommitted.
+  aChunk->map[i++].bits = CHUNK_MAP_DECOMMITTED;
+
+  // Mark the area usable for runs as available, note size at start and end
+  aChunk->map[i++].bits = gMaxLargeClass | flags;
+  for (; i < gChunkNumPages - 2; i++) {
     aChunk->map[i].bits = flags;
   }
   aChunk->map[gChunkNumPages - 2].bits = gMaxLargeClass | flags;
-  // Mark the guard page as decommited.
+
+  // Mark the trailing guard page as decommitted.
   aChunk->map[gChunkNumPages - 1].bits = CHUNK_MAP_DECOMMITTED;
 
 #ifdef MALLOC_DECOMMIT
   // Start out decommitted, in order to force a closer correspondence
-  // between dirty pages and committed untouched pages.
-  pages_decommit(run, gMaxLargeClass + gPageSize);
+  // between dirty pages and committed untouched pages. This includes
+  // leading and trailing guard pages.
+  pages_decommit((void*)(uintptr_t(run) - gPageSize),
+                 gMaxLargeClass + 2 * gPageSize);
 #else
-  // Only decommit the last page as a guard.
+  // Decommit the last header page (=leading page) as a guard.
+  pages_decommit((void*)(uintptr_t(run) - gPageSize), gPageSize);
+  // Decommit the last page as a guard.
   pages_decommit((void*)(uintptr_t(aChunk) + kChunkSize - gPageSize),
                  gPageSize);
 #endif
+
   mStats.committed += gChunkHeaderNumPages;
 
   // Insert the run into the tree of available runs.
@@ -2826,11 +2965,21 @@ void* arena_t::MallocSmall(size_t aSize, bool aZero) {
       bin = &mBins[FloorLog2(aSize / kMinTinyClass)];
       break;
     case SizeClass::Quantum:
-      bin = &mBins[kNumTinyClasses + (aSize / kQuantum) - 1];
+      // Although we divide 2 things by kQuantum, the compiler will
+      // reduce `kMinQuantumClass / kQuantum` and `kNumTinyClasses` to a
+      // single constant.
+      bin = &mBins[kNumTinyClasses + (aSize / kQuantum) -
+                   (kMinQuantumClass / kQuantum)];
+      break;
+    case SizeClass::QuantumWide:
+      bin =
+          &mBins[kNumTinyClasses + kNumQuantumClasses + (aSize / kQuantumWide) -
+                 (kMinQuantumWideClass / kQuantumWide)];
       break;
     case SizeClass::SubPage:
-      bin = &mBins[kNumTinyClasses + kNumQuantumClasses +
-                   (FloorLog2(aSize / kMaxQuantumClass) - 1)];
+      bin =
+          &mBins[kNumTinyClasses + kNumQuantumClasses + kNumQuantumWideClasses +
+                 (FloorLog2(aSize) - LOG2(kMinSubPageClass))];
       break;
     default:
       MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("Unexpected size class type");
@@ -3567,8 +3716,8 @@ arena_t::arena_t(arena_params_t* aParams, bool aIsPrivate) {
     arena_bin_t& bin = mBins[i];
     bin.Init(sizeClass);
 
-    // SizeClass doesn't want sizes larger than gMaxSubPageClass for now.
-    if (sizeClass.Size() == gMaxSubPageClass) {
+    // SizeClass doesn't want sizes larger than gMaxBinClass for now.
+    if (sizeClass.Size() == gMaxBinClass) {
       break;
     }
     sizeClass = sizeClass.Next();
@@ -3892,11 +4041,8 @@ static bool malloc_init_hard() {
     MOZ_CRASH();
   }
 #else
-  gPageSize = (size_t)result;
-  DefineGlobals();
+  gRealPageSize = gPageSize = (size_t)result;
 #endif
-
-  MOZ_RELEASE_ASSERT(JEMALLOC_MAX_STATS_BINS >= NUM_SMALL_CLASSES);
 
   // Get runtime configuration.
   if ((opts = getenv("MALLOC_OPTIONS"))) {
@@ -3948,14 +4094,19 @@ static bool malloc_init_hard() {
           case 'J':
             opt_junk = true;
             break;
-#endif
-#ifdef MOZ_DEBUG
           case 'z':
             opt_zero = false;
             break;
           case 'Z':
             opt_zero = true;
             break;
+#  ifndef MALLOC_STATIC_PAGESIZE
+          case 'P':
+            if (gPageSize < 64_KiB) {
+              gPageSize <<= 1;
+            }
+            break;
+#  endif
 #endif
           case 'r':
             opt_randomize_small = false;
@@ -3978,6 +4129,9 @@ static bool malloc_init_hard() {
     }
   }
 
+#ifndef MALLOC_STATIC_PAGESIZE
+  DefineGlobals();
+#endif
   gRecycledSize = 0;
 
   // Initialize chunks data.
@@ -4248,10 +4402,7 @@ inline void MozJemalloc::jemalloc_stats_internal(
     return;
   }
   if (aBinStats) {
-    // An assertion in malloc_init_hard will guarantee that
-    // JEMALLOC_MAX_STATS_BINS >= NUM_SMALL_CLASSES.
-    memset(aBinStats, 0,
-           sizeof(jemalloc_bin_stats_t) * JEMALLOC_MAX_STATS_BINS);
+    memset(aBinStats, 0, sizeof(jemalloc_bin_stats_t) * NUM_SMALL_CLASSES);
   }
 
   // Gather runtime settings.
@@ -4259,6 +4410,9 @@ inline void MozJemalloc::jemalloc_stats_internal(
   aStats->opt_zero = opt_zero;
   aStats->quantum = kQuantum;
   aStats->quantum_max = kMaxQuantumClass;
+  aStats->quantum_wide = kQuantumWide;
+  aStats->quantum_wide_max = kMaxQuantumWideClass;
+  aStats->subpage_max = gMaxSubPageClass;
   aStats->large_max = gMaxLargeClass;
   aStats->chunksize = kChunkSize;
   aStats->page_size = gPageSize;
@@ -4372,6 +4526,11 @@ inline void MozJemalloc::jemalloc_stats_internal(
 
   MOZ_ASSERT(aStats->mapped >= aStats->allocated + aStats->waste +
                                    aStats->page_cache + aStats->bookkeeping);
+}
+
+template <>
+inline size_t MozJemalloc::jemalloc_stats_num_bins() {
+  return NUM_SMALL_CLASSES;
 }
 
 #ifdef MALLOC_DOUBLE_PURGE

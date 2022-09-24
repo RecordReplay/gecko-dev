@@ -14,6 +14,10 @@ DIRS = [
 
 DEFINES["MOZ_APP_VERSION"] = '"%s"' % CONFIG["MOZ_APP_VERSION"]
 
+for var in ("MOZ_BACKGROUNDTASKS",):
+    if CONFIG[var]:
+        DEFINES[var] = True
+
 LOCAL_INCLUDES += [
     "/xpcom/build",
     "/xpcom/threads",
@@ -23,9 +27,6 @@ SPHINX_TREES["/toolkit/components/telemetry"] = "docs"
 
 with Files("docs/**"):
     SCHEDULES.exclusive = ["docs"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
 
 if CONFIG["ENABLE_TESTS"]:
     # We used to need GeckoView tests as a separate directory. This
@@ -114,6 +115,10 @@ EXTRA_JS_MODULES += [
     "pings/UntrustedModulesPing.jsm",
     "pings/UpdatePing.jsm",
     "TelemetryStartup.jsm",
+]
+
+EXTRA_JS_MODULES.backgroundtasks += [
+    "pings/BackgroundTask_pingsender.jsm",
 ]
 
 if CONFIG["OS_ARCH"] == "WINNT":

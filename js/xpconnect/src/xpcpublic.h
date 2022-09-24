@@ -44,7 +44,6 @@ class JSObject;
 class JSString;
 class JSTracer;
 class nsGlobalWindowInner;
-class nsIAddonInterposition;
 class nsIGlobalObject;
 class nsIHandleReportCallback;
 class nsIPrincipal;
@@ -55,6 +54,7 @@ struct nsXPTInterfaceInfo;
 
 namespace JS {
 class Compartment;
+class ContextOptions;
 class Realm;
 class RealmOptions;
 class Value;
@@ -84,6 +84,11 @@ class Scriptability {
   void SetWindowAllowsScript(bool aAllowed);
 
   static Scriptability& Get(JSObject* aScope);
+
+  // Returns true if scripting is allowed, false otherwise (if no Scriptability
+  // exists, like for example inside a ShadowRealm global, then script execution
+  // is assumed to be allowed)
+  static bool AllowedIfExists(JSObject* aScope);
 
  private:
   // Whenever a consumer wishes to prevent script from running on a global,
@@ -193,10 +198,11 @@ struct RuntimeStats;
 
 }  // namespace JS
 
-#define XPC_WRAPPER_FLAGS (JSCLASS_HAS_PRIVATE | JSCLASS_FOREGROUND_FINALIZE)
+static_assert(JSCLASS_GLOBAL_APPLICATION_SLOTS > 0,
+              "Need at least one slot for JSCLASS_SLOT0_IS_NSISUPPORTS");
 
-#define XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(n)                            \
-  JSCLASS_DOM_GLOBAL | JSCLASS_HAS_PRIVATE | JSCLASS_PRIVATE_IS_NSISUPPORTS | \
+#define XPCONNECT_GLOBAL_FLAGS_WITH_EXTRA_SLOTS(n)    \
+  JSCLASS_DOM_GLOBAL | JSCLASS_SLOT0_IS_NSISUPPORTS | \
       JSCLASS_GLOBAL_FLAGS_WITH_SLOTS(DOM_GLOBAL_SLOTS + n)
 
 #define XPCONNECT_GLOBAL_EXTRA_SLOT_OFFSET \
@@ -333,8 +339,6 @@ class XPCStringConvert {
 
   XPCStringConvert() = delete;
 };
-
-class nsIAddonInterposition;
 
 namespace xpc {
 
@@ -580,6 +584,7 @@ class MOZ_RAII AutoScriptActivity {
 bool ShouldDiscardSystemSource();
 
 void SetPrefableRealmOptions(JS::RealmOptions& options);
+void SetPrefableContextOptions(JS::ContextOptions& options);
 
 class ErrorBase {
  public:

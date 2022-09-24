@@ -47,7 +47,7 @@ load 1305312-1.html
 load 1305850.html
 load 1334366-1.html
 load 1334647-1.html
-skip-if(geckoview&&webrender) load 1349067.html # Bug 1563214 for GV+WR
+skip-if(geckoview) load 1349067.html # Bug 1563214 for GV+WR
 skip-if(ThreadSanitizer) pref(gfx.offscreencanvas.enabled,true) load 1348976-1.html
 load 1357092.html
 load 1441613.html
@@ -57,3 +57,8 @@ load 1549853.html
 load 1551745.html
 load 1569648.html
 skip-if(!winWidget||!isDebugBuild) pref(layers.gpu-process.crash-also-crashes-browser,true) load 1654477.html
+load 1739454-1.html
+load 1740031.html
+pref(webgl.enable-privileged-extensions,true) load 1744172.html
+load 1757925-1.html
+load 1757755.html

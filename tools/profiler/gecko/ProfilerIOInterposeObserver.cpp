@@ -7,6 +7,12 @@
 
 using namespace mozilla;
 
+/* static */
+ProfilerIOInterposeObserver& ProfilerIOInterposeObserver::GetInstance() {
+  static ProfilerIOInterposeObserver sProfilerIOInterposeObserver;
+  return sProfilerIOInterposeObserver;
+}
+
 namespace geckoprofiler::markers {
 struct FileIOMarker {
   static constexpr Span<const char> MarkerTypeName() {
@@ -23,21 +29,27 @@ struct FileIOMarker {
       aWriter.StringProperty("filename", aFilename);
     }
     if (!aOperationThreadId.IsUnspecified()) {
-      aWriter.IntProperty("threadId", aOperationThreadId.ThreadId());
+      // Tech note: If `ToNumber()` returns a uint64_t, the conversion to
+      // int64_t is "implementation-defined" before C++20. This is acceptable
+      // here, because this is a one-way conversion to a unique identifier
+      // that's used to visually separate data by thread on the front-end.
+      aWriter.IntProperty(
+          "threadId",
+          static_cast<int64_t>(aOperationThreadId.ThreadId().ToNumber()));
     }
   }
   static MarkerSchema MarkerTypeDisplay() {
     using MS = MarkerSchema;
-    MS schema{MS::Location::markerChart, MS::Location::markerTable,
-              MS::Location::timelineFileIO};
+    MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable,
+              MS::Location::TimelineFileIO};
     schema.AddKeyLabelFormatSearchable("operation", "Operation",
-                                       MS::Format::string,
-                                       MS::Searchable::searchable);
-    schema.AddKeyLabelFormatSearchable("source", "Source", MS::Format::string,
-                                       MS::Searchable::searchable);
+                                       MS::Format::String,
+                                       MS::Searchable::Searchable);
+    schema.AddKeyLabelFormatSearchable("source", "Source", MS::Format::String,
+                                       MS::Searchable::Searchable);
     schema.AddKeyLabelFormatSearchable("filename", "Filename",
-                                       MS::Format::filePath,
-                                       MS::Searchable::searchable);
+                                       MS::Format::FilePath,
+                                       MS::Searchable::Searchable);
     return schema;
   }
 };
@@ -69,7 +81,9 @@ void ProfilerIOInterposeObserver::Observe(Observation& aObservation) {
   }
   uint32_t features = *maybeFeatures;
 
-  if (!profiler_can_accept_markers()) {
+  if (!profiler_thread_is_being_profiled_for_markers(
+          profiler_main_thread_id()) &&
+      !profiler_thread_is_being_profiled_for_markers()) {
     return;
   }
 
@@ -79,7 +93,7 @@ void ProfilerIOInterposeObserver::Observe(Observation& aObservation) {
     // This is the main thread.
     // Capture a marker if any "IO" feature is on.
     // If it's not being profiled, we have nowhere to store FileIO markers.
-    if (!profiler_thread_is_being_profiled() ||
+    if (!profiler_thread_is_being_profiled_for_markers() ||
         !(features & ProfilerFeature::MainThreadIO)) {
       return;
     }
@@ -106,7 +120,7 @@ void ProfilerIOInterposeObserver::Observe(Observation& aObservation) {
         // from another thread.
         MarkerThreadId{});
 
-  } else if (profiler_thread_is_being_profiled()) {
+  } else if (profiler_thread_is_being_profiled_for_markers()) {
     // This is a non-main thread that is being profiled.
     if (!(features & ProfilerFeature::FileIO)) {
       return;

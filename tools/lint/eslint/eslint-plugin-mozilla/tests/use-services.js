@@ -16,25 +16,45 @@ const ruleTester = new RuleTester({ parserOptions: { ecmaVersion: 6 } });
 // Tests
 // ------------------------------------------------------------------------------
 
-function invalidCode(code, name) {
-  let message = `Use Services.${name} rather than getService().`;
-  return { code, errors: [{ message, type: "CallExpression" }] };
+function invalidCode(code, name, replaces, type = "CallExpression") {
+  let message = `Use Services.${name} rather than ${replaces}.`;
+  return { code, errors: [{ message, type }] };
 }
 
 ruleTester.run("use-services", rule, {
   valid: [
-    'Cc["@mozilla.org/uuid-generator;1"].getService(Ci.nsIUUIDGenerator)',
-    'Components.classes["@mozilla.org/uuid-generator;1"].getService(Components.interfaces.nsIUUIDGenerator)',
+    'Cc["@mozilla.org/fakeservice;1"].getService(Ci.nsIFake)',
+    'Components.classes["@mozilla.org/fakeservice;1"].getService(Components.interfaces.nsIFake)',
     "Services.wm.addListener()",
   ],
   invalid: [
     invalidCode(
       'Cc["@mozilla.org/appshell/window-mediator;1"].getService(Ci.nsIWindowMediator);',
-      "wm"
+      "wm",
+      "getService()"
     ),
     invalidCode(
       'Components.classes["@mozilla.org/toolkit/app-startup;1"].getService(Components.interfaces.nsIAppStartup);',
-      "startup"
+      "startup",
+      "getService()"
+    ),
+    invalidCode(
+      `XPCOMUtils.defineLazyServiceGetters(this, {
+         uuidGen: ["@mozilla.org/uuid-generator;1", "nsIUUIDGenerator"],
+       });`,
+      "uuid",
+      "defineLazyServiceGetters",
+      "ArrayExpression"
+    ),
+    invalidCode(
+      `XPCOMUtils.defineLazyServiceGetter(
+         this,
+         "gELS",
+         "@mozilla.org/eventlistenerservice;1",
+         "nsIEventListenerService"
+       );`,
+      "els",
+      "defineLazyServiceGetter"
     ),
   ],
 });

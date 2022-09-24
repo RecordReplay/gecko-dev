@@ -42,15 +42,6 @@ class gfxPlatformGtk final : public gfxPlatform {
   static int32_t GetFontScaleDPI();
   static double GetFontScaleFactor();
 
-#ifdef MOZ_X11
-  void GetAzureBackendInfo(mozilla::widget::InfoObject& aObj) override {
-    gfxPlatform::GetAzureBackendInfo(aObj);
-    aObj.DefineProperty("CairoUseXRender", mozilla::gfx::gfxVars::UseXRender());
-  }
-#endif
-
-  bool UseImageOffscreenSurfaces();
-
   gfxImageFormat GetOffscreenFormat() override;
 
   bool SupportsApzWheelInput() const override { return true; }
@@ -64,15 +55,8 @@ class gfxPlatformGtk final : public gfxPlatform {
 
   bool AccelerateLayersByDefault() override;
 
-#ifdef MOZ_X11
-  already_AddRefed<mozilla::gfx::VsyncSource> CreateHardwareVsyncSource()
+  already_AddRefed<mozilla::gfx::VsyncSource> CreateGlobalHardwareVsyncSource()
       override;
-#endif
-
-#ifdef MOZ_WAYLAND
-  bool UseDMABufWebGL() override;
-  void DisableDMABufWebGL() { mUseWebGLDmabufBackend = false; }
-#endif
 
   bool IsX11Display() { return mIsX11Display; }
   bool IsWaylandDisplay() override {
@@ -82,6 +66,7 @@ class gfxPlatformGtk final : public gfxPlatform {
  protected:
   void InitX11EGLConfig();
   void InitDmabufConfig();
+  void InitVAAPIConfig();
   void InitPlatformGPUProcessPrefs() override;
   void InitWebRenderConfig() override;
   bool CheckVariationFontSupport() override;
@@ -93,9 +78,6 @@ class gfxPlatformGtk final : public gfxPlatform {
   nsTArray<uint8_t> GetPlatformCMSOutputProfileData() override;
 
   bool mIsX11Display;
-#ifdef MOZ_WAYLAND
-  bool mUseWebGLDmabufBackend;
-#endif
 };
 
 #endif /* GFX_PLATFORM_GTK_H */

@@ -18,6 +18,7 @@
 #include "mozilla/SVGImageContext.h"
 #include "mozilla/ToString.h"
 #include "mozilla/TypedEnumBits.h"
+#include "mozilla/Span.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/WritingModes.h"
 #include "mozilla/layout/FrameChildList.h"
@@ -50,11 +51,7 @@ class nsIWidget;
 class nsAtom;
 class nsIScrollableFrame;
 class nsRegion;
-class nsDisplayListBuilder;
-enum class nsDisplayListBuilderMode : uint8_t;
 enum nsChangeHint : uint32_t;
-class nsDisplayItem;
-class nsDisplayList;
 class nsFontMetrics;
 class nsFontFaceList;
 class nsIImageLoadingContent;
@@ -67,6 +64,10 @@ class imgIRequest;
 struct nsStyleFont;
 
 namespace mozilla {
+class nsDisplayItem;
+class nsDisplayList;
+class nsDisplayListBuilder;
+enum class nsDisplayListBuilderMode : uint8_t;
 struct AspectRatio;
 class ComputedStyle;
 class DisplayPortUtils;
@@ -75,7 +76,6 @@ enum class PseudoStyleType : uint8_t;
 class EventListenerManager;
 enum class LayoutFrameType : uint8_t;
 struct IntrinsicSize;
-struct ContainerLayerParameters;
 class ReflowOutput;
 class WritingMode;
 class DisplayItemClip;
@@ -113,6 +113,7 @@ struct ScrollMetadata;
 class Image;
 class StackingContextHelper;
 class Layer;
+class WebRenderLayerManager;
 
 }  // namespace layers
 }  // namespace mozilla
@@ -146,7 +147,6 @@ class nsLayoutUtils {
   typedef mozilla::dom::DOMRectList DOMRectList;
   typedef mozilla::layers::Layer Layer;
   typedef mozilla::layers::StackingContextHelper StackingContextHelper;
-  typedef mozilla::ContainerLayerParameters ContainerLayerParameters;
   typedef mozilla::IntrinsicSize IntrinsicSize;
   typedef mozilla::RelativeTo RelativeTo;
   typedef mozilla::ScrollOrigin ScrollOrigin;
@@ -163,9 +163,15 @@ class nsLayoutUtils {
   typedef mozilla::gfx::Size Size;
   typedef mozilla::gfx::Matrix4x4 Matrix4x4;
   typedef mozilla::gfx::Matrix4x4Flagged Matrix4x4Flagged;
+  typedef mozilla::gfx::MatrixScalesDouble MatrixScalesDouble;
   typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
   typedef mozilla::gfx::StrokeOptions StrokeOptions;
   typedef mozilla::image::ImgDrawResult ImgDrawResult;
+
+  using nsDisplayItem = mozilla::nsDisplayItem;
+  using nsDisplayList = mozilla::nsDisplayList;
+  using nsDisplayListBuilder = mozilla::nsDisplayListBuilder;
+  using nsDisplayListBuilderMode = mozilla::nsDisplayListBuilderMode;
 
  public:
   typedef mozilla::layers::FrameMetrics FrameMetrics;
@@ -494,8 +500,19 @@ class nsLayoutUtils {
    *
    * Just like IsAncestorFrameCrossDoc, except that it returns false when
    * aFrame == aAncestorFrame.
+   * TODO: Once after we fixed bug 1715932, this function should be removed.
    */
   static bool IsProperAncestorFrameCrossDoc(
+      const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
+      const nsIFrame* aCommonAncestor = nullptr);
+
+  /**
+   * Like IsProperAncestorFrame, but looks across document boundaries.
+   *
+   * Just like IsAncestorFrameCrossDoc, except that it returns false when
+   * aFrame == aAncestorFrame.
+   */
+  static bool IsProperAncestorFrameCrossDocInProcess(
       const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
       const nsIFrame* aCommonAncestor = nullptr);
 
@@ -536,25 +553,6 @@ class nsLayoutUtils {
       const nsIFrame* aAncestorFrame, const nsIFrame* aFrame,
       const nsIFrame* aCommonAncestor = nullptr);
 
-  /**
-   * Sets the fixed-pos metadata properties on aLayer.
-   * aAnchorRect is the basic anchor rectangle. If aFixedPosFrame is not a
-   * viewport frame, then we pick a corner of aAnchorRect to as the anchor point
-   * for the fixed-pos layer (i.e. the point to remain stable during zooming),
-   * based on which of the fixed-pos frame's CSS absolute positioning offset
-   * properties (top, left, right, bottom) are auto. aAnchorRect is in the
-   * coordinate space of aLayer's container layer (i.e. relative to the
-   * reference frame of the display item which is building aLayer's container
-   * layer).
-   */
-  static void SetFixedPositionLayerData(
-      Layer* aLayer, const nsIFrame* aViewportFrame, const nsRect& aAnchorRect,
-      const nsIFrame* aFixedPosFrame, nsPresContext* aPresContext,
-      const ContainerLayerParameters& aContainerParameters);
-
-  static mozilla::SideBits GetSideBitsAndAdjustAnchorForFixedPositionContent(
-      const nsIFrame* aViewportFrame, const nsIFrame* aFixedPosFrame,
-      mozilla::LayerPoint* aAnchor, const Rect* aAnchorRect);
   static mozilla::SideBits GetSideBitsForFixedPositionContent(
       const nsIFrame* aFixedPosFrame);
 
@@ -735,13 +733,30 @@ class nsLayoutUtils {
 
   /**
    * Get the popup frame of a given native mouse event.
-   * @param aPresContext only check popups within aPresContext or a descendant
+   * @param aRootPresContext only check popups within aRootPresContext or a
+   * descendant
    * @param aEvent  the event.
    * @return        Null, if there is no popup frame at the point, otherwise,
    *                returns top-most popup frame at the point.
    */
   static nsIFrame* GetPopupFrameForEventCoordinates(
-      nsPresContext* aPresContext, const mozilla::WidgetEvent* aEvent);
+      nsPresContext* aRootPresContext, const mozilla::WidgetEvent* aEvent);
+
+  /**
+   * Get the popup frame of a given point relative to a widget.
+   * @param aRootPresContext only check popups within aRootPresContext or a
+   * descendant
+   * @param aEvent  the event.
+   * @return        Null, if there is no popup frame at the point, otherwise,
+   *                returns top-most popup frame at the point.
+   */
+  enum class GetPopupFrameForPointFlags : uint8_t {
+    OnlyReturnFramesWithWidgets = 0x1,
+  };
+  static nsIFrame* GetPopupFrameForPoint(
+      nsPresContext* aRootPresContext, nsIWidget* aWidget,
+      const mozilla::LayoutDeviceIntPoint& aPoint,
+      GetPopupFrameForPointFlags aFlags = GetPopupFrameForPointFlags(0));
 
   /**
    * Get container and offset if aEvent collapses Selection.
@@ -933,9 +948,10 @@ class nsLayoutUtils {
 
   /**
    * Gets the scale factors of the transform for aFrame relative to the root
-   * frame if this transform is 2D, or the identity scale factors otherwise.
+   * frame if this transform can be drawn 2D, or the identity scale factors
+   * otherwise.
    */
-  static gfxSize GetTransformToAncestorScale(const nsIFrame* aFrame);
+  static MatrixScalesDouble GetTransformToAncestorScale(const nsIFrame* aFrame);
 
   /**
    * Gets the scale factors of the transform for aFrame relative to the root
@@ -943,7 +959,21 @@ class nsLayoutUtils {
    * If some frame on the path from aFrame to the display root frame may have an
    * animated scale, returns the identity scale factors.
    */
-  static gfxSize GetTransformToAncestorScaleExcludingAnimated(nsIFrame* aFrame);
+  static MatrixScalesDouble GetTransformToAncestorScaleExcludingAnimated(
+      nsIFrame* aFrame);
+
+  /**
+   * Gets a scale that includes CSS transforms in this process as well as the
+   * transform to ancestor scale passed down from our direct ancestor process
+   * (which includes any enclosing CSS transforms and resolution). Note: this
+   * does not include any resolution in the current process (this is on purpose
+   * because that is what the transform to ancestor field on FrameMetrics needs,
+   * see its definition for explanation as to why). This is the transform to
+   * ancestor scale to set on FrameMetrics.
+   */
+  static mozilla::ParentLayerToScreenScale2D
+  GetTransformToAncestorScaleCrossProcessForFrameMetrics(
+      const nsIFrame* aFrame);
 
   /**
    * Find the nearest common ancestor frame for aFrame1 and aFrame2. The
@@ -983,8 +1013,8 @@ class nsLayoutUtils {
     NO_COMMON_ANCESTOR,
     NONINVERTIBLE_TRANSFORM
   };
-  static TransformResult TransformPoints(nsIFrame* aFromFrame,
-                                         nsIFrame* aToFrame,
+  static TransformResult TransformPoints(RelativeTo aFromFrame,
+                                         RelativeTo aToFrame,
                                          uint32_t aPointCount,
                                          CSSPoint* aPoints);
 
@@ -1141,11 +1171,9 @@ class nsLayoutUtils {
     HideCaret = 0x20,
     ToWindow = 0x40,
     ExistingTransaction = 0x80,
-    NoComposite = 0x100,
-    Compressed = 0x200,
-    ForWebRender = 0x400,
-    UseHighQualityScaling = 0x800,
-    ResetViewportScrolling = 0x1000,
+    ForWebRender = 0x100,
+    UseHighQualityScaling = 0x200,
+    ResetViewportScrolling = 0x400,
   };
 
   /**
@@ -1198,10 +1226,10 @@ class nsLayoutUtils {
    * necessarily correspond to what's visible in the window; we don't
    * want to mess up the widget's layer tree.
    */
-  static nsresult PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
-                             const nsRegion& aDirtyRegion, nscolor aBackstop,
-                             nsDisplayListBuilderMode aBuilderMode,
-                             PaintFrameFlags aFlags = PaintFrameFlags(0));
+  static void PaintFrame(gfxContext* aRenderingContext, nsIFrame* aFrame,
+                         const nsRegion& aDirtyRegion, nscolor aBackstop,
+                         nsDisplayListBuilderMode aBuilderMode,
+                         PaintFrameFlags aFlags = PaintFrameFlags(0));
 
   /**
    * Uses a binary search for find where the cursor falls in the line of text
@@ -1225,9 +1253,13 @@ class nsLayoutUtils {
 
   class BoxCallback {
    public:
-    BoxCallback() : mIncludeCaptionBoxForTable(true) {}
+    BoxCallback() = default;
     virtual void AddBox(nsIFrame* aFrame) = 0;
-    bool mIncludeCaptionBoxForTable;
+    bool mIncludeCaptionBoxForTable = true;
+    // Whether we are in a continuation or ib-split-sibling of the target we're
+    // measuring. This is useful because if we know we're in the target subtree
+    // and measuring against it we can avoid finding the common ancestor.
+    bool mInTargetContinuation = false;
   };
   /**
    * Collect all CSS boxes associated with aFrame and its
@@ -1373,7 +1405,7 @@ class nsLayoutUtils {
    * @param aSizeInflation number to multiply font size by
    */
   static already_AddRefed<nsFontMetrics> GetFontMetricsForComputedStyle(
-      ComputedStyle* aComputedStyle, nsPresContext* aPresContext,
+      const ComputedStyle* aComputedStyle, nsPresContext* aPresContext,
       float aSizeInflation = 1.0f,
       uint8_t aVariantWidth = NS_FONT_VARIANT_WIDTH_NORMAL);
 
@@ -1642,11 +1674,11 @@ class nsLayoutUtils {
                                       DrawTarget* aDrawTarget) {
     return AppUnitWidthOfString(&aC, 1, aFontMetrics, aDrawTarget);
   }
-  static nscoord AppUnitWidthOfString(const nsString& aString,
+  static nscoord AppUnitWidthOfString(mozilla::Span<const char16_t> aString,
                                       nsFontMetrics& aFontMetrics,
                                       DrawTarget* aDrawTarget) {
-    return nsLayoutUtils::AppUnitWidthOfString(aString.get(), aString.Length(),
-                                               aFontMetrics, aDrawTarget);
+    return nsLayoutUtils::AppUnitWidthOfString(
+        aString.Elements(), aString.Length(), aFontMetrics, aDrawTarget);
   }
   static nscoord AppUnitWidthOfString(const char16_t* aString, uint32_t aLength,
                                       nsFontMetrics& aFontMetrics,
@@ -2040,15 +2072,6 @@ class nsLayoutUtils {
                                      mozilla::Side aSide);
 
   /**
-   * Return the border radius size (width, height) based only on the top-left
-   * corner. This is a special case used for drawing the Windows 10 drop-shadow,
-   * and only supports a specified length (not percentages) on the top-left
-   * corner.
-   */
-  static LayoutDeviceIntSize GetBorderRadiusForMenuDropShadow(
-      const nsIFrame* aFrame);
-
-  /**
    * Determine if a widget is likely to require transparency or translucency.
    *   @param aBackgroundFrame The frame that the background is set on. For
    *                           <window>s, this will be the canvas frame.
@@ -2095,15 +2118,14 @@ class nsLayoutUtils {
    * and prefs indicate we should be optimizing for speed over quality
    */
   static mozilla::gfx::ShapedTextFlags GetTextRunFlagsForStyle(
-      ComputedStyle* aComputedStyle, nsPresContext* aPresContext,
-      const nsStyleFont* aStyleFont, const nsStyleText* aStyleText,
-      nscoord aLetterSpacing);
+      const ComputedStyle*, nsPresContext*, const nsStyleFont*,
+      const nsStyleText*, nscoord aLetterSpacing);
 
   /**
    * Get orientation flags for textrun construction.
    */
   static mozilla::gfx::ShapedTextFlags GetTextRunOrientFlagsForStyle(
-      ComputedStyle* aComputedStyle);
+      const ComputedStyle*);
 
   /**
    * Takes two rectangles whose origins must be the same, and computes
@@ -2410,7 +2432,7 @@ class nsLayoutUtils {
   /**
    * Unions the overflow areas of the children of aFrame with aOverflowAreas.
    * aSkipChildLists specifies any child lists that should be skipped.
-   * kSelectPopupList and kPopupList are always skipped.
+   * kPopupList is always skipped.
    */
   static void UnionChildOverflow(
       nsIFrame* aFrame, mozilla::OverflowAreas& aOverflowAreas,
@@ -2570,11 +2592,6 @@ class nsLayoutUtils {
 #endif
 
   /**
-   * Helper method to get touch action behaviour from the frame
-   */
-  static mozilla::StyleTouchAction GetTouchActionFromFrame(nsIFrame* aFrame);
-
-  /**
    * Helper method to transform |aBounds| from aFrame to aAncestorFrame,
    * and combine it with |aPreciseTargetDest| if it is axis-aligned, or
    * combine it with |aImpreciseTargetDest| if not. The transformed rect is
@@ -2661,12 +2678,6 @@ class nsLayoutUtils {
   static bool AsyncPanZoomEnabled(const nsIFrame* aFrame);
 
   /**
-   * Returns the current APZ Resolution Scale. When Java Pan/Zoom is
-   * enabled in Fennec it will always return 1.0.
-   */
-  static float GetCurrentAPZResolutionScale(PresShell* aPresShell);
-
-  /**
    * Returns true if aDocument should be allowed to use resolution
    * zooming.
    */
@@ -2703,9 +2714,9 @@ class nsLayoutUtils {
    * @param aKey The key under which to log the data.
    * @param aValue The value of the data to be logged.
    */
-  static void LogTestDataForPaint(mozilla::layers::LayerManager* aManager,
-                                  ViewID aScrollId, const std::string& aKey,
-                                  const std::string& aValue) {
+  static void LogTestDataForPaint(
+      mozilla::layers::WebRenderLayerManager* aManager, ViewID aScrollId,
+      const std::string& aKey, const std::string& aValue) {
     DoLogTestDataForPaint(aManager, aScrollId, aKey, aValue);
   }
 
@@ -2715,9 +2726,9 @@ class nsLayoutUtils {
    * value. The type passed must support streaming to an std::ostream.
    */
   template <typename Value>
-  static void LogTestDataForPaint(mozilla::layers::LayerManager* aManager,
-                                  ViewID aScrollId, const std::string& aKey,
-                                  const Value& aValue) {
+  static void LogTestDataForPaint(
+      mozilla::layers::WebRenderLayerManager* aManager, ViewID aScrollId,
+      const std::string& aKey, const Value& aValue) {
     DoLogTestDataForPaint(aManager, aScrollId, aKey, mozilla::ToString(aValue));
   }
 
@@ -2757,11 +2768,10 @@ class nsLayoutUtils {
 
   static ScrollMetadata ComputeScrollMetadata(
       const nsIFrame* aForFrame, const nsIFrame* aScrollFrame,
-      nsIContent* aContent, const nsIFrame* aReferenceFrame,
-      mozilla::layers::LayerManager* aLayerManager, ViewID aScrollParentId,
-      const nsSize& aScrollPortSize, const mozilla::Maybe<nsRect>& aClipRect,
-      bool aIsRoot,
-      const mozilla::Maybe<ContainerLayerParameters>& aContainerParameters);
+      nsIContent* aContent, const nsIFrame* aItemFrame,
+      const nsPoint& aOffsetToReferenceFrame,
+      mozilla::layers::WebRenderLayerManager* aLayerManager,
+      ViewID aScrollParentId, const nsSize& aScrollPortSize, bool aIsRoot);
 
   /**
    * Returns the metadata to put onto the root layer of a layer tree, if one is
@@ -2770,8 +2780,7 @@ class nsLayoutUtils {
    */
   static mozilla::Maybe<ScrollMetadata> GetRootMetadata(
       nsDisplayListBuilder* aBuilder,
-      mozilla::layers::LayerManager* aLayerManager,
-      const ContainerLayerParameters& aContainerParameters,
+      mozilla::layers::WebRenderLayerManager* aLayerManager,
       const std::function<bool(ViewID& aScrollId)>& aCallback);
 
   /**
@@ -2787,13 +2796,6 @@ class nsLayoutUtils {
    */
   static nsMargin ScrollbarAreaToExcludeFromCompositionBoundsFor(
       const nsIFrame* aScrollFrame);
-
-  /**
-   * Looks in the layer subtree rooted at aLayer for a metrics with scroll id
-   * aScrollId. Returns true if such is found.
-   */
-  static bool ContainsMetricsWithId(const Layer* aLayer,
-                                    const ViewID& aScrollId);
 
   static bool ShouldUseNoScriptSheet(mozilla::dom::Document*);
   static bool ShouldUseNoFramesSheet(mozilla::dom::Document*);
@@ -2927,7 +2929,7 @@ class nsLayoutUtils {
 
   static void ComputeSystemFont(nsFont* aSystemFont,
                                 mozilla::StyleSystemFont aFontID,
-                                const nsFont* aDefaultVariableFont,
+                                const nsFont& aDefaultVariableFont,
                                 const mozilla::dom::Document* aDocument);
 
   static uint32_t ParseFontLanguageOverride(const nsAString& aLangTag);
@@ -3009,9 +3011,9 @@ class nsLayoutUtils {
   /**
    * Helper function for LogTestDataForPaint().
    */
-  static void DoLogTestDataForPaint(mozilla::layers::LayerManager* aManager,
-                                    ViewID aScrollId, const std::string& aKey,
-                                    const std::string& aValue);
+  static void DoLogTestDataForPaint(
+      mozilla::layers::WebRenderLayerManager* aManager, ViewID aScrollId,
+      const std::string& aKey, const std::string& aValue);
 
   static bool IsAPZTestLoggingEnabled();
 
@@ -3020,6 +3022,7 @@ class nsLayoutUtils {
 };
 
 MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(nsLayoutUtils::PaintFrameFlags)
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(nsLayoutUtils::GetPopupFrameForPointFlags)
 
 template <typename PointType, typename RectType, typename CoordType>
 /* static */ bool nsLayoutUtils::PointIsCloserToRect(
@@ -3154,9 +3157,6 @@ class AutoMaybeDisableFontInflation {
   nsPresContext* mPresContext;
   bool mOldValue;
 };
-
-void MaybeSetupTransactionIdAllocator(layers::LayerManager* aManager,
-                                      nsPresContext* aPresContext);
 
 }  // namespace layout
 }  // namespace mozilla

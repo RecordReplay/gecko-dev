@@ -9,23 +9,27 @@
 #include <algorithm>
 #include <utility>
 
+#include "CSSEditUtils.h"
+#include "EditAction.h"
+#include "EditorDOMPoint.h"
+#include "EditorUtils.h"
+#include "HTMLEditHelpers.h"
 #include "HTMLEditUtils.h"
+#include "TypeInState.h"  // for SpecifiedStyle
 #include "WSRunObject.h"
+
 #include "mozilla/Assertions.h"
-#include "mozilla/CSSEditUtils.h"
 #include "mozilla/CheckedInt.h"
 #include "mozilla/ContentIterator.h"
-#include "mozilla/EditAction.h"
-#include "mozilla/EditorDOMPoint.h"
-#include "mozilla/EditorUtils.h"
+#include "mozilla/IntegerRange.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/OwningNonNull.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/RangeUtils.h"
 #include "mozilla/StaticPrefs_editor.h"  // for StaticPrefs::editor_*
 #include "mozilla/TextComposition.h"
-#include "mozilla/TypeInState.h"  // for SpecifiedStyle
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/AncestorIterator.h"
@@ -52,6 +56,7 @@
 #include "nsIFrame.h"
 #include "nsINode.h"
 #include "nsLiteralString.h"
+#include "nsPrintfCString.h"
 #include "nsRange.h"
 #include "nsReadableUtils.h"
 #include "nsString.h"
@@ -76,6 +81,7 @@ using EmptyCheckOption = HTMLEditUtils::EmptyCheckOption;
 using LeafNodeType = HTMLEditUtils::LeafNodeType;
 using LeafNodeTypes = HTMLEditUtils::LeafNodeTypes;
 using StyleDifference = HTMLEditUtils::StyleDifference;
+using WalkTextOption = HTMLEditUtils::WalkTextOption;
 using WalkTreeDirection = HTMLEditUtils::WalkTreeDirection;
 using WalkTreeOption = HTMLEditUtils::WalkTreeOption;
 
@@ -106,49 +112,67 @@ static bool IsStyleCachePreservingSubAction(EditSubAction aEditSubAction) {
 }
 
 template void HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock(
-    RangeBoundary& aStartRef, RangeBoundary& aEndRef) const;
+    EditorDOMPoint& aStartPoint, EditorDOMPoint& aEndPoint,
+    const Element& aEditingHost) const;
 template void HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock(
-    RawRangeBoundary& aStartRef, RangeBoundary& aEndRef) const;
+    EditorRawDOMPoint& aStartPoint, EditorDOMPoint& aEndPoint,
+    const Element& aEditingHost) const;
 template void HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock(
-    RangeBoundary& aStartRef, RawRangeBoundary& aEndRef) const;
+    EditorDOMPoint& aStartPoint, EditorRawDOMPoint& aEndPoint,
+    const Element& aEditingHost) const;
 template void HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock(
-    RawRangeBoundary& aStartRef, RawRangeBoundary& aEndRef) const;
+    EditorRawDOMPoint& aStartPoint, EditorRawDOMPoint& aEndPoint,
+    const Element& aEditingHost) const;
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const RangeBoundary& aStartRef, const RangeBoundary& aEndRef);
+    const EditorDOMRange& aRange);
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const RawRangeBoundary& aStartRef, const RangeBoundary& aEndRef);
+    const EditorRawDOMRange& aRange);
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const RangeBoundary& aStartRef, const RawRangeBoundary& aEndRef);
+    const EditorDOMPoint& aStartPoint, const EditorDOMPoint& aEndPoint);
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const RawRangeBoundary& aStartRef, const RawRangeBoundary& aEndRef);
+    const EditorRawDOMPoint& aStartPoint, const EditorDOMPoint& aEndPoint);
+template already_AddRefed<nsRange>
+HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
+    const EditorDOMPoint& aStartPoint, const EditorRawDOMPoint& aEndPoint);
+template already_AddRefed<nsRange>
+HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
+    const EditorRawDOMPoint& aStartPoint, const EditorRawDOMPoint& aEndPoint);
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const RangeBoundary& aStartRef, const RangeBoundary& aEndRef,
+    const EditorDOMRange& aRange, EditSubAction aEditSubAction) const;
+template already_AddRefed<nsRange>
+HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
+    const EditorRawDOMRange& aRange, EditSubAction aEditSubAction) const;
+template already_AddRefed<nsRange>
+HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
+    const EditorDOMPoint& aStartPoint, const EditorDOMPoint& aEndPoint,
     EditSubAction aEditSubAction) const;
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const RawRangeBoundary& aStartRef, const RangeBoundary& aEndRef,
+    const EditorRawDOMPoint& aStartPoint, const EditorDOMPoint& aEndPoint,
     EditSubAction aEditSubAction) const;
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const RangeBoundary& aStartRef, const RawRangeBoundary& aEndRef,
+    const EditorDOMPoint& aStartPoint, const EditorRawDOMPoint& aEndPoint,
     EditSubAction aEditSubAction) const;
 template already_AddRefed<nsRange>
 HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const RawRangeBoundary& aStartRef, const RawRangeBoundary& aEndRef,
+    const EditorRawDOMPoint& aStartPoint, const EditorRawDOMPoint& aEndPoint,
     EditSubAction aEditSubAction) const;
 template EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
-    const RangeBoundary& aPoint, EditSubAction aEditSubAction) const;
+    const EditorDOMPoint& aPoint, EditSubAction aEditSubAction,
+    const Element& aEditingHost) const;
 template EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
-    const RawRangeBoundary& aPoint, EditSubAction aEditSubAction) const;
+    const EditorRawDOMPoint& aPoint, EditSubAction aEditSubAction,
+    const Element& aEditingHost) const;
 template EditorDOMPoint HTMLEditor::GetCurrentHardLineEndPoint(
-    const RangeBoundary& aPoint) const;
+    const EditorDOMPoint& aPoint, const Element& aEditingHost) const;
 template EditorDOMPoint HTMLEditor::GetCurrentHardLineEndPoint(
-    const RawRangeBoundary& aPoint) const;
+    const EditorRawDOMPoint& aPoint, const Element& aEditingHost) const;
 
 nsresult HTMLEditor::InitEditorContentAndSelection() {
   MOZ_ASSERT(IsEditActionDataAvailable());
@@ -209,11 +233,13 @@ void HTMLEditor::OnStartToHandleTopLevelEditSubAction(
       "EditorBase::OnStartToHandleTopLevelEditSubAction() failed");
 
   // Remember where our selection was before edit action took place:
-  if (GetCompositionStartPoint().IsSet()) {
+  const auto atCompositionStart =
+      GetFirstIMESelectionStartPoint<EditorRawDOMPoint>();
+  if (atCompositionStart.IsSet()) {
     // If there is composition string, let's remember current composition
     // range.
     TopLevelEditSubActionDataRef().mSelectedRange->StoreRange(
-        GetCompositionStartPoint(), GetCompositionEndPoint());
+        atCompositionStart, GetLastIMESelectionEndPoint<EditorRawDOMPoint>());
   } else {
     // Get the selection location
     // XXX This may occur so that I think that we shouldn't throw exception
@@ -363,37 +389,43 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
     // Note that this won't prevent explicit selection setting from working.
     AutoTransactionsConserveSelection dontChangeMySelection(*this);
 
-    switch (GetTopLevelEditSubAction()) {
-      case EditSubAction::eInsertText:
-      case EditSubAction::eInsertTextComingFromIME:
-      case EditSubAction::eInsertLineBreak:
-      case EditSubAction::eInsertParagraphSeparator:
-      case EditSubAction::eDeleteText: {
-        // XXX We should investigate whether this is really needed because it
-        //     seems that the following code does not handle the white-spaces.
-        RefPtr<nsRange> extendedChangedRange =
-            CreateRangeIncludingAdjuscentWhiteSpaces(
-                *TopLevelEditSubActionDataRef().mChangedRange);
-        if (extendedChangedRange) {
-          MOZ_ASSERT(extendedChangedRange->IsPositioned());
-          // Use extended range temporarily.
-          TopLevelEditSubActionDataRef().mChangedRange =
-              std::move(extendedChangedRange);
+    {
+      EditorRawDOMRange changedRange(
+          *TopLevelEditSubActionDataRef().mChangedRange);
+      if (changedRange.IsPositioned() &&
+          changedRange.EnsureNotInNativeAnonymousSubtree()) {
+        switch (GetTopLevelEditSubAction()) {
+          case EditSubAction::eInsertText:
+          case EditSubAction::eInsertTextComingFromIME:
+          case EditSubAction::eInsertLineBreak:
+          case EditSubAction::eInsertParagraphSeparator:
+          case EditSubAction::eDeleteText: {
+            // XXX We should investigate whether this is really needed because
+            //     it seems that the following code does not handle the
+            //     white-spaces.
+            RefPtr<nsRange> extendedChangedRange =
+                CreateRangeIncludingAdjuscentWhiteSpaces(changedRange);
+            if (extendedChangedRange) {
+              MOZ_ASSERT(extendedChangedRange->IsPositioned());
+              // Use extended range temporarily.
+              TopLevelEditSubActionDataRef().mChangedRange =
+                  std::move(extendedChangedRange);
+            }
+            break;
+          }
+          default: {
+            RefPtr<nsRange> extendedChangedRange =
+                CreateRangeExtendedToHardLineStartAndEnd(
+                    changedRange, GetTopLevelEditSubAction());
+            if (extendedChangedRange) {
+              MOZ_ASSERT(extendedChangedRange->IsPositioned());
+              // Use extended range temporarily.
+              TopLevelEditSubActionDataRef().mChangedRange =
+                  std::move(extendedChangedRange);
+            }
+            break;
+          }
         }
-        break;
-      }
-      default: {
-        RefPtr<nsRange> extendedChangedRange =
-            CreateRangeExtendedToHardLineStartAndEnd(
-                *TopLevelEditSubActionDataRef().mChangedRange,
-                GetTopLevelEditSubAction());
-        if (extendedChangedRange) {
-          MOZ_ASSERT(extendedChangedRange->IsPositioned());
-          // Use extended range temporarily.
-          TopLevelEditSubActionDataRef().mChangedRange =
-              std::move(extendedChangedRange);
-        }
-        break;
       }
     }
 
@@ -412,8 +444,8 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
     if (GetTopLevelEditSubAction() == EditSubAction::eDeleteSelectedContent &&
         TopLevelEditSubActionDataRef().mDidDeleteNonCollapsedRange &&
         !TopLevelEditSubActionDataRef().mDidDeleteEmptyParentBlocks) {
-      EditorDOMPoint newCaretPosition =
-          EditorBase::GetStartPoint(SelectionRef());
+      const auto newCaretPosition =
+          GetFirstSelectionStartPoint<EditorDOMPoint>();
       if (!newCaretPosition.IsSet()) {
         NS_WARNING("There was no selection range");
         return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
@@ -460,12 +492,15 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
       }
     }
 
-    // clean up any empty nodes in the selection
-    rv = RemoveEmptyNodesIn(
-        MOZ_KnownLive(*TopLevelEditSubActionDataRef().mChangedRange));
-    if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::RemoveEmptyNodesIn() failed");
-      return rv;
+    // Clean up any empty nodes in the changed range unless they are inserted
+    // intentionally.
+    if (TopLevelEditSubActionDataRef().mNeedsToCleanUpEmptyElements) {
+      nsresult rv = RemoveEmptyNodesIn(
+          MOZ_KnownLive(*TopLevelEditSubActionDataRef().mChangedRange));
+      if (NS_FAILED(rv)) {
+        NS_WARNING("HTMLEditor::RemoveEmptyNodesIn() failed");
+        return rv;
+      }
     }
 
     // attempt to transform any unneeded nbsp's into spaces after doing various
@@ -489,48 +524,69 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
         //       causes running mutation event listeners which are really
         //       expensive.
         // Adjust end of composition string if there is composition string.
-        EditorRawDOMPoint pointToAdjust(GetCompositionEndPoint());
-        if (!pointToAdjust.IsSet()) {
+        auto pointToAdjust = GetLastIMESelectionEndPoint<EditorDOMPoint>();
+        if (!pointToAdjust.IsInContentNode()) {
           // Otherwise, adjust current selection start point.
-          pointToAdjust = EditorBase::GetStartPoint(SelectionRef());
-          if (NS_WARN_IF(!pointToAdjust.IsSet())) {
+          pointToAdjust = GetFirstSelectionStartPoint<EditorDOMPoint>();
+          if (NS_WARN_IF(!pointToAdjust.IsInContentNode())) {
             return NS_ERROR_FAILURE;
           }
         }
-        rv = WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt(
-            *this, pointToAdjust);
-        if (NS_FAILED(rv)) {
-          NS_WARNING(
-              "WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt() "
-              "failed");
-          return rv;
+        if (EditorUtils::IsEditableContent(*pointToAdjust.ContainerAsContent(),
+                                           EditorType::HTML)) {
+          AutoTrackDOMPoint trackPointToAdjust(RangeUpdaterRef(),
+                                               &pointToAdjust);
+          nsresult rv =
+              WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt(
+                  *this, pointToAdjust);
+          if (NS_FAILED(rv)) {
+            NS_WARNING(
+                "WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt() "
+                "failed");
+            return rv;
+          }
         }
 
         // also do this for original selection endpoints.
         // XXX Hmm, if `NormalizeVisibleWhiteSpacesAt()` runs mutation event
         //     listener and that causes changing `mSelectedRange`, what we
         //     should do?
-        if (NS_WARN_IF(
-                !TopLevelEditSubActionDataRef().mSelectedRange->IsSet())) {
+        if (NS_WARN_IF(!TopLevelEditSubActionDataRef()
+                            .mSelectedRange->IsPositioned())) {
           return NS_ERROR_FAILURE;
         }
-        rv = WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt(
-            *this,
-            TopLevelEditSubActionDataRef().mSelectedRange->StartRawPoint());
-        if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
-          return NS_ERROR_EDITOR_DESTROYED;
-        }
-        NS_WARNING_ASSERTION(
-            NS_SUCCEEDED(rv),
-            "WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt() "
-            "failed, but ignored");
-        // we only need to handle old selection endpoint if it was different
-        // from start
-        if (TopLevelEditSubActionDataRef().mSelectedRange->IsCollapsed()) {
+
+        EditorDOMPoint atStart =
+            TopLevelEditSubActionDataRef().mSelectedRange->StartPoint();
+        if (atStart != pointToAdjust && atStart.IsInContentNode() &&
+            EditorUtils::IsEditableContent(*atStart.ContainerAsContent(),
+                                           EditorType::HTML)) {
+          AutoTrackDOMPoint trackPointToAdjust(RangeUpdaterRef(),
+                                               &pointToAdjust);
+          AutoTrackDOMPoint trackStartPoint(RangeUpdaterRef(), &atStart);
           nsresult rv =
               WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt(
-                  *this,
-                  TopLevelEditSubActionDataRef().mSelectedRange->EndRawPoint());
+                  *this, atStart);
+          if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+            return NS_ERROR_EDITOR_DESTROYED;
+          }
+          NS_WARNING_ASSERTION(
+              NS_SUCCEEDED(rv),
+              "WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt() "
+              "failed, but ignored");
+        }
+        // we only need to handle old selection endpoint if it was different
+        // from start
+        EditorDOMPoint atEnd =
+            TopLevelEditSubActionDataRef().mSelectedRange->EndPoint();
+        if (!TopLevelEditSubActionDataRef().mSelectedRange->Collapsed() &&
+            atEnd != pointToAdjust && atEnd != atStart &&
+            atEnd.IsInContentNode() &&
+            EditorUtils::IsEditableContent(*atEnd.ContainerAsContent(),
+                                           EditorType::HTML)) {
+          nsresult rv =
+              WhiteSpaceVisibilityKeeper::NormalizeVisibleWhiteSpacesAt(*this,
+                                                                        atEnd);
           if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
             return NS_ERROR_EDITOR_DESTROYED;
           }
@@ -603,16 +659,49 @@ nsresult HTMLEditor::OnEndHandlingTopLevelEditSubActionInternal() {
             IsStyleCachePreservingSubAction(GetTopLevelEditSubAction());
         break;
     }
+
+    // If the selection is in empty inline HTML elements, we should delete
+    // them unless it's inserted intentionally.
+    if (mPlaceholderBatch &&
+        TopLevelEditSubActionDataRef().mNeedsToCleanUpEmptyElements &&
+        SelectionRef().IsCollapsed() && SelectionRef().GetFocusNode()) {
+      RefPtr<Element> mostDistantEmptyInlineAncestor = nullptr;
+      for (Element* ancestor :
+           SelectionRef().GetFocusNode()->InclusiveAncestorsOfType<Element>()) {
+        if (!ancestor->IsHTMLElement() ||
+            !HTMLEditUtils::IsRemovableFromParentNode(*ancestor) ||
+            !HTMLEditUtils::IsEmptyInlineContent(*ancestor)) {
+          break;
+        }
+        mostDistantEmptyInlineAncestor = ancestor;
+      }
+      if (mostDistantEmptyInlineAncestor) {
+        nsresult rv =
+            DeleteNodeWithTransaction(*mostDistantEmptyInlineAncestor);
+        if (Destroyed()) {
+          NS_WARNING(
+              "HTMLEditor::DeleteNodeWithTransaction() caused destroying the "
+              "editor at deleting empty inline ancestors");
+          return NS_ERROR_EDITOR_DESTROYED;
+        }
+        if (NS_FAILED(rv)) {
+          NS_WARNING(
+              "HTMLEditor::DeleteNodeWithTransaction() failed at deleting "
+              "empty inline ancestors");
+          return rv;
+        }
+      }
+    }
+
+    // But the cached inline styles should be restored from type-in-state later.
     if (reapplyCachedStyle) {
-      DebugOnly<nsresult> rvIgnored =
-          mTypeInState->UpdateSelState(SelectionRef());
+      DebugOnly<nsresult> rvIgnored = mTypeInState->UpdateSelState(*this);
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
                            "TypeInState::UpdateSelState() failed, but ignored");
-      rv = ReapplyCachedStyles();
-      if (NS_FAILED(rv)) {
-        NS_WARNING("HTMLEditor::ReapplyCachedStyles() failed");
-        return rv;
-      }
+      rvIgnored = ReapplyCachedStyles();
+      NS_WARNING_ASSERTION(
+          NS_SUCCEEDED(rvIgnored),
+          "HTMLEditor::ReapplyCachedStyles() failed, but ignored");
       TopLevelEditSubActionDataRef().mCachedInlineStyles->Clear();
     }
   }
@@ -708,7 +797,7 @@ MOZ_CAN_RUN_SCRIPT static nsStaticAtom& MarginPropertyAtomForIndent(
                                         : *nsGkAtoms::marginLeft;
 }
 
-nsresult HTMLEditor::EnsureCaretNotAfterPaddingBRElement() {
+nsresult HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() {
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(SelectionRef().IsCollapsed());
 
@@ -725,35 +814,38 @@ nsresult HTMLEditor::EnsureCaretNotAfterPaddingBRElement() {
   }
   MOZ_ASSERT(atSelectionStart.IsSetAndValid());
 
-  Element* editingHost = GetActiveEditingHost();
-  if (!editingHost) {
-    NS_WARNING(
-        "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() did nothing because "
-        "of no editing host");
-    return NS_OK;
-  }
-
-  nsIContent* previousEditableContent = HTMLEditUtils::GetPreviousContent(
-      atSelectionStart, {WalkTreeOption::IgnoreNonEditableNode}, editingHost);
-  if (!previousEditableContent ||
-      !EditorUtils::IsPaddingBRElementForEmptyLastLine(
-          *previousEditableContent)) {
-    return NS_OK;
-  }
-
   if (!atSelectionStart.IsInContentNode()) {
     return NS_OK;
   }
 
-  RefPtr<Element> blockElementAtSelectionStart =
-      HTMLEditUtils::GetInclusiveAncestorBlockElement(
-          *atSelectionStart.ContainerAsContent());
-  RefPtr<Element> parentBlockElementOfPreviousEditableContent =
-      HTMLEditUtils::GetAncestorBlockElement(*previousEditableContent);
+  Element* editingHost = GetActiveEditingHost();
+  if (!editingHost) {
+    NS_WARNING(
+        "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() did nothing "
+        "because of no editing host");
+    return NS_OK;
+  }
+
+  nsIContent* previousBRElement =
+      HTMLEditUtils::GetPreviousContent(atSelectionStart, {}, editingHost);
+  if (!previousBRElement || !previousBRElement->IsHTMLElement(nsGkAtoms::br) ||
+      !previousBRElement->GetParent() ||
+      !EditorUtils::IsEditableContent(*previousBRElement->GetParent(),
+                                      EditorType::HTML) ||
+      !HTMLEditUtils::IsInvisibleBRElement(*previousBRElement)) {
+    return NS_OK;
+  }
+
+  const RefPtr<const Element> blockElementAtSelectionStart =
+      HTMLEditUtils::GetInclusiveAncestorElement(
+          *atSelectionStart.ContainerAsContent(),
+          HTMLEditUtils::ClosestBlockElement);
+  const RefPtr<const Element> parentBlockElementOfBRElement =
+      HTMLEditUtils::GetAncestorElement(*previousBRElement,
+                                        HTMLEditUtils::ClosestBlockElement);
 
   if (!blockElementAtSelectionStart ||
-      blockElementAtSelectionStart !=
-          parentBlockElementOfPreviousEditableContent) {
+      blockElementAtSelectionStart != parentBlockElementOfBRElement) {
     return NS_OK;
   }
 
@@ -761,10 +853,10 @@ nsresult HTMLEditor::EnsureCaretNotAfterPaddingBRElement() {
   // element for empty last line that is in the same block as the
   // selection.  We need to move the selection start to be before the
   // padding <br> element.
-  EditorRawDOMPoint atPreviousEditableContent(previousEditableContent);
-  nsresult rv = CollapseSelectionTo(atPreviousEditableContent);
+  EditorRawDOMPoint atInvisibleBRElement(previousBRElement);
+  nsresult rv = CollapseSelectionTo(atInvisibleBRElement);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionTo() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -830,24 +922,26 @@ nsresult HTMLEditor::MaybeCreatePaddingBRElementForEmptyEditor() {
   newBRElement->SetFlags(NS_PADDING_FOR_EMPTY_EDITOR);
 
   // Put the node in the document.
-  nsresult rv =
-      InsertNodeWithTransaction(*newBRElement, EditorDOMPoint(rootElement, 0));
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (NS_FAILED(rv)) {
+  CreateElementResult insertBRElementResult =
+      InsertNodeWithTransaction<Element>(*newBRElement,
+                                         EditorDOMPoint(rootElement, 0u));
+  if (insertBRElementResult.isErr()) {
     NS_WARNING("EditorBase::InsertNodeWithTransaction() failed");
-    return rv;
+    return insertBRElementResult.unwrapErr();
   }
 
   // Set selection.
-  SelectionRef().CollapseInLimiter(EditorRawDOMPoint(rootElement, 0),
-                                   ignoredError);
-  if (NS_WARN_IF(Destroyed())) {
+  insertBRElementResult.IgnoreCaretPointSuggestion();
+  nsresult rv = CollapseSelectionToStartOf(*rootElement);
+  if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    NS_WARNING(
+        "EditorBase::CollapseSelectionToStartOf() caused destroying the "
+        "editor");
     return NS_ERROR_EDITOR_DESTROYED;
   }
-  NS_WARNING_ASSERTION(!ignoredError.Failed(),
-                       "Selection::CollapseInLimiter() failed, but ignored");
+  NS_WARNING_ASSERTION(
+      NS_SUCCEEDED(rv),
+      "EditorBase::CollapseSelectionToStartOf() failed, but ignored");
   return NS_OK;
 }
 
@@ -868,7 +962,7 @@ nsresult HTMLEditor::EnsureNoPaddingBRElementForEmptyEditor() {
     return NS_ERROR_EDITOR_DESTROYED;
   }
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "EditorBase::DeleteNodeWithTransaction() failed");
+                       "HTMLEditor::DeleteNodeWithTransaction() failed");
   return rv;
 }
 
@@ -926,10 +1020,13 @@ nsresult HTMLEditor::PrepareInlineStylesForCaret() {
 }
 
 EditActionResult HTMLEditor::HandleInsertText(
-    EditSubAction aEditSubAction, const nsAString& aInsertionString) {
+    EditSubAction aEditSubAction, const nsAString& aInsertionString,
+    SelectionHandling aSelectionHandling) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
   MOZ_ASSERT(aEditSubAction == EditSubAction::eInsertText ||
              aEditSubAction == EditSubAction::eInsertTextComingFromIME);
+  MOZ_ASSERT_IF(aSelectionHandling == SelectionHandling::Ignore,
+                aEditSubAction == EditSubAction::eInsertTextComingFromIME);
 
   EditActionResult result = CanHandleHTMLEditSubAction();
   if (result.Failed() || result.Canceled()) {
@@ -942,7 +1039,8 @@ EditActionResult HTMLEditor::HandleInsertText(
 
   // If the selection isn't collapsed, delete it.  Don't delete existing inline
   // tags, because we're hopefully going to insert text (bug 787432).
-  if (!SelectionRef().IsCollapsed()) {
+  if (!SelectionRef().IsCollapsed() &&
+      aSelectionHandling == SelectionHandling::Delete) {
     nsresult rv =
         DeleteSelectionAsSubAction(nsIEditor::eNone, nsIEditor::eNoStrip);
     if (NS_FAILED(rv)) {
@@ -962,12 +1060,12 @@ EditActionResult HTMLEditor::HandleInsertText(
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -1032,7 +1130,8 @@ EditActionResult HTMLEditor::HandleInsertText(
   }
 
   if (aEditSubAction == EditSubAction::eInsertTextComingFromIME) {
-    EditorRawDOMPoint compositionStartPoint = GetCompositionStartPoint();
+    auto compositionStartPoint =
+        GetFirstIMESelectionStartPoint<EditorDOMPoint>();
     if (!compositionStartPoint.IsSet()) {
       compositionStartPoint = pointToInsert;
     }
@@ -1041,36 +1140,37 @@ EditActionResult HTMLEditor::HandleInsertText(
       // Right now the WhiteSpaceVisibilityKeeper code bails on empty strings,
       // but IME needs the InsertTextWithTransaction() call to still happen
       // since empty strings are meaningful there.
-      nsresult rv = InsertTextWithTransaction(*document, aInsertionString,
-                                              compositionStartPoint);
-      if (NS_WARN_IF(Destroyed())) {
-        return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
+      Result<EditorDOMPoint, nsresult> insertTextResult =
+          InsertTextWithTransaction(*document, aInsertionString,
+                                    compositionStartPoint);
+      if (MOZ_UNLIKELY(insertTextResult.isErr())) {
+        NS_WARNING("HTMLEditor::InsertTextWithTransaction() failed");
+        return EditActionResult(insertTextResult.unwrapErr());
       }
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "HTMLEditor::InsertTextWithTransaction() failed");
-      return EditActionHandled(rv);
+      return EditActionHandled();
     }
 
-    EditorRawDOMPoint compositionEndPoint = GetCompositionEndPoint();
+    auto compositionEndPoint = GetLastIMESelectionEndPoint<EditorDOMPoint>();
     if (!compositionEndPoint.IsSet()) {
       compositionEndPoint = compositionStartPoint;
     }
-    nsresult rv = WhiteSpaceVisibilityKeeper::ReplaceText(
-        *this, aInsertionString,
-        EditorDOMRange(compositionStartPoint, compositionEndPoint));
-    if (NS_FAILED(rv)) {
+    Result<EditorDOMPoint, nsresult> replaceTextResult =
+        WhiteSpaceVisibilityKeeper::ReplaceText(
+            *this, aInsertionString,
+            EditorDOMRange(compositionStartPoint, compositionEndPoint));
+    if (MOZ_UNLIKELY(replaceTextResult.isErr())) {
       NS_WARNING("WhiteSpaceVisibilityKeeper::ReplaceText() failed");
-      return EditActionHandled(rv);
+      return EditActionHandled(replaceTextResult.unwrapErr());
     }
 
-    compositionStartPoint = GetCompositionStartPoint();
-    compositionEndPoint = GetCompositionEndPoint();
+    compositionStartPoint = GetFirstIMESelectionStartPoint<EditorDOMPoint>();
+    compositionEndPoint = GetLastIMESelectionEndPoint<EditorDOMPoint>();
     if (NS_WARN_IF(!compositionStartPoint.IsSet()) ||
         NS_WARN_IF(!compositionEndPoint.IsSet())) {
       // Mutation event listener has changed the DOM tree...
       return EditActionHandled();
     }
-    rv = TopLevelEditSubActionDataRef().mChangedRange->SetStartAndEnd(
+    nsresult rv = TopLevelEditSubActionDataRef().mChangedRange->SetStartAndEnd(
         compositionStartPoint.ToRawRangeBoundary(),
         compositionEndPoint.ToRawRangeBoundary());
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "nsRange::SetStartAndEnd() failed");
@@ -1084,8 +1184,8 @@ EditActionResult HTMLEditor::HandleInsertText(
 
   // is our text going to be PREformatted?
   // We remember this so that we know how to handle tabs.
-  bool isPRE =
-      EditorUtils::IsContentPreformatted(*pointToInsert.ContainerAsContent());
+  const bool isWhiteSpaceCollapsible = !EditorUtils::IsWhiteSpacePreformatted(
+      *pointToInsert.ContainerAsContent());
 
   // turn off the edit listener: we know how to
   // build the "doc changed range" ourselves, and it's
@@ -1106,7 +1206,7 @@ EditActionResult HTMLEditor::HandleInsertText(
     // for efficiency, break out the pre case separately.  This is because
     // its a lot cheaper to search the input string for only newlines than
     // it is to search for both tabs and newlines.
-    if (isPRE || IsInPlaintextMode()) {
+    if (!isWhiteSpaceCollapsible || IsInPlaintextMode()) {
       while (pos != -1 &&
              pos < AssertedCast<int32_t>(aInsertionString.Length())) {
         int32_t oldPos = pos;
@@ -1128,16 +1228,21 @@ EditActionResult HTMLEditor::HandleInsertText(
 
         // is it a return?
         if (subStr.Equals(newlineStr)) {
-          Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-              InsertBRElementWithTransaction(currentPoint, nsIEditor::eNone);
-          if (resultOfInsertingBRElement.isErr()) {
+          CreateElementResult insertBRElementResult =
+              InsertBRElement(WithTransaction::Yes, currentPoint);
+          if (insertBRElementResult.isErr()) {
             NS_WARNING(
-                "HTMLEditor::InsertBRElementWithTransaction(eNone) failed");
-            return EditActionHandled(resultOfInsertingBRElement.unwrapErr());
+                "HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+            return EditActionHandled(insertBRElementResult.unwrapErr());
           }
+          // We don't want to update selection here because we've blocked
+          // InsertNodeTransaction updating selection with
+          // dontChangeMySelection.
+          insertBRElementResult.IgnoreCaretPointSuggestion();
+          MOZ_ASSERT(!AllowsTransactionsToChangeSelection());
+
           pos++;
-          RefPtr<Element> brElement(
-              resultOfInsertingBRElement.unwrap().forget());
+          RefPtr<Element> brElement = insertBRElementResult.UnwrapNewNode();
           if (brElement->GetNextSibling()) {
             pointToInsert.Set(brElement->GetNextSibling());
           } else {
@@ -1154,22 +1259,22 @@ EditActionResult HTMLEditor::HandleInsertText(
                                "to different point "
                                "by mutation observer");
         } else {
-          EditorRawDOMPoint pointAfterInsertedString;
-          nsresult rv = InsertTextWithTransaction(
-              *document, subStr, EditorRawDOMPoint(currentPoint),
-              &pointAfterInsertedString);
-          if (NS_WARN_IF(Destroyed())) {
-            return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
-          }
-          if (NS_FAILED(rv)) {
+          Result<EditorDOMPoint, nsresult> insertTextResult =
+              InsertTextWithTransaction(*document, subStr, currentPoint);
+          if (MOZ_UNLIKELY(insertTextResult.isErr())) {
             NS_WARNING("HTMLEditor::InsertTextWithTransaction() failed");
-            return EditActionHandled(rv);
+            return EditActionHandled(insertTextResult.unwrapErr());
           }
-          currentPoint = pointAfterInsertedString;
-          pointToInsert = pointAfterInsertedString;
+          currentPoint = insertTextResult.inspect();
+          pointToInsert = insertTextResult.unwrap();
         }
       }
     } else {
+      const RefPtr<Element> editingHost =
+          GetActiveEditingHost(LimitInBodyElement::No);
+      if (NS_WARN_IF(!editingHost)) {
+        return EditActionHandled(NS_ERROR_FAILURE);
+      }
       constexpr auto tabStr = u"\t"_ns;
       constexpr auto spacesStr = u"    "_ns;
       char specialChars[] = {TAB, nsCRT::LF, 0};
@@ -1195,28 +1300,43 @@ EditActionResult HTMLEditor::HandleInsertText(
 
         // is it a tab?
         if (subStr.Equals(tabStr)) {
-          EditorRawDOMPoint pointAfterInsertedSpaces;
-          nsresult rv = WhiteSpaceVisibilityKeeper::InsertText(
-              *this, spacesStr, currentPoint, &pointAfterInsertedSpaces);
-          if (NS_FAILED(rv)) {
+          Result<EditorDOMPoint, nsresult> insertTextResult =
+              WhiteSpaceVisibilityKeeper::InsertText(*this, spacesStr,
+                                                     currentPoint);
+          if (MOZ_UNLIKELY(insertTextResult.isErr())) {
             NS_WARNING("WhiteSpaceVisibilityKeeper::InsertText() failed");
-            return EditActionHandled(rv);
+            return EditActionHandled(insertTextResult.unwrapErr());
           }
           pos++;
-          MOZ_ASSERT(pointAfterInsertedSpaces.IsSet());
-          currentPoint = pointAfterInsertedSpaces;
-          pointToInsert = pointAfterInsertedSpaces;
+          MOZ_ASSERT(insertTextResult.inspect().IsSet());
+          currentPoint = insertTextResult.inspect();
+          pointToInsert = insertTextResult.unwrap();
         }
         // is it a return?
         else if (subStr.Equals(newlineStr)) {
-          Result<RefPtr<Element>, nsresult> result =
-              WhiteSpaceVisibilityKeeper::InsertBRElement(*this, currentPoint);
-          if (result.isErr()) {
+          CreateElementResult insertBRElementResult =
+              WhiteSpaceVisibilityKeeper::InsertBRElement(*this, currentPoint,
+                                                          *editingHost);
+          if (insertBRElementResult.isErr()) {
             NS_WARNING("WhiteSpaceVisibilityKeeper::InsertBRElement() failed");
-            return EditActionHandled(result.inspectErr());
+            return EditActionHandled(insertBRElementResult.unwrapErr());
           }
+          // TODO: Some methods called for handling non-preformatted text use
+          //       GetActiveEditingHost().  Therefore, they depend on the latest
+          //       selection.  So we cannot skip updating selection here.
+          nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("CareateElementResult::SuggestCaretPointTo() failed");
+            return EditActionHandled(rv);
+          }
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
           pos++;
-          RefPtr<Element> newBRElement = result.unwrap();
+          RefPtr<Element> newBRElement = insertBRElementResult.UnwrapNewNode();
           MOZ_DIAGNOSTIC_ASSERT(newBRElement);
           if (newBRElement->GetNextSibling()) {
             pointToInsert.Set(newBRElement->GetNextSibling());
@@ -1234,16 +1354,16 @@ EditActionResult HTMLEditor::HandleInsertText(
               currentPoint == pointToInsert,
               "Perhaps, newBRElement has been moved or removed unexpectedly");
         } else {
-          EditorRawDOMPoint pointAfterInsertedString;
-          nsresult rv = WhiteSpaceVisibilityKeeper::InsertText(
-              *this, subStr, currentPoint, &pointAfterInsertedString);
-          if (NS_FAILED(rv)) {
+          Result<EditorDOMPoint, nsresult> insertTextResult =
+              WhiteSpaceVisibilityKeeper::InsertText(*this, subStr,
+                                                     currentPoint);
+          if (MOZ_UNLIKELY(insertTextResult.isErr())) {
             NS_WARNING("WhiteSpaceVisibilityKeeper::InsertText() failed");
-            return EditActionHandled(rv);
+            return EditActionHandled(insertTextResult.unwrapErr());
           }
-          MOZ_ASSERT(pointAfterInsertedString.IsSet());
-          currentPoint = pointAfterInsertedString;
-          pointToInsert = pointAfterInsertedString;
+          MOZ_ASSERT(insertTextResult.inspect().IsSet());
+          currentPoint = insertTextResult.inspect();
+          pointToInsert = insertTextResult.unwrap();
         }
       }
     }
@@ -1251,32 +1371,165 @@ EditActionResult HTMLEditor::HandleInsertText(
     // After this block, pointToInsert is updated by AutoTrackDOMPoint.
   }
 
-  IgnoredErrorResult ignoredError;
-  SelectionRef().SetInterlinePosition(false, ignoredError);
-  NS_WARNING_ASSERTION(!ignoredError.Failed(),
-                       "Failed to unset interline position");
-
   if (currentPoint.IsSet()) {
+    currentPoint.SetInterlinePosition(InterlinePosition::EndOfLine);
     nsresult rv = CollapseSelectionTo(currentPoint);
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
       return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                          "Selection::Collapse() failed, but ignored");
-  }
 
-  // manually update the doc changed range so that AfterEdit will clean up
-  // the correct portion of the document.
-  if (currentPoint.IsSet()) {
-    nsresult rv = TopLevelEditSubActionDataRef().mChangedRange->SetStartAndEnd(
+    // manually update the doc changed range so that AfterEdit will clean up
+    // the correct portion of the document.
+    rv = TopLevelEditSubActionDataRef().mChangedRange->SetStartAndEnd(
         pointToInsert.ToRawRangeBoundary(), currentPoint.ToRawRangeBoundary());
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "nsRange::SetStartAndEnd() failed");
     return EditActionHandled(rv);
   }
 
+  DebugOnly<nsresult> rvIgnored =
+      SelectionRef().SetInterlinePosition(InterlinePosition::EndOfLine);
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
+                       "Selection::SetInterlinePosition(InterlinePosition::"
+                       "EndOfLine) failed, but ignored");
   rv = TopLevelEditSubActionDataRef().mChangedRange->CollapseTo(pointToInsert);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "nsRange::CollapseTo() failed");
   return EditActionHandled(rv);
+}
+
+nsresult HTMLEditor::InsertLineBreakAsSubAction() {
+  MOZ_ASSERT(IsEditActionDataAvailable());
+  MOZ_ASSERT(!IsSelectionRangeContainerNotContent());
+
+  if (NS_WARN_IF(!mInitSucceeded)) {
+    return NS_ERROR_NOT_INITIALIZED;
+  }
+
+  EditActionResult result = CanHandleHTMLEditSubAction();
+  if (result.Failed() || result.Canceled()) {
+    NS_WARNING_ASSERTION(result.Succeeded(),
+                         "HTMLEditor::CanHandleHTMLEditSubAction() failed");
+    return result.Rv();
+  }
+
+  // XXX This may be called by execCommand() with "insertLineBreak".
+  //     In such case, naming the transaction "TypingTxnName" is odd.
+  AutoPlaceholderBatch treatAsOneTransaction(*this, *nsGkAtoms::TypingTxnName,
+                                             ScrollSelectionIntoView::Yes,
+                                             __FUNCTION__);
+
+  // calling it text insertion to trigger moz br treatment by rules
+  // XXX Why do we use EditSubAction::eInsertText here?  Looks like
+  //     EditSubAction::eInsertLineBreak or EditSubAction::eInsertNode
+  //     is better.
+  IgnoredErrorResult ignoredError;
+  AutoEditSubActionNotifier startToHandleEditSubAction(
+      *this, EditSubAction::eInsertText, nsIEditor::eNext, ignoredError);
+  if (NS_WARN_IF(ignoredError.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED))) {
+    return ignoredError.StealNSResult();
+  }
+  NS_WARNING_ASSERTION(
+      !ignoredError.Failed(),
+      "HTMLEditor::OnStartToHandleTopLevelEditSubAction() failed, but ignored");
+
+  UndefineCaretBidiLevel();
+
+  // If the selection isn't collapsed, delete it.
+  if (!SelectionRef().IsCollapsed()) {
+    nsresult rv =
+        DeleteSelectionAsSubAction(nsIEditor::eNone, nsIEditor::eStrip);
+    if (NS_FAILED(rv)) {
+      NS_WARNING(
+          "EditorBase::DeleteSelectionAsSubAction(eNone, eStrip) failed");
+      return rv;
+    }
+  }
+
+  const nsRange* firstRange = SelectionRef().GetRangeAt(0);
+  if (NS_WARN_IF(!firstRange)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  EditorDOMPoint atStartOfSelection(firstRange->StartRef());
+  if (NS_WARN_IF(!atStartOfSelection.IsSet())) {
+    return NS_ERROR_FAILURE;
+  }
+  MOZ_ASSERT(atStartOfSelection.IsSetAndValid());
+
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (NS_WARN_IF(!editingHost)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // For backward compatibility, we should not insert a linefeed if
+  // paragraph separator is set to "br" which is Gecko-specific mode.
+  if (GetDefaultParagraphSeparator() == ParagraphSeparator::br ||
+      !HTMLEditUtils::ShouldInsertLinefeedCharacter(atStartOfSelection,
+                                                    *editingHost)) {
+    CreateElementResult insertBRElementResult = InsertBRElement(
+        WithTransaction::Yes, atStartOfSelection, nsIEditor::eNext);
+    if (insertBRElementResult.isErr()) {
+      NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+      return insertBRElementResult.unwrapErr();
+    }
+    nsresult rv = insertBRElementResult.SuggestCaretPointTo(*this, {});
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                         "CreateElementResult::SuggestCaretPointTo() failed");
+    MOZ_ASSERT(insertBRElementResult.GetNewNode());
+    return rv;
+  }
+
+  nsresult rv = EnsureNoPaddingBRElementForEmptyEditor();
+  if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    return NS_ERROR_EDITOR_DESTROYED;
+  }
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "EditorBase::EnsureNoPaddingBRElementForEmptyEditor() "
+                       "failed, but ignored");
+
+  if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
+    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      return NS_ERROR_EDITOR_DESTROYED;
+    }
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
+                         "failed, but ignored");
+    if (NS_SUCCEEDED(rv)) {
+      nsresult rv = PrepareInlineStylesForCaret();
+      if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+        return NS_ERROR_EDITOR_DESTROYED;
+      }
+      NS_WARNING_ASSERTION(
+          NS_SUCCEEDED(rv),
+          "HTMLEditor::PrepareInlineStylesForCaret() failed, but ignored");
+    }
+  }
+
+  firstRange = SelectionRef().GetRangeAt(0);
+  if (NS_WARN_IF(!firstRange)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  atStartOfSelection = EditorDOMPoint(firstRange->StartRef());
+  if (NS_WARN_IF(!atStartOfSelection.IsSet())) {
+    return NS_ERROR_FAILURE;
+  }
+  MOZ_ASSERT(atStartOfSelection.IsSetAndValid());
+
+  // Do nothing if the node is read-only
+  if (!HTMLEditUtils::IsSimplyEditableNode(
+          *atStartOfSelection.GetContainer())) {
+    return NS_SUCCESS_DOM_NO_OPERATION;
+  }
+
+  rv = HandleInsertLinefeed(atStartOfSelection, *editingHost);
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "HTMLEditor::HandleInsertLinefeed() failed");
+  return rv;
 }
 
 EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
@@ -1294,7 +1547,8 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   // XXX This may be called by execCommand() with "insertParagraph".
   //     In such case, naming the transaction "TypingTxnName" is odd.
   AutoPlaceholderBatch treatAsOneTransaction(*this, *nsGkAtoms::TypingTxnName,
-                                             ScrollSelectionIntoView::Yes);
+                                             ScrollSelectionIntoView::Yes,
+                                             __FUNCTION__);
 
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
@@ -1329,12 +1583,12 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -1347,21 +1601,38 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
     }
   }
 
-  // Split any mailcites in the way.  Should we abort this if we encounter
-  // table cell boundaries?
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (NS_WARN_IF(!editingHost)) {
+    return EditActionIgnored(NS_ERROR_FAILURE);
+  }
+
   if (IsMailEditor()) {
-    EditorDOMPoint pointToSplit(EditorBase::GetStartPoint(SelectionRef()));
-    if (NS_WARN_IF(!pointToSplit.IsSet())) {
+    const auto pointToSplit = GetFirstSelectionStartPoint<EditorDOMPoint>();
+    if (NS_WARN_IF(!pointToSplit.IsInContentNode())) {
       return EditActionIgnored(NS_ERROR_FAILURE);
     }
 
-    EditActionResult result = SplitMailCiteElements(pointToSplit);
-    if (result.Failed()) {
-      NS_WARNING("HTMLEditor::SplitMailCiteElements() failed");
-      return result;
-    }
-    if (result.Handled()) {
-      return result;
+    if (RefPtr<Element> mailCiteElement = GetMostDistantAncestorMailCiteElement(
+            *pointToSplit.ContainerAsContent())) {
+      // Split any mailcites in the way.  Should we abort this if we encounter
+      // table cell boundaries?
+      Result<EditorDOMPoint, nsresult> atNewBRElementOrError =
+          HandleInsertParagraphInMailCiteElement(*mailCiteElement, pointToSplit,
+                                                 *editingHost);
+      if (MOZ_UNLIKELY(atNewBRElementOrError.isErr())) {
+        NS_WARNING(
+            "HTMLEditor::HandleInsertParagraphInMailCiteElement() failed");
+        return EditActionHandled(atNewBRElementOrError.unwrapErr());
+      }
+      EditorDOMPoint pointToPutCaret = atNewBRElementOrError.unwrap();
+      MOZ_ASSERT(pointToPutCaret.IsSet());
+      pointToPutCaret.SetInterlinePosition(InterlinePosition::StartOfNextLine);
+      MOZ_ASSERT(pointToPutCaret.GetChild());
+      MOZ_ASSERT(pointToPutCaret.GetChild()->IsHTMLElement(nsGkAtoms::br));
+      nsresult rv = CollapseSelectionTo(pointToPutCaret);
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                           "EditorBase::CollapseSelectionTo() failed");
+      return EditActionHandled(rv);
     }
   }
 
@@ -1386,10 +1657,6 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   // If the active editing host is an inline element, or if the active editing
   // host is the block parent itself and we're configured to use <br> as a
   // paragraph separator, just append a <br>.
-  RefPtr<Element> editingHost = GetActiveEditingHost();
-  if (NS_WARN_IF(!editingHost)) {
-    return EditActionIgnored(NS_ERROR_FAILURE);
-  }
   // If the editing host parent element is editable, it means that the editing
   // host must be a <body> element and the selection may be outside the body
   // element.  If the selection is outside the editing host, we should not
@@ -1407,58 +1674,83 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   // Look for the nearest parent block.  However, don't return error even if
   // there is no block parent here because in such case, i.e., editing host
   // is an inline element, we should insert <br> simply.
-  RefPtr<Element> blockElement =
+  RefPtr<Element> editableBlockElement =
       atStartOfSelection.IsInContentNode()
-          ? HTMLEditUtils::GetInclusiveAncestorBlockElement(
-                *atStartOfSelection.ContainerAsContent(), editingHost)
+          ? HTMLEditUtils::GetInclusiveAncestorElement(
+                *atStartOfSelection.ContainerAsContent(),
+                HTMLEditUtils::ClosestEditableBlockElement)
           : nullptr;
 
   ParagraphSeparator separator = GetDefaultParagraphSeparator();
-  bool insertBRElement;
+  bool insertLineBreak;
   // If there is no block parent in the editing host, i.e., the editing host
-  // itself is also a non-block element, we should insert a <br> element.
-  if (!blockElement) {
+  // itself is also a non-block element, we should insert a line break.
+  if (!editableBlockElement) {
     // XXX Chromium checks if the CSS box of the editing host is a block.
-    insertBRElement = true;
+    insertLineBreak = true;
   }
-  // If only the editing host is block, and the default paragraph separator
-  // is <br> or the editing host cannot contain a <p> element, we should
-  // insert a <br> element.
-  else if (editingHost == blockElement) {
-    insertBRElement = separator == ParagraphSeparator::br ||
-                      !HTMLEditUtils::CanElementContainParagraph(*editingHost);
+  // If the editable block element is not splittable, e.g., it's an editing
+  // host, and the default paragraph separator is <br> or the element cannot
+  // contain a <p> element, we should insert a <br> element.
+  else if (!HTMLEditUtils::IsSplittableNode(*editableBlockElement)) {
+    insertLineBreak =
+        separator == ParagraphSeparator::br ||
+        !HTMLEditUtils::CanElementContainParagraph(*editingHost) ||
+        HTMLEditUtils::ShouldInsertLinefeedCharacter(atStartOfSelection,
+                                                     *editingHost);
   }
   // If the nearest block parent is a single-line container declared in
   // the execCommand spec and not the editing host, we should separate the
   // block even if the default paragraph separator is <br> element.
-  else if (HTMLEditUtils::IsSingleLineContainer(*blockElement)) {
-    insertBRElement = false;
+  else if (HTMLEditUtils::IsSingleLineContainer(*editableBlockElement)) {
+    insertLineBreak = false;
   }
   // Otherwise, unless there is no block ancestor which can contain <p>
-  // element, we shouldn't insert a <br> element here.
+  // element, we shouldn't insert a line break here.
   else {
-    insertBRElement = true;
-    for (Element* blockAncestor = blockElement;
-         blockAncestor && insertBRElement;
-         blockAncestor = HTMLEditUtils::GetAncestorBlockElement(*blockAncestor,
-                                                                editingHost)) {
-      insertBRElement =
-          !HTMLEditUtils::CanElementContainParagraph(*blockAncestor);
+    insertLineBreak = true;
+    for (const Element* editableBlockAncestor = editableBlockElement;
+         editableBlockAncestor && insertLineBreak;
+         editableBlockAncestor = HTMLEditUtils::GetAncestorElement(
+             *editableBlockAncestor,
+             HTMLEditUtils::ClosestEditableBlockElement)) {
+      insertLineBreak =
+          !HTMLEditUtils::CanElementContainParagraph(*editableBlockAncestor);
     }
   }
 
   // If we cannot insert a <p>/<div> element at the selection, we should insert
-  // a <br> element instead.
-  if (insertBRElement) {
-    nsresult rv = InsertBRElement(atStartOfSelection);
+  // a <br> element or a linefeed instead.
+  if (insertLineBreak) {
+    // For backward compatibility, we should not insert a linefeed if
+    // paragraph separator is set to "br" which is Gecko-specific mode.
+    if (separator != ParagraphSeparator::br &&
+        HTMLEditUtils::ShouldInsertLinefeedCharacter(atStartOfSelection,
+                                                     *editingHost)) {
+      nsresult rv = HandleInsertLinefeed(atStartOfSelection, *editingHost);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("HTMLEditor::HandleInsertLinefeed() failed");
+        return EditActionResult(rv);
+      }
+      return EditActionHandled();
+    }
+
+    CreateElementResult insertBRElementResult =
+        HandleInsertBRElement(atStartOfSelection, *editingHost);
+    if (insertBRElementResult.isErr()) {
+      NS_WARNING("HTMLEditor::HandleInsertBRElement() failed");
+      return EditActionHandled(insertBRElementResult.unwrapErr());
+    }
+    nsresult rv = insertBRElementResult.SuggestCaretPointTo(*this, {});
     if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::InsertBRElement() failed");
-      return EditActionIgnored(rv);
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return EditActionHandled(rv);
     }
     return EditActionHandled();
   }
 
-  if (editingHost == blockElement && separator != ParagraphSeparator::br) {
+  if (!HTMLEditUtils::IsSplittableNode(*editableBlockElement) &&
+      separator != ParagraphSeparator::br) {
     // Insert a new block first
     MOZ_ASSERT(separator == ParagraphSeparator::div ||
                separator == ParagraphSeparator::p);
@@ -1483,25 +1775,29 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
     }
 
     atStartOfSelection = firstRange->StartRef();
-    if (NS_WARN_IF(!atStartOfSelection.IsSet())) {
+    if (NS_WARN_IF(!atStartOfSelection.IsInContentNode())) {
       return EditActionIgnored(NS_ERROR_FAILURE);
     }
     MOZ_ASSERT(atStartOfSelection.IsSetAndValid());
 
-    blockElement =
-        atStartOfSelection.IsInContentNode()
-            ? HTMLEditUtils::GetInclusiveAncestorBlockElement(
-                  *atStartOfSelection.ContainerAsContent(), editingHost)
-            : nullptr;
-    if (NS_WARN_IF(!blockElement)) {
+    editableBlockElement = HTMLEditUtils::GetInclusiveAncestorElement(
+        *atStartOfSelection.ContainerAsContent(),
+        HTMLEditUtils::ClosestEditableBlockElement);
+    if (NS_WARN_IF(!editableBlockElement)) {
       return EditActionIgnored(NS_ERROR_UNEXPECTED);
     }
-    if (NS_WARN_IF(blockElement == editingHost)) {
+    if (NS_WARN_IF(!HTMLEditUtils::IsSplittableNode(*editableBlockElement))) {
       // Didn't create a new block for some reason, fall back to <br>
-      rv = InsertBRElement(atStartOfSelection);
+      CreateElementResult insertBRElementResult =
+          HandleInsertBRElement(atStartOfSelection, *editingHost);
+      if (insertBRElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::HandleInsertBRElement() failed");
+        return EditActionResult(insertBRElementResult.unwrapErr());
+      }
+      nsresult rv = insertBRElementResult.SuggestCaretPointTo(*this, {});
       if (NS_FAILED(rv)) {
-        NS_WARNING("HTMLEditor::InsertBRElement() failed");
-        return EditActionIgnored(rv);
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return EditActionHandled(rv);
       }
       return EditActionHandled();
     }
@@ -1512,7 +1808,7 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
     // wrap following inline elements of a <br> element which is next sibling
     // of container of the caret.  So, we need to adjust mNewBlockElement here
     // for avoiding jumping caret to odd position.
-    TopLevelEditSubActionDataRef().mNewBlockElement = blockElement;
+    TopLevelEditSubActionDataRef().mNewBlockElement = editableBlockElement;
   }
 
   // If block is empty, populate with br.  (For example, imagine a div that
@@ -1520,45 +1816,86 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   // "Text" is deleted leaving an empty block.  We want to put in one br to
   // make block have a line.  Then code further below will put in a second br.)
   if (HTMLEditUtils::IsEmptyBlockElement(
-          *blockElement, {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+          *editableBlockElement,
+          {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
     AutoEditorDOMPointChildInvalidator lockOffset(atStartOfSelection);
     EditorDOMPoint endOfBlockParent;
-    endOfBlockParent.SetToEndOf(blockElement);
-    Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-        InsertBRElementWithTransaction(endOfBlockParent);
-    if (resultOfInsertingBRElement.isErr()) {
-      NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-      return EditActionIgnored(resultOfInsertingBRElement.unwrapErr());
+    endOfBlockParent.SetToEndOf(editableBlockElement);
+    const CreateElementResult insertBRElementResult =
+        InsertBRElement(WithTransaction::Yes, endOfBlockParent);
+    if (insertBRElementResult.isErr()) {
+      NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+      return EditActionIgnored(insertBRElementResult.unwrapErr());
     }
-    MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+    // XXX Is this intentional selection change?
+    nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return EditActionHandled(rv);
+    }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+    MOZ_ASSERT(insertBRElementResult.GetNewNode());
   }
 
-  RefPtr<Element> listItem = HTMLEditUtils::GetClosestAncestorListItemElement(
-      *blockElement, editingHost);
-  if (listItem && listItem != editingHost) {
-    nsresult rv = HandleInsertParagraphInListItemElement(
-        *listItem, MOZ_KnownLive(*atStartOfSelection.GetContainer()),
-        atStartOfSelection.Offset());
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
-      return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
+  RefPtr<Element> maybeNonEditableListItem =
+      HTMLEditUtils::GetClosestAncestorListItemElement(*editableBlockElement,
+                                                       editingHost);
+  if (maybeNonEditableListItem &&
+      HTMLEditUtils::IsSplittableNode(*maybeNonEditableListItem)) {
+    Result<EditorDOMPoint, nsresult> pointToPutCaretOrError =
+        HandleInsertParagraphInListItemElement(
+            *maybeNonEditableListItem, atStartOfSelection, *editingHost);
+    if (MOZ_UNLIKELY(pointToPutCaretOrError.isErr())) {
+      if (NS_WARN_IF(pointToPutCaretOrError.unwrapErr() ==
+                     NS_ERROR_EDITOR_DESTROYED)) {
+        return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
+      }
+      NS_WARNING(
+          "HTMLEditor::HandleInsertParagraphInListItemElement() failed, but "
+          "ignored");
+      return EditActionHandled();
     }
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::HandleInsertParagraphInListItemElement() "
-                         "failed, but ignored");
+    nsresult rv = CollapseSelectionTo(pointToPutCaretOrError.unwrap());
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
+      return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
+    }
+    NS_WARNING_ASSERTION(
+        NS_SUCCEEDED(rv),
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
     return EditActionHandled();
   }
 
-  if (HTMLEditUtils::IsHeader(*blockElement)) {
+  if (HTMLEditUtils::IsHeader(*editableBlockElement)) {
     // Headers: close (or split) header
-    nsresult rv = HandleInsertParagraphInHeadingElement(
-        *blockElement, MOZ_KnownLive(*atStartOfSelection.GetContainer()),
-        atStartOfSelection.Offset());
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
-      return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
+    Result<EditorDOMPoint, nsresult> pointToPutCaretOrError =
+        HandleInsertParagraphInHeadingElement(*editableBlockElement,
+                                              atStartOfSelection);
+    if (MOZ_UNLIKELY(pointToPutCaretOrError.isErr())) {
+      if (NS_WARN_IF(pointToPutCaretOrError.unwrapErr() ==
+                     NS_ERROR_EDITOR_DESTROYED)) {
+        return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
+      }
+      NS_WARNING(
+          "HTMLEditor::HandleInsertParagraphInHeadingElement() failed, but "
+          "ignored");
+      return EditActionHandled();
     }
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::HandleInsertParagraphInHeadingElement() "
-                         "failed, but ignored");
+    nsresult rv = CollapseSelectionTo(pointToPutCaretOrError.unwrap());
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
+      return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
+    }
+    NS_WARNING_ASSERTION(
+        NS_SUCCEEDED(rv),
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
     return EditActionHandled();
   }
 
@@ -1570,12 +1907,14 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   //     paragraph separator is <br>.  Otherwise, take consistent behavior
   //     between <p> container and <div> container.
   if ((separator == ParagraphSeparator::br &&
-       blockElement->IsHTMLElement(nsGkAtoms::p)) ||
+       editableBlockElement->IsHTMLElement(nsGkAtoms::p)) ||
       (separator != ParagraphSeparator::br &&
-       blockElement->IsAnyOfHTMLElements(nsGkAtoms::p, nsGkAtoms::div))) {
+       editableBlockElement->IsAnyOfHTMLElements(nsGkAtoms::p,
+                                                 nsGkAtoms::div))) {
     AutoEditorDOMPointChildInvalidator lockOffset(atStartOfSelection);
     // Paragraphs: special rules to look for <br>s
-    EditActionResult result = HandleInsertParagraphInParagraph(*blockElement);
+    EditActionResult result =
+        HandleInsertParagraphInParagraph(*editableBlockElement);
     if (result.Failed()) {
       NS_WARNING("HTMLEditor::HandleInsertParagraphInParagraph() failed");
       return result;
@@ -1595,53 +1934,58 @@ EditActionResult HTMLEditor::InsertParagraphSeparatorAsSubAction() {
   }
 
   // If nobody handles this edit action, let's insert new <br> at the selection.
-  rv = InsertBRElement(atStartOfSelection);
+  CreateElementResult insertBRElementResult =
+      HandleInsertBRElement(atStartOfSelection, *editingHost);
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::HandleInsertBRElement() failed");
+    return EditActionIgnored(insertBRElementResult.unwrapErr());
+  }
+  rv = insertBRElementResult.SuggestCaretPointTo(*this, {});
   if (NS_FAILED(rv)) {
-    NS_WARNING("HTMLEditor::InsertBRElement() failed");
-    return EditActionIgnored(rv);
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return EditActionHandled(rv);
   }
   return EditActionHandled();
 }
 
-nsresult HTMLEditor::InsertBRElement(const EditorDOMPoint& aPointToBreak) {
+CreateElementResult HTMLEditor::HandleInsertBRElement(
+    const EditorDOMPoint& aPointToBreak, Element& aEditingHost) {
+  MOZ_ASSERT(aPointToBreak.IsSet());
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  if (NS_WARN_IF(!aPointToBreak.IsSet())) {
-    return NS_ERROR_INVALID_ARG;
-  }
-
   bool brElementIsAfterBlock = false, brElementIsBeforeBlock = false;
-
-  RefPtr<Element> editingHost = GetActiveEditingHost();
 
   // First, insert a <br> element.
   RefPtr<Element> brElement;
   if (IsInPlaintextMode()) {
-    Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-        InsertBRElementWithTransaction(aPointToBreak);
-    if (resultOfInsertingBRElement.isErr()) {
-      NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-      return resultOfInsertingBRElement.unwrapErr();
+    CreateElementResult insertBRElementResult =
+        InsertBRElement(WithTransaction::Yes, aPointToBreak);
+    if (insertBRElementResult.isErr()) {
+      NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+      return CreateElementResult(insertBRElementResult.unwrapErr());
     }
-    MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-    brElement = resultOfInsertingBRElement.unwrap().forget();
+    // We'll return with suggesting new caret position and nobody refers
+    // selection after here.  So we don't need to update selection here.
+    insertBRElementResult.IgnoreCaretPointSuggestion();
+    MOZ_ASSERT(insertBRElementResult.GetNewNode());
+    brElement = insertBRElementResult.UnwrapNewNode();
   } else {
     EditorDOMPoint pointToBreak(aPointToBreak);
-    WSRunScanner wsRunScanner(editingHost, pointToBreak);
+    WSRunScanner wsRunScanner(&aEditingHost, pointToBreak);
     WSScanResult backwardScanResult =
         wsRunScanner.ScanPreviousVisibleNodeOrBlockBoundaryFrom(pointToBreak);
-    if (backwardScanResult.Failed()) {
+    if (MOZ_UNLIKELY(backwardScanResult.Failed())) {
       NS_WARNING(
           "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom() failed");
-      return NS_ERROR_FAILURE;
+      return CreateElementResult(NS_ERROR_FAILURE);
     }
     brElementIsAfterBlock = backwardScanResult.ReachedBlockBoundary();
     WSScanResult forwardScanResult =
         wsRunScanner.ScanNextVisibleNodeOrBlockBoundaryFrom(pointToBreak);
-    if (forwardScanResult.Failed()) {
+    if (MOZ_UNLIKELY(forwardScanResult.Failed())) {
       NS_WARNING(
           "WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom() failed");
-      return NS_ERROR_FAILURE;
+      return CreateElementResult(NS_ERROR_FAILURE);
     }
     brElementIsBeforeBlock = forwardScanResult.ReachedBlockBoundary();
     // If the container of the break is a link, we need to split it and
@@ -1649,33 +1993,47 @@ nsresult HTMLEditor::InsertBRElement(const EditorDOMPoint& aPointToBreak) {
     RefPtr<Element> linkNode =
         HTMLEditor::GetLinkElement(pointToBreak.GetContainer());
     if (linkNode) {
-      SplitNodeResult splitLinkNodeResult = SplitNodeDeepWithTransaction(
+      const SplitNodeResult splitLinkNodeResult = SplitNodeDeepWithTransaction(
           *linkNode, pointToBreak, SplitAtEdges::eDoNotCreateEmptyContainer);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (splitLinkNodeResult.Failed()) {
+      if (splitLinkNodeResult.isErr()) {
         NS_WARNING(
             "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
             "eDoNotCreateEmptyContainer) failed");
-        return splitLinkNodeResult.Rv();
+        return CreateElementResult(splitLinkNodeResult.unwrapErr());
       }
-      pointToBreak = splitLinkNodeResult.SplitPoint();
+      // TODO: Some methods called by
+      //       WhiteSpaceVisibilityKeeper::InsertBRElement() use
+      //       GetActiveEditingHost() which depends on selection.  Therefore,
+      //       we cannot skip updating selection here.
+      nsresult rv = splitLinkNodeResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+        return CreateElementResult(rv);
+      }
+      pointToBreak = splitLinkNodeResult.AtSplitPoint<EditorDOMPoint>();
+      // When adding caret suggestion to SplitNodeResult, here didn't change
+      // selection so that just ignore it.
+      splitLinkNodeResult.IgnoreCaretPointSuggestion();
     }
-    Result<RefPtr<Element>, nsresult> result =
-        WhiteSpaceVisibilityKeeper::InsertBRElement(*this, pointToBreak);
-    if (result.isErr()) {
+    CreateElementResult insertBRElementResult =
+        WhiteSpaceVisibilityKeeper::InsertBRElement(*this, pointToBreak,
+                                                    aEditingHost);
+    if (insertBRElementResult.isErr()) {
       NS_WARNING("WhiteSpaceVisibilityKeeper::InsertBRElement() failed");
-      return result.inspectErr();
+      return CreateElementResult(insertBRElementResult.unwrapErr());
     }
-    brElement = result.unwrap();
+    // We'll return with suggesting new caret position and nobody refers
+    // selection after here.  So we don't need to update selection here.
+    insertBRElementResult.IgnoreCaretPointSuggestion();
+    brElement = insertBRElementResult.UnwrapNewNode();
     MOZ_ASSERT(brElement);
   }
 
-  // If the <br> element has already been removed from the DOM tree by a
-  // mutation event listener, don't continue handling this.
-  if (NS_WARN_IF(!brElement->GetParentNode())) {
-    return NS_ERROR_FAILURE;
+  if (MOZ_UNLIKELY(!brElement->GetParentNode())) {
+    NS_WARNING("Inserted <br> element was removed by the web app");
+    return CreateElementResult(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
   }
 
   if (brElementIsAfterBlock && brElementIsBeforeBlock) {
@@ -1685,27 +2043,18 @@ nsresult HTMLEditor::InsertBRElement(const EditorDOMPoint& aPointToBreak) {
     // XXX brElementIsAfterBlock and brElementIsBeforeBlock were set before
     //     modifying the DOM tree.  So, now, the <br> element may not be
     //     between blocks.
-    IgnoredErrorResult ignoredError;
-    SelectionRef().SetInterlinePosition(true, ignoredError);
-    NS_WARNING_ASSERTION(
-        !ignoredError.Failed(),
-        "Selection::SetInterlinePosition(true) failed, but ignored");
-    nsresult rv = CollapseSelectionTo(EditorRawDOMPoint(brElement));
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionTo() failed");
-    return rv;
+    return CreateElementResult(
+        std::move(brElement),
+        EditorDOMPoint(brElement, InterlinePosition::StartOfNextLine));
   }
 
-  EditorDOMPoint afterBRElement(brElement);
-  DebugOnly<bool> advanced = afterBRElement.AdvanceOffset();
-  NS_WARNING_ASSERTION(advanced,
-                       "Failed to advance offset after the new <br> element");
+  auto afterBRElement = EditorDOMPoint::After(brElement);
   WSScanResult forwardScanFromAfterBRElementResult =
-      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(editingHost,
+      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(&aEditingHost,
                                                        afterBRElement);
-  if (forwardScanFromAfterBRElementResult.Failed()) {
+  if (MOZ_UNLIKELY(forwardScanFromAfterBRElementResult.Failed())) {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
-    return NS_ERROR_FAILURE;
+    return CreateElementResult(NS_ERROR_FAILURE);
   }
   if (forwardScanFromAfterBRElementResult.ReachedBRElement()) {
     // The next thing after the break we inserted is another break.  Move the
@@ -1717,231 +2066,395 @@ nsresult HTMLEditor::InsertBRElement(const EditorDOMPoint& aPointToBreak) {
     if (brElement->GetNextSibling() !=
         forwardScanFromAfterBRElementResult.BRElementPtr()) {
       MOZ_ASSERT(forwardScanFromAfterBRElementResult.BRElementPtr());
-      nsresult rv = MoveNodeWithTransaction(
+      const MoveNodeResult moveBRElementResult = MoveNodeWithTransaction(
           MOZ_KnownLive(*forwardScanFromAfterBRElementResult.BRElementPtr()),
           afterBRElement);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      if (moveBRElementResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
-        return rv;
+        return CreateElementResult(moveBRElementResult.unwrapErr());
       }
+      nsresult rv = moveBRElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return CreateElementResult(rv);
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     }
   }
 
-  // SetInterlinePosition(true) means we want the caret to stick to the
-  // content on the "right".  We want the caret to stick to whatever is past
-  // the break.  This is because the break is on the same line we were on,
-  // but the next content will be on the following line.
+  // We want the caret to stick to whatever is past the break.  This is because
+  // the break is on the same line we were on, but the next content will be on
+  // the following line.
 
   // An exception to this is if the break has a next sibling that is a block
   // node.  Then we stick to the left to avoid an uber caret.
   nsIContent* nextSiblingOfBRElement = brElement->GetNextSibling();
-  IgnoredErrorResult ignoredError;
-  SelectionRef().SetInterlinePosition(
-      !(nextSiblingOfBRElement &&
-        HTMLEditUtils::IsBlockElement(*nextSiblingOfBRElement)),
-      ignoredError);
-  NS_WARNING_ASSERTION(!ignoredError.Failed(),
-                       "Selection::SetInterlinePosition() failed, but ignored");
-  nsresult rv = CollapseSelectionTo(afterBRElement);
+  afterBRElement.SetInterlinePosition(
+      nextSiblingOfBRElement &&
+              HTMLEditUtils::IsBlockElement(*nextSiblingOfBRElement)
+          ? InterlinePosition::EndOfLine
+          : InterlinePosition::StartOfNextLine);
+  return CreateElementResult(std::move(brElement), afterBRElement);
+}
+
+nsresult HTMLEditor::HandleInsertLinefeed(const EditorDOMPoint& aPointToBreak,
+                                          Element& aEditingHost) {
+  MOZ_ASSERT(IsEditActionDataAvailable());
+
+  if (NS_WARN_IF(!aPointToBreak.IsSet())) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  // TODO: The following code is duplicated from `HandleInsertText`.  They
+  //       should be merged when we fix bug 92921.
+
+  RefPtr<const nsRange> caretRange =
+      nsRange::Create(aPointToBreak.ToRawRangeBoundary(),
+                      aPointToBreak.ToRawRangeBoundary(), IgnoreErrors());
+  if (NS_WARN_IF(!caretRange)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsresult rv = CreateStyleForInsertText(*caretRange);
+  if (NS_FAILED(rv)) {
+    NS_WARNING("HTMLEditor::CreateStyleForInsertText() failed");
+    return rv;
+  }
+
+  caretRange = SelectionRef().GetRangeAt(0);
+  if (NS_WARN_IF(!caretRange)) {
+    return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+  }
+
+  EditorDOMPoint pointToInsert(caretRange->StartRef());
+  if (NS_WARN_IF(!pointToInsert.IsSet()) ||
+      NS_WARN_IF(!pointToInsert.IsInContentNode())) {
+    return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+  }
+  MOZ_ASSERT(pointToInsert.IsSetAndValid());
+
+  // The node may not be able to have a text node so that we need to check it
+  // here.
+  if (!pointToInsert.IsInTextNode() &&
+      !HTMLEditUtils::CanNodeContain(*pointToInsert.ContainerAsContent(),
+                                     *nsGkAtoms::textTagName)) {
+    NS_WARNING(
+        "HTMLEditor::HandleInsertLinefeed() couldn't insert a linefeed because "
+        "the insertion position couldn't have text nodes");
+    return NS_ERROR_EDITOR_NO_EDITABLE_RANGE;
+  }
+
+  RefPtr<Document> document = GetDocument();
+  MOZ_ASSERT(document);
+  if (NS_WARN_IF(!document)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  AutoRestore<bool> disableListener(
+      EditSubActionDataRef().mAdjustChangedRangeFromListener);
+  EditSubActionDataRef().mAdjustChangedRangeFromListener = false;
+  AutoTransactionsConserveSelection dontChangeMySelection(*this);
+  EditorRawDOMPoint caretAfterInsert;
+  {
+    AutoTrackDOMPoint trackingInsertingPosition(RangeUpdaterRef(),
+                                                &pointToInsert);
+    Result<EditorDOMPoint, nsresult> insertTextResult =
+        InsertTextWithTransaction(*document, u"\n"_ns, pointToInsert);
+    if (MOZ_UNLIKELY(insertTextResult.isErr())) {
+      NS_WARNING("HTMLEditor::InsertTextWithTransaction() failed");
+      return insertTextResult.unwrapErr();
+    }
+    caretAfterInsert = insertTextResult.unwrap().To<EditorRawDOMPoint>();
+  }
+
+  // Insert a padding <br> element at the end of the block element if there is
+  // no content between the inserted linefeed and the following block boundary
+  // to make sure that the last line is visible.
+  // XXX Blink/WebKit inserts another linefeed character in this case.  However,
+  //     for doing it, we need more work, e.g., updating serializer, deleting
+  //     unnecessary padding <br> element at modifying the last line.
+  if (caretAfterInsert.IsInContentNode() &&
+      caretAfterInsert.IsEndOfContainer()) {
+    WSRunScanner wsScannerAtCaret(&aEditingHost, caretAfterInsert);
+    if (wsScannerAtCaret.StartsFromPreformattedLineBreak() &&
+        wsScannerAtCaret.EndsByBlockBoundary() &&
+        HTMLEditUtils::CanNodeContain(*wsScannerAtCaret.GetEndReasonContent(),
+                                      *nsGkAtoms::br)) {
+      auto newCaretPosition = caretAfterInsert.To<EditorDOMPoint>();
+      {
+        AutoTrackDOMPoint trackingInsertedPosition(RangeUpdaterRef(),
+                                                   &pointToInsert);
+        AutoTrackDOMPoint trackingNewCaretPosition(RangeUpdaterRef(),
+                                                   &newCaretPosition);
+        CreateElementResult insertBRElementResult =
+            InsertBRElement(WithTransaction::Yes, newCaretPosition);
+        if (insertBRElementResult.isErr()) {
+          NS_WARNING(
+              "HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+          return insertBRElementResult.unwrapErr();
+        }
+        // We're tracking next caret position with newCaretPosition.  Therefore,
+        // we don't need to update selection here.
+        insertBRElementResult.IgnoreCaretPointSuggestion();
+        MOZ_ASSERT(insertBRElementResult.GetNewNode());
+      }
+      caretAfterInsert = newCaretPosition.To<EditorRawDOMPoint>();
+    }
+  }
+
+  // manually update the doc changed range so that
+  // OnEndHandlingTopLevelEditSubActionInternal will clean up the correct
+  // portion of the document.
+  if (NS_WARN_IF(!caretAfterInsert.IsSet())) {
+    DebugOnly<nsresult> rvIgnored =
+        SelectionRef().SetInterlinePosition(InterlinePosition::EndOfLine);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
+                         "Selection::SetInterlinePosition(InterlinePosition::"
+                         "EndOfLine) failed, but ignored");
+    if (NS_FAILED(TopLevelEditSubActionDataRef().mChangedRange->CollapseTo(
+            pointToInsert))) {
+      NS_WARNING("nsRange::CollapseTo() failed");
+      return NS_ERROR_FAILURE;
+    }
+    // XXX Here is odd.  We did mChangedRange->SetStartAndEnd(pointToInsert,
+    //     caretAfterInsert), but it always fail so that returning
+    //     NS_ERROR_FAILURE from here is the traditional behavior...
+    return NS_ERROR_FAILURE;
+  }
+
+  if (MOZ_UNLIKELY(NS_FAILED(
+          TopLevelEditSubActionDataRef().mChangedRange->SetStartAndEnd(
+              pointToInsert.ToRawRangeBoundary(),
+              caretAfterInsert.ToRawRangeBoundary())))) {
+    NS_WARNING("nsRange::SetStartAndEnd() failed");
+    return NS_ERROR_FAILURE;
+  }
+
+  caretAfterInsert.SetInterlinePosition(InterlinePosition::EndOfLine);
+  rv = CollapseSelectionTo(caretAfterInsert);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionTo() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
-EditActionResult HTMLEditor::SplitMailCiteElements(
-    const EditorDOMPoint& aPointToSplit) {
+Result<EditorDOMPoint, nsresult>
+HTMLEditor::HandleInsertParagraphInMailCiteElement(
+    Element& aMailCiteElement, const EditorDOMPoint& aPointToSplit,
+    Element& aEditingHost) {
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(aPointToSplit.IsSet());
+  NS_ASSERTION(!HTMLEditUtils::IsEmptyNode(aMailCiteElement),
+               "The mail-cite element will be deleted, does it expected result "
+               "for you?");
 
-  RefPtr<Element> citeNode =
-      GetMostAncestorMailCiteElement(*aPointToSplit.GetContainer());
-  if (!citeNode) {
-    return EditActionIgnored();
-  }
+  const SplitNodeResult splitCiteElementResult = [&]() MOZ_CAN_RUN_SCRIPT {
+    EditorDOMPoint pointToSplit(aPointToSplit);
 
-  EditorDOMPoint pointToSplit(aPointToSplit);
+    // If our selection is just before a break, nudge it to be just after
+    // it. This does two things for us.  It saves us the trouble of having
+    // to add a break here ourselves to preserve the "blockness" of the
+    // inline span mailquote (in the inline case), and : it means the break
+    // won't end up making an empty line that happens to be inside a
+    // mailquote (in either inline or block case). The latter can confuse a
+    // user if they click there and start typing, because being in the
+    // mailquote may affect wrapping behavior, or font color, etc.
+    WSScanResult forwardScanFromPointToSplitResult =
+        WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(&aEditingHost,
+                                                         pointToSplit);
+    if (forwardScanFromPointToSplitResult.Failed()) {
+      return SplitNodeResult(NS_ERROR_FAILURE);
+    }
+    // If selection start point is before a break and it's inside the
+    // mailquote, let's split it after the visible node.
+    if (forwardScanFromPointToSplitResult.ReachedBRElement() &&
+        forwardScanFromPointToSplitResult.BRElementPtr() != &aMailCiteElement &&
+        aMailCiteElement.Contains(
+            forwardScanFromPointToSplitResult.BRElementPtr())) {
+      pointToSplit =
+          forwardScanFromPointToSplitResult.PointAfterContent<EditorDOMPoint>();
+    }
 
-  // If our selection is just before a break, nudge it to be just after it.
-  // This does two things for us.  It saves us the trouble of having to add
-  // a break here ourselves to preserve the "blockness" of the inline span
-  // mailquote (in the inline case), and :
-  // it means the break won't end up making an empty line that happens to be
-  // inside a mailquote (in either inline or block case).
-  // The latter can confuse a user if they click there and start typing,
-  // because being in the mailquote may affect wrapping behavior, or font
-  // color, etc.
-  RefPtr<Element> editingHost = GetActiveEditingHost();
-  WSScanResult forwardScanFromPointToSplitResult =
-      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(editingHost,
-                                                       pointToSplit);
-  if (forwardScanFromPointToSplitResult.Failed()) {
-    return EditActionResult(NS_ERROR_FAILURE);
-  }
-  // If selection start point is before a break and it's inside the mailquote,
-  // let's split it after the visible node.
-  if (forwardScanFromPointToSplitResult.ReachedBRElement() &&
-      forwardScanFromPointToSplitResult.BRElementPtr() != citeNode &&
-      citeNode->Contains(forwardScanFromPointToSplitResult.BRElementPtr())) {
-    pointToSplit = forwardScanFromPointToSplitResult.PointAfterContent();
-  }
+    if (NS_WARN_IF(!pointToSplit.GetContainerAsContent())) {
+      return SplitNodeResult(NS_ERROR_FAILURE);
+    }
 
-  if (NS_WARN_IF(!pointToSplit.GetContainerAsContent())) {
-    return EditActionIgnored(NS_ERROR_FAILURE);
+    SplitNodeResult splitResult =
+        SplitNodeDeepWithTransaction(aMailCiteElement, pointToSplit,
+                                     SplitAtEdges::eDoNotCreateEmptyContainer);
+    if (splitResult.isErr()) {
+      NS_WARNING(
+          "HTMLEditor::SplitNodeDeepWithTransaction(aMailCiteElement, "
+          "SplitAtEdges::eDoNotCreateEmptyContainer) failed");
+      return splitResult;
+    }
+    nsresult rv = splitResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+      return SplitNodeResult(rv);
+    }
+    return splitResult;
+  }();
+  if (splitCiteElementResult.isErr()) {
+    NS_WARNING("Failed to split a mail-cite element");
+    return Err(splitCiteElementResult.unwrapErr());
   }
+  // When adding caret suggestion to SplitNodeResult, here didn't change
+  // selection so that just ignore it.
+  splitCiteElementResult.IgnoreCaretPointSuggestion();
 
-  SplitNodeResult splitCiteNodeResult = SplitNodeDeepWithTransaction(
-      *citeNode, pointToSplit, SplitAtEdges::eDoNotCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
-    return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
-  }
-  if (splitCiteNodeResult.Failed()) {
-    NS_WARNING(
-        "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
-        "eDoNotCreateEmptyContainer) failed");
-    return EditActionIgnored(splitCiteNodeResult.Rv());
-  }
-  pointToSplit.Clear();
-
-  // Add an invisible <br> to the end of current cite node (If new left cite
-  // has not been created, we're at the end of it.  Otherwise, we're still at
-  // the right node) if it was a <span> of style="display: block". This is
-  // important, since when serializing the cite to plain text, the span which
-  // caused the visual break is discarded.  So the added <br> will guarantee
-  // that the serializer will insert a break where the user saw one.
-  // FYI: splitCiteNodeResult grabs the previous node with nsCOMPtr.  So, it's
-  //      safe to access previousNodeOfSplitPoint even after changing the DOM
-  //      tree and/or selection even though it's raw pointer.
-  nsIContent* previousNodeOfSplitPoint = splitCiteNodeResult.GetPreviousNode();
-  if (previousNodeOfSplitPoint &&
-      previousNodeOfSplitPoint->IsHTMLElement(nsGkAtoms::span) &&
-      previousNodeOfSplitPoint->GetPrimaryFrame() &&
-      previousNodeOfSplitPoint->GetPrimaryFrame()->IsBlockFrameOrSubclass()) {
-    nsCOMPtr<nsINode> lastChild = previousNodeOfSplitPoint->GetLastChild();
+  // Add an invisible <br> to the end of left cite node if it was a <span> of
+  // style="display: block".  This is important, since when serializing the cite
+  // to plain text, the span which caused the visual break is discarded.  So the
+  // added <br> will guarantee that the serializer will insert a break where the
+  // user saw one.
+  // FYI: splitCiteElementResult grabs the previous node and the next node with
+  //      nsCOMPtr or EditorDOMPoint.  So, it's safe to access leftCiteElement
+  //      and rightCiteElement even after changing the DOM tree and/or selection
+  //      even though it's raw pointer.
+  Element* const leftCiteElement =
+      Element::FromNodeOrNull(splitCiteElementResult.GetPreviousContent());
+  Element* const rightCiteElement =
+      Element::FromNodeOrNull(splitCiteElementResult.GetNextContent());
+  if (leftCiteElement && leftCiteElement->IsHTMLElement(nsGkAtoms::span) &&
+      // XXX Oh, this depends on layout information of new element, and it's
+      //     created by the hacky flush in DoSplitNode().  So we need to
+      //     redesign around this for bug 1710784.
+      leftCiteElement->GetPrimaryFrame() &&
+      leftCiteElement->GetPrimaryFrame()->IsBlockFrameOrSubclass()) {
+    nsIContent* lastChild = leftCiteElement->GetLastChild();
     if (lastChild && !lastChild->IsHTMLElement(nsGkAtoms::br)) {
-      // We ignore the result here.
-      EditorDOMPoint endOfPreviousNodeOfSplitPoint;
-      endOfPreviousNodeOfSplitPoint.SetToEndOf(previousNodeOfSplitPoint);
-      Result<RefPtr<Element>, nsresult> resultOfInsertingInvisibleBRElement =
-          InsertBRElementWithTransaction(endOfPreviousNodeOfSplitPoint);
-      if (resultOfInsertingInvisibleBRElement.isErr()) {
-        NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-        return EditActionIgnored(
-            resultOfInsertingInvisibleBRElement.unwrapErr());
+      const CreateElementResult insertInvisibleBRElementResult =
+          InsertBRElement(WithTransaction::Yes,
+                          EditorDOMPoint::AtEndOf(*leftCiteElement));
+      if (insertInvisibleBRElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+        return Err(insertInvisibleBRElementResult.unwrapErr());
       }
-      MOZ_ASSERT(resultOfInsertingInvisibleBRElement.inspect());
+      // We don't need to update selection here because we'll do another
+      // InsertBRElement call soon.
+      insertInvisibleBRElementResult.IgnoreCaretPointSuggestion();
+      MOZ_ASSERT(insertInvisibleBRElementResult.GetNewNode());
     }
   }
 
   // In most cases, <br> should be inserted after current cite.  However, if
   // left cite hasn't been created because the split point was start of the
   // cite node, <br> should be inserted before the current cite.
-  EditorDOMPoint pointToInsertBRNode(splitCiteNodeResult.SplitPoint());
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(pointToInsertBRNode);
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return EditActionIgnored(resultOfInsertingBRElement.unwrapErr());
+  CreateElementResult insertBRElementResult =
+      InsertBRElement(WithTransaction::Yes,
+                      splitCiteElementResult.AtSplitPoint<EditorDOMPoint>());
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+    return Err(insertBRElementResult.unwrapErr());
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-  // Now, offset of pointToInsertBRNode is invalid.  Let's clear it.
-  pointToInsertBRNode.Clear();
+  // We'll return with suggesting caret position.  Therefore, we don't need
+  // to update selection here.
+  insertBRElementResult.IgnoreCaretPointSuggestion();
+  MOZ_ASSERT(insertBRElementResult.GetNewNode());
 
-  // Want selection before the break, and on same line.
-  EditorDOMPoint atBRElement(resultOfInsertingBRElement.inspect());
-  {
-    AutoEditorDOMPointChildInvalidator lockOffset(atBRElement);
-    IgnoredErrorResult ignoredError;
-    SelectionRef().SetInterlinePosition(true, ignoredError);
-    NS_WARNING_ASSERTION(
-        !ignoredError.Failed(),
-        "Selection::SetInterlinePosition(true) failed, but ignored");
-    nsresult rv = CollapseSelectionTo(atBRElement);
-    if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::CollapseSelectionTo() failed");
-      return EditActionIgnored(rv);
-    }
-  }
+  // if aMailCiteElement wasn't a block, we might also want another break before
+  // it. We need to examine the content both before the br we just added and
+  // also just after it.  If we don't have another br or block boundary
+  // adjacent, then we will need a 2nd br added to achieve blank line that user
+  // expects.
+  if (HTMLEditUtils::IsInlineElement(aMailCiteElement)) {
+    nsresult rvOfInsertingBRElement = [&]() MOZ_CAN_RUN_SCRIPT {
+      EditorDOMPoint pointToCreateNewBRElement(
+          insertBRElementResult.GetNewNode());
 
-  // if citeNode wasn't a block, we might also want another break before it.
-  // We need to examine the content both before the br we just added and also
-  // just after it.  If we don't have another br or block boundary adjacent,
-  // then we will need a 2nd br added to achieve blank line that user expects.
-  if (HTMLEditUtils::IsInlineElement(*citeNode)) {
-    // Use DOM point which we tried to collapse to.
-    EditorDOMPoint pointToCreateNewBRElement(atBRElement);
-
-    WSScanResult backwardScanFromPointToCreateNewBRElementResult =
-        WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
-            editingHost, pointToCreateNewBRElement);
-    if (backwardScanFromPointToCreateNewBRElementResult.Failed()) {
-      NS_WARNING(
-          "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary() failed");
-      return EditActionResult(NS_ERROR_FAILURE);
-    }
-    if (backwardScanFromPointToCreateNewBRElementResult
-            .InNormalWhiteSpacesOrText() ||
-        backwardScanFromPointToCreateNewBRElementResult
-            .ReachedSpecialContent()) {
-      EditorRawDOMPoint pointAfterNewBRElement(
-          EditorRawDOMPoint::After(pointToCreateNewBRElement));
-      NS_WARNING_ASSERTION(pointAfterNewBRElement.IsSet(),
-                           "Failed to set to after the <br> node");
+      // XXX Cannot we replace this complicated check with just a call of
+      //     HTMLEditUtils::IsVisibleBRElement with
+      //     resultOfInsertingBRElement.inspect()?
+      WSScanResult backwardScanFromPointToCreateNewBRElementResult =
+          WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary(
+              &aEditingHost, pointToCreateNewBRElement);
+      if (MOZ_UNLIKELY(
+              backwardScanFromPointToCreateNewBRElementResult.Failed())) {
+        NS_WARNING(
+            "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundary() "
+            "failed");
+        return NS_ERROR_FAILURE;
+      }
+      if (!backwardScanFromPointToCreateNewBRElementResult
+               .InVisibleOrCollapsibleCharacters() &&
+          !backwardScanFromPointToCreateNewBRElementResult
+               .ReachedSpecialContent()) {
+        return NS_SUCCESS_DOM_NO_OPERATION;
+      }
       WSScanResult forwardScanFromPointAfterNewBRElementResult =
           WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-              editingHost, pointAfterNewBRElement);
-      if (forwardScanFromPointAfterNewBRElementResult.Failed()) {
+              &aEditingHost,
+              EditorRawDOMPoint::After(pointToCreateNewBRElement));
+      if (MOZ_UNLIKELY(forwardScanFromPointAfterNewBRElementResult.Failed())) {
         NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
-        return EditActionResult(NS_ERROR_FAILURE);
+        return NS_ERROR_FAILURE;
       }
-      if (forwardScanFromPointAfterNewBRElementResult
-              .InNormalWhiteSpacesOrText() ||
-          forwardScanFromPointAfterNewBRElementResult.ReachedSpecialContent() ||
+      if (!forwardScanFromPointAfterNewBRElementResult
+               .InVisibleOrCollapsibleCharacters() &&
+          !forwardScanFromPointAfterNewBRElementResult
+               .ReachedSpecialContent() &&
           // In case we're at the very end.
-          forwardScanFromPointAfterNewBRElementResult
-              .ReachedCurrentBlockBoundary()) {
-        Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-            InsertBRElementWithTransaction(pointToCreateNewBRElement);
-        if (resultOfInsertingBRElement.isErr()) {
-          NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-          return EditActionIgnored(resultOfInsertingBRElement.unwrapErr());
-        }
-        MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-        // Now, those points may be invalid.
-        pointToCreateNewBRElement.Clear();
-        pointAfterNewBRElement.Clear();
+          !forwardScanFromPointAfterNewBRElementResult
+               .ReachedCurrentBlockBoundary()) {
+        return NS_SUCCESS_DOM_NO_OPERATION;
       }
+      CreateElementResult insertBRElementResult =
+          InsertBRElement(WithTransaction::Yes, pointToCreateNewBRElement);
+      if (insertBRElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+        return insertBRElementResult.unwrapErr();
+      }
+      insertBRElementResult.IgnoreCaretPointSuggestion();
+      MOZ_ASSERT(insertBRElementResult.GetNewNode());
+      return NS_OK;
+    }();
+
+    if (NS_FAILED(rvOfInsertingBRElement)) {
+      NS_WARNING(
+          "Failed to insert additional <br> element before the inline right "
+          "mail-cite element");
+      return Err(rvOfInsertingBRElement);
     }
   }
 
-  // delete any empty cites
-  if (previousNodeOfSplitPoint &&
-      HTMLEditUtils::IsEmptyNode(*previousNodeOfSplitPoint)) {
-    nsresult rv =
-        DeleteNodeWithTransaction(MOZ_KnownLive(*previousNodeOfSplitPoint));
+  if (leftCiteElement && HTMLEditUtils::IsEmptyNode(*leftCiteElement)) {
+    // MOZ_KnownLive(leftCiteElement) because it's grabbed by
+    // splitCiteElementResult.
+    nsresult rv = DeleteNodeWithTransaction(MOZ_KnownLive(*leftCiteElement));
     if (NS_WARN_IF(Destroyed())) {
-      return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
+      return Err(NS_ERROR_EDITOR_DESTROYED);
     }
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-      return EditActionIgnored(rv);
+      return Err(rv);
     }
   }
 
-  if (citeNode && HTMLEditUtils::IsEmptyNode(*citeNode)) {
-    nsresult rv = DeleteNodeWithTransaction(*citeNode);
+  if (rightCiteElement && HTMLEditUtils::IsEmptyNode(*rightCiteElement)) {
+    // MOZ_KnownLive(rightCiteElement) because it's grabbed by
+    // splitCiteElementResult.
+    nsresult rv = DeleteNodeWithTransaction(MOZ_KnownLive(*rightCiteElement));
     if (NS_WARN_IF(Destroyed())) {
-      return EditActionIgnored(NS_ERROR_EDITOR_DESTROYED);
+      return Err(NS_ERROR_EDITOR_DESTROYED);
     }
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-      return EditActionIgnored(rv);
+      return Err(rv);
     }
   }
 
-  return EditActionHandled();
+  if (MOZ_UNLIKELY(!insertBRElementResult.GetNewNode()->GetParent())) {
+    NS_WARNING("Inserted <br> shouldn't become an orphan node");
+    return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+  }
+  return EditorDOMPoint(insertBRElementResult.GetNewNode());
 }
 
 HTMLEditor::CharPointData
@@ -1953,9 +2466,9 @@ HTMLEditor::GetPreviousCharPointDataForNormalizingWhiteSpaces(
     return CharPointData::InSameTextNode(
         HTMLEditor::GetPreviousCharPointType(aPoint));
   }
-  EditorDOMPointInText previousCharPoint =
-      WSRunScanner::GetPreviousEditableCharPoint(GetActiveEditingHost(),
-                                                 aPoint);
+  const auto previousCharPoint =
+      WSRunScanner::GetPreviousEditableCharPoint<EditorRawDOMPointInText>(
+          GetActiveEditingHost(), aPoint);
   if (!previousCharPoint.IsSet()) {
     return CharPointData::InDifferentTextNode(CharPointType::TextEnd);
   }
@@ -1971,9 +2484,9 @@ HTMLEditor::GetInclusiveNextCharPointDataForNormalizingWhiteSpaces(
   if (!aPoint.IsEndOfContainer()) {
     return CharPointData::InSameTextNode(HTMLEditor::GetCharPointType(aPoint));
   }
-  EditorDOMPointInText nextCharPoint =
-      WSRunScanner::GetInclusiveNextEditableCharPoint(GetActiveEditingHost(),
-                                                      aPoint);
+  const auto nextCharPoint =
+      WSRunScanner::GetInclusiveNextEditableCharPoint<EditorRawDOMPointInText>(
+          GetActiveEditingHost(), aPoint);
   if (!nextCharPoint.IsSet()) {
     return CharPointData::InDifferentTextNode(CharPointType::TextEnd);
   }
@@ -1991,11 +2504,11 @@ void HTMLEditor::GenerateWhiteSpaceSequence(
   // For now, this method does not assume that result will be append to
   // white-space sequence in the text node.
   MOZ_ASSERT(aPreviousCharPointData.AcrossTextNodeBoundary() ||
-             !aPreviousCharPointData.IsWhiteSpace());
+             !aPreviousCharPointData.IsCollapsibleWhiteSpace());
   // For now, this method does not assume that the result will be inserted
   // into white-space sequence nor start of white-space sequence.
   MOZ_ASSERT(aNextCharPointData.AcrossTextNodeBoundary() ||
-             !aNextCharPointData.IsWhiteSpace());
+             !aNextCharPointData.IsCollapsibleWhiteSpace());
 
   if (aLength == 1) {
     // Even if previous/next char is in different text node, we should put
@@ -2010,6 +2523,13 @@ void HTMLEditor::GenerateWhiteSpaceSequence(
     // If it's start or end of text, put an NBSP.
     if (aPreviousCharPointData.Type() == CharPointType::TextEnd ||
         aNextCharPointData.Type() == CharPointType::TextEnd) {
+      aResult.Assign(HTMLEditUtils::kNBSP);
+      return;
+    }
+    // If the character is next to a preformatted linefeed, we need to put
+    // an NBSP for avoiding collapsed into the linefeed.
+    if (aPreviousCharPointData.Type() == CharPointType::PreformattedLineBreak ||
+        aNextCharPointData.Type() == CharPointType::PreformattedLineBreak) {
       aResult.Assign(HTMLEditUtils::kNBSP);
       return;
     }
@@ -2039,11 +2559,12 @@ void HTMLEditor::GenerateWhiteSpaceSequence(
     return;
   }
 
-  // If next char point is end of text node or an ASCII white-space, we need to
-  // put an NBSP.
+  // If next char point is end of text node, an ASCII white-space or
+  // preformatted linefeed, we need to put an NBSP.
   *lastChar =
       aNextCharPointData.AcrossTextNodeBoundary() ||
-              aNextCharPointData.Type() == CharPointType::ASCIIWhiteSpace
+              aNextCharPointData.Type() == CharPointType::ASCIIWhiteSpace ||
+              aNextCharPointData.Type() == CharPointType::PreformattedLineBreak
           ? HTMLEditUtils::kNBSP
           : HTMLEditUtils::kSpace;
 }
@@ -2063,9 +2584,9 @@ void HTMLEditor::ExtendRangeToDeleteWithNormalizingWhiteSpaces(
   // touch white-spaces in different text nodes for performance, but we need
   // adjacent text node's first or last character information in some cases.
   Element* editingHost = GetActiveEditingHost();
-  EditorDOMPointInText precedingCharPoint =
+  const EditorDOMPointInText precedingCharPoint =
       WSRunScanner::GetPreviousEditableCharPoint(editingHost, aStartToDelete);
-  EditorDOMPointInText followingCharPoint =
+  const EditorDOMPointInText followingCharPoint =
       WSRunScanner::GetInclusiveNextEditableCharPoint(editingHost,
                                                       aEndToDelete);
   // Blink-compat: Normalize white-spaces in first node only when not removing
@@ -2081,16 +2602,12 @@ void HTMLEditor::ExtendRangeToDeleteWithNormalizingWhiteSpaces(
       !precedingCharPoint.IsEndOfContainer() &&
       precedingCharPoint.ContainerAsText() ==
           aStartToDelete.ContainerAsText() &&
-      precedingCharPoint.IsCharASCIISpaceOrNBSP() &&
-      !EditorUtils::IsContentPreformatted(
-          *precedingCharPoint.ContainerAsText());
+      precedingCharPoint.IsCharCollapsibleASCIISpaceOrNBSP();
   const bool maybeNormalizeFollowingWhiteSpaces =
       followingCharPoint.IsSet() && !followingCharPoint.IsEndOfContainer() &&
       (followingCharPoint.ContainerAsText() == aEndToDelete.ContainerAsText() ||
        removingLastCharOfStartNode) &&
-      followingCharPoint.IsCharASCIISpaceOrNBSP() &&
-      !EditorUtils::IsContentPreformatted(
-          *followingCharPoint.ContainerAsText());
+      followingCharPoint.IsCharCollapsibleASCIISpaceOrNBSP();
 
   if (!maybeNormalizePrecedingWhiteSpaces &&
       !maybeNormalizeFollowingWhiteSpaces) {
@@ -2101,8 +2618,8 @@ void HTMLEditor::ExtendRangeToDeleteWithNormalizingWhiteSpaces(
   EditorDOMPointInText startToNormalize, endToNormalize;
   if (maybeNormalizePrecedingWhiteSpaces) {
     Maybe<uint32_t> previousCharOffsetOfWhiteSpaces =
-        HTMLEditUtils::GetPreviousCharOffsetExceptWhiteSpaces(
-            precedingCharPoint);
+        HTMLEditUtils::GetPreviousNonCollapsibleCharOffset(
+            precedingCharPoint, {WalkTextOption::TreatNBSPsCollapsible});
     startToNormalize.Set(precedingCharPoint.ContainerAsText(),
                          previousCharOffsetOfWhiteSpaces.isSome()
                              ? previousCharOffsetOfWhiteSpaces.value() + 1
@@ -2111,8 +2628,8 @@ void HTMLEditor::ExtendRangeToDeleteWithNormalizingWhiteSpaces(
   }
   if (maybeNormalizeFollowingWhiteSpaces) {
     Maybe<uint32_t> nextCharOffsetOfWhiteSpaces =
-        HTMLEditUtils::GetInclusiveNextCharOffsetExceptWhiteSpaces(
-            followingCharPoint);
+        HTMLEditUtils::GetInclusiveNextNonCollapsibleCharOffset(
+            followingCharPoint, {WalkTextOption::TreatNBSPsCollapsible});
     if (nextCharOffsetOfWhiteSpaces.isSome()) {
       endToNormalize.Set(followingCharPoint.ContainerAsText(),
                          nextCharOffsetOfWhiteSpaces.value());
@@ -2223,18 +2740,18 @@ HTMLEditor::DeleteTextAndNormalizeSurroundingWhiteSpaces(
   // normalize white-space sequence, but there is no white-spaces which need to
   // be replaced, we need to do nothing here.
   if (startToDelete == endToDelete) {
-    return EditorDOMPoint(aStartToDelete);
+    return aStartToDelete.To<EditorDOMPoint>();
   }
 
   // Note that the container text node of startToDelete may be removed from
   // the tree if it becomes empty.  Therefore, we need to track the point.
   EditorDOMPoint newCaretPosition;
   if (aStartToDelete.ContainerAsText() == aEndToDelete.ContainerAsText()) {
-    newCaretPosition = aEndToDelete;
+    newCaretPosition = aEndToDelete.To<EditorDOMPoint>();
   } else if (aDeleteDirection == DeleteDirection::Forward) {
     newCaretPosition.SetToEndOf(aStartToDelete.ContainerAsText());
   } else {
-    newCaretPosition.Set(aEndToDelete.ContainerAsText(), 0);
+    newCaretPosition.Set(aEndToDelete.ContainerAsText(), 0u);
   }
 
   // Then, modify the text nodes in the range.
@@ -2351,14 +2868,16 @@ HTMLEditor::DeleteTextAndNormalizeSurroundingWhiteSpaces(
   // Look for leaf node to put caret if we remove some empty inline ancestors
   // at new caret position.
   if (!newCaretPosition.IsInTextNode()) {
-    if (nsIContent* currentBlock = HTMLEditUtils::
-            GetInclusiveAncestorEditableBlockElementOrInlineEditingHost(
-                *newCaretPosition.ContainerAsContent())) {
+    if (const Element* editableBlockElementOrInlineEditingHost =
+            HTMLEditUtils::GetInclusiveAncestorElement(
+                *newCaretPosition.ContainerAsContent(),
+                HTMLEditUtils::
+                    ClosestEditableBlockElementOrInlineEditingHost)) {
       Element* editingHost = GetActiveEditingHost();
       // Try to put caret next to immediately after previous editable leaf.
       nsIContent* previousContent =
           HTMLEditUtils::GetPreviousLeafContentOrPreviousBlockElement(
-              newCaretPosition, *currentBlock,
+              newCaretPosition, *editableBlockElementOrInlineEditingHost,
               {LeafNodeType::LeafNodeOrNonEditableNode}, editingHost);
       if (previousContent && !HTMLEditUtils::IsBlockElement(*previousContent)) {
         newCaretPosition =
@@ -2371,7 +2890,8 @@ HTMLEditor::DeleteTextAndNormalizeSurroundingWhiteSpaces(
       // a child block, look for next editable leaf instead.
       else if (nsIContent* nextContent =
                    HTMLEditUtils::GetNextLeafContentOrNextBlockElement(
-                       newCaretPosition, *currentBlock,
+                       newCaretPosition,
+                       *editableBlockElementOrInlineEditingHost,
                        {LeafNodeType::LeafNodeOrNonEditableNode},
                        editingHost)) {
         newCaretPosition = nextContent->IsText() ||
@@ -2445,14 +2965,17 @@ nsresult HTMLEditor::InsertBRElementIfHardLineIsEmptyAndEndsWithBlockBoundary(
     return NS_OK;
   }
 
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(aPointToInsert, nsIEditor::ePrevious);
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return resultOfInsertingBRElement.unwrapErr();
+  CreateElementResult insertBRElementResult = InsertBRElement(
+      WithTransaction::Yes, aPointToInsert, nsIEditor::ePrevious);
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING(
+        "HTMLEditor::InsertBRElement(WithTransaction::Yes, ePrevious) failed");
+    return insertBRElementResult.unwrapErr();
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-  return NS_OK;
+  nsresult rv = insertBRElementResult.SuggestCaretPointTo(*this, {});
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "CreateElementResult::SuggestCaretPointTo() failed");
+  return rv;
 }
 
 EditActionResult HTMLEditor::MakeOrChangeListAndListItemAsSubAction(
@@ -2481,8 +3004,8 @@ EditActionResult HTMLEditor::MakeOrChangeListAndListItemAsSubAction(
     return EditActionIgnored();
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
 
   // XXX EditSubAction::eCreateOrChangeDefinitionListItem and
   //     EditSubAction::eCreateOrChangeList are treated differently in
@@ -2516,12 +3039,12 @@ EditActionResult HTMLEditor::MakeOrChangeListAndListItemAsSubAction(
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -2588,6 +3111,11 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
     SelectAllOfCurrentList aSelectAllOfCurrentList) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
   MOZ_ASSERT(!IsSelectionRangeContainerNotContent());
+
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return EditActionResult(NS_ERROR_FAILURE);
+  }
 
   AutoSelectionRestorer restoreSelectionLater(*this);
 
@@ -2660,42 +3188,62 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
       return EditActionCanceled();
     }
 
-    SplitNodeResult splitAtSelectionStartResult =
-        MaybeSplitAncestorsForInsertWithTransaction(aListElementTagName,
-                                                    atStartOfSelection);
-    if (splitAtSelectionStartResult.Failed()) {
+    RefPtr<Element> newListItemElement;
+    CreateElementResult createNewListElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            aListElementTagName, atStartOfSelection,
+            BRElementNextToSplitPoint::Keep, *editingHost,
+            // MOZ_CAN_RUN_SCRIPT_BOUNDARY due to bug 1758868
+            [&newListItemElement, &aListItemElementTagName](
+                HTMLEditor& aHTMLEditor, Element& aListElement,
+                const EditorDOMPoint& aPointToInsert)
+                MOZ_CAN_RUN_SCRIPT_BOUNDARY {
+                  const auto withTransaction = aListElement.IsInComposedDoc()
+                                                   ? WithTransaction::Yes
+                                                   : WithTransaction::No;
+                  CreateElementResult createNewListItemElementResult =
+                      aHTMLEditor.CreateAndInsertElement(
+                          withTransaction, aListItemElementTagName,
+                          EditorDOMPoint(&aListElement, 0u));
+                  if (createNewListItemElementResult.isErr()) {
+                    NS_WARNING(
+                        nsPrintfCString(
+                            "HTMLEditor::CreateAndInsertElement(%s) failed",
+                            ToString(withTransaction).c_str())
+                            .get());
+                    return createNewListItemElementResult.unwrapErr();
+                  }
+                  // There is AutoSelectionRestorer in this method so that it'll
+                  // be restored or updated with making it abort.  Therefore,
+                  // we don't need to update selection here.
+                  // XXX I'd like to check restoreSelectionLater here, but it
+                  //     requires ifdefs to avoid bustage of opt builds caused
+                  //     by unused warning...
+                  createNewListItemElementResult.IgnoreCaretPointSuggestion();
+                  newListItemElement =
+                      createNewListItemElementResult.UnwrapNewNode();
+                  MOZ_ASSERT(newListItemElement);
+                  return NS_OK;
+                });
+    if (createNewListElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-      return EditActionResult(splitAtSelectionStartResult.Rv());
+          nsPrintfCString(
+              "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+              "%s) failed",
+              nsAtomCString(&aListElementTagName).get())
+              .get());
+      return EditActionResult(createNewListElementResult.unwrapErr());
     }
-    Result<RefPtr<Element>, nsresult> maybeNewListElement =
-        CreateNodeWithTransaction(aListElementTagName,
-                                  splitAtSelectionStartResult.SplitPoint());
-    if (maybeNewListElement.isErr()) {
-      NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-      return EditActionResult(maybeNewListElement.unwrapErr());
-    }
-    MOZ_ASSERT(maybeNewListElement.inspect());
-
-    Result<RefPtr<Element>, nsresult> maybeNewListItemElement =
-        CreateNodeWithTransaction(
-            aListItemElementTagName,
-            EditorDOMPoint(maybeNewListElement.inspect(), 0));
-    if (maybeNewListItemElement.isErr()) {
-      NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-      return EditActionResult(maybeNewListItemElement.unwrapErr());
-    }
-    MOZ_ASSERT(maybeNewListItemElement.inspect());
+    MOZ_ASSERT(createNewListElementResult.GetNewNode());
 
     // remember our new block for postprocessing
-    TopLevelEditSubActionDataRef().mNewBlockElement =
-        maybeNewListItemElement.inspect();
+    TopLevelEditSubActionDataRef().mNewBlockElement = newListItemElement;
     // Put selection in new list item and don't restore the Selection.
+    createNewListElementResult.IgnoreCaretPointSuggestion();
     restoreSelectionLater.Abort();
-    nsresult rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewListItemElement.inspect()));
+    nsresult rv = CollapseSelectionToStartOf(*newListItemElement);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
+                         "EditorBase::CollapseSelectionToStartOf() failed");
     return EditActionResult(rv);
   }
 
@@ -2763,30 +3311,46 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
       // of the list, append current node to end of the current list element.
       // Then, wrap it with list item element and delete the old container.
       if (curList && !EditorUtils::IsDescendantOf(*content, *curList)) {
-        nsresult rv = MoveNodeToEndWithTransaction(*content, *curList);
-        if (NS_WARN_IF(Destroyed())) {
-          return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-        }
-        if (NS_FAILED(rv)) {
+        const MoveNodeResult moveNodeResult =
+            MoveNodeToEndWithTransaction(*content, *curList);
+        if (moveNodeResult.isErr()) {
           NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+          return EditActionResult(moveNodeResult.unwrapErr());
+        }
+        nsresult rv = moveNodeResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                    SuggestCaret::AndIgnoreTrivialError});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
           return EditActionResult(rv);
         }
+        NS_WARNING_ASSERTION(
+            rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+            "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
         CreateElementResult convertListTypeResult =
             ChangeListElementType(MOZ_KnownLive(*content->AsElement()),
                                   aListElementTagName, aListItemElementTagName);
-        if (convertListTypeResult.Failed()) {
+        if (convertListTypeResult.isErr()) {
           NS_WARNING("HTMLEditor::ChangeListElementType() failed");
-          return EditActionResult(convertListTypeResult.Rv());
+          return EditActionResult(convertListTypeResult.unwrapErr());
         }
-        rv = RemoveBlockContainerWithTransaction(
-            MOZ_KnownLive(*convertListTypeResult.GetNewNode()));
-        if (NS_WARN_IF(Destroyed())) {
-          return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-        }
-        if (NS_FAILED(rv)) {
+        const Result<EditorDOMPoint, nsresult> unwrapNewListElementResult =
+            RemoveBlockContainerWithTransaction(
+                MOZ_KnownLive(*convertListTypeResult.GetNewNode()));
+        if (MOZ_UNLIKELY(unwrapNewListElementResult.isErr())) {
           NS_WARNING(
               "HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-          return EditActionResult(rv);
+          return EditActionResult(unwrapNewListElementResult.inspectErr());
+        }
+        const EditorDOMPoint& pointToPutCaret =
+            unwrapNewListElementResult.inspect();
+        if (AllowsTransactionsToChangeSelection() && pointToPutCaret.IsSet()) {
+          nsresult rv = CollapseSelectionTo(pointToPutCaret);
+          if (NS_FAILED(rv)) {
+            NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+            return EditActionResult(rv);
+          }
         }
         prevListItem = nullptr;
         continue;
@@ -2797,11 +3361,11 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
       CreateElementResult convertListTypeResult =
           ChangeListElementType(MOZ_KnownLive(*content->AsElement()),
                                 aListElementTagName, aListItemElementTagName);
-      if (convertListTypeResult.Failed()) {
+      if (convertListTypeResult.isErr()) {
         NS_WARNING("HTMLEditor::ChangeListElementType() failed");
-        return EditActionResult(convertListTypeResult.Rv());
+        return EditActionResult(convertListTypeResult.unwrapErr());
       }
-      curList = convertListTypeResult.forget();
+      curList = convertListTypeResult.UnwrapNewNode();
       prevListItem = nullptr;
       continue;
     }
@@ -2822,48 +3386,79 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
           if (NS_WARN_IF(!atContent.GetContainerAsContent())) {
             return EditActionResult(NS_ERROR_FAILURE);
           }
-          ErrorResult error;
-          nsCOMPtr<nsIContent> newLeftNode =
-              SplitNodeWithTransaction(atContent, error);
-          if (NS_WARN_IF(Destroyed())) {
-            error.SuppressException();
+          const SplitNodeResult splitListItemParentResult =
+              SplitNodeWithTransaction(atContent);
+          if (splitListItemParentResult.isErr()) {
+            NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
+            return EditActionResult(splitListItemParentResult.unwrapErr());
+          }
+          MOZ_ASSERT(splitListItemParentResult.DidSplit());
+          // We'll update selection after creating new list element below.
+          // Therefore, we don't need to handle selection now.
+          splitListItemParentResult.IgnoreCaretPointSuggestion();
+          CreateElementResult createNewListElementResult =
+              CreateAndInsertElement(
+                  WithTransaction::Yes, aListElementTagName,
+                  splitListItemParentResult.AtNextContent<EditorDOMPoint>());
+          if (createNewListElementResult.isErr()) {
+            NS_WARNING(
+                "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) "
+                "failed");
+            return EditActionResult(createNewListElementResult.unwrapErr());
+          }
+          nsresult rv = createNewListElementResult.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
             return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
           }
-          if (error.Failed()) {
-            NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
-            return EditActionResult(error.StealNSResult());
-          }
-          Result<RefPtr<Element>, nsresult> maybeNewListElement =
-              CreateNodeWithTransaction(
-                  aListElementTagName,
-                  EditorDOMPoint(atContent.GetContainer()));
-          if (maybeNewListElement.isErr()) {
-            NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-            return EditActionResult(maybeNewListElement.unwrapErr());
-          }
-          MOZ_ASSERT(maybeNewListElement.inspect());
-          curList = maybeNewListElement.unwrap();
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+          curList = createNewListElementResult.UnwrapNewNode();
+          MOZ_ASSERT(curList);
         }
         // Then, move current node into current list element.
-        nsresult rv = MoveNodeToEndWithTransaction(*content, *curList);
-        if (NS_WARN_IF(Destroyed())) {
-          return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-        }
-        if (NS_FAILED(rv)) {
+        const MoveNodeResult moveNodeResult =
+            MoveNodeToEndWithTransaction(*content, *curList);
+        if (moveNodeResult.isErr()) {
           NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+          return EditActionResult(moveNodeResult.unwrapErr());
+        }
+        nsresult rv = moveNodeResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                    SuggestCaret::AndIgnoreTrivialError});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
           return EditActionResult(rv);
         }
+        NS_WARNING_ASSERTION(
+            rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+            "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
         // Convert list item type if current node is different list item type.
         if (!content->IsHTMLElement(&aListItemElementTagName)) {
-          RefPtr<Element> newListItemElement = ReplaceContainerWithTransaction(
-              MOZ_KnownLive(*content->AsElement()), aListItemElementTagName);
-          if (NS_WARN_IF(Destroyed())) {
-            return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-          }
-          if (!newListItemElement) {
+          const CreateElementResult newListItemElementOrError =
+              ReplaceContainerWithTransaction(
+                  MOZ_KnownLive(*content->AsElement()),
+                  aListItemElementTagName);
+          if (newListItemElementOrError.isErr()) {
             NS_WARNING("HTMLEditor::ReplaceContainerWithTransaction() failed");
-            return EditActionResult(NS_ERROR_FAILURE);
+            return EditActionResult(newListItemElementOrError.inspectErr());
           }
+          nsresult rv = newListItemElementOrError.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+            return EditActionResult(rv);
+          }
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
         }
       } else {
         // If we've not met a list element, set current list element to the
@@ -2877,27 +3472,46 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
         // If current list item element is not a child of current list element,
         // move it into current list item.
         else if (atContent.GetContainer() != curList) {
-          nsresult rv = MoveNodeToEndWithTransaction(*content, *curList);
-          if (NS_WARN_IF(Destroyed())) {
-            return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-          }
-          if (NS_FAILED(rv)) {
+          const MoveNodeResult moveNodeResult =
+              MoveNodeToEndWithTransaction(*content, *curList);
+          if (moveNodeResult.isErr()) {
             NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+            return EditActionResult(moveNodeResult.unwrapErr());
+          }
+          nsresult rv = moveNodeResult.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
             return EditActionResult(rv);
           }
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
         }
         // Then, if current list item element is not proper type for current
         // list element, convert list item element to proper element.
         if (!content->IsHTMLElement(&aListItemElementTagName)) {
-          RefPtr<Element> newListItemElement = ReplaceContainerWithTransaction(
-              MOZ_KnownLive(*content->AsElement()), aListItemElementTagName);
-          if (NS_WARN_IF(Destroyed())) {
-            return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-          }
-          if (!newListItemElement) {
+          const CreateElementResult newListItemElementOrError =
+              ReplaceContainerWithTransaction(
+                  MOZ_KnownLive(*content->AsElement()),
+                  aListItemElementTagName);
+          if (newListItemElementOrError.isErr()) {
             NS_WARNING("HTMLEditor::ReplaceContainerWithTransaction() failed");
-            return EditActionResult(NS_ERROR_FAILURE);
+            return EditActionResult(newListItemElementOrError.inspectErr());
           }
+          nsresult rv = newListItemElementOrError.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+            return EditActionResult(rv);
+          }
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
         }
       }
       Element* element = Element::FromNode(content);
@@ -2952,14 +3566,19 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
       CollectChildren(*content, arrayOfContents, i + 1,
                       CollectListChildren::Yes, CollectTableChildren::Yes,
                       CollectNonEditableNodes::Yes);
-      nsresult rv =
+      const Result<EditorDOMPoint, nsresult> unwrapDivElementResult =
           RemoveContainerWithTransaction(MOZ_KnownLive(*content->AsElement()));
-      if (NS_WARN_IF(Destroyed())) {
-        return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (NS_FAILED(rv)) {
+      if (MOZ_UNLIKELY(unwrapDivElementResult.isErr())) {
         NS_WARNING("HTMLEditor::RemoveContainerWithTransaction() failed");
-        return EditActionResult(rv);
+        return EditActionResult(unwrapDivElementResult.inspectErr());
+      }
+      const EditorDOMPoint& pointToPutCaret = unwrapDivElementResult.inspect();
+      if (AllowsTransactionsToChangeSelection() && pointToPutCaret.IsSet()) {
+        nsresult rv = CollapseSelectionTo(pointToPutCaret);
+        if (NS_FAILED(rv)) {
+          NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+          return EditActionResult(rv);
+        }
       }
       // Extend the loop length to handle all children collected here.
       countOfCollectedContents = arrayOfContents.Length();
@@ -2969,24 +3588,26 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
     // If we've not met a list element, create a list element and make it
     // current list element.
     if (!curList) {
-      SplitNodeResult splitCurNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(aListElementTagName,
-                                                      atContent);
-      if (splitCurNodeResult.Failed()) {
-        NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-        return EditActionResult(splitCurNodeResult.Rv());
-      }
       prevListItem = nullptr;
-      Result<RefPtr<Element>, nsresult> maybeNewListElement =
-          CreateNodeWithTransaction(aListElementTagName,
-                                    splitCurNodeResult.SplitPoint());
-      if (maybeNewListElement.isErr()) {
-        NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-        return EditActionResult(maybeNewListElement.unwrapErr());
+      CreateElementResult createNewListElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              aListElementTagName, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewListElementResult.isErr()) {
+        NS_WARNING(
+            nsPrintfCString(
+                "HTMLEditor::"
+                "InsertElementWithSplittingAncestorsWithTransaction(%s) failed",
+                nsAtomCString(&aListElementTagName).get())
+                .get());
+        return EditActionResult(createNewListElementResult.unwrapErr());
       }
-      MOZ_ASSERT(maybeNewListElement.inspect());
-      curList = maybeNewListElement.unwrap();
+      // We'll restore selection so that we don't need to update selection now.
+      createNewListElementResult.IgnoreCaretPointSuggestion();
+      MOZ_ASSERT(restoreSelectionLater.MaybeRestoreSelectionLater());
+
+      MOZ_ASSERT(createNewListElementResult.GetNewNode());
+      curList = createNewListElementResult.UnwrapNewNode();
       // Set new block element of top level edit sub-action to the new list
       // element for setting selection into it.
       // XXX This must be wrong.  If we're handling nested edit action,
@@ -3001,14 +3622,23 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
     // If we're currently handling contents of a list item and current node
     // is not a block element, move current node into the list item.
     if (HTMLEditUtils::IsInlineElement(content) && prevListItem) {
-      nsresult rv = MoveNodeToEndWithTransaction(*content, *prevListItem);
-      if (NS_WARN_IF(Destroyed())) {
-        return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (NS_FAILED(rv)) {
+      const MoveNodeResult moveInlineElementResult =
+          MoveNodeToEndWithTransaction(*content, *prevListItem);
+      if (moveInlineElementResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return EditActionResult(moveInlineElementResult.unwrapErr());
+      }
+      nsresult rv = moveInlineElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
         return EditActionResult(rv);
       }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
       continue;
     }
 
@@ -3018,24 +3648,35 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
     // XXX This is too rough handling.  If web apps modifies DOM tree directly,
     //     any elements can have block elements as children.
     if (content->IsHTMLElement(nsGkAtoms::p)) {
-      RefPtr<Element> newListItemElement = ReplaceContainerWithTransaction(
-          MOZ_KnownLive(*content->AsElement()), aListItemElementTagName);
-      if (NS_WARN_IF(Destroyed())) {
-        return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (!newListItemElement) {
+      CreateElementResult newListItemElementOrError =
+          ReplaceContainerWithTransaction(MOZ_KnownLive(*content->AsElement()),
+                                          aListItemElementTagName);
+      if (newListItemElementOrError.isErr()) {
         NS_WARNING("HTMLEditor::ReplaceContainerWithTransaction() failed");
-        return EditActionResult(NS_ERROR_FAILURE);
+        return EditActionResult(newListItemElementOrError.inspectErr());
       }
+      // Collapse selection after moving the list item element.
+      newListItemElementOrError.IgnoreCaretPointSuggestion();
+      const OwningNonNull<Element> newListItemElement =
+          newListItemElementOrError.UnwrapNewNode();
       prevListItem = nullptr;
-      nsresult rv = MoveNodeToEndWithTransaction(*newListItemElement, *curList);
-      if (NS_WARN_IF(Destroyed())) {
-        return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (NS_FAILED(rv)) {
+      const MoveNodeResult moveListItemElementResult =
+          MoveNodeToEndWithTransaction(newListItemElement, *curList);
+      if (moveListItemElementResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return EditActionResult(moveListItemElementResult.unwrapErr());
+      }
+      nsresult rv = moveListItemElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
         return EditActionResult(rv);
       }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
       // XXX Why don't we set `type` attribute here??
       continue;
     }
@@ -3058,14 +3699,23 @@ EditActionResult HTMLEditor::ChangeSelectedHardLinesToList(
     } else {
       prevListItem = nullptr;
     }
-    nsresult rv = MoveNodeToEndWithTransaction(*newListItemElement, *curList);
-    if (NS_WARN_IF(Destroyed())) {
-      return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-    }
-    if (NS_FAILED(rv)) {
+    const MoveNodeResult moveListItemElementResult =
+        MoveNodeToEndWithTransaction(*newListItemElement, *curList);
+    if (moveListItemElementResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return EditActionResult(moveListItemElementResult.unwrapErr());
+    }
+    nsresult rv = moveListItemElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return EditActionResult(rv);
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     // XXX Why don't we set `type` attribute here??
   }
 
@@ -3082,8 +3732,8 @@ nsresult HTMLEditor::RemoveListAtSelectionAsSubAction() {
     return result.Rv();
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eRemoveList, nsIEditor::eNext, ignoredError);
@@ -3165,6 +3815,11 @@ nsresult HTMLEditor::RemoveListAtSelectionAsSubAction() {
 nsresult HTMLEditor::FormatBlockContainerWithTransaction(nsAtom& blockType) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
 
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   if (!SelectionRef().IsCollapsed()) {
     nsresult rv = MaybeExtendSelectionToHardLineEdgesForBlockEditAction();
     if (NS_FAILED(rv)) {
@@ -3208,82 +3863,29 @@ nsresult HTMLEditor::FormatBlockContainerWithTransaction(nsAtom& blockType) {
         return NS_ERROR_FAILURE;
       }
       // We are removing blocks (going to "body text")
-      RefPtr<Element> blockElement =
-          HTMLEditUtils::GetInclusiveAncestorBlockElement(
-              *pointToInsertBlock.ContainerAsContent());
-      if (!blockElement) {
+      const RefPtr<Element> editableBlockElement =
+          HTMLEditUtils::GetInclusiveAncestorElement(
+              *pointToInsertBlock.ContainerAsContent(),
+              HTMLEditUtils::ClosestEditableBlockElement);
+      if (!editableBlockElement) {
         NS_WARNING(
             "HTMLEditor::FormatBlockContainerWithTransaction() couldn't find "
             "block parent");
         return NS_ERROR_FAILURE;
       }
-      if (!HTMLEditUtils::IsFormatNode(blockElement)) {
+      if (!HTMLEditUtils::IsFormatNode(editableBlockElement)) {
         return NS_OK;
       }
 
       // If the first editable node after selection is a br, consume it.
       // Otherwise it gets pushed into a following block after the split,
       // which is visually bad.
-      // XXX Why do we keep handling it when there is no editing host?
-      if (Element* editingHost = GetActiveEditingHost()) {
-        if (nsCOMPtr<nsIContent> brContent = HTMLEditUtils::GetNextContent(
-                pointToInsertBlock, {WalkTreeOption::IgnoreNonEditableNode},
-                editingHost)) {
-          if (brContent && brContent->IsHTMLElement(nsGkAtoms::br)) {
-            AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertBlock);
-            rv = DeleteNodeWithTransaction(*brContent);
-            if (NS_WARN_IF(Destroyed())) {
-              return NS_ERROR_EDITOR_DESTROYED;
-            }
-            if (NS_FAILED(rv)) {
-              NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-              return rv;
-            }
-          }
-        }
-      }
-      // Do the splits!
-      SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
-          *blockElement, pointToInsertBlock,
-          SplitAtEdges::eDoNotCreateEmptyContainer);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (splitNodeResult.Failed()) {
-        NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
-        return splitNodeResult.Rv();
-      }
-      EditorDOMPoint pointToInsertBRNode(splitNodeResult.SplitPoint());
-      // Put a <br> element at the split point
-      Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-          InsertBRElementWithTransaction(pointToInsertBRNode);
-      if (resultOfInsertingBRElement.isErr()) {
-        NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-        return resultOfInsertingBRElement.unwrapErr();
-      }
-      MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-      // Don't restore the selection
-      restoreSelectionLater.Abort();
-      // Put selection at the split point
-      nsresult rv = CollapseSelectionTo(
-          EditorRawDOMPoint(resultOfInsertingBRElement.inspect()));
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "HTMLEditor::CollapseSelectionTo() failed");
-      return rv;
-    }
-
-    // We are making a block.  Consume a br, if needed.
-    // XXX Perhaps, we should stop handling this method when there is no
-    //     editing host.
-    if (Element* editingHost = GetActiveEditingHost()) {
-      if (nsCOMPtr<nsIContent> maybeBRContent = HTMLEditUtils::GetNextContent(
-              pointToInsertBlock,
-              {WalkTreeOption::IgnoreNonEditableNode,
-               WalkTreeOption::StopAtBlockBoundary},
+      if (nsCOMPtr<nsIContent> brContent = HTMLEditUtils::GetNextContent(
+              pointToInsertBlock, {WalkTreeOption::IgnoreNonEditableNode},
               editingHost)) {
-        if (maybeBRContent->IsHTMLElement(nsGkAtoms::br)) {
+        if (brContent && brContent->IsHTMLElement(nsGkAtoms::br)) {
           AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertBlock);
-          rv = DeleteNodeWithTransaction(*maybeBRContent);
+          rv = DeleteNodeWithTransaction(*brContent);
           if (NS_WARN_IF(Destroyed())) {
             return NS_ERROR_EDITOR_DESTROYED;
           }
@@ -3291,30 +3893,78 @@ nsresult HTMLEditor::FormatBlockContainerWithTransaction(nsAtom& blockType) {
             NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
             return rv;
           }
-          // We don't need to act on this node any more
-          arrayOfContents.RemoveElement(maybeBRContent);
         }
+      }
+      // Do the splits!
+      const SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
+          *editableBlockElement, pointToInsertBlock,
+          SplitAtEdges::eDoNotCreateEmptyContainer);
+      if (splitNodeResult.isErr()) {
+        NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
+        return splitNodeResult.unwrapErr();
+      }
+      // Put a <br> element at the split point
+      const CreateElementResult insertBRElementResult = InsertBRElement(
+          WithTransaction::Yes, splitNodeResult.AtSplitPoint<EditorDOMPoint>());
+      if (insertBRElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+        return insertBRElementResult.unwrapErr();
+      }
+      MOZ_ASSERT(insertBRElementResult.GetNewNode());
+      // Don't restore the selection
+      restoreSelectionLater.Abort();
+      // Put selection at the split point
+      splitNodeResult.IgnoreCaretPointSuggestion();
+      nsresult rv = CollapseSelectionTo(
+          EditorRawDOMPoint(insertBRElementResult.GetNewNode()));
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                           "EditorBase::CollapseSelectionTo() failed");
+      return rv;
+    }
+
+    // We are making a block.  Consume a br, if needed.
+    if (nsCOMPtr<nsIContent> maybeBRContent = HTMLEditUtils::GetNextContent(
+            pointToInsertBlock,
+            {WalkTreeOption::IgnoreNonEditableNode,
+             WalkTreeOption::StopAtBlockBoundary},
+            editingHost)) {
+      if (maybeBRContent->IsHTMLElement(nsGkAtoms::br)) {
+        AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertBlock);
+        rv = DeleteNodeWithTransaction(*maybeBRContent);
+        if (NS_WARN_IF(Destroyed())) {
+          return NS_ERROR_EDITOR_DESTROYED;
+        }
+        if (NS_FAILED(rv)) {
+          NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
+          return rv;
+        }
+        // We don't need to act on this node any more
+        arrayOfContents.RemoveElement(maybeBRContent);
       }
     }
     // Make sure we can put a block here.
-    SplitNodeResult splitNodeResult =
-        MaybeSplitAncestorsForInsertWithTransaction(blockType,
-                                                    pointToInsertBlock);
-    if (splitNodeResult.Failed()) {
+    CreateElementResult createNewBlockElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            blockType, pointToInsertBlock, BRElementNextToSplitPoint::Keep,
+            *editingHost);
+    if (createNewBlockElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-      return splitNodeResult.Rv();
+          nsPrintfCString(
+              "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+              "%s) failed",
+              nsAtomCString(&blockType).get())
+              .get());
+      return createNewBlockElementResult.unwrapErr();
     }
-    Result<RefPtr<Element>, nsresult> maybeNewBlockElement =
-        CreateNodeWithTransaction(blockType, splitNodeResult.SplitPoint());
-    if (maybeNewBlockElement.isErr()) {
-      NS_WARNING("CreateNodeWithTransaction() failed");
-      return maybeNewBlockElement.unwrapErr();
-    }
-    MOZ_ASSERT(maybeNewBlockElement.inspect());
+    // We'll update selection after deleting the content nodes and nobody refers
+    // selection until then.  Therefore, we don't need to update selection here.
+    createNewBlockElementResult.IgnoreCaretPointSuggestion();
+    MOZ_ASSERT(restoreSelectionLater.MaybeRestoreSelectionLater());
+
+    MOZ_ASSERT(createNewBlockElementResult.GetNewNode());
     // Remember our new block for postprocessing
     TopLevelEditSubActionDataRef().mNewBlockElement =
-        maybeNewBlockElement.inspect();
+        createNewBlockElementResult.GetNewNode();
     // Delete anything that was in the list of nodes
     while (!arrayOfContents.IsEmpty()) {
       OwningNonNull<nsIContent>& content = arrayOfContents[0];
@@ -3333,10 +3983,12 @@ nsresult HTMLEditor::FormatBlockContainerWithTransaction(nsAtom& blockType) {
     // Don't restore the selection
     restoreSelectionLater.Abort();
     // Put selection in new block
+    // MOZ_KnownLive(createNewBlockElementResult.GetNewNode()) because it's
+    // grabbed by createNewBlockElementResult.
     rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewBlockElement.inspect()));
+        MOZ_KnownLive(*createNewBlockElementResult.GetNewNode()));
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
+                         "EditorBase::CollapseSelectionToStartOf() failed");
     return rv;
   }
   // Okay, now go through all the nodes and make the right kind of blocks, or
@@ -3394,8 +4046,8 @@ nsresult HTMLEditor::MaybeInsertPaddingBRElementForEmptyLastLineAtSelection() {
 EditActionResult HTMLEditor::IndentAsSubAction() {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eIndent, nsIEditor::eNext, ignoredError);
@@ -3445,6 +4097,11 @@ nsresult HTMLEditor::IndentListChild(RefPtr<Element>* aCurList,
              "unexpected container");
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
 
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   // some logic for putting list items into nested lists...
 
   // Check for whether we should join a list that follows aContent.
@@ -3458,14 +4115,24 @@ nsresult HTMLEditor::IndentListChild(RefPtr<Element>* aCurList,
             nextEditableSibling->NodeInfo()->NameAtom() &&
         aCurPoint.GetContainer()->NodeInfo()->NamespaceID() ==
             nextEditableSibling->NodeInfo()->NamespaceID()) {
-      nsresult rv = MoveNodeWithTransaction(
-          aContent, EditorDOMPoint(nextEditableSibling, 0));
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
+      const MoveNodeResult moveListElementResult = MoveNodeWithTransaction(
+          aContent, EditorDOMPoint(nextEditableSibling, 0u));
+      if (moveListElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
+        return moveListElementResult.unwrapErr();
       }
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "EdigtorBase::MoveNodeWithTransaction() failed");
-      return rv;
+      nsresult rv = moveListElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
+      return NS_OK;
     }
   }
 
@@ -3481,14 +4148,24 @@ nsresult HTMLEditor::IndentListChild(RefPtr<Element>* aCurList,
             previousEditableSibling->NodeInfo()->NameAtom() &&
         aCurPoint.GetContainer()->NodeInfo()->NamespaceID() ==
             previousEditableSibling->NodeInfo()->NamespaceID()) {
-      nsresult rv =
+      const MoveNodeResult moveListElementResult =
           MoveNodeToEndWithTransaction(aContent, *previousEditableSibling);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
+      if (moveListElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return moveListElementResult.unwrapErr();
       }
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "HTMLEditor::MoveNodeToEndWithTransaction() failed");
-      return rv;
+      nsresult rv = moveListElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
+      return NS_OK;
     }
   }
 
@@ -3503,37 +4180,53 @@ nsresult HTMLEditor::IndentListChild(RefPtr<Element>* aCurList,
       (previousEditableSibling && previousEditableSibling != *aCurList)) {
     nsAtom* containerName = aCurPoint.GetContainer()->NodeInfo()->NameAtom();
     // Create a new nested list of correct type.
-    SplitNodeResult splitNodeResult =
-        MaybeSplitAncestorsForInsertWithTransaction(
-            MOZ_KnownLive(*containerName), aCurPoint);
-    if (splitNodeResult.Failed()) {
+    CreateElementResult createNewListElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            MOZ_KnownLive(*containerName), aCurPoint,
+            BRElementNextToSplitPoint::Keep, *editingHost);
+    if (createNewListElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-      return splitNodeResult.Rv();
+          nsPrintfCString(
+              "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+              "%s) failed",
+              nsAtomCString(containerName).get())
+              .get());
+      return createNewListElementResult.unwrapErr();
     }
-    Result<RefPtr<Element>, nsresult> maybeNewListElement =
-        CreateNodeWithTransaction(MOZ_KnownLive(*containerName),
-                                  splitNodeResult.SplitPoint());
-    if (maybeNewListElement.isErr()) {
-      NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-      return maybeNewListElement.unwrapErr();
+    nsresult rv = createNewListElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return rv;
     }
-    MOZ_ASSERT(maybeNewListElement.inspect());
+    MOZ_ASSERT(createNewListElementResult.GetNewNode());
     // aCurList is now the correct thing to put aContent in
     // remember our new block for postprocessing
     TopLevelEditSubActionDataRef().mNewBlockElement =
-        maybeNewListElement.inspect();
-    *aCurList = maybeNewListElement.unwrap();
+        createNewListElementResult.GetNewNode();
+    *aCurList = createNewListElementResult.UnwrapNewNode();
   }
   // tuck the node into the end of the active list
   RefPtr<nsINode> container = *aCurList;
-  nsresult rv = MoveNodeToEndWithTransaction(aContent, *container);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  const MoveNodeResult moveNodeResult =
+      MoveNodeToEndWithTransaction(aContent, *container);
+  if (moveNodeResult.isErr()) {
+    NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+    return moveNodeResult.unwrapErr();
   }
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::MoveNodeToEndWithTransaction() failed");
-  return rv;
+  nsresult rv = moveNodeResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
+  return NS_OK;
 }
 
 EditActionResult HTMLEditor::HandleIndentAtSelection() {
@@ -3549,12 +4242,12 @@ EditActionResult HTMLEditor::HandleIndentAtSelection() {
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -3615,6 +4308,11 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
   MOZ_ASSERT(!IsSelectionRangeContainerNotContent());
 
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   AutoSelectionRestorer restoreSelectionLater(*this);
   AutoTArray<OwningNonNull<nsIContent>, 64> arrayOfContents;
 
@@ -3622,15 +4320,18 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
   // just sublist that <li>.  This prevents bug 97797.
 
   if (SelectionRef().IsCollapsed()) {
-    EditorRawDOMPoint atCaret(EditorBase::GetStartPoint(SelectionRef()));
+    const auto atCaret = GetFirstSelectionStartPoint<EditorRawDOMPoint>();
     if (NS_WARN_IF(!atCaret.IsSet())) {
       return NS_ERROR_FAILURE;
     }
     MOZ_ASSERT(atCaret.IsInContentNode());
-    Element* blockElement = HTMLEditUtils::GetInclusiveAncestorBlockElement(
-        *atCaret.ContainerAsContent());
-    if (blockElement && HTMLEditUtils::IsListItem(blockElement)) {
-      arrayOfContents.AppendElement(*blockElement);
+    Element* const editableBlockElement =
+        HTMLEditUtils::GetInclusiveAncestorElement(
+            *atCaret.ContainerAsContent(),
+            HTMLEditUtils::ClosestEditableBlockElement);
+    if (editableBlockElement &&
+        HTMLEditUtils::IsListItem(editableBlockElement)) {
+      arrayOfContents.AppendElement(*editableBlockElement);
     }
   }
 
@@ -3664,29 +4365,25 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
     }
 
     // make sure we can put a block here
-    SplitNodeResult splitNodeResult =
-        MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::div,
-                                                    atStartOfSelection);
-    if (splitNodeResult.Failed()) {
+    CreateElementResult createNewDivElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            *nsGkAtoms::div, atStartOfSelection,
+            BRElementNextToSplitPoint::Keep, *editingHost);
+    if (createNewDivElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms::"
-          "div) failed");
-      return splitNodeResult.Rv();
+          "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+          "nsGkAtoms::div) failed");
+      return createNewDivElementResult.unwrapErr();
     }
-    Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-        CreateNodeWithTransaction(*nsGkAtoms::div,
-                                  splitNodeResult.SplitPoint());
-    if (maybeNewDivElement.isErr()) {
-      NS_WARNING(
-          "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-      return maybeNewDivElement.unwrapErr();
-    }
-    MOZ_ASSERT(maybeNewDivElement.inspect());
+    // We'll update selection below, and nobody refers selection until then.
+    // Therefore, we don't need to touch selection here.
+    createNewDivElementResult.IgnoreCaretPointSuggestion();
+    const RefPtr<Element> newDivElement =
+        createNewDivElementResult.UnwrapNewNode();
+    MOZ_ASSERT(newDivElement);
     // remember our new block for postprocessing
-    TopLevelEditSubActionDataRef().mNewBlockElement =
-        maybeNewDivElement.inspect();
-    nsresult rv = ChangeMarginStart(
-        MOZ_KnownLive(*maybeNewDivElement.inspect()), ChangeMargin::Increase);
+    TopLevelEditSubActionDataRef().mNewBlockElement = newDivElement;
+    nsresult rv = ChangeMarginStart(*newDivElement, ChangeMargin::Increase);
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return NS_ERROR_EDITOR_DESTROYED;
     }
@@ -3711,10 +4408,9 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
     // Don't restore the selection
     restoreSelectionLater.Abort();
     // put selection in new block
-    rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewDivElement.inspect()));
+    rv = CollapseSelectionToStartOf(*newDivElement);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
+                         "EditorBase::CollapseSelectionToStartOf() failed");
     return rv;
   }
 
@@ -3768,25 +4464,26 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
         return NS_OK;  // cancelled
       }
 
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::div,
-                                                      atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewDivElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              *nsGkAtoms::div, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewDivElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms:"
-            ":div) failed");
-        return splitNodeResult.Rv();
+            "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+            "nsGkAtoms::div) failed");
+        return createNewDivElementResult.unwrapErr();
       }
-      Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-          CreateNodeWithTransaction(*nsGkAtoms::div,
-                                    splitNodeResult.SplitPoint());
-      if (maybeNewDivElement.isErr()) {
-        NS_WARNING(
-            "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-        return maybeNewDivElement.unwrapErr();
+      nsresult rv = createNewDivElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      nsresult rv = ChangeMarginStart(
-          MOZ_KnownLive(*maybeNewDivElement.inspect()), ChangeMargin::Increase);
+      RefPtr<Element> newDivElement = createNewDivElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newDivElement);
+      rv = ChangeMarginStart(*newDivElement, ChangeMargin::Increase);
       if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
@@ -3794,24 +4491,31 @@ nsresult HTMLEditor::HandleCSSIndentAtSelectionInternal() {
           NS_SUCCEEDED(rv),
           "HTMLEditor::ChangeMarginStart() failed, but ignored");
       // remember our new block for postprocessing
-      TopLevelEditSubActionDataRef().mNewBlockElement =
-          maybeNewDivElement.inspect();
-      curQuote = maybeNewDivElement.unwrap();
+      TopLevelEditSubActionDataRef().mNewBlockElement = newDivElement;
+      curQuote = std::move(newDivElement);
       // curQuote is now the correct thing to put content in
     }
 
     // tuck the node into the end of the active blockquote
     // MOZ_KnownLive because 'arrayOfContents' is guaranteed to
     // keep it alive.
-    nsresult rv =
+    const MoveNodeResult moveNodeResult =
         MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curQuote);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
   }
   return NS_OK;
 }
@@ -3845,6 +4549,11 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelection() {
 
 nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
+
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
 
   AutoSelectionRestorer restoreSelectionLater(*this);
 
@@ -3884,33 +4593,31 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
     }
 
     // Make sure we can put a block here.
-    SplitNodeResult splitNodeResult =
-        MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::blockquote,
-                                                    atStartOfSelection);
-    if (splitNodeResult.Failed()) {
+    CreateElementResult createNewBlockQuoteElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            *nsGkAtoms::blockquote, atStartOfSelection,
+            BRElementNextToSplitPoint::Keep, *editingHost);
+    if (createNewBlockQuoteElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms::"
-          "blockquote) failed");
-      return splitNodeResult.Rv();
+          "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+          "nsGkAtoms::blockquote) failed");
+      return createNewBlockQuoteElementResult.unwrapErr();
     }
-    Result<RefPtr<Element>, nsresult> maybeNewBlockQuoteElement =
-        CreateNodeWithTransaction(*nsGkAtoms::blockquote,
-                                  splitNodeResult.SplitPoint());
-    if (maybeNewBlockQuoteElement.isErr()) {
-      NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-      return maybeNewBlockQuoteElement.unwrapErr();
-    }
-    MOZ_ASSERT(maybeNewBlockQuoteElement.inspect());
+    // We'll update selection below after deleting the content nodes and nobody
+    // refers selection until then.  Therefore, we don't need to update
+    // selection here.
+    createNewBlockQuoteElementResult.IgnoreCaretPointSuggestion();
+    RefPtr<Element> newBlockQuoteElement =
+        createNewBlockQuoteElementResult.UnwrapNewNode();
+    MOZ_ASSERT(newBlockQuoteElement);
     // remember our new block for postprocessing
-    TopLevelEditSubActionDataRef().mNewBlockElement =
-        maybeNewBlockQuoteElement.inspect();
+    TopLevelEditSubActionDataRef().mNewBlockElement = newBlockQuoteElement;
     // delete anything that was in the list of nodes
     // XXX We don't need to remove the nodes from the array for performance.
-    while (!arrayOfContents.IsEmpty()) {
-      OwningNonNull<nsIContent>& content = arrayOfContents[0];
+    for (const OwningNonNull<nsIContent>& content : arrayOfContents) {
       // MOZ_KnownLive because 'arrayOfContents' is guaranteed to
       // keep it alive.
-      rv = DeleteNodeWithTransaction(MOZ_KnownLive(*content));
+      nsresult rv = DeleteNodeWithTransaction(MOZ_KnownLive(*content));
       if (NS_WARN_IF(Destroyed())) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
@@ -3918,20 +4625,13 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
         NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
         return rv;
       }
-      arrayOfContents.RemoveElementAt(0);
     }
     // Don't restore the selection
     restoreSelectionLater.Abort();
-    nsresult rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewBlockQuoteElement.inspect()));
+    nsresult rv = CollapseSelectionToStartOf(*newBlockQuoteElement);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
+                         "EditorBase::CollapseSelectionToStartOf() failed");
     return rv;
-  }
-
-  RefPtr<Element> editingHost = GetActiveEditingHost();
-  if (NS_WARN_IF(!editingHost)) {
-    return NS_ERROR_FAILURE;
   }
 
   // Ok, now go through all the nodes and put them in a blockquote,
@@ -3994,34 +4694,46 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
         nsAtom* containerName =
             atListItem.GetContainer()->NodeInfo()->NameAtom();
         // Create a new nested list of correct type.
-        SplitNodeResult splitNodeResult =
-            MaybeSplitAncestorsForInsertWithTransaction(
-                MOZ_KnownLive(*containerName), atListItem);
-        if (splitNodeResult.Failed()) {
-          NS_WARNING(
-              "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() "
-              "failed");
-          return splitNodeResult.Rv();
+        CreateElementResult createNewListElementResult =
+            InsertElementWithSplittingAncestorsWithTransaction(
+                MOZ_KnownLive(*containerName), atListItem,
+                BRElementNextToSplitPoint::Keep, *editingHost);
+        if (createNewListElementResult.isErr()) {
+          NS_WARNING(nsPrintfCString("HTMLEditor::"
+                                     "InsertElementWithSplittingAncestorsWithTr"
+                                     "ansaction(%s) failed",
+                                     nsAtomCString(containerName).get())
+                         .get());
+          return createNewListElementResult.unwrapErr();
         }
-        Result<RefPtr<Element>, nsresult> maybeNewListElement =
-            CreateNodeWithTransaction(MOZ_KnownLive(*containerName),
-                                      splitNodeResult.SplitPoint());
-        if (maybeNewListElement.isErr()) {
-          NS_WARNING("HTMLEditor::CreateNodeWithTransaction() failed");
-          return maybeNewListElement.unwrapErr();
+        nsresult rv = createNewListElementResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+          return rv;
         }
-        MOZ_ASSERT(maybeNewListElement.inspect());
-        curList = maybeNewListElement.unwrap();
+        MOZ_ASSERT(createNewListElementResult.GetNewNode());
+        curList = createNewListElementResult.UnwrapNewNode();
       }
 
-      rv = MoveNodeToEndWithTransaction(*listItem, *curList);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      const MoveNodeResult moveListItemElementResult =
+          MoveNodeToEndWithTransaction(*listItem, *curList);
+      if (moveListItemElementResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return moveListItemElementResult.unwrapErr();
+      }
+      nsresult rv = moveListItemElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
         return rv;
       }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
 
       // remember we indented this li
       indentedLI = listItem;
@@ -4046,43 +4758,53 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
         return NS_OK;  // cancelled
       }
 
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::blockquote,
-                                                      atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewBlockQuoteElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              *nsGkAtoms::blockquote, atContent,
+              BRElementNextToSplitPoint::Keep, *editingHost);
+      if (createNewBlockQuoteElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms:"
-            ":blockquote) failed");
-        return splitNodeResult.Rv();
+            "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+            "nsGkAtoms::blockquote) failed");
+        return createNewBlockQuoteElementResult.unwrapErr();
       }
-      Result<RefPtr<Element>, nsresult> maybeNewBlockQuoteElement =
-          CreateNodeWithTransaction(*nsGkAtoms::blockquote,
-                                    splitNodeResult.SplitPoint());
-      if (maybeNewBlockQuoteElement.isErr()) {
-        NS_WARNING(
-            "EditorBase::CreateNodeWithTransaction(nsGkAtoms::blockquote) "
-            "failed");
-        return maybeNewBlockQuoteElement.unwrapErr();
+      nsresult rv = createNewBlockQuoteElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      MOZ_ASSERT(maybeNewBlockQuoteElement.inspect());
+
+      RefPtr<Element> newBlockQuoteElement =
+          createNewBlockQuoteElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newBlockQuoteElement);
       // remember our new block for postprocessing
-      TopLevelEditSubActionDataRef().mNewBlockElement =
-          maybeNewBlockQuoteElement.inspect();
-      curQuote = maybeNewBlockQuoteElement.unwrap();
+      TopLevelEditSubActionDataRef().mNewBlockElement = newBlockQuoteElement;
+      curQuote = std::move(newBlockQuoteElement);
       // curQuote is now the correct thing to put curNode in
     }
 
     // tuck the node into the end of the active blockquote
     // MOZ_KnownLive because 'arrayOfContents' is guaranteed to
     // keep it alive.
-    rv = MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curQuote);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    const MoveNodeResult moveNodeResult =
+        MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curQuote);
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     // forget curList, if any
     curList = nullptr;
   }
@@ -4092,8 +4814,8 @@ nsresult HTMLEditor::HandleHTMLIndentAtSelectionInternal() {
 EditActionResult HTMLEditor::OutdentAsSubAction() {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eOutdent, nsIEditor::eNext, ignoredError);
@@ -4155,9 +4877,9 @@ EditActionResult HTMLEditor::HandleOutdentAtSelection() {
   if (NS_WARN_IF(Destroyed())) {
     return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
   }
-  if (outdentResult.Failed()) {
+  if (outdentResult.isErr()) {
     NS_WARNING("HTMLEditor::HandleOutdentAtSelectionInternal() failed");
-    return EditActionHandled(outdentResult.Rv());
+    return EditActionHandled(outdentResult.unwrapErr());
   }
 
   // Make sure selection didn't stick to last piece of content in old bq (only
@@ -4190,12 +4912,14 @@ EditActionResult HTMLEditor::HandleOutdentAtSelection() {
           afterRememberedLeftBQ.IsSet(),
           "Failed to set after remembered left blockquote element");
       nsresult rv = CollapseSelectionTo(afterRememberedLeftBQ);
-      if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+        NS_WARNING(
+            "EditorBase::CollapseSelectionTo() caused destroying the editor");
         return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
       }
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rv),
-          "HTMLEditor::CollapseSelectionTo() failed, but ignored");
+          "EditorBase::CollapseSelectionTo() failed, but ignored");
     }
   }
   // And pull selection before beginning of right element of last split
@@ -4215,12 +4939,14 @@ EditActionResult HTMLEditor::HandleOutdentAtSelection() {
       // Selection is inside the right element - push it before it.
       EditorRawDOMPoint atRememberedRightBQ(outdentResult.GetRightContent());
       nsresult rv = CollapseSelectionTo(atRememberedRightBQ);
-      if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+        NS_WARNING(
+            "EditorBase::CollapseSelectionTo() caused destroying the editor");
         return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
       }
       NS_WARNING_ASSERTION(
           NS_SUCCEEDED(rv),
-          "HTMLEditor::CollapseSelectionTo() failed, but ignored");
+          "EditorBase::CollapseSelectionTo() failed, but ignored");
     }
   }
   return EditActionHandled();
@@ -4270,7 +4996,7 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
         SplitRangeOffFromNodeResult outdentResult = OutdentPartOfBlock(
             *indentedParentElement, *firstContentToBeOutdented,
             *lastContentToBeOutdented, indentedParentIndentedWith);
-        if (outdentResult.Failed()) {
+        if (outdentResult.isErr()) {
           NS_WARNING("HTMLEditor::OutdentPartOfBlock() failed");
           return outdentResult;
         }
@@ -4282,14 +5008,22 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
         lastContentToBeOutdented = nullptr;
         indentedParentIndentedWith = BlockIndentedWith::HTML;
       }
-      nsresult rv = RemoveBlockContainerWithTransaction(
-          MOZ_KnownLive(*content->AsElement()));
-      if (NS_WARN_IF(Destroyed())) {
-        return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (NS_FAILED(rv)) {
+      const Result<EditorDOMPoint, nsresult> unwrapBlockquoteElementResult =
+          RemoveBlockContainerWithTransaction(
+              MOZ_KnownLive(*content->AsElement()));
+      if (MOZ_UNLIKELY(unwrapBlockquoteElementResult.isErr())) {
         NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-        return SplitRangeOffFromNodeResult(rv);
+        return SplitRangeOffFromNodeResult(
+            unwrapBlockquoteElementResult.inspectErr());
+      }
+      const EditorDOMPoint& pointToPutCaret =
+          unwrapBlockquoteElementResult.inspect();
+      if (AllowsTransactionsToChangeSelection() && pointToPutCaret.IsSet()) {
+        nsresult rv = CollapseSelectionTo(pointToPutCaret);
+        if (NS_FAILED(rv)) {
+          NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+          return SplitRangeOffFromNodeResult(rv);
+        }
       }
       continue;
     }
@@ -4337,7 +5071,8 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
         SplitRangeOffFromNodeResult outdentResult = OutdentPartOfBlock(
             *indentedParentElement, *firstContentToBeOutdented,
             *lastContentToBeOutdented, indentedParentIndentedWith);
-        if (NS_WARN_IF(outdentResult.Failed())) {
+        if (outdentResult.isErr()) {
+          NS_WARNING("HTMLEditor::OutdentPartOfBlock() failed");
           return outdentResult;
         }
         leftContentOfLastOutdented = outdentResult.GetLeftContent();
@@ -4376,7 +5111,7 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
       SplitRangeOffFromNodeResult outdentResult = OutdentPartOfBlock(
           *indentedParentElement, *firstContentToBeOutdented,
           *lastContentToBeOutdented, indentedParentIndentedWith);
-      if (outdentResult.Failed()) {
+      if (outdentResult.isErr()) {
         NS_WARNING("HTMLEditor::OutdentPartOfBlock() failed");
         return outdentResult;
       }
@@ -4459,19 +5194,27 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
     //     we create invalid tree.  E.g., `<ul>` may have `<dd>` as its
     //     list item element.
     if (HTMLEditUtils::IsAnyListElement(atContent.GetContainer())) {
-      // Move node out of list
-      if (HTMLEditUtils::IsAnyListElement(content)) {
-        // Just unwrap this sublist
-        nsresult rv = RemoveBlockContainerWithTransaction(
-            MOZ_KnownLive(*content->AsElement()));
-        if (NS_WARN_IF(Destroyed())) {
-          return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-        }
-        if (NS_FAILED(rv)) {
-          NS_WARNING(
-              "HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-          return SplitRangeOffFromNodeResult(rv);
-        }
+      if (!HTMLEditUtils::IsAnyListElement(content)) {
+        continue;
+      }
+      // Just unwrap this sublist
+      const Result<EditorDOMPoint, nsresult> unwrapSubListElementResult =
+          RemoveBlockContainerWithTransaction(
+              MOZ_KnownLive(*content->AsElement()));
+      if (MOZ_UNLIKELY(unwrapSubListElementResult.isErr())) {
+        NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+        return SplitRangeOffFromNodeResult(
+            unwrapSubListElementResult.inspectErr());
+      }
+      const EditorDOMPoint& pointToPutCaret =
+          unwrapSubListElementResult.inspect();
+      if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+        continue;
+      }
+      nsresult rv = CollapseSelectionTo(pointToPutCaret);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+        return SplitRangeOffFromNodeResult(rv);
       }
       continue;
     }
@@ -4505,15 +5248,24 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
           NS_WARNING_ASSERTION(
               afterCurrentList.IsSet(),
               "Failed to set it to after current list element");
-          nsresult rv =
+          const MoveNodeResult moveListElementResult =
               MoveNodeWithTransaction(*lastChildContent, afterCurrentList);
-          if (NS_WARN_IF(Destroyed())) {
-            return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-          }
-          if (NS_FAILED(rv)) {
+          if (moveListElementResult.isErr()) {
             NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
+            return SplitRangeOffFromNodeResult(
+                moveListElementResult.unwrapErr());
+          }
+          nsresult rv = moveListElementResult.SuggestCaretPointTo(
+              *this, {SuggestCaret::OnlyIfHasSuggestion,
+                      SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                      SuggestCaret::AndIgnoreTrivialError});
+          if (NS_FAILED(rv)) {
+            NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
             return SplitRangeOffFromNodeResult(rv);
           }
+          NS_WARNING_ASSERTION(
+              rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+              "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
           continue;
         }
 
@@ -4529,13 +5281,21 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
         }
       }
       // Delete the now-empty list
-      nsresult rv = RemoveBlockContainerWithTransaction(
-          MOZ_KnownLive(*content->AsElement()));
-      if (NS_WARN_IF(Destroyed())) {
-        return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (NS_FAILED(rv)) {
+      const Result<EditorDOMPoint, nsresult> unwrapListElementResult =
+          RemoveBlockContainerWithTransaction(
+              MOZ_KnownLive(*content->AsElement()));
+      if (MOZ_UNLIKELY(unwrapListElementResult.isErr())) {
         NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+        return SplitRangeOffFromNodeResult(
+            unwrapListElementResult.inspectErr());
+      }
+      const EditorDOMPoint& pointToPutCaret = unwrapListElementResult.inspect();
+      if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+        continue;
+      }
+      nsresult rv = CollapseSelectionTo(pointToPutCaret);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("EditorBase::CollapseSelectionTo() failed");
         return SplitRangeOffFromNodeResult(rv);
       }
       continue;
@@ -4565,7 +5325,7 @@ SplitRangeOffFromNodeResult HTMLEditor::HandleOutdentAtSelectionInternal() {
   SplitRangeOffFromNodeResult outdentResult =
       OutdentPartOfBlock(*indentedParentElement, *firstContentToBeOutdented,
                          *lastContentToBeOutdented, indentedParentIndentedWith);
-  NS_WARNING_ASSERTION(outdentResult.Succeeded(),
+  NS_WARNING_ASSERTION(outdentResult.isOk(),
                        "HTMLEditor::OutdentPartOfBlock() failed");
   return outdentResult;
 }
@@ -4578,19 +5338,26 @@ HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer(
 
   SplitRangeOffFromNodeResult splitResult =
       SplitRangeOffFromBlock(aBlockElement, aStartOfRange, aEndOfRange);
-  if (NS_WARN_IF(splitResult.Rv() == NS_ERROR_EDITOR_DESTROYED)) {
+  if (splitResult.EditorDestroyed()) {
+    NS_WARNING(
+        "HTMLEditor::SplitRangeOffFromBlock() caused destorying the editor");
     return splitResult;
   }
   NS_WARNING_ASSERTION(
-      splitResult.Succeeded(),
+      splitResult.isOk(),
       "HTMLEditor::SplitRangeOffFromBlock() failed, but might be ignored");
-  nsresult rv = RemoveBlockContainerWithTransaction(aBlockElement);
-  if (NS_WARN_IF(Destroyed())) {
-    return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-  }
-  if (NS_FAILED(rv)) {
+  const Result<EditorDOMPoint, nsresult> unwrapBlockElementResult =
+      RemoveBlockContainerWithTransaction(aBlockElement);
+  if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
     NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-    return SplitRangeOffFromNodeResult(rv);
+    return SplitRangeOffFromNodeResult(unwrapBlockElementResult.inspectErr());
+  }
+  const EditorDOMPoint& pointToPutCaret = unwrapBlockElementResult.inspect();
+  if (AllowsTransactionsToChangeSelection() && pointToPutCaret.IsSet()) {
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    if (NS_FAILED(rv)) {
+      return SplitRangeOffFromNodeResult(rv);
+    }
   }
   return SplitRangeOffFromNodeResult(splitResult.GetLeftContent(), nullptr,
                                      splitResult.GetRightContent());
@@ -4610,27 +5377,48 @@ SplitRangeOffFromNodeResult HTMLEditor::SplitRangeOffFromBlock(
   SplitNodeResult splitAtStartResult = SplitNodeDeepWithTransaction(
       aBlockElement, EditorDOMPoint(&aStartOfMiddleElement),
       SplitAtEdges::eDoNotCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
+  if (MOZ_UNLIKELY(NS_WARN_IF(splitAtStartResult.EditorDestroyed()))) {
     return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
   }
-  NS_WARNING_ASSERTION(splitAtStartResult.Succeeded(),
-                       "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
-                       "eDoNotCreateEmptyContainer) failed");
+  NS_WARNING_ASSERTION(
+      splitAtStartResult.isOk(),
+      "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
+      "eDoNotCreateEmptyContainer) at start of middle element failed");
 
   // Split at after the end
-  EditorDOMPoint atAfterEnd(&aEndOfMiddleElement);
-  DebugOnly<bool> advanced = atAfterEnd.AdvanceOffset();
-  NS_WARNING_ASSERTION(advanced, "Failed to advance offset after the end node");
+  auto atAfterEnd = EditorDOMPoint::After(aEndOfMiddleElement);
   SplitNodeResult splitAtEndResult = SplitNodeDeepWithTransaction(
       aBlockElement, atAfterEnd, SplitAtEdges::eDoNotCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
+  if (MOZ_UNLIKELY(NS_WARN_IF(splitAtEndResult.EditorDestroyed()))) {
     return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
   }
-  NS_WARNING_ASSERTION(splitAtEndResult.Succeeded(),
-                       "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
-                       "eDoNotCreateEmptyContainer) failed");
+  NS_WARNING_ASSERTION(
+      splitAtEndResult.isOk(),
+      "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
+      "eDoNotCreateEmptyContainer) after end of middle element failed");
 
-  return SplitRangeOffFromNodeResult(splitAtStartResult, splitAtEndResult);
+  if (AllowsTransactionsToChangeSelection() &&
+      (splitAtStartResult.HasCaretPointSuggestion() ||
+       splitAtEndResult.HasCaretPointSuggestion())) {
+    const SplitNodeResult& splitNodeResultHavingLatestCaretSuggestion =
+        [&]() -> SplitNodeResult& {
+      if (splitAtEndResult.HasCaretPointSuggestion()) {
+        splitAtStartResult.IgnoreCaretPointSuggestion();
+        return splitAtEndResult;
+      }
+      return splitAtStartResult;
+    }();
+    nsresult rv =
+        splitNodeResultHavingLatestCaretSuggestion.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+      return SplitRangeOffFromNodeResult(rv);
+    }
+  }
+
+  return SplitRangeOffFromNodeResult(std::move(splitAtStartResult),
+                                     std::move(splitAtEndResult));
 }
 
 SplitRangeOffFromNodeResult HTMLEditor::OutdentPartOfBlock(
@@ -4650,18 +5438,24 @@ SplitRangeOffFromNodeResult HTMLEditor::OutdentPartOfBlock(
     return SplitRangeOffFromNodeResult(NS_ERROR_FAILURE);
   }
   NS_WARNING_ASSERTION(
-      splitResult.Succeeded(),
+      splitResult.isOk(),
       "HTMLEditor::SplitRangeOffFromBlock() failed, but might be ignored");
 
   if (aBlockIndentedWith == BlockIndentedWith::HTML) {
-    nsresult rv = RemoveBlockContainerWithTransaction(
-        MOZ_KnownLive(*splitResult.GetMiddleContentAsElement()));
-    if (NS_WARN_IF(Destroyed())) {
-      return SplitRangeOffFromNodeResult(NS_ERROR_EDITOR_DESTROYED);
-    }
-    if (NS_FAILED(rv)) {
+    Result<EditorDOMPoint, nsresult> unwrapBlockElementResult =
+        RemoveBlockContainerWithTransaction(
+            MOZ_KnownLive(*splitResult.GetMiddleContentAsElement()));
+    if (MOZ_UNLIKELY(unwrapBlockElementResult.isErr())) {
       NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-      return SplitRangeOffFromNodeResult(rv);
+      return SplitRangeOffFromNodeResult(unwrapBlockElementResult.inspectErr());
+    }
+    const EditorDOMPoint& pointToPutCaret = unwrapBlockElementResult.inspect();
+    if (AllowsTransactionsToChangeSelection() && pointToPutCaret.IsSet()) {
+      nsresult rv = CollapseSelectionTo(pointToPutCaret);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+        return SplitRangeOffFromNodeResult(rv);
+      }
     }
     return SplitRangeOffFromNodeResult(splitResult.GetLeftContent(), nullptr,
                                        splitResult.GetRightContent());
@@ -4695,16 +5489,24 @@ CreateElementResult HTMLEditor::ChangeListElementType(Element& aListElement,
     if (HTMLEditUtils::IsListItem(childContent->AsElement()) &&
         !childContent->IsHTMLElement(&aNewListItemTag)) {
       OwningNonNull<Element> listItemElement = *childContent->AsElement();
-      RefPtr<Element> newListItemElement =
+      CreateElementResult newListItemElementOrError =
           ReplaceContainerWithTransaction(listItemElement, aNewListItemTag);
-      if (NS_WARN_IF(Destroyed())) {
-        return CreateElementResult(NS_ERROR_EDITOR_DESTROYED);
-      }
-      if (!newListItemElement) {
+      if (newListItemElementOrError.isErr()) {
         NS_WARNING("HTMLEditor::ReplaceContainerWithTransaction() failed");
-        return CreateElementResult(NS_ERROR_FAILURE);
+        return newListItemElementOrError;
       }
-      childContent = newListItemElement;
+      nsresult rv = newListItemElementOrError.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return CreateElementResult(rv);
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+      childContent = newListItemElementOrError.GetNewNode();
       continue;
     }
     if (HTMLEditUtils::IsAnyListElement(childContent->AsElement()) &&
@@ -4715,7 +5517,7 @@ CreateElementResult HTMLEditor::ChangeListElementType(Element& aListElement,
       OwningNonNull<Element> listElement = *childContent->AsElement();
       CreateElementResult convertListTypeResult =
           ChangeListElementType(listElement, aNewListTag, aNewListItemTag);
-      if (convertListTypeResult.Failed()) {
+      if (convertListTypeResult.isErr()) {
         NS_WARNING("HTMLEditor::ChangeListElementType() failed");
         return convertListTypeResult;
       }
@@ -4728,14 +5530,24 @@ CreateElementResult HTMLEditor::ChangeListElementType(Element& aListElement,
     return CreateElementResult(&aListElement);
   }
 
-  RefPtr<Element> listElement =
+  CreateElementResult listElementOrError =
       ReplaceContainerWithTransaction(aListElement, aNewListTag);
-  if (NS_WARN_IF(Destroyed())) {
-    return CreateElementResult(NS_ERROR_EDITOR_DESTROYED);
+  if (listElementOrError.isErr()) {
+    NS_WARNING("HTMLEditor::ReplaceContainerWithTransaction() failed");
+    return listElementOrError;
   }
-  NS_WARNING_ASSERTION(listElement,
-                       "HTMLEditor::ReplaceContainerWithTransaction() failed");
-  return CreateElementResult(std::move(listElement));
+  nsresult rv = listElementOrError.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return CreateElementResult(rv);
+  }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  return CreateElementResult(listElementOrError.UnwrapNewNode());
 }
 
 nsresult HTMLEditor::CreateStyleForInsertText(
@@ -4781,19 +5593,23 @@ nsresult HTMLEditor::CreateStyleForInsertText(
     // nodes above.
     if (pointToPutCaret.IsInTextNode()) {
       // if we are in a text node, split it
-      SplitNodeResult splitTextNodeResult = SplitNodeDeepWithTransaction(
+      const SplitNodeResult splitTextNodeResult = SplitNodeDeepWithTransaction(
           MOZ_KnownLive(*pointToPutCaret.GetContainerAsText()), pointToPutCaret,
           SplitAtEdges::eAllowToCreateEmptyContainer);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (splitTextNodeResult.Failed()) {
+      if (splitTextNodeResult.isErr()) {
         NS_WARNING(
             "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
             "eAllowToCreateEmptyContainer) failed");
-        return splitTextNodeResult.Rv();
+        return splitTextNodeResult.unwrapErr();
       }
-      pointToPutCaret = splitTextNodeResult.SplitPoint();
+      nsresult rv = splitTextNodeResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      pointToPutCaret = splitTextNodeResult.AtSplitPoint<EditorDOMPoint>();
     }
     if (!pointToPutCaret.IsInContentNode() ||
         !HTMLEditUtils::IsContainerNode(
@@ -4805,15 +5621,14 @@ nsresult HTMLEditor::CreateStyleForInsertText(
       NS_WARNING("EditorBase::CreateTextNode() failed");
       return NS_ERROR_FAILURE;
     }
-    nsresult rv = InsertNodeWithTransaction(*newEmptyTextNode, pointToPutCaret);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    CreateTextResult insertNewTextNodeResult =
+        InsertNodeWithTransaction<Text>(*newEmptyTextNode, pointToPutCaret);
+    if (insertNewTextNodeResult.isErr()) {
       NS_WARNING("EditorBase::InsertNodeWithTransaction() failed");
-      return rv;
+      return insertNewTextNodeResult.unwrapErr();
     }
-    pointToPutCaret.Set(newEmptyTextNode, 0);
+    insertNewTextNodeResult.IgnoreCaretPointSuggestion();
+    pointToPutCaret.Set(newEmptyTextNode, 0u);
     putCaret = true;
 
     if (relFontSize) {
@@ -4854,15 +5669,15 @@ nsresult HTMLEditor::CreateStyleForInsertText(
 
   nsresult rv = CollapseSelectionTo(pointToPutCaret);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionTo() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
 EditActionResult HTMLEditor::AlignAsSubAction(const nsAString& aAlignType) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eSetOrClearAlignment, nsIEditor::eNext,
@@ -4900,12 +5715,12 @@ EditActionResult HTMLEditor::AlignAsSubAction(const nsAString& aAlignType) {
   }
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -5051,6 +5866,11 @@ EditActionResult HTMLEditor::AlignContentsAtSelectionWithEmptyDivElement(
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
   MOZ_ASSERT(!IsSelectionRangeContainerNotContent());
 
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return EditActionResult(NS_ERROR_FAILURE);
+  }
+
   const nsRange* firstRange = SelectionRef().GetRangeAt(0);
   if (NS_WARN_IF(!firstRange)) {
     return EditActionResult(NS_ERROR_FAILURE);
@@ -5061,64 +5881,27 @@ EditActionResult HTMLEditor::AlignContentsAtSelectionWithEmptyDivElement(
     return EditActionResult(NS_ERROR_FAILURE);
   }
 
-  SplitNodeResult splitNodeResult = MaybeSplitAncestorsForInsertWithTransaction(
-      *nsGkAtoms::div, atStartOfSelection);
-  if (splitNodeResult.Failed()) {
+  CreateElementResult createNewDivElementResult =
+      InsertElementWithSplittingAncestorsWithTransaction(
+          *nsGkAtoms::div, atStartOfSelection,
+          BRElementNextToSplitPoint::Delete, *editingHost);
+  if (createNewDivElementResult.isErr()) {
     NS_WARNING(
-        "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms::"
-        "div) failed");
-    return EditActionResult(splitNodeResult.Rv());
+        "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+        "nsGkAtoms::div, BRElementNextToSplitPoint::Delete) failed");
+    return EditActionResult(createNewDivElementResult.unwrapErr());
   }
+  // We'll update selection below and nobody refers selection until then.
+  // Therefore, we don't need to update selection here.
+  createNewDivElementResult.IgnoreCaretPointSuggestion();
 
-  EditorDOMPoint pointToInsertDiv(splitNodeResult.SplitPoint());
-
-  // Consume a trailing br, if any.  This is to keep an alignment from
-  // creating extra lines, if possible.
-  // XXX Perhaps, we should stop handling this if there is no editing host.
-  if (Element* editingHost = GetActiveEditingHost()) {
-    if (nsCOMPtr<nsIContent> maybeBRContent = HTMLEditUtils::GetNextContent(
-            splitNodeResult.SplitPoint(),
-            {WalkTreeOption::IgnoreNonEditableNode,
-             WalkTreeOption::StopAtBlockBoundary},
-            editingHost)) {
-      if (maybeBRContent->IsHTMLElement(nsGkAtoms::br) &&
-          pointToInsertDiv.GetChild()) {
-        // Making use of html structure... if next node after where we are
-        // putting our div is not a block, then the br we found is in same block
-        // we are, so it's safe to consume it.
-        if (nsIContent* nextEditableSibling = HTMLEditUtils::GetNextSibling(
-                *pointToInsertDiv.GetChild(),
-                {WalkTreeOption::IgnoreNonEditableNode})) {
-          if (!HTMLEditUtils::IsBlockElement(*nextEditableSibling)) {
-            AutoEditorDOMPointChildInvalidator lockOffset(pointToInsertDiv);
-            nsresult rv = DeleteNodeWithTransaction(*maybeBRContent);
-            if (NS_WARN_IF(Destroyed())) {
-              return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
-            }
-            if (NS_FAILED(rv)) {
-              NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-              return EditActionResult(rv);
-            }
-          }
-        }
-      }
-    }
-  }
-
-  Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-      CreateNodeWithTransaction(*nsGkAtoms::div, pointToInsertDiv);
-  if (maybeNewDivElement.isErr()) {
-    NS_WARNING("EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-    return EditActionResult(maybeNewDivElement.unwrapErr());
-  }
-  MOZ_ASSERT(maybeNewDivElement.inspect());
+  RefPtr<Element> newDivElement = createNewDivElementResult.UnwrapNewNode();
+  MOZ_ASSERT(newDivElement);
   // Remember our new block for postprocessing
-  TopLevelEditSubActionDataRef().mNewBlockElement =
-      maybeNewDivElement.inspect();
+  TopLevelEditSubActionDataRef().mNewBlockElement = newDivElement;
   // Set up the alignment on the div, using HTML or CSS
-  nsresult rv =
-      SetBlockElementAlign(MOZ_KnownLive(*maybeNewDivElement.inspect()),
-                           aAlignType, EditTarget::OnlyDescendantsExceptTable);
+  nsresult rv = SetBlockElementAlign(*newDivElement, aAlignType,
+                                     EditTarget::OnlyDescendantsExceptTable);
   if (NS_FAILED(rv)) {
     NS_WARNING(
         "HTMLEditor::SetBlockElementAlign(EditTarget::"
@@ -5127,24 +5910,30 @@ EditActionResult HTMLEditor::AlignContentsAtSelectionWithEmptyDivElement(
   }
   // Put in a padding <br> element for empty last line so that it won't get
   // deleted.
-  CreateElementResult createPaddingBRResult =
+  CreateElementResult insertPaddingBRElementResult =
       InsertPaddingBRElementForEmptyLastLineWithTransaction(
-          EditorDOMPoint(maybeNewDivElement.inspect(), 0));
-  if (createPaddingBRResult.Failed()) {
+          EditorDOMPoint(newDivElement, 0u));
+  if (insertPaddingBRElementResult.isErr()) {
     NS_WARNING(
         "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction() "
         "failed");
-    return EditActionResult(createPaddingBRResult.Rv());
+    return EditActionResult(insertPaddingBRElementResult.unwrapErr());
   }
-  rv = CollapseSelectionToStartOf(MOZ_KnownLive(*maybeNewDivElement.inspect()));
+  insertPaddingBRElementResult.IgnoreCaretPointSuggestion();
+  rv = CollapseSelectionToStartOf(*newDivElement);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionToStartOf() failed");
+                       "EditorBase::CollapseSelectionToStartOf() failed");
   return EditActionHandled(rv);
 }
 
 nsresult HTMLEditor::AlignNodesAndDescendants(
     nsTArray<OwningNonNull<nsIContent>>& aArrayOfContents,
     const nsAString& aAlignType) {
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   // Detect all the transitions in the array, where a transition means that
   // adjacent nodes in the array don't have the same parent.
   AutoTArray<bool, 64> transitionList;
@@ -5277,52 +6066,59 @@ nsresult HTMLEditor::AlignNodesAndDescendants(
         return NS_OK;
       }
 
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::div,
-                                                      atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewDivElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              *nsGkAtoms::div, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewDivElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms:"
-            ":div) failed");
-        return splitNodeResult.Rv();
+            "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+            "nsGkAtoms::div) failed");
+        return createNewDivElementResult.unwrapErr();
       }
-      Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-          CreateNodeWithTransaction(*nsGkAtoms::div,
-                                    splitNodeResult.SplitPoint());
-      if (maybeNewDivElement.isErr()) {
-        NS_WARNING(
-            "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-        return maybeNewDivElement.unwrapErr();
+      nsresult rv = createNewDivElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      MOZ_ASSERT(maybeNewDivElement.inspect());
+      RefPtr<Element> newDivElement = createNewDivElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newDivElement);
       // Remember our new block for postprocessing
-      TopLevelEditSubActionDataRef().mNewBlockElement =
-          maybeNewDivElement.inspect();
+      TopLevelEditSubActionDataRef().mNewBlockElement = newDivElement;
       // Set up the alignment on the div
-      nsresult rv = SetBlockElementAlign(
-          MOZ_KnownLive(*maybeNewDivElement.inspect()), aAlignType,
-          EditTarget::OnlyDescendantsExceptTable);
+      rv = SetBlockElementAlign(*newDivElement, aAlignType,
+                                EditTarget::OnlyDescendantsExceptTable);
       if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
         return NS_ERROR_EDITOR_DESTROYED;
       }
       NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                            "HTMLEditor::SetBlockElementAlign(EditTarget::"
                            "OnlyDescendantsExceptTable) failed, but ignored");
-      createdDivElement = maybeNewDivElement.unwrap();
+      createdDivElement = std::move(newDivElement);
     }
 
     // Tuck the node into the end of the active div
     //
     // MOZ_KnownLive because 'aArrayOfContents' is guaranteed to keep it alive.
-    nsresult rv = MoveNodeToEndWithTransaction(MOZ_KnownLive(content),
-                                               *createdDivElement);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    MoveNodeResult moveNodeResult = MoveNodeToEndWithTransaction(
+        MOZ_KnownLive(content), *createdDivElement);
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
   }
 
   return NS_OK;
@@ -5392,38 +6188,72 @@ nsresult HTMLEditor::AlignBlockContentsWithDivElement(
   // Otherwise, we need to insert a `<div>` element to set `align` attribute.
   // XXX Don't insert the new `<div>` element until we set `align` attribute
   //     for avoiding running mutation event listeners.
-  Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-      CreateNodeWithTransaction(*nsGkAtoms::div,
-                                EditorDOMPoint(&aBlockElement, 0));
-  if (maybeNewDivElement.isErr()) {
-    NS_WARNING("EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-    return maybeNewDivElement.unwrapErr();
+  CreateElementResult createNewDivElementResult = CreateAndInsertElement(
+      WithTransaction::Yes, *nsGkAtoms::div, EditorDOMPoint(&aBlockElement, 0u),
+      // MOZ_CAN_RUN_SCRIPT_BOUNDARY due to bug 1758868
+      [&aAlignType](HTMLEditor& aHTMLEditor, Element& aDivElement,
+                    const EditorDOMPoint&) MOZ_CAN_RUN_SCRIPT_BOUNDARY {
+        // If aDivElement has not been connected yet, we do not need
+        // transaction of setting align attribute here.
+        nsresult rv = aHTMLEditor.SetAttributeOrEquivalent(
+            &aDivElement, nsGkAtoms::align, aAlignType,
+            !aDivElement.IsInComposedDoc());
+        NS_WARNING_ASSERTION(
+            NS_SUCCEEDED(rv),
+            nsPrintfCString("EditorBase::SetAttributeOrEquivalent(nsGkAtoms:: "
+                            "align, \"...\", %s) failed",
+                            !aDivElement.IsInComposedDoc() ? "true" : "false")
+                .get());
+        return rv;
+      });
+  if (createNewDivElementResult.isErr()) {
+    NS_WARNING(
+        "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes, "
+        "nsGkAtoms::div) failed");
+    return createNewDivElementResult.unwrapErr();
   }
-  MOZ_ASSERT(maybeNewDivElement.inspect());
-  nsresult rv =
-      SetAttributeOrEquivalent(MOZ_KnownLive(maybeNewDivElement.inspect()),
-                               nsGkAtoms::align, aAlignType, false);
+  nsresult rv = createNewDivElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
   if (NS_FAILED(rv)) {
-    NS_WARNING("EditorBase::SetAttributeOrEquivalent(nsGkAtoms::align) failed");
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
     return rv;
   }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  RefPtr<Element> newDivElement = createNewDivElementResult.UnwrapNewNode();
+  MOZ_ASSERT(newDivElement);
   // XXX This is tricky and does not work with mutation event listeners.
   //     But I'm not sure what we should do if new content is inserted.
   //     Anyway, I don't think that we should move editable contents
   //     over non-editable contents.  Chrome does no do that.
-  while (lastEditableContent &&
-         (lastEditableContent != maybeNewDivElement.inspect())) {
-    nsresult rv = MoveNodeWithTransaction(
-        *lastEditableContent, EditorDOMPoint(maybeNewDivElement.inspect(), 0));
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+  EditorDOMPoint pointToPutCaret;
+  while (lastEditableContent && (lastEditableContent != newDivElement)) {
+    MoveNodeResult moveNodeResult = MoveNodeWithTransaction(
+        *lastEditableContent, EditorDOMPoint(newDivElement, 0u));
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
-      return rv;
+      return moveNodeResult.unwrapErr();
     }
+    moveNodeResult.MoveCaretPointTo(
+        pointToPutCaret, *this,
+        {SuggestCaret::OnlyIfHasSuggestion,
+         SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
     lastEditableContent = HTMLEditUtils::GetLastChild(
         aBlockElement, {WalkTreeOption::IgnoreNonEditableNode});
+  }
+  if (pointToPutCaret.IsSet()) {
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
+      return NS_ERROR_EDITOR_DESTROYED;
+    }
+    NS_WARNING_ASSERTION(
+        NS_SUCCEEDED(rv),
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
   }
   return NS_OK;
 }
@@ -5505,7 +6335,7 @@ nsresult HTMLEditor::MaybeExtendSelectionToHardLineEdgesForBlockEditAction() {
         "WSRunScanner::ScanPreviousVisibleNodeOrBlockBoundaryFrom() failed");
     return NS_ERROR_FAILURE;
   }
-  if (scanResultAtEnd.ReachedSomething()) {
+  if (scanResultAtEnd.ReachedSomethingNonTextContent()) {
     // eThisBlock and eOtherBlock conveniently distinguish cases
     // of going "down" into a block and "up" out of a block.
     if (wsScannerAtEnd.StartsFromOtherBlockElement()) {
@@ -5542,7 +6372,7 @@ nsresult HTMLEditor::MaybeExtendSelectionToHardLineEdgesForBlockEditAction() {
     NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundaryFrom() failed");
     return NS_ERROR_FAILURE;
   }
-  if (scanResultAtStart.ReachedSomething()) {
+  if (scanResultAtStart.ReachedSomethingNonTextContent()) {
     // eThisBlock and eOtherBlock conveniently distinguish cases
     // of going "down" into a block and "up" out of a block.
     if (wsScannerAtStart.EndsByOtherBlockElement()) {
@@ -5613,15 +6443,15 @@ nsresult HTMLEditor::MaybeExtendSelectionToHardLineEdgesForBlockEditAction() {
   return error.StealNSResult();
 }
 
-template <typename PT, typename RT>
+template <typename EditorDOMPointType>
 EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
-    const RangeBoundaryBase<PT, RT>& aPoint,
-    EditSubAction aEditSubAction) const {
+    const EditorDOMPointType& aPoint, EditSubAction aEditSubAction,
+    const Element& aEditingHost) const {
   if (NS_WARN_IF(!aPoint.IsSet())) {
     return EditorDOMPoint();
   }
 
-  EditorDOMPoint point(aPoint);
+  auto point = aPoint.template To<EditorDOMPoint>();
   // Start scanning from the container node if aPoint is in a text node.
   // XXX Perhaps, IsInDataNode() must be expected.
   if (point.IsInTextNode()) {
@@ -5630,15 +6460,15 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
       // XXX Why don't we return start of the text node?
       return point;
     }
+    // If there is a preformatted linefeed in the text node, let's return
+    // the point after it.
+    EditorDOMPoint atLastPreformattedNewLine =
+        HTMLEditUtils::GetPreviousPreformattedNewLineInTextNode<EditorDOMPoint>(
+            point);
+    if (atLastPreformattedNewLine.IsSet()) {
+      return atLastPreformattedNewLine.NextPoint();
+    }
     point.Set(point.GetContainer());
-  }
-
-  Element* editingHost = GetActiveEditingHost();
-  if (!editingHost) {
-    NS_WARNING(
-        "No editing host, HTMLEditor::GetCurrentHardLineStartPoint() returned "
-        "given point");
-    return point;
   }
 
   // Look back through any further inline nodes that aren't across a <br>
@@ -5649,15 +6479,19 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
           WalkTreeOption::IgnoreNonEditableNode,
           WalkTreeOption::StopAtBlockBoundary};
   for (nsIContent* previousEditableContent = HTMLEditUtils::GetPreviousContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost);
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost);
        previousEditableContent && previousEditableContent->GetParentNode() &&
-       !HTMLEditUtils::IsVisibleBRElement(*previousEditableContent,
-                                          editingHost) &&
+       !HTMLEditUtils::IsVisibleBRElement(*previousEditableContent) &&
        !HTMLEditUtils::IsBlockElement(*previousEditableContent);
        previousEditableContent = HTMLEditUtils::GetPreviousContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost)) {
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost)) {
+    EditorDOMPoint atLastPreformattedNewLine =
+        HTMLEditUtils::GetPreviousPreformattedNewLineInTextNode<EditorDOMPoint>(
+            EditorRawDOMPoint::AtEndOf(*previousEditableContent));
+    if (atLastPreformattedNewLine.IsSet()) {
+      return atLastPreformattedNewLine.NextPoint();
+    }
     point.Set(previousEditableContent);
-    // XXX Why don't we check \n in pre-formated text node here?
   }
 
   // Finding the real start for this point unless current line starts after
@@ -5665,11 +6499,11 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
   // the container (typically, start of nearest block ancestor), and as long
   // as we haven't hit the body node.
   for (nsIContent* nearContent = HTMLEditUtils::GetPreviousContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost);
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost);
        !nearContent && !point.IsContainerHTMLElement(nsGkAtoms::body) &&
        point.GetContainer()->GetParentNode();
        nearContent = HTMLEditUtils::GetPreviousContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost)) {
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost)) {
     // Don't keep looking up if we have found a blockquote element to act on
     // when we handle outdent.
     // XXX Sounds like this is hacky.  If possible, it should be check in
@@ -5703,33 +6537,55 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineStartPoint(
   return point;
 }
 
-template <typename PT, typename RT>
+template <typename EditorDOMPointType>
 EditorDOMPoint HTMLEditor::GetCurrentHardLineEndPoint(
-    const RangeBoundaryBase<PT, RT>& aPoint) const {
+    const EditorDOMPointType& aPoint, const Element& aEditingHost) const {
   if (NS_WARN_IF(!aPoint.IsSet())) {
     return EditorDOMPoint();
   }
 
-  EditorDOMPoint point(aPoint);
+  auto point = aPoint.template To<EditorDOMPoint>();
   // Start scanning from the container node if aPoint is in a text node.
   // XXX Perhaps, IsInDataNode() must be expected.
   if (point.IsInTextNode()) {
-    if (!point.GetContainer()->GetParentNode()) {
+    if (NS_WARN_IF(!point.GetContainer()->GetParentNode())) {
       // Okay, can't promote any further
       // XXX Why don't we return end of the text node?
       return point;
     }
+    EditorDOMPoint atNextPreformattedNewLine =
+        HTMLEditUtils::GetInclusiveNextPreformattedNewLineInTextNode<
+            EditorDOMPoint>(point);
+    if (atNextPreformattedNewLine.IsSet()) {
+      // If the linefeed is last character of the text node, it may be
+      // invisible if it's immediately before a block boundary.  In such
+      // case, we should retrun the block boundary.
+      Element* maybeNonEditableBlockElement = nullptr;
+      if (HTMLEditUtils::IsInvisiblePreformattedNewLine(
+              atNextPreformattedNewLine, &maybeNonEditableBlockElement) &&
+          maybeNonEditableBlockElement) {
+        // If the block is a parent of the editing host, let's return end
+        // of editing host.
+        if (maybeNonEditableBlockElement == &aEditingHost ||
+            !maybeNonEditableBlockElement->IsInclusiveDescendantOf(
+                &aEditingHost)) {
+          return EditorDOMPoint::AtEndOf(*maybeNonEditableBlockElement);
+        }
+        // If it's invisible because of parent block boundary, return end
+        // of the block.  Otherwise, i.e., it's followed by a child block,
+        // returns the point of the child block.
+        if (atNextPreformattedNewLine.ContainerAsText()
+                ->IsInclusiveDescendantOf(maybeNonEditableBlockElement)) {
+          return EditorDOMPoint::AtEndOf(*maybeNonEditableBlockElement);
+        }
+        return EditorDOMPoint(maybeNonEditableBlockElement);
+      }
+      // Otherwise, return the point after the preformatted linefeed.
+      return atNextPreformattedNewLine.NextPoint();
+    }
     // want to be after the text node
     point.SetAfter(point.GetContainer());
     NS_WARNING_ASSERTION(point.IsSet(), "Failed to set to after the text node");
-  }
-
-  Element* editingHost = GetActiveEditingHost();
-  if (!editingHost) {
-    NS_WARNING(
-        "No editing host, HTMLEditor::GetCurrentHardLineEndPoint() returned "
-        "given point");
-    return point;
   }
 
   // Look ahead through any further inline nodes that aren't across a <br> from
@@ -5751,33 +6607,48 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineEndPoint(
           WalkTreeOption::IgnoreNonEditableNode,
           WalkTreeOption::StopAtBlockBoundary};
   for (nsIContent* nextEditableContent = HTMLEditUtils::GetNextContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost);
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost);
        nextEditableContent &&
        !HTMLEditUtils::IsBlockElement(*nextEditableContent) &&
        nextEditableContent->GetParent();
        nextEditableContent = HTMLEditUtils::GetNextContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost)) {
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost)) {
+    EditorDOMPoint atFirstPreformattedNewLine =
+        HTMLEditUtils::GetInclusiveNextPreformattedNewLineInTextNode<
+            EditorDOMPoint>(EditorRawDOMPoint(nextEditableContent, 0));
+    if (atFirstPreformattedNewLine.IsSet()) {
+      // If the linefeed is last character of the text node, it may be
+      // invisible if it's immediately before a block boundary.  In such
+      // case, we should retrun the block boundary.
+      Element* maybeNonEditableBlockElement = nullptr;
+      if (HTMLEditUtils::IsInvisiblePreformattedNewLine(
+              atFirstPreformattedNewLine, &maybeNonEditableBlockElement) &&
+          maybeNonEditableBlockElement) {
+        // If the block is a parent of the editing host, let's return end
+        // of editing host.
+        if (maybeNonEditableBlockElement == &aEditingHost ||
+            !maybeNonEditableBlockElement->IsInclusiveDescendantOf(
+                &aEditingHost)) {
+          return EditorDOMPoint::AtEndOf(*maybeNonEditableBlockElement);
+        }
+        // If it's invisible because of parent block boundary, return end
+        // of the block.  Otherwise, i.e., it's followed by a child block,
+        // returns the point of the child block.
+        if (atFirstPreformattedNewLine.ContainerAsText()
+                ->IsInclusiveDescendantOf(maybeNonEditableBlockElement)) {
+          return EditorDOMPoint::AtEndOf(*maybeNonEditableBlockElement);
+        }
+        return EditorDOMPoint(maybeNonEditableBlockElement);
+      }
+      // Otherwise, return the point after the preformatted linefeed.
+      return atFirstPreformattedNewLine.NextPoint();
+    }
     point.SetAfter(nextEditableContent);
     if (NS_WARN_IF(!point.IsSet())) {
       break;
     }
-    if (HTMLEditUtils::IsVisibleBRElement(*nextEditableContent, editingHost)) {
+    if (HTMLEditUtils::IsVisibleBRElement(*nextEditableContent)) {
       break;
-    }
-
-    // Check for newlines in pre-formatted text nodes.
-    if (nextEditableContent->IsText() &&
-        EditorUtils::IsContentPreformatted(*nextEditableContent)) {
-      nsAutoString textContent;
-      nextEditableContent->GetAsText()->GetData(textContent);
-      int32_t newlinePos = textContent.FindChar(nsCRT::LF);
-      if (newlinePos >= 0) {
-        if (AssertedCast<uint32_t>(newlinePos) + 1 == textContent.Length()) {
-          // No need for special processing if the newline is at the end.
-          break;
-        }
-        return EditorDOMPoint(nextEditableContent, newlinePos + 1);
-      }
     }
   }
 
@@ -5786,11 +6657,11 @@ EditorDOMPoint HTMLEditor::GetCurrentHardLineEndPoint(
   // container (typically, block node), and as long as we haven't hit the body
   // node.
   for (nsIContent* nearContent = HTMLEditUtils::GetNextContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost);
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost);
        !nearContent && !point.IsContainerHTMLElement(nsGkAtoms::body) &&
        point.GetContainer()->GetParentNode();
        nearContent = HTMLEditUtils::GetNextContent(
-           point, ignoreNonEditableNodeAndStopAtBlockBoundary, editingHost)) {
+           point, ignoreNonEditableNodeAndStopAtBlockBoundary, &aEditingHost)) {
     // Don't walk past the editable section. Note that we need to check before
     // walking up to a parent because we need to return the parent object, so
     // the parent itself might not be in the editable area, but it's OK.
@@ -5817,13 +6688,20 @@ void HTMLEditor::GetSelectionRangesExtendedToIncludeAdjuscentWhiteSpaces(
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(aOutArrayOfRanges.IsEmpty());
 
-  aOutArrayOfRanges.SetCapacity(SelectionRef().RangeCount());
-  for (uint32_t i = 0; i < SelectionRef().RangeCount(); i++) {
+  const uint32_t rangeCount = SelectionRef().RangeCount();
+  aOutArrayOfRanges.SetCapacity(rangeCount);
+  for (const uint32_t i : IntegerRange(rangeCount)) {
+    MOZ_ASSERT(SelectionRef().RangeCount() == rangeCount);
     const nsRange* selectionRange = SelectionRef().GetRangeAt(i);
     MOZ_ASSERT(selectionRange);
-
+    EditorRawDOMRange rawRange(*selectionRange);
+    if (!rawRange.IsPositioned() ||
+        !rawRange.EnsureNotInNativeAnonymousSubtree()) {
+      continue;  // ignore ranges which are in orphan fragment which were
+                 // disconnected from native anonymous subtrees
+    }
     RefPtr<nsRange> extendedRange =
-        CreateRangeIncludingAdjuscentWhiteSpaces(*selectionRange);
+        CreateRangeIncludingAdjuscentWhiteSpaces(rawRange);
     if (!extendedRange) {
       extendedRange = selectionRange->CloneRange();
     }
@@ -5837,93 +6715,106 @@ void HTMLEditor::GetSelectionRangesExtendedToHardLineStartAndEnd(
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(aOutArrayOfRanges.IsEmpty());
 
-  aOutArrayOfRanges.SetCapacity(SelectionRef().RangeCount());
-  for (uint32_t i = 0; i < SelectionRef().RangeCount(); i++) {
+  const uint32_t rangeCount = SelectionRef().RangeCount();
+  aOutArrayOfRanges.SetCapacity(rangeCount);
+  for (const uint32_t i : IntegerRange(rangeCount)) {
+    MOZ_ASSERT(SelectionRef().RangeCount() == rangeCount);
     // Make a new adjusted range to represent the appropriate block content.
     // The basic idea is to push out the range endpoints to truly enclose the
     // blocks that we will affect.  This call alters opRange.
     nsRange* selectionRange = SelectionRef().GetRangeAt(i);
     MOZ_ASSERT(selectionRange);
-
-    RefPtr<nsRange> extendedRange = CreateRangeExtendedToHardLineStartAndEnd(
-        *selectionRange, aEditSubAction);
+    EditorRawDOMRange rawRange(*selectionRange);
+    if (!rawRange.IsPositioned() ||
+        !rawRange.EnsureNotInNativeAnonymousSubtree()) {
+      continue;  // ignore ranges which are in orphan fragment which were
+                 // disconnected from native anonymous subtrees
+    }
+    RefPtr<nsRange> extendedRange =
+        CreateRangeExtendedToHardLineStartAndEnd(rawRange, aEditSubAction);
     if (!extendedRange) {
       extendedRange = selectionRange->CloneRange();
     }
-
     aOutArrayOfRanges.AppendElement(extendedRange);
   }
 }
 
-template <typename SPT, typename SRT, typename EPT, typename ERT>
+template <typename EditorDOMPointType1, typename EditorDOMPointType2>
 void HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock(
-    RangeBoundaryBase<SPT, SRT>& aStartRef,
-    RangeBoundaryBase<EPT, ERT>& aEndRef) const {
+    EditorDOMPointType1& aStartPoint, EditorDOMPointType2& aEndPoint,
+    const Element& aEditingHost) const {
   // MOOSE major hack:
   // The GetCurrentHardLineStartPoint() and GetCurrentHardLineEndPoint() don't
   // really do the right thing for collapsed ranges inside block elements that
   // contain nothing but a solo <br>.  It's easier/ to put a workaround here
   // than to revamp them.  :-(
-  if (aStartRef != aEndRef) {
+  if (aStartPoint != aEndPoint) {
     return;
   }
 
-  if (!aStartRef.Container()->IsContent()) {
+  if (!aStartPoint.IsInContentNode()) {
     return;
   }
 
-  Element* blockElement = HTMLEditUtils::GetInclusiveAncestorBlockElement(
-      *aStartRef.Container()->AsContent());
-  if (!blockElement) {
-    return;
-  }
-
-  Element* editingHost = GetActiveEditingHost();
-  if (NS_WARN_IF(!editingHost)) {
+  // XXX Perhaps, this should be more careful.  This may not select only one
+  //     node because this just check whether the block is empty or not,
+  //     and may not select in non-editable block.  However, for inline
+  //     editing host case, it's right to look for block element without
+  //     editable state check.  Now, this method is used for preparation for
+  //     other things.  So, cannot write test for this method behavior.
+  //     So, perhaps, we should get rid of this method and each caller should
+  //     handle its job better.
+  Element* const maybeNonEditableBlockElement =
+      HTMLEditUtils::GetInclusiveAncestorElement(
+          *aStartPoint.ContainerAsContent(),
+          HTMLEditUtils::ClosestBlockElement);
+  if (!maybeNonEditableBlockElement) {
     return;
   }
 
   // Make sure we don't go higher than our root element in the content tree
-  if (editingHost->IsInclusiveDescendantOf(blockElement)) {
+  if (aEditingHost.IsInclusiveDescendantOf(maybeNonEditableBlockElement)) {
     return;
   }
 
-  if (HTMLEditUtils::IsEmptyNode(*blockElement)) {
-    aStartRef = {blockElement, 0u};
-    aEndRef = {blockElement, blockElement->Length()};
+  if (HTMLEditUtils::IsEmptyNode(*maybeNonEditableBlockElement)) {
+    aStartPoint.Set(maybeNonEditableBlockElement, 0u);
+    aEndPoint.SetToEndOf(maybeNonEditableBlockElement);
   }
 }
 
+template <typename EditorDOMRangeType>
 already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const AbstractRange& aAbstractRange) {
-  if (!aAbstractRange.IsPositioned()) {
-    return nullptr;
-  }
-  return CreateRangeIncludingAdjuscentWhiteSpaces(aAbstractRange.StartRef(),
-                                                  aAbstractRange.EndRef());
+    const EditorDOMRangeType& aRange) {
+  MOZ_DIAGNOSTIC_ASSERT(aRange.IsPositioned());
+  return CreateRangeIncludingAdjuscentWhiteSpaces(aRange.StartRef(),
+                                                  aRange.EndRef());
 }
 
-template <typename SPT, typename SRT, typename EPT, typename ERT>
+template <typename EditorDOMPointType1, typename EditorDOMPointType2>
 already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
-    const RangeBoundaryBase<SPT, SRT>& aStartRef,
-    const RangeBoundaryBase<EPT, ERT>& aEndRef) {
-  if (NS_WARN_IF(!aStartRef.IsSet()) || NS_WARN_IF(!aEndRef.IsSet())) {
+    const EditorDOMPointType1& aStartPoint,
+    const EditorDOMPointType2& aEndPoint) {
+  MOZ_DIAGNOSTIC_ASSERT(!aStartPoint.IsInNativeAnonymousSubtree());
+  MOZ_DIAGNOSTIC_ASSERT(!aEndPoint.IsInNativeAnonymousSubtree());
+
+  if (!aStartPoint.IsInContentNode() || !aEndPoint.IsInContentNode()) {
+    NS_WARNING_ASSERTION(aStartPoint.IsSet(), "aStartPoint was not set");
+    NS_WARNING_ASSERTION(aEndPoint.IsSet(), "aEndPoint was not set");
     return nullptr;
   }
 
-  if (!aStartRef.Container()->IsContent() ||
-      !aEndRef.Container()->IsContent()) {
+  const Element* editingHost = GetActiveEditingHost();
+  if (NS_WARN_IF(!editingHost)) {
     return nullptr;
   }
 
-  RangeBoundaryBase<SPT, SRT> startRef(aStartRef);
-  RangeBoundaryBase<EPT, ERT> endRef(aEndRef);
-  SelectBRElementIfCollapsedInEmptyBlock(startRef, endRef);
+  auto startPoint = aStartPoint.template To<EditorRawDOMPoint>();
+  auto endPoint = aEndPoint.template To<EditorRawDOMPoint>();
+  SelectBRElementIfCollapsedInEmptyBlock(startPoint, endPoint, *editingHost);
 
-  if (NS_WARN_IF(!startRef.IsSet()) ||
-      NS_WARN_IF(!startRef.Container()->IsContent()) ||
-      NS_WARN_IF(!endRef.IsSet()) ||
-      NS_WARN_IF(!endRef.Container()->IsContent())) {
+  if (NS_WARN_IF(!startPoint.IsInContentNode()) ||
+      NS_WARN_IF(!endPoint.IsInContentNode())) {
     NS_WARNING("HTMLEditor::SelectBRElementIfCollapsedInEmptyBlock() failed");
     return nullptr;
   }
@@ -5935,7 +6826,6 @@ already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
   // XXX Those scanners do not treat siblings of the text nodes.  Perhaps,
   //     we should use `WSRunScanner::GetFirstASCIIWhiteSpacePointCollapsedTo()`
   //     and `WSRunScanner::GetEndOfCollapsibleASCIIWhiteSpaces()` instead.
-  EditorRawDOMPoint startPoint(startRef);
   if (startPoint.IsInTextNode()) {
     while (!startPoint.IsStartOfContainer()) {
       if (!startPoint.IsPreviousCharASCIISpaceOrNBSP()) {
@@ -5947,7 +6837,6 @@ already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
   if (!IsDescendantOfEditorRoot(startPoint.GetChildOrContainerIfDataNode())) {
     return nullptr;
   }
-  EditorRawDOMPoint endPoint(endRef);
   if (endPoint.IsInTextNode()) {
     while (!endPoint.IsEndOfContainer()) {
       if (!endPoint.IsCharASCIISpaceOrNBSP()) {
@@ -5957,7 +6846,9 @@ already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
     }
   }
   EditorRawDOMPoint lastRawPoint(endPoint);
-  lastRawPoint.RewindOffset();  // XXX Fail if it's start of the container
+  if (!lastRawPoint.IsStartOfContainer()) {
+    lastRawPoint.RewindOffset();
+  }
   if (!IsDescendantOfEditorRoot(lastRawPoint.GetChildOrContainerIfDataNode())) {
     return nullptr;
   }
@@ -5969,27 +6860,35 @@ already_AddRefed<nsRange> HTMLEditor::CreateRangeIncludingAdjuscentWhiteSpaces(
   return range.forget();
 }
 
+template <typename EditorDOMRangeType>
 already_AddRefed<nsRange> HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const AbstractRange& aAbstractRange, EditSubAction aEditSubAction) const {
-  if (!aAbstractRange.IsPositioned()) {
+    const EditorDOMRangeType& aRange, EditSubAction aEditSubAction) const {
+  if (!aRange.IsPositioned()) {
     return nullptr;
   }
   return CreateRangeExtendedToHardLineStartAndEnd(
-      aAbstractRange.StartRef(), aAbstractRange.EndRef(), aEditSubAction);
+      aRange.StartRef(), aRange.EndRef(), aEditSubAction);
 }
 
-template <typename SPT, typename SRT, typename EPT, typename ERT>
+template <typename EditorDOMPointType1, typename EditorDOMPointType2>
 already_AddRefed<nsRange> HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
-    const RangeBoundaryBase<SPT, SRT>& aStartRef,
-    const RangeBoundaryBase<EPT, ERT>& aEndRef,
-    EditSubAction aEditSubAction) const {
-  if (NS_WARN_IF(!aStartRef.IsSet()) || NS_WARN_IF(!aEndRef.IsSet())) {
+    const EditorDOMPointType1& aStartPoint,
+    const EditorDOMPointType2& aEndPoint, EditSubAction aEditSubAction) const {
+  MOZ_DIAGNOSTIC_ASSERT(!aStartPoint.IsInNativeAnonymousSubtree());
+  MOZ_DIAGNOSTIC_ASSERT(!aEndPoint.IsInNativeAnonymousSubtree());
+
+  if (NS_WARN_IF(!aStartPoint.IsSet()) || NS_WARN_IF(!aEndPoint.IsSet())) {
     return nullptr;
   }
 
-  RangeBoundaryBase<SPT, SRT> startRef(aStartRef);
-  RangeBoundaryBase<EPT, ERT> endRef(aEndRef);
-  SelectBRElementIfCollapsedInEmptyBlock(startRef, endRef);
+  const Element* editingHost = GetActiveEditingHost();
+  if (NS_WARN_IF(!editingHost)) {
+    return nullptr;
+  }
+
+  auto startPoint = aStartPoint.template To<EditorDOMPoint>();
+  auto endPoint = aEndPoint.template To<EditorDOMPoint>();
+  SelectBRElementIfCollapsedInEmptyBlock(startPoint, endPoint, *editingHost);
 
   // Make a new adjusted range to represent the appropriate block content.
   // This is tricky.  The basic idea is to push out the range endpoints to
@@ -6000,17 +6899,17 @@ already_AddRefed<nsRange> HTMLEditor::CreateRangeExtendedToHardLineStartAndEnd(
   //     implement a method which checks both two DOM points in the editor
   //     root.
 
-  EditorDOMPoint startPoint =
-      GetCurrentHardLineStartPoint(startRef, aEditSubAction);
+  startPoint =
+      GetCurrentHardLineStartPoint(startPoint, aEditSubAction, *editingHost);
   // XXX GetCurrentHardLineStartPoint() may return point of editing
   //     host.  Perhaps, we should change it and stop checking it here
   //     since this check may be expensive.
   if (!IsDescendantOfEditorRoot(startPoint.GetChildOrContainerIfDataNode())) {
     return nullptr;
   }
-  EditorDOMPoint endPoint = GetCurrentHardLineEndPoint(endRef);
-  EditorRawDOMPoint lastRawPoint(endPoint);
-  lastRawPoint.RewindOffset();
+  endPoint = GetCurrentHardLineEndPoint(endPoint, *editingHost);
+  const EditorDOMPoint lastRawPoint =
+      endPoint.IsStartOfContainer() ? endPoint : endPoint.PreviousPoint();
   // XXX GetCurrentHardLineEndPoint() may return point of editing host.
   //     Perhaps, we should change it and stop checking it here since this
   //     check may be expensive.
@@ -6061,7 +6960,8 @@ nsresult HTMLEditor::SplitTextNodesAtRangeEnd(
     nsTArray<RefPtr<nsRange>>& aArrayOfRanges) {
   // Split text nodes. This is necessary, since given ranges may end in text
   // nodes in case where part of a pre-formatted elements needs to be moved.
-  ErrorResult error;
+  EditorDOMPoint pointToPutCaret;
+  nsresult rv = NS_OK;
   IgnoredErrorResult ignoredError;
   for (RefPtr<nsRange>& range : aArrayOfRanges) {
     EditorDOMPoint atEnd(range->EndRef());
@@ -6071,27 +6971,41 @@ nsresult HTMLEditor::SplitTextNodesAtRangeEnd(
 
     if (!atEnd.IsStartOfContainer() && !atEnd.IsEndOfContainer()) {
       // Split the text node.
-      nsCOMPtr<nsIContent> newLeftNode = SplitNodeWithTransaction(atEnd, error);
-      if (NS_WARN_IF(Destroyed())) {
-        error = NS_ERROR_EDITOR_DESTROYED;
+      SplitNodeResult splitAtEndResult = SplitNodeWithTransaction(atEnd);
+      if (splitAtEndResult.isErr()) {
+        NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
+        rv = splitAtEndResult.unwrapErr();
+        break;
       }
-      if (error.Failed()) {
-        NS_WARNING_ASSERTION(error.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED),
-                             "HTMLEditor::SplitNodeWithTransaction() failed");
-        return error.StealNSResult();
-      }
+      splitAtEndResult.MoveCaretPointTo(
+          pointToPutCaret, *this,
+          {SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      MOZ_ASSERT_IF(AllowsTransactionsToChangeSelection(),
+                    pointToPutCaret.IsSet());
 
       // Correct the range.
       // The new end parent becomes the parent node of the text.
-      EditorRawDOMPoint atContainerOfSplitNode(atEnd.GetContainer());
       MOZ_ASSERT(!range->IsInSelection());
-      range->SetEnd(atContainerOfSplitNode, ignoredError);
+      range->SetEnd(splitAtEndResult.AtNextContent<EditorRawDOMPoint>()
+                        .ToRawRangeBoundary(),
+                    ignoredError);
       NS_WARNING_ASSERTION(!ignoredError.Failed(),
                            "nsRange::SetEnd() failed, but ignored");
       ignoredError.SuppressException();
     }
   }
-  return NS_OK;
+
+  if (!pointToPutCaret.IsSet()) {
+    return rv;
+  }
+  nsresult rvOfCollapseSelection = CollapseSelectionTo(pointToPutCaret);
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rvOfCollapseSelection),
+                       "EditorBase::CollapseSelectionTo() failed");
+  if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED ||
+                   rvOfCollapseSelection == NS_ERROR_EDITOR_DESTROYED)) {
+    return NS_ERROR_EDITOR_DESTROYED;
+  }
+  return MOZ_LIKELY(NS_SUCCEEDED(rv)) ? rvOfCollapseSelection : rv;
 }
 
 nsresult HTMLEditor::SplitParentInlineElementsAtRangeEdges(
@@ -6186,8 +7100,7 @@ nsresult HTMLEditor::CollectEditTargetNodes(
       for (int32_t i = aOutArrayOfContents.Length() - 1; i >= 0; i--) {
         if (Text* text = aOutArrayOfContents[i]->GetAsText()) {
           // Don't select empty text except to empty block
-          if (!HTMLEditUtils::IsVisibleTextNode(*text,
-                                                GetActiveEditingHost())) {
+          if (!HTMLEditUtils::IsVisibleTextNode(*text)) {
             aOutArrayOfContents.RemoveElementAt(i);
           }
         }
@@ -6314,8 +7227,11 @@ Element* HTMLEditor::GetParentListElementAtSelection() const {
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(!IsSelectionRangeContainerNotContent());
 
-  for (uint32_t i = 0; i < SelectionRef().RangeCount(); ++i) {
+  const uint32_t rangeCount = SelectionRef().RangeCount();
+  for (const uint32_t i : IntegerRange(rangeCount)) {
+    MOZ_ASSERT(SelectionRef().RangeCount() == rangeCount);
     nsRange* range = SelectionRef().GetRangeAt(i);
+    MOZ_ASSERT(range);
     for (nsINode* parent = range->GetClosestCommonInclusiveAncestor(); parent;
          parent = parent->GetParentNode()) {
       if (HTMLEditUtils::IsAnyListElement(parent)) {
@@ -6335,7 +7251,7 @@ nsresult HTMLEditor::SplitParentInlineElementsAtRangeEdges(
     return NS_OK;
   }
 
-  if (!aRangeItem.IsCollapsed() && aRangeItem.mEndContainer &&
+  if (!aRangeItem.Collapsed() && aRangeItem.mEndContainer &&
       aRangeItem.mEndContainer->IsContent()) {
     nsCOMPtr<nsIContent> mostAncestorInlineContentAtEnd =
         HTMLEditUtils::GetMostDistantAncestorInlineElement(
@@ -6345,23 +7261,30 @@ nsresult HTMLEditor::SplitParentInlineElementsAtRangeEdges(
       SplitNodeResult splitEndInlineResult = SplitNodeDeepWithTransaction(
           *mostAncestorInlineContentAtEnd, aRangeItem.EndPoint(),
           SplitAtEdges::eDoNotCreateEmptyContainer);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (splitEndInlineResult.Failed()) {
+      if (splitEndInlineResult.isErr()) {
         NS_WARNING(
             "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
             "eDoNotCreateEmptyContainer) failed");
-        return splitEndInlineResult.Rv();
+        return splitEndInlineResult.unwrapErr();
       }
-      if (editingHost != GetActiveEditingHost()) {
+      // Unfortunately, we need to collapse selection here for
+      // GetActiveEditingHost() since it refers selection.
+      nsresult rv = splitEndInlineResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      if (MOZ_UNLIKELY(editingHost != GetActiveEditingHost())) {
         NS_WARNING(
             "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
             "eDoNotCreateEmptyContainer) caused changing editing host");
         return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
       }
-      EditorRawDOMPoint splitPointAtEnd(splitEndInlineResult.SplitPoint());
-      if (!splitPointAtEnd.IsSet()) {
+      const EditorRawDOMPoint& splitPointAtEnd =
+          splitEndInlineResult.AtSplitPoint<EditorRawDOMPoint>();
+      if (MOZ_UNLIKELY(!splitPointAtEnd.IsSet())) {
         NS_WARNING(
             "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
             "eDoNotCreateEmptyContainer) didn't return split point");
@@ -6384,20 +7307,26 @@ nsresult HTMLEditor::SplitParentInlineElementsAtRangeEdges(
     SplitNodeResult splitStartInlineResult = SplitNodeDeepWithTransaction(
         *mostAncestorInlineContentAtStart, aRangeItem.StartPoint(),
         SplitAtEdges::eDoNotCreateEmptyContainer);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (splitStartInlineResult.Failed()) {
+    if (splitStartInlineResult.isErr()) {
       NS_WARNING(
           "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
           "eDoNotCreateEmptyContainer) failed");
-      return splitStartInlineResult.Rv();
+      return splitStartInlineResult.unwrapErr();
+    }
+    // XXX Why don't we check editing host like above??
+    nsresult rv = splitStartInlineResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+      return rv;
     }
     // XXX If we split only here because of collapsed range, we're modifying
     //     only start point of aRangeItem.  Shouldn't we modify end point here
     //     if it's collapsed?
-    EditorRawDOMPoint splitPointAtStart(splitStartInlineResult.SplitPoint());
-    if (!splitPointAtStart.IsSet()) {
+    const EditorRawDOMPoint& splitPointAtStart =
+        splitStartInlineResult.AtSplitPoint<EditorRawDOMPoint>();
+    if (MOZ_UNLIKELY(!splitPointAtStart.IsSet())) {
       NS_WARNING(
           "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
           "eDoNotCreateEmptyContainer) didn't return split point");
@@ -6433,38 +7362,53 @@ nsresult HTMLEditor::SplitElementsAtEveryBRElement(
     if (NS_WARN_IF(!atBRNode.IsSet())) {
       return NS_ERROR_FAILURE;
     }
-    SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
+    const SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
         *nextContent, atBRNode, SplitAtEdges::eAllowToCreateEmptyContainer);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (splitNodeResult.Failed()) {
+    if (splitNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
-      return splitNodeResult.Rv();
+      return splitNodeResult.unwrapErr();
     }
-
+    nsresult rv = splitNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+      return rv;
+    }
     // Put previous node at the split point.
-    if (splitNodeResult.GetPreviousNode()) {
+    if (nsIContent* previousContent = splitNodeResult.GetPreviousContent()) {
       // Might not be a left node.  A break might have been at the very
       // beginning of inline container, in which case
       // SplitNodeDeepWithTransaction() would not actually split anything.
-      aOutArrayOfContents.AppendElement(*splitNodeResult.GetPreviousNode());
+      aOutArrayOfContents.AppendElement(*previousContent);
     }
+    // When adding caret suggestion to SplitNodeResult, here didn't change
+    // selection so that just ignore it.
+    splitNodeResult.IgnoreCaretPointSuggestion();
 
     // Move break outside of container and also put in node list
-    EditorDOMPoint atNextNode(splitNodeResult.GetNextNode());
     // MOZ_KnownLive because 'arrayOfBRElements' is guaranteed to keep it alive.
-    nsresult rv = MoveNodeWithTransaction(MOZ_KnownLive(brElement), atNextNode);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    const MoveNodeResult moveBRElementResult = MoveNodeWithTransaction(
+        MOZ_KnownLive(brElement),
+        splitNodeResult.AtNextContent<EditorDOMPoint>());
+    if (moveBRElementResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
+      return moveBRElementResult.unwrapErr();
+    }
+    rv = moveBRElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     aOutArrayOfContents.AppendElement(brElement);
 
-    nextContent = splitNodeResult.GetNextNode();
+    nextContent = splitNodeResult.GetNextContent();
   }
 
   // Now tack on remaining next node.
@@ -6485,137 +7429,201 @@ void HTMLEditor::MakeTransitionList(
   }
 }
 
-nsresult HTMLEditor::HandleInsertParagraphInHeadingElement(Element& aHeader,
-                                                           nsINode& aNode,
-                                                           uint32_t aOffset) {
+Result<EditorDOMPoint, nsresult>
+HTMLEditor::HandleInsertParagraphInHeadingElement(
+    Element& aHeadingElement, const EditorDOMPoint& aPointToSplit) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
 
-  // Remember where the header is
-  nsCOMPtr<nsINode> headerParent = aHeader.GetParentNode();
-  int32_t offset = headerParent ? headerParent->ComputeIndexOf(&aHeader) : -1;
+  const SplitNodeResult splitHeadingResult =
+      [this, &aPointToSplit, &aHeadingElement]() MOZ_CAN_RUN_SCRIPT {
+        // Get ws code to adjust any ws
+        Result<EditorDOMPoint, nsresult> preparationResult =
+            WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement(
+                *this, aPointToSplit, aHeadingElement);
+        if (MOZ_UNLIKELY(preparationResult.isErr())) {
+          NS_WARNING(
+              "WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement() "
+              "failed");
+          return SplitNodeResult(preparationResult.unwrapErr());
+        }
+        EditorDOMPoint pointToSplit = preparationResult.unwrap();
+        MOZ_ASSERT(pointToSplit.IsInContentNode());
 
-  // Get ws code to adjust any ws
-  nsCOMPtr<nsINode> node = &aNode;
-  nsresult rv = WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks(
-      *this, address_of(node), &aOffset);
+        // Split the header
+        SplitNodeResult splitResult = SplitNodeDeepWithTransaction(
+            aHeadingElement, pointToSplit,
+            SplitAtEdges::eAllowToCreateEmptyContainer);
+        NS_WARNING_ASSERTION(
+            splitResult.isOk(),
+            "HTMLEditor::SplitNodeDeepWithTransaction(aHeadingElement, "
+            "SplitAtEdges::eAllowToCreateEmptyContainer) failed");
+        return splitResult;
+      }();
+  if (splitHeadingResult.isErr()) {
+    NS_WARNING("Failed to splitting aHeadingElement");
+    return Err(splitHeadingResult.unwrapErr());
+  }
+  nsresult rv = splitHeadingResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+    return Err(rv);
+  }
+  if (MOZ_UNLIKELY(!splitHeadingResult.DidSplit())) {
+    NS_WARNING(
+        "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
+        "eAllowToCreateEmptyContainer) didn't split aHeadingElement");
+    return Err(NS_ERROR_FAILURE);
+  }
+
+  // If the left heading element is empty, put a padding <br> element for empty
+  // last line into it.
+  // FYI: leftHeadingElement is grabbed by splitHeadingResult so that it's safe
+  //      to access anytime.
+  Element* leftHeadingElement =
+      Element::FromNode(splitHeadingResult.GetPreviousContent());
+  MOZ_ASSERT(leftHeadingElement,
+             "SplitNodeResult::GetPreviousContent() should return something if "
+             "DidSplit() returns true");
+  MOZ_DIAGNOSTIC_ASSERT(HTMLEditUtils::IsHeader(*leftHeadingElement));
+  if (HTMLEditUtils::IsEmptyNode(
+          *leftHeadingElement,
+          {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+    CreateElementResult insertPaddingBRElementResult =
+        InsertPaddingBRElementForEmptyLastLineWithTransaction(
+            EditorDOMPoint(leftHeadingElement, 0u));
+    if (insertPaddingBRElementResult.isErr()) {
+      NS_WARNING(
+          "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction("
+          ") failed");
+      return Err(insertPaddingBRElementResult.unwrapErr());
+    }
+    nsresult rv = insertPaddingBRElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return Err(rv);
+    }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  }
+
+  // Put caret at start of the right head element if it's not empty.
+  Element* rightHeadingElement =
+      Element::FromNode(splitHeadingResult.GetNextContent());
+  MOZ_ASSERT(rightHeadingElement,
+             "SplitNodeResult::GetNextContent() should return something if "
+             "DidSplit() returns true");
+  if (!HTMLEditUtils::IsEmptyBlockElement(*rightHeadingElement, {})) {
+    return EditorDOMPoint(rightHeadingElement, 0u);
+  }
+
+  // If the right heading element is empty, delete it.
+  // MOZ_KnownLive(rightHeadingElement) because it's grabbed by
+  // splitHeadingResult.
+  rv = DeleteNodeWithTransaction(MOZ_KnownLive(*rightHeadingElement));
   if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+    return Err(NS_ERROR_EDITOR_DESTROYED);
   }
   if (NS_FAILED(rv)) {
+    NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
+    return Err(rv);
+  }
+
+  // Layout tells the caret to blink in a weird place if we don't place a
+  // break after the header.
+  // XXX This block is dead code unless the removed right heading element is
+  //     reconnected by a mutation event listener.  This is a regression of
+  //     bug 1405751:
+  //     https://searchfox.org/mozilla-central/diff/879f3317d1331818718e18776caa47be7f426a22/editor/libeditor/HTMLEditRules.cpp#6389
+  //     However, the traditional behavior is different from the other browsers.
+  //     Chrome creates new paragraph in this case.  Therefore, we should just
+  //     drop this block in a follow up bug.
+  if (rightHeadingElement->GetNextSibling()) {
+    // XXX Ignoring non-editable <br> element here is odd because non-editable
+    //     <br> elements also work as <br> from point of view of layout.
+    nsIContent* nextEditableSibling =
+        HTMLEditUtils::GetNextSibling(*rightHeadingElement->GetNextSibling(),
+                                      {WalkTreeOption::IgnoreNonEditableNode});
+    if (nextEditableSibling &&
+        nextEditableSibling->IsHTMLElement(nsGkAtoms::br)) {
+      auto afterEditableBRElement = EditorDOMPoint::After(*nextEditableSibling);
+      if (MOZ_UNLIKELY(NS_WARN_IF(!afterEditableBRElement.IsSet()))) {
+        return Err(NS_ERROR_FAILURE);
+      }
+      // Put caret at the <br> element.
+      return afterEditableBRElement;
+    }
+  }
+
+  if (MOZ_UNLIKELY(!leftHeadingElement->IsInComposedDoc())) {
+    NS_WARNING("The left heading element was unexpectedly removed");
+    return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+  }
+
+  TopLevelEditSubActionDataRef().mCachedInlineStyles->Clear();
+  mTypeInState->ClearAllProps();
+
+  // Create a paragraph if the right heading element is not followed by an
+  // editable <br> element.
+  nsStaticAtom& newParagraphTagName =
+      &DefaultParagraphSeparatorTagName() == nsGkAtoms::br
+          ? *nsGkAtoms::p
+          : DefaultParagraphSeparatorTagName();
+  // We want a wrapper element even if we separate with a <br>.
+  // MOZ_KnownLive(newParagraphTagName) because it's available until shutdown.
+  const CreateElementResult createNewParagraphElementResult =
+      CreateAndInsertElement(
+          WithTransaction::Yes, MOZ_KnownLive(newParagraphTagName),
+          EditorDOMPoint::After(*leftHeadingElement),
+          // MOZ_CAN_RUN_SCRIPT_BOUNDARY due to bug 1758868
+          [](HTMLEditor& aHTMLEditor, Element& aDivOrParagraphElement,
+             const EditorDOMPoint&) MOZ_CAN_RUN_SCRIPT_BOUNDARY {
+            // We don't make inserting new <br> element undoable because
+            // removing the new element from the DOM tree gets same result for
+            // the user if aDivOrParagraphElement has not been connected yet.
+            const auto withTransaction =
+                aDivOrParagraphElement.IsInComposedDoc() ? WithTransaction::Yes
+                                                         : WithTransaction::No;
+            CreateElementResult insertBRElementResult =
+                aHTMLEditor.InsertBRElement(
+                    withTransaction,
+                    EditorDOMPoint(&aDivOrParagraphElement, 0u));
+            if (insertBRElementResult.isErr()) {
+              NS_WARNING(
+                  nsPrintfCString("HTMLEditor::InsertBRElement(%s) failed",
+                                  ToString(withTransaction).c_str())
+                      .get());
+              return insertBRElementResult.unwrapErr();
+            }
+            // We'll update selection after inserting the new paragraph.
+            insertBRElementResult.IgnoreCaretPointSuggestion();
+            return NS_OK;
+          });
+  if (createNewParagraphElementResult.isErr()) {
     NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() failed");
-    return rv;
+        "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) failed");
+    return Err(createNewParagraphElementResult.unwrapErr());
   }
-  if (!node->IsContent()) {
-    NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() returned "
-        "Document or something non-content node");
-    return NS_ERROR_FAILURE;
+  rv = createNewParagraphElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return Err(rv);
   }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  MOZ_ASSERT(createNewParagraphElementResult.GetNewNode());
 
-  // Split the header
-  SplitNodeResult splitHeaderResult =
-      SplitNodeDeepWithTransaction(aHeader, EditorDOMPoint(node, aOffset),
-                                   SplitAtEdges::eAllowToCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (splitHeaderResult.Failed()) {
-    NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
-    return NS_ERROR_FAILURE;
-  }
-
-  // If the previous heading of split point is empty, put a padding <br>
-  // element for empty last line into it.
-  nsCOMPtr<nsIContent> prevItem = HTMLEditUtils::GetPreviousSibling(
-      aHeader, {WalkTreeOption::IgnoreNonEditableNode});
-  if (prevItem) {
-    MOZ_DIAGNOSTIC_ASSERT(HTMLEditUtils::IsHeader(*prevItem));
-    if (HTMLEditUtils::IsEmptyNode(
-            *prevItem, {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
-      CreateElementResult createPaddingBRResult =
-          InsertPaddingBRElementForEmptyLastLineWithTransaction(
-              EditorDOMPoint(prevItem, 0));
-      if (createPaddingBRResult.Failed()) {
-        NS_WARNING(
-            "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction("
-            ") failed");
-        return createPaddingBRResult.Rv();
-      }
-    }
-  }
-
-  // If the new (righthand) header node is empty, delete it
-  if (HTMLEditUtils::IsEmptyBlockElement(aHeader, {})) {
-    nsresult rv = DeleteNodeWithTransaction(aHeader);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-      return rv;
-    }
-    // Layout tells the caret to blink in a weird place if we don't place a
-    // break after the header.
-    nsCOMPtr<nsIContent> sibling;
-    if (aHeader.GetNextSibling()) {
-      sibling = HTMLEditUtils::GetNextSibling(
-          *aHeader.GetNextSibling(), {WalkTreeOption::IgnoreNonEditableNode});
-    }
-    if (!sibling || !sibling->IsHTMLElement(nsGkAtoms::br)) {
-      TopLevelEditSubActionDataRef().mCachedInlineStyles->Clear();
-      mTypeInState->ClearAllProps();
-
-      // Create a paragraph
-      nsStaticAtom& paraAtom = DefaultParagraphSeparatorTagName();
-      // We want a wrapper element even if we separate with <br>
-      EditorDOMPoint nextToHeader(headerParent,
-                                  AssertedCast<uint32_t>(offset + 1));
-      Result<RefPtr<Element>, nsresult> maybeNewParagraphElement =
-          CreateNodeWithTransaction(&paraAtom == nsGkAtoms::br
-                                        ? *nsGkAtoms::p
-                                        : MOZ_KnownLive(paraAtom),
-                                    nextToHeader);
-      if (maybeNewParagraphElement.isErr()) {
-        NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-        return maybeNewParagraphElement.unwrapErr();
-      }
-      MOZ_ASSERT(maybeNewParagraphElement.inspect());
-
-      // Append a <br> to it
-      Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-          InsertBRElementWithTransaction(
-              EditorDOMPoint(maybeNewParagraphElement.inspect(), 0));
-      if (resultOfInsertingBRElement.isErr()) {
-        NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-        return resultOfInsertingBRElement.unwrapErr();
-      }
-      MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-
-      // Set selection to before the break
-      nsresult rv = CollapseSelectionToStartOf(
-          MOZ_KnownLive(*maybeNewParagraphElement.inspect()));
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "HTMLEditor::CollapseSelectionToStartOf() failed");
-      return rv;
-    }
-
-    EditorRawDOMPoint afterSibling(EditorRawDOMPoint::After(*sibling));
-    if (NS_WARN_IF(!afterSibling.IsSet())) {
-      return NS_ERROR_FAILURE;
-    }
-    // Put selection after break
-    rv = CollapseSelectionTo(afterSibling);
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionTo() failed");
-    return rv;
-  }
-
-  // Put selection at front of righthand heading
-  rv = CollapseSelectionToStartOf(aHeader);
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionToStartOf() failed");
-  return rv;
+  // Put caret at the <br> element in the following paragraph.
+  return EditorDOMPoint(createNewParagraphElementResult.GetNewNode(), 0u);
 }
 
 EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
@@ -6741,27 +7749,47 @@ EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
       }
     } else {
       if (doesCRCreateNewP) {
-        ErrorResult error;
-        nsCOMPtr<nsIContent> newLeftDivOrP =
-            SplitNodeWithTransaction(pointToSplitParentDivOrP, error);
+        // XXX We split a text node here if caret is middle of it to insert
+        //     <br> element **before** splitting aParentDivOrP.  Then, if
+        //     the <br> element becomes unnecessary, it'll be removed again.
+        //     So this does much more complicated things than what we want to
+        //     do here.  We should handle this case separately to make the code
+        //     much simpler.
+        Result<EditorDOMPoint, nsresult> pointToSplitOrError =
+            WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement(
+                *this, pointToSplitParentDivOrP, aParentDivOrP);
         if (NS_WARN_IF(Destroyed())) {
-          error = NS_ERROR_EDITOR_DESTROYED;
+          return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
         }
-        if (error.Failed()) {
-          NS_WARNING_ASSERTION(error.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED),
-                               "HTMLEditor::SplitNodeWithTransaction() failed");
-          return EditActionResult(error.StealNSResult());
+        if (MOZ_UNLIKELY(pointToSplitOrError.isErr())) {
+          NS_WARNING(
+              "WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement() "
+              "failed");
+          return EditActionResult(pointToSplitOrError.unwrapErr());
         }
-        pointToSplitParentDivOrP.SetToEndOf(newLeftDivOrP);
+        MOZ_ASSERT(pointToSplitOrError.inspect().IsSetAndValid());
+        if (pointToSplitOrError.inspect().IsSet()) {
+          pointToSplitParentDivOrP = pointToSplitOrError.unwrap();
+        }
+        const SplitNodeResult splitParentDivOrPResult =
+            SplitNodeWithTransaction(pointToSplitParentDivOrP);
+        if (splitParentDivOrPResult.isErr()) {
+          NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
+          return EditActionResult(splitParentDivOrPResult.unwrapErr());
+        }
+        nsresult rv = splitParentDivOrPResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+          return EditActionHandled(rv);
+        }
+        pointToSplitParentDivOrP.SetToEndOf(
+            splitParentDivOrPResult.GetPreviousContent());
       }
 
       // We need to put new <br> after the left node if given node was split
       // above.
-      pointToInsertBR.Set(pointToSplitParentDivOrP.GetContainer());
-      DebugOnly<bool> advanced = pointToInsertBR.AdvanceOffset();
-      NS_WARNING_ASSERTION(advanced,
-                           "Failed to advance offset to after the container "
-                           "of selection start");
+      pointToInsertBR.SetAfter(pointToSplitParentDivOrP.GetContainer());
     }
   } else {
     // not in a text node.
@@ -6772,8 +7800,7 @@ EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
                           atStartOfSelection,
                           {WalkTreeOption::IgnoreNonEditableNode}, editingHost)
                     : nullptr;
-    if (!nearContent ||
-        !HTMLEditUtils::IsVisibleBRElement(*nearContent, editingHost) ||
+    if (!nearContent || !HTMLEditUtils::IsVisibleBRElement(*nearContent) ||
         EditorUtils::IsPaddingBRElementForEmptyLastLine(*nearContent)) {
       // is there a BR after it?
       nearContent = editingHost ? HTMLEditUtils::GetNextContent(
@@ -6781,8 +7808,7 @@ EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
                                       {WalkTreeOption::IgnoreNonEditableNode},
                                       editingHost)
                                 : nullptr;
-      if (!nearContent ||
-          !HTMLEditUtils::IsVisibleBRElement(*nearContent, editingHost) ||
+      if (!nearContent || !HTMLEditUtils::IsVisibleBRElement(*nearContent) ||
           EditorUtils::IsPaddingBRElementForEmptyLastLine(*nearContent)) {
         pointToInsertBR = atStartOfSelection;
         splitAfterNewBR = true;
@@ -6798,20 +7824,31 @@ EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
       return EditActionResult(NS_OK);
     }
 
-    Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-        InsertBRElementWithTransaction(pointToInsertBR);
-    if (resultOfInsertingBRElement.isErr()) {
-      NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-      return EditActionResult(resultOfInsertingBRElement.unwrapErr());
+    CreateElementResult insertBRElementResult =
+        InsertBRElement(WithTransaction::Yes, pointToInsertBR);
+    if (insertBRElementResult.isErr()) {
+      NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+      return EditActionResult(insertBRElementResult.unwrapErr());
     }
-    MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+    nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return EditActionResult(rv);
+    }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+    MOZ_ASSERT(insertBRElementResult.GetNewNode());
     if (splitAfterNewBR) {
       // We split the parent after the br we've just inserted.
-      pointToSplitParentDivOrP.SetAfter(resultOfInsertingBRElement.inspect());
+      pointToSplitParentDivOrP.SetAfter(insertBRElementResult.GetNewNode());
       NS_WARNING_ASSERTION(pointToSplitParentDivOrP.IsSet(),
                            "Failed to set after the new <br>");
     }
-    brContent = resultOfInsertingBRElement.unwrap().forget();
+    brContent = insertBRElementResult.UnwrapNewNode();
   }
   EditActionResult result(
       SplitParagraph(aParentDivOrP, pointToSplitParentDivOrP, brContent));
@@ -6821,52 +7858,57 @@ EditActionResult HTMLEditor::HandleInsertParagraphInParagraph(
   return result;
 }
 
-template <typename PT, typename CT>
-nsresult HTMLEditor::SplitParagraph(
-    Element& aParentDivOrP, const EditorDOMPointBase<PT, CT>& aStartOfRightNode,
-    nsIContent* aNextBRNode) {
+nsresult HTMLEditor::SplitParagraph(Element& aParentDivOrP,
+                                    const EditorDOMPoint& aStartOfRightNode,
+                                    nsIContent* aNextBRNode) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  nsCOMPtr<nsINode> selNode = aStartOfRightNode.GetContainer();
-  uint32_t selOffset = aStartOfRightNode.Offset();
-  nsresult rv = WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks(
-      *this, address_of(selNode), &selOffset);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (NS_FAILED(rv)) {
+  Result<EditorDOMPoint, nsresult> preparationResult =
+      WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement(
+          *this, aStartOfRightNode, aParentDivOrP);
+  if (MOZ_UNLIKELY(preparationResult.isErr())) {
     NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() failed");
-    return rv;
+        "WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement() failed");
+    return preparationResult.unwrapErr();
   }
-  if (!selNode->IsContent()) {
-    NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() returned "
-        "Document or something non-content node");
-    return NS_ERROR_FAILURE;
-  }
+  EditorDOMPoint pointToSplit = preparationResult.unwrap();
+  MOZ_ASSERT(pointToSplit.IsInContentNode());
 
   // Split the paragraph.
-  SplitNodeResult splitDivOrPResult = SplitNodeDeepWithTransaction(
-      aParentDivOrP, EditorDOMPoint(selNode, selOffset),
-      SplitAtEdges::eAllowToCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (splitDivOrPResult.Failed()) {
+  const SplitNodeResult splitDivOrPResult = SplitNodeDeepWithTransaction(
+      aParentDivOrP, pointToSplit, SplitAtEdges::eAllowToCreateEmptyContainer);
+  if (splitDivOrPResult.isErr()) {
     NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
-    return splitDivOrPResult.Rv();
+    return splitDivOrPResult.unwrapErr();
   }
-  if (!splitDivOrPResult.DidSplit()) {
+  nsresult rv = splitDivOrPResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
+  if (MOZ_UNLIKELY(!splitDivOrPResult.DidSplit())) {
     NS_WARNING(
         "HTMLEditor::SplitNodeDeepWithTransaction() didn't split any nodes");
     return NS_ERROR_FAILURE;
   }
 
+  Element* leftDivOrParagraphElement =
+      Element::FromNode(splitDivOrPResult.GetPreviousContent());
+  MOZ_ASSERT(leftDivOrParagraphElement,
+             "SplitNodeResult::GetPreviousContent() should return something if "
+             "DidSplit() returns true");
+  Element* rightDivOrParagraphElement =
+      Element::FromNode(splitDivOrPResult.GetNextContent());
+  MOZ_ASSERT(rightDivOrParagraphElement,
+             "SplitNodeResult::GetNextContent() should return something if "
+             "DidSplit() returns true");
+
   // Get rid of the break, if it is visible (otherwise it may be needed to
   // prevent an empty p).
   if (aNextBRNode && HTMLEditUtils::IsVisibleBRElement(*aNextBRNode)) {
-    rv = DeleteNodeWithTransaction(*aNextBRNode);
+    nsresult rv = DeleteNodeWithTransaction(*aNextBRNode);
     if (NS_WARN_IF(Destroyed())) {
       return NS_ERROR_EDITOR_DESTROYED;
     }
@@ -6876,8 +7918,11 @@ nsresult HTMLEditor::SplitParagraph(
     }
   }
 
-  // Remove ID attribute on the paragraph from the existing right node.
-  rv = RemoveAttributeWithTransaction(aParentDivOrP, *nsGkAtoms::id);
+  // Remove ID attribute on the paragraph from the right node.
+  // MOZ_KnownLive(rightDivOrParagraphElement) because it's grabbed by
+  // splitDivOrPResult.
+  rv = RemoveAttributeWithTransaction(
+      MOZ_KnownLive(*rightDivOrParagraphElement), *nsGkAtoms::id);
   if (NS_WARN_IF(Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }
@@ -6893,294 +7938,343 @@ nsresult HTMLEditor::SplitParagraph(
   // it'll be exposed as <br> with Element.innerHTML.  Therefore, we can use
   // normal <br> elements for placeholder in this case.  Note that Chromium
   // also behaves so.
-  if (splitDivOrPResult.GetPreviousNode()->IsElement()) {
-    rv = InsertBRElementIfEmptyBlockElement(
-        MOZ_KnownLive(*splitDivOrPResult.GetPreviousNode()->AsElement()));
-    if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::InsertBRElementIfEmptyBlockElement() failed");
-      return rv;
-    }
+  // MOZ_KnownLive(leftDivOrParagraphElement) because it's grabbed by
+  // splitDivOrResult.
+  rv = InsertBRElementIfEmptyBlockElement(
+      MOZ_KnownLive(*leftDivOrParagraphElement));
+  if (NS_FAILED(rv)) {
+    NS_WARNING("HTMLEditor::InsertBRElementIfEmptyBlockElement() failed");
+    return rv;
   }
-  if (splitDivOrPResult.GetNextNode()->IsElement()) {
-    rv = InsertBRElementIfEmptyBlockElement(
-        MOZ_KnownLive(*splitDivOrPResult.GetNextNode()->AsElement()));
-    if (NS_FAILED(rv)) {
-      NS_WARNING("HTMLEditor::InsertBRElementIfEmptyBlockElement() failed");
-      return rv;
-    }
+  // MOZ_KnownLive(rightDivOrParagraphElement) because it's grabbed by
+  // splitDivOrResult.
+  rv = InsertBRElementIfEmptyBlockElement(
+      MOZ_KnownLive(*rightDivOrParagraphElement));
+  if (NS_FAILED(rv)) {
+    NS_WARNING("HTMLEditor::InsertBRElementIfEmptyBlockElement() failed");
+    return rv;
   }
 
   // selection to beginning of right hand para;
   // look inside any containers that are up front.
   nsCOMPtr<nsIContent> child = HTMLEditUtils::GetFirstLeafContent(
-      aParentDivOrP, {LeafNodeType::LeafNodeOrChildBlock});
+      *rightDivOrParagraphElement, {LeafNodeType::LeafNodeOrChildBlock});
   if (child && (child->IsText() || HTMLEditUtils::IsContainerNode(*child))) {
     nsresult rv = CollapseSelectionToStartOf(*child);
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
       return NS_ERROR_EDITOR_DESTROYED;
     }
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
-        "HTMLEditor::CollapseSelectionToStartOf() failed, but ignored");
+        "EditorBase::CollapseSelectionToStartOf() failed, but ignored");
   } else {
     nsresult rv = CollapseSelectionTo(EditorRawDOMPoint(child));
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
       return NS_ERROR_EDITOR_DESTROYED;
     }
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
-        "HTMLEditor::CollapseSelectionTo() failed, but ignored");
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
   }
   return NS_OK;
 }
 
-nsresult HTMLEditor::HandleInsertParagraphInListItemElement(Element& aListItem,
-                                                            nsINode& aNode,
-                                                            uint32_t aOffset) {
+Result<EditorDOMPoint, nsresult>
+HTMLEditor::HandleInsertParagraphInListItemElement(
+    Element& aListItemElement, const EditorDOMPoint& aPointToSplit,
+    Element& aEditingHost) {
   MOZ_ASSERT(IsEditActionDataAvailable());
-  MOZ_ASSERT(HTMLEditUtils::IsListItem(&aListItem));
+  MOZ_ASSERT(HTMLEditUtils::IsListItem(&aListItemElement));
 
-  // Get the item parent and the active editing host.
-  RefPtr<Element> editingHost = GetActiveEditingHost();
-
-  // If we are in an empty item, then we want to pop up out of the list, but
-  // only if prefs say it's okay and if the parent isn't the active editing
-  // host.
-  if (editingHost != aListItem.GetParentElement() &&
-      HTMLEditUtils::IsEmptyBlockElement(aListItem, {})) {
-    nsCOMPtr<nsIContent> leftListNode = aListItem.GetParent();
-    // Are we the last list item in the list?
-    if (!HTMLEditUtils::IsLastChild(aListItem,
+  // If aListItemElement is empty, then we want to outdent its content.
+  if (&aEditingHost != aListItemElement.GetParentElement() &&
+      HTMLEditUtils::IsEmptyBlockElement(aListItemElement, {})) {
+    RefPtr<Element> leftListElement = aListItemElement.GetParentElement();
+    // If the given list item element is not the last list item element of
+    // its parent nor not followed by sub list elements, split the parent
+    // before it.
+    if (!HTMLEditUtils::IsLastChild(aListItemElement,
                                     {WalkTreeOption::IgnoreNonEditableNode})) {
-      // We need to split the list!
-      EditorDOMPoint atListItem(&aListItem);
-      ErrorResult error;
-      leftListNode = SplitNodeWithTransaction(atListItem, error);
-      if (NS_WARN_IF(Destroyed())) {
-        error = NS_ERROR_EDITOR_DESTROYED;
+      const SplitNodeResult splitListItemParentResult =
+          SplitNodeWithTransaction(EditorDOMPoint(&aListItemElement));
+      if (splitListItemParentResult.isErr()) {
+        NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
+        return Err(splitListItemParentResult.unwrapErr());
       }
-      if (error.Failed()) {
-        NS_WARNING_ASSERTION(error.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED),
-                             "HTMLEditor::SplitNodeWithTransaction() failed");
-        return error.StealNSResult();
+      if (MOZ_UNLIKELY(!splitListItemParentResult.DidSplit())) {
+        NS_WARNING(
+            "HTMLEditor::SplitNodeWithTransaction() didn't split the parent of "
+            "aListItemElement");
+        MOZ_ASSERT(!splitListItemParentResult.HasCaretPointSuggestion());
+        return Err(NS_ERROR_FAILURE);
       }
-    }
-
-    // Are we in a sublist?
-    EditorDOMPoint atNextSiblingOfLeftList(leftListNode);
-    DebugOnly<bool> advanced = atNextSiblingOfLeftList.AdvanceOffset();
-    NS_WARNING_ASSERTION(advanced,
-                         "Failed to advance offset after the right list node");
-    if (HTMLEditUtils::IsAnyListElement(
-            atNextSiblingOfLeftList.GetContainer())) {
-      // If so, move item out of this list and into the grandparent list
-      nsresult rv = MoveNodeWithTransaction(aListItem, atNextSiblingOfLeftList);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
+      nsresult rv = splitListItemParentResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
       if (NS_FAILED(rv)) {
-        NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
-        return rv;
+        NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+        return Err(rv);
       }
-      rv = CollapseSelectionToStartOf(aListItem);
-      NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                           "HTMLEditor::CollapseSelectionToStartOf() failed");
-      return rv;
+      leftListElement =
+          Element::FromNode(splitListItemParentResult.GetPreviousContent());
+      MOZ_DIAGNOSTIC_ASSERT(leftListElement);
     }
 
-    // Otherwise kill this item
-    nsresult rv = DeleteNodeWithTransaction(aListItem);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
+    auto afterLeftListElement = EditorDOMPoint::After(leftListElement);
+    if (MOZ_UNLIKELY(!afterLeftListElement.IsSet())) {
+      return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+    }
+
+    // If aListItemElement is in an invalid sub-list element, move it into
+    // the grand parent list element in order to outdent.
+    if (HTMLEditUtils::IsAnyListElement(afterLeftListElement.GetContainer())) {
+      const MoveNodeResult moveListItemElementResult =
+          MoveNodeWithTransaction(aListItemElement, afterLeftListElement);
+      if (moveListItemElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
+        return Err(moveListItemElementResult.unwrapErr());
+      }
+      moveListItemElementResult.IgnoreCaretPointSuggestion();
+      return EditorDOMPoint(&aListItemElement, 0u);
+    }
+
+    // Otherwise, replace the empty aListItemElement with a new paragraph.
+    nsresult rv = DeleteNodeWithTransaction(aListItemElement);
+    if (MOZ_UNLIKELY(NS_WARN_IF(Destroyed()))) {
+      return Err(NS_ERROR_EDITOR_DESTROYED);
     }
     if (NS_FAILED(rv)) {
       NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-      return rv;
+      return Err(rv);
     }
-
-    // Time to insert a paragraph
-    nsStaticAtom& paraAtom = DefaultParagraphSeparatorTagName();
-    // We want a wrapper even if we separate with <br>
-    Result<RefPtr<Element>, nsresult> maybeNewParagraphElement =
-        CreateNodeWithTransaction(&paraAtom == nsGkAtoms::br
-                                      ? *nsGkAtoms::p
-                                      : MOZ_KnownLive(paraAtom),
-                                  atNextSiblingOfLeftList);
-    if (maybeNewParagraphElement.isErr()) {
-      NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-      return maybeNewParagraphElement.unwrapErr();
+    nsStaticAtom& newParagraphTagName =
+        &DefaultParagraphSeparatorTagName() == nsGkAtoms::br
+            ? *nsGkAtoms::p
+            : DefaultParagraphSeparatorTagName();
+    // MOZ_KnownLive(newParagraphTagName) because it's available until shutdown.
+    const CreateElementResult createNewParagraphElementResult =
+        CreateAndInsertElement(
+            WithTransaction::Yes, MOZ_KnownLive(newParagraphTagName),
+            afterLeftListElement,
+            // MOZ_CAN_RUN_SCRIPT_BOUNDARY due to bug 1758868
+            [](HTMLEditor& aHTMLEditor, Element& aDivOrParagraphElement,
+               const EditorDOMPoint&) MOZ_CAN_RUN_SCRIPT_BOUNDARY {
+              // We don't make inserting new <br> element undoable because
+              // removing the new element from the DOM tree gets same result
+              // for the user if aDivOrParagraphElement has not been
+              // connected yet.
+              const auto withTransaction =
+                  aDivOrParagraphElement.IsInComposedDoc()
+                      ? WithTransaction::Yes
+                      : WithTransaction::No;
+              CreateElementResult insertBRElementResult =
+                  aHTMLEditor.InsertBRElement(
+                      withTransaction,
+                      EditorDOMPoint(&aDivOrParagraphElement, 0u));
+              if (insertBRElementResult.isErr()) {
+                NS_WARNING(
+                    nsPrintfCString("HTMLEditor::InsertBRElement(%s) failed",
+                                    ToString(withTransaction).c_str())
+                        .get());
+                return insertBRElementResult.unwrapErr();
+              }
+              // We'll update selection after inserting the paragraph.
+              insertBRElementResult.IgnoreCaretPointSuggestion();
+              return NS_OK;
+            });
+    if (createNewParagraphElementResult.isErr()) {
+      NS_WARNING(
+          "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) failed");
+      return Err(createNewParagraphElementResult.unwrapErr());
     }
-    MOZ_ASSERT(maybeNewParagraphElement.inspect());
-
-    // Append a <br> to it
-    Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-        InsertBRElementWithTransaction(
-            EditorDOMPoint(maybeNewParagraphElement.inspect(), 0));
-    if (resultOfInsertingBRElement.isErr()) {
-      NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-      return resultOfInsertingBRElement.unwrapErr();
+    rv = createNewParagraphElementResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+      return Err(rv);
     }
-    MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-
-    // Set selection to before the break
-    rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewParagraphElement.inspect()));
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
-    return rv;
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+    MOZ_ASSERT(createNewParagraphElementResult.GetNewNode());
+    return EditorDOMPoint(createNewParagraphElementResult.GetNewNode(), 0u);
   }
 
-  // Else we want a new list item at the same list level.  Get ws code to
-  // adjust any ws.
-  nsCOMPtr<nsINode> selNode = &aNode;
-  nsresult rv = WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks(
-      *this, address_of(selNode), &aOffset);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (NS_FAILED(rv)) {
+  // If aListItemElement has some content or aListItemElement is empty but it's
+  // a child of editing host, we want a new list item at the same list level.
+  // First, sort out white-spaces.
+  Result<EditorDOMPoint, nsresult> preparationResult =
+      WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement(
+          *this, aPointToSplit, aListItemElement);
+  if (preparationResult.isErr()) {
     NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() failed");
-    return rv;
+        "WhiteSpaceVisibilityKeeper::PrepareToSplitBlockElement() failed");
+    return Err(preparationResult.unwrapErr());
   }
-  if (!selNode->IsContent()) {
-    NS_WARNING(
-        "WhiteSpaceVisibilityKeeper::PrepareToSplitAcrossBlocks() returned "
-        "document node or something non-content node");
-    return NS_ERROR_FAILURE;
-  }
+  EditorDOMPoint pointToSplit = preparationResult.unwrap();
+  MOZ_ASSERT(pointToSplit.IsInContentNode());
 
   // Now split the list item.
-  SplitNodeResult splitListItemResult =
-      SplitNodeDeepWithTransaction(aListItem, EditorDOMPoint(selNode, aOffset),
+  const SplitNodeResult splitListItemResult =
+      SplitNodeDeepWithTransaction(aListItemElement, pointToSplit,
                                    SplitAtEdges::eAllowToCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  if (splitListItemResult.isErr()) {
+    NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() failed");
+    return Err(splitListItemResult.unwrapErr());
   }
-  NS_WARNING_ASSERTION(
-      splitListItemResult.Succeeded(),
-      "HTMLEditor::SplitNodeDeepWithTransaction() failed, but ignored");
+  nsresult rv = splitListItemResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+    return Err(rv);
+  }
+
+  if (MOZ_UNLIKELY(!aListItemElement.GetParent())) {
+    NS_WARNING("Somebody disconnected the target listitem from the parent");
+    return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+  }
+
+  // If aListItemElement is not replaced, we should not do anything anymore.
+  if (MOZ_UNLIKELY(!splitListItemResult.DidSplit()) ||
+      NS_WARN_IF(!splitListItemResult.GetNewContent()->IsElement()) ||
+      NS_WARN_IF(!splitListItemResult.GetOriginalContent()->IsElement())) {
+    NS_WARNING("HTMLEditor::SplitNodeDeepWithTransaction() didn't split");
+    return Err(NS_ERROR_FAILURE);
+  }
+
+  // FYI: They are grabbed by splitListItemResult so that they are known live
+  //      things.
+  Element& leftListItemElement =
+      *splitListItemResult.GetPreviousContent()->AsElement();
+  Element& rightListItemElement =
+      *splitListItemResult.GetNextContent()->AsElement();
 
   // Hack: until I can change the damaged doc range code back to being
   // extra-inclusive, I have to manually detect certain list items that may be
   // left empty.
-  nsCOMPtr<nsIContent> prevItem = HTMLEditUtils::GetPreviousSibling(
-      aListItem, {WalkTreeOption::IgnoreNonEditableNode});
-  if (prevItem && HTMLEditUtils::IsListItem(prevItem)) {
-    if (HTMLEditUtils::IsEmptyNode(
-            *prevItem, {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
-      CreateElementResult createPaddingBRResult =
-          InsertPaddingBRElementForEmptyLastLineWithTransaction(
-              EditorDOMPoint(prevItem, 0));
-      if (createPaddingBRResult.Failed()) {
-        NS_WARNING(
-            "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction("
-            ") failed");
-        return createPaddingBRResult.Rv();
-      }
-    } else {
-      if (HTMLEditUtils::IsEmptyNode(aListItem)) {
-        if (aListItem.IsAnyOfHTMLElements(nsGkAtoms::dd, nsGkAtoms::dt)) {
-          nsCOMPtr<nsINode> list = aListItem.GetParentNode();
-          int32_t itemOffset = list ? list->ComputeIndexOf(&aListItem) : -1;
-
-          nsStaticAtom* nextDefinitionListItemTagName =
-              aListItem.IsHTMLElement(nsGkAtoms::dt) ? nsGkAtoms::dd
-                                                     : nsGkAtoms::dt;
-          MOZ_DIAGNOSTIC_ASSERT(itemOffset != -1);
-          EditorDOMPoint atNextListItem(list, aListItem.GetNextSibling(),
-                                        AssertedCast<uint32_t>(itemOffset + 1));
-          Result<RefPtr<Element>, nsresult> maybeNewListItemElement =
-              CreateNodeWithTransaction(
-                  MOZ_KnownLive(*nextDefinitionListItemTagName),
-                  atNextListItem);
-          if (maybeNewListItemElement.isErr()) {
-            NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-            return maybeNewListItemElement.unwrapErr();
-          }
-          MOZ_ASSERT(maybeNewListItemElement.inspect());
-          nsresult rv = DeleteNodeWithTransaction(aListItem);
-          if (NS_WARN_IF(Destroyed())) {
-            return NS_ERROR_EDITOR_DESTROYED;
-          }
-          if (NS_FAILED(rv)) {
-            NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
-            return rv;
-          }
-          rv = CollapseSelectionToStartOf(
-              MOZ_KnownLive(*maybeNewListItemElement.inspect()));
-          NS_WARNING_ASSERTION(
-              NS_SUCCEEDED(rv),
-              "HTMLEditor::CollapseSelectionToStartOf() failed");
-          return rv;
-        }
-
-        RefPtr<Element> brElement;
-        nsresult rv = CopyLastEditableChildStylesWithTransaction(
-            MOZ_KnownLive(*prevItem->AsElement()), aListItem,
-            address_of(brElement));
-        if (NS_WARN_IF(Destroyed())) {
-          return NS_ERROR_EDITOR_DESTROYED;
-        }
-        if (NS_FAILED(rv)) {
-          NS_WARNING(
-              "HTMLEditor::CopyLastEditableChildStylesWithTransaction() "
-              "failed");
-          return NS_ERROR_FAILURE;
-        }
-        if (brElement) {
-          EditorRawDOMPoint atBRNode(brElement);
-          if (NS_WARN_IF(!atBRNode.IsSetAndValid())) {
-            return NS_ERROR_FAILURE;
-          }
-          nsresult rv = CollapseSelectionTo(atBRNode);
-          NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                               "HTMLEditor::CollapseSelectionTo() failed");
-          return rv;
-        }
-      } else {
-        WSScanResult forwardScanFromStartOfListItemResult =
-            WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-                editingHost, EditorRawDOMPoint(&aListItem, 0));
-        if (forwardScanFromStartOfListItemResult.Failed()) {
-          NS_WARNING(
-              "WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
-          return NS_ERROR_FAILURE;
-        }
-        if (forwardScanFromStartOfListItemResult.ReachedSpecialContent() ||
-            forwardScanFromStartOfListItemResult.ReachedBRElement() ||
-            forwardScanFromStartOfListItemResult.ReachedHRElement()) {
-          EditorRawDOMPoint atFoundElement(
-              forwardScanFromStartOfListItemResult.RawPointAtContent());
-          if (NS_WARN_IF(!atFoundElement.IsSetAndValid())) {
-            return NS_ERROR_FAILURE;
-          }
-          nsresult rv = CollapseSelectionTo(atFoundElement);
-          NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                               "HTMLEditor::CollapseSelectionTo() failed");
-          return rv;
-        }
-
-        // XXX This may be not meaningful position if it reached block element
-        //     in aListItem.
-        nsresult rv = CollapseSelectionTo(
-            forwardScanFromStartOfListItemResult.RawPoint());
-        NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                             "HTMLEditor::CollapseSelectionTo() failed");
-        return rv;
-      }
+  if (HTMLEditUtils::IsEmptyNode(
+          leftListItemElement,
+          {EmptyCheckOption::TreatSingleBRElementAsVisible})) {
+    CreateElementResult insertPaddingBRElementResult =
+        InsertPaddingBRElementForEmptyLastLineWithTransaction(
+            EditorDOMPoint(&leftListItemElement, 0u));
+    if (insertPaddingBRElementResult.isErr()) {
+      NS_WARNING(
+          "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction("
+          ") failed");
+      return Err(insertPaddingBRElementResult.unwrapErr());
     }
+    // We're returing a candidate point to put caret so that we don't need to
+    // update now.
+    insertPaddingBRElementResult.IgnoreCaretPointSuggestion();
+    return EditorDOMPoint(&rightListItemElement, 0u);
   }
 
-  rv = CollapseSelectionToStartOf(aListItem);
-  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionToStartOf() failed");
-  return rv;
+  if (HTMLEditUtils::IsEmptyNode(rightListItemElement)) {
+    // If aListItemElement is a <dd> or a <dt> and the right list item is empty
+    // or a direct child of the editing host, replace it a new list item element
+    // whose type is the other one.
+    if (aListItemElement.IsAnyOfHTMLElements(nsGkAtoms::dd, nsGkAtoms::dt)) {
+      nsStaticAtom& nextDefinitionListItemTagName =
+          aListItemElement.IsHTMLElement(nsGkAtoms::dt) ? *nsGkAtoms::dd
+                                                        : *nsGkAtoms::dt;
+      // MOZ_KnownLive(nextDefinitionListItemTagName) because it's available
+      // until shutdown.
+      CreateElementResult createNewListItemElementResult =
+          CreateAndInsertElement(WithTransaction::Yes,
+                                 MOZ_KnownLive(nextDefinitionListItemTagName),
+                                 EditorDOMPoint::After(rightListItemElement));
+      if (createNewListItemElementResult.isErr()) {
+        NS_WARNING(
+            "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) failed");
+        return Err(createNewListItemElementResult.unwrapErr());
+      }
+      nsresult rv = createNewListItemElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return Err(rv);
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+      RefPtr<Element> newListItemElement =
+          createNewListItemElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newListItemElement);
+      // MOZ_KnownLive(rightListItemElement) because it's grabbed by
+      // splitListItemResult.
+      rv = DeleteNodeWithTransaction(MOZ_KnownLive(rightListItemElement));
+      if (NS_WARN_IF(Destroyed())) {
+        return Err(NS_ERROR_EDITOR_DESTROYED);
+      }
+      if (NS_FAILED(rv)) {
+        NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
+        return Err(rv);
+      }
+      return EditorDOMPoint(newListItemElement, 0u);
+    }
+
+    // If aListItemElement is a <li> and the right list item becomes empty or a
+    // direct child of the editing host, copy all inline elements affecting to
+    // the style at end of the left list item element to the right list item
+    // element.
+    // MOZ_KnownLive(*ListItemElement) because they are grabbed by
+    // splitListItemResult.
+    Result<EditorDOMPoint, nsresult> pointToPutCaretOrError =
+        CopyLastEditableChildStylesWithTransaction(
+            MOZ_KnownLive(leftListItemElement),
+            MOZ_KnownLive(rightListItemElement), aEditingHost);
+    if (MOZ_UNLIKELY(pointToPutCaretOrError.isErr())) {
+      NS_WARNING(
+          "HTMLEditor::CopyLastEditableChildStylesWithTransaction() failed");
+      return Err(pointToPutCaretOrError.unwrapErr());
+    }
+    return pointToPutCaretOrError.unwrap();
+  }
+
+  // If the right list item element is not empty, we need to consider where to
+  // put caret in it. If it has non-container inline elements, <br> or <hr>, at
+  // the element is proper position.
+  WSScanResult forwardScanFromStartOfListItemResult =
+      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
+          &aEditingHost, EditorRawDOMPoint(&rightListItemElement, 0u));
+  if (MOZ_UNLIKELY(forwardScanFromStartOfListItemResult.Failed())) {
+    NS_WARNING("WSRunScanner::ScanNextVisibleNodeOrBlockBoundary() failed");
+    return Err(NS_ERROR_FAILURE);
+  }
+  if (forwardScanFromStartOfListItemResult.ReachedSpecialContent() ||
+      forwardScanFromStartOfListItemResult.ReachedBRElement() ||
+      forwardScanFromStartOfListItemResult.ReachedHRElement()) {
+    auto atFoundElement =
+        forwardScanFromStartOfListItemResult.PointAtContent<EditorDOMPoint>();
+    if (MOZ_UNLIKELY(NS_WARN_IF(!atFoundElement.IsSetAndValid()))) {
+      return Err(NS_ERROR_FAILURE);
+    }
+    return atFoundElement;
+  }
+
+  // Otherwise, return the point at first visible thing.
+  // XXX This may be not meaningful position if it reached block element
+  //     in aListItemElement.
+  return forwardScanFromStartOfListItemResult.Point<EditorDOMPoint>();
 }
 
 nsresult HTMLEditor::MoveNodesIntoNewBlockquoteElement(
     nsTArray<OwningNonNull<nsIContent>>& aArrayOfContents) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
+
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
 
   // The idea here is to put the nodes into a minimal number of blockquotes.
   // When the user blockquotes something, they expect one blockquote.  That
@@ -7189,6 +8283,7 @@ nsresult HTMLEditor::MoveNodesIntoNewBlockquoteElement(
   RefPtr<Element> curBlock;
   nsCOMPtr<nsINode> prevParent;
 
+  EditorDOMPoint pointToPutCaret;
   for (auto& content : aArrayOfContents) {
     // If the node is a table element or list item, dive inside
     if (HTMLEditUtils::IsAnyTableElementButNotTable(content) ||
@@ -7219,45 +8314,50 @@ nsresult HTMLEditor::MoveNodesIntoNewBlockquoteElement(
 
     // If no curBlock, make one
     if (!curBlock) {
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::blockquote,
-                                                      EditorDOMPoint(content));
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewBlockQuoteElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              *nsGkAtoms::blockquote, EditorDOMPoint(content),
+              BRElementNextToSplitPoint::Keep, *editingHost);
+      if (createNewBlockQuoteElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms:"
-            ":blockquote) failed");
-        return splitNodeResult.Rv();
+            "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+            "nsGkAtoms::blockquote) failed");
+        return createNewBlockQuoteElementResult.unwrapErr();
       }
-      // XXX Perhaps, we should insert the new `<blockquote>` element after
-      //     moving all nodes into it since the movement does not cause
-      //     running mutation event listeners.
-      Result<RefPtr<Element>, nsresult> maybeNewBlockQuoteElement =
-          CreateNodeWithTransaction(*nsGkAtoms::blockquote,
-                                    splitNodeResult.SplitPoint());
-      if (maybeNewBlockQuoteElement.isErr()) {
-        NS_WARNING(
-            "EditorBase::CreateNodeWithTransaction(nsGkAtoms::blockquote) "
-            "failed");
-        return maybeNewBlockQuoteElement.unwrapErr();
+      nsresult rv = createNewBlockQuoteElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      MOZ_ASSERT(maybeNewBlockQuoteElement.inspect());
+      RefPtr<Element> newBlockQuoteElement =
+          createNewBlockQuoteElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newBlockQuoteElement);
       // remember our new block for postprocessing
       // note: doesn't matter if we set mNewBlockElement multiple times.
-      TopLevelEditSubActionDataRef().mNewBlockElement =
-          maybeNewBlockQuoteElement.inspect();
-      curBlock = maybeNewBlockQuoteElement.unwrap();
+      TopLevelEditSubActionDataRef().mNewBlockElement = newBlockQuoteElement;
+      curBlock = std::move(newBlockQuoteElement);
     }
 
     // MOZ_KnownLive because 'aArrayOfContents' is guaranteed to/ keep it alive.
-    nsresult rv =
+    const MoveNodeResult moveNodeResult =
         MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curBlock);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
   }
   return NS_OK;
 }
@@ -7279,11 +8379,11 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
         SplitRangeOffFromNodeResult removeMiddleContainerResult =
             SplitRangeOffFromBlockAndRemoveMiddleContainer(
                 *blockElement, *firstContent, *lastContent);
-        if (removeMiddleContainerResult.Failed()) {
+        if (removeMiddleContainerResult.isErr()) {
           NS_WARNING(
               "HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer() "
               "failed");
-          return removeMiddleContainerResult.Rv();
+          return removeMiddleContainerResult.unwrapErr();
         }
         firstContent = lastContent = blockElement = nullptr;
       }
@@ -7291,13 +8391,20 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
         continue;
       }
       // Remove current block
-      nsresult rv = RemoveBlockContainerWithTransaction(
-          MOZ_KnownLive(*content->AsElement()));
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      const Result<EditorDOMPoint, nsresult> unwrapFormatBlockResult =
+          RemoveBlockContainerWithTransaction(
+              MOZ_KnownLive(*content->AsElement()));
+      if (MOZ_UNLIKELY(unwrapFormatBlockResult.isErr())) {
         NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+        return unwrapFormatBlockResult.inspectErr();
+      }
+      const EditorDOMPoint& pointToPutCaret = unwrapFormatBlockResult.inspect();
+      if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+        continue;
+      }
+      nsresult rv = CollapseSelectionTo(pointToPutCaret);
+      if (NS_FAILED(rv)) {
+        NS_WARNING("EditorBase::CollapseSelectionTo() failed");
         return rv;
       }
       continue;
@@ -7313,11 +8420,11 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
         SplitRangeOffFromNodeResult removeMiddleContainerResult =
             SplitRangeOffFromBlockAndRemoveMiddleContainer(
                 *blockElement, *firstContent, *lastContent);
-        if (removeMiddleContainerResult.Failed()) {
+        if (removeMiddleContainerResult.isErr()) {
           NS_WARNING(
               "HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer() "
               "failed");
-          return removeMiddleContainerResult.Rv();
+          return removeMiddleContainerResult.unwrapErr();
         }
         firstContent = lastContent = blockElement = nullptr;
       }
@@ -7349,18 +8456,19 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
         SplitRangeOffFromNodeResult removeMiddleContainerResult =
             SplitRangeOffFromBlockAndRemoveMiddleContainer(
                 *blockElement, *firstContent, *lastContent);
-        if (removeMiddleContainerResult.Failed()) {
+        if (removeMiddleContainerResult.isErr()) {
           NS_WARNING(
               "HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer() "
               "failed");
-          return removeMiddleContainerResult.Rv();
+          return removeMiddleContainerResult.unwrapErr();
         }
         firstContent = lastContent = blockElement = nullptr;
         // Fall out and handle content
       }
-      blockElement = HTMLEditUtils::GetAncestorBlockElement(content);
+      blockElement = HTMLEditUtils::GetAncestorElement(
+          content, HTMLEditUtils::ClosestEditableBlockElement);
       if (!blockElement || !HTMLEditUtils::IsFormatNode(blockElement) ||
-          !EditorUtils::IsEditableContent(*blockElement, EditorType::HTML)) {
+          !HTMLEditUtils::IsRemovableNode(*blockElement)) {
         // Not a block kind that we care about.
         blockElement = nullptr;
       } else {
@@ -7375,11 +8483,11 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
       SplitRangeOffFromNodeResult removeMiddleContainerResult =
           SplitRangeOffFromBlockAndRemoveMiddleContainer(
               *blockElement, *firstContent, *lastContent);
-      if (removeMiddleContainerResult.Failed()) {
+      if (removeMiddleContainerResult.isErr()) {
         NS_WARNING(
             "HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer() "
             "failed");
-        return removeMiddleContainerResult.Rv();
+        return removeMiddleContainerResult.unwrapErr();
       }
       firstContent = lastContent = blockElement = nullptr;
       continue;
@@ -7390,11 +8498,11 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
     SplitRangeOffFromNodeResult removeMiddleContainerResult =
         SplitRangeOffFromBlockAndRemoveMiddleContainer(
             *blockElement, *firstContent, *lastContent);
-    if (removeMiddleContainerResult.Failed()) {
+    if (removeMiddleContainerResult.isErr()) {
       NS_WARNING(
           "HTMLEditor::SplitRangeOffFromBlockAndRemoveMiddleContainer() "
           "failed");
-      return removeMiddleContainerResult.Rv();
+      return removeMiddleContainerResult.unwrapErr();
     }
     firstContent = lastContent = blockElement = nullptr;
   }
@@ -7404,6 +8512,11 @@ nsresult HTMLEditor::RemoveBlockContainerElements(
 nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
     nsTArray<OwningNonNull<nsIContent>>& aArrayOfContents, nsAtom& aBlockTag) {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
+
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
 
   // Intent of this routine is to be used for converting to/from headers,
   // paragraphs, pre, and address.  Those blocks that pretty much just contain
@@ -7438,23 +8551,34 @@ nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
         HTMLEditUtils::IsFormatNode(content)) {
       // Forget any previous block used for previous inline nodes
       curBlock = nullptr;
-      newBlock = ReplaceContainerAndCloneAttributesWithTransaction(
-          MOZ_KnownLive(*content->AsElement()), aBlockTag);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (!newBlock) {
+      CreateElementResult newBlockElementOrError =
+          ReplaceContainerAndCloneAttributesWithTransaction(
+              MOZ_KnownLive(*content->AsElement()), aBlockTag);
+      if (newBlockElementOrError.isErr()) {
         NS_WARNING(
             "EditorBase::ReplaceContainerAndCloneAttributesWithTransaction() "
             "failed");
-        return NS_ERROR_FAILURE;
+        return newBlockElementOrError.unwrapErr();
       }
       // If the new block element was moved to different element or removed by
       // the web app via mutation event listener, we should stop handling this
       // action since we cannot handle each of a lot of edge cases.
-      if (NS_WARN_IF(newBlock->GetParentNode() != atContent.GetContainer())) {
+      if (NS_WARN_IF(newBlockElementOrError.GetNewNode()->GetParentNode() !=
+                     atContent.GetContainer())) {
         return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
       }
+      nsresult rv = newBlockElementOrError.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+      newBlock = newBlockElementOrError.UnwrapNewNode();
       continue;
     }
 
@@ -7480,38 +8604,30 @@ nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
       }
 
       // Make sure we can put a block here
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(aBlockTag, atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewBlockElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              aBlockTag, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewBlockElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-        return splitNodeResult.Rv();
+            nsPrintfCString(
+                "HTMLEditor::"
+                "InsertElementWithSplittingAncestorsWithTransaction(%s) failed",
+                nsAtomCString(&aBlockTag).get())
+                .get());
+        return createNewBlockElementResult.unwrapErr();
       }
-      // If current handling node has been moved from the container by a
-      // mutation event listener when we need to do something more for it,
-      // we should stop handling this action since we cannot handle each of
-      // a lot of edge cases.
-      if (NS_WARN_IF(atContent.HasChildMovedFromContainer())) {
-        return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+      nsresult rv = createNewBlockElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      EditorDOMPoint splitPoint = splitNodeResult.SplitPoint();
-      Result<RefPtr<Element>, nsresult> maybeNewBlockElement =
-          CreateNodeWithTransaction(aBlockTag, splitPoint);
-      if (maybeNewBlockElement.isErr()) {
-        NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-        return maybeNewBlockElement.unwrapErr();
-      }
-      MOZ_ASSERT(maybeNewBlockElement.inspect());
-      // If the new block element was moved to different element or removed by
-      // the web app via mutation event listener, we should stop handling this
-      // action since we cannot handle each of a lot of edge cases.
-      if (NS_WARN_IF(maybeNewBlockElement.inspect()->GetParentNode() !=
-                     splitPoint.GetContainer())) {
-        return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
-      }
+      MOZ_ASSERT(createNewBlockElementResult.GetNewNode());
       // Remember our new block for postprocessing
       TopLevelEditSubActionDataRef().mNewBlockElement =
-          maybeNewBlockElement.unwrap();
+          createNewBlockElementResult.UnwrapNewNode();
       continue;
     }
 
@@ -7536,50 +8652,52 @@ nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
 
       // The break is the first (or even only) node we encountered.  Create a
       // block for it.
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(aBlockTag, atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewBlockElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              aBlockTag, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewBlockElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
-        return splitNodeResult.Rv();
+            nsPrintfCString(
+                "HTMLEditor::"
+                "InsertElementWithSplittingAncestorsWithTransaction(%s) failed",
+                nsAtomCString(&aBlockTag).get())
+                .get());
+        return createNewBlockElementResult.unwrapErr();
       }
-      // If current handling node has been moved from the container by a
-      // mutation event listener when we need to do something more for it,
-      // we should stop handling this action since we cannot handle each of
-      // a lot of edge cases.
-      if (NS_WARN_IF(atContent.HasChildMovedFromContainer())) {
-        return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
-      }
-      EditorDOMPoint splitPoint = splitNodeResult.SplitPoint();
-      Result<RefPtr<Element>, nsresult> maybeNewBlockElement =
-          CreateNodeWithTransaction(aBlockTag, splitPoint);
-      if (maybeNewBlockElement.isErr()) {
-        NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-        return maybeNewBlockElement.unwrapErr();
-      }
-      MOZ_ASSERT(maybeNewBlockElement.inspect());
-      curBlock = maybeNewBlockElement.unwrap();
-      // If the new block element was moved to different element or removed by
-      // the web app via mutation event listener, we should stop handling this
-      // action since we cannot handle each of a lot of edge cases.
-      if (NS_WARN_IF(curBlock->GetParentNode() != splitPoint.GetContainer())) {
-        return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
-      }
-      // Remember our new block for postprocessing
-      TopLevelEditSubActionDataRef().mNewBlockElement = curBlock;
-      // Note: doesn't matter if we set mNewBlockElement multiple times.
-      //
-      // MOZ_KnownLive because 'aArrayOfContents' is guaranteed to keep it
-      // alive.
-      nsresult rv =
-          MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curBlock);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
+      nsresult rv = createNewBlockElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
       if (NS_FAILED(rv)) {
-        NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
         return rv;
       }
+      RefPtr<Element> newBlockElement =
+          createNewBlockElementResult.UnwrapNewNode();
+      MOZ_ASSERT(newBlockElement);
+      // Remember our new block for postprocessing
+      // Note: doesn't matter if we set mNewBlockElement multiple times.
+      TopLevelEditSubActionDataRef().mNewBlockElement = newBlockElement;
+      // MOZ_KnownLive because 'aArrayOfContents' is guaranteed to keep it
+      // alive.
+      const MoveNodeResult moveNodeResult = MoveNodeToEndWithTransaction(
+          MOZ_KnownLive(content), *newBlockElement);
+      if (moveNodeResult.isErr()) {
+        NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return moveNodeResult.unwrapErr();
+      }
+      rv = moveNodeResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
+      curBlock = std::move(newBlockElement);
       continue;
     }
 
@@ -7599,44 +8717,34 @@ nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
 
       // If no curBlock, make one
       if (!curBlock) {
-        SplitNodeResult splitNodeResult =
-            MaybeSplitAncestorsForInsertWithTransaction(aBlockTag, atContent);
-        if (splitNodeResult.Failed()) {
-          NS_WARNING(
-              "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() "
-              "failed");
-          return splitNodeResult.Rv();
+        CreateElementResult createNewBlockElementResult =
+            InsertElementWithSplittingAncestorsWithTransaction(
+                aBlockTag, atContent, BRElementNextToSplitPoint::Keep,
+                *editingHost);
+        if (createNewBlockElementResult.isErr()) {
+          NS_WARNING(nsPrintfCString("HTMLEditor::"
+                                     "InsertElementWithSplittingAncestorsWithTr"
+                                     "ansaction(%s) failed",
+                                     nsAtomCString(&aBlockTag).get())
+                         .get());
+          return createNewBlockElementResult.unwrapErr();
         }
-        // If current handling node has been moved from the container by a
-        // mutation event listener when we need to do something more for it,
-        // we should stop handling this action since we cannot handle each of
-        // a lot of edge cases.
-        if (NS_WARN_IF(atContent.HasChildMovedFromContainer())) {
-          return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
+        nsresult rv = createNewBlockElementResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+          return rv;
         }
-        EditorDOMPoint splitPoint = splitNodeResult.SplitPoint();
-        Result<RefPtr<Element>, nsresult> maybeNewBlockElement =
-            CreateNodeWithTransaction(aBlockTag, splitPoint);
-        if (maybeNewBlockElement.isErr()) {
-          NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-          return maybeNewBlockElement.unwrapErr();
-        }
-        MOZ_ASSERT(maybeNewBlockElement.inspect());
-        curBlock = maybeNewBlockElement.unwrap();
-        // If the new block element was moved to different element or removed
-        // by the web app via mutation event listener, we should stop handling
-        // this action since we cannot handle each of a lot of edge cases.
-        if (NS_WARN_IF(curBlock->GetParentNode() !=
-                       splitPoint.GetContainer())) {
-          return NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE;
-        }
+        MOZ_ASSERT(createNewBlockElementResult.GetNewNode());
+        curBlock = createNewBlockElementResult.UnwrapNewNode();
 
         // Update container of content.
         atContent.Set(content);
 
         // Remember our new block for postprocessing
-        TopLevelEditSubActionDataRef().mNewBlockElement = curBlock;
         // Note: doesn't matter if we set mNewBlockElement multiple times.
+        TopLevelEditSubActionDataRef().mNewBlockElement = curBlock;
       }
 
       if (NS_WARN_IF(!atContent.IsSet())) {
@@ -7653,15 +8761,23 @@ nsresult HTMLEditor::CreateOrChangeBlockContainerElement(
       // alive.  We could try to make that a rvalue ref and create a const array
       // on the stack here, but callers are passing in auto arrays, and we don't
       // want to introduce copies..
-      nsresult rv =
+      const MoveNodeResult moveNodeResult =
           MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *curBlock);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      if (moveNodeResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return moveNodeResult.unwrapErr();
+      }
+      nsresult rv = moveNodeResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
         return rv;
       }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     }
   }
   return NS_OK;
@@ -7714,19 +8830,102 @@ SplitNodeResult HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(
   // ancestor nodes.  In this case, we should return the given split point
   // as is.
   if (pointToInsert.GetContainer() == aStartOfDeepestRightNode.GetContainer()) {
-    return SplitNodeResult(aStartOfDeepestRightNode);
+    return SplitNodeResult::NotHandled(aStartOfDeepestRightNode,
+                                       SplitNodeDirection::LeftNodeIsNewOne);
   }
 
   SplitNodeResult splitNodeResult = SplitNodeDeepWithTransaction(
       MOZ_KnownLive(*pointToInsert.GetChild()), aStartOfDeepestRightNode,
       SplitAtEdges::eAllowToCreateEmptyContainer);
-  if (NS_WARN_IF(Destroyed())) {
-    return SplitNodeResult(NS_ERROR_EDITOR_DESTROYED);
-  }
-  NS_WARNING_ASSERTION(splitNodeResult.Succeeded(),
+  NS_WARNING_ASSERTION(splitNodeResult.isOk(),
                        "HTMLEditor::SplitNodeDeepWithTransaction(SplitAtEdges::"
                        "eAllowToCreateEmptyContainer) failed");
   return splitNodeResult;
+}
+
+CreateElementResult
+HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction(
+    nsAtom& aTagName, const EditorDOMPoint& aPointToInsert,
+    BRElementNextToSplitPoint aBRElementNextToSplitPoint,
+    const Element& aEditingHost,
+    const InitializeInsertingElement& aInitializer) {
+  MOZ_ASSERT(aPointToInsert.IsSetAndValid());
+
+  const SplitNodeResult splitNodeResult =
+      MaybeSplitAncestorsForInsertWithTransaction(aTagName, aPointToInsert);
+  if (splitNodeResult.isErr()) {
+    NS_WARNING(
+        "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() failed");
+    return CreateElementResult(splitNodeResult.unwrapErr());
+  }
+  DebugOnly<bool> wasCaretPositionSuggestedAtSplit =
+      splitNodeResult.HasCaretPointSuggestion();
+  // We'll update selection below, and nobody touches selection until then.
+  // Therefore, we don't need to touch selection here.
+  splitNodeResult.IgnoreCaretPointSuggestion();
+
+  // If current handling node has been moved from the container by a
+  // mutation event listener when we need to do something more for it,
+  // we should stop handling this action since we cannot handle each of
+  // a lot of edge cases.
+  if (NS_WARN_IF(aPointToInsert.HasChildMovedFromContainer())) {
+    return CreateElementResult(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+  }
+
+  EditorDOMPoint splitPoint = splitNodeResult.AtSplitPoint<EditorDOMPoint>();
+
+  if (aBRElementNextToSplitPoint == BRElementNextToSplitPoint::Delete) {
+    // Consume a trailing br, if any.  This is to keep an alignment from
+    // creating extra lines, if possible.
+    if (nsCOMPtr<nsIContent> maybeBRContent = HTMLEditUtils::GetNextContent(
+            splitPoint,
+            {WalkTreeOption::IgnoreNonEditableNode,
+             WalkTreeOption::StopAtBlockBoundary},
+            &aEditingHost)) {
+      if (maybeBRContent->IsHTMLElement(nsGkAtoms::br) &&
+          splitPoint.GetChild()) {
+        // Making use of html structure... if next node after where we are
+        // putting our div is not a block, then the br we found is in same
+        // block we are, so it's safe to consume it.
+        if (nsIContent* nextEditableSibling = HTMLEditUtils::GetNextSibling(
+                *splitPoint.GetChild(),
+                {WalkTreeOption::IgnoreNonEditableNode})) {
+          if (!HTMLEditUtils::IsBlockElement(*nextEditableSibling)) {
+            AutoEditorDOMPointChildInvalidator lockOffset(splitPoint);
+            nsresult rv = DeleteNodeWithTransaction(*maybeBRContent);
+            if (NS_WARN_IF(Destroyed())) {
+              return CreateElementResult(NS_ERROR_EDITOR_DESTROYED);
+            }
+            if (NS_FAILED(rv)) {
+              NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
+              return CreateElementResult(rv);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  CreateElementResult createNewElementResult = CreateAndInsertElement(
+      WithTransaction::Yes, aTagName, splitPoint, aInitializer);
+  if (createNewElementResult.isErr()) {
+    NS_WARNING(
+        "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) failed");
+    return CreateElementResult(createNewElementResult.unwrapErr());
+  }
+  MOZ_ASSERT_IF(wasCaretPositionSuggestedAtSplit,
+                createNewElementResult.HasCaretPointSuggestion());
+  MOZ_ASSERT(createNewElementResult.GetNewNode());
+
+  // If the new block element was moved to different element or removed by
+  // the web app via mutation event listener, we should stop handling this
+  // action since we cannot handle each of a lot of edge cases.
+  if (NS_WARN_IF(createNewElementResult.GetNewNode()->GetParentNode() !=
+                 splitPoint.GetContainer())) {
+    return CreateElementResult(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
+  }
+
+  return createNewElementResult;
 }
 
 nsresult HTMLEditor::JoinNearestEditableNodesWithTransaction(
@@ -7742,84 +8941,90 @@ nsresult HTMLEditor::JoinNearestEditableNodesWithTransaction(
   // If they don't have the same parent, first move the right node to after
   // the left one
   if (aNodeLeft.GetParentNode() != aNodeRight.GetParentNode()) {
-    nsresult rv =
+    const MoveNodeResult moveNodeResult =
         MoveNodeWithTransaction(aNodeRight, EditorDOMPoint(&aNodeLeft));
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
   }
-
-  EditorDOMPoint ret(&aNodeRight, aNodeLeft.Length());
 
   // Separate join rules for differing blocks
   if (HTMLEditUtils::IsAnyListElement(&aNodeLeft) || aNodeLeft.IsText()) {
     // For lists, merge shallow (wouldn't want to combine list items)
-    nsresult rv = JoinNodesWithTransaction(aNodeLeft, aNodeRight);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
+    JoinNodesResult joinNodesResult =
+        JoinNodesWithTransaction(aNodeLeft, aNodeRight);
+    if (MOZ_UNLIKELY(joinNodesResult.Failed())) {
+      NS_WARNING("HTMLEditor::JoinNodesWithTransaction failed");
+      return joinNodesResult.Rv();
     }
-    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::JoinNodesWithTransaction failed");
-    if (NS_SUCCEEDED(rv)) {
-      // XXX `ret` may point invalid point if mutation event listener changed
-      //     the previous siblings...
-      *aNewFirstChildOfRightNode = std::move(ret);
-    }
-    return rv;
+    *aNewFirstChildOfRightNode =
+        joinNodesResult.AtJoinedPoint<EditorDOMPoint>();
+    return joinNodesResult.Rv();
   }
 
   // Remember the last left child, and first right child
-  nsCOMPtr<nsIContent> lastLeft = HTMLEditUtils::GetLastChild(
-      aNodeLeft, {WalkTreeOption::IgnoreNonEditableNode});
-  if (NS_WARN_IF(!lastLeft)) {
+  nsCOMPtr<nsIContent> lastEditableChildOfLeftContent =
+      HTMLEditUtils::GetLastChild(aNodeLeft,
+                                  {WalkTreeOption::IgnoreNonEditableNode});
+  if (MOZ_UNLIKELY(NS_WARN_IF(!lastEditableChildOfLeftContent))) {
     return NS_ERROR_FAILURE;
   }
 
-  nsCOMPtr<nsIContent> firstRight = HTMLEditUtils::GetFirstChild(
-      aNodeRight, {WalkTreeOption::IgnoreNonEditableNode});
-  if (NS_WARN_IF(!firstRight)) {
+  nsCOMPtr<nsIContent> firstEditableChildOfRightContent =
+      HTMLEditUtils::GetFirstChild(aNodeRight,
+                                   {WalkTreeOption::IgnoreNonEditableNode});
+  if (NS_WARN_IF(!firstEditableChildOfRightContent)) {
     return NS_ERROR_FAILURE;
   }
 
   // For list items, divs, etc., merge smart
-  nsresult rv = JoinNodesWithTransaction(aNodeLeft, aNodeRight);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (NS_FAILED(rv)) {
+  JoinNodesResult joinNodesResult =
+      JoinNodesWithTransaction(aNodeLeft, aNodeRight);
+  if (MOZ_UNLIKELY(joinNodesResult.Failed())) {
     NS_WARNING("HTMLEditor::JoinNodesWithTransaction() failed");
-    return rv;
+    return joinNodesResult.Rv();
   }
 
-  if ((lastLeft->IsText() || lastLeft->IsElement()) &&
-      HTMLEditUtils::CanContentsBeJoined(*lastLeft, *firstRight,
+  if ((lastEditableChildOfLeftContent->IsText() ||
+       lastEditableChildOfLeftContent->IsElement()) &&
+      HTMLEditUtils::CanContentsBeJoined(*lastEditableChildOfLeftContent,
+                                         *firstEditableChildOfRightContent,
                                          StyleDifference::CompareIfElements)) {
     nsresult rv = JoinNearestEditableNodesWithTransaction(
-        *lastLeft, *firstRight, aNewFirstChildOfRightNode);
+        *lastEditableChildOfLeftContent, *firstEditableChildOfRightContent,
+        aNewFirstChildOfRightNode);
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
         "HTMLEditor::JoinNearestEditableNodesWithTransaction() failed");
     return rv;
   }
-  // XXX `ret` may point invalid point if mutation event listener changed
-  //     the previous siblings...
-  *aNewFirstChildOfRightNode = std::move(ret);
+  *aNewFirstChildOfRightNode = joinNodesResult.AtJoinedPoint<EditorDOMPoint>();
   return NS_OK;
 }
 
-Element* HTMLEditor::GetMostAncestorMailCiteElement(nsINode& aNode) const {
+Element* HTMLEditor::GetMostDistantAncestorMailCiteElement(
+    const nsINode& aNode) const {
   Element* mailCiteElement = nullptr;
   const bool isPlaintextEditor = IsInPlaintextMode();
-  for (nsINode* node = &aNode; node; node = node->GetParentNode()) {
-    if ((isPlaintextEditor && node->IsHTMLElement(nsGkAtoms::pre)) ||
-        HTMLEditUtils::IsMailCite(node)) {
-      mailCiteElement = node->AsElement();
+  for (Element* element : aNode.InclusiveAncestorsOfType<Element>()) {
+    if ((isPlaintextEditor && element->IsHTMLElement(nsGkAtoms::pre)) ||
+        HTMLEditUtils::IsMailCite(*element)) {
+      mailCiteElement = element;
+      continue;
     }
-    if (node->IsHTMLElement(nsGkAtoms::body)) {
+    if (element->IsHTMLElement(nsGkAtoms::body)) {
       break;
     }
   }
@@ -7843,12 +9048,27 @@ nsresult HTMLEditor::GetInlineStyles(nsIContent& aContent,
 
   bool useCSS = IsCSSEnabled();
 
-  for (nsStaticAtom* property :
-       {nsGkAtoms::b, nsGkAtoms::i, nsGkAtoms::u, nsGkAtoms::face,
-        nsGkAtoms::size, nsGkAtoms::color, nsGkAtoms::tt, nsGkAtoms::em,
-        nsGkAtoms::strong, nsGkAtoms::dfn, nsGkAtoms::code, nsGkAtoms::samp,
-        nsGkAtoms::var, nsGkAtoms::cite, nsGkAtoms::abbr, nsGkAtoms::acronym,
-        nsGkAtoms::backgroundColor, nsGkAtoms::sub, nsGkAtoms::sup}) {
+  for (nsStaticAtom* property : {nsGkAtoms::b,
+                                 nsGkAtoms::i,
+                                 nsGkAtoms::u,
+                                 nsGkAtoms::s,
+                                 nsGkAtoms::strike,
+                                 nsGkAtoms::face,
+                                 nsGkAtoms::size,
+                                 nsGkAtoms::color,
+                                 nsGkAtoms::tt,
+                                 nsGkAtoms::em,
+                                 nsGkAtoms::strong,
+                                 nsGkAtoms::dfn,
+                                 nsGkAtoms::code,
+                                 nsGkAtoms::samp,
+                                 nsGkAtoms::var,
+                                 nsGkAtoms::cite,
+                                 nsGkAtoms::abbr,
+                                 nsGkAtoms::acronym,
+                                 nsGkAtoms::backgroundColor,
+                                 nsGkAtoms::sub,
+                                 nsGkAtoms::sup}) {
     nsStaticAtom *tag, *attribute;
     if (property == nsGkAtoms::face || property == nsGkAtoms::size ||
         property == nsGkAtoms::color) {
@@ -7872,11 +9092,15 @@ nsresult HTMLEditor::GetInlineStyles(nsIContent& aContent,
       isSet = HTMLEditUtils::IsInlineStyleSetByElement(
           aContent, *tag, attribute, nullptr, &value);
     } else {
-      isSet = CSSEditUtils::IsComputedCSSEquivalentToHTMLInlineStyleSet(
-          aContent, MOZ_KnownLive(tag), MOZ_KnownLive(attribute), value);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
+      Result<bool, nsresult> isComputedCSSEquivalentToHTMLInlineStyleOrError =
+          mCSSEditUtils->IsComputedCSSEquivalentToHTMLInlineStyleSet(
+              aContent, MOZ_KnownLive(tag), MOZ_KnownLive(attribute), value);
+      if (isComputedCSSEquivalentToHTMLInlineStyleOrError.isErr()) {
+        NS_WARNING(
+            "CSSEditUtils::IsComputedCSSEquivalentToHTMLInlineStyleSet failed");
+        return isComputedCSSEquivalentToHTMLInlineStyleOrError.unwrapErr();
       }
+      isSet = isComputedCSSEquivalentToHTMLInlineStyleOrError.unwrap();
     }
     if (isSet) {
       aStyleCacheArray.AppendElement(StyleCache(tag, attribute, value));
@@ -7928,12 +9152,17 @@ nsresult HTMLEditor::ReapplyCachedStyles() {
     nsAutoString currentValue;
     if (useCSS) {
       // check computed style first in css case
-      isAny = CSSEditUtils::IsComputedCSSEquivalentToHTMLInlineStyleSet(
-          *startContainerContent, MOZ_KnownLive(styleCacheBeforeEdit.Tag()),
-          MOZ_KnownLive(styleCacheBeforeEdit.GetAttribute()), currentValue);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
+      Result<bool, nsresult> isComputedCSSEquivalentToHTMLInlineStyleOrError =
+          mCSSEditUtils->IsComputedCSSEquivalentToHTMLInlineStyleSet(
+              *startContainerContent, MOZ_KnownLive(styleCacheBeforeEdit.Tag()),
+              MOZ_KnownLive(styleCacheBeforeEdit.GetAttribute()), currentValue);
+      if (isComputedCSSEquivalentToHTMLInlineStyleOrError.isErr()) {
+        NS_WARNING(
+            "CSSEditUtils::IsComputedCSSEquivalentToHTMLInlineStyleSet() "
+            "failed");
+        return isComputedCSSEquivalentToHTMLInlineStyleOrError.unwrapErr();
       }
+      isAny = isComputedCSSEquivalentToHTMLInlineStyleOrError.unwrap();
     }
     if (!isAny) {
       // then check typeinstate and html style
@@ -7992,20 +9221,36 @@ nsresult HTMLEditor::InsertBRElementToEmptyListItemsAndTableCellsInRange(
       arrayOfEmptyElements, this);
 
   // Put padding <br> elements for empty <li> and <td>.
+  EditorDOMPoint pointToPutCaret;
   for (auto& emptyElement : arrayOfEmptyElements) {
     // Need to put br at END of node.  It may have empty containers in it and
     // still pass the "IsEmptyNode" test, and we want the br's to be after
     // them.  Also, we want the br to be after the selection if the selection
     // is in this node.
     EditorDOMPoint endOfNode(EditorDOMPoint::AtEndOf(emptyElement));
-    CreateElementResult createPaddingBRResult =
+    CreateElementResult insertPaddingBRElementResult =
         InsertPaddingBRElementForEmptyLastLineWithTransaction(endOfNode);
-    if (createPaddingBRResult.Failed()) {
+    if (insertPaddingBRElementResult.isErr()) {
       NS_WARNING(
           "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction() "
           "failed");
-      return createPaddingBRResult.Rv();
+      return insertPaddingBRElementResult.unwrapErr();
     }
+    insertPaddingBRElementResult.MoveCaretPointTo(
+        pointToPutCaret, *this,
+        {SuggestCaret::OnlyIfHasSuggestion,
+         SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+  }
+  if (pointToPutCaret.IsSet()) {
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
+      return NS_ERROR_EDITOR_DESTROYED;
+    }
+    NS_WARNING_ASSERTION(
+        NS_SUCCEEDED(rv),
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
   }
   return NS_OK;
 }
@@ -8014,7 +9259,7 @@ nsresult HTMLEditor::EnsureCaretInBlockElement(Element& aElement) {
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(SelectionRef().IsCollapsed());
 
-  EditorRawDOMPoint atCaret(EditorBase::GetStartPoint(SelectionRef()));
+  const auto atCaret = GetFirstSelectionStartPoint<EditorRawDOMPoint>();
   if (NS_WARN_IF(!atCaret.IsSet())) {
     return NS_ERROR_FAILURE;
   }
@@ -8060,7 +9305,7 @@ nsresult HTMLEditor::EnsureCaretInBlockElement(Element& aElement) {
     }
     nsresult rv = CollapseSelectionTo(endPoint);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionTo() failed");
+                         "EditorBase::CollapseSelectionTo() failed");
     return rv;
   }
 
@@ -8079,7 +9324,7 @@ nsresult HTMLEditor::EnsureCaretInBlockElement(Element& aElement) {
   }
   rv = CollapseSelectionTo(atStartOfBlock);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionTo() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -8113,11 +9358,12 @@ void HTMLEditor::SetSelectionInterlinePosition() {
                  WalkTreeOption::StopAtBlockBoundary},
                 editingHost)) {
       if (previousEditableContentInBlock->IsHTMLElement(nsGkAtoms::br)) {
-        IgnoredErrorResult ignoredError;
-        SelectionRef().SetInterlinePosition(true, ignoredError);
+        DebugOnly<nsresult> rvIgnored = SelectionRef().SetInterlinePosition(
+            InterlinePosition::StartOfNextLine);
         NS_WARNING_ASSERTION(
-            !ignoredError.Failed(),
-            "Selection::SetInterlinePosition(true) failed, but ignored");
+            NS_SUCCEEDED(rvIgnored),
+            "Selection::SetInterlinePosition(InterlinePosition::"
+            "StartOfNextLine) failed, but ignored");
         return;
       }
     }
@@ -8135,11 +9381,11 @@ void HTMLEditor::SetSelectionInterlinePosition() {
           HTMLEditUtils::GetPreviousSibling(
               *atCaret.GetChild(), {WalkTreeOption::IgnoreNonEditableNode})) {
     if (HTMLEditUtils::IsBlockElement(*previousEditableContentInBlockAtCaret)) {
-      IgnoredErrorResult ignoredError;
-      SelectionRef().SetInterlinePosition(true, ignoredError);
-      NS_WARNING_ASSERTION(
-          !ignoredError.Failed(),
-          "Selection::SetInterlinePosition(true) failed, but ignored");
+      DebugOnly<nsresult> rvIgnored = SelectionRef().SetInterlinePosition(
+          InterlinePosition::StartOfNextLine);
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
+                           "Selection::SetInterlinePosition(InterlinePosition::"
+                           "StartOfNextLine) failed, but ignored");
       return;
     }
   }
@@ -8152,11 +9398,11 @@ void HTMLEditor::SetSelectionInterlinePosition() {
           HTMLEditUtils::GetNextSibling(
               *atCaret.GetChild(), {WalkTreeOption::IgnoreNonEditableNode})) {
     if (HTMLEditUtils::IsBlockElement(*nextEditableContentInBlockAtCaret)) {
-      IgnoredErrorResult ignoredError;
-      SelectionRef().SetInterlinePosition(false, ignoredError);
-      NS_WARNING_ASSERTION(
-          !ignoredError.Failed(),
-          "Selection::SetInterlinePosition(false) failed, but ignored");
+      DebugOnly<nsresult> rvIgnored =
+          SelectionRef().SetInterlinePosition(InterlinePosition::EndOfLine);
+      NS_WARNING_ASSERTION(NS_SUCCEEDED(rvIgnored),
+                           "Selection::SetInterlinePosition(InterlinePosition::"
+                           "EndOfLine) failed, but ignored");
     }
   }
 }
@@ -8166,7 +9412,7 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(SelectionRef().IsCollapsed());
 
-  EditorDOMPoint point(EditorBase::GetStartPoint(SelectionRef()));
+  auto point = GetFirstSelectionStartPoint<EditorDOMPoint>();
   if (NS_WARN_IF(!point.IsInContentNode())) {
     return NS_ERROR_FAILURE;
   }
@@ -8182,13 +9428,16 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
 
   // If caret is in empty block element, we need to insert a `<br>` element
   // because the block should have one-line height.
-  if (RefPtr<Element> blockElement =
-          HTMLEditUtils::GetInclusiveAncestorBlockElement(
-              *point.ContainerAsContent())) {
-    if (blockElement &&
-        EditorUtils::IsEditableContent(*blockElement, EditorType::HTML) &&
+  // XXX Even if only a part of the block is editable, shouldn't we put
+  //     caret if the block element is now empty?
+  if (Element* const editableBlockElement =
+          HTMLEditUtils::GetInclusiveAncestorElement(
+              *point.ContainerAsContent(),
+              HTMLEditUtils::ClosestEditableBlockElement)) {
+    if (editableBlockElement &&
         HTMLEditUtils::IsEmptyNode(
-            *blockElement, {EmptyCheckOption::TreatSingleBRElementAsVisible}) &&
+            *editableBlockElement,
+            {EmptyCheckOption::TreatSingleBRElementAsVisible}) &&
         HTMLEditUtils::CanNodeContain(*point.GetContainer(), *nsGkAtoms::br)) {
       Element* bodyOrDocumentElement = GetRoot();
       if (NS_WARN_IF(!bodyOrDocumentElement)) {
@@ -8204,13 +9453,26 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
         //     `<body>`, what are we doing?
         return NS_OK;
       }
-      CreateElementResult createPaddingBRResult =
+      CreateElementResult insertPaddingBRElementResult =
           InsertPaddingBRElementForEmptyLastLineWithTransaction(point);
+      if (insertPaddingBRElementResult.isErr()) {
+        NS_WARNING(
+            "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction("
+            ") failed");
+        return insertPaddingBRElementResult.unwrapErr();
+      }
+      nsresult rv = insertPaddingBRElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
+      }
       NS_WARNING_ASSERTION(
-          createPaddingBRResult.Succeeded(),
-          "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction() "
-          "failed");
-      return createPaddingBRResult.Rv();
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+      return NS_OK;
     }
   }
 
@@ -8233,44 +9495,41 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
   if (nsCOMPtr<nsIContent> previousEditableContent =
           HTMLEditUtils::GetPreviousContent(
               point, {WalkTreeOption::IgnoreNonEditableNode}, editingHost)) {
-    RefPtr<Element> blockElementAtCaret =
-        HTMLEditUtils::GetInclusiveAncestorBlockElement(
-            *point.ContainerAsContent());
-    RefPtr<Element> blockElementParentAtPreviousEditableContent =
-        HTMLEditUtils::GetAncestorBlockElement(*previousEditableContent);
+    // If caret and previous editable content are in same block element
+    // (even if it's a non-editable element), we should put a padding <br>
+    // element at end of the block.
+    const Element* const blockElementContainingCaret =
+        HTMLEditUtils::GetInclusiveAncestorElement(
+            *point.ContainerAsContent(), HTMLEditUtils::ClosestBlockElement);
+    const Element* const blockElementContainingPreviousEditableContent =
+        HTMLEditUtils::GetAncestorElement(*previousEditableContent,
+                                          HTMLEditUtils::ClosestBlockElement);
     // If previous editable content of caret is in same block and a `<br>`
     // element, we need to adjust interline position.
-    if (blockElementAtCaret &&
-        blockElementAtCaret == blockElementParentAtPreviousEditableContent &&
+    if (blockElementContainingCaret &&
+        blockElementContainingCaret ==
+            blockElementContainingPreviousEditableContent &&
+        point.ContainerAsContent()->GetEditingHost() ==
+            previousEditableContent->GetEditingHost() &&
         previousEditableContent &&
         previousEditableContent->IsHTMLElement(nsGkAtoms::br)) {
       // If it's an invisible `<br>` element, we need to insert a padding
       // `<br>` element for making empty line have one-line height.
-      if (HTMLEditUtils::IsInvisibleBRElement(*previousEditableContent,
-                                              editingHost)) {
-        CreateElementResult createPaddingBRResult =
+      if (HTMLEditUtils::IsInvisibleBRElement(*previousEditableContent)) {
+        CreateElementResult insertPaddingBRElementResult =
             InsertPaddingBRElementForEmptyLastLineWithTransaction(point);
-        if (createPaddingBRResult.Failed()) {
+        if (insertPaddingBRElementResult.isErr()) {
           NS_WARNING(
               "HTMLEditor::"
-              "InsertPaddingBRElementForEmptyLastLineWithTransaction() "
-              "failed");
-          return createPaddingBRResult.Rv();
+              "InsertPaddingBRElementForEmptyLastLineWithTransaction() failed");
+          return insertPaddingBRElementResult.unwrapErr();
         }
-        point.Set(createPaddingBRResult.GetNewNode());
-        // Selection stays *before* padding `<br>` element for empty last
-        // line, sticking to it.
-        IgnoredErrorResult ignoredError;
-        SelectionRef().SetInterlinePosition(true, ignoredError);
-        if (NS_WARN_IF(Destroyed())) {
-          return NS_ERROR_EDITOR_DESTROYED;
-        }
-        NS_WARNING_ASSERTION(
-            !ignoredError.Failed(),
-            "Selection::SetInterlinePosition(true) failed, but ignored");
-        nsresult rv = CollapseSelectionTo(point);
+        insertPaddingBRElementResult.IgnoreCaretPointSuggestion();
+        nsresult rv = CollapseSelectionTo(
+            EditorRawDOMPoint(insertPaddingBRElementResult.GetNewNode(),
+                              InterlinePosition::StartOfNextLine));
         if (NS_FAILED(rv)) {
-          NS_WARNING("HTMLEditor::CollapseSelectionTo() failed");
+          NS_WARNING("EditorBase::CollapseSelectionTo() failed");
           return rv;
         }
       }
@@ -8286,11 +9545,12 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
                 *nextEditableContentInBlock)) {
           // Make it stick to the padding `<br>` element so that it will be
           // on blank line.
-          IgnoredErrorResult ignoredError;
-          SelectionRef().SetInterlinePosition(true, ignoredError);
+          DebugOnly<nsresult> rvIgnored = SelectionRef().SetInterlinePosition(
+              InterlinePosition::StartOfNextLine);
           NS_WARNING_ASSERTION(
-              !ignoredError.Failed(),
-              "Selection::SetInterlinePosition(true) failed, but ignored");
+              NS_SUCCEEDED(rvIgnored),
+              "Selection::SetInterlinePosition(InterlinePosition::"
+              "StartOfNextLine) failed, but ignored");
         }
       }
     }
@@ -8348,7 +9608,7 @@ nsresult HTMLEditor::AdjustCaretPositionAndEnsurePaddingBRElement(
   }
   nsresult rv = CollapseSelectionTo(pointToPutCaret);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::CollapseSelectionTo() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -8415,7 +9675,8 @@ nsresult HTMLEditor::RemoveEmptyNodesIn(nsRange& aRange) {
     if (content->IsElement()) {
       if (content->IsHTMLElement(nsGkAtoms::body)) {
         // Don't delete the body
-      } else if ((isMailCite = HTMLEditUtils::IsMailCite(content)) ||
+      } else if ((isMailCite =
+                      HTMLEditUtils::IsMailCite(*content->AsElement())) ||
                  content->IsHTMLElement(nsGkAtoms::a) ||
                  HTMLEditUtils::IsInlineStyle(content) ||
                  HTMLEditUtils::IsAnyListElement(content) ||
@@ -8482,6 +9743,7 @@ nsresult HTMLEditor::RemoveEmptyNodesIn(nsRange& aRange) {
 
   // Now delete the empty mailcites.  This is a separate step because we want
   // to pull out any br's and preserve them.
+  EditorDOMPoint pointToPutCaret;
   for (OwningNonNull<nsIContent>& emptyCite : arrayOfEmptyCites) {
     if (!HTMLEditUtils::IsEmptyNode(
             emptyCite, {EmptyCheckOption::TreatSingleBRElementAsVisible,
@@ -8489,13 +9751,18 @@ nsresult HTMLEditor::RemoveEmptyNodesIn(nsRange& aRange) {
                         EmptyCheckOption::TreatTableCellAsVisible})) {
       // We are deleting a cite that has just a `<br>`.  We want to delete cite,
       // but preserve `<br>`.
-      Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-          InsertBRElementWithTransaction(EditorDOMPoint(emptyCite));
-      if (resultOfInsertingBRElement.isErr()) {
-        NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-        return resultOfInsertingBRElement.unwrapErr();
+      CreateElementResult insertBRElementResult =
+          InsertBRElement(WithTransaction::Yes, EditorDOMPoint(emptyCite));
+      if (insertBRElementResult.isErr()) {
+        NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+        return insertBRElementResult.unwrapErr();
       }
-      MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+      // XXX Is this intentional selection change?
+      insertBRElementResult.MoveCaretPointTo(
+          pointToPutCaret, *this,
+          {SuggestCaret::OnlyIfHasSuggestion,
+           SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      MOZ_ASSERT(insertBRElementResult.GetNewNode());
     }
     // MOZ_KnownLive because 'arrayOfEmptyCites' is guaranteed to keep it alive.
     rv = DeleteNodeWithTransaction(MOZ_KnownLive(emptyCite));
@@ -8506,6 +9773,18 @@ nsresult HTMLEditor::RemoveEmptyNodesIn(nsRange& aRange) {
       NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
       return rv;
     }
+  }
+  // XXX Is this intentional selection change?
+  if (pointToPutCaret.IsSet()) {
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionTo() caused destroying the editor");
+      return NS_ERROR_EDITOR_DESTROYED;
+    }
+    NS_WARNING_ASSERTION(
+        NS_SUCCEEDED(rv),
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
   }
 
   return NS_OK;
@@ -8545,24 +9824,27 @@ nsresult HTMLEditor::LiftUpListItemElement(
       return NS_ERROR_FAILURE;
     }
     MOZ_ASSERT(atListItemElement.IsSetAndValid());
-    ErrorResult error;
-    nsCOMPtr<nsIContent> maybeLeftListContent =
-        SplitNodeWithTransaction(atListItemElement, error);
-    if (NS_WARN_IF(Destroyed())) {
-      error = NS_ERROR_EDITOR_DESTROYED;
+    const SplitNodeResult splitListItemParentResult =
+        SplitNodeWithTransaction(atListItemElement);
+    if (splitListItemParentResult.isErr()) {
+      NS_WARNING("HTMLEditor::SplitNodeWithTransaction() failed");
+      return splitListItemParentResult.unwrapErr();
     }
-    if (error.Failed()) {
-      NS_WARNING_ASSERTION(error.ErrorCodeIs(NS_ERROR_EDITOR_DESTROYED),
-                           "HTMLEditor::SplitNodeWithTransaction() failed");
-      return error.StealNSResult();
+    nsresult rv = splitListItemParentResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("SplitNodeResult::SuggestCaretPointTo() failed");
+      return rv;
     }
-    if (!maybeLeftListContent->IsElement()) {
+
+    leftListElement =
+        Element::FromNodeOrNull(splitListItemParentResult.GetPreviousContent());
+    if (MOZ_UNLIKELY(!leftListElement)) {
       NS_WARNING(
           "HTMLEditor::SplitNodeWithTransaction() didn't return left list "
           "element");
       return NS_ERROR_FAILURE;
     }
-    leftListElement = maybeLeftListContent->AsElement();
   }
 
   // In most cases, insert the list item into the new left list node..
@@ -8580,15 +9862,17 @@ nsresult HTMLEditor::LiftUpListItemElement(
                          "Failed to advance offset to right list node");
   }
 
-  nsresult rv =
+  EditorDOMPoint pointToPutCaret;
+  MoveNodeResult moveListItemElementResult =
       MoveNodeWithTransaction(aListItemElement, pointToInsertListItem);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
-  }
-  if (NS_FAILED(rv)) {
+  if (moveListItemElementResult.isErr()) {
     NS_WARNING("HTMLEditor::MoveNodeWithTransaction() failed");
-    return rv;
+    return moveListItemElementResult.unwrapErr();
   }
+  moveListItemElementResult.MoveCaretPointTo(
+      pointToPutCaret, *this,
+      {SuggestCaret::OnlyIfHasSuggestion,
+       SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
 
   // Unwrap list item contents if they are no longer in a list
   // XXX If the parent list element is a child of another list element
@@ -8600,22 +9884,43 @@ nsresult HTMLEditor::LiftUpListItemElement(
   //     current parent is <dl>, there is same issue.
   if (!HTMLEditUtils::IsAnyListElement(pointToInsertListItem.GetContainer()) &&
       HTMLEditUtils::IsListItem(&aListItemElement)) {
-    nsresult rv = RemoveBlockContainerWithTransaction(aListItemElement);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
+    Result<EditorDOMPoint, nsresult> unwrapOrphanListItemElementResult =
+        RemoveBlockContainerWithTransaction(aListItemElement);
+    if (MOZ_UNLIKELY(unwrapOrphanListItemElementResult.isErr())) {
+      NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+      return unwrapOrphanListItemElementResult.unwrapErr();
+    }
+    if (AllowsTransactionsToChangeSelection() &&
+        unwrapOrphanListItemElementResult.inspect().IsSet()) {
+      pointToPutCaret = unwrapOrphanListItemElementResult.unwrap();
+    }
+    if (!pointToPutCaret.IsSet()) {
+      return NS_OK;
+    }
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                         "EditorBase::CollapseSelectionTo() failed");
+    return rv;
+  }
+
+  if (pointToPutCaret.IsSet()) {
+    nsresult rv = CollapseSelectionTo(pointToPutCaret);
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING("EditorBase::CollapseSelectionTo() failed");
+      return rv;
     }
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
-        "HTMLEditor::RemoveBlockContainerWithTransaction() failed");
-    return rv;
+        "EditorBase::CollapseSelectionTo() failed, but ignored");
   }
+
   if (aLiftUpFromAllParentListElements == LiftUpFromAllParentListElements::No) {
     return NS_OK;
   }
   // XXX If aListItemElement is moved to unexpected element by mutation event
   //     listener, shouldn't we stop calling this?
-  rv = LiftUpListItemElement(aListItemElement,
-                             LiftUpFromAllParentListElements::Yes);
+  nsresult rv = LiftUpListItemElement(aListItemElement,
+                                      LiftUpFromAllParentListElements::Yes);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
                        "HTMLEditor::LiftUpListItemElement("
                        "LiftUpFromAllParentListElements::Yes) failed");
@@ -8678,13 +9983,19 @@ nsresult HTMLEditor::DestroyListStructureRecursively(Element& aListElement) {
   }
 
   // Delete the now-empty list
-  nsresult rv = RemoveBlockContainerWithTransaction(aListElement);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  const Result<EditorDOMPoint, nsresult> unwrapListElementResult =
+      RemoveBlockContainerWithTransaction(aListElement);
+  if (MOZ_UNLIKELY(unwrapListElementResult.isErr())) {
+    NS_WARNING("HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+    return unwrapListElementResult.inspectErr();
   }
-  NS_WARNING_ASSERTION(
-      NS_SUCCEEDED(rv),
-      "HTMLEditor::RemoveBlockContainerWithTransaction() failed");
+  const EditorDOMPoint& pointToPutCaret = unwrapListElementResult.inspect();
+  if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+    return NS_OK;
+  }
+  nsresult rv = CollapseSelectionTo(pointToPutCaret);
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -8696,7 +10007,7 @@ nsresult HTMLEditor::EnsureSelectionInBodyOrDocumentElement() {
     return NS_ERROR_FAILURE;
   }
 
-  EditorRawDOMPoint atCaret(EditorBase::GetStartPoint(SelectionRef()));
+  const auto atCaret = GetFirstSelectionStartPoint<EditorRawDOMPoint>();
   if (NS_WARN_IF(!atCaret.IsSet())) {
     return NS_ERROR_FAILURE;
   }
@@ -8717,16 +10028,19 @@ nsresult HTMLEditor::EnsureSelectionInBodyOrDocumentElement() {
   // If we aren't in the <body> element, force the issue.
   if (!temp) {
     nsresult rv = CollapseSelectionToStartOf(*bodyOrDocumentElement);
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionToStartOf() caused destroying the "
+          "editor");
       return NS_ERROR_EDITOR_DESTROYED;
     }
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
-        "HTMLEditor::CollapseSelectionToStartOf() failed, but ignored");
+        "EditorBase::CollapseSelectionToStartOf() failed, but ignored");
     return NS_OK;
   }
 
-  EditorRawDOMPoint selectionEndPoint(EditorBase::GetEndPoint(SelectionRef()));
+  const auto selectionEndPoint = GetFirstSelectionEndPoint<EditorRawDOMPoint>();
   if (NS_WARN_IF(!selectionEndPoint.IsSet())) {
     return NS_ERROR_FAILURE;
   }
@@ -8741,12 +10055,15 @@ nsresult HTMLEditor::EnsureSelectionInBodyOrDocumentElement() {
   // If we aren't in the <body> element, force the issue.
   if (!temp) {
     nsresult rv = CollapseSelectionToStartOf(*bodyOrDocumentElement);
-    if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
+    if (MOZ_UNLIKELY(rv == NS_ERROR_EDITOR_DESTROYED)) {
+      NS_WARNING(
+          "EditorBase::CollapseSelectionToStartOf() caused destroying the "
+          "editor");
       return NS_ERROR_EDITOR_DESTROYED;
     }
     NS_WARNING_ASSERTION(
         NS_SUCCEEDED(rv),
-        "HTMLEditor::CollapseSelectionToStartOf() failed, but ignored");
+        "EditorBase::CollapseSelectionToStartOf() failed, but ignored");
   }
 
   return NS_OK;
@@ -8765,14 +10082,27 @@ nsresult HTMLEditor::InsertPaddingBRElementForEmptyLastLineIfNeeded(
     return NS_OK;
   }
 
-  CreateElementResult createBRResult =
+  CreateElementResult insertPaddingBRElementResult =
       InsertPaddingBRElementForEmptyLastLineWithTransaction(
-          EditorDOMPoint(&aElement, 0));
+          EditorDOMPoint(&aElement, 0u));
+  if (insertPaddingBRElementResult.isErr()) {
+    NS_WARNING(
+        "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction() "
+        "failed");
+    return insertPaddingBRElementResult.unwrapErr();
+  }
+  nsresult rv = insertPaddingBRElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
   NS_WARNING_ASSERTION(
-      createBRResult.Succeeded(),
-      "HTMLEditor::InsertPaddingBRElementForEmptyLastLineWithTransaction() "
-      "failed");
-  return createBRResult.Rv();
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  return NS_OK;
 }
 
 nsresult HTMLEditor::InsertBRElementIfEmptyBlockElement(Element& aElement) {
@@ -8787,13 +10117,25 @@ nsresult HTMLEditor::InsertBRElementIfEmptyBlockElement(Element& aElement) {
     return NS_OK;
   }
 
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(EditorDOMPoint(&aElement, 0));
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return resultOfInsertingBRElement.unwrapErr();
+  CreateElementResult insertBRElementResult =
+      InsertBRElement(WithTransaction::Yes, EditorDOMPoint(&aElement, 0u));
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+    return insertBRElementResult.unwrapErr();
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+  // XXX Is this intentional selection change?
+  nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  MOZ_ASSERT(insertBRElementResult.GetNewNode());
   return NS_OK;
 }
 
@@ -8853,12 +10195,19 @@ nsresult HTMLEditor::RemoveAlignFromDescendants(Element& aElement,
         return rv;
       }
 
-      rv = RemoveContainerWithTransaction(centerElement);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      const Result<EditorDOMPoint, nsresult> unwrapCenterElementResult =
+          RemoveContainerWithTransaction(centerElement);
+      if (MOZ_UNLIKELY(unwrapCenterElementResult.isErr())) {
         NS_WARNING("HTMLEditor::RemoveContainerWithTransaction() failed");
+        return unwrapCenterElementResult.inspectErr();
+      }
+      const EditorDOMPoint& pointToPutCaret =
+          unwrapCenterElementResult.inspect();
+      if (!AllowsTransactionsToChangeSelection() && !pointToPutCaret.IsSet()) {
+        continue;
+      }
+      if (NS_FAILED(rv = CollapseSelectionTo(pointToPutCaret))) {
+        NS_WARNING("EditorBase::CollapseSelectionTo() failed");
         return rv;
       }
       continue;
@@ -8957,14 +10306,25 @@ nsresult HTMLEditor::EnsureHardLineBeginsWithFirstChildOf(
     return NS_OK;
   }
 
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(
-          EditorDOMPoint(&aRemovingContainerElement, 0));
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return resultOfInsertingBRElement.unwrapErr();
+  CreateElementResult insertBRElementResult = InsertBRElement(
+      WithTransaction::Yes, EditorDOMPoint(&aRemovingContainerElement, 0u));
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+    return insertBRElementResult.unwrapErr();
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+  // XXX Is this intentional selection change?
+  nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  MOZ_ASSERT(insertBRElementResult.GetNewNode());
   return NS_OK;
 }
 
@@ -8994,14 +10354,24 @@ nsresult HTMLEditor::EnsureHardLineEndsWithLastChildOf(
     return NS_OK;
   }
 
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(
-          EditorDOMPoint::AtEndOf(aRemovingContainerElement));
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return resultOfInsertingBRElement.unwrapErr();
+  CreateElementResult insertBRElementResult = InsertBRElement(
+      WithTransaction::Yes, EditorDOMPoint::AtEndOf(aRemovingContainerElement));
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+    return insertBRElementResult.unwrapErr();
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
+  nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+              SuggestCaret::AndIgnoreTrivialError});
+  if (NS_FAILED(rv)) {
+    NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+    return rv;
+  }
+  NS_WARNING_ASSERTION(
+      rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+      "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+  MOZ_ASSERT(insertBRElementResult.GetNewNode());
   return NS_OK;
 }
 
@@ -9132,20 +10502,27 @@ nsresult HTMLEditor::ChangeMarginStart(Element& aElement,
     return NS_OK;
   }
 
-  nsresult rv = RemoveContainerWithTransaction(aElement);
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  const Result<EditorDOMPoint, nsresult> unwrapDivElementResult =
+      RemoveContainerWithTransaction(aElement);
+  if (MOZ_UNLIKELY(unwrapDivElementResult.isErr())) {
+    NS_WARNING("HTMLEditor::RemoveContainerWithTransaction() failed");
+    return unwrapDivElementResult.inspectErr();
   }
+  const EditorDOMPoint& pointToPutCaret = unwrapDivElementResult.inspect();
+  if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+    return NS_OK;
+  }
+  nsresult rv = CollapseSelectionTo(pointToPutCaret);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::RemoveContainerWithTransaction() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
 EditActionResult HTMLEditor::SetSelectionToAbsoluteAsSubAction() {
   MOZ_ASSERT(IsTopLevelEditSubActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eSetPositionToAbsolute, nsIEditor::eNext,
@@ -9173,12 +10550,12 @@ EditActionResult HTMLEditor::SetSelectionToAbsoluteAsSubAction() {
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -9256,6 +10633,11 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
   MOZ_ASSERT(IsEditActionDataAvailable());
   MOZ_ASSERT(aTargetElement);
 
+  RefPtr<Element> editingHost = GetActiveEditingHost();
+  if (MOZ_UNLIKELY(NS_WARN_IF(!editingHost))) {
+    return NS_ERROR_FAILURE;
+  }
+
   AutoSelectionRestorer restoreSelectionLater(*this);
 
   AutoTArray<RefPtr<nsRange>, 4> arrayOfRanges;
@@ -9289,27 +10671,25 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
     }
 
     // Make sure we can put a block here.
-    SplitNodeResult splitNodeResult =
-        MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::div, atCaret);
-    if (splitNodeResult.Failed()) {
+    CreateElementResult createNewDivElementResult =
+        InsertElementWithSplittingAncestorsWithTransaction(
+            *nsGkAtoms::div, atCaret, BRElementNextToSplitPoint::Keep,
+            *editingHost);
+    if (createNewDivElementResult.isErr()) {
       NS_WARNING(
-          "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms::"
-          "div) failed");
-      return splitNodeResult.Rv();
+          "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+          "nsGkAtoms::div) failed");
+      return createNewDivElementResult.unwrapErr();
     }
-    Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-        CreateNodeWithTransaction(*nsGkAtoms::div,
-                                  splitNodeResult.SplitPoint());
-    if (maybeNewDivElement.isErr()) {
-      NS_WARNING(
-          "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-      return maybeNewDivElement.unwrapErr();
-    }
-    MOZ_ASSERT(maybeNewDivElement.inspect());
+    // We'll update selection after deleting the content nodes and nobody
+    // refers selection until then.  Therefore, we don't need to update
+    // selection here.
+    createNewDivElementResult.IgnoreCaretPointSuggestion();
+    RefPtr<Element> newDivElement = createNewDivElementResult.UnwrapNewNode();
+    MOZ_ASSERT(newDivElement);
     // Delete anything that was in the list of nodes
     // XXX We don't need to remove items from the array.
-    while (!arrayOfContents.IsEmpty()) {
-      OwningNonNull<nsIContent>& curNode = arrayOfContents[0];
+    for (OwningNonNull<nsIContent>& curNode : arrayOfContents) {
       // MOZ_KnownLive because 'arrayOfContents' is guaranteed to keep it alive.
       nsresult rv = DeleteNodeWithTransaction(MOZ_KnownLive(*curNode));
       if (NS_WARN_IF(Destroyed())) {
@@ -9319,21 +10699,14 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
         NS_WARNING("HTMLEditor::DeleteNodeWithTransaction() failed");
         return rv;
       }
-      arrayOfContents.RemoveElementAt(0);
     }
     // Don't restore the selection
     restoreSelectionLater.Abort();
-    nsresult rv = CollapseSelectionToStartOf(
-        MOZ_KnownLive(*maybeNewDivElement.inspect()));
+    nsresult rv = CollapseSelectionToStartOf(*newDivElement);
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::CollapseSelectionToStartOf() failed");
-    *aTargetElement = maybeNewDivElement.unwrap();
+                         "EditorBase::CollapseSelectionToStartOf() failed");
+    *aTargetElement = std::move(newDivElement);
     return rv;
-  }
-
-  RefPtr<Element> editingHost = GetActiveEditingHost();
-  if (NS_WARN_IF(!editingHost)) {
-    return NS_ERROR_FAILURE;
   }
 
   // `<div>` element to be positioned absolutely.  This may have already
@@ -9375,47 +10748,85 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
            previousEditableContent != createdListElement)) {
         nsAtom* ULOrOLOrDLTagName =
             atContent.GetContainer()->NodeInfo()->NameAtom();
-        SplitNodeResult splitNodeResult =
-            MaybeSplitAncestorsForInsertWithTransaction(
-                MOZ_KnownLive(*ULOrOLOrDLTagName), atContent);
-        if (NS_WARN_IF(splitNodeResult.Failed())) {
-          return splitNodeResult.Rv();
-        }
-        if (!targetDivElement) {
-          Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-              CreateNodeWithTransaction(*nsGkAtoms::div,
-                                        splitNodeResult.SplitPoint());
-          if (maybeNewDivElement.isErr()) {
+        if (targetDivElement) {
+          // XXX Do we need to split the container? Since we'll append new
+          //     element at end of the <div> element.
+          const SplitNodeResult splitNodeResult =
+              MaybeSplitAncestorsForInsertWithTransaction(
+                  MOZ_KnownLive(*ULOrOLOrDLTagName), atContent);
+          if (splitNodeResult.isOk()) {
             NS_WARNING(
-                "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-            return maybeNewDivElement.unwrapErr();
+                "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() "
+                "failed");
+            return splitNodeResult.unwrapErr();
           }
-          MOZ_ASSERT(maybeNewDivElement.inspect());
-          targetDivElement = maybeNewDivElement.unwrap();
+          // We'll update selection after creating a list element below.
+          // Therefore, we don't need to touch selection here.
+          splitNodeResult.IgnoreCaretPointSuggestion();
+        } else {
+          // If we've not had a target <div> element yet, let's insert a <div>
+          // element with splitting the ancestors.
+          CreateElementResult createNewDivElementResult =
+              InsertElementWithSplittingAncestorsWithTransaction(
+                  *nsGkAtoms::div, atContent, BRElementNextToSplitPoint::Keep,
+                  *editingHost);
+          if (createNewDivElementResult.isErr()) {
+            NS_WARNING(
+                "HTMLEditor::"
+                "InsertElementWithSplittingAncestorsWithTransaction(nsGkAtoms::"
+                "div) failed");
+            return createNewDivElementResult.unwrapErr();
+          }
+          // We'll update selection after creating a list element below.
+          // Therefor, we don't need to touch selection here.
+          createNewDivElementResult.IgnoreCaretPointSuggestion();
+          MOZ_ASSERT(createNewDivElementResult.GetNewNode());
+          targetDivElement = createNewDivElementResult.UnwrapNewNode();
         }
-        Result<RefPtr<Element>, nsresult> maybeNewListElement =
-            CreateNodeWithTransaction(
-                MOZ_KnownLive(*ULOrOLOrDLTagName),
-                EditorDOMPoint::AtEndOf(targetDivElement));
-        if (maybeNewListElement.isErr()) {
-          NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-          return maybeNewListElement.unwrapErr();
+        CreateElementResult createNewListElementResult = CreateAndInsertElement(
+            WithTransaction::Yes, MOZ_KnownLive(*ULOrOLOrDLTagName),
+            EditorDOMPoint::AtEndOf(targetDivElement));
+        if (createNewListElementResult.isErr()) {
+          NS_WARNING(
+              "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) "
+              "failed");
+          return createNewListElementResult.unwrapErr();
         }
-        MOZ_ASSERT(maybeNewListElement.inspect());
-        createdListElement = maybeNewListElement.unwrap();
+        nsresult rv = createNewListElementResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                    SuggestCaret::AndIgnoreTrivialError});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+          return Err(rv);
+        }
+        NS_WARNING_ASSERTION(
+            rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+            "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+        createdListElement = createNewListElementResult.UnwrapNewNode();
+        MOZ_ASSERT(createdListElement);
       }
       // Move current node (maybe, assumed as a list item element) into the
       // new list element in the target `<div>` element to be positioned
       // absolutely.
       // MOZ_KnownLive because 'arrayOfContents' is guaranteed to keep it alive.
-      nsresult rv = MoveNodeToEndWithTransaction(MOZ_KnownLive(content),
-                                                 *createdListElement);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
+      const MoveNodeResult moveNodeResult = MoveNodeToEndWithTransaction(
+          MOZ_KnownLive(content), *createdListElement);
+      if (moveNodeResult.isErr()) {
+        NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+        return Err(moveNodeResult.unwrapErr());
       }
-      if (NS_WARN_IF(NS_FAILED(rv))) {
-        return rv;
+      nsresult rv = moveNodeResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return Err(rv);
       }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
       continue;
     }
 
@@ -9447,48 +10858,85 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
         //     we duplicate wrong element into the target `<div>` element.
         nsAtom* containerName =
             atListItem.GetContainer()->NodeInfo()->NameAtom();
-        SplitNodeResult splitNodeResult =
-            MaybeSplitAncestorsForInsertWithTransaction(
-                MOZ_KnownLive(*containerName), atListItem);
-        if (NS_WARN_IF(splitNodeResult.Failed())) {
-          return splitNodeResult.Rv();
-        }
-        if (!targetDivElement) {
-          Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-              CreateNodeWithTransaction(
-                  *nsGkAtoms::div, EditorDOMPoint(atListItem.GetContainer()));
-          if (maybeNewDivElement.isErr()) {
+        if (targetDivElement) {
+          // XXX Do we need to split the container? Since we'll append new
+          //     element at end of the <div> element.
+          const SplitNodeResult splitNodeResult =
+              MaybeSplitAncestorsForInsertWithTransaction(
+                  MOZ_KnownLive(*containerName), atListItem);
+          if (splitNodeResult.isErr()) {
             NS_WARNING(
-                "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-            return maybeNewDivElement.unwrapErr();
+                "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction() "
+                "failed");
+            return splitNodeResult.unwrapErr();
           }
-          MOZ_ASSERT(maybeNewDivElement.inspect());
-          targetDivElement = maybeNewDivElement.unwrap();
+          // We'll update selection after creating a list element below.
+          // Therefore, we don't need to touch selection here.
+          splitNodeResult.IgnoreCaretPointSuggestion();
+        } else {
+          // If we've not had a target <div> element yet, let's insert a <div>
+          // element with splitting the ancestors.
+          CreateElementResult createNewDivElementResult =
+              InsertElementWithSplittingAncestorsWithTransaction(
+                  *nsGkAtoms::div, atContent, BRElementNextToSplitPoint::Keep,
+                  *editingHost);
+          if (createNewDivElementResult.isErr()) {
+            NS_WARNING(
+                "HTMLEditor::"
+                "InsertElementWithSplittingAncestorsWithTransaction("
+                "nsGkAtoms::div) failed");
+            return createNewDivElementResult.unwrapErr();
+          }
+          // We'll update selection after creating a list element below.
+          // Therefore, we don't need to touch selection here.
+          createNewDivElementResult.IgnoreCaretPointSuggestion();
+          MOZ_ASSERT(createNewDivElementResult.GetNewNode());
+          targetDivElement = createNewDivElementResult.UnwrapNewNode();
         }
         // XXX So, createdListElement may be set to a non-list element.
-        Result<RefPtr<Element>, nsresult> maybeNewListElement =
-            CreateNodeWithTransaction(
-                MOZ_KnownLive(*containerName),
-                EditorDOMPoint::AtEndOf(targetDivElement));
-        if (maybeNewListElement.isErr()) {
-          NS_WARNING("EditorBase::CreateNodeWithTransaction() failed");
-          return maybeNewListElement.unwrapErr();
+        CreateElementResult createNewListElementResult = CreateAndInsertElement(
+            WithTransaction::Yes, MOZ_KnownLive(*containerName),
+            EditorDOMPoint::AtEndOf(targetDivElement));
+        if (createNewListElementResult.isErr()) {
+          NS_WARNING(
+              "HTMLEditor::CreateAndInsertElement(WithTransaction::Yes) "
+              "failed");
+          return createNewListElementResult.unwrapErr();
         }
-        MOZ_ASSERT(maybeNewListElement.inspect());
-        createdListElement = maybeNewListElement.unwrap();
+        nsresult rv = createNewListElementResult.SuggestCaretPointTo(
+            *this, {SuggestCaret::OnlyIfHasSuggestion,
+                    SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                    SuggestCaret::AndIgnoreTrivialError});
+        if (NS_FAILED(rv)) {
+          NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+          return Err(rv);
+        }
+        NS_WARNING_ASSERTION(
+            rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+            "CreateElementResult::SuggestCaretPointTo() failed, but ignored");
+        createdListElement = createNewListElementResult.UnwrapNewNode();
+        MOZ_ASSERT(createdListElement);
       }
       // Move current list item element into the createdListElement (could be
       // non-list element due to the above bug) in a candidate `<div>` element
       // to be positioned absolutely.
-      nsresult rv =
+      const MoveNodeResult moveListItemElementResult =
           MoveNodeToEndWithTransaction(*listItemElement, *createdListElement);
-      if (NS_WARN_IF(Destroyed())) {
-        return NS_ERROR_EDITOR_DESTROYED;
-      }
-      if (NS_FAILED(rv)) {
+      if (moveListItemElementResult.isErr()) {
         NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
-        return rv;
+        return Err(moveListItemElementResult.unwrapErr());
       }
+      nsresult rv = moveListItemElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                  SuggestCaret::AndIgnoreTrivialError});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
+        return Err(rv);
+      }
+      NS_WARNING_ASSERTION(
+          rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+          "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
       handledListItemElement = std::move(listItemElement);
       continue;
     }
@@ -9507,37 +10955,45 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
       }
       // Otherwise, create new `<div>` element to be positioned absolutely
       // and to contain all selected nodes.
-      SplitNodeResult splitNodeResult =
-          MaybeSplitAncestorsForInsertWithTransaction(*nsGkAtoms::div,
-                                                      atContent);
-      if (splitNodeResult.Failed()) {
+      CreateElementResult createNewDivElementResult =
+          InsertElementWithSplittingAncestorsWithTransaction(
+              *nsGkAtoms::div, atContent, BRElementNextToSplitPoint::Keep,
+              *editingHost);
+      if (createNewDivElementResult.isErr()) {
         NS_WARNING(
-            "HTMLEditor::MaybeSplitAncestorsForInsertWithTransaction(nsGkAtoms:"
-            ":div) failed");
-        return splitNodeResult.Rv();
+            "HTMLEditor::InsertElementWithSplittingAncestorsWithTransaction("
+            "nsGkAtoms::div) failed");
+        return createNewDivElementResult.unwrapErr();
       }
-      Result<RefPtr<Element>, nsresult> maybeNewDivElement =
-          CreateNodeWithTransaction(*nsGkAtoms::div,
-                                    splitNodeResult.SplitPoint());
-      if (maybeNewDivElement.isErr()) {
-        NS_WARNING(
-            "EditorBase::CreateNodeWithTransaction(nsGkAtoms::div) failed");
-        return maybeNewDivElement.unwrapErr();
+      nsresult rv = createNewDivElementResult.SuggestCaretPointTo(
+          *this, {SuggestCaret::OnlyIfHasSuggestion,
+                  SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+      if (NS_FAILED(rv)) {
+        NS_WARNING("CreateElementResult::SuggestCaretPointTo() failed");
+        return rv;
       }
-      MOZ_ASSERT(maybeNewDivElement.inspect());
-      targetDivElement = maybeNewDivElement.unwrap();
+      MOZ_ASSERT(createNewDivElementResult.GetNewNode());
+      targetDivElement = createNewDivElementResult.UnwrapNewNode();
     }
 
     // MOZ_KnownLive because 'arrayOfContents' is guaranteed to keep it alive.
-    nsresult rv =
+    const MoveNodeResult moveNodeResult =
         MoveNodeToEndWithTransaction(MOZ_KnownLive(content), *targetDivElement);
-    if (NS_WARN_IF(Destroyed())) {
-      return NS_ERROR_EDITOR_DESTROYED;
-    }
-    if (NS_FAILED(rv)) {
+    if (moveNodeResult.isErr()) {
       NS_WARNING("HTMLEditor::MoveNodeToEndWithTransaction() failed");
+      return moveNodeResult.unwrapErr();
+    }
+    nsresult rv = moveNodeResult.SuggestCaretPointTo(
+        *this, {SuggestCaret::OnlyIfHasSuggestion,
+                SuggestCaret::OnlyIfTransactionsAllowedToDoIt,
+                SuggestCaret::AndIgnoreTrivialError});
+    if (NS_FAILED(rv)) {
+      NS_WARNING("MoveNodeResult::SuggestCaretPointTo() failed");
       return rv;
     }
+    NS_WARNING_ASSERTION(
+        rv != NS_SUCCESS_EDITOR_BUT_IGNORED_TRIVIAL_ERROR,
+        "MoveNodeResult::SuggestCaretPointTo() failed, but ignored");
     // Forget createdListElement, if any
     createdListElement = nullptr;
   }
@@ -9548,8 +11004,8 @@ nsresult HTMLEditor::MoveSelectedContentsToDivElementToMakeItAbsolutePosition(
 EditActionResult HTMLEditor::SetSelectionToStaticAsSubAction() {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this, EditSubAction::eSetPositionToStatic, nsIEditor::eNext,
@@ -9577,12 +11033,12 @@ EditActionResult HTMLEditor::SetSelectionToStaticAsSubAction() {
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionResult(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();
@@ -9627,8 +11083,8 @@ EditActionResult HTMLEditor::SetSelectionToStaticAsSubAction() {
 EditActionResult HTMLEditor::AddZIndexAsSubAction(int32_t aChange) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   IgnoredErrorResult ignoredError;
   AutoEditSubActionNotifier startToHandleEditSubAction(
       *this,
@@ -9658,12 +11114,12 @@ EditActionResult HTMLEditor::AddZIndexAsSubAction(int32_t aChange) {
                        "failed, but ignored");
 
   if (NS_SUCCEEDED(rv) && SelectionRef().IsCollapsed()) {
-    nsresult rv = EnsureCaretNotAfterPaddingBRElement();
+    nsresult rv = EnsureCaretNotAfterInvisibleBRElement();
     if (NS_WARN_IF(rv == NS_ERROR_EDITOR_DESTROYED)) {
       return EditActionHandled(NS_ERROR_EDITOR_DESTROYED);
     }
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                         "HTMLEditor::EnsureCaretNotAfterPaddingBRElement() "
+                         "HTMLEditor::EnsureCaretNotAfterInvisibleBRElement() "
                          "failed, but ignored");
     if (NS_SUCCEEDED(rv)) {
       nsresult rv = PrepareInlineStylesForCaret();

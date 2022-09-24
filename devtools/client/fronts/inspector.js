@@ -43,6 +43,8 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
 
     // Map of highlighter types to unsettled promises to create a highlighter of that type
     this._pendingGetHighlighterMap = new Map();
+
+    this.noopStylesheetListener = () => {};
   }
 
   // async initialization
@@ -54,16 +56,23 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
     // If the server-side support for stylesheet resources is enabled, we need to start
     // to watch for them before instanciating the pageStyle actor (which does use the
     // watcher and assume we're already watching for stylesheets).
-    const { resourceCommand } = this.targetFront;
+    const { resourceCommand } = this.targetFront.commands;
     if (
       resourceCommand?.hasResourceCommandSupport(
         resourceCommand.TYPES.STYLESHEET
       )
     ) {
+      // Store `resourceCommand` on the inspector front as we need it later, and we might not be able to retrieve it from
+      // the targetFront as its resourceCommand property is nullified by ResourceCommand.onTargetDestroyed.
+      this.resourceCommand = resourceCommand;
       await resourceCommand.watchResources([resourceCommand.TYPES.STYLESHEET], {
         // we simply want to start the watcher, we don't have to do anything with those resources.
-        onAvailable: () => {},
+        onAvailable: this.noopStylesheetListener,
       });
+      // Bail out if the inspector is closed while watchResources was pending
+      if (this.isDestroyed()) {
+        return null;
+      }
     }
 
     this.initialized = await Promise.all([
@@ -105,7 +114,22 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
   }
 
   destroy() {
+    if (this.isDestroyed()) {
+      return;
+    }
     this._compatibility = null;
+
+    // We might not have started watching for STYLESHEET if the debugged context
+    // doesn't support the watcher codepath
+    if (this.resourceCommand) {
+      const { resourceCommand } = this;
+      resourceCommand.unwatchResources([resourceCommand.TYPES.STYLESHEET], {
+        onAvailable: this.noopStylesheetListener,
+      });
+      this.resourceCommand = null;
+    }
+    this.walker = null;
+
     // CustomHighlighter fronts are managed by InspectorFront and so will be
     // automatically destroyed. But we have to clear the `_highlighters`
     // Map as well as explicitly call `finalize` request on all of them.
@@ -240,7 +264,7 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
 
     // If the contentDomReference has a different browsing context than the current one,
     // we are either in Fission or in the Multiprocess Browser Toolbox, so we need to
-    // retrieve the walker of the BrowsingContextTarget.
+    // retrieve the walker of the WindowGlobalTarget.
     // Get the target for this remote frame element
     const { descriptorFront } = this.targetFront;
 
@@ -249,7 +273,7 @@ class InspectorFront extends FrontClassWithSpec(inspectorSpec) {
     let target;
     if (descriptorFront && descriptorFront.traits.watcher) {
       const watcherFront = await descriptorFront.getWatcher();
-      target = await watcherFront.getBrowsingContextTarget(browsingContextId);
+      target = await watcherFront.getWindowGlobalTarget(browsingContextId);
     } else {
       // For descriptors which don't expose a watcher (e.g. WebExtension)
       // we used to call RootActor::getBrowsingContextDescriptor, but it was

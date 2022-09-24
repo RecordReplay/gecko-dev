@@ -3,8 +3,10 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ---
 job-defaults:
-    e10s: false
     test-manifest-loader: null  # don't load tests in the taskgraph
+    run-without-variant: false
+    variants:
+        - 1proc
     virtualization: virtual
     mozharness:
         script:
@@ -16,7 +18,7 @@ job-defaults:
             by-test-platform:
                 android-em-7.*:
                     - android/android_common.py
-                    - android/androidx86_7_0.py
+                    - android/android-x86_64.py
                 android-hw.*:
                     - android/android_common.py
                     - android/android_hw.py
@@ -27,7 +29,6 @@ job-defaults:
                     - unittests/mac_unittest.py
                 windows.*:
                     - unittests/win_unittest.py
-    python-3: true
     supports-artifact-builds: false
 
 cppunit:
@@ -36,10 +37,13 @@ cppunit:
     treeherder-symbol: cppunit
     target:
         by-test-platform:
-            android-em-7.*: geckoview-androidTest.apk
+            android-em-7.*: geckoview-test_runner.apk
             default: null
     tier: default
-    run-on-projects: built-projects
+    run-on-projects:
+        by-variant:
+            1proc: built-projects
+            default: []
 
 gtest:
     description: "GTests run"
@@ -47,41 +51,45 @@ gtest:
     treeherder-symbol: GTest
     instance-size: xlarge
     run-on-projects:
-        by-test-platform:
-            .*-devedition.*/.*: []  # don't run on devedition
-            linux1804-32-qr/debug: ['mozilla-central']  # try and m-c
-            linux1804-32-qr/opt: []  # try only, shippable on m-c
-            linux1804-32-shippable-qr/opt: ['mozilla-central']  # try and m-c
-            default: built-projects
+        by-variant:
+            1proc:
+                by-test-platform:
+                    .*android.*: built-projects
+                    .*-devedition.*/.*: []  # don't run on devedition
+                    linux1804-32-qr/opt: []  # try only, shippable on m-c
+                    linux1804-32-qr/debug: ['mozilla-central']  # try and m-c
+                    linux1804-32-shippable-qr/opt: ['mozilla-central']  # try and m-c
+                    default: built-projects
+            default: []
     target:
         by-test-platform:
-            android-em-7.*: geckoview-androidTest.apk
+            android-em-7.*: geckoview-test_runner.apk
             default: null
-    tier:
-        by-test-platform:
-            windows10-64-2004-asan.*: 3
-            default: default
+    tier: default
 
 jittest:
     description: "JIT Test run"
     suite: jittest
     treeherder-symbol: Jit
     run-on-projects:
-        by-test-platform:
-            android-hw-.*-aarch64/debug: ['mozilla-central', 'release']
-            android-hw-.*-arm7/debug: ['mozilla-central', 'release']
-            default: built-projects
+        by-variant:
+            1proc:
+                by-test-platform:
+                    android-hw-.*-aarch64-qr/debug: ['mozilla-central', 'release']
+                    android-hw-.*-arm7-qr/debug: ['mozilla-central', 'release']
+                    default: built-projects
+            default: []
     chunks:
         by-test-platform:
             windows.*: 1
-            windows10-64-ccov-qr/opt: 8
+            windows10-64-2004-ccov-qr/opt: 8
             macosx.*/opt: 1
             macosx.*/debug: 3
             android.*: 10
             default: 6
     max-run-time:
         by-test-platform:
-            windows10-64-ccov.*/.*: 7200
+            windows10-64-2004-ccov.*/.*: 7200
             macosx.*-ccov.*/.*: 7200
             android-hw.*: 5400
             default: 3600
@@ -93,12 +101,11 @@ jittest:
                 default: true
     target:
         by-test-platform:
-            android-.*: geckoview-androidTest.apk
+            android-.*: geckoview-test_runner.apk
             default: null
     tier:
         by-test-platform:
             android-hw.*: 2
-            macosx1100.*: 2
             default: default
 
 jittest-all:
@@ -107,7 +114,7 @@ jittest-all:
     treeherder-symbol: Jit
     run-on-projects:
         by-test-platform:
-            android-hw-.*-arm7(?:-shippable)?/.*: ['mozilla-central', 'release']
+            android-hw-.*-arm7(?:-shippable)?-qr/.*: ['mozilla-central', 'release']
             default: []
     chunks: 10
     max-run-time: 3600
@@ -120,7 +127,7 @@ jittest-all:
                 default: None
     target:
         by-test-platform:
-            android-.*: geckoview-androidTest.apk
+            android-.*: geckoview-test_runner.apk
             default: null
     tier:
         by-test-platform:

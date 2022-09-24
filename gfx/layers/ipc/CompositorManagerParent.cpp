@@ -6,6 +6,7 @@
 
 #include "mozilla/layers/CompositorManagerParent.h"
 #include "mozilla/gfx/GPUParent.h"
+#include "mozilla/gfx/CanvasManagerParent.h"
 #include "mozilla/webrender/RenderThread.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
@@ -78,8 +79,9 @@ bool CompositorManagerParent::Create(
 already_AddRefed<CompositorBridgeParent>
 CompositorManagerParent::CreateSameProcessWidgetCompositorBridge(
     CSSToLayoutDeviceScale aScale, const CompositorOptions& aOptions,
-    bool aUseExternalSurfaceSize, const gfx::IntSize& aSurfaceSize) {
-  MOZ_ASSERT(XRE_IsParentProcess() || recordreplay::IsRecordingOrReplaying());
+    bool aUseExternalSurfaceSize, const gfx::IntSize& aSurfaceSize,
+    uint64_t aInnerWindowId) {
+  MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(NS_IsMainThread());
 
   // When we are in a combined UI / GPU process, InProcessCompositorSession
@@ -102,14 +104,12 @@ CompositorManagerParent::CreateSameProcessWidgetCompositorBridge(
     return nullptr;
   }
 
-  TimeDuration vsyncRate = gfxPlatform::GetPlatform()
-                               ->GetHardwareVsync()
-                               ->GetGlobalDisplay()
-                               .GetVsyncRate();
+  TimeDuration vsyncRate =
+      gfxPlatform::GetPlatform()->GetGlobalVsyncDispatcher()->GetVsyncRate();
 
-  RefPtr<CompositorBridgeParent> bridge =
-      new CompositorBridgeParent(sInstance, aScale, vsyncRate, aOptions,
-                                 aUseExternalSurfaceSize, aSurfaceSize);
+  RefPtr<CompositorBridgeParent> bridge = new CompositorBridgeParent(
+      sInstance, aScale, vsyncRate, aOptions, aUseExternalSurfaceSize,
+      aSurfaceSize, aInnerWindowId);
 
   sInstance->mPendingCompositorBridges.AppendElement(bridge);
   return bridge.forget();
@@ -230,7 +230,7 @@ CompositorManagerParent::AllocPCompositorBridgeParent(
       const WidgetCompositorOptions& opt = aOpt.get_WidgetCompositorOptions();
       RefPtr<CompositorBridgeParent> bridge = new CompositorBridgeParent(
           this, opt.scale(), opt.vsyncRate(), opt.options(),
-          opt.useExternalSurfaceSize(), opt.surfaceSize());
+          opt.useExternalSurfaceSize(), opt.surfaceSize(), opt.innerWindowId());
       return bridge.forget();
     }
     case CompositorBridgeOptions::TSameProcessWidgetCompositorOptions: {
@@ -261,8 +261,8 @@ CompositorManagerParent::AllocPCompositorBridgeParent(
 }
 
 mozilla::ipc::IPCResult CompositorManagerParent::RecvAddSharedSurface(
-    const wr::ExternalImageId& aId, const SurfaceDescriptorShared& aDesc) {
-  SharedSurfacesParent::Add(aId, aDesc, OtherPid());
+    const wr::ExternalImageId& aId, SurfaceDescriptorShared&& aDesc) {
+  SharedSurfacesParent::Add(aId, std::move(aDesc), OtherPid());
   return IPC_OK();
 }
 
@@ -317,6 +317,12 @@ mozilla::ipc::IPCResult CompositorManagerParent::RecvReportMemory(
         MOZ_ASSERT_UNREACHABLE("MemoryReport promises are never rejected");
       });
 
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult CompositorManagerParent::RecvInitCanvasManager(
+    Endpoint<PCanvasManagerParent>&& aEndpoint) {
+  gfx::CanvasManagerParent::Init(std::move(aEndpoint));
   return IPC_OK();
 }
 

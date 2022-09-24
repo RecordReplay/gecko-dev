@@ -27,6 +27,10 @@
 #  include <android/log.h>
 #endif
 
+#ifdef FUZZING_SNAPSHOT
+#  include <mozilla/fuzzing/NyxWrapper.h>
+#endif
+
 using namespace mozilla;
 
 const char* NS_strspnp(const char* aDelims, const char* aStr) {
@@ -227,14 +231,6 @@ void NS_MakeRandomString(char* aBuf, int32_t aBufLen) {
 
 #endif
 
-#ifdef HAVE_VA_COPY
-#  define VARARGS_ASSIGN(foo, bar) VA_COPY(foo, bar)
-#elif defined(HAVE_VA_LIST_AS_ARRAY)
-#  define VARARGS_ASSIGN(foo, bar) foo[0] = bar[0]
-#else
-#  define VARARGS_ASSIGN(foo, bar) (foo) = (bar)
-#endif
-
 #if defined(XP_WIN)
 void vprintf_stderr(const char* aFmt, va_list aArgs) {
   if (IsDebuggerPresent()) {
@@ -244,7 +240,7 @@ void vprintf_stderr(const char* aFmt, va_list aArgs) {
       auto buf = MakeUnique<char[]>(lengthNeeded);
       if (buf) {
         va_list argsCpy;
-        VARARGS_ASSIGN(argsCpy, aArgs);
+        va_copy(argsCpy, aArgs);
         vsnprintf(buf.get(), lengthNeeded, aFmt, argsCpy);
         buf[lengthNeeded - 1] = '\0';
         va_end(argsCpy);
@@ -274,6 +270,15 @@ void vprintf_stderr(const char* aFmt, va_list aArgs) {
 #elif defined(ANDROID)
 void vprintf_stderr(const char* aFmt, va_list aArgs) {
   __android_log_vprint(ANDROID_LOG_INFO, "Gecko", aFmt, aArgs);
+}
+#elif defined(FUZZING_SNAPSHOT)
+void vprintf_stderr(const char* aFmt, va_list aArgs) {
+  if (nyx_puts) {
+    auto msgbuf = mozilla::Vsmprintf(aFmt, aArgs);
+    nyx_puts(msgbuf.get());
+  } else {
+    vfprintf(stderr, aFmt, aArgs);
+  }
 }
 #else
 void vprintf_stderr(const char* aFmt, va_list aArgs) {

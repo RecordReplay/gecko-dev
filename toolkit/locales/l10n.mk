@@ -114,6 +114,7 @@ repackage-zip: UNPACKAGE='$(ZIP_IN)'
 repackage-zip:
 	$(PYTHON3) $(MOZILLA_DIR)/toolkit/mozapps/installer/l10n-repack.py '$(STAGEDIST)' $(DIST)/xpi-stage/locale-$(AB_CD) \
 		$(MOZ_PKG_EXTRAL10N) \
+		$(if $(MOZ_PACKAGER_MINIFY),--minify) \
 		$(if $(filter omni,$(MOZ_PACKAGER_FORMAT)),$(if $(NON_OMNIJAR_FILES),--non-resource $(NON_OMNIJAR_FILES)))
 
 ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
@@ -137,10 +138,6 @@ endif
 	$(NSINSTALL) -D $(DIST)/l10n-stage/$(PKG_PATH)
 	(cd $(DIST)/l10n-stage; \
 	  $(MAKE_PACKAGE))
-ifdef MOZ_MAKE_COMPLETE_MAR
-	$(MAKE) -C $(MOZDEPTH)/tools/update-packaging full-update AB_CD=$(AB_CD) \
-	  PACKAGE_BASE_DIR='$(ABS_DIST)/l10n-stage'
-endif
 # packaging done, undo l10n stuff
 ifneq (en,$(LPROJ_ROOT))
 ifeq (cocoa,$(MOZ_WIDGET_TOOLKIT))
@@ -233,7 +230,7 @@ package-langpack-%: XPI_NAME=locale-$*
 package-langpack-%: AB_CD=$*
 package-langpack-%:
 	$(NSINSTALL) -D $(DIST)/$(PKG_LANGPACK_PATH)
-	$(call py_action,langpack_manifest,--locales $(AB_CD) --min-app-ver $(MOZ_APP_VERSION) --max-app-ver $(MOZ_APP_MAXVERSION) --app-name '$(MOZ_APP_DISPLAYNAME)' --l10n-basedir '$(L10NBASEDIR)' --defines $(LANGPACK_DEFINES) --langpack-eid '$(MOZ_LANGPACK_EID)' --input $(DIST)/xpi-stage/locale-$(AB_CD))
+	$(call py_action,langpack_manifest,--locales $(AB_CD) --app-version $(MOZ_APP_VERSION) --max-app-ver $(MOZ_APP_MAXVERSION) --app-name '$(MOZ_APP_DISPLAYNAME)' --l10n-basedir '$(L10NBASEDIR)' --defines $(LANGPACK_DEFINES) --langpack-eid '$(MOZ_LANGPACK_EID)' --input $(DIST)/xpi-stage/locale-$(AB_CD))
 	$(call py_action,zip,-C $(DIST)/xpi-stage/locale-$(AB_CD) -x **/*.manifest -x **/*.js -x **/*.ini $(LANGPACK_FILE) $(PKG_ZIP_DIRS) manifest.json)
 
 # This variable is to allow the wget-en-US target to know which ftp server to download from

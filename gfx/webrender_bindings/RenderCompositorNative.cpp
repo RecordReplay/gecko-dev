@@ -22,10 +22,15 @@
 
 namespace mozilla::wr {
 
+extern LazyLogModule gRenderThreadLog;
+#define LOG(...) MOZ_LOG(gRenderThreadLog, LogLevel::Debug, (__VA_ARGS__))
+
 RenderCompositorNative::RenderCompositorNative(
     const RefPtr<widget::CompositorWidget>& aWidget, gl::GLContext* aGL)
     : RenderCompositor(aWidget),
       mNativeLayerRoot(GetWidget()->GetNativeLayerRoot()) {
+  LOG("RenderCompositorNative::RenderCompositorNative()");
+
 #if defined(XP_MACOSX) || defined(MOZ_WAYLAND)
   auto pool = RenderThread::Get()->SharedSurfacePool();
   if (pool) {
@@ -36,6 +41,8 @@ RenderCompositorNative::RenderCompositorNative(
 }
 
 RenderCompositorNative::~RenderCompositorNative() {
+  LOG("RRenderCompositorNative::~RenderCompositorNative()");
+
   Pause();
   mProfilerScreenshotGrabber.Destroy();
   mNativeLayerRoot->SetLayers({});
@@ -89,11 +96,9 @@ RenderedFrameId RenderCompositorNative::EndFrame(
   return frameId;
 }
 
-void RenderCompositorNative::Pause() { mNativeLayerRoot->PauseCompositor(); }
+void RenderCompositorNative::Pause() {}
 
-bool RenderCompositorNative::Resume() {
-  return mNativeLayerRoot->ResumeCompositor();
-}
+bool RenderCompositorNative::Resume() { return true; }
 
 inline layers::WebRenderCompositor RenderCompositorNative::CompositorType()
     const {
@@ -219,12 +224,13 @@ void RenderCompositorNative::CompositorBeginFrame() {
   mAddedLayers.Clear();
   mAddedTilePixelCount = 0;
   mAddedClippedPixelCount = 0;
-  mBeginFrameTimeStamp = TimeStamp::NowUnfuzzed();
+  mBeginFrameTimeStamp = TimeStamp::Now();
   mSurfacePoolHandle->OnBeginFrame();
+  mNativeLayerRoot->PrepareForCommit();
 }
 
 void RenderCompositorNative::CompositorEndFrame() {
-  if (profiler_thread_is_being_profiled()) {
+  if (profiler_thread_is_being_profiled_for_markers()) {
     auto bufferSize = GetBufferSize();
     [[maybe_unused]] uint64_t windowPixelCount =
         uint64_t(bufferSize.width) * bufferSize.height;

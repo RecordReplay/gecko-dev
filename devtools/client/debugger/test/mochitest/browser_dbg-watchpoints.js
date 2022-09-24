@@ -7,17 +7,13 @@
 // - Tests adding a watchpoint, resuming to after the youngest frame has popped,
 // then removing and adding a watchpoint during the same pause
 
-add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
-  });
+"use strict";
 
+add_task(async function() {
   const dbg = await initDebugger("doc-sources.html");
 
   // Do not await for navigation as an early breakpoint pauses the document load
-  const onNavigated = navigateTo(EXAMPLE_URL + "doc-watchpoints.html");
+  const onNavigated = navigateTo(`${EXAMPLE_URL}doc-watchpoints.html`);
   await waitForSources(dbg, "doc-watchpoints.html");
   await selectSource(dbg, "doc-watchpoints.html");
   await waitForPaused(dbg);
@@ -27,17 +23,22 @@ add_task(async function() {
   await toggleScopeNode(dbg, 3);
   const addedWatchpoint = waitForDispatch(dbg.store, "SET_WATCHPOINT");
   await rightClickScopeNode(dbg, 5);
-  await waitForContextMenu(dbg);
+  let popup = await waitForContextMenu(dbg);
   let submenu = await openContextMenuSubmenu(dbg, selectors.watchpointsSubmenu);
   const getWatchpointItem = document.querySelector(selectors.addGetWatchpoint);
   submenu.activateItem(getWatchpointItem);
   await addedWatchpoint;
+  popup.hidePopup();
 
   await resume(dbg);
   await waitForPaused(dbg);
   await waitForState(dbg, () => dbg.selectors.getSelectedInlinePreviews());
   assertPausedAtSourceAndLine(dbg, sourceId, 17);
   is(await getScopeValue(dbg, 5), "3");
+  const whyPaused = await waitFor(
+    () => dbg.win.document.querySelector(".why-paused")?.innerText
+  );
+  is(whyPaused, `Paused on property get\nobj.b`);
 
   info("Resume and wait to pause at the access to b in the first `obj.b;`");
   await resume(dbg);
@@ -67,11 +68,12 @@ add_task(async function() {
   await toggleScopeNode(dbg, 4);
   const addedWatchpoint2 = waitForDispatch(dbg.store, "SET_WATCHPOINT");
   await rightClickScopeNode(dbg, 6);
-  await waitForContextMenu(dbg);
+  popup = await waitForContextMenu(dbg);
   submenu = await openContextMenuSubmenu(dbg, selectors.watchpointsSubmenu);
   const getWatchpointItem2 = document.querySelector(selectors.addGetWatchpoint);
   submenu.activateItem(getWatchpointItem2);
   await addedWatchpoint2;
+  popup.hidePopup();
 
   info("Resume and wait to pause at the access to b in getB");
   await resume(dbg);
@@ -87,7 +89,6 @@ add_task(async function() {
   info("Remove the get watchpoint on b");
   const removedWatchpoint2 = waitForDispatch(dbg.store, "REMOVE_WATCHPOINT");
   await toggleScopeNode(dbg, 3);
-  await rightClickScopeNode(dbg, 5);
   const el2 = await waitForElementWithSelector(dbg, ".remove-get-watchpoint");
   el2.scrollIntoView();
   clickElementWithSelector(dbg, ".remove-get-watchpoint");
@@ -96,11 +97,12 @@ add_task(async function() {
   info("Add back the get watchpoint on b");
   const addedWatchpoint3 = waitForDispatch(dbg.store, "SET_WATCHPOINT");
   await rightClickScopeNode(dbg, 5);
-  await waitForContextMenu(dbg);
+  popup = await waitForContextMenu(dbg);
   submenu = await openContextMenuSubmenu(dbg, selectors.watchpointsSubmenu);
   const getWatchpointItem3 = document.querySelector(selectors.addGetWatchpoint);
   submenu.activateItem(getWatchpointItem3);
   await addedWatchpoint3;
+  popup.hidePopup();
 
   info("Resume and wait to pause on the final `obj.b;`");
   await resume(dbg);

@@ -72,9 +72,6 @@ class SourceSurfaceCanvasRecording final : public gfx::SourceSurface {
     return do_AddRef(mDataSourceSurface);
   }
 
- protected:
-  void GuaranteePersistance() final { EnsureDataSurfaceOnMainThread(); }
-
  private:
   void EnsureDataSurfaceOnMainThread() {
     // The data can only be retrieved on the main thread.
@@ -152,7 +149,8 @@ void CanvasChild::EnsureRecorder(TextureType aTextureType) {
     }
 
     if (CanSend()) {
-      Unused << SendInitTranslator(mTextureType, handle, readerSem, writerSem);
+      Unused << SendInitTranslator(mTextureType, std::move(handle),
+                                   std::move(readerSem), std::move(writerSem));
     }
   }
 
@@ -202,6 +200,13 @@ void CanvasChild::OnTextureForwarded() {
 
     mHasOutstandingWriteLock = false;
   }
+
+  // We hold onto the last transaction's external surfaces until we have waited
+  // for the write locks in this transaction. This means we know that the
+  // surfaces have been picked up in the canvas threads and there is no race
+  // with them being removed from SharedSurfacesParent. Note this releases the
+  // current contents of mLastTransactionExternalSurfaces.
+  mRecorder->TakeExternalSurfaces(mLastTransactionExternalSurfaces);
 }
 
 void CanvasChild::EnsureBeginTransaction() {
@@ -281,7 +286,13 @@ already_AddRefed<gfx::DataSourceSurface> CanvasChild::GetDataSurface(
     return nullptr;
   }
 
-  mTransactionsSinceGetDataSurface = 0;
+  // mTransactionsSinceGetDataSurface is used to determine if we want to prepare
+  // a DataSourceSurface in the GPU process up front at the end of the
+  // transaction, but that only makes sense if the canvas JS is requesting data
+  // in between transactions.
+  if (!mIsInTransaction) {
+    mTransactionsSinceGetDataSurface = 0;
+  }
   EnsureBeginTransaction();
   mRecorder->RecordEvent(RecordedPrepareDataForSurface(aSurface));
   uint32_t checkpoint = mRecorder->CreateCheckpoint();

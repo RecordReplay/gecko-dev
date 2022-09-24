@@ -18,6 +18,12 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
 });
 
+ChromeUtils.defineModuleGetter(
+  this,
+  "DeferredTask",
+  "resource://gre/modules/DeferredTask.jsm"
+);
+
 const { debug, warn } = GeckoViewUtils.initLogging("GeckoViewPrompt");
 
 class PromptFactory {
@@ -27,6 +33,13 @@ class PromptFactory {
 
   handleEvent(aEvent) {
     switch (aEvent.type) {
+      case "mozshowdropdown":
+      case "mozshowdropdown-sourcetouch":
+        this._handleSelect(aEvent.composedTarget, /* aIsDropDown = */ true);
+        break;
+      case "MozOpenDateTimePicker":
+        this._handleDateTime(aEvent.composedTarget);
+        break;
       case "click":
         this._handleClick(aEvent);
         break;
@@ -41,6 +54,11 @@ class PromptFactory {
 
   _handleClick(aEvent) {
     const target = aEvent.composedTarget;
+    const className = ChromeUtils.getClassName(target);
+    if (className !== "HTMLInputElement" && className !== "HTMLSelectElement") {
+      return;
+    }
+
     if (
       target.isContentEditable ||
       target.disabled ||
@@ -52,26 +70,29 @@ class PromptFactory {
       return;
     }
 
-    const win = target.ownerGlobal;
-    if (target instanceof win.HTMLSelectElement) {
-      this._handleSelect(target);
-      aEvent.preventDefault();
-    } else if (target instanceof win.HTMLInputElement) {
-      const type = target.type;
-      if (
-        type === "date" ||
-        type === "month" ||
-        type === "week" ||
-        type === "time" ||
-        type === "datetime-local"
-      ) {
-        this._handleDateTime(target, type);
+    if (className === "HTMLSelectElement") {
+      if (!target.isCombobox) {
+        this._handleSelect(target, /* aIsDropDown = */ false);
+        return;
+      }
+      // combobox select is handled by mozshowdropdown.
+      return;
+    }
+
+    const type = target.type;
+    if (type === "month" || type === "week") {
+      // If there's a shadow root, the MozOpenDateTimePicker event takes care
+      // of this. Right now for these input types there's never a shadow root.
+      // Once we support UA widgets for month/week inputs (see bug 888320), we
+      // can remove this.
+      if (!target.openOrClosedShadowRoot) {
+        this._handleDateTime(target);
         aEvent.preventDefault();
       }
     }
   }
 
-  _handleSelect(aElement) {
+  _generateSelectItems(aElement) {
     const win = aElement.ownerGlobal;
     let id = 0;
     const map = {};
@@ -88,10 +109,10 @@ class PromptFactory {
           id: String(id),
           disabled: disabled || child.disabled,
         };
-        if (child instanceof win.HTMLOptGroupElement) {
+        if (win.HTMLOptGroupElement.isInstance(child)) {
           item.label = child.label;
           item.items = enumList(child, item.disabled);
-        } else if (child instanceof win.HTMLOptionElement) {
+        } else if (win.HTMLOptionElement.isInstance(child)) {
           item.label = child.label || child.text;
           item.selected = child.selected;
         } else {
@@ -103,7 +124,38 @@ class PromptFactory {
       return items;
     })(aElement);
 
+    return [items, map, id];
+  }
+
+  _handleSelect(aElement, aIsDropDown) {
+    const win = aElement.ownerGlobal;
+    const [items] = this._generateSelectItems(aElement);
+
+    if (aIsDropDown) {
+      aElement.openInParentProcess = true;
+    }
+
     const prompt = new GeckoViewPrompter(win);
+
+    // Something changed the <select> while it was open.
+    const deferredUpdate = new DeferredTask(() => {
+      // Inner contents in choice prompt are updated.
+      const [newItems] = this._generateSelectItems(aElement);
+      prompt.update({
+        type: "choice",
+        mode: aElement.multiple ? "multiple" : "single",
+        choices: newItems,
+      });
+    }, 0);
+    const mut = new win.MutationObserver(() => {
+      deferredUpdate.arm();
+    });
+    mut.observe(aElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+    });
+
     prompt.asyncShowPrompt(
       {
         type: "choice",
@@ -111,16 +163,23 @@ class PromptFactory {
         choices: items,
       },
       result => {
+        deferredUpdate.disarm();
+        mut.disconnect();
+
+        if (aIsDropDown) {
+          aElement.openInParentProcess = false;
+        }
         // OK: result
         // Cancel: !result
         if (!result || result.choices === undefined) {
           return;
         }
 
+        const [, map, id] = this._generateSelectItems(aElement);
         let dispatchEvents = false;
         if (!aElement.multiple) {
           const elem = map[result.choices[0]];
-          if (elem && elem instanceof win.HTMLOptionElement) {
+          if (elem && win.HTMLOptionElement.isInstance(elem)) {
             dispatchEvents = !elem.selected;
             elem.selected = true;
           } else {
@@ -133,7 +192,7 @@ class PromptFactory {
             const elem = map[i];
             const index = result.choices.indexOf(String(i));
             if (
-              elem instanceof win.HTMLOptionElement &&
+              win.HTMLOptionElement.isInstance(elem) &&
               elem.selected !== index >= 0
             ) {
               // Current selected is not the same as the new selected state.
@@ -159,15 +218,16 @@ class PromptFactory {
     );
   }
 
-  _handleDateTime(aElement, aType) {
+  _handleDateTime(aElement) {
     const prompt = new GeckoViewPrompter(aElement.ownerGlobal);
     prompt.asyncShowPrompt(
       {
         type: "datetime",
-        mode: aType,
+        mode: aElement.type,
         value: aElement.value,
         min: aElement.min,
         max: aElement.max,
+        step: aElement.step,
       },
       result => {
         // OK: result
@@ -189,7 +249,7 @@ class PromptFactory {
     // Fire both "input" and "change" events for <select> and <input> for
     // date/time.
     aElement.dispatchEvent(
-      new aElement.ownerGlobal.Event("input", { bubbles: true })
+      new aElement.ownerGlobal.Event("input", { bubbles: true, composed: true })
     );
     aElement.dispatchEvent(
       new aElement.ownerGlobal.Event("change", { bubbles: true })
@@ -366,7 +426,7 @@ class PromptFactory {
   callProxy(aMethod, aArguments) {
     const prompt = new PromptDelegate(aArguments[0]);
     let promptArgs;
-    if (aArguments[0] instanceof BrowsingContext) {
+    if (BrowsingContext.isInstance(aArguments[0])) {
       // Called by BrowsingContext prompt method, strip modalType.
       [, , /*browsingContext*/ /*modalType*/ ...promptArgs] = aArguments;
     } else {
@@ -614,25 +674,16 @@ class PromptDelegate {
     return true;
   }
 
-  promptPassword(aTitle, aText, aPassword, aCheckMsg, aCheckState) {
+  promptPassword(aTitle, aText, aPassword) {
     return this._promptUsernameAndPassword(
       aTitle,
       aText,
       /* aUsername */ undefined,
-      aPassword,
-      aCheckMsg,
-      aCheckState
+      aPassword
     );
   }
 
-  promptUsernameAndPassword(
-    aTitle,
-    aText,
-    aUsername,
-    aPassword,
-    aCheckMsg,
-    aCheckState
-  ) {
+  promptUsernameAndPassword(aTitle, aText, aUsername, aPassword) {
     const msg = {
       type: "auth",
       mode: aUsername ? "auth" : "password",
@@ -642,15 +693,10 @@ class PromptDelegate {
         password: aPassword.value,
       },
     };
-    const result = this._prompter.showPrompt(
-      this._addText(aTitle, aText, this._addCheck(aCheckMsg, aCheckState, msg))
-    );
+    const result = this._prompter.showPrompt(this._addText(aTitle, aText, msg));
     // OK: result && result.password !== undefined
     // Cancel: result && result.password === undefined
     // Error: !result
-    if (result && aCheckState) {
-      aCheckState.value = !!result.checkValue;
-    }
     if (!result || result.password === undefined) {
       return false;
     }
@@ -714,10 +760,7 @@ class PromptDelegate {
     );
   }
 
-  _fillAuthInfo(aAuthInfo, aCheckState, aResult) {
-    if (aResult && aCheckState) {
-      aCheckState.value = !!aResult.checkValue;
-    }
+  _fillAuthInfo(aAuthInfo, aResult) {
     if (!aResult || aResult.password === undefined) {
       return false;
     }
@@ -741,35 +784,24 @@ class PromptDelegate {
     return true;
   }
 
-  promptAuth(aChannel, aLevel, aAuthInfo, aCheckMsg, aCheckState) {
+  promptAuth(aChannel, aLevel, aAuthInfo) {
     const result = this._prompter.showPrompt(
-      this._addCheck(
-        aCheckMsg,
-        aCheckState,
-        this._getAuthMsg(aChannel, aLevel, aAuthInfo)
-      )
+      this._getAuthMsg(aChannel, aLevel, aAuthInfo)
     );
     // OK: result && result.password !== undefined
     // Cancel: result && result.password === undefined
     // Error: !result
-    return this._fillAuthInfo(aAuthInfo, aCheckState, result);
+    return this._fillAuthInfo(aAuthInfo, result);
   }
 
-  async asyncPromptAuth(aChannel, aLevel, aAuthInfo, aCheckMsg, aCheckState) {
-    const check = {
-      value: aCheckState,
-    };
+  async asyncPromptAuth(aChannel, aLevel, aAuthInfo) {
     const result = await this._prompter.asyncShowPromptPromise(
-      this._addCheck(
-        aCheckMsg,
-        check,
-        this._getAuthMsg(aChannel, aLevel, aAuthInfo)
-      )
+      this._getAuthMsg(aChannel, aLevel, aAuthInfo)
     );
     // OK: result && result.password !== undefined
     // Cancel: result && result.password === undefined
     // Error: !result
-    return this._fillAuthInfo(aAuthInfo, check, result);
+    return this._fillAuthInfo(aAuthInfo, result);
   }
 
   _getAuthText(aChannel, aAuthInfo) {

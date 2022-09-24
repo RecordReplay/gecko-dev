@@ -48,6 +48,7 @@
 #include "nsAboutProtocolUtils.h"
 #include "nsIClassInfo.h"
 #include "nsIURIFixup.h"
+#include "nsIURIMutator.h"
 #include "nsIChromeRegistry.h"
 #include "nsIResProtocolHandler.h"
 #include "nsIContentSecurityPolicy.h"
@@ -62,6 +63,7 @@
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/ClearOnShutdown.h"
+#include "mozilla/ExtensionPolicyService.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/dom/WorkerCommon.h"
@@ -250,8 +252,16 @@ nsScriptSecurityManager::GetChannelResultStoragePrincipal(
   nsCOMPtr<nsIPrincipal> principal;
   nsresult rv = GetChannelResultPrincipal(aChannel, getter_AddRefs(principal),
                                           /*aIgnoreSandboxing*/ false);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
+  if (NS_WARN_IF(NS_FAILED(rv) || !principal)) {
     return rv;
+  }
+
+  if (!(principal->GetIsContentPrincipal())) {
+    // If for some reason we don't have a content principal here, just reuse our
+    // principal for the storage principal too, since attempting to create a
+    // storage principal would fail anyway.
+    principal.forget(aPrincipal);
+    return NS_OK;
   }
 
   return StoragePrincipalHelper::Create(
@@ -304,10 +314,24 @@ nsresult nsScriptSecurityManager::GetChannelResultPrincipal(
   }
 
   if (!aIgnoreSandboxing && loadInfo->GetLoadingSandboxed()) {
-    nsCOMPtr<nsIPrincipal> sandboxedLoadingPrincipal =
-        loadInfo->GetSandboxedLoadingPrincipal();
-    MOZ_ASSERT(sandboxedLoadingPrincipal);
-    sandboxedLoadingPrincipal.forget(aPrincipal);
+    // Determine the unsandboxed result principal to use as this null
+    // principal's precursor. Ignore errors here, as the precursor isn't
+    // required.
+    nsCOMPtr<nsIPrincipal> precursor;
+    GetChannelResultPrincipal(aChannel, getter_AddRefs(precursor),
+                              /*aIgnoreSandboxing*/ true);
+
+    // Construct a deterministic null principal URI from the precursor and the
+    // loadinfo's nullPrincipalID.
+    nsCOMPtr<nsIURI> nullPrincipalURI = NullPrincipal::CreateURI(
+        precursor, &loadInfo->GetSandboxedNullPrincipalID());
+
+    // Use the URI to construct the sandboxed result principal.
+    OriginAttributes attrs;
+    loadInfo->GetOriginAttributes(&attrs);
+    nsCOMPtr<nsIPrincipal> sandboxedPrincipal =
+        NullPrincipal::Create(attrs, nullPrincipalURI);
+    sandboxedPrincipal.forget(aPrincipal);
     return NS_OK;
   }
 
@@ -384,6 +408,24 @@ nsScriptSecurityManager::GetChannelURIPrincipal(nsIChannel* aChannel,
   // its loadingPrincipal.
   OriginAttributes attrs = loadInfo->GetOriginAttributes();
 
+  // If the URI is supposed to inherit the security context of whoever loads it,
+  // we shouldn't make a content principal for it, so instead return a null
+  // principal.
+  bool inheritsPrincipal = false;
+  rv = NS_URIChainHasFlags(uri,
+                           nsIProtocolHandler::URI_INHERITS_SECURITY_CONTEXT,
+                           &inheritsPrincipal);
+  if (NS_FAILED(rv) || inheritsPrincipal) {
+    // Find a precursor principal to credit for the load. This won't impact
+    // security checks, but makes tracking the source of related loads easier.
+    nsCOMPtr<nsIPrincipal> precursorPrincipal =
+        loadInfo->FindPrincipalToInherit(aChannel);
+    nsCOMPtr<nsIURI> nullPrincipalURI =
+        NullPrincipal::CreateURI(precursorPrincipal);
+    *aPrincipal = NullPrincipal::Create(attrs, nullPrincipalURI).take();
+    return *aPrincipal ? NS_OK : NS_ERROR_FAILURE;
+  }
+
   nsCOMPtr<nsIPrincipal> prin =
       BasePrincipal::CreateContentPrincipal(uri, attrs);
   prin.forget(aPrincipal);
@@ -406,7 +448,7 @@ NS_IMPL_ISUPPORTS(nsScriptSecurityManager, nsIScriptSecurityManager)
 ///////////////// Security Checks /////////////////
 
 bool nsScriptSecurityManager::ContentSecurityPolicyPermitsJSAction(
-    JSContext* cx, JS::HandleString aCode) {
+    JSContext* cx, JS::RuntimeCode aKind, JS::Handle<JSString*> aCode) {
   MOZ_ASSERT(cx == nsContentUtils::GetCurrentJSContext());
 
   // Get the window, if any, corresponding to the current global
@@ -442,30 +484,48 @@ bool nsScriptSecurityManager::ContentSecurityPolicyPermitsJSAction(
 
   bool evalOK = true;
   bool reportViolation = false;
-  nsresult rv = csp->GetAllowsEval(&reportViolation, &evalOK);
-
-  // A little convoluted. We want the scriptSample for a) reporting a violation
-  // or b) passing it to AssertEvalNotUsingSystemPrincipal or c) we're in the
-  // parent process. So do the work to get it if either of those cases is true.
   nsAutoJSString scriptSample;
-  if (reportViolation || subjectPrincipal->IsSystemPrincipal() ||
-      XRE_IsE10sParentProcess()) {
-    if (NS_WARN_IF(!scriptSample.init(cx, aCode))) {
-      JS_ClearPendingException(cx);
-      return false;
+  if (aKind == JS::RuntimeCode::JS) {
+    nsresult rv = csp->GetAllowsEval(&reportViolation, &evalOK);
+
+    // A little convoluted. We want the scriptSample for a) reporting a
+    // violation or b) passing it to AssertEvalNotUsingSystemPrincipal or c)
+    // we're in the parent process. So do the work to get it if either of those
+    // cases is true.
+    if (reportViolation || subjectPrincipal->IsSystemPrincipal() ||
+        XRE_IsE10sParentProcess()) {
+      if (NS_WARN_IF(!scriptSample.init(cx, aCode))) {
+        JS_ClearPendingException(cx);
+        return false;
+      }
     }
-  }
 
 #if !defined(ANDROID)
-  if (!nsContentSecurityUtils::IsEvalAllowed(
-          cx, subjectPrincipal->IsSystemPrincipal(), scriptSample)) {
-    return false;
-  }
+    if (!nsContentSecurityUtils::IsEvalAllowed(
+            cx, subjectPrincipal->IsSystemPrincipal(), scriptSample)) {
+      return false;
+    }
 #endif
 
-  if (NS_FAILED(rv)) {
-    NS_WARNING("CSP: failed to get allowsEval");
-    return true;  // fail open to not break sites.
+    if (NS_FAILED(rv)) {
+      NS_WARNING("CSP: failed to get allowsEval");
+      return true;  // fail open to not break sites.
+    }
+  } else {
+    if (NS_FAILED(csp->GetAllowsWasmEval(&reportViolation, &evalOK))) {
+      return false;
+    }
+    if (!evalOK) {
+      // Historically, CSP did not block WebAssembly in Firefox, and some
+      // add-ons use wasm and a stricter CSP. To avoid breaking them, ignore
+      // 'wasm-unsafe-eval' violations for MV2 extensions.
+      // TODO bug 1770909: remove this exception.
+      auto* addonPolicy = BasePrincipal::Cast(subjectPrincipal)->AddonPolicy();
+      if (addonPolicy && addonPolicy->ManifestVersion() == 2) {
+        reportViolation = true;
+        evalOK = true;
+      }
+    }
   }
 
   if (reportViolation) {
@@ -480,7 +540,12 @@ bool nsScriptSecurityManager::ContentSecurityPolicyPermitsJSAction(
     } else {
       MOZ_ASSERT(!JS_IsExceptionPending(cx));
     }
-    csp->LogViolationDetails(nsIContentSecurityPolicy::VIOLATION_TYPE_EVAL,
+
+    uint16_t violationType =
+        aKind == JS::RuntimeCode::JS
+            ? nsIContentSecurityPolicy::VIOLATION_TYPE_EVAL
+            : nsIContentSecurityPolicy::VIOLATION_TYPE_WASM_EVAL;
+    csp->LogViolationDetails(violationType,
                              nullptr,  // triggering element
                              cspEventListener, fileName, scriptSample, lineNum,
                              columnNum, u""_ns, u""_ns);

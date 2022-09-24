@@ -47,7 +47,8 @@ use_basic_features[] =
 {
   /*
    * Basic features.
-   * These features are applied all at once, before reordering.
+   * These features are applied all at once, before reordering, constrained
+   * to the syllable.
    */
   HB_TAG('r','k','r','f'),
   HB_TAG('a','b','v','f'),
@@ -154,7 +155,7 @@ struct use_shape_plan_t
 static void *
 data_create_use (const hb_ot_shape_plan_t *plan)
 {
-  use_shape_plan_t *use_plan = (use_shape_plan_t *) calloc (1, sizeof (use_shape_plan_t));
+  use_shape_plan_t *use_plan = (use_shape_plan_t *) hb_calloc (1, sizeof (use_shape_plan_t));
   if (unlikely (!use_plan))
     return nullptr;
 
@@ -165,7 +166,7 @@ data_create_use (const hb_ot_shape_plan_t *plan)
     use_plan->arabic_plan = (arabic_shape_plan_t *) data_create_arabic (plan);
     if (unlikely (!use_plan->arabic_plan))
     {
-      free (use_plan);
+      hb_free (use_plan);
       return nullptr;
     }
   }
@@ -181,7 +182,7 @@ data_destroy_use (void *data)
   if (use_plan->arabic_plan)
     data_destroy_arabic (use_plan->arabic_plan);
 
-  free (data);
+  hb_free (data);
 }
 
 static void
@@ -205,7 +206,7 @@ setup_masks_use (const hb_ot_shape_plan_t *plan,
   unsigned int count = buffer->len;
   hb_glyph_info_t *info = buffer->info;
   for (unsigned int i = 0; i < count; i++)
-    info[i].use_category() = hb_use_get_category (info[i].codepoint);
+    info[i].use_category() = hb_use_get_category (info[i]);
 }
 
 static void
@@ -256,8 +257,6 @@ setup_topographical_masks (const hb_ot_shape_plan_t *plan,
     use_syllable_type_t syllable_type = (use_syllable_type_t) (info[start].syllable() & 0x0F);
     switch (syllable_type)
     {
-      case use_independent_cluster:
-      case use_symbol_cluster:
       case use_hieroglyph_cluster:
       case use_non_cluster:
 	/* These don't join.  Nothing to do. */
@@ -269,6 +268,7 @@ setup_topographical_masks (const hb_ot_shape_plan_t *plan,
       case use_standard_cluster:
       case use_number_joiner_terminated_cluster:
       case use_numeral_cluster:
+      case use_symbol_cluster:
       case use_broken_cluster:
 
 	bool join = last_form == JOINING_FORM_FINA || last_form == JOINING_FORM_ISOL;
@@ -350,7 +350,7 @@ record_pref_use (const hb_ot_shape_plan_t *plan HB_UNUSED,
 static inline bool
 is_halant_use (const hb_glyph_info_t &info)
 {
-  return (info.use_category() == USE(H) || info.use_category() == USE(HVM)) &&
+  return (info.use_category() == USE(H) || info.use_category() == USE(IS)) &&
 	 !_hb_glyph_info_ligated (&info);
 }
 
@@ -363,6 +363,7 @@ reorder_syllable_use (hb_buffer_t *buffer, unsigned int start, unsigned int end)
 		  (FLAG (use_virama_terminated_cluster) |
 		   FLAG (use_sakot_terminated_cluster) |
 		   FLAG (use_standard_cluster) |
+		   FLAG (use_symbol_cluster) |
 		   FLAG (use_broken_cluster) |
 		   0))))
     return;

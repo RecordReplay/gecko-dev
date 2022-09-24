@@ -8,7 +8,7 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["FormAutofillHeuristics", "LabelUtils"];
+var EXPORTED_SYMBOLS = ["FormAutofillHeuristics", "FieldScanner"];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
@@ -17,6 +17,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 const { FormAutofill } = ChromeUtils.import(
   "resource://autofill/FormAutofill.jsm"
 );
+
 ChromeUtils.defineModuleGetter(
   this,
   "FormAutofillUtils",
@@ -25,6 +26,9 @@ ChromeUtils.defineModuleGetter(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   CreditCard: "resource://gre/modules/CreditCard.jsm",
+  creditCardRulesets: "resource://autofill/CreditCardRuleset.jsm",
+  FormAutofillUtils: "resource://autofill/FormAutofillUtils.jsm",
+  LabelUtils: "resource://autofill/FormAutofillUtils.jsm",
 });
 
 this.log = null;
@@ -48,6 +52,16 @@ const MULTI_FIELD_NAMES = [
   "email",
   "street-address",
 ];
+
+/**
+ * To help us classify sections that can appear only N times in a row.
+ * For example, the only time multiple cc-number fields are valid is when
+ * there are four of these fields in a row.
+ * Otherwise, multiple cc-number fields should be in separate sections.
+ */
+const MULTI_N_FIELD_NAMES = {
+  "cc-number": 4,
+};
 
 /**
  * A scanner for traversing all elements in a form and retrieving the field
@@ -142,6 +156,43 @@ class FieldScanner {
       fieldDetails: [fieldDetail],
     });
   }
+  /**
+   * Merges the next N fields if the currentType is in the list of MULTI_N_FIELD_NAMES
+   *
+   * @param {number} mergeNextNFields How many of the next N fields to merge into the current section
+   * @param {string} currentType Type of the current field detail
+   * @param {Array<Object>} fieldDetails List of current field details
+   * @param {number} i Index to keep track of the fieldDetails list
+   * @param {boolean} createNewSection Determines if a new section should be created
+   * @returns {[number, boolean]} mergeNextNFields and creatNewSection for use in _classifySections
+   * @memberof FieldScanner
+   */
+  _mergeNextNFields(
+    mergeNextNFields,
+    currentType,
+    fieldDetails,
+    i,
+    createNewSection
+  ) {
+    if (mergeNextNFields) {
+      mergeNextNFields--;
+    } else {
+      // We use -2 here because we have already seen two consecutive fields,
+      // the previous one and the current one.
+      // This ensures we don't accidentally add a field we've already seen.
+      let nextN = MULTI_N_FIELD_NAMES[currentType] - 2;
+      let array = fieldDetails.slice(i + 1, i + 1 + nextN);
+      if (
+        array.length == nextN &&
+        array.every(detail => detail.fieldName == currentType)
+      ) {
+        mergeNextNFields = nextN;
+      } else {
+        createNewSection = true;
+      }
+    }
+    return { mergeNextNFields, createNewSection };
+  }
 
   _classifySections() {
     let fieldDetails = this._sections[0].fieldDetails;
@@ -149,24 +200,52 @@ class FieldScanner {
     let seenTypes = new Set();
     let previousType;
     let sectionCount = 0;
+    let mergeNextNFields = 0;
 
-    for (let fieldDetail of fieldDetails) {
-      if (!fieldDetail.fieldName) {
+    for (let i = 0; i < fieldDetails.length; i++) {
+      let currentType = fieldDetails[i].fieldName;
+      if (!currentType) {
         continue;
       }
-      if (
-        seenTypes.has(fieldDetail.fieldName) &&
-        (previousType != fieldDetail.fieldName ||
-          !MULTI_FIELD_NAMES.includes(fieldDetail.fieldName))
-      ) {
+
+      let createNewSection = false;
+      if (seenTypes.has(currentType)) {
+        if (previousType != currentType) {
+          // If we have seen this field before and it is different from
+          // the previous one, always create a new section.
+          createNewSection = true;
+        } else if (MULTI_FIELD_NAMES.includes(currentType)) {
+          // For fields that can appear multiple times in a row
+          // within one section, don't create a new section
+        } else if (currentType in MULTI_N_FIELD_NAMES) {
+          // This is the heuristic to handle special cases where we can have multiple
+          // fields in one section, but only if the field has appeared N times in a row.
+          // For example, websites can use 4 consecutive 4-digit `cc-number` fields
+          // instead of one 16-digit `cc-number` field.
+          ({ mergeNextNFields, createNewSection } = this._mergeNextNFields(
+            mergeNextNFields,
+            currentType,
+            fieldDetails,
+            i,
+            createNewSection
+          ));
+        } else {
+          // Fields that should not appear multiple times in one section.
+          createNewSection = true;
+        }
+      }
+
+      if (createNewSection) {
+        mergeNextNFields = 0;
         seenTypes.clear();
         sectionCount++;
       }
-      previousType = fieldDetail.fieldName;
-      seenTypes.add(fieldDetail.fieldName);
+
+      previousType = currentType;
+      seenTypes.add(currentType);
       this._pushToSection(
         DEFAULT_SECTION_NAME + "-" + sectionCount,
-        fieldDetail
+        fieldDetails[i]
       );
     }
   }
@@ -179,7 +258,27 @@ class FieldScanner {
    *
    * @returns {Array<Object>}
    *          The array with the sections, and the belonging fieldDetails are in
-   *          each section.
+   *          each section. For example, it may return something like this:
+   *          [{
+   *             type: FormAutofillUtils.SECTION_TYPES.ADDRESS,  // section type
+   *             fieldDetails: [{  // a record for each field
+   *                 fieldName: "email",
+   *                 section: "",
+   *                 addressType: "",
+   *                 contactType: "",
+   *                 elementWeakRef: the element
+   *               }, ...]
+   *           },
+   *           {
+   *             type: FormAutofillUtils.SECTION_TYPES.CREDIT_CARD,
+   *             fieldDetails: [{
+   *                fieldName: "cc-exp-month",
+   *                section: "",
+   *                addressType: "",
+   *                contactType: "",
+   *                 elementWeakRef: the element
+   *               }, ...]
+   *           }]
    */
   getSectionFieldDetails() {
     // When the section feature is disabled, `getSectionFieldDetails` should
@@ -218,7 +317,7 @@ class FieldScanner {
       throw new Error("Try to push the non-existing element info.");
     }
     let element = this._elements[elementIndex];
-    let info = FormAutofillHeuristics.getInfo(element);
+    let info = FormAutofillHeuristics.getInfo(element, this);
     let fieldInfo = {
       section: info ? info.section : "",
       addressType: info ? info.addressType : "",
@@ -266,8 +365,34 @@ class FieldScanner {
     return (
       field1.section == field2.section &&
       field1.addressType == field2.addressType &&
-      field1.fieldName == field2.fieldName
+      field1.fieldName == field2.fieldName &&
+      !field1.transform &&
+      !field2.transform
     );
+  }
+
+  /**
+   * When a site has four credit card number fields and
+   * these fields have a max length of four
+   * then we transform the credit card number into
+   * four subsections in order to fill correctly.
+   *
+   * @param {Array<Object>} creditCardFieldDetails
+   *        The credit card field details to be transformed for multiple cc-number fields filling
+   * @memberof FieldScanner
+   */
+  _transformCCNumberForMultipleFields(creditCardFieldDetails) {
+    let ccNumberFields = creditCardFieldDetails.filter(
+      field =>
+        field.fieldName == "cc-number" &&
+        field.elementWeakRef.get().maxLength == 4
+    );
+    if (ccNumberFields.length == 4) {
+      ccNumberFields[0].transform = fullCCNumber => fullCCNumber.slice(0, 4);
+      ccNumberFields[1].transform = fullCCNumber => fullCCNumber.slice(4, 8);
+      ccNumberFields[2].transform = fullCCNumber => fullCCNumber.slice(8, 12);
+      ccNumberFields[3].transform = fullCCNumber => fullCCNumber.slice(12, 16);
+    }
   }
 
   /**
@@ -301,7 +426,7 @@ class FieldScanner {
         );
       }
     }
-
+    this._transformCCNumberForMultipleFields(creditCardFieldDetails);
     return [
       {
         type: FormAutofillUtils.SECTION_TYPES.ADDRESS,
@@ -330,117 +455,112 @@ class FieldScanner {
   elementExisting(index) {
     return index < this._elements.length;
   }
-}
-
-var LabelUtils = {
-  // The tag name list is from Chromium except for "STYLE":
-  // eslint-disable-next-line max-len
-  // https://cs.chromium.org/chromium/src/components/autofill/content/renderer/form_autofill_util.cc?l=216&rcl=d33a171b7c308a64dc3372fac3da2179c63b419e
-  EXCLUDED_TAGS: ["SCRIPT", "NOSCRIPT", "OPTION", "STYLE"],
-
-  // A map object, whose keys are the id's of form fields and each value is an
-  // array consisting of label elements correponding to the id.
-  // @type {Map<string, array>}
-  _mappedLabels: null,
-
-  // An array consisting of label elements whose correponding form field doesn't
-  // have an id attribute.
-  // @type {Array<HTMLLabelElement>}
-  _unmappedLabels: null,
-
-  // A weak map consisting of label element and extracted strings pairs.
-  // @type {WeakMap<HTMLLabelElement, array>}
-  _labelStrings: null,
 
   /**
-   * Extract all strings of an element's children to an array.
-   * "element.textContent" is a string which is merged of all children nodes,
-   * and this function provides an array of the strings contains in an element.
+   * Using Fathom, say what kind of CC field an element is most likely to be.
+   * This function deoesn't only run fathom on the passed elements. It also
+   * runs fathom for all elements in the FieldScanner for optimization purpose.
    *
-   * @param  {Object} element
-   *         A DOM element to be extracted.
-   * @returns {Array}
-   *          All strings in an element.
+   * @param {HTMLElement} element
+   * @param {Array} fields
+   * @returns {Array} A tuple of [field name, probability] describing the
+   *   highest-confidence classification
    */
-  extractLabelStrings(element) {
-    if (this._labelStrings.has(element)) {
-      return this._labelStrings.get(element);
+  getFathomField(element, fields) {
+    if (!fields.length) {
+      return null;
     }
-    let strings = [];
-    let _extractLabelStrings = el => {
-      if (this.EXCLUDED_TAGS.includes(el.tagName)) {
-        return;
-      }
 
-      if (el.nodeType == el.TEXT_NODE || !el.childNodes.length) {
-        let trimmedText = el.textContent.trim();
-        if (trimmedText) {
-          strings.push(trimmedText);
-        }
-        return;
-      }
+    if (!this._fathomConfidences?.get(element)) {
+      this._fathomConfidences = new Map();
 
-      for (let node of el.childNodes) {
-        let nodeType = node.nodeType;
-        if (nodeType != node.ELEMENT_NODE && nodeType != node.TEXT_NODE) {
-          continue;
-        }
-        _extractLabelStrings(node);
-      }
-    };
-    _extractLabelStrings(element);
-    this._labelStrings.set(element, strings);
-    return strings;
-  },
-
-  generateLabelMap(doc) {
-    let mappedLabels = new Map();
-    let unmappedLabels = [];
-
-    for (let label of doc.querySelectorAll("label")) {
-      let id = label.htmlFor;
-      if (!id) {
-        let control = label.control;
-        if (!control) {
-          continue;
-        }
-        id = control.id;
-      }
-      if (id) {
-        let labels = mappedLabels.get(id);
-        if (labels) {
-          labels.push(label);
-        } else {
-          mappedLabels.set(id, [label]);
-        }
+      let elements = [];
+      if (this._elements?.includes(element)) {
+        elements = this._elements;
       } else {
-        unmappedLabels.push(label);
+        elements = [element];
+      }
+
+      // This should not throw unless we run into an OOM situation, at which
+      // point we have worse problems and this failing is not a big deal.
+      let confidences = FieldScanner.getFormAutofillConfidences(elements);
+      for (let i = 0; i < elements.length; i++) {
+        this._fathomConfidences.set(elements[i], confidences[i]);
       }
     }
 
-    this._mappedLabels = mappedLabels;
-    this._unmappedLabels = unmappedLabels;
-    this._labelStrings = new WeakMap();
-  },
-
-  clearLabelMap() {
-    this._mappedLabels = null;
-    this._unmappedLabels = null;
-    this._labelStrings = null;
-  },
-
-  findLabelElements(element) {
-    if (!this._mappedLabels) {
-      this.generateLabelMap(element.ownerDocument);
+    let elementConfidences = this._fathomConfidences.get(element);
+    if (!elementConfidences) {
+      return null;
     }
 
-    let id = element.id;
-    if (!id) {
-      return this._unmappedLabels.filter(label => label.control == element);
+    let highestField = null;
+    let highestConfidence = FormAutofillUtils.ccHeuristicsThreshold; // Start with a threshold of 0.5
+    for (let [key, value] of Object.entries(elementConfidences)) {
+      if (!fields.includes(key)) {
+        // ignore field that we don't care
+        continue;
+      }
+
+      if (value > highestConfidence) {
+        highestConfidence = value;
+        highestField = key;
+      }
     }
-    return this._mappedLabels.get(id) || [];
-  },
-};
+
+    return highestField;
+  }
+
+  /**
+   * @param {Array} elements Array of elements that we want to get result from fathom cc rules
+   * @returns {object} Fathom confidence keyed by field-type.
+   */
+  static getFormAutofillConfidences(elements) {
+    if (
+      FormAutofillUtils.ccHeuristicsMode == FormAutofillUtils.CC_FATHOM_NATIVE
+    ) {
+      let confidences = ChromeUtils.getFormAutofillConfidences(elements);
+      return confidences.map(c => {
+        let result = {};
+        for (let [fieldName, confidence] of Object.entries(c)) {
+          let type = FormAutofillUtils.formAutofillConfidencesKeyToCCFieldType(
+            fieldName
+          );
+          result[type] = confidence;
+        }
+        return result;
+      });
+    }
+
+    return elements.map(element => {
+      /**
+       * Return how confident our ML model is that `element` is a field of the
+       * given type.
+       *
+       * @param {string} fieldName The Fathom type to check against. This is
+       *   conveniently the same as the autocomplete attribute value that means
+       *   the same thing.
+       * @returns {number} Confidence in range [0, 1]
+       */
+      function confidence(fieldName) {
+        const ruleset = creditCardRulesets[fieldName];
+        const fnodes = ruleset.against(element).get(fieldName);
+
+        // fnodes is either 0 or 1 item long, since we ran the ruleset
+        // against a single element:
+        return fnodes.length ? fnodes[0].scoreFor(fieldName) : 0;
+      }
+
+      // Bang the element against the ruleset for every type of field:
+      let confidences = {};
+      creditCardRulesets.types.map(fieldName => {
+        confidences[fieldName] = confidence(fieldName);
+      });
+
+      return confidences;
+    });
+  }
+}
 
 /**
  * Returns the autocomplete information of fields according to heuristics.
@@ -448,6 +568,8 @@ var LabelUtils = {
 this.FormAutofillHeuristics = {
   RULES: null,
 
+  CREDIT_CARD_FIELDNAMES: [],
+  ADDRESS_FIELDNAMES: [],
   /**
    * Try to find a contiguous sub-array within an array.
    *
@@ -720,6 +842,9 @@ this.FormAutofillHeuristics = {
     return parsedFields;
   },
 
+  // The old heuristics can be removed when we fully adopt fathom, so disable the
+  // esline complexity check for now
+  /* eslint-disable complexity */
   /**
    * Try to look for expiration date fields and revise the field names if needed.
    *
@@ -752,6 +877,16 @@ this.FormAutofillHeuristics = {
       )
     ) {
       return false;
+    }
+
+    // The heuristic below should be covered by fathom rules, so we can skip doing
+    // it.
+    if (
+      FormAutofillUtils.isFathomCreditCardsEnabled() &&
+      creditCardRulesets.types.includes(detail.fieldName)
+    ) {
+      fieldScanner.parsingIndex++;
+      return true;
     }
 
     const element = detail.elementWeakRef.get();
@@ -908,7 +1043,7 @@ this.FormAutofillHeuristics = {
    */
   getFormInfo(form, allowDuplicates = false) {
     const eligibleFields = Array.from(form.elements).filter(elem =>
-      FormAutofillUtils.isFieldEligibleForAutofill(elem)
+      FormAutofillUtils.isCreditCardOrAddressFieldType(elem)
     );
 
     if (eligibleFields.length <= 0) {
@@ -926,7 +1061,7 @@ this.FormAutofillHeuristics = {
         fieldScanner
       );
 
-      // If there is no any field parsed, the parsing cursor can be moved
+      // If there is no field parsed, the parsing cursor can be moved
       // forward to the next one.
       if (
         !parsedPhoneFields &&
@@ -942,53 +1077,24 @@ this.FormAutofillHeuristics = {
     return fieldScanner.getSectionFieldDetails();
   },
 
-  _regExpTableHashValue(...signBits) {
-    return signBits.reduce((p, c, i) => p | (!!c << i), 0);
-  },
-
-  _setRegExpListCache(regexps, b0, b1, b2) {
-    if (!this._regexpList) {
-      this._regexpList = [];
+  _getPossibleFieldNames(element) {
+    let fieldNames = [];
+    let isAutoCompleteOff =
+      element.autocomplete == "off" || element.form?.autocomplete == "off";
+    if (
+      FormAutofill.isAutofillCreditCardsAvailable &&
+      (!isAutoCompleteOff || FormAutofill.creditCardsAutocompleteOff)
+    ) {
+      fieldNames.push(...this.CREDIT_CARD_FIELDNAMES);
     }
-    this._regexpList[this._regExpTableHashValue(b0, b1, b2)] = regexps;
-  },
-
-  _getRegExpListCache(b0, b1, b2) {
-    if (!this._regexpList) {
-      return null;
-    }
-    return this._regexpList[this._regExpTableHashValue(b0, b1, b2)] || null;
-  },
-
-  _getRegExpList(isAutoCompleteOff, elementTagName) {
-    let isSelectElem = elementTagName == "SELECT";
-    let regExpListCache = this._getRegExpListCache(
-      isAutoCompleteOff,
-      FormAutofill.isAutofillCreditCardsAvailable,
-      isSelectElem
-    );
-    if (regExpListCache) {
-      return regExpListCache;
-    }
-    const FIELDNAMES_IGNORING_AUTOCOMPLETE_OFF = [
-      "cc-name",
-      "cc-number",
-      "cc-exp-month",
-      "cc-exp-year",
-      "cc-exp",
-      "cc-type",
-    ];
-    let regexps = isAutoCompleteOff
-      ? FIELDNAMES_IGNORING_AUTOCOMPLETE_OFF
-      : Object.keys(this.RULES);
-
-    if (!FormAutofill.isAutofillCreditCardsAvailable) {
-      regexps = regexps.filter(
-        name => !FormAutofillUtils.isCreditCardField(name)
-      );
+    if (
+      FormAutofill.isAutofillAddressesAvailable &&
+      (!isAutoCompleteOff || FormAutofill.addressesAutocompleteOff)
+    ) {
+      fieldNames.push(...this.ADDRESS_FIELDNAMES);
     }
 
-    if (isSelectElem) {
+    if (HTMLSelectElement.isInstance(element)) {
       const FIELDNAMES_FOR_SELECT_ELEMENT = [
         "address-level1",
         "address-level2",
@@ -998,22 +1104,24 @@ this.FormAutofillHeuristics = {
         "cc-exp",
         "cc-type",
       ];
-      regexps = regexps.filter(name =>
+      fieldNames = fieldNames.filter(name =>
         FIELDNAMES_FOR_SELECT_ELEMENT.includes(name)
       );
     }
 
-    this._setRegExpListCache(
-      regexps,
-      isAutoCompleteOff,
-      FormAutofill.isAutofillCreditCardsAvailable,
-      isSelectElem
-    );
-
-    return regexps;
+    return fieldNames;
   },
 
-  getInfo(element) {
+  getInfo(element, scanner) {
+    function infoRecordWithFieldName(fieldName) {
+      return {
+        fieldName,
+        section: "",
+        addressType: "",
+        contactType: "",
+      };
+    }
+
     let info = element.getAutocompleteInfo();
     // An input[autocomplete="on"] will not be early return here since it stll
     // needs to find the field name.
@@ -1031,36 +1139,39 @@ this.FormAutofillHeuristics = {
       return null;
     }
 
-    let isAutoCompleteOff =
-      element.autocomplete == "off" ||
-      (element.form && element.form.autocomplete == "off");
+    let fields = this._getPossibleFieldNames(element);
 
     // "email" type of input is accurate for heuristics to determine its Email
     // field or not. However, "tel" type is used for ZIP code for some web site
     // (e.g. HomeDepot, BestBuy), so "tel" type should be not used for "tel"
     // prediction.
-    if (element.type == "email" && !isAutoCompleteOff) {
-      return {
-        fieldName: "email",
-        section: "",
-        addressType: "",
-        contactType: "",
-      };
+    if (element.type == "email" && fields.includes("email")) {
+      return infoRecordWithFieldName("email");
     }
 
-    let regexps = this._getRegExpList(isAutoCompleteOff, element.tagName);
-    if (!regexps.length) {
-      return null;
+    if (FormAutofillUtils.isFathomCreditCardsEnabled()) {
+      // We don't care fields that are not supported by fathom
+      let fathomFields = fields.filter(r =>
+        creditCardRulesets.types.includes(r)
+      );
+      let matchedFieldName = scanner.getFathomField(element, fathomFields);
+      // At this point, use fathom's recommendation if it has one
+      if (matchedFieldName) {
+        return infoRecordWithFieldName(matchedFieldName);
+      }
+
+      // TODO: Do we want to run old heuristics for fields that fathom isn't confident?
+      // Since Fathom isn't confident, try the old heuristics. I've removed all
+      // the CC-specific ones, so this should be almost a mutually exclusive
+      // set of fields.
+      fields = fields.filter(r => !creditCardRulesets.types.includes(r));
     }
 
-    let matchedFieldName = this._findMatchedFieldName(element, regexps);
-    if (matchedFieldName) {
-      return {
-        fieldName: matchedFieldName,
-        section: "",
-        addressType: "",
-        contactType: "",
-      };
+    if (fields.length) {
+      let matchedFieldName = this._findMatchedFieldName(element, fields);
+      if (matchedFieldName) {
+        return infoRecordWithFieldName(matchedFieldName);
+      }
     }
 
     return null;
@@ -1099,14 +1210,15 @@ this.FormAutofillHeuristics = {
    *
    * @param {HTMLElement} element
    * @param {Array<string>} regexps
-   *        The regex key names that correspond to pattern in the rule list.
+   *        The regex key names that correspond to pattern in the rule list. It will
+   *        be matched against the element string converted to lower case.
    * @returns {?string} The first matched field name
    */
   _findMatchedFieldName(element, regexps) {
     const getElementStrings = this._getElementStrings(element);
     for (let regexp of regexps) {
       for (let string of getElementStrings) {
-        if (this.RULES[regexp].test(string)) {
+        if (this.RULES[regexp].test(string.toLowerCase())) {
           return regexp;
         }
       }
@@ -1259,22 +1371,29 @@ XPCOMUtils.defineLazyGetter(FormAutofillHeuristics, "RULES", () => {
   return sandbox.HeuristicsRegExp.RULES;
 });
 
-XPCOMUtils.defineLazyGetter(FormAutofillHeuristics, "_prefEnabled", () => {
-  return Services.prefs.getBoolPref(PREF_HEURISTICS_ENABLED);
-});
+XPCOMUtils.defineLazyGetter(
+  FormAutofillHeuristics,
+  "CREDIT_CARD_FIELDNAMES",
+  () =>
+    Object.keys(FormAutofillHeuristics.RULES).filter(name =>
+      FormAutofillUtils.isCreditCardField(name)
+    )
+);
 
-Services.prefs.addObserver(PREF_HEURISTICS_ENABLED, () => {
-  FormAutofillHeuristics._prefEnabled = Services.prefs.getBoolPref(
-    PREF_HEURISTICS_ENABLED
-  );
-});
+XPCOMUtils.defineLazyGetter(FormAutofillHeuristics, "ADDRESS_FIELDNAMES", () =>
+  Object.keys(FormAutofillHeuristics.RULES).filter(name =>
+    FormAutofillUtils.isAddressField(name)
+  )
+);
 
-XPCOMUtils.defineLazyGetter(FormAutofillHeuristics, "_sectionEnabled", () => {
-  return Services.prefs.getBoolPref(PREF_SECTION_ENABLED);
-});
+XPCOMUtils.defineLazyPreferenceGetter(
+  FormAutofillHeuristics,
+  "_prefEnabled",
+  PREF_HEURISTICS_ENABLED
+);
 
-Services.prefs.addObserver(PREF_SECTION_ENABLED, () => {
-  FormAutofillHeuristics._sectionEnabled = Services.prefs.getBoolPref(
-    PREF_SECTION_ENABLED
-  );
-});
+XPCOMUtils.defineLazyPreferenceGetter(
+  FormAutofillHeuristics,
+  "_sectionEnabled",
+  PREF_SECTION_ENABLED
+);

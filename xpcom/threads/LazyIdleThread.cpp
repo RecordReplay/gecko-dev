@@ -119,11 +119,15 @@ nsresult LazyIdleThread::EnsureThread() {
     return NS_OK;
   }
 
-  MOZ_ASSERT(!mPendingEventCount, "Shouldn't have events yet!");
-  MOZ_ASSERT(!mIdleNotificationCount, "Shouldn't have idle events yet!");
-  MOZ_ASSERT(!mIdleTimer, "Should have killed this long ago!");
-  MOZ_ASSERT(!mThreadIsShuttingDown, "Should have cleared that!");
-
+#ifdef DEBUG
+  {
+    MutexAutoLock lock(mMutex);
+    MOZ_ASSERT(!mPendingEventCount, "Shouldn't have events yet!");
+    MOZ_ASSERT(!mIdleNotificationCount, "Shouldn't have idle events yet!");
+    MOZ_ASSERT(!mIdleTimer, "Should have killed this long ago!");
+    MOZ_ASSERT(!mThreadIsShuttingDown, "Should have cleared that!");
+  }
+#endif
   nsresult rv;
 
   if (mShutdownMethod == AutomaticShutdown && NS_IsMainThread()) {
@@ -395,6 +399,16 @@ LazyIdleThread::DelayedDispatch(already_AddRefed<nsIRunnable>, uint32_t) {
 }
 
 NS_IMETHODIMP
+LazyIdleThread::RegisterShutdownTask(nsITargetShutdownTask* aTask) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+LazyIdleThread::UnregisterShutdownTask(nsITargetShutdownTask* aTask) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 LazyIdleThread::GetRunningEventDelay(TimeDuration* aDelay, TimeStamp* aStart) {
   if (mThread) {
     return mThread->GetRunningEventDelay(aDelay, aStart);
@@ -470,6 +484,13 @@ LazyIdleThread::SetNameForWakeupTelemetry(const nsACString& aName) {
 NS_IMETHODIMP
 LazyIdleThread::AsyncShutdown() {
   ASSERT_OWNING_THREAD();
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+LazyIdleThread::BeginShutdown(nsIThreadShutdown** aShutdown) {
+  ASSERT_OWNING_THREAD();
+  *aShutdown = nullptr;
   return NS_ERROR_NOT_IMPLEMENTED;
 }
 

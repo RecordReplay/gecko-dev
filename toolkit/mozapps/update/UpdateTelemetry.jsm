@@ -101,6 +101,9 @@ var AUSTLMY = {
   // Update check was delayed because another instance of the application is
   // currently running
   CHK_OTHER_INSTANCE: 39,
+  // Cannot yet download update because no partial patch is available and an
+  // update has already been downloaded.
+  CHK_NO_PARTIAL_PATCH: 40,
 
   /**
    * Submit a telemetry ping for the update check result code or a telemetry
@@ -629,6 +632,25 @@ var AUSTLMY = {
    */
   pingMoveResult: function UT_pingMoveResult(aResult) {
     Services.telemetry.keyedScalarAdd("update.move_result", aResult, 1);
+  },
+
+  pingSuppressPrompts: function UT_pingSuppressPrompts() {
+    try {
+      let val = Services.prefs.getBoolPref("app.update.suppressPrompts", false);
+      if (val === true) {
+        Services.telemetry.scalarSet("update.suppress_prompts", true);
+      }
+    } catch (e) {
+      Cu.reportError(e);
+    }
+  },
+
+  pingPinPolicy: function UT_pingPinPolicy(updatePin) {
+    try {
+      Services.telemetry.scalarSet("update.version_pin", updatePin);
+    } catch (e) {
+      Cu.reportError(e);
+    }
   },
 };
 Object.freeze(AUSTLMY);

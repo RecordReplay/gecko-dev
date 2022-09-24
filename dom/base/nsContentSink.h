@@ -45,6 +45,10 @@ namespace dom {
 class Document;
 class ScriptLoader;
 }  // namespace dom
+
+namespace net {
+struct LinkHeader;
+};
 }  // namespace mozilla
 
 #ifdef DEBUG
@@ -78,7 +82,7 @@ class nsContentSink : public nsICSSLoaderObserver,
                       public nsITimerCallback,
                       public nsINamed {
  protected:
-  typedef mozilla::dom::Document Document;
+  using Document = mozilla::dom::Document;
 
  private:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
@@ -95,7 +99,7 @@ class nsContentSink : public nsICSSLoaderObserver,
   // nsIContentSink implementation helpers
   nsresult WillParseImpl(void);
   nsresult WillInterruptImpl(void);
-  nsresult WillResumeImpl(void);
+  void WillResumeImpl();
   nsresult DidProcessATokenImpl(void);
   void WillBuildModelImpl(void);
   void DidBuildModelImpl(bool aTerminated);
@@ -112,7 +116,6 @@ class nsContentSink : public nsICSSLoaderObserver,
 
   bool IsTimeToNotify();
   bool LinkContextIsOurDocument(const nsAString& aAnchor);
-  bool Decode5987Format(nsAString& aEncoded);
 
  protected:
   nsContentSink();
@@ -122,13 +125,7 @@ class nsContentSink : public nsICSSLoaderObserver,
                 nsIChannel* aChannel);
 
   nsresult ProcessHTTPHeaders(nsIChannel* aChannel);
-  nsresult ProcessLinkHeader(const nsAString& aLinkData);
-  nsresult ProcessLinkFromHeader(
-      const nsAString& aAnchor, const nsAString& aHref, const nsAString& aRel,
-      const nsAString& aTitle, const nsAString& aIntegrity,
-      const nsAString& aSrcset, const nsAString& aSizes, const nsAString& aType,
-      const nsAString& aMedia, const nsAString& aCrossOrigin,
-      const nsAString& aReferrerPolicy, const nsAString& aAs);
+  nsresult ProcessLinkFromHeader(const mozilla::net::LinkHeader& aHeader);
 
   virtual nsresult ProcessStyleLinkFromHeader(
       const nsAString& aHref, bool aAlternate, const nsAString& aTitle,

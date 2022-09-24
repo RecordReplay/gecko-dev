@@ -49,10 +49,9 @@ async function testToggleToolboxButtons(toolbox, optionsPanelWin) {
   ];
 
   // Filter out all the buttons which are not supported on the current target.
-  // (DevTools Fission Preferences etc...)
-  const target = toolbox.target;
+  // (DevTools Experimental Preferences etc...)
   const toolbarButtons = toolbox.toolbarButtons.filter(tool =>
-    tool.isTargetSupported(target)
+    tool.isToolSupported(toolbox)
   );
 
   const visibleToolbarButtons = toolbarButtons.filter(tool => tool.isVisible);

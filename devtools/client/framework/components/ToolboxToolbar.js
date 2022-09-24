@@ -10,7 +10,6 @@ const {
 const dom = require("devtools/client/shared/vendor/react-dom-factories");
 const PropTypes = require("devtools/client/shared/vendor/react-prop-types");
 const { div, button } = dom;
-
 const DebugTargetInfo = createFactory(
   require("devtools/client/framework/components/DebugTargetInfo")
 );
@@ -34,6 +33,11 @@ loader.lazyGetter(this, "MenuItem", function() {
 loader.lazyGetter(this, "MenuList", function() {
   return createFactory(
     require("devtools/client/shared/components/menu/MenuList")
+  );
+});
+loader.lazyGetter(this, "LocalizationProvider", function() {
+  return createFactory(
+    require("devtools/client/shared/vendor/fluent-react").LocalizationProvider
   );
 });
 
@@ -119,6 +123,8 @@ class ToolboxToolbar extends Component {
         runtimeInfo: PropTypes.object.isRequired,
         targetType: PropTypes.string.isRequired,
       }),
+      // The loaded Fluent localization bundles.
+      fluentBundles: PropTypes.array.isRequired,
     };
   }
 
@@ -128,7 +134,6 @@ class ToolboxToolbar extends Component {
     this.hideMenu = this.hideMenu.bind(this);
     this.createFrameList = this.createFrameList.bind(this);
     this.highlightFrame = this.highlightFrame.bind(this);
-    this.clickFrameButton = this.clickFrameButton.bind(this);
   }
 
   componentDidMount() {
@@ -311,17 +316,12 @@ class ToolboxToolbar extends Component {
     );
   }
 
-  clickFrameButton(event) {
-    const { toolbox } = this.props;
-    toolbox.onSelectFrame(event.target.id);
-  }
-
   highlightFrame(id) {
+    const { toolbox } = this.props;
     if (!id) {
       return;
     }
 
-    const { toolbox } = this.props;
     toolbox.onHighlightFrame(id);
   }
 
@@ -336,15 +336,21 @@ class ToolboxToolbar extends Component {
       const label = toolbox.target.isWebExtension
         ? toolbox.target.getExtensionPathName(frame.url)
         : getUnicodeUrl(frame.url);
-      items.push(
-        MenuItem({
-          id: frame.id.toString(),
-          key: "toolbox-frame-key-" + frame.id,
-          label,
-          checked: frame.id === toolbox.selectedFrameId,
-          onClick: this.clickFrameButton,
-        })
-      );
+
+      const item = MenuItem({
+        id: frame.id.toString(),
+        key: "toolbox-frame-key-" + frame.id,
+        label,
+        checked: frame.id === toolbox.selectedFrameId,
+        onClick: () => toolbox.onIframePickerFrameSelected(frame.id),
+      });
+
+      // Always put the top level frame at the top
+      if (frame.isTopLevel) {
+        items.unshift(item);
+      } else {
+        items.push(item);
+      }
     });
 
     return MenuList(
@@ -466,7 +472,7 @@ class ToolboxToolbar extends Component {
    * render functions for how each of the sections is rendered.
    */
   render() {
-    const { L10N, debugTargetData, toolbox } = this.props;
+    const { L10N, debugTargetData, toolbox, fluentBundles } = this.props;
     const classnames = ["devtools-tabbar"];
     const startButtons = this.renderToolboxButtonsStart();
     const endButtons = this.renderToolboxButtonsEnd();
@@ -494,7 +500,10 @@ class ToolboxToolbar extends Component {
       ? DebugTargetInfo({ debugTargetData, L10N, toolbox })
       : null;
 
-    return div({}, debugTargetInfo, toolbar);
+    return LocalizationProvider(
+      { bundles: fluentBundles },
+      div({}, debugTargetInfo, toolbar)
+    );
   }
 }
 

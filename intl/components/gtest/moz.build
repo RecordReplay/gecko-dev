@@ -5,10 +5,28 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 UNIFIED_SOURCES += [
+    "TestBidi.cpp",
     "TestCalendar.cpp",
+    "TestCollator.cpp",
+    "TestCurrency.cpp",
+    "TestDateIntervalFormat.cpp",
     "TestDateTimeFormat.cpp",
+    "TestDisplayNames.cpp",
+    "TestIDNA.cpp",
+    "TestListFormat.cpp",
+    "TestLocale.cpp",
+    "TestLocaleCanonicalizer.cpp",
+    "TestMeasureUnit.cpp",
     "TestNumberFormat.cpp",
+    "TestNumberingSystem.cpp",
+    "TestNumberParser.cpp",
     "TestPluralRules.cpp",
+    "TestRelativeTimeFormat.cpp",
+    "TestScript.cpp",
+    "TestString.cpp",
+    "TestTimeZone.cpp",
 ]
 
 FINAL_LIBRARY = "xul-gtest"
+
+REQUIRES_UNIFIED_BUILD = True

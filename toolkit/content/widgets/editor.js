@@ -50,8 +50,9 @@
           return null;
         }
 
-        let Finder = ChromeUtils.import("resource://gre/modules/Finder.jsm", {})
-          .Finder;
+        let { Finder } = ChromeUtils.import(
+          "resource://gre/modules/Finder.jsm"
+        );
         this._finder = new Finder(this.docShell);
       }
       return this._finder;
@@ -200,14 +201,6 @@
     getHTMLEditor(containingWindow) {
       var editor = this.editingSession.getEditorForWindow(containingWindow);
       return editor.QueryInterface(Ci.nsIHTMLEditor);
-    }
-
-    print(aOuterWindowID, aPrintSettings) {
-      if (!this.frameLoader) {
-        throw Components.Exception("No frame loader.", Cr.NS_ERROR_FAILURE);
-      }
-
-      return this.frameLoader.print(aOuterWindowID, aPrintSettings);
     }
   }
 

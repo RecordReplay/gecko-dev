@@ -33,7 +33,9 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   AsyncShutdown: "resource://gre/modules/AsyncShutdown.jsm",
   Dictionary: "resource://gre/modules/Extension.jsm",
   Extension: "resource://gre/modules/Extension.jsm",
+  ExtensionData: "resource://gre/modules/Extension.jsm",
   Langpack: "resource://gre/modules/Extension.jsm",
+  SitePermission: "resource://gre/modules/Extension.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   JSONFile: "resource://gre/modules/JSONFile.jsm",
   TelemetrySession: "resource://gre/modules/TelemetrySession.jsm",
@@ -86,9 +88,6 @@ const PREF_EM_LAST_APP_BUILD_ID = "extensions.lastAppBuildId";
 // Specify a list of valid built-in add-ons to load.
 const BUILT_IN_ADDONS_URI = "chrome://browser/content/built_in_addons.json";
 
-const URI_EXTENSION_STRINGS =
-  "chrome://mozapps/locale/extensions/extensions.properties";
-
 const DIR_EXTENSIONS = "extensions";
 const DIR_SYSTEM_ADDONS = "features";
 const DIR_APP_SYSTEM_PROFILE = "system-extensions";
@@ -127,7 +126,7 @@ const XPI_PERMISSION = "install";
 
 const XPI_SIGNATURE_CHECK_PERIOD = 24 * 60 * 60;
 
-const DB_SCHEMA = 33;
+const DB_SCHEMA = 35;
 
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
@@ -167,10 +166,16 @@ const BOOTSTRAP_REASONS = {
   ADDON_DOWNGRADE: 8,
 };
 
-const ALL_EXTERNAL_TYPES = new Set([
+// All addonTypes supported by the XPIProvider. These values can be passed to
+// AddonManager.getAddonsByTypes in order to get XPIProvider.getAddonsByTypes
+// to return only supported add-ons. Without these, it is possible for
+// AddonManager.getAddonsByTypes to return addons from other providers, or even
+// add-on types that are no longer supported by XPIProvider.
+const ALL_XPI_TYPES = new Set([
   "dictionary",
   "extension",
   "locale",
+  "sitepermission",
   "theme",
 ]);
 
@@ -559,6 +564,14 @@ class XPIState {
 
   get isWebExtension() {
     return this.loader == null;
+  }
+
+  get isPrivileged() {
+    return ExtensionData.getIsPrivileged({
+      signedState: this.signedState,
+      builtIn: this.location.isBuiltin,
+      temporarilyInstalled: this.location.isTemporary,
+    });
   }
 
   /**
@@ -1809,6 +1822,7 @@ class BootstrapScope {
         temporarilyInstalled: addon.location.isTemporary,
         builtIn: addon.location.isBuiltin,
         isSystem: addon.location.isSystem,
+        isPrivileged: addon.isPrivileged,
         recommendationState: addon.recommendationState,
       };
 
@@ -1881,6 +1895,10 @@ class BootstrapScope {
         case "extension":
         case "theme":
           this.scope = Extension.getBootstrapScope();
+          break;
+
+        case "sitepermission":
+          this.scope = SitePermission.getBootstrapScope();
           break;
 
         case "locale":
@@ -2404,7 +2422,8 @@ var XPIProvider = {
    *        unregistered.
    */
   unregisterDictionaries(aDicts) {
-    let origDict = spellCheck.dictionary;
+    let origDicts = spellCheck.dictionaries.slice();
+    let toRemove = [];
 
     for (let [lang, uri] of Object.entries(aDicts)) {
       if (
@@ -2412,12 +2431,14 @@ var XPIProvider = {
         this.dictionaries.hasOwnProperty(lang)
       ) {
         spellCheck.addDictionary(lang, this.dictionaries[lang]);
-
-        if (lang == origDict) {
-          spellCheck.dictionary = origDict;
-        }
+      } else {
+        toRemove.push(lang);
       }
     }
+
+    spellCheck.dictionaries = origDicts.filter(
+      lang => !toRemove.includes(lang)
+    );
   },
 
   /**
@@ -2472,9 +2493,27 @@ var XPIProvider = {
 
       AddonManagerPrivate.markProviderSafe(this);
 
+      const lastTheme = Services.prefs.getCharPref(
+        "extensions.activeThemeID",
+        null
+      );
+
+      if (
+        lastTheme === "recommended-1" ||
+        lastTheme === "recommended-2" ||
+        lastTheme === "recommended-3" ||
+        lastTheme === "recommended-4" ||
+        lastTheme === "recommended-5"
+      ) {
+        // The user is using a theme that was once bundled with Firefox, but no longer
+        // is. Clear their theme so that they will be forced to reset to the default.
+        this.startupPromises.push(
+          AddonManagerPrivate.notifyAddonChanged(null, "theme")
+        );
+      }
       this.maybeInstallBuiltinAddon(
         "default-theme@mozilla.org",
-        "1.2",
+        "1.3",
         "resource://default-theme/"
       );
 
@@ -2489,28 +2528,6 @@ var XPIProvider = {
           );
         } catch (e) {}
         this.addAddonsToCrashReporter();
-      }
-
-      // This is a one-time migration when incognito is turned on.  Any previously
-      // enabled extension will be migrated.
-      try {
-        if (
-          !Services.prefs.getBoolPref("extensions.incognito.migrated", false)
-        ) {
-          XPIDatabase.syncLoadDB(false);
-          let promises = [];
-          for (let addon of XPIDatabase.getAddons()) {
-            if (addon.type == "extension" && addon.active) {
-              promises.push(Extension.migratePrivateBrowsing(addon));
-            }
-          }
-          if (promises.length) {
-            awaitPromise(Promise.all(promises));
-          }
-          Services.prefs.setBoolPref("extensions.incognito.migrated", true);
-        }
-      } catch (e) {
-        logger.error("private browsing migration failed", e);
       }
 
       try {
@@ -2840,55 +2857,83 @@ var XPIProvider = {
    *        True if any new add-ons were installed
    */
   installDistributionAddons(aManifests, aAppChanged, aOldAppVersion) {
-    let distroDir;
+    let distroDirs = [];
     try {
-      distroDir = FileUtils.getDir(KEY_APP_DISTRIBUTION, [DIR_EXTENSIONS]);
+      distroDirs.push(FileUtils.getDir(KEY_APP_DISTRIBUTION, [DIR_EXTENSIONS]));
     } catch (e) {
       return false;
     }
 
+    let availableLocales = [];
+    for (let file of iterDirectory(distroDirs[0])) {
+      if (file.isDirectory() && file.leafName.startsWith("locale-")) {
+        availableLocales.push(file.leafName.replace("locale-", ""));
+      }
+    }
+
+    let locales = Services.locale.negotiateLanguages(
+      Services.locale.requestedLocales,
+      availableLocales,
+      undefined,
+      Services.locale.langNegStrategyMatching
+    );
+
+    // Also install addons from subdirectories that correspond to the requested
+    // locales. This allows for installing language packs and dictionaries.
+    for (let locale of locales) {
+      let langPackDir = distroDirs[0].clone();
+      langPackDir.append(`locale-${locale}`);
+      distroDirs.push(langPackDir);
+    }
+
     let changed = false;
-    for (let file of iterDirectory(distroDir)) {
-      if (!isXPI(file.leafName, true)) {
-        logger.warn(`Ignoring distribution: not an XPI: ${file.path}`);
-        continue;
-      }
-
-      let id = getExpectedID(file);
-      if (!id) {
-        logger.warn(
-          `Ignoring distribution: name is not a valid add-on ID: ${file.path}`
-        );
-        continue;
-      }
-
-      /* If this is not an upgrade and we've already handled this extension
-       * just continue */
-      if (
-        !aAppChanged &&
-        Services.prefs.prefHasUserValue(PREF_BRANCH_INSTALLED_ADDON + id)
-      ) {
-        continue;
-      }
-
-      try {
-        let loc = XPIStates.getLocation(KEY_APP_PROFILE);
-        let addon = awaitPromise(
-          XPIInstall.installDistributionAddon(id, file, loc, aOldAppVersion)
-        );
-
-        if (addon) {
-          // aManifests may contain a copy of a newly installed add-on's manifest
-          // and we'll have overwritten that so instead cache our install manifest
-          // which will later be put into the database in processFileChanges
-          if (!(loc.name in aManifests)) {
-            aManifests[loc.name] = {};
+    for (let distroDir of distroDirs) {
+      logger.warn(`Checking ${distroDir.path} for addons`);
+      for (let file of iterDirectory(distroDir)) {
+        if (!isXPI(file.leafName, true)) {
+          // Only warn for files, not directories
+          if (!file.isDirectory()) {
+            logger.warn(`Ignoring distribution: not an XPI: ${file.path}`);
           }
-          aManifests[loc.name][id] = addon;
-          changed = true;
+          continue;
         }
-      } catch (e) {
-        logger.error(`Failed to install distribution add-on ${file.path}`, e);
+
+        let id = getExpectedID(file);
+        if (!id) {
+          logger.warn(
+            `Ignoring distribution: name is not a valid add-on ID: ${file.path}`
+          );
+          continue;
+        }
+
+        /* If this is not an upgrade and we've already handled this extension
+         * just continue */
+        if (
+          !aAppChanged &&
+          Services.prefs.prefHasUserValue(PREF_BRANCH_INSTALLED_ADDON + id)
+        ) {
+          continue;
+        }
+
+        try {
+          let loc = XPIStates.getLocation(KEY_APP_PROFILE);
+          let addon = awaitPromise(
+            XPIInstall.installDistributionAddon(id, file, loc, aOldAppVersion)
+          );
+
+          if (addon) {
+            // aManifests may contain a copy of a newly installed add-on's manifest
+            // and we'll have overwritten that so instead cache our install manifest
+            // which will later be put into the database in processFileChanges
+            if (!(loc.name in aManifests)) {
+              aManifests[loc.name] = {};
+            }
+            aManifests[loc.name][id] = addon;
+            changed = true;
+          }
+        } catch (e) {
+          logger.error(`Failed to install distribution add-on ${file.path}`, e);
+        }
       }
     }
 
@@ -3141,7 +3186,7 @@ var XPIProvider = {
   },
 
   async getAddonsByTypes(aTypes) {
-    if (aTypes && !aTypes.some(type => ALL_EXTERNAL_TYPES.has(type))) {
+    if (aTypes && !aTypes.some(type => ALL_XPI_TYPES.has(type))) {
       return [];
     }
     return XPIDatabase.getAddonsByTypes(aTypes);
@@ -3252,7 +3297,6 @@ var XPIInternal = {
   KEY_APP_SYSTEM_PROFILE,
   KEY_APP_SYSTEM_ADDONS,
   KEY_APP_SYSTEM_DEFAULTS,
-  KEY_PROFILEDIR,
   PREF_BRANCH_INSTALLED_ADDON,
   PREF_SYSTEM_ADDON_SET,
   SystemAddonLocation,
@@ -3268,37 +3312,11 @@ var XPIInternal = {
   maybeResolveURI,
   migrateAddonLoader,
   resolveDBReady,
+
+  // Used by tests to shut down AddonManager.
+  overrideAsyncShutdown(mockAsyncShutdown) {
+    AsyncShutdown = mockAsyncShutdown;
+  },
 };
 
-var addonTypes = [
-  new AddonManagerPrivate.AddonType(
-    "extension",
-    URI_EXTENSION_STRINGS,
-    "type.extension.name",
-    AddonManager.VIEW_TYPE_LIST,
-    4000
-  ),
-  new AddonManagerPrivate.AddonType(
-    "theme",
-    URI_EXTENSION_STRINGS,
-    "type.themes.name",
-    AddonManager.VIEW_TYPE_LIST,
-    5000
-  ),
-  new AddonManagerPrivate.AddonType(
-    "dictionary",
-    URI_EXTENSION_STRINGS,
-    "type.dictionary.name",
-    AddonManager.VIEW_TYPE_LIST,
-    7000
-  ),
-  new AddonManagerPrivate.AddonType(
-    "locale",
-    URI_EXTENSION_STRINGS,
-    "type.locale.name",
-    AddonManager.VIEW_TYPE_LIST,
-    8000
-  ),
-];
-
-AddonManagerPrivate.registerProvider(XPIProvider, addonTypes);
+AddonManagerPrivate.registerProvider(XPIProvider, Array.from(ALL_XPI_TYPES));

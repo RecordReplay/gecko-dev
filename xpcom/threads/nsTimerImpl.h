@@ -15,6 +15,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/Mutex.h"
+#include "mozilla/StaticMutex.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/Variant.h"
 #include "mozilla/Logging.h"
@@ -39,7 +40,23 @@ class LogModule;
 // a separate lifecycle so we can Cancel() the underlying timer when the user of
 // the nsTimer has let go of its last reference.
 class nsTimerImpl {
-  ~nsTimerImpl() { MOZ_ASSERT(!mHolder); }
+  ~nsTimerImpl() {
+    MOZ_ASSERT(!mHolder);
+
+    // The nsITimer interface requires that its users keep a reference to the
+    // timers they use while those timers are initialized but have not yet
+    // fired. If this assert ever fails, it is a bug in the code that created
+    // and used the timer.
+    //
+    // Further, note that this should never fail even with a misbehaving user,
+    // because nsTimer::Release checks for a refcount of 1 with an armed timer
+    // (a timer whose only reference is from the timer thread) and when it hits
+    // this will remove the timer from the timer thread and thus destroy the
+    // last reference, preventing this situation from occurring.
+    MOZ_ASSERT(
+        mCallback.is<UnknownCallback>() || mEventTarget->IsOnCurrentThread(),
+        "Must not release mCallback off-target without canceling");
+  }
 
  public:
   typedef mozilla::TimeStamp TimeStamp;
@@ -82,13 +99,12 @@ class nsTimerImpl {
       mozilla::Variant<UnknownCallback, InterfaceCallback, ObserverCallback,
                        FuncCallback, ClosureCallback>;
 
-  nsresult InitCommon(uint32_t aDelayMS, uint32_t aType,
-                      Callback&& newCallback);
-
   nsresult InitCommon(const mozilla::TimeDuration& aDelay, uint32_t aType,
-                      Callback&& newCallback);
+                      Callback&& newCallback,
+                      const mozilla::MutexAutoLock& aProofOfLock)
+      REQUIRES(mMutex);
 
-  Callback& GetCallback() {
+  Callback& GetCallback() REQUIRES(mMutex) {
     mMutex.AssertCurrentThreadOwns();
     return mCallback;
   }
@@ -116,6 +132,9 @@ class nsTimerImpl {
            mType == nsITimer::TYPE_REPEATING_SLACK_LOW_PRIORITY;
   }
 
+  void GetName(nsACString& aName, const mozilla::MutexAutoLock& aProofOfLock)
+      REQUIRES(mMutex);
+
   void GetName(nsACString& aName);
 
   void SetHolder(nsTimerImplHolder* aHolder);
@@ -128,8 +147,14 @@ class nsTimerImpl {
                                    const mozilla::TimeDuration& aDelay,
                                    uint32_t aType, const char* aNameString);
 
-  // This weak reference must be cleared by the nsTimerImplHolder by calling
-  // SetHolder(nullptr) before the holder is destroyed.
+  // This weak reference must be cleared by the nsTimerImplHolder by
+  // calling SetHolder(nullptr) before the holder is destroyed.  Take()
+  // also sets this to null, to indicate it's no longer in the
+  // TimerThread's list.  This Take() call is NOT made under the
+  // nsTimerImpl's mutex (all other SetHolder calls are under the mutex,
+  // and all references other than in the constructor or destructor of
+  // nsTimerImpl).  However, ALL uses and references to the holder are
+  // under the TimerThread's Monitor lock, so consistency is guaranteed by that.
   nsTimerImplHolder* mHolder;
 
   // These members are set by the initiating thread, when the timer's type is
@@ -142,18 +167,23 @@ class nsTimerImpl {
   // Updated only after this timer has been removed from the timer thread.
   int32_t mGeneration;
 
-  mozilla::TimeDuration mDelay;
-  // Updated only after this timer has been removed from the timer thread.
+  mozilla::TimeDuration mDelay GUARDED_BY(mMutex);
+  // Never updated while in the TimerThread's timer list.  Only updated
+  // before adding to that list or during nsTimerImpl::Fire(), when it has
+  // been removed from the TimerThread's list.  TimerThread can access
+  // mTimeout of any timer in the list safely
   mozilla::TimeStamp mTimeout;
 
-  static double sDeltaSum;
-  static double sDeltaSumSquared;
-  static double sDeltaNum;
-  RefPtr<nsITimer> mITimer;
+  RefPtr<nsITimer> mITimer GUARDED_BY(mMutex);
   mozilla::Mutex mMutex;
-  Callback mCallback;
+  Callback mCallback GUARDED_BY(mMutex);
   // Counter because in rare cases we can Fire reentrantly
-  unsigned int mFiring;
+  unsigned int mFiring GUARDED_BY(mMutex);
+
+  static mozilla::StaticMutex sDeltaMutex;
+  static double sDeltaSum GUARDED_BY(sDeltaMutex);
+  static double sDeltaSumSquared GUARDED_BY(sDeltaMutex);
+  static double sDeltaNum GUARDED_BY(sDeltaMutex);
 };
 
 class nsTimer final : public nsITimer {
@@ -186,8 +216,7 @@ class nsTimer final : public nsITimer {
   // current thread should be used as the timer's target.
   static RefPtr<nsTimer> WithEventTarget(nsIEventTarget* aTarget);
 
-  static nsresult XPCOMConstructor(nsISupports* aOuter, REFNSIID aIID,
-                                   void** aResult);
+  static nsresult XPCOMConstructor(REFNSIID aIID, void** aResult);
 
  private:
   // nsTimerImpl holds a strong ref to us. When our refcount goes to 1, we will
@@ -201,12 +230,14 @@ class nsTimerImplHolder {
  public:
   explicit nsTimerImplHolder(nsTimerImpl* aTimerImpl) : mTimerImpl(aTimerImpl) {
     if (mTimerImpl) {
+      mTimerImpl->mMutex.AssertCurrentThreadOwns();
       mTimerImpl->SetHolder(this);
     }
   }
 
   ~nsTimerImplHolder() {
     if (mTimerImpl) {
+      mTimerImpl->mMutex.AssertCurrentThreadOwns();
       mTimerImpl->SetHolder(nullptr);
     }
   }
@@ -216,6 +247,7 @@ class nsTimerImplHolder {
       return;
     }
     MOZ_ASSERT(aTimerImpl == mTimerImpl);
+    mTimerImpl->mMutex.AssertCurrentThreadOwns();
     mTimerImpl->SetHolder(nullptr);
     mTimerImpl = nullptr;
   }

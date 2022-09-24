@@ -32,11 +32,13 @@ class CSSImportRule final : public css::Rule {
   size_t SizeOfIncludingThis(MallocSizeOf) const override;
 
   // WebIDL interface
-  uint16_t Type() const final { return CSSRule_Binding::IMPORT_RULE; }
+  StyleCssRuleType Type() const final;
   void GetCssText(nsACString& aCssText) const override;
   void GetHref(nsAString& aHref) const;
-  dom::MediaList* GetMedia() const;
+  dom::MediaList* GetMedia();
   StyleSheet* GetStyleSheet() const { return mChildSheet; }
+  StyleSheet* GetStyleSheetForBindings();
+  void GetLayerName(nsACString&) const;
 
   // Clear the mSheet pointer on this rule and descendants.
   void DropSheetReference() final;
@@ -45,6 +47,7 @@ class CSSImportRule final : public css::Rule {
                        JS::Handle<JSObject*> aGivenProto) override;
 
   const RawServoImportRule* Raw() const { return mRawRule.get(); }
+  void SetRawAfterClone(RefPtr<RawServoImportRule>);
 
  private:
   ~CSSImportRule();

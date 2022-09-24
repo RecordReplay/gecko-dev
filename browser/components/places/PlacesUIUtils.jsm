@@ -45,9 +45,6 @@ const ITEM_CHANGED_BATCH_NOTIFICATION_THRESHOLD = 10;
 
 // copied from utilityOverlay.js
 const TAB_DROP_TYPE = "application/x-moz-tabbrowser-tab";
-const PREF_LOAD_BOOKMARKS_IN_BACKGROUND =
-  "browser.tabs.loadBookmarksInBackground";
-const PREF_LOAD_BOOKMARKS_IN_TABS = "browser.tabs.loadBookmarksInTabs";
 
 let InternalFaviconLoader = {
   /**
@@ -247,11 +244,193 @@ let InternalFaviconLoader = {
   },
 };
 
+/**
+ * Collects all information for a bookmark and performs editmethods
+ *
+ * @param {object} info
+ *    Either a result node or a node-like object representing the item to be edited.
+ * @param {string} [tags]
+ *     Tags (if any) for the bookmark in a comma separated string. Empty tags are
+ * skipped
+ * @param {string} [keyword]
+ *    Existing (if there are any) keyword for bookmark
+ * @returns {string} Guid
+ *    BookamrkGuid
+ */
+class BookmarkState {
+  constructor(info, tags = "", keyword = "") {
+    this._guid = info.itemGuid;
+    this._postData = info.postData;
+    this._isTagContainer = info.isTag;
+
+    // Original Bookmark
+    this._originalState = {
+      title: this._isTagContainer ? info.tag : info.title,
+      uri: info.uri?.spec,
+      tags: tags
+        .trim()
+        .split(/\s*,\s*/)
+        .filter(tag => !!tag.length),
+      keyword,
+      parentGuid: info.parentGuid,
+    };
+
+    // Edited bookmark
+    this._newState = {};
+  }
+
+  /**
+   * Save edited title for the bookmark
+   * @param {string} title
+   */
+  _titleChanged(title) {
+    this._newState.title = title;
+  }
+
+  /**
+   * Save edited location for the bookmark
+   * @param {string} location
+   */
+  _locationChanged(location) {
+    this._newState.uri = location;
+  }
+
+  /**
+   * Save edited tags for the bookmark
+   * @param {string} tags
+   *    Comma separated list of tags
+   */
+  _tagsChanged(tags) {
+    this._newState.tags = tags;
+  }
+
+  /**
+   * Save edited keyword for the bookmark
+   * @param {string} keyword
+   */
+  _keywordChanged(keyword) {
+    this._newState.keyword = keyword;
+  }
+
+  /**
+   * Save edited parentGuid for the bookmark
+   * @param {string} parentGuid
+   */
+  _parentGuidChanged(parentGuid) {
+    this._newState.parentGuid = parentGuid;
+  }
+
+  /**
+   * Save() API function for bookmark.
+   *
+   * @returns {string} bookmark.guid
+   */
+  async save() {
+    if (!Object.keys(this._newState).length) {
+      return this._guid;
+    }
+
+    if (this._isTagContainer && this._newState.title) {
+      await PlacesTransactions.RenameTag({
+        oldTag: this._originalState.title,
+        tag: this._newState.title,
+      })
+        .transact()
+        .catch(Cu.reportError);
+      return this._guid;
+    }
+
+    let url = this._newState.uri || this._originalState.uri;
+    let transactions = [];
+
+    if (this._newState.uri) {
+      transactions.push(
+        PlacesTransactions.EditUrl({
+          guid: this._guid,
+          url,
+        })
+      );
+    }
+
+    for (const [key, value] of Object.entries(this._newState)) {
+      switch (key) {
+        case "title":
+          transactions.push(
+            PlacesTransactions.EditTitle({
+              guid: this._guid,
+              title: value,
+            })
+          );
+          break;
+        case "tags":
+          let newTags = [];
+          let removedTags = [];
+          value.filter(element => {
+            if (!this._originalState.tags.includes(element)) {
+              newTags.push(element);
+            }
+          });
+          this._originalState.tags.filter(el => {
+            if (!value.includes(el)) {
+              removedTags.push(el);
+            }
+          });
+          if (newTags.length) {
+            transactions.push(
+              PlacesTransactions.Tag({
+                urls: [url],
+                tags: newTags,
+              })
+            );
+          }
+          if (removedTags.length) {
+            transactions.push(
+              PlacesTransactions.Untag({
+                urls: [url],
+                tags: removedTags,
+              })
+            );
+          }
+          break;
+        case "keyword":
+          transactions.push(
+            PlacesTransactions.EditKeyword({
+              guid: this._guid,
+              keyword: value,
+              postData: this._postData,
+              oldKeyword: this._originalState.keyword,
+            })
+          );
+          break;
+        case "parentGuid":
+          transactions.push(
+            PlacesTransactions.Move({
+              guid: this._guid,
+              newParentGuid: this._newState.parentGuid,
+            })
+          );
+          break;
+      }
+    }
+    if (transactions.length) {
+      await PlacesTransactions.batch(transactions);
+    }
+
+    return this._guid;
+  }
+}
+
 var PlacesUIUtils = {
+  BookmarkState,
   _bookmarkToolbarTelemetryListening: false,
   LAST_USED_FOLDERS_META_KEY: "bookmarks/lastusedfolders",
 
   lastContextMenuTriggerNode: null,
+
+  // This allows to await for all the relevant bookmark changes to be applied
+  // when a bookmark dialog is closed. It is resolved to the bookmark guid,
+  // if a bookmark was created or modified.
+  lastBookmarkDialogDeferred: null,
 
   getFormattedString: function PUIU_getFormattedString(key, params) {
     return bundle.formatStringFromName(key, params);
@@ -287,6 +466,25 @@ var PlacesUIUtils = {
   },
 
   /**
+   * Obfuscates a place: URL to use it in xulstore without the risk of
+   leaking browsing information. Uses md5 to hash the query string.
+   *
+   * @param {URL} url
+   *        the URL for xulstore with place: key pairs.
+   * @returns {string} "place:[md5_hash]" hashed url
+   */
+
+  obfuscateUrlForXulStore(url) {
+    if (!url.startsWith("place:")) {
+      throw new Error("Method must be used to only obfuscate place: uris!");
+    }
+    let urlNoProtocol = url.substring(url.indexOf(":") + 1);
+    let hashedURL = PlacesUtils.md5(urlNoProtocol);
+
+    return `place:${hashedURL}`;
+  },
+
+  /**
    * Shows the bookmark dialog corresponding to the specified info.
    *
    * @param {object} aInfo
@@ -300,6 +498,8 @@ var PlacesUIUtils = {
    *                   undefined otherwise.
    */
   async showBookmarkDialog(aInfo, aParentWindow = null) {
+    this.lastBookmarkDialogDeferred = PromiseUtils.defer();
+
     // Preserve size attributes differently based on the fact the dialog has
     // a folder picker or not, since it needs more horizontal space than the
     // other controls.
@@ -311,16 +511,45 @@ var PlacesUIUtils = {
       : "chrome://browser/content/places/bookmarkProperties.xhtml";
 
     let features = "centerscreen,chrome,modal,resizable=yes";
+    let bookmarkGuid;
 
-    let topUndoEntry;
-    let batchBlockingDeferred;
+    if (
+      !Services.prefs.getBoolPref(
+        "browser.bookmarks.editDialog.delayedApply.enabled",
+        false
+      )
+    ) {
+      let topUndoEntry;
+      let batchBlockingDeferred;
 
-    // Set the transaction manager into batching mode.
-    topUndoEntry = PlacesTransactions.topUndoEntry;
-    batchBlockingDeferred = PromiseUtils.defer();
-    PlacesTransactions.batch(async () => {
-      await batchBlockingDeferred.promise;
-    });
+      // Set the transaction manager into batching mode.
+      topUndoEntry = PlacesTransactions.topUndoEntry;
+      batchBlockingDeferred = PromiseUtils.defer();
+      PlacesTransactions.batch(async () => {
+        await batchBlockingDeferred.promise;
+      });
+
+      if (!aParentWindow) {
+        aParentWindow = Services.wm.getMostRecentWindow(null);
+      }
+
+      if (aParentWindow.gDialogBox) {
+        await aParentWindow.gDialogBox.open(dialogURL, aInfo);
+      } else {
+        aParentWindow.openDialog(dialogURL, "", features, aInfo);
+      }
+
+      bookmarkGuid =
+        ("bookmarkGuid" in aInfo && aInfo.bookmarkGuid) || undefined;
+
+      batchBlockingDeferred.resolve();
+
+      if (!bookmarkGuid && topUndoEntry != PlacesTransactions.topUndoEntry) {
+        PlacesTransactions.undo().catch(Cu.reportError);
+      }
+      this.lastBookmarkDialogDeferred.resolve(bookmarkGuid);
+      return bookmarkGuid;
+    }
 
     if (!aParentWindow) {
       aParentWindow = Services.wm.getMostRecentWindow(null);
@@ -332,15 +561,13 @@ var PlacesUIUtils = {
       aParentWindow.openDialog(dialogURL, "", features, aInfo);
     }
 
-    let bookmarkGuid =
-      ("bookmarkGuid" in aInfo && aInfo.bookmarkGuid) || undefined;
-
-    batchBlockingDeferred.resolve();
-
-    if (!bookmarkGuid && topUndoEntry != PlacesTransactions.topUndoEntry) {
-      PlacesTransactions.undo().catch(Cu.reportError);
+    if (aInfo.bookmarkState) {
+      bookmarkGuid = await aInfo.bookmarkState.save();
+      this.lastBookmarkDialogDeferred.resolve(bookmarkGuid);
+      return bookmarkGuid;
     }
-
+    bookmarkGuid = undefined;
+    this.lastBookmarkDialogDeferred.resolve(bookmarkGuid);
     return bookmarkGuid;
   },
 
@@ -461,8 +688,8 @@ var PlacesUIUtils = {
    * @returns {PlacesController} a places controller
    */
   getControllerForCommand(win, command) {
-    // A context menu may be built for non-focusable views.  Thus, we first try
-    // to look for a view associated with document.popupNode
+    // If we're building a context menu for a non-focusable view, for example
+    // a menupopup, we must return the view that triggered the context menu.
     let popupNode = PlacesUIUtils.lastContextMenuTriggerNode;
     if (popupNode) {
       let isManaged = !!popupNode.closest("#managed-bookmarks");
@@ -506,6 +733,7 @@ var PlacesUIUtils = {
       "placesCmd_copy",
       "placesCmd_paste",
       "placesCmd_delete",
+      "placesCmd_showInFolder",
     ]) {
       win.goSetCommandEnabled(
         command,
@@ -846,14 +1074,14 @@ var PlacesUIUtils = {
    */
   openNodeIn: function PUIU_openNodeIn(aNode, aWhere, aView, aPrivate) {
     let window = aView.ownerWindow;
-    this._openNodeIn(aNode, aWhere, window, aPrivate);
+    this._openNodeIn(aNode, aWhere, window, { aPrivate });
   },
 
   _openNodeIn: function PUIU__openNodeIn(
     aNode,
     aWhere,
     aWindow,
-    aPrivate = false
+    { aPrivate = false, userContextId = 0 } = {}
   ) {
     if (
       aNode &&
@@ -876,6 +1104,7 @@ var PlacesUIUtils = {
         inBackground: this.loadBookmarksInBackground,
         allowInheritPrincipal: isJavaScriptURL,
         private: aPrivate,
+        userContextId,
       });
     }
   },
@@ -1208,77 +1437,6 @@ var PlacesUIUtils = {
     }
   },
 
-  ensureBookmarkToolbarTelemetryListening() {
-    if (this._bookmarkToolbarTelemetryListening) {
-      return;
-    }
-
-    // This listener is for counting new bookmarks
-    let placesUtilsObserversListener = events => {
-      for (let event of events) {
-        switch (event.type) {
-          case "bookmark-added":
-            if (event.parentGuid == PlacesUtils.bookmarks.toolbarGuid) {
-              Services.telemetry.scalarAdd(
-                "browser.engagement.bookmarks_toolbar_bookmark_added",
-                1
-              );
-            }
-            break;
-          case "bookmark-moved":
-            let hasMovedToToolbar =
-              event.parentGuid == PlacesUtils.bookmarks.toolbarGuid &&
-              event.oldParentGuid != PlacesUtils.bookmarks.toolbarGuid;
-            if (hasMovedToToolbar) {
-              Services.telemetry.scalarAdd(
-                "browser.engagement.bookmarks_toolbar_bookmark_added",
-                1
-              );
-            }
-            break;
-        }
-      }
-    };
-
-    // This listener is for tracking bookmark moves
-    let placesUtilsBookmarksObserver = {
-      onItemChanged() {},
-      onItemMoved(
-        aItemId,
-        aOldIndex,
-        aNewIndex,
-        aItemType,
-        aGuid,
-        oldParentGuid,
-        newParentGuid
-      ) {
-        let hasMovedToToolbar =
-          newParentGuid == PlacesUtils.bookmarks.toolbarGuid &&
-          oldParentGuid != PlacesUtils.bookmarks.toolbarGuid;
-        if (hasMovedToToolbar) {
-          Services.telemetry.scalarAdd(
-            "browser.engagement.bookmarks_toolbar_bookmark_added",
-            1
-          );
-        }
-      },
-    };
-
-    this._bookmarkToolbarTelemetryListening = true;
-    PlacesUtils.observers.addListener(
-      ["bookmark-added", "bookmark-moved"],
-      placesUtilsObserversListener
-    );
-    PlacesUtils.bookmarks.addObserver(placesUtilsBookmarksObserver);
-    PlacesUtils.registerShutdownFunction(() => {
-      PlacesUtils.observers.removeListener(
-        ["bookmark-added", "bookmark-moved"],
-        placesUtilsObserversListener
-      );
-      PlacesUtils.bookmarks.removeObserver(placesUtilsBookmarksObserver);
-    });
-  },
-
   /**
    * Uncollapses PersonalToolbar if its collapsed status is not
    * persisted, and user customized it or changed default bookmarks.
@@ -1376,6 +1534,12 @@ var PlacesUIUtils = {
       document.getElementById("placesContext_open:newprivatewindow").hidden =
         PrivateBrowsingUtils.isWindowPrivate(window) ||
         !PrivateBrowsingUtils.enabled;
+      document.getElementById(
+        "placesContext_open:newcontainertab"
+      ).hidden = !Services.prefs.getBoolPref(
+        "privacy.userContext.enabled",
+        false
+      );
     }
 
     event.target.ownerGlobal.updateCommands("places");
@@ -1419,6 +1583,28 @@ var PlacesUIUtils = {
     if (menupopup.id == "placesContext") {
       PlacesUIUtils.lastContextMenuTriggerNode = null;
     }
+  },
+
+  createContainerTabMenu(event) {
+    let window = event.target.ownerGlobal;
+    return window.createUserContextMenu(event, { isContextMenu: true });
+  },
+
+  openInContainerTab(event) {
+    let userContextId = parseInt(
+      event.target.getAttribute("data-usercontextid")
+    );
+    let triggerNode = this.lastContextMenuTriggerNode;
+    let isManaged = !!triggerNode.closest("#managed-bookmarks");
+    if (isManaged) {
+      let window = triggerNode.ownerGlobal;
+      window.openTrustedLinkIn(triggerNode.link, "tab", { userContextId });
+      return;
+    }
+    let view = this.getViewForNode(triggerNode);
+    this._openNodeIn(view.selectedNode, "tab", view.ownerWindow, {
+      userContextId,
+    });
   },
 
   openSelectionInTabs(event) {
@@ -1536,17 +1722,7 @@ var PlacesUIUtils = {
     if (!Services.policies.isAllowed("profileImport")) {
       return;
     }
-    // Check if the experiment is running. If not, wait for it to run.
-    const kPref = "browser.toolbars.bookmarks.2h2020";
-    if (!Services.prefs.getBoolPref(kPref, false)) {
-      Services.prefs.addObserver(kPref, function obs() {
-        Services.prefs.removeObserver(kPref, obs);
-        Services.tm.dispatchToMainThread(() =>
-          PlacesUIUtils.maybeAddImportButton()
-        );
-      });
-      return;
-    }
+
     let numberOfBookmarks = await PlacesUtils.withConnectionWrapper(
       "PlacesUIUtils: maybeAddImportButton",
       async db => {
@@ -1598,18 +1774,111 @@ var PlacesUIUtils = {
     Services.obs.addObserver(obs, "Migration:ItemError");
   },
 
-  get _nonPrefDefaultParentGuid() {
-    let { unfiledGuid, toolbarGuid } = PlacesUtils.bookmarks;
-    return this._2020h2bookmarks ? toolbarGuid : unfiledGuid;
+  /**
+   * Tries to initiate a speculative connection to a given url.
+   * @param {nsIURI|URL|string} url entity to initiate
+   *        a speculative connection for.
+   * @param {window} window the window from where the connection is initialized.
+   * @note This is not infallible, if a speculative connection cannot be
+   *       initialized, it will be a no-op.
+   */
+  setupSpeculativeConnection(url, window) {
+    if (
+      !Services.prefs.getBoolPref(
+        "browser.places.speculativeConnect.enabled",
+        true
+      )
+    ) {
+      return;
+    }
+    if (!url.startsWith("http")) {
+      return;
+    }
+    try {
+      let uri = url instanceof Ci.nsIURI ? url : Services.io.newURI(url);
+      Services.io.speculativeConnect(
+        uri,
+        window.gBrowser.contentPrincipal,
+        null
+      );
+    } catch (ex) {
+      // Can't setup speculative connection for this url, just ignore it.
+    }
   },
 
-  get defaultParentGuid() {
-    if (!PlacesUIUtils._2020h2bookmarks) {
-      return PlacesUtils.bookmarks.unfiledGuid;
+  getImageURL(aItem) {
+    let iconURL = aItem.image;
+    // don't initiate a connection just to fetch a favicon (see bug 467828)
+    if (/^https?:/.test(iconURL)) {
+      iconURL = "moz-anno:favicon:" + iconURL;
     }
-    // Defined via a lazy pref getter below, see the comment there about the
-    // reason for this (temporary) setup.
-    return this._defaultParentGuid;
+    return iconURL;
+  },
+
+  /**
+   * Determines the string indexes where titles differ from similar titles (where
+   * the first n characters are the same) in the provided list of items, and
+   * adds that into the item.
+   *
+   * This assumes the titles will be displayed along the lines of
+   * `Start of title ... place where differs` the index would be reference
+   * the `p` here.
+   *
+   * @param {object[]} candidates
+   *   An array of candidates to modify. The candidates should have a `title`
+   *   property.
+   *   The order of the array does not matter. The objects are modified
+   *   in-place.
+   *   If a difference to other similar titles is found then a
+   *   `titleDifferentIndex` property will be inserted into all similar
+   *   candidates with the index of the start of the difference.
+   */
+  insertTitleStartDiffs(candidates) {
+    function findStartDifference(a, b) {
+      let i;
+      // We already know the start is the same, so skip that part.
+      for (i = PlacesUIUtils.similarTitlesMinChars; i < a.length; i++) {
+        if (a[i] != b[i]) {
+          return i;
+        }
+      }
+      if (b.length > i) {
+        return i;
+      }
+      // They are the same.
+      return -1;
+    }
+
+    let longTitles = new Map();
+
+    for (let candidate of candidates) {
+      // Title is too short for us to care about, simply continue.
+      if (candidate.title.length < this.similarTitlesMinChars) {
+        continue;
+      }
+      let titleBeginning = candidate.title.slice(0, this.similarTitlesMinChars);
+      let matches = longTitles.get(titleBeginning);
+      if (matches) {
+        for (let match of matches) {
+          let startDiff = findStartDifference(candidate.title, match.title);
+          if (startDiff > 0) {
+            candidate.titleDifferentIndex = startDiff;
+            // If we have an existing difference index for the match, move
+            // it forward if this one is earlier in the string.
+            if (
+              !("titleDifferentIndex" in match) ||
+              match.titleDifferentIndex > startDiff
+            ) {
+              match.titleDifferentIndex = startDiff;
+            }
+          }
+        }
+
+        matches.push(candidate);
+      } else {
+        longTitles.set(titleBeginning, [candidate]);
+      }
+    }
   },
 };
 
@@ -1617,17 +1886,9 @@ var PlacesUIUtils = {
  * Promise used by the toolbar view browser-places to determine whether we
  * can start loading its content (which involves IO, and so is postponed
  * during startup).
- * This promise's resolution value indicates whether toolbar initialization
- * waited on sessionstore-windows-restored and then an idle task, or happened
- * immediately as the window was opened. This is used for telemetry.
  */
 PlacesUIUtils.canLoadToolbarContentPromise = new Promise(resolve => {
-  PlacesUIUtils.unblockToolbars = () => {
-    resolve("waited-for-session-idle");
-    // Overwrite the property with the new promise, as the session has
-    // now been restored:
-    PlacesUIUtils.canLoadToolbarContentPromise = Promise.resolve("immediate");
-  };
+  PlacesUIUtils.unblockToolbars = resolve;
 });
 
 // These are lazy getters to avoid importing PlacesUtils immediately.
@@ -1654,14 +1915,20 @@ XPCOMUtils.defineLazyGetter(PlacesUIUtils, "ellipsis", function() {
 
 XPCOMUtils.defineLazyPreferenceGetter(
   PlacesUIUtils,
+  "similarTitlesMinChars",
+  "browser.places.similarTitlesMinChars",
+  20
+);
+XPCOMUtils.defineLazyPreferenceGetter(
+  PlacesUIUtils,
   "loadBookmarksInBackground",
-  PREF_LOAD_BOOKMARKS_IN_BACKGROUND,
+  "browser.tabs.loadBookmarksInBackground",
   false
 );
 XPCOMUtils.defineLazyPreferenceGetter(
   PlacesUIUtils,
   "loadBookmarksInTabs",
-  PREF_LOAD_BOOKMARKS_IN_TABS,
+  "browser.tabs.loadBookmarksInTabs",
   false
 );
 XPCOMUtils.defineLazyPreferenceGetter(
@@ -1679,36 +1946,26 @@ XPCOMUtils.defineLazyPreferenceGetter(
 
 XPCOMUtils.defineLazyPreferenceGetter(
   PlacesUIUtils,
-  "_2020h2bookmarks",
-  "browser.toolbars.bookmarks.2h2020",
-  false
-);
-
-/**
- * This value should be accessed through the defaultParentGuid getter,
- * which will only access this pref if the browser.toolbars.bookmarks.2h2020
- * pref is true. We can't put that check directly in the pref transformation
- * callback below, because then the resulting value doesn't update if the
- * 2h2020 pref updates, breaking tests and potentially real-world behaviour
- * if the 2h2020 pref is flipped at runtime.
- */
-XPCOMUtils.defineLazyPreferenceGetter(
-  PlacesUIUtils,
-  "_defaultParentGuid",
+  "defaultParentGuid",
   "browser.bookmarks.defaultLocation",
   "", // Avoid eagerly loading PlacesUtils.
   null,
-  prefValue => {
+  async prefValue => {
     if (!prefValue) {
-      return PlacesUIUtils._nonPrefDefaultParentGuid;
+      return PlacesUtils.bookmarks.toolbarGuid;
     }
     if (["toolbar", "menu", "unfiled"].includes(prefValue)) {
       return PlacesUtils.bookmarks[prefValue + "Guid"];
     }
-    return PlacesUtils.bookmarks
-      .fetch({ guid: prefValue })
-      .then(bm => bm.guid)
-      .catch(() => PlacesUIUtils._nonPrefDefaultParentGuid);
+
+    try {
+      return await PlacesUtils.bookmarks
+        .fetch({ guid: prefValue })
+        .then(bm => bm.guid);
+    } catch (ex) {
+      // The guid may have an invalid format.
+      return PlacesUtils.bookmarks.toolbarGuid;
+    }
   }
 );
 

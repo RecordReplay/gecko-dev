@@ -26,6 +26,7 @@
 
 #bottomBox {
   padding: 15px 10px 0;
+  height: 52px;
 }
 
 #release {
@@ -37,7 +38,6 @@
 
 #version {
   font-weight: bold;
-  margin-top: 10px;
   margin-inline-start: 0;
   user-select: text;
   -moz-user-focus: normal;
@@ -46,11 +46,6 @@
 
 #version.update {
   font-weight: normal;
-  margin-top: 0;
-}
-
-#releasenotes {
-  margin-top: 10px;
 }
 
 #distribution,
@@ -95,19 +90,16 @@ image.update-throbber {
   }
 }
 
-description > .text-link,
-description > .text-link:focus {
+description > .text-link {
   margin: 0;
   padding: 0;
 }
 
-#submit-feedback,
-#support-email {
-  padding-inline-start: 10px;
+#submit-feedback {
+  margin-inline-start: .9em;
 }
 
-.bottom-link,
-.bottom-link:focus {
+.bottom-link {
   text-align: center;
   margin: 0 40px;
 }

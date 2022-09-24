@@ -7,41 +7,18 @@ import { ContextMenuButton } from "content-src/components/ContextMenu/ContextMen
 import React from "react";
 
 export class DSLinkMenu extends React.PureComponent {
-  constructor(props) {
-    super(props);
-    this.onMenuUpdate = this.onMenuUpdate.bind(this);
-    this.onMenuShow = this.onMenuShow.bind(this);
-    this.contextMenuButtonRef = React.createRef();
-  }
-
-  onMenuUpdate(showContextMenu) {
-    if (!showContextMenu) {
-      const dsLinkMenuHostDiv = this.contextMenuButtonRef.current.parentElement;
-      dsLinkMenuHostDiv.parentElement.classList.remove("active", "last-item");
-    }
-  }
-
-  nextAnimationFrame() {
-    return new Promise(resolve =>
-      this.props.windowObj.requestAnimationFrame(resolve)
-    );
-  }
-
-  async onMenuShow() {
-    const dsLinkMenuHostDiv = this.contextMenuButtonRef.current.parentElement;
-    // Wait for next frame before computing scrollMaxX to allow fluent menu strings to be visible
-    await this.nextAnimationFrame();
-    if (this.props.windowObj.scrollMaxX > 0) {
-      dsLinkMenuHostDiv.parentElement.classList.add("last-item");
-    }
-    dsLinkMenuHostDiv.parentElement.classList.add("active");
-  }
-
   render() {
     const { index, dispatch } = this.props;
+    let pocketMenuOptions = [];
+    if (this.props.pocket_button_enabled) {
+      pocketMenuOptions = this.props.saveToPocketCard
+        ? ["CheckDeleteFromPocket"]
+        : ["CheckSavedToPocket"];
+    }
     const TOP_STORIES_CONTEXT_MENU_OPTIONS = [
-      "CheckBookmarkOrArchive",
-      "CheckSavedToPocket",
+      "CheckBookmark",
+      "CheckArchiveFromPocket",
+      ...pocketMenuOptions,
       "Separator",
       "OpenInNewWindow",
       "OpenInPrivateWindow",
@@ -53,18 +30,17 @@ export class DSLinkMenu extends React.PureComponent {
     const title = this.props.title || this.props.source;
 
     return (
-      <div>
+      <div className="context-menu-position-container">
         <ContextMenuButton
-          refFunction={this.contextMenuButtonRef}
           tooltip={"newtab-menu-content-tooltip"}
           tooltipArgs={{ title }}
-          onUpdate={this.onMenuUpdate}
+          onUpdate={this.props.onMenuUpdate}
         >
           <LinkMenu
             dispatch={dispatch}
             index={index}
             source={type.toUpperCase()}
-            onShow={this.onMenuShow}
+            onShow={this.props.onMenuShow}
             options={TOP_STORIES_CONTEXT_MENU_OPTIONS}
             shouldSendImpressionStats={true}
             site={{
@@ -84,7 +60,3 @@ export class DSLinkMenu extends React.PureComponent {
     );
   }
 }
-
-DSLinkMenu.defaultProps = {
-  windowObj: window, // Added to support unit tests
-};

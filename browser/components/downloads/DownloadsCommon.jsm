@@ -37,7 +37,6 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   NetUtil: "resource://gre/modules/NetUtil.jsm",
-  PluralForm: "resource://gre/modules/PluralForm.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
   DownloadHistory: "resource://gre/modules/DownloadHistory.jsm",
   Downloads: "resource://gre/modules/Downloads.jsm",
@@ -63,17 +62,25 @@ XPCOMUtils.defineLazyGetter(this, "DownloadsLogger", () => {
   return new ConsoleAPI(consoleOptions);
 });
 
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "gAlwaysOpenPanel",
+  "browser.download.alwaysOpenPanel",
+  true
+);
+
 const kDownloadsStringBundleUrl =
   "chrome://browser/locale/downloads/downloads.properties";
+
+const kDownloadsFluentStrings = new Localization(
+  ["browser/downloads.ftl"],
+  true
+);
 
 const kDownloadsStringsRequiringFormatting = {
   sizeWithUnits: true,
   statusSeparator: true,
   statusSeparatorBeforeNumber: true,
-};
-
-const kDownloadsStringsRequiringPluralForm = {
-  otherDownloads3: true,
 };
 
 const kMaxHistoryResultsForLimitedView = 42;
@@ -147,8 +154,15 @@ var DownloadsCommon = {
   // The following are the possible values of the "attention" property.
   ATTENTION_NONE: "",
   ATTENTION_SUCCESS: "success",
+  ATTENTION_INFO: "info",
   ATTENTION_WARNING: "warning",
   ATTENTION_SEVERE: "severe",
+
+  // Bit flags for the attentionSuppressed property.
+  SUPPRESS_NONE: 0,
+  SUPPRESS_PANEL_OPEN: 1,
+  SUPPRESS_ALL_DOWNLOADS_OPEN: 2,
+  SUPPRESS_CONTENT_AREA_DOWNLOADS_OPEN: 4,
 
   /**
    * Returns an object whose keys are the string names from the downloads string
@@ -164,15 +178,6 @@ var DownloadsCommon = {
         strings[stringName] = function() {
           // Convert "arguments" to a real array before calling into XPCOM.
           return sb.formatStringFromName(stringName, Array.from(arguments));
-        };
-      } else if (stringName in kDownloadsStringsRequiringPluralForm) {
-        strings[stringName] = function(aCount) {
-          // Convert "arguments" to a real array before calling into XPCOM.
-          let formattedString = sb.formatStringFromName(
-            stringName,
-            Array.from(arguments)
-          );
-          return PluralForm.get(aCount, formattedString);
         };
       } else {
         strings[stringName] = string.value;
@@ -318,6 +323,17 @@ var DownloadsCommon = {
    * Removes a Download object from both session and history downloads.
    */
   async deleteDownload(download) {
+    // Check hasBlockedData to avoid double counting if you click the X button
+    // in the Libarary view and then delete the download from the history.
+    if (
+      download.error?.becauseBlockedByReputationCheck &&
+      download.hasBlockedData
+    ) {
+      Services.telemetry
+        .getKeyedHistogramById("DOWNLOADS_USER_ACTION_ON_BLOCKED_DOWNLOAD")
+        .add(download.error.reputationCheckVerdict, 1); // confirm block
+    }
+
     // Remove the associated history element first, if any, so that the views
     // that combine history and session downloads won't resurrect the history
     // download into the view just before it is deleted permanently.
@@ -329,6 +345,36 @@ var DownloadsCommon = {
     let list = await Downloads.getList(Downloads.ALL);
     await list.remove(download);
     await download.finalize(true);
+  },
+
+  /**
+   * Deletes all files associated with a download, with or without removing it
+   * from the session downloads list and/or download history.
+   *
+   * @param download
+   *        The download to delete and/or forget.
+   * @param clearHistory
+   *        Optional. Removes history from session downloads list or history.
+   *        0 - Don't remove the download from session list or history.
+   *        1 - Remove the download from session list, but not history.
+   *        2 - Remove the download from both session list and history.
+   */
+  async deleteDownloadFiles(download, clearHistory = 0) {
+    if (clearHistory > 1) {
+      try {
+        await PlacesUtils.history.remove(download.source.url);
+      } catch (ex) {
+        Cu.reportError(ex);
+      }
+    }
+    if (clearHistory > 0) {
+      let list = await Downloads.getList(Downloads.ALL);
+      await list.remove(download);
+    }
+    await download.manuallyRemoveData();
+    if (clearHistory < 2) {
+      DownloadHistory.updateMetaData(download).catch(Cu.reportError);
+    }
   },
 
   /**
@@ -396,7 +442,9 @@ var DownloadsCommon = {
    * Copies the source URI of the given Download object to the clipboard.
    */
   copyDownloadLink(download) {
-    gClipboardHelper.copyString(download.source.url);
+    gClipboardHelper.copyString(
+      download.source.originalUrl || download.source.url
+    );
   },
 
   /**
@@ -657,6 +705,9 @@ var DownloadsCommon = {
       case Downloads.Error.BLOCK_VERDICT_POTENTIALLY_UNWANTED:
         message = s.unblockTypePotentiallyUnwanted2;
         break;
+      case Downloads.Error.BLOCK_VERDICT_INSECURE:
+        message = s.unblockInsecure;
+        break;
       default:
         // Assume Downloads.Error.BLOCK_VERDICT_MALWARE
         message = s.unblockTypeMalware;
@@ -739,7 +790,7 @@ function DownloadsDataCtor({ isPrivate, isHistory, maxHistoryResults } = {}) {
   this._isPrivate = !!isPrivate;
 
   // Contains all the available Download objects and their integer state.
-  this.oldDownloadStates = new Map();
+  this._oldDownloadStates = new WeakMap();
 
   // For the history downloads list we don't need to register this as a view,
   // but we have to ensure that the DownloadsData object is initialized before
@@ -791,15 +842,15 @@ DownloadsDataCtor.prototype = {
    * Iterator for all the available Download objects. This is empty until the
    * data has been loaded using the JavaScript API for downloads.
    */
-  get downloads() {
-    return this.oldDownloadStates.keys();
+  get _downloads() {
+    return ChromeUtils.nondeterministicGetWeakMapKeys(this._oldDownloadStates);
   },
 
   /**
    * True if there are finished downloads that can be removed from the list.
    */
   get canRemoveFinished() {
-    for (let download of this.downloads) {
+    for (let download of this._downloads) {
       // Stopped, paused, and failed downloads with partial data are removed.
       if (download.stopped && !(download.canceled && download.hasPartialData)) {
         return true;
@@ -816,10 +867,6 @@ DownloadsDataCtor.prototype = {
     Downloads.getList(this._isPrivate ? Downloads.PRIVATE : Downloads.PUBLIC)
       .then(list => list.removeFinished())
       .catch(Cu.reportError);
-    let indicatorData = this._isPrivate
-      ? PrivateDownloadsIndicatorData
-      : DownloadsIndicatorData;
-    indicatorData.attention = DownloadsCommon.ATTENTION_NONE;
   },
 
   // Integration with the asynchronous Downloads back-end
@@ -831,7 +878,7 @@ DownloadsDataCtor.prototype = {
     // for which the end time is stored differently, as a Places annotation.
     download.endTime = Date.now();
 
-    this.oldDownloadStates.set(
+    this._oldDownloadStates.set(
       download,
       DownloadsCommon.stateOfDownload(download)
     );
@@ -841,9 +888,9 @@ DownloadsDataCtor.prototype = {
   },
 
   onDownloadChanged(download) {
-    let oldState = this.oldDownloadStates.get(download);
+    let oldState = this._oldDownloadStates.get(download);
     let newState = DownloadsCommon.stateOfDownload(download);
-    this.oldDownloadStates.set(download, newState);
+    this._oldDownloadStates.set(download, newState);
 
     if (oldState != newState) {
       if (
@@ -869,12 +916,14 @@ DownloadsDataCtor.prototype = {
 
     if (!download.newDownloadNotified) {
       download.newDownloadNotified = true;
-      this._notifyDownloadEvent("start");
+      this._notifyDownloadEvent("start", {
+        openDownloadsListOnStart: download.openDownloadsListOnStart,
+      });
     }
   },
 
   onDownloadRemoved(download) {
-    this.oldDownloadStates.delete(download);
+    this._oldDownloadStates.delete(download);
   },
 
   // Registration of views
@@ -923,12 +972,15 @@ DownloadsDataCtor.prototype = {
   /**
    * Displays a new or finished download notification in the most recent browser
    * window, if one is currently available with the required privacy type.
-   *
-   * @param aType
+   * @param {string} aType
    *        Set to "start" for new downloads, "finish" for completed downloads,
    *        "error" for downloads that failed and need attention
+   * @param {boolean} [openDownloadsListOnStart]
+   *        (Only relevant when aType = "start")
+   *        true (default) - open the downloads panel.
+   *        false - only show an indicator notification.
    */
-  _notifyDownloadEvent(aType) {
+  _notifyDownloadEvent(aType, { openDownloadsListOnStart = true } = {}) {
     DownloadsCommon.log(
       "Attempting to notify that a new download has started or finished."
     );
@@ -946,16 +998,22 @@ DownloadsDataCtor.prototype = {
       Services.prefs.getBoolPref(
         "browser.download.improvements_to_download_panel"
       ) &&
-      DownloadsCommon.summarizeDownloads(this.downloads).numDownloading <= 1;
+      DownloadsCommon.summarizeDownloads(this._downloads).numDownloading <= 1 &&
+      gAlwaysOpenPanel;
 
+    // For new downloads after the first one, don't show the panel
+    // automatically, but provide a visible notification in the topmost browser
+    // window, if the status indicator is already visible. Also ensure that if
+    // openDownloadsListOnStart = false is passed, we always skip opening the
+    // panel. That's because this will only be passed if the download is started
+    // without user interaction or if a dialog was previously opened in the
+    // process of the download (e.g. unknown content type dialog).
     if (
-      this.panelHasShownBefore &&
       aType != "error" &&
-      !shouldOpenDownloadsPanel
+      ((this.panelHasShownBefore && !shouldOpenDownloadsPanel) ||
+        !openDownloadsListOnStart ||
+        browserWin != Services.focus.activeWindow)
     ) {
-      // For new downloads after the first one, don't show the panel
-      // automatically, but provide a visible notification in the topmost
-      // browser window, if the status indicator is already visible.
       DownloadsCommon.log("Showing new download notification.");
       browserWin.DownloadsIndicatorView.showEventNotification(aType);
       return;
@@ -1165,7 +1223,7 @@ const DownloadsViewPrototype = {
    * @note Subclasses should override this.
    */
   onDownloadRemoved(download) {
-    throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
+    this._oldDownloadStates.delete(download);
   },
 
   /**
@@ -1222,6 +1280,27 @@ DownloadsIndicatorDataCtor.prototype = {
   __proto__: DownloadsViewPrototype,
 
   /**
+   * Map of the relative severities of different attention states.
+   * Used in sorting the map of active downloads' attention states
+   * to determine the attention state to be displayed.
+   */
+  _attentionPriority: new Map([
+    [DownloadsCommon.ATTENTION_NONE, 0],
+    [DownloadsCommon.ATTENTION_SUCCESS, 1],
+    [DownloadsCommon.ATTENTION_INFO, 2],
+    [DownloadsCommon.ATTENTION_WARNING, 3],
+    [DownloadsCommon.ATTENTION_SEVERE, 4],
+  ]),
+
+  /**
+   * Iterator for all the available Download objects. This is empty until the
+   * data has been loaded using the JavaScript API for downloads.
+   */
+  get _downloads() {
+    return ChromeUtils.nondeterministicGetWeakMapKeys(this._oldDownloadStates);
+  },
+
+  /**
    * Removes an object previously added using addView.
    *
    * @param aView
@@ -1242,44 +1321,41 @@ DownloadsIndicatorDataCtor.prototype = {
   },
 
   onDownloadStateChanged(download) {
+    if (this._attentionSuppressed !== DownloadsCommon.SUPPRESS_NONE) {
+      return;
+    }
+    let attention;
     if (
       !download.succeeded &&
       download.error &&
       download.error.reputationCheckVerdict
     ) {
       switch (download.error.reputationCheckVerdict) {
-        case Downloads.Error.BLOCK_VERDICT_UNCOMMON: // fall-through
-        case Downloads.Error.BLOCK_VERDICT_POTENTIALLY_UNWANTED:
+        case Downloads.Error.BLOCK_VERDICT_UNCOMMON:
+          attention = DownloadsCommon.ATTENTION_INFO;
+          break;
+        case Downloads.Error.BLOCK_VERDICT_POTENTIALLY_UNWANTED: // fall-through
         case Downloads.Error.BLOCK_VERDICT_INSECURE:
-          // Existing higher level attention indication trumps ATTENTION_WARNING.
-          if (this._attention != DownloadsCommon.ATTENTION_SEVERE) {
-            this.attention = DownloadsCommon.ATTENTION_WARNING;
-          }
+        case Downloads.Error.BLOCK_VERDICT_DOWNLOAD_SPAM:
+          attention = DownloadsCommon.ATTENTION_WARNING;
           break;
         case Downloads.Error.BLOCK_VERDICT_MALWARE:
-          this.attention = DownloadsCommon.ATTENTION_SEVERE;
+          attention = DownloadsCommon.ATTENTION_SEVERE;
           break;
         default:
-          this.attention = DownloadsCommon.ATTENTION_SEVERE;
+          attention = DownloadsCommon.ATTENTION_SEVERE;
           Cu.reportError(
             "Unknown reputation verdict: " +
               download.error.reputationCheckVerdict
           );
       }
     } else if (download.succeeded) {
-      // Existing higher level attention indication trumps ATTENTION_SUCCESS.
-      if (
-        this._attention != DownloadsCommon.ATTENTION_SEVERE &&
-        this._attention != DownloadsCommon.ATTENTION_WARNING
-      ) {
-        this.attention = DownloadsCommon.ATTENTION_SUCCESS;
-      }
+      attention = DownloadsCommon.ATTENTION_SUCCESS;
     } else if (download.error) {
-      // Existing higher level attention indication trumps ATTENTION_WARNING.
-      if (this._attention != DownloadsCommon.ATTENTION_SEVERE) {
-        this.attention = DownloadsCommon.ATTENTION_WARNING;
-      }
+      attention = DownloadsCommon.ATTENTION_WARNING;
     }
+    download.attention = attention;
+    this.updateAttention();
   },
 
   onDownloadChanged(download) {
@@ -1288,7 +1364,9 @@ DownloadsIndicatorDataCtor.prototype = {
   },
 
   onDownloadRemoved(download) {
+    DownloadsViewPrototype.onDownloadRemoved.call(this, download);
     this._itemCount--;
+    this.updateAttention();
     this._updateViews();
   },
 
@@ -1312,12 +1390,37 @@ DownloadsIndicatorDataCtor.prototype = {
    * Indicates whether the user is interacting with downloads, thus the
    * attention indication should not be shown even if requested.
    */
-  set attentionSuppressed(aValue) {
-    this._attentionSuppressed = aValue;
-    this._attention = DownloadsCommon.ATTENTION_NONE;
-    this._updateViews();
+  set attentionSuppressed(aFlags) {
+    this._attentionSuppressed = aFlags;
+    if (aFlags !== DownloadsCommon.SUPPRESS_NONE) {
+      for (let download of this._downloads) {
+        download.attention = DownloadsCommon.ATTENTION_NONE;
+      }
+      this.attention = DownloadsCommon.ATTENTION_NONE;
+    }
   },
-  _attentionSuppressed: false,
+  get attentionSuppressed() {
+    return this._attentionSuppressed;
+  },
+  _attentionSuppressed: DownloadsCommon.SUPPRESS_NONE,
+
+  /**
+   * Set the indicator's attention to the most severe attention state among the
+   * unseen displayed downloads, or DownloadsCommon.ATTENTION_NONE if empty.
+   */
+  updateAttention() {
+    let currentAttention = DownloadsCommon.ATTENTION_NONE;
+    let currentPriority = 0;
+    for (let download of this._downloads) {
+      let { attention } = download;
+      let priority = this._attentionPriority.get(attention);
+      if (priority > currentPriority) {
+        currentPriority = priority;
+        currentAttention = attention;
+      }
+    }
+    this.attention = currentAttention;
+  },
 
   /**
    * Updates the specified view with the current aggregate values.
@@ -1328,9 +1431,10 @@ DownloadsIndicatorDataCtor.prototype = {
   _updateView(aView) {
     aView.hasDownloads = this._hasDownloads;
     aView.percentComplete = this._percentComplete;
-    aView.attention = this._attentionSuppressed
-      ? DownloadsCommon.ATTENTION_NONE
-      : this._attention;
+    aView.attention =
+      this.attentionSuppressed !== DownloadsCommon.SUPPRESS_NONE
+        ? DownloadsCommon.ATTENTION_NONE
+        : this._attention;
   },
 
   // Property updating based on current download status
@@ -1348,8 +1452,8 @@ DownloadsIndicatorDataCtor.prototype = {
    */
   *_activeDownloads() {
     let downloads = this._isPrivate
-      ? PrivateDownloadsData.downloads
-      : DownloadsData.downloads;
+      ? PrivateDownloadsData._downloads
+      : DownloadsData._downloads;
     for (let download of downloads) {
       if (!download.stopped || (download.canceled && download.hasPartialData)) {
         yield download;
@@ -1472,6 +1576,7 @@ DownloadsSummaryData.prototype = {
   },
 
   onDownloadRemoved(download) {
+    DownloadsViewPrototype.onDownloadRemoved.call(this, download);
     let itemIndex = this._downloads.indexOf(download);
     this._downloads.splice(itemIndex, 1);
     this._updateViews();
@@ -1518,8 +1623,13 @@ DownloadsSummaryData.prototype = {
       this._downloadsForSummary()
     );
 
-    this._description = DownloadsCommon.strings.otherDownloads3(
-      summary.numDownloading
+    // Run sync to update view right away and get correct description.
+    // See refreshView for more details.
+    this._description = kDownloadsFluentStrings.formatValueSync(
+      "downloads-more-downloading",
+      {
+        count: summary.numDownloading,
+      }
     );
     this._percentComplete = summary.percentComplete;
 

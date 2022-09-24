@@ -49,6 +49,7 @@ using namespace mozilla::layout;
 
 using mozilla::gfx::ColorPattern;
 using mozilla::gfx::DeviceColor;
+using mozilla::gfx::DrawTarget;
 using mozilla::gfx::Rect;
 using mozilla::gfx::sRGBColor;
 using mozilla::gfx::ToDeviceColor;
@@ -252,7 +253,7 @@ void nsContainerFrame::DestroyFrom(nsIFrame* aDestructRoot,
   if (MOZ_UNLIKELY(!mProperties.IsEmpty())) {
     using T = mozilla::FrameProperties::UntypedDescriptor;
     bool hasO = false, hasOC = false, hasEOC = false, hasBackdrop = false;
-    mProperties.ForEach([&](const T& aProp, void*) {
+    mProperties.ForEach([&](const T& aProp, uint64_t) {
       if (aProp == OverflowProperty()) {
         hasO = true;
       } else if (aProp == OverflowContainersProperty()) {
@@ -331,22 +332,24 @@ void nsContainerFrame::GetChildLists(nsTArray<ChildList>* aLists) const {
   mFrames.AppendIfNonempty(aLists, kPrincipalList);
 
   using T = mozilla::FrameProperties::UntypedDescriptor;
-  mProperties.ForEach([this, aLists](const T& aProp, void* aValue) {
+  mProperties.ForEach([this, aLists](const T& aProp, uint64_t aValue) {
     typedef const nsFrameList* L;
     if (aProp == OverflowProperty()) {
-      L(aValue)->AppendIfNonempty(aLists, kOverflowList);
+      reinterpret_cast<L>(aValue)->AppendIfNonempty(aLists, kOverflowList);
     } else if (aProp == OverflowContainersProperty()) {
       MOZ_ASSERT(IsFrameOfType(nsIFrame::eCanContainOverflowContainers),
                  "found unexpected OverflowContainersProperty");
       Unused << this;  // silence clang -Wunused-lambda-capture in opt builds
-      L(aValue)->AppendIfNonempty(aLists, kOverflowContainersList);
+      reinterpret_cast<L>(aValue)->AppendIfNonempty(aLists,
+                                                    kOverflowContainersList);
     } else if (aProp == ExcessOverflowContainersProperty()) {
       MOZ_ASSERT(IsFrameOfType(nsIFrame::eCanContainOverflowContainers),
                  "found unexpected ExcessOverflowContainersProperty");
       Unused << this;  // silence clang -Wunused-lambda-capture in opt builds
-      L(aValue)->AppendIfNonempty(aLists, kExcessOverflowContainersList);
+      reinterpret_cast<L>(aValue)->AppendIfNonempty(
+          aLists, kExcessOverflowContainersList);
     } else if (aProp == BackdropProperty()) {
-      L(aValue)->AppendIfNonempty(aLists, kBackdropList);
+      reinterpret_cast<L>(aValue)->AppendIfNonempty(aLists, kBackdropList);
     }
     return true;
   });
@@ -434,11 +437,11 @@ DeviceColor nsDisplaySelectionOverlay::ComputeColor() const {
     return ComputeColorFromSelectionStyle(*style);
   }
   if (mSelectionValue == nsISelectionController::SELECTION_ON) {
-    colorID = LookAndFeel::ColorID::TextSelectBackground;
+    colorID = LookAndFeel::ColorID::Highlight;
   } else if (mSelectionValue == nsISelectionController::SELECTION_ATTENTION) {
-    colorID = LookAndFeel::ColorID::TextSelectBackgroundAttention;
+    colorID = LookAndFeel::ColorID::TextSelectAttentionBackground;
   } else {
-    colorID = LookAndFeel::ColorID::TextSelectBackgroundDisabled;
+    colorID = LookAndFeel::ColorID::TextSelectDisabledBackground;
   }
 
   return ApplyTransparencyIfNecessary(
@@ -450,8 +453,9 @@ void nsDisplaySelectionOverlay::Paint(nsDisplayListBuilder* aBuilder,
   DrawTarget& aDrawTarget = *aCtx->GetDrawTarget();
   ColorPattern color(ComputeColor());
 
-  nsIntRect pxRect = GetPaintRect().ToOutsidePixels(
-      mFrame->PresContext()->AppUnitsPerDevPixel());
+  nsIntRect pxRect =
+      GetPaintRect(aBuilder, aCtx)
+          .ToOutsidePixels(mFrame->PresContext()->AppUnitsPerDevPixel());
   Rect rect(pxRect.x, pxRect.y, pxRect.width, pxRect.height);
   MaybeSnapToDevicePixels(rect, aDrawTarget, true);
 
@@ -467,7 +471,7 @@ bool nsDisplaySelectionOverlay::CreateWebRenderCommands(
   wr::LayoutRect bounds = wr::ToLayoutRect(LayoutDeviceRect::FromAppUnits(
       nsRect(ToReferenceFrame(), Frame()->GetSize()),
       mFrame->PresContext()->AppUnitsPerDevPixel()));
-  aBuilder.PushRect(bounds, bounds, !BackfaceIsHidden(),
+  aBuilder.PushRect(bounds, bounds, !BackfaceIsHidden(), false, false,
                     wr::ToColorF(ComputeColor()));
   return true;
 }
@@ -494,11 +498,9 @@ void nsContainerFrame::DisplaySelectionOverlay(nsDisplayListBuilder* aBuilder,
   nsIContent* newContent = mContent->GetParent();
 
   // check to see if we are anonymous content
-  int32_t offset = 0;
-  if (newContent) {
-    // XXXbz there has GOT to be a better way of determining this!
-    offset = newContent->ComputeIndexOf(mContent);
-  }
+  // XXXbz there has GOT to be a better way of determining this!
+  int32_t offset =
+      newContent ? newContent->ComputeIndexOf_Deprecated(mContent) : 0;
 
   // look up to see what selection(s) are on this frame
   UniquePtr<SelectionDetails> details =
@@ -729,7 +731,6 @@ static bool IsTopLevelWidget(nsIWidget* aWidget) {
 void nsContainerFrame::SyncWindowProperties(nsPresContext* aPresContext,
                                             nsIFrame* aFrame, nsView* aView,
                                             gfxContext* aRC, uint32_t aFlags) {
-#ifdef MOZ_XUL
   if (!aView || !nsCSSRendering::IsCanvasFrame(aFrame) || !aView->HasWidget())
     return;
 
@@ -776,6 +777,11 @@ void nsContainerFrame::SyncWindowProperties(nsPresContext* aPresContext,
     nsCOMPtr<nsIWidget> viewWidget = aView->GetWidget();
     viewWidget->SetTransparencyMode(mode);
     windowWidget->SetWindowShadowStyle(shadow);
+
+    // For macOS, apply color scheme overrides to the top level window widget.
+    if (auto scheme = aPresContext->GetOverriddenOrEmbedderColorScheme()) {
+      windowWidget->SetColorScheme(scheme);
+    }
   }
 
   if (!aRC) return;
@@ -806,7 +812,6 @@ void nsContainerFrame::SyncWindowProperties(nsPresContext* aPresContext,
     }
   }
   SetSizeConstraints(aPresContext, windowWidget, minSize, maxSize);
-#endif
 }
 
 void nsContainerFrame::SetSizeConstraints(nsPresContext* aPresContext,
@@ -2714,9 +2719,34 @@ bool nsContainerFrame::IsFrameTreeTooDeep(const ReflowInput& aReflowInput,
 bool nsContainerFrame::ShouldAvoidBreakInside(
     const ReflowInput& aReflowInput) const {
   const auto* disp = StyleDisplay();
-  return !aReflowInput.mFlags.mIsTopOfPage &&
-         StyleBreakWithin::Avoid == disp->mBreakInside &&
-         !IsAbsolutelyPositioned(disp) && !GetPrevInFlow();
+  const bool mayAvoidBreak = [&] {
+    switch (disp->mBreakInside) {
+      case StyleBreakWithin::Auto:
+        return false;
+      case StyleBreakWithin::Avoid:
+        return true;
+      case StyleBreakWithin::AvoidPage:
+        return aReflowInput.mBreakType == ReflowInput::BreakType::Page;
+      case StyleBreakWithin::AvoidColumn:
+        return aReflowInput.mBreakType == ReflowInput::BreakType::Column;
+    }
+    MOZ_ASSERT_UNREACHABLE("Unknown break-inside value");
+    return false;
+  }();
+
+  if (!mayAvoidBreak) {
+    return false;
+  }
+  if (aReflowInput.mFlags.mIsTopOfPage) {
+    return false;
+  }
+  if (IsAbsolutelyPositioned(disp)) {
+    return false;
+  }
+  if (GetPrevInFlow()) {
+    return false;
+  }
+  return true;
 }
 
 void nsContainerFrame::ConsiderChildOverflow(OverflowAreas& aOverflowAreas,
@@ -2724,16 +2754,17 @@ void nsContainerFrame::ConsiderChildOverflow(OverflowAreas& aOverflowAreas,
   if (StyleDisplay()->IsContainLayout() &&
       IsFrameOfType(eSupportsContainLayoutAndPaint)) {
     // If we have layout containment and are not a non-atomic, inline-level
-    // principal box, we should only consider our child's visual (ink) overflow,
+    // principal box, we should only consider our child's ink overflow,
     // leaving the scrollable regions of the parent unaffected.
     // Note: scrollable overflow is a subset of ink overflow,
-    // so this has the same affect as unioning the child's visual and
+    // so this has the same affect as unioning the child's ink and
     // scrollable overflow with the parent's ink overflow.
-    nsRect childVisual = aChildFrame->InkOverflowRect();
-    OverflowAreas combined = OverflowAreas(childVisual, nsRect());
-    aOverflowAreas.UnionWith(combined + aChildFrame->GetPosition());
+    const OverflowAreas childOverflows(aChildFrame->InkOverflowRect(),
+                                       nsRect());
+    aOverflowAreas.UnionWith(childOverflows + aChildFrame->GetPosition());
   } else {
-    aOverflowAreas.UnionWith(aChildFrame->GetOverflowAreasRelativeToParent());
+    aOverflowAreas.UnionWith(
+        aChildFrame->GetActualAndNormalOverflowAreasRelativeToParent());
   }
 }
 

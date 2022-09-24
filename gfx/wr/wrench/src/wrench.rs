@@ -9,13 +9,11 @@ use crossbeam::sync::chase_lev;
 use dwrote;
 #[cfg(all(unix, not(target_os = "android")))]
 use font_loader::system_fonts;
-use winit::EventsLoopProxy;
+use winit::event_loop::EventLoopProxy;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Receiver;
-use time;
-use webrender;
 use webrender::api::*;
 use webrender::render_api::*;
 use webrender::api::units::*;
@@ -38,7 +36,7 @@ pub enum FontDescriptor {
 }
 
 struct NotifierData {
-    events_loop_proxy: Option<EventsLoopProxy>,
+    events_loop_proxy: Option<EventLoopProxy<()>>,
     frames_notified: u32,
     timing_receiver: chase_lev::Stealer<time::SteadyTime>,
     verbose: bool,
@@ -46,7 +44,7 @@ struct NotifierData {
 
 impl NotifierData {
     fn new(
-        events_loop_proxy: Option<EventsLoopProxy>,
+        events_loop_proxy: Option<EventLoopProxy<()>>,
         timing_receiver: chase_lev::Stealer<time::SteadyTime>,
         verbose: bool,
     ) -> Self {
@@ -86,7 +84,7 @@ impl Notifier {
 
         if let Some(ref _elp) = data.events_loop_proxy {
             #[cfg(not(target_os = "android"))]
-            let _ = _elp.wakeup();
+            let _ = _elp.send_event(());
         }
     }
 }
@@ -102,8 +100,7 @@ impl RenderNotifier for Notifier {
 
     fn new_frame_ready(&self, _: DocumentId,
                        scrolled: bool,
-                       _composite_needed: bool,
-                       _render_time: Option<u64>) {
+                       _composite_needed: bool) {
         self.update(!scrolled);
     }
 }
@@ -118,16 +115,13 @@ impl WrenchThing for CapturedDocument {
     fn next_frame(&mut self) {}
     fn prev_frame(&mut self) {}
     fn do_frame(&mut self, wrench: &mut Wrench) -> u32 {
-        match self.root_pipeline_id.take() {
-            Some(root_pipeline_id) => {
-                // skip the first frame - to not overwrite the loaded one
-                let mut txn = Transaction::new();
-                txn.set_root_pipeline(root_pipeline_id);
-                wrench.api.send_transaction(self.document_id, txn);
-            }
-            None => {
-                wrench.refresh();
-            }
+        if let Some(root_pipeline_id) = self.root_pipeline_id.take() {
+            // skip the first frame - to not overwrite the loaded one
+            let mut txn = Transaction::new();
+            txn.set_root_pipeline(root_pipeline_id);
+            wrench.api.send_transaction(self.document_id, txn);
+        } else {
+            wrench.refresh();
         }
         0
     }
@@ -163,12 +157,12 @@ impl CapturedSequence {
         }
     }
 
-    fn scene_root(root: &PathBuf, scene: u32) -> PathBuf {
+    fn scene_root(root: &Path, scene: u32) -> PathBuf {
         let path = format!("scenes/{:05}", scene);
         root.join(path)
     }
 
-    fn frame_root(root: &PathBuf, scene: u32, frame: u32) -> PathBuf {
+    fn frame_root(root: &Path, scene: u32, frame: u32) -> PathBuf {
         let path = format!("scenes/{:05}/frames/{:05}", scene, frame);
         root.join(path)
     }
@@ -219,9 +213,10 @@ pub struct Wrench {
 }
 
 impl Wrench {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         window: &mut WindowWrapper,
-        proxy: Option<EventsLoopProxy>,
+        proxy: Option<EventLoopProxy<()>>,
         shader_override_path: Option<PathBuf>,
         use_optimized_shaders: bool,
         size: DeviceIntSize,
@@ -272,7 +267,7 @@ impl Wrench {
         // put an Awakened event into the queue to kick off the first frame
         if let Some(ref _elp) = proxy {
             #[cfg(not(target_os = "android"))]
-            let _ = _elp.wakeup();
+            let _ = _elp.send_event(());
         }
 
         let (timing_sender, timing_receiver) = chase_lev::deque();
@@ -364,22 +359,19 @@ impl Wrench {
         for metric in metrics {
             positions.push(cursor);
 
-            match metric {
-                Some(metric) => {
-                    let glyph_rect = LayoutRect::from_origin_and_size(
-                        LayoutPoint::new(cursor.x + metric.left as f32, cursor.y - metric.top as f32),
-                        LayoutSize::new(metric.width as f32, metric.height as f32)
-                    );
-                    bounding_rect = bounding_rect.union(&glyph_rect);
-                    cursor += direction * metric.advance;
-                }
-                None => {
-                    // Extract the advances from the metrics. The get_glyph_dimensions API
-                    // has a limitation that it can't currently get dimensions for non-renderable
-                    // glyphs (e.g. spaces), so just use a rough estimate in that case.
-                    let space_advance = size / 3.0;
-                    cursor += direction * space_advance;
-                }
+            if let Some(GlyphDimensions { left, top, width, height, advance }) = metric {
+                let glyph_rect = LayoutRect::from_origin_and_size(
+                    LayoutPoint::new(cursor.x + left as f32, cursor.y - top as f32),
+                    LayoutSize::new(width as f32, height as f32)
+                );
+                bounding_rect = bounding_rect.union(&glyph_rect);
+                cursor += direction * advance;
+            } else {
+                // Extract the advances from the metrics. The get_glyph_dimensions API
+                // has a limitation that it can't currently get dimensions for non-renderable
+                // glyphs (e.g. spaces), so just use a rough estimate in that case.
+                let space_advance = size / 3.0;
+                cursor += direction * space_advance;
             }
         }
 
@@ -562,7 +554,7 @@ impl Wrench {
         &mut self,
         frame_number: u32,
         display_lists: Vec<(PipelineId, BuiltDisplayList)>,
-        scroll_offsets: &HashMap<ExternalScrollId, LayoutPoint>,
+        scroll_offsets: &HashMap<ExternalScrollId, Vec<SampledScrollOffset>>,
     ) {
         let root_background_color = Some(ColorF::new(1.0, 1.0, 1.0, 1.0));
 
@@ -573,15 +565,14 @@ impl Wrench {
                 root_background_color,
                 self.window_size_f32(),
                 display_list,
-                false,
             );
         }
 
-        for (id, offset) in scroll_offsets {
-            txn.scroll_node_with_id(*offset, *id, ScrollClamping::NoClamping);
+        for (id, offsets) in scroll_offsets {
+            txn.set_scroll_offsets(*id, offsets.clone());
         }
 
-        txn.generate_frame(0);
+        txn.generate_frame(0, RenderReasons::TESTING);
         self.api.send_transaction(self.document_id, txn);
     }
 
@@ -602,7 +593,7 @@ impl Wrench {
     pub fn refresh(&mut self) {
         self.begin_frame();
         let mut txn = Transaction::new();
-        txn.generate_frame(0);
+        txn.generate_frame(0, RenderReasons::TESTING);
         self.api.send_transaction(self.document_id, txn);
     }
 
@@ -630,10 +621,10 @@ impl Wrench {
         self.renderer.device.begin_frame(); // next line might compile shaders:
         let dr = self.renderer.debug_renderer().unwrap();
 
-        for ref co in &color_and_offset {
+        for co in &color_and_offset {
             let x = 15.0 + co.1;
             let mut y = 15.0 + co.1 + dr.line_height();
-            for ref line in &help_lines {
+            for line in &help_lines {
                 dr.add_text(x, y, line, co.0.into(), None);
                 y += dr.line_height();
             }

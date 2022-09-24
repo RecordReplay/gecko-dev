@@ -1,16 +1,17 @@
+use crate::{consumer::Consumer, producer::Producer};
 use alloc::{sync::Arc, vec::Vec};
+use cache_padded::CachePadded;
 use core::{
     cell::UnsafeCell,
     cmp::min,
-    mem::{self, MaybeUninit},
+    mem::MaybeUninit,
     ptr::{self, copy},
     sync::atomic::{AtomicUsize, Ordering},
 };
-use cache_padded::CachePadded;
-use crate::{consumer::Consumer, producer::Producer};
 
 pub(crate) struct SharedVec<T: Sized> {
     cell: UnsafeCell<Vec<T>>,
+    len: usize,
 }
 
 unsafe impl<T: Sized> Sync for SharedVec<T> {}
@@ -18,8 +19,13 @@ unsafe impl<T: Sized> Sync for SharedVec<T> {}
 impl<T: Sized> SharedVec<T> {
     pub fn new(data: Vec<T>) -> Self {
         Self {
+            len: data.len(),
             cell: UnsafeCell::new(data),
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
     }
     pub unsafe fn get_ref(&self) -> &Vec<T> {
         &*self.cell.get()
@@ -57,7 +63,7 @@ impl<T: Sized> RingBuffer<T> {
 
     /// Returns capacity of the ring buffer.
     pub fn capacity(&self) -> usize {
-        unsafe { self.data.get_ref() }.len() - 1
+        self.data.len() - 1
     }
 
     /// Checks if the ring buffer is empty.
@@ -71,14 +77,14 @@ impl<T: Sized> RingBuffer<T> {
     pub fn is_full(&self) -> bool {
         let head = self.head.load(Ordering::Acquire);
         let tail = self.tail.load(Ordering::Acquire);
-        (tail + 1) % (self.capacity() + 1) == head
+        (tail + 1) % self.data.len() == head
     }
 
     /// The length of the data in the buffer.
     pub fn len(&self) -> usize {
         let head = self.head.load(Ordering::Acquire);
         let tail = self.tail.load(Ordering::Acquire);
-        (tail + self.capacity() + 1 - head) % (self.capacity() + 1)
+        (tail + self.data.len() - head) % self.data.len()
     }
 
     /// The remaining space in the buffer.
@@ -102,7 +108,7 @@ impl<T: Sized> Drop for RingBuffer<T> {
         };
 
         let drop = |elem_ref: &mut MaybeUninit<T>| unsafe {
-            mem::replace(elem_ref, MaybeUninit::uninit()).assume_init();
+            elem_ref.as_ptr().read();
         };
         for elem in data[slices.0].iter_mut() {
             drop(elem);

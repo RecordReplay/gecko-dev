@@ -10,6 +10,7 @@
 #include "NativeKeyBindings.h"
 #include "ScreenHelperCocoa.h"
 #include "TextInputHandler.h"
+#include "nsCocoaUtils.h"
 #include "nsObjCExceptions.h"
 #include "nsCOMPtr.h"
 #include "nsWidgetsCID.h"
@@ -46,6 +47,7 @@
 #include "mozilla/BasicEvents.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/NativeKeyBindingsType.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ScopeExit.h"
@@ -134,6 +136,7 @@ nsCocoaWindow::nsCocoaWindow()
       mAnimationType(nsIWidget::eGenericWindowAnimation),
       mWindowMadeHere(false),
       mSheetNeedsShow(false),
+      mSizeMode(nsSizeMode_Normal),
       mInFullScreenMode(false),
       mInFullScreenTransition(false),
       mIgnoreOcclusionCount(0),
@@ -374,12 +377,28 @@ static unsigned int WindowMaskForBorderStyle(nsBorderStyle aBorderStyle) {
    * NSWindowStyleMaskBorderless]".  This implies that a borderless window
    * shouldn't have any other styles than NSWindowStyleMaskBorderless.
    */
-  if (!allOrDefault && !(aBorderStyle & eBorderStyle_title)) return NSWindowStyleMaskBorderless;
+  if (!allOrDefault && !(aBorderStyle & eBorderStyle_title)) {
+    if (aBorderStyle & eBorderStyle_minimize) {
+      /* It appears that at a minimum, borderless windows can be miniaturizable,
+       * effectively contradicting some of Apple's documentation referenced
+       * above. One such exception is the screen share indicator, see
+       * bug 1742877.
+       */
+      return NSWindowStyleMaskBorderless | NSWindowStyleMaskMiniaturizable;
+    }
+    return NSWindowStyleMaskBorderless;
+  }
 
   unsigned int mask = NSWindowStyleMaskTitled;
-  if (allOrDefault || aBorderStyle & eBorderStyle_close) mask |= NSWindowStyleMaskClosable;
-  if (allOrDefault || aBorderStyle & eBorderStyle_minimize) mask |= NSWindowStyleMaskMiniaturizable;
-  if (allOrDefault || aBorderStyle & eBorderStyle_resizeh) mask |= NSWindowStyleMaskResizable;
+  if (allOrDefault || aBorderStyle & eBorderStyle_close) {
+    mask |= NSWindowStyleMaskClosable;
+  }
+  if (allOrDefault || aBorderStyle & eBorderStyle_minimize) {
+    mask |= NSWindowStyleMaskMiniaturizable;
+  }
+  if (allOrDefault || aBorderStyle & eBorderStyle_resizeh) {
+    mask |= NSWindowStyleMaskResizable;
+  }
 
   return mask;
 }
@@ -399,7 +418,6 @@ nsresult nsCocoaWindow::CreateNativeWindow(const NSRect& aRect, nsBorderStyle aB
   switch (mWindowType) {
     case eWindowType_invisible:
     case eWindowType_child:
-    case eWindowType_plugin:
       break;
     case eWindowType_popup:
       if (aBorderStyle != eBorderStyle_default && mBorderStyle & eBorderStyle_title) {
@@ -780,12 +798,12 @@ void nsCocoaWindow::Show(bool bState) {
 
   if (!mWindow) return;
 
-  // We need to re-execute sometimes in order to bring already-visible
-  // windows forward.
-  if (!mSheetNeedsShow && !bState && ![mWindow isVisible]) return;
-
-  // Protect against re-entering.
-  if (bState && [mWindow isBeingShown]) return;
+  if (!mSheetNeedsShow) {
+    // Early exit if our current visibility state is already the requested state.
+    if (bState == ([mWindow isVisible] || [mWindow isBeingShown])) {
+      return;
+    }
+  }
 
   [mWindow setBeingShown:bState];
   if (bState && !mWasShown) {
@@ -798,6 +816,14 @@ void nsCocoaWindow::Show(bool bState) {
       (parentWidget) ? (NSWindow*)parentWidget->GetNativeData(NS_NATIVE_WINDOW) : nil;
 
   if (bState && !mBounds.IsEmpty()) {
+    // If we had set the activationPolicy to accessory, then right now we won't
+    // have a dock icon. Make sure that we undo that and show a dock icon now that
+    // we're going to show a window.
+    if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular) {
+      [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+      PR_SetEnv("MOZ_APP_NO_DOCK=");
+    }
+
     // Don't try to show a popup when the parent isn't visible or is minimized.
     if (mWindowType == eWindowType_popup && nativeParentWindow) {
       if (![nativeParentWindow isVisible] || [nativeParentWindow isMiniaturized]) {
@@ -920,8 +946,7 @@ void nsCocoaWindow::Show(bool bState) {
               behavior = NSWindowAnimationBehaviorDocumentWindow;
               break;
             default:
-              MOZ_ASSERT_UNREACHABLE("unexpected mAnimationType value");
-              // fall through
+              MOZ_FALLTHROUGH_ASSERT("unexpected mAnimationType value");
             case nsIWidget::eGenericWindowAnimation:
               behavior = NSWindowAnimationBehaviorDefault;
               break;
@@ -1068,18 +1093,9 @@ bool nsCocoaWindow::NeedsRecreateToReshow() {
   return (mWindowType == eWindowType_popup) && mWasShown && ([[NSScreen screens] count] > 1);
 }
 
-nsresult nsCocoaWindow::ConfigureChildren(const nsTArray<Configuration>& aConfigurations) {
+WindowRenderer* nsCocoaWindow::GetWindowRenderer() {
   if (mPopupContentView) {
-    mPopupContentView->ConfigureChildren(aConfigurations);
-  }
-  return NS_OK;
-}
-
-LayerManager* nsCocoaWindow::GetLayerManager(PLayerTransactionChild* aShadowManager,
-                                             LayersBackend aBackendHint,
-                                             LayerManagerPersistence aPersistence) {
-  if (mPopupContentView) {
-    return mPopupContentView->GetLayerManager(aShadowManager, aBackendHint, aPersistence);
+    return mPopupContentView->GetWindowRenderer();
   }
   return nullptr;
 }
@@ -1642,6 +1658,12 @@ void nsCocoaWindow::UpdateFullscreenState(bool aFullScreen, bool aNativeMode) {
   if (mWidgetListener && wasInFullscreen != aFullScreen) {
     mWidgetListener->FullscreenChanged(aFullScreen);
   }
+
+  // Notify the mainChildView with our new fullscreen state.
+  nsChildView* mainChildView = static_cast<nsChildView*>([[mWindow mainChildView] widget]);
+  if (mainChildView) {
+    mainChildView->UpdateFullscreen(aFullScreen);
+  }
 }
 
 inline bool nsCocoaWindow::ShouldToggleNativeFullscreen(bool aFullScreen,
@@ -1667,12 +1689,11 @@ inline bool nsCocoaWindow::ShouldToggleNativeFullscreen(bool aFullScreen,
   return aFullScreen;
 }
 
-nsresult nsCocoaWindow::MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen) {
+nsresult nsCocoaWindow::MakeFullScreen(bool aFullScreen) {
   return DoMakeFullScreen(aFullScreen, AlwaysUsesNativeFullScreen());
 }
 
-nsresult nsCocoaWindow::MakeFullScreenWithNativeTransition(bool aFullScreen,
-                                                           nsIScreen* aTargetScreen) {
+nsresult nsCocoaWindow::MakeFullScreenWithNativeTransition(bool aFullScreen) {
   return DoMakeFullScreen(aFullScreen, true);
 }
 
@@ -2353,6 +2374,18 @@ void nsCocoaWindow::SetWindowOpacity(float aOpacity) {
   NS_OBJC_END_TRY_IGNORE_BLOCK;
 }
 
+void nsCocoaWindow::SetColorScheme(const Maybe<ColorScheme>& aScheme) {
+  NS_OBJC_BEGIN_TRY_IGNORE_BLOCK;
+
+  if (!mWindow) {
+    return;
+  }
+
+  mWindow.appearance = aScheme ? NSAppearanceForColorScheme(*aScheme) : nil;
+
+  NS_OBJC_END_TRY_IGNORE_BLOCK;
+}
+
 static inline CGAffineTransform GfxMatrixToCGAffineTransform(const gfx::Matrix& m) {
   CGAffineTransform t;
   t.a = m._11;
@@ -3022,11 +3055,30 @@ already_AddRefed<nsIWidget> nsIWidget::CreateChildWindow() {
 @implementation NSView (FrameViewMethodSwizzling)
 
 - (NSPoint)FrameView__closeButtonOrigin {
-  NSPoint defaultPosition = [self FrameView__closeButtonOrigin];
-  if ([[self window] isKindOfClass:[ToolbarWindow class]]) {
-    return [(ToolbarWindow*)[self window] windowButtonsPositionWithDefaultPosition:defaultPosition];
+  if (![self.window isKindOfClass:[ToolbarWindow class]]) {
+    return self.FrameView__closeButtonOrigin;
   }
-  return defaultPosition;
+  ToolbarWindow* win = (ToolbarWindow*)[self window];
+  if (win.drawsContentsIntoWindowFrame && !(win.styleMask & NSWindowStyleMaskFullScreen) &&
+      (win.styleMask & NSWindowStyleMaskTitled)) {
+    const NSRect buttonsRect = win.windowButtonsRect;
+    if (NSIsEmptyRect(buttonsRect)) {
+      // Empty rect. Let's hide the buttons.
+      // Position is in non-flipped window coordinates. Using frame's height
+      // for the vertical coordinate will move the buttons above the window,
+      // making them invisible.
+      return NSMakePoint(buttonsRect.origin.x, win.frame.size.height);
+    } else if (win.windowTitlebarLayoutDirection == NSUserInterfaceLayoutDirectionRightToLeft) {
+      // We're in RTL mode, which means that the close button is the rightmost
+      // button of the three window buttons. and buttonsRect.origin is the
+      // bottom left corner of the green (zoom) button. The close button is 40px
+      // to the right of the zoom button. This is confirmed to be the same on
+      // all macOS versions between 10.12 - 12.0.
+      return NSMakePoint(buttonsRect.origin.x + 40.0f, buttonsRect.origin.y);
+    }
+    return buttonsRect.origin;
+  }
+  return self.FrameView__closeButtonOrigin;
 }
 
 - (CGFloat)FrameView__titlebarHeight {
@@ -3037,8 +3089,12 @@ already_AddRefed<nsIWidget> nsIWidget::CreateChildWindow() {
     // corner of the window.
     ToolbarWindow* win = (ToolbarWindow*)[self window];
     CGFloat frameHeight = [self frame].size.height;
-    NSPoint pointAboveWindow = {0.0, frameHeight};
-    CGFloat windowButtonY = [win windowButtonsPositionWithDefaultPosition:pointAboveWindow].y;
+    CGFloat windowButtonY = frameHeight;
+    if (!NSIsEmptyRect(win.windowButtonsRect) && win.drawsContentsIntoWindowFrame &&
+        !(win.styleMask & NSWindowStyleMaskFullScreen) &&
+        (win.styleMask & NSWindowStyleMaskTitled)) {
+      windowButtonY = win.windowButtonsRect.origin.y;
+    }
     height = std::max(height, frameHeight - windowButtonY);
   }
   return height;
@@ -3643,6 +3699,34 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
   }
 }
 
+static bool ScreenHasNotch(nsCocoaWindow* aGeckoWindow) {
+  if (@available(macOS 12.0, *)) {
+    nsCOMPtr<nsIScreen> widgetScreen = aGeckoWindow->GetWidgetScreen();
+    NSScreen* cocoaScreen = ScreenHelperCocoa::CocoaScreenForScreen(widgetScreen);
+    return cocoaScreen.safeAreaInsets.top != 0.0f;
+  }
+  return false;
+}
+
+static bool ShouldShiftByMenubarHeightInFullscreen(nsCocoaWindow* aWindow) {
+  switch (StaticPrefs::widget_macos_shift_by_menubar_on_fullscreen()) {
+    case 0:
+      return false;
+    case 1:
+      return true;
+    default:
+      break;
+  }
+  // TODO: On notch-less macbooks, this creates extra space when the
+  // "automatically show and hide the menubar on fullscreen" option is unchecked
+  // (default checked). We tried to detect that in bug 1737831 but it wasn't
+  // reliable enough, see the regressions from that bug. For now, stick to the
+  // good behavior for default configurations (that is, shift by menubar height
+  // on notch-less macbooks, and don't for devices that have a notch). This will
+  // need refinement in the future.
+  return !ScreenHasNotch(aWindow);
+}
+
 - (void)updateTitlebarShownAmount:(CGFloat)aShownAmount {
   NSInteger styleMask = [self styleMask];
   if (!(styleMask & NSWindowStyleMaskFullScreen)) {
@@ -3655,10 +3739,10 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
   // if the menubar is shown or is in the process of being shown, and 0
   // otherwise. Since we are multiplying the menubar height by aShownAmount, we
   // always want the full height.
-  if ([[NSApp mainMenu] menuBarHeight] > 0) {
-    mMenuBarHeight = [[NSApp mainMenu] menuBarHeight];
+  CGFloat menuBarHeight = NSApp.mainMenu.menuBarHeight;
+  if (menuBarHeight > 0.0f) {
+    mMenuBarHeight = menuBarHeight;
   }
-
   if ([[self delegate] isKindOfClass:[WindowDelegate class]]) {
     WindowDelegate* windowDelegate = (WindowDelegate*)[self delegate];
     nsCocoaWindow* geckoWindow = [windowDelegate geckoWidget];
@@ -3666,12 +3750,14 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
       return;
     }
 
-    nsIWidgetListener* listener = geckoWindow->GetWidgetListener();
-    if (listener) {
+    if (nsIWidgetListener* listener = geckoWindow->GetWidgetListener()) {
       // Use the titlebar height cached in our frame rather than
       // [ToolbarWindow titlebarHeight]. titlebarHeight returns 0 when we're in
       // fullscreen.
-      CGFloat shiftByPixels = (mInitialTitlebarHeight + mMenuBarHeight) * aShownAmount;
+      CGFloat shiftByPixels = mInitialTitlebarHeight * aShownAmount;
+      if (ShouldShiftByMenubarHeightInFullscreen(geckoWindow)) {
+        shiftByPixels += mMenuBarHeight * aShownAmount;
+      }
       // Use mozilla::DesktopToLayoutDeviceScale rather than the
       // DesktopToLayoutDeviceScale in nsCocoaWindow. The latter accounts for
       // screen DPI. We don't want that because the revealAmount property
@@ -3811,20 +3897,8 @@ static const NSString* kStateWantsTitleDrawn = @"wantsTitleDrawn";
   }
 }
 
-- (NSPoint)windowButtonsPositionWithDefaultPosition:(NSPoint)aDefaultPosition {
-  NSInteger styleMask = [self styleMask];
-  if ([self drawsContentsIntoWindowFrame] && !(styleMask & NSWindowStyleMaskFullScreen) &&
-      (styleMask & NSWindowStyleMaskTitled)) {
-    if (NSIsEmptyRect(mWindowButtonsRect)) {
-      // Empty rect. Let's hide the buttons.
-      // Position is in non-flipped window coordinates. Using frame's height
-      // for the vertical coordinate will move the buttons above the window,
-      // making them invisible.
-      return NSMakePoint(0, [self frame].size.height);
-    }
-    return NSMakePoint(mWindowButtonsRect.origin.x, mWindowButtonsRect.origin.y);
-  }
-  return aDefaultPosition;
+- (NSRect)windowButtonsRect {
+  return mWindowButtonsRect;
 }
 
 // Returning YES here makes the setShowsToolbarButton method work even though
@@ -3945,8 +4019,6 @@ static const NSUInteger kWindowShadowOptionsTooltipMojaveOrLater = 4;
 
     case StyleWindowShadow::Default:  // we treat "default" as "default panel"
     case StyleWindowShadow::Menu:
-    case StyleWindowShadow::Sheet:
-    case StyleWindowShadow::Cliprounded:  // this is a Windows-only value.
       return kWindowShadowOptionsMenu;
 
     case StyleWindowShadow::Tooltip:

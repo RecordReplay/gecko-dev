@@ -6,7 +6,7 @@
 // Check that calling console.table on a variable which is modified after the
 // console.table call only shows data for when the variable was logged.
 
-const TEST_URI = `data:text/html,Test console.table with modified variable`;
+const TEST_URI = `data:text/html,<!DOCTYPE html>Test console.table with modified variable`;
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
@@ -16,14 +16,20 @@ add_task(async function() {
     content.wrappedJSObject.console.table(x);
     x.push("c");
     content.wrappedJSObject.console.table(x);
-    x.sort((a, b) => b - a);
+    x.sort((a, b) => {
+      if (a < b) {
+        return 1;
+      }
+      if (a > b) {
+        return -1;
+      }
+      return 0;
+    });
     content.wrappedJSObject.console.table(x);
   });
 
   const [table1, table2, table3] = await waitFor(() => {
-    const res = hud.ui.outputNode.querySelectorAll(
-      ".message .new-consoletable"
-    );
+    const res = hud.ui.outputNode.querySelectorAll(".message .consoletable");
     if (res.length === 3) {
       return res;
     }

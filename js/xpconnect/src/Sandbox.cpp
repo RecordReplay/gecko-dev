@@ -10,10 +10,13 @@
 
 #include "AccessCheck.h"
 #include "jsfriendapi.h"
-#include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject
+#include "js/Array.h"             // JS::GetArrayLength, JS::IsArrayObject
+#include "js/CallAndConstruct.h"  // JS::Call, JS::IsCallable
 #include "js/CharacterEncoding.h"
 #include "js/CompilationAndEvaluation.h"
 #include "js/Object.h"  // JS::GetClass, JS::GetCompartment, JS::GetReservedSlot
+#include "js/PropertyAndElement.h"  // JS_DefineFunction, JS_DefineFunctions, JS_DefineProperty, JS_GetElement, JS_GetProperty, JS_HasProperty, JS_SetProperty, JS_SetPropertyById
+#include "js/PropertyDescriptor.h"  // JS::PropertyDescriptor, JS_GetOwnPropertyDescriptorById, JS_GetPropertyDescriptorById
 #include "js/PropertySpec.h"
 #include "js/Proxy.h"
 #include "js/SourceText.h"
@@ -32,6 +35,7 @@
 #include "xpc_make_class.h"
 #include "XPCWrapper.h"
 #include "Crypto.h"
+#include "mozilla/dom/AbortControllerBinding.h"
 #include "mozilla/dom/AutoEntryScript.h"
 #include "mozilla/dom/BindingCallContext.h"
 #include "mozilla/dom/BindingUtils.h"
@@ -51,34 +55,40 @@
 #include "mozilla/dom/Fetch.h"
 #include "mozilla/dom/FileBinding.h"
 #include "mozilla/dom/HeadersBinding.h"
+#include "mozilla/dom/IOUtilsBinding.h"
 #include "mozilla/dom/InspectorUtilsBinding.h"
 #include "mozilla/dom/MessageChannelBinding.h"
 #include "mozilla/dom/MessagePortBinding.h"
+#include "mozilla/dom/ModuleLoader.h"
 #include "mozilla/dom/NodeBinding.h"
 #include "mozilla/dom/NodeFilterBinding.h"
+#include "mozilla/dom/PathUtilsBinding.h"
 #include "mozilla/dom/PerformanceBinding.h"
 #include "mozilla/dom/PromiseBinding.h"
 #include "mozilla/dom/PromiseDebuggingBinding.h"
 #include "mozilla/dom/RangeBinding.h"
 #include "mozilla/dom/RequestBinding.h"
+#include "mozilla/dom/ReadableStreamBinding.h"
 #include "mozilla/dom/ResponseBinding.h"
 #ifdef MOZ_WEBRTC
 #  include "mozilla/dom/RTCIdentityProviderRegistrar.h"
 #endif
 #include "mozilla/dom/FileReaderBinding.h"
+#include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/SelectionBinding.h"
+#include "mozilla/dom/StorageManager.h"
 #include "mozilla/dom/TextDecoderBinding.h"
 #include "mozilla/dom/TextEncoderBinding.h"
 #include "mozilla/dom/UnionConversions.h"
 #include "mozilla/dom/URLBinding.h"
 #include "mozilla/dom/URLSearchParamsBinding.h"
 #include "mozilla/dom/XMLHttpRequest.h"
+#include "mozilla/dom/WebSocketBinding.h"
+#include "mozilla/dom/WindowBinding.h"
 #include "mozilla/dom/XMLSerializerBinding.h"
 #include "mozilla/dom/FormDataBinding.h"
 #include "mozilla/dom/nsCSPContext.h"
-#include "mozilla/glean/bindings/Glean.h"
-#include "mozilla/glean/bindings/GleanPings.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/DeferredFinalize.h"
 #include "mozilla/ExtensionPolicyService.h"
@@ -89,25 +99,26 @@
 
 using namespace mozilla;
 using namespace JS;
+using namespace JS::loader;
 using namespace xpc;
 
 using mozilla::dom::DestroyProtoAndIfaceCache;
 using mozilla::dom::IndexedDatabaseManager;
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(SandboxPrivate)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(SandboxPrivate)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(SandboxPrivate)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
   NS_IMPL_CYCLE_COLLECTION_UNLINK_WEAK_REFERENCE
   NS_IMPL_CYCLE_COLLECTION_UNLINK_WEAK_PTR
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mModuleLoader)
   tmp->UnlinkObjectsInGlobal();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(SandboxPrivate)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mModuleLoader)
   tmp->TraverseObjectsInGlobal(cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(SandboxPrivate)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(SandboxPrivate)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(SandboxPrivate)
@@ -355,6 +366,57 @@ static bool SandboxCreateFetch(JSContext* cx, HandleObject obj) {
          dom::Headers_Binding::GetConstructorObject(cx);
 }
 
+static bool SandboxCreateStorage(JSContext* cx, JS::HandleObject obj) {
+  MOZ_ASSERT(JS_IsGlobalObject(obj));
+
+  nsIGlobalObject* native = xpc::NativeGlobal(obj);
+  MOZ_ASSERT(native);
+
+  dom::StorageManager* storageManager = new dom::StorageManager(native);
+  JS::RootedObject wrapped(cx, storageManager->WrapObject(cx, nullptr));
+  return JS_DefineProperty(cx, obj, "storage", wrapped, JSPROP_ENUMERATE);
+}
+
+static bool SandboxStructuredClone(JSContext* cx, unsigned argc, Value* vp) {
+  CallArgs args = CallArgsFromVp(argc, vp);
+
+  if (!args.requireAtLeast(cx, "structuredClone", 1)) {
+    return false;
+  }
+
+  RootedDictionary<dom::StructuredSerializeOptions> options(cx);
+  BindingCallContext callCx(cx, "structuredClone");
+  if (!options.Init(cx, args.hasDefined(1) ? args[1] : JS::NullHandleValue,
+                    "Argument 2", false)) {
+    return false;
+  }
+
+  nsIGlobalObject* global = CurrentNativeGlobal(cx);
+  if (!global) {
+    JS_ReportErrorASCII(cx, "structuredClone: Missing global");
+    return false;
+  }
+
+  JS::Rooted<JS::Value> result(cx);
+  ErrorResult rv;
+  nsContentUtils::StructuredClone(cx, global, args[0], options, &result, rv);
+  if (rv.MaybeSetPendingException(cx)) {
+    return false;
+  }
+
+  MOZ_ASSERT_IF(result.isGCThing(),
+                !JS::GCThingIsMarkedGray(result.toGCCellPtr()));
+  args.rval().set(result);
+  return true;
+}
+
+static bool SandboxCreateStructuredClone(JSContext* cx, HandleObject obj) {
+  MOZ_ASSERT(JS_IsGlobalObject(obj));
+
+  return JS_DefineFunction(cx, obj, "structuredClone", SandboxStructuredClone,
+                           1, 0);
+}
+
 static bool SandboxIsProxy(JSContext* cx, unsigned argc, Value* vp) {
   CallArgs args = CallArgsFromVp(argc, vp);
   if (args.length() < 1) {
@@ -434,30 +496,28 @@ static bool SandboxCloneInto(JSContext* cx, unsigned argc, Value* vp) {
   return xpc::CloneInto(cx, args[0], args[1], options, args.rval());
 }
 
-static void sandbox_finalize(JSFreeOp* fop, JSObject* obj) {
-  nsIScriptObjectPrincipal* sop =
-      static_cast<nsIScriptObjectPrincipal*>(xpc_GetJSPrivate(obj));
-  if (!sop) {
-    // sop can be null if CreateSandboxObject fails in the middle.
+static void sandbox_finalize(JS::GCContext* gcx, JSObject* obj) {
+  SandboxPrivate* priv = SandboxPrivate::GetPrivate(obj);
+  if (!priv) {
+    // priv can be null if CreateSandboxObject fails in the middle.
     return;
   }
 
-  static_cast<SandboxPrivate*>(sop)->ForgetGlobalObject(obj);
+  priv->ForgetGlobalObject(obj);
   DestroyProtoAndIfaceCache(obj);
-  DeferredFinalize(sop);
+  DeferredFinalize(static_cast<nsIScriptObjectPrincipal*>(priv));
 }
 
 static size_t sandbox_moved(JSObject* obj, JSObject* old) {
   // Note that this hook can be called before the private pointer is set. In
   // this case the SandboxPrivate will not exist yet, so there is nothing to
   // do.
-  nsIScriptObjectPrincipal* sop =
-      static_cast<nsIScriptObjectPrincipal*>(xpc_GetJSPrivate(obj));
-  if (!sop) {
+  SandboxPrivate* priv = SandboxPrivate::GetPrivate(obj);
+  if (!priv) {
     return 0;
   }
 
-  return static_cast<SandboxPrivate*>(sop)->ObjectMoved(obj, old);
+  return priv->ObjectMoved(obj, old);
 }
 
 #define XPCONNECT_SANDBOX_CLASS_METADATA_SLOT \
@@ -472,7 +532,6 @@ static const JSClassOps SandboxClassOps = {
     JS_MayResolveStandardClass,      // mayResolve
     sandbox_finalize,                // finalize
     nullptr,                         // call
-    nullptr,                         // hasInstance
     nullptr,                         // construct
     JS_GlobalObjectTraceHook,        // trace
 };
@@ -842,7 +901,10 @@ bool xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj) {
     if (!nameStr) {
       return false;
     }
-    if (JS_LinearStringEqualsLiteral(nameStr, "Blob")) {
+
+    if (JS_LinearStringEqualsLiteral(nameStr, "AbortController")) {
+      AbortController = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "Blob")) {
       Blob = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "ChromeUtils")) {
       ChromeUtils = true;
@@ -872,6 +934,8 @@ bool xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj) {
       FormData = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "Headers")) {
       Headers = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "IOUtils")) {
+      IOUtils = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "InspectorUtils")) {
       InspectorUtils = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "MessageChannel")) {
@@ -880,6 +944,8 @@ bool xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj) {
       Node = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "NodeFilter")) {
       NodeFilter = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "PathUtils")) {
+      PathUtils = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "Performance")) {
       Performance = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "PromiseDebugging")) {
@@ -898,8 +964,14 @@ bool xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj) {
       URLSearchParams = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "XMLHttpRequest")) {
       XMLHttpRequest = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "WebSocket")) {
+      WebSocket = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "Window")) {
+      Window = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "XMLSerializer")) {
       XMLSerializer = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "ReadableStream")) {
+      ReadableStream = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "atob")) {
       atob = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "btoa")) {
@@ -910,14 +982,14 @@ bool xpc::GlobalProperties::Parse(JSContext* cx, JS::HandleObject obj) {
       crypto = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "fetch")) {
       fetch = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "storage")) {
+      storage = true;
+    } else if (JS_LinearStringEqualsLiteral(nameStr, "structuredClone")) {
+      structuredClone = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "indexedDB")) {
       indexedDB = true;
     } else if (JS_LinearStringEqualsLiteral(nameStr, "isSecureContext")) {
       isSecureContext = true;
-    } else if (JS_LinearStringEqualsLiteral(nameStr, "Glean")) {
-      glean = true;
-    } else if (JS_LinearStringEqualsLiteral(nameStr, "GleanPings")) {
-      gleanPings = true;
 #ifdef MOZ_WEBRTC
     } else if (JS_LinearStringEqualsLiteral(nameStr, "rtcIdentityProvider")) {
       rtcIdentityProvider = true;
@@ -943,6 +1015,11 @@ bool xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj) {
   // This function holds common properties not exposed automatically but able
   // to be requested either in |Cu.importGlobalProperties| or
   // |wantGlobalProperties| of a sandbox.
+  if (AbortController &&
+      !dom::AbortController_Binding::GetConstructorObject(cx)) {
+    return false;
+  }
+
   if (Blob && !dom::Blob_Binding::GetConstructorObject(cx)) return false;
 
   if (ChromeUtils && !dom::ChromeUtils_Binding::GetConstructorObject(cx)) {
@@ -993,6 +1070,10 @@ bool xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj) {
     return false;
   }
 
+  if (IOUtils && !dom::IOUtils_Binding::GetConstructorObject(cx)) {
+    return false;
+  }
+
   if (InspectorUtils && !dom::InspectorUtils_Binding::GetConstructorObject(cx))
     return false;
 
@@ -1006,6 +1087,10 @@ bool xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj) {
   }
 
   if (NodeFilter && !dom::NodeFilter_Binding::GetConstructorObject(cx)) {
+    return false;
+  }
+
+  if (PathUtils && !dom::PathUtils_Binding::GetConstructorObject(cx)) {
     return false;
   }
 
@@ -1041,7 +1126,15 @@ bool xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj) {
   if (XMLHttpRequest && !dom::XMLHttpRequest_Binding::GetConstructorObject(cx))
     return false;
 
+  if (WebSocket && !dom::WebSocket_Binding::GetConstructorObject(cx))
+    return false;
+
+  if (Window && !dom::Window_Binding::GetConstructorObject(cx)) return false;
+
   if (XMLSerializer && !dom::XMLSerializer_Binding::GetConstructorObject(cx))
+    return false;
+
+  if (ReadableStream && !dom::ReadableStream_Binding::GetConstructorObject(cx))
     return false;
 
   if (atob && !JS_DefineFunction(cx, obj, "atob", Atob, 1, 0)) return false;
@@ -1057,6 +1150,14 @@ bool xpc::GlobalProperties::Define(JSContext* cx, JS::HandleObject obj) {
   }
 
   if (fetch && !SandboxCreateFetch(cx, obj)) {
+    return false;
+  }
+
+  if (storage && !SandboxCreateStorage(cx, obj)) {
+    return false;
+  }
+
+  if (structuredClone && !SandboxCreateStructuredClone(cx, obj)) {
     return false;
   }
 
@@ -1082,11 +1183,6 @@ bool xpc::GlobalProperties::DefineInXPCComponents(JSContext* cx,
                                                   JS::HandleObject obj) {
   if (indexedDB && !IndexedDatabaseManager::DefineIndexedDB(cx, obj))
     return false;
-
-  if (glean && !mozilla::glean::Glean::DefineGlean(cx, obj)) return false;
-  if (gleanPings && !mozilla::glean::GleanPings::DefineGleanPings(cx, obj)) {
-    return false;
-  }
 
   return Define(cx, obj);
 }
@@ -1156,8 +1252,20 @@ nsresult ApplyAddonContentScriptCSP(nsISupports* prinOrSop) {
   }
 #endif
 
+  // Create a clone of the expanded principal to be used for the call to
+  // SetRequestContextWithPrincipal (to prevent the CSP and expanded
+  // principal instances to keep each other alive indefinitely, see
+  // Bug 1741600).
+  //
+  // This may not be necessary anymore once Bug 1548468 will move CSP
+  // off ExpandedPrincipal.
+  RefPtr<ExpandedPrincipal> clonedPrincipal = ExpandedPrincipal::Create(
+      expanded->AllowList(), expanded->OriginAttributesRef());
+  MOZ_ASSERT(clonedPrincipal);
+
   csp = new nsCSPContext();
-  MOZ_TRY(csp->SetRequestContextWithPrincipal(expanded, selfURI, u""_ns, 0));
+  MOZ_TRY(
+      csp->SetRequestContextWithPrincipal(clonedPrincipal, selfURI, u""_ns, 0));
 
   MOZ_TRY(csp->AppendPolicy(baseCSP, false, false));
 
@@ -1983,10 +2091,9 @@ nsresult xpc::EvalInSandbox(JSContext* cx, HandleObject sandboxArg,
     return NS_ERROR_INVALID_ARG;
   }
 
-  nsIScriptObjectPrincipal* sop =
-      static_cast<nsIScriptObjectPrincipal*>(xpc_GetJSPrivate(sandbox));
+  SandboxPrivate* priv = SandboxPrivate::GetPrivate(sandbox);
+  nsIScriptObjectPrincipal* sop = priv;
   MOZ_ASSERT(sop, "Invalid sandbox passed");
-  SandboxPrivate* priv = static_cast<SandboxPrivate*>(sop);
   nsCOMPtr<nsIPrincipal> prin = sop->GetPrincipal();
   NS_ENSURE_TRUE(prin, NS_ERROR_FAILURE);
 
@@ -2096,4 +2203,28 @@ nsresult xpc::SetSandboxMetadata(JSContext* cx, HandleObject sandbox,
   JS_SetReservedSlot(sandbox, XPCONNECT_SANDBOX_CLASS_METADATA_SLOT, metadata);
 
   return NS_OK;
+}
+
+ModuleLoaderBase* SandboxPrivate::GetModuleLoader(JSContext* aCx) {
+  if (mModuleLoader) {
+    return mModuleLoader;
+  }
+
+  JSObject* object = GetGlobalJSObject();
+  nsGlobalWindowInner* sandboxWindow = xpc::SandboxWindowOrNull(object, aCx);
+  if (!sandboxWindow) {
+    return nullptr;
+  }
+
+  ModuleLoader* mainModuleLoader =
+      static_cast<ModuleLoader*>(sandboxWindow->GetModuleLoader(aCx));
+
+  ScriptLoader* scriptLoader = mainModuleLoader->GetScriptLoader();
+
+  ModuleLoader* moduleLoader =
+      new ModuleLoader(scriptLoader, this, ModuleLoader::WebExtension);
+  scriptLoader->RegisterContentScriptModuleLoader(moduleLoader);
+  mModuleLoader = moduleLoader;
+
+  return moduleLoader;
 }

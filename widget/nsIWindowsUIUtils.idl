@@ -9,7 +9,7 @@
 interface mozIDOMWindowProxy;
 interface imgIContainer;
 
-[scriptable, uuid(aa8a0ecf-96a1-418c-b80e-f24ae18bbedc)]
+[scriptable, builtinclass, uuid(aa8a0ecf-96a1-418c-b80e-f24ae18bbedc)]
 interface nsIWindowsUIUtils : nsISupports
 {
   readonly attribute long systemSmallIconSize;
@@ -17,16 +17,15 @@ interface nsIWindowsUIUtils : nsISupports
 
   void setWindowIcon(in mozIDOMWindowProxy aWindow, in imgIContainer aSmallIcon, in imgIContainer aLargeIcon);
 
+  void setWindowIconFromExe(in mozIDOMWindowProxy aWindow, in AString aExe, in unsigned short aIndex);
+
+  void setWindowIconNoData(in mozIDOMWindowProxy aWindow);
+
   /**
    * Whether the OS is currently in tablet mode. Always false on
    * non-Windows and on versions of Windows before win10
    */
   readonly attribute boolean inTabletMode;
-
-  /**
-   * Update the tablet mode state
-   */
-  void updateTabletModeState();
 
   /**
    * Share URL

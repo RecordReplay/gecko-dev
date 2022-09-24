@@ -65,7 +65,7 @@ class MainThreadReleaseRunnable final : public Runnable {
 // Specialize this if there's some class that has multiple nsISupports bases.
 template <class T>
 struct ISupportsBaseInfo {
-  typedef T ISupportsBase;
+  using ISupportsBase = T;
 };
 
 template <template <class> class SmartPtr, class T>
@@ -87,9 +87,12 @@ WorkerLoadInfoData::WorkerLoadInfoData()
     : mLoadFlags(nsIRequest::LOAD_NORMAL),
       mWindowID(UINT64_MAX),
       mReferrerInfo(new ReferrerInfo(nullptr)),
+      mPrincipalHashValue(0),
       mFromWindow(false),
       mEvalAllowed(false),
-      mReportCSPViolations(false),
+      mReportEvalCSPViolations(false),
+      mWasmEvalAllowed(false),
+      mReportWasmEvalCSPViolations(false),
       mXHRParamsAllowed(false),
       mPrincipalIsSystem(false),
       mPrincipalIsAddonOrExpandedAddon(false),
@@ -98,6 +101,8 @@ WorkerLoadInfoData::WorkerLoadInfoData()
       mUseRegularPrincipal(false),
       mHasStorageAccessPermissionGranted(false),
       mServiceWorkersTestingInWindow(false),
+      mShouldResistFingerprinting(false),
+      mIsThirdPartyContextToTopWindow(true),
       mSecureContext(eNotSet) {}
 
 nsresult WorkerLoadInfo::SetPrincipalsAndCSPOnMainThread(
@@ -115,7 +120,8 @@ nsresult WorkerLoadInfo::SetPrincipalsAndCSPOnMainThread(
   mCSP = aCsp;
 
   if (mCSP) {
-    mCSP->GetAllowsEval(&mReportCSPViolations, &mEvalAllowed);
+    mCSP->GetAllowsEval(&mReportEvalCSPViolations, &mEvalAllowed);
+    mCSP->GetAllowsWasmEval(&mReportWasmEvalCSPViolations, &mWasmEvalAllowed);
     mCSPInfo = MakeUnique<CSPInfo>();
     nsresult rv = CSPToCSPInfo(aCsp, mCSPInfo.get());
     if (NS_WARN_IF(NS_FAILED(rv))) {
@@ -123,7 +129,9 @@ nsresult WorkerLoadInfo::SetPrincipalsAndCSPOnMainThread(
     }
   } else {
     mEvalAllowed = true;
-    mReportCSPViolations = false;
+    mReportEvalCSPViolations = false;
+    mWasmEvalAllowed = true;
+    mReportWasmEvalCSPViolations = false;
   }
 
   mLoadGroup = aLoadGroup;
@@ -155,6 +163,7 @@ nsresult WorkerLoadInfo::SetPrincipalsAndCSPOnMainThread(
     NS_ENSURE_SUCCESS(rv, rv);
   }
 
+  mPrincipalHashValue = aPrincipal->GetHashValue();
   return NS_OK;
 }
 
@@ -336,10 +345,7 @@ bool WorkerLoadInfo::PrincipalURIMatchesScriptURL() {
     return true;
   }
 
-  bool isSameOrigin = false;
-  rv = mPrincipal->IsSameOrigin(mBaseURI, false, &isSameOrigin);
-
-  if (NS_SUCCEEDED(rv) && isSameOrigin) {
+  if (mPrincipal->IsSameOrigin(mBaseURI)) {
     return true;
   }
 

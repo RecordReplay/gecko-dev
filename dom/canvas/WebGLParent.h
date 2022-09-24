@@ -9,7 +9,6 @@
 #include "mozilla/GfxMessageUtils.h"
 #include "mozilla/dom/PWebGLParent.h"
 #include "mozilla/WeakPtr.h"
-#include "mozilla/dom/IpdlQueue.h"
 
 namespace mozilla {
 
@@ -28,7 +27,6 @@ class WebGLParent : public PWebGLParent, public SupportsWeakPtr {
 
  public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(WebGLParent, override);
-  using OtherSideActor = WebGLChild;
 
   mozilla::ipc::IPCResult RecvInitialize(const webgl::InitContextDesc&,
                                          webgl::InitContextResult* out);
@@ -38,9 +36,14 @@ class WebGLParent : public PWebGLParent, public SupportsWeakPtr {
   using IPCResult = mozilla::ipc::IPCResult;
 
   IPCResult RecvDispatchCommands(mozilla::ipc::Shmem&&, uint64_t);
+  IPCResult RecvTexImage(uint32_t level, uint32_t respecFormat,
+                         const uvec3& offset, const webgl::PackingInfo&,
+                         webgl::TexUnpackBlobDesc&&);
 
   IPCResult RecvGetBufferSubData(GLenum target, uint64_t srcByteOffset,
                                  uint64_t byteSize, mozilla::ipc::Shmem* ret);
+  IPCResult GetFrontBufferSnapshot(webgl::FrontBufferSnapshotIpc* ret,
+                                   IProtocol* aProtocol);
   IPCResult RecvGetFrontBufferSnapshot(webgl::FrontBufferSnapshotIpc* ret);
   IPCResult RecvReadPixels(const webgl::ReadPixelsDesc&, uint64_t byteSize,
                            webgl::ReadPixelsResultIpc* ret);

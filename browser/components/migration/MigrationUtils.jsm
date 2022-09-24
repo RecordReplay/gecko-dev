@@ -78,12 +78,13 @@ XPCOMUtils.defineLazyGetter(this, "gAvailableMigratorKeys", function() {
       "firefox",
       "edge",
       "ie",
+      "brave",
       "chrome",
       "chromium-edge",
       "chromium-edge-beta",
       "chrome-beta",
       "chromium",
-      "360se",
+      "chromium-360se",
       "canary",
     ];
   }
@@ -91,6 +92,7 @@ XPCOMUtils.defineLazyGetter(this, "gAvailableMigratorKeys", function() {
     return [
       "firefox",
       "safari",
+      "brave",
       "chrome",
       "chromium-edge",
       "chromium-edge-beta",
@@ -99,7 +101,14 @@ XPCOMUtils.defineLazyGetter(this, "gAvailableMigratorKeys", function() {
     ];
   }
   if (AppConstants.XP_UNIX) {
-    return ["firefox", "chrome", "chrome-beta", "chrome-dev", "chromium"];
+    return [
+      "firefox",
+      "brave",
+      "chrome",
+      "chrome-beta",
+      "chrome-dev",
+      "chromium",
+    ];
   }
   return [];
 });
@@ -447,7 +456,7 @@ var MigratorPrototype = {
 
         // Import the default bookmarks. We ignore whether or not we succeed.
         await BookmarkHTMLUtils.importFromURL(
-          "chrome://browser/locale/bookmarks.html",
+          "chrome://browser/content/default-bookmarks.html",
           {
             replace: true,
             source: PlacesUtils.bookmarks.SOURCES.RESTORE_ON_STARTUP,
@@ -603,64 +612,6 @@ var MigrationUtils = Object.seal({
     return l10n.formatValue(aKey, aArgs);
   },
 
-  _getLocalePropertyForBrowser(browserId) {
-    switch (browserId) {
-      case "chromium-edge":
-      case "edge":
-        return "source-name-edge";
-      case "ie":
-        return "source-name-ie";
-      case "safari":
-        return "source-name-safari";
-      case "canary":
-        return "source-name-canary";
-      case "chrome":
-        return "source-name-chrome";
-      case "chrome-beta":
-        return "source-name-chrome-beta";
-      case "chrome-dev":
-        return "source-name-chrome-dev";
-      case "chromium":
-        return "source-name-chromium";
-      case "chromium-edge-beta":
-        return "source-name-chromium-edge-beta";
-      case "firefox":
-        return "source-name-firefox";
-      case "360se":
-        return "source-name-360se";
-    }
-    return null;
-  },
-
-  /**
-   * Helper for creating a folder for imported bookmarks from a particular
-   * migration source. The folder is created at the end of the given folder.
-   *
-   * @param sourceNameStr
-   *        the source name (first letter capitalized). This is used
-   *        for reading the localized source name from the migration
-   *        bundle (e.g. if aSourceNameStr is Mosaic, this will try to read
-   *        sourceNameMosaic from the migration bundle).
-   * @param parentGuid
-   *        the GUID of the folder in which the new folder should be created.
-   * @return the GUID of the new folder.
-   */
-  async createImportedBookmarksFolder(sourceNameStr, parentGuid) {
-    let source = await this.getLocalizedString(
-      "source-name-" + sourceNameStr.toLowerCase()
-    );
-    let title = await this.getLocalizedString("imported-bookmarks-source", {
-      source,
-    });
-    return (
-      await PlacesUtils.bookmarks.insert({
-        type: PlacesUtils.bookmarks.TYPE_FOLDER,
-        parentGuid,
-        title,
-      })
-    ).guid;
-  },
-
   /**
    * Get all the rows corresponding to a select query from a database, without
    * requiring a lock on the database. If fetching data fails (because someone
@@ -696,16 +647,16 @@ var MigrationUtils = Object.seal({
         // and try again. This will repeat a maximum of RETRYLIMIT times.
         let db;
         let didOpen = false;
-        let exceptionSeen;
+        let previousException = { message: null };
         try {
           db = await Sqlite.openConnection(dbOptions);
           didOpen = true;
           rows = await db.execute(selectQuery);
         } catch (ex) {
-          if (!exceptionSeen) {
+          if (previousException.message != ex.message) {
             Cu.reportError(ex);
           }
-          exceptionSeen = ex;
+          previousException = ex;
         } finally {
           try {
             if (didOpen) {
@@ -713,7 +664,7 @@ var MigrationUtils = Object.seal({
             }
           } catch (ex) {}
         }
-        if (exceptionSeen) {
+        if (previousException) {
           await new Promise(resolve => setTimeout(resolve, RETRYINTERVAL));
         }
       }
@@ -821,11 +772,13 @@ var MigrationUtils = Object.seal({
       Safari: "safari",
       Firefox: "firefox",
       Nightly: "firefox",
+      "Brave Web Browser": "brave", // Windows, Linux
+      Brave: "brave", // OS X
       "Google Chrome": "chrome", // Windows, Linux
       Chrome: "chrome", // OS X
       Chromium: "chromium", // Windows, OS X
       "Chromium Web Browser": "chromium", // Linux
-      "360\u5b89\u5168\u6d4f\u89c8\u5668": "360se",
+      "360\u5b89\u5168\u6d4f\u89c8\u5668": "chromium-360se",
     };
 
     let key = "";
@@ -1312,9 +1265,10 @@ var MigrationUtils = Object.seal({
     chromium: 6,
     canary: 7,
     safari: 8,
-    "360se": 9,
+    "chromium-360se": 9,
     "chromium-edge": 10,
     "chromium-edge-beta": 10,
+    brave: 11,
   },
   getSourceIdForTelemetry(sourceName) {
     return this._sourceNameToIdMapping[sourceName] || 0;

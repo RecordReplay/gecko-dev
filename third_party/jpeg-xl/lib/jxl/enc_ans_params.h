@@ -24,6 +24,7 @@ struct HistogramParams {
 
   enum class HybridUintMethod {
     kNone,        // just use kHybridUint420Config.
+    k000,         // force the fastest option.
     kFast,        // just try a couple of options.
     kContextMap,  // fast choice for ctx map.
     kBest,
@@ -45,7 +46,7 @@ struct HistogramParams {
   HistogramParams() = default;
 
   HistogramParams(SpeedTier tier, size_t num_ctx) {
-    if (tier == SpeedTier::kFalcon) {
+    if (tier > SpeedTier::kFalcon) {
       clustering = ClusteringType::kFastest;
       lz77_method = LZ77Method::kNone;
     } else if (tier > SpeedTier::kTortoise) {

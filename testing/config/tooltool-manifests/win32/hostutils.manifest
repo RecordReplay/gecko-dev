@@ -2,9 +2,9 @@
   {
     "algorithm": "sha512",
     "visibility": "public",
-    "filename": "host-utils-85.0a1.en-US.win32.tar.gz",
+    "filename": "host-utils-101.0a1.en-US.win32.tar.gz",
     "unpack": true,
-    "digest": "557a6c9eaee3dfe694901b9f30b02a158c873fb99f624c48d41c9715ddcd82591eb88b5b5f72d24958c499f5b572b962af7c17af235133703a065841822cb9f3",
-    "size": 65012620
+    "digest": "a36ed2f2322ab34cad8defb5cd137d7a5ce45872a4f8a6e21cffc582bb3b2adbda795aaec7bb76ed1b409c1fd798efaaca4b01b96716012a5d8e4ea665d00ba9",
+    "size": 69420262
   }
 ]

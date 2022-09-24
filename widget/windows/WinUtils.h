@@ -11,6 +11,7 @@
 #include <shobjidl.h>
 #include <uxtheme.h>
 #include <dwmapi.h>
+#include <unordered_map>
 
 // Undo the windows.h damage
 #undef GetMessage
@@ -35,6 +36,7 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/HalScreenConfiguration.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Vector.h"
 #include "mozilla/WindowsDpiAwareness.h"
@@ -78,7 +80,6 @@
  public:
 
 class nsWindow;
-class nsWindowBase;
 struct KeyPair;
 
 namespace mozilla {
@@ -96,7 +97,7 @@ typedef struct {
   const char* mStr;
   UINT mId;
 } EventMsgInfo;
-extern EventMsgInfo gAllEvents[];
+extern std::unordered_map<UINT, EventMsgInfo> gAllEvents;
 
 // More complete QS definitions for MsgWaitForMultipleObjects() and
 // GetQueueStatus() that include newer win8 specific defines.
@@ -144,6 +145,9 @@ class WinUtils {
   static SetThreadDpiAwarenessContextProc sSetThreadDpiAwarenessContext;
   static EnableNonClientDpiScalingProc sEnableNonClientDpiScaling;
   static GetSystemMetricsForDpiProc sGetSystemMetricsForDpi;
+
+  // Set on Initialize().
+  static bool sHasPackageIdentity;
 
  public:
   class AutoSystemDpiAware {
@@ -195,12 +199,7 @@ class WinUtils {
    * and physical (device) pixels.
    */
   static double LogToPhysFactor(HMONITOR aMonitor);
-  static double LogToPhysFactor(HWND aWnd) {
-    // if there's an ancestor window, we want to share its DPI setting
-    HWND ancestor = ::GetAncestor(aWnd, GA_ROOTOWNER);
-    return LogToPhysFactor(::MonitorFromWindow(ancestor ? ancestor : aWnd,
-                                               MONITOR_DEFAULTTOPRIMARY));
-  }
+  static double LogToPhysFactor(HWND aWnd);
   static double LogToPhysFactor(HDC aDC) {
     return LogToPhysFactor(::WindowFromDC(aDC));
   }
@@ -217,6 +216,20 @@ class WinUtils {
    *         if aHdc is null
    */
   static gfx::MarginDouble GetUnwriteableMarginsForDeviceInInches(HDC aHdc);
+
+  static bool HasPackageIdentity() { return sHasPackageIdentity; }
+
+  /*
+   * The "family name" of a Windows app package is the full name without any of
+   * the components that might change during the life cycle of the app (such as
+   * the version number, or the architecture). This leaves only those properties
+   * which together serve to uniquely identify the app within one Windows
+   * installation, namely the base name and the publisher name. Meaning, this
+   * string is safe to use anywhere that a string uniquely identifying an app
+   * installation is called for (because multiple copies of the same app on the
+   * same system is not a supported feature in the app framework).
+   */
+  static nsString GetPackageFamilyName();
 
   /**
    * Logging helpers that dump output to prlog module 'Widget', console, and
@@ -302,14 +315,14 @@ class WinUtils {
                               bool aStopIfNotPopup = true);
 
   /**
-   * SetNSWindowBasePtr() associates an nsWindowBase to aWnd.  If aWidget is
+   * SetNSWindowBasePtr() associates an nsWindow to aWnd.  If aWidget is
    * nullptr, it dissociate any nsBaseWidget pointer from aWnd.
-   * GetNSWindowBasePtr() returns an nsWindowBase pointer which was associated
+   * GetNSWindowBasePtr() returns an nsWindow pointer which was associated
    * by SetNSWindowBasePtr(). GetNSWindowPtr() is a legacy api for win32
    * nsWindow and should be avoided outside of nsWindow src.
    */
-  static bool SetNSWindowBasePtr(HWND aWnd, nsWindowBase* aWidget);
-  static nsWindowBase* GetNSWindowBasePtr(HWND aWnd);
+  static bool SetNSWindowBasePtr(HWND aWnd, nsWindow* aWidget);
+  static nsWindow* GetNSWindowBasePtr(HWND aWnd);
   static nsWindow* GetNSWindowPtr(HWND aWnd);
 
   /**
@@ -489,15 +502,6 @@ class WinUtils {
   static nsresult WriteBitmap(nsIFile* aFile, imgIContainer* aImage);
 
   /**
-   * Wrapper for ::GetModuleFileNameW().
-   * @param  aModuleHandle [in] The handle of a loaded module
-   * @param  aPath         [out] receives the full path of the module specified
-   *                       by aModuleBase.
-   * @return true if aPath was successfully populated.
-   */
-  static bool GetModuleFullPath(HMODULE aModuleHandle, nsAString& aPath);
-
-  /**
    * Wrapper for PathCanonicalize().
    * Upon success, the resulting output string length is <= MAX_PATH.
    * @param  aPath [in,out] The path to transform.
@@ -556,6 +560,10 @@ class WinUtils {
       Vector<std::pair<nsString, nsDependentString>, kMaxWhitelistedItems>;
 
   static const WhitelistVec& GetWhitelistedPaths();
+
+  static bool GetClassName(HWND aHwnd, nsAString& aName);
+
+  static void EnableWindowOcclusion(const bool aEnable);
 
  private:
   static WhitelistVec BuildWhitelist();

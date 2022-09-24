@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use super::super::shader_source::{OPTIMIZED_SHADERS, UNOPTIMIZED_SHADERS};
-use api::{ColorF, ImageDescriptor, ImageFormat};
+use api::{ColorF, ImageDescriptor, ImageFormat, Parameter, BoolParameter, IntParameter};
 use api::{MixBlendMode, ImageBufferKind, VoidPtrToSizeFn};
 use api::{CrashAnnotator, CrashAnnotation, CrashAnnotatorGuard};
 use api::units::*;
@@ -386,7 +386,6 @@ impl<T> Drop for VBO<T> {
 pub struct ExternalTexture {
     id: gl::GLuint,
     target: gl::GLuint,
-    swizzle: Swizzle,
     uv_rect: TexelRect,
 }
 
@@ -394,13 +393,11 @@ impl ExternalTexture {
     pub fn new(
         id: u32,
         target: ImageBufferKind,
-        swizzle: Swizzle,
         uv_rect: TexelRect,
     ) -> Self {
         ExternalTexture {
             id,
             target: get_gl_target(target),
-            swizzle,
             uv_rect,
         }
     }
@@ -526,7 +523,6 @@ impl Texture {
         let ext = ExternalTexture {
             id: self.id,
             target: self.target,
-            swizzle: Swizzle::default(),
             // TODO(gw): Support custom UV rect for external textures during captures
             uv_rect: TexelRect::new(
                 0.0,
@@ -974,6 +970,12 @@ pub struct Capabilities {
     /// Whether we are able to ue glClear to clear regions of an alpha render target.
     /// If false, we must use a shader to clear instead.
     pub supports_alpha_target_clears: bool,
+    /// Whether we must perform a full unscissored glClear on alpha targets
+    /// prior to rendering.
+    pub requires_alpha_target_full_clear: bool,
+    /// Whether the driver can correctly invalidate render targets. This can be
+    /// a worthwhile optimization, but is buggy on some devices.
+    pub supports_render_target_invalidate: bool,
     /// Whether the driver can reliably upload data to R8 format textures.
     pub supports_r8_texture_upload: bool,
     /// Whether clip-masking is supported natively by the GL implementation
@@ -1078,6 +1080,8 @@ pub struct Device {
     /// Note: this currently only applies to the batched texture uploads
     /// path.
     use_draw_calls_for_texture_copy: bool,
+    /// Number of pixels below which we prefer batched uploads.
+    batched_upload_threshold: i32,
 
     // HW or API capabilities
     capabilities: Capabilities,
@@ -1131,6 +1135,9 @@ pub struct Device {
     /// Whether we must unbind any texture from GL_TEXTURE_EXTERNAL_OES before
     /// binding to GL_TEXTURE_2D, to work around an android emulator bug.
     requires_texture_external_unbind: bool,
+
+    ///
+    is_software_webrender: bool,
 
     // GL extensions
     extensions: Vec<String>,
@@ -1238,6 +1245,17 @@ impl DrawTarget {
             DrawTarget::Texture { dimensions, .. } => dimensions,
             DrawTarget::External { size, .. } => size.cast_unit(),
             DrawTarget::NativeSurface { dimensions, .. } => dimensions,
+        }
+    }
+
+    pub fn offset(&self) -> DeviceIntPoint {
+        match *self {
+            DrawTarget::Default { .. } |
+            DrawTarget::Texture { .. } |
+            DrawTarget::External { .. } => {
+                DeviceIntPoint::zero()
+            }
+            DrawTarget::NativeSurface { offset, .. } => offset,
         }
     }
 
@@ -1373,6 +1391,7 @@ impl Device {
         resource_override_path: Option<PathBuf>,
         use_optimized_shaders: bool,
         upload_method: UploadMethod,
+        batched_upload_threshold: i32,
         cached_programs: Option<Rc<ProgramCache>>,
         allow_texture_storage_support: bool,
         allow_texture_swizzling: bool,
@@ -1392,6 +1411,8 @@ impl Device {
 
         let renderer_name = gl.get_string(gl::RENDERER);
         info!("Renderer: {}", renderer_name);
+        let version_string = gl.get_string(gl::VERSION);
+        info!("Version: {}", version_string);
         info!("Max texture size: {}", max_texture_size);
 
         let mut extension_count = [0];
@@ -1413,7 +1434,7 @@ impl Device {
                 if supports_khr_debug {
                     Self::log_driver_messages(gl);
                 }
-                println!("Caught GL error {:x} at {}", code, name);
+                error!("Caught GL error {:x} at {}", code, name);
                 panic!("Caught GL error {:x} at {}", code, name);
             });
         }
@@ -1464,10 +1485,6 @@ impl Device {
         // [3] https://www.khronos.org/registry/OpenGL/extensions/EXT/EXT_texture_storage.txt
         // [4] http://http.download.nvidia.com/developer/Papers/2005/Fast_Texture_Transfers/Fast_Texture_Transfers.pdf
 
-        // To support BGRA8 with glTexStorage* we specifically need
-        // GL_EXT_texture_storage and GL_EXT_texture_format_BGRA8888.
-        let supports_gles_bgra = supports_extension(&extensions, "GL_EXT_texture_format_BGRA8888");
-
         // On the android emulator glTexImage fails to create textures larger than 3379.
         // So we must use glTexStorage instead. See bug 1591436.
         let is_emulator = renderer_name.starts_with("Android Emulator");
@@ -1485,6 +1502,20 @@ impl Device {
                 gl::GlType::Gl => supports_extension(&extensions, "GL_ARB_texture_storage"),
                 gl::GlType::Gles => true,
             };
+
+        // The GL_EXT_texture_format_BGRA8888 extension allows us to use BGRA as an internal format
+        // with glTexImage on GLES. However, we can only use BGRA8 as an internal format for
+        // glTexStorage when GL_EXT_texture_storage is also explicitly supported. This is because
+        // glTexStorage was added in GLES 3, but GL_EXT_texture_format_BGRA8888 was written against
+        // GLES 2 and GL_EXT_texture_storage.
+        // To complicate things even further, some Intel devices claim to support both extensions
+        // but in practice do not allow BGRA to be used with glTexStorage.
+        let supports_gles_bgra = supports_extension(&extensions, "GL_EXT_texture_format_BGRA8888");
+        let supports_texture_storage_with_gles_bgra = supports_gles_bgra
+            && supports_extension(&extensions, "GL_EXT_texture_storage")
+            && !renderer_name.starts_with("Intel(R) HD Graphics for BayTrail")
+            && !renderer_name.starts_with("Intel(R) HD Graphics for Atom(TM) x5/x7");
+
         let supports_texture_swizzle = allow_texture_swizzling &&
             match gl.get_type() {
                 // see https://www.g-truc.net/post-0734.html
@@ -1513,9 +1544,7 @@ impl Device {
             // glTexStorage is always supported in GLES 3, but because the GL_EXT_texture_storage
             // extension is supported we can use glTexStorage with BGRA8 as the internal format.
             // Prefer BGRA textures over RGBA.
-            gl::GlType::Gles if supports_gles_bgra
-                && supports_extension(&extensions, "GL_EXT_texture_storage") =>
-            (
+            gl::GlType::Gles if supports_texture_storage_with_gles_bgra => (
                 TextureFormatPair::from(ImageFormat::BGRA8),
                 TextureFormatPair { internal: gl::BGRA8_EXT, external: gl::BGRA_EXT },
                 gl::UNSIGNED_BYTE,
@@ -1634,7 +1663,8 @@ impl Device {
              //  && renderer_name.starts_with("AMD");
              //  (XXX: we apply this restriction to all GPUs to handle switching)
 
-        let is_angle = renderer_name.starts_with("ANGLE");
+        let is_windows_angle = cfg!(target_os = "windows")
+            && renderer_name.starts_with("ANGLE");
         let is_adreno_3xx = renderer_name.starts_with("Adreno (TM) 3");
 
         // Some GPUs require the stride of the data during texture uploads to be
@@ -1653,9 +1683,9 @@ impl Device {
             // On AMD Mac, it must always be a multiple of 256 bytes.
             // We apply this restriction to all GPUs to handle switching
             StrideAlignment::Bytes(NonZeroUsize::new(256).unwrap())
-        } else if is_angle {
-            // On ANGLE, PBO texture uploads get incorrectly truncated if
-            // the stride is greater than the width * bpp.
+        } else if is_windows_angle {
+            // On ANGLE-on-D3D, PBO texture uploads get incorrectly truncated
+            // if the stride is greater than the width * bpp.
             StrideAlignment::Bytes(NonZeroUsize::new(1).unwrap())
         } else {
             // Other platforms may have similar requirements and should be added
@@ -1690,7 +1720,27 @@ impl Device {
         // As above, this allows bypassing certain alpha-pass variants.
         let uses_native_antialiasing = is_software_webrender;
 
-        let supports_image_external_essl3 = supports_extension(&extensions, "GL_OES_EGL_image_external_essl3");
+        // If running on android with a mesa driver (eg intel chromebooks), parse the mesa version.
+        let mut android_mesa_version = None;
+        if cfg!(target_os = "android") && renderer_name.starts_with("Mesa") {
+            if let Some((_, mesa_version)) = version_string.split_once("Mesa ") {
+                if let Some((major_str, _)) = mesa_version.split_once(".") {
+                    if let Ok(major) = major_str.parse::<i32>() {
+                        android_mesa_version = Some(major);
+                    }
+                }
+            }
+        }
+
+        // If the device supports OES_EGL_image_external_essl3 we can use it to render
+        // external images. If not, we must use the ESSL 1.0 OES_EGL_image_external
+        // extension instead.
+        // Mesa versions prior to 20.0 do not implement textureSize(samplerExternalOES),
+        // so we must use the fallback path.
+        let supports_image_external_essl3 = match android_mesa_version {
+            Some(major) if major < 20 => false,
+            _ => supports_extension(&extensions, "GL_OES_EGL_image_external_essl3"),
+        };
 
         let mut requires_batched_texture_uploads = None;
         if is_software_webrender {
@@ -1706,6 +1756,17 @@ impl Device {
         // to an alpha target immediately after using glClear to clear regions of it.
         // Using a shader to clear the regions avoids the crash. See bug 1638593.
         let supports_alpha_target_clears = !is_mali_t;
+
+        // On Adreno 4xx devices with older drivers we have seen render tasks to alpha targets have
+        // no effect unless the target is fully cleared prior to rendering. See bug 1714227.
+        let is_adreno_4xx = renderer_name.starts_with("Adreno (TM) 4");
+        let requires_alpha_target_full_clear = is_adreno_4xx;
+
+        // On PowerVR Rogue devices we have seen that invalidating render targets after we are done
+        // with them can incorrectly cause pending renders to be written to different targets
+        // instead. See bug 1719345.
+        let is_powervr_rogue = renderer_name.starts_with("PowerVR Rogue");
+        let supports_render_target_invalidate = !is_powervr_rogue;
 
         // On Linux we we have seen uploads to R8 format textures result in
         // corruption on some AMD cards.
@@ -1732,6 +1793,7 @@ impl Device {
             upload_method,
             use_batched_texture_uploads: requires_batched_texture_uploads.unwrap_or(false),
             use_draw_calls_for_texture_copy: false,
+            batched_upload_threshold,
 
             inside_frame: false,
 
@@ -1750,6 +1812,8 @@ impl Device {
                 supports_shader_storage_object,
                 requires_batched_texture_uploads,
                 supports_alpha_target_clears,
+                requires_alpha_target_full_clear,
+                supports_render_target_invalidate,
                 supports_r8_texture_upload,
                 uses_native_clip_mask,
                 uses_native_antialiasing,
@@ -1787,6 +1851,7 @@ impl Device {
             texture_storage_usage,
             requires_null_terminated_shader_source,
             requires_texture_external_unbind,
+            is_software_webrender,
             required_pbo_stride,
             dump_shader_source,
             surface_origin_is_top_left,
@@ -1802,6 +1867,32 @@ impl Device {
 
     pub fn rc_gl(&self) -> &Rc<dyn gl::Gl> {
         &self.gl
+    }
+
+    pub fn set_parameter(&mut self, param: &Parameter) {
+        match param {
+            Parameter::Bool(BoolParameter::PboUploads, enabled) => {
+                if !self.is_software_webrender {
+                    self.upload_method = if *enabled {
+                        UploadMethod::PixelBuffer(crate::ONE_TIME_USAGE_HINT)
+                    } else {
+                        UploadMethod::Immediate
+                    };
+                }
+            }
+            Parameter::Bool(BoolParameter::BatchedUploads, enabled) => {
+                self.use_batched_texture_uploads = *enabled;
+            }
+            Parameter::Bool(BoolParameter::DrawCallsForTextureCopy, enabled) => {
+                if self.capabilities.requires_batched_texture_uploads.is_none() {
+                    self.use_draw_calls_for_texture_copy = *enabled;
+                }
+            }
+            Parameter::Int(IntParameter::BatchedUploadThreshold, threshold) => {
+                self.batched_upload_threshold = *threshold;
+            }
+            _ => {}
+        }
     }
 
     /// Ensures that the maximum texture size is less than or equal to the
@@ -1874,15 +1965,8 @@ impl Device {
         self.use_draw_calls_for_texture_copy
     }
 
-    pub fn set_use_batched_texture_uploads(&mut self, enabled: bool) {
-        if self.capabilities.requires_batched_texture_uploads.is_some() {
-            return;
-        }
-        self.use_batched_texture_uploads = enabled;
-    }
-
-    pub fn set_use_draw_calls_for_texture_copy(&mut self, enabled: bool) {
-        self.use_draw_calls_for_texture_copy = enabled;
+    pub fn batched_upload_threshold(&self) -> i32 {
+        self.batched_upload_threshold
     }
 
     pub fn reset_state(&mut self) {
@@ -1984,7 +2068,7 @@ impl Device {
             && !using_wrapper
         {
             fn note(name: &str, duration: Duration) {
-                profiler::add_text_marker(cstr!("OpenGL Calls"), name, duration);
+                profiler::add_text_marker("OpenGL Calls", name, duration);
             }
             let threshold = Duration::from_millis(1);
             let wrapped = gl::ProfilingGl::wrap(self.gl.clone(), threshold, note);
@@ -2213,6 +2297,8 @@ impl Device {
         program: &mut Program,
         descriptor: &VertexDescriptor,
     ) -> Result<(), ShaderError> {
+        profile_scope!("compile shader");
+
         let _guard = CrashAnnotatorGuard::new(
             &self.crash_annotator,
             CrashAnnotation::CompileShader,
@@ -2306,24 +2392,6 @@ impl Device {
 
             // Link!
             self.gl.link_program(program.id);
-
-            if cfg!(debug_assertions) {
-                // Check that all our overrides worked
-                for (i, attr) in descriptor
-                    .vertex_attributes
-                    .iter()
-                    .chain(descriptor.instance_attributes.iter())
-                    .enumerate()
-                {
-                    //Note: we can't assert here because the driver may optimize out some of the
-                    // vertex attributes legitimately, returning their location to be -1.
-                    let location = self.gl.get_attrib_location(program.id, attr.name);
-                    if location != i as gl::GLint {
-                        warn!("Attribute {:?} is not found in the shader {}. Expected at {}, found at {}",
-                            attr, program.source_info.base_filename, i, location);
-                    }
-                }
-            }
 
             // GL recommends detaching and deleting shaders once the link
             // is complete (whether successful or not). This allows the driver
@@ -2586,21 +2654,23 @@ impl Device {
     /// Notifies the device that the contents of a render target are no longer
     /// needed.
     pub fn invalidate_render_target(&mut self, texture: &Texture) {
-        let (fbo, attachments) = if texture.supports_depth() {
-            (&texture.fbo_with_depth,
-             &[gl::COLOR_ATTACHMENT0, gl::DEPTH_ATTACHMENT] as &[gl::GLenum])
-        } else {
-            (&texture.fbo, &[gl::COLOR_ATTACHMENT0] as &[gl::GLenum])
-        };
+        if self.capabilities.supports_render_target_invalidate {
+            let (fbo, attachments) = if texture.supports_depth() {
+                (&texture.fbo_with_depth,
+                 &[gl::COLOR_ATTACHMENT0, gl::DEPTH_ATTACHMENT] as &[gl::GLenum])
+            } else {
+                (&texture.fbo, &[gl::COLOR_ATTACHMENT0] as &[gl::GLenum])
+            };
 
-        if let Some(fbo_id) = fbo {
-            let original_bound_fbo = self.bound_draw_fbo;
-            // Note: The invalidate extension may not be supported, in which
-            // case this is a no-op. That's ok though, because it's just a
-            // hint.
-            self.bind_external_draw_target(*fbo_id);
-            self.gl.invalidate_framebuffer(gl::FRAMEBUFFER, attachments);
-            self.bind_external_draw_target(original_bound_fbo);
+            if let Some(fbo_id) = fbo {
+                let original_bound_fbo = self.bound_draw_fbo;
+                // Note: The invalidate extension may not be supported, in which
+                // case this is a no-op. That's ok though, because it's just a
+                // hint.
+                self.bind_external_draw_target(*fbo_id);
+                self.gl.invalidate_framebuffer(gl::FRAMEBUFFER, attachments);
+                self.bind_external_draw_target(original_bound_fbo);
+            }
         }
     }
 
@@ -3801,6 +3871,12 @@ impl Device {
             (gl::ONE, gl::ONE_MINUS_SRC_ALPHA),
         );
     }
+    pub fn set_blend_mode_plus_lighter(&mut self) {
+        self.set_blend_factors(
+            (gl::ONE, gl::ONE),
+            (gl::ONE, gl::ONE),
+        );
+    }
     pub fn set_blend_mode_exclusion(&mut self) {
         self.set_blend_factors(
             (gl::ONE_MINUS_DST_COLOR, gl::ONE_MINUS_SRC_COLOR),
@@ -3838,6 +3914,9 @@ impl Device {
                 // blend factor only make sense for the normal mode
                 self.gl.blend_func_separate(gl::ZERO, gl::SRC_COLOR, gl::ZERO, gl::SRC_ALPHA);
                 gl::FUNC_ADD
+            },
+            MixBlendMode::PlusLighter => {
+                return self.set_blend_mode_plus_lighter();
             },
             MixBlendMode::Multiply => gl::MULTIPLY_KHR,
             MixBlendMode::Screen => gl::SCREEN_KHR,

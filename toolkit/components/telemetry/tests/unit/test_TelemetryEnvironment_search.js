@@ -11,12 +11,6 @@ const { TelemetryEnvironmentTesting } = ChromeUtils.import(
   "resource://testing-common/TelemetryEnvironmentTesting.jsm"
 );
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "ExtensionTestUtils",
-  "resource://testing-common/ExtensionXPCShellUtils.jsm"
-);
-
 SearchTestUtils.init(this);
 
 function promiseNextTick() {
@@ -36,8 +30,7 @@ add_task(async function setup() {
   do_get_profile();
 
   // We need to ensure FOG is initialized, otherwise we will panic trying to get test values.
-  let FOG = Cc["@mozilla.org/toolkit/glean;1"].createInstance(Ci.nsIFOG);
-  FOG.initializeFOG();
+  Services.fog.initializeFOG();
 
   // The system add-on must be installed before AddonManager is started.
   const distroDir = FileUtils.getDir("ProfD", ["sysfeatures", "app0"], true);
@@ -61,9 +54,6 @@ add_task(async function setup() {
   await AddonTestUtils.overrideBuiltIns({ system: [] });
   AddonTestUtils.addonStartup.remove(true);
   await AddonTestUtils.promiseStartupManager();
-  // Override ExtensionXPCShellUtils.jsm's overriding of the pref as the
-  // search service needs it.
-  Services.prefs.clearUserPref("services.settings.default_bucket");
 
   // Setup a webserver to serve Addons, etc.
   gHttpServer = new HttpServer();

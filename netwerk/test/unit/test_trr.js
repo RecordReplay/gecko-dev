@@ -26,7 +26,7 @@ async function waitForConfirmation(expectedResponseIP, confirmationShouldFail) {
       // because of the increased delay between the emulator and host.
       await new Promise(resolve => do_timeout(100 * (100 / count), resolve));
     }
-    let [, inRecord] = await new TRRDNSListener(
+    let { inRecord } = await new TRRDNSListener(
       `ip${count}.example.org`,
       undefined,
       false
@@ -148,6 +148,8 @@ add_task(test_RFC1918);
 add_task(test_GET_ECS);
 
 add_task(test_timeout_mode3);
+
+add_task(test_strict_native_fallback);
 
 add_task(test_no_answers_fallback);
 
@@ -339,7 +341,7 @@ add_task(async function test_async_resolve_with_trr_server() {
   dns.clearCache(true);
   setModeAndURI(2, "doh?responseIP=2.2.2.2");
 
-  let [, , inStatus] = await new TRRDNSListener(
+  let { inStatus } = await new TRRDNSListener(
     "bar_with_trr6.example.com",
     undefined,
     false,
@@ -404,13 +406,13 @@ add_task(async function test_async_resolve_with_trr_server() {
   dns.clearCache(true);
   setModeAndURI(2, "doh?responseIP=2.2.2.2");
 
-  [, , inStatus] = await new TRRDNSListener(
+  ({ inStatus } = await new TRRDNSListener(
     "only_once.example.com",
     undefined,
     false,
     undefined,
     `https://target.example.com:666/404`
-  );
+  ));
   Assert.ok(
     !Components.isSuccessCode(inStatus),
     `${inStatus} should be an error code`
@@ -758,6 +760,8 @@ add_task(async function test_dohrollout_mode() {
 
 add_task(test_ipv6_trr_fallback);
 
+add_task(test_ipv4_trr_fallback);
+
 add_task(test_no_retry_without_doh);
 
 // This test checks that normally when the TRR mode goes from ON -> OFF
@@ -793,3 +797,101 @@ add_task(async function test_old_bootstrap_pref() {
   setModeAndURI(Ci.nsIDNSService.MODE_TRRONLY, `doh?responseIP=4.4.4.4`);
   await new TRRDNSListener("testytest.com", "4.4.4.4");
 });
+
+add_task(async function test_padding() {
+  setModeAndURI(Ci.nsIDNSService.MODE_TRRONLY, `doh`);
+  async function CheckPadding(
+    pad_length,
+    request,
+    none,
+    ecs,
+    padding,
+    ecsPadding
+  ) {
+    Services.prefs.setIntPref("network.trr.padding.length", pad_length);
+    dns.clearCache(true);
+    Services.prefs.setBoolPref("network.trr.padding", false);
+    Services.prefs.setBoolPref("network.trr.disable-ECS", false);
+    await new TRRDNSListener(request, none);
+
+    dns.clearCache(true);
+    Services.prefs.setBoolPref("network.trr.padding", false);
+    Services.prefs.setBoolPref("network.trr.disable-ECS", true);
+    await new TRRDNSListener(request, ecs);
+
+    dns.clearCache(true);
+    Services.prefs.setBoolPref("network.trr.padding", true);
+    Services.prefs.setBoolPref("network.trr.disable-ECS", false);
+    await new TRRDNSListener(request, padding);
+
+    dns.clearCache(true);
+    Services.prefs.setBoolPref("network.trr.padding", true);
+    Services.prefs.setBoolPref("network.trr.disable-ECS", true);
+    await new TRRDNSListener(request, ecsPadding);
+  }
+
+  // short domain name
+  await CheckPadding(
+    16,
+    "a.pd",
+    "2.2.0.22",
+    "2.2.0.41",
+    "1.1.0.48",
+    "1.1.0.48"
+  );
+  await CheckPadding(256, "a.pd", "2.2.0.22", "2.2.0.41", "1.1.1.0", "1.1.1.0");
+
+  // medium domain name
+  await CheckPadding(
+    16,
+    "has-padding.pd",
+    "2.2.0.32",
+    "2.2.0.51",
+    "1.1.0.48",
+    "1.1.0.64"
+  );
+  await CheckPadding(
+    128,
+    "has-padding.pd",
+    "2.2.0.32",
+    "2.2.0.51",
+    "1.1.0.128",
+    "1.1.0.128"
+  );
+  await CheckPadding(
+    80,
+    "has-padding.pd",
+    "2.2.0.32",
+    "2.2.0.51",
+    "1.1.0.80",
+    "1.1.0.80"
+  );
+
+  // long domain name
+  await CheckPadding(
+    16,
+    "abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.pd",
+    "2.2.0.131",
+    "2.2.0.150",
+    "1.1.0.160",
+    "1.1.0.160"
+  );
+  await CheckPadding(
+    128,
+    "abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.pd",
+    "2.2.0.131",
+    "2.2.0.150",
+    "1.1.1.0",
+    "1.1.1.0"
+  );
+  await CheckPadding(
+    80,
+    "abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.abcdefghijklmnopqrstuvwxyz0123456789.pd",
+    "2.2.0.131",
+    "2.2.0.150",
+    "1.1.0.160",
+    "1.1.0.160"
+  );
+});
+
+add_task(test_connection_reuse_and_cycling);

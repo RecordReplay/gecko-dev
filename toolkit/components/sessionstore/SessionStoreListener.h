@@ -16,8 +16,7 @@
 
 class nsITimer;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ContentSessionStore {
  public:
@@ -33,19 +32,16 @@ class ContentSessionStore {
 
   void SetSHistoryChanged();
   // request "collect sessionHistory" which is happened in the parent process
-  void SetSHistoryFromParentChanged();
   bool GetAndClearSHistoryChanged() {
     bool ret = mSHistoryChanged;
     mSHistoryChanged = false;
-    mSHistoryChangedFromParent = false;
     return ret;
   }
 
   void OnDocumentStart();
   void OnDocumentEnd();
   bool UpdateNeeded() {
-    return mPrivateChanged || mDocCapChanged || mSHistoryChanged ||
-           mSHistoryChangedFromParent;
+    return mPrivateChanged || mDocCapChanged || mSHistoryChanged;
   }
 
  private:
@@ -63,9 +59,6 @@ class ContentSessionStore {
   //    2. webProgress changes to STATE_STOP
   //    3. receiving "DOMTitleChanged" event
   bool mSHistoryChanged;
-  // mSHistoryChangedFromParent means there are history changes which
-  // are found by session history listener in the parent process.
-  bool mSHistoryChangedFromParent;
 };
 
 class TabListener : public nsIDOMEventListener,
@@ -79,7 +72,7 @@ class TabListener : public nsIDOMEventListener,
   nsresult Init();
   ContentSessionStore* GetSessionStore() { return mSessionStore; }
   // the function is called only when TabListener is in parent process
-  bool ForceFlushFromParent();
+  void ForceFlushFromParent();
   void RemoveListeners();
   void SetEpoch(uint32_t aEpoch) { mEpoch = aEpoch; }
   uint32_t GetEpoch() { return mEpoch; }
@@ -100,7 +93,7 @@ class TabListener : public nsIDOMEventListener,
   void StopTimerForUpdate();
   void AddEventListeners();
   void RemoveEventListeners();
-  bool UpdateSessionStore(bool aIsFlush = false);
+  void UpdateSessionStore(bool aIsFlush = false);
   virtual ~TabListener();
 
   nsCOMPtr<nsIDocShell> mDocShell;
@@ -116,7 +109,6 @@ class TabListener : public nsIDOMEventListener,
   uint32_t mEpoch;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_SessionStoreListener_h

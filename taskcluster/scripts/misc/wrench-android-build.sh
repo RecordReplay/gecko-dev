@@ -11,17 +11,14 @@ pushd "${GECKO_PATH}/gfx/wr/wrench"
 # These things come from the toolchain dependencies of the job that invokes
 # this script (webrender-wrench-android-build).
 export PATH="${PATH}:${MOZ_FETCHES_DIR}/rustc/bin"
-export ANDROID_HOME="${MOZ_FETCHES_DIR}/android-sdk-linux"
-export NDK_HOME="${MOZ_FETCHES_DIR}/android-ndk"
+export PATH="${PATH}:${JAVA_HOME}/bin"
+export ANDROID_SDK_ROOT="${MOZ_FETCHES_DIR}/android-sdk-linux"
+export ANDROID_NDK_ROOT="${MOZ_FETCHES_DIR}/android-ndk"
 
-# `cargo apk build` fails whilst attempting to sign the output apk,
-# unless the `.android` directory exists.
-# See https://github.com/rust-windowing/android-rs-glue/issues/252
-mkdir /builds/worker/.android
 if [ "$MODE" == "debug" ]; then
-    ../cargo-apk/bin/cargo-apk build --frozen --verbose
+    ../cargo-apk/bin/cargo-apk apk build --frozen --verbose
 elif [ "$MODE" == "release" ]; then
-    ../cargo-apk/bin/cargo-apk build --frozen --verbose --release
+    ../cargo-apk/bin/cargo-apk apk build --frozen --verbose --release
 else
     echo "Unknown mode '${MODE}'; must be 'debug' or 'release'"
     exit 1

@@ -29,11 +29,13 @@ WIN_LIBS=                                       \
 
 #include "mozilla/BackgroundHangMonitor.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/Span.h"
 #include "nsString.h"
 #include "nsReadableUtils.h"
 #include "nsIPrintSettings.h"
 #include "nsIPrintSettingsWin.h"
 #include "nsIPrinterList.h"
+#include "nsServiceManagerUtils.h"
 
 #include "nsRect.h"
 
@@ -150,7 +152,7 @@ static void GetDefaultPrinterNameFromGlobalPrinters(nsAString& aPrinterName) {
 
 //------------------------------------------------------------------
 // Displays the native Print Dialog
-static nsresult ShowNativePrintDialog(HWND aHWnd,
+static nsresult ShowNativePrintDialog(HWND aHWnd, bool aHaveSelection,
                                       nsIPrintSettings* aPrintSettings) {
   // NS_ENSURE_ARG_POINTER(aHWnd);
   NS_ENSURE_ARG_POINTER(aPrintSettings);
@@ -218,7 +220,7 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
                   PD_COLLATE | PD_NOCURRENTPAGE;
 
   // If there is a current selection then enable the "Selection" radio button
-  if (!aPrintSettings->GetIsPrintSelectionRBEnabled()) {
+  if (!aHaveSelection) {
     prntdlg.Flags |= PD_NOSELECTION;
   }
 
@@ -277,14 +279,11 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
     result = ::PrintDlgExW(&prntdlg);
   }
 
-  auto cancelOnExit = mozilla::MakeScopeExit([&] {
-    ::SetFocus(aHWnd);
-    aPrintSettings->SetIsCancelled(true);
-  });
+  auto cancelOnExit = mozilla::MakeScopeExit([&] { ::SetFocus(aHWnd); });
 
   if (NS_WARN_IF(!SUCCEEDED(result))) {
 #ifdef DEBUG
-    printf_stderr("PrintDlgExW failed with %x\n", result);
+    printf_stderr("PrintDlgExW failed with %lx\n", result);
 #endif
     return NS_ERROR_FAILURE;
   }
@@ -312,11 +311,13 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
   if (prntdlg.Flags & PD_PRINTTOFILE) {
     char16ptr_t fileName = &(((wchar_t*)devnames)[devnames->wOutputOffset]);
     NS_ASSERTION(wcscmp(fileName, L"FILE:") == 0, "FileName must be `FILE:`");
+    aPrintSettings->SetOutputDestination(
+        nsIPrintSettings::kOutputDestinationFile);
     aPrintSettings->SetToFileName(nsDependentString(fileName));
-    aPrintSettings->SetPrintToFile(true);
   } else {
     // clear "print to file" info
-    aPrintSettings->SetPrintToFile(false);
+    aPrintSettings->SetOutputDestination(
+        nsIPrintSettings::kOutputDestinationPrinter);
     aPrintSettings->SetToFileName(u""_ns);
   }
 
@@ -334,7 +335,8 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
   AutoTArray<int32_t, kMinSupportedRanges * 2> pageRanges;
   if (prntdlg.Flags & PD_PAGENUMS) {
     pageRanges.SetCapacity(prntdlg.nPageRanges * 2);
-    for (const auto& range : Span(prntdlg.lpPageRanges, prntdlg.nPageRanges)) {
+    for (const auto& range :
+         mozilla::Span(prntdlg.lpPageRanges, prntdlg.nPageRanges)) {
       pageRanges.AppendElement(range.nFromPage);
       pageRanges.AppendElement(range.nToPage);
     }
@@ -361,8 +363,9 @@ static nsresult ShowNativePrintDialog(HWND aHWnd,
 //----------------------------------------------------------------------------------
 //-- Show Print Dialog
 //----------------------------------------------------------------------------------
-nsresult NativeShowPrintDialog(HWND aHWnd, nsIPrintSettings* aPrintSettings) {
-  nsresult rv = ShowNativePrintDialog(aHWnd, aPrintSettings);
+nsresult NativeShowPrintDialog(HWND aHWnd, bool aHaveSelection,
+                               nsIPrintSettings* aPrintSettings) {
+  nsresult rv = ShowNativePrintDialog(aHWnd, aHaveSelection, aPrintSettings);
   if (aHWnd) {
     ::DestroyWindow(aHWnd);
   }

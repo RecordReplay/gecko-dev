@@ -4,7 +4,7 @@
 
 use crate::{
     cow_label, AdapterInformation, ByteBuf, CommandEncoderAction, DeviceAction, DropAction,
-    ImplicitLayout, QueueWriteAction, RawString, ShaderModuleSource, TextureAction,
+    ImplicitLayout, QueueWriteAction, RawString, TextureAction,
 };
 
 use wgc::{hub::IdentityManager, id};
@@ -38,9 +38,8 @@ fn make_byte_buf<T: serde::Serialize>(data: &T) -> ByteBuf {
 #[repr(C)]
 pub struct ShaderModuleDescriptor {
     label: RawString,
-    spirv_words: *const u32,
-    spirv_words_length: usize,
-    wgsl_chars: RawString,
+    code: *const u8,
+    code_length: usize,
 }
 
 #[repr(C)]
@@ -68,7 +67,7 @@ pub struct ComputePipelineDescriptor {
 #[repr(C)]
 pub struct VertexBufferLayout {
     array_stride: wgt::BufferAddress,
-    step_mode: wgt::InputStepMode,
+    step_mode: wgt::VertexStepMode,
     attributes: *const wgt::VertexAttribute,
     attributes_length: usize,
 }
@@ -101,7 +100,7 @@ impl VertexState {
 pub struct ColorTargetState<'a> {
     format: wgt::TextureFormat,
     blend: Option<&'a wgt::BlendState>,
-    write_mask: wgt::ColorWrite,
+    write_mask: wgt::ColorWrites,
 }
 
 #[repr(C)]
@@ -135,7 +134,7 @@ pub struct PrimitiveState<'a> {
     front_face: wgt::FrontFace,
     cull_mode: Option<&'a wgt::Face>,
     polygon_mode: wgt::PolygonMode,
-    clamp_depth: bool,
+    unclipped_depth: bool,
 }
 
 impl PrimitiveState<'_> {
@@ -146,7 +145,7 @@ impl PrimitiveState<'_> {
             front_face: self.front_face.clone(),
             cull_mode: self.cull_mode.cloned(),
             polygon_mode: self.polygon_mode,
-            clamp_depth: self.clamp_depth,
+            unclipped_depth: self.unclipped_depth,
             conservative: false,
         }
     }
@@ -186,7 +185,7 @@ pub enum RawBindingType {
 #[repr(C)]
 pub struct BindGroupLayoutEntry<'a> {
     binding: u32,
-    visibility: wgt::ShaderStage,
+    visibility: wgt::ShaderStages,
     ty: RawBindingType,
     has_dynamic_offset: bool,
     min_binding_size: Option<wgt::BufferSize>,
@@ -262,6 +261,8 @@ pub struct RenderBundleEncoderDescriptor<'a> {
     color_formats: *const wgt::TextureFormat,
     color_formats_length: usize,
     depth_stencil_format: Option<&'a wgt::TextureFormat>,
+    depth_read_only: bool,
+    stencil_read_only: bool,
     sample_count: u32,
 }
 
@@ -288,7 +289,7 @@ impl ImplicitLayout<'_> {
         ImplicitLayout {
             pipeline: identities.pipeline_layouts.alloc(backend),
             bind_groups: Cow::Owned(
-                (0..wgc::MAX_BIND_GROUPS)
+                (0..8) // hal::MAX_BIND_GROUPS
                     .map(|_| identities.bind_group_layouts.alloc(backend))
                     .collect(),
             ),
@@ -298,7 +299,6 @@ impl ImplicitLayout<'_> {
 
 #[derive(Debug, Default)]
 struct Identities {
-    surfaces: IdentityManager,
     vulkan: IdentityHub,
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     metal: IdentityHub,
@@ -618,16 +618,29 @@ pub extern "C" fn wgpu_client_create_command_encoder(
 pub extern "C" fn wgpu_device_create_render_bundle_encoder(
     device_id: id::DeviceId,
     desc: &RenderBundleEncoderDescriptor,
+    bb: &mut ByteBuf,
 ) -> *mut wgc::command::RenderBundleEncoder {
     let descriptor = wgc::command::RenderBundleEncoderDescriptor {
         label: cow_label(&desc.label),
         color_formats: Cow::Borrowed(make_slice(desc.color_formats, desc.color_formats_length)),
-        depth_stencil_format: desc.depth_stencil_format.cloned(),
+        depth_stencil: desc
+            .depth_stencil_format
+            .map(|&format| wgt::RenderBundleDepthStencil {
+                format,
+                depth_read_only: desc.depth_read_only,
+                stencil_read_only: desc.stencil_read_only,
+            }),
         sample_count: desc.sample_count,
+        multiview: None,
     };
     match wgc::command::RenderBundleEncoder::new(&descriptor, device_id, None) {
         Ok(encoder) => Box::into_raw(Box::new(encoder)),
-        Err(e) => panic!("Error in Device::create_render_bundle_encoder: {}", e),
+        Err(e) => {
+            let message = format!("Error in Device::create_render_bundle_encoder: {}", e);
+            let action = DeviceAction::Error(message);
+            *bb = make_byte_buf(&action);
+            ptr::null_mut()
+        }
     }
 }
 
@@ -773,10 +786,13 @@ pub unsafe extern "C" fn wgpu_client_create_bind_group_layout(
                     has_dynamic_offset: entry.has_dynamic_offset,
                     min_binding_size: entry.min_binding_size,
                 },
-                RawBindingType::Sampler => wgt::BindingType::Sampler {
-                    comparison: entry.sampler_compare,
-                    filtering: entry.sampler_filter,
-                },
+                RawBindingType::Sampler => wgt::BindingType::Sampler(if entry.sampler_compare {
+                    wgt::SamplerBindingType::Comparison
+                } else if entry.sampler_filter {
+                    wgt::SamplerBindingType::Filtering
+                } else {
+                    wgt::SamplerBindingType::NonFiltering
+                }),
                 RawBindingType::SampledTexture => wgt::BindingType::Texture {
                     //TODO: the spec has a bug here
                     view_dimension: *entry
@@ -907,19 +923,14 @@ pub unsafe extern "C" fn wgpu_client_create_shader_module(
         .shader_modules
         .alloc(backend);
 
-    let source = match cow_label(&desc.wgsl_chars) {
-        Some(code) => ShaderModuleSource::Wgsl(code),
-        None => ShaderModuleSource::SpirV(Cow::Borrowed(make_slice(
-            desc.spirv_words,
-            desc.spirv_words_length,
-        ))),
-    };
+    let code =
+        std::str::from_utf8_unchecked(std::slice::from_raw_parts(desc.code, desc.code_length));
     let desc = wgc::pipeline::ShaderModuleDescriptor {
         label: cow_label(&desc.label),
-        flags: wgt::ShaderFlags::VALIDATION, // careful here!
+        shader_bound_checks: wgt::ShaderBoundChecks::new(),
     };
 
-    let action = DeviceAction::CreateShaderModule(id, desc, source);
+    let action = DeviceAction::CreateShaderModule(id, desc, Cow::Borrowed(code));
     *bb = make_byte_buf(&action);
     id
 }
@@ -981,6 +992,7 @@ pub unsafe extern "C" fn wgpu_client_create_render_pipeline(
         primitive: desc.primitive.to_wgpu(),
         depth_stencil: desc.depth_stencil.cloned(),
         multisample: desc.multisample.clone(),
+        multiview: None,
     };
 
     let implicit = match desc.layout {
@@ -1053,25 +1065,31 @@ pub unsafe extern "C" fn wgpu_command_encoder_copy_texture_to_texture(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wgpu_render_pass_set_index_buffer(
-    pass: &mut wgc::command::RenderPass,
-    buffer: wgc::id::BufferId,
-    index_format: wgt::IndexFormat,
-    offset: wgt::BufferAddress,
-    size: Option<wgt::BufferSize>,
+pub unsafe extern "C" fn wgpu_command_encoder_push_debug_group(
+    marker: RawString,
+    bb: &mut ByteBuf,
 ) {
-    pass.set_index_buffer(buffer, index_format, offset, size);
+    let cstr = std::ffi::CStr::from_ptr(marker);
+    let string = cstr.to_str().unwrap_or_default().to_string();
+    let action = CommandEncoderAction::PushDebugGroup(string);
+    *bb = make_byte_buf(&action);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn wgpu_render_bundle_set_index_buffer(
-    encoder: &mut wgc::command::RenderBundleEncoder,
-    buffer: wgc::id::BufferId,
-    index_format: wgt::IndexFormat,
-    offset: wgt::BufferAddress,
-    size: Option<wgt::BufferSize>,
+pub unsafe extern "C" fn wgpu_command_encoder_pop_debug_group(bb: &mut ByteBuf) {
+    let action = CommandEncoderAction::PopDebugGroup;
+    *bb = make_byte_buf(&action);
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn wgpu_command_encoder_insert_debug_marker(
+    marker: RawString,
+    bb: &mut ByteBuf,
 ) {
-    encoder.set_index_buffer(buffer, index_format, offset, size);
+    let cstr = std::ffi::CStr::from_ptr(marker);
+    let string = cstr.to_str().unwrap_or_default().to_string();
+    let action = CommandEncoderAction::InsertDebugMarker(string);
+    *bb = make_byte_buf(&action);
 }
 
 #[no_mangle]

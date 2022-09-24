@@ -15,8 +15,14 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  Services: "resource://gre/modules/Services.jsm",
+
   executeSoon: "chrome://remote/content/shared/Sync.jsm",
+  Log: "chrome://remote/content/shared/Log.jsm",
+  RemoteAgent: "chrome://remote/content/components/RemoteAgent.jsm",
 });
+
+XPCOMUtils.defineLazyGetter(this, "logger", () => Log.get());
 
 XPCOMUtils.defineLazyGetter(this, "CryptoHash", () => {
   return CC("@mozilla.org/security/hash;1", "nsICryptoHash", "initWithString");
@@ -26,8 +32,34 @@ XPCOMUtils.defineLazyGetter(this, "threadManager", () => {
   return Cc["@mozilla.org/thread-manager;1"].getService();
 });
 
-// TODO(ato): Merge this with httpd.js so that we can respond to both HTTP/1.1
-// as well as WebSocket requests on the same server.
+/**
+ * Allowed origins are exposed through 2 separate getters because while most
+ * of the values should be valid URIs, `null` is also a valid origin and cannot
+ * be converted to a URI. Call sites interested in checking for null should use
+ * `allowedOrigins`, those interested in URIs should use `allowedOriginURIs`.
+ */
+XPCOMUtils.defineLazyGetter(this, "allowedOrigins", () =>
+  RemoteAgent.allowOrigins !== null ? RemoteAgent.allowOrigins : []
+);
+
+XPCOMUtils.defineLazyGetter(this, "allowedOriginURIs", () => {
+  return allowedOrigins
+    .map(origin => {
+      try {
+        const originURI = Services.io.newURI(origin);
+        // Make sure to read host/port/scheme as those getters could throw for
+        // invalid URIs.
+        return {
+          host: originURI.host,
+          port: originURI.port,
+          scheme: originURI.scheme,
+        };
+      } catch (e) {
+        return null;
+      }
+    })
+    .filter(uri => uri !== null);
+});
 
 /**
  * Write a string of bytes to async output stream
@@ -63,10 +95,71 @@ function writeString(output, data) {
   });
 }
 
-/** Write HTTP response (array of strings) to async output stream. */
-function writeHttpResponse(output, response) {
-  const s = response.join("\r\n") + "\r\n\r\n";
+/**
+ * Write HTTP response with headers (array of strings) and body
+ * to async output stream.
+ */
+function writeHttpResponse(output, headers, body = "") {
+  headers.push(`Content-Length: ${body.length}`);
+
+  const s = headers.join("\r\n") + `\r\n\r\n${body}`;
   return writeString(output, s);
+}
+
+/**
+ * Check if the provided URI's host is an IP address.
+ *
+ * @param {nsIURI} uri
+ *     The URI to check.
+ * @return {boolean}
+ */
+function isIPAddress(uri) {
+  try {
+    // getBaseDomain throws an explicit error if the uri host is an IP address.
+    Services.eTLD.getBaseDomain(uri);
+  } catch (e) {
+    return e.result == Cr.NS_ERROR_HOST_IS_IP_ADDRESS;
+  }
+  return false;
+}
+
+function isHostValid(hostHeader) {
+  try {
+    // Might throw both when calling newURI or when accessing the host/port.
+    const hostUri = Services.io.newURI(`https://${hostHeader}`);
+    const { host, port } = hostUri;
+    const isHostnameValid =
+      isIPAddress(hostUri) || RemoteAgent.allowHosts.includes(host);
+    // For nsIURI a port value of -1 corresponds to the protocol's default port.
+    const isPortValid = [-1, RemoteAgent.port].includes(port);
+    return isHostnameValid && isPortValid;
+  } catch (e) {
+    return false;
+  }
+}
+
+function isOriginValid(originHeader) {
+  if (originHeader === undefined) {
+    // Always accept no origin header.
+    return true;
+  }
+
+  // Special case "null" origins, used for privacy sensitive or opaque origins.
+  if (originHeader === "null") {
+    return allowedOrigins.includes("null");
+  }
+
+  try {
+    // Extract the host, port and scheme from the provided origin header.
+    const { host, port, scheme } = Services.io.newURI(originHeader);
+    // Check if any allowed origin matches the provided host, port and scheme.
+    return allowedOriginURIs.some(
+      uri => uri.host === host && uri.port === port && uri.scheme === scheme
+    );
+  } catch (e) {
+    // Reject invalid origin headers
+    return false;
+  }
 }
 
 /**
@@ -74,6 +167,26 @@ function writeHttpResponse(output, response) {
  * Sec-WebSocket-Accept response header.
  */
 function processRequest({ requestLine, headers }) {
+  if (!isOriginValid(headers.get("origin"))) {
+    logger.debug(
+      `Incorrect Origin header, allowed origins: [${allowedOrigins}]`
+    );
+    throw new Error(
+      `The handshake request has incorrect Origin header ${headers.get(
+        "origin"
+      )}`
+    );
+  }
+
+  if (!isHostValid(headers.get("host"))) {
+    logger.debug(
+      `Incorrect Host header, allowed hosts: [${RemoteAgent.allowHosts}]`
+    );
+    throw new Error(
+      `The handshake request has incorrect Host header ${headers.get("host")}`
+    );
+  }
+
   const method = requestLine.split(" ")[0];
   if (method !== "GET") {
     throw new Error("The handshake request must use GET method");
@@ -135,13 +248,23 @@ async function serverHandshake(request, output) {
     // Send response headers
     await writeHttpResponse(output, [
       "HTTP/1.1 101 Switching Protocols",
+      "Server: httpd.js",
       "Upgrade: websocket",
       "Connection: Upgrade",
       `Sec-WebSocket-Accept: ${acceptKey}`,
     ]);
   } catch (error) {
     // Send error response in case of error
-    await writeHttpResponse(output, ["HTTP/1.1 400 Bad Request"]);
+    await writeHttpResponse(
+      output,
+      [
+        "HTTP/1.1 400 Bad Request",
+        "Server: httpd.js",
+        "Content-Type: text/plain",
+      ],
+      error.message
+    );
+
     throw error;
   }
 }

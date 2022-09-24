@@ -78,7 +78,6 @@ info = {
     "os_version": unknown,
     "bits": unknown,
     "has_sandbox": unknown,
-    "webrender": False,
     "automation": bool(os.environ.get("MOZ_AUTOMATION", False)),
 }
 (system, node, release, version, machine, processor) = platform.uname()
@@ -153,7 +152,7 @@ info["apple_silicon"] = False
 if (
     info["os"] == "mac"
     and float(os_version) > 10.15
-    and processor == "i386"
+    and processor == "arm"
     and bits == "64bit"
 ):
     info["apple_silicon"] = True

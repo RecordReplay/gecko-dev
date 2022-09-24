@@ -7,19 +7,37 @@
 #include "TRRServiceBase.h"
 
 #include "mozilla/Preferences.h"
+#include "mozilla/ScopeExit.h"
 #include "nsHostResolver.h"
 #include "nsNetUtil.h"
 #include "nsIOService.h"
 #include "nsIDNSService.h"
+#include "nsIProxyInfo.h"
+#include "nsHttpConnectionInfo.h"
+#include "nsHttpHandler.h"
+#include "mozilla/StaticPrefs_network.h"
+#include "AlternateServices.h"
+#include "ProxyConfigLookup.h"
 // Put DNSLogging.h at the end to avoid LOG being overwritten by other headers.
 #include "DNSLogging.h"
-#include "mozilla/StaticPrefs_network.h"
+
+#if defined(XP_WIN) && !defined(__MINGW32__)
+#  include <shlobj_core.h>  // for SHGetSpecialFolderPathA
+#endif                      // XP_WIN
 
 namespace mozilla {
 namespace net {
 
+NS_IMPL_ISUPPORTS(TRRServiceBase, nsIProxyConfigChangedCallback)
+
 TRRServiceBase::TRRServiceBase()
-    : mMode(nsIDNSService::MODE_NATIVEONLY), mURISetByDetection(false) {}
+    : mDefaultTRRConnectionInfo("DataMutex::mDefaultTRRConnectionInfo") {}
+
+TRRServiceBase::~TRRServiceBase() {
+  if (mTRRConnectionInfoInited) {
+    UnregisterProxyChangeListener();
+  }
+}
 
 void TRRServiceBase::ProcessURITemplate(nsACString& aURI) {
   // URI Template, RFC 6570.
@@ -147,6 +165,223 @@ void TRRServiceBase::OnTRRURIChange() {
   Preferences::GetCString("network.trr.default_provider_uri", mDefaultURIPref);
 
   CheckURIPrefs();
+}
+
+static already_AddRefed<nsHttpConnectionInfo> CreateConnInfoHelper(
+    nsIURI* aURI, nsIProxyInfo* aProxyInfo) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsAutoCString host;
+  nsAutoCString scheme;
+  nsAutoCString username;
+  int32_t port = -1;
+  bool isHttps = aURI->SchemeIs("https");
+
+  nsresult rv = aURI->GetScheme(scheme);
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  rv = aURI->GetAsciiHost(host);
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  rv = aURI->GetPort(&port);
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
+  // Just a warning here because some nsIURIs do not implement this method.
+  if (NS_WARN_IF(NS_FAILED(aURI->GetUsername(username)))) {
+    LOG(("Failed to get username for aURI(%s)",
+         aURI->GetSpecOrDefault().get()));
+  }
+
+  gHttpHandler->MaybeAddAltSvcForTesting(aURI, username, false, nullptr,
+                                         OriginAttributes());
+
+  nsCOMPtr<nsProxyInfo> proxyInfo = do_QueryInterface(aProxyInfo);
+  RefPtr<nsHttpConnectionInfo> connInfo = new nsHttpConnectionInfo(
+      host, port, ""_ns, username, proxyInfo, OriginAttributes(), isHttps);
+  bool http2Allowed = !gHttpHandler->IsHttp2Excluded(connInfo);
+  bool http3Allowed = proxyInfo ? proxyInfo->IsDirect() : true;
+
+  RefPtr<AltSvcMapping> mapping;
+  if ((http2Allowed || http3Allowed) &&
+      AltSvcMapping::AcceptableProxy(proxyInfo) &&
+      (scheme.EqualsLiteral("http") || scheme.EqualsLiteral("https")) &&
+      (mapping = gHttpHandler->GetAltServiceMapping(
+           scheme, host, port, false, OriginAttributes(), http2Allowed,
+           http3Allowed))) {
+    mapping->GetConnectionInfo(getter_AddRefs(connInfo), proxyInfo,
+                               OriginAttributes());
+  }
+
+  return connInfo.forget();
+}
+
+void TRRServiceBase::InitTRRConnectionInfo() {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
+  if (mTRRConnectionInfoInited) {
+    return;
+  }
+
+  if (!NS_IsMainThread()) {
+    NS_DispatchToMainThread(NS_NewRunnableFunction(
+        "TRRServiceBase::InitTRRConnectionInfo",
+        [self = RefPtr{this}]() { self->InitTRRConnectionInfo(); }));
+    return;
+  }
+
+  LOG(("TRRServiceBase::InitTRRConnectionInfo"));
+  nsAutoCString uri;
+  GetURI(uri);
+  AsyncCreateTRRConnectionInfoInternal(uri);
+}
+
+void TRRServiceBase::AsyncCreateTRRConnectionInfo(const nsACString& aURI) {
+  LOG(
+      ("TRRServiceBase::AsyncCreateTRRConnectionInfo "
+       "mTRRConnectionInfoInited=%d",
+       bool(mTRRConnectionInfoInited)));
+  if (!mTRRConnectionInfoInited) {
+    return;
+  }
+
+  AsyncCreateTRRConnectionInfoInternal(aURI);
+}
+
+void TRRServiceBase::AsyncCreateTRRConnectionInfoInternal(
+    const nsACString& aURI) {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
+  SetDefaultTRRConnectionInfo(nullptr);
+
+  MOZ_ASSERT(NS_IsMainThread());
+
+  nsCOMPtr<nsIURI> dnsURI;
+  nsresult rv = NS_NewURI(getter_AddRefs(dnsURI), aURI);
+  if (NS_FAILED(rv)) {
+    return;
+  }
+
+  rv = ProxyConfigLookup::Create(
+      [self = RefPtr{this}, uri(dnsURI)](nsIProxyInfo* aProxyInfo,
+                                         nsresult aStatus) mutable {
+        if (NS_FAILED(aStatus)) {
+          self->SetDefaultTRRConnectionInfo(nullptr);
+          return;
+        }
+
+        RefPtr<nsHttpConnectionInfo> connInfo =
+            CreateConnInfoHelper(uri, aProxyInfo);
+        self->SetDefaultTRRConnectionInfo(connInfo);
+        if (!self->mTRRConnectionInfoInited) {
+          self->mTRRConnectionInfoInited = true;
+          self->RegisterProxyChangeListener();
+        }
+      },
+      dnsURI, 0, nullptr);
+
+  // mDefaultTRRConnectionInfo is set to nullptr at the beginning of this
+  // method, so we don't really care aobut the |rv| here. If it's failed,
+  // mDefaultTRRConnectionInfo stays as nullptr and we'll create a new
+  // connection info in TRRServiceChannel again.
+  Unused << NS_WARN_IF(NS_FAILED(rv));
+}
+
+already_AddRefed<nsHttpConnectionInfo> TRRServiceBase::TRRConnectionInfo() {
+  RefPtr<nsHttpConnectionInfo> connInfo;
+  {
+    auto lock = mDefaultTRRConnectionInfo.Lock();
+    connInfo = *lock;
+  }
+  return connInfo.forget();
+}
+
+void TRRServiceBase::SetDefaultTRRConnectionInfo(
+    nsHttpConnectionInfo* aConnInfo) {
+  LOG(("TRRService::SetDefaultTRRConnectionInfo aConnInfo=%s",
+       aConnInfo ? aConnInfo->HashKey().get() : "none"));
+  {
+    auto lock = mDefaultTRRConnectionInfo.Lock();
+    lock.ref() = aConnInfo;
+  }
+}
+
+void TRRServiceBase::RegisterProxyChangeListener() {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
+  nsCOMPtr<nsIProtocolProxyService> pps =
+      do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+  if (!pps) {
+    return;
+  }
+
+  pps->AddProxyConfigCallback(this);
+}
+
+void TRRServiceBase::UnregisterProxyChangeListener() {
+  if (!XRE_IsParentProcess()) {
+    return;
+  }
+
+  nsCOMPtr<nsIProtocolProxyService> pps =
+      do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+  if (!pps) {
+    return;
+  }
+
+  pps->RemoveProxyConfigCallback(this);
+}
+
+void TRRServiceBase::DoReadEtcHostsFile(ParsingCallback aCallback) {
+  MOZ_ASSERT(XRE_IsParentProcess());
+
+  if (!StaticPrefs::network_trr_exclude_etc_hosts()) {
+    return;
+  }
+
+  auto readHostsTask = [aCallback]() {
+    MOZ_ASSERT(!NS_IsMainThread(), "Must not run on the main thread");
+#if defined(XP_WIN) && !defined(__MINGW32__)
+    // Inspired by libevent/evdns.c
+    // Windows is a little coy about where it puts its configuration
+    // files.  Sure, they're _usually_ in C:\windows\system32, but
+    // there's no reason in principle they couldn't be in
+    // W:\hoboken chicken emergency
+
+    nsCString path;
+    path.SetLength(MAX_PATH + 1);
+    if (!SHGetSpecialFolderPathA(NULL, path.BeginWriting(), CSIDL_SYSTEM,
+                                 false)) {
+      LOG(("Calling SHGetSpecialFolderPathA failed"));
+      return;
+    }
+
+    path.SetLength(strlen(path.get()));
+    path.Append("\\drivers\\etc\\hosts");
+#elif defined(__MINGW32__)
+    nsAutoCString path("C:\\windows\\system32\\drivers\\etc\\hosts"_ns);
+#else
+    nsAutoCString path("/etc/hosts"_ns);
+#endif
+
+    LOG(("Reading hosts file at %s", path.get()));
+    rust_parse_etc_hosts(&path, aCallback);
+  };
+
+  Unused << NS_DispatchBackgroundTask(
+      NS_NewRunnableFunction("Read /etc/hosts file", readHostsTask),
+      NS_DISPATCH_EVENT_MAY_BLOCK);
 }
 
 }  // namespace net

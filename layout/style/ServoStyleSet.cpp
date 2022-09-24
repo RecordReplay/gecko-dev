@@ -30,12 +30,16 @@
 #include "mozilla/dom/CSSFontFaceRule.h"
 #include "mozilla/dom/CSSFontFeatureValuesRule.h"
 #include "mozilla/dom/CSSImportRule.h"
+#include "mozilla/dom/CSSContainerRule.h"
+#include "mozilla/dom/CSSLayerBlockRule.h"
+#include "mozilla/dom/CSSLayerStatementRule.h"
 #include "mozilla/dom/CSSMediaRule.h"
 #include "mozilla/dom/CSSMozDocumentRule.h"
 #include "mozilla/dom/CSSKeyframesRule.h"
 #include "mozilla/dom/CSSKeyframeRule.h"
 #include "mozilla/dom/CSSNamespaceRule.h"
 #include "mozilla/dom/CSSPageRule.h"
+#include "mozilla/dom/CSSScrollTimelineRule.h"
 #include "mozilla/dom/CSSSupportsRule.h"
 #include "mozilla/dom/ChildIterator.h"
 #include "mozilla/dom/FontFaceSet.h"
@@ -47,6 +51,7 @@
 #include "nsDeviceContext.h"
 #include "nsHTMLStyleSheet.h"
 #include "nsIAnonymousContentCreator.h"
+#include "nsLayoutUtils.h"
 #include "mozilla/dom/DocumentInlines.h"
 #include "nsPrintfCString.h"
 #include "gfxUserFontSet.h"
@@ -220,12 +225,15 @@ RestyleHint ServoStyleSet::MediumFeaturesChanged(
 
   const bool mayAffectDefaultStyle =
       bool(aReason & kMediaFeaturesAffectingDefaultStyle);
+  const MediumFeaturesChangedResult result =
+      Servo_StyleSet_MediumFeaturesChanged(mRawSet.get(), &nonDocumentStyles,
+                                           mayAffectDefaultStyle);
+
   const bool viewportChanged =
       bool(aReason & MediaFeatureChangeReason::ViewportChange);
-  const MediumFeaturesChangedResult result =
-      Servo_StyleSet_MediumFeaturesChanged(
-          mRawSet.get(), &nonDocumentStyles, mayAffectDefaultStyle,
-          viewportChanged, mDocument->GetRootElement());
+  if (viewportChanged) {
+    InvalidateForViewportUnits(OnlyDynamic::No);
+  }
 
   const bool rulesChanged =
       result.mAffectsDocumentRules || result.mAffectsNonDocumentRules;
@@ -348,7 +356,7 @@ void ServoStyleSet::PreTraverseSync() {
     uint64_t generation = userFontSet->GetGeneration();
     if (generation != mUserFontSetUpdateGeneration) {
       mDocument->GetFonts()->CacheFontLoadability();
-      presContext->DeviceContext()->UpdateFontCacheUserFonts(userFontSet);
+      presContext->UpdateFontCacheUserFonts(userFontSet);
       mUserFontSetUpdateGeneration = generation;
     }
   }
@@ -546,7 +554,6 @@ ServoStyleSet::ResolveNonInheritingAnonymousBoxStyle(PseudoStyleType aType) {
   return computedValues.forget();
 }
 
-#ifdef MOZ_XUL
 already_AddRefed<ComputedStyle> ServoStyleSet::ResolveXULTreePseudoStyle(
     dom::Element* aParentElement, nsCSSAnonBoxPseudoStaticAtom* aPseudoTag,
     ComputedStyle* aParentStyle, const AtomArray& aInputWord) {
@@ -559,7 +566,6 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ResolveXULTreePseudoStyle(
              mRawSet.get())
       .Consume();
 }
-#endif
 
 // manage the set of style sheets in the style set
 void ServoStyleSet::AppendStyleSheet(StyleSheet& aSheet) {
@@ -628,12 +634,35 @@ StyleSheet* ServoStyleSet::SheetAt(Origin aOrigin, size_t aIndex) const {
       Servo_StyleSet_GetSheetAt(mRawSet.get(), aOrigin, aIndex));
 }
 
+Maybe<StylePageOrientation> ServoStyleSet::GetDefaultPageOrientation() {
+  const RefPtr<ComputedStyle> style =
+      ResolveNonInheritingAnonymousBoxStyle(PseudoStyleType::pageContent);
+  const StylePageSize& pageSize = style->StylePage()->mSize;
+  if (pageSize.IsOrientation()) {
+    return Some(pageSize.AsOrientation());
+  }
+  if (pageSize.IsSize()) {
+    const CSSCoord w = pageSize.AsSize().width.ToCSSPixels();
+    const CSSCoord h = pageSize.AsSize().height.ToCSSPixels();
+    if (w > h) {
+      return Some(StylePageOrientation::Landscape);
+    }
+    if (w < h) {
+      return Some(StylePageOrientation::Portrait);
+    }
+  } else {
+    MOZ_ASSERT(pageSize.IsAuto(), "Impossible page size");
+  }
+  return Nothing();
+}
+
 void ServoStyleSet::AppendAllNonDocumentAuthorSheets(
     nsTArray<StyleSheet*>& aArray) const {
   EnumerateShadowRoots(*mDocument, [&](ShadowRoot& aShadowRoot) {
     for (auto index : IntegerRange(aShadowRoot.SheetCount())) {
       aArray.AppendElement(aShadowRoot.SheetAt(index));
     }
+    aArray.AppendElements(aShadowRoot.AdoptedStyleSheets());
   });
 }
 
@@ -906,33 +935,36 @@ void ServoStyleSet::RuleChangedInternal(StyleSheet& aSheet, css::Rule& aRule,
   SetStylistStyleSheetsDirty();
 
 #define CASE_FOR(constant_, type_)                                       \
-  case CSSRule_Binding::constant_##_RULE:                                \
+  case StyleCssRuleType::constant_:                                      \
     return Servo_StyleSet_##type_##RuleChanged(                          \
         mRawSet.get(), static_cast<dom::CSS##type_##Rule&>(aRule).Raw(), \
         &aSheet, aKind);
 
   switch (aRule.Type()) {
-    CASE_FOR(COUNTER_STYLE, CounterStyle)
-    CASE_FOR(STYLE, Style)
-    CASE_FOR(IMPORT, Import)
-    CASE_FOR(MEDIA, Media)
-    CASE_FOR(KEYFRAMES, Keyframes)
-    CASE_FOR(FONT_FEATURE_VALUES, FontFeatureValues)
-    CASE_FOR(FONT_FACE, FontFace)
-    CASE_FOR(PAGE, Page)
-    CASE_FOR(DOCUMENT, MozDocument)
-    CASE_FOR(SUPPORTS, Supports)
+    CASE_FOR(CounterStyle, CounterStyle)
+    CASE_FOR(Style, Style)
+    CASE_FOR(Import, Import)
+    CASE_FOR(Media, Media)
+    CASE_FOR(Keyframes, Keyframes)
+    CASE_FOR(FontFeatureValues, FontFeatureValues)
+    CASE_FOR(FontFace, FontFace)
+    CASE_FOR(Page, Page)
+    CASE_FOR(Document, MozDocument)
+    CASE_FOR(Supports, Supports)
+    CASE_FOR(LayerBlock, LayerBlock)
+    CASE_FOR(LayerStatement, LayerStatement)
+    CASE_FOR(ScrollTimeline, ScrollTimeline)
+    CASE_FOR(Container, Container)
     // @namespace can only be inserted / removed when there are only other
     // @namespace and @import rules, and can't be mutated.
-    case CSSRule_Binding::NAMESPACE_RULE:
-    case CSSRule_Binding::CHARSET_RULE:
+    case StyleCssRuleType::Namespace:
       break;
-    case CSSRule_Binding::KEYFRAME_RULE:
+    case StyleCssRuleType::Viewport:
+      MOZ_ASSERT_UNREACHABLE("Gecko doesn't implement @viewport");
+      break;
+    case StyleCssRuleType::Keyframe:
       // FIXME: We should probably just forward to the parent @keyframes rule? I
       // think that'd do the right thing, but meanwhile...
-      return MarkOriginsDirty(ToOriginFlags(aSheet.GetOrigin()));
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unknown rule type changed");
       return MarkOriginsDirty(ToOriginFlags(aSheet.GetOrigin()));
   }
 
@@ -950,6 +982,13 @@ void ServoStyleSet::RuleChanged(StyleSheet& aSheet, css::Rule* aRule,
     MarkOriginsDirty(ToOriginFlags(aSheet.GetOrigin()));
   } else {
     RuleChangedInternal(aSheet, *aRule, aKind);
+  }
+}
+
+void ServoStyleSet::SheetCloned(StyleSheet& aSheet) {
+  mNeedsRestyleAfterEnsureUniqueInner = true;
+  if (mStyleRuleMap) {
+    mStyleRuleMap->SheetCloned(aSheet);
   }
 }
 
@@ -1033,10 +1072,21 @@ bool ServoStyleSet::EnsureUniqueInnerOnCSSSheets() {
       queue.AppendElement(
           std::make_pair(aShadowRoot.SheetAt(index), SheetOwner{&aShadowRoot}));
     }
+    for (auto& adopted : aShadowRoot.AdoptedStyleSheets()) {
+      queue.AppendElement(
+          std::make_pair(adopted.get(), SheetOwner{&aShadowRoot}));
+    }
   });
 
   while (!queue.IsEmpty()) {
     auto [sheet, owner] = queue.PopLastElement();
+
+    if (sheet->HasForcedUniqueInner()) {
+      // We already processed this sheet and its children.
+      // Normally we don't hit this but adopted stylesheets can have dupes so we
+      // can save some work here.
+      continue;
+    }
 
     // Only call EnsureUniqueInner for complete sheets. If we do call it on
     // incomplete sheets, we'll cause problems when the sheet is actually
@@ -1157,6 +1207,12 @@ const RawServoCounterStyleRule* ServoStyleSet::CounterStyleRuleForName(
   return Servo_StyleSet_GetCounterStyleRule(mRawSet.get(), aName);
 }
 
+const RawServoScrollTimelineRule* ServoStyleSet::ScrollTimelineRuleForName(
+    nsAtom* aName) {
+  MOZ_ASSERT(!StylistNeedsUpdate());
+  return Servo_StyleSet_GetScrollTimelineRule(mRawSet.get(), aName);
+}
+
 already_AddRefed<gfxFontFeatureValueSet>
 ServoStyleSet::BuildFontFeatureValueSet() {
   MOZ_ASSERT(!StylistNeedsUpdate());
@@ -1175,6 +1231,7 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ResolveForDeclarations(
 }
 
 void ServoStyleSet::UpdateStylist() {
+  AUTO_PROFILER_LABEL_RELEVANT_FOR_JS("Update stylesheet information", LAYOUT);
   MOZ_ASSERT(StylistNeedsUpdate());
 
   if (mStylistState & StylistState::StyleSheetsDirty) {
@@ -1281,6 +1338,16 @@ already_AddRefed<ComputedStyle> ServoStyleSet::ReparentComputedStyle(
                              aNewParentIgnoringFirstLine, aNewLayoutParent,
                              aElement, mRawSet.get())
       .Consume();
+}
+
+void ServoStyleSet::InvalidateForViewportUnits(OnlyDynamic aOnlyDynamic) {
+  dom::Element* root = mDocument->GetRootElement();
+  if (!root) {
+    return;
+  }
+
+  Servo_InvalidateForViewportUnits(mRawSet.get(), root,
+                                   aOnlyDynamic == OnlyDynamic::Yes);
 }
 
 NS_IMPL_ISUPPORTS(UACacheReporter, nsIMemoryReporter)

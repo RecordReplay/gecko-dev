@@ -36,7 +36,7 @@ namespace layers {
 class ImageContainer;
 class StackingContextHelper;
 class WebRenderParentCommand;
-class LayerManager;
+class WebRenderLayerManager;
 class RenderRootStateManager;
 }  // namespace layers
 
@@ -103,7 +103,7 @@ struct nsCSSRendering {
   typedef mozilla::gfx::Rect Rect;
   typedef mozilla::gfx::Size Size;
   typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
-  typedef mozilla::layers::LayerManager LayerManager;
+  typedef mozilla::layers::WebRenderLayerManager WebRenderLayerManager;
   typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef nsIFrame::Sides Sides;
 
@@ -208,27 +208,27 @@ struct nsCSSRendering {
                                           mozilla::ComputedStyle* aStyle);
 
   static ImgDrawResult CreateWebRenderCommandsForBorder(
-      nsDisplayItem* aItem, nsIFrame* aForFrame, const nsRect& aBorderArea,
-      mozilla::wr::DisplayListBuilder& aBuilder,
+      mozilla::nsDisplayItem* aItem, nsIFrame* aForFrame,
+      const nsRect& aBorderArea, mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
       mozilla::layers::RenderRootStateManager* aManager,
-      nsDisplayListBuilder* aDisplayListBuilder);
+      mozilla::nsDisplayListBuilder* aDisplayListBuilder);
 
   static void CreateWebRenderCommandsForNullBorder(
-      nsDisplayItem* aItem, nsIFrame* aForFrame, const nsRect& aBorderArea,
-      mozilla::wr::DisplayListBuilder& aBuilder,
+      mozilla::nsDisplayItem* aItem, nsIFrame* aForFrame,
+      const nsRect& aBorderArea, mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
       const nsStyleBorder& aStyleBorder);
 
   static ImgDrawResult CreateWebRenderCommandsForBorderWithStyleBorder(
-      nsDisplayItem* aItem, nsIFrame* aForFrame, const nsRect& aBorderArea,
-      mozilla::wr::DisplayListBuilder& aBuilder,
+      mozilla::nsDisplayItem* aItem, nsIFrame* aForFrame,
+      const nsRect& aBorderArea, mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
       mozilla::layers::RenderRootStateManager* aManager,
-      nsDisplayListBuilder* aDisplayListBuilder,
+      mozilla::nsDisplayListBuilder* aDisplayListBuilder,
       const nsStyleBorder& aStyleBorder);
 
   /**
@@ -505,21 +505,23 @@ struct nsCSSRendering {
       mozilla::ComputedStyle* mBackgroundSC, const nsStyleBorder& aBorder);
 
   static bool CanBuildWebRenderDisplayItemsForStyleImageLayer(
-      LayerManager* aManager, nsPresContext& aPresCtx, nsIFrame* aFrame,
-      const nsStyleBackground* aBackgroundStyle, int32_t aLayer,
-      uint32_t aPaintFlags);
+      WebRenderLayerManager* aManager, nsPresContext& aPresCtx,
+      nsIFrame* aFrame, const nsStyleBackground* aBackgroundStyle,
+      int32_t aLayer, uint32_t aPaintFlags);
   static ImgDrawResult BuildWebRenderDisplayItemsForStyleImageLayer(
       const PaintBGParams& aParams, mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
-      mozilla::layers::RenderRootStateManager* aManager, nsDisplayItem* aItem);
+      mozilla::layers::RenderRootStateManager* aManager,
+      mozilla::nsDisplayItem* aItem);
 
   static ImgDrawResult BuildWebRenderDisplayItemsForStyleImageLayerWithSC(
       const PaintBGParams& aParams, mozilla::wr::DisplayListBuilder& aBuilder,
       mozilla::wr::IpcResourceUpdateQueue& aResources,
       const mozilla::layers::StackingContextHelper& aSc,
-      mozilla::layers::RenderRootStateManager* aManager, nsDisplayItem* aItem,
-      mozilla::ComputedStyle* mBackgroundSC, const nsStyleBorder& aBorder);
+      mozilla::layers::RenderRootStateManager* aManager,
+      mozilla::nsDisplayItem* aItem, mozilla::ComputedStyle* mBackgroundSC,
+      const nsStyleBorder& aBorder);
 
   /**
    * Returns the rectangle covered by the given background layer image, taking
@@ -682,8 +684,8 @@ struct nsCSSRendering {
   static nsRect GetTextDecorationRect(nsPresContext* aPresContext,
                                       const DecorationRectParams& aParams);
 
-  static CompositionOp GetGFXBlendMode(mozilla::StyleBlend mBlendMode) {
-    switch (mBlendMode) {
+  static CompositionOp GetGFXBlendMode(mozilla::StyleBlend aBlendMode) {
+    switch (aBlendMode) {
       case mozilla::StyleBlend::Normal:
         return CompositionOp::OP_OVER;
       case mozilla::StyleBlend::Multiply:
@@ -716,6 +718,8 @@ struct nsCSSRendering {
         return CompositionOp::OP_COLOR;
       case mozilla::StyleBlend::Luminosity:
         return CompositionOp::OP_LUMINOSITY;
+      case mozilla::StyleBlend::PlusLighter:
+        return CompositionOp::OP_ADD;
       default:
         MOZ_ASSERT(false);
         return CompositionOp::OP_OVER;

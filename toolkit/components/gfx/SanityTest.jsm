@@ -22,12 +22,9 @@ const VIDEO_HEIGHT = 132;
 const DRIVER_PREF = "sanity-test.driver-version";
 const DEVICE_PREF = "sanity-test.device-id";
 const VERSION_PREF = "sanity-test.version";
-const WEBRENDER_DISABLED_PREF = "sanity-test.webrender.force-disabled";
 const DISABLE_VIDEO_PREF = "media.hardware-video-decoding.failed";
 const RUNNING_PREF = "sanity-test.running";
 const TIMEOUT_SEC = 20;
-
-const WR_DISABLED_PREF = "gfx.webrender.force-disabled";
 
 // GRAPHICS_SANITY_TEST histogram enumeration values
 const TEST_PASSED = 0;
@@ -41,7 +38,6 @@ const REASON_FIRST_RUN = 0;
 const REASON_FIREFOX_CHANGED = 1;
 const REASON_DEVICE_CHANGED = 2;
 const REASON_DRIVER_CHANGED = 3;
-const REASON_WR_CONFIG_CHANGED = 5;
 
 function testPixel(ctx, x, y, r, g, b, a, fuzz) {
   var data = ctx.getImageData(x, y, 1, 1);
@@ -79,7 +75,7 @@ function annotateCrashReport() {
     var crashReporter = Cc["@mozilla.org/toolkit/crash-reporter;1"].getService(
       Ci.nsICrashReporter
     );
-    crashReporter.annotateCrashReport("GraphicsSanityTest", "1");
+    crashReporter.annotateCrashReport("TestKey", "1");
   } catch (e) {}
 }
 
@@ -88,7 +84,7 @@ function removeCrashReportAnnotation(value) {
     var crashReporter = Cc["@mozilla.org/toolkit/crash-reporter;1"].getService(
       Ci.nsICrashReporter
     );
-    crashReporter.removeCrashReportAnnotation("GraphicsSanityTest");
+    crashReporter.removeCrashReportAnnotation("TestKey");
   } catch (e) {}
 }
 
@@ -204,13 +200,6 @@ function verifyLayersRendering(ctx) {
 }
 
 function testCompositor(test, win, ctx) {
-  if (win.windowUtils.layerManagerType.startsWith("WebRender")) {
-    // When layer manger type is WebRender, drawWindow() is skipped, since
-    // drawWindow() could take long time.
-    reportResult(TEST_PASSED);
-    return true;
-  }
-
   takeWindowSnapshot(win, ctx);
   var testPassed = true;
 
@@ -336,7 +325,6 @@ SanityTest.prototype = {
     // gpu or drivers.
     var buildId = Services.appinfo.platformBuildID;
     var gfxinfo = Cc["@mozilla.org/gfx/info;1"].getService(Ci.nsIGfxInfo);
-    var disableWR = Services.prefs.getBoolPref(WR_DISABLED_PREF, false);
 
     if (Services.prefs.getBoolPref(RUNNING_PREF, false)) {
       Services.prefs.setBoolPref(DISABLE_VIDEO_PREF, true);
@@ -385,8 +373,7 @@ SanityTest.prototype = {
         REASON_DRIVER_CHANGED
       ) &&
       checkPref(DEVICE_PREF, gfxinfo.adapterDeviceID, REASON_DEVICE_CHANGED) &&
-      checkPref(VERSION_PREF, buildId, REASON_FIREFOX_CHANGED) &&
-      checkPref(WEBRENDER_DISABLED_PREF, disableWR, REASON_WR_CONFIG_CHANGED)
+      checkPref(VERSION_PREF, buildId, REASON_FIREFOX_CHANGED)
     ) {
       return false;
     }
@@ -397,7 +384,6 @@ SanityTest.prototype = {
     Services.prefs.setStringPref(DRIVER_PREF, gfxinfo.adapterDriverVersion);
     Services.prefs.setStringPref(DEVICE_PREF, gfxinfo.adapterDeviceID);
     Services.prefs.setStringPref(VERSION_PREF, buildId);
-    Services.prefs.setBoolPref(WEBRENDER_DISABLED_PREF, disableWR);
 
     // Update the prefs so that this test doesn't run again until the next update.
     Services.prefs.setBoolPref(RUNNING_PREF, true);
@@ -436,6 +422,14 @@ SanityTest.prototype = {
         ",chrome,titlebar=0,scrollbars=0,popup=1",
       null
     );
+
+    let appWin = sanityTest.docShell.treeOwner
+      .QueryInterface(Ci.nsIInterfaceRequestor)
+      .getInterface(Ci.nsIAppWindow);
+
+    // Request fast snapshot at RenderCompositor of WebRender.
+    // Since readback of Windows DirectComposition is very slow.
+    appWin.needFastSnaphot();
 
     // There's no clean way to have an invisible window and ensure it's always painted.
     // Instead, move the window far offscreen so it doesn't show up during launch.

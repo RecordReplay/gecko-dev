@@ -16,8 +16,7 @@
 // file.
 #include "mozilla/dom/MIDIMessageQueue.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class MIDIManagerParent;
 class MIDIPortParent;
@@ -41,10 +40,10 @@ class MIDIPlatformService {
   void RemovePortInfo(MIDIPortInfo& aPortInfo);
 
   // Adds a newly created manager protocol object to manager array.
-  void AddManager(MIDIManagerParent* aParent);
+  void AddManager(MIDIManagerParent* aManager);
 
   // Removes a deleted manager protocol object from manager array.
-  void RemoveManager(MIDIManagerParent* aParent);
+  void RemoveManager(MIDIManagerParent* aManager);
 
   // Adds a newly created port protocol object to port array.
   void AddPort(MIDIPortParent* aPort);
@@ -54,6 +53,9 @@ class MIDIPlatformService {
 
   // Platform specific init function.
   virtual void Init() = 0;
+
+  // Forces the implementation to refresh the port list.
+  virtual void Refresh() = 0;
 
   // Platform specific MIDI port opening function.
   virtual void Open(MIDIPortParent* aPort) = 0;
@@ -85,9 +87,6 @@ class MIDIPlatformService {
   // Sends connection/disconnect/open/closed/etc status updates about a MIDI
   // Port to all port listeners.
   void UpdateStatus(MIDIPortParent* aPort,
-                    const MIDIPortDeviceState& aDeviceState,
-                    const MIDIPortConnectionState& aConnectionState);
-  void UpdateStatus(const nsAString& aPortId,
                     const MIDIPortDeviceState& aDeviceState,
                     const MIDIPortConnectionState& aConnectionState);
 
@@ -153,10 +152,9 @@ class MIDIPlatformService {
   nsClassHashtable<nsStringHashKey, MIDIMessageQueue> mMessageQueues;
 
   // Mutex for managing access to message queue objects.
-  Mutex mMessageQueueMutex;
+  Mutex mMessageQueueMutex MOZ_UNANNOTATED;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_MIDIPlatformService_h

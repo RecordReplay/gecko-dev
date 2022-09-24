@@ -13,7 +13,6 @@ define(function(require, exports, module) {
   // Reps
   const {
     getGripType,
-    isGrip,
     getURLDisplayString,
     wrapRender,
   } = require("devtools/client/shared/components/reps/reps/rep-utils");
@@ -46,13 +45,17 @@ define(function(require, exports, module) {
     return {
       "data-link-actor-id": grip.actor,
       className: "objectBox objectBox-object",
-      title: shouldRenderTooltip ? `StyleSheet ${location}` : null,
+      title: shouldRenderTooltip
+        ? `${getGripType(grip, false)} ${location}`
+        : null,
     };
   }
 
   function getTitle(grip) {
-    const title = "StyleSheet ";
-    return span({ className: "objectBoxTitle" }, title);
+    return span(
+      { className: "objectBoxTitle" },
+      `${getGripType(grip, false)} `
+    );
   }
 
   function getLocation(grip) {
@@ -63,10 +66,6 @@ define(function(require, exports, module) {
 
   // Registration
   function supportsObject(object, noGrip = false) {
-    if (noGrip === true || !isGrip(object)) {
-      return false;
-    }
-
     return getGripType(object, noGrip) == "CSSStyleSheet";
   }
 

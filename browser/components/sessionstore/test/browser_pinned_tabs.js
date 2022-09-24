@@ -3,7 +3,7 @@
 
 "use strict";
 
-const REMOTE_URL = "http://www.example.com/";
+const REMOTE_URL = "https://www.example.com/";
 const ABOUT_ROBOTS_URL = "about:robots";
 const NO_TITLE_URL = "data:text/plain,foo";
 
@@ -33,7 +33,7 @@ function promiseSessionStoreLoads(numberOfLoads) {
   });
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["browser.sessionstore.restore_on_demand", true],

@@ -412,9 +412,16 @@ class WebRTCParent extends JSWindowActorParent {
       aRequest.secondOrigin;
 
     let set = webrtcUI.activePerms.get(this.manager.outerWindowId);
-    let { callID, windowID } = aRequest;
+    let {
+      callID,
+      windowID,
+      audioInputDevices,
+      videoInputDevices,
+      hasInherentAudioConstraints,
+      hasInherentVideoConstraints,
+    } = aRequest;
 
-    // We consider a camera active if it is active or was active within a
+    // We consider a camera or mic active if it is active or was active within a
     // grace period of milliseconds ago.
     const isAllowed = ({ mediaSource, id }, permissionID) =>
       set?.has(windowID + mediaSource + id) ||
@@ -427,18 +434,46 @@ class WebRTCParent extends JSWindowActorParent {
             this.getBrowser()
           ).state == SitePermissions.ALLOW));
 
-    let {
-      audioInputDevices: [microphone],
-      videoInputDevices: [camera],
-    } = aRequest;
-
-    if (microphone && !isAllowed(microphone, "microphone")) {
-      return false;
+    let microphone;
+    if (audioInputDevices.length) {
+      for (let device of audioInputDevices) {
+        if (isAllowed(device, "microphone")) {
+          microphone = device;
+          break;
+        }
+        if (hasInherentAudioConstraints) {
+          // Inherent constraints suggest site is looking for a specific mic
+          break;
+        }
+        // Some sites don't look too hard at what they get, and spam gUM without
+        // adjusting what they ask for to match what they got last time. To keep
+        // users in charge and reduce prompts, ignore other constraints by
+        // returning the most-fit microphone a site already has access to.
+      }
+      if (!microphone) {
+        return false;
+      }
     }
-    if (camera && !isAllowed(camera, "camera")) {
-      return false;
+    let camera;
+    if (videoInputDevices.length) {
+      for (let device of videoInputDevices) {
+        if (isAllowed(device, "camera")) {
+          camera = device;
+          break;
+        }
+        if (hasInherentVideoConstraints) {
+          // Inherent constraints suggest site is looking for a specific camera
+          break;
+        }
+        // Some sites don't look too hard at what they get, and spam gUM without
+        // adjusting what they ask for to match what they got last time. To keep
+        // users in charge and reduce prompts, ignore other constraints by
+        // returning the most-fit camera a site already has access to.
+      }
+      if (!camera) {
+        return false;
+      }
     }
-
     let devices = [];
     if (camera) {
       perms.addFromPrincipal(
@@ -748,9 +783,9 @@ function prompt(aActor, aBrowser, aRequest) {
         return false;
       }
 
-      // BLOCK is handled immediately by MediaManager if it has been set
-      // persistently in the permission manager. If it has been set on the tab,
-      // it is handled synchronously before we add the notification.
+      // If BLOCK has been set persistently in the permission manager or has
+      // been set on the tab, then it is handled synchronously before we add
+      // the notification.
       // Handling of ALLOW is delayed until the popupshowing event,
       // to avoid granting permissions automatically to background tabs.
       if (aActor.checkRequestAllowed(aRequest, principal, aBrowser)) {
@@ -870,6 +905,11 @@ function prompt(aActor, aBrowser, aRequest) {
               );
               item.deviceId = device.id;
               item.mediaSource = type;
+
+              // In this case the OS sharing dialog will be the only option and
+              // can be safely pre-selected.
+              menupopup.parentNode.selectedItem = item;
+              menupopup.parentNode.disabled = true;
               break;
             }
             if (type == "application") {
@@ -1281,11 +1321,16 @@ function prompt(aActor, aBrowser, aRequest) {
   }
 
   let iconType = "Devices";
-  if (
-    requestTypes.length == 1 &&
-    (requestTypes[0] == "Microphone" || requestTypes[0] == "AudioCapture")
-  ) {
-    iconType = "Microphone";
+  if (requestTypes.length == 1) {
+    switch (requestTypes[0]) {
+      case "AudioCapture":
+        iconType = "Microphone";
+        break;
+      case "Microphone":
+      case "Speaker":
+        iconType = requestTypes[0];
+        break;
+    }
   }
   if (requestTypes.includes("Screen")) {
     iconType = "Screen";
@@ -1298,8 +1343,6 @@ function prompt(aActor, aBrowser, aRequest) {
       aRequest.secondOrigin
     );
   }
-
-  mainAction.disableHighlight = true;
 
   notification = chromeDoc.defaultView.PopupNotifications.show(
     aBrowser,

@@ -36,7 +36,7 @@ use crate::cid::{
 
 use crate::crypto::{Crypto, CryptoDxState, CryptoSpace};
 use crate::dump::*;
-use crate::events::{ConnectionEvent, ConnectionEvents};
+use crate::events::{ConnectionEvent, ConnectionEvents, OutgoingDatagramOutcome};
 use crate::frame::{
     CloseError, Frame, FrameType, FRAME_TYPE_CONNECTION_CLOSE_APPLICATION,
     FRAME_TYPE_CONNECTION_CLOSE_TRANSPORT,
@@ -45,7 +45,7 @@ use crate::packet::{
     DecryptedPacket, PacketBuilder, PacketNumber, PacketType, PublicPacket, QuicVersion,
 };
 use crate::path::{Path, PathRef, Paths};
-use crate::qlog;
+use crate::quic_datagrams::{DatagramTracking, QuicDatagrams};
 use crate::recovery::{LossRecovery, RecoveryToken, SendProfile};
 use crate::rtt::GRANULARITY;
 pub use crate::send_stream::{RetransmissionPriority, TransmissionPriority};
@@ -54,6 +54,7 @@ use crate::stream_id::StreamType;
 use crate::streams::Streams;
 use crate::tparams::{self, TransportParameter, TransportParameters, TransportParametersHandler};
 use crate::tracking::{AckTracker, PacketNumberSpace, SentPacket};
+use crate::{qlog, StreamId};
 use crate::{AppError, ConnectionError, Error, Res};
 
 mod idle;
@@ -64,7 +65,6 @@ mod state;
 pub mod test_internal;
 
 use idle::IdleTimeout;
-pub use idle::LOCAL_IDLE_TIMEOUT;
 use params::PreferredAddressConfig;
 pub use params::{ConnectionParameters, ACK_RATIO_SCALE};
 use saved::SavedDatagrams;
@@ -174,7 +174,7 @@ enum AddressValidationInfo {
 impl AddressValidationInfo {
     pub fn token(&self) -> &[u8] {
         match self {
-            Self::NewToken(token) | Self::Retry { token, .. } => &token,
+            Self::NewToken(token) | Self::Retry { token, .. } => token,
             _ => &[],
         }
     }
@@ -246,6 +246,10 @@ pub struct Connection {
     /// when they are either just reordered or we haven't been able to install keys yet.
     /// In particular, this occurs when asynchronous certificate validation happens.
     saved_datagrams: SavedDatagrams,
+
+    /// This is responsible for the QuicDatagrams' handling:
+    /// https://datatracker.ietf.org/doc/html/draft-ietf-quic-datagram
+    quic_datagrams: QuicDatagrams,
 
     pub(crate) crypto: Crypto,
     pub(crate) acks: AckTracker,
@@ -364,6 +368,12 @@ impl Connection {
 
         let stats = StatsCell::default();
         let events = ConnectionEvents::default();
+        let quic_datagrams = QuicDatagrams::new(
+            conn_params.get_datagram_size(),
+            conn_params.get_outgoing_datagram_queue(),
+            conn_params.get_incoming_datagram_queue(),
+            events.clone(),
+        );
 
         let c = Self {
             role,
@@ -379,11 +389,11 @@ impl Connection {
             saved_datagrams: SavedDatagrams::default(),
             crypto,
             acks: AckTracker::default(),
-            idle_timeout: IdleTimeout::default(),
+            idle_timeout: IdleTimeout::new(conn_params.get_idle_timeout()),
             streams: Streams::new(tphandler, role, events.clone()),
             connection_ids: ConnectionIdStore::default(),
             state_signaling: StateSignaling::Idle,
-            loss_recovery: LossRecovery::new(stats.clone()),
+            loss_recovery: LossRecovery::new(stats.clone(), conn_params.get_fast_pto()),
             events,
             new_token: NewTokenState::new(role),
             stats,
@@ -391,6 +401,7 @@ impl Connection {
             release_resumption_token_timer: None,
             conn_params,
             hrtime: hrtime::Time::get(Self::LOOSE_TIMER_RESOLUTION),
+            quic_datagrams,
             #[cfg(test)]
             test_frame_writer: None,
         };
@@ -680,8 +691,8 @@ impl Connection {
         let tps = &self.tps;
         if let Agent::Server(ref mut s) = self.crypto.tls {
             let mut enc = Encoder::default();
-            enc.encode_vvec_with(|mut enc_inner| {
-                tps.borrow().local.encode(&mut enc_inner);
+            enc.encode_vvec_with(|enc_inner| {
+                tps.borrow().local.encode(enc_inner);
             });
             enc.encode(extra);
             let records = s.send_ticket(now, &enc)?;
@@ -756,7 +767,13 @@ impl Connection {
 
     /// Get a snapshot of collected statistics.
     pub fn stats(&self) -> Stats {
-        self.stats.borrow().clone()
+        let mut v = self.stats.borrow().clone();
+        if let Some(p) = self.paths.primary_fallible() {
+            let p = p.borrow();
+            v.rtt = p.rtt().estimate();
+            v.rttvar = p.rtt().rttvar();
+        }
+        v
     }
 
     // This function wraps a call to another function and sets the connection state
@@ -897,8 +914,9 @@ impl Connection {
             let rtt = path.rtt();
             let pto = rtt.pto(PacketNumberSpace::ApplicationData);
 
-            let idle_time = self.idle_timeout.expiry(now, pto);
-            qtrace!([self], "Idle timer {:?}", idle_time);
+            let keep_alive = self.streams.need_keep_alive();
+            let idle_time = self.idle_timeout.expiry(now, pto, keep_alive);
+            qtrace!([self], "Idle/keepalive timer {:?}", idle_time);
             delays.push(idle_time);
 
             if let Some(lr_time) = self.loss_recovery.next_timeout(rtt) {
@@ -932,13 +950,9 @@ impl Connection {
         let earliest = delays.into_iter().min().unwrap();
         // TODO(agrover, mt) - need to analyze and fix #47
         // rather than just clamping to zero here.
-        qdebug!(
-            [self],
-            "delay duration {:?}",
-            max(now, earliest).duration_since(now)
-        );
         debug_assert!(earliest > now);
-        let delay = max(now, earliest).duration_since(now);
+        let delay = earliest.saturating_duration_since(now);
+        qdebug!([self], "delay duration {:?}", delay);
         self.hrtime.update(delay / 4);
         delay
     }
@@ -996,7 +1010,7 @@ impl Connection {
             self.stats.borrow_mut().pkt_dropped("Retry without a token");
             return;
         }
-        if !packet.is_valid_retry(&self.original_destination_cid.as_ref().unwrap()) {
+        if !packet.is_valid_retry(self.original_destination_cid.as_ref().unwrap()) {
             self.stats
                 .borrow_mut()
                 .pkt_dropped("Retry with bad integrity tag");
@@ -1134,7 +1148,7 @@ impl Connection {
                 self.set_state(State::WaitInitial);
                 self.crypto
                     .states
-                    .init(self.version(), self.role, &packet.dcid());
+                    .init(self.version(), self.role, packet.dcid());
 
                 // We need to make sure that we set this transport parameter.
                 // This has to happen prior to processing the packet so that
@@ -1253,7 +1267,7 @@ impl Connection {
         now: Instant,
     ) {
         if self.state == State::WaitInitial {
-            self.start_handshake(path, &packet, now);
+            self.start_handshake(path, packet, now);
         }
         if self.state.connected() {
             self.handle_migration(path, d, migrate, now);
@@ -1302,7 +1316,7 @@ impl Connection {
                         break;
                     }
                 };
-            match self.preprocess_packet(&packet, &path, dcid.as_ref(), now)? {
+            match self.preprocess_packet(&packet, path, dcid.as_ref(), now)? {
                 PreprocessResult::Continue => (),
                 PreprocessResult::Next => break,
                 PreprocessResult::End => return Ok(()),
@@ -1329,10 +1343,8 @@ impl Connection {
                         qdebug!([self], "Duplicate packet {}-{}", space, payload.pn());
                         self.stats.borrow_mut().dups_rx += 1;
                     } else {
-                        match self.process_packet(&path, &payload, now) {
-                            Ok(migrate) => {
-                                self.postprocess_packet(&path, &d, &packet, migrate, now)
-                            }
+                        match self.process_packet(path, &payload, now) {
+                            Ok(migrate) => self.postprocess_packet(path, &d, &packet, migrate, now),
                             Err(e) => {
                                 self.ensure_error_path(path, &packet, now);
                                 return Err(e);
@@ -1358,7 +1370,7 @@ impl Connection {
                     // Decryption failure, or not having keys is not fatal.
                     // If the state isn't available, or we can't decrypt the packet, drop
                     // the rest of the datagram on the floor, but don't generate an error.
-                    self.check_stateless_reset(&path, &d, dcid.is_none(), now)?;
+                    self.check_stateless_reset(path, &d, dcid.is_none(), now)?;
                     self.stats.borrow_mut().pkt_dropped("Decryption failure");
                     qlog::packet_dropped(&mut self.qlog, &packet);
                 }
@@ -1366,7 +1378,7 @@ impl Connection {
             slc = remainder;
             dcid = Some(ConnectionId::from(packet.dcid()));
         }
-        self.check_stateless_reset(&path, &d, dcid.is_none(), now)?;
+        self.check_stateless_reset(path, &d, dcid.is_none(), now)?;
         Ok(())
     }
 
@@ -1406,7 +1418,7 @@ impl Connection {
             ack_eliciting |= f.ack_eliciting();
             probing &= f.path_probing();
             let t = f.get_type();
-            if let Err(e) = self.input_frame(&path, packet.packet_type(), f, now) {
+            if let Err(e) = self.input_frame(path, packet.packet_type(), f, now) {
                 self.capture_error(Some(Rc::clone(path)), now, t, Err(e))?;
             }
         }
@@ -1424,7 +1436,7 @@ impl Connection {
     /// to setup that path.
     fn setup_handshake_path(&mut self, path: &PathRef, now: Instant) {
         self.paths.make_permanent(
-            &path,
+            path,
             Some(self.local_initial_source_cid.clone()),
             // Ideally we know what the peer wants us to use for the remote CID.
             // But we will use our own guess if necessary.
@@ -1441,7 +1453,7 @@ impl Connection {
 
     /// If the path isn't permanent, assign it a connection ID to make it so.
     fn ensure_permanent(&mut self, path: &PathRef) -> Res<()> {
-        if self.paths.is_temporary(&path) {
+        if self.paths.is_temporary(path) {
             // If there isn't a connection ID to use for this path, the packet
             // will be processed, but it won't be attributed to a path.  That means
             // no path probes or PATH_RESPONSE.  But it's not fatal.
@@ -1466,14 +1478,14 @@ impl Connection {
     /// temporary, there is no reason to do anything special here.
     fn ensure_error_path(&mut self, path: &PathRef, packet: &PublicPacket, now: Instant) {
         path.borrow_mut().set_valid(now);
-        if self.paths.is_temporary(&path) {
+        if self.paths.is_temporary(path) {
             // First try to fill in handshake details.
             if packet.packet_type() == PacketType::Initial {
                 self.remote_initial_source_cid = Some(ConnectionId::from(packet.scid()));
-                self.setup_handshake_path(&path, now);
+                self.setup_handshake_path(path, now);
             } else {
                 // Otherwise try to get a usable connection ID.
-                mem::drop(self.ensure_permanent(&path));
+                mem::drop(self.ensure_permanent(path));
             }
         }
     }
@@ -1736,7 +1748,7 @@ impl Connection {
         let grease_quic_bit = self.can_grease_quic_bit();
         let version = self.version();
         for space in PacketNumberSpace::iter() {
-            let (cspace, tx) = if let Some(crypto) = self.crypto.states.select_tx(*space) {
+            let (cspace, tx) = if let Some(crypto) = self.crypto.states.select_tx_mut(*space) {
                 crypto
             } else {
                 continue;
@@ -1791,14 +1803,18 @@ impl Connection {
         builder: &mut PacketBuilder,
         tokens: &mut Vec<RecoveryToken>,
     ) -> Res<()> {
-        let stats = &mut self.stats.borrow_mut().frame_tx;
-
         if self.role == Role::Server {
             if let Some(t) = self.state_signaling.write_done(builder)? {
                 tokens.push(t);
-                stats.handshake_done += 1;
+                self.stats.borrow_mut().frame_tx.handshake_done += 1;
             }
         }
+
+        // Check if there is a Datagram to be written
+        self.quic_datagrams
+            .write_frames(builder, tokens, &mut self.stats.borrow_mut());
+
+        let stats = &mut self.stats.borrow_mut().frame_tx;
 
         self.streams
             .write_frames(TransmissionPriority::Critical, builder, tokens, stats);
@@ -1859,6 +1875,49 @@ impl Connection {
         Ok(())
     }
 
+    // Maybe send a probe.  Return true if the packet was ack-eliciting.
+    fn maybe_probe(
+        &mut self,
+        path: &PathRef,
+        force_probe: bool,
+        builder: &mut PacketBuilder,
+        ack_end: usize,
+        tokens: &mut Vec<RecoveryToken>,
+        now: Instant,
+    ) -> bool {
+        // Anything written after an ACK already elicits acknowledgment.
+        // If we need to probe and nothing has been written, send a PING.
+        if builder.len() > ack_end {
+            return true;
+        }
+        let probe = if force_probe {
+            // The packet might be empty, but we need to probe.
+            true
+        } else {
+            let pto = path.borrow().rtt().pto(PacketNumberSpace::ApplicationData);
+            if !builder.packet_empty() {
+                // The packet only contains an ACK.  Check whether we want to
+                // force an ACK with a PING so we can stop tracking packets.
+                self.loss_recovery.should_probe(pto, now)
+            } else if self.streams.need_keep_alive() {
+                // We need to keep the connection alive, including sending
+                // a PING again.
+                self.idle_timeout.send_keep_alive(now, pto, tokens)
+            } else {
+                false
+            }
+        };
+        if probe {
+            // Nothing ack-eliciting and we need to probe; send PING.
+            debug_assert_ne!(builder.remaining(), 0);
+            builder.encode_varint(crate::frame::FRAME_TYPE_PING);
+            let stats = &mut self.stats.borrow_mut().frame_tx;
+            stats.ping += 1;
+            stats.all += 1;
+        }
+        probe
+    }
+
     /// Write frames to the provided builder.  Returns a list of tokens used for
     /// tracking loss or acknowledgment, whether any frame was ACK eliciting, and
     /// whether the packet was padded.
@@ -1872,6 +1931,7 @@ impl Connection {
     ) -> Res<(Vec<RecoveryToken>, bool, bool)> {
         let mut tokens = Vec::new();
         let primary = path.borrow().is_primary();
+        let mut ack_eliciting = false;
 
         if primary {
             let stats = &mut self.stats.borrow_mut().frame_tx;
@@ -1911,40 +1971,17 @@ impl Connection {
             }
         }
 
-        let stats = &mut self.stats.borrow_mut().frame_tx;
-        // Anything written after an ACK already elicits acknowledgment.
-        // If we need to probe and nothing has been written, send a PING.
-        if builder.len() == ack_end {
-            let probe = if profile.should_probe(space) {
-                // The packet might be empty, but we need to probe.
-                true
-            } else if !builder.packet_empty() {
-                // The packet only contains an ACK.  Check whether we want to
-                // force an ACK with a PING so we can stop tracking packets.
-                let pto = path.borrow().rtt().pto(PacketNumberSpace::ApplicationData);
-                self.loss_recovery.should_probe(pto, now)
-            } else {
-                false
-            };
-            if probe {
-                // Nothing ack-eliciting and we need to probe; send PING.
-                debug_assert_ne!(builder.remaining(), 0);
-                builder.encode_varint(crate::frame::FRAME_TYPE_PING);
-                if builder.len() > builder.limit() {
-                    return Err(Error::InternalError(11));
-                }
-                stats.ping += 1;
-                stats.all += 1;
-            }
-        }
+        // Maybe send a probe now, either to probe for losses or to keep the connection live.
+        let force_probe = profile.should_probe(space);
+        ack_eliciting |= self.maybe_probe(path, force_probe, builder, ack_end, &mut tokens, now);
         // If this is not the primary path, this should be ack-eliciting.
-        let ack_eliciting = builder.len() > ack_end;
         debug_assert!(primary || ack_eliciting);
 
         // Add padding.  Only pad 1-RTT packets so that we don't prevent coalescing.
         // And avoid padding packets that otherwise only contain ACK because adding PADDING
         // causes those packets to consume congestion window, which is not tracked (yet).
         // And avoid padding if we don't have a full MTU available.
+        let stats = &mut self.stats.borrow_mut().frame_tx;
         let padded = if ack_eliciting && full_mtu && builder.pad() {
             stats.padding += 1;
             stats.all += 1;
@@ -1975,7 +2012,7 @@ impl Connection {
         let mut encoder = Encoder::with_capacity(profile.limit());
         for space in PacketNumberSpace::iter() {
             // Ensure we have tx crypto state for this epoch, or skip it.
-            let (cspace, tx) = if let Some(crypto) = self.crypto.states.select_tx(*space) {
+            let (cspace, tx) = if let Some(crypto) = self.crypto.states.select_tx_mut(*space) {
                 crypto
             } else {
                 continue;
@@ -2032,7 +2069,7 @@ impl Connection {
             );
 
             self.stats.borrow_mut().packets_tx += 1;
-            encoder = builder.build(self.crypto.states.tx(cspace).unwrap())?;
+            encoder = builder.build(self.crypto.states.tx_mut(cspace).unwrap())?;
             debug_assert!(encoder.len() <= mtu);
             self.crypto.states.auto_update()?;
 
@@ -2152,6 +2189,17 @@ impl Connection {
             self.idle_timeout
                 .set_peer_timeout(Duration::from_millis(peer_timeout));
         }
+
+        self.quic_datagrams.set_remote_datagram_size(
+            self.tps
+                .borrow()
+                .remote()
+                .get_integer(tparams::MAX_DATAGRAM_FRAME_SIZE),
+        );
+    }
+
+    pub fn is_stream_id_allowed(&self, stream_id: StreamId) -> bool {
+        self.streams.is_stream_id_allowed(stream_id)
     }
 
     /// Process the final set of transport parameters.
@@ -2185,9 +2233,11 @@ impl Connection {
 
             let max_ad = Duration::from_millis(remote.get_integer(tparams::MAX_ACK_DELAY));
             let min_ad = if remote.has_value(tparams::MIN_ACK_DELAY) {
-                Some(Duration::from_micros(
-                    remote.get_integer(tparams::MIN_ACK_DELAY),
-                ))
+                let min_ad = Duration::from_micros(remote.get_integer(tparams::MIN_ACK_DELAY));
+                if min_ad > max_ad {
+                    return Err(Error::TransportParameterError);
+                }
+                Some(min_ad)
             } else {
                 None
             };
@@ -2469,6 +2519,11 @@ impl Connection {
                 self.acks
                     .ack_freq(seqno, tolerance - 1, delay, ignore_order);
             }
+            Frame::Datagram { data, .. } => {
+                self.stats.borrow_mut().frame_rx.datagram += 1;
+                self.quic_datagrams
+                    .handle_datagram(data, &mut self.stats.borrow_mut())?;
+            }
             _ => unreachable!("All other frames are for streams"),
         };
 
@@ -2482,19 +2537,21 @@ impl Connection {
         for lost in lost_packets {
             for token in &lost.tokens {
                 qdebug!([self], "Lost: {:?}", token);
-                if token.is_stream() {
-                    self.streams.lost(token);
-                    continue;
-                }
                 match token {
                     RecoveryToken::Ack(_) => {}
-                    RecoveryToken::Crypto(ct) => self.crypto.lost(&ct),
+                    RecoveryToken::Crypto(ct) => self.crypto.lost(ct),
                     RecoveryToken::HandshakeDone => self.state_signaling.handshake_done(),
                     RecoveryToken::NewToken(seqno) => self.new_token.lost(*seqno),
                     RecoveryToken::NewConnectionId(ncid) => self.cid_manager.lost(ncid),
                     RecoveryToken::RetireConnectionId(seqno) => self.paths.lost_retire_cid(*seqno),
                     RecoveryToken::AckFrequency(rate) => self.paths.lost_ack_frequency(rate),
-                    _ => unreachable!("All other tokens are for streams"),
+                    RecoveryToken::KeepAlive => self.idle_timeout.lost_keep_alive(),
+                    RecoveryToken::Stream(stream_token) => self.streams.lost(stream_token),
+                    RecoveryToken::Datagram(dgram_tracker) => {
+                        self.events
+                            .datagram_outcome(dgram_tracker, OutgoingDatagramOutcome::Lost);
+                        self.stats.borrow_mut().datagram_tx.lost += 1;
+                    }
                 }
             }
         }
@@ -2534,20 +2591,20 @@ impl Connection {
         );
         for acked in acked_packets {
             for token in &acked.tokens {
-                if token.is_stream() {
-                    self.streams.acked(token);
-                    continue;
-                }
                 match token {
+                    RecoveryToken::Stream(stream_token) => self.streams.acked(stream_token),
                     RecoveryToken::Ack(at) => self.acks.acked(at),
                     RecoveryToken::Crypto(ct) => self.crypto.acked(ct),
                     RecoveryToken::NewToken(seqno) => self.new_token.acked(*seqno),
                     RecoveryToken::NewConnectionId(entry) => self.cid_manager.acked(entry),
                     RecoveryToken::RetireConnectionId(seqno) => self.paths.acked_retire_cid(*seqno),
                     RecoveryToken::AckFrequency(rate) => self.paths.acked_ack_frequency(rate),
+                    RecoveryToken::KeepAlive => self.idle_timeout.ack_keep_alive(),
+                    RecoveryToken::Datagram(dgram_tracker) => self
+                        .events
+                        .datagram_outcome(dgram_tracker, OutgoingDatagramOutcome::Acked),
                     // We only worry when these are lost
                     RecoveryToken::HandshakeDone => (),
-                    _ => unreachable!("All other tokens are for streams"),
                 }
             }
         }
@@ -2641,7 +2698,7 @@ impl Connection {
     /// # Errors
     /// `ConnectionState` if the connecton stat does not allow to create streams.
     /// `StreamLimitError` if we are limiied by server's stream concurence.
-    pub fn stream_create(&mut self, st: StreamType) -> Res<u64> {
+    pub fn stream_create(&mut self, st: StreamType) -> Res<StreamId> {
         // Can't make streams while closing, otherwise rely on the stream limits.
         match self.state {
             State::Closing { .. } | State::Draining { .. } | State::Closed { .. } => {
@@ -2664,12 +2721,12 @@ impl Connection {
     /// `InvalidStreamId` the stream does not exist.
     pub fn stream_priority(
         &mut self,
-        stream_id: u64,
+        stream_id: StreamId,
         transmission: TransmissionPriority,
         retransmission: RetransmissionPriority,
     ) -> Res<()> {
         self.streams
-            .get_send_stream_mut(stream_id.into())?
+            .get_send_stream_mut(stream_id)?
             .set_priority(transmission, retransmission);
         Ok(())
     }
@@ -2681,10 +2738,8 @@ impl Connection {
     /// `InvalidStreamId` the stream does not exist,
     /// `InvalidInput` if length of `data` is zero,
     /// `FinalSizeError` if the stream has already been closed.
-    pub fn stream_send(&mut self, stream_id: u64, data: &[u8]) -> Res<usize> {
-        self.streams
-            .get_send_stream_mut(stream_id.into())?
-            .send(data)
+    pub fn stream_send(&mut self, stream_id: StreamId, data: &[u8]) -> Res<usize> {
+        self.streams.get_send_stream_mut(stream_id)?.send(data)
     }
 
     /// Send all data or nothing on a stream. May cause DATA_BLOCKED or
@@ -2694,10 +2749,10 @@ impl Connection {
     /// `InvalidStreamId` the stream does not exist,
     /// `InvalidInput` if length of `data` is zero,
     /// `FinalSizeError` if the stream has already been closed.
-    pub fn stream_send_atomic(&mut self, stream_id: u64, data: &[u8]) -> Res<bool> {
+    pub fn stream_send_atomic(&mut self, stream_id: StreamId, data: &[u8]) -> Res<bool> {
         let val = self
             .streams
-            .get_send_stream_mut(stream_id.into())?
+            .get_send_stream_mut(stream_id)?
             .send_atomic(data);
         if let Ok(val) = val {
             debug_assert!(
@@ -2713,21 +2768,19 @@ impl Connection {
     /// Bytes that stream_send() is guaranteed to accept for sending.
     /// i.e. that will not be blocked by flow credits or send buffer max
     /// capacity.
-    pub fn stream_avail_send_space(&self, stream_id: u64) -> Res<usize> {
-        Ok(self.streams.get_send_stream(stream_id.into())?.avail())
+    pub fn stream_avail_send_space(&self, stream_id: StreamId) -> Res<usize> {
+        Ok(self.streams.get_send_stream(stream_id)?.avail())
     }
 
     /// Close the stream. Enqueued data will be sent.
-    pub fn stream_close_send(&mut self, stream_id: u64) -> Res<()> {
-        self.streams.get_send_stream_mut(stream_id.into())?.close();
+    pub fn stream_close_send(&mut self, stream_id: StreamId) -> Res<()> {
+        self.streams.get_send_stream_mut(stream_id)?.close();
         Ok(())
     }
 
     /// Abandon transmission of in-flight and future stream data.
-    pub fn stream_reset_send(&mut self, stream_id: u64, err: AppError) -> Res<()> {
-        self.streams
-            .get_send_stream_mut(stream_id.into())?
-            .reset(err);
+    pub fn stream_reset_send(&mut self, stream_id: StreamId, err: AppError) -> Res<()> {
+        self.streams.get_send_stream_mut(stream_id)?.reset(err);
         Ok(())
     }
 
@@ -2736,16 +2789,16 @@ impl Connection {
     /// # Errors
     /// `InvalidStreamId` if the stream does not exist.
     /// `NoMoreData` if data and fin bit were previously read by the application.
-    pub fn stream_recv(&mut self, stream_id: u64, data: &mut [u8]) -> Res<(usize, bool)> {
-        let stream = self.streams.get_recv_stream_mut(stream_id.into())?;
+    pub fn stream_recv(&mut self, stream_id: StreamId, data: &mut [u8]) -> Res<(usize, bool)> {
+        let stream = self.streams.get_recv_stream_mut(stream_id)?;
 
         let rb = stream.read(data)?;
         Ok((rb.0 as usize, rb.1))
     }
 
     /// Application is no longer interested in this stream.
-    pub fn stream_stop_sending(&mut self, stream_id: u64, err: AppError) -> Res<()> {
-        let stream = self.streams.get_recv_stream_mut(stream_id.into())?;
+    pub fn stream_stop_sending(&mut self, stream_id: StreamId, err: AppError) -> Res<()> {
+        let stream = self.streams.get_recv_stream_mut(stream_id)?;
 
         stream.stop_sending(err);
         Ok(())
@@ -2755,11 +2808,87 @@ impl Connection {
     /// # Errors
     /// Returns `InvalidStreamId` if a stream does not exist or the receiving
     /// side is closed.
-    pub fn set_stream_max_data(&mut self, stream_id: u64, max_data: u64) -> Res<()> {
-        let stream = self.streams.get_recv_stream_mut(stream_id.into())?;
+    pub fn set_stream_max_data(&mut self, stream_id: StreamId, max_data: u64) -> Res<()> {
+        let stream = self.streams.get_recv_stream_mut(stream_id)?;
 
         stream.set_stream_max_data(max_data);
         Ok(())
+    }
+
+    /// Mark a receive stream as being important enough to keep the connection alive
+    /// (if `keep` is `true`) or no longer important (if `keep` is `false`).  If any
+    /// stream is marked this way, PING frames will be used to keep the connection
+    /// alive, even when there is no activity.
+    /// # Errors
+    /// Returns `InvalidStreamId` if a stream does not exist or the receiving
+    /// side is closed.
+    pub fn stream_keep_alive(&mut self, stream_id: StreamId, keep: bool) -> Res<()> {
+        self.streams.keep_alive(stream_id, keep)
+    }
+
+    pub fn remote_datagram_size(&self) -> u64 {
+        self.quic_datagrams.remote_datagram_size()
+    }
+
+    /// Returns the current max size of a datagram that can fit into a packet.
+    /// The value will change over time depending on the encoded size of the
+    /// packet number, ack frames, etc.
+    /// # Error
+    /// The function returns `NotAvailable` if datagrams are not enabled.
+    pub fn max_datagram_size(&self) -> Res<u64> {
+        let max_dgram_size = self.quic_datagrams.remote_datagram_size();
+        if max_dgram_size == 0 {
+            return Err(Error::NotAvailable);
+        }
+        let version = self.version();
+        let (cspace, tx) = if let Some(crypto) = self
+            .crypto
+            .states
+            .select_tx(PacketNumberSpace::ApplicationData)
+        {
+            crypto
+        } else {
+            return Err(Error::NotAvailable);
+        };
+        let path = self.paths.primary_fallible().ok_or(Error::NotAvailable)?;
+        let mtu = path.borrow().mtu();
+        let encoder = Encoder::with_capacity(mtu);
+
+        let (_, mut builder) = Self::build_packet_header(
+            &path.borrow(),
+            cspace,
+            encoder,
+            tx,
+            &self.address_validation,
+            version,
+            false,
+        );
+        let _ = Self::add_packet_number(
+            &mut builder,
+            tx,
+            self.loss_recovery
+                .largest_acknowledged_pn(PacketNumberSpace::ApplicationData),
+        );
+
+        let data_len_possible =
+            u64::try_from(mtu.saturating_sub(tx.expansion() + builder.len() + 1)).unwrap();
+        Ok(min(data_len_possible, max_dgram_size))
+    }
+
+    /// Queue a datagram for sending.
+    /// # Error
+    /// The function returns `TooMuchData` if the supply buffer is bigger than
+    /// the allowed remote datagram size. The funcion does not check if the
+    /// datagram can fit into a packet (i.e. MTU limit). This is checked during
+    /// creation of an actual packet and the datagram will be dropped if it does
+    /// not fit into the packet. The app is encourage to use `max_datagram_size`
+    /// to check the estimated max datagram size and to use smaller datagrams.
+    /// `max_datagram_size` is just a current estimate and will change over
+    /// time depending on the encoded size of the packet number, ack frames, etc.
+
+    pub fn send_datagram(&mut self, buf: &[u8], id: impl Into<DatagramTracking>) -> Res<()> {
+        self.quic_datagrams
+            .add_datagram(buf, id.into(), &mut self.stats.borrow_mut())
     }
 }
 

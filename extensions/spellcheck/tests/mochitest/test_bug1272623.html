@@ -27,21 +27,32 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1272623
 
 /** Test for Bug 1272623 **/
 
+  var maybeOnSpellCheck;
+
   async function performCorrection(misspelled, area) {
     synthesizeMouseAtCenter($(misspelled), {}, window);
-    await new Promise(resolve => onSpellCheck($(area), resolve));
+    await new Promise(resolve => maybeOnSpellCheck($(area), resolve));
     synthesizeMouseAtCenter($(misspelled), {type: 'contextmenu'}, window);
 
     // Perform the spelling correction
     let mm = SpecialPowers.loadChromeScript(function() {
       const {Services} = ChromeUtils.import("resource://gre/modules/Services.jsm");
+      const {BrowserTestUtils} = ChromeUtils.import("resource://testing-common/BrowserTestUtils.jsm");
 
       // Chrome scripts are run with synchronous messages, so make sure we're completely
       // decoupled from the content process before doing this work.
-      Cu.dispatch(function() {
+      Cu.dispatch(async function() {
         let chromeWin = Services.ww.activeWindow;
         let contextMenu = chromeWin.document.getElementById("contentAreaContextMenu");
         let suggestion = contextMenu.querySelector(".spell-suggestion");
+        if (!suggestion) {
+          await BrowserTestUtils.waitForMutationCondition(
+            contextMenu,
+            { childList: true },
+            () => contextMenu.querySelector(".spell-suggestion")
+          );
+          suggestion = contextMenu.querySelector(".spell-suggestion");
+        }
         suggestion.doCommand();
         contextMenu.hidePopup();
         sendAsyncMessage("spellingCorrected");
@@ -52,9 +63,9 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=1272623
   }
 
   add_task(async function() {
-    /* global onSpellCheck */
-    SpecialPowers.Cu.import(
-      "resource://testing-common/AsyncSpellCheckTestHelper.jsm", window);
+    maybeOnSpellCheck = SpecialPowers.ChromeUtils.import(
+      "resource://testing-common/AsyncSpellCheckTestHelper.jsm"
+    ).maybeOnSpellCheck;
 
     // Wait for the page to be ready
     await new Promise(resolve => SimpleTest.waitForFocus(() => SimpleTest.executeSoon(resolve), window));

@@ -12,10 +12,10 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/gfx/GPUProcessHost.h"
+#include "mozilla/gfx/PGPUChild.h"
 #include "mozilla/gfx/Point.h"
 #include "mozilla/ipc/ProtocolUtils.h"
 #include "mozilla/ipc/TaskFactory.h"
-#include "mozilla/ipc/Transport.h"
 #include "mozilla/layers/LayersTypes.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 #include "nsIObserver.h"
@@ -38,7 +38,7 @@ class PVideoBridgeParent;
 class RemoteCompositorSession;
 class InProcessCompositorSession;
 class UiCompositorControllerChild;
-class LayerManager;
+class WebRenderLayerManager;
 }  // namespace layers
 namespace widget {
 class CompositorWidget;
@@ -69,7 +69,7 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   typedef layers::CompositorSession CompositorSession;
   typedef layers::CompositorUpdateObserver CompositorUpdateObserver;
   typedef layers::IAPZCTreeManager IAPZCTreeManager;
-  typedef layers::LayerManager LayerManager;
+  typedef layers::WebRenderLayerManager WebRenderLayerManager;
   typedef layers::LayersId LayersId;
   typedef layers::PCompositorBridgeChild PCompositorBridgeChild;
   typedef layers::PCompositorManagerChild PCompositorManagerChild;
@@ -87,19 +87,22 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   ~GPUProcessManager();
 
   // If not using a GPU process, launch a new GPU process asynchronously.
-  void LaunchGPUProcess();
+  bool LaunchGPUProcess();
   bool IsGPUProcessLaunching();
 
   // Ensure that GPU-bound methods can be used. If no GPU process is being
   // used, or one is launched and ready, this function returns immediately.
   // Otherwise it blocks until the GPU process has finished launching.
+  // If the GPU process is enabled but has not yet been launched then this will
+  // launch the process. If that is not desired then check that return value of
+  // Process() is non-null before calling.
   bool EnsureGPUReady();
 
   already_AddRefed<CompositorSession> CreateTopLevelCompositor(
-      nsBaseWidget* aWidget, LayerManager* aLayerManager,
+      nsBaseWidget* aWidget, WebRenderLayerManager* aLayerManager,
       CSSToLayoutDeviceScale aScale, const CompositorOptions& aOptions,
       bool aUseExternalSurfaceSize, const gfx::IntSize& aSurfaceSize,
-      bool* aRetry);
+      uint64_t aInnerWindowId, bool* aRetry);
 
   bool CreateContentBridges(
       base::ProcessId aOtherProcess,
@@ -173,8 +176,11 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // true if the message was sent, false if not.
   bool NotifyGpuObservers(const char* aTopic);
 
-  // Used for tests and diagnostics
+  // Kills the GPU process. Used for tests and diagnostics
   void KillProcess();
+
+  // Causes the GPU process to crash. Used for tests and diagnostics
+  void CrashProcess();
 
   // Returns -1 if there is no GPU process, or the platform pid for it.
   base::ProcessId GPUProcessPid();
@@ -191,6 +197,13 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
 
   // Returns the process host
   GPUProcessHost* Process() { return mProcess; }
+
+  /*
+   * ** Test-only Method **
+   *
+   * Trigger GPU-process test metric instrumentation.
+   */
+  RefPtr<PGPUChild::TestTriggerMetricsPromise> TestTriggerMetrics();
 
  private:
   // Called from our xpcom-shutdown observer.
@@ -220,8 +233,8 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   void RegisterInProcessSession(InProcessCompositorSession* aSession);
   void UnregisterInProcessSession(InProcessCompositorSession* aSession);
 
-  void RebuildRemoteSessions();
-  void RebuildInProcessSessions();
+  void DestroyRemoteCompositorSessions();
+  void DestroyInProcessCompositorSessions();
 
   // Returns true if we crossed the threshold such that we should disable
   // acceleration.
@@ -229,8 +242,6 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
 
   // Returns true if WebRender was enabled and is now disabled.
   bool DisableWebRenderConfig(wr::WebRenderError aError, const nsCString& aMsg);
-
-  void NotifyDisablingWebRender();
 
   void FallbackToSoftware(const char* aMessage);
 
@@ -245,11 +256,25 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   // process, but only if aAllowRestart is also true.
   bool MaybeDisableGPUProcess(const char* aMessage, bool aAllowRestart);
 
+  bool FallbackFromAcceleration(wr::WebRenderError aError,
+                                const nsCString& aMsg);
+
+  void ResetProcessStable();
+
+  // Returns true if the composting pocess is currently considered to be stable.
+  bool IsProcessStable(const TimeStamp& aNow);
+
   // Shutdown the GPU process.
   void CleanShutdown();
-  void DestroyProcess();
+  // Destroy the process and clean up resources.
+  // Setting aUnexpectedShutdown = true indicates that this is being called to
+  // clean up resources in response to an unexpected shutdown having been
+  // detected.
+  void DestroyProcess(bool aUnexpectedShutdown = false);
 
   void HandleProcessLost();
+  // Reinitialize rendering following a GPU process loss.
+  void ReinitializeRendering();
 
   void EnsureVsyncIOThread();
   void ShutdownVsyncIOThread();
@@ -265,10 +290,10 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
 #endif  // defined(MOZ_WIDGET_ANDROID)
 
   RefPtr<CompositorSession> CreateRemoteSession(
-      nsBaseWidget* aWidget, LayerManager* aLayerManager,
+      nsBaseWidget* aWidget, WebRenderLayerManager* aLayerManager,
       const LayersId& aRootLayerTreeId, CSSToLayoutDeviceScale aScale,
       const CompositorOptions& aOptions, bool aUseExternalSurfaceSize,
-      const gfx::IntSize& aSurfaceSize);
+      const gfx::IntSize& aSurfaceSize, uint64_t aInnerWindowId);
 
   DISALLOW_COPY_AND_ASSIGN(GPUProcessManager);
 
@@ -306,10 +331,15 @@ class GPUProcessManager final : public GPUProcessHost::Listener {
   uint32_t mDeviceResetCount;
   TimeStamp mDeviceResetLastTime;
 
+  // Keeps track of whether not the application is in the foreground on android.
+  bool mAppInForeground;
+
   // Fields that are associated with the current GPU process.
   GPUProcessHost* mProcess;
   uint64_t mProcessToken;
   bool mProcessStable;
+  Maybe<wr::WebRenderError> mLastError;
+  Maybe<nsCString> mLastErrorMsg;
   GPUChild* mGPUChild;
   RefPtr<VsyncBridgeChild> mVsyncBridge;
   // Collects any pref changes that occur during process launch (after

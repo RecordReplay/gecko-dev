@@ -16,7 +16,6 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/intl/LineBreaker.h"
 #include "nsCOMPtr.h"
 #include "nsAtom.h"
 #include "nsCycleCollectionParticipant.h"
@@ -29,12 +28,10 @@
 
 class nsIContent;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class DocumentType;
 class Element;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 class nsPlainTextSerializer final : public nsIContentSerializer {
  public:
@@ -239,11 +236,9 @@ class nsPlainTextSerializer final : public nsIContentSerializer {
       return !mContent.IsEmpty() || !mIndentation.mHeader.IsEmpty();
     }
 
-    // @param aContentWidth Has to be the unichar string width of mContent.
     // @param aLineBreaker May be nullptr.
-    int32_t FindWrapIndexForContent(
-        uint32_t aWrapColumn, uint32_t aContentWidth,
-        mozilla::intl::LineBreaker* aLineBreaker) const;
+    int32_t FindWrapIndexForContent(uint32_t aWrapColumn,
+                                    bool aUseLineBreaker) const;
 
     // @return Combined width of cite quote level and indentation.
     uint32_t DeterminePrefixWidth() const {
@@ -370,7 +365,7 @@ class nsPlainTextSerializer final : public nsIContentSerializer {
 
   uint32_t mULCount;
 
-  RefPtr<mozilla::intl::LineBreaker> mLineBreaker;
+  bool mUseLineBreaker = false;
 
   // Conveniance constant. It would be nice to have it as a const static
   // variable, but that causes issues with OpenBSD and module unloading.

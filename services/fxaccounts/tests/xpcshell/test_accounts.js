@@ -29,8 +29,7 @@ const { PromiseUtils } = ChromeUtils.import(
 
 // We grab some additional stuff via backstage passes.
 var { AccountState } = ChromeUtils.import(
-  "resource://gre/modules/FxAccounts.jsm",
-  null
+  "resource://gre/modules/FxAccounts.jsm"
 );
 
 const ONE_HOUR_MS = 1000 * 60 * 60;
@@ -212,6 +211,7 @@ function MockFxAccounts(credentials = null) {
     observerPreloads: [],
     device: {
       _registerOrUpdateDevice() {},
+      _checkRemoteCommandsUpdateNeeded: async () => false,
     },
     profile: {
       getProfile() {
@@ -246,10 +246,12 @@ async function MakeFxAccounts({ internal = {}, credentials } = {}) {
   if (internal.device) {
     if (!internal.device._registerOrUpdateDevice) {
       internal.device._registerOrUpdateDevice = () => Promise.resolve();
+      internal.device._checkRemoteCommandsUpdateNeeded = async () => false;
     }
   } else {
     internal.device = {
       _registerOrUpdateDevice() {},
+      _checkRemoteCommandsUpdateNeeded: async () => false,
     };
   }
   if (!internal.observerPreloads) {
@@ -864,6 +866,8 @@ add_task(async function test_getKeyForScope_invalid_token() {
   };
 
   await fxa.setSignedInUser(yusuf);
+  let user = await fxa._internal.getUserAccountData();
+  Assert.notEqual(user.encryptedSendTabKeys, null);
 
   try {
     await fxa.keys.getKeyForScope(SCOPE_OLD_SYNC);
@@ -873,9 +877,12 @@ add_task(async function test_getKeyForScope_invalid_token() {
     Assert.equal(err.errno, ERRNO_INVALID_AUTH_TOKEN);
   }
 
-  let user = await fxa._internal.getUserAccountData();
+  user = await fxa._internal.getUserAccountData();
   Assert.equal(user.email, yusuf.email);
   Assert.equal(user.keyFetchToken, null);
+  // We verify that encryptedSendTabKeys are also wiped
+  // when a user's credentials are wiped
+  Assert.equal(user.encryptedSendTabKeys, null);
   await fxa._internal.abortExistingFlow();
 });
 
@@ -1630,6 +1637,7 @@ function getTestUser(name) {
     keyFetchToken: name + "'s keyfetch token",
     unwrapBKey: expandHex("44"),
     verified: false,
+    encryptedSendTabKeys: name + "'s encrypted Send tab keys",
   };
 }
 

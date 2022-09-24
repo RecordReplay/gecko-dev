@@ -203,18 +203,12 @@ ia2Accessible::role(long* aRole) {
 // XXX Use MOZ_CAN_RUN_SCRIPT_BOUNDARY for now due to bug 1543294.
 MOZ_CAN_RUN_SCRIPT_BOUNDARY STDMETHODIMP
 ia2Accessible::scrollTo(enum IA2ScrollType aScrollType) {
-  if (!Acc()) {
+  Accessible* acc = Acc();
+  if (!acc) {
     return CO_E_OBJNOTCONNECTED;
   }
-  AccessibleWrap* acc = LocalAcc();
-  if (!acc) {
-    return E_NOTIMPL;  // XXX Not supported for RemoteAccessible yet.
-  }
 
-  RefPtr<PresShell> presShell = acc->Document()->PresShellPtr();
-  nsCOMPtr<nsIContent> content = acc->GetContent();
-  nsCoreUtils::ScrollTo(presShell, content, aScrollType);
-
+  acc->ScrollTo(aScrollType);
   return S_OK;
 }
 
@@ -234,7 +228,6 @@ ia2Accessible::scrollToPoint(enum IA2CoordinateType aCoordType, long aX,
           ? nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE
           : nsIAccessibleCoordinateType::COORDTYPE_PARENT_RELATIVE;
 
-  MOZ_ASSERT(!acc->IsProxy());
   acc->ScrollToPoint(geckoCoordType, aX, aY);
 
   return S_OK;
@@ -250,12 +243,9 @@ ia2Accessible::get_groupPosition(long* aGroupLevel, long* aSimilarItemsInGroup,
   *aSimilarItemsInGroup = 0;
   *aPositionInGroup = 0;
 
-  if (!Acc()) {
-    return CO_E_OBJNOTCONNECTED;
-  }
-  AccessibleWrap* acc = LocalAcc();
+  Accessible* acc = Acc();
   if (!acc) {
-    return E_NOTIMPL;  // XXX Not supported for RemoteAccessible yet.
+    return CO_E_OBJNOTCONNECTED;
   }
 
   GroupPos groupPos = acc->GroupPosition();
@@ -279,17 +269,13 @@ ia2Accessible::get_states(AccessibleStates* aStates) {
 
   // XXX: bug 344674 should come with better approach that we have here.
 
-  if (!Acc()) {
+  Accessible* acc = Acc();
+  if (!acc) {
     *aStates = IA2_STATE_DEFUNCT;
     return S_OK;
   }
-  AccessibleWrap* acc = LocalAcc();
-  if (!acc) {
-    return E_NOTIMPL;  // XXX Not supported for RemoteAccessible yet.
-  }
 
   uint64_t state;
-  MOZ_ASSERT(!acc->IsProxy());
   state = acc->State();
 
   if (state & states::INVALID) *aStates |= IA2_STATE_INVALID_ENTRY;
@@ -458,23 +444,15 @@ ia2Accessible::get_attributes(BSTR* aAttributes) {
   if (!aAttributes) return E_INVALIDARG;
   *aAttributes = nullptr;
 
-  if (!Acc()) {
-    return CO_E_OBJNOTCONNECTED;
-  }
-  AccessibleWrap* acc = LocalAcc();
+  Accessible* acc = Acc();
   if (!acc) {
-    return E_NOTIMPL;  // XXX Not supported for RemoteAccessible yet.
+    return CO_E_OBJNOTCONNECTED;
   }
 
   // The format is name:value;name:value; with \ for escaping these
   // characters ":;=,\".
-  if (!acc->IsProxy()) {
-    RefPtr<AccAttributes> attributes = acc->Attributes();
-    return ConvertToIA2Attributes(attributes, aAttributes);
-  }
-
-  MOZ_ASSERT(!acc->IsProxy());
-  return E_UNEXPECTED;
+  RefPtr<AccAttributes> attributes = acc->Attributes();
+  return ConvertToIA2Attributes(attributes, aAttributes);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -546,7 +524,6 @@ ia2Accessible::get_relationTargetsOfType(BSTR aType, long aMaxTargets,
   }
 
   nsTArray<LocalAccessible*> targets;
-  MOZ_ASSERT(!acc->IsProxy());
   Relation rel = acc->RelationByType(*relationType);
   LocalAccessible* target = nullptr;
   while (
@@ -593,14 +570,14 @@ ia2Accessible::get_selectionRanges(IA2Range** aRanges, long* aNRanges) {
   if (!*aRanges) return E_OUTOFMEMORY;
 
   for (uint32_t idx = 0; idx < static_cast<uint32_t>(*aNRanges); idx++) {
-    RefPtr<IAccessible2> anchor;
-    ranges[idx].StartContainer()->GetNativeInterface(getter_AddRefs(anchor));
+    RefPtr<IAccessible2> anchor =
+        MsaaAccessible::GetFrom(ranges[idx].StartContainer());
     anchor.forget(&(*aRanges)[idx].anchor);
 
     (*aRanges)[idx].anchorOffset = ranges[idx].StartOffset();
 
-    RefPtr<IAccessible2> active;
-    ranges[idx].EndContainer()->GetNativeInterface(getter_AddRefs(active));
+    RefPtr<IAccessible2> active =
+        MsaaAccessible::GetFrom(ranges[idx].EndContainer());
     active.forget(&(*aRanges)[idx].active);
 
     (*aRanges)[idx].activeOffset = ranges[idx].EndOffset();

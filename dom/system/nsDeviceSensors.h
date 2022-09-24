@@ -17,17 +17,15 @@
 
 class nsIDOMWindow;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Document;
 class EventTarget;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 class nsDeviceSensors : public nsIDeviceSensors,
                         public mozilla::hal::ISensorObserver {
-  typedef mozilla::dom::DeviceAccelerationInit DeviceAccelerationInit;
-  typedef mozilla::dom::DeviceRotationRateInit DeviceRotationRateInit;
+  using DeviceAccelerationInit = mozilla::dom::DeviceAccelerationInit;
+  using DeviceRotationRateInit = mozilla::dom::DeviceRotationRateInit;
 
  public:
   NS_DECL_ISUPPORTS

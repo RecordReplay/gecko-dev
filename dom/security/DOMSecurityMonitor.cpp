@@ -13,6 +13,7 @@
 #include "nsIURI.h"
 #include "nsJSUtils.h"
 
+#include "mozilla/BasePrincipal.h"
 #include "mozilla/StaticPrefs_dom.h"
 
 /* static */
@@ -36,7 +37,8 @@ void DOMSecurityMonitor::AuditParsingOfHTMLXMLFragments(
   uint32_t lineNum = 0;
   uint32_t columnNum = 0;
   JSContext* cx = nsContentUtils::GetCurrentJSContext();
-  if (!nsJSUtils::GetCallingLocation(cx, filename, &lineNum, &columnNum)) {
+  if (!cx ||
+      !nsJSUtils::GetCallingLocation(cx, filename, &lineNum, &columnNum)) {
     return;
   }
 
@@ -57,8 +59,6 @@ void DOMSecurityMonitor::AuditParsingOfHTMLXMLFragments(
       "chrome://browser/content/certerror/aboutNetError.js"_ns,
       nsLiteralCString("chrome://devtools/content/shared/sourceeditor/"
                        "codemirror/codemirror.bundle.js"),
-      nsLiteralCString(
-          "chrome://devtools-startup/content/aboutdevtools/aboutdevtools.js"),
       nsLiteralCString(
           "resource://activity-stream/data/content/activity-stream.bundle.js"),
       nsLiteralCString("resource://devtools/client/debugger/src/components/"

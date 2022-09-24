@@ -192,7 +192,7 @@ nsCertOverrideService::nsCertOverrideService()
       do_GetService(NS_STREAMTRANSPORTSERVICE_CONTRACTID);
   MOZ_ASSERT(target);
 
-  mWriterTaskQueue = new TaskQueue(target.forget());
+  mWriterTaskQueue = TaskQueue::Create(target.forget(), "CertOverrideService");
 }
 
 nsCertOverrideService::~nsCertOverrideService() = default;
@@ -283,6 +283,7 @@ void nsCertOverrideService::RemoveAllTemporaryOverrides() {
 
 static const char sSHA256OIDString[] = "OID.2.16.840.1.101.3.4.2.1";
 nsresult nsCertOverrideService::Read(const MutexAutoLock& aProofOfLock) {
+  mMutex.AssertCurrentThreadOwns();
   // If we don't have a profile, then we won't try to read any settings file.
   if (!mSettingsFile) return NS_OK;
 
@@ -323,8 +324,13 @@ nsresult nsCertOverrideService::Read(const MutexAutoLock& aProofOfLock) {
 
     Tokenizer parser(buffer);
     nsDependentCSubstring host;
-    if (!parser.ReadUntil(Tokenizer::Token::Char(':'), host) ||
-        host.Length() == 0) {
+    if (parser.CheckChar('[')) {  // this is a IPv6 address
+      if (!parser.ReadUntil(Tokenizer::Token::Char(']'), host) ||
+          host.Length() == 0 || !parser.CheckChar(':')) {
+        continue;
+      }
+    } else if (!parser.ReadUntil(Tokenizer::Token::Char(':'), host) ||
+               host.Length() == 0) {
       continue;
     }
     int32_t port = -1;
@@ -374,6 +380,7 @@ nsresult nsCertOverrideService::Read(const MutexAutoLock& aProofOfLock) {
 }
 
 nsresult nsCertOverrideService::Write(const MutexAutoLock& aProofOfLock) {
+  mMutex.AssertCurrentThreadOwns();
   MOZ_ASSERT(NS_IsMainThread());
   if (!NS_IsMainThread()) {
     return NS_ERROR_NOT_SAME_THREAD;
@@ -636,6 +643,7 @@ nsresult nsCertOverrideService::AddEntryToList(
     const bool aIsTemporary, const nsACString& fingerprint,
     nsCertOverride::OverrideBits ob, const nsACString& dbKey,
     const MutexAutoLock& aProofOfLock) {
+  mMutex.AssertCurrentThreadOwns();
   nsAutoCString keyString;
   GetKeyString(aHostName, aPort, aOriginAttributes, keyString);
 
@@ -733,6 +741,7 @@ nsCertOverrideService::ClearAllOverrides() {
 
 void nsCertOverrideService::CountPermanentOverrideTelemetry(
     const MutexAutoLock& aProofOfLock) {
+  mMutex.AssertCurrentThreadOwns();
   uint32_t overrideCount = 0;
   for (auto iter = mSettingsTable.Iter(); !iter.Done(); iter.Next()) {
     if (!iter.Get()->mSettings->mIsTemporary) {
@@ -741,48 +750,6 @@ void nsCertOverrideService::CountPermanentOverrideTelemetry(
   }
   Telemetry::Accumulate(Telemetry::SSL_PERMANENT_CERT_ERROR_OVERRIDES,
                         overrideCount);
-}
-
-static bool matchesDBKey(nsIX509Cert* cert, const nsCString& matchDbKey) {
-  nsAutoCString dbKey;
-  nsresult rv = cert->GetDbKey(dbKey);
-  if (NS_FAILED(rv)) {
-    return false;
-  }
-  return dbKey.Equals(matchDbKey);
-}
-
-NS_IMETHODIMP
-nsCertOverrideService::IsCertUsedForOverrides(nsIX509Cert* aCert,
-                                              bool aCheckTemporaries,
-                                              bool aCheckPermanents,
-                                              uint32_t* aRetval) {
-  NS_ENSURE_ARG(aCert);
-  NS_ENSURE_ARG(aRetval);
-
-  uint32_t counter = 0;
-  {
-    MutexAutoLock lock(mMutex);
-    for (auto iter = mSettingsTable.Iter(); !iter.Done(); iter.Next()) {
-      RefPtr<nsCertOverride> settings = iter.Get()->mSettings;
-
-      if ((settings->mIsTemporary && !aCheckTemporaries) ||
-          (!settings->mIsTemporary && !aCheckPermanents)) {
-        continue;
-      }
-
-      if (matchesDBKey(aCert, settings->mDBKey)) {
-        nsAutoCString certFingerprint;
-        nsresult rv = GetCertSha256Fingerprint(aCert, certFingerprint);
-        if (NS_SUCCEEDED(rv) &&
-            settings->mFingerprint.Equals(certFingerprint)) {
-          counter++;
-        }
-      }
-    }
-  }
-  *aRetval = counter;
-  return NS_OK;
 }
 
 static bool IsDebugger() {
@@ -798,9 +765,9 @@ static bool IsDebugger() {
 
   nsCOMPtr<nsIRemoteAgent> agent = do_GetService(NS_REMOTEAGENT_CONTRACTID);
   if (agent) {
-    bool remoteAgentListening = false;
-    agent->GetListening(&remoteAgentListening);
-    if (remoteAgentListening) {
+    bool remoteAgentRunning = false;
+    agent->GetRunning(&remoteAgentRunning);
+    if (remoteAgentRunning) {
       return true;
     }
   }
@@ -853,7 +820,16 @@ nsCertOverrideService::GetOverrides(
 void nsCertOverrideService::GetHostWithPort(const nsACString& aHostName,
                                             int32_t aPort,
                                             nsACString& aRetval) {
-  nsAutoCString hostPort(aHostName);
+  nsAutoCString hostPort;
+  if (aHostName.Contains(':')) {
+    // if aHostName is an IPv6 address, add brackets to match the internal
+    // representation, which always stores IPv6 addresses with brackets
+    hostPort.Append('[');
+    hostPort.Append(aHostName);
+    hostPort.Append(']');
+  } else {
+    hostPort.Append(aHostName);
+  }
   if (aPort == -1) {
     aPort = 443;
   }

@@ -76,9 +76,10 @@ nsresult TextEditor::InsertTextFromTransferable(
       // Sanitize possible carriage returns in the string to be inserted
       nsContentUtils::PlatformToDOMLineBreaks(stuffToPaste);
 
-      AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                                 ScrollSelectionIntoView::Yes);
-      nsresult rv = InsertTextAsSubAction(stuffToPaste);
+      AutoPlaceholderBatch treatAsOneTransaction(
+          *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
+      nsresult rv =
+          InsertTextAsSubAction(stuffToPaste, SelectionHandling::Delete);
       if (NS_FAILED(rv)) {
         NS_WARNING("EditorBase::InsertTextAsSubAction() failed");
         return rv;
@@ -95,7 +96,7 @@ nsresult TextEditor::InsertTextFromTransferable(
 
 nsresult TextEditor::InsertDroppedDataTransferAsAction(
     AutoEditActionDataSetter& aEditActionData, DataTransfer& aDataTransfer,
-    const EditorDOMPoint& aDroppedAt, Document* aSrcDocument) {
+    const EditorDOMPoint& aDroppedAt, nsIPrincipal* aSourcePrincipal) {
   MOZ_ASSERT(aEditActionData.GetEditAction() == EditAction::eDrop);
   MOZ_ASSERT(GetEditAction() == EditAction::eDrop);
   MOZ_ASSERT(aDroppedAt.IsSet());

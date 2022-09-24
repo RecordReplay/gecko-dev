@@ -241,6 +241,9 @@ with Files("OfflineAudio*"):
 with Files("OffscreenCanvas.webidl"):
     BUG_COMPONENT = ("Core", "Canvas: 2D")
 
+with Files("OffscreenCanvasRenderingContext2D.webidl"):
+    BUG_COMPONENT = ("Core", "Canvas: 2D")
+
 with Files("OscillatorNode.webidl"):
     BUG_COMPONENT = ("Core", "Web Audio")
 
@@ -293,7 +296,7 @@ with Files("SimpleGestureEvent.webidl"):
     BUG_COMPONENT = ("Core", "DOM: UI Events & Focus Handling")
 
 with Files("SocketCommon.webidl"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+    BUG_COMPONENT = ("Core", "DOM: Networking")
 
 with Files("SourceBuffer*"):
     BUG_COMPONENT = ("Core", "Audio/Video")
@@ -314,7 +317,7 @@ with Files("SubtleCrypto.webidl"):
     BUG_COMPONENT = ("Core", "DOM: Security")
 
 with Files("TCP*"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+    BUG_COMPONENT = ("Core", "DOM: Networking")
 
 with Files("TextTrack*"):
     BUG_COMPONENT = ("Core", "Audio/Video")
@@ -323,10 +326,10 @@ with Files("TrackEvent.webidl"):
     BUG_COMPONENT = ("Core", "Audio/Video")
 
 with Files("U2F.webidl"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+    BUG_COMPONENT = ("Core", "DOM: Web Authentication")
 
 with Files("UDP*"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+    BUG_COMPONENT = ("Core", "DOM: Networking")
 
 with Files("UIEvent.webidl"):
     BUG_COMPONENT = ("Core", "DOM: UI Events & Focus Handling")
@@ -350,7 +353,7 @@ with Files("WaveShaperNode.webidl"):
     BUG_COMPONENT = ("Core", "Web Audio")
 
 with Files("WebAuthentication.webidl"):
-    BUG_COMPONENT = ("Core", "DOM: Device Interfaces")
+    BUG_COMPONENT = ("Core", "DOM: Web Authentication")
 
 with Files("WebGL*"):
     BUG_COMPONENT = ("Core", "Canvas: WebGL")
@@ -387,7 +390,6 @@ GENERATED_WEBIDL_FILES = [
 ]
 
 PREPROCESSED_WEBIDL_FILES = [
-    "Animation.webidl",
     "Node.webidl",
     "Window.webidl",
 ]
@@ -401,8 +403,10 @@ WEBIDL_FILES = [
     "AddonManager.webidl",
     "AnalyserNode.webidl",
     "Animatable.webidl",
+    "Animation.webidl",
     "AnimationEffect.webidl",
     "AnimationEvent.webidl",
+    "AnimationFrameProvider.webidl",
     "AnimationTimeline.webidl",
     "AnonymousContent.webidl",
     "AppInfo.webidl",
@@ -470,6 +474,7 @@ WEBIDL_FILES = [
     "CSS.webidl",
     "CSSAnimation.webidl",
     "CSSConditionRule.webidl",
+    "CSSContainerRule.webidl",
     "CSSCounterStyleRule.webidl",
     "CSSFontFaceRule.webidl",
     "CSSFontFeatureValuesRule.webidl",
@@ -477,6 +482,8 @@ WEBIDL_FILES = [
     "CSSImportRule.webidl",
     "CSSKeyframeRule.webidl",
     "CSSKeyframesRule.webidl",
+    "CSSLayerBlockRule.webidl",
+    "CSSLayerStatementRule.webidl",
     "CSSMediaRule.webidl",
     "CSSMozDocumentRule.webidl",
     "CSSNamespaceRule.webidl",
@@ -484,6 +491,7 @@ WEBIDL_FILES = [
     "CSSPseudoElement.webidl",
     "CSSRule.webidl",
     "CSSRuleList.webidl",
+    "CSSScrollTimelineRule.webidl",
     "CSSStyleDeclaration.webidl",
     "CSSStyleRule.webidl",
     "CSSStyleSheet.webidl",
@@ -541,9 +549,14 @@ WEBIDL_FILES = [
     "FileReaderSync.webidl",
     "FileSystem.webidl",
     "FileSystemDirectoryEntry.webidl",
+    "FileSystemDirectoryHandle.webidl",
+    "FileSystemDirectoryIterator.webidl",
     "FileSystemDirectoryReader.webidl",
     "FileSystemEntry.webidl",
     "FileSystemFileEntry.webidl",
+    "FileSystemFileHandle.webidl",
+    "FileSystemHandle.webidl",
+    "FileSystemSyncAccessHandle.webidl",
     "FinalizationRegistry.webidl",
     "FocusEvent.webidl",
     "FontFace.webidl",
@@ -678,6 +691,8 @@ WEBIDL_FILES = [
     "LoadURIOptions.webidl",
     "Localization.webidl",
     "Location.webidl",
+    "Lock.webidl",
+    "LockManager.webidl",
     "MathMLElement.webidl",
     "MediaCapabilities.webidl",
     "MediaDebugInfo.webidl",
@@ -741,6 +756,7 @@ WEBIDL_FILES = [
     "OfflineAudioContext.webidl",
     "OfflineResourceList.webidl",
     "OffscreenCanvas.webidl",
+    "OffscreenCanvasRenderingContext2D.webidl",
     "OscillatorNode.webidl",
     "PaintRequest.webidl",
     "PaintRequestList.webidl",
@@ -927,6 +943,7 @@ WEBIDL_FILES = [
     "TCPSocket.webidl",
     "TCPSocketErrorEvent.webidl",
     "TCPSocketEvent.webidl",
+    "TestUtils.webidl",
     "Text.webidl",
     "TextClause.webidl",
     "TextDecoder.webidl",
@@ -964,11 +981,11 @@ WEBIDL_FILES = [
     "VTTRegion.webidl",
     "WaveShaperNode.webidl",
     "WebAuthentication.webidl",
-    "WebComponents.webidl",
     "WebGL2RenderingContext.webidl",
     "WebGLRenderingContext.webidl",
     "WebGPU.webidl",
     "WebSocket.webidl",
+    "WebTaskScheduling.webidl",
     "WebXR.webidl",
     "WheelEvent.webidl",
     "WidevineCDMManifest.webidl",
@@ -997,6 +1014,26 @@ WEBIDL_FILES = [
     "XULPopupElement.webidl",
 ]
 
+if CONFIG["MOZ_DOM_STREAMS"]:
+    WEBIDL_FILES += [
+        "FileSystemWritableFileStream.webidl",
+        "QueuingStrategy.webidl",
+        "ReadableByteStreamController.webidl",
+        "ReadableStream.webidl",
+        "ReadableStreamBYOBReader.webidl",
+        "ReadableStreamBYOBRequest.webidl",
+        "ReadableStreamDefaultController.webidl",
+        "ReadableStreamDefaultReader.webidl",
+        "Transformer.webidl",
+        "TransformStream.webidl",
+        "TransformStreamDefaultController.webidl",
+        "UnderlyingSink.webidl",
+        "UnderlyingSource.webidl",
+        "WritableStream.webidl",
+        "WritableStreamDefaultController.webidl",
+        "WritableStreamDefaultWriter.webidl",
+    ]
+
 if CONFIG["MOZ_WEBRTC"]:
     WEBIDL_FILES += [
         "PeerConnectionImpl.webidl",
@@ -1012,13 +1049,13 @@ if CONFIG["MOZ_WEBRTC"]:
         "RTCIdentityProvider.webidl",
         "RTCPeerConnection.webidl",
         "RTCPeerConnectionStatic.webidl",
+        "RTCRtpParameters.webidl",
         "RTCRtpReceiver.webidl",
         "RTCRtpSender.webidl",
         "RTCRtpSources.webidl",
         "RTCRtpTransceiver.webidl",
         "RTCSessionDescription.webidl",
         "RTCStatsReport.webidl",
-        "TransceiverImpl.webidl",
         "WebrtcDeprecated.webidl",
         "WebrtcGlobalInformation.webidl",
     ]
@@ -1054,11 +1091,14 @@ WEBIDL_FILES += [
 
 # WebExtensions API.
 WEBIDL_FILES += [
+    "ExtensionAlarms.webidl",
     "ExtensionBrowser.webidl",
     "ExtensionEventManager.webidl",
     # ExtensionMockAPI is not a real WebExtensions API, and it is only enabled in tests.
     "ExtensionMockAPI.webidl",
     "ExtensionPort.webidl",
+    "ExtensionRuntime.webidl",
+    "ExtensionTest.webidl",
 ]
 
 # We only expose our prefable test interfaces in debug builds, just to be on
@@ -1069,6 +1109,7 @@ if CONFIG["MOZ_DEBUG"] and CONFIG["ENABLE_TESTS"]:
         "TestInterfaceJS.webidl",
         "TestInterfaceJSDictionaries.webidl",
         "TestInterfaceJSMaplikeSetlikeIterable.webidl",
+        "TestInterfaceObservableArray.webidl",
     ]
 
 WEBIDL_FILES += [
@@ -1117,6 +1158,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     "SecurityPolicyViolationEvent.webidl",
     "StyleSheetApplicableStateChangeEvent.webidl",
     "SubmitEvent.webidl",
+    "TaskPriorityChangeEvent.webidl",
     "TCPServerSocketEvent.webidl",
     "TCPSocketErrorEvent.webidl",
     "TCPSocketEvent.webidl",

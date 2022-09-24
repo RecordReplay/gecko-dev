@@ -12,8 +12,9 @@
 // Enable logging all platform events this module listen to
 const DEBUG_PLATFORM_EVENTS = false;
 
-const { Cc, Ci, Cu } = require("chrome");
+const { Cc, Ci } = require("chrome");
 const Services = require("Services");
+const ChromeUtils = require("ChromeUtils");
 
 loader.lazyRequireGetter(
   this,
@@ -54,11 +55,6 @@ loader.lazyRequireGetter(
   "devtools/server/actors/network-monitor/network-response-listener",
   true
 );
-loader.lazyGetter(
-  this,
-  "WebExtensionPolicy",
-  () => Cu.getGlobalForObject(Cu).WebExtensionPolicy
-);
 
 function logPlatformEvent(eventName, channel, message = "") {
   if (!DEBUG_PLATFORM_EVENTS) {
@@ -77,72 +73,6 @@ const HTTP_SEE_OTHER = 303;
 const HTTP_TEMPORARY_REDIRECT = 307;
 
 /**
- * Check if a given network request should be logged by a network monitor
- * based on the specified filters.
- *
- * @param nsIHttpChannel channel
- *        Request to check.
- * @param filters
- *        NetworkObserver filters to match against.
- * @return boolean
- *         True if the network request should be logged, false otherwise.
- */
-function matchRequest(channel, filters) {
-  // Log everything if no filter is specified
-  if (!filters.browserId && !filters.window) {
-    return true;
-  }
-
-  // Ignore requests from chrome or add-on code when we are monitoring
-  // content.
-  if (
-    channel.loadInfo &&
-    channel.loadInfo.loadingDocument === null &&
-    (channel.loadInfo.loadingPrincipal ===
-      Services.scriptSecurityManager.getSystemPrincipal() ||
-      channel.loadInfo.isInDevToolsContext)
-  ) {
-    return false;
-  }
-
-  if (filters.window) {
-    // Since frames support, this.window may not be the top level content
-    // frame, so that we can't only compare with win.top.
-    let win = NetworkHelper.getWindowForRequest(channel);
-    while (win) {
-      if (win == filters.window) {
-        return true;
-      }
-      if (win.parent == win) {
-        break;
-      }
-      win = win.parent;
-    }
-  }
-
-  if (filters.browserId) {
-    const topFrame = NetworkHelper.getTopFrameForRequest(channel);
-    // topFrame is typically null for some chrome requests like favicons
-    if (topFrame && topFrame.browsingContext.browserId == filters.browserId) {
-      return true;
-    }
-
-    // If we couldn't get the top frame BrowsingContext from the loadContext,
-    // look for it on channel.loadInfo instead.
-    if (
-      channel.loadInfo &&
-      channel.loadInfo.browsingContext &&
-      channel.loadInfo.browsingContext.browserId == filters.browserId
-    ) {
-      return true;
-    }
-  }
-
-  return false;
-}
-exports.matchRequest = matchRequest;
-
-/**
  * The network monitor uses the nsIHttpActivityDistributor to monitor network
  * requests. The nsIObserverService is also used for monitoring
  * http-on-examine-response notifications. All network request information is
@@ -153,6 +83,9 @@ exports.matchRequest = matchRequest;
  *        Object with the filters to use for network requests:
  *        - window (nsIDOMWindow): filter network requests by the associated
  *          window object.
+ *        - matchExactWindow (Boolean): only has effect when `window` is provided too.
+ *        When set to true, only requests associated with this specific window will be returned.
+ *        When false, the requests from parent windows will be retrieved.
  *        - browserId (number): filter requests by their top frame's Browser Element.
  *        Filters are optional. If any of these filters match the request is
  *        logged (OR is applied). If no filter is provided then all requests are
@@ -190,6 +123,9 @@ function NetworkObserver(filters, owner) {
 
   this._throttleData = null;
   this._throttler = null;
+  // This is ultimately used by NetworkHelper.parseSecurityInfo to avoid
+  // repeatedly decoding already-seen certificates.
+  this._decodedCertificateCache = new Map();
 }
 
 exports.NetworkObserver = NetworkObserver;
@@ -300,10 +236,12 @@ NetworkObserver.prototype = {
     return this._throttler;
   },
 
+  _decodedCertificateCache: null,
+
   _serviceWorkerRequest: function(subject, topic, data) {
     const channel = subject.QueryInterface(Ci.nsIHttpChannel);
 
-    if (!matchRequest(channel, this.filters)) {
+    if (!NetworkUtils.matchRequest(channel, this.filters)) {
       return;
     }
 
@@ -330,7 +268,7 @@ NetworkObserver.prototype = {
     }
 
     const channel = subject.QueryInterface(Ci.nsIHttpChannel);
-    if (!matchRequest(channel, this.filters)) {
+    if (!NetworkUtils.matchRequest(channel, this.filters)) {
       return;
     }
 
@@ -357,7 +295,7 @@ NetworkObserver.prototype = {
     }
 
     const channel = subject.QueryInterface(Ci.nsIHttpChannel);
-    if (!matchRequest(channel, this.filters)) {
+    if (!NetworkUtils.matchRequest(channel, this.filters)) {
       return;
     }
 
@@ -402,7 +340,7 @@ NetworkObserver.prototype = {
         if (reason == 0) {
           // If we get there, we have a non-zero status, but no clear blocking reason
           // This is most likely a request that failed for some reason, so try to pass this reason
-          reason = NetworkUtils.getErrorCodeString(status);
+          reason = ChromeUtils.getXPCOMErrorName(status);
         }
         this._createNetworkEvent(subject, {
           blockedReason: reason,
@@ -442,7 +380,7 @@ NetworkObserver.prototype = {
     subject.QueryInterface(Ci.nsIClassifiedChannel);
     const channel = subject.QueryInterface(Ci.nsIHttpChannel);
 
-    if (!matchRequest(channel, this.filters)) {
+    if (!NetworkUtils.matchRequest(channel, this.filters)) {
       return;
     }
 
@@ -571,7 +509,7 @@ NetworkObserver.prototype = {
     const throttler = this._getThrottler();
     if (throttler) {
       const channel = subject.QueryInterface(Ci.nsIHttpChannel);
-      if (matchRequest(channel, this.filters)) {
+      if (NetworkUtils.matchRequest(channel, this.filters)) {
         logPlatformEvent("http-on-modify-request", channel);
 
         // Read any request body here, before it is throttled.
@@ -811,7 +749,7 @@ NetworkObserver.prototype = {
    * @return void
    */
   _onRequestHeader: function(channel, timestamp, extraStringData) {
-    if (!matchRequest(channel, this.filters)) {
+    if (!NetworkUtils.matchRequest(channel, this.filters)) {
       return;
     }
 
@@ -953,7 +891,11 @@ NetworkObserver.prototype = {
     sink.init(false, false, this.responsePipeSegmentSize, PR_UINT32_MAX, null);
 
     // Add listener for the response body.
-    const newListener = new NetworkResponseListener(this, httpActivity);
+    const newListener = new NetworkResponseListener(
+      this,
+      httpActivity,
+      this._decodedCertificateCache
+    );
 
     // Remember the input stream, so it isn't released by GC.
     newListener.inputStream = sink.inputStream;
@@ -1522,6 +1464,7 @@ NetworkObserver.prototype = {
     this.owner = null;
     this.filters = null;
     this._throttler = null;
+    this._decodedCertificateCache.clear();
   },
 };
 

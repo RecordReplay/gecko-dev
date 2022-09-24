@@ -154,17 +154,20 @@ static MOZ_ALWAYS_INLINE SharedPropMap* PropMapChildReadBarrier(
     return child;
   }
 
-  if (MOZ_LIKELY(!zone->isGCSweepingOrCompacting() ||
-                 !IsAboutToBeFinalizedUnbarriered(&child))) {
-    return child;
+  if (MOZ_UNLIKELY(zone->isGCSweeping() &&
+                   IsAboutToBeFinalizedUnbarriered(child))) {
+    // The map we've found is unreachable and due to be finalized, so
+    // remove our weak reference to it and don't use it.
+    MOZ_ASSERT(parent->isMarkedAny());
+    parent->removeChild(zone->runtimeFromMainThread()->gcContext(), child);
+    return nullptr;
   }
 
-  // The map we've found is unreachable and due to be finalized, so
-  // remove our weak reference to it and don't use it.
-  MOZ_ASSERT(parent->isMarkedAny());
-  parent->removeChild(zone->runtimeFromMainThread()->defaultFreeOp(), child);
+  // We don't yield to the mutator when the zone is in this state so we don't
+  // need to account for it here.
+  MOZ_ASSERT(!zone->isGCCompacting());
 
-  return nullptr;
+  return child;
 }
 
 SharedPropMap* SharedPropMap::lookupChild(uint32_t length, HandleId id,
@@ -875,7 +878,7 @@ void SharedPropMap::fixupAfterMovingGC() {
   }
 }
 
-void SharedPropMap::removeChild(JSFreeOp* fop, SharedPropMap* child) {
+void SharedPropMap::removeChild(JS::GCContext* gcx, SharedPropMap* child) {
   SharedPropMapAndIndex& parentRef = child->treeDataRef().parent;
   MOZ_ASSERT(parentRef.map() == this);
 
@@ -910,13 +913,13 @@ void SharedPropMap::removeChild(JSFreeOp* fop, SharedPropMap* child) {
     SharedPropMapAndIndex remainingChild = r.front();
     childrenRef.setSingleChild(remainingChild);
     clearHasChildrenSet();
-    fop->delete_(this, set, MemoryUse::PropMapChildren);
+    gcx->delete_(this, set, MemoryUse::PropMapChildren);
   }
 }
 
-void LinkedPropMap::purgeTable(JSFreeOp* fop) {
+void LinkedPropMap::purgeTable(JS::GCContext* gcx) {
   MOZ_ASSERT(hasTable());
-  fop->delete_(this, data_.table, MemoryUse::PropMapTable);
+  gcx->delete_(this, data_.table, MemoryUse::PropMapTable);
   data_.table = nullptr;
 }
 

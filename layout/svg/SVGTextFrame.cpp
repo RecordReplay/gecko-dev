@@ -48,6 +48,7 @@
 #include "mozilla/dom/Text.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PatternHelpers.h"
+#include "nsDisplayList.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -125,13 +126,7 @@ static void GetAscentAndDescentInAppUnits(nsTextFrame* aFrame,
   gfxTextRun::Range range = ConvertOriginalToSkipped(
       it, aFrame->GetContentOffset(), aFrame->GetContentLength());
 
-  // We pass in null for the PropertyProvider since letter-spacing and
-  // word-spacing should not affect the ascent and descent values we get.
-  gfxTextRun::Metrics metrics =
-      textRun->MeasureText(range, gfxFont::LOOSE_INK_EXTENTS, nullptr, nullptr);
-
-  aAscent = metrics.mAscent;
-  aDescent = metrics.mDescent;
+  textRun->GetLineHeightMetrics(range, aAscent, aDescent);
 }
 
 /**
@@ -278,43 +273,46 @@ static nscoord GetBaselinePosition(nsTextFrame* aFrame, gfxTextRun* aTextRun,
                                    StyleDominantBaseline aDominantBaseline,
                                    float aFontSizeScaleFactor) {
   WritingMode writingMode = aFrame->GetWritingMode();
-  // We pass in null for the PropertyProvider since letter-spacing and
-  // word-spacing should not affect the ascent and descent values we get.
-  gfxTextRun::Metrics metrics =
-      aTextRun->MeasureText(gfxFont::LOOSE_INK_EXTENTS, nullptr);
+  gfxFloat ascent, descent;
+  aTextRun->GetLineHeightMetrics(ascent, descent);
+
+  auto convertIfVerticalRL = [&](gfxFloat dominantBaseline) {
+    return writingMode.IsVerticalRL() ? ascent + descent - dominantBaseline
+                                      : dominantBaseline;
+  };
 
   switch (aDominantBaseline) {
     case StyleDominantBaseline::Hanging:
-      return metrics.mAscent * 0.2;
+      return convertIfVerticalRL(ascent * 0.2);
     case StyleDominantBaseline::TextBeforeEdge:
-      return writingMode.IsVerticalRL() ? metrics.mAscent + metrics.mDescent
-                                        : 0;
+      return convertIfVerticalRL(0);
 
-    case StyleDominantBaseline::Auto:
     case StyleDominantBaseline::Alphabetic:
       return writingMode.IsVerticalRL()
-                 ? metrics.mAscent + metrics.mDescent -
-                       aFrame->GetLogicalBaseline(writingMode)
+                 ? ascent * 0.5
                  : aFrame->GetLogicalBaseline(writingMode);
 
+    case StyleDominantBaseline::Auto:
+      return convertIfVerticalRL(aFrame->GetLogicalBaseline(writingMode));
+
     case StyleDominantBaseline::Middle:
-      return aFrame->GetLogicalBaseline(writingMode) -
-             SVGContentUtils::GetFontXHeight(aFrame) / 2.0 *
-                 AppUnitsPerCSSPixel() * aFontSizeScaleFactor;
+      return convertIfVerticalRL(aFrame->GetLogicalBaseline(writingMode) -
+                                 SVGContentUtils::GetFontXHeight(aFrame) / 2.0 *
+                                     AppUnitsPerCSSPixel() *
+                                     aFontSizeScaleFactor);
 
     case StyleDominantBaseline::TextAfterEdge:
     case StyleDominantBaseline::Ideographic:
-      return writingMode.IsVerticalLR() ? 0
-                                        : metrics.mAscent + metrics.mDescent;
+      return writingMode.IsVerticalLR() ? 0 : ascent + descent;
 
     case StyleDominantBaseline::Central:
-      return (metrics.mAscent + metrics.mDescent) / 2.0;
+      return (ascent + descent) / 2.0;
     case StyleDominantBaseline::Mathematical:
-      return metrics.mAscent / 2.0;
+      return convertIfVerticalRL(ascent / 2.0);
   }
 
   MOZ_ASSERT_UNREACHABLE("unexpected dominant-baseline value");
-  return aFrame->GetLogicalBaseline(writingMode);
+  return convertIfVerticalRL(aFrame->GetLogicalBaseline(writingMode));
 }
 
 /**
@@ -843,17 +841,24 @@ SVGBBox TextRenderedRun::GetRunUserSpaceRect(nsPresContext* aContext,
   // Determine the rectangle that covers the rendered run's fill,
   // taking into account the measured vertical overflow due to
   // decorations.
-  nscoord baseline = metrics.mBoundingBox.y + metrics.mAscent;
+  nscoord baseline =
+      NSToCoordRoundWithClamp(metrics.mBoundingBox.y + metrics.mAscent);
   gfxFloat x, width;
   if (aFlags & eNoHorizontalOverflow) {
     x = 0.0;
     width = textRun->GetAdvanceWidth(range, &provider);
+    if (width < 0.0) {
+      x = width;
+      width = -width;
+    }
   } else {
     x = metrics.mBoundingBox.x;
     width = metrics.mBoundingBox.width;
   }
-  nsRect fillInAppUnits(x, baseline - above, width,
-                        metrics.mBoundingBox.height + above + below);
+  nsRect fillInAppUnits(
+      NSToCoordRoundWithClamp(x), baseline - above,
+      NSToCoordRoundWithClamp(width),
+      NSToCoordRoundWithClamp(metrics.mBoundingBox.height) + above + below);
   if (textRun->IsVertical()) {
     // Swap line-relative textMetrics dimensions to physical coordinates.
     std::swap(fillInAppUnits.x, fillInAppUnits.y);
@@ -2714,9 +2719,6 @@ void DisplaySVGText::HitTest(nsDisplayListBuilder* aBuilder,
 }
 
 void DisplaySVGText::Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) {
-  DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
-                                                    IsSubpixelAADisabled());
-
   uint32_t appUnitsPerDevPixel = mFrame->PresContext()->AppUnitsPerDevPixel();
 
   // ToReferenceFrame includes our mRect offset, but painting takes
@@ -5177,6 +5179,9 @@ bool SVGTextFrame::UpdateFontSizeScaleFactor() {
     gfxMatrix m(GetCanvasTM());
     if (!m.IsSingular()) {
       contextScale = GetContextScale(m);
+      if (!std::isfinite(contextScale)) {
+        contextScale = 1.0f;
+      }
     }
   }
   mLastContextScale = contextScale;
@@ -5356,6 +5361,24 @@ gfxRect SVGTextFrame::TransformFrameRectFromTextChild(
                          NSAppUnitsToFloatPixels(mRect.y, factor));
 
   return result - framePosition;
+}
+
+Rect SVGTextFrame::TransformFrameRectFromTextChild(
+    const Rect& aRect, const nsIFrame* aChildFrame) {
+  nscoord appUnitsPerDevPixel = PresContext()->AppUnitsPerDevPixel();
+  nsRect r = LayoutDevicePixel::ToAppUnits(
+      LayoutDeviceRect::FromUnknownRect(aRect), appUnitsPerDevPixel);
+  gfxRect resultCssUnits = TransformFrameRectFromTextChild(r, aChildFrame);
+  float devPixelPerCSSPixel =
+      float(AppUnitsPerCSSPixel()) / appUnitsPerDevPixel;
+  resultCssUnits.Scale(devPixelPerCSSPixel);
+  return ToRect(resultCssUnits);
+}
+
+Point SVGTextFrame::TransformFramePointFromTextChild(
+    const Point& aPoint, const nsIFrame* aChildFrame) {
+  return TransformFrameRectFromTextChild(Rect(aPoint, Size(1, 1)), aChildFrame)
+      .TopLeft();
 }
 
 void SVGTextFrame::AppendDirectlyOwnedAnonBoxes(

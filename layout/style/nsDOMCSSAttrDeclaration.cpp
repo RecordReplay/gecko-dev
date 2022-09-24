@@ -12,6 +12,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/SVGElement.h"
 #include "mozilla/dom/MutationEventBinding.h"
+#include "mozilla/layers/ScrollLinkedEffectDetector.h"
 #include "mozilla/DeclarationBlock.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/SMILCSSValueType.h"
@@ -75,7 +76,8 @@ nsresult nsDOMCSSAttributeDeclaration::SetCSSDeclaration(
 
   // The closure needs to have been called by now, otherwise we shouldn't be
   // getting here when the attribute hasn't changed.
-  MOZ_ASSERT_IF(aClosureData, !aClosureData->mClosure);
+  MOZ_ASSERT_IF(aClosureData && aClosureData->mShouldBeCalled,
+                aClosureData->mWasCalled);
 
   aDecl->SetDirty();
   if (mIsSMILOverride) {
@@ -186,39 +188,83 @@ nsresult nsDOMCSSAttributeDeclaration::SetSMILValue(
   });
 }
 
+// Scripted modifications to style.opacity or style.transform (or other
+// transform-like properties, e.g. style.translate, style.rotate, style.scale)
+// could immediately force us into the animated state if heuristics suggest
+// this is a scripted animation.
+//
+// FIXME: This is missing the margin shorthand and the logical versions of
+// the margin properties, see bug 1266287.
+static bool IsActiveLayerProperty(nsCSSPropertyID aPropID) {
+  switch (aPropID) {
+    case eCSSProperty_opacity:
+    case eCSSProperty_transform:
+    case eCSSProperty_translate:
+    case eCSSProperty_rotate:
+    case eCSSProperty_scale:
+    case eCSSProperty_offset_path:
+    case eCSSProperty_offset_distance:
+    case eCSSProperty_offset_rotate:
+    case eCSSProperty_offset_anchor:
+      return true;
+    default:
+      return false;
+  }
+}
+
 void nsDOMCSSAttributeDeclaration::SetPropertyValue(
     const nsCSSPropertyID aPropID, const nsACString& aValue,
     nsIPrincipal* aSubjectPrincipal, ErrorResult& aRv) {
-  // Scripted modifications to style.opacity or style.transform (or other
-  // transform-like properties, e.g. style.translate, style.rotate, style.scale)
-  // could immediately force us into the animated state if heuristics suggest
-  // this is scripted animation.
-  // FIXME: This is missing the margin shorthand and the logical versions of
-  // the margin properties, see bug 1266287.
-  if (aPropID == eCSSProperty_opacity || aPropID == eCSSProperty_transform ||
-      aPropID == eCSSProperty_translate || aPropID == eCSSProperty_rotate ||
-      aPropID == eCSSProperty_scale || aPropID == eCSSProperty_offset_path ||
-      aPropID == eCSSProperty_offset_distance ||
-      aPropID == eCSSProperty_offset_rotate ||
-      aPropID == eCSSProperty_offset_anchor || aPropID == eCSSProperty_left ||
-      aPropID == eCSSProperty_top || aPropID == eCSSProperty_right ||
-      aPropID == eCSSProperty_bottom ||
-      aPropID == eCSSProperty_background_position_x ||
-      aPropID == eCSSProperty_background_position_y ||
-      aPropID == eCSSProperty_background_position) {
-    nsIFrame* frame = mElement->GetPrimaryFrame();
-    if (frame) {
-      ActiveLayerTracker::NotifyInlineStyleRuleModified(frame, aPropID, aValue,
-                                                        this);
-    }
-  }
   nsDOMCSSDeclaration::SetPropertyValue(aPropID, aValue, aSubjectPrincipal,
                                         aRv);
 }
 
-void nsDOMCSSAttributeDeclaration::MutationClosureFunction(void* aData) {
-  MutationClosureData* data = static_cast<MutationClosureData*>(aData);
-  // Clear mClosure pointer so that it doesn't get called again.
-  data->mClosure = nullptr;
+static bool IsScrollLinkedEffectiveProperty(const nsCSSPropertyID aPropID) {
+  switch (aPropID) {
+    case eCSSProperty_background_position:
+    case eCSSProperty_background_position_x:
+    case eCSSProperty_background_position_y:
+    case eCSSProperty_transform:
+    case eCSSProperty_translate:
+    case eCSSProperty_rotate:
+    case eCSSProperty_scale:
+    case eCSSProperty_top:
+    case eCSSProperty_left:
+    case eCSSProperty_bottom:
+    case eCSSProperty_right:
+    case eCSSProperty_margin:
+    case eCSSProperty_margin_top:
+    case eCSSProperty_margin_left:
+    case eCSSProperty_margin_bottom:
+    case eCSSProperty_margin_right:
+    case eCSSProperty_margin_inline_start:
+    case eCSSProperty_margin_inline_end:
+    case eCSSProperty_margin_block_start:
+    case eCSSProperty_margin_block_end:
+      return true;
+    default:
+      return false;
+  }
+}
+
+void nsDOMCSSAttributeDeclaration::MutationClosureFunction(
+    void* aData, nsCSSPropertyID aPropID) {
+  auto* data = static_cast<MutationClosureData*>(aData);
+  MOZ_ASSERT(
+      data->mShouldBeCalled,
+      "Did we pass a non-null closure to the style system unnecessarily?");
+  if (data->mWasCalled) {
+    return;
+  }
+  if (IsScrollLinkedEffectiveProperty(aPropID)) {
+    mozilla::layers::ScrollLinkedEffectDetector::PositioningPropertyMutated();
+  }
+  if (IsActiveLayerProperty(aPropID)) {
+    if (nsIFrame* frame = data->mElement->GetPrimaryFrame()) {
+      ActiveLayerTracker::NotifyInlineStyleRuleModified(frame, aPropID);
+    }
+  }
+
+  data->mWasCalled = true;
   data->mElement->InlineStyleDeclarationWillChange(*data);
 }

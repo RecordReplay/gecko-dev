@@ -6,7 +6,7 @@
 "use strict";
 
 const MESSAGE = "React Error";
-const TEST_URI = `data:text/html;charset=utf8,<script>
+const TEST_URI = `data:text/html;charset=utf8,<!DOCTYPE html><script>
   const x = new Error("${MESSAGE}");
   x.stack = "a@http://exampl.com:1:1\\n" +
     "grouped@http://react.js:1:1\\n" +
@@ -18,7 +18,7 @@ add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
 
   info("Wait for the error to be logged");
-  const msgNode = await waitFor(() => findMessage(hud, MESSAGE));
+  const msgNode = await waitFor(() => findConsoleAPIMessage(hud, MESSAGE));
   ok(!msgNode.classList.contains("open"), `Error logged not expanded`);
 
   const groupNode = await waitFor(() => msgNode.querySelector(".group"));

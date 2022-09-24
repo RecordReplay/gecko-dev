@@ -19,12 +19,13 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   ClientID: "resource://gre/modules/ClientID.jsm",
-  BrowserTelemetryUtils: "resource://gre/modules/BrowserTelemetryUtils.jsm",
   CustomizableUI: "resource:///modules/CustomizableUI.jsm",
   PageActions: "resource:///modules/PageActions.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   SearchSERPTelemetry: "resource:///modules/SearchSERPTelemetry.jsm",
   Services: "resource://gre/modules/Services.jsm",
+  WindowsInstallsInfo:
+    "resource://gre/modules/components-utils/WindowsInstallsInfo.jsm",
   setTimeout: "resource://gre/modules/Timer.jsm",
   setInterval: "resource://gre/modules/Timer.jsm",
   clearTimeout: "resource://gre/modules/Timer.jsm",
@@ -68,6 +69,7 @@ const TOTAL_URI_COUNT_NORMAL_AND_PRIVATE_MODE_SCALAR_NAME =
   "browser.engagement.total_uri_count_normal_and_private_mode";
 
 const CONTENT_PROCESS_COUNT = "CONTENT_PROCESS_COUNT";
+const CONTENT_PROCESS_PRECISE_COUNT = "CONTENT_PROCESS_PRECISE_COUNT";
 
 const MINIMUM_TAB_COUNT_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes, in ms
 const CONTENT_PROCESS_COUNT_INTERVAL_MS = 5 * 60 * 1000;
@@ -116,6 +118,7 @@ const PREFERENCES_PANES = [
   "paneSync",
   "paneContainers",
   "paneExperimental",
+  "paneMoreFromMozilla",
 ];
 
 const IGNORABLE_EVENTS = new WeakMap();
@@ -250,22 +253,6 @@ let URICountListener = {
     this._restoredURIsMap.set(browser, uri.spec);
   },
 
-  onStateChange(browser, webProgress, request, stateFlags, status) {
-    if (
-      !webProgress.isTopLevel ||
-      !(stateFlags & Ci.nsIWebProgressListener.STATE_STOP) ||
-      !(stateFlags & Ci.nsIWebProgressListener.STATE_IS_WINDOW)
-    ) {
-      return;
-    }
-
-    if (!(request instanceof Ci.nsIChannel) || !this.isHttpURI(request.URI)) {
-      return;
-    }
-
-    BrowserUsageTelemetry._recordSiteOriginsPerLoadedTabs();
-  },
-
   onLocationChange(browser, webProgress, request, uri, flags) {
     if (
       !(flags & Ci.nsIWebProgressListener.LOCATION_CHANGE_SAME_DOCUMENT) &&
@@ -356,6 +343,7 @@ let URICountListener = {
       TOTAL_URI_COUNT_NORMAL_AND_PRIVATE_MODE_SCALAR_NAME,
       1
     );
+    Glean.browserEngagement.uriCount.add(1);
 
     if (!shouldCountURI) {
       return;
@@ -444,14 +432,14 @@ let BrowserUsageTelemetry = {
   init() {
     this._lastRecordTabCount = 0;
     this._lastRecordLoadedTabCount = 0;
-    this._lastRecordSiteOriginsPerLoadedTabs = 0;
     this._setupAfterRestore();
     this._inited = true;
 
-    Services.prefs.addObserver("browser.tabs.drawInTitlebar", this);
+    Services.prefs.addObserver("browser.tabs.inTitlebar", this);
 
     this._recordUITelemetry();
-    this._contentProcessCountInterval = setInterval(
+
+    this._recordContentProcessCountInterval = setInterval(
       () => this._recordContentProcessCount(),
       CONTENT_PROCESS_COUNT_INTERVAL_MS
     );
@@ -498,7 +486,6 @@ let BrowserUsageTelemetry = {
     Services.obs.removeObserver(this, TELEMETRY_SUBSESSIONSPLIT_TOPIC);
 
     clearInterval(this._recordContentProcessCountInterval);
-    this._recordContentProcessCountDelayed = null;
   },
 
   observe(subject, topic, data) {
@@ -511,12 +498,10 @@ let BrowserUsageTelemetry = {
         break;
       case "nsPref:changed":
         switch (data) {
-          case "browser.tabs.drawInTitlebar":
+          case "browser.tabs.inTitlebar":
             this._recordWidgetChange(
               "titlebar",
-              Services.prefs.getBoolPref("browser.tabs.drawInTitlebar")
-                ? "off"
-                : "on",
+              Services.appinfo.drawInTitlebar ? "off" : "on",
               "pref"
             );
             break;
@@ -618,12 +603,7 @@ let BrowserUsageTelemetry = {
     widgetMap.set("menu-toolbar", menuBarHidden ? "off" : "on");
 
     // Drawing in the titlebar means not showing the titlebar, hence the negation.
-    widgetMap.set(
-      "titlebar",
-      Services.prefs.getBoolPref("browser.tabs.drawInTitlebar", true)
-        ? "off"
-        : "on"
-    );
+    widgetMap.set("titlebar", Services.appinfo.drawInTitlebar ? "off" : "on");
 
     for (let area of CustomizableUI.areas) {
       if (!(area in BROWSER_UI_CONTAINER_IDS)) {
@@ -834,7 +814,18 @@ let BrowserUsageTelemetry = {
 
     // Find the actual element we're interested in.
     let node = sourceEvent.target;
-    while (!UI_TARGET_ELEMENTS.includes(node.localName)) {
+    const isAboutPreferences = node.ownerDocument.URL.startsWith(
+      "about:preferences"
+    );
+    while (
+      !UI_TARGET_ELEMENTS.includes(node.localName) &&
+      !node.classList?.contains("wants-telemetry") &&
+      // We are interested in links on about:preferences as well.
+      !(
+        isAboutPreferences &&
+        (node.getAttribute("is") === "text-link" || node.localName === "a")
+      )
+    ) {
       node = node.parentNode;
       if (!node) {
         // A click on a space or label or something we're not interested in.
@@ -846,7 +837,7 @@ let BrowserUsageTelemetry = {
     let source = this._getWidgetContainer(node);
 
     if (item && source) {
-      let scalar = `browser.ui.interaction.${source.replace("-", "_")}`;
+      let scalar = `browser.ui.interaction.${source.replace(/-/g, "_")}`;
       Services.telemetry.keyedScalarAdd(scalar, telemetryId(item), 1);
       if (SET_USAGECOUNT_PREF_BUTTONS.includes(item)) {
         let pref = `browser.engagement.${item}.used-count`;
@@ -1215,139 +1206,151 @@ let BrowserUsageTelemetry = {
    * if so then send installation telemetry.
    *
    * @param {nsIFile} [dataPathOverride] Optional, full data file path, for tests.
+   * @param {Array<string>} [msixPackagePrefixes] Optional, list of prefixes to
+            consider "existing" installs when looking at installed MSIX packages.
+            Defaults to prefixes for builds produced in Firefox automation.
    * @return {Promise}
    * @resolves When the event has been recorded, or if the data file was not found.
    * @rejects JavaScript exception on any failure.
    */
-  async reportInstallationTelemetry(dataPathOverride) {
+  async reportInstallationTelemetry(
+    dataPathOverride,
+    msixPackagePrefixes = ["Mozilla.Firefox", "Mozilla.MozillaFirefox"]
+  ) {
     if (AppConstants.platform != "win") {
       // This is a windows-only feature.
       return;
     }
 
-    let dataPath = dataPathOverride;
-    if (!dataPath) {
-      dataPath = Services.dirsvc.get("GreD", Ci.nsIFile);
-      dataPath.append("installation_telemetry.json");
-    }
-
-    let dataBytes;
-    try {
-      dataBytes = await IOUtils.read(dataPath.path);
-    } catch (ex) {
-      if (ex.name == "NotFoundError") {
-        // Many systems will not have the data file, return silently if not found as
-        // there is nothing to record.
-        return;
-      }
-      throw ex;
-    }
-    const dataString = new TextDecoder("utf-16").decode(dataBytes);
-    const data = JSON.parse(dataString);
-
     const TIMESTAMP_PREF = "app.installation.timestamp";
     const lastInstallTime = Services.prefs.getStringPref(TIMESTAMP_PREF, null);
+    const wpm = Cc["@mozilla.org/windows-package-manager;1"].createInstance(
+      Ci.nsIWindowsPackageManager
+    );
+    let installer_type = "";
+    let pfn;
+    try {
+      pfn = Services.sysinfo.getProperty("winPackageFamilyName");
+    } catch (e) {}
 
-    if (lastInstallTime && data.install_timestamp == lastInstallTime) {
-      // We've already seen this install
-      return;
+    function getInstallData() {
+      // We only care about where _any_ other install existed - no
+      // need to count more than 1.
+      const installPaths = WindowsInstallsInfo.getInstallPaths(
+        1,
+        new Set([Services.dirsvc.get("GreBinD", Ci.nsIFile).path])
+      );
+      const msixInstalls = new Set();
+      // We're just going to eat all errors here -- we don't want the event
+      // to go unsent if we were unable to look for MSIX installs.
+      try {
+        wpm
+          .findUserInstalledPackages(msixPackagePrefixes)
+          .forEach(i => msixInstalls.add(i));
+        if (pfn) {
+          msixInstalls.delete(pfn);
+        }
+      } catch (ex) {}
+      return {
+        installPaths,
+        msixInstalls,
+      };
     }
 
-    // First time seeing this install, record the timestamp.
-    Services.prefs.setStringPref(TIMESTAMP_PREF, data.install_timestamp);
+    let extra = {};
 
-    // Installation timestamp is not intended to be sent with telemetry,
-    // remove it to emphasize this point.
-    delete data.install_timestamp;
+    if (pfn) {
+      if (lastInstallTime != null) {
+        // We've already seen this install
+        return;
+      }
 
-    // Build the extra event data
-    let extra = {
-      version: data.version,
-      build_id: data.build_id,
-      admin_user: data.admin_user.toString(),
-      install_existed: data.install_existed.toString(),
-      profdir_existed: data.profdir_existed.toString(),
-    };
+      // First time seeing this install, record the timestamp.
+      Services.prefs.setStringPref(TIMESTAMP_PREF, wpm.getInstalledDate());
+      let install_data = getInstallData();
 
-    if (data.installer_type == "full") {
-      extra.silent = data.silent.toString();
-      extra.from_msi = data.from_msi.toString();
-      extra.default_path = data.default_path.toString();
+      installer_type = "msix";
+
+      // Build the extra event data
+      extra.version = AppConstants.MOZ_APP_VERSION;
+      extra.build_id = AppConstants.MOZ_BUILDID;
+      // The next few keys are static for the reasons described
+      // No way to detect whether or not we were installed by an admin
+      extra.admin_user = "false";
+      // Always false at the moment, because we create a new profile
+      // on first launch
+      extra.profdir_existed = "false";
+      // Obviously false for MSIX installs
+      extra.from_msi = "false";
+      // We have no way of knowing whether we were installed via the GUI,
+      // through the command line, or some Enterprise management tool.
+      extra.silent = "false";
+      // There's no way to change the install path for an MSIX package
+      extra.default_path = "true";
+      extra.install_existed = install_data.msixInstalls.has(pfn).toString();
+      install_data.msixInstalls.delete(pfn);
+      extra.other_inst = (!!install_data.installPaths.size).toString();
+      extra.other_msix_inst = (!!install_data.msixInstalls.size).toString();
+    } else {
+      let dataPath = dataPathOverride;
+      if (!dataPath) {
+        dataPath = Services.dirsvc.get("GreD", Ci.nsIFile);
+        dataPath.append("installation_telemetry.json");
+      }
+
+      let dataBytes;
+      try {
+        dataBytes = await IOUtils.read(dataPath.path);
+      } catch (ex) {
+        if (ex.name == "NotFoundError") {
+          // Many systems will not have the data file, return silently if not found as
+          // there is nothing to record.
+          return;
+        }
+        throw ex;
+      }
+      const dataString = new TextDecoder("utf-16").decode(dataBytes);
+      const data = JSON.parse(dataString);
+
+      if (lastInstallTime && data.install_timestamp == lastInstallTime) {
+        // We've already seen this install
+        return;
+      }
+
+      // First time seeing this install, record the timestamp.
+      Services.prefs.setStringPref(TIMESTAMP_PREF, data.install_timestamp);
+      let install_data = getInstallData();
+
+      installer_type = data.installer_type;
+
+      // Installation timestamp is not intended to be sent with telemetry,
+      // remove it to emphasize this point.
+      delete data.install_timestamp;
+
+      // Build the extra event data
+      extra.version = data.version;
+      extra.build_id = data.build_id;
+      extra.admin_user = data.admin_user.toString();
+      extra.install_existed = data.install_existed.toString();
+      extra.profdir_existed = data.profdir_existed.toString();
+      extra.other_inst = (!!install_data.installPaths.size).toString();
+      extra.other_msix_inst = (!!install_data.msixInstalls.size).toString();
+
+      if (data.installer_type == "full") {
+        extra.silent = data.silent.toString();
+        extra.from_msi = data.from_msi.toString();
+        extra.default_path = data.default_path.toString();
+      }
     }
-
     // Record the event
     Services.telemetry.setEventRecordingEnabled("installation", true);
     Services.telemetry.recordEvent(
       "installation",
       "first_seen",
-      data.installer_type,
+      installer_type,
       null,
       extra
     );
-  },
-
-  /**
-   * Record telemetry about the ratio of number of site origins per number of
-   * loaded tabs.
-   *
-   * This will only record the telemetry if it has been five minutes since the
-   * last recording.
-   */
-  _recordSiteOriginsPerLoadedTabs() {
-    const currentTime = Date.now();
-    if (
-      currentTime >
-      this._lastRecordSiteOriginsPerLoadedTabs + MINIMUM_TAB_COUNT_INTERVAL_MS
-    ) {
-      this._lastRecordSiteOriginsPerLoadedTabs = currentTime;
-      // If this is the first load, we discard it because it is likely just the
-      // browser opening for the first time.
-      if (this._lastRecordSiteOriginsPerLoadedTabs === 0) {
-        return;
-      }
-
-      const { loadedTabCount } = getOpenTabsAndWinsCounts();
-      const siteOrigins = BrowserTelemetryUtils.computeSiteOriginCount(
-        Services.wm.getEnumerator("navigator:browser"),
-        false
-      );
-      const histogramId = this._getSiteOriginHistogram(loadedTabCount);
-      // Telemetry doesn't support float values.
-      Services.telemetry
-        .getHistogramById(histogramId)
-        .add(Math.trunc((100 * siteOrigins) / loadedTabCount));
-    }
-  },
-
-  _siteOriginHistogramIds: [
-    [1, 1, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_1"],
-    [2, 4, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_2_4"],
-    [5, 9, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_5_9"],
-    [10, 14, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_10_14"],
-    [15, 19, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_15_19"],
-    [20, 24, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_20_24"],
-    [25, 29, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_25_29"],
-    [31, 34, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_30_34"],
-    [35, 39, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_35_39"],
-    [40, 44, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_40_44"],
-    [45, 49, "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_45_49"],
-  ],
-
-  /**
-   * Return the appropriate histogram ID for the given loaded tab count.
-   *
-   * Unique site origin telemetry is split across several histograms so that it
-   * can approximate a unique site origin vs loaded tab count curve.
-   *
-   * @param {number} [loadedTabCount] The number of loaded tabs.
-   */
-  _getSiteOriginHistogram(loadedTabCount) {
-    for (const [min, max, histogramId] of this._siteOriginHistogramIds) {
-      if (min <= loadedTabCount && loadedTabCount <= max) {
-        return histogramId;
-      }
-    }
-    return "FX_NUMBER_OF_UNIQUE_SITE_ORIGINS_PER_LOADED_TABS_50_PLUS";
   },
 
   /**
@@ -1358,6 +1361,9 @@ let BrowserUsageTelemetry = {
     const count = ChromeUtils.getAllDOMProcesses().length - 1;
 
     Services.telemetry.getHistogramById(CONTENT_PROCESS_COUNT).add(count);
+    Services.telemetry
+      .getHistogramById(CONTENT_PROCESS_PRECISE_COUNT)
+      .add(count);
   },
 };
 

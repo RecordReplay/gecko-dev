@@ -399,7 +399,7 @@ struct gvar
 				  get_offset (glyphCount) - get_offset (0)));
   }
 
-  /* GlyphVariationData not sanitized here; must be checked while accessing each glyph varation data */
+  /* GlyphVariationData not sanitized here; must be checked while accessing each glyph variation data */
   bool sanitize (hb_sanitize_context_t *c) const
   { return sanitize_shallow (c); }
 
@@ -419,7 +419,9 @@ struct gvar
     out->glyphCount = num_glyphs;
 
     unsigned int subset_data_size = 0;
-    for (hb_codepoint_t gid = 0; gid < num_glyphs; gid++)
+    for (hb_codepoint_t gid = (c->plan->flags & HB_SUBSET_FLAGS_NOTDEF_OUTLINE) ? 0 : 1;
+         gid < num_glyphs;
+         gid++)
     {
       hb_codepoint_t old_gid;
       if (!c->plan->old_gid_for_new_gid (gid, &old_gid)) continue;
@@ -449,7 +451,9 @@ struct gvar
     out->dataZ = subset_data - (char *) out;
 
     unsigned int glyph_offset = 0;
-    for (hb_codepoint_t gid = 0; gid < num_glyphs; gid++)
+    for (hb_codepoint_t gid = (c->plan->flags & HB_SUBSET_FLAGS_NOTDEF_OUTLINE) ? 0 : 1;
+         gid < num_glyphs;
+         gid++)
     {
       hb_codepoint_t old_gid;
       hb_bytes_t var_data_bytes = c->plan->old_gid_for_new_gid (gid, &old_gid)
@@ -494,9 +498,9 @@ struct gvar
   public:
   struct accelerator_t
   {
-    void init (hb_face_t *face)
+    accelerator_t (hb_face_t *face)
     { table = hb_sanitize_context_t ().reference_table<gvar> (face); }
-    void fini () { table.destroy (); }
+    ~accelerator_t () { table.destroy (); }
 
     private:
     struct x_getter { static float get (const contour_point_t &p) { return p.x; } };
@@ -694,7 +698,9 @@ no_more_gaps:
   DEFINE_SIZE_MIN (20);
 };
 
-struct gvar_accelerator_t : gvar::accelerator_t {};
+struct gvar_accelerator_t : gvar::accelerator_t {
+  gvar_accelerator_t (hb_face_t *face) : gvar::accelerator_t (face) {}
+};
 
 } /* namespace OT */
 

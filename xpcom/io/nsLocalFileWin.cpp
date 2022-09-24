@@ -10,6 +10,7 @@
 #include "mozilla/TextUtils.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "mozilla/Utf8.h"
+#include "mozilla/WinHeaderOnlyUtils.h"
 
 #include "nsCOMPtr.h"
 #include "nsMemory.h"
@@ -28,6 +29,7 @@
 #include "nsReadableUtils.h"
 
 #include <direct.h>
+#include <fileapi.h>
 #include <windows.h>
 #include <shlwapi.h>
 #include <aclapi.h>
@@ -80,6 +82,9 @@ using mozilla::FilePreferences::kPathSeparator;
 // MinGW does not know about this error, ensure we do.
 #ifndef ERROR_DEVICE_HARDWARE_ERROR
 #  define ERROR_DEVICE_HARDWARE_ERROR 483L
+#endif
+#ifndef ERROR_CONTENT_BLOCKED
+#  define ERROR_CONTENT_BLOCKED 1296L
 #endif
 
 namespace {
@@ -186,6 +191,26 @@ nsresult nsLocalFile::RevealFile(const nsString& aResolvedPath) {
   return SUCCEEDED(hr) ? NS_OK : NS_ERROR_FAILURE;
 }
 
+// static
+void nsLocalFile::CheckForReservedFileName(nsString& aFileName) {
+  static const char* forbiddenNames[] = {
+      "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",  "COM8",
+      "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",  "LPT7",
+      "LPT8", "LPT9", "CON",  "PRN",  "AUX",  "NUL",  "CLOCK$"};
+
+  uint32_t nameLen;
+  for (size_t n = 0; n < ArrayLength(forbiddenNames); ++n) {
+    nameLen = (uint32_t)strlen(forbiddenNames[n]);
+    if (aFileName.EqualsIgnoreCase(forbiddenNames[n], nameLen)) {
+      // invalid name is either the entire string, or a prefix with a period
+      if (aFileName.Length() == nameLen ||
+          aFileName.CharAt(nameLen) == char16_t('.')) {
+        aFileName.Truncate();
+      }
+    }
+  }
+}
+
 class nsDriveEnumerator : public nsSimpleEnumerator,
                           public nsIDirectoryEnumerator {
  public:
@@ -252,13 +277,15 @@ static nsresult ConvertWinError(DWORD aWinErr) {
     case ERROR_PATH_NOT_FOUND:
       [[fallthrough]];  // to NS_ERROR_FILE_NOT_FOUND
     case ERROR_INVALID_DRIVE:
-      [[fallthrough]];  // to NS_ERROR_FILE_NOT_FOUND
-    case ERROR_NOT_READY:
       rv = NS_ERROR_FILE_NOT_FOUND;
       break;
     case ERROR_ACCESS_DENIED:
       [[fallthrough]];  // to NS_ERROR_FILE_ACCESS_DENIED
     case ERROR_NOT_SAME_DEVICE:
+      [[fallthrough]];  // to NS_ERROR_FILE_ACCESS_DENIED
+    case ERROR_CANNOT_MAKE:
+      [[fallthrough]];  // to NS_ERROR_FILE_ACCESS_DENIED
+    case ERROR_CONTENT_BLOCKED:
       rv = NS_ERROR_FILE_ACCESS_DENIED;
       break;
     case ERROR_SHARING_VIOLATION:  // CreateFile without sharing flags
@@ -267,12 +294,6 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       rv = NS_ERROR_FILE_IS_LOCKED;
       break;
     case ERROR_NOT_ENOUGH_MEMORY:
-      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
-    case ERROR_INVALID_BLOCK:
-      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
-    case ERROR_INVALID_HANDLE:
-      [[fallthrough]];  // to NS_ERROR_OUT_OF_MEMORY
-    case ERROR_ARENA_TRASHED:
       rv = NS_ERROR_OUT_OF_MEMORY;
       break;
     case ERROR_DIR_NOT_EMPTY:
@@ -291,8 +312,6 @@ static nsresult ConvertWinError(DWORD aWinErr) {
     case ERROR_FILE_EXISTS:
       [[fallthrough]];  // to NS_ERROR_FILE_ALREADY_EXISTS
     case ERROR_ALREADY_EXISTS:
-      [[fallthrough]];  // to NS_ERROR_FILE_ALREADY_EXISTS
-    case ERROR_CANNOT_MAKE:
       rv = NS_ERROR_FILE_ALREADY_EXISTS;
       break;
     case ERROR_FILENAME_EXCED_RANGE:
@@ -302,6 +321,8 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       rv = NS_ERROR_FILE_NOT_DIRECTORY;
       break;
     case ERROR_FILE_CORRUPT:
+      [[fallthrough]];  // to NS_ERROR_FILE_FS_CORRUPTED
+    case ERROR_DISK_CORRUPT:
       rv = NS_ERROR_FILE_FS_CORRUPTED;
       break;
     case ERROR_DEVICE_HARDWARE_ERROR:
@@ -310,6 +331,19 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       [[fallthrough]];  // to NS_ERROR_FILE_DEVICE_FAILURE
     case ERROR_IO_DEVICE:
       rv = NS_ERROR_FILE_DEVICE_FAILURE;
+      break;
+    case ERROR_NOT_READY:
+      rv = NS_ERROR_FILE_DEVICE_TEMPORARY_FAILURE;
+      break;
+    case ERROR_INVALID_NAME:
+      rv = NS_ERROR_FILE_INVALID_PATH;
+      break;
+    case ERROR_INVALID_BLOCK:
+      [[fallthrough]];  // to NS_ERROR_FILE_INVALID_HANDLE
+    case ERROR_INVALID_HANDLE:
+      [[fallthrough]];  // to NS_ERROR_FILE_INVALID_HANDLE
+    case ERROR_ARENA_TRASHED:
+      rv = NS_ERROR_FILE_INVALID_HANDLE;
       break;
     case 0:
       rv = NS_OK;
@@ -323,20 +357,6 @@ static nsresult ConvertWinError(DWORD aWinErr) {
       break;
   }
   return rv;
-}
-
-// as suggested in the MSDN documentation on SetFilePointer
-static __int64 MyFileSeek64(HANDLE aHandle, __int64 aDistance,
-                            DWORD aMoveMethod) {
-  LARGE_INTEGER li;
-
-  li.QuadPart = aDistance;
-  li.LowPart = SetFilePointer(aHandle, li.LowPart, &li.HighPart, aMoveMethod);
-  if (li.LowPart == INVALID_SET_FILE_POINTER && GetLastError() != NO_ERROR) {
-    li.QuadPart = -1;
-  }
-
-  return li.QuadPart;
 }
 
 // Check whether a path is a volume root. Expects paths to be \-terminated.
@@ -860,14 +880,10 @@ nsLocalFile::nsLocalFile(const nsAString& aFilePath)
   InitWithPath(aFilePath);
 }
 
-nsresult nsLocalFile::nsLocalFileConstructor(nsISupports* aOuter,
-                                             const nsIID& aIID,
+nsresult nsLocalFile::nsLocalFileConstructor(const nsIID& aIID,
                                              void** aInstancePtr) {
   if (NS_WARN_IF(!aInstancePtr)) {
     return NS_ERROR_INVALID_ARG;
-  }
-  if (NS_WARN_IF(aOuter)) {
-    return NS_ERROR_NO_AGGREGATION;
   }
 
   nsLocalFile* inst = new nsLocalFile();
@@ -1047,7 +1063,7 @@ nsLocalFile::InitWithPath(const nsAString& aFilePath) {
   if (secondChar == L':') {
     // Make sure we have a valid drive, later code assumes the drive letter
     // is a single char a-z or A-Z.
-    if (PathGetDriveNumberW(aFilePath.Data()) == -1) {
+    if (MozPathGetDriveNumber<wchar_t>(aFilePath.Data()) == -1) {
       return NS_ERROR_FILE_UNRECOGNIZED_PATH;
     }
   }
@@ -1161,7 +1177,7 @@ bool nsLocalFile::CleanupCmdHandlerPath(nsAString& aCommandHandler) {
   handlerCommand.Assign(destination.get());
 
   // Remove quotes around paths
-  handlerCommand.StripChars("\"");
+  handlerCommand.StripChars(u"\"");
 
   // Strip windows host process bootstrap so we can get to the actual
   // handler.
@@ -1600,6 +1616,25 @@ nsLocalFile::SetLeafName(const nsAString& aLeafName) {
 }
 
 NS_IMETHODIMP
+nsLocalFile::GetDisplayName(nsAString& aLeafName) {
+  aLeafName.Truncate();
+
+  if (mWorkingPath.IsEmpty()) {
+    return NS_ERROR_FILE_UNRECOGNIZED_PATH;
+  }
+  SHFILEINFOW sfi = {};
+  DWORD_PTR result = ::SHGetFileInfoW(mWorkingPath.get(), 0, &sfi, sizeof(sfi),
+                                      SHGFI_DISPLAYNAME);
+  // If we found a display name, return that:
+  if (result) {
+    aLeafName.Assign(sfi.szDisplayName);
+    return NS_OK;
+  }
+  // Nope - fall back to the regular leaf name.
+  return GetLeafName(aLeafName);
+}
+
+NS_IMETHODIMP
 nsLocalFile::GetPath(nsAString& aResult) {
   MOZ_ASSERT_IF(
       mUseDOSDevicePathSyntax,
@@ -1641,10 +1676,9 @@ nsLocalFile::GetVersionInfoField(const char* aField, nsAString& aResult) {
     if (queryResult && translate) {
       for (int32_t i = 0; i < 2; ++i) {
         wchar_t subBlock[MAX_PATH];
-        _snwprintf(subBlock, MAX_PATH, L"\\StringFileInfo\\%04x%04x\\%s",
+        _snwprintf(subBlock, MAX_PATH, L"\\StringFileInfo\\%04x%04x\\%S",
                    (i == 0 ? translate[0].wLanguage : ::GetUserDefaultLangID()),
-                   translate[0].wCodePage,
-                   NS_ConvertASCIItoUTF16(nsDependentCString(aField)).get());
+                   translate[0].wCodePage, aField);
         subBlock[MAX_PATH - 1] = 0;
         LPVOID value = nullptr;
         UINT size;
@@ -2289,6 +2323,11 @@ nsLocalFile::Remove(bool aRecursive) {
 
   if (isDir) {
     if (aRecursive) {
+      // WARNING: neither the `SHFileOperation` nor `IFileOperation` APIs are
+      // appropriate here as neither handle long path names, i.e. paths prefixed
+      // with `\\?\` or longer than 260 characters on Windows 10+ system with
+      // long paths enabled.
+
       RefPtr<nsDirEnumerator> dirEnum = new nsDirEnumerator();
 
       rv = dirEnum->Init(this);
@@ -2296,14 +2335,9 @@ nsLocalFile::Remove(bool aRecursive) {
         return rv;
       }
 
-      bool more = false;
-      while (NS_SUCCEEDED(dirEnum->HasMoreElements(&more)) && more) {
-        nsCOMPtr<nsISupports> item;
-        dirEnum->GetNext(getter_AddRefs(item));
-        nsCOMPtr<nsIFile> file = do_QueryInterface(item);
-        if (file) {
-          file->Remove(aRecursive);
-        }
+      nsCOMPtr<nsIFile> file;
+      while (NS_SUCCEEDED(dirEnum->GetNextFile(getter_AddRefs(file))) && file) {
+        file->Remove(aRecursive);
       }
     }
     if (RemoveDirectoryW(mWorkingPath.get()) == 0) {
@@ -2632,14 +2666,32 @@ nsLocalFile::SetFileSize(int64_t aFileSize) {
   // seek the file pointer to the new, desired end of file
   // and then truncate the file at that position
   nsresult rv = NS_ERROR_FAILURE;
-  aFileSize = MyFileSeek64(hFile, aFileSize, FILE_BEGIN);
-  if (aFileSize != -1 && SetEndOfFile(hFile)) {
+  LARGE_INTEGER distance;
+  distance.QuadPart = aFileSize;
+  if (SetFilePointerEx(hFile, distance, nullptr, FILE_BEGIN) &&
+      SetEndOfFile(hFile)) {
     MakeDirty();
     rv = NS_OK;
   }
 
   CloseHandle(hFile);
   return rv;
+}
+
+static nsresult GetDiskSpaceAttributes(const nsString& aResolvedPath,
+                                       int64_t* aFreeBytesAvailable,
+                                       int64_t* aTotalBytes) {
+  ULARGE_INTEGER liFreeBytesAvailableToCaller;
+  ULARGE_INTEGER liTotalNumberOfBytes;
+  if (::GetDiskFreeSpaceExW(aResolvedPath.get(), &liFreeBytesAvailableToCaller,
+                            &liTotalNumberOfBytes, nullptr)) {
+    *aFreeBytesAvailable = liFreeBytesAvailableToCaller.QuadPart;
+    *aTotalBytes = liTotalNumberOfBytes.QuadPart;
+
+    return NS_OK;
+  }
+
+  return ConvertWinError(::GetLastError());
 }
 
 NS_IMETHODIMP
@@ -2651,7 +2703,12 @@ nsLocalFile::GetDiskSpaceAvailable(int64_t* aDiskSpaceAvailable) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  ResolveAndStat();
+  *aDiskSpaceAvailable = 0;
+
+  nsresult rv = ResolveAndStat();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
 
   if (mFileInfo64.type == PR_FILE_FILE) {
     // Since GetDiskFreeSpaceExW works only on directories, use the parent.
@@ -2661,14 +2718,36 @@ nsLocalFile::GetDiskSpaceAvailable(int64_t* aDiskSpaceAvailable) {
     }
   }
 
-  ULARGE_INTEGER liFreeBytesAvailableToCaller, liTotalNumberOfBytes;
-  if (::GetDiskFreeSpaceExW(mResolvedPath.get(), &liFreeBytesAvailableToCaller,
-                            &liTotalNumberOfBytes, nullptr)) {
-    *aDiskSpaceAvailable = liFreeBytesAvailableToCaller.QuadPart;
-    return NS_OK;
+  int64_t dummy = 0;
+  return GetDiskSpaceAttributes(mResolvedPath, aDiskSpaceAvailable, &dummy);
+}
+
+NS_IMETHODIMP
+nsLocalFile::GetDiskCapacity(int64_t* aDiskCapacity) {
+  // Check we are correctly initialized.
+  CHECK_mWorkingPath();
+
+  if (NS_WARN_IF(!aDiskCapacity)) {
+    return NS_ERROR_INVALID_ARG;
   }
-  *aDiskSpaceAvailable = 0;
-  return NS_OK;
+
+  *aDiskCapacity = 0;
+
+  nsresult rv = ResolveAndStat();
+  if (NS_FAILED(rv)) {
+    return rv;
+  }
+
+  if (mFileInfo64.type == PR_FILE_FILE) {
+    // Since GetDiskFreeSpaceExW works only on directories, use the parent.
+    nsCOMPtr<nsIFile> parent;
+    if (NS_SUCCEEDED(GetParent(getter_AddRefs(parent))) && parent) {
+      return parent->GetDiskCapacity(aDiskCapacity);
+    }
+  }
+
+  int64_t dummy = 0;
+  return GetDiskSpaceAttributes(mResolvedPath, &dummy, aDiskCapacity);
 }
 
 NS_IMETHODIMP
@@ -2947,43 +3026,59 @@ nsLocalFile::Equals(nsIFile* aInFile, bool* aResult) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  EnsureShortPath();
-
   nsCOMPtr<nsILocalFileWin> lf(do_QueryInterface(aInFile));
   if (!lf) {
     *aResult = false;
     return NS_OK;
   }
 
-  nsAutoString inFilePath;
-  lf->GetCanonicalPath(inFilePath);
-
   bool inUseDOSDevicePathSyntax;
   lf->GetUseDOSDevicePathSyntax(&inUseDOSDevicePathSyntax);
 
-  // Remove the prefix for both inFilePath and mShortWorkingPath if the
-  // useDOSDevicePathSyntax from them are not the same.
-  // This is added because of Omnijar. It compare files from different moduals
-  // with itself
-  nsAutoString shortWorkingPath;
-  if (inUseDOSDevicePathSyntax == mUseDOSDevicePathSyntax) {
-    shortWorkingPath = mShortWorkingPath;
-  } else if (inUseDOSDevicePathSyntax &&
-             StringBeginsWith(inFilePath, kDevicePathSpecifier)) {
-    MOZ_ASSERT(!StringBeginsWith(mShortWorkingPath, kDevicePathSpecifier));
-
-    shortWorkingPath = mShortWorkingPath;
-    inFilePath = Substring(inFilePath, kDevicePathSpecifier.Length());
-  } else if (mUseDOSDevicePathSyntax &&
-             StringBeginsWith(mShortWorkingPath, kDevicePathSpecifier)) {
-    MOZ_ASSERT(!StringBeginsWith(inFilePath, kDevicePathSpecifier));
-
-    shortWorkingPath =
-        Substring(mShortWorkingPath, kDevicePathSpecifier.Length());
+  // If useDOSDevicePathSyntax are different remove the prefix from the one that
+  // might have it. This is added because of Omnijar. It compares files from
+  // different modules with itself.
+  bool removePathPrefix, removeInPathPrefix;
+  if (inUseDOSDevicePathSyntax != mUseDOSDevicePathSyntax) {
+    removeInPathPrefix = inUseDOSDevicePathSyntax;
+    removePathPrefix = mUseDOSDevicePathSyntax;
+  } else {
+    removePathPrefix = removeInPathPrefix = false;
   }
 
-  // Ok : Win9x
-  *aResult = _wcsicmp(shortWorkingPath.get(), inFilePath.get()) == 0;
+  nsAutoString inFilePath, workingPath;
+  aInFile->GetPath(inFilePath);
+  workingPath = mWorkingPath;
+
+  constexpr static auto equalPath =
+      [](nsAutoString& workingPath, nsAutoString& inFilePath,
+         bool removePathPrefix, bool removeInPathPrefix) {
+        if (removeInPathPrefix &&
+            StringBeginsWith(inFilePath, kDevicePathSpecifier)) {
+          MOZ_ASSERT(!StringBeginsWith(workingPath, kDevicePathSpecifier));
+
+          inFilePath = Substring(inFilePath, kDevicePathSpecifier.Length());
+        } else if (removePathPrefix &&
+                   StringBeginsWith(workingPath, kDevicePathSpecifier)) {
+          MOZ_ASSERT(!StringBeginsWith(inFilePath, kDevicePathSpecifier));
+
+          workingPath = Substring(workingPath, kDevicePathSpecifier.Length());
+        }
+
+        return _wcsicmp(workingPath.get(), inFilePath.get()) == 0;
+      };
+
+  if (equalPath(workingPath, inFilePath, removePathPrefix,
+                removeInPathPrefix)) {
+    *aResult = true;
+    return NS_OK;
+  }
+
+  EnsureShortPath();
+  lf->GetCanonicalPath(inFilePath);
+  workingPath = mShortWorkingPath;
+  *aResult =
+      equalPath(workingPath, inFilePath, removePathPrefix, removeInPathPrefix);
 
   return NS_OK;
 }
@@ -3007,8 +3102,8 @@ nsLocalFile::Contains(nsIFile* aInFile, bool* aResult) {
     aInFile->GetPath(inFilePath);
   }
 
-  // make sure that the |aInFile|'s path has a trailing separator.
-  if (inFilePath.Length() >= myFilePathLen &&
+  // Make sure that the |aInFile|'s path has a trailing separator.
+  if (inFilePath.Length() > myFilePathLen &&
       inFilePath[myFilePathLen] == L'\\') {
     if (_wcsnicmp(myFilePath.get(), inFilePath.get(), myFilePathLen) == 0) {
       *aResult = true;
@@ -3074,43 +3169,36 @@ nsLocalFile::SetPersistentDescriptor(const nsACString& aPersistentDescriptor) {
 }
 
 NS_IMETHODIMP
-nsLocalFile::GetFileAttributesWin(uint32_t* aAttribs) {
-  *aAttribs = 0;
+nsLocalFile::GetReadOnly(bool* aReadOnly) {
+  NS_ENSURE_ARG_POINTER(aReadOnly);
+
   DWORD dwAttrs = GetFileAttributesW(mWorkingPath.get());
   if (dwAttrs == INVALID_FILE_ATTRIBUTES) {
     return NS_ERROR_FILE_INVALID_PATH;
   }
 
-  if (!(dwAttrs & FILE_ATTRIBUTE_NOT_CONTENT_INDEXED)) {
-    *aAttribs |= WFA_SEARCH_INDEXED;
-  }
+  *aReadOnly = dwAttrs & FILE_ATTRIBUTE_READONLY;
 
   return NS_OK;
 }
 
 NS_IMETHODIMP
-nsLocalFile::SetFileAttributesWin(uint32_t aAttribs) {
+nsLocalFile::SetReadOnly(bool aReadOnly) {
   DWORD dwAttrs = GetFileAttributesW(mWorkingPath.get());
   if (dwAttrs == INVALID_FILE_ATTRIBUTES) {
     return NS_ERROR_FILE_INVALID_PATH;
   }
 
-  if (aAttribs & WFA_SEARCH_INDEXED) {
-    dwAttrs &= ~FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
-  } else {
-    dwAttrs |= FILE_ATTRIBUTE_NOT_CONTENT_INDEXED;
-  }
-
-  if (aAttribs & WFA_READONLY) {
+  if (aReadOnly) {
     dwAttrs |= FILE_ATTRIBUTE_READONLY;
-  } else if ((aAttribs & WFA_READWRITE) &&
-             (dwAttrs & FILE_ATTRIBUTE_READONLY)) {
+  } else {
     dwAttrs &= ~FILE_ATTRIBUTE_READONLY;
   }
 
   if (SetFileAttributesW(mWorkingPath.get(), dwAttrs) == 0) {
     return NS_ERROR_FAILURE;
   }
+
   return NS_OK;
 }
 
@@ -3171,6 +3259,36 @@ nsLocalFile::Reveal() {
 
   return NS_DispatchBackgroundTask(task,
                                    nsIEventTarget::DISPATCH_EVENT_MAY_BLOCK);
+}
+
+NS_IMETHODIMP
+nsLocalFile::GetWindowsFileAttributes(uint32_t* aAttrs) {
+  NS_ENSURE_ARG_POINTER(aAttrs);
+
+  DWORD dwAttrs = ::GetFileAttributesW(mWorkingPath.get());
+  if (dwAttrs == INVALID_FILE_ATTRIBUTES) {
+    return ConvertWinError(GetLastError());
+  }
+
+  *aAttrs = dwAttrs;
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsLocalFile::SetWindowsFileAttributes(uint32_t aSetAttrs,
+                                      uint32_t aClearAttrs) {
+  DWORD dwAttrs = ::GetFileAttributesW(mWorkingPath.get());
+  if (dwAttrs == INVALID_FILE_ATTRIBUTES) {
+    return ConvertWinError(GetLastError());
+  }
+
+  dwAttrs = (dwAttrs & ~aClearAttrs) | aSetAttrs;
+
+  if (::SetFileAttributesW(mWorkingPath.get(), dwAttrs) == 0) {
+    return ConvertWinError(GetLastError());
+  }
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -3349,14 +3467,6 @@ nsCString nsIFile::HumanReadablePath() {
   DebugOnly<nsresult> rv = GetPath(path);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
   return NS_ConvertUTF16toUTF8(path);
-}
-
-NS_IMETHODIMP
-nsLocalFile::GetNativeCanonicalPath(nsACString& aResult) {
-  NS_WARNING("This method is lossy. Use GetCanonicalPath !");
-  EnsureShortPath();
-  NS_CopyUnicodeToNative(mShortWorkingPath, aResult);
-  return NS_OK;
 }
 
 NS_IMETHODIMP

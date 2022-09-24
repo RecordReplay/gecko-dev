@@ -7,7 +7,7 @@
 /**
  *  Test removing bookmarks from the Bookmarks Toolbar and Library.
  */
-const BOOKMARKS_H2_2020_PREF = "browser.toolbars.bookmarks.2h2020";
+const SECOND_BOOKMARK_TITLE = "Second Bookmark Title";
 const bookmarksInfo = [
   {
     title: "firefox",
@@ -24,7 +24,13 @@ const bookmarksInfo = [
 ];
 const TEST_URL = "about:mozilla";
 
-add_task(async function setup() {
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "userContextEnabled",
+  "privacy.userContext.enabled"
+);
+
+add_setup(async function() {
   await PlacesUtils.bookmarks.eraseEverything();
 
   let toolbar = document.getElementById("PersonalToolbar");
@@ -73,12 +79,9 @@ let OptionsMatchExpected = (contextMenu, expectedOptionItems) => {
 };
 
 let checkContextMenu = async (cbfunc, optionItems, doc = document) => {
-  await SpecialPowers.pushPrefEnv({
-    set: [[BOOKMARKS_H2_2020_PREF, true]],
-  });
   let bookmark = await PlacesUtils.bookmarks.insert({
     parentGuid: PlacesUtils.bookmarks.toolbarGuid,
-    title: "Second Bookmark Title",
+    title: SECOND_BOOKMARK_TITLE,
     url: TEST_URL,
   });
 
@@ -101,6 +104,7 @@ let checkContextMenu = async (cbfunc, optionItems, doc = document) => {
 add_task(async function test_bookmark_contextmenu_contents() {
   let optionItems = [
     "placesContext_open:newtab",
+    "placesContext_open:newcontainertab",
     "placesContext_open:newwindow",
     "placesContext_open:newprivatewindow",
     "placesContext_show_bookmark:info",
@@ -115,6 +119,12 @@ add_task(async function test_bookmark_contextmenu_contents() {
     "toggle_PersonalToolbar",
     "show-other-bookmarks_PersonalToolbar",
   ];
+  if (!userContextEnabled) {
+    optionItems.splice(
+      optionItems.indexOf("placesContext_open:newcontainertab"),
+      1
+    );
+  }
 
   await checkContextMenu(async function() {
     let toolbarBookmark = await PlacesUtils.bookmarks.insert({
@@ -139,6 +149,9 @@ add_task(async function test_bookmark_contextmenu_contents() {
     return contextMenu;
   }, optionItems);
 
+  let tab;
+  let contextMenuOnContent;
+
   await checkContextMenu(async function() {
     info("Check context menu after opening context menu on content");
     const toolbarBookmark = await PlacesUtils.bookmarks.insert({
@@ -148,13 +161,8 @@ add_task(async function test_bookmark_contextmenu_contents() {
     });
 
     info("Open context menu on about:config");
-    const tab = await BrowserTestUtils.openNewForegroundTab(
-      gBrowser,
-      "about:config"
-    );
-    const contextMenuOnContent = document.getElementById(
-      "contentAreaContextMenu"
-    );
+    tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, "about:config");
+    contextMenuOnContent = document.getElementById("contentAreaContextMenu");
     const popupShownPromiseOnContent = BrowserTestUtils.waitForEvent(
       contextMenuOnContent,
       "popupshown"
@@ -179,10 +187,15 @@ add_task(async function test_bookmark_contextmenu_contents() {
     });
     await popupShownPromise;
 
-    BrowserTestUtils.removeTab(tab);
-
     return contextMenu;
   }, optionItems);
+
+  // We need to do a thorough cleanup to avoid leaking the window of
+  // 'about:config'.
+  const tabClosed = BrowserTestUtils.waitForTabClosing(tab);
+  contextMenuOnContent.hidePopup();
+  BrowserTestUtils.removeTab(tab);
+  await tabClosed;
 });
 
 add_task(async function test_empty_contextmenu_contents() {
@@ -382,6 +395,7 @@ add_task(async function test_sidebar_multiple_folders_contextmenu_contents() {
 add_task(async function test_sidebar_bookmark_contextmenu_contents() {
   let optionItems = [
     "placesContext_open:newtab",
+    "placesContext_open:newcontainertab",
     "placesContext_open:newwindow",
     "placesContext_open:newprivatewindow",
     "placesContext_show_bookmark:info",
@@ -393,6 +407,12 @@ add_task(async function test_sidebar_bookmark_contextmenu_contents() {
     "placesContext_new:folder",
     "placesContext_new:separator",
   ];
+  if (!userContextEnabled) {
+    optionItems.splice(
+      optionItems.indexOf("placesContext_open:newcontainertab"),
+      1
+    );
+  }
 
   await withSidebarTree("bookmarks", async tree => {
     await checkContextMenu(
@@ -416,10 +436,59 @@ add_task(async function test_sidebar_bookmark_contextmenu_contents() {
   });
 });
 
+add_task(async function test_sidebar_bookmark_search_contextmenu_contents() {
+  let optionItems = [
+    "placesContext_open:newtab",
+    "placesContext_open:newcontainertab",
+    "placesContext_open:newwindow",
+    "placesContext_open:newprivatewindow",
+    "placesContext_showInFolder",
+    "placesContext_show_bookmark:info",
+    "placesContext_deleteBookmark",
+    "placesContext_cut",
+    "placesContext_copy",
+  ];
+  if (!userContextEnabled) {
+    optionItems.splice(
+      optionItems.indexOf("placesContext_open:newcontainertab"),
+      1
+    );
+  }
+
+  await withSidebarTree("bookmarks", async tree => {
+    await checkContextMenu(
+      async bookmark => {
+        info("Checking bookmark sidebar menu contents in search context");
+        // Perform a search first
+        let searchBox = SidebarUI.browser.contentDocument.getElementById(
+          "search-box"
+        );
+        searchBox.value = SECOND_BOOKMARK_TITLE;
+        searchBox.doCommand();
+        tree.selectItems([bookmark.guid]);
+
+        let contextMenu = SidebarUI.browser.contentDocument.getElementById(
+          "placesContext"
+        );
+        let popupShownPromise = BrowserTestUtils.waitForEvent(
+          contextMenu,
+          "popupshown"
+        );
+        synthesizeClickOnSelectedTreeCell(tree, { type: "contextmenu" });
+        await popupShownPromise;
+        return contextMenu;
+      },
+      optionItems,
+      SidebarUI.browser.contentDocument
+    );
+  });
+});
+
 add_task(async function test_library_bookmark_contextmenu_contents() {
   let optionItems = [
     "placesContext_open",
     "placesContext_open:newtab",
+    "placesContext_open:newcontainertab",
     "placesContext_open:newwindow",
     "placesContext_open:newprivatewindow",
     "placesContext_deleteBookmark",
@@ -430,10 +499,60 @@ add_task(async function test_library_bookmark_contextmenu_contents() {
     "placesContext_new:folder",
     "placesContext_new:separator",
   ];
+  if (!userContextEnabled) {
+    optionItems.splice(
+      optionItems.indexOf("placesContext_open:newcontainertab"),
+      1
+    );
+  }
 
   await withLibraryWindow("BookmarksToolbar", async ({ left, right }) => {
     await checkContextMenu(
       async bookmark => {
+        let contextMenu = right.ownerDocument.getElementById("placesContext");
+        let popupShownPromise = BrowserTestUtils.waitForEvent(
+          contextMenu,
+          "popupshown"
+        );
+        right.selectItems([bookmark.guid]);
+        synthesizeClickOnSelectedTreeCell(right, { type: "contextmenu" });
+        await popupShownPromise;
+        return contextMenu;
+      },
+      optionItems,
+      right.ownerDocument
+    );
+  });
+});
+
+add_task(async function test_library_bookmark_search_contextmenu_contents() {
+  let optionItems = [
+    "placesContext_open",
+    "placesContext_open:newtab",
+    "placesContext_open:newcontainertab",
+    "placesContext_open:newwindow",
+    "placesContext_open:newprivatewindow",
+    "placesContext_showInFolder",
+    "placesContext_deleteBookmark",
+    "placesContext_cut",
+    "placesContext_copy",
+  ];
+  if (!userContextEnabled) {
+    optionItems.splice(
+      optionItems.indexOf("placesContext_open:newcontainertab"),
+      1
+    );
+  }
+
+  await withLibraryWindow("BookmarksToolbar", async ({ left, right }) => {
+    await checkContextMenu(
+      async bookmark => {
+        info("Checking bookmark library menu contents in search context");
+        // Perform a search first
+        let searchBox = right.ownerDocument.getElementById("searchFilter");
+        searchBox.value = SECOND_BOOKMARK_TITLE;
+        searchBox.doCommand();
+
         let contextMenu = right.ownerDocument.getElementById("placesContext");
         let popupShownPromise = BrowserTestUtils.waitForEvent(
           contextMenu,

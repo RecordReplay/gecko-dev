@@ -8,7 +8,9 @@ EXPORTS += ["AccEvent.h", "nsAccessibilityService.h"]
 
 EXPORTS.mozilla.a11y += [
     "AccAttributes.h",
+    "AccGroupInfo.h",
     "AccTypes.h",
+    "CacheConstants.h",
     "DocManager.h",
     "FocusManager.h",
     "IDSet.h",
@@ -26,13 +28,13 @@ if CONFIG["MOZ_DEBUG"]:
 
 UNIFIED_SOURCES += [
     "AccAttributes.cpp",
-    "AccessibleOrProxy.cpp",
     "AccEvent.cpp",
     "AccGroupInfo.cpp",
     "AccIterator.cpp",
     "ARIAMap.cpp",
     "ARIAStateMap.cpp",
     "Asserts.cpp",
+    "CachedTableAccessible.cpp",
     "DocManager.cpp",
     "EmbeddedObjCollector.cpp",
     "EventQueue.cpp",
@@ -50,6 +52,7 @@ UNIFIED_SOURCES += [
     "SelectionManager.cpp",
     "StyleInfo.cpp",
     "TextAttrs.cpp",
+    "TextLeafRange.cpp",
     "TextRange.cpp",
     "TextUpdater.cpp",
     "TreeWalker.cpp",
@@ -91,8 +94,8 @@ LOCAL_INCLUDES += [
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     LOCAL_INCLUDES += [
         "/accessible/atk",
+        "/gfx/cairo/cairo/src",
     ]
-    CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     LOCAL_INCLUDES += [
         "/accessible/windows/ia2",
@@ -114,6 +117,3 @@ else:
 FINAL_LIBRARY = "xul"
 
 include("/ipc/chromium/chromium-config.mozbuild")
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

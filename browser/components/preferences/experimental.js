@@ -4,10 +4,6 @@
 
 /* import-globals-from preferences.js */
 
-var { FeatureGate } = ChromeUtils.import(
-  "resource://featuregates/FeatureGate.jsm"
-);
-
 var gExperimentalPane = {
   inited: false,
   _template: null,
@@ -163,6 +159,5 @@ var gExperimentalPane = {
       preference.setElementValue(checkbox);
     }
     this._featureGatesContainer.appendChild(frag);
-    Preferences.updateAllElements();
   },
 };

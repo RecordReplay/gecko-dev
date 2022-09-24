@@ -23,14 +23,16 @@ namespace mozilla::dom {
 class VsyncParent final : public PVsyncParent, public VsyncObserver {
   friend class PVsyncParent;
 
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(VsyncParent, override)
+
  public:
   VsyncParent();
-  void UpdateVsyncSource(const RefPtr<gfx::VsyncSource>& aVsyncSource);
+  void UpdateVsyncDispatcher(const RefPtr<VsyncDispatcher>& aVsyncDispatcher);
 
  private:
   virtual ~VsyncParent() = default;
 
-  virtual bool NotifyVsync(const VsyncEvent& aVsync) override;
+  void NotifyVsync(const VsyncEvent& aVsync) override;
   virtual void ActorDestroy(ActorDestroyReason aActorDestroyReason) override;
 
   mozilla::ipc::IPCResult RecvObserve();
@@ -45,8 +47,7 @@ class VsyncParent final : public PVsyncParent, public VsyncObserver {
   bool mObservingVsync;
   bool mDestroyed;
   nsCOMPtr<nsIThread> mInitialThread;
-  RefPtr<gfx::VsyncSource> mVsyncSource;
-  RefPtr<RefreshTimerVsyncDispatcher> mVsyncDispatcher;
+  RefPtr<VsyncDispatcher> mVsyncDispatcher;
 };
 
 }  // namespace mozilla::dom

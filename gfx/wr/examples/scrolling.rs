@@ -24,7 +24,7 @@ const EXT_SCROLL_ID_CONTENT: u64 = 2;
 
 struct App {
     cursor_position: WorldPoint,
-    scroll_origin: LayoutPoint,
+    scroll_offset: LayoutVector2D,
 }
 
 impl Example for App {
@@ -54,14 +54,20 @@ impl Example for App {
                 PrimitiveFlags::IS_BACKFACE_VISIBLE,
             );
             // set the scrolling clip
-            let space_and_clip1 = builder.define_scroll_frame(
-                &root_space_and_clip,
+            let space1 = builder.define_scroll_frame(
+                root_space_and_clip.spatial_id,
                 ExternalScrollId(EXT_SCROLL_ID_ROOT, PipelineId::dummy()),
                 (0, 0).by(1000, 1000),
                 scrollbox,
-                ScrollSensitivity::ScriptAndInputEvents,
                 LayoutVector2D::zero(),
+                APZScrollGeneration::default(),
+                HasScrollLinkedEffect::No,
+                SpatialTreeItemKey::new(0, 0),
             );
+            let space_and_clip1 = SpaceAndClipInfo {
+                spatial_id: space1,
+                clip_id: root_space_and_clip.clip_id,
+            };
 
             // now put some content into it.
             // start with a white background
@@ -86,14 +92,20 @@ impl Example for App {
             // Below the above rectangles, set up a nested scrollbox. It's still in
             // the same stacking context, so note that the rects passed in need to
             // be relative to the stacking context.
-            let space_and_clip2 = builder.define_scroll_frame(
-                &space_and_clip1,
+            let space2 = builder.define_scroll_frame(
+                space1,
                 ExternalScrollId(EXT_SCROLL_ID_CONTENT, PipelineId::dummy()),
                 (0, 100).to(300, 1000),
                 (0, 100).to(200, 300),
-                ScrollSensitivity::ScriptAndInputEvents,
                 LayoutVector2D::zero(),
+                APZScrollGeneration::default(),
+                HasScrollLinkedEffect::No,
+                SpatialTreeItemKey::new(0, 1),
             );
+            let space_and_clip2 = SpaceAndClipInfo {
+                spatial_id: space2,
+                clip_id: root_space_and_clip.clip_id,
+            };
 
             // give it a giant gray background just to distinguish it and to easily
             // visually identify the nested scrollbox
@@ -120,7 +132,8 @@ impl Example for App {
                 SideOffsets2D::new(Some(10.0), None, Some(10.0), None),
                 StickyOffsetBounds::new(-40.0, 60.0),
                 StickyOffsetBounds::new(0.0, 0.0),
-                LayoutVector2D::new(0.0, 0.0)
+                LayoutVector2D::new(0.0, 0.0),
+                SpatialTreeItemKey::new(0, 2),
             );
 
             let info = CommonItemProperties::new(
@@ -152,60 +165,70 @@ impl Example for App {
         builder.pop_stacking_context();
     }
 
-    fn on_event(&mut self, event: winit::WindowEvent, api: &mut RenderApi, document_id: DocumentId) -> bool {
+    fn on_event(
+        &mut self,
+        event: winit::event::WindowEvent,
+        window: &winit::window::Window,
+        api: &mut RenderApi,
+        document_id: DocumentId,
+    ) -> bool {
         let mut txn = Transaction::new();
         match event {
-            winit::WindowEvent::KeyboardInput {
-                input: winit::KeyboardInput {
-                    state: winit::ElementState::Pressed,
+            winit::event::WindowEvent::KeyboardInput {
+                input: winit::event::KeyboardInput {
+                    state: winit::event::ElementState::Pressed,
                     virtual_keycode: Some(key),
                     ..
                 },
                 ..
             } => {
                 let offset = match key {
-                    winit::VirtualKeyCode::Down => Some(LayoutVector2D::new(0.0, -10.0)),
-                    winit::VirtualKeyCode::Up => Some(LayoutVector2D::new(0.0, 10.0)),
-                    winit::VirtualKeyCode::Right => Some(LayoutVector2D::new(-10.0, 0.0)),
-                    winit::VirtualKeyCode::Left => Some(LayoutVector2D::new(10.0, 0.0)),
+                    winit::event::VirtualKeyCode::Down => Some(LayoutVector2D::new(0.0, -10.0)),
+                    winit::event::VirtualKeyCode::Up => Some(LayoutVector2D::new(0.0, 10.0)),
+                    winit::event::VirtualKeyCode::Right => Some(LayoutVector2D::new(-10.0, 0.0)),
+                    winit::event::VirtualKeyCode::Left => Some(LayoutVector2D::new(10.0, 0.0)),
                     _ => None,
                 };
 
                 if let Some(offset) = offset {
-                    self.scroll_origin += offset;
+                    self.scroll_offset += offset;
 
-                    txn.scroll_node_with_id(
-                        self.scroll_origin,
+                    txn.set_scroll_offsets(
                         ExternalScrollId(EXT_SCROLL_ID_CONTENT, PipelineId::dummy()),
-                        ScrollClamping::ToContentBounds,
+                        vec![SampledScrollOffset {
+                            offset: self.scroll_offset,
+                            generation: APZScrollGeneration::default(),
+                        }],
                     );
-                    txn.generate_frame(0);
+                    txn.generate_frame(0, RenderReasons::empty());
                 }
             }
-            winit::WindowEvent::CursorMoved { position: LogicalPosition { x, y }, .. } => {
-                self.cursor_position = WorldPoint::new(x as f32, y as f32);
+            winit::event::WindowEvent::CursorMoved { position, .. } => {
+                let pos: LogicalPosition<f32> = position.to_logical(window.scale_factor());
+                self.cursor_position = WorldPoint::new(pos.x, pos.y);
             }
-            winit::WindowEvent::MouseWheel { delta, .. } => {
+            winit::event::WindowEvent::MouseWheel { delta, .. } => {
                 const LINE_HEIGHT: f32 = 38.0;
                 let (dx, dy) = match delta {
-                    winit::MouseScrollDelta::LineDelta(dx, dy) => (dx, dy * LINE_HEIGHT),
-                    winit::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
+                    winit::event::MouseScrollDelta::LineDelta(dx, dy) => (dx, dy * LINE_HEIGHT),
+                    winit::event::MouseScrollDelta::PixelDelta(pos) => (pos.x as f32, pos.y as f32),
                 };
 
-                self.scroll_origin += LayoutVector2D::new(dx, dy);
+                self.scroll_offset += LayoutVector2D::new(dx, dy);
 
-                txn.scroll_node_with_id(
-                    self.scroll_origin,
+                txn.set_scroll_offsets(
                     ExternalScrollId(EXT_SCROLL_ID_CONTENT, PipelineId::dummy()),
-                    ScrollClamping::ToContentBounds,
+                    vec![SampledScrollOffset {
+                            offset: self.scroll_offset,
+                            generation: APZScrollGeneration::default(),
+                    }],
                 );
 
-                txn.generate_frame(0);
+                txn.generate_frame(0, RenderReasons::empty());
             }
-            winit::WindowEvent::MouseInput { .. } => {
+            winit::event::WindowEvent::MouseInput { .. } => {
                 let results = api.hit_test(
                     document_id,
-                    None,
                     self.cursor_position,
                 );
 
@@ -227,7 +250,7 @@ impl Example for App {
 fn main() {
     let mut app = App {
         cursor_position: WorldPoint::zero(),
-        scroll_origin: LayoutPoint::zero(),
+        scroll_offset: LayoutVector2D::zero(),
     };
     boilerplate::main_wrapper(&mut app, None);
 }

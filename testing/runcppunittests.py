@@ -102,7 +102,7 @@ class CPPUnitTests(object):
                 self.log.test_end(basename, status="PASS", expected="PASS")
             return result
 
-    def build_core_environment(self, env, enable_webrender):
+    def build_core_environment(self, env):
         """
         Add environment variables likely to be used across all platforms, including remote systems.
         """
@@ -112,16 +112,9 @@ class CPPUnitTests(object):
         env["XPCOM_DEBUG_BREAK"] = "stack-and-abort"
         env["MOZ_CRASHREPORTER_NO_REPORT"] = "1"
         env["MOZ_CRASHREPORTER"] = "1"
-
-        if enable_webrender:
-            env["MOZ_WEBRENDER"] = "1"
-            env["MOZ_ACCELERATED"] = "1"
-        else:
-            env["MOZ_WEBRENDER"] = "0"
-
         return env
 
-    def build_environment(self, enable_webrender=False):
+    def build_environment(self):
         """
         Create and return a dictionary of all the appropriate env variables and values.
         On a remote system, we overload this to set different values and are missing things
@@ -130,7 +123,7 @@ class CPPUnitTests(object):
         if not os.path.isdir(self.xre_path):
             raise Exception("xre_path does not exist: %s", self.xre_path)
         env = dict(os.environ)
-        env = self.build_core_environment(env, enable_webrender)
+        env = self.build_core_environment(env)
         pathvar = ""
         libpath = self.xre_path
         if mozinfo.os == "linux":
@@ -174,7 +167,6 @@ class CPPUnitTests(object):
         xre_path,
         symbols_path=None,
         utility_path=None,
-        enable_webrender=False,
         interactive=False,
     ):
         """
@@ -198,7 +190,7 @@ class CPPUnitTests(object):
                 utility_path, symbols_path
             )
         self.log.suite_start(programs, name="cppunittest")
-        env = self.build_environment(enable_webrender)
+        env = self.build_environment()
         pass_count = 0
         fail_count = 0
         for prog in programs:
@@ -256,13 +248,6 @@ class CPPUnittestOptions(OptionParser):
             default=None,
             help="path to directory containing utility programs",
         )
-        self.add_option(
-            "--enable-webrender",
-            action="store_true",
-            dest="enable_webrender",
-            default=False,
-            help="Enable the WebRender compositor in Gecko",
-        )
 
 
 def extract_unittests_from_args(args, environ, manifest_path):
@@ -287,8 +272,8 @@ def extract_unittests_from_args(args, environ, manifest_path):
             else:
                 tests.append((os.path.abspath(p), 1))
 
-    # we skip the existence check here because not all tests are built
-    # for all platforms (and it will fail on Windows anyway)
+    # We don't use the manifest parser's existence-check only because it will
+    # fail on Windows due to the `.exe` suffix.
     active_tests = mp.active_tests(exists=False, disabled=False, **environ)
     suffix = ".exe" if mozinfo.isWin else ""
     if binary_path:
@@ -309,16 +294,18 @@ def extract_unittests_from_args(args, environ, manifest_path):
             ]
         )
 
-    # skip and warn for any tests in the manifest that are not found
-    final_tests = []
+    # Manually confirm that all tests named in the manifest exist.
+    errors = False
     log = mozlog.get_default_logger()
     for test in tests:
-        if os.path.isfile(test[0]):
-            final_tests.append(test)
-        else:
-            log.warning("test file not found: %s - skipped" % test[0])
+        if not os.path.isfile(test[0]):
+            errors = True
+            log.error("test file not found: %s" % test[0])
 
-    return final_tests
+    if errors:
+        raise RuntimeError("One or more cppunittests not found; aborting.")
+
+    return tests
 
 
 def update_mozinfo():
@@ -344,7 +331,6 @@ def run_test_harness(options, args):
         options.xre_path,
         options.symbols_path,
         options.utility_path,
-        options.enable_webrender,
     )
 
     return result

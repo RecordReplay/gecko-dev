@@ -120,7 +120,8 @@ impl RootParameter {
         RootParameter(param)
     }
 
-    fn descriptor(
+    //TODO: should this be unsafe?
+    pub fn descriptor(
         ty: d3d12::D3D12_ROOT_PARAMETER_TYPE,
         visibility: ShaderVisibility,
         binding: Binding,
@@ -155,6 +156,7 @@ impl RootParameter {
 impl fmt::Debug for RootParameter {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         #[derive(Debug)]
+        #[allow(dead_code)] // False-positive
         enum Inner<'a> {
             Table(&'a [DescriptorRange]),
             Constants { binding: Binding, num: u32 },

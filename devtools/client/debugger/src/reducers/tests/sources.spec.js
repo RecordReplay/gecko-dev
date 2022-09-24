@@ -2,17 +2,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-import update, { initialSourcesState, getDisplayedSources } from "../sources";
+import update, { initialSourcesState } from "../sources";
+import { getDisplayedSources } from "../../selectors/sources";
 import { initialThreadsState } from "../threads";
 import updateSourceActors from "../source-actors";
 import { prefs } from "../../utils/prefs";
 import { makeMockSource, mockcx, makeMockState } from "../../utils/test-mockup";
-import { getResourceIds } from "../../utils/resource";
 
 const extensionSource = {
   ...makeMockSource(),
   id: "extensionId",
   url: "http://example.com/script.js",
+  thread: "foo",
 };
 
 const firefoxExtensionSource = {
@@ -20,6 +21,7 @@ const firefoxExtensionSource = {
   id: "firefoxExtension",
   url: "moz-extension://id/js/content.js",
   isExtension: true,
+  thread: "foo",
 };
 
 const chromeExtensionSource = {
@@ -27,6 +29,7 @@ const chromeExtensionSource = {
   id: "chromeExtension",
   isExtension: true,
   url: "chrome-extension://id/js/content.js",
+  thread: "foo",
 };
 
 const mockedSources = [
@@ -60,11 +63,11 @@ describe("sources reducer", () => {
   it("should work", () => {
     let state = initialSourcesState();
     state = update(state, {
-      type: "ADD_SOURCE",
+      type: "ADD_SOURCES",
       cx: mockcx,
-      source: makeMockSource(),
+      sources: [makeMockSource()],
     });
-    expect(getResourceIds(state.sources)).toHaveLength(1);
+    expect(state.sources.size).toBe(1);
   });
 });
 

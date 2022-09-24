@@ -79,7 +79,7 @@ static sslOptions ssl_defaults = {
     .enableOCSPStapling = PR_FALSE,
     .enableDelegatedCredentials = PR_FALSE,
     .enableALPN = PR_TRUE,
-    .reuseServerECDHEKey = PR_TRUE,
+    .reuseServerECDHEKey = PR_FALSE,
     .enableFallbackSCSV = PR_FALSE,
     .enableServerDhe = PR_TRUE,
     .enableExtendedMS = PR_TRUE,
@@ -89,24 +89,25 @@ static sslOptions ssl_defaults = {
     .enableTls13CompatMode = PR_FALSE,
     .enableDtls13VersionCompat = PR_FALSE,
     .enableDtlsShortHeader = PR_FALSE,
-    .enableHelloDowngradeCheck = PR_FALSE,
+    .enableHelloDowngradeCheck = PR_TRUE,
     .enableV2CompatibleHello = PR_FALSE,
     .enablePostHandshakeAuth = PR_FALSE,
     .suppressEndOfEarlyData = PR_FALSE,
     .enableTls13GreaseEch = PR_FALSE,
-    .enableTls13BackendEch = PR_FALSE
+    .enableTls13BackendEch = PR_FALSE,
+    .callExtensionWriterOnEchInner = PR_FALSE,
 };
 
 /*
  * default range of enabled SSL/TLS protocols
  */
 static SSLVersionRange versions_defaults_stream = {
-    SSL_LIBRARY_VERSION_TLS_1_0,
+    SSL_LIBRARY_VERSION_TLS_1_2,
     SSL_LIBRARY_VERSION_TLS_1_3
 };
 
 static SSLVersionRange versions_defaults_datagram = {
-    SSL_LIBRARY_VERSION_TLS_1_1,
+    SSL_LIBRARY_VERSION_TLS_1_2,
     SSL_LIBRARY_VERSION_TLS_1_2
 };
 
@@ -398,6 +399,10 @@ ssl_DupSocket(sslSocket *os)
                 goto loser;
             }
         }
+        /* The original socket 'owns' the copy of these, so
+         * just set the target copies to zero */
+        ss->peerSignatureSchemes = NULL;
+        ss->peerSignatureSchemeCount = 0;
 
         /* Create security data */
         rv = ssl_CopySecurityInfo(ss, os);
@@ -489,6 +494,10 @@ ssl_DestroySocketContents(sslSocket *ss)
     tls13_ReleaseAntiReplayContext(ss->antiReplay);
 
     tls13_DestroyPsk(ss->psk);
+    /* data in peer Signature schemes comes from the buffer system,
+     * so there is nothing to free here. Make sure that's the case */
+    PORT_Assert(ss->peerSignatureSchemes == NULL);
+    PORT_Assert(ss->peerSignatureSchemeCount == 0);
 
     tls13_DestroyEchConfigs(&ss->echConfigs);
     SECKEY_DestroyPrivateKey(ss->echPrivKey);
@@ -1716,7 +1725,7 @@ NSS_SetDomesticPolicy(void)
     /* If we've already defined some policy oids, skip changing them */
     rv = NSS_GetAlgorithmPolicy(SEC_OID_APPLY_SSL_POLICY, &policy);
     if ((rv == SECSuccess) && (policy & NSS_USE_POLICY_IN_SSL)) {
-        return ssl_Init(); /* make sure the policies have bee loaded */
+        return ssl_Init(); /* make sure the policies have been loaded */
     }
 
     for (cipher = SSL_ImplementedCiphers; *cipher != 0; ++cipher) {
@@ -2096,23 +2105,35 @@ ssl_SelectDHEGroup(sslSocket *ss, const sslNamedGroupDef **groupDef)
         ssl_grp_ffdhe_custom, WEAK_DHE_SIZE, ssl_kea_dh,
         SEC_OID_TLS_DHE_CUSTOM, PR_TRUE
     };
+    PRInt32 minDH;
+    SECStatus rv;
+
+    // make sure we select a group consistent with our
+    // current policy policy
+    rv = NSS_OptionGet(NSS_DH_MIN_KEY_SIZE, &minDH);
+    if (rv != SECSuccess || minDH <= 0) {
+        minDH = DH_MIN_P_BITS;
+    }
 
     /* Only select weak groups in TLS 1.2 and earlier, but not if the client has
      * indicated that it supports an FFDHE named group. */
     if (ss->ssl3.dheWeakGroupEnabled &&
         ss->version < SSL_LIBRARY_VERSION_TLS_1_3 &&
-        !ss->xtnData.peerSupportsFfdheGroups) {
+        !ss->xtnData.peerSupportsFfdheGroups &&
+        weak_group_def.bits >= minDH) {
         *groupDef = &weak_group_def;
         return SECSuccess;
     }
     if (ss->ssl3.dhePreferredGroup &&
-        ssl_NamedGroupEnabled(ss, ss->ssl3.dhePreferredGroup)) {
+        ssl_NamedGroupEnabled(ss, ss->ssl3.dhePreferredGroup) &&
+        ss->ssl3.dhePreferredGroup->bits >= minDH) {
         *groupDef = ss->ssl3.dhePreferredGroup;
         return SECSuccess;
     }
     for (i = 0; i < SSL_NAMED_GROUP_COUNT; ++i) {
         if (ss->namedGroupPreferences[i] &&
-            ss->namedGroupPreferences[i]->keaType == ssl_kea_dh) {
+            ss->namedGroupPreferences[i]->keaType == ssl_kea_dh &&
+            ss->namedGroupPreferences[i]->bits >= minDH) {
             *groupDef = ss->namedGroupPreferences[i];
             return SECSuccess;
         }
@@ -2551,6 +2572,8 @@ SSL_ReconfigFD(PRFileDesc *model, PRFileDesc *fd)
         ss->handshakeCallbackData = sm->handshakeCallbackData;
     if (sm->pkcs11PinArg)
         ss->pkcs11PinArg = sm->pkcs11PinArg;
+    ss->peerSignatureSchemes = NULL;
+    ss->peerSignatureSchemeCount = 0;
     return fd;
 }
 
@@ -4222,6 +4245,8 @@ ssl_NewSocket(PRBool makeLocks, SSLProtocolVariant protocolVariant)
     ss->echPubKey = NULL;
     ss->antiReplay = NULL;
     ss->psk = NULL;
+    ss->peerSignatureSchemes = NULL;
+    ss->peerSignatureSchemeCount = 0;
 
     if (makeLocks) {
         rv = ssl_MakeLocks(ss);
@@ -4292,6 +4317,7 @@ struct {
     EXP(AddExternalPsk0Rtt),
     EXP(AeadDecrypt),
     EXP(AeadEncrypt),
+    EXP(CallExtensionWriterOnEchInner),
     EXP(CipherSuiteOrderGet),
     EXP(CipherSuiteOrderSet),
     EXP(CreateAntiReplayContext),
@@ -4304,6 +4330,7 @@ struct {
     EXP(DestroyResumptionTokenInfo),
     EXP(EnableTls13BackendEch),
     EXP(EnableTls13GreaseEch),
+    EXP(SetTls13GreaseEchSize),
     EXP(EncodeEchConfigId),
     EXP(GetCurrentEpoch),
     EXP(GetEchRetryConfigs),
@@ -4382,6 +4409,24 @@ SSLExp_EnableTls13GreaseEch(PRFileDesc *fd, PRBool enabled)
 }
 
 SECStatus
+SSLExp_SetTls13GreaseEchSize(PRFileDesc *fd, PRUint8 size)
+{
+    sslSocket *ss = ssl_FindSocket(fd);
+    if (!ss || size == 0) {
+        return SECFailure;
+    }
+    ssl_Get1stHandshakeLock(ss);
+    ssl_GetSSL3HandshakeLock(ss);
+
+    ss->ssl3.hs.greaseEchSize = size;
+
+    ssl_ReleaseSSL3HandshakeLock(ss);
+    ssl_Release1stHandshakeLock(ss);
+
+    return SECSuccess;
+}
+
+SECStatus
 SSLExp_EnableTls13BackendEch(PRFileDesc *fd, PRBool enabled)
 {
     sslSocket *ss = ssl_FindSocket(fd);
@@ -4389,6 +4434,17 @@ SSLExp_EnableTls13BackendEch(PRFileDesc *fd, PRBool enabled)
         return SECFailure;
     }
     ss->opt.enableTls13BackendEch = enabled;
+    return SECSuccess;
+}
+
+SECStatus
+SSLExp_CallExtensionWriterOnEchInner(PRFileDesc *fd, PRBool enabled)
+{
+    sslSocket *ss = ssl_FindSocket(fd);
+    if (!ss) {
+        return SECFailure;
+    }
+    ss->opt.callExtensionWriterOnEchInner = enabled;
     return SECSuccess;
 }
 

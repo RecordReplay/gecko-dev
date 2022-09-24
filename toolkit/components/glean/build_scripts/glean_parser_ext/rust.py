@@ -13,8 +13,21 @@ import json
 
 import jinja2
 
-from util import generate_metric_ids, generate_ping_ids
+from util import generate_metric_ids, generate_ping_ids, get_metrics
 from glean_parser import util
+from glean_parser.metrics import Rate
+
+# The list of all args to CommonMetricData.
+# No particular order is required, but I have these in common_metric_data.rs
+# order just to be organized.
+common_metric_data_args = [
+    "name",
+    "category",
+    "send_in_pings",
+    "lifetime",
+    "disabled",
+    "dynamic_label",
+]
 
 
 def rust_datatypes_filter(value):
@@ -28,6 +41,8 @@ def rust_datatypes_filter(value):
       - lists to vec![] (used in send_in_pings)
       - null to None
       - strings to "value".into()
+      - Rate objects to a CommonMetricData initializer
+        (for external Denominators' Numerators lists)
     """
 
     class RustEncoder(json.JSONEncoder):
@@ -58,6 +73,14 @@ def rust_datatypes_filter(value):
                 yield "None"
             elif isinstance(value, str):
                 yield '"' + value + '".into()'
+            elif isinstance(value, Rate):
+                yield "CommonMetricData {"
+                for arg_name in common_metric_data_args:
+                    if hasattr(value, arg_name):
+                        yield f"{arg_name}: "
+                        yield from self.iterencode(getattr(value, arg_name))
+                        yield ", "
+                yield " ..Default::default()}"
             else:
                 yield from super().iterencode(value)
 
@@ -182,14 +205,14 @@ def output_rust(objs, output_fd, options={}):
     #   17 -> "test_only::an_event"
     events_by_id = {}
 
-    if len(objs) == 1 and "pings" in objs:
+    if "pings" in objs:
         template_filename = "rust_pings.jinja2"
+        objs = {"pings": objs["pings"]}
     else:
         template_filename = "rust.jinja2"
-
-        for category_name, metrics in objs.items():
-            for metric in metrics.values():
-
+        objs = get_metrics(objs)
+        for category_name, category_value in objs.items():
+            for metric in category_value.values():
                 # The constant is all uppercase and suffixed by `_MAP`
                 const_name = util.snake_case(metric.type).upper() + "_MAP"
                 typ = type_name(metric)
@@ -221,18 +244,6 @@ def output_rust(objs, output_fd, options={}):
             ("ping_id", get_ping_id),
         ),
     )
-
-    # The list of all args to CommonMetricData (besides category and name).
-    # No particular order is required, but I have these in common_metric_data.rs
-    # order just to be organized.
-    common_metric_data_args = [
-        "name",
-        "category",
-        "send_in_pings",
-        "lifetime",
-        "disabled",
-        "dynamic_label",
-    ]
 
     output_fd.write(
         template.render(

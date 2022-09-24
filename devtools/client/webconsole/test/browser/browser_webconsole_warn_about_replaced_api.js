@@ -4,9 +4,9 @@
 "use strict";
 
 const TEST_URI_REPLACED =
-  "data:text/html;charset=utf8,<script>console = {log: () => ''}</script>";
+  "data:text/html;charset=utf8,<!DOCTYPE html><script>console = {log: () => ''}</script>";
 const TEST_URI_NOT_REPLACED =
-  "data:text/html;charset=utf8,<script>console.log('foo')</script>";
+  "data:text/html;charset=utf8,<!DOCTYPE html><script>console.log('foo')</script>";
 
 add_task(async function() {
   await pushPref("devtools.webconsole.timestampMessages", true);
@@ -30,29 +30,30 @@ add_task(async function() {
 });
 
 async function testWarningNotPresent(hud) {
-  ok(!findMessage(hud, "logging API"), "no warning displayed");
+  ok(!findWarningMessage(hud, "logging API"), "no warning displayed");
 
   // Bug 862024: make sure the warning doesn't show after page reload.
   info(
     "wait for the page to refresh and make sure the warning still isn't there"
   );
-  await refreshTab();
+  await reloadBrowser();
   await waitFor(() => {
-    // We need to wait for 3 messages because there are two logs, plus the
-    // navigation message since messages are persisted
-    return findMessages(hud, "foo").length === 3;
+    return (
+      findConsoleAPIMessages(hud, "foo").length === 2 &&
+      findMessagesByType(hud, "foo", ".navigationMarker").length === 1
+    );
   });
 
-  ok(!findMessage(hud, "logging API"), "no warning displayed");
+  ok(!findWarningMessage(hud, "logging API"), "no warning displayed");
 }
 
 async function testWarningPresent(hud) {
   info("wait for the warning to show");
-  await waitFor(() => findMessage(hud, "logging API"));
+  await waitFor(() => findWarningMessage(hud, "logging API"));
 
   info("reload the test page and wait for the warning to show");
-  await refreshTab();
+  await reloadBrowser();
   await waitFor(() => {
-    return findMessages(hud, "logging API").length === 2;
+    return findWarningMessages(hud, "logging API").length === 2;
   });
 }

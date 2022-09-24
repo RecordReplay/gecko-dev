@@ -15,6 +15,7 @@
 #include "lib/jxl/base/profiler.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/image_ops.h"
+#include "lib/jxl/sanitizers.h"
 
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -114,9 +115,10 @@ void PlaneBase::InitializePadding(const size_t sizeof_t, Padding padding) {
     // There's a bug in msan in clang-6 when handling AVX2 operations. This
     // workaround allows tests to pass on msan, although it is slower and
     // prevents msan warnings from uninitialized images.
-    memset(row, 0, initialize_size);
+    std::fill(row, msan::kSanitizerSentinelByte, initialize_size);
 #else
-    memset(row + valid_size, 0, initialize_size - valid_size);
+    memset(row + valid_size, msan::kSanitizerSentinelByte,
+           initialize_size - valid_size);
 #endif  // clang6
   }
 #endif  // MEMORY_SANITIZER
@@ -129,47 +131,6 @@ void PlaneBase::Swap(PlaneBase& other) {
   std::swap(orig_ysize_, other.orig_ysize_);
   std::swap(bytes_per_row_, other.bytes_per_row_);
   std::swap(bytes_, other.bytes_);
-}
-
-ImageB ImageFromPacked(const uint8_t* packed, const size_t xsize,
-                       const size_t ysize, const size_t bytes_per_row) {
-  JXL_ASSERT(bytes_per_row >= xsize);
-  ImageB image(xsize, ysize);
-  PROFILER_FUNC;
-  for (size_t y = 0; y < ysize; ++y) {
-    uint8_t* const JXL_RESTRICT row = image.Row(y);
-    const uint8_t* const JXL_RESTRICT packed_row = packed + y * bytes_per_row;
-    memcpy(row, packed_row, xsize);
-  }
-  return image;
-}
-
-// Note that using mirroring here gives slightly worse results.
-ImageF PadImage(const ImageF& in, const size_t xsize, const size_t ysize) {
-  JXL_ASSERT(xsize >= in.xsize());
-  JXL_ASSERT(ysize >= in.ysize());
-  ImageF out(xsize, ysize);
-  size_t y = 0;
-  for (; y < in.ysize(); ++y) {
-    const float* JXL_RESTRICT row_in = in.ConstRow(y);
-    float* JXL_RESTRICT row_out = out.Row(y);
-    memcpy(row_out, row_in, in.xsize() * sizeof(row_in[0]));
-    const int lastcol = in.xsize() - 1;
-    const float lastval = row_out[lastcol];
-    for (size_t x = in.xsize(); x < xsize; ++x) {
-      row_out[x] = lastval;
-    }
-  }
-
-  // TODO(janwas): no need to copy if we can 'extend' image: if rows are
-  // pointers to any memory? Or allocate larger image before IO?
-  const int lastrow = in.ysize() - 1;
-  for (; y < ysize; ++y) {
-    const float* JXL_RESTRICT row_in = out.ConstRow(lastrow);
-    float* JXL_RESTRICT row_out = out.Row(y);
-    memcpy(row_out, row_in, xsize * sizeof(row_out[0]));
-  }
-  return out;
 }
 
 Image3F PadImageMirror(const Image3F& in, const size_t xborder,
@@ -214,19 +175,6 @@ Image3F PadImageMirror(const Image3F& in, const size_t xborder,
   return out;
 }
 
-Image3F PadImageToMultiple(const Image3F& in, const size_t N) {
-  PROFILER_FUNC;
-  const size_t xsize_blocks = DivCeil(in.xsize(), N);
-  const size_t ysize_blocks = DivCeil(in.ysize(), N);
-  const size_t xsize = N * xsize_blocks;
-  const size_t ysize = N * ysize_blocks;
-  ImageF out[3];
-  for (size_t c = 0; c < 3; ++c) {
-    out[c] = PadImage(in.Plane(c), xsize, ysize);
-  }
-  return Image3F(std::move(out[0]), std::move(out[1]), std::move(out[2]));
-}
-
 void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {
   PROFILER_FUNC;
   const size_t xsize_orig = in->xsize();
@@ -247,18 +195,6 @@ void PadImageToBlockMultipleInPlace(Image3F* JXL_RESTRICT in) {
       memcpy(in->PlaneRow(c, y), row_src, xsize * sizeof(float));
     }
   }
-}
-
-float DotProduct(const ImageF& a, const ImageF& b) {
-  double sum = 0.0;
-  for (size_t y = 0; y < a.ysize(); ++y) {
-    const float* const JXL_RESTRICT row_a = a.ConstRow(y);
-    const float* const JXL_RESTRICT row_b = b.ConstRow(y);
-    for (size_t x = 0; x < a.xsize(); ++x) {
-      sum += row_a[x] * row_b[x];
-    }
-  }
-  return sum;
 }
 
 static void DownsampleImage(const ImageF& input, size_t factor,

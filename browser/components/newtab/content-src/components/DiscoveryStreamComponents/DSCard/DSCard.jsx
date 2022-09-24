@@ -2,15 +2,72 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { actionCreators as ac } from "common/Actions.jsm";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.jsm";
 import { DSImage } from "../DSImage/DSImage.jsx";
 import { DSLinkMenu } from "../DSLinkMenu/DSLinkMenu";
 import { ImpressionStats } from "../../DiscoveryStreamImpressionStats/ImpressionStats";
 import React from "react";
 import { SafeAnchor } from "../SafeAnchor/SafeAnchor";
-import { DSContextFooter } from "../DSContextFooter/DSContextFooter.jsx";
+import {
+  DSContextFooter,
+  SponsorLabel,
+  DSMessageFooter,
+} from "../DSContextFooter/DSContextFooter.jsx";
 import { FluentOrText } from "../../FluentOrText/FluentOrText.jsx";
 import { connect } from "react-redux";
+
+const READING_WPM = 220;
+
+/**
+ * READ TIME FROM WORD COUNT
+ * @param {int} wordCount number of words in an article
+ * @returns {int} number of words per minute in minutes
+ */
+export function readTimeFromWordCount(wordCount) {
+  if (!wordCount) return false;
+  return Math.ceil(parseInt(wordCount, 10) / READING_WPM);
+}
+
+export const DSSource = ({
+  source,
+  timeToRead,
+  newSponsoredLabel,
+  context,
+  sponsor,
+  sponsored_by_override,
+}) => {
+  // First try to display sponsored label or time to read here.
+  if (newSponsoredLabel) {
+    // If we can display something for spocs, do so.
+    if (sponsored_by_override || sponsor || context) {
+      return (
+        <SponsorLabel
+          context={context}
+          sponsor={sponsor}
+          sponsored_by_override={sponsored_by_override}
+          newSponsoredLabel="new-sponsored-label"
+        />
+      );
+    }
+  }
+
+  // If we are not a spoc, and can display a time to read value.
+  if (timeToRead) {
+    return (
+      <p className="source clamp time-to-read">
+        <FluentOrText
+          message={{
+            id: `newtab-label-source-read-time`,
+            values: { source, timeToRead },
+          }}
+        />
+      </p>
+    );
+  }
+
+  // Otherwise display a default source.
+  return <p className="source clamp">{source}</p>;
+};
 
 // Default Meta that displays CTA as link if cta_variant in layout is set as "link"
 export const DefaultMeta = ({
@@ -18,6 +75,8 @@ export const DefaultMeta = ({
   source,
   title,
   excerpt,
+  timeToRead,
+  newSponsoredLabel,
   context,
   context_type,
   cta,
@@ -25,11 +84,21 @@ export const DefaultMeta = ({
   cta_variant,
   sponsor,
   sponsored_by_override,
+  saveToPocketCard,
 }) => (
   <div className="meta">
     <div className="info-wrap">
-      <p className="source clamp">{source}</p>
-      <header className="title clamp">{title}</header>
+      <DSSource
+        source={source}
+        timeToRead={timeToRead}
+        newSponsoredLabel={newSponsoredLabel}
+        context={context}
+        sponsor={sponsor}
+        sponsored_by_override={sponsored_by_override}
+      />
+      <header title={title} className="title clamp">
+        {title}
+      </header>
       {excerpt && <p className="excerpt clamp">{excerpt}</p>}
       {cta_variant === "link" && cta && (
         <div role="link" className="cta-link icon icon-arrow" tabIndex="0">
@@ -37,14 +106,28 @@ export const DefaultMeta = ({
         </div>
       )}
     </div>
-    <DSContextFooter
-      context_type={context_type}
-      context={context}
-      sponsor={sponsor}
-      sponsored_by_override={sponsored_by_override}
-      display_engagement_labels={display_engagement_labels}
-      engagement={engagement}
-    />
+    {!newSponsoredLabel && (
+      <DSContextFooter
+        context_type={context_type}
+        context={context}
+        sponsor={sponsor}
+        sponsored_by_override={sponsored_by_override}
+        display_engagement_labels={display_engagement_labels}
+        engagement={engagement}
+      />
+    )}
+    {/* Sponsored label is normally in the way of any message.
+        newSponsoredLabel cards sponsored label is moved to just under the thumbnail,
+        so we can display both, so we specifically don't pass in context. */}
+    {newSponsoredLabel && (
+      <DSMessageFooter
+        context_type={context_type}
+        context={null}
+        display_engagement_labels={display_engagement_labels}
+        engagement={engagement}
+        saveToPocketCard={saveToPocketCard}
+      />
+    )}
   </div>
 );
 
@@ -74,7 +157,9 @@ export const CTAButtonMeta = ({
 
         {!context && (sponsor ? sponsor : source)}
       </p>
-      <header className="title clamp">{title}</header>
+      <header title={title} className="title clamp">
+        {title}
+      </header>
       {excerpt && <p className="excerpt clamp">{excerpt}</p>}
     </div>
     {context && cta && <button className="button cta-button">{cta}</button>}
@@ -96,6 +181,13 @@ export class _DSCard extends React.PureComponent {
     super(props);
 
     this.onLinkClick = this.onLinkClick.bind(this);
+    this.onSaveClick = this.onSaveClick.bind(this);
+    this.onMenuUpdate = this.onMenuUpdate.bind(this);
+    this.onMenuShow = this.onMenuShow.bind(this);
+
+    this.setContextMenuButtonHostRef = element => {
+      this.contextMenuButtonHostElement = element;
+    };
     this.setPlaceholderRef = element => {
       this.placeholderElement = element;
     };
@@ -158,6 +250,8 @@ export class _DSCard extends React.PureComponent {
             ? "CARDGRID_VIDEO"
             : this.props.type.toUpperCase(),
           click: 0,
+          window_inner_width: this.props.windowObj.innerWidth,
+          window_inner_height: this.props.windowObj.innerHeight,
           tiles: [
             {
               id: this.props.id,
@@ -169,6 +263,64 @@ export class _DSCard extends React.PureComponent {
           ],
         })
       );
+    }
+  }
+
+  onSaveClick(event) {
+    if (this.props.dispatch) {
+      this.props.dispatch(
+        ac.AlsoToMain({
+          type: at.SAVE_TO_POCKET,
+          data: { site: { url: this.props.url, title: this.props.title } },
+        })
+      );
+
+      this.props.dispatch(
+        ac.UserEvent({
+          event: "SAVE_TO_POCKET",
+          source: "CARDGRID_HOVER",
+          action_position: this.props.pos,
+        })
+      );
+
+      this.props.dispatch(
+        ac.ImpressionStats({
+          source: "CARDGRID_HOVER",
+          pocket: 0,
+          tiles: [
+            {
+              id: this.props.id,
+              pos: this.props.pos,
+              ...(this.props.shim && this.props.shim.save
+                ? { shim: this.props.shim.save }
+                : {}),
+            },
+          ],
+        })
+      );
+    }
+  }
+
+  onMenuUpdate(showContextMenu) {
+    if (!showContextMenu) {
+      const dsLinkMenuHostDiv = this.contextMenuButtonHostElement;
+      if (dsLinkMenuHostDiv) {
+        dsLinkMenuHostDiv.classList.remove("active", "last-item");
+      }
+    }
+  }
+
+  async onMenuShow() {
+    const dsLinkMenuHostDiv = this.contextMenuButtonHostElement;
+    if (dsLinkMenuHostDiv) {
+      // Force translation so we can be sure it's ready before measuring.
+      await this.props.windowObj.document.l10n.translateFragment(
+        dsLinkMenuHostDiv
+      );
+      if (this.props.windowObj.scrollMaxX > 0) {
+        dsLinkMenuHostDiv.classList.add("last-item");
+      }
+      dsLinkMenuHostDiv.classList.add("active");
     }
   }
 
@@ -226,11 +378,68 @@ export class _DSCard extends React.PureComponent {
         <div className="ds-card placeholder" ref={this.setPlaceholderRef} />
       );
     }
+
+    if (this.props.lastCard) {
+      return (
+        <div className="ds-card last-card-message">
+          <div className="img-wrapper">
+            <picture className="ds-image img loaded">
+              <img
+                data-l10n-id="newtab-pocket-last-card-image"
+                className="last-card-message-image"
+                src="chrome://activity-stream/content/data/content/assets/caught-up-illustration.svg"
+                alt="You’re all caught up"
+              />
+            </picture>
+          </div>
+          <div className="meta">
+            <div className="info-wrap">
+              <header
+                className="title clamp"
+                data-l10n-id="newtab-pocket-last-card-title"
+              />
+              <p
+                className="ds-last-card-desc"
+                data-l10n-id="newtab-pocket-last-card-desc"
+              />
+            </div>
+          </div>
+        </div>
+      );
+    }
     const isButtonCTA = this.props.cta_variant === "button";
-    const baseClass = `ds-card ${this.props.is_video ? `video-card` : ``}`;
+
+    const {
+      is_video,
+      saveToPocketCard,
+      hideDescriptions,
+      compactImages,
+      imageGradient,
+      titleLines = 3,
+      descLines = 3,
+      displayReadTime,
+    } = this.props;
+    const excerpt = !hideDescriptions ? this.props.excerpt : "";
+
+    let timeToRead;
+    if (displayReadTime) {
+      timeToRead =
+        this.props.time_to_read || readTimeFromWordCount(this.props.word_count);
+    }
+
+    const videoCardClassName = is_video ? `video-card` : ``;
+    const compactImagesClassName = compactImages ? `ds-card-compact-image` : ``;
+    const imageGradientClassName = imageGradient
+      ? `ds-card-image-gradient`
+      : ``;
+    const titleLinesName = `ds-card-title-lines-${titleLines}`;
+    const descLinesClassName = `ds-card-desc-lines-${descLines}`;
 
     return (
-      <div className={baseClass}>
+      <div
+        className={`ds-card ${videoCardClassName} ${videoCardClassName} ${compactImagesClassName} ${imageGradientClassName} ${titleLinesName} ${descLinesClassName}`}
+        ref={this.setContextMenuButtonHostRef}
+      >
         <SafeAnchor
           className="ds-card-link"
           dispatch={this.props.dispatch}
@@ -255,7 +464,8 @@ export class _DSCard extends React.PureComponent {
               display_engagement_labels={this.props.display_engagement_labels}
               source={this.props.source}
               title={this.props.title}
-              excerpt={this.props.excerpt}
+              excerpt={excerpt}
+              timeToRead={timeToRead}
               context={this.props.context}
               context_type={this.props.context_type}
               engagement={this.props.engagement}
@@ -268,7 +478,9 @@ export class _DSCard extends React.PureComponent {
               display_engagement_labels={this.props.display_engagement_labels}
               source={this.props.source}
               title={this.props.title}
-              excerpt={this.props.excerpt}
+              excerpt={excerpt}
+              newSponsoredLabel={this.props.newSponsoredLabel}
+              timeToRead={timeToRead}
               context={this.props.context}
               engagement={this.props.engagement}
               context_type={this.props.context_type}
@@ -276,6 +488,7 @@ export class _DSCard extends React.PureComponent {
               cta_variant={this.props.cta_variant}
               sponsor={this.props.sponsor}
               sponsored_by_override={this.props.sponsored_by_override}
+              saveToPocketCard={saveToPocketCard}
             />
           )}
           <ImpressionStats
@@ -293,20 +506,67 @@ export class _DSCard extends React.PureComponent {
             source={this.props.is_video ? "CARDGRID_VIDEO" : this.props.type}
           />
         </SafeAnchor>
-        <DSLinkMenu
-          id={this.props.id}
-          index={this.props.pos}
-          dispatch={this.props.dispatch}
-          url={this.props.url}
-          title={this.props.title}
-          source={this.props.source}
-          type={this.props.type}
-          pocket_id={this.props.pocket_id}
-          shim={this.props.shim}
-          bookmarkGuid={this.props.bookmarkGuid}
-          flightId={!this.props.is_collection ? this.props.flightId : undefined}
-          showPrivacyInfo={!!this.props.flightId}
-        />
+        {saveToPocketCard && (
+          <div className="card-stp-button-hover-background">
+            <div className="card-stp-button-position-wrapper">
+              <button className="card-stp-button" onClick={this.onSaveClick}>
+                {this.props.context_type === "pocket" ? (
+                  <>
+                    <span className="story-badge-icon icon icon-pocket" />
+                    <span data-l10n-id="newtab-pocket-saved-to-pocket" />
+                  </>
+                ) : (
+                  <>
+                    <span className="story-badge-icon icon icon-pocket-save" />
+                    <span data-l10n-id="newtab-pocket-save-to-pocket" />
+                  </>
+                )}
+              </button>
+              <DSLinkMenu
+                id={this.props.id}
+                index={this.props.pos}
+                dispatch={this.props.dispatch}
+                url={this.props.url}
+                title={this.props.title}
+                source={this.props.source}
+                type={this.props.type}
+                pocket_id={this.props.pocket_id}
+                shim={this.props.shim}
+                bookmarkGuid={this.props.bookmarkGuid}
+                flightId={
+                  !this.props.is_collection ? this.props.flightId : undefined
+                }
+                showPrivacyInfo={!!this.props.flightId}
+                onMenuUpdate={this.onMenuUpdate}
+                onMenuShow={this.onMenuShow}
+                saveToPocketCard={saveToPocketCard}
+                pocket_button_enabled={this.props.pocket_button_enabled}
+              />
+            </div>
+          </div>
+        )}
+        {!saveToPocketCard && (
+          <DSLinkMenu
+            id={this.props.id}
+            index={this.props.pos}
+            dispatch={this.props.dispatch}
+            url={this.props.url}
+            title={this.props.title}
+            source={this.props.source}
+            type={this.props.type}
+            pocket_id={this.props.pocket_id}
+            shim={this.props.shim}
+            bookmarkGuid={this.props.bookmarkGuid}
+            flightId={
+              !this.props.is_collection ? this.props.flightId : undefined
+            }
+            showPrivacyInfo={!!this.props.flightId}
+            hostRef={this.contextMenuButtonHostRef}
+            onMenuUpdate={this.onMenuUpdate}
+            onMenuShow={this.onMenuShow}
+            pocket_button_enabled={this.props.pocket_button_enabled}
+          />
+        )}
       </div>
     );
   }
@@ -321,3 +581,4 @@ export const DSCard = connect(state => ({
 }))(_DSCard);
 
 export const PlaceholderDSCard = props => <DSCard placeholder={true} />;
+export const LastCardMessage = props => <DSCard lastCard={true} />;

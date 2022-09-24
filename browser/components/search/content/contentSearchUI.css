@@ -4,6 +4,7 @@
 
 .contentSearchSuggestionTable {
   background-color: hsla(0,0%,100%,.99);
+  color: black;
   border: 1px solid hsla(0, 0%, 0%, .2);
   border-top: none;
   box-shadow: 0 5px 10px hsla(0, 0%, 0%, .1);
@@ -67,8 +68,8 @@
 }
 
 .contentSearchSuggestionRow.selected {
-  background-color: Highlight;
-  color: HighlightText;
+  background-color: SelectedItem;
+  color: SelectedItemText;
 }
 
 .contentSearchHeader,
@@ -132,7 +133,7 @@
 }
 
 .contentSearchOneOffItem.selected {
-  background-color: Highlight;
+  background-color: SelectedItem;
   background-image: none;
 }
 

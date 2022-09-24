@@ -33,7 +33,6 @@
  */
 
 /**
- * @typedef {import("../@types/perf").PopupWindow} PopupWindow
  * @typedef {import("../@types/perf").State} StoreState
  * @typedef {import("../@types/perf").FeatureDescription} FeatureDescription
  *
@@ -67,6 +66,7 @@ const {
   h3,
   section,
   p,
+  span,
 } = require("devtools/client/shared/vendor/react-dom-factories");
 const Range = createFactory(
   require("devtools/client/performance-new/components/Range")
@@ -75,7 +75,7 @@ const DirectoryPicker = createFactory(
   require("devtools/client/performance-new/components/DirectoryPicker")
 );
 const {
-  makeExponentialScale,
+  makeLinear10Scale,
   makePowerOf2Scale,
   formatFileSize,
   featureDescriptions,
@@ -170,6 +170,46 @@ const threadColumns = [
   ],
 ];
 
+/** @type {Array<ThreadColumn[]>} */
+const jvmThreadColumns = [
+  [
+    {
+      name: "Gecko",
+      id: "gecko",
+      l10nId: "perftools-thread-jvm-gecko",
+    },
+    {
+      name: "Nimbus",
+      id: "nimbus",
+      l10nId: "perftools-thread-jvm-nimbus",
+    },
+  ],
+  [
+    {
+      name: "DefaultDispatcher",
+      id: "default-dispatcher",
+      l10nId: "perftools-thread-jvm-default-dispatcher",
+    },
+    {
+      name: "Glean",
+      id: "glean",
+      l10nId: "perftools-thread-jvm-glean",
+    },
+  ],
+  [
+    {
+      name: "arch_disk_io",
+      id: "arch-disk-io",
+      l10nId: "perftools-thread-jvm-arch-disk-io",
+    },
+    {
+      name: "pool-",
+      id: "pool",
+      l10nId: "perftools-thread-jvm-pool",
+    },
+  ],
+];
+
 /**
  * This component manages the settings for recording a performance profile.
  * @extends {React.PureComponent<Props, State>}
@@ -186,19 +226,7 @@ class Settings extends PureComponent {
       temporaryThreadText: null,
     };
 
-    this._handleThreadCheckboxChange = this._handleThreadCheckboxChange.bind(
-      this
-    );
-    this._handleFeaturesCheckboxChange = this._handleFeaturesCheckboxChange.bind(
-      this
-    );
-    this._handleAddObjdir = this._handleAddObjdir.bind(this);
-    this._handleRemoveObjdir = this._handleRemoveObjdir.bind(this);
-    this._setThreadTextFromInput = this._setThreadTextFromInput.bind(this);
-    this._handleThreadTextCleanup = this._handleThreadTextCleanup.bind(this);
-    this._renderThreadsColumns = this._renderThreadsColumns.bind(this);
-
-    this._intervalExponentialScale = makeExponentialScale(0.01, 100);
+    this._intervalExponentialScale = makeLinear10Scale(0.01, 100);
     this._entriesExponentialScale = makePowerOf2Scale(
       128 * 1024,
       256 * 1024 * 1024
@@ -209,7 +237,7 @@ class Settings extends PureComponent {
    * Handle the checkbox change.
    * @param {React.ChangeEvent<HTMLInputElement>} event
    */
-  _handleThreadCheckboxChange(event) {
+  _handleThreadCheckboxChange = event => {
     const { threads, changeThreads } = this.props;
     const { checked, value } = event.target;
 
@@ -220,13 +248,13 @@ class Settings extends PureComponent {
     } else {
       changeThreads(threads.filter(thread => thread !== value));
     }
-  }
+  };
 
   /**
    * Handle the checkbox change.
    * @param {React.ChangeEvent<HTMLInputElement>} event
    */
-  _handleFeaturesCheckboxChange(event) {
+  _handleFeaturesCheckboxChange = event => {
     const { features, changeFeatures } = this.props;
     const { checked, value } = event.target;
 
@@ -237,38 +265,38 @@ class Settings extends PureComponent {
     } else {
       changeFeatures(features.filter(feature => feature !== value));
     }
-  }
+  };
 
-  _handleAddObjdir() {
+  _handleAddObjdir = () => {
     const { objdirs, changeObjdirs } = this.props;
     openFilePickerForObjdir(window, objdirs, changeObjdirs);
-  }
+  };
 
   /**
    * @param {number} index
    * @return {void}
    */
-  _handleRemoveObjdir(index) {
+  _handleRemoveObjdir = index => {
     const { objdirs, changeObjdirs } = this.props;
     const newObjdirs = [...objdirs];
     newObjdirs.splice(index, 1);
     changeObjdirs(newObjdirs);
-  }
+  };
 
   /**
    * @param {React.ChangeEvent<HTMLInputElement>} event
    */
-  _setThreadTextFromInput(event) {
+  _setThreadTextFromInput = event => {
     this.setState({ temporaryThreadText: event.target.value });
-  }
+  };
 
   /**
    * @param {React.ChangeEvent<HTMLInputElement>} event
    */
-  _handleThreadTextCleanup(event) {
+  _handleThreadTextCleanup = event => {
     this.setState({ temporaryThreadText: null });
     this.props.changeThreads(_threadTextToList(event.target.value));
-  }
+  };
 
   /**
    * @param {ThreadColumn[]} threadDisplay
@@ -277,6 +305,7 @@ class Settings extends PureComponent {
    */
   _renderThreadsColumns(threadDisplay, index) {
     const { threads } = this.props;
+    const areAllThreadsIncluded = threads.includes("*");
     return div(
       { className: "perf-settings-thread-column", key: index },
       threadDisplay.map(({ name, id, l10nId }) =>
@@ -285,8 +314,11 @@ class Settings extends PureComponent {
           { id: l10nId, attrs: { title: true }, key: name },
           label(
             {
-              className:
-                "perf-settings-checkbox-label perf-settings-thread-label toggle-container-with-text",
+              className: `perf-settings-checkbox-label perf-settings-thread-label toggle-container-with-text ${
+                areAllThreadsIncluded
+                  ? "perf-settings-checkbox-label-disabled"
+                  : ""
+              }`,
             },
             input({
               className: "perf-settings-checkbox",
@@ -295,9 +327,10 @@ class Settings extends PureComponent {
               // Do not localize the value, this is used internally by the profiler.
               value: name,
               checked: threads.includes(name),
+              disabled: areAllThreadsIncluded,
               onChange: this._handleThreadCheckboxChange,
             }),
-            name
+            span(null, name)
           )
         )
       )
@@ -314,8 +347,11 @@ class Settings extends PureComponent {
         null,
         div(
           { className: "perf-settings-thread-columns" },
-          threadColumns.map(this._renderThreadsColumns)
+          threadColumns.map((threadDisplay, index) =>
+            this._renderThreadsColumns(threadDisplay, index)
+          )
         ),
+        this._renderJvmThreads(),
         div(
           {
             className: "perf-settings-checkbox-label perf-settings-all-threads",
@@ -364,6 +400,25 @@ class Settings extends PureComponent {
         )
       )
     );
+  }
+
+  _renderJvmThreads() {
+    if (!this.props.supportedFeatures.includes("java")) {
+      return null;
+    }
+
+    return [
+      h2(
+        null,
+        Localized({ id: "perftools-heading-threads-jvm" }, "JVM Threads")
+      ),
+      div(
+        { className: "perf-settings-thread-columns" },
+        jvmThreadColumns.map((threadDisplay, index) =>
+          this._renderThreadsColumns(threadDisplay, index)
+        )
+      ),
+    ];
   }
 
   /**
@@ -570,10 +625,9 @@ function _entriesTextDisplay(value) {
 }
 
 /**
- * about:profiling doesn't need to collapse the children into details/summary,
- * but the popup and devtools do (for now).
+ * Renders a section for about:profiling.
  *
- * @param {string} id
+ * @param {string} id Unused.
  * @param {React.ReactNode} title
  * @param {React.ReactNode} children
  * @returns React.ReactNode

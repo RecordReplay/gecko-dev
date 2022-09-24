@@ -94,9 +94,10 @@ var PointerlockFsWarning = {
     } else {
       textElem.removeAttribute("hidden");
       // Document's principal's URI has a host. Display a warning including it.
-      let utils = {};
-      ChromeUtils.import("resource://gre/modules/DownloadUtils.jsm", utils);
-      let displayHost = utils.DownloadUtils.getURIHost(uri.spec)[0];
+      let { DownloadUtils } = ChromeUtils.import(
+        "resource://gre/modules/DownloadUtils.jsm"
+      );
+      let displayHost = DownloadUtils.getURIHost(uri.spec)[0];
       let l10nString = {
         "fullscreen-warning": "fullscreen-warning-domain",
         "pointerlock-warning": "pointerlock-warning-domain",
@@ -384,17 +385,12 @@ var FullScreen = {
     // don't need that kind of precision in our CSS.
     shiftSize = shiftSize.toFixed(2);
     let toolbox = document.getElementById("navigator-toolbox");
-    let browserEl = document.getElementById("browser");
     if (shiftSize > 0) {
       toolbox.style.setProperty("transform", `translateY(${shiftSize}px)`);
       toolbox.style.setProperty("z-index", "2");
-      toolbox.style.setProperty("position", "relative");
-      browserEl.style.setProperty("position", "relative");
     } else {
       toolbox.style.removeProperty("transform");
       toolbox.style.removeProperty("z-index");
-      toolbox.style.removeProperty("position");
-      browserEl.style.removeProperty("position");
     }
   },
 
@@ -886,56 +882,22 @@ var FullScreen = {
     for (let el of document.querySelectorAll(
       "toolbar[fullscreentoolbar=true]"
     )) {
+      // Set the inFullscreen attribute to allow specific styling
+      // in fullscreen mode
       if (aEnterFS) {
-        // Give the main nav bar and the tab bar the fullscreen context menu,
-        // otherwise remove context menu to prevent breakage
-        el.setAttribute("saved-context", el.getAttribute("context"));
-        if (el.id == "nav-bar" || el.id == "TabsToolbar") {
-          el.setAttribute("context", "autohide-context");
-        } else {
-          el.removeAttribute("context");
-        }
-
-        // Set the inFullscreen attribute to allow specific styling
-        // in fullscreen mode
         el.setAttribute("inFullscreen", true);
       } else {
-        if (el.hasAttribute("saved-context")) {
-          el.setAttribute("context", el.getAttribute("saved-context"));
-          el.removeAttribute("saved-context");
-        }
         el.removeAttribute("inFullscreen");
       }
     }
 
     ToolbarIconColor.inferFromText("fullscreen", aEnterFS);
-
-    // For macOS, we use native full screen, all full screen controls
-    // are hidden, don't bother to touch them. If we don't stop here,
-    // the following code could cause the native full screen button be
-    // shown unexpectedly. See bug 1165570.
-    if (AppConstants.platform == "macosx") {
-      return;
-    }
-
-    var fullscreenctls = document.getElementById("window-controls");
-    var navbar = document.getElementById("nav-bar");
-    var ctlsOnTabbar = window.toolbar.visible;
-    if (fullscreenctls.parentNode == navbar && ctlsOnTabbar) {
-      fullscreenctls.removeAttribute("flex");
-      document.getElementById("TabsToolbar").appendChild(fullscreenctls);
-    } else if (fullscreenctls.parentNode.id == "TabsToolbar" && !ctlsOnTabbar) {
-      fullscreenctls.setAttribute("flex", "1");
-      navbar.appendChild(fullscreenctls);
-    }
-    fullscreenctls.hidden = !aEnterFS;
   },
 };
 
 XPCOMUtils.defineLazyGetter(FullScreen, "_permissionNotificationIDs", () => {
   let { PermissionUI } = ChromeUtils.import(
-    "resource:///modules/PermissionUI.jsm",
-    {}
+    "resource:///modules/PermissionUI.jsm"
   );
   return (
     Object.values(PermissionUI)

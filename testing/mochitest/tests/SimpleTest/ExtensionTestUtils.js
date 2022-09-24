@@ -1,9 +1,24 @@
-var ExtensionTestUtils = {};
-
-const { ExtensionTestCommon } = SpecialPowers.Cu.import(
-  "resource://testing-common/ExtensionTestCommon.jsm",
-  {}
+const { ExtensionTestCommon } = SpecialPowers.ChromeUtils.import(
+  "resource://testing-common/ExtensionTestCommon.jsm"
 );
+
+var ExtensionTestUtils = {
+  // Shortcut to more easily access WebExtensionPolicy.backgroundServiceWorkerEnabled
+  // from mochitest-plain tests.
+  getBackgroundServiceWorkerEnabled() {
+    return ExtensionTestCommon.getBackgroundServiceWorkerEnabled();
+  },
+
+  // A test helper used to check if the pref "extension.backgroundServiceWorker.forceInTestExtension"
+  // is set to true.
+  isInBackgroundServiceWorkerTests() {
+    return ExtensionTestCommon.isInBackgroundServiceWorkerTests();
+  },
+
+  get testAssertions() {
+    return ExtensionTestCommon.testAssertions;
+  },
+};
 
 ExtensionTestUtils.loadExtension = function(ext) {
   // Cleanup functions need to be registered differently depending on
@@ -150,7 +165,7 @@ ExtensionTestUtils.loadExtension = function(ext) {
 
 ExtensionTestUtils.failOnSchemaWarnings = (warningsAsErrors = true) => {
   let prefName = "extensions.webextensions.warnings-as-errors";
-  SpecialPowers.setBoolPref(prefName, warningsAsErrors);
+  let prefPromise = SpecialPowers.setBoolPref(prefName, warningsAsErrors);
   if (!warningsAsErrors) {
     let registerCleanup;
     if (typeof registerCleanupFunction != "undefined") {
@@ -160,4 +175,6 @@ ExtensionTestUtils.failOnSchemaWarnings = (warningsAsErrors = true) => {
     }
     registerCleanup(() => SpecialPowers.setBoolPref(prefName, true));
   }
+  // In mochitests, setBoolPref is async.
+  return prefPromise.then(() => {});
 };

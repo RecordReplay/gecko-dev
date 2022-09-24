@@ -6,13 +6,13 @@
 
 #include "nsPageSequenceFrame.h"
 
+#include "mozilla/intl/AppDateTimeFormat.h"
 #include "mozilla/Logging.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/PrintedSheetFrame.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
 #include "mozilla/StaticPresData.h"
 
-#include "DateTimeFormat.h"
 #include "nsCOMPtr.h"
 #include "nsDeviceContext.h"
 #include "nsPresContext.h"
@@ -190,10 +190,21 @@ void nsPageSequenceFrame::PopulateReflowOutput(
   nscoord iSize = wm.IsVertical() ? mSize.Height() : mSize.Width();
   nscoord bSize = wm.IsVertical() ? mSize.Width() : mSize.Height();
 
+  nscoord availableISize = aReflowInput.AvailableISize();
+  nscoord computedBSize = aReflowInput.ComputedBSize();
+  if (MOZ_UNLIKELY(computedBSize == NS_UNCONSTRAINEDSIZE)) {
+    // We have unconstrained BSize, which should only happen if someone calls
+    // SizeToContent() on our window (which we don't expect to happen for
+    // actual user flows, but is possible for fuzzers to trigger). We just nerf
+    // the ReflowInput's contributions to the std::max() expressions below,
+    // which does indeed make us "size to content", via letting std::max()
+    // choose the scaled iSize/bSize expressions.
+    availableISize = computedBSize = 0;
+  }
   aReflowOutput.ISize(wm) =
-      std::max(NSToCoordFloor(iSize * scale), aReflowInput.AvailableISize());
+      std::max(NSToCoordFloor(iSize * scale), availableISize);
   aReflowOutput.BSize(wm) =
-      std::max(NSToCoordFloor(bSize * scale), aReflowInput.ComputedBSize());
+      std::max(NSToCoordFloor(bSize * scale), computedBSize);
   aReflowOutput.SetOverflowAreasToDesiredBounds();
 }
 
@@ -275,6 +286,9 @@ void nsPageSequenceFrame::Reflow(nsPresContext* aPresContext,
     // When we're displayed on-screen, the computed size that we're given is
     // the size of our scrollport. We need to save this for use in
     // GetPrintPreviewScale.
+    // (NOTE: It's possible but unlikely that we have an unconstrained BSize
+    // here, if we're being sized to content. GetPrintPreviewScale() checks
+    // for and handles this, when making use of this member-var.)
     mScrollportSize = aReflowInput.ComputedSize();
   }
 
@@ -337,6 +351,8 @@ void nsPageSequenceFrame::Reflow(nsPresContext* aPresContext,
     ReflowInput kidReflowInput(
         aPresContext, aReflowInput, kidFrame,
         LogicalSize(kidFrame->GetWritingMode(), sheetSize));
+    kidReflowInput.mBreakType = ReflowInput::BreakType::Page;
+
     ReflowOutput kidReflowOutput(kidReflowInput);
     nsReflowStatus status;
 
@@ -385,8 +401,11 @@ void nsPageSequenceFrame::Reflow(nsPresContext* aPresContext,
 
   nsAutoString formattedDateString;
   PRTime now = PR_Now();
-  if (NS_SUCCEEDED(DateTimeFormat::FormatPRTime(
-          kDateFormatShort, kTimeFormatShort, now, formattedDateString))) {
+  mozilla::intl::DateTimeFormat::StyleBag style;
+  style.date = Some(mozilla::intl::DateTimeFormat::Style::Short);
+  style.time = Some(mozilla::intl::DateTimeFormat::Style::Short);
+  if (NS_SUCCEEDED(mozilla::intl::AppDateTimeFormat::Format(
+          style, now, formattedDateString))) {
     SetDateTimeStr(formattedDateString);
   }
 
@@ -712,7 +731,7 @@ void nsPageSequenceFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   aBuilder->SetDisablePartialUpdates(true);
   DisplayBorderBackgroundOutline(aBuilder, aLists);
 
-  nsDisplayList content;
+  nsDisplayList content(aBuilder);
 
   {
     // Clear clip state while we construct the children of the

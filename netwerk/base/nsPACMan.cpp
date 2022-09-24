@@ -17,10 +17,12 @@
 #include "nsIPromptFactory.h"
 #include "nsIProtocolProxyService.h"
 #include "nsISystemProxySettings.h"
+#include "nsIOService.h"
 #include "nsNetUtil.h"
 #include "nsThreadUtils.h"
 #include "mozilla/Result.h"
 #include "mozilla/ResultExtensions.h"
+#include "mozilla/StaticPrefs_network.h"
 #include "mozilla/Telemetry.h"
 
 //-----------------------------------------------------------------------------
@@ -270,8 +272,9 @@ class ExecutePACThreadAction final : public Runnable {
       mSetupPAC = false;
 
       nsCOMPtr<nsIEventTarget> target = mPACMan->GetNeckoTarget();
-      mPACMan->mPAC.Init(mSetupPACURI, mSetupPACData, mPACMan->mIncludePath,
-                         mExtraHeapSize, target);
+      mPACMan->mPAC->ConfigurePAC(mSetupPACURI, mSetupPACData,
+                                  mPACMan->mIncludePath, mExtraHeapSize,
+                                  target);
 
       RefPtr<PACLoadComplete> runnable = new PACLoadComplete(mPACMan);
       mPACMan->Dispatch(runnable.forget());
@@ -372,12 +375,18 @@ nsPACMan::nsPACMan(nsISerialEventTarget* mainThreadEventTarget)
       mWPADOverDHCPEnabled(false),
       mProxyConfigType(0) {
   MOZ_ASSERT(NS_IsMainThread(), "pacman must be created on main thread");
-  if (!sThreadLocalSetup) {
-    sThreadLocalSetup = true;
-    PR_NewThreadPrivateIndex(&sThreadLocalIndex, nullptr);
-  }
-  mPAC.SetThreadLocalIndex(sThreadLocalIndex);
   mIncludePath = Preferences::GetBool(kPACIncludePath, false);
+  if (StaticPrefs::network_proxy_parse_pac_on_socket_process() &&
+      gIOService->SocketProcessReady()) {
+    mPAC = MakeUnique<RemoteProxyAutoConfig>();
+  } else {
+    mPAC = MakeUnique<ProxyAutoConfig>();
+    if (!sThreadLocalSetup) {
+      sThreadLocalSetup = true;
+      PR_NewThreadPrivateIndex(&sThreadLocalIndex, nullptr);
+    }
+    mPAC->SetThreadLocalIndex(sThreadLocalIndex);
+  }
 }
 
 nsPACMan::~nsPACMan() {
@@ -438,6 +447,10 @@ nsresult nsPACMan::DispatchToPAC(already_AddRefed<nsIRunnable> aEvent,
   // have to worry about threading issues here.
   if (!mPACThread) {
     MOZ_TRY(NS_NewNamedThread("ProxyResolution", getter_AddRefs(mPACThread)));
+    nsresult rv = mPAC->Init(mPACThread);
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
   }
 
   return mPACThread->Dispatch(
@@ -685,6 +698,7 @@ void nsPACMan::ContinueLoadingAfterPACUriKnown() {
         // allow deprecated HTTP request from SystemPrincipal
         nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
         loadInfo->SetAllowDeprecatedSystemRequests(true);
+        loadInfo->SetHttpsOnlyStatus(nsILoadInfo::HTTPS_ONLY_EXEMPT);
 
         channel->SetLoadFlags(nsIRequest::LOAD_BYPASS_CACHE);
         channel->SetNotificationCallbacks(this);
@@ -722,7 +736,7 @@ void nsPACMan::OnLoadFailure() {
   mScheduledReload = TimeStamp::Now() + TimeDuration::FromSeconds(interval);
 
   LOG(("OnLoadFailure: retry in %d seconds (%d fails)\n", interval,
-       mLoadFailureCount));
+       (uint32_t)mLoadFailureCount));
 
   // while we wait for the retry queued members should try direct
   // even if that means fast failure.
@@ -766,7 +780,9 @@ void nsPACMan::CancelPendingQ(nsresult status, bool aShutdown) {
     query->Complete(status, ""_ns);
   }
 
-  if (aShutdown) mPAC.Shutdown();
+  if (aShutdown) {
+    mPAC->Shutdown();
+  }
 }
 
 void nsPACMan::ProcessPendingQ() {
@@ -776,10 +792,10 @@ void nsPACMan::ProcessPendingQ() {
   }
 
   if (mShutdown) {
-    mPAC.Shutdown();
+    mPAC->Shutdown();
   } else {
     // do GC while the thread has nothing pending
-    mPAC.GC();
+    mPAC->GC();
   }
 }
 
@@ -793,7 +809,9 @@ bool nsPACMan::ProcessPending() {
 
   RefPtr<PendingPACQuery> query(dont_AddRef(mPendingQ.popFirst()));
 
-  if (mShutdown || IsLoading()) {
+  // Having |mLoadFailureCount > 0| means we haven't had a sucessful PAC load
+  // yet. We should use DIRECT instead.
+  if (mShutdown || IsLoading() || mLoadFailureCount > 0) {
     query->Complete(NS_ERROR_NOT_AVAILABLE, ""_ns);
     return true;
   }
@@ -837,10 +855,13 @@ bool nsPACMan::ProcessPending() {
 
   // the systemproxysettings didn't complete the resolution. try via PAC
   if (!completed) {
-    nsresult status =
-        mPAC.GetProxyForURI(query->mSpec, query->mHost, pacString);
-    LOG(("Use proxy from PAC: %s\n", pacString.get()));
-    query->Complete(status, pacString);
+    auto callback = [query(query)](nsresult aStatus,
+                                   const nsACString& aResult) {
+      LOG(("Use proxy from PAC: %s\n", PromiseFlatCString(aResult).get()));
+      query->Complete(aStatus, aResult);
+    };
+    mPAC->GetProxyForURIWithCallback(query->mSpec, query->mHost,
+                                     std::move(callback));
   }
 
   mInProgress = false;
@@ -856,6 +877,7 @@ nsPACMan::OnStreamComplete(nsIStreamLoader* loader, nsISupports* context,
                            const uint8_t* data) {
   MOZ_ASSERT(NS_IsMainThread(), "wrong thread");
 
+  bool loadSucceeded = NS_SUCCEEDED(status) && HttpRequestSucceeded(loader);
   {
     auto locked = mLoader.Lock();
     if (locked.ref() != loader) {
@@ -864,13 +886,21 @@ nsPACMan::OnStreamComplete(nsIStreamLoader* loader, nsISupports* context,
       // should be NS_ERROR_ABORT, and if so, then we know that we can and
       // should delay any processing.
       LOG(("OnStreamComplete: called more than once\n"));
-      if (status == NS_ERROR_ABORT) return NS_OK;
+      if (status == NS_ERROR_ABORT) {
+        return NS_OK;
+      }
+    } else if (!loadSucceeded) {
+      // We have to clear the loader to indicate that we are not loading PAC
+      // currently.
+      // Note that we can only clear the loader when |loader| and |mLoader| are
+      // the same one.
+      locked.ref() = nullptr;
     }
   }
 
   LOG(("OnStreamComplete: entry\n"));
 
-  if (NS_SUCCEEDED(status) && HttpRequestSucceeded(loader)) {
+  if (loadSucceeded) {
     // Get the URI spec used to load this PAC script.
     nsAutoCString pacURI;
     {
@@ -882,6 +912,13 @@ nsPACMan::OnStreamComplete(nsIStreamLoader* loader, nsISupports* context,
         channel->GetURI(getter_AddRefs(uri));
         if (uri) uri->GetAsciiSpec(pacURI);
       }
+    }
+
+    nsCOMPtr<nsIProtocolProxyService> pps =
+        do_GetService(NS_PROTOCOLPROXYSERVICE_CONTRACTID);
+    MOZ_ASSERT(pps);
+    if (pps) {
+      pps->NotifyProxyConfigChangedInternal();
     }
 
     // We succeeded in loading the pac file using a bunch of interfaces that are

@@ -63,7 +63,6 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
-const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm");
 const { FileUtils } = ChromeUtils.import(
   "resource://gre/modules/FileUtils.jsm"
 );
@@ -204,13 +203,13 @@ var BookmarkHTMLUtils = Object.freeze({
   ) {
     notifyObservers(PlacesUtils.TOPIC_BOOKMARKS_RESTORE_BEGIN, aInitialImport);
     try {
-      if (!(await OS.File.exists(aFilePath))) {
+      if (!(await IOUtils.exists(aFilePath))) {
         throw new Error(
           "Cannot import from nonexisting html file: " + aFilePath
         );
       }
       let importer = new BookmarkImporter(aInitialImport, aSource);
-      await importer.importFromURL(OS.Path.toFileURI(aFilePath));
+      await importer.importFromURL(PathUtils.toFileURI(aFilePath));
 
       notifyObservers(
         PlacesUtils.TOPIC_BOOKMARKS_RESTORE_SUCCESS,
@@ -261,7 +260,7 @@ var BookmarkHTMLUtils = Object.freeze({
     try {
       return Services.prefs.getCharPref("browser.bookmarks.file");
     } catch (ex) {}
-    return OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.html");
+    return PathUtils.join(PathUtils.profileDir, "bookmarks.html");
   },
 });
 
@@ -840,6 +839,25 @@ BookmarkImporter.prototype = {
    */
   async importFromURL(href) {
     let data = await fetchData(href);
+
+    if (this._isImportDefaults && data) {
+      // Localize default bookmarks.  Find rel="localization" links and manually
+      // localize using them.
+      let hrefs = [];
+      let links = data.head.querySelectorAll("link[rel='localization']");
+      for (let link of links) {
+        if (link.getAttribute("href")) {
+          // We need the text, not the fully qualified URL, so we use `getAttribute`.
+          hrefs.push(link.getAttribute("href"));
+        }
+      }
+
+      if (hrefs.length) {
+        let domLoc = new DOMLocalization(hrefs);
+        await domLoc.translateFragment(data.body);
+      }
+    }
+
     this._walkTreeForImport(data);
     await this._importBookmarks();
   },
@@ -931,6 +949,8 @@ BookmarkExporter.prototype = {
     this._writeLine(
       '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">'
     );
+    this._writeLine(`<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'none'; img-src data: *; object-src 'none'"></meta>`);
     this._writeLine("<TITLE>Bookmarks</TITLE>");
   },
 

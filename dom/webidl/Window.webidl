@@ -19,6 +19,7 @@
  * https://wicg.github.io/visual-viewport/#the-visualviewport-interface
  */
 
+interface Principal;
 interface nsIBrowserDOMWindow;
 interface XULControllers;
 interface nsIDOMWindowUtils;
@@ -304,10 +305,10 @@ partial interface Window {
   [Throws] Selection? getSelection();
 };
 
-// http://dev.w3.org/csswg/cssom/
+// https://drafts.csswg.org/cssom/#extensions-to-the-window-interface
 partial interface Window {
-  //[NewObject, Throws] CSSStyleDeclaration getComputedStyle(Element elt, optional DOMString pseudoElt = "");
-  [NewObject, Throws] CSSStyleDeclaration? getComputedStyle(Element elt, optional DOMString pseudoElt = "");
+  //[NewObject, Throws] CSSStyleDeclaration getComputedStyle(Element elt, optional DOMString? pseudoElt = "");
+  [NewObject, Throws] CSSStyleDeclaration? getComputedStyle(Element elt, optional DOMString? pseudoElt = "");
 };
 
 // http://dev.w3.org/csswg/cssom-view/
@@ -386,12 +387,8 @@ partial interface Window {
   [Throws, NeedsCallerType] attribute any outerHeight;
 };
 
-// https://dvcs.w3.org/hg/webperf/raw-file/tip/specs/RequestAnimationFrame/Overview.html
-partial interface Window {
-  [Throws] long requestAnimationFrame(FrameRequestCallback callback);
-  [Throws] void cancelAnimationFrame(long handle);
-};
-callback FrameRequestCallback = void (DOMHighResTimeStamp time);
+// https://html.spec.whatwg.org/multipage/imagebitmap-and-animations.html#animation-frames
+Window includes AnimationFrameProvider;
 
 // https://dvcs.w3.org/hg/webperf/raw-file/tip/specs/NavigationTiming/Overview.html
 partial interface Window {
@@ -451,6 +448,11 @@ partial interface Window {
   [Replaceable, Throws, NeedsCallerType]
   readonly attribute double devicePixelRatio;
 
+  // Allows chrome code to convert desktop pixels to device pixels and vice
+  // versa. Useful for interacting with the screen manager.
+  [ChromeOnly, Throws]
+  readonly attribute double desktopToDeviceScale;
+
   /* The maximum offset that the window can be scrolled to
      (i.e., the document width/height minus the scrollport width/height) */
   [ChromeOnly, Throws]  readonly attribute long   scrollMinX;
@@ -481,14 +483,6 @@ partial interface Window {
                            optional boolean wholeWord = false,
                            optional boolean searchInFrames = false,
                            optional boolean showDialog = false);
-
-  /**
-   * Returns the number of times this document for this window has
-   * been painted to the screen.
-   *
-   * If you need this for tests use nsIDOMWindowUtils.paintCount instead.
-   */
-  [Throws, Pref="dom.mozPaintCount.enabled"] readonly attribute unsigned long long mozPaintCount;
 
            attribute EventHandler ondevicemotion;
            attribute EventHandler ondeviceorientation;
@@ -541,7 +535,7 @@ partial interface Window {
    * be something like a WebIDL namespace, but we don't support
    * JS-implemented static things yet.  See bug 863952.
    */
-  [Replaceable]
+  [Replaceable, Deprecated="InstallTriggerDeprecated", Pref="extensions.InstallTrigger.enabled"]
   readonly attribute InstallTriggerImpl? InstallTrigger;
 
   /**
@@ -552,6 +546,23 @@ partial interface Window {
 
   [Pure, ChromeOnly]
   readonly attribute WindowGlobalChild? windowGlobalChild;
+
+  /**
+   * The principal of the client source of the window. This is supposed to be
+   * used for the service worker.
+   *
+   * This is used for APIs like https://w3c.github.io/push-api/ that extend
+   * ServiceWorkerRegistration and therefore need to operate consistently with
+   * ServiceWorkers and its Clients API. The client principal is the appropriate
+   * principal to pass to all nsIServiceWorkerManager APIs.
+   *
+   * Note that the client principal will be different from the node principal of
+   * the window's document if the window is in a third-party context when dFPI
+   * is enabled. In this case, the client principal will be the partitioned
+   * principal to support the service worker partitioning.
+   */
+  [ChromeOnly]
+  readonly attribute Principal? clientPrincipal;
 };
 
 Window includes TouchEventHandlers;
@@ -698,7 +709,7 @@ partial interface Window {
    * @param {function} callback
    * @returns {Promise}
    */
-  [Throws, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
+  [NewObject, Func="nsGlobalWindowInner::IsPrivilegedChromeWindow"]
   Promise<any> promiseDocumentFlushed(PromiseDocumentFlushedCallback callback);
 
   [ChromeOnly]
@@ -723,11 +734,13 @@ partial interface Window {
   attribute EventHandler onvrdisplaypresentchange;
 };
 
+#ifndef RELEASE_OR_BETA
 // https://drafts.css-houdini.org/css-paint-api-1/#dom-window-paintworklet
 partial interface Window {
     [Pref="dom.paintWorklet.enabled", Throws]
     readonly attribute Worklet paintWorklet;
 };
+#endif
 
 Window includes WindowOrWorkerGlobalScope;
 
@@ -797,11 +810,12 @@ partial interface Window {
 // Used to assign marks to appear on the scrollbar when
 // finding on a page.
 partial interface Window {
-  // The marks are values between 0 and scrollMaxY.
+  // The marks are values between 0 and scrollMax{X,Y} - scrollMin{X,Y}.
   [ChromeOnly]
-  void setScrollMarks(sequence<unsigned long> marks);
+  void setScrollMarks(sequence<unsigned long> marks,
+                      optional boolean onHorizontalScrollbar = false);
 };
 
-dictionary WindowPostMessageOptions : PostMessageOptions {
+dictionary WindowPostMessageOptions : StructuredSerializeOptions {
   USVString targetOrigin = "/";
 };

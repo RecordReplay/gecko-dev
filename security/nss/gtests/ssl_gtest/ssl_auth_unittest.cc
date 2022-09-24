@@ -309,6 +309,126 @@ static SECStatus GetClientAuthDataHook(void* self, PRFileDesc* fd,
   return SECSuccess;
 }
 
+typedef struct AutoClientTestStr {
+  SECStatus result;
+  const std::string cert;
+} AutoClientTest;
+
+typedef struct AutoClientResultsStr {
+  AutoClientTest isRsa2048;
+  AutoClientTest isClient;
+  AutoClientTest isNull;
+  bool hookCalled;
+} AutoClientResults;
+
+void VerifyClientCertMatch(CERTCertificate* clientCert,
+                           const std::string expectedName) {
+  const char* name = clientCert->nickname;
+  std::cout << "Match name=\"" << name << "\" expected=\"" << expectedName
+            << "\"" << std::endl;
+  EXPECT_TRUE(PORT_Strcmp(name, expectedName.c_str()) == 0)
+      << " Certmismatch: \"" << name << "\" != \"" << expectedName << "\"";
+}
+
+static SECStatus GetAutoClientAuthDataHook(void* expectResults, PRFileDesc* fd,
+                                           CERTDistNames* caNames,
+                                           CERTCertificate** clientCert,
+                                           SECKEYPrivateKey** clientKey) {
+  AutoClientResults& results = *(AutoClientResults*)expectResults;
+  SECStatus rv;
+
+  results.hookCalled = true;
+  *clientCert = NULL;
+  *clientKey = NULL;
+  rv = NSS_GetClientAuthData((void*)TlsAgent::kRsa2048.c_str(), fd, caNames,
+                             clientCert, clientKey);
+  if (rv == SECSuccess) {
+    VerifyClientCertMatch(*clientCert, results.isRsa2048.cert);
+    CERT_DestroyCertificate(*clientCert);
+    SECKEY_DestroyPrivateKey(*clientKey);
+    *clientCert = NULL;
+    *clientKey = NULL;
+  }
+  EXPECT_EQ(results.isRsa2048.result, rv);
+
+  rv = NSS_GetClientAuthData((void*)TlsAgent::kClient.c_str(), fd, caNames,
+                             clientCert, clientKey);
+  if (rv == SECSuccess) {
+    VerifyClientCertMatch(*clientCert, results.isClient.cert);
+    CERT_DestroyCertificate(*clientCert);
+    SECKEY_DestroyPrivateKey(*clientKey);
+    *clientCert = NULL;
+    *clientKey = NULL;
+  }
+  EXPECT_EQ(results.isClient.result, rv);
+  EXPECT_EQ(*clientCert, nullptr);
+  EXPECT_EQ(*clientKey, nullptr);
+  rv = NSS_GetClientAuthData(NULL, fd, caNames, clientCert, clientKey);
+  if (rv == SECSuccess) {
+    VerifyClientCertMatch(*clientCert, results.isNull.cert);
+    // return this result
+  }
+  EXPECT_EQ(results.isNull.result, rv);
+  return rv;
+}
+
+// while I would have liked to use a new INSTANTIATE macro the
+// generates the following three tests, figuring out how to make that
+// work on top of the existing TlsConnect* plumbing hurts my head.
+TEST_P(TlsConnectTls12, AutoClientSelectRsaPss) {
+  AutoClientResults rsa = {{SECSuccess, TlsAgent::kRsa2048},
+                           {SECSuccess, TlsAgent::kClient},
+                           {SECSuccess, TlsAgent::kDelegatorRsaPss2048},
+                           false};
+  static const SSLSignatureScheme kSchemes[] = {ssl_sig_rsa_pss_pss_sha256,
+                                                ssl_sig_rsa_pkcs1_sha256,
+                                                ssl_sig_rsa_pkcs1_sha1};
+  Reset("rsa_pss_noparam");
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(true);
+  EXPECT_EQ(SECSuccess,
+            SSL_GetClientAuthDataHook(client_->ssl_fd(),
+                                      GetAutoClientAuthDataHook, (void*)&rsa));
+  server_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  client_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  Connect();
+  EXPECT_TRUE(rsa.hookCalled);
+}
+
+TEST_P(TlsConnectTls12, AutoClientSelectEcc) {
+  AutoClientResults ecc = {{SECFailure, TlsAgent::kClient},
+                           {SECFailure, TlsAgent::kClient},
+                           {SECSuccess, TlsAgent::kDelegatorEcdsa256},
+                           false};
+  static const SSLSignatureScheme kSchemes[] = {ssl_sig_ecdsa_secp256r1_sha256};
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(true);
+  EXPECT_EQ(SECSuccess,
+            SSL_GetClientAuthDataHook(client_->ssl_fd(),
+                                      GetAutoClientAuthDataHook, (void*)&ecc));
+  server_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  client_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  Connect();
+  EXPECT_TRUE(ecc.hookCalled);
+}
+
+TEST_P(TlsConnectTls12, AutoClientSelectDsa) {
+  AutoClientResults dsa = {{SECFailure, TlsAgent::kClient},
+                           {SECFailure, TlsAgent::kClient},
+                           {SECSuccess, TlsAgent::kServerDsa},
+                           false};
+  static const SSLSignatureScheme kSchemes[] = {ssl_sig_dsa_sha256};
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(true);
+  EXPECT_EQ(SECSuccess,
+            SSL_GetClientAuthDataHook(client_->ssl_fd(),
+                                      GetAutoClientAuthDataHook, (void*)&dsa));
+  server_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  client_->SetSignatureSchemes(kSchemes, PR_ARRAY_SIZE(kSchemes));
+  Connect();
+  EXPECT_TRUE(dsa.hookCalled);
+}
+
 TEST_F(TlsConnectStreamTls13, PostHandshakeAuthMultiple) {
   client_->SetupClientAuth();
   EXPECT_EQ(SECSuccess, SSL_OptionSet(client_->ssl_fd(),
@@ -1797,6 +1917,165 @@ TEST_P(TlsSignatureSchemeConfiguration, SignatureSchemeConfigBoth) {
   Connect();
   CheckKeys(ssl_kea_ecdh, ssl_grp_ec_curve25519, auth_type_, signature_scheme_);
 }
+
+class Tls12CertificateRequestReplacer : public TlsHandshakeFilter {
+ public:
+  Tls12CertificateRequestReplacer(const std::shared_ptr<TlsAgent>& a,
+                                  SSLSignatureScheme scheme)
+      : TlsHandshakeFilter(a, {kTlsHandshakeCertificateRequest}),
+        scheme_(scheme) {}
+
+  virtual PacketFilter::Action FilterHandshake(const HandshakeHeader& header,
+                                               const DataBuffer& input,
+                                               DataBuffer* output) {
+    uint32_t offset = 0;
+
+    if (header.handshake_type() != ssl_hs_certificate_request) {
+      return KEEP;
+    }
+
+    *output = input;
+
+    uint32_t types_len = 0;
+    if (!output->Read(offset, 1, &types_len)) {
+      ADD_FAILURE();
+      return KEEP;
+    }
+    offset += 1 + types_len;
+    uint32_t scheme_len = 0;
+    if (!output->Read(offset, 2, &scheme_len)) {
+      ADD_FAILURE();
+      return KEEP;
+    }
+    DataBuffer schemes;
+    schemes.Write(0, 2, 2);
+    schemes.Write(2, scheme_, 2);
+    output->Write(offset, 2, schemes.len());
+    output->Splice(schemes, offset + 2, scheme_len);
+
+    return CHANGE;
+  }
+
+ private:
+  SSLSignatureScheme scheme_;
+};
+
+//
+// Test how policy interacts with client auth connections
+//
+
+// TLS/DTLS version algorithm policy
+typedef std::tuple<SSLProtocolVariant, uint16_t, SECOidTag, PRUint32>
+    PolicySignatureSchemeProfile;
+
+// Only TLS 1.2 handles client auth schemes inside
+// the certificate request packet, so our failure tests for
+// those kinds of connections only occur here.
+class TlsConnectAuthWithPolicyTls12
+    : public TlsConnectTestBase,
+      public ::testing::WithParamInterface<PolicySignatureSchemeProfile> {
+ public:
+  TlsConnectAuthWithPolicyTls12()
+      : TlsConnectTestBase(std::get<0>(GetParam()), std::get<1>(GetParam())) {
+    alg_ = std::get<2>(GetParam());
+    policy_ = std::get<3>(GetParam());
+    // use the algorithm to select which single scheme to deploy
+    // We use these schemes to force servers sending schemes the client
+    // didn't advertise to make sure the client will still filter these
+    // by policy and detect that no valid schemes were presented, rather
+    // than sending an empty client auth message.
+    switch (alg_) {
+      case SEC_OID_SHA256:
+      case SEC_OID_PKCS1_RSA_PSS_SIGNATURE:
+        scheme_ = ssl_sig_rsa_pss_pss_sha256;
+        break;
+      case SEC_OID_PKCS1_RSA_ENCRYPTION:
+        scheme_ = ssl_sig_rsa_pkcs1_sha256;
+        break;
+      case SEC_OID_ANSIX962_EC_PUBLIC_KEY:
+        scheme_ = ssl_sig_ecdsa_secp256r1_sha256;
+        break;
+      default:
+        ADD_FAILURE() << "need to update algorithm table in "
+                         "TlsConnectAuthWithPolicyTls12";
+        scheme_ = ssl_sig_none;
+        break;
+    }
+  }
+
+ protected:
+  SECOidTag alg_;
+  PRUint32 policy_;
+  SSLSignatureScheme scheme_;
+};
+
+// Only TLS 1.2 and greater looks at schemes extensions on client auth
+class TlsConnectAuthWithPolicyTls12Plus
+    : public TlsConnectTestBase,
+      public ::testing::WithParamInterface<PolicySignatureSchemeProfile> {
+ public:
+  TlsConnectAuthWithPolicyTls12Plus()
+      : TlsConnectTestBase(std::get<0>(GetParam()), std::get<1>(GetParam())) {
+    alg_ = std::get<2>(GetParam());
+    policy_ = std::get<3>(GetParam());
+  }
+
+ protected:
+  SECOidTag alg_;
+  PRUint32 policy_;
+};
+
+// make sure we can turn single algorithms off by policy an still connect
+// this is basically testing that we are properly filtering our schemes
+// by policy before communicating them to the server, and that the
+// server is respecting our choices
+TEST_P(TlsConnectAuthWithPolicyTls12Plus, PolicySuccessTest) {
+  // in TLS 1.3, RSA PKCS1 is restricted. If we are also
+  // restricting RSA PSS by policy, we can't use the default
+  // RSA certificate as the server cert, switch to ECDSA
+  if ((version_ >= SSL_LIBRARY_VERSION_TLS_1_3) &&
+      (alg_ == SEC_OID_PKCS1_RSA_PSS_SIGNATURE)) {
+    Reset(TlsAgent::kServerEcdsa256);
+  }
+  client_->SetPolicy(alg_, 0, policy_);  // Disable policy for client
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(false);
+  Connect();
+}
+
+// make sure we fail if the server ignores our policy preference and
+// requests client auth with a scheme we don't support
+TEST_P(TlsConnectAuthWithPolicyTls12, PolicyFailureTest) {
+  client_->SetPolicy(alg_, 0, policy_);
+  client_->SetupClientAuth();
+  server_->RequestClientAuth(false);
+  MakeTlsFilter<Tls12CertificateRequestReplacer>(server_, scheme_);
+  ConnectExpectAlert(client_, kTlsAlertHandshakeFailure);
+  client_->CheckErrorCode(SSL_ERROR_UNSUPPORTED_SIGNATURE_ALGORITHM);
+  server_->CheckErrorCode(SSL_ERROR_HANDSHAKE_FAILURE_ALERT);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SignaturesWithPolicyFail, TlsConnectAuthWithPolicyTls12,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
+                       TlsConnectTestBase::kTlsV12,
+                       ::testing::Values(SEC_OID_SHA256,
+                                         SEC_OID_PKCS1_RSA_PSS_SIGNATURE,
+                                         SEC_OID_PKCS1_RSA_ENCRYPTION,
+                                         SEC_OID_ANSIX962_EC_PUBLIC_KEY),
+                       ::testing::Values(NSS_USE_ALG_IN_SSL_KX,
+                                         NSS_USE_ALG_IN_ANY_SIGNATURE)));
+
+INSTANTIATE_TEST_SUITE_P(
+    SignaturesWithPolicySuccess, TlsConnectAuthWithPolicyTls12Plus,
+    ::testing::Combine(TlsConnectTestBase::kTlsVariantsAll,
+                       TlsConnectTestBase::kTlsV12Plus,
+                       ::testing::Values(SEC_OID_SHA256,
+                                         SEC_OID_PKCS1_RSA_PSS_SIGNATURE,
+                                         SEC_OID_PKCS1_RSA_ENCRYPTION,
+                                         SEC_OID_ANSIX962_EC_PUBLIC_KEY),
+                       ::testing::Values(NSS_USE_ALG_IN_SSL_KX,
+                                         NSS_USE_ALG_IN_ANY_SIGNATURE)));
 
 INSTANTIATE_TEST_SUITE_P(
     SignatureSchemeRsa, TlsSignatureSchemeConfiguration,

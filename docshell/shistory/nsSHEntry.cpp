@@ -939,6 +939,11 @@ nsSHEntry::CreateLoadInfo(nsDocShellLoadState** aLoadState) {
 
   loadState->SetSHEntry(this);
 
+  // When we create a load state from the history entry we already know if
+  // https-first was able to upgrade the request from http to https. There is no
+  // point in re-retrying to upgrade.
+  loadState->SetIsExemptFromHTTPSOnlyMode(true);
+
   loadState.forget(aLoadState);
   return NS_OK;
 }
@@ -993,6 +998,12 @@ NS_IMETHODIMP
 nsSHEntry::GetContentViewer(nsIContentViewer** aResult) {
   *aResult = GetState()->mContentViewer;
   NS_IF_ADDREF(*aResult);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::GetIsInBFCache(bool* aResult) {
+  *aResult = !!GetState()->mContentViewer;
   return NS_OK;
 }
 
@@ -1093,4 +1104,15 @@ NS_IMETHODIMP
 nsSHEntry::GetBfcacheID(uint64_t* aBFCacheID) {
   *aBFCacheID = mShared->GetId();
   return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::GetWireframe(JSContext* aCx, JS::MutableHandleValue aOut) {
+  aOut.set(JS::NullValue());
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsSHEntry::SetWireframe(JSContext* aCx, JS::HandleValue aArg) {
+  return NS_ERROR_NOT_IMPLEMENTED;
 }

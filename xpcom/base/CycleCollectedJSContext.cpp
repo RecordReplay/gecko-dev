@@ -499,6 +499,8 @@ void CycleCollectedJSContext::IsIdleGCTaskNeeded() const {
     using mozilla::IdleRunnable::IdleRunnable;
 
    public:
+    IdleTimeGCTaskRunnable() : IdleRunnable("IdleTimeGCTask") {}
+
     NS_IMETHOD Run() override {
       CycleCollectedJSRuntime* ccrt = CycleCollectedJSRuntime::Get();
       if (ccrt) {
@@ -866,8 +868,8 @@ void FinalizationRegistryCleanup::DoCleanup() {
 }
 
 void FinalizationRegistryCleanup::Callback::trace(JSTracer* trc) {
-  JS::UnsafeTraceRoot(trc, &mCallbackFunction, "mCallbackFunction");
-  JS::UnsafeTraceRoot(trc, &mIncumbentGlobal, "mIncumbentGlobal");
+  JS::TraceRoot(trc, &mCallbackFunction, "mCallbackFunction");
+  JS::TraceRoot(trc, &mIncumbentGlobal, "mIncumbentGlobal");
 }
 
 }  // namespace mozilla

@@ -24,10 +24,6 @@ extern crate bitflags;
 extern crate byteorder;
 #[cfg(feature = "nightly")]
 extern crate core;
-#[cfg(target_os = "macos")]
-extern crate core_foundation;
-#[cfg(target_os = "macos")]
-extern crate core_graphics;
 extern crate derive_more;
 #[macro_use]
 extern crate malloc_size_of_derive;
@@ -63,6 +59,9 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::os::raw::c_void;
 use peek_poke::PeekPoke;
+
+/// Defined here for cbindgen
+pub const MAX_RENDER_TASK_SIZE: i32 = 16384;
 
 /// Width and height in device pixels of image tiles.
 pub type TileSize = u16;
@@ -184,13 +183,29 @@ impl ExternalEvent {
     }
 }
 
-/// Describe whether or not scrolling should be clamped by the content bounds.
-#[derive(Clone, Deserialize, Serialize)]
-pub enum ScrollClamping {
-    ///
-    ToContentBounds,
-    ///
-    NoClamping,
+pub type APZScrollGeneration = u64;
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, Default)]
+pub struct SampledScrollOffset {
+    pub offset: LayoutVector2D,
+    pub generation: APZScrollGeneration,
+}
+
+/// A flag in each scrollable frame to represent whether the owner of the frame document
+/// has any scroll-linked effect.
+/// See https://firefox-source-docs.mozilla.org/performance/scroll-linked_effects.html
+/// for a definition of scroll-linked effect.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
+pub enum HasScrollLinkedEffect {
+    Yes,
+    No,
+}
+
+impl Default for HasScrollLinkedEffect {
+    fn default() -> Self {
+        HasScrollLinkedEffect::No
+    }
 }
 
 /// A handler to integrate WebRender with the thread that contains the `Renderer`.
@@ -204,7 +219,7 @@ pub trait RenderNotifier: Send {
         composite_needed: bool,
     );
     /// Notify the thread containing the `Renderer` that a new frame is ready.
-    fn new_frame_ready(&self, _: DocumentId, scrolled: bool, composite_needed: bool, render_time_ns: Option<u64>);
+    fn new_frame_ready(&self, _: DocumentId, scrolled: bool, composite_needed: bool);
     /// A Gecko-specific notification mechanism to get some code executed on the
     /// `Renderer`'s thread, mostly replaced by `NotificationHandler`. You should
     /// probably use the latter instead.
@@ -274,11 +289,9 @@ impl NotificationRequest {
 /// the RenderBackendThread.
 pub trait ApiHitTester: Send + Sync {
     /// Does a hit test on display items in the specified document, at the given
-    /// point. If a pipeline_id is specified, it is used to further restrict the
-    /// hit results so that only items inside that pipeline are matched. The vector
-    /// of hit results will contain all display items that match, ordered from
-    /// front to back.
-    fn hit_test(&self, pipeline_id: Option<PipelineId>, point: WorldPoint) -> HitTestResult;
+    /// point. The vector of hit results will contain all display items that match,
+    /// ordered from front to back.
+    fn hit_test(&self, point: WorldPoint) -> HitTestResult;
 }
 
 /// A hit tester requested to the render backend thread but not necessarily ready yet.
@@ -304,15 +317,6 @@ pub struct HitTestItem {
 
     /// The tag of the hit display item.
     pub tag: ItemTag,
-
-    /// The hit point in the coordinate space of the "viewport" of the display item. The
-    /// viewport is the scroll node formed by the root reference frame of the display item's
-    /// pipeline.
-    pub point_in_viewport: LayoutPoint,
-
-    /// The coordinates of the original hit test point relative to the origin of this item.
-    /// This is useful for calculating things like text offsets in the client.
-    pub point_relative_to_item: LayoutPoint,
 }
 
 /// Returned by `RenderApi::hit_test`.
@@ -475,7 +479,7 @@ pub struct PropertyValue<T> {
 /// animated properties.
 #[derive(Clone, Deserialize, Serialize, Debug, PartialEq, Default)]
 pub struct DynamicProperties {
-    ///
+    /// transform list
     pub transforms: Vec<PropertyValue<LayoutTransform>>,
     /// opacity
     pub floats: Vec<PropertyValue<f32>>,
@@ -483,11 +487,92 @@ pub struct DynamicProperties {
     pub colors: Vec<PropertyValue<ColorF>>,
 }
 
+impl DynamicProperties {
+    /// Extend the properties.
+    pub fn extend(&mut self, other: Self) {
+        self.transforms.extend(other.transforms);
+        self.floats.extend(other.floats);
+        self.colors.extend(other.colors);
+    }
+}
+
 /// A C function that takes a pointer to a heap allocation and returns its size.
 ///
 /// This is borrowed from the malloc_size_of crate, upon which we want to avoid
 /// a dependency from WebRender.
 pub type VoidPtrToSizeFn = unsafe extern "C" fn(ptr: *const c_void) -> usize;
+
+/// A configuration option that can be changed at runtime.
+///
+/// # Adding a new configuration option
+///
+///  - Add a new enum variant here.
+///  - Add the entry in WR_BOOL_PARAMETER_LIST in gfxPlatform.cpp.
+///  - React to the parameter change anywhere in WebRender where a SetParam message is received.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Parameter {
+    Bool(BoolParameter, bool),
+    Int(IntParameter, i32),
+}
+
+/// Boolean configuration option.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum BoolParameter {
+    PboUploads = 0,
+    Multithreading = 1,
+    BatchedUploads = 2,
+    DrawCallsForTextureCopy = 3,
+}
+
+/// Integer configuration option.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum IntParameter {
+    BatchedUploadThreshold = 0,
+}
+
+bitflags! {
+    /// Flags to track why we are rendering.
+    #[repr(C)]
+    #[derive(Default, Deserialize, MallocSizeOf, Serialize)]
+    pub struct RenderReasons: u32 {
+        /// Equivalent of empty() for the C++ side.
+        const NONE                          = 0;
+        const SCENE                         = 1 << 0;
+        const ANIMATED_PROPERTY             = 1 << 1;
+        const RESOURCE_UPDATE               = 1 << 2;
+        const ASYNC_IMAGE                   = 1 << 3;
+        const CLEAR_RESOURCES               = 1 << 4;
+        const APZ                           = 1 << 5;
+        /// Window resize
+        const RESIZE                        = 1 << 6;
+        /// Various widget-related reasons
+        const WIDGET                        = 1 << 7;
+        /// See Frame::must_be_drawn
+        const TEXTURE_CACHE_FLUSH           = 1 << 8;
+        const SNAPSHOT                      = 1 << 9;
+        const POST_RESOURCE_UPDATES_HOOK    = 1 << 10;
+        const CONFIG_CHANGE                 = 1 << 11;
+        const CONTENT_SYNC                  = 1 << 12;
+        const FLUSH                         = 1 << 13;
+        const TESTING                       = 1 << 14;
+        const OTHER                         = 1 << 15;
+        /// Vsync isn't actually "why" we render but it can be useful
+        /// to see which frames were driven by the vsync scheduler so
+        /// we store a bit for it.
+        const VSYNC                         = 1 << 16;
+        const SKIPPED_COMPOSITE             = 1 << 17;
+        /// Gecko does some special things when it starts observing vsync
+        /// so it can be useful to know what frames are associated with it.
+        const START_OBSERVING_VSYNC         = 1 << 18;
+        const ASYNC_IMAGE_COMPOSITE_UNTIL   = 1 << 19;
+    }
+}
+
+impl RenderReasons {
+    pub const NUM_BITS: u32 = 17;
+}
 
 bitflags! {
     /// Flags to enable/disable various builtin debugging tools.
@@ -551,14 +636,12 @@ bitflags! {
         const SMART_PROFILER        = 1 << 22;
         /// If set, dump picture cache invalidation debug to console.
         const INVALIDATION_DBG = 1 << 23;
-        /// Log tile cache to memory for later saving as part of wr-capture
-        const TILE_CACHE_LOGGING_DBG   = 1 << 24;
         /// Collect and dump profiler statistics to captures.
         const PROFILER_CAPTURE = (1 as u32) << 25; // need "as u32" until we have cbindgen#556
         /// Invalidate picture tiles every frames (useful when inspecting GPU work in external tools).
         const FORCE_PICTURE_INVALIDATION = (1 as u32) << 26;
-        const USE_BATCHED_TEXTURE_UPLOADS = (1 as u32) << 27;
-        const USE_DRAW_CALLS_FOR_TEXTURE_COPY = (1 as u32) << 28;
+        /// Display window visibility on screen.
+        const WINDOW_VISIBILITY_DBG     = 1 << 27;
     }
 }
 
@@ -573,15 +656,6 @@ pub enum PrimitiveKeyKind {
         ///
         color: PropertyBinding<ColorU>,
     },
-}
-
-///
-#[derive(Clone)]
-pub struct ScrollNodeState {
-    ///
-    pub id: ExternalScrollId,
-    ///
-    pub scroll_offset: LayoutVector2D,
 }
 
 ///

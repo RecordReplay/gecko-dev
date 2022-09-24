@@ -24,7 +24,7 @@ const HELPERS = [
 ];
 
 // The page script sets a global function for each known helper (except print).
-const TEST_URI = `data:text/html,<meta charset=utf8>
+const TEST_URI = `data:text/html,<!DOCTYPE html><meta charset=utf8>
   <script>
     const helpers = ${JSON.stringify(HELPERS)};
     for (const helper of helpers) {
@@ -48,11 +48,10 @@ add_task(async function() {
       `There's no duplicated "${helper}" item in the autocomplete popup`
     );
 
-    await executeAndWaitForMessage(
+    await executeAndWaitForResultMessage(
       hud,
       `${helper}()`,
-      `"${PREFIX + helper}"`,
-      ".result"
+      `"${PREFIX + helper}"`
     );
     ok(true, `output is correct for ${helper}()`);
   }

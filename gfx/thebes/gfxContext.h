@@ -8,13 +8,13 @@
 
 #include "gfxTypes.h"
 
-#include "gfxASurface.h"
 #include "gfxPoint.h"
 #include "gfxRect.h"
 #include "gfxMatrix.h"
 #include "gfxPattern.h"
 #include "nsTArray.h"
 
+#include "mozilla/EnumSet.h"
 #include "mozilla/gfx/2D.h"
 
 typedef struct _cairo cairo_t;
@@ -113,13 +113,6 @@ class gfxContext final {
   void NewPath();
 
   /**
-   * Closes the path, i.e. connects the last drawn point to the first one.
-   *
-   * Filling a path will implicitly close it.
-   */
-  void ClosePath();
-
-  /**
    * Returns the current path.
    */
   already_AddRefed<Path> GetPath();
@@ -128,25 +121,6 @@ class gfxContext final {
    * Sets the given path as the current path.
    */
   void SetPath(Path* path);
-
-  /**
-   * Moves the pen to a new point without drawing a line.
-   */
-  void MoveTo(const gfxPoint& pt);
-
-  /**
-   * Draws a line from the current point to pt.
-   *
-   * @see MoveTo
-   */
-  void LineTo(const gfxPoint& pt);
-
-  // path helpers
-  /**
-   * Draws a line from start to end.
-   */
-  void Line(const gfxPoint& start,
-            const gfxPoint& end);  // XXX snapToPixels option?
 
   /**
    * Draws the rectangle given by rect.
@@ -175,6 +149,14 @@ class gfxContext final {
    */
   void SetMatrix(const mozilla::gfx::Matrix& matrix);
   void SetMatrixDouble(const gfxMatrix& matrix);
+
+  void SetCrossProcessPaintScale(float aScale) {
+    MOZ_ASSERT(mCrossProcessPaintScale == 1.0f,
+               "Should only be initialized once");
+    mCrossProcessPaintScale = aScale;
+  }
+
+  float GetCrossProcessPaintScale() const { return mCrossProcessPaintScale; }
 
   /**
    * Returns the current transformation matrix.
@@ -227,11 +209,21 @@ class gfxContext final {
    * fails, the method will return false, and the rect will not be
    * changed.
    *
-   * If ignoreScale is true, then snapping will take place even if
-   * the CTM has a scale applied.  Snapping never takes place if
-   * there is a rotation in the CTM.
+   * aOptions parameter:
+   *   If IgnoreScale is set, then snapping will take place even if the CTM
+   *   has a scale applied. Snapping never takes place if there is a rotation
+   *   in the CTM.
+   *
+   *   If PrioritizeSize is set, the rect's dimensions will first be snapped
+   *   and then its position aligned to device pixels, rather than snapping
+   *   the position of each edge independently.
    */
-  bool UserToDevicePixelSnapped(gfxRect& rect, bool ignoreScale = false) const;
+  enum class SnapOption : uint8_t {
+    IgnoreScale = 1,
+    PrioritizeSize = 2,
+  };
+  using SnapOptions = mozilla::EnumSet<SnapOption>;
+  bool UserToDevicePixelSnapped(gfxRect& rect, SnapOptions aOptions = {}) const;
 
   /**
    * Takes the given point and tries to align it to device pixels.  If
@@ -317,7 +309,11 @@ class gfxContext final {
    ** Line Properties
    **/
 
-  void SetDash(const Float* dashes, int ndash, Float offset);
+  // Set the dash pattern, applying devPxScale to convert passed-in lengths
+  // to device pixels (used by the SVGUtils::SetupStrokeGeometry caller,
+  // which has the desired dash pattern in CSS px).
+  void SetDash(const Float* dashes, int ndash, Float offset, Float devPxScale);
+
   // Return true if dashing is set, false if it's not enabled or the
   // context is in an error state.  |offset| can be nullptr to mean
   // "don't care".
@@ -415,20 +411,6 @@ class gfxContext final {
       mozilla::gfx::SourceSurface* aMask = nullptr,
       const mozilla::gfx::Matrix& aMaskTransform = mozilla::gfx::Matrix());
 
-  /**
-   * Like PushGroupForBlendBack, but if the current surface is
-   * gfxContentType::COLOR and content is gfxContentType::COLOR_ALPHA, makes the
-   * pushed surface gfxContentType::COLOR instead and copies the contents of the
-   * current surface to the pushed surface. This is good for pushing opacity
-   * groups, since blending the group back to the current surface with some
-   * alpha applied will give the correct results and using an opaque pushed
-   * surface gives better quality and performance.
-   */
-  void PushGroupAndCopyBackground(
-      gfxContentType content = gfxContentType::COLOR,
-      mozilla::gfx::Float aOpacity = 1.0f,
-      mozilla::gfx::SourceSurface* aMask = nullptr,
-      const mozilla::gfx::Matrix& aMaskTransform = mozilla::gfx::Matrix());
   void PopGroupAndBlend();
 
   mozilla::gfx::Point GetDeviceOffset() const;
@@ -454,8 +436,6 @@ class gfxContext final {
    */
   void CopyAsDataURI();
 #endif
-
-  static mozilla::gfx::UserDataKey sDontUseAsSourceKey;
 
  private:
   /**
@@ -544,6 +524,7 @@ class gfxContext final {
   }
 
   RefPtr<DrawTarget> mDT;
+  float mCrossProcessPaintScale = 1.0f;
 };
 
 /**

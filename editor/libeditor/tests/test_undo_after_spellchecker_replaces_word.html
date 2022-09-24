@@ -20,7 +20,6 @@ SimpleTest.expectAssertions(0, 1);  // In a11y module
 SimpleTest.waitForFocus(async () => {
   await SpecialPowers.pushPrefEnv({
     set: [
-      ["dom.input_events.beforeinput.enabled", true],
       // Even if `beforeinput` events for `setUserInput()` calls are not
       // allowed to cancel, correcting the spells should be cancelable for
       // compatibility with the other browsers.
@@ -94,9 +93,10 @@ SimpleTest.waitForFocus(async () => {
         return aElement === textarea ? aElement.value : aElement.innerHTML;
       }
 
-      SpecialPowers.Cu.import(
-        "resource://testing-common/AsyncSpellCheckTestHelper.jsm")
-      .onSpellCheck(aElement, () => {
+      const { maybeOnSpellCheck } = SpecialPowers.ChromeUtils.import(
+        "resource://testing-common/AsyncSpellCheckTestHelper.jsm"
+      );
+      maybeOnSpellCheck(aElement, () => {
         SimpleTest.executeSoon(() => {
           aElement.addEventListener("beforeinput", onBeforeInput);
           aElement.addEventListener("input", onInput);

@@ -3,39 +3,32 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 include "gfxipc/ShadowLayerUtils.h";
+include "mozilla/GfxMessageUtils.h";
 
-using struct gfxPoint from "gfxPoint.h";
+using gfxPoint from "gfxPoint.h";
 using nsIntRegion from "nsRegion.h";
-using struct mozilla::layers::SurfaceDescriptorX11 from "gfxipc/SurfaceDescriptor.h";
 using mozilla::StereoMode from "ImageTypes.h";
 using struct mozilla::null_t from "mozilla/ipc/IPCCore.h";
 using mozilla::WindowsHandle from "mozilla/ipc/IPCTypes.h";
 using mozilla::gfx::YUVColorSpace from "mozilla/gfx/Types.h";
+using mozilla::gfx::ChromaSubsampling from "mozilla/gfx/Types.h";
 using mozilla::gfx::ColorDepth from "mozilla/gfx/Types.h";
 using mozilla::gfx::ColorRange from "mozilla/gfx/Types.h";
+using mozilla::gfx::ColorSpace2 from "mozilla/gfx/Types.h";
 using mozilla::gfx::SurfaceFormat from "mozilla/gfx/Types.h";
 using mozilla::gfx::IntRect from "mozilla/gfx/Rect.h";
 using mozilla::gfx::IntSize from "mozilla/gfx/Point.h";
-using mozilla::ipc::SharedMemoryBasic::Handle from "mozilla/ipc/SharedMemoryBasic.h";
+[MoveOnly] using mozilla::ipc::SharedMemoryBasic::Handle from "mozilla/ipc/SharedMemoryBasic.h";
 using gfxImageFormat from "gfxTypes.h";
 using mozilla::layers::MaybeVideoBridgeSource from "mozilla/layers/VideoBridgeUtils.h";
 
 namespace mozilla {
 namespace layers {
 
-[Comparable] struct SurfaceDescriptorFileMapping {
-  WindowsHandle handle;
-  SurfaceFormat format;
-  IntSize size;
-};
-
-[Comparable] struct SurfaceDescriptorDIB {
-  // gfxWindowsSurface*
-  uintptr_t surface;
-};
-
 [Comparable] struct SurfaceDescriptorD3D10 {
   WindowsHandle handle;
+  uint64_t? gpuProcessTextureId;
+  uint32_t arrayIndex;
   SurfaceFormat format;
   IntSize size;
   YUVColorSpace yUVColorSpace;
@@ -62,15 +55,18 @@ namespace layers {
 
 [Comparable] struct SurfaceDescriptorDMABuf {
   uint32_t bufferType;
-  uint64_t modifier;
+  uint64_t[] modifier;
   uint32_t flags;
   FileDescriptor[] fds;
   uint32_t[] width;
   uint32_t[] height;
+  uint32_t[] widthAligned;
+  uint32_t[] heightAligned;
   uint32_t[] format;
   uint32_t[] strides;
   uint32_t[] offsets;
   YUVColorSpace yUVColorSpace;
+  ColorRange colorRange;
   FileDescriptor[] fence;
   uint32_t uid;
   FileDescriptor[] refCount;
@@ -128,7 +124,6 @@ namespace layers {
 [Comparable] struct RGBDescriptor {
   IntSize size;
   SurfaceFormat format;
-  bool hasIntermediateBuffer;
 };
 
 [Comparable] struct YCbCrDescriptor {
@@ -144,7 +139,7 @@ namespace layers {
   ColorDepth colorDepth;
   YUVColorSpace yUVColorSpace;
   ColorRange colorRange;
-  bool hasIntermediateBuffer;
+  ChromaSubsampling chromaSubsampling;
 };
 
 [Comparable] union BufferDescriptor {
@@ -176,11 +171,8 @@ namespace layers {
 
 [Comparable] union SurfaceDescriptor {
   SurfaceDescriptorBuffer;
-  SurfaceDescriptorDIB;
   SurfaceDescriptorD3D10;
-  SurfaceDescriptorFileMapping;
   SurfaceDescriptorDXGIYCbCr;
-  SurfaceDescriptorX11;
   SurfaceDescriptorDMABuf;
   SurfaceTextureDescriptor;
   SurfaceDescriptorAndroidHardwareBuffer;

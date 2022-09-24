@@ -7,6 +7,7 @@
 #define GMPServiceParent_h_
 
 #include "GMPService.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/gmp/PGMPServiceParent.h"
 #include "mozIGeckoMediaPluginChromeService.h"
 #include "nsClassHashtable.h"
@@ -16,11 +17,14 @@
 #include "nsIAsyncShutdown.h"
 #include "nsRefPtrHashtable.h"
 #include "nsThreadUtils.h"
+#include "mozilla/gmp/PGMPParent.h"
 #include "mozilla/MozPromise.h"
 #include "GMPStorage.h"
 
 template <class>
 struct already_AddRefed;
+using FlushFOGDataPromise = mozilla::dom::ContentParent::FlushFOGDataPromise;
+using ContentParent = mozilla::dom::ContentParent;
 
 namespace mozilla {
 class OriginAttributesPattern;
@@ -70,7 +74,19 @@ class GeckoMediaPluginServiceParent final
   void ServiceUserCreated(GMPServiceParent* aServiceParent);
   void ServiceUserDestroyed(GMPServiceParent* aServiceParent);
 
-  void UpdateContentProcessGMPCapabilities();
+  // If aContentProcess is specified, this will only update GMP caps in that
+  // content process, otherwise will update all content processes.
+  void UpdateContentProcessGMPCapabilities(
+      ContentParent* aContentProcess = nullptr);
+
+  void SendFlushFOGData(nsTArray<RefPtr<FlushFOGDataPromise>>& promises);
+
+  /*
+   * ** Test-only Method **
+   *
+   * Trigger GMP-process test metric instrumentation.
+   */
+  RefPtr<PGMPParent::TestTriggerMetricsPromise> TestTriggerMetrics();
 
  private:
   friend class GMPServiceParent;
@@ -164,7 +180,6 @@ class GeckoMediaPluginServiceParent final
 
   // Protected by mMutex from the base class.
   nsTArray<RefPtr<GMPParent>> mPlugins;
-  bool mShuttingDown;
 
   // True if we've inspected MOZ_GMP_PATH on the GMP thread and loaded any
   // plugins found there into mPlugins.
@@ -183,6 +198,7 @@ class GeckoMediaPluginServiceParent final
     T mValue;
   };
 
+  MainThreadOnly<bool> mShuttingDown;
   MainThreadOnly<bool> mWaitingForPluginsSyncShutdown;
 
   nsTArray<nsString> mPluginsWaitingForDeletion;
@@ -199,7 +215,7 @@ class GeckoMediaPluginServiceParent final
 
   // Synchronization for barrier that ensures we've loaded GMPs from
   // MOZ_GMP_PATH before allowing GetContentParentFrom() to proceed.
-  Monitor mInitPromiseMonitor;
+  Monitor mInitPromiseMonitor MOZ_UNANNOTATED;
   MozMonitoredPromiseHolder<GenericPromise> mInitPromise;
   bool mLoadPluginsFromDiskComplete;
 
@@ -210,6 +226,9 @@ class GeckoMediaPluginServiceParent final
   // processes we have. When this is empty we can safely shut down.
   // Synchronized across thread via mMutex in base class.
   nsTArray<GMPServiceParent*> mServiceParents;
+
+  uint32_t mDirectoriesAdded = 0;
+  uint32_t mDirectoriesInProgress = 0;
 };
 
 nsresult WriteToFile(nsIFile* aPath, const nsCString& aFileName,

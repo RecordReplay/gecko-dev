@@ -27,7 +27,6 @@ class GLContext;
 namespace layers {
 class Compositor;
 class LayerManager;
-class LayerManagerComposite;
 class NativeLayerRoot;
 }  // namespace layers
 namespace gfx {
@@ -63,7 +62,8 @@ class CompositorWidgetDelegate {
 };
 
 // Platforms that support out-of-process widgets.
-#if defined(XP_WIN) || defined(MOZ_X11)
+#if defined(XP_WIN) || defined(MOZ_X11) || defined(MOZ_WIDGET_ANDROID) || \
+    defined(MOZ_WAYLAND)
 // CompositorWidgetParent should implement CompositorWidget and
 // PCompositorWidgetParent.
 class CompositorWidgetParent;
@@ -190,6 +190,16 @@ class CompositorWidget {
    * a different compositor backend will be used (if any).
    */
   virtual bool InitCompositor(layers::Compositor* aCompositor) { return true; }
+
+  /**
+   * A hook that is ran whenever composition is resumed.
+   *
+   * This is called from CompositorBridgeParent::ResumeComposition,
+   * immediately prior to webrender being resumed.
+   *
+   * Returns true if composition can be successfully resumed, else false.
+   */
+  virtual bool OnResumeComposition() { return true; }
 
   /**
    * Return the size of the drawable area of the widget.

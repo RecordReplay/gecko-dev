@@ -13,6 +13,7 @@
         // defined(MOZ_HAS_MOZGLUE))
 #include "mozilla/Assertions.h"
 #include "mozilla/DynamicallyLinkedFunctionPtr.h"
+#include "mozilla/mscom/COMWrappers.h"
 #include "mozilla/mscom/ProcessRuntimeShared.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
@@ -36,6 +37,8 @@
 // This API from oleaut32.dll is not declared in Windows SDK headers
 extern "C" void __cdecl SetOaNoCache(void);
 
+using namespace mozilla::mscom::detail;
+
 namespace mozilla {
 namespace mscom {
 
@@ -56,7 +59,9 @@ ProcessRuntime::ProcessRuntime(const ProcessCategory aProcessCategory)
 #  if defined(MOZILLA_INTERNAL_API)
   // If we're inside XUL, and we're the parent process, then we trust that
   // this has already been initialized for us prior to XUL being loaded.
-  if (aProcessCategory != ProcessCategory::GeckoBrowserParent) {
+  // Only required in the child if the Resource ID has been passed down.
+  if (aProcessCategory != ProcessCategory::GeckoBrowserParent &&
+      ActCtxResource::GetAccessibilityResourceId()) {
     mActCtxRgn.emplace(ActCtxResource::GetAccessibilityResource());
   }
 #  elif defined(MOZ_HAS_MOZGLUE)
@@ -148,7 +153,8 @@ ProcessRuntime::ProcessRuntime(const ProcessCategory aProcessCategory)
 
     // Is another instance of ProcessRuntime responsible for the outer
     // initialization?
-    const bool prevInit = lock.IsInitialized();
+    const bool prevInit =
+        lock.GetInitState() == ProcessInitState::FullyInitialized;
     MOZ_ASSERT(prevInit);
     if (prevInit) {
       PostInit();
@@ -259,45 +265,56 @@ COINIT ProcessRuntime::GetDesiredApartmentType(
 
 void ProcessRuntime::InitInsideApartment() {
   ProcessInitLock lock;
-  if (lock.IsInitialized()) {
+  const ProcessInitState prevInitState = lock.GetInitState();
+  if (prevInitState == ProcessInitState::FullyInitialized) {
     // COM has already been initialized by a previous ProcessRuntime instance
     mInitResult = S_OK;
     return;
   }
 
-  // We are required to initialize security prior to configuring global options.
-  mInitResult = InitializeSecurity(mProcessCategory);
-  MOZ_DIAGNOSTIC_ASSERT(SUCCEEDED(mInitResult));
+  if (prevInitState < ProcessInitState::PartialSecurityInitialized) {
+    // We are required to initialize security prior to configuring global
+    // options.
+    mInitResult = InitializeSecurity(mProcessCategory);
+    MOZ_DIAGNOSTIC_ASSERT(SUCCEEDED(mInitResult));
 
-  // Even though this isn't great, we should try to proceed even when
-  // CoInitializeSecurity has previously been called: the additional settings
-  // we want to change are important enough that we don't want to skip them.
-  if (FAILED(mInitResult) && mInitResult != RPC_E_TOO_LATE) {
-    return;
+    // Even though this isn't great, we should try to proceed even when
+    // CoInitializeSecurity has previously been called: the additional settings
+    // we want to change are important enough that we don't want to skip them.
+    if (FAILED(mInitResult) && mInitResult != RPC_E_TOO_LATE) {
+      return;
+    }
+
+    lock.SetInitState(ProcessInitState::PartialSecurityInitialized);
   }
 
-  RefPtr<IGlobalOptions> globalOpts;
-  mInitResult =
-      ::CoCreateInstance(CLSID_GlobalOptions, nullptr, CLSCTX_INPROC_SERVER,
-                         IID_IGlobalOptions, getter_AddRefs(globalOpts));
-  MOZ_ASSERT(SUCCEEDED(mInitResult));
-  if (FAILED(mInitResult)) {
-    return;
-  }
+  if (prevInitState < ProcessInitState::PartialGlobalOptions) {
+    RefPtr<IGlobalOptions> globalOpts;
+    mInitResult = wrapped::CoCreateInstance(
+        CLSID_GlobalOptions, nullptr, CLSCTX_INPROC_SERVER, IID_IGlobalOptions,
+        getter_AddRefs(globalOpts));
+    MOZ_ASSERT(SUCCEEDED(mInitResult));
+    if (FAILED(mInitResult)) {
+      return;
+    }
 
-  // Disable COM's catch-all exception handler
-  mInitResult = globalOpts->Set(COMGLB_EXCEPTION_HANDLING,
-                                COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
-  MOZ_ASSERT(SUCCEEDED(mInitResult));
+    // Disable COM's catch-all exception handler
+    mInitResult = globalOpts->Set(COMGLB_EXCEPTION_HANDLING,
+                                  COMGLB_EXCEPTION_DONOT_HANDLE_ANY);
+    MOZ_ASSERT(SUCCEEDED(mInitResult));
+    if (FAILED(mInitResult)) {
+      return;
+    }
+
+    lock.SetInitState(ProcessInitState::PartialGlobalOptions);
+  }
 
   // Disable the BSTR cache (as it never invalidates, thus leaking memory)
+  // (This function is itself idempotent, so we do not concern ourselves with
+  // tracking whether or not we've already called it.)
   ::SetOaNoCache();
 
-  if (FAILED(mInitResult)) {
-    return;
-  }
-
-  lock.SetInitialized();
+  lock.SetInitState(ProcessInitState::FullyInitialized);
 }
 
 #if defined(MOZILLA_INTERNAL_API)
@@ -454,7 +471,7 @@ ProcessRuntime::InitializeSecurity(const ProcessCategory aProcessCategory) {
     return HRESULT_FROM_WIN32(::GetLastError());
   }
 
-  return ::CoInitializeSecurity(
+  return wrapped::CoInitializeSecurity(
       &sd, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
       RPC_C_IMP_LEVEL_IDENTIFY, nullptr, EOAC_NONE, nullptr);
 }

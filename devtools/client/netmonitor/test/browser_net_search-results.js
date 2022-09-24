@@ -11,7 +11,7 @@
 add_task(async function() {
   await pushPref("devtools.netmonitor.features.search", true);
 
-  const { tab, monitor } = await initNetMonitor(CUSTOM_GET_URL, {
+  const { tab, monitor } = await initNetMonitor(HTTPS_CUSTOM_GET_URL, {
     requestCount: 1,
   });
   info("Starting test... ");
@@ -24,14 +24,17 @@ add_task(async function() {
 
   const SEARCH_STRING = "test";
   // Execute two XHRs and wait until they are finished.
-  const URLS = [SEARCH_SJS + "?value=test1", SEARCH_SJS + "?value=test2"];
+  const URLS = [
+    HTTPS_SEARCH_SJS + "?value=test1",
+    HTTPS_SEARCH_SJS + "?value=test2",
+  ];
 
   const wait = waitForNetworkEvents(monitor, 2);
   await SpecialPowers.spawn(tab.linkedBrowser, [URLS], makeRequests);
   await wait;
 
   // Open the Search panel
-  store.dispatch(Actions.openSearch());
+  await store.dispatch(Actions.openSearch());
 
   // Helper for keyboard typing
   const type = string => {
@@ -148,7 +151,7 @@ add_task(async function() {
     monitor,
     matches[9],
     "#cookies-panel",
-    "#requestCookies .properties-view",
+    "#responseCookies .properties-view",
     ".treeRow.selected",
     [SEARCH_STRING]
   );
@@ -156,7 +159,7 @@ add_task(async function() {
     monitor,
     matches[10],
     "#cookies-panel",
-    "#responseCookies .properties-view",
+    "#requestCookies .properties-view",
     ".treeRow.selected",
     [SEARCH_STRING]
   );
@@ -173,11 +176,9 @@ add_task(async function() {
 });
 
 async function makeRequests(urls) {
-  content.wrappedJSObject.get(urls[0], () => {
-    content.wrappedJSObject.get(urls[1], () => {
-      info("XHR Requests executed");
-    });
-  });
+  await content.wrappedJSObject.get(urls[0]);
+  await content.wrappedJSObject.get(urls[1]);
+  info("XHR Requests executed");
 }
 
 /**
@@ -216,6 +217,16 @@ async function checkSearchResult(
       expected.length === 1 ? "" : "s"
     } displayed in this tabpanel`
   );
+
+  // Make sure only 1 item is selected
+  if (panelDetailSelector === ".treeRow.selected") {
+    const selectedElements = tabpanel.querySelectorAll(panelDetailSelector);
+    is(
+      selectedElements.length,
+      1,
+      `There should be only 1 item selected, found ${selectedElements.length} items selected`
+    );
+  }
 
   if (content.length === expected.length) {
     for (let i = 0; i < expected.length; i++) {

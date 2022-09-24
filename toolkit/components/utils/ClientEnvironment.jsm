@@ -32,7 +32,9 @@ var EXPORTED_SYMBOLS = ["ClientEnvironmentBase"];
  */
 class ClientEnvironmentBase {
   static get distribution() {
-    return Services.prefs.getCharPref("distribution.id", "default");
+    return Services.prefs
+      .getDefaultBranch(null)
+      .getCharPref("distribution.id", "default");
   }
 
   static get telemetry() {
@@ -119,8 +121,8 @@ class ClientEnvironmentBase {
 
   static get searchEngine() {
     return (async () => {
-      const defaultEngineInfo = await Services.search.getDefaultEngineInfo();
-      return defaultEngineInfo.defaultSearchEngine;
+      const defaultEngineInfo = await Services.search.getDefault();
+      return defaultEngineInfo.telemetryId;
     })();
   }
 

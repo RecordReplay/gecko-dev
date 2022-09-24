@@ -12,11 +12,15 @@
 #include "mozilla/dom/CSSFontFaceRule.h"
 #include "mozilla/dom/CSSFontFeatureValuesRule.h"
 #include "mozilla/dom/CSSImportRule.h"
+#include "mozilla/dom/CSSLayerBlockRule.h"
+#include "mozilla/dom/CSSLayerStatementRule.h"
 #include "mozilla/dom/CSSKeyframesRule.h"
+#include "mozilla/dom/CSSContainerRule.h"
 #include "mozilla/dom/CSSMediaRule.h"
 #include "mozilla/dom/CSSMozDocumentRule.h"
 #include "mozilla/dom/CSSNamespaceRule.h"
 #include "mozilla/dom/CSSPageRule.h"
+#include "mozilla/dom/CSSScrollTimelineRule.h"
 #include "mozilla/dom/CSSStyleRule.h"
 #include "mozilla/dom/CSSSupportsRule.h"
 #include "mozilla/IntegerRange.h"
@@ -32,7 +36,7 @@ ServoCSSRuleList::ServoCSSRuleList(already_AddRefed<ServoCssRules> aRawRules,
                                    StyleSheet* aSheet,
                                    css::GroupRule* aParentRule)
     : mStyleSheet(aSheet), mParentRule(aParentRule), mRawRules(aRawRules) {
-  Servo_CssRules_ListTypes(mRawRules, &mRules);
+  ResetRules();
 }
 
 // QueryInterface implementation for ServoCSSRuleList
@@ -49,7 +53,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ServoCSSRuleList)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END_INHERITED(dom::CSSRuleList)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(ServoCSSRuleList,
                                                   dom::CSSRuleList)
-  tmp->EnumerateInstantiatedRules([&](css::Rule* aRule) {
+  tmp->EnumerateInstantiatedRules([&](css::Rule* aRule, uint32_t) {
     if (!aRule->IsCCLeaf()) {
       NS_CYCLE_COLLECTION_NOTE_EDGE_NAME(cb, "mRules[i]");
       cb.NoteXPCOMChild(aRule);
@@ -61,35 +65,40 @@ css::Rule* ServoCSSRuleList::GetRule(uint32_t aIndex) {
   uintptr_t rule = mRules[aIndex];
   if (rule <= kMaxRuleType) {
     RefPtr<css::Rule> ruleObj = nullptr;
-    switch (rule) {
+    switch (StyleCssRuleType(rule)) {
 #define CASE_RULE(const_, name_)                                             \
-  case CSSRule_Binding::const_##_RULE: {                                     \
+  case StyleCssRuleType::const_: {                                           \
     uint32_t line = 0, column = 0;                                           \
-    RefPtr<RawServo##name_##Rule> rule =                                     \
+    RefPtr<RawServo##name_##Rule> raw =                                      \
         Servo_CssRules_Get##name_##RuleAt(mRawRules, aIndex, &line, &column) \
             .Consume();                                                      \
-    MOZ_ASSERT(rule);                                                        \
-    ruleObj = new CSS##name_##Rule(rule.forget(), mStyleSheet, mParentRule,  \
+    MOZ_ASSERT(raw);                                                         \
+    ruleObj = new CSS##name_##Rule(raw.forget(), mStyleSheet, mParentRule,   \
                                    line, column);                            \
+    MOZ_ASSERT(ruleObj->Type() == StyleCssRuleType(rule));                   \
     break;                                                                   \
   }
-      CASE_RULE(STYLE, Style)
-      CASE_RULE(KEYFRAMES, Keyframes)
-      CASE_RULE(MEDIA, Media)
-      CASE_RULE(NAMESPACE, Namespace)
-      CASE_RULE(PAGE, Page)
-      CASE_RULE(SUPPORTS, Supports)
-      CASE_RULE(DOCUMENT, MozDocument)
-      CASE_RULE(IMPORT, Import)
-      CASE_RULE(FONT_FEATURE_VALUES, FontFeatureValues)
-      CASE_RULE(FONT_FACE, FontFace)
-      CASE_RULE(COUNTER_STYLE, CounterStyle)
+      CASE_RULE(Style, Style)
+      CASE_RULE(Keyframes, Keyframes)
+      CASE_RULE(Media, Media)
+      CASE_RULE(Namespace, Namespace)
+      CASE_RULE(Page, Page)
+      CASE_RULE(Supports, Supports)
+      CASE_RULE(Document, MozDocument)
+      CASE_RULE(Import, Import)
+      CASE_RULE(FontFeatureValues, FontFeatureValues)
+      CASE_RULE(FontFace, FontFace)
+      CASE_RULE(CounterStyle, CounterStyle)
+      CASE_RULE(LayerBlock, LayerBlock)
+      CASE_RULE(LayerStatement, LayerStatement)
+      CASE_RULE(ScrollTimeline, ScrollTimeline)
+      CASE_RULE(Container, Container)
 #undef CASE_RULE
-      case CSSRule_Binding::KEYFRAME_RULE:
-        MOZ_ASSERT_UNREACHABLE("keyframe rule cannot be here");
+      case StyleCssRuleType::Viewport:
+        MOZ_ASSERT_UNREACHABLE("viewport is not implemented in Gecko");
         return nullptr;
-      default:
-        NS_WARNING("stylo: not implemented yet");
+      case StyleCssRuleType::Keyframe:
+        MOZ_ASSERT_UNREACHABLE("keyframe rule cannot be here");
         return nullptr;
     }
     rule = CastToUint(ruleObj.forget().take());
@@ -109,10 +118,12 @@ css::Rule* ServoCSSRuleList::IndexedGetter(uint32_t aIndex, bool& aFound) {
 
 template <typename Func>
 void ServoCSSRuleList::EnumerateInstantiatedRules(Func aCallback) {
+  uint32_t index = 0;
   for (uintptr_t rule : mRules) {
     if (rule > kMaxRuleType) {
-      aCallback(CastToPtr(rule));
+      aCallback(CastToPtr(rule), index);
     }
+    index++;
   }
 }
 
@@ -121,10 +132,7 @@ static void DropRule(already_AddRefed<css::Rule> aRule) {
   rule->DropReferences();
 }
 
-void ServoCSSRuleList::DropAllRules() {
-  mStyleSheet = nullptr;
-  mParentRule = nullptr;
-  mRawRules = nullptr;
+void ServoCSSRuleList::ResetRules() {
   // DropRule could reenter here via the cycle collector.
   auto rules = std::move(mRules);
   for (uintptr_t rule : rules) {
@@ -133,6 +141,17 @@ void ServoCSSRuleList::DropAllRules() {
     }
   }
   MOZ_ASSERT(mRules.IsEmpty());
+  if (mRawRules) {
+    Servo_CssRules_ListTypes(mRawRules, &mRules);
+  }
+}
+
+void ServoCSSRuleList::DropAllRules() {
+  mStyleSheet = nullptr;
+  mParentRule = nullptr;
+  mRawRules = nullptr;
+
+  ResetRules();
 }
 
 void ServoCSSRuleList::DropSheetReference() {
@@ -146,13 +165,13 @@ void ServoCSSRuleList::DropSheetReference() {
   }
   mStyleSheet = nullptr;
   EnumerateInstantiatedRules(
-      [](css::Rule* rule) { rule->DropSheetReference(); });
+      [](css::Rule* rule, uint32_t) { rule->DropSheetReference(); });
 }
 
 void ServoCSSRuleList::DropParentRuleReference() {
   mParentRule = nullptr;
   EnumerateInstantiatedRules(
-      [](css::Rule* rule) { rule->DropParentRuleReference(); });
+      [](css::Rule* rule, uint32_t) { rule->DropParentRuleReference(); });
 }
 
 nsresult ServoCSSRuleList::InsertRule(const nsACString& aRule,
@@ -161,9 +180,11 @@ nsresult ServoCSSRuleList::InsertRule(const nsACString& aRule,
              "Caller must ensure that "
              "the list is not unlinked from stylesheet");
 
-  if (IsReadOnly()) {
+  if (!mRawRules || IsReadOnly()) {
     return NS_OK;
   }
+
+  mStyleSheet->WillDirty();
 
   bool nested = !!mParentRule;
   css::Loader* loader = nullptr;
@@ -179,19 +200,19 @@ nsresult ServoCSSRuleList::InsertRule(const nsACString& aRule,
   if (Document* doc = mStyleSheet->GetAssociatedDocument()) {
     loader = doc->CSSLoader();
   }
-  uint16_t type;
+  StyleCssRuleType type;
   nsresult rv = Servo_CssRules_InsertRule(mRawRules, mStyleSheet->RawContents(),
                                           &aRule, aIndex, nested, loader,
                                           allowImportRules, mStyleSheet, &type);
   if (NS_FAILED(rv)) {
     return rv;
   }
-  mRules.InsertElementAt(aIndex, type);
+  mRules.InsertElementAt(aIndex, uintptr_t(type));
   return rv;
 }
 
 nsresult ServoCSSRuleList::DeleteRule(uint32_t aIndex) {
-  if (IsReadOnly()) {
+  if (!mRawRules || IsReadOnly()) {
     return NS_OK;
   }
 
@@ -206,12 +227,50 @@ nsresult ServoCSSRuleList::DeleteRule(uint32_t aIndex) {
   return rv;
 }
 
-uint16_t ServoCSSRuleList::GetDOMCSSRuleType(uint32_t aIndex) const {
-  uintptr_t rule = mRules[aIndex];
-  if (rule <= kMaxRuleType) {
-    return rule;
+void ServoCSSRuleList::SetRawContents(RefPtr<ServoCssRules> aNewRules,
+                                      bool aFromClone) {
+  mRawRules = std::move(aNewRules);
+  if (!aFromClone) {
+    ResetRules();
+    return;
   }
-  return CastToPtr(rule)->Type();
+
+  EnumerateInstantiatedRules([&](css::Rule* aRule, uint32_t aIndex) {
+#define CASE_FOR(constant_, type_)                                           \
+  case StyleCssRuleType::constant_: {                                        \
+    uint32_t line = 0, column = 0;                                           \
+    RefPtr<RawServo##type_##Rule> raw =                                      \
+        Servo_CssRules_Get##type_##RuleAt(mRawRules, aIndex, &line, &column) \
+            .Consume();                                                      \
+    static_cast<dom::CSS##type_##Rule*>(aRule)->SetRawAfterClone(            \
+        std::move(raw));                                                     \
+    break;                                                                   \
+  }
+    switch (aRule->Type()) {
+      CASE_FOR(Style, Style)
+      CASE_FOR(Keyframes, Keyframes)
+      CASE_FOR(Media, Media)
+      CASE_FOR(Namespace, Namespace)
+      CASE_FOR(Page, Page)
+      CASE_FOR(Supports, Supports)
+      CASE_FOR(Document, MozDocument)
+      CASE_FOR(Import, Import)
+      CASE_FOR(FontFeatureValues, FontFeatureValues)
+      CASE_FOR(FontFace, FontFace)
+      CASE_FOR(CounterStyle, CounterStyle)
+      CASE_FOR(LayerBlock, LayerBlock)
+      CASE_FOR(LayerStatement, LayerStatement)
+      CASE_FOR(ScrollTimeline, ScrollTimeline)
+      CASE_FOR(Container, Container)
+      case StyleCssRuleType::Keyframe:
+        MOZ_ASSERT_UNREACHABLE("keyframe rule cannot be here");
+        break;
+      case StyleCssRuleType::Viewport:
+        MOZ_ASSERT_UNREACHABLE("Gecko doesn't implemente @viewport?");
+        break;
+    }
+#undef CASE_FOR
+  });
 }
 
 ServoCSSRuleList::~ServoCSSRuleList() {

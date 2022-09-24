@@ -43,6 +43,9 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
   NS_DECL_NSISERIALIZABLE
   NS_DECL_NSICLASSINFO
 
+  void SetPreliminaryHandshakeInfo(const SSLChannelInfo& channelInfo,
+                                   const SSLCipherSuiteInfo& cipherInfo);
+
   void SetSecurityState(uint32_t aState);
 
   inline int32_t GetErrorCode() {
@@ -75,11 +78,13 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
   void SetCanceled(PRErrorCode errorCode);
   bool IsCanceled();
 
-  void SetStatusErrorBits(nsNSSCertificate* cert, uint32_t collected_errors);
+  void SetStatusErrorBits(const nsCOMPtr<nsIX509Cert>& cert,
+                          uint32_t collected_errors);
 
   nsresult SetFailedCertChain(nsTArray<nsTArray<uint8_t>>&& certList);
 
-  void SetServerCert(nsNSSCertificate* aServerCert, EVStatus aEVStatus);
+  void SetServerCert(const nsCOMPtr<nsIX509Cert>& aServerCert,
+                     EVStatus aEVStatus);
 
   nsresult SetSucceededCertChain(nsTArray<nsTArray<uint8_t>>&& certList);
 
@@ -90,9 +95,6 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
 
   static uint16_t ConvertCertificateTransparencyInfoToStatus(
       const mozilla::psm::CertificateTransparencyInfo& info);
-
-  static nsTArray<nsTArray<uint8_t>> CreateCertBytesArray(
-      const UniqueCERTCertList& aCertChain);
 
   // Use errorCode == 0 to indicate success;
   virtual void SetCertVerificationResult(PRErrorCode errorCode){};
@@ -105,14 +107,6 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
 
   void SetResumed(bool aResumed);
 
-  uint16_t mCipherSuite;
-  uint16_t mProtocolVersion;
-  uint16_t mCertificateTransparencyStatus;
-  nsCString mKeaGroup;
-  nsCString mSignatureSchemeName;
-
-  Atomic<bool> mIsAcceptedEch;
-  Atomic<bool> mIsDelegatedCredential;
   Atomic<bool> mIsDomainMismatch;
   Atomic<bool> mIsNotValidAtThisTime;
   Atomic<bool> mIsUntrusted;
@@ -134,12 +128,24 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
  protected:
   mutable ::mozilla::Mutex mMutex;
 
-  nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
-  nsTArray<RefPtr<nsIX509Cert>> mSucceededCertChain;
-  Atomic<bool> mNPNCompleted;
-  nsCString mNegotiatedNPN;
-  Atomic<bool> mResumed;
-  Atomic<bool> mIsBuiltCertChainRootBuiltInRoot;
+  uint16_t mCipherSuite GUARDED_BY(mMutex);
+  uint16_t mProtocolVersion GUARDED_BY(mMutex);
+  uint16_t mCertificateTransparencyStatus GUARDED_BY(mMutex);
+  nsCString mKeaGroup GUARDED_BY(mMutex);
+  nsCString mSignatureSchemeName GUARDED_BY(mMutex);
+
+  bool mIsAcceptedEch GUARDED_BY(mMutex);
+  bool mIsDelegatedCredential GUARDED_BY(mMutex);
+
+  nsCOMPtr<nsIInterfaceRequestor> mCallbacks GUARDED_BY(mMutex);
+  nsTArray<RefPtr<nsIX509Cert>> mSucceededCertChain GUARDED_BY(mMutex);
+  bool mNPNCompleted GUARDED_BY(mMutex);
+  nsCString mNegotiatedNPN GUARDED_BY(mMutex);
+  bool mResumed GUARDED_BY(mMutex);
+  bool mIsBuiltCertChainRootBuiltInRoot GUARDED_BY(mMutex);
+  nsCString mPeerId GUARDED_BY(mMutex);
+  nsCString mHostName GUARDED_BY(mMutex);
+  OriginAttributes mOriginAttributes GUARDED_BY(mMutex);
 
  private:
   static nsresult ReadBoolAndSetAtomicFieldHelper(nsIObjectInputStream* stream,
@@ -165,10 +171,10 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
   }
 
   template <typename P>
-  static bool ReadParamAtomicHelper(const IPC::Message* aMsg,
-                                    PickleIterator* aIter, Atomic<P>& atomic) {
+  static bool ReadParamAtomicHelper(IPC::MessageReader* aReader,
+                                    Atomic<P>& atomic) {
     P tmpStore;
-    bool result = ReadParam(aMsg, aIter, &tmpStore);
+    bool result = ReadParam(aReader, &tmpStore);
     if (result == false) {
       return result;
     }
@@ -181,13 +187,11 @@ class TransportSecurityInfo : public nsITransportSecurityInfo,
   Atomic<PRErrorCode> mErrorCode;
 
   Atomic<int32_t> mPort;
-  nsCString mHostName;
-  OriginAttributes mOriginAttributes;
 
-  nsCOMPtr<nsIX509Cert> mServerCert;
+  nsCOMPtr<nsIX509Cert> mServerCert GUARDED_BY(mMutex);
 
   /* Peer cert chain for failed connections (for error reporting) */
-  nsTArray<RefPtr<nsIX509Cert>> mFailedCertChain;
+  nsTArray<RefPtr<nsIX509Cert>> mFailedCertChain GUARDED_BY(mMutex);
 
   nsresult ReadSSLStatus(nsIObjectInputStream* aStream,
                          MutexAutoLock& aProofOfLock);
@@ -212,7 +216,7 @@ class RememberCertErrorsTable {
     bool mIsNotValidAtThisTime;
     bool mIsUntrusted;
   };
-  nsTHashMap<nsCStringHashKey, CertStateBits> mErrorHosts;
+  nsTHashMap<nsCStringHashKey, CertStateBits> mErrorHosts GUARDED_BY(mMutex);
 
  public:
   void RememberCertHasError(TransportSecurityInfo* infoObject,

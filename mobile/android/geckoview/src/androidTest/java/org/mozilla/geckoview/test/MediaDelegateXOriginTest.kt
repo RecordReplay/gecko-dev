@@ -13,8 +13,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.Assume.assumeThat
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.MediaDelegate
+import org.mozilla.geckoview.GeckoSession.PermissionDelegate
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule
-import org.mozilla.geckoview.test.util.Callbacks
 
 @RunWith(AndroidJUnit4::class)
 @MediumTest
@@ -23,7 +24,7 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
 
     private fun requestRecordingPermission(allowAudio: Boolean, allowCamera: Boolean) {
 
-        mainSession.delegateDuringNextWait(object : Callbacks.PermissionDelegate {
+        mainSession.delegateDuringNextWait(object : PermissionDelegate {
             @GeckoSessionTestRule.AssertCalled(count = 1)
             override fun onMediaPermissionRequest(
                     session: GeckoSession, uri: String,
@@ -55,18 +56,18 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
             }
         })
 
-        mainSession.delegateDuringNextWait(object : Callbacks.MediaDelegate {
+        mainSession.delegateDuringNextWait(object : MediaDelegate {
             @GeckoSessionTestRule.AssertCalled(count = 1)
             override fun onRecordingStatusChanged(session: GeckoSession,
-                                                devices:  Array<org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice>) {
+                                                devices:  Array<MediaDelegate.RecordingDevice>) {
                 var audioActive = false
                 var cameraActive = false
                 for (device in devices) {
-                    if (device.type == org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice.Type.MICROPHONE) {
-                        audioActive = device.status != org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice.Status.INACTIVE
+                    if (device.type == MediaDelegate.RecordingDevice.Type.MICROPHONE) {
+                        audioActive = device.status != MediaDelegate.RecordingDevice.Status.INACTIVE
                     }
-                    if (device.type == org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice.Type.CAMERA) {
-                        cameraActive = device.status != org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice.Status.INACTIVE
+                    if (device.type == MediaDelegate.RecordingDevice.Type.CAMERA) {
+                        cameraActive = device.status != MediaDelegate.RecordingDevice.Status.INACTIVE
                     }
                 }
 
@@ -75,7 +76,6 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
 
                 assertThat("Audio is ${if (allowAudio ) { "active" } else { "inactive" }}" ,
                         audioActive, Matchers.equalTo(allowAudio))
-
             }
         })
 
@@ -102,7 +102,7 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
 
     private fun requestRecordingPermissionNoAllow(allowAudio: Boolean, allowCamera: Boolean) {
 
-        mainSession.delegateDuringNextWait(object : Callbacks.PermissionDelegate {
+        mainSession.delegateDuringNextWait(object : PermissionDelegate {
             @GeckoSessionTestRule.AssertCalled(count = 0)
             override fun onMediaPermissionRequest(
                     session: GeckoSession, uri: String,
@@ -120,7 +120,7 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
             }
         })
 
-        mainSession.delegateDuringNextWait(object : Callbacks.MediaDelegate {
+        mainSession.delegateDuringNextWait(object : MediaDelegate {
             @GeckoSessionTestRule.AssertCalled(count = 0)
             override fun onRecordingStatusChanged(session: GeckoSession,
                                                 devices:  Array<org.mozilla.geckoview.GeckoSession.MediaDelegate.RecordingDevice>) {}
@@ -148,9 +148,6 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
     }
 
     @Test fun testDeviceRecordingEventAudioAndVideoInXOriginIframe() {
-        // TODO: Bug 1648153
-        assumeThat(sessionRule.env.isFission, Matchers.equalTo(false))
-
         // TODO: needs bug 1700243
         assumeThat(sessionRule.env.isIsolatedProcess, Matchers.equalTo(false))
 
@@ -166,9 +163,6 @@ class MediaDelegateXOriginTest : BaseSessionTest() {
     }
 
     @Test fun testDeviceRecordingEventAudioAndVideoInXOriginIframeNoAllow() {
-        // TODO: Bug 1648153
-        assumeThat(sessionRule.env.isFission, Matchers.equalTo(false))
-
         mainSession.loadTestPath(GETUSERMEDIA_XORIGIN_CONTAINER_HTML_PATH)
         mainSession.waitForPageStop()
 

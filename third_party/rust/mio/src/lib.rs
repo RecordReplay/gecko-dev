@@ -1,308 +1,264 @@
-#![doc(html_root_url = "https://docs.rs/mio/0.6.23")]
-// Mio targets old versions of the Rust compiler. In order to do this, uses
-// deprecated APIs.
-#![allow(bare_trait_objects, deprecated, unknown_lints)]
-#![deny(missing_docs, missing_debug_implementations)]
+#![deny(
+    missing_docs,
+    missing_debug_implementations,
+    rust_2018_idioms,
+    unused_imports,
+    dead_code
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+// Disallow warnings when running tests.
 #![cfg_attr(test, deny(warnings))]
+// Disallow warnings in examples.
+#![doc(test(attr(deny(warnings))))]
 
-// Many of mio's public methods violate this lint, but they can't be fixed
-// without a breaking change.
-#![cfg_attr(feature = "cargo-clippy", allow(clippy::trivially_copy_pass_by_ref))]
-
-//! A fast, low-level IO library for Rust focusing on non-blocking APIs, event
-//! notification, and other useful utilities for building high performance IO
-//! apps.
-//!
-//! # Features
-//!
-//! * Non-blocking TCP, UDP
-//! * I/O event notification queue backed by epoll, kqueue, and IOCP
-//! * Zero allocations at runtime
-//! * Platform specific extensions
-//!
-//! # Non-goals
-//!
-//! The following are specifically omitted from Mio and are left to the user or higher-level libraries.
-//!
-//! * File operations
-//! * Thread pools / multi-threaded event loop
-//! * Timers
-//!
-//! # Platforms
-//!
-//! Currently supported platforms:
-//!
-//! * Linux
-//! * OS X
-//! * Windows
-//! * FreeBSD
-//! * NetBSD
-//! * Android
-//! * iOS
-//!
-//! mio can handle interfacing with each of the event notification systems of the aforementioned platforms. The details of
-//! their implementation are further discussed in [`Poll`].
+//! Mio is a fast, low-level I/O library for Rust focusing on non-blocking APIs
+//! and event notification for building high performance I/O apps with as little
+//! overhead as possible over the OS abstractions.
 //!
 //! # Usage
 //!
-//! Using mio starts by creating a [`Poll`], which reads events from the OS and
-//! put them into [`Events`]. You can handle IO events from the OS with it.
+//! Using Mio starts by creating a [`Poll`], which reads events from the OS and
+//! puts them into [`Events`]. You can handle I/O events from the OS with it.
 //!
 //! For more detail, see [`Poll`].
 //!
-//! [`Poll`]: struct.Poll.html
-//! [`Events`]: struct.Events.html
+//! [`Poll`]: ../mio/struct.Poll.html
+//! [`Events`]: ../mio/event/struct.Events.html
 //!
-//! # Example
+//! ## Examples
 //!
-//! ```
-//! use mio::*;
-//! use mio::net::{TcpListener, TcpStream};
+//! Examples can found in the `examples` directory of the source code, or [on
+//! GitHub].
 //!
-//! // Setup some tokens to allow us to identify which event is
-//! // for which socket.
-//! const SERVER: Token = Token(0);
-//! const CLIENT: Token = Token(1);
+//! [on GitHub]: https://github.com/tokio-rs/mio/tree/master/examples
 //!
-//! let addr = "127.0.0.1:13265".parse().unwrap();
+//! ## Guide
 //!
-//! // Setup the server socket
-//! let server = TcpListener::bind(&addr).unwrap();
+//! A getting started guide is available in the [`guide`] module.
 //!
-//! // Create a poll instance
-//! let poll = Poll::new().unwrap();
+//! ## Available features
 //!
-//! // Start listening for incoming connections
-//! poll.register(&server, SERVER, Ready::readable(),
-//!               PollOpt::edge()).unwrap();
-//!
-//! // Setup the client socket
-//! let sock = TcpStream::connect(&addr).unwrap();
-//!
-//! // Register the socket
-//! poll.register(&sock, CLIENT, Ready::readable(),
-//!               PollOpt::edge()).unwrap();
-//!
-//! // Create storage for events
-//! let mut events = Events::with_capacity(1024);
-//!
-//! loop {
-//!     poll.poll(&mut events, None).unwrap();
-//!
-//!     for event in events.iter() {
-//!         match event.token() {
-//!             SERVER => {
-//!                 // Accept and drop the socket immediately, this will close
-//!                 // the socket and notify the client of the EOF.
-//!                 let _ = server.accept();
-//!             }
-//!             CLIENT => {
-//!                 // The server just shuts down the socket, let's just exit
-//!                 // from our event loop.
-//!                 return;
-//!             }
-//!             _ => unreachable!(),
-//!         }
-//!     }
-//! }
-//!
-//! ```
+//! The available features are described in the [`features`] module.
 
-extern crate net2;
-extern crate iovec;
-extern crate slab;
-
-#[cfg(target_os = "fuchsia")]
-extern crate fuchsia_zircon as zircon;
-#[cfg(target_os = "fuchsia")]
-extern crate fuchsia_zircon_sys as zircon_sys;
-
-#[cfg(unix)]
-extern crate libc;
-
-#[cfg(windows)]
-extern crate miow;
-
-#[cfg(windows)]
-extern crate winapi;
-
+// macros used internally
 #[macro_use]
-extern crate log;
+mod macros;
 
-mod event_imp;
-mod io;
+mod interest;
 mod poll;
 mod sys;
 mod token;
-mod lazycell;
+mod waker;
 
-pub mod net;
+pub mod event;
 
-#[deprecated(since = "0.6.5", note = "use mio-extras instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub mod channel;
-
-#[deprecated(since = "0.6.5", note = "use mio-extras instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub mod timer;
-
-#[deprecated(since = "0.6.5", note = "update to use `Poll`")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub mod deprecated;
-
-#[deprecated(since = "0.6.5", note = "use iovec crate directly")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub use iovec::IoVec;
-
-#[deprecated(since = "0.6.6", note = "use net module instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub mod tcp {
-    pub use net::{TcpListener, TcpStream};
-    pub use std::net::Shutdown;
+cfg_io_source! {
+    mod io_source;
 }
 
-#[deprecated(since = "0.6.6", note = "use net module instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub mod udp;
+cfg_net! {
+    pub mod net;
+}
 
-pub use poll::{
-    Poll,
-    Registration,
-    SetReadiness,
-};
-pub use event_imp::{
-    PollOpt,
-    Ready,
-};
+#[doc(no_inline)]
+pub use event::Events;
+pub use interest::Interest;
+pub use poll::{Poll, Registry};
 pub use token::Token;
+pub use waker::Waker;
 
-pub mod event {
-    //! Readiness event types and utilities.
-
-    pub use super::poll::{Events, Iter};
-    pub use super::event_imp::{Event, Evented};
-}
-
-pub use event::{
-    Events,
-};
-
-#[deprecated(since = "0.6.5", note = "use events:: instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub use event::{Event, Evented};
-
-#[deprecated(since = "0.6.5", note = "use events::Iter instead")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub use poll::Iter as EventsIter;
-
-#[deprecated(since = "0.6.5", note = "std::io::Error can avoid the allocation now")]
-#[cfg(feature = "with-deprecated")]
-#[doc(hidden)]
-pub use io::deprecated::would_block;
-
-#[cfg(all(unix, not(target_os = "fuchsia")))]
+#[cfg(all(unix, feature = "os-ext"))]
+#[cfg_attr(docsrs, doc(cfg(all(unix, feature = "os-ext"))))]
 pub mod unix {
-    //! Unix only extensions
-    pub use sys::{
-        EventedFd,
-    };
-    pub use sys::unix::UnixReady;
-}
+    //! Unix only extensions.
 
-#[cfg(target_os = "fuchsia")]
-pub mod fuchsia {
-    //! Fuchsia-only extensions
-    //!
-    //! # Stability
-    //!
-    //! This module depends on the [magenta-sys crate](https://crates.io/crates/magenta-sys)
-    //! and so might introduce breaking changes, even on minor releases,
-    //! so long as that crate remains unstable.
-    pub use sys::{
-        EventedHandle,
-    };
-    pub use sys::fuchsia::{FuchsiaReady, zx_signals_t};
-}
+    pub mod pipe {
+        //! Unix pipe.
+        //!
+        //! See the [`new`] function for documentation.
 
-/// Windows-only extensions to the mio crate.
-///
-/// Mio on windows is currently implemented with IOCP for a high-performance
-/// implementation of asynchronous I/O. Mio then provides TCP and UDP as sample
-/// bindings for the system to connect networking types to asynchronous I/O. On
-/// Unix this scheme is then also extensible to all other file descriptors with
-/// the `EventedFd` type, but on Windows no such analog is available. The
-/// purpose of this module, however, is to similarly provide a mechanism for
-/// foreign I/O types to get hooked up into the IOCP event loop.
-///
-/// This module provides two types for interfacing with a custom IOCP handle:
-///
-/// * `Binding` - this type is intended to govern binding with mio's `Poll`
-///   type. Each I/O object should contain an instance of `Binding` that's
-///   interfaced with for the implementation of the `Evented` trait. The
-///   `register`, `reregister`, and `deregister` methods for the `Evented` trait
-///   all have rough analogs with `Binding`.
-///
-///   Note that this type **does not handle readiness**. That is, this type does
-///   not handle whether sockets are readable/writable/etc. It's intended that
-///   IOCP types will internally manage this state with a `SetReadiness` type
-///   from the `poll` module. The `SetReadiness` is typically lazily created on
-///   the first time that `Evented::register` is called and then stored in the
-///   I/O object.
-///
-///   Also note that for types which represent streams of bytes the mio
-///   interface of *readiness* doesn't map directly to the Windows model of
-///   *completion*. This means that types will have to perform internal
-///   buffering to ensure that a readiness interface can be provided. For a
-///   sample implementation see the TCP/UDP modules in mio itself.
-///
-/// * `Overlapped` - this type is intended to be used as the concrete instances
-///   of the `OVERLAPPED` type that most win32 methods expect. It's crucial, for
-///   safety, that all asynchronous operations are initiated with an instance of
-///   `Overlapped` and not another instantiation of `OVERLAPPED`.
-///
-///   Mio's `Overlapped` type is created with a function pointer that receives
-///   a `OVERLAPPED_ENTRY` type when called. This `OVERLAPPED_ENTRY` type is
-///   defined in the `winapi` crate. Whenever a completion is posted to an IOCP
-///   object the `OVERLAPPED` that was signaled will be interpreted as
-///   `Overlapped` in the mio crate and this function pointer will be invoked.
-///   Through this function pointer, and through the `OVERLAPPED` pointer,
-///   implementations can handle management of I/O events.
-///
-/// When put together these two types enable custom Windows handles to be
-/// registered with mio's event loops. The `Binding` type is used to associate
-/// handles and the `Overlapped` type is used to execute I/O operations. When
-/// the I/O operations are completed a custom function pointer is called which
-/// typically modifies a `SetReadiness` set by `Evented` methods which will get
-/// later hooked into the mio event loop.
-#[cfg(windows)]
-pub mod windows {
-
-    pub use sys::{Overlapped, Binding};
-}
-
-#[cfg(feature = "with-deprecated")]
-mod convert {
-    use std::time::Duration;
-
-    const NANOS_PER_MILLI: u32 = 1_000_000;
-    const MILLIS_PER_SEC: u64 = 1_000;
-
-    /// Convert a `Duration` to milliseconds, rounding up and saturating at
-    /// `u64::MAX`.
-    ///
-    /// The saturating is fine because `u64::MAX` milliseconds are still many
-    /// million years.
-    pub fn millis(duration: Duration) -> u64 {
-        // Round up.
-        let millis = (duration.subsec_nanos() + NANOS_PER_MILLI - 1) / NANOS_PER_MILLI;
-        duration.as_secs().saturating_mul(MILLIS_PER_SEC).saturating_add(u64::from(millis))
+        pub use crate::sys::pipe::{new, Receiver, Sender};
     }
+
+    pub use crate::sys::SourceFd;
+}
+
+#[cfg(all(windows, feature = "os-ext"))]
+#[cfg_attr(docsrs, doc(cfg(all(windows, feature = "os-ext"))))]
+pub mod windows {
+    //! Windows only extensions.
+
+    pub use crate::sys::named_pipe::NamedPipe;
+}
+
+pub mod features {
+    //! # Mio's optional features.
+    //!
+    //! This document describes the available features in Mio.
+    //!
+    #![cfg_attr(feature = "os-poll", doc = "## `os-poll` (enabled)")]
+    #![cfg_attr(not(feature = "os-poll"), doc = "## `os-poll` (disabled)")]
+    //!
+    //! Mio by default provides only a shell implementation, that `panic!`s the
+    //! moment it is actually run. To run it requires OS support, this is
+    //! enabled by activating the `os-poll` feature.
+    //!
+    //! This makes `Poll`, `Registry` and `Waker` functional.
+    //!
+    #![cfg_attr(feature = "os-ext", doc = "## `os-ext` (enabled)")]
+    #![cfg_attr(not(feature = "os-ext"), doc = "## `os-ext` (disabled)")]
+    //!
+    //! `os-ext` enables additional OS specific facilities. These facilities can
+    //! be found in the `unix` and `windows` module.
+    //!
+    #![cfg_attr(feature = "net", doc = "## Network types (enabled)")]
+    #![cfg_attr(not(feature = "net"), doc = "## Network types (disabled)")]
+    //!
+    //! The `net` feature enables networking primitives in the `net` module.
+}
+
+pub mod guide {
+    //! # Getting started guide.
+    //!
+    //! In this guide we'll do the following:
+    //!
+    //! 1. Create a [`Poll`] instance (and learn what it is).
+    //! 2. Register an [event source].
+    //! 3. Create an event loop.
+    //!
+    //! At the end you'll have a very small (but quick) TCP server that accepts
+    //! connections and then drops (disconnects) them.
+    //!
+    //! ## 1. Creating a `Poll` instance
+    //!
+    //! Using Mio starts by creating a [`Poll`] instance, which monitors events
+    //! from the OS and puts them into [`Events`]. This allows us to execute I/O
+    //! operations based on what operations are ready.
+    //!
+    //! [`Poll`]: ../struct.Poll.html
+    //! [`Events`]: ../event/struct.Events.html
+    //!
+    #![cfg_attr(feature = "os-poll", doc = "```")]
+    #![cfg_attr(not(feature = "os-poll"), doc = "```ignore")]
+    //! # use mio::{Poll, Events};
+    //! # fn main() -> std::io::Result<()> {
+    //! // `Poll` allows for polling of readiness events.
+    //! let poll = Poll::new()?;
+    //! // `Events` is collection of readiness `Event`s and can be filled by
+    //! // calling `Poll::poll`.
+    //! let events = Events::with_capacity(128);
+    //! # drop((poll, events));
+    //! # Ok(())
+    //! # }
+    //! ```
+    //!
+    //! For example if we're using a [`TcpListener`],  we'll only want to
+    //! attempt to accept an incoming connection *iff* any connections are
+    //! queued and ready to be accepted. We don't want to waste our time if no
+    //! connections are ready.
+    //!
+    //! [`TcpListener`]: ../net/struct.TcpListener.html
+    //!
+    //! ## 2. Registering event source
+    //!
+    //! After we've created a [`Poll`] instance that monitors events from the OS
+    //! for us, we need to provide it with a source of events. This is done by
+    //! registering an [event source]. As the name “event source” suggests it is
+    //! a source of events which can be polled using a `Poll` instance. On Unix
+    //! systems this is usually a file descriptor, or a socket/handle on
+    //! Windows.
+    //!
+    //! In the example below we'll use a [`TcpListener`] for which we'll receive
+    //! an event (from [`Poll`]) once a connection is ready to be accepted.
+    //!
+    //! [event source]: ../event/trait.Source.html
+    //!
+    #![cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
+    #![cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
+    //! # use mio::net::TcpListener;
+    //! # use mio::{Poll, Token, Interest};
+    //! # fn main() -> std::io::Result<()> {
+    //! # let poll = Poll::new()?;
+    //! # let address = "127.0.0.1:0".parse().unwrap();
+    //! // Create a `TcpListener`, binding it to `address`.
+    //! let mut listener = TcpListener::bind(address)?;
+    //!
+    //! // Next we register it with `Poll` to receive events for it. The `SERVER`
+    //! // `Token` is used to determine that we received an event for the listener
+    //! // later on.
+    //! const SERVER: Token = Token(0);
+    //! poll.registry().register(&mut listener, SERVER, Interest::READABLE)?;
+    //! # Ok(())
+    //! # }
+    //! ```
+    //!
+    //! Multiple event sources can be [registered] (concurrently), so we can
+    //! monitor multiple sources at a time.
+    //!
+    //! [registered]: ../struct.Registry.html#method.register
+    //!
+    //! ## 3. Creating the event loop
+    //!
+    //! After we've created a [`Poll`] instance and registered one or more
+    //! [event sources] with it, we can [poll] it for events. Polling for events
+    //! is simple, we need a container to store the events: [`Events`] and need
+    //! to do something based on the polled events (this part is up to you, we
+    //! can't do it all!). If we do this in a loop we've got ourselves an event
+    //! loop.
+    //!
+    //! The example below shows the event loop in action, completing our small
+    //! TCP server.
+    //!
+    //! [poll]: ../struct.Poll.html#method.poll
+    //! [event sources]: ../event/trait.Source.html
+    //!
+    #![cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
+    #![cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
+    //! # use std::io;
+    //! # use std::time::Duration;
+    //! # use mio::net::TcpListener;
+    //! # use mio::{Poll, Token, Interest, Events};
+    //! # fn main() -> io::Result<()> {
+    //! # let mut poll = Poll::new()?;
+    //! # let mut events = Events::with_capacity(128);
+    //! # let address = "127.0.0.1:0".parse().unwrap();
+    //! # let mut listener = TcpListener::bind(address)?;
+    //! # const SERVER: Token = Token(0);
+    //! # poll.registry().register(&mut listener, SERVER, Interest::READABLE)?;
+    //! // Start our event loop.
+    //! loop {
+    //!     // Poll the OS for events, waiting at most 100 milliseconds.
+    //!     poll.poll(&mut events, Some(Duration::from_millis(100)))?;
+    //!
+    //!     // Process each event.
+    //!     for event in events.iter() {
+    //!         // We can use the token we previously provided to `register` to
+    //!         // determine for which type the event is.
+    //!         match event.token() {
+    //!             SERVER => loop {
+    //!                 // One or more connections are ready, so we'll attempt to
+    //!                 // accept them (in a loop).
+    //!                 match listener.accept() {
+    //!                     Ok((connection, address)) => {
+    //!                         println!("Got a connection from: {}", address);
+    //! #                       drop(connection);
+    //!                     },
+    //!                     // A "would block error" is returned if the operation
+    //!                     // is not ready, so we'll stop trying to accept
+    //!                     // connections.
+    //!                     Err(ref err) if would_block(err) => break,
+    //!                     Err(err) => return Err(err),
+    //!                 }
+    //!             }
+    //! #           _ => unreachable!(),
+    //!         }
+    //!     }
+    //! #   return Ok(());
+    //! }
+    //!
+    //! fn would_block(err: &io::Error) -> bool {
+    //!     err.kind() == io::ErrorKind::WouldBlock
+    //! }
+    //! # }
+    //! ```
 }

@@ -10,8 +10,7 @@
 #include "mozilla/dom/CSSKeyframeRuleBinding.h"
 #include "nsDOMCSSDeclaration.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // -------------------------------------------
 // CSSKeyframeDeclaration
@@ -22,11 +21,12 @@ class CSSKeyframeDeclaration : public nsDOMCSSDeclaration {
   explicit CSSKeyframeDeclaration(CSSKeyframeRule* aRule) : mRule(aRule) {
     mDecls =
         new DeclarationBlock(Servo_Keyframe_GetStyle(aRule->Raw()).Consume());
+    mDecls->SetOwningRule(aRule);
   }
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(CSSKeyframeDeclaration,
-                                                         nsICSSDeclaration)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS_AMBIGUOUS(CSSKeyframeDeclaration,
+                                                        nsICSSDeclaration)
 
   css::Rule* GetParentRule() final { return mRule; }
 
@@ -37,6 +37,11 @@ class CSSKeyframeDeclaration : public nsDOMCSSDeclaration {
 
   DeclarationBlock* GetOrCreateCSSDeclaration(
       Operation aOperation, DeclarationBlock** aCreated) final {
+    if (aOperation != Operation::Read && mRule) {
+      if (StyleSheet* sheet = mRule->GetStyleSheet()) {
+        sheet->WillDirty();
+      }
+    }
     return mDecls;
   }
   nsresult SetCSSDeclaration(DeclarationBlock* aDecls,
@@ -56,7 +61,7 @@ class CSSKeyframeDeclaration : public nsDOMCSSDeclaration {
   }
   ParsingEnvironment GetParsingEnvironment(
       nsIPrincipal* aSubjectPrincipal) const final {
-    return GetParsingEnvironmentForRule(mRule, CSSRule_Binding::KEYFRAME_RULE);
+    return GetParsingEnvironmentForRule(mRule, StyleCssRuleType::Keyframe);
   }
   Document* DocToUpdate() final { return nullptr; }
 
@@ -72,6 +77,12 @@ class CSSKeyframeDeclaration : public nsDOMCSSDeclaration {
     size_t n = aMallocSizeOf(this);
     // TODO we may want to add size of mDecls as well
     return n;
+  }
+
+  void SetRawAfterClone(RawServoKeyframe* aKeyframe) {
+    mDecls->SetOwningRule(nullptr);
+    mDecls = new DeclarationBlock(Servo_Keyframe_GetStyle(aKeyframe).Consume());
+    mDecls->SetOwningRule(mRule);
   }
 
  private:
@@ -130,6 +141,18 @@ bool CSSKeyframeRule::IsCCLeaf() const {
   return Rule::IsCCLeaf() && !mDeclaration;
 }
 
+StyleCssRuleType CSSKeyframeRule::Type() const {
+  return StyleCssRuleType::Keyframe;
+}
+
+void CSSKeyframeRule::SetRawAfterClone(RefPtr<RawServoKeyframe> aRaw) {
+  mRaw = std::move(aRaw);
+
+  if (mDeclaration) {
+    mDeclaration->SetRawAfterClone(mRaw);
+  }
+}
+
 #ifdef DEBUG
 /* virtual */
 void CSSKeyframeRule::List(FILE* out, int32_t aIndent) const {
@@ -148,9 +171,14 @@ void CSSKeyframeRule::UpdateRule(Func aCallback) {
     return;
   }
 
+  StyleSheet* sheet = GetStyleSheet();
+  if (sheet) {
+    sheet->WillDirty();
+  }
+
   aCallback();
 
-  if (StyleSheet* sheet = GetStyleSheet()) {
+  if (sheet) {
     sheet->RuleChanged(this, StyleRuleChangeKind::Generic);
   }
 }
@@ -189,5 +217,4 @@ JSObject* CSSKeyframeRule::WrapObject(JSContext* aCx,
   return CSSKeyframeRule_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

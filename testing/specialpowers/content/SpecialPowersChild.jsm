@@ -137,17 +137,6 @@ SPConsoleListener.prototype = {
       m.innerWindowID = msg.innerWindowID;
       m.isScriptError = true;
       m.isWarning = (msg.flags & Ci.nsIScriptError.warningFlag) === 1;
-    } else if (topic === "console-api-log-event") {
-      // This is a dom/console event.
-      let unwrapped = msg.wrappedJSObject;
-      m.errorMessage = unwrapped.arguments[0];
-      m.sourceName = unwrapped.filename;
-      m.lineNumber = unwrapped.lineNumber;
-      m.columnNumber = unwrapped.columnNumber;
-      m.windowID = unwrapped.ID;
-      m.innerWindowID = unwrapped.innerID;
-      m.isConsoleEvent = true;
-      m.isWarning = unwrapped.level === "warning";
     }
 
     Object.freeze(m);
@@ -159,7 +148,6 @@ SPConsoleListener.prototype = {
     });
 
     if (!m.isScriptError && !m.isConsoleEvent && m.message === "SENTINEL") {
-      Services.obs.removeObserver(this, "console-api-log-event");
       Services.console.unregisterListener(this);
     }
   },
@@ -594,10 +582,7 @@ class SpecialPowersChild extends JSWindowActorChild {
 
   loadChromeScript(urlOrFunction, sandboxOptions) {
     // Create a unique id for this chrome script
-    let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(
-      Ci.nsIUUIDGenerator
-    );
-    let id = uuidGenerator.generateUUID().toString();
+    let id = Services.uuid.generateUUID().toString();
 
     // Tells chrome code to evaluate this chrome script
     let scriptArgs = { id, sandboxOptions };
@@ -710,6 +695,10 @@ class SpecialPowersChild extends JSWindowActorChild {
   }
   get Cr() {
     return Cr;
+  }
+
+  get ChromeUtils() {
+    return ChromeUtils;
   }
 
   get isHeadless() {
@@ -897,18 +886,46 @@ class SpecialPowersChild extends JSWindowActorChild {
   }
 
   async pushPrefEnv(inPrefs, callback = null) {
-    await this.sendQuery("PushPrefEnv", inPrefs).then(callback);
-    await this.promiseTimeout(0);
+    let { requiresRefresh } = await this.sendQuery("PushPrefEnv", inPrefs);
+    if (callback) {
+      await callback();
+    }
+    if (requiresRefresh) {
+      await this._promiseEarlyRefresh();
+    }
   }
 
   async popPrefEnv(callback = null) {
-    await this.sendQuery("PopPrefEnv").then(callback);
-    await this.promiseTimeout(0);
+    let { popped, requiresRefresh } = await this.sendQuery("PopPrefEnv");
+    if (callback) {
+      await callback(popped);
+    }
+    if (requiresRefresh) {
+      await this._promiseEarlyRefresh();
+    }
   }
 
   async flushPrefEnv(callback = null) {
-    await this.sendQuery("FlushPrefEnv").then(callback);
-    await this.promiseTimeout(0);
+    let { requiresRefresh } = await this.sendQuery("FlushPrefEnv");
+    if (callback) {
+      await callback();
+    }
+    if (requiresRefresh) {
+      await this._promiseEarlyRefresh();
+    }
+  }
+
+  _promiseEarlyRefresh() {
+    return new Promise(r => {
+      // for mochitest-browser
+      if (typeof this.chromeWindow != "undefined") {
+        this.chromeWindow.requestAnimationFrame(r);
+      }
+      // for mochitest-plain
+      else {
+        this.contentWindow.requestAnimationFrame(r);
+      }
+    });
   }
 
   _addObserverProxy(notification) {
@@ -1118,11 +1135,6 @@ class SpecialPowersChild extends JSWindowActorChild {
   removeAutoCompletePopupEventListener(window, eventname, listener) {
     this._getAutoCompletePopup(window).removeEventListener(eventname, listener);
   }
-  get formHistory() {
-    let tmp = {};
-    ChromeUtils.import("resource://gre/modules/FormHistory.jsm", tmp);
-    return tmp.FormHistory;
-  }
   getFormFillController(window) {
     return Cc["@mozilla.org/satchel/form-fill-controller;1"].getService(
       Ci.nsIFormFillController
@@ -1173,9 +1185,6 @@ class SpecialPowersChild extends JSWindowActorChild {
   registerConsoleListener(callback) {
     let listener = new SPConsoleListener(callback, this.contentWindow);
     Services.console.registerListener(listener);
-
-    // listen for dom/console events as well
-    Services.obs.addObserver(listener, "console-api-log-event");
   }
   postConsoleSentinel() {
     Services.console.logStringMessage("SENTINEL");
@@ -1273,7 +1282,7 @@ class SpecialPowersChild extends JSWindowActorChild {
       return el;
     };
 
-    if (Window.isInstance(content)) {
+    if (!Cu.isRemoteProxy(content) && Window.isInstance(content)) {
       // Hack around tests that try to snapshot 0 width or height
       // elements.
       if (rect && !(rect.width && rect.height)) {
@@ -1584,13 +1593,14 @@ class SpecialPowersChild extends JSWindowActorChild {
     });
   }
 
-  snapshotContext(target, rect, background) {
+  snapshotContext(target, rect, background, resetScrollPosition = false) {
     let browsingContext = this._browsingContextForTarget(target);
 
     return this.sendQuery("Snapshot", {
       browsingContext,
       rect,
       background,
+      resetScrollPosition,
     }).then(imageData => {
       return this.contentWindow.createImageBitmap(imageData);
     });
@@ -1755,10 +1765,7 @@ class SpecialPowersChild extends JSWindowActorChild {
     if (cid) {
       componentRegistrar.unregisterFactory(currentCID, currentFactory);
     } else {
-      let uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(
-        Ci.nsIUUIDGenerator
-      );
-      cid = uuidGenerator.generateUUID();
+      cid = Services.uuid.generateUUID();
     }
 
     // Restore the original factory.
@@ -1915,7 +1922,7 @@ class SpecialPowersChild extends JSWindowActorChild {
   }
 
   cleanUpSTSData(origin, flags) {
-    return this.sendQuery("SPCleanUpSTSData", { origin, flags: flags || 0 });
+    return this.sendQuery("SPCleanUpSTSData", { origin });
   }
 
   async requestDumpCoverageCounters(cb) {
@@ -1993,6 +2000,14 @@ class SpecialPowersChild extends JSWindowActorChild {
 
       grantActiveTab(tabId) {
         sp.sendAsyncMessage("SPExtensionGrantActiveTab", { id, tabId });
+      },
+
+      terminateBackground() {
+        return sp.sendQuery("SPExtensionTerminateBackground", { id });
+      },
+
+      wakeupBackground() {
+        return sp.sendQuery("SPExtensionWakeupBackground", { id });
       },
     };
 
@@ -2170,7 +2185,7 @@ class SpecialPowersChild extends JSWindowActorChild {
    * chrome-privileged and allowed to run inside SystemGroup
    */
 
-  doUrlClassify(principal, eventTarget, callback) {
+  doUrlClassify(principal, callback) {
     let classifierService = Cc[
       "@mozilla.org/url-classifier/dbservice;1"
     ].getService(Ci.nsIURIClassifier);
@@ -2187,7 +2202,6 @@ class SpecialPowersChild extends JSWindowActorChild {
 
     return classifierService.classify(
       WrapPrivileged.unwrap(principal),
-      eventTarget,
       wrapCallback
     );
   }
@@ -2222,6 +2236,27 @@ class SpecialPowersChild extends JSWindowActorChild {
       Ci.nsIUrlClassifierFeature.blocklist,
       wrapCallback
     );
+  }
+
+  /* Content processes asynchronously receive child-to-parent transformations
+   * when they are launched.  Until they are received, screen coordinates
+   * reported to JS are wrong.  This is generally ok.  It behaves as if the
+   * user repositioned the window.  But if we want to test screen coordinates,
+   * we need to wait for the updated data.
+   */
+  contentTransformsReceived(win) {
+    while (win) {
+      try {
+        return win.docShell.browserChild.contentTransformsReceived();
+      } catch (ex) {
+        // browserChild getter throws on non-e10s rather than returning null.
+      }
+      if (win == win.parent) {
+        break;
+      }
+      win = win.parent;
+    }
+    return Promise.resolve();
   }
 }
 

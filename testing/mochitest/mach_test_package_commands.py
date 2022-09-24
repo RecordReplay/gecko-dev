@@ -11,10 +11,8 @@ from argparse import Namespace
 from functools import partial
 
 from mach.decorators import (
-    CommandProvider,
     Command,
 )
-from mozbuild.base import MachCommandBase
 
 here = os.path.abspath(os.path.dirname(__file__))
 parser = None
@@ -72,10 +70,13 @@ def run_test(context, is_junit, **kwargs):
         "mochitest-webgl2-deqp": "webgl2-deqp",
         "mochitest-webgpu": "webgpu",
         "mochitest-devtools-chrome": "devtools",
+        "mochitest-browser-a11y": "a11y",
         "mochitest-remote": "remote",
     }
     args.subsuite = subsuites.get(suite)
     if args.subsuite == "devtools":
+        args.flavor = "browser"
+    if args.subsuite == "a11y":
         args.flavor = "browser"
 
     if not args.test_paths:
@@ -123,7 +124,7 @@ def run_mochitest_desktop(context, args):
 
 
 def set_android_args(context, args):
-    args.app = args.app or "org.mozilla.geckoview.test"
+    args.app = args.app or "org.mozilla.geckoview.test_runner"
     args.utilityPath = context.hostutils
     args.xrePath = context.hostutils
     config = context.mozharness_config
@@ -155,6 +156,9 @@ def run_geckoview_junit(context, args):
     args = set_android_args(context, args)
 
     from runjunit import run_test_harness
+
+    # Force fission disabled by default for android
+    args["disable_fission"] = True
 
     logger.info("mach calling runjunit with args: " + str(args))
     return run_test_harness(parser, args)
@@ -193,24 +197,23 @@ def setup_junit_argument_parser():
     return parser
 
 
-@CommandProvider
-class MochitestCommands(MachCommandBase):
-    @Command(
-        "mochitest",
-        category="testing",
-        description="Run the mochitest harness.",
-        parser=setup_mochitest_argument_parser,
-    )
-    def mochitest(self, command_context, **kwargs):
-        self._mach_context.activate_mozharness_venv()
-        return run_test(self._mach_context, False, **kwargs)
+@Command(
+    "mochitest",
+    category="testing",
+    description="Run the mochitest harness.",
+    parser=setup_mochitest_argument_parser,
+)
+def mochitest(command_context, **kwargs):
+    command_context._mach_context.activate_mozharness_venv()
+    return run_test(command_context._mach_context, False, **kwargs)
 
-    @Command(
-        "geckoview-junit",
-        category="testing",
-        description="Run the geckoview-junit harness.",
-        parser=setup_junit_argument_parser,
-    )
-    def geckoview_junit(self, command_context, **kwargs):
-        self._mach_context.activate_mozharness_venv()
-        return run_test(self._mach_context, True, **kwargs)
+
+@Command(
+    "geckoview-junit",
+    category="testing",
+    description="Run the geckoview-junit harness.",
+    parser=setup_junit_argument_parser,
+)
+def geckoview_junit(command_context, **kwargs):
+    command_context._mach_context.activate_mozharness_venv()
+    return run_test(command_context._mach_context, True, **kwargs)

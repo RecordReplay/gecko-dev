@@ -81,6 +81,12 @@ if CONFIG["MOZ_WEBRTC_SIGNALING"]:
 
 MOCHITEST_MANIFESTS += [
     "test/mochitest.ini",
+    "test/mochitest_background_video.ini",
+    "test/mochitest_bugs.ini",
+    "test/mochitest_eme.ini",
+    "test/mochitest_media_recorder.ini",
+    "test/mochitest_seek.ini",
+    "test/mochitest_stream.ini",
     "webrtc/tests/mochitests/identity/mochitest.ini",
 ]
 
@@ -93,7 +99,14 @@ BROWSER_CHROME_MANIFESTS += [
 ]
 
 if CONFIG["MOZ_WEBRTC"]:
-    MOCHITEST_MANIFESTS += ["webrtc/tests/mochitests/mochitest.ini"]
+    MOCHITEST_MANIFESTS += [
+        "webrtc/tests/mochitests/mochitest.ini",
+        "webrtc/tests/mochitests/mochitest_datachannel.ini",
+        "webrtc/tests/mochitests/mochitest_getusermedia.ini",
+        "webrtc/tests/mochitests/mochitest_peerconnection.ini",
+    ]
+
+    CRASHTEST_MANIFESTS += ["webrtc/tests/crashtests/crashtests.list"]
 
 XPIDL_SOURCES += [
     "nsIAudioDeviceInfo.idl",
@@ -137,6 +150,7 @@ EXPORTS += [
     "DOMMediaStream.h",
     "DriftCompensation.h",
     "DynamicResampler.h",
+    "ExternalEngineStateMachine.h",
     "FileBlockCache.h",
     "ForwardedInputTrack.h",
     "FrameStatistics.h",
@@ -149,6 +163,7 @@ EXPORTS += [
     "MediaDecoder.h",
     "MediaDecoderOwner.h",
     "MediaDecoderStateMachine.h",
+    "MediaDecoderStateMachineBase.h",
     "MediaEventSource.h",
     "MediaFormatReader.h",
     "MediaInfo.h",
@@ -177,11 +192,11 @@ EXPORTS += [
     "PrincipalChangeObserver.h",
     "PrincipalHandle.h",
     "QueueObject.h",
+    "ReaderProxy.h",
     "SeekJob.h",
     "SeekTarget.h",
     "SelfRef.h",
     "SharedBuffer.h",
-    "ThreadPoolCOMListener.h",
     "TimeUnits.h",
     "Tracing.h",
     "VideoFrameContainer.h",
@@ -236,6 +251,7 @@ UNIFIED_SOURCES += [
     "AudioConfig.cpp",
     "AudioConverter.cpp",
     "AudioDeviceInfo.cpp",
+    "AudioInputSource.cpp",
     "AudioRingBuffer.cpp",
     "AudioSegment.cpp",
     "AudioStream.cpp",
@@ -252,8 +268,11 @@ UNIFIED_SOURCES += [
     "ChannelMediaResource.cpp",
     "CloneableWithRangeMediaResource.cpp",
     "CrossGraphPort.cpp",
+    "CubebInputStream.cpp",
+    "DeviceInputTrack.cpp",
     "DOMMediaStream.cpp",
     "DynamicResampler.cpp",
+    "ExternalEngineStateMachine.cpp",
     "FileBlockCache.cpp",
     "FileMediaResource.cpp",
     "ForwardedInputTrack.cpp",
@@ -263,9 +282,9 @@ UNIFIED_SOURCES += [
     "ImageToI420.cpp",
     "MediaCache.cpp",
     "MediaContainerType.cpp",
-    "MediaData.cpp",
     "MediaDecoder.cpp",
     "MediaDecoderStateMachine.cpp",
+    "MediaDecoderStateMachineBase.cpp",
     "MediaDeviceInfo.cpp",
     "MediaDevices.cpp",
     "MediaFormatReader.cpp",
@@ -304,17 +323,14 @@ if CONFIG["OS_TARGET"] == "Linux":
 else:
     UNIFIED_SOURCES += ["UnderrunHandlerNoop.cpp"]
 
-if CONFIG["OS_TARGET"] == "WINNT":
-    SOURCES += [
-        "ThreadPoolCOMListener.cpp",
-    ]
-
 # CubebUtils.cpp needs to be built separately due to what appears to be some kind
 # of compiler bug on Android 4.2 x86 opt. See bug 1408459.
 # DecoderTraits.cpp needs to be built separately because of Mac OS X headers.
+# MediaData.cpp : ambiguous compilation error caused by Mac OS X headers.
 SOURCES += [
     "CubebUtils.cpp",
     "DecoderTraits.cpp",
+    "MediaData.cpp",
 ]
 
 # Some codec-related code uses multi-character constants, which GCC and clang
@@ -339,6 +355,7 @@ LOCAL_INCLUDES += [
     "/caps",
     "/docshell/base",
     "/dom/base",
+    "/dom/media/webrtc",
     "/layout/generic",
     "/layout/xul",
     "/media/libyuv/libyuv/include",
@@ -350,7 +367,7 @@ if CONFIG["MOZ_WEBRTC"]:
     LOCAL_INCLUDES += [
         "/dom/media/webrtc/common",
         "/third_party/libwebrtc",
-        "/third_party/libwebrtc/webrtc",
+        "/third_party/libwebrtc/third_party/abseil-cpp",
     ]
 
 DEFINES["MOZILLA_INTERNAL_API"] = True
@@ -361,9 +378,21 @@ if CONFIG["MOZ_ANDROID_HLS_SUPPORT"]:
 
 if CONFIG["COMPILE_ENVIRONMENT"]:
     EXPORTS += [
+        "!audioipc2_client_ffi_generated.h",
+        "!audioipc2_server_ffi_generated.h",
         "!audioipc_client_ffi_generated.h",
         "!audioipc_server_ffi_generated.h",
     ]
+
+    CbindgenHeader(
+        "audioipc2_client_ffi_generated.h",
+        inputs=["/third_party/rust/audioipc2-client"],
+    )
+
+    CbindgenHeader(
+        "audioipc2_server_ffi_generated.h",
+        inputs=["/third_party/rust/audioipc2-server"],
+    )
 
     CbindgenHeader(
         "audioipc_client_ffi_generated.h", inputs=["/third_party/rust/audioipc-client"]
@@ -381,7 +410,6 @@ include("/ipc/chromium/chromium-config.mozbuild")
 if CONFIG["CC_TYPE"] in ("clang", "gcc"):
     CXXFLAGS += [
         "-Wno-error=attributes",
-        "-Wno-error=shadow",
     ]
 
 CXXFLAGS += ["-Werror=switch"]

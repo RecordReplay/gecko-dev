@@ -12,8 +12,7 @@
 nsresult NS_NewSVGFEComponentTransferElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFEComponentTransferElementBase = SVGFE;
 
@@ -44,6 +43,8 @@ class SVGFEComponentTransferElement : public SVGFEComponentTransferElementBase {
   // nsIContent
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
+  virtual nsresult BindToTree(BindContext&, nsINode& aParent) override;
+
   // WebIDL
   already_AddRefed<DOMSVGAnimatedString> In1();
 
@@ -55,7 +56,6 @@ class SVGFEComponentTransferElement : public SVGFEComponentTransferElementBase {
   static StringInfo sStringInfo[2];
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFECOMPONENTTRANSFERELEMENT_H_

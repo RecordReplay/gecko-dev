@@ -11,6 +11,7 @@
 #include "mozilla/css/SheetParsingMode.h"
 #include "mozilla/Encoding.h"
 #include "mozilla/PreloaderBase.h"
+#include "mozilla/SharedSubResourceCache.h"
 #include "mozilla/NotNull.h"
 #include "mozilla/UniquePtr.h"
 #include "nsIThreadInternal.h"
@@ -24,7 +25,6 @@ class nsINode;
 class nsIPrincipal;
 class nsIURI;
 class nsIReferrerInfo;
-struct StyleUseCounters;
 
 namespace mozilla::css {
 
@@ -37,12 +37,14 @@ static_assert(eAuthorSheetFeatures == 0 && eUserSheetFeatures == 1 &&
               "sheet parsing mode constants won't fit "
               "in SheetLoadData::mParsingMode");
 
-class SheetLoadData final : public PreloaderBase,
-                            public nsIRunnable,
-                            public nsIThreadObserver {
+class SheetLoadData final
+    : public PreloaderBase,
+      public SharedSubResourceCacheLoadingValueBase<SheetLoadData>,
+      public nsIRunnable,
+      public nsIThreadObserver {
   using MediaMatched = dom::LinkStyle::MediaMatched;
   using IsAlternate = dom::LinkStyle::IsAlternate;
-  using UseSystemPrincipal = Loader::UseSystemPrincipal;
+  using UseSystemPrincipal = css::Loader::UseSystemPrincipal;
 
  protected:
   virtual ~SheetLoadData();
@@ -52,27 +54,30 @@ class SheetLoadData final : public PreloaderBase,
   static void PrioritizeAsPreload(nsIChannel* aChannel);
   void PrioritizeAsPreload() final;
 
+  // If this is a deferred load, start it now.
+  void StartPendingLoad();
+
   // Data for loading a sheet linked from a document
-  SheetLoadData(Loader* aLoader, const nsAString& aTitle, nsIURI* aURI,
+  SheetLoadData(css::Loader* aLoader, const nsAString& aTitle, nsIURI* aURI,
                 StyleSheet* aSheet, bool aSyncLoad, nsINode* aOwningNode,
                 IsAlternate aIsAlternate, MediaMatched aMediaMatched,
                 StylePreloadKind aPreloadKind, nsICSSLoaderObserver* aObserver,
                 nsIPrincipal* aTriggeringPrincipal,
-                nsIReferrerInfo* aReferrerInfo, nsINode* aRequestingNode);
+                nsIReferrerInfo* aReferrerInfo);
 
   // Data for loading a sheet linked from an @import rule
-  SheetLoadData(Loader* aLoader, nsIURI* aURI, StyleSheet* aSheet,
+  SheetLoadData(css::Loader* aLoader, nsIURI* aURI, StyleSheet* aSheet,
                 SheetLoadData* aParentData, nsICSSLoaderObserver* aObserver,
                 nsIPrincipal* aTriggeringPrincipal,
-                nsIReferrerInfo* aReferrerInfo, nsINode* aRequestingNode);
+                nsIReferrerInfo* aReferrerInfo);
 
   // Data for loading a non-document sheet
-  SheetLoadData(Loader* aLoader, nsIURI* aURI, StyleSheet* aSheet,
+  SheetLoadData(css::Loader* aLoader, nsIURI* aURI, StyleSheet* aSheet,
                 bool aSyncLoad, UseSystemPrincipal, StylePreloadKind,
                 const Encoding* aPreloadEncoding,
                 nsICSSLoaderObserver* aObserver,
                 nsIPrincipal* aTriggeringPrincipal,
-                nsIReferrerInfo* aReferrerInfo, nsINode* aRequestingNode);
+                nsIReferrerInfo* aReferrerInfo);
 
   nsIReferrerInfo* ReferrerInfo() const { return mReferrerInfo; }
 
@@ -91,9 +96,13 @@ class SheetLoadData final : public PreloaderBase,
   NS_DECL_NSIRUNNABLE
   NS_DECL_NSITHREADOBSERVER
 
+  css::Loader& Loader() { return *mLoader; }
+
+  void DidCancelLoad() { mIsCancelled = true; }
+
   // Hold a ref to the CSSLoader so we can call back to it to let it
   // know the load finished
-  const RefPtr<Loader> mLoader;
+  const RefPtr<css::Loader> mLoader;
 
   // Title needed to pull datas out of the pending datas table when
   // the preferred title is changed
@@ -110,9 +119,6 @@ class SheetLoadData final : public PreloaderBase,
 
   // The sheet we're loading data for
   const RefPtr<StyleSheet> mSheet;
-
-  // Linked list of datas for the same URI as us.
-  RefPtr<SheetLoadData> mNext;
 
   // Load data for the sheet that @import-ed us if we were @import-ed
   // during the parse
@@ -139,12 +145,6 @@ class SheetLoadData final : public PreloaderBase,
   // because the sheet could be detached mid-load by CSSOM.
   const bool mIsChildSheet : 1;
 
-  // mIsLoading is true from the moment we are placed in the loader's
-  // "loading datas" table (right after the async channel is opened)
-  // to the moment we are removed from said table (due to the load
-  // completing or being cancelled).
-  bool mIsLoading : 1;
-
   // mIsBeingParsed is true if this stylesheet is currently being parsed.
   bool mIsBeingParsed : 1;
 
@@ -158,7 +158,7 @@ class SheetLoadData final : public PreloaderBase,
   // the original function call that started the load has returned.
   // This applies only to observer notifications; load/error events
   // are fired for any SheetLoadData that has a non-null
-  // mOwningElement.
+  // mOwningNodeBeforeLoadEvent.
   bool mMustNotify : 1;
 
   // mWasAlternate is true if the sheet was an alternate when the load data was
@@ -201,12 +201,18 @@ class SheetLoadData final : public PreloaderBase,
   // which causes a false positive warning here.
   const StylePreloadKind mPreloadKind;
 
-  // This is the node that imported the sheet. Needed to get the charset set on
-  // it, and to fire load/error events. Must implement LinkStyle.
-  const nsCOMPtr<nsINode> mOwningNode;
+  // This is the node that imported the sheet. Cleared after the load/error
+  // event fires, as we don't need it anymore. Needed to get the charset on it,
+  // and to fire load/error events. Must implement LinkStyle.
+  //
+  // This is only set for top-level sheets (e.g., for an @import-ed sheet it'll
+  // be null).
+  nsCOMPtr<nsINode> mOwningNodeBeforeLoadEvent;
+
+  nsINode* GetRequestingNode() const;
 
   // The observer that wishes to be notified of load completion
-  const nsCOMPtr<nsICSSLoaderObserver> mObserver;
+  nsCOMPtr<nsICSSLoaderObserver> mObserver;
 
   // The principal that identifies who started loading us.
   const nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
@@ -214,15 +220,8 @@ class SheetLoadData final : public PreloaderBase,
   // Referrer info of the load.
   const nsCOMPtr<nsIReferrerInfo> mReferrerInfo;
 
-  // The node that identifies who started loading us.
-  const nsCOMPtr<nsINode> mRequestingNode;
-
   // The encoding guessed from attributes and the document character set.
   const NotNull<const Encoding*> mGuessedEncoding;
-
-  // If we've parsed the stylesheet, the use counters for the properties parsed
-  // in this styleshetet.
-  UniquePtr<StyleUseCounters> mUseCounters;
 
   // The quirks mode of the loader at the time the load was triggered.
   const nsCompatibility mCompatMode;
@@ -236,6 +235,9 @@ class SheetLoadData final : public PreloaderBase,
 #endif
 
   bool ShouldDefer() const { return mWasAlternate || !mMediaMatched; }
+
+  RefPtr<StyleSheet> ValueForCache() const;
+  uint32_t ExpirationTime() const { return mExpirationTime; }
 
   // If there are no child sheets outstanding, mark us as complete.
   // Otherwise, the children are holding strong refs to the data

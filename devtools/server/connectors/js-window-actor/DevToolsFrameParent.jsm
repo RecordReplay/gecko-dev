@@ -5,7 +5,9 @@
 "use strict";
 
 var EXPORTED_SYMBOLS = ["DevToolsFrameParent"];
-const { loader } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { loader } = ChromeUtils.import(
+  "resource://devtools/shared/loader/Loader.jsm"
+);
 const { EventEmitter } = ChromeUtils.import(
   "resource://gre/modules/EventEmitter.jsm"
 );
@@ -55,49 +57,38 @@ class DevToolsFrameParent extends JSWindowActorParent {
   async instantiateTarget({
     watcherActorID,
     connectionPrefix,
-    browserId,
-    watchedData,
+    sessionContext,
+    sessionData,
   }) {
-    try {
-      await this.sendQuery(
-        "DevToolsFrameParent:instantiate-already-available",
-        {
-          watcherActorID,
-          connectionPrefix,
-          browserId,
-          watchedData,
-        }
-      );
-    } catch (e) {
-      console.warn(
-        "Failed to create DevTools Frame target for browsingContext",
-        this.browsingContext.id
-      );
-      console.warn(e);
-    }
+    await this.sendQuery("DevToolsFrameParent:instantiate-already-available", {
+      watcherActorID,
+      connectionPrefix,
+      sessionContext,
+      sessionData,
+    });
   }
 
-  destroyTarget({ watcherActorID, browserId }) {
+  destroyTarget({ watcherActorID, sessionContext }) {
     this.sendAsyncMessage("DevToolsFrameParent:destroy", {
       watcherActorID,
-      browserId,
+      sessionContext,
     });
   }
 
   /**
    * Communicate to the content process that some data have been added.
    */
-  async addWatcherDataEntry({ watcherActorID, browserId, type, entries }) {
+  async addSessionDataEntry({ watcherActorID, sessionContext, type, entries }) {
     try {
-      await this.sendQuery("DevToolsFrameParent:addWatcherDataEntry", {
+      await this.sendQuery("DevToolsFrameParent:addSessionDataEntry", {
         watcherActorID,
-        browserId,
+        sessionContext,
         type,
         entries,
       });
     } catch (e) {
       console.warn(
-        "Failed to add watcher data entry for frame targets in browsing context",
+        "Failed to add session data entry for frame targets in browsing context",
         this.browsingContext.id
       );
       console.warn(e);
@@ -107,10 +98,10 @@ class DevToolsFrameParent extends JSWindowActorParent {
   /**
    * Communicate to the content process that some data have been removed.
    */
-  removeWatcherDataEntry({ watcherActorID, browserId, type, entries }) {
-    this.sendAsyncMessage("DevToolsFrameParent:removeWatcherDataEntry", {
+  removeSessionDataEntry({ watcherActorID, sessionContext, type, entries }) {
+    this.sendAsyncMessage("DevToolsFrameParent:removeSessionDataEntry", {
       watcherActorID,
-      browserId,
+      sessionContext,
       type,
       entries,
     });
@@ -226,6 +217,24 @@ class DevToolsFrameParent extends JSWindowActorParent {
           watcher.notifyTargetDestroyed(form);
         }
         return this._closeAllConnections();
+      case "DevToolsFrameChild:bf-cache-navigation-pageshow":
+        for (const watcherActor of WatcherRegistry.getWatchersForBrowserId(
+          this.browsingContext.browserId
+        )) {
+          watcherActor.emit("bf-cache-navigation-pageshow", {
+            windowGlobal: this.browsingContext.currentWindowGlobal,
+          });
+        }
+        return null;
+      case "DevToolsFrameChild:bf-cache-navigation-pagehide":
+        for (const watcherActor of WatcherRegistry.getWatchersForBrowserId(
+          this.browsingContext.browserId
+        )) {
+          watcherActor.emit("bf-cache-navigation-pagehide", {
+            windowGlobal: this.browsingContext.currentWindowGlobal,
+          });
+        }
+        return null;
       default:
         throw new Error(
           "Unsupported message in DevToolsFrameParent: " + message.name

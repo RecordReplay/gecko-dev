@@ -74,25 +74,6 @@
 
 using namespace mozilla;
 
-int profiler_current_process_id() { return getpid(); }
-
-int profiler_current_thread_id() {
-#if defined(GP_OS_linux)
-  // glibc doesn't provide a wrapper for gettid() until 2.30
-  return static_cast<int>(static_cast<pid_t>(syscall(SYS_gettid)));
-#elif defined(GP_OS_android)
-  return gettid();
-#elif defined(GP_OS_freebsd)
-  long id;
-  (void)thr_self(&id);
-  return static_cast<int>(id);
-#else
-#  error "bad platform"
-#endif
-}
-
-void* GetStackTop(void* aGuess) { return aGuess; }
-
 static void PopulateRegsFromContext(Registers& aRegs, ucontext_t* aContext) {
   aRegs.mContext = aContext;
   mcontext_t& mcontext = aContext->uc_mcontext;
@@ -152,31 +133,14 @@ int tgkill(pid_t tgid, pid_t tid, int signalno) {
 #  define tgkill thr_kill2
 #endif
 
-class PlatformData {
- public:
-  explicit PlatformData(int aThreadId) {
-    MOZ_ASSERT(aThreadId == profiler_current_thread_id());
-    MOZ_COUNT_CTOR(PlatformData);
-    if (clockid_t clockid;
-        pthread_getcpuclockid(pthread_self(), &clockid) == 0) {
-      mClockId = Some(clockid);
-    }
+mozilla::profiler::PlatformData::PlatformData(ProfilerThreadId aThreadId) {
+  MOZ_ASSERT(aThreadId == profiler_current_thread_id());
+  if (clockid_t clockid; pthread_getcpuclockid(pthread_self(), &clockid) == 0) {
+    mClockId = Some(clockid);
   }
+}
 
-  MOZ_COUNTED_DTOR(PlatformData)
-
-  // Clock Id for this profiled thread. `Nothing` if `pthread_getcpuclockid`
-  // failed (e.g., if the system doesn't support per-thread clocks).
-  Maybe<clockid_t> GetClockId() const { return mClockId; }
-
-  RunningTimes& PreviousThreadRunningTimesRef() {
-    return mPreviousThreadRunningTimes;
-  }
-
- private:
-  Maybe<clockid_t> mClockId;
-  RunningTimes mPreviousThreadRunningTimes;
-};
+mozilla::profiler::PlatformData::~PlatformData() = default;
 
 ////////////////////////////////////////////////////////////////////////
 // BEGIN Sampler target specifics
@@ -230,6 +194,7 @@ struct SigHandlerCoordinator {
     r |= sem_init(&mMessage3, /* pshared */ 0, 0);
     r |= sem_init(&mMessage4, /* pshared */ 0, 0);
     MOZ_ASSERT(r == 0);
+    (void)r;
   }
 
   ~SigHandlerCoordinator() {
@@ -237,6 +202,7 @@ struct SigHandlerCoordinator {
     r |= sem_destroy(&mMessage3);
     r |= sem_destroy(&mMessage4);
     MOZ_ASSERT(r == 0);
+    (void)r;
   }
 
   sem_t mMessage2;       // To sampler: "context is in sSigHandlerCoordinator"
@@ -291,12 +257,11 @@ static void SigprofHandler(int aSignal, siginfo_t* aInfo, void* aContext) {
 }
 
 Sampler::Sampler(PSLockRef aLock)
-    : mMyPid(profiler_current_process_id())
+    : mMyPid(profiler_current_process_id()),
       // We don't know what the sampler thread's ID will be until it runs, so
       // set mSamplerTid to a dummy value and fill it in for real in
       // SuspendAndSampleAndResumeThread().
-      ,
-      mSamplerTid(-1) {
+      mSamplerTid{} {
 #if defined(USE_EHABI_STACKWALK)
   mozilla::EHABIStackWalkInit();
 #endif
@@ -327,18 +292,61 @@ static void StreamMetaPlatformSampleUnits(PSLockRef aLock,
   aWriter.StringProperty("threadCPUDelta", "ns");
 }
 
+/* static */
+uint64_t RunningTimes::ConvertRawToJson(uint64_t aRawValue) {
+  return aRawValue;
+}
+
+namespace mozilla::profiler {
+bool GetCpuTimeSinceThreadStartInNs(
+    uint64_t* aResult, const mozilla::profiler::PlatformData& aPlatformData) {
+  Maybe<clockid_t> maybeCid = aPlatformData.GetClockId();
+  if (MOZ_UNLIKELY(!maybeCid)) {
+    return false;
+  }
+
+  timespec t;
+  if (clock_gettime(*maybeCid, &t) != 0) {
+    return false;
+  }
+
+  *aResult = uint64_t(t.tv_sec) * 1'000'000'000u + uint64_t(t.tv_nsec);
+  return true;
+}
+}  // namespace mozilla::profiler
+
+static RunningTimes GetProcessRunningTimesDiff(
+    PSLockRef aLock, RunningTimes& aPreviousRunningTimesToBeUpdated) {
+  AUTO_PROFILER_STATS(GetProcessRunningTimes);
+
+  RunningTimes newRunningTimes;
+  {
+    AUTO_PROFILER_STATS(GetProcessRunningTimes_clock_gettime);
+    if (timespec ts; clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts) == 0) {
+      newRunningTimes.SetThreadCPUDelta(uint64_t(ts.tv_sec) * 1'000'000'000u +
+                                        uint64_t(ts.tv_nsec));
+    }
+    newRunningTimes.SetPostMeasurementTimeStamp(TimeStamp::Now());
+  };
+
+  const RunningTimes diff = newRunningTimes - aPreviousRunningTimesToBeUpdated;
+  aPreviousRunningTimesToBeUpdated = newRunningTimes;
+  return diff;
+}
+
 static RunningTimes GetThreadRunningTimesDiff(
-    PSLockRef aLock, const RegisteredThread& aRegisteredThread) {
+    PSLockRef aLock,
+    ThreadRegistration::UnlockedRWForLockedProfiler& aThreadData) {
   AUTO_PROFILER_STATS(GetRunningTimes_clock_gettime_thread);
 
-  PlatformData* platformData = aRegisteredThread.GetPlatformData();
-  MOZ_RELEASE_ASSERT(platformData);
-  Maybe<clockid_t> maybeCid = platformData->GetClockId();
+  const mozilla::profiler::PlatformData& platformData =
+      aThreadData.PlatformDataCRef();
+  Maybe<clockid_t> maybeCid = platformData.GetClockId();
 
   if (MOZ_UNLIKELY(!maybeCid)) {
     // No clock id -> Nothing to measure apart from the timestamp.
     RunningTimes emptyRunningTimes;
-    emptyRunningTimes.SetPostMeasurementTimeStamp(TimeStamp::NowUnfuzzed());
+    emptyRunningTimes.SetPostMeasurementTimeStamp(TimeStamp::Now());
     return emptyRunningTimes;
   }
 
@@ -353,31 +361,62 @@ static RunningTimes GetThreadRunningTimesDiff(
         }
       });
 
-  const RunningTimes diff =
-      newRunningTimes - platformData->PreviousThreadRunningTimesRef();
-  platformData->PreviousThreadRunningTimesRef() = newRunningTimes;
+  ProfiledThreadData* profiledThreadData =
+      aThreadData.GetProfiledThreadData(aLock);
+  MOZ_ASSERT(profiledThreadData);
+  RunningTimes& previousRunningTimes =
+      profiledThreadData->PreviousThreadRunningTimesRef();
+  const RunningTimes diff = newRunningTimes - previousRunningTimes;
+  previousRunningTimes = newRunningTimes;
   return diff;
 }
 
-static void ClearThreadRunningTimes(PSLockRef aLock,
-                                    const RegisteredThread& aRegisteredThread) {
-  PlatformData* const platformData = aRegisteredThread.GetPlatformData();
-  MOZ_RELEASE_ASSERT(platformData);
-  platformData->PreviousThreadRunningTimesRef().Clear();
+static void DiscardSuspendedThreadRunningTimes(
+    PSLockRef aLock,
+    ThreadRegistration::UnlockedRWForLockedProfiler& aThreadData) {
+  AUTO_PROFILER_STATS(DiscardSuspendedThreadRunningTimes);
+
+  // On Linux, suspending a thread uses a signal that makes that thread work
+  // to handle it. So we want to discard any added running time since the call
+  // to GetThreadRunningTimesDiff, which is done by overwriting the thread's
+  // PreviousThreadRunningTimesRef() with the current running time now.
+
+  const mozilla::profiler::PlatformData& platformData =
+      aThreadData.PlatformDataCRef();
+  Maybe<clockid_t> maybeCid = platformData.GetClockId();
+
+  if (MOZ_UNLIKELY(!maybeCid)) {
+    // No clock id -> Nothing to measure.
+    return;
+  }
+
+  ProfiledThreadData* profiledThreadData =
+      aThreadData.GetProfiledThreadData(aLock);
+  MOZ_ASSERT(profiledThreadData);
+  RunningTimes& previousRunningTimes =
+      profiledThreadData->PreviousThreadRunningTimesRef();
+
+  if (timespec ts; clock_gettime(*maybeCid, &ts) == 0) {
+    previousRunningTimes.ResetThreadCPUDelta(
+        uint64_t(ts.tv_sec) * 1'000'000'000u + uint64_t(ts.tv_nsec));
+  } else {
+    previousRunningTimes.ClearThreadCPUDelta();
+  }
 }
 
 template <typename Func>
 void Sampler::SuspendAndSampleAndResumeThread(
-    PSLockRef aLock, const RegisteredThread& aRegisteredThread,
+    PSLockRef aLock,
+    const ThreadRegistration::UnlockedReaderAndAtomicRWOnThread& aThreadData,
     const TimeStamp& aNow, const Func& aProcessRegs) {
   // Only one sampler thread can be sampling at once.  So we expect to have
   // complete control over |sSigHandlerCoordinator|.
   MOZ_ASSERT(!sSigHandlerCoordinator);
 
-  if (mSamplerTid == -1) {
+  if (!mSamplerTid.IsSpecified()) {
     mSamplerTid = profiler_current_thread_id();
   }
-  int sampleeTid = aRegisteredThread.Info()->ThreadId();
+  ProfilerThreadId sampleeTid = aThreadData.Info().ThreadId();
   MOZ_RELEASE_ASSERT(sampleeTid != mSamplerTid);
 
   //----------------------------------------------------------------//
@@ -389,7 +428,7 @@ void Sampler::SuspendAndSampleAndResumeThread(
   // Send message 1 to the samplee (the thread to be sampled), by
   // signalling at it.
   // This could fail if the thread doesn't exist anymore.
-  int r = tgkill(mMyPid, sampleeTid, SIGPROF);
+  int r = tgkill(mMyPid.ToNumber(), sampleeTid.ToNumber(), SIGPROF);
   if (r == 0) {
     // Wait for message 2 from the samplee, indicating that the context
     // is available and that the thread is suspended.
@@ -468,19 +507,17 @@ static void* ThreadEntry(void* aArg) {
 }
 
 SamplerThread::SamplerThread(PSLockRef aLock, uint32_t aActivityGeneration,
-                             double aIntervalMilliseconds,
-                             bool aStackWalkEnabled,
-                             bool aNoTimerResolutionChange)
+                             double aIntervalMilliseconds, uint32_t aFeatures)
     : mSampler(aLock),
       mActivityGeneration(aActivityGeneration),
       mIntervalMicroseconds(
           std::max(1, int(floor(aIntervalMilliseconds * 1000 + 0.5)))) {
 #if defined(USE_LUL_STACKWALK)
-  lul::LUL* lul = CorePS::Lul(aLock);
-  if (!lul && aStackWalkEnabled) {
-    CorePS::SetLul(aLock, MakeUnique<lul::LUL>(logging_sink_for_LUL));
+  lul::LUL* lul = CorePS::Lul();
+  if (!lul && ProfilerFeature::HasStackWalk(aFeatures)) {
+    CorePS::SetLul(MakeUnique<lul::LUL>(logging_sink_for_LUL));
     // Read all the unwind info currently available.
-    lul = CorePS::Lul(aLock);
+    lul = CorePS::Lul();
     read_procmaps(lul);
 
     // Switch into unwind mode. After this point, we can't add or remove any
@@ -564,36 +601,21 @@ void SamplerThread::Stop(PSLockRef aLock) {
 //
 // We provide no paf_child() function to run in the child after forking. This
 // is fine because we always immediately exec() after fork(), and exec()
-// clobbers all process state. (At one point we did have a paf_child()
-// function, but it caused problems related to locking gPSMutex. See bug
-// 1348374.)
+// clobbers all process state. Also, we don't want the sampler to resume in the
+// child process between fork() and exec(), it would be wasteful.
 //
 // Unfortunately all this is only doable on non-Android because Bionic doesn't
 // have pthread_atfork.
 
-// In the parent, before the fork, record IsSamplingPaused, and then pause.
-static void paf_prepare() {
-  MOZ_RELEASE_ASSERT(CorePS::Exists());
+// In the parent, before the fork, increase gSkipSampling to ensure that
+// profiler sampling loops will be skipped. There could be one in progress now,
+// causing a small delay, but further sampling will be skipped, allowing `fork`
+// to complete.
+static void paf_prepare() { ++gSkipSampling; }
 
-  PSAutoLock lock(gPSMutex);
-
-  if (ActivePS::Exists(lock)) {
-    ActivePS::SetWasSamplingPaused(lock, ActivePS::IsSamplingPaused(lock));
-    ActivePS::SetIsSamplingPaused(lock, true);
-  }
-}
-
-// In the parent, after the fork, return IsSamplingPaused to the pre-fork state.
-static void paf_parent() {
-  MOZ_RELEASE_ASSERT(CorePS::Exists());
-
-  PSAutoLock lock(gPSMutex);
-
-  if (ActivePS::Exists(lock)) {
-    ActivePS::SetIsSamplingPaused(lock, ActivePS::WasSamplingPaused(lock));
-    ActivePS::SetWasSamplingPaused(lock, false);
-  }
-}
+// In the parent, after the fork, decrease gSkipSampling to let the sampler
+// resume sampling (unless other places have made it non-zero as well).
+static void paf_parent() { --gSkipSampling; }
 
 static void PlatformInit(PSLockRef aLock) {
   // Set up the fork handlers.
@@ -607,14 +629,9 @@ static void PlatformInit(PSLockRef aLock) {}
 #endif
 
 #if defined(HAVE_NATIVE_UNWIND)
-// Context used by synchronous samples. It's safe to have a single one because
-// only one synchronous sample can be taken at a time (due to
-// profiler_get_backtrace()'s PSAutoLock).
-ucontext_t sSyncUContext;
-
 void Registers::SyncPopulate() {
-  if (!getcontext(&sSyncUContext)) {
-    PopulateRegsFromContext(*this, &sSyncUContext);
+  if (!getcontext(&mContextSyncStorage)) {
+    PopulateRegsFromContext(*this, &mContextSyncStorage);
   }
 }
 #endif

@@ -11,31 +11,42 @@
 
 #include "ServiceWorkerOp.h"
 #include "ServiceWorkerOpPromise.h"
+#include "mozilla/MozPromise.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/dom/InternalRequest.h"
 #include "mozilla/dom/PFetchEventOpProxyChild.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class InternalRequest;
-class ServiceWorkerFetchEventOpArgs;
+class InternalResponse;
+class ParentToChildServiceWorkerFetchEventOpArgs;
 
 class FetchEventOpProxyChild final : public PFetchEventOpProxyChild {
   friend class PFetchEventOpProxyChild;
 
  public:
-  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FetchEventOpProxyChild)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FetchEventOpProxyChild, override);
 
   FetchEventOpProxyChild() = default;
 
-  void Initialize(const ServiceWorkerFetchEventOpArgs& aArgs);
+  void Initialize(const ParentToChildServiceWorkerFetchEventOpArgs& aArgs);
 
   // Must only be called once and on a worker thread.
   SafeRefPtr<InternalRequest> ExtractInternalRequest();
 
+  RefPtr<FetchEventPreloadResponseAvailablePromise>
+  GetPreloadResponseAvailablePromise();
+
+  RefPtr<FetchEventPreloadResponseEndPromise> GetPreloadResponseEndPromise();
+
  private:
   ~FetchEventOpProxyChild() = default;
+
+  mozilla::ipc::IPCResult RecvPreloadResponse(
+      ParentToChildInternalResponse&& aResponse);
+
+  mozilla::ipc::IPCResult RecvPreloadResponseEnd(ResponseEndArgs&& aArgs);
 
   void ActorDestroy(ActorDestroyReason) override;
 
@@ -46,9 +57,15 @@ class FetchEventOpProxyChild final : public PFetchEventOpProxyChild {
 
   // Initialized on RemoteWorkerService::Thread, read on a worker thread.
   SafeRefPtr<InternalRequest> mInternalRequest;
+
+  RefPtr<FetchEventPreloadResponseAvailablePromise::Private>
+      mPreloadResponseAvailablePromise;
+  RefPtr<FetchEventPreloadResponseEndPromise::Private>
+      mPreloadResponseEndPromise;
+
+  Maybe<ServiceWorkerOpResult> mCachedOpResult;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_fetcheventopproxychild_h__

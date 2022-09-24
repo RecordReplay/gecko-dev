@@ -13,6 +13,8 @@
 
 #include "frontend/ParserAtom.h"  // frontend::{ParserAtomsTable, TaggedParserAtomIndex
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
+#include "vm/StaticStrings.h"
+
 #include "vm/JSObject-inl.h"
 #include "vm/StringType-inl.h"
 
@@ -114,7 +116,7 @@ JSLinearString* JSStringBuilder::finishString() {
     return cx_->names().empty;
   }
 
-  if (!JSString::validateLength(cx_, len)) {
+  if (MOZ_UNLIKELY(!JSString::validateLength(cx_, len))) {
     return nullptr;
   }
 

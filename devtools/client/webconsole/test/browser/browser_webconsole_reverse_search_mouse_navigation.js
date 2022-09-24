@@ -6,7 +6,7 @@
 
 "use strict";
 
-const TEST_URI = `data:text/html,<meta charset=utf8>Test reverse search`;
+const TEST_URI = `data:text/html,<!DOCTYPE html><meta charset=utf8>Test reverse search`;
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
@@ -19,7 +19,7 @@ add_task(async function() {
     `Dog = "Snoopy"`,
   ];
 
-  const onLastMessage = waitForMessage(hud, `"Snoopy"`);
+  const onLastMessage = waitForMessageByType(hud, `"Snoopy"`, ".result");
   for (const input of jstermHistory) {
     execute(hud, input);
   }

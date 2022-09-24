@@ -129,7 +129,7 @@ nsTextFragment& nsTextFragment::operator=(const nsTextFragment& aOther) {
 
 static inline int32_t FirstNon8BitUnvectorized(const char16_t* str,
                                                const char16_t* end) {
-  typedef Non8BitParameters<sizeof(size_t)> p;
+  using p = Non8BitParameters<sizeof(size_t)>;
   const size_t mask = p::mask();
   const uint32_t alignMask = p::alignMask();
   const uint32_t numUnicharsPerWord = p::numUnicharsPerWord();
@@ -194,10 +194,9 @@ static inline int32_t FirstNon8Bit(const char16_t* str, const char16_t* end) {
   return FirstNon8BitUnvectorized(str, end);
 }
 
-bool nsTextFragment::SetTo(const char16_t* aBuffer, int32_t aLength,
+bool nsTextFragment::SetTo(const char16_t* aBuffer, uint32_t aLength,
                            bool aUpdateBidi, bool aForce2b) {
-  if (MOZ_UNLIKELY(aLength < 0 || static_cast<uint32_t>(aLength) >
-                                      NS_MAX_TEXT_FRAGMENT_LENGTH)) {
+  if (MOZ_UNLIKELY(aLength > NS_MAX_TEXT_FRAGMENT_LENGTH)) {
     return false;
   }
 
@@ -291,7 +290,10 @@ bool nsTextFragment::SetTo(const char16_t* aBuffer, int32_t aLength,
 
   if (first16bit != -1) {  // aBuffer contains no non-8bit character
     // Use ucs2 storage because we have to
-    CheckedUint32 m2bSize = aLength + 1;
+    CheckedUint32 m2bSize = CheckedUint32(aLength) + 1;
+    if (!m2bSize.isValid()) {
+      return false;
+    }
     m2bSize *= sizeof(char16_t);
     if (!m2bSize.isValid()) {
       return false;
@@ -329,19 +331,14 @@ bool nsTextFragment::SetTo(const char16_t* aBuffer, int32_t aLength,
   return true;
 }
 
-void nsTextFragment::CopyTo(char16_t* aDest, int32_t aOffset, int32_t aCount) {
-  NS_ASSERTION(aOffset >= 0, "Bad offset passed to nsTextFragment::CopyTo()!");
-  NS_ASSERTION(aCount >= 0, "Bad count passed to nsTextFragment::CopyTo()!");
-
-  if (aOffset < 0) {
-    aOffset = 0;
-  }
-
-  if (uint32_t(aOffset + aCount) > GetLength()) {
+void nsTextFragment::CopyTo(char16_t* aDest, uint32_t aOffset,
+                            uint32_t aCount) {
+  const CheckedUint32 endOffset = CheckedUint32(aOffset) + aCount;
+  if (!endOffset.isValid() || endOffset.value() > GetLength()) {
     aCount = mState.mLength - aOffset;
   }
 
-  if (aCount != 0) {
+  if (aCount) {
     if (mState.mIs2b) {
       memcpy(aDest, Get2b() + aOffset, sizeof(char16_t) * aCount);
     } else {

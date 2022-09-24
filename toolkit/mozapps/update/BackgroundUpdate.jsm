@@ -48,14 +48,12 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIApplicationUpdateService"
 );
 
-Cu.importGlobalProperties(["Glean"]);
-
 // We may want to change the definition of the task over time. When we do this,
 // we need to remove and re-register the task. We will make sure this happens
 // by storing the installed version number of the task to a pref and comparing
 // that version number to the current version. If they aren't equal, we know
 // that we have to re-register the task.
-const TASK_DEF_CURRENT_VERSION = 2;
+const TASK_DEF_CURRENT_VERSION = 3;
 const TASK_INSTALLED_VERSION_PREF =
   "app.update.background.lastInstalledTaskVersion";
 
@@ -307,32 +305,39 @@ var BackgroundUpdate = {
     return result;
   },
 
-  async _mirrorToPerInstallationPref() {
-    try {
-      let scheduling = Services.prefs.getBoolPref(
-        "app.update.background.scheduling.enabled",
-        true
-      );
-      await UpdateUtils.writeUpdateConfigSetting(
-        "app.update.background.enabled",
-        scheduling,
-        { setDefaultOnly: true }
-      );
-      log.debug(
-        `mirrored per-profile pref "app.update.background.scheduling.enabled" default ` +
-          `to per-installation pref default "app.update.background.enabled": ${scheduling}`
-      );
-    } catch (e) {
-      if (e instanceof Ci.nsIException && e.result == Cr.NS_ERROR_UNEXPECTED) {
-        // The preference doesn't exist.
-        return;
-      }
-      console.warn(
-        `ignoring failure to mirror per-profile pref "app.update.background.scheduling.enabled" default ` +
-          `to per-installation pref default "app.update.background.enabled"`,
-        e
-      );
+  /**
+   * Background Update is controlled by the per-installation pref
+   * "app.update.background.enabled". When Background Update was still in the
+   * experimental phase, the default value of this pref may have been changed.
+   * Now that the feature has been rolled out, we need to make sure that the
+   * desired default value is restored.
+   */
+  async ensureExperimentToRolloutTransitionPerformed() {
+    if (!UpdateUtils.PER_INSTALLATION_PREFS_SUPPORTED) {
+      return;
     }
+    const transitionPerformedPref = "app.update.background.rolledout";
+    if (Services.prefs.getBoolPref(transitionPerformedPref, false)) {
+      // writeUpdateConfigSetting serializes access to the config file. Because
+      // of this, we can safely return here without worrying about another call
+      // to this function that might still be in progress.
+      return;
+    }
+    Services.prefs.setBoolPref(transitionPerformedPref, true);
+
+    const defaultValue =
+      UpdateUtils.PER_INSTALLATION_PREFS["app.update.background.enabled"]
+        .defaultValue;
+    await UpdateUtils.writeUpdateConfigSetting(
+      "app.update.background.enabled",
+      defaultValue,
+      { setDefaultOnly: true }
+    );
+
+    // To be thorough, remove any traces of the pref that used to control the
+    // default value that we just set. We don't want any users to have the
+    // impression that that pref is still useful.
+    Services.prefs.clearUserPref("app.update.background.scheduling.enabled");
   },
 
   async observe(subject, topic, data) {
@@ -365,12 +370,7 @@ var BackgroundUpdate = {
   async maybeScheduleBackgroundUpdateTask() {
     let SLUG = "maybeScheduleBackgroundUpdateTask";
 
-    if (
-      this._force() ||
-      BackgroundTasksUtils.currentProfileIsDefaultProfile()
-    ) {
-      await this._mirrorToPerInstallationPref();
-    }
+    await this.ensureExperimentToRolloutTransitionPerformed();
 
     log.info(
       `${SLUG}: checking eligibility before scheduling background update task`
@@ -397,15 +397,6 @@ var BackgroundUpdate = {
       // Witness when our own prefs change.
       Services.prefs.addObserver("app.update.background.force", this);
       Services.prefs.addObserver("app.update.background.interval", this);
-
-      // To accommodate forcing with "app.update.background.force"
-      // dynamically, we always observe
-      // "app.update.background.scheduling.enabled", even though we act on it
-      // (usually) only when we're the default profile.
-      Services.prefs.addObserver(
-        "app.update.background.scheduling.enabled",
-        this
-      );
 
       // Witness when the langpack updating feature is changed.
       Services.prefs.addObserver("app.update.langpack.enabled", this);
@@ -507,6 +498,41 @@ var BackgroundUpdate = {
           await TaskScheduler.deleteTask(this.taskId);
         } catch (e) {
           log.error(`${SLUG}: Error removing old task: ${e}`);
+        }
+        try {
+          // When the update directory was moved, we migrated the old contents
+          // to the new location. This can potentially happen in a background
+          // task. However, we also need to re-register the background task
+          // with the task scheduler in order to update the MOZ_LOG_FILE value
+          // to point to the new location. If the task runs before Firefox has
+          // a chance to re-register the task, the log file may be recreated in
+          // the old location. In practice, this would be unusual, because
+          // MOZ_LOG_FILE will not create the parent directories necessary to
+          // put a log file in the specified location. But just to be safe,
+          // we'll do some cleanup when we re-register the task to make sure
+          // that no log file is hanging around in the old location.
+          let oldUpdateDir = FileUtils.getDir("OldUpdRootD", [], false);
+          let oldLog = oldUpdateDir.clone();
+          oldLog.append("backgroundupdate.moz_log");
+
+          if (oldLog.exists()) {
+            oldLog.remove(false);
+            // We may have created some directories in order to put this log
+            // file in this location. Clean them up if they are empty.
+            // (If we pass false for the recurse parameter, directories with
+            // contents will not be removed)
+            //
+            // Potentially removes "C:\ProgramData\Mozilla\updates\<hash>"
+            oldUpdateDir.remove(false);
+            // Potentially removes "C:\ProgramData\Mozilla\updates"
+            oldUpdateDir.parent.remove(false);
+            // Potentially removes "C:\ProgramData\Mozilla"
+            oldUpdateDir.parent.parent.remove(false);
+          }
+        } catch (ex) {
+          log.warn(
+            `${SLUG}: Ignoring error encountered attempting to remove stale log file: ${ex}`
+          );
         }
       }
 

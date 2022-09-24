@@ -9,6 +9,7 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
     <meta http-equiv="Content-Security-Policy" content="default-src chrome: resource:; object-src 'none'" />
+    <meta name="color-scheme" content="light dark" />
     <title data-l10n-id="about-telemetry-page-title"></title>
     <link rel="stylesheet" href="chrome://global/content/aboutTelemetry.css"
           type="text/css"/>
@@ -64,9 +65,6 @@
       </div>
       <div class="category category-no-icon" value="addon-details-section">
         <span class="category-name" data-l10n-id="about-telemetry-addon-details-section"></span>
-      </div>
-      <div class="category category-no-icon" value="captured-stacks-section">
-        <span class="category-name" data-l10n-id="about-telemetry-captured-stacks-section"></span>
       </div>
       <div class="category category-no-icon" value="late-writes-section">
         <span class="category-name" data-l10n-id="about-telemetry-late-writes-section"></span>
@@ -131,7 +129,6 @@
 
       <div id="no-search-results" hidden="true" class="hidden">
         <span id="no-search-results-text"></span>
-        <div class="no-search-results-image"></div>
       </div>
 
       <section id="home-section" class="active">
@@ -209,12 +206,6 @@
 
       <section id="addon-details-section">
         <div id="addon-details" class="data"></div>
-      </section>
-
-      <section id="captured-stacks-section">
-        <a id="captured-stacks-fetch-symbols" href="" data-l10n-id="about-telemetry-fetch-stack-symbols"></a>
-        <a id="captured-stacks-hide-symbols" href="" data-l10n-id="about-telemetry-hide-stack-symbols"></a>
-        <div id="captured-stacks" class="data"></div>
       </section>
     </div>
 

@@ -6,7 +6,8 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html;charset=utf-8,Web Console test for bug 595350";
+const TEST_URI =
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console test for bug 595350";
 
 add_task(async function() {
   requestLongerTimeout(3);
@@ -40,7 +41,7 @@ add_task(async function() {
     const message = "message for tab " + tabs.indexOf(tab);
 
     // Log a message in the newly opened console.
-    const onMessage = waitForMessage(hud, message);
+    const onMessage = waitForMessageByType(hud, message, ".console-api");
     await SpecialPowers.spawn(browser, [message], function(msg) {
       content.console.log(msg);
     });

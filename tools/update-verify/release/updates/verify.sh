@@ -7,8 +7,9 @@
 . ../common/download_builds.sh
 . ../common/check_updates.sh
 
-clear_cache
-create_cache
+# Cache init being handled by new async_download.py
+# clear_cache
+# create_cache
 
 ftp_server_to="http://stage.mozilla.org/pub/mozilla.org"
 ftp_server_from="http://stage.mozilla.org/pub/mozilla.org"
@@ -102,10 +103,10 @@ fi
 while read entry
 do
   # initialize all config variables
-  release="" 
-  product="" 
-  platform="" 
-  build_id="" 
+  release=""
+  product=""
+  platform=""
+  build_id=""
   locales=""
   channel=""
   from=""

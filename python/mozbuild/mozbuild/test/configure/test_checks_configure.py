@@ -4,7 +4,6 @@
 
 from __future__ import absolute_import, print_function, unicode_literals
 
-from unittest.mock import patch
 from six import StringIO
 import os
 import sys
@@ -557,19 +556,12 @@ class TestChecksConfigure(unittest.TestCase):
                 """\
                     @depends('--help')
                     def host(_):
-                        return namespace(os='unknown')
+                        return namespace(os='unknown', kernel='unknown')
+                    toolchains_base_dir = depends(when=True)(lambda: '/mozbuild')
                     include('%(topsrcdir)s/build/moz.configure/java.configure')
                 """
                 % {"topsrcdir": topsrcdir}
             )
-
-            def mock_which(exe, path=None):
-                for mock_fs_path in mock_fs_paths.keys():
-                    (base, filename) = os.path.split(mock_fs_path)
-                    if filename == exe:
-                        if path and os.path.normpath(base) != os.path.normpath(path):
-                            continue
-                        return mock_fs_path
 
             # Don't let system JAVA_HOME influence the test
             original_java_home = os.environ.pop("JAVA_HOME", None)
@@ -582,7 +574,6 @@ class TestChecksConfigure(unittest.TestCase):
             if mock_path:
                 configure_environ["PATH"] = mock_path
 
-            # * Don't attempt to invoke Java, just resolve each mock Java's version as "1.8"
             # * Even if the real file sysphabtem has a symlink at the mocked path, don't let
             #   realpath follow it, as it may influence the test.
             # * When finding a binary, check the mock paths rather than the real filesystem.
@@ -590,15 +581,12 @@ class TestChecksConfigure(unittest.TestCase):
             # because then it thinks it's an un-with-able tuple. Additionally, if this is cleanly
             # lined up with "\", black removes them and autoformats them to the block that is
             # below.
-            with patch("mozboot.util._resolve_java_version", return_value="1.8"), patch(
-                "os.path.realpath", side_effect=lambda path: path
-            ), patch("mozboot.util.which", side_effect=mock_which):
-                result = self.get_result(
-                    args=args,
-                    command=script,
-                    extra_paths=paths,
-                    environ=configure_environ,
-                )
+            result = self.get_result(
+                args=args,
+                command=script,
+                extra_paths=paths,
+                environ=configure_environ,
+            )
 
             if original_java_home:
                 os.environ["JAVA_HOME"] = original_java_home
@@ -607,19 +595,15 @@ class TestChecksConfigure(unittest.TestCase):
         java = mozpath.abspath("/usr/bin/java")
         javac = mozpath.abspath("/usr/bin/javac")
         paths = {java: None, javac: None}
+        expected_error_message = (
+            "ERROR: Could not locate Java at /mozbuild/jdk/jdk-17.0.1+12/bin, "
+            "please run ./mach bootstrap --no-system-changes\n"
+        )
 
         config, out, status = run_configure_java(paths)
-        self.assertEqual(status, 0)
-        self.assertEqual(config, {"JAVA": java, "MOZ_JAVA_CODE_COVERAGE": False})
-        self.assertEqual(
-            out,
-            textwrap.dedent(
-                """\
-             checking for java... %s
-        """
-                % java
-            ),
-        )
+        self.assertEqual(status, 1)
+        self.assertEqual(config, {})
+        self.assertEqual(out, expected_error_message)
 
         # An alternative valid set of tools referred to by JAVA_HOME.
         alt_java = mozpath.abspath("/usr/local/bin/java")
@@ -629,17 +613,9 @@ class TestChecksConfigure(unittest.TestCase):
 
         alt_path = mozpath.dirname(java)
         config, out, status = run_configure_java(paths, alt_java_home, alt_path)
-        self.assertEqual(status, 0)
-        self.assertEqual(config, {"JAVA": alt_java, "MOZ_JAVA_CODE_COVERAGE": False})
-        self.assertEqual(
-            out,
-            textwrap.dedent(
-                """\
-             checking for java... %s
-        """
-                % alt_java
-            ),
-        )
+        self.assertEqual(status, 1)
+        self.assertEqual(config, {})
+        self.assertEqual(out, expected_error_message)
 
         # We can use --with-java-bin-path instead of JAVA_HOME to similar
         # effect.
@@ -688,8 +664,8 @@ class TestChecksConfigure(unittest.TestCase):
             mock_path=mozpath.dirname(java),
             args=["--enable-java-coverage"],
         )
-        self.assertEqual(status, 0)
-        self.assertEqual(config, {"JAVA": java, "MOZ_JAVA_CODE_COVERAGE": True})
+        self.assertEqual(status, 1)
+        self.assertEqual(config, {})
 
         # Any missing tool is fatal when these checks run.
         paths = {}
@@ -700,21 +676,19 @@ class TestChecksConfigure(unittest.TestCase):
         )
         self.assertEqual(status, 1)
         self.assertEqual(config, {})
-        self.assertEqual(
-            out,
-            textwrap.dedent(
-                """\
-            ERROR: Could not find "java" on the $PATH. Please install the Java 1.8 JDK \
-and/or set $JAVA_HOME.
-            """
-            ),
-        )
+        self.assertEqual(out, expected_error_message)
 
     def test_pkg_check_modules(self):
         mock_pkg_config_version = "0.10.0"
         mock_pkg_config_path = mozpath.abspath("/usr/bin/pkg-config")
 
+        seen_flags = set()
+
         def mock_pkg_config(_, args):
+            if "--dont-define-prefix" in args:
+                args = list(args)
+                seen_flags.add(args.pop(args.index("--dont-define-prefix")))
+                args = tuple(args)
             if args[0:2] == ("--errors-to-stdout", "--print-errors"):
                 assert len(args) == 3
                 package = args[2]
@@ -739,22 +713,43 @@ and/or set $JAVA_HOME.
                 return 0, "-l%s" % args[1], ""
             if args[0] == "--version":
                 return 0, mock_pkg_config_version, ""
+            if args[0] == "--about":
+                return 1, "Unknown option --about", ""
             self.fail("Unexpected arguments to mock_pkg_config: %s" % (args,))
 
-        def get_result(cmd, args=[], extra_paths=None):
+        def mock_pkgconf(_, args):
+            if args[0] == "--shared":
+                seen_flags.add(args[0])
+                args = args[1:]
+            if args[0] == "--about":
+                return 0, "pkgconf {}".format(mock_pkg_config_version), ""
+            return mock_pkg_config(_, args)
+
+        def get_result(cmd, args=[], bootstrapped_sysroot=False, extra_paths=None):
             return self.get_result(
                 textwrap.dedent(
                     """\
                 option('--disable-compile-environment', help='compile env')
                 compile_environment = depends(when='--enable-compile-environment')(lambda: True)
                 toolchain_prefix = depends(when=True)(lambda: None)
-                multiarch_dir = depends(when=True)(lambda: None)
-                sysroot_path = depends(when=True)(lambda: None)
+                target_multiarch_dir = depends(when=True)(lambda: None)
+                target_sysroot = depends(when=True)(lambda: %(sysroot)s)
+                target = depends(when=True)(lambda: None)
                 include('%(topsrcdir)s/build/moz.configure/util.configure')
                 include('%(topsrcdir)s/build/moz.configure/checks.configure')
+                # Skip bootstrapping.
+                @template
+                def check_prog(*args, **kwargs):
+                    del kwargs["bootstrap"]
+                    return check_prog(*args, **kwargs)
                 include('%(topsrcdir)s/build/moz.configure/pkg.configure')
             """
-                    % {"topsrcdir": topsrcdir}
+                    % {
+                        "topsrcdir": topsrcdir,
+                        "sysroot": "namespace(bootstrapped=True)"
+                        if bootstrapped_sysroot
+                        else "None",
+                    }
                 )
                 + cmd,
                 args=args,
@@ -778,31 +773,57 @@ and/or set $JAVA_HOME.
             ),
         )
 
-        config, output, status = get_result(
-            "pkg_check_modules('MOZ_VALID', 'valid')", extra_paths=extra_paths
-        )
-        self.assertEqual(status, 0)
-        self.assertEqual(
-            output,
-            textwrap.dedent(
-                """\
-            checking for pkg_config... %s
-            checking for pkg-config version... %s
-            checking for valid... yes
-            checking MOZ_VALID_CFLAGS... -I/usr/include/valid
-            checking MOZ_VALID_LIBS... -lvalid
-        """
-                % (mock_pkg_config_path, mock_pkg_config_version)
-            ),
-        )
-        self.assertEqual(
-            config,
-            {
-                "PKG_CONFIG": mock_pkg_config_path,
-                "MOZ_VALID_CFLAGS": ("-I/usr/include/valid",),
-                "MOZ_VALID_LIBS": ("-lvalid",),
-            },
-        )
+        for pkg_config, version, bootstrapped_sysroot, is_pkgconf in (
+            (mock_pkg_config, "0.10.0", False, False),
+            (mock_pkg_config, "0.30.0", False, False),
+            (mock_pkg_config, "0.30.0", True, False),
+            (mock_pkgconf, "1.1.0", True, True),
+            (mock_pkgconf, "1.6.0", False, True),
+            (mock_pkgconf, "1.8.0", False, True),
+            (mock_pkgconf, "1.8.0", True, True),
+        ):
+            seen_flags = set()
+            mock_pkg_config_version = version
+            config, output, status = get_result(
+                "pkg_check_modules('MOZ_VALID', 'valid')",
+                bootstrapped_sysroot=bootstrapped_sysroot,
+                extra_paths={mock_pkg_config_path: pkg_config},
+            )
+            self.assertEqual(status, 0)
+            self.assertEqual(
+                output,
+                textwrap.dedent(
+                    """\
+                checking for pkg_config... %s
+                checking for pkg-config version... %s
+                checking whether pkg-config is pkgconf... %s
+                checking for valid... yes
+                checking MOZ_VALID_CFLAGS... -I/usr/include/valid
+                checking MOZ_VALID_LIBS... -lvalid
+            """
+                    % (
+                        mock_pkg_config_path,
+                        mock_pkg_config_version,
+                        "yes" if is_pkgconf else "no",
+                    )
+                ),
+            )
+            self.assertEqual(
+                config,
+                {
+                    "PKG_CONFIG": mock_pkg_config_path,
+                    "MOZ_VALID_CFLAGS": ("-I/usr/include/valid",),
+                    "MOZ_VALID_LIBS": ("-lvalid",),
+                },
+            )
+            if version == "1.8.0" and bootstrapped_sysroot:
+                self.assertEqual(seen_flags, set(["--shared", "--dont-define-prefix"]))
+            elif version == "1.8.0":
+                self.assertEqual(seen_flags, set(["--shared"]))
+            elif version in ("1.6.0", "0.30.0") and bootstrapped_sysroot:
+                self.assertEqual(seen_flags, set(["--dont-define-prefix"]))
+            else:
+                self.assertEqual(seen_flags, set())
 
         config, output, status = get_result(
             "pkg_check_modules('MOZ_UKNOWN', 'unknown')", extra_paths=extra_paths
@@ -814,6 +835,7 @@ and/or set $JAVA_HOME.
                 """\
             checking for pkg_config... %s
             checking for pkg-config version... %s
+            checking whether pkg-config is pkgconf... no
             checking for unknown... no
             ERROR: Package unknown was not found in the pkg-config search path.
             ERROR: Perhaps you should add the directory containing `unknown.pc'
@@ -835,6 +857,7 @@ and/or set $JAVA_HOME.
                 """\
             checking for pkg_config... %s
             checking for pkg-config version... %s
+            checking whether pkg-config is pkgconf... no
             checking for new > 1.1... no
             ERROR: Requested 'new > 1.1' but version of new is 1.1
         """
@@ -862,6 +885,7 @@ and/or set $JAVA_HOME.
                 """\
             checking for pkg_config... %s
             checking for pkg-config version... %s
+            checking whether pkg-config is pkgconf... no
             checking for new > 1.1... no
             WARNING: Requested 'new > 1.1' but version of new is 1.1
             Module not found.
@@ -881,6 +905,8 @@ and/or set $JAVA_HOME.
         def mock_old_pkg_config(_, args):
             if args[0] == "--version":
                 return 0, "0.8.10", ""
+            if args[0] == "--about":
+                return 1, "Unknown option --about", ""
             self.fail("Unexpected arguments to mock_old_pkg_config: %s" % args)
 
         extra_paths = {mock_pkg_config_path: mock_old_pkg_config}
@@ -895,6 +921,7 @@ and/or set $JAVA_HOME.
                 """\
             checking for pkg_config... %s
             checking for pkg-config version... 0.8.10
+            checking whether pkg-config is pkgconf... no
             ERROR: *** Your version of pkg-config is too old. You need version 0.9.0 or newer.
         """
                 % mock_pkg_config_path

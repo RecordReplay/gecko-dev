@@ -28,8 +28,10 @@
 #  include "mozilla/PreXULSkeletonUI.h"
 #  include "freestanding/SharedSection.h"
 #  include "LauncherProcessWin.h"
+#  include "mozilla/GeckoArgs.h"
 #  include "mozilla/WindowsDllBlocklist.h"
 #  include "mozilla/WindowsDpiInitialization.h"
+#  include "mozilla/WindowsProcessMitigations.h"
 
 #  define XRE_WANT_ENVIRON
 #  define strcasecmp _stricmp
@@ -220,7 +222,7 @@ static int do_main(int argc, char* argv[], char* envp[]) {
 #endif
 
   // Note: keep in sync with LauncherProcessWin.
-  const char* acceptableParams[] = {"url", nullptr};
+  const char* acceptableParams[] = {"url", "private-window", nullptr};
   EnsureCommandlineSafe(argc, argv, acceptableParams);
 
   return gBootstrap->XRE_main(argc, argv, config);
@@ -302,6 +304,23 @@ int main(int argc, char* argv[], char* envp[]) {
     DllBlocklist_Initialize(gBlocklistInitFlags |
                             eDllBlocklistInitFlagIsChildProcess);
 #  endif
+#  if defined(XP_WIN) && defined(MOZ_SANDBOX)
+    // We need to set whether our process is supposed to have win32k locked down
+    // from the command line setting before GetInitializedTargetServices and
+    // WindowsDpiInitialization.
+    Maybe<bool> win32kLockedDown =
+        mozilla::geckoargs::sWin32kLockedDown.Get(argc, argv);
+    if (win32kLockedDown.isSome() && *win32kLockedDown) {
+      mozilla::SetWin32kLockedDownInPolicy();
+    }
+
+    // We need to initialize the sandbox TargetServices before InitXPCOMGlue
+    // because we might need the sandbox broker to give access to some files.
+    if (IsSandboxedProcess() && !sandboxing::GetInitializedTargetServices()) {
+      Output("Failed to initialize the sandbox target services.");
+      return 255;
+    }
+#  endif
 #  if defined(XP_WIN)
     // Ideally, we would be able to set our DPI awareness in
     // firefox.exe.manifest Unfortunately, that would cause Win32k calls when
@@ -313,14 +332,6 @@ int main(int argc, char* argv[], char* envp[]) {
     {
       auto result = mozilla::WindowsDpiInitialization();
       (void)result;  // Ignore errors since some tools block DPI calls
-    }
-#  endif
-#  if defined(XP_WIN) && defined(MOZ_SANDBOX)
-    // We need to initialize the sandbox TargetServices before InitXPCOMGlue
-    // because we might need the sandbox broker to give access to some files.
-    if (IsSandboxedProcess() && !sandboxing::GetInitializedTargetServices()) {
-      Output("Failed to initialize the sandbox target services.");
-      return 255;
     }
 #  endif
 
@@ -352,6 +363,23 @@ int main(int argc, char* argv[], char* envp[]) {
 
 #ifdef HAS_DLL_BLOCKLIST
   DllBlocklist_Initialize(gBlocklistInitFlags);
+#endif
+
+// We will likely only ever support this as a command line argument on Windows
+// and OSX, so we're ifdefing here just to not create any expectations.
+#if defined(XP_WIN) || defined(XP_MACOSX)
+  if (argc > 1 && IsArg(argv[1], "silentmode")) {
+    ::putenv(const_cast<char*>("MOZ_APP_SILENT_START=1"));
+#  if defined(XP_WIN)
+    // On windows We also want to set a separate variable, which we want to
+    // persist across restarts, which will let us keep the process alive
+    // even if the last window is closed.
+    ::putenv(const_cast<char*>("MOZ_APP_ALLOW_WINDOWLESS=1"));
+#  endif
+#  if defined(XP_MACOSX)
+    ::putenv(const_cast<char*>("MOZ_APP_NO_DOCK=1"));
+#  endif
+  }
 #endif
 
 #if defined(XP_WIN)

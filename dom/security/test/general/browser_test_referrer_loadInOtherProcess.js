@@ -1,5 +1,5 @@
 const TEST_PAGE =
-  "http://example.org/browser/browser/base/content/test/general/dummy_page.html";
+  "https://example.org/browser/browser/base/content/test/general/dummy_page.html";
 const TEST_REFERRER = "http://mochi.test:8888/";
 
 const ReferrerInfo = Components.Constructor(
@@ -77,7 +77,7 @@ var checkResult = async function(isRemote, browserKey, uri) {
         sessionHistory.count - 1
       );
 
-      var { E10SUtils } = SpecialPowers.Cu.import(
+      var { E10SUtils } = SpecialPowers.ChromeUtils.import(
         "resource://gre/modules/E10SUtils.jsm"
       );
 
@@ -142,6 +142,8 @@ add_task(async function test_navigation() {
 
   // Navigate from remote to non-remote
   gBrowser.selectedTab = BrowserTestUtils.addTab(gBrowser, TEST_PAGE);
+  // Wait for the non-blank page to finish loading
+  await BrowserTestUtils.browserStopped(gBrowser, TEST_PAGE);
   testURI = "about:mozilla";
   permanentKey = gBrowser.selectedBrowser.permanentKey;
   await waitForLoad(testURI);

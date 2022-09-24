@@ -10,14 +10,13 @@
 #include "MediaEngine.h"
 #include "VideoFrameUtils.h"
 #include "mozilla/media/MediaUtils.h"
-#include "webrtc/modules/video_capture/video_capture_impl.h"
-#include "webrtc/modules/video_capture/video_capture_defines.h"
-#include "webrtc/modules/video_capture/video_capture_factory.h"
+#include "modules/video_capture/video_capture_impl.h"
+#include "modules/video_capture/video_capture_defines.h"
+#include "modules/video_capture/video_capture_factory.h"
 #include <memory>
 #include <functional>
 
-namespace mozilla {
-namespace camera {
+namespace mozilla::camera {
 
 // Historically the video engine was part of webrtc
 // it was removed (and reimplemented in Talk)
@@ -39,7 +38,8 @@ class VideoEngine {
 #if defined(ANDROID)
   static int SetAndroidObjects();
 #endif
-  void CreateVideoCapture(int32_t& id, const char* deviceUniqueIdUTF8);
+  // Returns a non-negative capture identifier or -1 on failure.
+  int32_t CreateVideoCapture(const char* deviceUniqueIdUTF8);
 
   int ReleaseVideoCapture(const int32_t id);
 
@@ -86,10 +86,8 @@ class VideoEngine {
   std::map<int32_t, CaptureEntry> mCaps;
   std::map<int32_t, int32_t> mIdMap;
   // The validity period for non-camera capture device infos`
-  int64_t mExpiryTimeInMs = 0;
+  webrtc::Timestamp mExpiryTime = webrtc::Timestamp::Micros(0);
   int32_t GenerateId();
-  static int32_t sId;
 };
-}  // namespace camera
-}  // namespace mozilla
+}  // namespace mozilla::camera
 #endif

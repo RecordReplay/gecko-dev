@@ -240,9 +240,23 @@ class ShowTab extends Control {
     add(new SavePage().render());
     add(new DebugMode().render());
     add(new AecLogging().render());
+    // Add the autorefresh checkbox and its label
+    const autorefresh = document.createElement("input");
+    Object.assign(autorefresh, {
+      type: "checkbox",
+      id: "autorefresh",
+      checked: true,
+    });
+    const autorefreshLabel = document.createElement("label");
+    document.l10n.setAttributes(
+      autorefreshLabel,
+      "about-webrtc-auto-refresh-label"
+    );
 
     const ctrls = document.querySelector("#controls");
     ctrls.append(renderElements("div", { className: "controls" }, [ctrl, msg]));
+    ctrls.appendChild(autorefresh);
+    ctrls.appendChild(autorefreshLabel);
   }
 
   // Render pcs and log
@@ -258,6 +272,8 @@ class ShowTab extends Control {
   const content = document.querySelector("#content");
   content.append(peerConnections, connectionLog, userPrefs);
 
+  // This does not handle the auto-refresh, only the manual refreshes needed
+  // for certain user actions, and the initial population of the data
   function refresh() {
     const pcDiv = renderElements("div", { className: "stats" }, [
       renderElements("span", { className: "section-heading" }, [
@@ -312,22 +328,44 @@ class ShowTab extends Control {
   }
   refresh();
 
+  async function translate(element) {
+    const frag = document.createDocumentFragment();
+    frag.append(element);
+    await document.l10n.translateFragment(frag);
+    return frag;
+  }
+
   window.setInterval(
     async history => {
-      userPrefs.replaceWith((userPrefs = renderUserPrefs()));
+      // Only refresh if the autorefresh checkbox is checked
+      if (!document.getElementById("autorefresh").checked) {
+        return;
+      }
       const reports = await getStats();
-      reports.forEach(report => {
-        const replace = (id, renderFunc) => {
-          const elem = document.getElementById(`${id}: ${report.pcid}`);
-          if (elem) {
-            elem.replaceWith(renderFunc(report, history));
-          }
-        };
-        replace("ice-stats", renderICEStats);
-        replace("rtp-stats", renderRTPStats);
-        replace("bandwidth-stats", renderBandwidthStats);
-        replace("frame-stats", renderFrameRateStats);
-      });
+
+      const translateSection = async (report, id, renderFunc) => {
+        const element = document.getElementById(`${id}: ${report.pcid}`);
+        const result =
+          element && (await translate(renderFunc(report, history)));
+        return { element, translated: result };
+      };
+
+      const sections = (
+        await Promise.all(
+          reports.flatMap(report => [
+            translateSection(report, "ice-stats", renderICEStats),
+            translateSection(report, "rtp-stats", renderRTPStats),
+            translateSection(report, "bandwidth-stats", renderBandwidthStats),
+            translateSection(report, "frame-stats", renderFrameRateStats),
+          ])
+        )
+      ).filter(({ element }) => element);
+
+      document.l10n.pauseObserving();
+      for (const { element, translated } of sections) {
+        element.replaceWith(translated);
+      }
+      document.l10n.resumeObserving();
     },
     500,
     {}
@@ -580,16 +618,18 @@ function renderRTPStats(report, history) {
   for (const stat of rtpStats.filter(s => "remoteId" in s)) {
     stat.remoteRtpStats = remoteRtpStatsMap[stat.remoteId];
   }
-  const stats = [...rtpStats, ...remoteRtpStats];
+  for (const stat of rtpStats.filter(s => "codecId" in s)) {
+    stat.codecStat = report.codecStats.find(({ id }) => id == stat.codecId);
+  }
 
   // Render stats set
   return renderElements("div", { id: "rtp-stats: " + report.pcid }, [
     renderElement("h4", {}, "about-webrtc-rtp-stats-heading"),
-    ...stats.map(stat => {
-      const { id, remoteId, remoteRtpStats } = stat;
+    ...rtpStats.map(stat => {
+      const { ssrc, remoteId, remoteRtpStats } = stat;
       const div = renderElements("div", {}, [
-        renderText("h5", id),
-        renderCoderStats(stat),
+        renderText("h5", `SSRC ${ssrc}`),
+        renderCodecStats(stat),
         renderTransportStats(stat, true, history),
       ]);
       if (remoteId && remoteRtpStats) {
@@ -600,58 +640,53 @@ function renderRTPStats(report, history) {
   ]);
 }
 
-function renderCoderStats({
-  bitrateMean,
-  bitrateStdDev,
-  framerateMean,
-  framerateStdDev,
-  droppedFrames,
+function renderCodecStats({
+  codecStat,
+  framesEncoded,
+  framesDecoded,
+  framesDropped,
   discardedPackets,
   packetsReceived,
 }) {
   let elements = [];
 
-  if (bitrateMean) {
+  if (codecStat) {
     elements.push(
-      renderElement(
-        "span",
-        { className: "stat-label" },
-        "about-webrtc-avg-bitrate-label"
-      )
+      renderText("span", `${codecStat.payloadType} ${codecStat.mimeType}`, {})
     );
-    elements.push(
-      renderText("span", ` ${(bitrateMean / 1000000).toFixed(2)}`, {})
-    );
-
-    if (bitrateStdDev) {
+    if (framesEncoded !== undefined || framesDecoded !== undefined) {
       elements.push(
-        renderText("span", ` (${(bitrateStdDev / 1000000).toFixed(2)} SD)`, {})
-      );
-    }
-  }
-  if (bitrateMean) {
-    elements.push(
-      renderElement(
-        "span",
-        { className: "stat-label" },
-        "about-webrtc-avg-framerate-label"
-      )
-    );
-    elements.push(
-      renderText("span", ` ${(framerateMean / 1000000).toFixed(2)}`, {})
-    );
-
-    if (framerateStdDev) {
-      elements.push(
-        renderText(
+        renderElement(
           "span",
-          ` (${(framerateStdDev / 1000000).toFixed(2)} SD)`,
-          {}
+          { className: "stat-label" },
+          "about-webrtc-frames",
+          {
+            frames: framesEncoded || framesDecoded || 0,
+          }
         )
       );
     }
+    if (codecStat.channels !== undefined) {
+      elements.push(
+        renderElement(
+          "span",
+          { className: "stat-label" },
+          "about-webrtc-channels",
+          {
+            channels: codecStat.channels,
+          }
+        )
+      );
+    }
+    elements.push(
+      renderText(
+        "span",
+        ` ${codecStat.clockRate} ${codecStat.sdpFmtpLine || ""}`,
+        {}
+      )
+    );
   }
-  if (droppedFrames) {
+  if (framesDropped !== undefined) {
     elements.push(
       renderElement(
         "span",
@@ -659,9 +694,9 @@ function renderCoderStats({
         "about-webrtc-dropped-frames-label"
       )
     );
-    elements.push(renderText("span", ` ${droppedFrames}`, {}));
+    elements.push(renderText("span", ` ${framesDropped}`, {}));
   }
-  if (discardedPackets) {
+  if (discardedPackets !== undefined) {
     elements.push(
       renderElement(
         "span",
@@ -672,7 +707,7 @@ function renderCoderStats({
     elements.push(renderText("span", ` ${discardedPackets}`, {}));
   }
   if (elements.length) {
-    if (packetsReceived) {
+    if (packetsReceived !== undefined) {
       elements.unshift(
         renderElement("span", {}, "about-webrtc-decoder-label"),
         renderText("span", ": ")
@@ -692,7 +727,6 @@ function renderTransportStats(
     id,
     timestamp,
     type,
-    ssrc,
     packetsReceived,
     bytesReceived,
     packetsLost,
@@ -710,7 +744,7 @@ function renderTransportStats(
     }
   }
 
-  const estimateKbps = (timestamp, lastTimestamp, bytes, lastBytes) => {
+  const estimateKBps = (timestamp, lastTimestamp, bytes, lastBytes) => {
     if (!timestamp || !lastTimestamp || !bytes || !lastBytes) {
       return "0.0";
     }
@@ -736,7 +770,7 @@ function renderTransportStats(
   }
 
   const time = new Date(timestamp).toTimeString();
-  elements.push(renderText("span", `${time} ${type} SSRC: ${ssrc}`));
+  elements.push(renderText("span", `${time} ${type}`));
 
   if (packetsReceived) {
     elements.push(
@@ -753,12 +787,12 @@ function renderTransportStats(
     if (bytesReceived) {
       let s = ` (${(bytesReceived / 1024).toFixed(2)} Kb`;
       if (local && history) {
-        s += ` , ${estimateKbps(
+        s += ` , ${estimateKBps(
           timestamp,
           history[id].lastTimestamp,
           bytesReceived,
           history[id].lastBytesReceived
-        )} Kbps`;
+        )} KBps`;
       }
       s += ")";
       elements.push(renderText("span", s));
@@ -770,7 +804,7 @@ function renderTransportStats(
         { className: "stat-label" },
         "about-webrtc-lost-label",
         {
-          packets: packetsReceived,
+          packets: packetsLost,
         }
       )
     );
@@ -802,12 +836,12 @@ function renderTransportStats(
     if (bytesSent) {
       let s = ` (${(bytesSent / 1024).toFixed(2)} Kb`;
       if (local && history) {
-        s += `, ${estimateKbps(
+        s += `, ${estimateKBps(
           timestamp,
           history[id].lastTimestamp,
           bytesSent,
           history[id].lastBytesSent
-        )} Kbps`;
+        )} KBps`;
       }
       s += ")";
       elements.push(renderText("span", s));
@@ -1110,6 +1144,7 @@ function renderUserPrefs() {
     "media.peerconnection",
     "media.navigator",
     "media.getusermedia",
+    "media.gmp-gmpopenh264.enabled",
   ];
   const renderPref = p => renderText("p", `${p}: ${getPref(p)}`);
   const display = prefs

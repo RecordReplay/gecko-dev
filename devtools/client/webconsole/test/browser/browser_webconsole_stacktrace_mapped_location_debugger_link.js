@@ -11,20 +11,24 @@
 requestLongerTimeout(2);
 
 const TEST_URI =
-  "http://example.com/browser/devtools/client/webconsole/test/browser/" +
+  "https://example.com/browser/devtools/client/webconsole/test/browser/" +
   "test-console-stacktrace-mapped.html";
 
 const TEST_ORIGINAL_FILENAME = "test-sourcemap-original.js";
 
 const TEST_ORIGINAL_URI =
-  "http://example.com/browser/devtools/client/webconsole/test/browser/" +
+  "https://example.com/browser/devtools/client/webconsole/test/browser/" +
   TEST_ORIGINAL_FILENAME;
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
 
   info("Print a stacktrace");
-  const onLoggedStacktrace = waitForMessage(hud, "console.trace");
+  const onLoggedStacktrace = waitForMessageByType(
+    hud,
+    "console.trace",
+    ".console-api"
+  );
   SpecialPowers.spawn(gBrowser.selectedBrowser, [], function() {
     content.wrappedJSObject.logTrace();
   });

@@ -49,8 +49,3 @@ LOCAL_INCLUDES += [
     "/dom/base",
     "/dom/html",
 ]
-
-DEFINES["DEBUG_TABLE_STRATEGY_off"] = True
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

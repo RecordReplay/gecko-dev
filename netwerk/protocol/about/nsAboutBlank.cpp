@@ -7,6 +7,7 @@
 #include "nsStringStream.h"
 #include "nsNetUtil.h"
 #include "nsContentUtils.h"
+#include "nsIChannel.h"
 
 NS_IMPL_ISUPPORTS(nsAboutBlank, nsIAboutModule)
 
@@ -43,8 +44,7 @@ nsAboutBlank::GetChromeURI(nsIURI* aURI, nsIURI** chromeURI) {
   return NS_ERROR_ILLEGAL_VALUE;
 }
 
-nsresult nsAboutBlank::Create(nsISupports* aOuter, REFNSIID aIID,
-                              void** aResult) {
+nsresult nsAboutBlank::Create(REFNSIID aIID, void** aResult) {
   RefPtr<nsAboutBlank> about = new nsAboutBlank();
   return about->QueryInterface(aIID, aResult);
 }

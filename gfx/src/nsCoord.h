@@ -13,6 +13,7 @@
 #include <math.h>
 
 #include "mozilla/Assertions.h"
+#include "mozilla/gfx/Coord.h"
 #include "nsMathUtils.h"
 
 /*
@@ -24,47 +25,76 @@
  * 96dpi as possible.
  */
 
-// This controls whether we're using integers or floats for coordinates. We
-// want to eventually use floats.
-//#define NS_COORD_IS_FLOAT
-
-#ifdef NS_COORD_IS_FLOAT
-typedef float nscoord;
-#  define nscoord_MAX (mozilla::PositiveInfinity<float>())
-#else
 typedef int32_t nscoord;
-#  define nscoord_MAX nscoord((1 << 30) - 1)
-#endif
-
+#define nscoord_MAX nscoord((1 << 30) - 1)
 #define nscoord_MIN (-nscoord_MAX)
 
-inline void VERIFY_COORD(nscoord aCoord) {
-#ifdef NS_COORD_IS_FLOAT
-  NS_ASSERTION(floorf(aCoord) == aCoord, "Coords cannot have fractions");
-#endif
-}
+namespace mozilla {
+struct AppUnit {};
+
+// Declare AppUnit as a coordinate system tag.
+template <>
+struct IsPixel<AppUnit> : std::true_type {};
+
+namespace detail {
+template <typename Rep>
+struct AuCoordImpl : public gfx::IntCoordTyped<AppUnit, Rep> {
+  using Super = gfx::IntCoordTyped<AppUnit, Rep>;
+
+  constexpr AuCoordImpl() : Super() {}
+  constexpr MOZ_IMPLICIT AuCoordImpl(Rep aValue) : Super(aValue) {}
+  constexpr MOZ_IMPLICIT AuCoordImpl(Super aValue) : Super(aValue) {}
+
+  template <typename F>
+  static AuCoordImpl FromRound(F aValue) {
+    // Note: aValue is *not* rounding to nearest integer if it is negative. See
+    // https://bugzilla.mozilla.org/show_bug.cgi?id=410748#c14
+    return AuCoordImpl(std::floor(aValue + 0.5f));
+  }
+
+  template <typename F>
+  static AuCoordImpl FromTruncate(F aValue) {
+    return AuCoordImpl(std::trunc(aValue));
+  }
+
+  template <typename F>
+  static AuCoordImpl FromCeil(F aValue) {
+    return AuCoordImpl(std::ceil(aValue));
+  }
+
+  template <typename F>
+  static AuCoordImpl FromFloor(F aValue) {
+    return AuCoordImpl(std::floor(aValue));
+  }
+
+  // Note: this returns the result of the operation, without modifying the
+  // original value.
+  [[nodiscard]] AuCoordImpl ToMinMaxClamped() const {
+    return std::clamp(this->value, kMin, kMax);
+  }
+
+  static constexpr Rep kMax = nscoord_MAX;
+  static constexpr Rep kMin = nscoord_MIN;
+};
+}  // namespace detail
+
+using AuCoord = detail::AuCoordImpl<int32_t>;
+using AuCoord64 = detail::AuCoordImpl<int64_t>;
+
+}  // namespace mozilla
 
 /**
  * Divide aSpace by aN.  Assign the resulting quotient to aQuotient and
  * return the remainder.
  */
 inline nscoord NSCoordDivRem(nscoord aSpace, size_t aN, nscoord* aQuotient) {
-#ifdef NS_COORD_IS_FLOAT
-  *aQuotient = aSpace / aN;
-  return 0.0f;
-#else
   div_t result = div(aSpace, aN);
   *aQuotient = nscoord(result.quot);
   return nscoord(result.rem);
-#endif
 }
 
 inline nscoord NSCoordMulDiv(nscoord aMult1, nscoord aMult2, nscoord aDiv) {
-#ifdef NS_COORD_IS_FLOAT
-  return (aMult1 * aMult2 / aDiv);
-#else
   return (int64_t(aMult1) * int64_t(aMult2) / int64_t(aDiv));
-#endif
 }
 
 inline nscoord NSToCoordRound(float aValue) {
@@ -86,7 +116,6 @@ inline nscoord NSToCoordRound(double aValue) {
 }
 
 inline nscoord NSToCoordRoundWithClamp(float aValue) {
-#ifndef NS_COORD_IS_FLOAT
   // Bounds-check before converting out of float, to avoid overflow
   if (aValue >= float(nscoord_MAX)) {
     return nscoord_MAX;
@@ -94,7 +123,17 @@ inline nscoord NSToCoordRoundWithClamp(float aValue) {
   if (aValue <= float(nscoord_MIN)) {
     return nscoord_MIN;
   }
-#endif
+  return NSToCoordRound(aValue);
+}
+
+inline nscoord NSToCoordRoundWithClamp(double aValue) {
+  // Bounds-check before converting out of double, to avoid overflow
+  if (aValue >= double(nscoord_MAX)) {
+    return nscoord_MAX;
+  }
+  if (aValue <= double(nscoord_MIN)) {
+    return nscoord_MIN;
+  }
   return NSToCoordRound(aValue);
 }
 
@@ -106,20 +145,15 @@ inline nscoord NSToCoordRoundWithClamp(float aValue) {
  */
 inline nscoord _nscoordSaturatingMultiply(nscoord aCoord, float aScale,
                                           bool requireNotNegative) {
-  VERIFY_COORD(aCoord);
   if (requireNotNegative) {
     MOZ_ASSERT(aScale >= 0.0f,
                "negative scaling factors must be handled manually");
   }
-#ifdef NS_COORD_IS_FLOAT
-  return floorf(aCoord * aScale);
-#else
   float product = aCoord * aScale;
   if (requireNotNegative ? aCoord > 0 : (aCoord > 0) == (aScale > 0))
     return NSToCoordRoundWithClamp(
         std::min<float>((float)nscoord_MAX, product));
   return NSToCoordRoundWithClamp(std::max<float>((float)nscoord_MIN, product));
-#endif
 }
 
 /**
@@ -145,19 +179,8 @@ inline nscoord NSCoordSaturatingMultiply(nscoord aCoord, float aScale) {
  * Returns a + b, capping the sum to nscoord_MAX.
  *
  * This function assumes that neither argument is nscoord_MIN.
- *
- * Note: If/when we start using floats for nscoords, this function won't be as
- * necessary.  Normal float addition correctly handles adding with infinity,
- * assuming we aren't adding nscoord_MIN. (-infinity)
  */
 inline nscoord NSCoordSaturatingAdd(nscoord a, nscoord b) {
-  VERIFY_COORD(a);
-  VERIFY_COORD(b);
-
-#ifdef NS_COORD_IS_FLOAT
-  // Float math correctly handles a+b, given that neither is -infinity.
-  return a + b;
-#else
   if (a == nscoord_MAX || b == nscoord_MAX) {
     // infinity + anything = anything + infinity = infinity
     return nscoord_MAX;
@@ -166,7 +189,6 @@ inline nscoord NSCoordSaturatingAdd(nscoord a, nscoord b) {
     // Cap the result, just in case we're dealing with numbers near nscoord_MAX
     return std::min(nscoord_MAX, a + b);
   }
-#endif
 }
 
 /**
@@ -179,17 +201,9 @@ inline nscoord NSCoordSaturatingAdd(nscoord a, nscoord b) {
  *  b)  N - infinity        -> 0  (unexpected -- triggers NOTREACHED)
  *  c)  infinity - N        -> infinity
  *  d)  N1 - N2             -> N1 - N2
- *
- * Note: For float nscoords, cases (c) and (d) are handled by normal float
- * math.  We still need to explicitly specify the behavior for cases (a)
- * and (b), though.  (Under normal float math, those cases would return NaN
- * and -infinity, respectively.)
  */
 inline nscoord NSCoordSaturatingSubtract(nscoord a, nscoord b,
                                          nscoord infMinusInfResult) {
-  VERIFY_COORD(a);
-  VERIFY_COORD(b);
-
   if (b == nscoord_MAX) {
     if (a == nscoord_MAX) {
       // case (a)
@@ -199,10 +213,6 @@ inline nscoord NSCoordSaturatingSubtract(nscoord a, nscoord b,
       return 0;
     }
   } else {
-#ifdef NS_COORD_IS_FLOAT
-    // case (c) and (d) for floats.  (float math handles both)
-    return a - b;
-#else
     if (a == nscoord_MAX) {
       // case (c) for integers
       return nscoord_MAX;
@@ -211,17 +221,10 @@ inline nscoord NSCoordSaturatingSubtract(nscoord a, nscoord b,
       // Cap the result, in case we're dealing with numbers near nscoord_MAX
       return std::min(nscoord_MAX, a - b);
     }
-#endif
   }
 }
 
-inline float NSCoordToFloat(nscoord aCoord) {
-  VERIFY_COORD(aCoord);
-#ifdef NS_COORD_IS_FLOAT
-  NS_ASSERTION(!mozilla::IsNaN(aCoord), "NaN encountered in float conversion");
-#endif
-  return (float)aCoord;
-}
+inline float NSCoordToFloat(nscoord aCoord) { return (float)aCoord; }
 
 /*
  * Coord Rounding Functions
@@ -231,7 +234,6 @@ inline nscoord NSToCoordFloor(float aValue) { return nscoord(floorf(aValue)); }
 inline nscoord NSToCoordFloor(double aValue) { return nscoord(floor(aValue)); }
 
 inline nscoord NSToCoordFloorClamped(float aValue) {
-#ifndef NS_COORD_IS_FLOAT
   // Bounds-check before converting out of float, to avoid overflow
   if (aValue >= float(nscoord_MAX)) {
     return nscoord_MAX;
@@ -239,7 +241,6 @@ inline nscoord NSToCoordFloorClamped(float aValue) {
   if (aValue <= float(nscoord_MIN)) {
     return nscoord_MIN;
   }
-#endif
   return NSToCoordFloor(aValue);
 }
 
@@ -248,7 +249,6 @@ inline nscoord NSToCoordCeil(float aValue) { return nscoord(ceilf(aValue)); }
 inline nscoord NSToCoordCeil(double aValue) { return nscoord(ceil(aValue)); }
 
 inline nscoord NSToCoordCeilClamped(double aValue) {
-#ifndef NS_COORD_IS_FLOAT
   // Bounds-check before converting out of double, to avoid overflow
   if (aValue >= nscoord_MAX) {
     return nscoord_MAX;
@@ -256,7 +256,6 @@ inline nscoord NSToCoordCeilClamped(double aValue) {
   if (aValue <= nscoord_MIN) {
     return nscoord_MIN;
   }
-#endif
   return NSToCoordCeil(aValue);
 }
 
@@ -277,7 +276,6 @@ inline nscoord NSToCoordTrunc(double aValue) {
 }
 
 inline nscoord NSToCoordTruncClamped(float aValue) {
-#ifndef NS_COORD_IS_FLOAT
   // Bounds-check before converting out of float, to avoid overflow
   if (aValue >= float(nscoord_MAX)) {
     return nscoord_MAX;
@@ -285,12 +283,10 @@ inline nscoord NSToCoordTruncClamped(float aValue) {
   if (aValue <= float(nscoord_MIN)) {
     return nscoord_MIN;
   }
-#endif
   return NSToCoordTrunc(aValue);
 }
 
 inline nscoord NSToCoordTruncClamped(double aValue) {
-#ifndef NS_COORD_IS_FLOAT
   // Bounds-check before converting out of double, to avoid overflow
   if (aValue >= float(nscoord_MAX)) {
     return nscoord_MAX;
@@ -298,7 +294,6 @@ inline nscoord NSToCoordTruncClamped(double aValue) {
   if (aValue <= float(nscoord_MIN)) {
     return nscoord_MIN;
   }
-#endif
   return NSToCoordTrunc(aValue);
 }
 
@@ -329,7 +324,6 @@ inline nscoord NSIntPixelsToAppUnits(int32_t aPixels,
   // The cast to nscoord makes sure we don't overflow if we ever change
   // nscoord to float
   nscoord r = aPixels * (nscoord)aAppUnitsPerPixel;
-  VERIFY_COORD(r);
   return r;
 }
 

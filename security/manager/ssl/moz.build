@@ -12,18 +12,19 @@ if (CONFIG["OS_ARCH"] == "WINNT" and CONFIG["CPU_ARCH"] != "aarch64") or CONFIG[
 ] == "Darwin":
     DIRS += ["osclientcerts"]
 
+DIRS += ["ipcclientcerts"]
+
 TEST_DIRS += ["tests"]
 
 XPIDL_SOURCES += [
     "nsICertificateDialogs.idl",
     "nsICertOverrideService.idl",
     "nsICertStorage.idl",
+    "nsICertTree.idl",
     "nsIClientAuthDialogs.idl",
     "nsIClientAuthRememberService.idl",
     "nsIContentSignatureVerifier.idl",
     "nsICryptoHash.idl",
-    "nsICryptoHMAC.idl",
-    "nsIKeyModule.idl",
     "nsILocalCertService.idl",
     "nsINSSComponent.idl",
     "nsINSSErrorsService.idl",
@@ -46,11 +47,6 @@ XPIDL_SOURCES += [
     "nsIX509CertDB.idl",
     "nsIX509CertValidity.idl",
 ]
-
-if CONFIG["MOZ_XUL"]:
-    XPIDL_SOURCES += [
-        "nsICertTree.idl",
-    ]
 
 XPIDL_MODULE = "pipnss"
 
@@ -93,7 +89,8 @@ EXPORTS.mozilla += [
 ]
 
 EXPORTS.mozilla.psm += [
-    "PSMIPCCommon.h",
+    "IPCClientCertsChild.h",
+    "IPCClientCertsParent.h",
     "TransportSecurityInfo.h",
     "VerifySSLServerCertChild.h",
     "VerifySSLServerCertParent.h",
@@ -104,18 +101,20 @@ EXPORTS.ipc += [
 ]
 
 UNIFIED_SOURCES += [
+    "AppSignatureVerification.cpp",
+    "AppTrustDomain.cpp",
     "CertStorageMemoryReporting.cpp",
     "CommonSocketControl.cpp",
     "ContentSignatureVerifier.cpp",
     "CryptoTask.cpp",
-    "CSTrustDomain.cpp",
     "DataStorage.cpp",
     "EnterpriseRoots.cpp",
+    "IPCClientCertsChild.cpp",
+    "IPCClientCertsParent.cpp",
     "LocalCertService.cpp",
     "nsCertOverrideService.cpp",
     "nsClientAuthRemember.cpp",
     "nsCryptoHash.cpp",
-    "nsKeyModule.cpp",
     "nsNSSCallbacks.cpp",
     "nsNSSCertHelper.cpp",
     "nsNSSCertificate.cpp",
@@ -140,7 +139,6 @@ UNIFIED_SOURCES += [
     "nsTLSSocketProvider.cpp",
     "OSKeyStore.cpp",
     "PKCS11ModuleDB.cpp",
-    "PSMIPCCommon.cpp",
     "PSMRunnable.cpp",
     "PublicKeyPinningService.cpp",
     "RootCertificateTelemetryUtils.cpp",
@@ -189,30 +187,26 @@ if CONFIG["OS_ARCH"] == "WINNT":
     ]
 
 IPDL_SOURCES += [
+    "PIPCClientCerts.ipdl",
     "PSMIPCTypes.ipdlh",
     "PVerifySSLServerCert.ipdl",
 ]
 
-if CONFIG["MOZ_XUL"]:
-    UNIFIED_SOURCES += [
-        "nsCertTree.cpp",
-    ]
-
 UNIFIED_SOURCES += [
     "md4.c",
+    "nsCertTree.cpp",
 ]
 
 FINAL_LIBRARY = "xul"
 
 LOCAL_INCLUDES += [
+    "!/dist/public/nss",
     "/dom/base",
     "/dom/crypto",
     "/netwerk/base",
     "/security/certverifier",
-]
-
-LOCAL_INCLUDES += [
-    "!/dist/public/nss",
+    "/third_party/rust/cose-c/include",
+    "/xpcom/build",
 ]
 
 GeneratedFile(
@@ -246,3 +240,46 @@ if CONFIG["CC_TYPE"] in ("clang", "gcc"):
     CXXFLAGS += [
         "-Wno-unused-parameter",
     ]
+
+headers_arrays_certs = [
+    (
+        "xpcshell.inc",
+        "xpcshellRoot",
+        "tests/unit/test_signed_apps/xpcshellTestRoot.der",
+    ),
+    ("addons-public.inc", "addonsPublicRoot", "addons-public.crt"),
+    (
+        "addons-public-intermediate.inc",
+        "addonsPublicIntermediate",
+        "addons-public-intermediate.crt",
+    ),
+    ("addons-stage.inc", "addonsStageRoot", "addons-stage.crt"),
+    (
+        "content-signature-prod.inc",
+        "contentSignatureProdRoot",
+        "content-signature-prod.crt",
+    ),
+    (
+        "content-signature-stage.inc",
+        "contentSignatureStageRoot",
+        "content-signature-stage.crt",
+    ),
+    # The dev root is the same as the stage root.
+    (
+        "content-signature-dev.inc",
+        "contentSignatureDevRoot",
+        "content-signature-stage.crt",
+    ),
+    (
+        "content-signature-local.inc",
+        "contentSignatureLocalRoot",
+        "content-signature-local.crt",
+    ),
+]
+
+for header, array_name, cert in headers_arrays_certs:
+    GeneratedFile(
+        header, script="gen_cert_header.py", entry_point=array_name, inputs=[cert]
+    )
+
+REQUIRES_UNIFIED_BUILD = True

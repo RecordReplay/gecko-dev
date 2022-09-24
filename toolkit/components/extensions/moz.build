@@ -32,26 +32,18 @@ EXTRA_JS_MODULES += [
     "ExtensionStorageSyncKinto.jsm",
     "ExtensionTelemetry.jsm",
     "ExtensionUtils.jsm",
+    "ExtensionWorkerChild.jsm",
     "FindContent.jsm",
     "MatchURLFilters.jsm",
-    "MessageChannel.jsm",
     "MessageManagerProxy.jsm",
     "NativeManifests.jsm",
     "NativeMessaging.jsm",
-    "onExtensionBrowser.js",
     "PerformanceCounters.jsm",
     "ProxyChannelFilter.jsm",
     "Schemas.jsm",
     "WebNavigation.jsm",
     "WebNavigationFrames.jsm",
 ]
-
-if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
-    EXTRA_JS_MODULES += [
-        "profiler_get_symbols.js",
-        "ProfilerGetSymbols-worker.js",
-        "ProfilerGetSymbols.jsm",
-    ]
 
 EXTRA_COMPONENTS += [
     "extensions-toolkit.manifest",
@@ -60,6 +52,9 @@ EXTRA_COMPONENTS += [
 TESTING_JS_MODULES += [
     "ExtensionTestCommon.jsm",
     "ExtensionXPCShellUtils.jsm",
+    "MessageChannel.jsm",
+    "test/xpcshell/data/TestWorkerWatcherChild.jsm",
+    "test/xpcshell/data/TestWorkerWatcherParent.jsm",
 ]
 
 DIRS += [
@@ -133,7 +128,12 @@ XPCSHELL_TESTS_MANIFESTS += [
 # Only include tests that requires the WebExtensions WebIDL API bindings
 # in builds where they are enabled (currently only on Nightly builds).
 if CONFIG["MOZ_WEBEXT_WEBIDL_ENABLED"]:
-    XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/webidl-api/xpcshell.ini"]
+    XPCSHELL_TESTS_MANIFESTS += [
+        "test/xpcshell/webidl-api/xpcshell.ini",
+        "test/xpcshell/xpcshell-serviceworker.ini",
+    ]
+    MOCHITEST_MANIFESTS += ["test/mochitest/mochitest-serviceworker.ini"]
+
 
 SPHINX_TREES["webextensions"] = "docs"
 
@@ -141,3 +141,5 @@ with Files("docs/**"):
     SCHEDULES.exclusive = ["docs"]
 
 include("/ipc/chromium/chromium-config.mozbuild")
+
+REQUIRES_UNIFIED_BUILD = True

@@ -78,7 +78,7 @@ class ProviderPreloadedSites extends UrlbarProvider {
       fetch("chrome://browser/content/urlbar/preloaded-top-urls.json")
         .then(response => response.json())
         .then(sites => PreloadedSiteStorage.populate(sites))
-        .catch(ex => Cu.reportError(ex));
+        .catch(ex => this.logger.error(ex));
     }
   }
 
@@ -265,6 +265,7 @@ class ProviderPreloadedSites extends UrlbarProvider {
       queryContext.searchString +
       value.substring(queryContext.searchString.length);
     result.autofill = {
+      type: "preloaded",
       value: autofilledValue,
       selectionStart: queryContext.searchString.length,
       selectionEnd: autofilledValue.length,

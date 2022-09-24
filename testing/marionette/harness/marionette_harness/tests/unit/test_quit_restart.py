@@ -23,10 +23,14 @@ class TestServerQuitApplication(MarionetteTestCase):
         if self.marionette.session is None:
             self.marionette.start_session()
 
-    def quit(self, flags=None):
-        body = None
+    def quit(self, flags=None, safe_mode=False):
+        body = {}
         if flags is not None:
-            body = {"flags": list(flags)}
+            body["flags"] = list(
+                flags,
+            )
+        if safe_mode:
+            body["safeMode"] = safe_mode
 
         resp = self.marionette._send_message("Marionette:Quit", body)
         self.marionette.session_id = None
@@ -59,7 +63,7 @@ class TestServerQuitApplication(MarionetteTestCase):
         cause = self.quit(())
         self.assertEqual("shutdown", cause)
 
-    def test_incompatible_flags(self):
+    def test_incompatible_quit_flags(self):
         with self.assertRaises(errors.InvalidArgumentException):
             self.quit(("eAttemptQuit", "eForceQuit"))
 
@@ -70,6 +74,15 @@ class TestServerQuitApplication(MarionetteTestCase):
     def test_force_quit(self):
         cause = self.quit(("eForceQuit",))
         self.assertEqual("shutdown", cause)
+
+    def test_safe_mode_requires_restart(self):
+        with self.assertRaises(errors.InvalidArgumentException):
+            self.quit(("eAttemptQuit",), True)
+
+    @unittest.skipUnless(sys.platform.startswith("darwin"), "Only supported on MacOS")
+    def test_silent_quit_missing_windowless_capability(self):
+        with self.assertRaises(errors.UnsupportedOperationException):
+            self.quit(("eSilently",))
 
 
 class TestQuitRestart(MarionetteTestCase):
@@ -101,7 +114,9 @@ class TestQuitRestart(MarionetteTestCase):
         with self.marionette.using_context("chrome"):
             return self.marionette.execute_script(
                 """
-              Cu.import("resource://gre/modules/Services.jsm");
+              const { Services } = ChromeUtils.import(
+                "resource://gre/modules/Services.jsm"
+              );
               return Services.appinfo.inSafeMode;
             """
             )
@@ -110,7 +125,9 @@ class TestQuitRestart(MarionetteTestCase):
         self.marionette.set_context("chrome")
         self.marionette.execute_script(
             """
-            Components.utils.import("resource://gre/modules/Services.jsm");
+            const { Services } = ChromeUtils.import(
+              "resource://gre/modules/Services.jsm"
+            );
             let flags = Ci.nsIAppStartup.eAttemptQuit;
             if (arguments[0]) {
               flags |= Ci.nsIAppStartup.eRestart;
@@ -172,6 +189,21 @@ class TestQuitRestart(MarionetteTestCase):
             ValueError, "cannot be triggered with the clean flag set"
         ):
             self.marionette.restart(in_app=True, clean=True)
+
+    def test_restart_preserves_requested_capabilities(self):
+        self.marionette.delete_session()
+        self.marionette.start_session(capabilities={"moz:fooBar": True})
+
+        self.marionette.restart(in_app=False)
+        self.assertEqual(self.marionette.session.get("moz:fooBar"), True)
+
+    def test_restart_safe_mode(self):
+        try:
+            self.assertFalse(self.is_safe_mode, "Safe Mode is unexpectedly enabled")
+            self.marionette.restart(safe_mode=True)
+            self.assertTrue(self.is_safe_mode, "Safe Mode is not enabled")
+        finally:
+            self.marionette.quit(clean=True)
 
     def test_in_app_restart(self):
         details = self.marionette.restart(in_app=True)
@@ -263,32 +295,42 @@ class TestQuitRestart(MarionetteTestCase):
             self.marionette.shutdown_timeout = timeout_shutdown
             self.marionette.startup_timeout = timeout_startup
 
-    def test_in_app_restart_safe_mode(self):
-        def restart_in_safe_mode():
-            with self.marionette.using_context("chrome"):
-                self.marionette.execute_script(
-                    """
-                  Components.utils.import("resource://gre/modules/Services.jsm");
+    def test_in_app_restart_preserves_requested_capabilities(self):
+        self.marionette.delete_session()
+        self.marionette.start_session(capabilities={"moz:fooBar": True})
 
-                  let cancelQuit = Cc["@mozilla.org/supports-PRBool;1"]
-                                     .createInstance(Ci.nsISupportsPRBool);
-                  Services.obs.notifyObservers(cancelQuit,
-                      "quit-application-requested", null);
+        self.marionette.restart(in_app=True)
+        self.assertEqual(self.marionette.session.get("moz:fooBar"), True)
 
-                  if (!cancelQuit.data) {
-                    Services.startup.restartInSafeMode(Ci.nsIAppStartup.eAttemptQuit);
-                  }
-                """
-                )
+    @unittest.skipUnless(sys.platform.startswith("darwin"), "Only supported on MacOS")
+    def test_in_app_silent_restart_fails_without_windowless_flag_on_mac_os(self):
+        self.marionette.delete_session()
+        self.marionette.start_session()
 
-        try:
-            self.assertFalse(self.is_safe_mode, "Safe Mode is unexpectedly enabled")
-            self.marionette.restart(in_app=True, callback=restart_in_safe_mode)
-            self.assertTrue(self.is_safe_mode, "Safe Mode is not enabled")
-        finally:
-            if self.marionette.session is None:
-                self.marionette.start_session()
-            self.marionette.quit(clean=True)
+        with self.assertRaises(errors.UnsupportedOperationException):
+            self.marionette.restart(silent=True)
+
+    @unittest.skipUnless(sys.platform.startswith("darwin"), "Only supported on MacOS")
+    def test_in_app_silent_restart_windowless_flag_on_mac_os(self):
+        self.marionette.delete_session()
+        self.marionette.start_session(capabilities={"moz:windowless": True})
+
+        self.marionette.restart(silent=True)
+        self.assertTrue(self.marionette.session_capabilities["moz:windowless"])
+
+        self.marionette.restart(in_app=True)
+        self.assertTrue(self.marionette.session_capabilities["moz:windowless"])
+
+        self.marionette.delete_session()
+
+    @unittest.skipIf(
+        sys.platform.startswith("darwin"), "Not supported on other platforms than MacOS"
+    )
+    def test_in_app_silent_restart_windowless_flag_unsupported_platforms(self):
+        self.marionette.delete_session()
+
+        with self.assertRaises(errors.SessionNotCreatedException):
+            self.marionette.start_session(capabilities={"moz:windowless": True})
 
     def test_in_app_quit(self):
         details = self.marionette.quit(in_app=True)

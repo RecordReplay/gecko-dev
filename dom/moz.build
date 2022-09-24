@@ -52,6 +52,7 @@ DIRS += [
     "filehandle",
     "filesystem",
     "flex",
+    "fs",
     "gamepad",
     "geolocation",
     "grid",
@@ -69,6 +70,7 @@ DIRS += [
     "storage",
     "svg",
     "locales",
+    "locks",
     "network",
     "permission",
     "plugins/base",
@@ -82,6 +84,7 @@ DIRS += [
     "messagechannel",
     "promise",
     "smil",
+    "streams",
     "url",
     "webauthn",
     "webidl",
@@ -107,7 +110,10 @@ DIRS += [
     "localstorage",
     "prio",
     "l10n",
+    "origin-trials",
+    "webscheduling",
 ]
+
 
 TEST_DIRS += [
     "tests",

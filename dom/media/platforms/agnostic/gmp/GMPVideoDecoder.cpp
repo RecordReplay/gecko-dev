@@ -34,7 +34,8 @@ static bool IsOnGMPThread() {
 GMPVideoDecoderParams::GMPVideoDecoderParams(const CreateDecoderParams& aParams)
     : mConfig(aParams.VideoConfig()),
       mImageContainer(aParams.mImageContainer),
-      mCrashHelper(aParams.mCrashHelper) {}
+      mCrashHelper(aParams.mCrashHelper),
+      mKnowsCompositor(aParams.mKnowsCompositor) {}
 
 void GMPVideoDecoder::Decoded(GMPVideoi420Frame* aDecodedFrame) {
   GMPUniquePtr<GMPVideoi420Frame> decodedFrame(aDecodedFrame);
@@ -55,6 +56,7 @@ void GMPVideoDecoder::Decoded(GMPVideoi420Frame* aDecodedFrame) {
     b.mPlanes[i].mSkip = 0;
   }
 
+  b.mChromaSubsampling = gfx::ChromaSubsampling::HALF_WIDTH_AND_HEIGHT;
   b.mYUVColorSpace =
       DefaultColorSpace({decodedFrame->Width(), decodedFrame->Height()});
 
@@ -64,7 +66,7 @@ void GMPVideoDecoder::Decoded(GMPVideoi420Frame* aDecodedFrame) {
       mConfig, mImageContainer, mLastStreamOffset,
       media::TimeUnit::FromMicroseconds(decodedFrame->Timestamp()),
       media::TimeUnit::FromMicroseconds(decodedFrame->Duration()), b, false,
-      media::TimeUnit::FromMicroseconds(-1), pictureRegion);
+      media::TimeUnit::FromMicroseconds(-1), pictureRegion, mKnowsCompositor);
   RefPtr<GMPVideoDecoder> self = this;
   if (v) {
     mDecodedData.AppendElement(std::move(v));
@@ -123,7 +125,8 @@ GMPVideoDecoder::GMPVideoDecoder(const GMPVideoDecoderParams& aParams)
       mHost(nullptr),
       mConvertNALUnitLengths(false),
       mCrashHelper(aParams.mCrashHelper),
-      mImageContainer(aParams.mImageContainer) {}
+      mImageContainer(aParams.mImageContainer),
+      mKnowsCompositor(aParams.mKnowsCompositor) {}
 
 void GMPVideoDecoder::InitTags(nsTArray<nsCString>& aTags) {
   if (MP4Decoder::IsH264(mConfig.mMimeType)) {
@@ -260,9 +263,8 @@ RefPtr<MediaDataDecoder::InitPromise> GMPVideoDecoder::Init() {
   nsTArray<nsCString> tags;
   InitTags(tags);
   UniquePtr<GetGMPVideoDecoderCallback> callback(new GMPInitDoneCallback(this));
-  if (NS_FAILED(mMPS->GetDecryptingGMPVideoDecoder(
-          mCrashHelper, &tags, GetNodeId(), std::move(callback),
-          DecryptorId()))) {
+  if (NS_FAILED(mMPS->GetGMPVideoDecoder(mCrashHelper, &tags, GetNodeId(),
+                                         std::move(callback)))) {
     mInitPromise.Reject(NS_ERROR_DOM_MEDIA_FATAL_ERR, __func__);
   }
 

@@ -1,19 +1,27 @@
-/// Associates readiness notifications with [`Evented`] handles.
+/// Associates readiness events with [`event::Source`]s.
 ///
 /// `Token` is a wrapper around `usize` and is used as an argument to
-/// [`Poll::register`] and [`Poll::reregister`].
+/// [`Registry::register`] and [`Registry::reregister`].
 ///
 /// See [`Poll`] for more documentation on polling.
 ///
+/// [`event::Source`]: ./event/trait.Source.html
+/// [`Poll`]: struct.Poll.html
+/// [`Registry::register`]: struct.Registry.html#method.register
+/// [`Registry::reregister`]: struct.Registry.html#method.reregister
+///
 /// # Example
 ///
-/// Using `Token` to track which socket generated the notification. In this
-/// example, `HashMap` is used, but usually something like [`slab`] is better.
+/// Using `Token` to track which socket generated the event. In this example,
+/// `HashMap` is used, but usually something like [`slab`] is better.
 ///
-/// ```
+/// [`slab`]: https://crates.io/crates/slab
+///
+#[cfg_attr(all(feature = "os-poll", feature = "net"), doc = "```")]
+#[cfg_attr(not(all(feature = "os-poll", feature = "net")), doc = "```ignore")]
 /// # use std::error::Error;
-/// # fn try_main() -> Result<(), Box<Error>> {
-/// use mio::{Events, Ready, Poll, PollOpt, Token};
+/// # fn main() -> Result<(), Box<dyn Error>> {
+/// use mio::{Events, Interest, Poll, Token};
 /// use mio::net::TcpListener;
 ///
 /// use std::thread;
@@ -34,16 +42,13 @@
 /// let mut next_socket_index = 0;
 ///
 /// // The `Poll` instance
-/// let poll = Poll::new()?;
+/// let mut poll = Poll::new()?;
 ///
 /// // Tcp listener
-/// let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
+/// let mut listener = TcpListener::bind("127.0.0.1:0".parse()?)?;
 ///
 /// // Register the listener
-/// poll.register(&listener,
-///               LISTENER,
-///               Ready::readable(),
-///               PollOpt::edge())?;
+/// poll.registry().register(&mut listener, LISTENER, Interest::READABLE)?;
 ///
 /// // Spawn a thread that will connect a bunch of sockets then close them
 /// let addr = listener.local_addr()?;
@@ -53,7 +58,7 @@
 ///     // +1 here is to connect an extra socket to signal the socket to close
 ///     for _ in 0..(MAX_SOCKETS+1) {
 ///         // Connect then drop the socket
-///         let _ = TcpStream::connect(&addr).unwrap();
+///         let _ = TcpStream::connect(addr).unwrap();
 ///     }
 /// });
 ///
@@ -75,7 +80,7 @@
 ///                 // encountered.
 ///                 loop {
 ///                     match listener.accept() {
-///                         Ok((socket, _)) => {
+///                         Ok((mut socket, _)) => {
 ///                             // Shutdown the server
 ///                             if next_socket_index == MAX_SOCKETS {
 ///                                 return Ok(());
@@ -86,10 +91,7 @@
 ///                             next_socket_index += 1;
 ///
 ///                             // Register the new socket w/ poll
-///                             poll.register(&socket,
-///                                          token,
-///                                          Ready::readable(),
-///                                          PollOpt::edge())?;
+///                             poll.registry().register(&mut socket, token, Interest::READABLE)?;
 ///
 ///                             // Store the socket
 ///                             sockets.insert(token, socket);
@@ -124,27 +126,10 @@
 ///         }
 ///     }
 /// }
-/// #     Ok(())
-/// # }
-/// #
-/// # fn main() {
-/// #     try_main().unwrap();
 /// # }
 /// ```
-///
-/// [`Evented`]: event/trait.Evented.html
-/// [`Poll`]: struct.Poll.html
-/// [`Poll::register`]: struct.Poll.html#method.register
-/// [`Poll::reregister`]: struct.Poll.html#method.reregister
-/// [`slab`]: https://crates.io/crates/slab
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Token(pub usize);
-
-impl From<usize> for Token {
-    fn from(val: usize) -> Token {
-        Token(val)
-    }
-}
 
 impl From<Token> for usize {
     fn from(val: Token) -> usize {

@@ -184,8 +184,17 @@ class Network extends Domain {
    *     Array of cookie objects.
    */
   async getCookies(options = {}) {
-    // Bug 1605354 - Add support for options.urls
-    const urls = [this.session.target.url];
+    const { urls = this._getDefaultUrls() } = options;
+
+    if (!Array.isArray(urls)) {
+      throw new TypeError("urls: array expected");
+    }
+
+    for (const [index, url] of urls.entries()) {
+      if (typeof url !== "string") {
+        throw new TypeError(`urls: string value expected at index ${index}`);
+      }
+    }
 
     const cookies = [];
     for (let url of urls) {
@@ -209,7 +218,20 @@ class Network extends Domain {
           continue;
         }
 
-        cookies.push(_buildCookie(cookie));
+        const builtCookie = _buildCookie(cookie);
+        const duplicateCookie = cookies.some(value => {
+          return (
+            value.name === builtCookie.name &&
+            value.path === builtCookie.path &&
+            value.domain === builtCookie.domain
+          );
+        });
+
+        if (duplicateCookie) {
+          continue;
+        }
+
+        cookies.push(builtCookie);
       }
     }
 
@@ -438,6 +460,19 @@ class Network extends Domain {
       },
       frameId: data.frameId.toString(),
     });
+  }
+
+  /**
+   * Creates an array of all Urls in the page context
+   *
+   * @param {Array<string>=} urls
+   */
+  _getDefaultUrls() {
+    const urls = this.session.target.browsingContext
+      .getAllBrowsingContextsInSubtree()
+      .map(context => context.currentURI.spec);
+
+    return urls;
   }
 }
 

@@ -51,13 +51,10 @@ var TabsInTitlebar = {
 
   _initialized: false,
   _disallowed: {},
-  _prefName: "browser.tabs.drawInTitlebar",
+  _prefName: "browser.tabs.inTitlebar",
 
   _readPref() {
-    let hiddenTitlebar = Services.prefs.getBoolPref(
-      "browser.tabs.drawInTitlebar",
-      window.matchMedia("(-moz-gtk-csd-hide-titlebar-by-default)").matches
-    );
+    let hiddenTitlebar = Services.appinfo.drawInTitlebar;
     this.allowedBy("pref", hiddenTitlebar);
   },
 

@@ -38,7 +38,9 @@
         <html:video id="webRTC-previewVideo" tabindex="-1"/>
         <vbox id="webRTC-previewWarningBox">
           <description id="webRTC-previewWarning"/>
-          <label id="webRTC-previewWarning-learnMore" is="text-link" class="popup-notification-learnmore-link"/>
+          <hbox>
+            <label id="webRTC-previewWarning-learnMore" is="text-link" class="popup-notification-learnmore-link"/>
+          </hbox>
         </vbox>
       </popupnotificationcontent>
 
@@ -137,7 +139,9 @@
       </popupnotificationcontent>
     </popupnotification>
 
-    <popupnotification id="contextual-feature-recommendation-notification" hidden="true">
+    <popupnotification id="contextual-feature-recommendation-notification"
+                       buttonhighlight="true"
+                       hidden="true">
       <popupnotificationheader id="cfr-notification-header">
         <stack id="cfr-notification-header-stack">
           <description id="cfr-notification-header-label"></description>

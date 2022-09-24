@@ -11,7 +11,8 @@
  */
 
 interface nsISupports;
-interface Variant;
+
+typedef (HTMLCanvasElement or OffscreenCanvas) CanvasSource;
 
 [Exposed=Window]
 interface HTMLCanvasElement : HTMLElement {
@@ -38,8 +39,6 @@ interface HTMLCanvasElement : HTMLElement {
 partial interface HTMLCanvasElement {
   [Pure, SetterThrows]
            attribute boolean mozOpaque;
-  [Throws, NeedsSubjectPrincipal, Pref="canvas.mozgetasfile.enabled"]
-  File mozGetAsFile(DOMString name, optional DOMString? type = null);
   // A Mozilla-only extension to get a canvas context backed by double-buffered
   // shared memory. Only privileged callers can call this.
   [ChromeOnly, Throws]
@@ -54,7 +53,7 @@ partial interface HTMLCanvasElement {
 // For OffscreenCanvas
 // Reference: https://wiki.whatwg.org/wiki/OffscreenCanvas
 partial interface HTMLCanvasElement {
-  [Pref="gfx.offscreencanvas.enabled", Throws]
+  [Func="CanvasUtils::IsOffscreenCanvasEnabled", Throws]
   OffscreenCanvas transferControlToOffscreen();
 };
 

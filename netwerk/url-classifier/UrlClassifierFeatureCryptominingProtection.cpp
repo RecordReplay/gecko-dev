@@ -11,6 +11,10 @@
 #include "ChannelClassifierService.h"
 #include "mozilla/StaticPrefs_privacy.h"
 #include "nsNetUtil.h"
+#include "mozilla/StaticPtr.h"
+#include "nsIWebProgressListener.h"
+#include "nsIHttpChannelInternal.h"
+#include "nsIChannel.h"
 
 namespace mozilla {
 namespace net {
@@ -39,7 +43,7 @@ StaticRefPtr<UrlClassifierFeatureCryptominingProtection>
 
 UrlClassifierFeatureCryptominingProtection::
     UrlClassifierFeatureCryptominingProtection()
-    : UrlClassifierFeatureBase(
+    : UrlClassifierFeatureAntiTrackingBase(
           nsLiteralCString(CRYPTOMINING_FEATURE_NAME),
           nsLiteralCString(URLCLASSIFIER_CRYPTOMINING_BLOCKLIST),
           nsLiteralCString(URLCLASSIFIER_CRYPTOMINING_ENTITYLIST),

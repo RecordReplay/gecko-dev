@@ -26,17 +26,16 @@ class nsFontMetrics;
 class nsImageMap;
 class nsIURI;
 class nsILoadGroup;
-class nsDisplayImage;
 class nsPresContext;
 class nsImageFrame;
 class nsTransform2D;
 class nsImageLoadingContent;
 
 namespace mozilla {
+class nsDisplayImage;
 class PresShell;
 namespace layers {
 class ImageContainer;
-class ImageLayer;
 class LayerManager;
 }  // namespace layers
 }  // namespace mozilla
@@ -66,7 +65,6 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
 
   typedef mozilla::image::ImgDrawResult ImgDrawResult;
   typedef mozilla::layers::ImageContainer ImageContainer;
-  typedef mozilla::layers::ImageLayer ImageLayer;
   typedef mozilla::layers::LayerManager LayerManager;
 
   NS_DECL_FRAMEARENA_HELPERS(nsImageFrame)
@@ -86,6 +84,7 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   }
   void Reflow(nsPresContext*, ReflowOutput&, const ReflowInput&,
               nsReflowStatus&) override;
+  bool IsLeafDynamic() const override;
 
   nsresult GetContentForEvent(mozilla::WidgetEvent*,
                               nsIContent** aContent) final;
@@ -136,12 +135,19 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   void Notify(imgIRequest*, int32_t aType, const nsIntRect* aData);
 
   /**
+   * Returns whether we should replace an element with an image corresponding to
+   * its 'content' CSS property.
+   */
+  static bool ShouldCreateImageFrameForContent(const mozilla::dom::Element&,
+                                               const ComputedStyle&);
+
+  /**
    * Function to test whether given an element and its style, that element
    * should get an image frame.  Note that this method is only used by the
    * frame constructor; it's only here because it uses gIconLoad for now.
    */
   static bool ShouldCreateImageFrameFor(const mozilla::dom::Element&,
-                                        ComputedStyle&);
+                                        const ComputedStyle&);
 
   ImgDrawResult DisplayAltFeedback(gfxContext& aRenderingContext,
                                    const nsRect& aDirtyRect, nsPoint aPt,
@@ -153,8 +159,6 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
       const mozilla::layers::StackingContextHelper&,
       mozilla::layers::RenderRootStateManager*, nsDisplayListBuilder*,
       nsPoint aPt, uint32_t aFlags);
-
-  nsRect GetInnerArea() const;
 
   /**
    * Return a map element associated with this image.
@@ -209,6 +213,9 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
 
   nsImageFrame(ComputedStyle*, nsPresContext* aPresContext, ClassID, Kind);
 
+  void ReflowChildren(nsPresContext*, const ReflowInput&,
+                      const mozilla::LogicalSize& aImageSize);
+
  protected:
   nsImageFrame(ComputedStyle* aStyle, nsPresContext* aPresContext, ClassID aID)
       : nsImageFrame(aStyle, aPresContext, aID, Kind::ImageElement) {}
@@ -231,7 +238,10 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
 
   bool IsServerImageMap();
 
-  void TranslateEventCoords(const nsPoint& aPoint, nsIntPoint& aResult);
+  // Translate a point that is relative to our frame into a localized CSS pixel
+  // coordinate that is relative to the content area of this frame (inside the
+  // border+padding).
+  mozilla::CSSIntPoint TranslateEventCoords(const nsPoint& aPoint);
 
   bool GetAnchorHREFTargetAndNode(nsIURI** aHref, nsString& aTarget,
                                   nsIContent** aNode);
@@ -367,7 +377,11 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
 
   nsCOMPtr<imgIContainer> mImage;
   nsCOMPtr<imgIContainer> mPrevImage;
+
+  // The content-box size as if we are not fragmented, cached in the most recent
+  // reflow.
   nsSize mComputedSize;
+
   mozilla::IntrinsicSize mIntrinsicSize;
 
   // Stores mImage's intrinsic ratio, or a default AspectRatio if there's no
@@ -434,23 +448,24 @@ class nsImageFrame : public nsAtomicContainerFrame, public nsIReflowCallback {
   // singleton pattern: one LoadIcons instance is used
   static mozilla::StaticRefPtr<IconLoad> gIconLoad;
 
-  friend class nsDisplayImage;
+  friend class mozilla::nsDisplayImage;
   friend class nsDisplayGradient;
 };
 
+namespace mozilla {
 /**
  * Note that nsDisplayImage does not receive events. However, an image element
  * is replaced content so its background will be z-adjacent to the
  * image itself, and hence receive events just as if the image itself
  * received events.
  */
-class nsDisplayImage final : public nsDisplayImageContainer {
+class nsDisplayImage final : public nsPaintedDisplayItem {
  public:
   typedef mozilla::layers::LayerManager LayerManager;
 
   nsDisplayImage(nsDisplayListBuilder* aBuilder, nsImageFrame* aFrame,
                  imgIContainer* aImage, imgIContainer* aPrevImage)
-      : nsDisplayImageContainer(aBuilder, aFrame),
+      : nsPaintedDisplayItem(aBuilder, aFrame),
         mImage(aImage),
         mPrevImage(aPrevImage) {
     MOZ_COUNT_CTOR(nsDisplayImage);
@@ -463,25 +478,15 @@ class nsDisplayImage final : public nsDisplayImageContainer {
                                  nsRegion* aInvalidRegion) const final;
   void Paint(nsDisplayListBuilder*, gfxContext* aCtx) final;
 
-  already_AddRefed<imgIContainer> GetImage() final;
-
   /**
    * @return The dest rect we'll use when drawing this image, in app units.
    *         Not necessarily contained in this item's bounds.
    */
-  nsRect GetDestRect() const final;
+  nsRect GetDestRect() const;
 
-  void UpdateDrawResult(mozilla::image::ImgDrawResult aResult) final {
-    nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, aResult);
-  }
-
-  LayerState GetLayerState(nsDisplayListBuilder*, LayerManager*,
-                           const ContainerLayerParameters&) final;
   nsRect GetBounds(bool* aSnap) const {
     *aSnap = true;
-
-    nsImageFrame* imageFrame = static_cast<nsImageFrame*>(mFrame);
-    return imageFrame->GetInnerArea() + ToReferenceFrame();
+    return Frame()->GetContentRectRelativeToSelf() + ToReferenceFrame();
   }
 
   nsRect GetBounds(nsDisplayListBuilder*, bool* aSnap) const final {
@@ -490,8 +495,6 @@ class nsDisplayImage final : public nsDisplayImageContainer {
 
   nsRegion GetOpaqueRegion(nsDisplayListBuilder*, bool* aSnap) const final;
 
-  already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder*, LayerManager*,
-                                     const ContainerLayerParameters&) final;
   bool CreateWebRenderCommands(mozilla::wr::DisplayListBuilder&,
                                mozilla::wr::IpcResourceUpdateQueue&,
                                const StackingContextHelper&,
@@ -503,5 +506,7 @@ class nsDisplayImage final : public nsDisplayImageContainer {
   nsCOMPtr<imgIContainer> mImage;
   nsCOMPtr<imgIContainer> mPrevImage;
 };
+
+}  // namespace mozilla
 
 #endif /* nsImageFrame_h___ */

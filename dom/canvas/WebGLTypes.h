@@ -7,6 +7,7 @@
 #define WEBGLTYPES_H_
 
 #include <limits>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +19,7 @@
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Range.h"
 #include "mozilla/RefCounted.h"
+#include "mozilla/Result.h"
 #include "mozilla/ResultVariant.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/BuildConstants.h"
@@ -34,9 +36,9 @@
 
 // Manual reflection of WebIDL typedefs that are different from their
 // OpenGL counterparts.
-typedef int64_t WebGLsizeiptr;
-typedef int64_t WebGLintptr;
-typedef bool WebGLboolean;
+using WebGLsizeiptr = int64_t;
+using WebGLintptr = int64_t;
+using WebGLboolean = bool;
 
 // -
 
@@ -228,6 +230,7 @@ enum class WebGLExtensionID : uint8_t {
   EXT_texture_filter_anisotropic,
   EXT_texture_norm16,
   MOZ_debug,
+  OES_draw_buffers_indexed,
   OES_element_index_uint,
   OES_fbo_render_mipmap,
   OES_standard_derivatives,
@@ -253,36 +256,27 @@ enum class WebGLExtensionID : uint8_t {
   Max
 };
 
-class UniqueBuffer {
+class UniqueBuffer final {
   // Like UniquePtr<>, but for void* and malloc/calloc/free.
-  void* mBuffer;
+  void* mBuffer = nullptr;
 
  public:
-  static inline UniqueBuffer Alloc(const size_t byteSize) {
-    return {malloc(byteSize)};
+  static inline UniqueBuffer Take(void* buffer) {
+    UniqueBuffer ret;
+    ret.mBuffer = buffer;
+    return ret;
   }
 
-  UniqueBuffer() : mBuffer(nullptr) {}
+  UniqueBuffer() = default;
 
-  MOZ_IMPLICIT UniqueBuffer(void* buffer) : mBuffer(buffer) {}
+  ~UniqueBuffer() { reset(); }
 
-  ~UniqueBuffer() { free(mBuffer); }
+  UniqueBuffer(UniqueBuffer&& rhs) { *this = std::move(rhs); }
 
-  UniqueBuffer(UniqueBuffer&& other) {
-    this->mBuffer = other.mBuffer;
-    other.mBuffer = nullptr;
-  }
-
-  UniqueBuffer& operator=(UniqueBuffer&& other) {
-    free(this->mBuffer);
-    this->mBuffer = other.mBuffer;
-    other.mBuffer = nullptr;
-    return *this;
-  }
-
-  UniqueBuffer& operator=(void* newBuffer) {
-    free(this->mBuffer);
-    this->mBuffer = newBuffer;
+  UniqueBuffer& operator=(UniqueBuffer&& rhs) {
+    reset();
+    this->mBuffer = rhs.mBuffer;
+    rhs.mBuffer = nullptr;
     return *this;
   }
 
@@ -290,10 +284,15 @@ class UniqueBuffer {
 
   void* get() const { return mBuffer; }
 
-  explicit UniqueBuffer(const UniqueBuffer& other) =
-      delete;  // construct using std::move()!
-  UniqueBuffer& operator=(const UniqueBuffer& other) =
-      delete;  // assign using std::move()!
+  void reset() {
+    // Believe it or not, when `free` unconditional, it was showing up
+    // in profiles, nearly 20% of time spent in MethodDispatcther<UniformData>
+    // on Aquarium.
+    if (mBuffer) {
+      free(mBuffer);
+      mBuffer = nullptr;
+    }
+  }
 };
 
 namespace webgl {
@@ -326,7 +325,7 @@ enum class UniformBaseType : uint8_t {
 };
 const char* ToString(UniformBaseType);
 
-typedef uint64_t ObjectId;
+using ObjectId = uint64_t;
 
 enum class BufferKind : uint8_t {
   Undefined,
@@ -340,26 +339,14 @@ enum class BufferKind : uint8_t {
 
 struct FloatOrInt final  // For TexParameter[fi] and friends.
 {
-  const bool isFloat;
-  const GLfloat f;
-  const GLint i;
+  bool isFloat = false;
+  GLfloat f = 0;
+  GLint i = 0;
 
   explicit FloatOrInt(GLint x = 0) : isFloat(false), f(x), i(x) {}
 
   explicit FloatOrInt(GLfloat x) : isFloat(true), f(x), i(roundf(x)) {}
-
-  FloatOrInt& operator=(const FloatOrInt& x) {
-    memcpy(this, &x, sizeof(x));
-    return *this;
-  }
 };
-
-using WebGLTexUnpackVariant =
-    Variant<UniquePtr<webgl::TexUnpackBytes>,
-            UniquePtr<webgl::TexUnpackSurface>,
-            UniquePtr<webgl::TexUnpackImage>, WebGLTexPboOffset>;
-
-using MaybeWebGLTexUnpackVariant = Maybe<WebGLTexUnpackVariant>;
 
 struct WebGLContextOptions {
   bool alpha = true;
@@ -372,6 +359,8 @@ struct WebGLContextOptions {
   bool xrCompatible = false;
   dom::WebGLPowerPreference powerPreference =
       dom::WebGLPowerPreference::Default;
+  dom::PredefinedColorSpace colorSpace = dom::PredefinedColorSpace::Srgb;
+  bool ignoreColorSpace = true;  // Our legacy behavior.
   bool shouldResistFingerprinting = true;
   bool enableDebugRendererInfo = false;
 
@@ -383,6 +372,22 @@ struct WebGLContextOptions {
     return !(*this == rhs);
   }
 };
+
+namespace gfx {
+
+inline ColorSpace2 ToColorSpace2(const dom::PredefinedColorSpace cs) {
+  switch (cs) {
+    case dom::PredefinedColorSpace::Srgb:
+      return ColorSpace2::SRGB;
+    case dom::PredefinedColorSpace::Display_p3:
+      return ColorSpace2::DISPLAY_P3;
+    case dom::PredefinedColorSpace::EndGuard_:
+      break;
+  }
+  MOZ_CRASH("Exhaustive switch");
+}
+
+}  // namespace gfx
 
 // -
 
@@ -491,10 +496,10 @@ struct avec3 {
   bool operator!=(const avec3& rhs) const { return !(*this == rhs); }
 };
 
-typedef avec2<int32_t> ivec2;
-typedef avec3<int32_t> ivec3;
-typedef avec2<uint32_t> uvec2;
-typedef avec3<uint32_t> uvec3;
+using ivec2 = avec2<int32_t>;
+using ivec3 = avec3<int32_t>;
+using uvec2 = avec2<uint32_t>;
+using uvec3 = avec3<uint32_t>;
 
 inline ivec2 AsVec(const gfx::IntSize& s) { return {s.width, s.height}; }
 
@@ -523,20 +528,6 @@ struct DriverUnpackInfo final {
   GLenum unpackType = 0;
 
   PackingInfo ToPacking() const { return {unpackFormat, unpackType}; }
-};
-
-struct PixelPackState final {
-  uint32_t alignment = 4;
-  uint32_t rowLength = 0;
-  uint32_t skipRows = 0;
-  uint32_t skipPixels = 0;
-};
-
-struct ReadPixelsDesc final {
-  ivec2 srcOffset;
-  uvec2 size;
-  PackingInfo pi = {LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE};
-  PixelPackState packState;
 };
 
 // -
@@ -679,6 +670,12 @@ struct OpaqueFramebufferOptions final {
 
 // -
 
+struct SwapChainOptions final {
+  bool bgra = false;
+};
+
+// -
+
 struct ActiveInfo {
   GLenum elemType = 0;     // `type`
   uint32_t elemCount = 0;  // `size`
@@ -740,7 +737,7 @@ struct GetUniformData final {
 
 struct FrontBufferSnapshotIpc final {
   uvec2 surfSize = {};
-  mozilla::ipc::Shmem shmem = {};
+  Maybe<mozilla::ipc::Shmem> shmem = {};
 };
 
 struct ReadPixelsResult {
@@ -768,13 +765,6 @@ struct VertAttribPointerCalculated final {
 };
 
 }  // namespace webgl
-
-// return value for the InitializeCanvasRenderer message
-struct ICRData {
-  gfx::IntSize size;
-  bool hasAlpha;
-  bool isPremultAlpha;
-};
 
 /**
  * Represents a block of memory that it may or may not own.  The
@@ -944,6 +934,7 @@ namespace dom {
 class Element;
 class ImageBitmap;
 class ImageData;
+class OffscreenCanvas;
 }  // namespace dom
 
 struct TexImageSource {
@@ -956,94 +947,89 @@ struct TexImageSource {
   const dom::ImageBitmap* mImageBitmap = nullptr;
   const dom::ImageData* mImageData = nullptr;
 
+  const dom::OffscreenCanvas* mOffscreenCanvas = nullptr;
+
   const dom::Element* mDomElem = nullptr;
   ErrorResult* mOut_error = nullptr;
 };
 
-struct WebGLPixelStore final {
-  uint32_t mUnpackImageHeight = 0;
-  uint32_t mUnpackSkipImages = 0;
-  uint32_t mUnpackRowLength = 0;
-  uint32_t mUnpackSkipRows = 0;
-  uint32_t mUnpackSkipPixels = 0;
-  uint32_t mUnpackAlignment = 4;
-  GLenum mColorspaceConversion =
+namespace webgl {
+
+template <class DerivedT>
+struct DeriveNotEq {
+  bool operator!=(const DerivedT& rhs) const {
+    const auto self = reinterpret_cast<const DerivedT*>(this);
+    return !(*self == rhs);
+  }
+};
+
+struct PixelPackingState : public DeriveNotEq<PixelPackingState> {
+  uint32_t alignmentInTypeElems = 4;  // ALIGNMENT isn't naive byte alignment!
+  uint32_t rowLength = 0;
+  uint32_t imageHeight = 0;
+  uint32_t skipPixels = 0;
+  uint32_t skipRows = 0;
+  uint32_t skipImages = 0;
+
+  // C++20's default comparison operators can't come soon enough!
+  bool operator==(const PixelPackingState& rhs) const {
+    return alignmentInTypeElems == rhs.alignmentInTypeElems &&
+           rowLength == rhs.rowLength && imageHeight == rhs.imageHeight &&
+           skipPixels == rhs.skipPixels && skipRows == rhs.skipRows &&
+           skipImages == rhs.skipImages;
+  }
+
+  static void AssertDefaultUnpack(gl::GLContext& gl, const bool isWebgl2) {
+    PixelPackingState{}.AssertCurrentUnpack(gl, isWebgl2);
+  }
+
+  void ApplyUnpack(gl::GLContext&, bool isWebgl2,
+                   const uvec3& uploadSize) const;
+  bool AssertCurrentUnpack(gl::GLContext&, bool isWebgl2) const;
+};
+
+struct PixelUnpackStateWebgl final : public PixelPackingState {
+  GLenum colorspaceConversion =
       dom::WebGLRenderingContext_Binding::BROWSER_DEFAULT_WEBGL;
-  bool mFlipY = false;
-  bool mPremultiplyAlpha = false;
-  bool mRequireFastPath = false;
-
-  static void AssertDefault(gl::GLContext& gl, const bool isWebgl2) {
-    WebGLPixelStore expected;
-    MOZ_ASSERT(expected.AssertCurrent(gl, isWebgl2));
-    Unused << expected;
-  }
-
-  void Apply(gl::GLContext&, bool isWebgl2, const uvec3& uploadSize) const;
-  bool AssertCurrent(gl::GLContext&, bool isWebgl2) const;
-
-  WebGLPixelStore ForUseWith(const GLenum target, const uvec3& uploadSize,
-                             const Maybe<uvec2>& structuredSrcSize) const {
-    auto ret = *this;
-
-    if (!IsTexTarget3D(target)) {
-      ret.mUnpackSkipImages = 0;
-      ret.mUnpackImageHeight = 0;
-    }
-
-    if (structuredSrcSize) {
-      ret.mUnpackRowLength = structuredSrcSize->x;
-    }
-
-    if (!ret.mUnpackRowLength) {
-      ret.mUnpackRowLength = uploadSize.x;
-    }
-    if (!ret.mUnpackImageHeight) {
-      ret.mUnpackImageHeight = uploadSize.y;
-
-      if (!IsTexTarget3D(target)) {
-        // 2D targets don't enforce skipRows+height<=imageHeight.
-        ret.mUnpackImageHeight += ret.mUnpackSkipRows;
-      }
-    }
-
-    return ret;
-  }
-
-  CheckedInt<size_t> UsedPixelsPerRow(const uvec3& size) const {
-    if (!size.x || !size.y || !size.z) return 0;
-    return CheckedInt<size_t>(mUnpackSkipPixels) + size.x;
-  }
-
-  CheckedInt<size_t> FullRowsNeeded(const uvec3& size) const {
-    if (!size.x || !size.y || !size.z) return 0;
-
-    // The spec guarantees:
-    // * SKIP_PIXELS + width <= ROW_LENGTH.
-    // * SKIP_ROWS + height <= IMAGE_HEIGHT.
-    MOZ_ASSERT(mUnpackImageHeight);
-    auto skipFullRows =
-        CheckedInt<size_t>(mUnpackSkipImages) * mUnpackImageHeight;
-    skipFullRows += mUnpackSkipRows;
-
-    // Full rows in the final image, excluding the tail.
-    auto usedFullRows = CheckedInt<size_t>(size.z - 1) * mUnpackImageHeight;
-    usedFullRows += size.y - 1;
-
-    return skipFullRows + usedFullRows;
-  }
+  bool flipY = false;
+  bool premultiplyAlpha = false;
+  bool requireFastPath = false;
 };
 
-struct TexImageData final {
-  WebGLPixelStore unpackState;
+struct ExplicitPixelPackingState final {
+  struct Metrics final {
+    uvec3 usedSize = {};
+    size_t bytesPerPixel = 0;
 
-  Maybe<uint64_t> pboOffset;
+    // (srcStrideAndRowOverride.x, otherwise ROW_LENGTH != 0, otherwise size.x)
+    // ...aligned to ALIGNMENT.
+    size_t bytesPerRowStride = 0;
 
-  RawBuffer<> data;
+    // structuredSrcSize.y, otherwise IMAGE_HEIGHT*(SKIP_IMAGES+size.z)
+    size_t totalRows = 0;
 
-  const dom::Element* domElem = nullptr;
-  ErrorResult* out_domElemError = nullptr;
+    // This ensures that no one else needs to do CheckedInt math.
+    size_t totalBytesUsed = 0;
+    size_t totalBytesStrided = 0;
+  };
+
+  // It's so important that these aren't modified once evaluated.
+  const PixelPackingState state;
+  const Metrics metrics;
+
+  static Result<ExplicitPixelPackingState, std::string> ForUseWith(
+      const PixelPackingState&, GLenum target, const uvec3& subrectSize,
+      const webgl::PackingInfo&, const Maybe<size_t> bytesPerRowStrideOverride);
 };
+
+struct ReadPixelsDesc final {
+  ivec2 srcOffset;
+  uvec2 size;
+  PackingInfo pi = {LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE};
+  PixelPackingState packState;
+};
+
+}  // namespace webgl
 
 namespace webgl {
 
@@ -1055,12 +1041,22 @@ struct TexUnpackBlobDesc final {
   Maybe<RawBuffer<>> cpuData;
   Maybe<uint64_t> pboOffset;
 
-  uvec2 imageSize;
+  Maybe<uvec2> structuredSrcSize;
   RefPtr<layers::Image> image;
   Maybe<layers::SurfaceDescriptor> sd;
   RefPtr<gfx::DataSourceSurface> dataSurf;
 
-  WebGLPixelStore unpacking;
+  webgl::PixelUnpackStateWebgl unpacking;
+  bool applyUnpackTransforms = true;
+
+  // -
+
+  auto ExplicitUnpacking(const webgl::PackingInfo& pi,
+                         const Maybe<size_t> bytesPerRowStrideOverride) const {
+    return ExplicitPixelPackingState::ForUseWith(this->unpacking,
+                                                 this->imageTarget, this->size,
+                                                 pi, bytesPerRowStrideOverride);
+  }
 
   void Shrink(const webgl::PackingInfo&);
 };
@@ -1155,6 +1151,15 @@ inline void Memcpy(const RangedPtr<uint8_t>& destBytes,
 }
 
 // -
+
+namespace webgl {
+
+// In theory, this number can be unbounded based on the driver. However, no
+// driver appears to expose more than 8. We might as well stop there too, for
+// now.
+// (http://opengl.gpuinfo.org/gl_stats_caps_single.php?listreportsbycap=GL_MAX_COLOR_ATTACHMENTS)
+inline constexpr size_t kMaxDrawBuffers = 8;
+}  // namespace webgl
 
 }  // namespace mozilla
 

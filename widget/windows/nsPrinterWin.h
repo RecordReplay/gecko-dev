@@ -14,6 +14,8 @@ class nsPrinterWin final : public nsPrinterBase {
  public:
   NS_IMETHOD GetName(nsAString& aName) override;
   NS_IMETHOD GetSystemName(nsAString& aName) override;
+  NS_IMETHOD CopyFromWithValidation(nsIPrintSettings*, JSContext*,
+                                    Promise**) final;
   bool SupportsDuplex() const final;
   bool SupportsColor() const final;
   bool SupportsMonochrome() const final;
@@ -31,6 +33,9 @@ class nsPrinterWin final : public nsPrinterBase {
                const nsAString& aName);
   ~nsPrinterWin() = default;
 
+  PrintSettingsInitializer GetValidatedSettings(
+      PrintSettingsInitializer aSettingsToValidate) const;
+
   nsTArray<uint8_t> CopyDefaultDevmodeW() const;
   nsTArray<mozilla::PaperInfo> PaperList() const;
   PrintSettingsInitializer DefaultSettings() const;
@@ -42,7 +47,7 @@ class nsPrinterWin final : public nsPrinterBase {
   // see threading issues with multiple drivers. This Mutex is used to lock
   // around all calls to DeviceCapabilitiesW, DocumentPropertiesW and
   // CreateICW/DCW, to hopefully prevent these issues.
-  mutable mozilla::Mutex mDriverMutex{"nsPrinterWin::Driver"};
+  mutable mozilla::Mutex mDriverMutex MOZ_UNANNOTATED{"nsPrinterWin::Driver"};
 };
 
 #endif  // nsPrinterWin_h_

@@ -31,23 +31,17 @@ class CompositorOptions {
   // This constructor needed for IPDL purposes, don't use it anywhere else.
   CompositorOptions() = default;
 
-  CompositorOptions(bool aUseAPZ, bool aUseWebRender,
-                    bool aUseSoftwareWebRender)
-      : mUseAPZ(aUseAPZ),
-        mUseWebRender(aUseWebRender),
-        mUseSoftwareWebRender(aUseSoftwareWebRender) {
-    MOZ_ASSERT_IF(aUseSoftwareWebRender, aUseWebRender);
-  }
+  CompositorOptions(bool aUseAPZ, bool aUseSoftwareWebRender)
+      : mUseAPZ(aUseAPZ), mUseSoftwareWebRender(aUseSoftwareWebRender) {}
 
   bool UseAPZ() const { return mUseAPZ; }
-  bool UseWebRender() const { return mUseWebRender; }
   bool UseSoftwareWebRender() const { return mUseSoftwareWebRender; }
   bool AllowSoftwareWebRenderD3D11() const {
     return mAllowSoftwareWebRenderD3D11;
   }
   bool AllowSoftwareWebRenderOGL() const { return mAllowSoftwareWebRenderOGL; }
-  bool UseAdvancedLayers() const { return mUseAdvancedLayers; }
   bool InitiallyPaused() const { return mInitiallyPaused; }
+  bool NeedFastSnaphot() const { return mNeedFastSnaphot; }
 
   void SetUseAPZ(bool aUseAPZ) { mUseAPZ = aUseAPZ; }
 
@@ -59,38 +53,32 @@ class CompositorOptions {
     mAllowSoftwareWebRenderOGL = aAllowSoftwareWebRenderOGL;
   }
 
-  void SetUseAdvancedLayers(bool aUseAdvancedLayers) {
-    mUseAdvancedLayers = aUseAdvancedLayers;
-  }
-
-  bool UseWebGPU() const { return mUseWebGPU; }
-  void SetUseWebGPU(bool aUseWebGPU) { mUseWebGPU = aUseWebGPU; }
-
   void SetInitiallyPaused(bool aPauseAtStartup) {
     mInitiallyPaused = aPauseAtStartup;
   }
 
+  void SetNeedFastSnaphot(bool aNeedFastSnaphot) {
+    mNeedFastSnaphot = aNeedFastSnaphot;
+  }
+
   bool operator==(const CompositorOptions& aOther) const {
-    return mUseAPZ == aOther.mUseAPZ && mUseWebRender == aOther.mUseWebRender &&
+    return mUseAPZ == aOther.mUseAPZ &&
            mUseSoftwareWebRender == aOther.mUseSoftwareWebRender &&
            mAllowSoftwareWebRenderD3D11 ==
                aOther.mAllowSoftwareWebRenderD3D11 &&
            mAllowSoftwareWebRenderOGL == aOther.mAllowSoftwareWebRenderOGL &&
-           mUseAdvancedLayers == aOther.mUseAdvancedLayers &&
-           mUseWebGPU == aOther.mUseWebGPU;
+           mNeedFastSnaphot == aOther.mNeedFastSnaphot;
   }
 
   friend struct IPC::ParamTraits<CompositorOptions>;
 
  private:
   bool mUseAPZ = false;
-  bool mUseWebRender = false;
   bool mUseSoftwareWebRender = false;
   bool mAllowSoftwareWebRenderD3D11 = false;
   bool mAllowSoftwareWebRenderOGL = false;
-  bool mUseAdvancedLayers = false;
-  bool mUseWebGPU = false;
   bool mInitiallyPaused = false;
+  bool mNeedFastSnaphot = false;
 
   // Make sure to add new fields to the ParamTraits implementation
   // in LayersMessageUtils.h

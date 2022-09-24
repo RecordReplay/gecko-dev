@@ -63,30 +63,28 @@ ChromeUtils.defineModuleGetter(
   // with region names based on en-US. This is
   // necessary for tests that expect to match
   // on region code display names.
-  const { L10nRegistry, FileSource } = ChromeUtils.import(
-    "resource://gre/modules/L10nRegistry.jsm"
-  );
-
-  const fs = {
-    "toolkit/intl/regionNames.ftl": `
+  const fs = [
+    {
+      path: "toolkit/intl/regionNames.ftl",
+      source: `
 region-name-us = United States
-region-name-nz = New Zeland
+region-name-nz = New Zealand
 region-name-au = Australia
 region-name-ca = Canada
 region-name-tw = Taiwan
     `,
-  };
-
-  L10nRegistry.loadSync = function(url) {
-    if (!fs.hasOwnProperty(url)) {
-      return false;
-    }
-    return fs[url];
-  };
+    },
+  ];
 
   let locales = Services.locale.packagedLocales;
-  const mockSource = new FileSource("mock", locales, "");
-  L10nRegistry.registerSources([mockSource]);
+  const mockSource = L10nFileSource.createMock(
+    "mock",
+    "app",
+    locales,
+    "resource://mock_path",
+    fs
+  );
+  L10nRegistry.getInstance().registerSources([mockSource]);
 }
 
 do_get_profile();
@@ -207,10 +205,10 @@ var AddressDataLoader, FormAutofillUtils;
 
 async function runHeuristicsTest(patterns, fixturePathPrefix) {
   add_task(async function setup() {
-    ({ FormAutofillHeuristics, LabelUtils } = ChromeUtils.import(
+    ({ FormAutofillHeuristics } = ChromeUtils.import(
       "resource://autofill/FormAutofillHeuristics.jsm"
     ));
-    ({ AddressDataLoader, FormAutofillUtils } = ChromeUtils.import(
+    ({ AddressDataLoader, FormAutofillUtils, LabelUtils } = ChromeUtils.import(
       "resource://autofill/FormAutofillUtils.jsm"
     ));
   });
@@ -298,17 +296,8 @@ function objectMatches(object, fields) {
   return ObjectUtils.deepEqual(actual, fields);
 }
 
-add_task(async function head_initialize() {
-  Services.prefs.setStringPref("extensions.formautofill.available", "on");
+add_setup(async function head_initialize() {
   Services.prefs.setBoolPref("extensions.experiments.enabled", true);
-  Services.prefs.setBoolPref(
-    "extensions.formautofill.creditCards.available",
-    true
-  );
-  Services.prefs.setBoolPref(
-    "extensions.formautofill.creditCards.enabled",
-    true
-  );
   Services.prefs.setBoolPref(
     "extensions.formautofill.heuristics.enabled",
     true
@@ -316,24 +305,40 @@ add_task(async function head_initialize() {
   Services.prefs.setBoolPref("extensions.formautofill.section.enabled", true);
   Services.prefs.setBoolPref("dom.forms.autocomplete.formautofill", true);
 
+  Services.prefs.setCharPref(
+    "extensions.formautofill.addresses.supported",
+    "on"
+  );
+  Services.prefs.setCharPref(
+    "extensions.formautofill.creditCards.supported",
+    "on"
+  );
+  Services.prefs.setBoolPref("extensions.formautofill.addresses.enabled", true);
+  Services.prefs.setBoolPref(
+    "extensions.formautofill.creditCards.enabled",
+    true
+  );
+
   // Clean up after every test.
   registerCleanupFunction(function head_cleanup() {
-    Services.prefs.clearUserPref("extensions.formautofill.available");
     Services.prefs.clearUserPref("extensions.experiments.enabled");
     Services.prefs.clearUserPref(
-      "extensions.formautofill.creditCards.available"
+      "extensions.formautofill.creditCards.supported"
     );
+    Services.prefs.clearUserPref("extensions.formautofill.addresses.supported");
     Services.prefs.clearUserPref("extensions.formautofill.creditCards.enabled");
     Services.prefs.clearUserPref("extensions.formautofill.heuristics.enabled");
     Services.prefs.clearUserPref("extensions.formautofill.section.enabled");
     Services.prefs.clearUserPref("dom.forms.autocomplete.formautofill");
+    Services.prefs.clearUserPref("extensions.formautofill.addresses.enabled");
+    Services.prefs.clearUserPref("extensions.formautofill.creditCards.enabled");
   });
 
   await loadExtension();
 });
 
 let OSKeyStoreTestUtils;
-add_task(async function os_key_store_setup() {
+add_setup(async function os_key_store_setup() {
   ({ OSKeyStoreTestUtils } = ChromeUtils.import(
     "resource://testing-common/OSKeyStoreTestUtils.jsm"
   ));

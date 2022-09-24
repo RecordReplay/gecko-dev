@@ -545,7 +545,7 @@ var ProcessHangMonitor = {
       }
     }
 
-    let notification = win.gHighPriorityNotificationBox.getNotificationWithValue(
+    let notification = win.gNotificationBox.getNotificationWithValue(
       "process-hang"
     );
     if (notificationTag == notification?.getAttribute("notification-tag")) {
@@ -568,18 +568,20 @@ var ProcessHangMonitor = {
       });
     }
 
-    win.gHighPriorityNotificationBox
+    win.gNotificationBox
       .appendNotification(
-        message,
         "process-hang",
-        "chrome://browser/content/aboutRobots-icon.png",
-        win.gHighPriorityNotificationBox.PRIORITY_INFO_HIGH,
-        buttons,
-        event => {
-          if (event == "dismissed") {
-            ProcessHangMonitor.waitLonger(win);
-          }
-        }
+        {
+          label: message,
+          image: "chrome://browser/content/aboutRobots-icon.png",
+          priority: win.gNotificationBox.PRIORITY_INFO_HIGH,
+          eventCallback: event => {
+            if (event == "dismissed") {
+              ProcessHangMonitor.waitLonger(win);
+            }
+          },
+        },
+        buttons
       )
       .setAttribute("notification-tag", notificationTag);
   },
@@ -588,11 +590,11 @@ var ProcessHangMonitor = {
    * Ensure that no hang notifications are visible in |win|.
    */
   hideNotification(win) {
-    let notification = win.gHighPriorityNotificationBox.getNotificationWithValue(
+    let notification = win.gNotificationBox.getNotificationWithValue(
       "process-hang"
     );
     if (notification) {
-      win.gHighPriorityNotificationBox.removeNotification(notification);
+      win.gNotificationBox.removeNotification(notification);
     }
   },
 

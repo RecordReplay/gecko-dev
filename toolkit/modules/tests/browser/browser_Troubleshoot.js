@@ -327,6 +327,9 @@ const SNAPSHOT_SCHEMA = {
           required: true,
           type: "string",
         },
+        osTheme: {
+          type: "string",
+        },
         rosetta: {
           required: false,
           type: "boolean",
@@ -376,6 +379,12 @@ const SNAPSHOT_SCHEMA = {
         },
         safeMode: {
           type: "boolean",
+        },
+        memorySizeBytes: {
+          type: "number",
+        },
+        diskAvailableBytes: {
+          type: "number",
         },
       },
     },
@@ -540,9 +549,6 @@ const SNAPSHOT_SCHEMA = {
         windowLayerManagerRemote: {
           type: "boolean",
         },
-        windowUsingAdvancedLayers: {
-          type: "boolean",
-        },
         numAcceleratedWindowsMessage: {
           type: "object",
           properties: {
@@ -621,18 +627,6 @@ const SNAPSHOT_SCHEMA = {
         },
         directWriteVersion: {
           type: "string",
-        },
-        usesTiling: {
-          type: "boolean",
-        },
-        contentUsesTiling: {
-          type: "boolean",
-        },
-        offMainThreadPaintEnabled: {
-          type: "boolean",
-        },
-        offMainThreadPaintWorkerCount: {
-          type: "number",
         },
         clearTypeParameters: {
           type: "string",
@@ -1121,7 +1115,7 @@ const SNAPSHOT_SCHEMA = {
     remoteAgent: {
       type: "object",
       properties: {
-        listening: {
+        running: {
           required: true,
           type: "boolean",
         },
@@ -1184,7 +1178,7 @@ const SNAPSHOT_SCHEMA = {
           },
           required: true,
         },
-        remoteConfigs: {
+        nimbusRollouts: {
           type: "array",
           items: {
             type: "object",

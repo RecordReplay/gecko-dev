@@ -224,11 +224,43 @@ inline bool TraceManuallyBarrieredWeakEdge(JSTracer* trc, T* thingp,
   return gc::TraceEdgeInternal(trc, gc::ConvertToBase(thingp), name);
 }
 
+// The result of tracing a weak edge, which can be either:
+//
+//  - the target is dead (and the edge has been cleared), or
+//  - the target is alive (and the edge may have been updated)
+//
+// This includes the initial and final values of the edge to allow cleanup if
+// the target is dead or access to the referent if it is alive.
 template <typename T>
-inline bool TraceWeakEdge(JSTracer* trc, BarrieredBase<T>* thingp,
-                          const char* name) {
-  return gc::TraceEdgeInternal(
-      trc, gc::ConvertToBase(thingp->unbarrieredAddress()), name);
+struct TraceWeakResult {
+  const bool live_;
+  const T initial_;
+  const T final_;
+
+  bool isLive() const { return live_; }
+  bool isDead() const { return !live_; }
+
+  MOZ_IMPLICIT operator bool() const { return isLive(); }
+
+  T initialTarget() const {
+    MOZ_ASSERT(isDead());
+    return initial_;
+  }
+
+  T finalTarget() const {
+    MOZ_ASSERT(isLive());
+    return final_;
+  }
+};
+
+template <typename T>
+inline TraceWeakResult<T> TraceWeakEdge(JSTracer* trc, BarrieredBase<T>* thingp,
+                                        const char* name) {
+  T* addr = thingp->unbarrieredAddress();
+  T initial = *addr;
+  bool live = !InternalBarrierMethods<T>::isMarkable(initial) ||
+              gc::TraceEdgeInternal(trc, gc::ConvertToBase(addr), name);
+  return TraceWeakResult<T>{live, initial, *addr};
 }
 
 // Trace all edges contained in the given array.
@@ -287,12 +319,6 @@ inline void TraceWeakMapKeyEdge(JSTracer* trc, Zone* weakMapZone,
   TraceWeakMapKeyEdgeInternal(
       trc, weakMapZone, gc::ConvertToBase(thingp->unbarrieredAddress()), name);
 }
-
-// Permanent atoms and well-known symbols are shared between runtimes and must
-// use a separate marking path so that we can filter them out of normal heap
-// tracing.
-template <typename T>
-void TraceProcessGlobalRoot(JSTracer* trc, T* thing, const char* name);
 
 // Trace a root edge that uses the base GC thing type, instead of a more
 // specific type.

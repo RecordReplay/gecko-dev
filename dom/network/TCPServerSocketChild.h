@@ -20,8 +20,7 @@
 
 class nsITCPServerSocketInternal;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class TCPServerSocket;
 
@@ -47,8 +46,7 @@ class TCPServerSocketChild : public mozilla::net::PTCPServerSocketChild,
   NS_IMETHOD_(MozExternalRefCountType) Release() override;
 
   TCPServerSocketChild(TCPServerSocket* aServerSocket, uint16_t aLocalPort,
-                       uint16_t aBacklog, bool aUseArrayBuffers,
-                       nsISerialEventTarget* aIPCEventTarget);
+                       uint16_t aBacklog, bool aUseArrayBuffers);
   ~TCPServerSocketChild();
 
   void Close();
@@ -56,7 +54,6 @@ class TCPServerSocketChild : public mozilla::net::PTCPServerSocketChild,
   mozilla::ipc::IPCResult RecvCallbackAccept(PTCPSocketChild* socket);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_TCPServerSocketChild_h

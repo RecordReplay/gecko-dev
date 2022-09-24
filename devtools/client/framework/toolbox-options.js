@@ -14,12 +14,6 @@ const L10N = new LocalizationHelper(
 
 loader.lazyRequireGetter(
   this,
-  "AppConstants",
-  "resource://gre/modules/AppConstants.jsm",
-  true
-);
-loader.lazyRequireGetter(
-  this,
   "openDocLink",
   "devtools/client/shared/link",
   true
@@ -216,7 +210,7 @@ OptionsPanel.prototype = {
     };
 
     for (const button of toolbarButtons) {
-      if (!button.isTargetSupported(this.toolbox.target)) {
+      if (!button.isToolSupported(this.toolbox)) {
         continue;
       }
 
@@ -263,7 +257,7 @@ OptionsPanel.prototype = {
       checkboxInput.setAttribute("title", tool.tooltip || "");
 
       const checkboxSpanLabel = this.panelDoc.createElement("span");
-      if (tool.isTargetSupported(this.target)) {
+      if (tool.isToolSupported(this.toolbox)) {
         checkboxSpanLabel.textContent = tool.label;
       } else {
         atleastOneToolNotSupported = true;
@@ -363,7 +357,7 @@ OptionsPanel.prototype = {
           visibilityswitch: pref,
 
           // Only local tabs are currently supported as targets.
-          isTargetSupported: target => target.isLocalTab,
+          isToolSupported: toolbox => toolbox.target.isLocalTab,
         })
       );
     }
@@ -409,6 +403,13 @@ OptionsPanel.prototype = {
     };
 
     // Populating the default theme list
+    themeBox.appendChild(
+      createThemeOption({
+        id: "auto",
+        label: L10N.getStr("options.autoTheme.label"),
+      })
+    );
+
     const themes = gDevTools.getThemeDefinitionArray();
     for (const theme of themes) {
       themeBox.appendChild(createThemeOption(theme));
@@ -423,13 +424,12 @@ OptionsPanel.prototype = {
   setupAdditionalOptions: function() {
     const prefDefinitions = [];
 
-    const isNightly = AppConstants.NIGHTLY_BUILD;
-    if (isNightly) {
-      // Labels are hardcoded in english because this checkbox is Nightly only.
+    if (GetPref("devtools.custom-formatters")) {
       prefDefinitions.push({
-        pref: "devtools.performance.new-panel-enabled",
-        label: "Enable new performance recorder (then re-open DevTools)",
-        id: "devtools-new-performance",
+        pref: "devtools.custom-formatters.enabled",
+        l10nLabelId: "options-enable-custom-formatters-label",
+        l10nTooltipId: "options-enable-custom-formatters-tooltip",
+        id: "devtools-custom-formatters",
         parentId: "context-options",
       });
     }
@@ -472,8 +472,18 @@ OptionsPanel.prototype = {
       });
     }
 
-    const createPreferenceOption = ({ pref, label, id, onChange }) => {
+    const createPreferenceOption = ({
+      pref,
+      label,
+      l10nLabelId,
+      l10nTooltipId,
+      id,
+      onChange,
+    }) => {
       const inputLabel = this.panelDoc.createElement("label");
+      if (l10nTooltipId) {
+        this.panelDoc.l10n.setAttributes(inputLabel, l10nTooltipId);
+      }
       const checkbox = this.panelDoc.createElement("input");
       checkbox.setAttribute("type", "checkbox");
       if (GetPref(pref)) {
@@ -488,7 +498,11 @@ OptionsPanel.prototype = {
       });
 
       const inputSpanLabel = this.panelDoc.createElement("span");
-      inputSpanLabel.textContent = label;
+      if (l10nLabelId) {
+        this.panelDoc.l10n.setAttributes(inputSpanLabel, l10nLabelId);
+      } else if (label) {
+        inputSpanLabel.textContent = label;
+      }
       inputLabel.appendChild(checkbox);
       inputLabel.appendChild(inputSpanLabel);
 
@@ -590,9 +604,9 @@ OptionsPanel.prototype = {
     if (themeRadioInput) {
       themeRadioInput.checked = true;
     } else {
-      // If the current theme does not exist anymore, switch to light theme
-      const lightThemeInputRadio = themeBox.querySelector("[value=light]");
-      lightThemeInputRadio.checked = true;
+      // If the current theme does not exist anymore, switch to auto theme
+      const autoThemeInputRadio = themeBox.querySelector("[value=auto]");
+      autoThemeInputRadio.checked = true;
     }
   },
 

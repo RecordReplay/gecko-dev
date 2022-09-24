@@ -10,11 +10,12 @@
 #include "CoalescedInputData.h"
 #include "mozilla/TouchEvents.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class CoalescedTouchData final : public CoalescedInputData<WidgetTouchEvent> {
  public:
+  void CreateCoalescedTouchEvent(const WidgetTouchEvent& aEvent);
+
   void Coalesce(const WidgetTouchEvent& aEvent,
                 const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId,
                 const nsEventStatus& aApzResponse);
@@ -40,7 +41,6 @@ class CoalescedTouchMoveFlusher final : public CoalescedInputFlusher {
  private:
   ~CoalescedTouchMoveFlusher() override;
 };
-}  // namespace dom
-};  // namespace mozilla
+};  // namespace mozilla::dom
 
 #endif  // mozilla_dom_CoalescedTouchData_h

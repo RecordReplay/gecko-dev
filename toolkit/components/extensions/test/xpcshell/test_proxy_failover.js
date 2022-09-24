@@ -20,6 +20,10 @@ XPCOMUtils.defineLazyGetter(this, "directFailoverDisabled", () => {
   );
 });
 
+const { ServiceRequest } = ChromeUtils.import(
+  "resource://gre/modules/ServiceRequest.jsm"
+);
+
 // Prevent the request from reaching out to the network.
 const { HttpServer } = ChromeUtils.import("resource://testing-common/httpd.js");
 
@@ -31,6 +35,14 @@ nonProxiedServer.registerPathHandler("/", (request, response) => {
 });
 const { primaryHost, primaryPort } = nonProxiedServer.identity;
 
+function getProxyData(channel) {
+  if (!(channel instanceof Ci.nsIProxiedChannel) || !channel.proxyInfo) {
+    return;
+  }
+  let { type, host, port, sourceId } = channel.proxyInfo;
+  return { type, host, port, sourceId };
+}
+
 // Get a free port with no listener to use in the proxyinfo.
 function getBadProxyPort() {
   let server = new HttpServer();
@@ -40,15 +52,35 @@ function getBadProxyPort() {
   return badPort;
 }
 
-function xhr(url) {
+function xhr(url, options = { beConservative: true, bypassProxy: false }) {
   return new Promise((resolve, reject) => {
-    let req = new XMLHttpRequest({ mozSystem: true });
+    let req = new XMLHttpRequest();
     req.open("GET", `${url}?t=${Math.random()}`);
+    req.channel.QueryInterface(Ci.nsIHttpChannelInternal).beConservative =
+      options.beConservative;
+    req.channel.QueryInterface(Ci.nsIHttpChannelInternal).bypassProxy =
+      options.bypassProxy;
     req.onload = () => {
-      resolve(req.responseText);
+      resolve({ text: req.responseText, proxy: getProxyData(req.channel) });
     };
     req.onerror = () => {
-      reject(req.status);
+      reject({ status: req.status, proxy: getProxyData(req.channel) });
+    };
+    req.send();
+  });
+}
+
+// Same as the above xhr call, but ServiceRequest is always beConservative.
+// This is here to specifically test bypassProxy with ServiceRequest.
+function serviceRequest(url, options = { bypassProxy: false }) {
+  return new Promise((resolve, reject) => {
+    let req = new ServiceRequest();
+    req.open("GET", `${url}?t=${Math.random()}`, options);
+    req.onload = () => {
+      resolve({ text: req.responseText, proxy: getProxyData(req.channel) });
+    };
+    req.onerror = () => {
+      reject({ status: req.status, proxy: getProxyData(req.channel) });
     };
     req.send();
   });
@@ -158,10 +190,11 @@ add_task(
     let extension = await getProxyExtension(proxyDetails);
 
     await xhr(`http://${primaryHost}:${primaryPort}/`)
-      .then(text => {
-        equal(text, "ok!", "xhr completed");
+      .then(req => {
+        equal(req.proxy.type, "direct", "proxy failover to direct");
+        equal(req.text, "ok!", "xhr completed");
       })
-      .catch(() => {
+      .catch(req => {
         ok(false, "xhr failed");
       });
 
@@ -212,8 +245,9 @@ add_task(
     );
 
     await xhr(`http://${primaryHost}:${primaryPort}/`)
-      .then(text => {
-        equal(text, "ok!", "xhr completed");
+      .then(req => {
+        equal(req.proxy.type, "direct", "proxy failover to direct");
+        equal(req.text, "ok!", "xhr completed");
       })
       .catch(() => {
         ok(false, "xhr failed");
@@ -222,6 +256,48 @@ add_task(
     await extension.unload();
   }
 );
+
+add_task(async function test_bypass_proxy() {
+  const proxyDetails = [
+    { type: "http", host: "127.0.0.1", port: getBadProxyPort() },
+  ];
+
+  let extension = await getProxyExtension(proxyDetails);
+
+  await xhr(`http://${primaryHost}:${primaryPort}/`, { bypassProxy: true })
+    .then(req => {
+      equal(req.proxy, undefined, "no proxy used");
+      ok(true, "xhr completed");
+    })
+    .catch(req => {
+      equal(req.proxy, undefined, "no proxy used");
+      ok(false, "xhr error");
+    });
+
+  await extension.unload();
+});
+
+add_task(async function test_bypass_proxy() {
+  const proxyDetails = [
+    { type: "http", host: "127.0.0.1", port: getBadProxyPort() },
+  ];
+
+  let extension = await getProxyExtension(proxyDetails);
+
+  await serviceRequest(`http://${primaryHost}:${primaryPort}/`, {
+    bypassProxy: true,
+  })
+    .then(req => {
+      equal(req.proxy, undefined, "no proxy used");
+      ok(true, "xhr completed");
+    })
+    .catch(req => {
+      equal(req.proxy, undefined, "no proxy used");
+      ok(false, "xhr error");
+    });
+
+  await extension.unload();
+});
 
 add_task(async function test_failover_system_off() {
   // Test test failover failures, uncomment and set pref to false
@@ -234,11 +310,13 @@ add_task(async function test_failover_system_off() {
   let extension = await getProxyExtension(proxyDetails);
 
   await xhr(`http://${primaryHost}:${primaryPort}/`)
-    .then(text => {
+    .then(req => {
+      equal(req.proxy.sourceId, extension.id, "extension matches");
       ok(false, "xhr completed");
     })
-    .catch(status => {
-      equal(status, 0, "xhr failed");
+    .catch(req => {
+      equal(req.proxy.sourceId, extension.id, "extension matches");
+      equal(req.status, 0, "xhr failed");
     });
 
   await extension.unload();

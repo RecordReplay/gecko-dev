@@ -8,14 +8,11 @@
 const TEST_URL = URL_ROOT + "doc_inspector_remove-iframe-during-load.html";
 
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
-  });
-
   const { inspector, tab } = await openInspectorForURL("about:blank");
   await selectNode("body", inspector);
+
+  // Before we start navigating, attach a listener on the reloaded event.
+  const onInspectorReloaded = inspector.once("reloaded");
 
   // Note: here we don't want to use the `navigateTo` helper from shared-head.js
   // because we want to modify the page as early as possible after the
@@ -62,6 +59,9 @@ add_task(async function() {
     return content.document.querySelector("#yay").textContent;
   });
   is(expectedText, "load", "Load event fired.");
+
+  info("Wait for the inspector to be properly reloaded");
+  await onInspectorReloaded;
 
   // Smoke test to check that the inspector can still select nodes and hasn't
   // gone blank.

@@ -2,10 +2,9 @@
 // http://creativecommons.org/publicdomain/zero/1.0/
 
 "use strict";
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
 const {
   analyzeInputString,
-} = require("devtools/shared/webconsole/js-property-provider");
+} = require("devtools/shared/webconsole/analyze-input-string");
 
 add_task(() => {
   const tests = [

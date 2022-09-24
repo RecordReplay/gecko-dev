@@ -321,8 +321,11 @@ class UrlbarInput {
    * @param {boolean} [dueToTabSwitch]
    *        True if this is being called due to switching tabs and false
    *        otherwise.
+   * @param {boolean} [dueToSessionRestore]
+   *        True if this is being called due to session restore and false
+   *        otherwise.
    */
-  setURI(uri = null, dueToTabSwitch = false) {
+  setURI(uri = null, dueToTabSwitch = false, dueToSessionRestore = false) {
     let value = this.window.gBrowser.userTypedValue;
     let valid = false;
 
@@ -355,9 +358,13 @@ class UrlbarInput {
           value = "about:blank";
         }
       }
-
+      // If we update the URI while restoring a session, set the proxyState to
+      // invalid, because we don't have a valid security state to show via site
+      // identity yet. See Bug 1746383.
       valid =
-        !this.window.isBlankPageURL(uri.spec) || uri.schemeIs("moz-extension");
+        !dueToSessionRestore &&
+        (!this.window.isBlankPageURL(uri.spec) ||
+          uri.schemeIs("moz-extension"));
     } else if (
       this.window.isInitialPage(value) &&
       BrowserUIUtils.checkEmptyPageOrigin(this.window.gBrowser.selectedBrowser)
@@ -366,14 +373,46 @@ class UrlbarInput {
       valid = true;
     }
 
-    let isDifferentValidValue = valid && value != this.untrimmedValue;
+    const previousUntrimmedValue = this.untrimmedValue;
+    const previousSelectionStart = this.selectionStart;
+    const previousSelectionEnd = this.selectionEnd;
+
     this.value = value;
     this.valueIsTyped = !valid;
     this.removeAttribute("usertyping");
-    if (isDifferentValidValue) {
-      // The selection is enforced only for new values, to avoid overriding the
-      // cursor position when the user switches windows while typing.
-      this.selectionStart = this.selectionEnd = 0;
+
+    if (this.focused && value != previousUntrimmedValue) {
+      if (
+        previousSelectionStart != previousSelectionEnd &&
+        value.substring(previousSelectionStart, previousSelectionEnd) ===
+          previousUntrimmedValue.substring(
+            previousSelectionStart,
+            previousSelectionEnd
+          )
+      ) {
+        // If the same text is in the same place as the previously selected text,
+        // the selection is kept.
+        this.inputField.setSelectionRange(
+          previousSelectionStart,
+          previousSelectionEnd
+        );
+      } else if (
+        previousSelectionEnd &&
+        (previousUntrimmedValue.length === previousSelectionEnd ||
+          value.length <= previousSelectionEnd)
+      ) {
+        // If the previous end caret is not 0 and the caret is at the end of the
+        // input or its position is beyond the end of the new value, keep the
+        // position at the end.
+        this.inputField.setSelectionRange(value.length, value.length);
+      } else {
+        // Otherwise clear selection and set the caret position to the previous
+        // caret end position.
+        this.inputField.setSelectionRange(
+          previousSelectionEnd,
+          previousSelectionEnd
+        );
+      }
     }
 
     // The proxystate must be set before setting search mode below because
@@ -436,7 +475,7 @@ class UrlbarInput {
    * @param {Event} [event] The event triggering the open.
    */
   handleCommand(event = null) {
-    let isMouseEvent = event instanceof this.window.MouseEvent;
+    let isMouseEvent = this.window.MouseEvent.isInstance(event);
     if (isMouseEvent && event.button == 2) {
       // Do nothing for right clicks.
       return;
@@ -506,6 +545,18 @@ class UrlbarInput {
       (!oneOffParams?.engine || selectedPrivateEngineResult)
     ) {
       this.pickElement(element, event);
+      return;
+    }
+
+    // Use the hidden heuristic if it exists and there's no selection.
+    if (
+      UrlbarPrefs.get("experimental.hideHeuristic") &&
+      !element &&
+      !isComposing &&
+      !oneOffParams?.engine &&
+      this._resultForCurrentValue?.heuristic
+    ) {
+      this.pickResult(this._resultForCurrentValue, event);
       return;
     }
 
@@ -662,6 +713,29 @@ class UrlbarInput {
   }
 
   /**
+   * Called by inputs that resemble search boxes, but actually hand input off
+   * to the Urlbar. We use these fake inputs on the new tab page and
+   * about:privatebrowsing.
+   *
+   * @param {string} searchString
+   * @param {nsISearchEngine} [searchEngine]
+   *   Optional. If included and the right prefs are set, we will enter search
+   *   mode when handing `searchString` from the fake input to the Urlbar.
+   *
+   */
+  handoff(searchString, searchEngine) {
+    this._isHandoffSession = true;
+    if (UrlbarPrefs.get("shouldHandOffToSearchMode") && searchEngine) {
+      this.search(searchString, {
+        searchEngine,
+        searchModeEntry: "handoff",
+      });
+    } else {
+      this.search(searchString);
+    }
+  }
+
+  /**
    * Called when an element of the view is picked.
    *
    * @param {Element} element The element that was picked.
@@ -705,8 +779,13 @@ class UrlbarInput {
       return;
     }
 
+    if (element?.classList.contains("urlbarView-button-block")) {
+      this.controller.handleDeleteEntry(result);
+      return;
+    }
+
     let urlOverride;
-    if (element?.classList.contains("urlbarView-help")) {
+    if (element?.classList.contains("urlbarView-button-help")) {
       urlOverride = result.payload.helpUrl;
     }
 
@@ -799,8 +878,10 @@ class UrlbarInput {
           ),
         };
 
+        // We cache the search string because switching tab may clear it.
+        let searchString = this._lastSearchString;
         this.controller.engagementEvent.record(event, {
-          searchString: this._lastSearchString,
+          searchString,
           selIndex,
           selType: "tabswitch",
           provider: result.providerName,
@@ -814,6 +895,15 @@ class UrlbarInput {
         if (switched && prevTab.isEmpty) {
           this.window.gBrowser.removeTab(prevTab);
         }
+
+        if (switched && !this.isPrivate && !result.heuristic) {
+          // We don't await for this, because a rejection should not interrupt
+          // the load. Just reportError it.
+          UrlbarUtils.addToInputHistory(url, searchString).catch(
+            Cu.reportError
+          );
+        }
+
         return;
       }
       case UrlbarUtils.RESULT_TYPE.SEARCH: {
@@ -878,7 +968,7 @@ class UrlbarInput {
       }
       case UrlbarUtils.RESULT_TYPE.TIP: {
         let scalarName;
-        if (element.classList.contains("urlbarView-help")) {
+        if (element.classList.contains("urlbarView-button-help")) {
           url = result.payload.helpUrl;
           if (!url) {
             Cu.reportError("helpUrl not specified");
@@ -966,11 +1056,20 @@ class UrlbarInput {
       throw new Error(`Invalid url for result ${JSON.stringify(result)}`);
     }
 
-    if (!this.isPrivate && !result.heuristic) {
-      // This should not interrupt the load anyway.
-      UrlbarUtils.addToInputHistory(url, this._lastSearchString).catch(
-        Cu.reportError
-      );
+    // Record input history but only in non-private windows.
+    if (!this.isPrivate) {
+      let input;
+      if (!result.heuristic) {
+        input = this._lastSearchString;
+      } else if (result.autofill?.type == "adaptive") {
+        input = result.autofill.adaptiveHistoryInput;
+      }
+      // `input` may be an empty string, so do a strict comparison here.
+      if (input !== undefined) {
+        // We don't await for this, because a rejection should not interrupt
+        // the load. Just reportError it.
+        UrlbarUtils.addToInputHistory(url, input).catch(Cu.reportError);
+      }
     }
 
     this.controller.engagementEvent.record(event, {
@@ -1301,11 +1400,10 @@ class UrlbarInput {
       ),
       currentPage: this.window.gBrowser.currentURI.spec,
       formHistoryName: this.formHistoryName,
-      allowSearchSuggestions:
-        !event ||
-        !UrlbarUtils.isPasteEvent(event) ||
-        !event.data ||
-        event.data.length <= UrlbarPrefs.get("maxCharsForSearchSuggestions"),
+      prohibitRemoteResults:
+        event &&
+        UrlbarUtils.isPasteEvent(event) &&
+        UrlbarPrefs.get("maxCharsForSearchSuggestions") < event.data?.length,
     };
 
     if (this.searchMode) {
@@ -1344,39 +1442,40 @@ class UrlbarInput {
     if (focus) {
       this.focus();
     }
-
-    let tokens = value.trim().split(UrlbarTokenizer.REGEXP_SPACES);
+    let trimmedValue = value.trim();
+    let end = trimmedValue.search(UrlbarTokenizer.REGEXP_SPACES);
+    let firstToken = end == -1 ? trimmedValue : trimmedValue.substring(0, end);
     // Enter search mode if the string starts with a restriction token.
-    let searchMode = UrlbarUtils.searchModeForToken(tokens[0]);
+    let searchMode = UrlbarUtils.searchModeForToken(firstToken);
+    let firstTokenIsRestriction = !!searchMode;
     if (!searchMode && searchEngine) {
       searchMode = { engineName: searchEngine.name };
+      firstTokenIsRestriction = searchEngine.aliases.includes(firstToken);
     }
 
     if (searchMode) {
       searchMode.entry = searchModeEntry;
       this.searchMode = searchMode;
-      // Remove the restriction token/alias from the string to be searched for
-      // in search mode.
-      value = value.replace(tokens[0], "");
+      if (firstTokenIsRestriction) {
+        // Remove the restriction token/alias from the string to be searched for
+        // in search mode.
+        value = value.replace(firstToken, "");
+      }
       if (UrlbarTokenizer.REGEXP_SPACES.test(value[0])) {
         // If there was a trailing space after the restriction token/alias,
         // remove it.
         value = value.slice(1);
       }
-      this.inputField.value = value;
-      this._revertOnBlurValue = this.value;
-    } else if (Object.values(UrlbarTokenizer.RESTRICT).includes(tokens[0])) {
+      this._revertOnBlurValue = value;
+    } else if (Object.values(UrlbarTokenizer.RESTRICT).includes(firstToken)) {
       this.searchMode = null;
       // If the entire value is a restricted token, append a space.
       if (Object.values(UrlbarTokenizer.RESTRICT).includes(value)) {
         value += " ";
       }
-      this.inputField.value = value;
-      this._revertOnBlurValue = this.value;
-    } else {
-      this.inputField.value = value;
+      this._revertOnBlurValue = value;
     }
-
+    this.inputField.value = value;
     // Avoid selecting the text if this method is called twice in a row.
     this.selectionStart = -1;
 
@@ -1387,8 +1486,12 @@ class UrlbarInput {
     // same as the previous search, but we want to allow consecutive searches
     // with the same string. So clear _lastSearchString first.
     this._lastSearchString = "";
-    let event = this.document.createEvent("UIEvents");
-    event.initUIEvent("input", true, false, this.window, 0);
+    let event = new UIEvent("input", {
+      bubbles: true,
+      cancelable: false,
+      view: this.window,
+      detail: 0,
+    });
     this.inputField.dispatchEvent(event);
   }
 
@@ -1943,6 +2046,11 @@ class UrlbarInput {
         return result.payload.input || "";
     }
 
+    if (urlOverride === "") {
+      // Allow callers to clear the input.
+      return "";
+    }
+
     try {
       let uri = Services.io.newURI(urlOverride || result.payload.url);
       if (uri) {
@@ -2143,6 +2251,20 @@ class UrlbarInput {
       selectedVal = BrowserUIUtils.trimURLProtocol + selectedVal;
     }
 
+    // If selection starts from the beginning and part or all of the URL
+    // is selected, we check for decoded characters and encode them.
+    // Unless decodeURLsOnCopy is set. Do not encode data: URIs.
+    if (!UrlbarPrefs.get("decodeURLsOnCopy") && !uri.schemeIs("data")) {
+      try {
+        new URL(selectedVal);
+        // Use encodeURI instead of URL.href because we don't want
+        // trailing slash.
+        selectedVal = encodeURI(selectedVal);
+      } catch (ex) {
+        // URL is invalid. Return original selected value.
+      }
+    }
+
     return selectedVal;
   }
 
@@ -2200,15 +2322,22 @@ class UrlbarInput {
   _recordSearch(engine, event, searchActionDetails = {}) {
     const isOneOff = this.view.oneOffSearchButtons.eventTargetIsAOneOff(event);
 
-    BrowserSearchTelemetry.recordSearch(
-      this.window.gBrowser.selectedBrowser,
-      engine,
+    let source = "urlbar";
+    if (this._isHandoffSession) {
+      source = "urlbar-handoff";
+    } else if (this.searchMode && !isOneOff) {
       // Without checking !isOneOff, we might record the string
       // oneoff_urlbar-searchmode in the SEARCH_COUNTS probe (in addition to
       // oneoff_urlbar and oneoff_searchbar). The extra information is not
       // necessary; the intent is the same regardless of whether the user is
       // in search mode when they do a key-modified click/enter on a one-off.
-      this.searchMode && !isOneOff ? "urlbar-searchmode" : "urlbar",
+      source = "urlbar-searchmode";
+    }
+
+    BrowserSearchTelemetry.recordSearch(
+      this.window.gBrowser.selectedBrowser,
+      engine,
+      source,
       { ...searchActionDetails, isOneOff }
     );
   }
@@ -2240,7 +2369,7 @@ class UrlbarInput {
     // Only add the suffix when the URL bar value isn't already "URL-like",
     // and only if we get a keyboard event, to match user expectations.
     if (
-      !(event instanceof KeyboardEvent) ||
+      !KeyboardEvent.isInstance(event) ||
       event._disableCanonization ||
       !event.ctrlKey ||
       !UrlbarPrefs.get("ctrlCanonizesURLs") ||
@@ -2447,7 +2576,7 @@ class UrlbarInput {
    * @returns {"current" | "tabshifted" | "tab" | "save" | "window"}
    */
   _whereToOpen(event) {
-    let isKeyboardEvent = event instanceof KeyboardEvent;
+    let isKeyboardEvent = KeyboardEvent.isInstance(event);
     let reuseEmpty = isKeyboardEvent;
     let where = undefined;
     if (
@@ -2711,6 +2840,8 @@ class UrlbarInput {
 
   _on_blur(event) {
     this.focusedViaMousedown = false;
+    this._isHandoffSession = false;
+
     // We cannot count every blur events after a missed engagement as abandoment
     // because the user may have clicked on some view element that executes
     // a command causing a focus change. For example opening preferences from
@@ -3287,7 +3418,8 @@ class UrlbarInput {
       return;
     }
 
-    let href = this.window.gBrowser.currentURI.displaySpec;
+    let uri = this.makeURIReadable(this.window.gBrowser.currentURI);
+    let href = uri.displaySpec;
     let title = this.window.gBrowser.contentTitle || href;
 
     event.dataTransfer.setData("text/x-moz-url", `${href}\n${title}`);
@@ -3305,8 +3437,9 @@ class UrlbarInput {
 
   _on_drop(event) {
     let droppedItem = getDroppableData(event);
-    let droppedURL =
-      droppedItem instanceof URL ? droppedItem.href : droppedItem;
+    let droppedURL = URL.isInstance(droppedItem)
+      ? droppedItem.href
+      : droppedItem;
     if (droppedURL && droppedURL !== this.window.gBrowser.currentURI.spec) {
       let principal = Services.droppedLinkHandler.getTriggeringPrincipal(event);
       this.value = droppedURL;
@@ -3516,8 +3649,12 @@ class CopyCutController {
         urlbar.inputField.value.substring(end);
       urlbar.selectionStart = urlbar.selectionEnd = start;
 
-      let event = urlbar.document.createEvent("UIEvents");
-      event.initUIEvent("input", true, false, urlbar.window, 0);
+      let event = new UIEvent("input", {
+        bubbles: true,
+        cancelable: false,
+        view: urlbar.window,
+        detail: 0,
+      });
       urlbar.inputField.dispatchEvent(event);
     }
 

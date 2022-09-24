@@ -125,12 +125,6 @@ struct Module;
 #define XRE_USER_SYS_EXTENSION_DIR "XREUSysExt"
 
 /**
- * A directory service key which specifies a directory where temporary
- * system extensions can be loaded from during development.
- */
-#define XRE_USER_SYS_EXTENSION_DEV_DIR "XRESysExtDev"
-
-/**
  * A directory service key which specifies the distribution specific files for
  * the application.
  */
@@ -366,8 +360,9 @@ XRE_API(nsresult, XRE_ParseAppData,
 
 // This enum is not dense.  See GeckoProcessTypes.h for details.
 enum GeckoProcessType {
-#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, xre_name, \
-                           bin_type)                                     \
+#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+                           process_bin_type, procinfo_typename,               \
+                           webidl_typename, allcaps_name)                     \
   GeckoProcessType_##enum_name = enum_value,
 #include "mozilla/GeckoProcessTypes.h"
 #undef GECKO_PROCESS_TYPE
@@ -422,9 +417,10 @@ XRE_API(bool, XRE_IsE10sParentProcess, ())
  * the e10s parent process or called in the main process when e10s is
  * disabled.
  */
-#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, xre_name, \
-                           bin_type)                                     \
-  XRE_API(bool, XRE_Is##xre_name##Process, ())
+#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+                           process_bin_type, procinfo_typename,               \
+                           webidl_typename, allcaps_name)                     \
+  XRE_API(bool, XRE_Is##proc_typename##Process, ())
 #include "mozilla/GeckoProcessTypes.h"
 #undef GECKO_PROCESS_TYPE
 
@@ -459,6 +455,7 @@ XRE_API(bool, XRE_SendTestShellCommand,
 XRE_API(bool, XRE_ShutdownTestShell, ())
 
 XRE_API(void, XRE_InstallX11ErrorHandler, ())
+XRE_API(void, XRE_CleanupX11ErrorHandler, ())
 
 XRE_API(void, XRE_TelemetryAccumulate, (int aID, uint32_t aSample))
 

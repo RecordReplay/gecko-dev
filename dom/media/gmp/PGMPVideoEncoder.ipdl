@@ -11,11 +11,13 @@ using GMPVideoFrameType from "gmp-video-frame-encoded.h";
 using GMPErr from "gmp-errors.h";
 
 include "GMPMessageUtils.h";
+include "GMPVideoEncoderChild.h";
 
 namespace mozilla {
 namespace gmp {
 
-intr refcounted protocol PGMPVideoEncoder
+[ChildImpl="GMPVideoEncoderChild", ParentImpl=virtual]
+sync protocol PGMPVideoEncoder
 {
   manager PGMPContent;
 child:
@@ -39,9 +41,7 @@ parent:
   async Error(GMPErr aErr);
   async Shutdown();
   async ParentShmemForPool(Shmem aFrameBuffer);
-  // MUST be intr - if sync and we create a new Shmem, when the returned
-  // Shmem is received in the Child it will fail to Deserialize
-  intr NeedShmem(uint32_t aEncodedBufferSize) returns (Shmem aMem);
+  sync NeedShmem(uint32_t aEncodedBufferSize) returns (Shmem aMem);
 };
 
 } // namespace gmp

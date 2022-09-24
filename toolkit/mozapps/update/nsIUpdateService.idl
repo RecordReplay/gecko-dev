@@ -239,8 +239,9 @@ interface nsIUpdateCheckListener : nsISupports
    *          The XMLHttpRequest handling the update check.
    * @param   updates
    *          An array of nsIUpdate objects listing available updates.
+   * @returns A Promise that resolves when the callback is complete.
    */
-  void onCheckComplete(in jsval request, in Array<nsIUpdate> updates);
+  Promise onCheckComplete(in jsval request, in Array<nsIUpdate> updates);
 
   /**
    * An error occurred while loading the remote update service file.
@@ -249,9 +250,10 @@ interface nsIUpdateCheckListener : nsISupports
    * @param   update
    *          A nsIUpdate object that contains details about the
    *          error in its |statusText| property.
+   * @returns A Promise that resolves when the callback is complete.
    */
-  void onError(in jsval request,
-               in nsIUpdate update);
+  Promise onError(in jsval request,
+                  in nsIUpdate update);
 };
 
 /**
@@ -459,26 +461,6 @@ interface nsIUpdateProcessor : nsISupports
    * Stages an update while the application is running.
    */
   void processUpdate();
-
-  /**
-   * Attempts to fix the permissions of the update directory. This can be done
-   * in two ways. Firefox can attempt to fix the permissions itself, or it can
-   * call into the maintenance service to request that it attempt to fix the
-   * permissions.
-   *
-   * Fixing the permissions can take some time, so this work is all done off of
-   * the main thread.
-   *
-   * Currently, this function only has a Windows implementation. On other
-   * operating systems, it will throw NS_ERROR_NOT_IMPLEMENTED.
-   *
-   * Since this function does its work off of the main thread and does not
-   * block, it will only throw if it was unable to dispatch to another thread.
-   *
-   * @param useServiceOnFailure
-   *        Deprecated. This argument no longer has any effect.
-   */
-  void fixUpdateDirectoryPerms(in boolean useServiceOnFailure);
 
   /**
    * The installer writes an installation-specific registry key if the

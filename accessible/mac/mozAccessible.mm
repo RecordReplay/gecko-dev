@@ -41,16 +41,17 @@ using namespace mozilla::a11y;
 - (BOOL)providesLabelNotTitle;
 
 - (void)maybePostLiveRegionChanged;
+- (void)maybePostA11yUtilNotification;
 @end
 
 @implementation mozAccessible
 
-- (id)initWithAccessible:(AccessibleOrProxy)aAccOrProxy {
+- (id)initWithAccessible:(Accessible*)aAcc {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
-  MOZ_ASSERT(!aAccOrProxy.IsNull(), "Cannot init mozAccessible with null");
+  MOZ_ASSERT(aAcc, "Cannot init mozAccessible with null");
   if ((self = [super init])) {
-    mGeckoAccessible = aAccOrProxy;
-    mRole = aAccOrProxy.Role();
+    mGeckoAccessible = aAcc;
+    mRole = aAcc->Role();
   }
 
   return self;
@@ -83,7 +84,7 @@ using namespace mozilla::a11y;
 #pragma mark -
 
 - (BOOL)moxIgnoreWithParent:(mozAccessible*)parent {
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     if (acc->IsContent() && acc->GetContent()->IsXULElement()) {
       if (acc->VisibilityState() & states::INVISIBLE) {
         return YES;
@@ -101,26 +102,27 @@ using namespace mozilla::a11y;
 - (id)childAt:(uint32_t)i {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
-  AccessibleOrProxy child = mGeckoAccessible.ChildAt(i);
-  return !child.IsNull() ? GetNativeFromGeckoAccessible(child) : nil;
+  Accessible* child = mGeckoAccessible->ChildAt(i);
+  return child ? GetNativeFromGeckoAccessible(child) : nil;
 
   NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
 
 static const uint64_t kCachedStates =
     states::CHECKED | states::PRESSED | states::MIXED | states::EXPANDED |
-    states::CURRENT | states::SELECTED | states::TRAVERSED | states::LINKED |
-    states::HASPOPUP | states::BUSY | states::MULTI_LINE;
+    states::EXPANDABLE | states::CURRENT | states::SELECTED |
+    states::TRAVERSED | states::LINKED | states::HASPOPUP | states::BUSY |
+    states::MULTI_LINE | states::CHECKABLE;
 static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 
 - (uint64_t)state {
   uint64_t state = 0;
 
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     state = acc->State();
   }
 
-  if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
+  if (RemoteAccessible* proxy = mGeckoAccessible->AsRemote()) {
     state = proxy->State();
   }
 
@@ -168,37 +170,38 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
   // They may be named explicitly, but they still provide a label not a title.
   return mRole == roles::GROUPING || mRole == roles::RADIO_GROUP ||
          mRole == roles::FIGURE || mRole == roles::GRAPHIC ||
-         mRole == roles::DOCUMENT || mRole == roles::OUTLINE;
+         mRole == roles::DOCUMENT || mRole == roles::OUTLINE ||
+         mRole == roles::ARTICLE;
 }
 
-- (mozilla::a11y::AccessibleOrProxy)geckoAccessible {
+- (mozilla::a11y::Accessible*)geckoAccessible {
   return mGeckoAccessible;
 }
 
-- (mozilla::a11y::AccessibleOrProxy)geckoDocument {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+- (mozilla::a11y::Accessible*)geckoDocument {
+  MOZ_ASSERT(mGeckoAccessible);
 
-  if (mGeckoAccessible.IsAccessible()) {
-    if (mGeckoAccessible.AsAccessible()->IsDoc()) {
+  if (mGeckoAccessible->IsLocal()) {
+    if (mGeckoAccessible->AsLocal()->IsDoc()) {
       return mGeckoAccessible;
     }
-    return mGeckoAccessible.AsAccessible()->Document();
+    return mGeckoAccessible->AsLocal()->Document();
   }
 
-  if (mGeckoAccessible.AsProxy()->IsDoc()) {
+  if (mGeckoAccessible->AsRemote()->IsDoc()) {
     return mGeckoAccessible;
   }
 
-  return mGeckoAccessible.AsProxy()->Document();
+  return mGeckoAccessible->AsRemote()->Document();
 }
 
 #pragma mark - MOXAccessible protocol
 
 - (BOOL)moxBlockSelector:(SEL)selector {
   if (selector == @selector(moxPerformPress)) {
-    uint8_t actionCount = mGeckoAccessible.IsAccessible()
-                              ? mGeckoAccessible.AsAccessible()->ActionCount()
-                              : mGeckoAccessible.AsProxy()->ActionCount();
+    uint8_t actionCount = mGeckoAccessible->IsLocal()
+                              ? mGeckoAccessible->AsLocal()->ActionCount()
+                              : mGeckoAccessible->AsRemote()->ActionCount();
 
     // If we have no action, we don't support press, so return YES.
     return actionCount == 0;
@@ -214,14 +217,18 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
     return ![self moxIsLiveRegion];
   }
 
+  if (selector == @selector(moxExpanded)) {
+    return [self stateWithMask:states::EXPANDABLE] == 0;
+  }
+
   return [super moxBlockSelector:selector];
 }
 
 - (id)moxFocusedUIElement {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  LocalAccessible* acc = mGeckoAccessible.AsAccessible();
-  RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+  LocalAccessible* acc = mGeckoAccessible->AsLocal();
+  RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
 
   mozAccessible* focusedChild = nil;
   if (acc) {
@@ -256,15 +263,15 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 }
 
 - (id<MOXTextMarkerSupport>)moxTextMarkerDelegate {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  if (mGeckoAccessible.IsAccessible()) {
+  if (mGeckoAccessible->IsLocal()) {
     return [MOXTextMarkerDelegate
-        getOrCreateForDoc:mGeckoAccessible.AsAccessible()->Document()];
+        getOrCreateForDoc:mGeckoAccessible->AsLocal()->Document()];
   }
 
   return [MOXTextMarkerDelegate
-      getOrCreateForDoc:mGeckoAccessible.AsProxy()->Document()];
+      getOrCreateForDoc:mGeckoAccessible->AsRemote()->Document()];
 }
 
 - (BOOL)moxIsLiveRegion {
@@ -272,7 +279,7 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 }
 
 - (id)moxHitTest:(NSPoint)point {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
   // Convert the given screen-global point in the cocoa coordinate system (with
   // origin in the bottom-left corner of the screen) into point in the Gecko
@@ -283,10 +290,10 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
   LayoutDeviceIntPoint geckoPoint = nsCocoaUtils::CocoaPointsToDevPixels(
       tmpPoint, nsCocoaUtils::GetBackingScaleFactor(mainView));
 
-  AccessibleOrProxy child = mGeckoAccessible.ChildAtPoint(
+  Accessible* child = mGeckoAccessible->ChildAtPoint(
       geckoPoint.x, geckoPoint.y, Accessible::EWhichChildAtPoint::DeepestChild);
 
-  if (!child.IsNull()) {
+  if (child) {
     mozAccessible* nativeChild = GetNativeFromGeckoAccessible(child);
     return [nativeChild isAccessibilityElement]
                ? nativeChild
@@ -303,15 +310,14 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
     return nil;
   }
 
-  AccessibleOrProxy parent = mGeckoAccessible.Parent();
+  Accessible* parent = mGeckoAccessible->Parent();
 
-  if (parent.IsNull()) {
+  if (!parent) {
     return nil;
   }
 
   id nativeParent = GetNativeFromGeckoAccessible(parent);
-  if (parent.Role() == roles::DOCUMENT &&
-      [nativeParent respondsToSelector:@selector(rootGroup)]) {
+  if ([nativeParent respondsToSelector:@selector(rootGroup)]) {
     // Before returning a WebArea as parent, check to see if
     // there is a generated root group that is an intermediate container.
     if (id<mozAccessible> rootGroup = [nativeParent rootGroup]) {
@@ -319,11 +325,11 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
     }
   }
 
-  if (!nativeParent && mGeckoAccessible.IsAccessible()) {
+  if (!nativeParent && mGeckoAccessible->IsLocal()) {
     // Return native of root accessible if we have no direct parent.
     // XXX: need to return a sensible fallback in proxy case as well
     nativeParent = GetNativeFromGeckoAccessible(
-        mGeckoAccessible.AsAccessible()->RootAccessible());
+        mGeckoAccessible->AsLocal()->RootAccessible());
   }
 
   return GetObjectOrRepresentedView(nativeParent);
@@ -333,14 +339,14 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 
 // gets all our native children lazily, including those that are ignored.
 - (NSArray*)moxChildren {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
   NSMutableArray* children = [[[NSMutableArray alloc]
-      initWithCapacity:mGeckoAccessible.ChildCount()] autorelease];
+      initWithCapacity:mGeckoAccessible->ChildCount()] autorelease];
 
-  for (uint32_t childIdx = 0; childIdx < mGeckoAccessible.ChildCount();
+  for (uint32_t childIdx = 0; childIdx < mGeckoAccessible->ChildCount();
        childIdx++) {
-    AccessibleOrProxy child = mGeckoAccessible.ChildAt(childIdx);
+    Accessible* child = mGeckoAccessible->ChildAt(childIdx);
     mozAccessible* nativeChild = GetNativeFromGeckoAccessible(child);
     if (!nativeChild) {
       continue;
@@ -382,9 +388,9 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 }
 
 - (nsStaticAtom*)ARIARole {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     if (acc->HasARIARole()) {
       const nsRoleMapEntry* roleMap = acc->ARIARoleMap();
       return roleMap->roleAtom;
@@ -394,7 +400,7 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
   }
 
   if (!mARIARole) {
-    mARIARole = mGeckoAccessible.AsProxy()->ARIARoleAtom();
+    mARIARole = mGeckoAccessible->AsRemote()->ARIARoleAtom();
     if (!mARIARole) {
       mARIARole = nsGkAtoms::_empty;
     }
@@ -404,10 +410,10 @@ static const uint64_t kCacheInitialized = ((uint64_t)0x1) << 63;
 }
 
 - (NSString*)moxSubrole {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  LocalAccessible* acc = mGeckoAccessible.AsAccessible();
-  RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+  LocalAccessible* acc = mGeckoAccessible->AsLocal();
+  RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
 
   // Deal with landmarks first
   // macOS groups the specific landmark types of DPub ARIA into two broad
@@ -563,8 +569,6 @@ struct RoleDescrComparator {
     return nil;
   }
 
-  LocalAccessible* acc = mGeckoAccessible.AsAccessible();
-  RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
   nsAutoString name;
 
   /* If our accessible is:
@@ -573,16 +577,9 @@ struct RoleDescrComparator {
    * 3. Is a special role defined in providesLabelNotTitle
    *   ... return its name as a label (AXDescription).
    */
-  if (acc) {
-    ENameValueFlag flag = acc->Name(name);
-    if (flag == eNameFromSubtree) {
-      return nil;
-    }
-  } else if (proxy) {
-    uint32_t flag = proxy->Name(name);
-    if (flag == eNameFromSubtree) {
-      return nil;
-    }
+  ENameValueFlag flag = mGeckoAccessible->Name(name);
+  if (flag == eNameFromSubtree) {
+    return nil;
   }
 
   if (![self providesLabelNotTitle]) {
@@ -604,11 +601,7 @@ struct RoleDescrComparator {
   }
 
   nsAutoString title;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    acc->Name(title);
-  } else {
-    mGeckoAccessible.AsProxy()->Name(title);
-  }
+  mGeckoAccessible->Name(title);
 
   return nsCocoaUtils::ToNSString(title);
 
@@ -619,11 +612,7 @@ struct RoleDescrComparator {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
   nsAutoString value;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    acc->Value(value);
-  } else {
-    mGeckoAccessible.AsProxy()->Value(value);
-  }
+  mGeckoAccessible->Value(value);
 
   return nsCocoaUtils::ToNSString(value);
 
@@ -636,11 +625,7 @@ struct RoleDescrComparator {
   // What needs to go here is actually the accDescription of an item.
   // The MSAA acc_help method has nothing to do with this one.
   nsAutoString helpText;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    acc->Description(helpText);
-  } else {
-    mGeckoAccessible.AsProxy()->Description(helpText);
-  }
+  mGeckoAccessible->Description(helpText);
 
   return nsCocoaUtils::ToNSString(helpText);
 
@@ -653,10 +638,10 @@ struct RoleDescrComparator {
   // Get a pointer to the native window (NSWindow) we reside in.
   NSWindow* nativeWindow = nil;
   DocAccessible* docAcc = nullptr;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     docAcc = acc->Document();
   } else {
-    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+    RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
     LocalAccessible* outerDoc = proxy->OuterDocOfRemoteBrowser();
     if (outerDoc) docAcc = outerDoc->Document();
   }
@@ -692,12 +677,16 @@ struct RoleDescrComparator {
   return @NO;
 }
 
-- (NSValue*)moxFrame {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+- (NSNumber*)moxExpanded {
+  return @([self stateWithMask:states::EXPANDED] != 0);
+}
 
-  nsIntRect rect = mGeckoAccessible.IsAccessible()
-                       ? mGeckoAccessible.AsAccessible()->Bounds()
-                       : mGeckoAccessible.AsProxy()->Bounds();
+- (NSValue*)moxFrame {
+  MOZ_ASSERT(mGeckoAccessible);
+
+  LayoutDeviceIntRect rect = mGeckoAccessible->IsLocal()
+                                 ? mGeckoAccessible->AsLocal()->Bounds()
+                                 : mGeckoAccessible->AsRemote()->Bounds();
   NSScreen* mainView = [[NSScreen screens] objectAtIndex:0];
   CGFloat scaleFactor = nsCocoaUtils::GetBackingScaleFactor(mainView);
 
@@ -738,7 +727,7 @@ struct RoleDescrComparator {
 }
 
 - (id)moxTitleUIElement {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
   NSArray* relations = [self getRelationsByType:RelationType::LABELLED_BY];
   if ([relations count] == 1) {
@@ -749,16 +738,10 @@ struct RoleDescrComparator {
 }
 
 - (NSString*)moxDOMIdentifier {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
   nsAutoString id;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    if (acc->GetContent()) {
-      nsCoreUtils::GetID(acc->GetContent(), id);
-    }
-  } else {
-    mGeckoAccessible.AsProxy()->DOMNodeID(id);
-  }
+  mGeckoAccessible->DOMNodeID(id);
 
   return nsCocoaUtils::ToNSString(id);
 }
@@ -780,17 +763,17 @@ struct RoleDescrComparator {
 }
 
 - (mozAccessible*)topWebArea {
-  AccessibleOrProxy doc = [self geckoDocument];
-  while (!doc.IsNull()) {
-    if (doc.IsAccessible()) {
-      DocAccessible* docAcc = doc.AsAccessible()->AsDoc();
+  Accessible* doc = [self geckoDocument];
+  while (doc) {
+    if (doc->IsLocal()) {
+      DocAccessible* docAcc = doc->AsLocal()->AsDoc();
       if (docAcc->DocumentNode()->GetBrowsingContext()->IsTopContent()) {
         return GetNativeFromGeckoAccessible(docAcc);
       }
 
       doc = docAcc->ParentDocument();
     } else {
-      DocAccessibleParent* docProxy = doc.AsProxy()->AsDoc();
+      DocAccessibleParent* docProxy = doc->AsRemote()->AsDoc();
       if (docProxy->IsTopLevel()) {
         return GetNativeFromGeckoAccessible(docProxy);
       }
@@ -889,52 +872,37 @@ struct RoleDescrComparator {
 }
 
 - (void)moxSetFocused:(NSNumber*)focused {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
   if ([focused boolValue]) {
-    if (mGeckoAccessible.IsAccessible()) {
-      mGeckoAccessible.AsAccessible()->TakeFocus();
-    } else {
-      mGeckoAccessible.AsProxy()->TakeFocus();
-    }
+    mGeckoAccessible->TakeFocus();
   }
 }
 
 - (void)moxPerformScrollToVisible {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
-
-  if (mGeckoAccessible.IsAccessible()) {
-    // Need strong ref because of MOZ_CAN_RUN_SCRIPT
-    RefPtr<LocalAccessible> acc = mGeckoAccessible.AsAccessible();
-    acc->ScrollTo(nsIAccessibleScrollType::SCROLL_TYPE_ANYWHERE);
-  } else {
-    mGeckoAccessible.AsProxy()->ScrollTo(
-        nsIAccessibleScrollType::SCROLL_TYPE_ANYWHERE);
-  }
+  MOZ_ASSERT(mGeckoAccessible);
+  mGeckoAccessible->ScrollTo(nsIAccessibleScrollType::SCROLL_TYPE_ANYWHERE);
 }
 
 - (void)moxPerformShowMenu {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  nsIntRect bounds = mGeckoAccessible.IsAccessible()
-                         ? mGeckoAccessible.AsAccessible()->Bounds()
-                         : mGeckoAccessible.AsProxy()->Bounds();
   // We don't need to convert this rect into mac coordinates because the
   // mouse event synthesizer expects layout (gecko) coordinates.
-  LayoutDeviceIntRect geckoRect = LayoutDeviceIntRect::FromUnknownRect(bounds);
+  LayoutDeviceIntRect bounds = mGeckoAccessible->IsLocal()
+                                   ? mGeckoAccessible->AsLocal()->Bounds()
+                                   : mGeckoAccessible->AsRemote()->Bounds();
 
-  LocalAccessible* rootAcc =
-      mGeckoAccessible.IsAccessible()
-          ? mGeckoAccessible.AsAccessible()->RootAccessible()
-          : mGeckoAccessible.AsProxy()
-                ->OuterDocOfRemoteBrowser()
-                ->RootAccessible();
+  LocalAccessible* rootAcc = mGeckoAccessible->IsLocal()
+                                 ? mGeckoAccessible->AsLocal()->RootAccessible()
+                                 : mGeckoAccessible->AsRemote()
+                                       ->OuterDocOfRemoteBrowser()
+                                       ->RootAccessible();
   id objOrView =
       GetObjectOrRepresentedView(GetNativeFromGeckoAccessible(rootAcc));
 
-  LayoutDeviceIntPoint p =
-      LayoutDeviceIntPoint(geckoRect.X() + (geckoRect.Width() / 2),
-                           geckoRect.Y() + (geckoRect.Height() / 2));
+  LayoutDeviceIntPoint p = LayoutDeviceIntPoint(
+      bounds.X() + (bounds.Width() / 2), bounds.Y() + (bounds.Height() / 2));
   nsIWidget* widget = [objOrView widget];
   widget->SynthesizeNativeMouseEvent(
       p, nsIWidget::NativeMouseMessage::ButtonDown, MouseButton::eSecondary,
@@ -942,12 +910,12 @@ struct RoleDescrComparator {
 }
 
 - (void)moxPerformPress {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull());
+  MOZ_ASSERT(mGeckoAccessible);
 
-  if (mGeckoAccessible.IsAccessible()) {
-    mGeckoAccessible.AsAccessible()->DoAction(0);
+  if (mGeckoAccessible->IsLocal()) {
+    mGeckoAccessible->AsLocal()->DoAction(0);
   } else {
-    mGeckoAccessible.AsProxy()->DoAction(0);
+    mGeckoAccessible->AsRemote()->DoAction(0);
   }
 
   // Activating accessible may alter its state.
@@ -971,8 +939,57 @@ struct RoleDescrComparator {
   }
 }
 
+- (void)maybePostA11yUtilNotification {
+  MOZ_ASSERT(mGeckoAccessible);
+  // Sometimes we use a special live region to make announcements to the user.
+  // This region is a child of the root document, but doesn't contain any
+  // content. If we try to fire regular AXLiveRegion changed events through it,
+  // VoiceOver clips the notifications because it (rightfully) doesn't detect
+  // focus within the region. We get around this by firing an
+  // AXAnnouncementRequested notification here instead.
+  // Verify we're trying to send a notification for the a11yUtils alert (and not
+  // a random acc with the same ID) by checking:
+  //  - The gecko acc is local, our a11y-announcement lives in browser.xhtml
+  //  - The ID of the gecko acc is "a11y-announcement"
+  //  - The native acc is a direct descendent of the root
+  if (mGeckoAccessible->IsLocal() &&
+      [[self moxDOMIdentifier] isEqualToString:@"a11y-announcement"] &&
+      [[self moxParent] isKindOfClass:[mozRootAccessible class]]) {
+    // Our actual announcement should be stored as a child of the alert,
+    // so we verify a child exists, and then query that child below.
+    NSArray* children = [self moxChildren];
+    MOZ_ASSERT([children count] == 1 && children[0],
+               "A11yUtil event recieved, but no announcement found?");
+
+    mozAccessible* announcement = children[0];
+    NSString* key;
+    if ([announcement providesLabelNotTitle]) {
+      key = [announcement moxLabel];
+    } else {
+      key = [announcement moxTitle];
+    }
+
+    NSDictionary* info = @{
+      NSAccessibilityAnnouncementKey : key ? key : @(""),
+      NSAccessibilityPriorityKey : @(NSAccessibilityPriorityMedium)
+    };
+
+    id window = [self moxWindow];
+
+    // This sends events via nsIObserverService to be consumed by our
+    // mochitests. Normally we'd fire these events through moxPostNotification
+    // which takes care of this, but because the window we fetch above isn't
+    // derrived from MOXAccessibleBase, we do this (and post the notification)
+    // manually.
+    xpcAccessibleMacEvent::FireEvent(
+        window, NSAccessibilityAnnouncementRequestedNotification, info);
+    NSAccessibilityPostNotificationWithUserInfo(
+        window, NSAccessibilityAnnouncementRequestedNotification, info);
+  }
+}
+
 - (NSArray<mozAccessible*>*)getRelationsByType:(RelationType)relationType {
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     NSMutableArray<mozAccessible*>* relations =
         [[[NSMutableArray alloc] init] autorelease];
     Relation rel = acc->RelationByType(relationType);
@@ -985,19 +1002,22 @@ struct RoleDescrComparator {
     return relations;
   }
 
-  RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
+  RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
   nsTArray<RemoteAccessible*> rel = proxy->RelationByType(relationType);
   return utils::ConvertToNSArray(rel);
 }
 
 - (void)handleAccessibleTextChangeEvent:(NSString*)change
                                inserted:(BOOL)isInserted
-                            inContainer:(const AccessibleOrProxy&)container
+                            inContainer:(Accessible*)container
                                      at:(int32_t)start {
 }
 
 - (void)handleAccessibleEvent:(uint32_t)eventType {
   switch (eventType) {
+    case nsIAccessibleEvent::EVENT_ALERT:
+      [self maybePostA11yUtilNotification];
+      break;
     case nsIAccessibleEvent::EVENT_FOCUS:
       [self moxPostNotification:
                 NSAccessibilityFocusedUIElementChangedNotification];
@@ -1061,7 +1081,7 @@ struct RoleDescrComparator {
 
   [self invalidateState];
 
-  mGeckoAccessible.SetBits(0);
+  mGeckoAccessible = nullptr;
 
   [self moxPostNotification:NSAccessibilityUIElementDestroyedNotification];
 
@@ -1069,7 +1089,7 @@ struct RoleDescrComparator {
 }
 
 - (BOOL)isExpired {
-  return !mGeckoAccessible.AsAccessible() && !mGeckoAccessible.AsProxy();
+  return !mGeckoAccessible;
 }
 
 @end

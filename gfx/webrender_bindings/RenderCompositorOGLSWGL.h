@@ -35,6 +35,8 @@ class RenderCompositorOGLSWGL : public RenderCompositorLayersSWGL {
   bool BeginFrame() override;
   RenderedFrameId EndFrame(const nsTArray<DeviceIntRect>& aDirtyRects) override;
 
+  void GetCompositorCapabilities(CompositorCapabilities* aCaps) override;
+
   // Returns true for requesting rendering during readback.
   // RenderCompositorOGLSWGL::MaybeReadback() requests rendering.
   // This value is not used by WebRender, since native compositor API is used
@@ -67,8 +69,6 @@ class RenderCompositorOGLSWGL : public RenderCompositorLayersSWGL {
   void DestroyEGLSurface();
 
   EGLSurface mEGLSurface = EGL_NO_SURFACE;
-  // On android, we must track our own surface size.
-  Maybe<LayoutDeviceIntSize> mEGLSurfaceSize;
   bool mFullRender = false;
 
   class TileOGL : public RenderCompositorLayersSWGL::Tile {

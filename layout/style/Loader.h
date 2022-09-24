@@ -235,6 +235,15 @@ class Loader final {
 
   using StylePreloadKind = css::StylePreloadKind;
 
+  bool HasLoaded(const SheetLoadDataHashKey& aKey) const {
+    return mLoadsPerformed.Contains(aKey);
+  }
+
+  void WillStartPendingLoad() {
+    MOZ_DIAGNOSTIC_ASSERT(mPendingLoadCount, "Where did this load come from?");
+    mPendingLoadCount--;
+  }
+
   nsCompatibility CompatMode(StylePreloadKind aPreloadKind) const {
     // For Link header preload, we guess non-quirks, because otherwise it is
     // useless for modern pages.
@@ -519,7 +528,7 @@ class Loader final {
                             IsAlternate, IsExplicitlyEnabled);
 
   // Inserts a style sheet in a document or a ShadowRoot.
-  void InsertSheetInTree(StyleSheet& aSheet, nsINode* aOwningNode);
+  void InsertSheetInTree(StyleSheet& aSheet);
   // Inserts a style sheet into a parent style sheet.
   void InsertChildSheet(StyleSheet& aSheet, StyleSheet& aParentSheet);
 

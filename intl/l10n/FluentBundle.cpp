@@ -9,9 +9,11 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/intl/NumberFormat.h"
 #include "mozilla/intl/DateTimeFormat.h"
+#include "mozilla/intl/DateTimePatternGenerator.h"
 #include "nsIInputStream.h"
 #include "nsStringFwd.h"
 #include "nsTArray.h"
+#include "js/PropertyAndElement.h"  // JS_DefineElement
 
 using namespace mozilla::dom;
 
@@ -20,7 +22,7 @@ namespace intl {
 
 class SizeableUTF8Buffer {
  public:
-  using CharType = uint8_t;
+  using CharType = char;
 
   bool reserve(size_t size) {
     mBuffer.reset(reinterpret_cast<CharType*>(malloc(size)));
@@ -187,35 +189,41 @@ bool extendJSArrayWithErrors(JSContext* aCx, JS::Handle<JSObject*> aErrors,
   return true;
 }
 
+/* static */
+void FluentBundle::ConvertArgs(const L10nArgs& aArgs,
+                               nsTArray<ffi::L10nArg>& aRetVal) {
+  aRetVal.SetCapacity(aArgs.Entries().Length());
+  for (const auto& entry : aArgs.Entries()) {
+    if (!entry.mValue.IsNull()) {
+      const auto& value = entry.mValue.Value();
+
+      if (value.IsUTF8String()) {
+        aRetVal.AppendElement(ffi::L10nArg{
+            &entry.mKey,
+            ffi::FluentArgument::String(&value.GetAsUTF8String())});
+      } else {
+        aRetVal.AppendElement(ffi::L10nArg{
+            &entry.mKey, ffi::FluentArgument::Double_(value.GetAsDouble())});
+      }
+    }
+  }
+}
+
 void FluentBundle::FormatPattern(JSContext* aCx, const FluentPattern& aPattern,
                                  const Nullable<L10nArgs>& aArgs,
                                  const Optional<JS::Handle<JSObject*>>& aErrors,
                                  nsACString& aRetVal, ErrorResult& aRv) {
-  nsTArray<nsCString> argIds;
-  nsTArray<ffi::FluentArgument> argValues;
+  nsTArray<ffi::L10nArg> l10nArgs;
 
   if (!aArgs.IsNull()) {
     const L10nArgs& args = aArgs.Value();
-    for (auto& entry : args.Entries()) {
-      if (!entry.mValue.IsNull()) {
-        argIds.AppendElement(entry.mKey);
-
-        auto& value = entry.mValue.Value();
-        if (value.IsUTF8String()) {
-          argValues.AppendElement(
-              ffi::FluentArgument::String(&value.GetAsUTF8String()));
-        } else {
-          argValues.AppendElement(
-              ffi::FluentArgument::Double_(value.GetAsDouble()));
-        }
-      }
-    }
+    ConvertArgs(args, l10nArgs);
   }
 
   nsTArray<nsCString> errors;
   bool succeeded = fluent_bundle_format_pattern(mRaw.get(), &aPattern.mId,
-                                                &aPattern.mAttrName, &argIds,
-                                                &argValues, &aRetVal, &errors);
+                                                &aPattern.mAttrName, &l10nArgs,
+                                                &aRetVal, &errors);
 
   if (!succeeded) {
     return aRv.ThrowInvalidStateError(
@@ -267,7 +275,9 @@ ffi::RawNumberFormatter* FluentBuiltInNumberFormatterCreate(
       break;
   }
 
-  options.mUseGrouping = aOptions->use_grouping;
+  options.mGrouping = aOptions->use_grouping
+                          ? NumberFormatOptions::Grouping::Auto
+                          : NumberFormatOptions::Grouping::Never;
   options.mMinIntegerDigits = Some(aOptions->minimum_integer_digits);
 
   if (aOptions->minimum_significant_digits >= 0 ||
@@ -280,7 +290,7 @@ ffi::RawNumberFormatter* FluentBuiltInNumberFormatterCreate(
         aOptions->minimum_fraction_digits, aOptions->maximum_fraction_digits));
   }
 
-  Result<UniquePtr<NumberFormat>, NumberFormat::FormatError> result =
+  Result<UniquePtr<NumberFormat>, ICUError> result =
       NumberFormat::TryCreate(aLocale->get(), options);
 
   MOZ_ASSERT(result.isOk());
@@ -302,7 +312,7 @@ uint8_t* FluentBuiltInNumberFormatterFormat(
   if (nf->format(input, buffer).isOk()) {
     *aOutCount = buffer.mWritten;
     *aOutCapacity = buffer.mCapacity;
-    return buffer.mBuffer.release();
+    return reinterpret_cast<uint8_t*>(buffer.mBuffer.release());
   }
 
   return nullptr;
@@ -314,32 +324,145 @@ void FluentBuiltInNumberFormatterDestroy(ffi::RawNumberFormatter* aFormatter) {
 
 /* DateTime */
 
-static DateTimeStyle GetStyle(ffi::FluentDateTimeStyle aStyle) {
+static Maybe<DateTimeFormat::Style> GetStyle(ffi::FluentDateTimeStyle aStyle) {
   switch (aStyle) {
     case ffi::FluentDateTimeStyle::Full:
-      return DateTimeStyle::Full;
+      return Some(DateTimeFormat::Style::Full);
     case ffi::FluentDateTimeStyle::Long:
-      return DateTimeStyle::Long;
+      return Some(DateTimeFormat::Style::Long);
     case ffi::FluentDateTimeStyle::Medium:
-      return DateTimeStyle::Medium;
+      return Some(DateTimeFormat::Style::Medium);
     case ffi::FluentDateTimeStyle::Short:
-      return DateTimeStyle::Short;
+      return Some(DateTimeFormat::Style::Short);
     case ffi::FluentDateTimeStyle::None:
-      return DateTimeStyle::None;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unsupported date time style.");
-      return DateTimeStyle::None;
+      return Nothing();
   }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::Text> GetText(
+    ffi::FluentDateTimeTextComponent aText) {
+  switch (aText) {
+    case ffi::FluentDateTimeTextComponent::Long:
+      return Some(DateTimeFormat::Text::Long);
+    case ffi::FluentDateTimeTextComponent::Short:
+      return Some(DateTimeFormat::Text::Short);
+    case ffi::FluentDateTimeTextComponent::Narrow:
+      return Some(DateTimeFormat::Text::Narrow);
+    case ffi::FluentDateTimeTextComponent::None:
+      return Nothing();
+  }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::Month> GetMonth(
+    ffi::FluentDateTimeMonthComponent aMonth) {
+  switch (aMonth) {
+    case ffi::FluentDateTimeMonthComponent::Numeric:
+      return Some(DateTimeFormat::Month::Numeric);
+    case ffi::FluentDateTimeMonthComponent::TwoDigit:
+      return Some(DateTimeFormat::Month::TwoDigit);
+    case ffi::FluentDateTimeMonthComponent::Long:
+      return Some(DateTimeFormat::Month::Long);
+    case ffi::FluentDateTimeMonthComponent::Short:
+      return Some(DateTimeFormat::Month::Short);
+    case ffi::FluentDateTimeMonthComponent::Narrow:
+      return Some(DateTimeFormat::Month::Narrow);
+    case ffi::FluentDateTimeMonthComponent::None:
+      return Nothing();
+  }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::Numeric> GetNumeric(
+    ffi::FluentDateTimeNumericComponent aNumeric) {
+  switch (aNumeric) {
+    case ffi::FluentDateTimeNumericComponent::Numeric:
+      return Some(DateTimeFormat::Numeric::Numeric);
+    case ffi::FluentDateTimeNumericComponent::TwoDigit:
+      return Some(DateTimeFormat::Numeric::TwoDigit);
+    case ffi::FluentDateTimeNumericComponent::None:
+      return Nothing();
+  }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::TimeZoneName> GetTimeZoneName(
+    ffi::FluentDateTimeTimeZoneNameComponent aTimeZoneName) {
+  switch (aTimeZoneName) {
+    case ffi::FluentDateTimeTimeZoneNameComponent::Long:
+      return Some(DateTimeFormat::TimeZoneName::Long);
+    case ffi::FluentDateTimeTimeZoneNameComponent::Short:
+      return Some(DateTimeFormat::TimeZoneName::Short);
+    case ffi::FluentDateTimeTimeZoneNameComponent::None:
+      return Nothing();
+  }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::HourCycle> GetHourCycle(
+    ffi::FluentDateTimeHourCycle aHourCycle) {
+  switch (aHourCycle) {
+    case ffi::FluentDateTimeHourCycle::H24:
+      return Some(DateTimeFormat::HourCycle::H24);
+    case ffi::FluentDateTimeHourCycle::H23:
+      return Some(DateTimeFormat::HourCycle::H23);
+    case ffi::FluentDateTimeHourCycle::H12:
+      return Some(DateTimeFormat::HourCycle::H12);
+    case ffi::FluentDateTimeHourCycle::H11:
+      return Some(DateTimeFormat::HourCycle::H11);
+    case ffi::FluentDateTimeHourCycle::None:
+      return Nothing();
+  }
+  MOZ_ASSERT_UNREACHABLE();
+  return Nothing();
+}
+
+static Maybe<DateTimeFormat::ComponentsBag> GetComponentsBag(
+    ffi::FluentDateTimeOptions aOptions) {
+  if (GetStyle(aOptions.date_style) || GetStyle(aOptions.time_style)) {
+    return Nothing();
+  }
+
+  DateTimeFormat::ComponentsBag components;
+  components.era = GetText(aOptions.era);
+  components.year = GetNumeric(aOptions.year);
+  components.month = GetMonth(aOptions.month);
+  components.day = GetNumeric(aOptions.day);
+  components.weekday = GetText(aOptions.weekday);
+  components.hour = GetNumeric(aOptions.hour);
+  components.minute = GetNumeric(aOptions.minute);
+  components.second = GetNumeric(aOptions.second);
+  components.timeZoneName = GetTimeZoneName(aOptions.time_zone_name);
+  components.hourCycle = GetHourCycle(aOptions.hour_cycle);
+
+  if (!components.era && !components.year && !components.month &&
+      !components.day && !components.weekday && !components.hour &&
+      !components.minute && !components.second && !components.timeZoneName) {
+    return Nothing();
+  }
+
+  return Some(components);
 }
 
 ffi::RawDateTimeFormatter* FluentBuiltInDateTimeFormatterCreate(
-    const nsCString* aLocale, const ffi::FluentDateTimeOptionsRaw* aOptions) {
-  if (aOptions->date_style == ffi::FluentDateTimeStyle::None &&
-      aOptions->time_style == ffi::FluentDateTimeStyle::None &&
-      !aOptions->skeleton.IsEmpty()) {
-    auto result = DateTimeFormat::TryCreateFromSkeleton(
-        Span(aLocale->get(), aLocale->Length()),
-        Span(aOptions->skeleton.get(), aOptions->skeleton.Length()));
+    const nsCString* aLocale, ffi::FluentDateTimeOptions aOptions) {
+  auto genResult = DateTimePatternGenerator::TryCreate(aLocale->get());
+  if (genResult.isErr()) {
+    MOZ_ASSERT_UNREACHABLE("There was an error in DateTimeFormat");
+    return nullptr;
+  }
+  UniquePtr<DateTimePatternGenerator> dateTimePatternGenerator =
+      genResult.unwrap();
+
+  if (auto components = GetComponentsBag(aOptions)) {
+    auto result = DateTimeFormat::TryCreateFromComponents(
+        Span(*aLocale), *components, dateTimePatternGenerator.get());
     if (result.isErr()) {
       MOZ_ASSERT_UNREACHABLE("There was an error in DateTimeFormat");
       return nullptr;
@@ -349,9 +472,12 @@ ffi::RawDateTimeFormatter* FluentBuiltInDateTimeFormatterCreate(
         result.unwrap().release());
   }
 
+  DateTimeFormat::StyleBag style;
+  style.date = GetStyle(aOptions.date_style);
+  style.time = GetStyle(aOptions.time_style);
+
   auto result = DateTimeFormat::TryCreateFromStyle(
-      Span(aLocale->get(), aLocale->Length()), GetStyle(aOptions->date_style),
-      GetStyle(aOptions->time_style));
+      Span(*aLocale), style, dateTimePatternGenerator.get());
 
   if (result.isErr()) {
     MOZ_ASSERT_UNREACHABLE("There was an error in DateTimeFormat");
@@ -372,7 +498,7 @@ uint8_t* FluentBuiltInDateTimeFormatterFormat(
 
   *aOutCount = buffer.mWritten;
 
-  return buffer.mBuffer.release();
+  return reinterpret_cast<uint8_t*>(buffer.mBuffer.release());
 }
 
 void FluentBuiltInDateTimeFormatterDestroy(

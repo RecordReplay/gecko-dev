@@ -318,6 +318,28 @@ tests.push({
   test: engines => hasDefault(engines, "GMX - Recherche web"),
 });
 
+tests.push({
+  locale: "en-US",
+  region: "US",
+  distribution: "mint-001",
+  test: engines =>
+    hasParams(engines, "Google", "searchbar", "client=firefox-b-1-lm") &&
+    hasDefault(engines, "Google") &&
+    hasEnginesFirst(engines, ["Google"]) &&
+    hasTelemetryId(engines, "Google", "google-b-1-lm"),
+});
+
+tests.push({
+  locale: "en-GB",
+  region: "GB",
+  distribution: "mint-001",
+  test: engines =>
+    hasParams(engines, "Google", "searchbar", "client=firefox-b-lm") &&
+    hasDefault(engines, "Google") &&
+    hasEnginesFirst(engines, ["Google"]) &&
+    hasTelemetryId(engines, "Google", "google-b-lm"),
+});
+
 function hasURLs(engines, engineName, url, suggestURL) {
   let engine = engines.find(e => e._name === engineName);
   Assert.ok(engine, `Should be able to find ${engineName}`);

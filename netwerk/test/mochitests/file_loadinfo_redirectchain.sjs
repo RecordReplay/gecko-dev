@@ -4,8 +4,7 @@
  */
 
 function createIframeContent(aQuery) {
-
-  var content =`
+  var content = `
   <!DOCTYPE HTML>
   <html>
   <head><meta charset="utf-8">
@@ -14,27 +13,27 @@ function createIframeContent(aQuery) {
   <body>
   <script type="text/javascript">
     var myXHR = new XMLHttpRequest();
-    myXHR.open("GET", "http://example.com/tests/netwerk/test/mochitests/file_loadinfo_redirectchain.sjs?` + aQuery + `");
+    myXHR.open("GET", "http://example.com/tests/netwerk/test/mochitests/file_loadinfo_redirectchain.sjs?${aQuery}");
     myXHR.onload = function() {
-    var loadinfo = SpecialPowers.wrap(myXHR).channel.loadInfo;
-    var redirectChain = loadinfo.redirectChain;
-    var redirectChainIncludingInternalRedirects = loadinfo.redirectChainIncludingInternalRedirects;
-    var resultOBJ = { redirectChain : [], redirectChainIncludingInternalRedirects : [] };
-    for (var i = 0; i < redirectChain.length; i++) {
-      resultOBJ.redirectChain.push(redirectChain[i].principal.spec);
+      var loadinfo = SpecialPowers.wrap(myXHR).channel.loadInfo;
+      var redirectChain = loadinfo.redirectChain;
+      var redirectChainIncludingInternalRedirects = loadinfo.redirectChainIncludingInternalRedirects;
+      var resultOBJ = { redirectChain : [], redirectChainIncludingInternalRedirects : [] };
+      for (var i = 0; i < redirectChain.length; i++) {
+        resultOBJ.redirectChain.push(redirectChain[i].principal.spec);
+      }
+      for (var i = 0; i < redirectChainIncludingInternalRedirects.length; i++) {
+        resultOBJ.redirectChainIncludingInternalRedirects.push(redirectChainIncludingInternalRedirects[i].principal.spec);
+      }
+      var loadinfoJSON = JSON.stringify(resultOBJ);
+      window.parent.postMessage({ loadinfo: loadinfoJSON }, "*");
     }
-    for (var i = 0; i < redirectChainIncludingInternalRedirects.length; i++) {
-      resultOBJ.redirectChainIncludingInternalRedirects.push(redirectChainIncludingInternalRedirects[i].principal.spec);
+    myXHR.onerror = function() {
+      var resultOBJ = { redirectChain : [], redirectChainIncludingInternalRedirects : [] };
+      var loadinfoJSON = JSON.stringify(resultOBJ);
+      window.parent.postMessage({ loadinfo: loadinfoJSON }, "*");
     }
-    var loadinfoJSON = JSON.stringify(resultOBJ);
-    window.parent.postMessage({ loadinfo: loadinfoJSON }, "*");
-  }
-  myXHR.onerror = function() {
-    var resultOBJ = { redirectChain : [], redirectChainIncludingInternalRedirects : [] };
-    var loadinfoJSON = JSON.stringify(resultOBJ);
-    window.parent.postMessage({ loadinfo: loadinfoJSON }, "*");
-  }
-  myXHR.send();
+    myXHR.send();
   </script>
   </body>
   </html>`;
@@ -42,25 +41,29 @@ function createIframeContent(aQuery) {
   return content;
 }
 
-function handleRequest(request, response)
-{
+function handleRequest(request, response) {
   response.setHeader("Cache-Control", "no-cache", false);
   var queryString = request.queryString;
 
-  if (queryString == "iframe-redir-https-2" ||
-      queryString == "iframe-redir-err-2") {
+  if (
+    queryString == "iframe-redir-https-2" ||
+    queryString == "iframe-redir-err-2"
+  ) {
     var query = queryString.replace("iframe-", "");
     // send upgrade-insecure-requests CSP header
     response.setHeader("Content-Type", "text/html", false);
-    response.setHeader("Content-Security-Policy", "upgrade-insecure-requests", false);
+    response.setHeader(
+      "Content-Security-Policy",
+      "upgrade-insecure-requests",
+      false
+    );
     response.write(createIframeContent(query));
     return;
   }
 
   // at the end of the redirectchain we return some text
   // for sanity checking
-  if (queryString == "redir-0" ||
-      queryString == "redir-https-0") {
+  if (queryString == "redir-0" || queryString == "redir-https-0") {
     response.setHeader("Content-Type", "text/html", false);
     response.write("checking redirectchain");
     return;
@@ -73,7 +76,7 @@ function handleRequest(request, response)
   }
 
   // must be a redirect
-  var newLoaction = "";
+  var newLocation = "";
   switch (queryString) {
     case "redir-err-2":
       newLocation =

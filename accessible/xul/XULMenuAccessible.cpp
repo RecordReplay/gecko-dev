@@ -13,6 +13,7 @@
 #include "States.h"
 #include "XULFormControlAccessible.h"
 
+#include "nsIContentInlines.h"
 #include "nsIDOMXULContainerElement.h"
 #include "nsIDOMXULSelectCntrlEl.h"
 #include "nsIDOMXULSelectCntrlItemEl.h"
@@ -128,7 +129,7 @@ ENameValueFlag XULMenuitemAccessible::NativeName(nsString& aName) const {
   return eNameOK;
 }
 
-void XULMenuitemAccessible::Description(nsString& aDescription) {
+void XULMenuitemAccessible::Description(nsString& aDescription) const {
   mContent->AsElement()->GetAttr(kNameSpaceID_None, nsGkAtoms::description,
                                  aDescription);
 }
@@ -239,24 +240,15 @@ role XULMenuitemAccessible::NativeRole() const {
   return roles::MENUITEM;
 }
 
-int32_t XULMenuitemAccessible::GetLevelInternal() {
+int32_t XULMenuitemAccessible::GetLevel(bool aFast) const {
   return nsAccUtils::GetLevelForXULContainerItem(mContent);
-}
-
-bool XULMenuitemAccessible::DoAction(uint8_t index) const {
-  if (index == eAction_Click) {  // default action
-    DoCommand();
-    return true;
-  }
-
-  return false;
 }
 
 void XULMenuitemAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName) {
   if (aIndex == eAction_Click) aName.AssignLiteral("click");
 }
 
-uint8_t XULMenuitemAccessible::ActionCount() const { return 1; }
+bool XULMenuitemAccessible::HasPrimaryAction() const { return true; }
 
 ////////////////////////////////////////////////////////////////////////////////
 // XULMenuitemAccessible: Widgets
@@ -334,14 +326,7 @@ ENameValueFlag XULMenuSeparatorAccessible::NativeName(nsString& aName) const {
 
 role XULMenuSeparatorAccessible::NativeRole() const { return roles::SEPARATOR; }
 
-bool XULMenuSeparatorAccessible::DoAction(uint8_t index) const { return false; }
-
-void XULMenuSeparatorAccessible::ActionNameAt(uint8_t aIndex,
-                                              nsAString& aName) {
-  aName.Truncate();
-}
-
-uint8_t XULMenuSeparatorAccessible::ActionCount() const { return 0; }
+bool XULMenuSeparatorAccessible::HasPrimaryAction() const { return false; }
 
 ////////////////////////////////////////////////////////////////////////////////
 // XULMenupopupAccessible
@@ -410,16 +395,8 @@ role XULMenupopupAccessible::NativeRole() const {
   }
 
   if (mParent) {
-    if (mParent->IsCombobox() || mParent->IsAutoComplete()) {
+    if (mParent->IsCombobox()) {
       return roles::COMBOBOX_LIST;
-    }
-
-    if (mParent->Role() == roles::PUSHBUTTON) {
-      // Some widgets like the search bar have several popups, owned by buttons.
-      LocalAccessible* grandParent = mParent->LocalParent();
-      if (grandParent && grandParent->IsAutoComplete()) {
-        return roles::COMBOBOX_LIST;
-      }
     }
   }
 

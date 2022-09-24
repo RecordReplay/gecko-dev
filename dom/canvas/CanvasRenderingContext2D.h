@@ -9,18 +9,21 @@
 #include "mozilla/dom/BasicRenderingContext2D.h"
 #include "mozilla/dom/CanvasRenderingContext2DBinding.h"
 #include "mozilla/dom/HTMLCanvasElement.h"
+#include "mozilla/intl/Bidi.h"
 #include "mozilla/gfx/Rect.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EnumeratedArray.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/SurfaceFromElementResult.h"
 #include "mozilla/UniquePtr.h"
 #include "FilterDescription.h"
 #include "gfx2DGlue.h"
 #include "nsICanvasRenderingContextInternal.h"
-#include "nsBidi.h"
 #include "nsColor.h"
+#include "nsIFrame.h"
 
 class gfxFontGroup;
 class nsGlobalWindowInner;
@@ -41,9 +44,9 @@ enum class LayersBackend : int8_t;
 
 namespace dom {
 class
-    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap;
-typedef HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrImageBitmap
-    CanvasImageSource;
+    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmap;
+using CanvasImageSource =
+    HTMLImageElementOrSVGImageElementOrHTMLCanvasElementOrHTMLVideoElementOrOffscreenCanvasOrImageBitmap;
 class ImageBitmap;
 class ImageData;
 class UTF8StringOrCanvasGradientOrCanvasPattern;
@@ -69,9 +72,10 @@ struct DOMMatrix2DInit;
 /**
  ** CanvasRenderingContext2D
  **/
-class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
-                                       public nsWrapperCache,
-                                       public BasicRenderingContext2D {
+class CanvasRenderingContext2D : public nsICanvasRenderingContextInternal,
+                                 public nsWrapperCache,
+                                 public BasicRenderingContext2D {
+ protected:
   virtual ~CanvasRenderingContext2D();
 
  public:
@@ -89,11 +93,15 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
     return mCanvasElement->GetOriginalCanvas();
   }
 
+  void OnMemoryPressure() override;
   void OnBeforePaintTransaction() override;
   void OnDidPaintTransaction() override;
   layers::PersistentBufferProvider* GetBufferProvider() override {
     return mBufferProvider;
   }
+
+  Maybe<layers::SurfaceDescriptor> GetFrontBuffer(
+      WebGLFramebufferJS*, const bool webvr = false) override;
 
   void Save() override;
   void Restore() override;
@@ -205,13 +213,23 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   bool IsPointInPath(JSContext* aCx, double aX, double aY,
                      const CanvasWindingRule& aWinding,
                      nsIPrincipal& aSubjectPrincipal);
+  bool IsPointInPath(JSContext* aCx, double aX, double aY,
+                     const CanvasWindingRule& aWinding,
+                     Maybe<nsIPrincipal*> aSubjectPrincipal);
   bool IsPointInPath(JSContext* aCx, const CanvasPath& aPath, double aX,
                      double aY, const CanvasWindingRule& aWinding,
                      nsIPrincipal&);
+  bool IsPointInPath(JSContext* aCx, const CanvasPath& aPath, double aX,
+                     double aY, const CanvasWindingRule& aWinding,
+                     Maybe<nsIPrincipal*>);
   bool IsPointInStroke(JSContext* aCx, double aX, double aY,
                        nsIPrincipal& aSubjectPrincipal);
+  bool IsPointInStroke(JSContext* aCx, double aX, double aY,
+                       Maybe<nsIPrincipal*> aSubjectPrincipal);
   bool IsPointInStroke(JSContext* aCx, const CanvasPath& aPath, double aX,
                        double aY, nsIPrincipal&);
+  bool IsPointInStroke(JSContext* aCx, const CanvasPath& aPath, double aX,
+                       double aY, Maybe<nsIPrincipal*>);
   void FillText(const nsAString& aText, double aX, double aY,
                 const Optional<double>& aMaxWidth,
                 mozilla::ErrorResult& aError);
@@ -251,6 +269,9 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
                                            int32_t aSw, int32_t aSh,
                                            nsIPrincipal& aSubjectPrincipal,
                                            ErrorResult&);
+  already_AddRefed<ImageData> GetImageData(
+      JSContext*, int32_t aSx, int32_t aSy, int32_t aSw, int32_t aSh,
+      Maybe<nsIPrincipal*> aSubjectPrincipal, ErrorResult&);
   void PutImageData(ImageData&, int32_t aDx, int32_t aDy, ErrorResult&);
   void PutImageData(ImageData&, int32_t aDx, int32_t aDy, int32_t aDirtyX,
                     int32_t aDirtyY, int32_t aDirtyWidth, int32_t aDirtyHeight,
@@ -284,6 +305,8 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   void SetTextAlign(const nsAString& aTextAlign);
   void GetTextBaseline(nsAString& aTextBaseline);
   void SetTextBaseline(const nsAString& aTextBaseline);
+  void GetDirection(nsAString& aDirection);
+  void SetDirection(const nsAString& aDirection);
 
   void ClosePath() override {
     EnsureWritablePath();
@@ -408,6 +431,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
    * Gets the pres shell from either the canvas element or the doc shell
    */
   PresShell* GetPresShell() final;
+  void Initialize() override;
   NS_IMETHOD SetDimensions(int32_t aWidth, int32_t aHeight) override;
   NS_IMETHOD InitializeWithDrawTarget(
       nsIDocShell* aShell, NotNull<gfx::DrawTarget*> aTarget) override;
@@ -422,19 +446,19 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   virtual void SetOpaqueValueFromOpaqueAttr(bool aOpaqueAttrValue) override;
   bool GetIsOpaque() override { return mOpaque; }
   NS_IMETHOD Reset() override;
-  already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
-                                         Layer* aOldLayer,
-                                         LayerManager* aManager) override;
 
   bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
                                  WebRenderCanvasData* aCanvasData) override;
 
   bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
                                 CanvasRenderer* aRenderer) override;
-  virtual bool ShouldForceInactiveLayer(LayerManager* aManager) override;
   void MarkContextClean() override;
-  void MarkContextCleanForFrameCapture() override;
-  bool IsContextCleanForFrameCapture() override;
+  void MarkContextCleanForFrameCapture() override {
+    mFrameCaptureState = FrameCaptureState::CLEAN;
+  }
+  Watchable<FrameCaptureState>* GetFrameCaptureState() override {
+    return &mFrameCaptureState;
+  }
   NS_IMETHOD SetIsIPC(bool aIsIPC) override;
   // this rect is in canvas device space
   void Redraw(const mozilla::gfx::Rect& aR);
@@ -458,7 +482,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   // nsISupports interface + CC
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
-  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS(
+  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_WRAPPERCACHE_CLASS(
       CanvasRenderingContext2D)
 
   enum class CanvasMultiGetterType : uint8_t {
@@ -468,8 +492,6 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   };
 
   enum class Style : uint8_t { STROKE = 0, FILL, MAX };
-
-  nsINode* GetParentObject() { return mCanvasElement; }
 
   void LineTo(const mozilla::gfx::Point& aPoint) {
     if (mPathBuilder) {
@@ -500,7 +522,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   // return true and fills in the bound rect if element has a hit region.
   bool GetHitRegionRect(Element* aElement, nsRect& aRect) override;
 
-  void OnShutdown();
+  virtual void OnShutdown();
 
   /**
    * Update CurrentState().filter with the filter description for
@@ -512,7 +534,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
  protected:
   nsresult GetImageDataArray(JSContext* aCx, int32_t aX, int32_t aY,
                              uint32_t aWidth, uint32_t aHeight,
-                             nsIPrincipal& aSubjectPrincipal,
+                             Maybe<nsIPrincipal*> aSubjectPrincipal,
                              JSObject** aRetval);
 
   void PutImageData_explicit(int32_t aX, int32_t aY, ImageData&,
@@ -536,7 +558,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
    * The number of living nsCanvasRenderingContexts.  When this goes down to
    * 0, we free the premultiply and unpremultiply tables, if they exist.
    */
-  static uintptr_t sNumLivingContexts;
+  static mozilla::Atomic<uintptr_t> sNumLivingContexts;
 
   static mozilla::gfx::DrawTarget* sErrorTarget;
 
@@ -570,7 +592,8 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
                    ErrorResult& aError);
 
   // Returns whether the font was successfully updated.
-  bool SetFontInternal(const nsACString& aFont, mozilla::ErrorResult& aError);
+  virtual bool SetFontInternal(const nsACString& aFont,
+                               mozilla::ErrorResult& aError);
 
   // Clears the target and updates mOpaque based on mOpaqueAttrValue and
   // mContextAttributesHasAlpha.
@@ -613,6 +636,10 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
                     bool aWillClear = false);
 
   void RestoreClipsAndTransformToTarget();
+
+  bool TryAcceleratedTarget(
+      RefPtr<gfx::DrawTarget>& aOutDT,
+      RefPtr<layers::PersistentBufferProvider>& aOutProvider);
 
   bool TrySharedTarget(RefPtr<gfx::DrawTarget>& aOutDT,
                        RefPtr<layers::PersistentBufferProvider>& aOutProvider);
@@ -728,9 +755,13 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
 
   RefPtr<mozilla::layers::PersistentBufferProvider> mBufferProvider;
 
+  // Whether we should try to create an accelerated buffer provider.
+  bool mAllowAcceleration = true;
+
   RefPtr<CanvasShutdownObserver> mShutdownObserver;
-  void RemoveShutdownObserver();
-  bool AlreadyShutDown() const { return !mShutdownObserver; }
+  virtual void AddShutdownObserver();
+  virtual void RemoveShutdownObserver();
+  virtual bool AlreadyShutDown() const { return !mShutdownObserver; }
 
   /**
    * Flag to avoid duplicate calls to InvalidateFrame. Set to true whenever
@@ -749,7 +780,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
    * case when the canvas is not currently being drawn into and not rendered
    * but canvas capturing is still ongoing.
    */
-  bool mIsCapturedFrameInvalid;
+  Watchable<FrameCaptureState> mFrameCaptureState;
 
   /**
    * We also have a device space pathbuilder. The reason for this is as
@@ -801,7 +832,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
 
   nsTArray<RegionInfo> mHitRegionsOptions;
 
-  nsBidi mBidiEngine;
+  mozilla::intl::Bidi mBidiEngine;
 
   /**
    * Returns true if a shadow should be drawn along with a
@@ -843,15 +874,6 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
     return NeedToDrawShadow() || NeedToApplyFilter();
   }
 
-  mozilla::gfx::CompositionOp UsedOperation() {
-    if (NeedToDrawShadow() || NeedToApplyFilter()) {
-      // In this case the shadow or filter rendering will use the operator.
-      return mozilla::gfx::CompositionOp::OP_OVER;
-    }
-
-    return CurrentState().op;
-  }
-
   // text
 
  protected:
@@ -867,6 +889,8 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
   };
 
   enum class TextDrawOperation : uint8_t { FILL, STROKE, MEASURE };
+
+  enum class TextDirection : uint8_t { LTR, RTL, INHERIT };
 
  protected:
   gfxFontGroup* GetCurrentFontStyle();
@@ -935,6 +959,7 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
     nsCString font;
     TextAlign textAlign = TextAlign::START;
     TextBaseline textBaseline = TextBaseline::ALPHABETIC;
+    TextDirection textDirection = TextDirection::INHERIT;
 
     nscolor shadowColor = 0;
 
@@ -1006,6 +1031,10 @@ class CanvasRenderingContext2D final : public nsICanvasRenderingContextInternal,
 
   bool mWriteOnly;
   bool mClipsNeedConverting = false;
+
+  virtual void AddZoneWaitingForGC();
+  virtual void AddAssociatedMemory();
+  virtual void RemoveAssociatedMemory();
 };
 
 size_t BindingJSObjectMallocBytes(CanvasRenderingContext2D* aContext);

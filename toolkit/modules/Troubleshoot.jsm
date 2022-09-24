@@ -34,12 +34,16 @@ const PREFS_FOR_DISPLAY = [
   "browser.cache.",
   "browser.contentblocking.category",
   "browser.display.",
+  "browser.download.always_ask_before_handling_new_types",
+  "browser.download.enable_spam_prevention",
   "browser.download.folderList",
+  "browser.download.improvements_to_download_panel",
   "browser.download.lastDir.savePerSite",
   "browser.download.manager.addToRecentDocs",
   "browser.download.manager.resumeOnWakeDelay",
   "browser.download.preferred.",
   "browser.download.skipConfirmLaunchExecutable",
+  "browser.download.start_downloads_in_tmp_dir",
   "browser.download.useDownloadDir",
   "browser.fixup.",
   "browser.history_expire_",
@@ -63,8 +67,12 @@ const PREFS_FOR_DISPLAY = [
   "doh-rollout.",
   "dom.",
   "extensions.checkCompatibility",
+  "extensions.eventPages.enabled",
   "extensions.formautofill.",
   "extensions.lastAppVersion",
+  "extensions.manifestV3.enabled",
+  "extensions.InstallTrigger.enabled",
+  "extensions.InstallTriggerImpl.enabled",
   "fission.autostart",
   "font.",
   "general.autoScroll",
@@ -105,6 +113,9 @@ const PREFS_FOR_DISPLAY = [
   "webgl.",
   "widget.dmabuf",
   "widget.use-xdg-desktop-portal",
+  "widget.use-xdg-desktop-portal.file-picker",
+  "widget.use-xdg-desktop-portal.mime-handler",
+  "widget.gtk.overlay-scrollbars.enabled",
   "widget.wayland",
 ];
 
@@ -198,7 +209,7 @@ var Troubleshoot = {
 // when done, it must pass its data to the callback.  The resulting snapshot
 // object will contain a name => data entry for each provider.
 var dataProviders = {
-  application: function application(done) {
+  application: async function application(done) {
     let data = {
       name: Services.appinfo.name,
       osVersion:
@@ -216,12 +227,20 @@ var dataProviders = {
         Ci.nsIHttpProtocolHandler
       ).userAgent,
       safeMode: Services.appinfo.inSafeMode,
+      memorySizeBytes: Services.sysinfo.getProperty("memsize"),
+      diskAvailableBytes: Services.dirsvc.get("ProfD", Ci.nsIFile)
+        .diskSpaceAvailable,
     };
+
+    if (Services.sysinfo.getProperty("name") == "Windows_NT") {
+      if ((await Services.sysinfo.processInfo).isWindowsSMode) {
+        data.osVersion += " S";
+      }
+    }
 
     if (AppConstants.MOZ_UPDATER) {
       data.updateChannel = ChromeUtils.import(
-        "resource://gre/modules/UpdateUtils.jsm",
-        {}
+        "resource://gre/modules/UpdateUtils.jsm"
       ).UpdateUtils.UpdateChannel;
     }
 
@@ -235,8 +254,10 @@ var dataProviders = {
       );
     } catch (e) {}
 
-    // MacOSX: Check for rosetta status, if it exists
+    data.osTheme = Services.sysinfo.getProperty("osThemeInfo");
+
     try {
+      // MacOSX: Check for rosetta status, if it exists
       data.rosetta = Services.sysinfo.getProperty("rosettaStatus");
     } catch (e) {}
 
@@ -295,6 +316,7 @@ var dataProviders = {
       "extension",
       "locale",
       "dictionary",
+      "sitepermission",
     ]);
     addons = addons.filter(e => !e.isSystem);
     addons.sort(function(a, b) {
@@ -552,7 +574,6 @@ var dataProviders = {
         data.numTotalWindows++;
         data.windowLayerManagerType = winUtils.layerManagerType;
         data.windowLayerManagerRemote = winUtils.layerManagerRemote;
-        data.windowUsingAdvancedLayers = winUtils.usingAdvancedLayers;
       } catch (e) {
         continue;
       }
@@ -610,10 +631,6 @@ var dataProviders = {
       DWriteEnabled: "directWriteEnabled",
       DWriteVersion: "directWriteVersion",
       cleartypeParameters: "clearTypeParameters",
-      UsesTiling: "usesTiling",
-      ContentUsesTiling: "contentUsesTiling",
-      OffMainThreadPaintEnabled: "offMainThreadPaintEnabled",
-      OffMainThreadPaintWorkerCount: "offMainThreadPaintWorkerCount",
       TargetFrameRate: "targetFrameRate",
       windowProtocol: null,
       desktopEnvironment: null,
@@ -861,7 +878,7 @@ var dataProviders = {
       prefRollouts,
       prefStudies,
       nimbusExperiments,
-      remoteConfigs,
+      nimbusRollouts,
     ] = await Promise.all(
       [
         NormandyAddonStudies.getAllActive(),
@@ -872,7 +889,7 @@ var dataProviders = {
           .then(() => ExperimentManager.store.getAllActive()),
         ExperimentManager.store
           .ready()
-          .then(() => ExperimentManager.store.getAllRemoteConfigs()),
+          .then(() => ExperimentManager.store.getAllRollouts()),
       ].map(promise =>
         promise
           .catch(error => {
@@ -888,7 +905,7 @@ var dataProviders = {
       prefRollouts,
       prefStudies,
       nimbusExperiments,
-      remoteConfigs,
+      nimbusRollouts,
     });
   },
 };
@@ -968,11 +985,11 @@ if (AppConstants.ENABLE_WEBDRIVER) {
     const { RemoteAgent } = ChromeUtils.import(
       "chrome://remote/content/components/RemoteAgent.jsm"
     );
-    const { listening, scheme, host, port } = RemoteAgent;
+    const { running, scheme, host, port } = RemoteAgent;
     let url = "";
-    if (listening) {
+    if (running) {
       url = `${scheme}://${host}:${port}/`;
     }
-    done({ listening, url });
+    done({ running, url });
   };
 }

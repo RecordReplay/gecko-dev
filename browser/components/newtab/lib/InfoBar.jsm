@@ -13,13 +13,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
 });
 
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "PROTON_ENABLED",
-  "browser.proton.enabled",
-  false
-);
-
 class InfoBarNotification {
   constructor(message, dispatch) {
     this._dispatch = dispatch;
@@ -41,24 +34,22 @@ class InfoBarNotification {
     let doc = gBrowser.ownerDocument;
     let notificationContainer;
     if (content.type === "global") {
-      notificationContainer = browser.ownerGlobal.gHighPriorityNotificationBox;
+      notificationContainer = browser.ownerGlobal.gNotificationBox;
     } else {
       notificationContainer = gBrowser.getNotificationBox(browser);
     }
 
-    let priority =
-      content.priority ||
-      (PROTON_ENABLED
-        ? notificationContainer.PRIORITY_SYSTEM
-        : notificationContainer.PRIORITY_INFO_MEDIUM);
+    let priority = content.priority || notificationContainer.PRIORITY_SYSTEM;
 
     this.notification = notificationContainer.appendNotification(
-      this.formatMessageConfig(doc, content.text),
       this.message.id,
-      content.icon || "chrome://branding/content/icon64.png",
-      priority,
-      content.buttons.map(b => this.formatButtonConfig(b)),
-      this.infobarCallback
+      {
+        label: this.formatMessageConfig(doc, content.text),
+        image: content.icon || "chrome://branding/content/icon64.png",
+        priority,
+        eventCallback: this.infobarCallback,
+      },
+      content.buttons.map(b => this.formatButtonConfig(b))
     );
 
     this.addImpression();

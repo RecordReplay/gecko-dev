@@ -10,9 +10,7 @@
 #include "mozilla/CheckedInt.h"
 #include "mozilla/DebugOnly.h"
 
-#include "jsfriendapi.h"
-
-#include "gc/FreeOp.h"
+#include "gc/GCContext.h"
 #include "jit/AtomicOperations.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
 #include "js/PropertySpec.h"
@@ -20,9 +18,10 @@
 #include "js/Wrapper.h"
 #include "util/Memory.h"
 #include "vm/SharedMem.h"
+#include "wasm/WasmMemory.h"
 #include "wasm/WasmSignalHandlers.h"
-#include "wasm/WasmTypes.h"
 
+#include "vm/ArrayBufferObject-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/NativeObject-inl.h"
 
@@ -31,6 +30,7 @@ using mozilla::CheckedInt;
 using mozilla::DebugOnly;
 using mozilla::Maybe;
 using mozilla::Nothing;
+using mozilla::Some;
 
 using namespace js;
 
@@ -46,10 +46,12 @@ static size_t SharedArrayMappedSize(size_t length) {
   return SharedArrayAccessibleSize(length) + gc::SystemPageSize();
 }
 
-// `wasmMaxPages` must always be something for wasm and nothing for other
-// users.
+// `wasmSourceMaxPages` must always be something for wasm and nothing for
+// other users.
 SharedArrayRawBuffer* SharedArrayRawBuffer::AllocateInternal(
-    size_t length, const Maybe<wasm::Pages>& wasmMaxPages,
+    wasm::IndexType wasmIndexType, size_t length,
+    const Maybe<wasm::Pages>& wasmClampedMaxPages,
+    const Maybe<wasm::Pages>& wasmSourceMaxPages,
     const Maybe<size_t>& wasmMappedSize) {
   MOZ_RELEASE_ASSERT(length <= ArrayBufferObject::maxBufferByteLength());
 
@@ -58,12 +60,12 @@ SharedArrayRawBuffer* SharedArrayRawBuffer::AllocateInternal(
     return nullptr;
   }
 
-  bool preparedForWasm = wasmMaxPages.isSome();
+  bool preparedForWasm = wasmClampedMaxPages.isSome();
   size_t computedMappedSize;
   if (preparedForWasm) {
     computedMappedSize = wasmMappedSize.isSome()
                              ? *wasmMappedSize
-                             : wasm::ComputeMappedSize(*wasmMaxPages);
+                             : wasm::ComputeMappedSize(*wasmClampedMaxPages);
   } else {
     MOZ_ASSERT(wasmMappedSize.isNothing());
     computedMappedSize = accessibleSize;
@@ -73,38 +75,46 @@ SharedArrayRawBuffer* SharedArrayRawBuffer::AllocateInternal(
   uint64_t mappedSizeWithHeader = computedMappedSize + gc::SystemPageSize();
   uint64_t accessibleSizeWithHeader = accessibleSize + gc::SystemPageSize();
 
-  void* p = MapBufferMemory(mappedSizeWithHeader, accessibleSizeWithHeader);
+  void* p = MapBufferMemory(wasmIndexType, mappedSizeWithHeader,
+                            accessibleSizeWithHeader);
   if (!p) {
     return nullptr;
   }
 
   uint8_t* buffer = reinterpret_cast<uint8_t*>(p) + gc::SystemPageSize();
   uint8_t* base = buffer - sizeof(SharedArrayRawBuffer);
-  SharedArrayRawBuffer* rawbuf = new (base)
-      SharedArrayRawBuffer(buffer, length, wasmMaxPages.valueOr(Pages(0)),
-                           computedMappedSize, preparedForWasm);
+  SharedArrayRawBuffer* rawbuf = new (base) SharedArrayRawBuffer(
+      wasmIndexType, buffer, length, wasmClampedMaxPages.valueOr(Pages(0)),
+      wasmSourceMaxPages.valueOr(Pages(0)), computedMappedSize,
+      preparedForWasm);
   MOZ_ASSERT(rawbuf->length_ == length);  // Deallocation needs this
   return rawbuf;
 }
 
 SharedArrayRawBuffer* SharedArrayRawBuffer::Allocate(size_t length) {
-  return SharedArrayRawBuffer::AllocateInternal(length, Nothing(), Nothing());
+  return SharedArrayRawBuffer::AllocateInternal(
+      wasm::IndexType::I32, length, Nothing(), Nothing(), Nothing());
 }
 
 SharedArrayRawBuffer* SharedArrayRawBuffer::AllocateWasm(
-    Pages initialPages, const mozilla::Maybe<wasm::Pages>& maxPages,
+    wasm::IndexType indexType, Pages initialPages, wasm::Pages clampedMaxPages,
+    const mozilla::Maybe<wasm::Pages>& sourceMaxPages,
     const mozilla::Maybe<size_t>& mappedSize) {
   // Prior code has asserted that initial pages is within our implementation
-  // limits (wasm::MaxMemory32Pages) and we can assume it is a valid size_t.
+  // limits (wasm::MaxMemoryPages()) and we can assume it is a valid size_t.
   MOZ_ASSERT(initialPages.hasByteLength());
   size_t length = initialPages.byteLength();
-  return SharedArrayRawBuffer::AllocateInternal(length, maxPages, mappedSize);
+  return SharedArrayRawBuffer::AllocateInternal(
+      indexType, length, Some(clampedMaxPages), sourceMaxPages, mappedSize);
 }
 
 void SharedArrayRawBuffer::tryGrowMaxPagesInPlace(Pages deltaMaxPages) {
-  Pages newMaxPages = wasmMaxPages_;
+  Pages newMaxPages = wasmClampedMaxPages_;
   DebugOnly<bool> valid = newMaxPages.checkedIncrement(deltaMaxPages);
+  // Caller must ensure increment does not overflow or increase over the
+  // specified maximum pages.
   MOZ_ASSERT(valid);
+  MOZ_ASSERT(newMaxPages <= wasmSourceMaxPages_);
 
   size_t newMappedSize = wasm::ComputeMappedSize(newMaxPages);
   MOZ_ASSERT(mappedSize_ <= newMappedSize);
@@ -117,19 +127,24 @@ void SharedArrayRawBuffer::tryGrowMaxPagesInPlace(Pages deltaMaxPages) {
   }
 
   mappedSize_ = newMappedSize;
-  wasmMaxPages_ = newMaxPages;
+  wasmClampedMaxPages_ = newMaxPages;
 }
 
 bool SharedArrayRawBuffer::wasmGrowToPagesInPlace(const Lock&,
+                                                  wasm::IndexType t,
                                                   wasm::Pages newPages) {
-  // The caller must verify that the new page size won't overflow when
-  // converted to a byte length.
-  size_t newLength = newPages.byteLength();
-
-  // Note, caller must guard on the limit appropriate to the memory type
-  if (newLength > ArrayBufferObject::maxBufferByteLength()) {
+  // Check that the new pages is within our allowable range. This will
+  // simultaneously check against the maximum specified in source and our
+  // implementation limits.
+  if (newPages > wasmClampedMaxPages_) {
     return false;
   }
+  MOZ_ASSERT(newPages <= wasm::MaxMemoryPages(t) &&
+             newPages.byteLength() <= ArrayBufferObject::maxBufferByteLength());
+
+  // We have checked against the clamped maximum and so we know we can convert
+  // to byte lengths now.
+  size_t newLength = newPages.byteLength();
 
   MOZ_ASSERT(newLength >= length_);
 
@@ -186,7 +201,7 @@ void SharedArrayRawBuffer::dropReference() {
   size_t mappedSizeWithHeader = mappedSize_ + gc::SystemPageSize();
 
   // This was the final reference, so release the buffer.
-  UnmapBufferMemory(basePointer(), mappedSizeWithHeader);
+  UnmapBufferMemory(wasmIndexType(), basePointer(), mappedSizeWithHeader);
 }
 
 static bool IsSharedArrayBuffer(HandleValue v) {
@@ -324,10 +339,10 @@ SharedArrayRawBuffer* SharedArrayBufferObject::rawBufferObject() const {
   return reinterpret_cast<SharedArrayRawBuffer*>(v.toPrivate());
 }
 
-void SharedArrayBufferObject::Finalize(JSFreeOp* fop, JSObject* obj) {
+void SharedArrayBufferObject::Finalize(JS::GCContext* gcx, JSObject* obj) {
   // Must be foreground finalizable so that we can account for the object.
-  MOZ_ASSERT(fop->onMainThread());
-  fop->runtime()->decSABCount();
+  MOZ_ASSERT(gcx->onMainThread());
+  gcx->runtime()->decSABCount();
 
   SharedArrayBufferObject& buf = obj->as<SharedArrayBufferObject>();
 
@@ -342,7 +357,8 @@ void SharedArrayBufferObject::Finalize(JSFreeOp* fop, JSObject* obj) {
 
 /* static */
 void SharedArrayBufferObject::addSizeOfExcludingThis(
-    JSObject* obj, mozilla::MallocSizeOf mallocSizeOf, JS::ClassInfo* info) {
+    JSObject* obj, mozilla::MallocSizeOf mallocSizeOf, JS::ClassInfo* info,
+    JS::RuntimeSizes* runtimeSizes) {
   // Divide the buffer size by the refcount to get the fraction of the buffer
   // owned by this thread. It's conceivable that the refcount might change in
   // the middle of memory reporting, in which case the amount reported for
@@ -350,14 +366,23 @@ void SharedArrayBufferObject::addSizeOfExcludingThis(
   // the refcount goes down). But that's unlikely and hard to avoid, so we
   // just live with the risk.
   const SharedArrayBufferObject& buf = obj->as<SharedArrayBufferObject>();
-  info->objectsNonHeapElementsShared +=
-      buf.byteLength() / buf.rawBufferObject()->refcount();
+  size_t owned = buf.byteLength() / buf.rawBufferObject()->refcount();
+  if (buf.isWasm()) {
+    info->objectsNonHeapElementsWasmShared += owned;
+    if (runtimeSizes) {
+      size_t ownedGuardPages = (buf.wasmMappedSize() - buf.byteLength()) /
+                               buf.rawBufferObject()->refcount();
+      runtimeSizes->wasmGuardPages += ownedGuardPages;
+    }
+  } else {
+    info->objectsNonHeapElementsShared += owned;
+  }
 }
 
 /* static */
 void SharedArrayBufferObject::copyData(
-    Handle<SharedArrayBufferObject*> toBuffer, size_t toIndex,
-    Handle<SharedArrayBufferObject*> fromBuffer, size_t fromIndex,
+    Handle<ArrayBufferObjectMaybeShared*> toBuffer, size_t toIndex,
+    Handle<ArrayBufferObjectMaybeShared*> fromBuffer, size_t fromIndex,
     size_t count) {
   MOZ_ASSERT(toBuffer->byteLength() >= count);
   MOZ_ASSERT(toBuffer->byteLength() >= toIndex + count);
@@ -365,8 +390,8 @@ void SharedArrayBufferObject::copyData(
   MOZ_ASSERT(fromBuffer->byteLength() >= fromIndex + count);
 
   jit::AtomicOperations::memcpySafeWhenRacy(
-      toBuffer->dataPointerShared() + toIndex,
-      fromBuffer->dataPointerShared() + fromIndex, count);
+      toBuffer->dataPointerEither() + toIndex,
+      fromBuffer->dataPointerEither() + fromIndex, count);
 }
 
 SharedArrayBufferObject* SharedArrayBufferObject::createFromNewRawBuffer(
@@ -400,7 +425,6 @@ static const JSClassOps SharedArrayBufferObjectClassOps = {
     nullptr,                            // mayResolve
     SharedArrayBufferObject::Finalize,  // finalize
     nullptr,                            // call
-    nullptr,                            // hasInstance
     nullptr,                            // construct
     nullptr,                            // trace
 };

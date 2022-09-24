@@ -162,13 +162,12 @@ bool EncodeJxlOneshot(const std::vector<float>& pixels, const uint32_t xsize,
 
   JxlPixelFormat pixel_format = {3, JXL_TYPE_FLOAT, JXL_NATIVE_ENDIAN, 0};
 
-  JxlBasicInfo basic_info = {};
+  JxlBasicInfo basic_info;
+  JxlEncoderInitBasicInfo(&basic_info);
   basic_info.xsize = xsize;
   basic_info.ysize = ysize;
   basic_info.bits_per_sample = 32;
   basic_info.exponent_bits_per_sample = 8;
-  basic_info.alpha_exponent_bits = 0;
-  basic_info.alpha_bits = 0;
   basic_info.uses_original_profile = JXL_FALSE;
   if (JXL_ENC_SUCCESS != JxlEncoderSetBasicInfo(enc.get(), &basic_info)) {
     fprintf(stderr, "JxlEncoderSetBasicInfo failed\n");
@@ -184,13 +183,17 @@ bool EncodeJxlOneshot(const std::vector<float>& pixels, const uint32_t xsize,
     return false;
   }
 
+  JxlEncoderFrameSettings* frame_settings =
+      JxlEncoderFrameSettingsCreate(enc.get(), nullptr);
+
   if (JXL_ENC_SUCCESS !=
-      JxlEncoderAddImageFrame(JxlEncoderOptionsCreate(enc.get(), nullptr),
-                              &pixel_format, (void*)pixels.data(),
+      JxlEncoderAddImageFrame(frame_settings, &pixel_format,
+                              (void*)pixels.data(),
                               sizeof(float) * pixels.size())) {
     fprintf(stderr, "JxlEncoderAddImageFrame failed\n");
     return false;
   }
+  JxlEncoderCloseInput(enc.get());
 
   compressed->resize(64);
   uint8_t* next_out = compressed->data();

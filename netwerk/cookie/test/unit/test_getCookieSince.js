@@ -5,7 +5,7 @@ const cs = Cc["@mozilla.org/cookieService;1"].getService(Ci.nsICookieService);
 const cm = cs.QueryInterface(Ci.nsICookieManager);
 
 function setCookie(name, url) {
-  let value = `${name}=${Math.random()}; Path=/; Max-Age=1000; sameSite=none`;
+  let value = `${name}=${Math.random()}; Path=/; Max-Age=1000; sameSite=none; Secure`;
   info(`Setting cookie ${value} for ${url.spec}`);
 
   let channel = NetUtil.newChannel({

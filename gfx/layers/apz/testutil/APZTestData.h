@@ -9,7 +9,8 @@
 
 #include <map>
 
-#include "nsDebug.h"  // for NS_WARNING
+#include "nsDebug.h"                // for NS_WARNING
+#include "nsDOMNavigationTiming.h"  // for DOMHighResTimeStamp
 #include "nsTArray.h"
 #include "mozilla/Assertions.h"       // for MOZ_ASSERT
 #include "mozilla/DebugOnly.h"        // for DebugOnly
@@ -79,6 +80,12 @@ class APZTestData {
                        const LayersId& aLayersId, const ViewID& aScrollId) {
     mHitResults.AppendElement(HitResult{aPoint, aResult, aLayersId, aScrollId});
   }
+  void RecordSampledResult(const CSSPoint& aScrollOffset,
+                           DOMHighResTimeStamp aSampledTimeStamp,
+                           const LayersId& aLayersId, const ViewID& aScrollId) {
+    mSampledResults.AppendElement(
+        SampledResult{aScrollOffset, aSampledTimeStamp, aLayersId, aScrollId});
+  }
   void RecordAdditionalData(const std::string& aKey,
                             const std::string& aValue) {
     mAdditionalData[aKey] = aValue;
@@ -101,11 +108,18 @@ class APZTestData {
     LayersId layersId;
     ViewID scrollId;
   };
+  struct SampledResult {
+    CSSPoint scrollOffset;
+    DOMHighResTimeStamp sampledTimeStamp;
+    LayersId layersId;
+    ViewID scrollId;
+  };
 
  private:
   DataStore mPaints;
   DataStore mRepaintRequests;
   CopyableTArray<HitResult> mHitResults;
+  CopyableTArray<SampledResult> mSampledResults;
   // Additional free-form data that's not grouped paint or scroll frame.
   std::map<std::string, std::string> mAdditionalData;
 
@@ -166,19 +180,20 @@ template <>
 struct ParamTraits<mozilla::layers::APZTestData> {
   typedef mozilla::layers::APZTestData paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mPaints);
-    WriteParam(aMsg, aParam.mRepaintRequests);
-    WriteParam(aMsg, aParam.mHitResults);
-    WriteParam(aMsg, aParam.mAdditionalData);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.mPaints);
+    WriteParam(aWriter, aParam.mRepaintRequests);
+    WriteParam(aWriter, aParam.mHitResults);
+    WriteParam(aWriter, aParam.mSampledResults);
+    WriteParam(aWriter, aParam.mAdditionalData);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return (ReadParam(aMsg, aIter, &aResult->mPaints) &&
-            ReadParam(aMsg, aIter, &aResult->mRepaintRequests) &&
-            ReadParam(aMsg, aIter, &aResult->mHitResults) &&
-            ReadParam(aMsg, aIter, &aResult->mAdditionalData));
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return (ReadParam(aReader, &aResult->mPaints) &&
+            ReadParam(aReader, &aResult->mRepaintRequests) &&
+            ReadParam(aReader, &aResult->mHitResults) &&
+            ReadParam(aReader, &aResult->mSampledResults) &&
+            ReadParam(aReader, &aResult->mAdditionalData));
   }
 };
 
@@ -198,19 +213,37 @@ template <>
 struct ParamTraits<mozilla::layers::APZTestData::HitResult> {
   typedef mozilla::layers::APZTestData::HitResult paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.point);
-    WriteParam(aMsg, aParam.result);
-    WriteParam(aMsg, aParam.layersId);
-    WriteParam(aMsg, aParam.scrollId);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.point);
+    WriteParam(aWriter, aParam.result);
+    WriteParam(aWriter, aParam.layersId);
+    WriteParam(aWriter, aParam.scrollId);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return (ReadParam(aMsg, aIter, &aResult->point) &&
-            ReadParam(aMsg, aIter, &aResult->result) &&
-            ReadParam(aMsg, aIter, &aResult->layersId) &&
-            ReadParam(aMsg, aIter, &aResult->scrollId));
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return (ReadParam(aReader, &aResult->point) &&
+            ReadParam(aReader, &aResult->result) &&
+            ReadParam(aReader, &aResult->layersId) &&
+            ReadParam(aReader, &aResult->scrollId));
+  }
+};
+
+template <>
+struct ParamTraits<mozilla::layers::APZTestData::SampledResult> {
+  typedef mozilla::layers::APZTestData::SampledResult paramType;
+
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.scrollOffset);
+    WriteParam(aWriter, aParam.sampledTimeStamp);
+    WriteParam(aWriter, aParam.layersId);
+    WriteParam(aWriter, aParam.scrollId);
+  }
+
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return (ReadParam(aReader, &aResult->scrollOffset) &&
+            ReadParam(aReader, &aResult->sampledTimeStamp) &&
+            ReadParam(aReader, &aResult->layersId) &&
+            ReadParam(aReader, &aResult->scrollId));
   }
 };
 

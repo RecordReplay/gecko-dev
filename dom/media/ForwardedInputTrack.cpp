@@ -139,7 +139,7 @@ void ForwardedInputTrack::ProcessInputImpl(MediaTrack* aSource,
     } else if (InMutedCycle()) {
       aSegment->AppendNullData(ticks);
     } else if (aSource->IsSuspended()) {
-      aSegment->AppendNullData(aTo - aFrom);
+      aSegment->AppendNullData(ticks);
     } else {
       MOZ_ASSERT(GetEnd() == GraphTimeToTrackTimeWithBlocking(interval.mStart),
                  "Samples missing");
@@ -159,7 +159,8 @@ void ForwardedInputTrack::ProcessInputImpl(MediaTrack* aSource,
 
 void ForwardedInputTrack::ProcessInput(GraphTime aFrom, GraphTime aTo,
                                        uint32_t aFlags) {
-  TRACE_COMMENT("ForwardedInputTrack %p", this);
+  TRACE_COMMENT("ForwardedInputTrack::ProcessInput", "ForwardedInputTrack %p",
+                this);
   if (mEnded) {
     return;
   }

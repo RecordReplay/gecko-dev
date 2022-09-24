@@ -7,6 +7,7 @@
 // Microsoft's API Name hackery sucks
 #undef CreateEvent
 
+#include "js/loader/LoadedScript.h"
 #include "mozilla/BasicEvents.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
 #include "mozilla/DOMEventTargetHelper.h"
@@ -25,12 +26,12 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/EventTargetBinding.h"
-#include "mozilla/dom/LoadedScript.h"
 #include "mozilla/dom/PopupBlocker.h"
 #include "mozilla/dom/ScriptLoader.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/TouchEvent.h"
 #include "mozilla/dom/UserActivation.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TimelineConsumers.h"
 #include "mozilla/EventTimelineMarker.h"
@@ -51,6 +52,7 @@
 #include "nsJSUtils.h"
 #include "nsNameSpaceManager.h"
 #include "nsPIDOMWindow.h"
+#include "nsPrintfCString.h"
 #include "nsSandboxFlags.h"
 #include "xpcpublic.h"
 #include "nsIFrame.h"
@@ -110,6 +112,7 @@ EventListenerManagerBase::EventListenerManagerBase()
       mMayHaveKeyEventListener(false),
       mMayHaveInputOrCompositionEventListener(false),
       mMayHaveSelectionChangeEventListener(false),
+      mMayHaveFormSelectEventListener(false),
       mClearingListeners(false),
       mIsMainThreadELM(NS_IsMainThread()),
       mHasNonPrivilegedClickListeners(false),
@@ -189,8 +192,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(EventListenerManager)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 nsPIDOMWindowInner* EventListenerManager::GetInnerWindowForTarget() {
-  nsCOMPtr<nsINode> node = do_QueryInterface(mTarget);
-  if (node) {
+  if (nsINode* node = nsINode::FromEventTargetOrNull(mTarget)) {
     // XXX sXBL/XBL2 issue -- do we really want the owner here?  What
     // if that's the XBL document?
     return node->OwnerDoc()->GetInnerWindow();
@@ -202,7 +204,8 @@ nsPIDOMWindowInner* EventListenerManager::GetInnerWindowForTarget() {
 
 already_AddRefed<nsPIDOMWindowInner>
 EventListenerManager::GetTargetAsInnerWindow() const {
-  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryInterface(mTarget);
+  nsCOMPtr<nsPIDOMWindowInner> window =
+      nsPIDOMWindowInner::FromEventTargetOrNull(mTarget);
   return window.forget();
 }
 
@@ -275,152 +278,336 @@ void EventListenerManager::AddEventListenerInternal(
     mMayHaveCapturingListeners = true;
   }
 
-  if (aEventMessage == eAfterPaint) {
-    mMayHavePaintEventListener = true;
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      window->SetHasPaintEventListeners();
-    }
-  } else if (aEventMessage >= eLegacyMutationEventFirst &&
-             aEventMessage <= eLegacyMutationEventLast) {
-    // For mutation listeners, we need to update the global bit on the DOM
-    // window. Otherwise we won't actually fire the mutation event.
-    mMayHaveMutationListeners = true;
-    // Go from our target to the nearest enclosing DOM window.
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->WarnOnceAbout(DeprecatedOperations::eMutationEvent);
+  // Events which are not supported in the running environment is mapped to
+  // eUnidentifiedEvent.  Then, we need to consider the proper event message
+  // with comparing the atom.
+  {
+    EventMessage resolvedEventMessage = aEventMessage;
+    if (resolvedEventMessage == eUnidentifiedEvent && aTypeAtom->IsStatic()) {
+      // TouchEvents are registered only when
+      // nsContentUtils::InitializeTouchEventTable() is called.
+      if (aTypeAtom == nsGkAtoms::ontouchstart) {
+        resolvedEventMessage = eTouchStart;
+      } else if (aTypeAtom == nsGkAtoms::ontouchend) {
+        resolvedEventMessage = eTouchEnd;
+      } else if (aTypeAtom == nsGkAtoms::ontouchmove) {
+        resolvedEventMessage = eTouchMove;
+      } else if (aTypeAtom == nsGkAtoms::ontouchcancel) {
+        resolvedEventMessage = eTouchCancel;
       }
-      // If aEventMessage is eLegacySubtreeModified, we need to listen all
-      // mutations. nsContentUtils::HasMutationListeners relies on this.
-      window->SetMutationListeners(
-          (aEventMessage == eLegacySubtreeModified)
-              ? kAllMutationBits
-              : MutationBitForEventType(aEventMessage));
     }
-  } else if (aTypeAtom == nsGkAtoms::ondeviceorientation) {
-    EnableDevice(eDeviceOrientation);
-  } else if (aTypeAtom == nsGkAtoms::onabsolutedeviceorientation) {
-    EnableDevice(eAbsoluteDeviceOrientation);
-  } else if (aTypeAtom == nsGkAtoms::onuserproximity) {
-    EnableDevice(eUserProximity);
-  } else if (aTypeAtom == nsGkAtoms::ondevicelight) {
-    EnableDevice(eDeviceLight);
-  } else if (aTypeAtom == nsGkAtoms::ondevicemotion) {
-    EnableDevice(eDeviceMotion);
+
+    switch (resolvedEventMessage) {
+      case eAfterPaint:
+        mMayHavePaintEventListener = true;
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          window->SetHasPaintEventListeners();
+        }
+        break;
+      case eLegacySubtreeModified:
+      case eLegacyNodeInserted:
+      case eLegacyNodeRemoved:
+      case eLegacyNodeRemovedFromDocument:
+      case eLegacyNodeInsertedIntoDocument:
+      case eLegacyAttrModified:
+      case eLegacyCharacterDataModified:
+        // For mutation listeners, we need to update the global bit on the DOM
+        // window. Otherwise we won't actually fire the mutation event.
+        mMayHaveMutationListeners = true;
+        // Go from our target to the nearest enclosing DOM window.
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->WarnOnceAbout(DeprecatedOperations::eMutationEvent);
+          }
+          // If resolvedEventMessage is eLegacySubtreeModified, we need to
+          // listen all mutations. nsContentUtils::HasMutationListeners relies
+          // on this.
+          window->SetMutationListeners(
+              (resolvedEventMessage == eLegacySubtreeModified)
+                  ? kAllMutationBits
+                  : MutationBitForEventType(resolvedEventMessage));
+        }
+        break;
+      case ePointerEnter:
+      case ePointerLeave:
+        mMayHavePointerEnterLeaveEventListener = true;
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          NS_WARNING_ASSERTION(
+              !nsContentUtils::IsChromeDoc(window->GetExtantDoc()),
+              "Please do not use pointerenter/leave events in chrome. "
+              "They are slower than pointerover/out!");
+          window->SetHasPointerEnterLeaveEventListeners();
+        }
+        break;
+      case eGamepadButtonDown:
+      case eGamepadButtonUp:
+      case eGamepadAxisMove:
+      case eGamepadConnected:
+      case eGamepadDisconnected:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          window->SetHasGamepadEventListener();
+        }
+        break;
+      case eDeviceOrientation:
+      case eAbsoluteDeviceOrientation:
+      case eUserProximity:
+      case eDeviceLight:
+      case eDeviceMotion:
 #if defined(MOZ_WIDGET_ANDROID)
-  } else if (aTypeAtom == nsGkAtoms::onorientationchange) {
-    EnableDevice(eOrientationChange);
-#endif
-  } else if (aTypeAtom == nsGkAtoms::ontouchstart ||
-             aTypeAtom == nsGkAtoms::ontouchend ||
-             aTypeAtom == nsGkAtoms::ontouchmove ||
-             aTypeAtom == nsGkAtoms::ontouchcancel) {
-    mMayHaveTouchEventListener = true;
-    nsPIDOMWindowInner* window = GetInnerWindowForTarget();
-    // we don't want touchevent listeners added by scrollbars to flip this flag
-    // so we ignore listeners created with system event flag
-    if (window && !aFlags.mInSystemGroup) {
-      window->SetHasTouchEventListeners();
-    }
-  } else if (aEventMessage >= ePointerEventFirst &&
-             aEventMessage <= ePointerEventLast) {
-    nsPIDOMWindowInner* window = GetInnerWindowForTarget();
-    if (aTypeAtom == nsGkAtoms::onpointerenter ||
-        aTypeAtom == nsGkAtoms::onpointerleave) {
-      mMayHavePointerEnterLeaveEventListener = true;
-      if (window) {
-#ifdef DEBUG
-        nsCOMPtr<Document> d = window->GetExtantDoc();
-        NS_WARNING_ASSERTION(
-            !nsContentUtils::IsChromeDoc(d),
-            "Please do not use pointerenter/leave events in chrome. "
-            "They are slower than pointerover/out!");
-#endif
-        window->SetHasPointerEnterLeaveEventListeners();
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onmouseenter ||
-             aTypeAtom == nsGkAtoms::onmouseleave) {
-    mMayHaveMouseEnterLeaveEventListener = true;
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-#ifdef DEBUG
-      nsCOMPtr<Document> d = window->GetExtantDoc();
-      NS_WARNING_ASSERTION(
-          !nsContentUtils::IsChromeDoc(d),
-          "Please do not use mouseenter/leave events in chrome. "
-          "They are slower than mouseover/out!");
-#endif
-      window->SetHasMouseEnterLeaveEventListeners();
-    }
-  } else if (aEventMessage >= eGamepadEventFirst &&
-             aEventMessage <= eGamepadEventLast) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      window->SetHasGamepadEventListener();
-    }
-  } else if (aTypeAtom == nsGkAtoms::onkeydown ||
-             aTypeAtom == nsGkAtoms::onkeypress ||
-             aTypeAtom == nsGkAtoms::onkeyup) {
-    if (!aFlags.mInSystemGroup) {
-      mMayHaveKeyEventListener = true;
-    }
-  } else if (aTypeAtom == nsGkAtoms::oncompositionend ||
-             aTypeAtom == nsGkAtoms::oncompositionstart ||
-             aTypeAtom == nsGkAtoms::oncompositionupdate ||
-             aTypeAtom == nsGkAtoms::oninput) {
-    if (!aFlags.mInSystemGroup) {
-      mMayHaveInputOrCompositionEventListener = true;
-    }
-  } else if (aEventMessage == eSelectionChange ||
-             aEventMessage == eFormSelect) {
-    mMayHaveSelectionChangeEventListener = true;
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      window->SetHasSelectionChangeEventListeners();
-    }
-  } else if (aTypeAtom == nsGkAtoms::onstart) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onstart);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onbounce) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onbounce);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onfinish) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onfinish);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onbeforeinput) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      window->SetHasBeforeInputEventListenersForTelemetry();
-    }
-  } else if (aTypeAtom == nsGkAtoms::onoverflow) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onoverflow);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onunderflow) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onunderflow);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onDOMMouseScroll) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_ondommousescroll);
-      }
-    }
-  } else if (aTypeAtom == nsGkAtoms::onMozMousePixelScroll) {
-    if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
-      if (Document* doc = window->GetExtantDoc()) {
-        doc->SetUseCounter(eUseCounter_custom_onmozmousepixelscroll);
-      }
+      case eOrientationChange:
+#endif  // #if defined(MOZ_WIDGET_ANDROID)
+        EnableDevice(resolvedEventMessage);
+        break;
+      case eTouchStart:
+      case eTouchEnd:
+      case eTouchMove:
+      case eTouchCancel:
+        mMayHaveTouchEventListener = true;
+        // we don't want touchevent listeners added by scrollbars to flip this
+        // flag so we ignore listeners created with system event flag
+        if (!aFlags.mInSystemGroup) {
+          if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+            window->SetHasTouchEventListeners();
+          }
+        }
+        break;
+      case eMouseEnter:
+      case eMouseLeave:
+        mMayHaveMouseEnterLeaveEventListener = true;
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          NS_WARNING_ASSERTION(
+              !nsContentUtils::IsChromeDoc(window->GetExtantDoc()),
+              "Please do not use mouseenter/leave events in chrome. "
+              "They are slower than mouseover/out!");
+          window->SetHasMouseEnterLeaveEventListeners();
+        }
+        break;
+      case eKeyDown:
+      case eKeyPress:
+      case eKeyUp:
+        if (!aFlags.mInSystemGroup) {
+          mMayHaveKeyEventListener = true;
+        }
+        break;
+      case eCompositionEnd:
+      case eCompositionStart:
+      case eCompositionUpdate:
+      case eEditorInput:
+        if (!aFlags.mInSystemGroup) {
+          mMayHaveInputOrCompositionEventListener = true;
+        }
+        break;
+      case eEditorBeforeInput:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          window->SetHasBeforeInputEventListenersForTelemetry();
+        }
+        break;
+      case eSelectionChange:
+        mMayHaveSelectionChangeEventListener = true;
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          window->SetHasSelectionChangeEventListeners();
+        }
+        break;
+      case eFormSelect:
+        mMayHaveFormSelectEventListener = true;
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          window->SetHasFormSelectEventListeners();
+        }
+        break;
+      case eMarqueeStart:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onstart);
+          }
+        }
+        break;
+      case eMarqueeBounce:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onbounce);
+          }
+        }
+        break;
+      case eMarqueeFinish:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onfinish);
+          }
+        }
+        break;
+      case eScrollPortOverflow:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onoverflow);
+          }
+        }
+        break;
+      case eScrollPortUnderflow:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onunderflow);
+          }
+        }
+        break;
+      case eLegacyMouseLineOrPageScroll:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_ondommousescroll);
+          }
+        }
+        break;
+      case eLegacyMousePixelScroll:
+        if (nsPIDOMWindowInner* window = GetInnerWindowForTarget()) {
+          if (Document* doc = window->GetExtantDoc()) {
+            doc->SetUseCounter(eUseCounter_custom_onmozmousepixelscroll);
+          }
+        }
+        break;
+      default:
+        // XXX Use NS_ASSERTION here to print resolvedEventMessage since
+        //     MOZ_ASSERT can take only string literal, not pointer to
+        //     characters.
+        NS_ASSERTION(
+            resolvedEventMessage < eLegacyMutationEventFirst ||
+                resolvedEventMessage > eLegacyMutationEventLast,
+            nsPrintfCString("You added new mutation event, but it's not "
+                            "handled above, resolvedEventMessage=%s",
+                            ToChar(resolvedEventMessage))
+                .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onpointerenter,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onpointerleave,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(
+            resolvedEventMessage < eGamepadEventFirst ||
+                resolvedEventMessage > eGamepadEventLast,
+            nsPrintfCString("You added new gamepad event, but it's not "
+                            "handled above, resolvedEventMessage=%s",
+                            ToChar(resolvedEventMessage))
+                .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ondeviceorientation,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onabsolutedeviceorientation,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onuserproximity,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ondevicelight,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ondevicemotion,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+#if defined(MOZ_WIDGET_ANDROID)
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onorientationchange,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+#endif  // #if defined(MOZ_WIDGET_ANDROID)
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchstart,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchend,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchmove,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::ontouchcancel,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onmouseenter,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onmouseleave,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onkeydown,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onkeypress,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onkeyup,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::oncompositionend,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::oncompositionstart,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::oncompositionupdate,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::oninput,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onbeforeinput,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onselectionchange,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onselect,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onstart,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onbounce,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onfinish,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onoverflow,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onunderflow,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onDOMMouseScroll,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        NS_ASSERTION(aTypeAtom != nsGkAtoms::onMozMousePixelScroll,
+                     nsPrintfCString("resolvedEventMessage=%s",
+                                     ToChar(resolvedEventMessage))
+                         .get());
+        break;
     }
   }
 
@@ -446,17 +633,15 @@ void EventListenerManager::AddEventListenerInternal(
 }
 
 void EventListenerManager::ProcessApzAwareEventListenerAdd() {
+  Document* doc = nullptr;
+
   // Mark the node as having apz aware listeners
-  nsCOMPtr<nsINode> node = do_QueryInterface(mTarget);
-  if (node) {
+  if (nsINode* node = nsINode::FromEventTargetOrNull(mTarget)) {
     node->SetMayBeApzAware();
+    doc = node->OwnerDoc();
   }
 
   // Schedule a paint so event regions on the layer tree gets updated
-  Document* doc = nullptr;
-  if (node) {
-    doc = node->OwnerDoc();
-  }
   if (!doc) {
     if (nsCOMPtr<nsPIDOMWindowInner> window = GetTargetAsInnerWindow()) {
       doc = window->GetExtantDoc();
@@ -665,6 +850,12 @@ bool EventListenerManager::ListenerCanHandle(const Listener* aListener,
   if (aListener->mListenerType == Listener::eNoListener) {
     return false;
   }
+
+  // The listener has been disabled, for example by devtools.
+  if (!aListener->mEnabled) {
+    return false;
+  }
+
   // This is slightly different from EVENT_TYPE_EQUALS in that it returns
   // true even when aEvent->mMessage == eUnidentifiedEvent and
   // aListener=>mEventMessage != eUnidentifiedEvent as long as the atoms are
@@ -690,11 +881,14 @@ static bool IsDefaultPassiveWhenOnRoot(EventMessage aMessage) {
   return false;
 }
 
-static bool IsRootEventTaget(EventTarget* aTarget) {
-  if (nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(aTarget)) {
+static bool IsRootEventTarget(EventTarget* aTarget) {
+  if (!aTarget) {
+    return false;
+  }
+  if (aTarget->IsInnerWindow()) {
     return true;
   }
-  nsCOMPtr<nsINode> node = do_QueryInterface(aTarget);
+  const nsINode* node = nsINode::FromEventTarget(aTarget);
   if (!node) {
     return false;
   }
@@ -710,7 +904,7 @@ void EventListenerManager::MaybeMarkPassive(EventMessage aMessage,
   if (!IsDefaultPassiveWhenOnRoot(aMessage)) {
     return;
   }
-  if (!IsRootEventTaget(mTarget)) {
+  if (!IsRootEventTarget(mTarget)) {
     return;
   }
   aFlags.mPassive = true;
@@ -951,7 +1145,7 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
   // here. The alternative is to store the event handler string on
   // the JSEventHandler itself, and that still doesn't address
   // the arg names issue.
-  nsCOMPtr<Element> element = do_QueryInterface(mTarget);
+  RefPtr<Element> element = Element::FromEventTargetOrNull(mTarget);
   MOZ_ASSERT(element || aBody, "Where will we get our body?");
   nsAutoString handlerBody;
   const nsAString* body = aBody;
@@ -990,7 +1184,8 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
     uri->GetSpec(url);
   }
 
-  nsCOMPtr<nsPIDOMWindowInner> win = do_QueryInterface(mTarget);
+  nsCOMPtr<nsPIDOMWindowInner> win =
+      nsPIDOMWindowInner::FromEventTargetOrNull(mTarget);
   uint32_t argCount;
   const char** argNames;
   nsContentUtils::GetEventArgNames(aElement->GetNameSpaceID(), typeAtom, win,
@@ -1039,17 +1234,19 @@ nsresult EventListenerManager::CompileEventHandlerInternal(
     return NS_ERROR_FAILURE;
   }
 
-  RefPtr<ScriptFetchOptions> fetchOptions = new ScriptFetchOptions(
-      CORS_NONE, aElement->OwnerDoc()->GetReferrerPolicy(), aElement,
-      aElement->OwnerDoc()->NodePrincipal(), nullptr);
+  RefPtr<JS::loader::ScriptFetchOptions> fetchOptions =
+      new JS::loader::ScriptFetchOptions(
+          CORS_NONE, aElement->OwnerDoc()->GetReferrerPolicy(),
+          aElement->OwnerDoc()->NodePrincipal());
 
-  RefPtr<EventScript> eventScript = new EventScript(fetchOptions, uri);
+  RefPtr<JS::loader::EventScript> eventScript =
+      new JS::loader::EventScript(fetchOptions, uri);
 
   JS::CompileOptions options(cx);
   // Use line 0 to make the function body starts from line 1.
   options.setIntroductionType("eventHandler")
       .setFileAndLine(url.get(), 0)
-      .setdeferDebugMetadata(true);
+      .setDeferDebugMetadata(true);
 
   JS::Rooted<JSObject*> handler(cx);
   result = nsJSUtils::CompileFunction(jsapi, scopeChain, options,
@@ -1593,9 +1790,77 @@ nsresult EventListenerManager::GetListenerInfo(
     }
 
     RefPtr<EventListenerInfo> info = new EventListenerInfo(
-        eventType, callback, callbackGlobal, listener.mFlags.mCapture,
-        listener.mFlags.mAllowUntrustedEvents, listener.mFlags.mInSystemGroup);
+        this, eventType, callback, callbackGlobal, listener.mFlags.mCapture,
+        listener.mFlags.mAllowUntrustedEvents, listener.mFlags.mInSystemGroup,
+        listener.mListenerIsHandler);
     aList.AppendElement(info.forget());
+  }
+  return NS_OK;
+}
+
+EventListenerManager::Listener* EventListenerManager::GetListenerFor(
+    nsAString& aType, JSObject* aListener, bool aCapturing,
+    bool aAllowsUntrusted, bool aInSystemEventGroup, bool aIsHandler) {
+  NS_ENSURE_TRUE(aListener, nullptr);
+
+  for (Listener& listener : mListeners.ForwardRange()) {
+    if ((aType.IsVoid() && !listener.mAllEvents) ||
+        !Substring(nsDependentAtomString(listener.mTypeAtom), 2)
+             .Equals(aType) ||
+        listener.mListenerType == Listener::eNoListener) {
+      continue;
+    }
+
+    if (listener.mFlags.mCapture != aCapturing ||
+        listener.mFlags.mAllowUntrustedEvents != aAllowsUntrusted ||
+        listener.mFlags.mInSystemGroup != aInSystemEventGroup) {
+      continue;
+    }
+
+    if (aIsHandler) {
+      if (JSEventHandler* handler = listener.GetJSEventHandler()) {
+        if (handler->GetTypedEventHandler().HasEventHandler()) {
+          if (handler->GetTypedEventHandler().Ptr()->CallableOrNull() ==
+              aListener) {
+            return &listener;
+          }
+        }
+      }
+    } else if (listener.mListenerType == Listener::eWebIDLListener &&
+               listener.mListener.GetWebIDLCallback()->CallbackOrNull() ==
+                   aListener) {
+      return &listener;
+    }
+  }
+  return nullptr;
+}
+
+nsresult EventListenerManager::IsListenerEnabled(
+    nsAString& aType, JSObject* aListener, bool aCapturing,
+    bool aAllowsUntrusted, bool aInSystemEventGroup, bool aIsHandler,
+    bool* aEnabled) {
+  Listener* listener =
+      GetListenerFor(aType, aListener, aCapturing, aAllowsUntrusted,
+                     aInSystemEventGroup, aIsHandler);
+  NS_ENSURE_TRUE(listener, NS_ERROR_NOT_AVAILABLE);
+  *aEnabled = listener->mEnabled;
+  return NS_OK;
+}
+
+nsresult EventListenerManager::SetListenerEnabled(
+    nsAString& aType, JSObject* aListener, bool aCapturing,
+    bool aAllowsUntrusted, bool aInSystemEventGroup, bool aIsHandler,
+    bool aEnabled) {
+  Listener* listener =
+      GetListenerFor(aType, aListener, aCapturing, aAllowsUntrusted,
+                     aInSystemEventGroup, aIsHandler);
+  NS_ENSURE_TRUE(listener, NS_ERROR_NOT_AVAILABLE);
+  listener->mEnabled = aEnabled;
+  if (aEnabled) {
+    // We may have enabled some listener, clear the cache for which events
+    // we don't have listeners.
+    mNoListenerForEvent = eVoidEvent;
+    mNoListenerForEventAtom = nullptr;
   }
   return NS_OK;
 }
@@ -1604,8 +1869,18 @@ bool EventListenerManager::HasUnloadListeners() {
   uint32_t count = mListeners.Length();
   for (uint32_t i = 0; i < count; ++i) {
     Listener* listener = &mListeners.ElementAt(i);
-    if (listener->mEventMessage == eUnload ||
-        listener->mEventMessage == eBeforeUnload) {
+    if (listener->mEventMessage == eUnload) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool EventListenerManager::HasBeforeUnloadListeners() {
+  uint32_t count = mListeners.Length();
+  for (uint32_t i = 0; i < count; ++i) {
+    Listener* listener = &mListeners.ElementAt(i);
+    if (listener->mEventMessage == eBeforeUnload) {
       return true;
     }
   }
@@ -1776,10 +2051,17 @@ bool EventListenerManager::IsApzAwareListener(Listener* aListener) {
          IsApzAwareEvent(aListener->mTypeAtom);
 }
 
-bool EventListenerManager::IsApzAwareEvent(nsAtom* aEvent) {
+static bool IsWheelEventType(nsAtom* aEvent) {
   if (aEvent == nsGkAtoms::onwheel || aEvent == nsGkAtoms::onDOMMouseScroll ||
       aEvent == nsGkAtoms::onmousewheel ||
       aEvent == nsGkAtoms::onMozMousePixelScroll) {
+    return true;
+  }
+  return false;
+}
+
+bool EventListenerManager::IsApzAwareEvent(nsAtom* aEvent) {
+  if (IsWheelEventType(aEvent)) {
     return true;
   }
   // In theory we should schedule a repaint if the touch event pref changes,
@@ -1791,6 +2073,18 @@ bool EventListenerManager::IsApzAwareEvent(nsAtom* aEvent) {
   if (aEvent == nsGkAtoms::ontouchstart || aEvent == nsGkAtoms::ontouchmove) {
     return TouchEvent::PrefEnabled(
         nsContentUtils::GetDocShellForEventTarget(mTarget));
+  }
+  return false;
+}
+
+bool EventListenerManager::HasNonPassiveWheelListener() {
+  MOZ_ASSERT(NS_IsMainThread());
+  uint32_t count = mListeners.Length();
+  for (uint32_t i = 0; i < count; ++i) {
+    Listener* listener = &mListeners.ElementAt(i);
+    if (!listener->mFlags.mPassive && IsWheelEventType(listener->mTypeAtom)) {
+      return true;
+    }
   }
   return false;
 }
@@ -1810,10 +2104,9 @@ void EventListenerManager::RemoveAllListeners() {
 
 already_AddRefed<nsIScriptGlobalObject>
 EventListenerManager::GetScriptGlobalAndDocument(Document** aDoc) {
-  nsCOMPtr<nsINode> node(do_QueryInterface(mTarget));
   nsCOMPtr<Document> doc;
   nsCOMPtr<nsPIDOMWindowInner> win;
-  if (node) {
+  if (nsINode* node = nsINode::FromEventTargetOrNull(mTarget)) {
     // Try to get context from doc
     doc = node->OwnerDoc();
     if (doc->IsLoadedAsData()) {
@@ -1853,13 +2146,11 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(EventListenerManager::ListenerSignalFollower)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(
     EventListenerManager::ListenerSignalFollower)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mListener)
-  AbortFollower::Traverse(static_cast<AbortFollower*>(tmp), cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(
     EventListenerManager::ListenerSignalFollower)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mListener)
-  AbortFollower::Unlink(static_cast<AbortFollower*>(tmp));
   tmp->mListenerManager = nullptr;
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 

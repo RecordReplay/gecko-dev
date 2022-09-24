@@ -86,6 +86,8 @@ with Files("css-mediaqueries/**"):
     BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
 with Files("css-optional/**"):
     BUG_COMPONENT = ("Core", "Layout: Form Controls")
+with Files("css-page/**"):
+    BUG_COMPONENT = ("Core", "Layout")
 with Files("css-parsing/**"):
     BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
 with Files("css-placeholder/**"):
@@ -96,8 +98,6 @@ with Files("css-ruby/**"):
     BUG_COMPONENT = ("Core", "Layout: Block and Inline")
 with Files("css-selectors/**"):
     BUG_COMPONENT = ("Core", "CSS Parsing and Computation")
-with Files("css-submit-invalid/**"):
-    BUG_COMPONENT = ("Core", "Layout: Form Controls")
 with Files("css-transitions/**"):
     BUG_COMPONENT = ("Core", "CSS Transitions and Animations")
 with Files("css-ui-invalid/**"):

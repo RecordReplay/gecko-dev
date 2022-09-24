@@ -13,12 +13,11 @@ class APZCFlingAccelerationTester : public APZCTreeManagerTester {
  protected:
   void SetUp() {
     APZCTreeManagerTester::SetUp();
-    const char* layerTreeSyntax = "c";
-    nsIntRegion layerVisibleRegion[] = {
-        nsIntRegion(IntRect(0, 0, 800, 1000)),
+    const char* treeShape = "x";
+    LayerIntRegion layerVisibleRegion[] = {
+        LayerIntRect(0, 0, 800, 1000),
     };
-    root = CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm,
-                           layers);
+    CreateScrollData(treeShape, layerVisibleRegion);
     SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
                               CSSRect(0, 0, 800, 50000));
     // Scroll somewhere into the middle of the scroll range, so that we have
@@ -29,8 +28,7 @@ class APZCFlingAccelerationTester : public APZCTreeManagerTester {
       aMetrics.SetVisualDestination(CSSPoint(0, 25000));
     });
 
-    registration =
-        MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, root, mcc);
+    registration = MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
     UpdateHitTestingTree();
 
     apzc = ApzcOf(root);
@@ -41,8 +39,7 @@ class APZCFlingAccelerationTester : public APZCTreeManagerTester {
     APZEventResult result = TouchDown(apzc, aStartPoint, mcc->Time());
 
     // Allowed touch behaviours must be set after sending touch-start.
-    if (result.GetStatus() != nsEventStatus_eConsumeNoDefault &&
-        StaticPrefs::layout_css_touch_action_enabled()) {
+    if (result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
       SetDefaultAllowedTouchBehavior(apzc, result.mInputBlockId);
     }
 

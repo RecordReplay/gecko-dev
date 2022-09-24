@@ -10,6 +10,7 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/intl/Segmenter.h"
 #include "gfxContext.h"
 #include "nsDeviceContext.h"
 #include "nsFontMetrics.h"
@@ -334,28 +335,43 @@ void nsPageFrame::DrawHeaderFooter(gfxContext& aRenderingContext,
     nsAutoString str;
     ProcessSpecialCodes(aStr, str);
 
-    int32_t indx;
-    int32_t textWidth = 0;
-    const char16_t* text = str.get();
-
     int32_t len = (int32_t)str.Length();
     if (len == 0) {
       return;  // bail is empty string
     }
+
+    int32_t index;
+    int32_t textWidth = 0;
+    const char16_t* text = str.get();
     // find how much text fits, the "position" is the size of the available area
     if (nsLayoutUtils::BinarySearchForPosition(drawTarget, aFontMetrics, text,
                                                0, 0, 0, len, int32_t(aWidth),
-                                               indx, textWidth)) {
-      if (indx < len - 1) {
-        // we can't fit in all the text
-        if (indx > 3) {
-          // But we can fit in at least 4 chars.  Show all but 3 of them, then
-          // an ellipsis.
-          // XXXbz for non-plane0 text, this may be cutting things in the
-          // middle of a codepoint!  Also, we have no guarantees that the three
-          // dots will fit in the space the three chars we removed took up with
-          // these font metrics!
-          str.Truncate(indx - 3);
+                                               index, textWidth)) {
+      if (index < len - 1) {
+        // we can't fit in all the text, try to remove 3 glyphs and append
+        // three "." charactrers.
+
+        // TODO: This might not actually remove three glyphs in cases where
+        // ZWJ sequences, regional indicators, etc are used.
+        // We also have guarantee that removing three glyphs will make enough
+        // space for the ellipse, if they are zero-width or even just narrower
+        // than the "." character.
+        // See https://bugzilla.mozilla.org/1765008
+        mozilla::intl::GraphemeClusterBreakReverseIteratorUtf16 revIter(str);
+
+        // Start iteration at the point where the text does properly fit.
+        revIter.Seek(index);
+
+        // Step backwards 3 times, checking if we have any string left by the
+        // end.
+        revIter.Next();
+        revIter.Next();
+        if (const Maybe<uint32_t> maybeIndex = revIter.Next()) {
+          // TODO: We should consider checking for the ellipse character, or
+          // possibly for another continuation indicator based on
+          // localization.
+          // See https://bugzilla.mozilla.org/1765007
+          str.Truncate(*maybeIndex);
           str.AppendLiteral("...");
         } else {
           // We can only fit 3 or fewer chars.  Just show nothing
@@ -407,7 +423,7 @@ class nsDisplayHeaderFooter final : public nsPaintedDisplayItem {
     MOZ_ASSERT(pageFrame, "We should have an nsPageFrame");
 #endif
     static_cast<nsPageFrame*>(mFrame)->PaintHeaderFooter(
-        *aCtx, ToReferenceFrame(), IsSubpixelAADisabled());
+        *aCtx, ToReferenceFrame(), false);
   }
   NS_DISPLAY_DECL_NAME("HeaderFooter", TYPE_HEADER_FOOTER)
 
@@ -567,12 +583,12 @@ nsSize nsPageFrame::ComputePageSize() const {
   }
   if (pageSize.IsOrientation()) {
     // Ensure the correct orientation is applied.
-    if (pageSize.AsOrientation() == StyleOrientation::Portrait) {
+    if (pageSize.AsOrientation() == StylePageOrientation::Portrait) {
       if (size.width > size.height) {
         std::swap(size.width, size.height);
       }
     } else {
-      MOZ_ASSERT(pageSize.AsOrientation() == StyleOrientation::Landscape);
+      MOZ_ASSERT(pageSize.AsOrientation() == StylePageOrientation::Landscape);
       if (size.width < size.height) {
         std::swap(size.width, size.height);
       }
@@ -585,29 +601,32 @@ nsSize nsPageFrame::ComputePageSize() const {
 
 void nsPageFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                    const nsDisplayListSet& aLists) {
-  nsDisplayList content;
+  nsDisplayList content(aBuilder);
   nsDisplayListSet set(&content, &content, &content, &content, &content,
                        &content);
   {
     DisplayListClipState::AutoSaveRestore clipState(aBuilder);
     clipState.Clear();
 
-    // We need to extend the building rect to include the specified page size
-    // (scaled by the print scaling factor), in case it is larger than the
-    // physical page size. In that case the nsPageFrame will be the size of the
-    // physical page, but the child nsPageContentFrame will be the larger
-    // specified page size. The more correct way to do this would be to fully
-    // reverse the result of ComputePagesPerSheetAndPageSizeTransform to handle
-    // this scaling, but this should have the same result and is easier.
     nsPresContext* const pc = PresContext();
-    const float scale = pc->GetPageScale();
-    const nsSize pageSize = ComputePageSize();
-    const nsRect scaledPageRect{0, 0, NSToCoordCeil(pageSize.width / scale),
-                                NSToCoordCeil(pageSize.height / scale)};
-    nsDisplayListBuilder::AutoBuildingDisplayList buildingForPageContentFrame(
-        aBuilder, this, scaledPageRect, scaledPageRect);
+    {
+      // We need to extend the building rect to include the specified page size
+      // (scaled by the print scaling factor), in case it is larger than the
+      // physical page size. In that case the nsPageFrame will be the size of
+      // the physical page, but the child nsPageContentFrame will be the larger
+      // specified page size. The more correct way to do this would be to fully
+      // reverse the result of ComputePagesPerSheetAndPageSizeTransform to
+      // handle this scaling, but this should have the same result and is
+      // easier.
+      const float scale = pc->GetPageScale();
+      const nsSize pageSize = ComputePageSize();
+      const nsRect scaledPageRect{0, 0, NSToCoordCeil(pageSize.width / scale),
+                                  NSToCoordCeil(pageSize.height / scale)};
+      nsDisplayListBuilder::AutoBuildingDisplayList buildingForPageContentFrame(
+          aBuilder, this, scaledPageRect, scaledPageRect);
 
-    nsContainerFrame::BuildDisplayList(aBuilder, set);
+      nsContainerFrame::BuildDisplayList(aBuilder, set);
+    }
 
     if (pc->IsRootPaginatedDocument()) {
       content.AppendNewToTop<nsDisplayHeaderFooter>(aBuilder, this);
@@ -658,10 +677,8 @@ void nsPageFrame::PaintHeaderFooter(gfxContext& aRenderingContext, nsPoint aPt,
   nsFontMetrics::Params params;
   params.userFontSet = pc->GetUserFontSet();
   params.textPerf = pc->GetTextPerfMetrics();
-  params.fontStats = pc->GetFontMatchingStats();
   params.featureValueLookup = pc->GetFontFeatureValuesLookup();
-  RefPtr<nsFontMetrics> fontMet =
-      pc->DeviceContext()->GetMetricsFor(mPD->mHeadFootFont, params);
+  RefPtr<nsFontMetrics> fontMet = pc->GetMetricsFor(mPD->mHeadFootFont, params);
 
   nscoord ascent = fontMet->MaxAscent();
   nscoord visibleHeight = fontMet->MaxHeight();

@@ -31,17 +31,10 @@ class nsHTMLDocument {
                                             const nsACString& aOrigHost);
 };
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 constexpr auto kFinishEnrollment = u"navigator.id.finishEnrollment"_ns;
 constexpr auto kGetAssertion = u"navigator.id.getAssertion"_ns;
-
-// Bug #1436078 - Permit Google Accounts. Remove in Bug #1436085 in Jan 2023.
-constexpr auto kGoogleAccountsAppId1 =
-    u"https://www.gstatic.com/securitykey/origins.json"_ns;
-constexpr auto kGoogleAccountsAppId2 =
-    u"https://www.gstatic.com/securitykey/a/google.com/origins.json"_ns;
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(U2F)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
@@ -50,7 +43,7 @@ NS_INTERFACE_MAP_END_INHERITING(WebAuthnManagerBase)
 NS_IMPL_ADDREF_INHERITED(U2F, WebAuthnManagerBase)
 NS_IMPL_RELEASE_INHERITED(U2F, WebAuthnManagerBase)
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(U2F)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(U2F)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(U2F, WebAuthnManagerBase)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTransaction)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
@@ -59,7 +52,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(U2F, WebAuthnManagerBase)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTransaction)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(U2F)
 
 /***********************************************************************
  * Utility Functions
@@ -648,5 +640,4 @@ void U2F::HandleVisibilityChange() {
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

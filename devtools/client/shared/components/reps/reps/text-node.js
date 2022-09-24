@@ -15,13 +15,16 @@ define(function(require, exports, module) {
 
   // Reps
   const {
-    isGrip,
     cropString,
     wrapRender,
   } = require("devtools/client/shared/components/reps/reps/rep-utils");
   const {
     MODE,
   } = require("devtools/client/shared/components/reps/reps/constants");
+  const {
+    rep: StringRep,
+    isLongString,
+  } = require("devtools/client/shared/components/reps/reps/string");
 
   /**
    * Renders DOM #text node.
@@ -29,8 +32,7 @@ define(function(require, exports, module) {
 
   TextNode.propTypes = {
     object: PropTypes.object.isRequired,
-    // @TODO Change this to Object.values when supported in Node's version of V8
-    mode: PropTypes.oneOf(Object.keys(MODE).map(key => MODE[key])),
+    mode: PropTypes.oneOf(Object.values(MODE)),
     onDOMNodeMouseOver: PropTypes.func,
     onDOMNodeMouseOut: PropTypes.func,
     onInspectIconClick: PropTypes.func,
@@ -51,7 +53,11 @@ define(function(require, exports, module) {
     return span(
       config,
       getTitle(grip),
-      span({ className: "nodeValue" }, " ", `"${getTextContent(grip)}"`),
+      " ",
+      StringRep({
+        className: "nodeValue",
+        object: grip.preview.textContent,
+      }),
       inspectIcon ? inspectIcon : null
     );
   }
@@ -92,7 +98,8 @@ define(function(require, exports, module) {
   }
 
   function getTextContent(grip) {
-    return cropString(grip.preview.textContent);
+    const text = grip.preview.textContent;
+    return cropString(isLongString(text) ? text.initial : text);
   }
 
   function getInspectIcon(opts) {
@@ -118,11 +125,7 @@ define(function(require, exports, module) {
 
   // Registration
   function supportsObject(grip, noGrip = false) {
-    if (noGrip === true || !isGrip(grip)) {
-      return false;
-    }
-
-    return grip.preview && grip.class == "Text";
+    return grip?.preview && grip?.class == "Text";
   }
 
   // Exports from this module

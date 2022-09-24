@@ -5,9 +5,6 @@
 include protocol PCache;
 include protocol PCacheStorage;
 include protocol PCacheStreamControl;
-include protocol PFileDescriptorSet;
-include protocol PChildToParentStream;
-include protocol PParentToChildStream;
 
 include CacheTypes;
 
@@ -19,6 +16,7 @@ namespace mozilla {
 namespace dom {
 namespace cache {
 
+[ManualDealloc]
 protocol PCacheOp
 {
   manager PCache or PCacheStorage;

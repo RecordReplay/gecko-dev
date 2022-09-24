@@ -9,6 +9,7 @@
 
 #include <ostream>
 
+#include "mozilla/intl/BidiEmbeddingLevel.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/EnumeratedRange.h"
 
@@ -69,6 +70,15 @@ enum LogicalCorner {
 
 // Physical axis constants.
 enum PhysicalAxis { eAxisVertical = 0x0, eAxisHorizontal = 0x1 };
+
+// Represents zero or more physical axes.
+enum class PhysicalAxes : uint8_t {
+  None = 0x0,
+  Horizontal = 0x1,
+  Vertical = 0x2,
+  Both = Horizontal | Vertical,
+};
+MOZ_MAKE_ENUM_CLASS_BITWISE_OPERATORS(PhysicalAxes)
 
 inline LogicalAxis GetOrthogonalAxis(LogicalAxis aAxis) {
   return aAxis == eLogicalAxisBlock ? eLogicalAxisInline : eLogicalAxisBlock;
@@ -524,8 +534,8 @@ class WritingMode {
    *
    * XXX change uint8_t to UBiDiLevel after bug 924851
    */
-  void SetDirectionFromBidiLevel(uint8_t level) {
-    if (IS_LEVEL_RTL(level) == IsBidiLTR()) {
+  void SetDirectionFromBidiLevel(mozilla::intl::BidiEmbeddingLevel level) {
+    if (level.IsRTL() == IsBidiLTR()) {
       mWritingMode ^= StyleWritingMode::RTL | StyleWritingMode::INLINE_REVERSED;
     }
   }

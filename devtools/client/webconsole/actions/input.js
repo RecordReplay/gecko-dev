@@ -49,8 +49,15 @@ loader.lazyRequireGetter(
   "devtools/client/shared/screenshot",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "createSimpleTableMessage",
+  "devtools/client/webconsole/utils/messages",
+  true
+);
 
-const HELP_URL = "https://developer.mozilla.org/docs/Tools/Web_Console/Helpers";
+const HELP_URL =
+  "https://firefox-source-docs.mozilla.org/devtools-user/web_console/helpers/";
 
 async function getMappedExpression(hud, expression) {
   let mapResult;
@@ -104,7 +111,7 @@ function evaluateExpression(expression, from = "input") {
 
     const response = await commands.scriptCommand
       .execute(expression, {
-        frameActor: webConsoleUI.getFrameActor(),
+        frameActor: hud.getSelectedFrameActorID(),
         selectedNodeActor: webConsoleUI.getSelectedNodeActorID(),
         selectedTargetFront: toolbox && toolbox.getSelectedTargetFront(),
         mapped,
@@ -168,14 +175,16 @@ function onExpressionEvaluated(response) {
 
 function handleHelperResult(response) {
   // eslint-disable-next-line complexity
-  return async ({ dispatch, hud, toolbox, webConsoleUI }) => {
+  return async ({ dispatch, hud, toolbox, webConsoleUI, getState }) => {
     const { result, helperResult } = response;
     const helperHasRawOutput = !!helperResult?.rawOutput;
+    let networkFront = null;
+
+    // We still don't have support for network event everywhere (e.g. it's missing in
+    // non-multiprocess Browser Toolboxes).
     const hasNetworkResourceCommandSupport = hud.resourceCommand.hasResourceCommandSupport(
       hud.resourceCommand.TYPES.NETWORK_EVENT
     );
-    let networkFront = null;
-    // @backward-compat { version 86 } default network events watcher support
     if (hasNetworkResourceCommandSupport) {
       networkFront = await hud.resourceCommand.watcherFront.getNetworkParentActor();
     }
@@ -187,6 +196,25 @@ function handleHelperResult(response) {
           break;
         case "clearHistory":
           dispatch(historyActions.clearHistory());
+          break;
+        case "historyOutput":
+          const history = getState().history.entries || [];
+          const columns = new Map([
+            ["_index", "(index)"],
+            ["expression", "Expressions"],
+          ]);
+          dispatch(
+            messagesActions.messagesAdd([
+              {
+                ...createSimpleTableMessage(
+                  columns,
+                  history.map((expression, index) => {
+                    return { _index: index, expression };
+                  })
+                ),
+              },
+            ])
+          );
           break;
         case "inspectObject": {
           const objectActor = helperResult.object;
@@ -202,6 +230,16 @@ function handleHelperResult(response) {
           break;
         case "copyValueToClipboard":
           clipboardHelper.copyString(helperResult.value);
+          dispatch(
+            messagesActions.messagesAdd([
+              {
+                resourceType: ResourceCommand.TYPES.PLATFORM_MESSAGE,
+                message: l10n.getStr(
+                  "webconsole.message.commands.copyValueToClipboard"
+                ),
+              },
+            ])
+          );
           break;
         case "screenshotOutput":
           const { args, value } = helperResult;
@@ -236,6 +274,7 @@ function handleHelperResult(response) {
                   message: {
                     level: message.level || "log",
                     arguments: [message.text],
+                    chromeContext: true,
                   },
                   resourceType: ResourceCommand.TYPES.CONSOLE_MESSAGE,
                 }))
@@ -249,8 +288,7 @@ function handleHelperResult(response) {
           // process, while the request has to be blocked from the parent process.
           // Then, calling the Netmonitor action will only update the visual state of the Netmonitor,
           // but we also have to block the request via the NetworkParentActor.
-          // @backward-compat { version 86 } default network events watcher support
-          if (hasNetworkResourceCommandSupport && networkFront) {
+          if (networkFront) {
             await networkFront.blockRequest({ url: blockURL });
           }
           toolbox
@@ -273,8 +311,7 @@ function handleHelperResult(response) {
           break;
         case "unblockURL":
           const unblockURL = helperResult.args.url;
-          // @backward-compat { version 86 } see related comments in block url above
-          if (hasNetworkResourceCommandSupport && networkFront) {
+          if (networkFront) {
             await networkFront.unblockRequest({ url: unblockURL });
           }
           toolbox
@@ -378,7 +415,7 @@ function terminalInputChanged(expression, force = false) {
     ({ expression, mapped } = await getMappedExpression(hud, expression));
 
     const response = await commands.scriptCommand.execute(expression, {
-      frameActor: await webConsoleUI.getFrameActor(),
+      frameActor: hud.getSelectedFrameActorID(),
       selectedNodeActor: webConsoleUI.getSelectedNodeActorID(),
       selectedTargetFront: toolbox && toolbox.getSelectedTargetFront(),
       mapped,

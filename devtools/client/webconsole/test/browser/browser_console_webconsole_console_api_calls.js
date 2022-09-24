@@ -19,7 +19,7 @@ const contentArgs = {
   timerName: FILTER_PREFIX + "MyTimer",
 };
 
-const TEST_URI = `data:text/html,<meta charset=utf8>console API calls<script>
+const TEST_URI = `data:text/html,<!DOCTYPE html><meta charset=utf8>console API calls<script>
   console.log("${contentArgs.log}", {hello: "world"});
   console.warn("${contentArgs.warn}", {hello: "world"});
   console.error("${contentArgs.error}", {hello: "world"});
@@ -50,7 +50,7 @@ add_task(async function() {
 
 async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   // Add the tab first so it creates the ContentProcess
-  const tab = await addTab(TEST_URI);
+  await addTab(TEST_URI);
 
   // Open the Browser Console
   const hud = await BrowserConsoleManager.toggleBrowserConsole();
@@ -59,9 +59,7 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   // In non fission world, we don't retrieve cached messages, so we need to reload the
   // tab to see them.
   if (!nonPrimitiveVariablesDisplayed) {
-    const loaded = BrowserTestUtils.browserLoaded(tab.linkedBrowser);
-    tab.linkedBrowser.reload();
-    await loaded;
+    await reloadBrowser();
   }
 
   const suffix = nonPrimitiveVariablesDisplayed
@@ -90,7 +88,7 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   await waitFor(
     () =>
       expectedMessages.every(expectedMessage =>
-        findMessage(hud, expectedMessage)
+        findConsoleAPIMessage(hud, expectedMessage)
       ),
     "wait for all the messages to be displayed",
     100
@@ -98,10 +96,14 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   ok(true, "Expected messages are displayed in the browser console");
 
   if (nonPrimitiveVariablesDisplayed) {
-    const tableMessage = findMessage(hud, "console.table()", ".message.table");
+    const tableMessage = findConsoleAPIMessage(
+      hud,
+      "console.table()",
+      ".table"
+    );
 
     const table = await waitFor(() =>
-      tableMessage.querySelector(".new-consoletable")
+      tableMessage.querySelector(".consoletable")
     );
     ok(table, "There is a table element");
     const tableTextContent = table.textContent;
@@ -115,7 +117,7 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
 
   info("Uncheck the Show content messages checkbox");
   const onContentMessagesHidden = waitFor(
-    () => !findMessage(hud, contentArgs.log)
+    () => !findConsoleAPIMessage(hud, contentArgs.log)
   );
   await toggleConsoleSetting(
     hud,
@@ -124,12 +126,17 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   await onContentMessagesHidden;
 
   for (const expectedMessage of expectedMessages) {
-    ok(!findMessage(hud, expectedMessage), `"${expectedMessage}" is hidden`);
+    ok(
+      !findConsoleAPIMessage(hud, expectedMessage),
+      `"${expectedMessage}" is hidden`
+    );
   }
 
   info("Check the Show content messages checkbox");
   const onContentMessagesDisplayed = waitFor(() =>
-    expectedMessages.every(expectedMessage => findMessage(hud, expectedMessage))
+    expectedMessages.every(expectedMessage =>
+      findConsoleAPIMessage(hud, expectedMessage)
+    )
   );
   await toggleConsoleSetting(
     hud,
@@ -138,7 +145,10 @@ async function checkContentConsoleApiMessages(nonPrimitiveVariablesDisplayed) {
   await onContentMessagesDisplayed;
 
   for (const expectedMessage of expectedMessages) {
-    ok(findMessage(hud, expectedMessage), `"${expectedMessage}" is visible`);
+    ok(
+      findConsoleAPIMessage(hud, expectedMessage),
+      `"${expectedMessage}" is visible`
+    );
   }
 
   info("Clear and close the Browser Console");

@@ -4,7 +4,6 @@
 
 "use strict";
 
-const promise = require("promise");
 const Services = require("Services");
 const flags = require("devtools/shared/flags");
 const { l10n } = require("devtools/shared/inspector/css-logic");
@@ -23,6 +22,7 @@ const {
 } = require("devtools/client/inspector/shared/utils");
 const { debounce } = require("devtools/shared/debounce");
 const EventEmitter = require("devtools/shared/event-emitter");
+const DOUBLESPACE = "  ";
 
 loader.lazyRequireGetter(
   this,
@@ -71,6 +71,7 @@ loader.lazyRequireGetter(
 const HTML_NS = "http://www.w3.org/1999/xhtml";
 const PREF_UA_STYLES = "devtools.inspector.showUserAgentStyles";
 const PREF_DEFAULT_COLOR_UNIT = "devtools.defaultColorUnit";
+const PREF_DRAGGABLE = "devtools.inspector.draggable_properties";
 const FILTER_CHANGED_TIMEOUT = 150;
 // Removes the flash-out class from an element after 1 second.
 const PROPERTY_FLASHING_DURATION = 1000;
@@ -140,6 +141,10 @@ function CssRuleView(inspector, document, store) {
 
   // Allow tests to override debouncing behavior, as this can cause intermittents.
   this.debounce = debounce;
+
+  // Variable used to stop the propagation of mouse events to children
+  // when we are updating a value by dragging the mouse and we then release it
+  this.childHasDragged = false;
 
   this._outputParser = new OutputParser(document, this.cssProperties);
 
@@ -237,6 +242,7 @@ function CssRuleView(inspector, document, store) {
   this._handleDefaultColorUnitPrefChange = this._handleDefaultColorUnitPrefChange.bind(
     this
   );
+  this._handleDraggablePrefChange = this._handleDraggablePrefChange.bind(this);
 
   this._prefObserver = new PrefObserver("devtools.");
   this._prefObserver.on(PREF_UA_STYLES, this._handleUAStylePrefChange);
@@ -244,6 +250,7 @@ function CssRuleView(inspector, document, store) {
     PREF_DEFAULT_COLOR_UNIT,
     this._handleDefaultColorUnitPrefChange
   );
+  this._prefObserver.on(PREF_DRAGGABLE, this._handleDraggablePrefChange);
 
   this.pseudoClassCheckboxes = this._createPseudoClassCheckboxes();
   this.showUserAgentStyles = Services.prefs.getBoolPref(PREF_UA_STYLES);
@@ -389,6 +396,11 @@ CssRuleView.prototype = {
    * @param {MouseEvent|UIEvent} event
    */
   handleEvent(event) {
+    if (this.childHasDragged) {
+      this.childHasDragged = false;
+      event.stopPropagation();
+      return;
+    }
     switch (event.type) {
       case "click":
         this.handleClickEvent(event);
@@ -508,23 +520,13 @@ CssRuleView.prototype = {
    */
   async _initSimulationFeatures() {
     if (!this.currentTarget.chrome) {
+      this.colorSchemeLightSimulationButton.removeAttribute("hidden");
+      this.colorSchemeDarkSimulationButton.removeAttribute("hidden");
       this.printSimulationButton.removeAttribute("hidden");
       this.printSimulationButton.addEventListener(
         "click",
         this._onTogglePrintSimulation
       );
-    }
-
-    // Show the color scheme simulation toggle button if the feature pref is
-    // enabled.
-    if (
-      Services.prefs.getBoolPref(
-        "devtools.inspector.color-scheme-simulation.enabled"
-      )
-    ) {
-      this.colorSchemeLightSimulationButton.removeAttribute("hidden");
-      this.colorSchemeDarkSimulationButton.removeAttribute("hidden");
-
       this.colorSchemeLightSimulationButton.addEventListener(
         "click",
         this._onToggleLightColorSchemeSimulation
@@ -636,6 +638,9 @@ CssRuleView.prototype = {
 
         // Remove any double newlines.
         text = text.replace(/(\r?\n)\r?\n/g, "$1");
+
+        // Replace 4 space indentation with 2 Spaces.
+        text = text.replace(/\ {4}/g, DOUBLESPACE);
       }
 
       clipboardHelper.copyString(text);
@@ -658,7 +663,7 @@ CssRuleView.prototype = {
     // request to complete, and then focus the new rule's selector.
     const eventPromise = this.once("ruleview-refreshed");
     const newRulePromise = this.pageStyle.addNewRule(element, pseudoClasses);
-    promise.all([eventPromise, newRulePromise]).then(values => {
+    Promise.all([eventPromise, newRulePromise]).then(values => {
       const options = values[1];
       // Be sure the reference the correct |rules| here.
       for (const rule of this._elementStyle.rules) {
@@ -700,6 +705,13 @@ CssRuleView.prototype = {
 
   _handleDefaultColorUnitPrefChange: function() {
     this._handlePrefChange(PREF_DEFAULT_COLOR_UNIT);
+  },
+
+  _handleDraggablePrefChange: function() {
+    // This event is consumed by text-property-editor instances in order to
+    // update their draggable behavior. Preferences observer are costly, so
+    // we are forwarding the preference update via the EventEmitter.
+    this.emit("draggable-preference-updated");
   },
 
   _handlePrefChange: function(pref) {
@@ -821,6 +833,7 @@ CssRuleView.prototype = {
       PREF_DEFAULT_COLOR_UNIT,
       this._handleDefaultColorUnitPrefChange
     );
+    this._prefObserver.off(PREF_DRAGGABLE, this._handleDraggablePrefChange);
     this._prefObserver.destroy();
 
     this._outputParser = null;
@@ -862,7 +875,7 @@ CssRuleView.prototype = {
 
     // Remove bound listeners
     this.shortcuts.destroy();
-    this.styleDocument.removeEventListener("click", this);
+    this.styleDocument.removeEventListener("click", this, { capture: true });
     this.element.removeEventListener("copy", this._onCopy);
     this.element.removeEventListener("contextmenu", this._onContextMenu);
     this.addRuleButton.removeEventListener("click", this._onAddRule);
@@ -939,7 +952,7 @@ CssRuleView.prototype = {
   selectElement: function(element, allowRefresh = false) {
     const refresh = this._viewedElement === element;
     if (refresh && !allowRefresh) {
-      return promise.resolve(undefined);
+      return Promise.resolve(undefined);
     }
 
     if (this._popup && this.popup.isOpen) {
@@ -961,7 +974,7 @@ CssRuleView.prototype = {
         this.pageStyle.off("stylesheet-updated", this.refreshPanel);
         this.pageStyle = null;
       }
-      return promise.resolve(undefined);
+      return Promise.resolve(undefined);
     }
 
     this.pageStyle = element.inspectorFront.pageStyle;
@@ -970,8 +983,7 @@ CssRuleView.prototype = {
     // To figure out how shorthand properties are interpreted by the
     // engine, we will set properties on a dummy element and observe
     // how their .style attribute reflects them as computed values.
-    const dummyElementPromise = promise
-      .resolve(this.styleDocument)
+    const dummyElementPromise = Promise.resolve(this.styleDocument)
       .then(document => {
         // ::before and ::after do not have a namespaceURI
         const namespaceURI =
@@ -1027,7 +1039,7 @@ CssRuleView.prototype = {
   refreshPanel: function() {
     // Ignore refreshes when the panel is hidden, or during editing or when no element is selected.
     if (!this.isPanelVisible() || this.isEditing || !this._elementStyle) {
-      return promise.resolve(undefined);
+      return Promise.resolve(undefined);
     }
 
     // Repopulate the element style once the current modifications are done.
@@ -1038,7 +1050,7 @@ CssRuleView.prototype = {
       }
     }
 
-    return promise.all(promises).then(() => {
+    return Promise.all(promises).then(() => {
       return this._populate();
     });
   },
@@ -1320,7 +1332,7 @@ CssRuleView.prototype = {
     let container = null;
 
     if (!this._elementStyle.rules) {
-      return promise.resolve();
+      return Promise.resolve();
     }
 
     const editorReadyPromises = [];
@@ -1393,7 +1405,7 @@ CssRuleView.prototype = {
       this.searchValue && !seenSearchTerm
     );
 
-    return promise.all(editorReadyPromises);
+    return Promise.all(editorReadyPromises);
   },
 
   /**
@@ -1408,7 +1420,11 @@ CssRuleView.prototype = {
   highlightRule: function(rule) {
     const isRuleSelectorHighlighted = this._highlightRuleSelector(rule);
     const isStyleSheetHighlighted = this._highlightStyleSheet(rule);
-    let isHighlighted = isRuleSelectorHighlighted || isStyleSheetHighlighted;
+    const isAncestorRulesHighlighted = this._highlightAncestorRules(rule);
+    let isHighlighted =
+      isRuleSelectorHighlighted ||
+      isStyleSheetHighlighted ||
+      isAncestorRulesHighlighted;
 
     // Highlight search matches in the rule properties
     for (const textProp of rule.textProps) {
@@ -1454,6 +1470,34 @@ CssRuleView.prototype = {
     }
 
     return isSelectorHighlighted;
+  },
+
+  /**
+   * Highlights the ancestor rules data (@media / @layer) that matches the filter search
+   * value and returns a boolean indicating whether or not element was highlighted.
+   *
+   * @return {Boolean} true if the element was highlighted, false otherwise.
+   */
+  _highlightAncestorRules: function(rule) {
+    const element = rule.editor.ancestorDataEl;
+    if (!element) {
+      return false;
+    }
+
+    let isHighlighted = false;
+    for (let i = 0; i < element.childNodes.length; i++) {
+      const child = element.childNodes[i];
+      const dataText = child.innerText.toLowerCase();
+      const matches = this.searchData.strictSearchValue
+        ? dataText === this.searchData.strictSearchValue
+        : dataText.includes(this.searchValue);
+      if (matches) {
+        isHighlighted = true;
+        child.classList.add("ruleview-highlight");
+      }
+    }
+
+    return isHighlighted;
   },
 
   /**
@@ -2027,7 +2071,9 @@ function RuleViewTool(inspector, window) {
     }
   );
 
-  this.onSelected();
+  // At the moment `readyPromise` is only consumed in tests (see `openRuleView`) to be
+  // notified when the ruleview was first populated to match the initial selected node.
+  this.readyPromise = this.onSelected();
 }
 
 RuleViewTool.prototype = {
@@ -2048,29 +2094,30 @@ RuleViewTool.prototype = {
     // let the update go through as this is needed to empty the view on
     // navigation.
     if (!this.view) {
-      return;
+      return null;
     }
 
     const isInactive =
       !this.isPanelVisible() && this.inspector.selection.nodeFront;
     if (isInactive) {
-      return;
+      return null;
     }
 
     if (
       !this.inspector.selection.isConnected() ||
       !this.inspector.selection.isElementNode()
     ) {
-      this.view.selectElement(null);
-      return;
+      return this.view.selectElement(null);
     }
 
-    if (selectElement) {
-      const done = this.inspector.updating("rule-view");
-      this.view
-        .selectElement(this.inspector.selection.nodeFront)
-        .then(done, done);
+    if (!selectElement) {
+      return null;
     }
+
+    const done = this.inspector.updating("rule-view");
+    return this.view
+      .selectElement(this.inspector.selection.nodeFront)
+      .then(done, done);
   },
 
   refresh: function() {
@@ -2129,7 +2176,7 @@ RuleViewTool.prototype = {
 
     this.view.destroy();
 
-    this.view = this.document = this.inspector = null;
+    this.view = this.document = this.inspector = this.readyPromise = null;
   },
 };
 

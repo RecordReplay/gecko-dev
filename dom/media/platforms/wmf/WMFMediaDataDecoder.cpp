@@ -20,9 +20,9 @@
 namespace mozilla {
 
 WMFMediaDataDecoder::WMFMediaDataDecoder(MFTManager* aMFTManager)
-    : mTaskQueue(
-          new TaskQueue(GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
-                        "WMFMediaDataDecoder")),
+    : mTaskQueue(TaskQueue::Create(
+          GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+          "WMFMediaDataDecoder")),
       mMFTManager(aMFTManager) {}
 
 WMFMediaDataDecoder::~WMFMediaDataDecoder() {}
@@ -30,31 +30,6 @@ WMFMediaDataDecoder::~WMFMediaDataDecoder() {}
 RefPtr<MediaDataDecoder::InitPromise> WMFMediaDataDecoder::Init() {
   MOZ_ASSERT(!mIsShutDown);
   return InitPromise::CreateAndResolve(mMFTManager->GetType(), __func__);
-}
-
-// A single telemetry sample is reported for each MediaDataDecoder object
-// that has detected error or produced output successfully.
-static void SendTelemetry(unsigned long hr) {
-  // Collapse the error codes into a range of 0-0xff that can be viewed in
-  // telemetry histograms.  For most MF_E_* errors, unique samples are used,
-  // retaining the least significant 7 or 8 bits.  Other error codes are
-  // bucketed.
-  uint32_t sample;
-  if (SUCCEEDED(hr)) {
-    sample = 0;
-  } else if (hr < 0xc00d36b0) {
-    sample = 1;  // low bucket
-  } else if (hr < 0xc00d3700) {
-    sample = hr & 0xffU;  // MF_E_*
-  } else if (hr <= 0xc00d3705) {
-    sample = 0x80 + (hr & 0xfU);  // more MF_E_*
-  } else if (hr < 0xc00d6d60) {
-    sample = 2;  // mid bucket
-  } else if (hr <= 0xc00d6d78) {
-    sample = hr & 0xffU;  // MF_E_TRANSFORM_*
-  } else {
-    sample = 3;  // high bucket
-  }
 }
 
 RefPtr<ShutdownPromise> WMFMediaDataDecoder::Shutdown() {
@@ -65,9 +40,6 @@ RefPtr<ShutdownPromise> WMFMediaDataDecoder::Shutdown() {
     if (mMFTManager) {
       mMFTManager->Shutdown();
       mMFTManager = nullptr;
-      if (!mRecordedError && mHasSuccessfulOutput) {
-        SendTelemetry(S_OK);
-      }
     }
     return mTaskQueue->BeginShutdown();
   });
@@ -85,16 +57,12 @@ RefPtr<MediaDataDecoder::DecodePromise> WMFMediaDataDecoder::Decode(
 RefPtr<MediaDataDecoder::DecodePromise> WMFMediaDataDecoder::ProcessError(
     HRESULT aError, const char* aReason) {
   MOZ_ASSERT(mTaskQueue->IsCurrentThreadIn());
-  if (!mRecordedError) {
-    SendTelemetry(aError);
-    mRecordedError = true;
-  }
 
   nsPrintfCString markerString(
       "WMFMediaDataDecoder::ProcessError for decoder with description %s with "
       "reason: %s",
       GetDescriptionName().get(), aReason);
-  LOG(markerString.get());
+  LOG("%s", markerString.get());
   PROFILER_MARKER_TEXT("WMFDecoder Error", MEDIA_PLAYBACK, {}, markerString);
 
   // TODO: For the error DXGI_ERROR_DEVICE_RESET, we could return
@@ -102,7 +70,7 @@ RefPtr<MediaDataDecoder::DecodePromise> WMFMediaDataDecoder::ProcessError(
   // up to 3 times.
   return DecodePromise::CreateAndReject(
       MediaResult(NS_ERROR_DOM_MEDIA_DECODE_ERR,
-                  RESULT_DETAIL("%s:%x", aReason, aError)),
+                  RESULT_DETAIL("%s:%lx", aReason, aError)),
       __func__);
 }
 
@@ -182,7 +150,6 @@ WMFMediaDataDecoder::ProcessOutput(DecodedData& aResults) {
   HRESULT hr = S_OK;
   while (SUCCEEDED(hr = mMFTManager->Output(mLastStreamOffset, output))) {
     MOZ_ASSERT(output.get(), "Upon success, we must receive an output");
-    mHasSuccessfulOutput = true;
     if (ShouldGuardAgaintIncorrectFirstSample(output)) {
       LOG("Discarding sample with time %" PRId64
           " because of ShouldGuardAgaintIncorrectFirstSample check",

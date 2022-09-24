@@ -33,7 +33,7 @@ class nsHttpTransaction;
 class nsHttpRequestHead;
 class nsHttpConnectionInfo;
 class NullHttpTransaction;
-class SpdyConnectTransaction;
+class Http2ConnectTransaction;
 
 //----------------------------------------------------------------------------
 // Abstract base class for a HTTP transaction:
@@ -151,9 +151,9 @@ class nsAHttpTransaction : public nsSupportsWeakReference {
   virtual nsHttpTransaction* QueryHttpTransaction() { return nullptr; }
 
   // If we used rtti this would be the result of doing
-  // dynamic_cast<SpdyConnectTransaction *>(this).. i.e. it can be nullptr for
+  // dynamic_cast<Http2ConnectTransaction *>(this).. i.e. it can be nullptr for
   // other types
-  virtual SpdyConnectTransaction* QuerySpdyConnectTransaction() {
+  virtual Http2ConnectTransaction* QueryHttp2ConnectTransaction() {
     return nullptr;
   }
 
@@ -178,7 +178,7 @@ class nsAHttpTransaction : public nsSupportsWeakReference {
   }
 
   virtual void DisableSpdy() {}
-  virtual void DisableHttp3() {}
+  virtual void DisableHttp3(bool aAllowRetryHTTPSRR) {}
   virtual void MakeNonSticky() {}
   virtual void ReuseConnectionOnRestartOK(bool) {}
 

@@ -13,7 +13,7 @@
 #include "jit/AtomicOp.h"
 #include "jit/MoveResolver.h"
 #include "vm/BigIntType.h"  // JS::BigInt
-#include "wasm/WasmTypes.h"
+#include "wasm/WasmBuiltins.h"
 
 #ifdef _M_ARM64
 #  ifdef move32
@@ -321,6 +321,13 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
     storePtr(temp, dest);
   }
 
+  void storePrivateValue(Register src, const Address& dest) {
+    storePtr(src, dest);
+  }
+  void storePrivateValue(ImmGCPtr imm, const Address& dest) {
+    storePtr(imm, dest);
+  }
+
   void loadValue(Address src, Register val) {
     Ldr(ARMRegister(val, 64), MemOperand(src));
   }
@@ -566,9 +573,16 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
     ARMFPRegister fsrc64(src, 64);
     ARMRegister dest32(dest, 32);
 
-    // ARMv8.3 chips support the FJCVTZS instruction, which handles
-    // exactly this logic.
-    if (CPUHas(vixl::CPUFeatures::kFP, vixl::CPUFeatures::kJSCVT)) {
+    // ARMv8.3 chips support the FJCVTZS instruction, which handles exactly this
+    // logic.  But the simulator does not implement it, and when the simulator
+    // runs on ARM64 hardware we want to override vixl's detection of it.
+#if defined(JS_SIMULATOR_ARM64) && (defined(__aarch64__) || defined(_M_ARM64))
+    const bool fjscvt = false;
+#else
+    const bool fjscvt =
+        CPUHas(vixl::CPUFeatures::kFP, vixl::CPUFeatures::kJSCVT);
+#endif
+    if (fjscvt) {
       // Convert double to integer, rounding toward zero.
       // The Z-flag is set iff the conversion is exact. -0 unsets the Z-flag.
       Fjcvtzs(dest32, fsrc64);
@@ -1125,6 +1139,9 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
   void cmpPtr(Register lhs, ImmPtr rhs) {
     Cmp(ARMRegister(lhs, 64), Operand(uint64_t(rhs.value)));
   }
+  void cmpPtr(Register lhs, Imm64 rhs) {
+    Cmp(ARMRegister(lhs, 64), Operand(uint64_t(rhs.value)));
+  }
   void cmpPtr(Register lhs, Register rhs) {
     Cmp(ARMRegister(lhs, 64), ARMRegister(rhs, 64));
   }
@@ -1346,6 +1363,9 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
     Str(scratch32, toMemOperand(dest));
   }
   void adds64(Imm32 imm, Register dest) {
+    Adds(ARMRegister(dest, 64), ARMRegister(dest, 64), Operand(imm.value));
+  }
+  void adds64(ImmWord imm, Register dest) {
     Adds(ARMRegister(dest, 64), ARMRegister(dest, 64), Operand(imm.value));
   }
   void adds64(Register src, Register dest) {
@@ -1572,10 +1592,31 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
   }
 
   void loadConstantDouble(double d, FloatRegister dest) {
-    Fmov(ARMFPRegister(dest, 64), d);
+    ARMFPRegister r(dest, 64);
+    if (d == 0.0) {
+      // Clang11 does movi for 0 and movi+fneg for -0, and this seems like a
+      // good implementation-independent strategy as it avoids any gpr->fpr
+      // moves or memory traffic.
+      Movi(r, 0);
+      if (std::signbit(d)) {
+        Fneg(r, r);
+      }
+    } else {
+      Fmov(r, d);
+    }
   }
   void loadConstantFloat32(float f, FloatRegister dest) {
-    Fmov(ARMFPRegister(dest, 32), f);
+    ARMFPRegister r(dest, 32);
+    if (f == 0.0) {
+      // See comments above.  There's not a movi variant for a single register,
+      // so clear the double.
+      Movi(ARMFPRegister(dest, 64), 0);
+      if (std::signbit(f)) {
+        Fneg(r, r);
+      }
+    } else {
+      Fmov(r, f);
+    }
   }
 
   void cmpTag(Register tag, ImmTag ref) {
@@ -1917,17 +1958,6 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
     splitSignExtTag(src, scratch);
     return testBigInt(cond, scratch);
   }
-  Condition testBigIntTruthy(bool truthy, const ValueOperand& value) {
-    vixl::UseScratchRegisterScope temps(this);
-    const Register scratch = temps.AcquireX().asUnsized();
-
-    MOZ_ASSERT(value.valueReg() != scratch);
-
-    unboxBigInt(value, scratch);
-    load32(Address(scratch, BigInt::offsetOfDigitLength()), scratch);
-    cmp32(scratch, Imm32(0));
-    return truthy ? Condition::NonZero : Condition::Zero;
-  }
   Condition testInt32(Condition cond, const BaseIndex& src) {
     vixl::UseScratchRegisterScope temps(this);
     const Register scratch = temps.AcquireX().asUnsized();
@@ -1980,19 +2010,10 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
     Tst(payload32, payload32);
     return truthy ? NonZero : Zero;
   }
-  Condition testStringTruthy(bool truthy, const ValueOperand& value) {
-    vixl::UseScratchRegisterScope temps(this);
-    const Register scratch = temps.AcquireX().asUnsized();
-    const ARMRegister scratch32(scratch, 32);
-    const ARMRegister scratch64(scratch, 64);
 
-    MOZ_ASSERT(value.valueReg() != scratch);
+  Condition testBigIntTruthy(bool truthy, const ValueOperand& value);
+  Condition testStringTruthy(bool truthy, const ValueOperand& value);
 
-    unboxString(value, scratch);
-    Ldr(scratch32, MemOperand(scratch64, JSString::offsetOfLength()));
-    Cmp(scratch32, Operand(0));
-    return truthy ? Condition::NonZero : Condition::Zero;
-  }
   void int32OrDouble(Register src, ARMFPRegister dest) {
     Label isInt32;
     Label join;
@@ -2228,15 +2249,6 @@ class MacroAssemblerCompat : public vixl::MacroAssembler {
 #ifdef JS_SIMULATOR_ARM64
     svc(vixl::kCheckStackPointer);
 #endif
-  }
-
-  void loadWasmGlobalPtr(uint32_t globalDataOffset, Register dest) {
-    loadPtr(Address(WasmTlsReg,
-                    offsetof(wasm::TlsData, globalArea) + globalDataOffset),
-            dest);
-  }
-  void loadWasmPinnedRegsFromTls() {
-    loadPtr(Address(WasmTlsReg, offsetof(wasm::TlsData, memoryBase)), HeapReg);
   }
 
   // Overwrites the payload bits of a dest register containing a Value.

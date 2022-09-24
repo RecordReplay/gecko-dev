@@ -6,7 +6,6 @@
 
 #include "jsfriendapi.h"
 
-#include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/TimeStamp.h"
@@ -16,10 +15,8 @@
 #include "builtin/BigInt.h"
 #include "builtin/MapObject.h"
 #include "builtin/TestingFunctions.h"
-#include "gc/GC.h"
 #include "gc/PublicIterators.h"
 #include "gc/WeakMap.h"
-#include "js/CharacterEncoding.h"
 #include "js/experimental/CodeCoverage.h"
 #include "js/experimental/CTypes.h"  // JS::AutoCTypesActivityCallback, JS::SetCTypesActivityCallback
 #include "js/experimental/Intl.h"  // JS::AddMoz{DateTimeFormat,DisplayNames}Constructor
@@ -27,10 +24,9 @@
 #include "js/friend/StackLimits.h"    // JS_STACK_GROWTH_DIRECTION
 #include "js/friend/WindowProxy.h"    // js::ToWindowIfWindowProxy
 #include "js/Object.h"                // JS::GetClass
-#include "js/Printf.h"
+#include "js/PropertyAndElement.h"    // JS_DefineProperty
 #include "js/Proxy.h"
-#include "js/shadow/Object.h"  // JS::shadow::Object
-#include "js/String.h"         // JS::detail::StringToLinearStringSlow
+#include "js/String.h"  // JS::detail::StringToLinearStringSlow
 #include "js/Wrapper.h"
 #include "proxy/DeadObjectProxy.h"
 #include "util/Poison.h"
@@ -38,24 +34,22 @@
 #include "vm/BooleanObject.h"
 #include "vm/DateObject.h"
 #include "vm/ErrorObject.h"
-#include "vm/FrameIter.h"  // js::FrameIter
 #include "vm/JSContext.h"
 #include "vm/JSObject.h"
 #include "vm/NumberObject.h"
-#include "vm/PlainObject.h"  // js::PlainObject
-#include "vm/Printer.h"
+#include "vm/PlainObject.h"    // js::PlainObject
 #include "vm/PromiseObject.h"  // js::PromiseObject
 #include "vm/Realm.h"
 #include "vm/StringObject.h"
-#include "vm/Time.h"
 #include "vm/WrapperObject.h"
+#ifdef ENABLE_RECORD_TUPLE
+#  include "vm/RecordType.h"
+#  include "vm/TupleType.h"
+#endif
 
-#include "gc/Nursery-inl.h"
 #include "vm/Compartment-inl.h"  // JS::Compartment::wrap
-#include "vm/EnvironmentObject-inl.h"
 #include "vm/JSObject-inl.h"
 #include "vm/JSScript-inl.h"
-#include "vm/NativeObject-inl.h"
 
 using namespace js;
 
@@ -77,7 +71,8 @@ JS::RootingContext::RootingContext() : realm_(nullptr), zone_(nullptr) {
 #endif
 }
 
-JS_PUBLIC_API void JS_SetGrayGCRootsTracer(JSContext* cx, JSTraceDataOp traceOp,
+JS_PUBLIC_API void JS_SetGrayGCRootsTracer(JSContext* cx,
+                                           JSGrayRootsTracer traceOp,
                                            void* data) {
   cx->runtime()->gc.setGrayRootsTracer(traceOp, data);
 }
@@ -123,6 +118,10 @@ JS_PUBLIC_API bool JS::GetIsSecureContext(JS::Realm* realm) {
 
 JS_PUBLIC_API JSPrincipals* JS::GetRealmPrincipals(JS::Realm* realm) {
   return realm->principals();
+}
+
+JS_PUBLIC_API bool JS::GetDebuggerObservesWasm(JS::Realm* realm) {
+  return realm->debuggerObservesAsmJS();
 }
 
 JS_PUBLIC_API void JS::SetRealmPrincipals(JS::Realm* realm,
@@ -268,6 +267,12 @@ JS_PUBLIC_API bool JS::GetBuiltinClass(JSContext* cx, HandleObject obj,
     *cls = ESClass::Error;
   } else if (obj->is<BigIntObject>()) {
     *cls = ESClass::BigInt;
+#ifdef ENABLE_RECORD_TUPLE
+  } else if (obj->is<RecordType>()) {
+    *cls = ESClass::Record;
+  } else if (obj->is<TupleType>()) {
+    *cls = ESClass::Tuple;
+#endif
   } else if (obj->is<JSFunction>()) {
     *cls = ESClass::Function;
   } else {
@@ -445,6 +450,8 @@ void JS::detail::SetReservedSlotWithBarrier(JSObject* obj, size_t slot,
   if (obj->is<ProxyObject>()) {
     obj->as<ProxyObject>().setReservedSlot(slot, value);
   } else {
+    // Note: we don't use setReservedSlot so that this also works on swappable
+    // DOM objects. See NativeObject::getReservedSlotRef comment.
     obj->as<NativeObject>().setSlot(slot, value);
   }
 }
@@ -554,35 +561,18 @@ JS_PUBLIC_API JSObject* JS_CloneObject(JSContext* cx, HandleObject obj,
 
   RootedObject clone(cx);
   if (obj->is<NativeObject>()) {
-    // JS_CloneObject is used to create the target object for JSObject::swap().
-    // swap() requires its arguments are tenured, so ensure tenure allocation.
-    clone = NewTenuredObjectWithGivenProto(cx, obj->getClass(), proto);
+    clone = NewObjectWithGivenProto(cx, obj->getClass(), proto);
     if (!clone) {
       return nullptr;
     }
 
-    if (clone->is<JSFunction>() &&
-        (obj->compartment() != clone->compartment())) {
+    if (clone->is<JSFunction>() && obj->compartment() != clone->compartment()) {
       JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
                                 JSMSG_CANT_CLONE_OBJECT);
       return nullptr;
-    }
-
-    if (obj->as<NativeObject>().hasPrivate()) {
-      clone->as<NativeObject>().setPrivate(
-          obj->as<NativeObject>().getPrivate());
     }
   } else {
     auto* handler = GetProxyHandler(obj);
-
-    // Same as above, require tenure allocation of the clone. This means for
-    // proxy objects we need to reject nursery allocatable proxies.
-    if (handler->canNurseryAllocate()) {
-      JS_ReportErrorNumberASCII(cx, GetErrorMessage, nullptr,
-                                JSMSG_CANT_CLONE_OBJECT);
-      return nullptr;
-    }
-
     clone = ProxyObject::New(cx, handler, JS::NullHandleValue,
                              AsTaggedProto(proto), obj->getClass());
     if (!clone) {
@@ -759,7 +749,7 @@ JS_PUBLIC_API JS::Value js::MaybeGetScriptPrivate(JSObject* object) {
     return UndefinedValue();
   }
 
-  return object->as<ScriptSourceObject>().canonicalPrivate();
+  return object->as<ScriptSourceObject>().getPrivate();
 }
 
 JS_PUBLIC_API uint64_t js::GetGCHeapUsageForObjectZone(JSObject* obj) {

@@ -20,12 +20,14 @@ using prefix_and_netmask = std::pair<in6_addr, in6_addr>;
 
 class nsNetworkLinkService : public nsINetworkLinkService,
                              public nsIObserver,
-                             public nsITimerCallback {
+                             public nsITimerCallback,
+                             public nsINamed {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSINETWORKLINKSERVICE
   NS_DECL_NSIOBSERVER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   nsNetworkLinkService();
 
@@ -67,13 +69,17 @@ class nsNetworkLinkService : public nsINetworkLinkService,
   bool RoutingFromKernel(nsTArray<nsCString>& aHash);
   bool RoutingTable(nsTArray<nsCString>& aHash);
 
-  mozilla::Mutex mMutex;
+  mozilla::Mutex mMutex MOZ_UNANNOTATED;
   nsCString mNetworkId;
   nsTArray<nsCString> mDNSSuffixList;
 
   // The timer used to delay the calculation of network id since it takes some
   // time to discover the gateway's MAC address.
   nsCOMPtr<nsITimer> mNetworkIdTimer;
+
+  // Scheduled timers used to delay querying of the DNS suffix list when
+  // triggered by a network change. Guarded by mMutex.
+  nsTArray<nsCOMPtr<nsITimer>> mDNSConfigChangedTimers;
 
   // IP address used to check the route for public traffic.
   struct in_addr mRouteCheckIPv4;

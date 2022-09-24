@@ -11,6 +11,7 @@
 #include "mozilla/DebugOnly.h"
 #include "mozilla/LoadInfo.h"
 #include "mozilla/MozPromiseInlines.h"  // For MozPromise::FromDomPromise
+#include "mozilla/NullPrincipal.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_extensions.h"
 #include "mozilla/StaticPrefs_fission.h"
@@ -22,6 +23,7 @@
 #include "mozilla/dom/ClientChannelHelper.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ContentProcessManager.h"
+#include "mozilla/dom/ProcessIsolation.h"
 #include "mozilla/dom/SessionHistoryEntry.h"
 #include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/ipc/IdType.h"
@@ -29,14 +31,17 @@
 #include "mozilla/net/HttpChannelParent.h"
 #include "mozilla/net/RedirectChannelRegistrar.h"
 #include "nsContentSecurityUtils.h"
+#include "nsContentSecurityManager.h"
 #include "nsDocShell.h"
 #include "nsDocShellLoadState.h"
 #include "nsDocShellLoadTypes.h"
 #include "nsDOMNavigationTiming.h"
+#include "nsDSURIContentListener.h"
+#include "nsObjectLoadingContent.h"
+#include "nsOpenWindowInfo.h"
 #include "nsExternalHelperAppService.h"
 #include "nsHttpChannel.h"
 #include "nsIBrowser.h"
-#include "nsIE10SUtils.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIStreamConverterService.h"
 #include "nsIViewSourceChannel.h"
@@ -53,6 +58,7 @@
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/nsHTTPSOnlyUtils.h"
+#include "mozilla/dom/ReferrerInfo.h"
 #include "mozilla/dom/RemoteWebProgressRequest.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
 #include "mozilla/ExtensionPolicyService.h"
@@ -78,6 +84,10 @@ using namespace mozilla::dom;
 
 namespace mozilla {
 namespace net {
+
+static ContentParentId GetContentProcessId(ContentParent* aContentParent) {
+  return aContentParent ? aContentParent->ChildID() : ContentParentId{0};
+}
 
 static void SetNeedToAddURIVisit(nsIChannel* aChannel,
                                  bool aNeedToAddURIVisit) {
@@ -212,8 +222,7 @@ class ParentProcessDocumentOpenInfo final : public nsDocumentOpenInfo,
   // channel listener so that we forward onto DocumentLoadListener.
   bool TryDefaultContentListener(nsIChannel* aChannel,
                                  const nsCString& aContentType) {
-    uint32_t canHandle = nsWebNavigationInfo::IsTypeSupported(
-        aContentType, mBrowsingContext->GetAllowPlugins());
+    uint32_t canHandle = nsWebNavigationInfo::IsTypeSupported(aContentType);
     if (canHandle != nsIWebNavigationInfo::UNSUPPORTED) {
       m_targetStreamListener = mListener;
       nsLoadFlags loadFlags = 0;
@@ -386,6 +395,7 @@ NS_INTERFACE_MAP_BEGIN(DocumentLoadListener)
   NS_INTERFACE_MAP_ENTRY(nsIChannelEventSink)
   NS_INTERFACE_MAP_ENTRY(nsIMultiPartChannelListener)
   NS_INTERFACE_MAP_ENTRY(nsIProgressEventSink)
+  NS_INTERFACE_MAP_ENTRY(nsIEarlyHintObserver)
   NS_INTERFACE_MAP_ENTRY_CONCRETE(DocumentLoadListener)
 NS_INTERFACE_MAP_END
 
@@ -516,8 +526,8 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
                                 const TimeStamp& aAsyncOpenTime,
                                 nsDOMNavigationTiming* aTiming,
                                 Maybe<ClientInfo>&& aInfo, bool aUrgentStart,
-                                base::ProcessId aPid, nsresult* aRv)
-    -> RefPtr<OpenPromise> {
+                                dom::ContentParent* aContentParent,
+                                nsresult* aRv) -> RefPtr<OpenPromise> {
   auto* loadingContext = GetLoadingBrowsingContext();
 
   MOZ_DIAGNOSTIC_ASSERT_IF(loadingContext->GetParent(),
@@ -527,6 +537,9 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
   loadingContext->GetOriginAttributes(attrs);
 
   mLoadIdentifier = aLoadState->GetLoadIdentifier();
+  // See description of  mFileName in nsDocShellLoadState.h
+  mIsDownload = !aLoadState->FileName().IsVoid();
+  mIsLoadingJSURI = net::SchemeIsJavascript(aLoadState->URI());
 
   // Check for infinite recursive object or iframe loads
   if (aLoadState->OriginalFrameSrc() || !mIsDocumentLoad) {
@@ -536,6 +549,44 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
       mParentChannelListener = nullptr;
       return nullptr;
     }
+  }
+
+  if (aLoadState->GetRemoteTypeOverride()) {
+    if (!mIsDocumentLoad || !NS_IsAboutBlank(aLoadState->URI()) ||
+        !loadingContext->IsTopContent()) {
+      LOG(
+          ("DocumentLoadListener::Open with invalid remoteTypeOverride "
+           "[this=%p]",
+           this));
+      *aRv = NS_ERROR_DOM_SECURITY_ERR;
+      mParentChannelListener = nullptr;
+      return nullptr;
+    }
+
+    mRemoteTypeOverride = aLoadState->GetRemoteTypeOverride();
+  }
+
+  if (NS_WARN_IF(!loadingContext->IsOwnedByProcess(
+          GetContentProcessId(aContentParent)))) {
+    LOG(
+        ("DocumentLoadListener::Open called from non-current content process "
+         "[this=%p, current=%" PRIu64 ", caller=%" PRIu64 "]",
+         this, loadingContext->OwnerProcessId(),
+         uint64_t(GetContentProcessId(aContentParent))));
+    *aRv = NS_BINDING_ABORTED;
+    mParentChannelListener = nullptr;
+    return nullptr;
+  }
+
+  if (mIsDocumentLoad && loadingContext->IsContent() &&
+      NS_WARN_IF(loadingContext->IsReplaced())) {
+    LOG(
+        ("DocumentLoadListener::Open called from replaced BrowsingContext "
+         "[this=%p, browserid=%" PRIx64 ", bcid=%" PRIx64 "]",
+         this, loadingContext->BrowserId(), loadingContext->Id()));
+    *aRv = NS_BINDING_ABORTED;
+    mParentChannelListener = nullptr;
+    return nullptr;
   }
 
   if (!nsDocShell::CreateAndConfigureRealChannelForLoadState(
@@ -597,6 +648,10 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
   RefPtr<nsHttpChannel> httpChannelImpl = do_QueryObject(mChannel);
   if (httpChannelImpl) {
     httpChannelImpl->SetWarningReporter(this);
+
+    if (mIsDocumentLoad && loadingContext->IsTop()) {
+      httpChannelImpl->SetEarlyHintObserver(this);
+    }
   }
 
   nsCOMPtr<nsITimedChannel> timedChannel = do_QueryInterface(mChannel);
@@ -697,8 +752,10 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
   // after opening the document channel we have to kick off countermeasures.
   nsHTTPSOnlyUtils::PotentiallyFireHttpRequestToShortenTimout(this);
 
-  mOtherPid = aPid;
-  mChannelCreationURI = aLoadState->URI();
+  nsCOMPtr<nsILoadInfo> loadInfo = mChannel->LoadInfo();
+  loadInfo->SetChannelCreationOriginalURI(aLoadState->URI());
+
+  mContentParent = aContentParent;
   mLoadStateExternalLoadFlags = aLoadState->LoadFlags();
   mLoadStateInternalLoadFlags = aLoadState->InternalLoadFlags();
   mLoadStateLoadType = aLoadState->LoadType();
@@ -716,6 +773,22 @@ auto DocumentLoadListener::Open(nsDocShellLoadState* aLoadState,
                        "mismatched parent window context?");
   }
 
+  // For content-initiated loads, this flag is set in nsDocShell::LoadURI.
+  // For parent-initiated loads, we have to set it here.
+  // Below comment is copied from nsDocShell::LoadURI -
+  // If we have a system triggering principal, we can assume that this load was
+  // triggered by some UI in the browser chrome, such as the URL bar or
+  // bookmark bar. This should count as a user interaction for the current sh
+  // entry, so that the user may navigate back to the current entry, from the
+  // entry that is going to be added as part of this load.
+  if (!mSupportsRedirectToRealChannel && aLoadState->TriggeringPrincipal() &&
+      aLoadState->TriggeringPrincipal()->IsSystemPrincipal()) {
+    WindowContext* topWc = loadingContext->GetTopWindowContext();
+    if (topWc && !topWc->IsDiscarded()) {
+      MOZ_ALWAYS_SUCCEEDS(topWc->SetSHEntryHasUserInteraction(true));
+    }
+  }
+
   *aRv = NS_OK;
   mOpenPromise = new OpenPromise::Private(__func__);
   // We make the promise use direct task dispatch in order to reduce the number
@@ -728,8 +801,8 @@ auto DocumentLoadListener::OpenDocument(
     nsDocShellLoadState* aLoadState, uint32_t aCacheKey,
     const Maybe<uint64_t>& aChannelId, const TimeStamp& aAsyncOpenTime,
     nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
-    Maybe<bool> aUriModified, Maybe<bool> aIsXFOError, base::ProcessId aPid,
-    nsresult* aRv) -> RefPtr<OpenPromise> {
+    Maybe<bool> aUriModified, Maybe<bool> aIsXFOError,
+    dom::ContentParent* aContentParent, nsresult* aRv) -> RefPtr<OpenPromise> {
   LOG(("DocumentLoadListener [%p] OpenDocument [uri=%s]", this,
        aLoadState->URI()->GetSpecOrDefault().get()));
 
@@ -748,7 +821,8 @@ auto DocumentLoadListener::OpenDocument(
       browsingContext, std::move(aUriModified), std::move(aIsXFOError));
 
   return Open(aLoadState, loadInfo, loadFlags, aCacheKey, aChannelId,
-              aAsyncOpenTime, aTiming, std::move(aInfo), false, aPid, aRv);
+              aAsyncOpenTime, aTiming, std::move(aInfo), false, aContentParent,
+              aRv);
 }
 
 auto DocumentLoadListener::OpenObject(
@@ -757,8 +831,9 @@ auto DocumentLoadListener::OpenObject(
     nsDOMNavigationTiming* aTiming, Maybe<dom::ClientInfo>&& aInfo,
     uint64_t aInnerWindowId, nsLoadFlags aLoadFlags,
     nsContentPolicyType aContentPolicyType, bool aUrgentStart,
-    base::ProcessId aPid, ObjectUpgradeHandler* aObjectUpgradeHandler,
-    nsresult* aRv) -> RefPtr<OpenPromise> {
+    dom::ContentParent* aContentParent,
+    ObjectUpgradeHandler* aObjectUpgradeHandler, nsresult* aRv)
+    -> RefPtr<OpenPromise> {
   LOG(("DocumentLoadListener [%p] OpenObject [uri=%s]", this,
        aLoadState->URI()->GetSpecOrDefault().get()));
 
@@ -772,8 +847,8 @@ auto DocumentLoadListener::OpenObject(
   mObjectUpgradeHandler = aObjectUpgradeHandler;
 
   return Open(aLoadState, loadInfo, aLoadFlags, aCacheKey, aChannelId,
-              aAsyncOpenTime, aTiming, std::move(aInfo), aUrgentStart, aPid,
-              aRv);
+              aAsyncOpenTime, aTiming, std::move(aInfo), aUrgentStart,
+              aContentParent, aRv);
 }
 
 auto DocumentLoadListener::OpenInParent(nsDocShellLoadState* aLoadState,
@@ -852,7 +927,11 @@ auto DocumentLoadListener::OpenInParent(nsDocShellLoadState* aLoadState,
   nsresult rv;
   return Open(loadState, loadInfo, loadFlags, cacheKey, channelId,
               TimeStamp::Now(), timing, std::move(initialClientInfo), false,
-              browsingContext->GetContentParent()->OtherPid(), &rv);
+              browsingContext->GetContentParent(), &rv);
+}
+
+base::ProcessId DocumentLoadListener::OtherPid() const {
+  return mContentParent ? mContentParent->OtherPid() : base::ProcessId{0};
 }
 
 void DocumentLoadListener::FireStateChange(uint32_t aStateFlags,
@@ -909,7 +988,7 @@ static void SetNavigating(CanonicalBrowsingContext* aBrowsingContext,
         MOZ_ASSERT(aValue.IsReject());
         DocumentLoadListener::OpenPromiseFailedType& rejectValue =
             aValue.RejectValue();
-        if (!rejectValue.mSwitchedProcess) {
+        if (!rejectValue.mContinueNavigating) {
           // If we're not switching the load to a new process, then it is
           // finished (and failed), and we should fire a state change to notify
           // observers. Normally the docshell would fire this, and it would get
@@ -1014,17 +1093,23 @@ void DocumentLoadListener::NotifyDocumentChannelFailed() {
   Cancel(NS_BINDING_ABORTED);
 }
 
-void DocumentLoadListener::Disconnect() {
-  LOG(("DocumentLoadListener Disconnect [this=%p]", this));
+void DocumentLoadListener::Disconnect(bool aContinueNavigating) {
+  LOG(("DocumentLoadListener Disconnect [this=%p, aContinueNavigating=%d]",
+       this, aContinueNavigating));
   // The nsHttpChannel may have a reference to this parent, release it
   // to avoid circular references.
   RefPtr<nsHttpChannel> httpChannelImpl = do_QueryObject(mChannel);
   if (httpChannelImpl) {
     httpChannelImpl->SetWarningReporter(nullptr);
+    httpChannelImpl->SetEarlyHintObserver(nullptr);
+  }
+
+  if (GetLoadingBrowsingContext()) {
+    GetLoadingBrowsingContext()->mEarlyHintsService.Cancel();
   }
 
   if (auto* ctx = GetDocumentBrowsingContext()) {
-    ctx->EndDocumentLoad(mDoingProcessSwitch);
+    ctx->EndDocumentLoad(aContinueNavigating);
   }
 }
 
@@ -1045,27 +1130,26 @@ void DocumentLoadListener::Cancel(const nsresult& aStatusCode) {
 
 void DocumentLoadListener::DisconnectListeners(nsresult aStatus,
                                                nsresult aLoadGroupStatus,
-                                               bool aSwitchedProcess) {
+                                               bool aContinueNavigating) {
   LOG(
       ("DocumentLoadListener DisconnectListener [this=%p, "
-       "aStatus=%" PRIx32 " aLoadGroupStatus=%" PRIx32 " ]",
+       "aStatus=%" PRIx32 ", aLoadGroupStatus=%" PRIx32
+       ", aContinueNavigating=%d]",
        this, static_cast<uint32_t>(aStatus),
-       static_cast<uint32_t>(aLoadGroupStatus)));
+       static_cast<uint32_t>(aLoadGroupStatus), aContinueNavigating));
 
-  RejectOpenPromise(aStatus, aLoadGroupStatus, aSwitchedProcess, __func__);
+  RejectOpenPromise(aStatus, aLoadGroupStatus, aContinueNavigating, __func__);
 
-  Disconnect();
+  Disconnect(aContinueNavigating);
 
-  if (!aSwitchedProcess) {
-    // If we're not going to send anything else to the content process, and
-    // we haven't yet consumed a stream filter promise, then we're never going
-    // to. If we're disconnecting the old content process due to a proces
-    // switch, then we can rely on FinishReplacementChannelSetup being called
-    // (even if the switch failed), so we clear at that point instead.
-    // TODO: This might be because we retargeted the stream to the download
-    // handler or similar. Do we need to attach a stream filter to that?
-    mStreamFilterRequests.Clear();
-  }
+  // Clear any pending stream filter requests. If we're going to be sending a
+  // response to the content process due to a navigation, our caller will have
+  // already stashed the array to be passed to `TriggerRedirectToRealChannel`,
+  // so it's safe for us to clear here.
+  // TODO: If we retargeted the stream to a non-default handler (e.g. to trigger
+  // a download), we currently never attach a stream filter. Should we attach a
+  // stream filter in those situations as well?
+  mStreamFilterRequests.Clear();
 }
 
 void DocumentLoadListener::RedirectToRealChannelFinished(nsresult aRv) {
@@ -1298,9 +1382,7 @@ bool DocumentLoadListener::ResumeSuspendedChannel(
 
   mChannel->Resume();
 
-  if (auto* ctx = GetDocumentBrowsingContext()) {
-    ctx->EndDocumentLoad(mDoingProcessSwitch);
-  }
+  // Our caller will invoke `EndDocumentLoad` for us.
 
   return !mIsFinished;
 }
@@ -1309,13 +1391,7 @@ void DocumentLoadListener::SerializeRedirectData(
     RedirectToRealChannelArgs& aArgs, bool aIsCrossProcess,
     uint32_t aRedirectFlags, uint32_t aLoadFlags,
     ContentParent* aParent) const {
-  // Use the original URI of the current channel, as this is what
-  // we'll use to construct the channel in the content process.
-  aArgs.uri() = mChannelCreationURI;
-  if (!aArgs.uri()) {
-    mChannel->GetOriginalURI(getter_AddRefs(aArgs.uri()));
-  }
-
+  aArgs.uri() = GetChannelCreationURI();
   aArgs.loadIdentifier() = mLoadIdentifier;
 
   // I previously used HttpBaseChannel::CloneLoadInfoForRedirect, but that
@@ -1351,14 +1427,7 @@ void DocumentLoadListener::SerializeRedirectData(
     redirectLoadInfo =
         static_cast<mozilla::net::LoadInfo*>(channelLoadInfo.get())->Clone();
 
-    nsCOMPtr<nsIPrincipal> uriPrincipal;
-    nsIScriptSecurityManager* sm = nsContentUtils::GetSecurityManager();
-    sm->GetChannelURIPrincipal(mChannel, getter_AddRefs(uriPrincipal));
-
-    nsCOMPtr<nsIRedirectHistoryEntry> entry =
-        new nsRedirectHistoryEntry(uriPrincipal, nullptr, ""_ns);
-
-    redirectLoadInfo->AppendRedirectHistoryEntry(entry, true);
+    redirectLoadInfo->AppendRedirectHistoryEntry(mChannel, true);
   }
 
   const Maybe<ClientInfo>& reservedClientInfo =
@@ -1425,52 +1494,96 @@ void DocumentLoadListener::SerializeRedirectData(
   }
 }
 
-static bool IsLargeAllocationLoad(CanonicalBrowsingContext* aBrowsingContext,
-                                  nsIChannel* aChannel) {
-  if (!StaticPrefs::dom_largeAllocationHeader_enabled() ||
-      aBrowsingContext->UseRemoteSubframes()) {
-    return false;
+static bool IsFirstLoadInWindow(nsIChannel* aChannel) {
+  if (nsCOMPtr<nsIPropertyBag2> props = do_QueryInterface(aChannel)) {
+    bool tmp = false;
+    nsresult rv =
+        props->GetPropertyAsBool(u"docshell.newWindowTarget"_ns, &tmp);
+    return NS_SUCCEEDED(rv) && tmp;
+  }
+  return false;
+}
+
+// Get where the document loaded by this nsIChannel should be rendered. This
+// will be `OPEN_CURRENTWINDOW` unless we're loading an attachment which would
+// normally open in an external program, but we're instead choosing to render
+// internally.
+static int32_t GetWhereToOpen(nsIChannel* aChannel, bool aIsDocumentLoad) {
+  // Ignore content disposition for loads from an object or embed element.
+  if (!aIsDocumentLoad) {
+    return nsIBrowserDOMWindow::OPEN_CURRENTWINDOW;
   }
 
-  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aChannel);
-  if (!httpChannel) {
-    return false;
+  // Always continue in the same window if we're not loading an attachment.
+  uint32_t disposition = nsIChannel::DISPOSITION_INLINE;
+  if (NS_FAILED(aChannel->GetContentDisposition(&disposition)) ||
+      disposition != nsIChannel::DISPOSITION_ATTACHMENT) {
+    return nsIBrowserDOMWindow::OPEN_CURRENTWINDOW;
   }
 
-  nsAutoCString ignoredHeaderValue;
-  nsresult rv =
-      httpChannel->GetResponseHeader("Large-Allocation"_ns, ignoredHeaderValue);
-  if (NS_FAILED(rv)) {
-    return false;
+  // If the channel is for a new window target, continue in the same window.
+  if (IsFirstLoadInWindow(aChannel)) {
+    return nsIBrowserDOMWindow::OPEN_CURRENTWINDOW;
   }
 
-  // On all platforms other than win32, LargeAllocation is disabled by default,
-  // and has to be force-enabled using `dom.largeAllocation.forceEnable`.
-#if defined(XP_WIN) && defined(_X86_)
-  return true;
-#else
-  return StaticPrefs::dom_largeAllocation_forceEnable();
-#endif
+  // Respect the user's preferences with browser.link.open_newwindow
+  // FIXME: There should probably be a helper for this, as the logic is
+  // duplicated in a few places.
+  int32_t where = Preferences::GetInt("browser.link.open_newwindow",
+                                      nsIBrowserDOMWindow::OPEN_NEWTAB);
+  if (where == nsIBrowserDOMWindow::OPEN_CURRENTWINDOW ||
+      where == nsIBrowserDOMWindow::OPEN_NEWWINDOW ||
+      where == nsIBrowserDOMWindow::OPEN_NEWTAB) {
+    return where;
+  }
+  return nsIBrowserDOMWindow::OPEN_NEWTAB;
+}
+
+static DocumentLoadListener::ProcessBehavior GetProcessSwitchBehavior(
+    Element* aBrowserElement) {
+  if (aBrowserElement->HasAttribute(u"maychangeremoteness"_ns)) {
+    return DocumentLoadListener::ProcessBehavior::PROCESS_BEHAVIOR_STANDARD;
+  }
+  nsCOMPtr<nsIBrowser> browser = aBrowserElement->AsBrowser();
+  bool isRemoteBrowser = false;
+  browser->GetIsRemoteBrowser(&isRemoteBrowser);
+  if (isRemoteBrowser) {
+    return DocumentLoadListener::ProcessBehavior::
+        PROCESS_BEHAVIOR_SUBFRAME_ONLY;
+  }
+  return DocumentLoadListener::ProcessBehavior::PROCESS_BEHAVIOR_DISABLED;
 }
 
 static bool ContextCanProcessSwitch(CanonicalBrowsingContext* aBrowsingContext,
-                                    WindowGlobalParent* aParentWindow) {
+                                    WindowGlobalParent* aParentWindow,
+                                    bool aSwitchToNewTab) {
   if (NS_WARN_IF(!aBrowsingContext)) {
-    LOG(("Process Switch Abort: no browsing context"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: no browsing context"));
     return false;
   }
   if (!aBrowsingContext->IsContent()) {
-    LOG(("Process Switch Abort: non-content browsing context"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: non-content browsing context"));
     return false;
   }
 
+  // If we're switching into a new tab, we can skip the remaining checks, as
+  // we're not actually changing the process of aBrowsingContext, so whether or
+  // not it is allowed to process switch isn't relevant.
+  if (aSwitchToNewTab) {
+    return true;
+  }
+
   if (aParentWindow && !aBrowsingContext->UseRemoteSubframes()) {
-    LOG(("Process Switch Abort: remote subframes disabled"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: remote subframes disabled"));
     return false;
   }
 
   if (aParentWindow && aParentWindow->IsInProcess()) {
-    LOG(("Process Switch Abort: Subframe with in-process parent"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: Subframe with in-process parent"));
     return false;
   }
 
@@ -1478,34 +1591,33 @@ static bool ContextCanProcessSwitch(CanonicalBrowsingContext* aBrowsingContext,
   // <browser> element.
   Element* browserElement = aBrowsingContext->Top()->GetEmbedderElement();
   if (!browserElement) {
-    LOG(("Process Switch Abort: cannot get embedder element"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: cannot get embedder element"));
     return false;
   }
   nsCOMPtr<nsIBrowser> browser = browserElement->AsBrowser();
   if (!browser) {
-    LOG(("Process Switch Abort: not loaded within nsIBrowser"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: not loaded within nsIBrowser"));
     return false;
   }
 
-  nsIBrowser::ProcessBehavior processBehavior =
-      nsIBrowser::PROCESS_BEHAVIOR_DISABLED;
-  nsresult rv = browser->GetProcessSwitchBehavior(&processBehavior);
-  if (NS_FAILED(rv)) {
-    MOZ_ASSERT_UNREACHABLE(
-        "nsIBrowser::GetProcessSwitchBehavior shouldn't fail");
-    LOG(("Process Switch Abort: failed to get process switch behavior"));
-    return false;
-  }
+  DocumentLoadListener::ProcessBehavior processBehavior =
+      GetProcessSwitchBehavior(browserElement);
 
   // Check if the process switch we're considering is disabled by the
   // <browser>'s process behavior.
-  if (processBehavior == nsIBrowser::PROCESS_BEHAVIOR_DISABLED) {
-    LOG(("Process Switch Abort: switch disabled by <browser>"));
+  if (processBehavior ==
+      DocumentLoadListener::ProcessBehavior::PROCESS_BEHAVIOR_DISABLED) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: switch disabled by <browser>"));
     return false;
   }
-  if (!aParentWindow &&
-      processBehavior == nsIBrowser::PROCESS_BEHAVIOR_SUBFRAME_ONLY) {
-    LOG(("Process Switch Abort: toplevel switch disabled by <browser>"));
+  if (!aParentWindow && processBehavior ==
+                            DocumentLoadListener::ProcessBehavior::
+                                PROCESS_BEHAVIOR_SUBFRAME_ONLY) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: toplevel switch disabled by <browser>"));
     return false;
   }
 
@@ -1522,28 +1634,103 @@ static bool ContextCanProcessSwitch(CanonicalBrowsingContext* aBrowsingContext,
   return true;
 }
 
+static RefPtr<dom::BrowsingContextCallbackReceivedPromise> SwitchToNewTab(
+    CanonicalBrowsingContext* aLoadingBrowsingContext, int32_t aWhere) {
+  MOZ_ASSERT(aWhere == nsIBrowserDOMWindow::OPEN_NEWTAB ||
+                 aWhere == nsIBrowserDOMWindow::OPEN_NEWWINDOW,
+             "Unsupported open location");
+
+  auto promise =
+      MakeRefPtr<dom::BrowsingContextCallbackReceivedPromise::Private>(
+          __func__);
+
+  // Get the nsIBrowserDOMWindow for the given BrowsingContext's tab.
+  nsCOMPtr<nsIBrowserDOMWindow> browserDOMWindow =
+      aLoadingBrowsingContext->GetBrowserDOMWindow();
+  if (NS_WARN_IF(!browserDOMWindow)) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: Unable to get nsIBrowserDOMWindow"));
+    promise->Reject(NS_ERROR_FAILURE, __func__);
+    return promise;
+  }
+
+  // Open a new content tab by calling into frontend. We don't need to worry
+  // about the triggering principal or CSP, as createContentWindow doesn't
+  // actually start loading anything, but use a null principal anyway in case
+  // something changes.
+  nsCOMPtr<nsIPrincipal> triggeringPrincipal =
+      NullPrincipal::Create(aLoadingBrowsingContext->OriginAttributesRef());
+
+  RefPtr<nsOpenWindowInfo> openInfo = new nsOpenWindowInfo();
+  openInfo->mBrowsingContextReadyCallback =
+      new nsBrowsingContextReadyCallback(promise);
+  openInfo->mOriginAttributes = aLoadingBrowsingContext->OriginAttributesRef();
+  openInfo->mParent = aLoadingBrowsingContext;
+  openInfo->mForceNoOpener = true;
+  openInfo->mIsRemote = true;
+
+  // Do the actual work to open a new tab or window async.
+  nsresult rv = NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "DocumentLoadListener::SwitchToNewTab",
+      [browserDOMWindow, openInfo, aWhere, triggeringPrincipal, promise] {
+        RefPtr<BrowsingContext> bc;
+        nsresult rv = browserDOMWindow->CreateContentWindow(
+            /* uri */ nullptr, openInfo, aWhere,
+            nsIBrowserDOMWindow::OPEN_NO_REFERRER, triggeringPrincipal,
+            /* csp */ nullptr, getter_AddRefs(bc));
+        if (NS_WARN_IF(NS_FAILED(rv))) {
+          MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+                  ("Process Switch Abort: CreateContentWindow threw"));
+          promise->Reject(rv, __func__);
+        }
+        if (bc) {
+          promise->Resolve(bc, __func__);
+        }
+      }));
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    promise->Reject(NS_ERROR_UNEXPECTED, __func__);
+  }
+  return promise;
+}
+
 bool DocumentLoadListener::MaybeTriggerProcessSwitch(
     bool* aWillSwitchToRemote) {
   MOZ_ASSERT(XRE_IsParentProcess());
-  MOZ_DIAGNOSTIC_ASSERT(!mDoingProcessSwitch,
-                        "Already in the middle of switching?");
   MOZ_DIAGNOSTIC_ASSERT(mChannel);
   MOZ_DIAGNOSTIC_ASSERT(mParentChannelListener);
   MOZ_DIAGNOSTIC_ASSERT(aWillSwitchToRemote);
 
-  LOG(("DocumentLoadListener MaybeTriggerProcessSwitch [this=%p]", this));
+  MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+          ("DocumentLoadListener MaybeTriggerProcessSwitch [this=%p, uri=%s, "
+           "browserid=%" PRIx64 "]",
+           this, GetChannelCreationURI()->GetSpecOrDefault().get(),
+           GetLoadingBrowsingContext()->Top()->BrowserId()));
 
   // If we're doing an <object>/<embed> load, we may be doing a document load at
   // this point. We never need to do a process switch for a non-document
   // <object> or <embed> load.
-  if (!mIsDocumentLoad && !mChannel->IsDocument()) {
-    LOG(("Process Switch Abort: non-document load"));
-    return false;
+  if (!mIsDocumentLoad) {
+    if (!mChannel->IsDocument()) {
+      MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+              ("Process Switch Abort: non-document load"));
+      return false;
+    }
+    nsresult status;
+    if (!nsObjectLoadingContent::IsSuccessfulRequest(mChannel, &status)) {
+      MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+              ("Process Switch Abort: error page"));
+      return false;
+    }
   }
 
+  // Check if we should handle this load in a different tab or window.
+  int32_t where = GetWhereToOpen(mChannel, mIsDocumentLoad);
+  bool switchToNewTab = where != nsIBrowserDOMWindow::OPEN_CURRENTWINDOW;
+
   // Get the loading BrowsingContext. This may not be the context which will be
-  // switching processes in the case of an <object> or <embed> element, as we
-  // don't create the final context until after process selection.
+  // switching processes when switching to a new tab, and in the case of an
+  // <object> or <embed> element, as we don't create the final context until
+  // after process selection.
   //
   // - /!\ WARNING /!\ -
   // Don't use `browsingContext->IsTop()` in this method! It will behave
@@ -1551,206 +1738,122 @@ bool DocumentLoadListener::MaybeTriggerProcessSwitch(
   // Instead, check whether or not `parentWindow` is null.
   RefPtr<CanonicalBrowsingContext> browsingContext =
       GetLoadingBrowsingContext();
-  RefPtr<WindowGlobalParent> parentWindow = GetParentWindowContext();
-  if (!ContextCanProcessSwitch(browsingContext, parentWindow)) {
+  // If switching to a new tab, the final BC isn't a frame.
+  RefPtr<WindowGlobalParent> parentWindow =
+      switchToNewTab ? nullptr : GetParentWindowContext();
+  if (!ContextCanProcessSwitch(browsingContext, parentWindow, switchToNewTab)) {
     return false;
   }
 
-  // Get the final principal, used to select which process to load into.
-  nsCOMPtr<nsIPrincipal> resultPrincipal;
-  nsresult rv = nsContentUtils::GetSecurityManager()->GetChannelResultPrincipal(
-      mChannel, getter_AddRefs(resultPrincipal));
-  if (NS_FAILED(rv)) {
-    LOG(("Process Switch Abort: failed to get channel result principal"));
+  if (!browsingContext->IsOwnedByProcess(GetContentProcessId(mContentParent))) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Error,
+            ("Process Switch Abort: context no longer owned by creator"));
+    Cancel(NS_BINDING_ABORTED);
+    return false;
+  }
+
+  if (browsingContext->IsReplaced()) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: replaced browsing context"));
+    Cancel(NS_BINDING_ABORTED);
     return false;
   }
 
   nsAutoCString currentRemoteType(NOT_REMOTE_TYPE);
-  if (RefPtr<ContentParent> contentParent =
-          browsingContext->GetContentParent()) {
-    currentRemoteType = contentParent->GetRemoteType();
+  if (mContentParent) {
+    currentRemoteType = mContentParent->GetRemoteType();
   }
-  MOZ_ASSERT_IF(currentRemoteType.IsEmpty(), !OtherPid());
 
-  // Determine what type of content process this load should finish in.
-  nsAutoCString preferredRemoteType(currentRemoteType);
-  RemotenessChangeOptions options;
-
-  // If we're in a preloaded browser, force browsing context replacement to
-  // ensure the current process is re-selected.
-  if (Element* browserElement = browsingContext->Top()->GetEmbedderElement()) {
-    nsAutoString isPreloadBrowserStr;
-    if (browserElement->GetAttr(kNameSpaceID_None, nsGkAtoms::preloadedState,
-                                isPreloadBrowserStr) &&
-        isPreloadBrowserStr.EqualsLiteral("consumed")) {
-      nsCOMPtr<nsIURI> originalURI;
-      if (NS_SUCCEEDED(mChannel->GetOriginalURI(getter_AddRefs(originalURI))) &&
-          !originalURI->GetSpecOrDefault().EqualsLiteral("about:newtab")) {
-        LOG(("Process Switch: leaving preloaded browser"));
-        options.mReplaceBrowsingContext = true;
-        browserElement->UnsetAttr(kNameSpaceID_None, nsGkAtoms::preloadedState,
-                                  true);
-      }
-    }
-  } else {
-    // Note: ContextCanProcessSwitch should return false if the embedder
-    // element is null, but it also runs JS, which has the potential to allow
-    // code to run which may null the embedder element.
-    LOG(("Process Switch Abort: top embedder element disappeared"));
+  auto optionsResult = IsolationOptionsForNavigation(
+      browsingContext->Top(), switchToNewTab ? nullptr : parentWindow.get(),
+      GetChannelCreationURI(), mChannel, currentRemoteType,
+      HasCrossOriginOpenerPolicyMismatch(), switchToNewTab, mLoadStateLoadType,
+      mDocumentChannelId, mRemoteTypeOverride);
+  if (optionsResult.isErr()) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Error,
+            ("Process Switch Abort: CheckIsolationForNavigation Failed with %s",
+             GetStaticErrorName(optionsResult.inspectErr())));
+    Cancel(optionsResult.unwrapErr());
     return false;
   }
 
-  // Update the preferred final process for our load based on the
-  // Cross-Origin-Opener-Policy and Cross-Origin-Embedder-Policy headers.
-  {
-    bool isCOOPSwitch = HasCrossOriginOpenerPolicyMismatch();
-    options.mReplaceBrowsingContext |= isCOOPSwitch;
+  NavigationIsolationOptions options = optionsResult.unwrap();
 
-    // Determine our COOP status, which will be used to determine our preferred
-    // remote type.
-    nsILoadInfo::CrossOriginOpenerPolicy coop =
-        nsILoadInfo::OPENER_POLICY_UNSAFE_NONE;
-    if (parentWindow) {
-      coop = browsingContext->Top()->GetOpenerPolicy();
-    } else if (nsCOMPtr<nsIHttpChannelInternal> httpChannel =
-                   do_QueryInterface(mChannel)) {
-      MOZ_ALWAYS_SUCCEEDS(httpChannel->GetCrossOriginOpenerPolicy(&coop));
+  if (options.mTryUseBFCache) {
+    MOZ_ASSERT(!parentWindow, "Can only BFCache toplevel windows");
+    MOZ_ASSERT(!switchToNewTab, "Can't BFCache for a tab switch");
+    bool sameOrigin = false;
+    if (auto* wgp = browsingContext->GetCurrentWindowGlobal()) {
+      nsCOMPtr<nsIPrincipal> resultPrincipal;
+      MOZ_ALWAYS_SUCCEEDS(
+          nsContentUtils::GetSecurityManager()->GetChannelResultPrincipal(
+              mChannel, getter_AddRefs(resultPrincipal)));
+      sameOrigin =
+          wgp->DocumentPrincipal()->EqualsConsideringDomain(resultPrincipal);
     }
 
-    if (coop ==
-        nsILoadInfo::OPENER_POLICY_SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP) {
-      // We want documents with SAME_ORIGIN_EMBEDDER_POLICY_REQUIRE_CORP COOP
-      // policy to be loaded in a separate process in which we can enable
-      // high-resolution timers.
-      nsAutoCString siteOrigin;
-      resultPrincipal->GetSiteOrigin(siteOrigin);
-      preferredRemoteType = WITH_COOP_COEP_REMOTE_TYPE_PREFIX;
-      preferredRemoteType.Append(siteOrigin);
-    } else if (isCOOPSwitch) {
-      // If we're doing a COOP switch, we do not need any affinity to the
-      // current remote type. Clear it back to the default value.
-      preferredRemoteType = DEFAULT_REMOTE_TYPE;
-    }
+    // We only reset the window name for content.
+    mLoadingSessionHistoryInfo->mForceMaybeResetName.emplace(
+        StaticPrefs::privacy_window_name_update_enabled() &&
+        browsingContext->IsContent() && !sameOrigin);
   }
 
-  // If we're performing a large allocation load, override the remote type
-  // with `LARGE_ALLOCATION_REMOTE_TYPE` to move it into an exclusive content
-  // process. If we're already in one, and don't otherwise we force ourselves
-  // out of that content process.
-  if (!parentWindow && browsingContext->Group()->Toplevels().Length() == 1) {
-    if (IsLargeAllocationLoad(browsingContext, mChannel)) {
-      preferredRemoteType = LARGE_ALLOCATION_REMOTE_TYPE;
-      options.mReplaceBrowsingContext = true;
-    } else if (preferredRemoteType == LARGE_ALLOCATION_REMOTE_TYPE) {
-      preferredRemoteType = DEFAULT_REMOTE_TYPE;
-      options.mReplaceBrowsingContext = true;
-    }
-  }
-
-  // Put toplevel BrowsingContexts which load within the extension process into
-  // a specific BrowsingContextGroup.
-  if (auto* addonPolicy = BasePrincipal::Cast(resultPrincipal)->AddonPolicy()) {
-    if (!parentWindow) {
-      // Toplevel extension BrowsingContexts must be loaded in the extension
-      // browsing context group, within the extension content process.
-      if (ExtensionPolicyService::GetSingleton().UseRemoteExtensions()) {
-        preferredRemoteType = EXTENSION_REMOTE_TYPE;
-      } else {
-        preferredRemoteType = NOT_REMOTE_TYPE;
-      }
-
-      if (browsingContext->Group()->Id() !=
-          addonPolicy->GetBrowsingContextGroupId()) {
-        options.mReplaceBrowsingContext = true;
-        options.mSpecificGroupId = addonPolicy->GetBrowsingContextGroupId();
-      }
-    } else {
-      // As a temporary measure, extension iframes must be loaded within the
-      // same process as their parent document.
-      preferredRemoteType = parentWindow->GetRemoteType();
-    }
-  }
-
-  LOG(
-      ("DocumentLoadListener GetRemoteTypeForPrincipal "
-       "[this=%p, contentParent=%s, preferredRemoteType=%s]",
-       this, currentRemoteType.get(), preferredRemoteType.get()));
-
-  nsCOMPtr<nsIE10SUtils> e10sUtils =
-      do_ImportModule("resource://gre/modules/E10SUtils.jsm", "E10SUtils");
-  if (!e10sUtils) {
-    LOG(("Process Switch Abort: Could not import E10SUtils"));
-    return false;
-  }
-
-  // Get information about the current document loaded in our BrowsingContext.
-  nsCOMPtr<nsIPrincipal> currentPrincipal;
-  RefPtr<WindowGlobalParent> wgp = browsingContext->GetCurrentWindowGlobal();
-  if (wgp) {
-    currentPrincipal = wgp->DocumentPrincipal();
-  }
-
-  rv = e10sUtils->GetRemoteTypeForPrincipal(
-      resultPrincipal, mChannelCreationURI, browsingContext->UseRemoteTabs(),
-      browsingContext->UseRemoteSubframes(), preferredRemoteType,
-      currentPrincipal, parentWindow, options.mRemoteType);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    LOG(("Process Switch Abort: getRemoteTypeForPrincipal threw an exception"));
-    return false;
-  }
-
-  // If the final decision is to switch from an 'extension' remote type to any
-  // other remote type, ensure the browsing context is replaced so that we leave
-  // the extension-specific BrowsingContextGroup.
-  if (!parentWindow && currentRemoteType != options.mRemoteType &&
-      currentRemoteType == EXTENSION_REMOTE_TYPE) {
-    options.mReplaceBrowsingContext = true;
-  }
-
-  if (mozilla::BFCacheInParent() && nsSHistory::GetMaxTotalViewers() > 0 &&
-      !parentWindow && !browsingContext->HadOriginalOpener() &&
-      !options.mRemoteType.IsEmpty() &&
-      browsingContext->GetHasLoadedNonInitialDocument() &&
-      (mLoadStateLoadType == LOAD_NORMAL ||
-       mLoadStateLoadType == LOAD_HISTORY || mLoadStateLoadType == LOAD_LINK ||
-       mLoadStateLoadType == LOAD_STOP_CONTENT ||
-       mLoadStateLoadType == LOAD_STOP_CONTENT_AND_REPLACE) &&
-      (!browsingContext->GetActiveSessionHistoryEntry() ||
-       browsingContext->GetActiveSessionHistoryEntry()
-           ->GetSaveLayoutStateFlag())) {
-    MOZ_ASSERT(mIsDocumentLoad);
-    options.mTryUseBFCache =
-        browsingContext->AllowedInBFCache(mDocumentChannelId);
-    if (options.mTryUseBFCache) {
-      options.mReplaceBrowsingContext = true;
-      options.mActiveSessionHistoryEntry =
-          browsingContext->GetActiveSessionHistoryEntry();
-      // We only reset the window name for content.
-      mLoadingSessionHistoryInfo->mForceMaybeResetName.emplace(
-          StaticPrefs::privacy_window_name_update_enabled() &&
-          browsingContext->IsContent() &&
-          (!currentPrincipal ||
-           !currentPrincipal->EqualsConsideringDomain(resultPrincipal)));
-    }
-  }
-
-  LOG(("GetRemoteTypeForPrincipal -> current:%s remoteType:%s",
-       currentRemoteType.get(), options.mRemoteType.get()));
+  MOZ_LOG(
+      gProcessIsolationLog, LogLevel::Verbose,
+      ("CheckIsolationForNavigation -> current:(%s) remoteType:(%s) replace:%d "
+       "group:%" PRIx64 " bfcache:%d shentry:%p newTab:%d",
+       currentRemoteType.get(), options.mRemoteType.get(),
+       options.mReplaceBrowsingContext, options.mSpecificGroupId,
+       options.mTryUseBFCache, options.mActiveSessionHistoryEntry.get(),
+       switchToNewTab));
 
   // Check if a process switch is needed.
   if (currentRemoteType == options.mRemoteType &&
-      !options.mReplaceBrowsingContext) {
-    LOG(("Process Switch Abort: type (%s) is compatible",
-         options.mRemoteType.get()));
+      !options.mReplaceBrowsingContext && !switchToNewTab) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Info,
+            ("Process Switch Abort: type (%s) is compatible",
+             options.mRemoteType.get()));
     return false;
   }
 
   if (NS_WARN_IF(parentWindow && options.mRemoteType.IsEmpty())) {
-    LOG(("Process Switch Abort: non-remote target process for subframe"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Error,
+            ("Process Switch Abort: non-remote target process for subframe"));
     return false;
   }
 
   *aWillSwitchToRemote = !options.mRemoteType.IsEmpty();
+
+  // If we've decided to re-target this load into a new tab or window (see
+  // `GetWhereToOpen`), do so before performing a process switch. This will
+  // require creating the new <browser> to load in, which may be performed
+  // async.
+  if (switchToNewTab) {
+    SwitchToNewTab(browsingContext, where)
+        ->Then(
+            GetMainThreadSerialEventTarget(), __func__,
+            [self = RefPtr{this},
+             options](const RefPtr<BrowsingContext>& aBrowsingContext) mutable {
+              if (aBrowsingContext->IsDiscarded()) {
+                MOZ_LOG(
+                    gProcessIsolationLog, LogLevel::Error,
+                    ("Process Switch: Got invalid new-tab BrowsingContext"));
+                self->RedirectToRealChannelFinished(NS_ERROR_FAILURE);
+                return;
+              }
+
+              MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+                      ("Process Switch: Redirected load to new tab"));
+              self->TriggerProcessSwitch(aBrowsingContext->Canonical(), options,
+                                         /* aIsNewTab */ true);
+            },
+            [self = RefPtr{this}](const CopyableErrorResult&) {
+              MOZ_LOG(gProcessIsolationLog, LogLevel::Error,
+                      ("Process Switch: SwitchToNewTab failed"));
+              self->RedirectToRealChannelFinished(NS_ERROR_FAILURE);
+            });
+    return true;
+  }
 
   // If we're doing a document load, we can immediately perform a process
   // switch.
@@ -1763,29 +1866,32 @@ bool DocumentLoadListener::MaybeTriggerProcessSwitch(
   // object load. We need a BrowsingContext to perform the switch in, so will
   // trigger an upgrade.
   if (!mObjectUpgradeHandler) {
-    LOG(("Process Switch Abort: no object upgrade handler"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Warning,
+            ("Process Switch Abort: no object upgrade handler"));
     return false;
   }
 
   if (!StaticPrefs::fission_remoteObjectEmbed()) {
-    LOG(("Process Switch Abort: remote <object>/<embed> disabled"));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+            ("Process Switch Abort: remote <object>/<embed> disabled"));
     return false;
   }
 
   mObjectUpgradeHandler->UpgradeObjectLoad()->Then(
       GetMainThreadSerialEventTarget(), __func__,
-      [self = RefPtr{this}, options,
-       wgp](const RefPtr<CanonicalBrowsingContext>& aBrowsingContext) mutable {
+      [self = RefPtr{this}, options, parentWindow](
+          const RefPtr<CanonicalBrowsingContext>& aBrowsingContext) mutable {
         if (aBrowsingContext->IsDiscarded() ||
-            wgp != aBrowsingContext->GetParentWindowContext()) {
-          LOG(
-              ("Process Switch: Got invalid BrowsingContext from object "
-               "upgrade!"));
+            parentWindow != aBrowsingContext->GetParentWindowContext()) {
+          MOZ_LOG(gProcessIsolationLog, LogLevel::Error,
+                  ("Process Switch: Got invalid BrowsingContext from object "
+                   "upgrade!"));
           self->RedirectToRealChannelFinished(NS_ERROR_FAILURE);
           return;
         }
 
-        LOG(("Process Switch: Upgraded Object to Document Load"));
+        MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+                ("Process Switch: Upgraded Object to Document Load"));
         self->TriggerProcessSwitch(aBrowsingContext, options);
       },
       [self = RefPtr{this}](nsresult aStatusCode) {
@@ -1797,31 +1903,43 @@ bool DocumentLoadListener::MaybeTriggerProcessSwitch(
 
 void DocumentLoadListener::TriggerProcessSwitch(
     CanonicalBrowsingContext* aContext,
-    const RemotenessChangeOptions& aOptions) {
-  nsAutoCString currentRemoteType(NOT_REMOTE_TYPE);
-  if (RefPtr<ContentParent> contentParent = aContext->GetContentParent()) {
-    currentRemoteType = contentParent->GetRemoteType();
-  }
-  MOZ_ASSERT_IF(currentRemoteType.IsEmpty(), !OtherPid());
+    const NavigationIsolationOptions& aOptions, bool aIsNewTab) {
+  MOZ_DIAGNOSTIC_ASSERT(aIsNewTab || aContext->IsOwnedByProcess(
+                                         GetContentProcessId(mContentParent)),
+                        "not owned by creator process anymore?");
+  if (MOZ_LOG_TEST(gProcessIsolationLog, LogLevel::Info)) {
+    nsCString currentRemoteType = "INVALID"_ns;
+    aContext->GetCurrentRemoteType(currentRemoteType, IgnoreErrors());
 
-  LOG(("Process Switch: Changing Remoteness from '%s' to '%s'",
-       currentRemoteType.get(), aOptions.mRemoteType.get()));
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Info,
+            ("Process Switch: Changing Remoteness from '%s' to '%s'",
+             currentRemoteType.get(), aOptions.mRemoteType.get()));
+  }
+
+  // Stash our stream filter requests to pass to TriggerRedirectToRealChannel,
+  // as the call to `DisconnectListeners` will clear our list.
+  nsTArray<StreamFilterRequest> streamFilterRequests =
+      std::move(mStreamFilterRequests);
 
   // We're now committing to a process switch, so we can disconnect from
   // the listeners in the old process.
-  mDoingProcessSwitch = true;
+  // As the navigation is continuing, we don't actually want to cancel the
+  // request in the old process unless we're redirecting the load into a new
+  // tab.
+  DisconnectListeners(NS_BINDING_ABORTED, NS_BINDING_ABORTED, !aIsNewTab);
 
-  DisconnectListeners(NS_BINDING_ABORTED, NS_BINDING_ABORTED, true);
-
-  LOG(("Process Switch: Calling ChangeRemoteness"));
+  MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+          ("Process Switch: Calling ChangeRemoteness"));
   aContext->ChangeRemoteness(aOptions, mLoadIdentifier)
       ->Then(
           GetMainThreadSerialEventTarget(), __func__,
-          [self = RefPtr{this}](BrowserParent* aBrowserParent) {
+          [self = RefPtr{this}, requests = std::move(streamFilterRequests)](
+              BrowserParent* aBrowserParent) mutable {
             MOZ_ASSERT(self->mChannel,
                        "Something went wrong, channel got cancelled");
-            self->TriggerRedirectToRealChannel(Some(
-                aBrowserParent ? aBrowserParent->Manager()->ChildID() : 0));
+            self->TriggerRedirectToRealChannel(
+                Some(aBrowserParent ? aBrowserParent->Manager() : nullptr),
+                std::move(requests));
           },
           [self = RefPtr{this}](nsresult aStatusCode) {
             MOZ_ASSERT(NS_FAILED(aStatusCode), "Status should be error");
@@ -1869,7 +1987,7 @@ DocumentLoadListener::RedirectToParentProcess(uint32_t aRedirectFlags,
 RefPtr<PDocumentChannelParent::RedirectToRealChannelPromise>
 DocumentLoadListener::RedirectToRealChannel(
     uint32_t aRedirectFlags, uint32_t aLoadFlags,
-    const Maybe<uint64_t>& aDestinationProcess,
+    const Maybe<ContentParent*>& aDestinationProcess,
     nsTArray<ParentEndpoint>&& aStreamFilterEndpoints) {
   LOG(
       ("DocumentLoadListener RedirectToRealChannel [this=%p] "
@@ -1901,20 +2019,19 @@ DocumentLoadListener::RedirectToRealChannel(
   MOZ_ALWAYS_SUCCEEDS(registrar->RegisterChannel(chan, mRedirectChannelId));
 
   if (aDestinationProcess) {
-    if (!*aDestinationProcess) {
+    RefPtr<ContentParent> cp = *aDestinationProcess;
+    if (!cp) {
       MOZ_ASSERT(aStreamFilterEndpoints.IsEmpty());
       return RedirectToParentProcess(aRedirectFlags, aLoadFlags);
     }
-    dom::ContentParent* cp =
-        dom::ContentProcessManager::GetSingleton()->GetContentProcessById(
-            ContentParentId{*aDestinationProcess});
-    if (!cp) {
+
+    if (!cp->CanSend()) {
       return PDocumentChannelParent::RedirectToRealChannelPromise::
           CreateAndReject(ipc::ResponseRejectReason::SendError, __func__);
     }
 
     RedirectToRealChannelArgs args;
-    SerializeRedirectData(args, !!aDestinationProcess, aRedirectFlags,
+    SerializeRedirectData(args, /* aIsCrossProcess */ true, aRedirectFlags,
                           aLoadFlags, cp);
     if (mTiming) {
       mTiming->Anonymize(args.uri());
@@ -1928,14 +2045,7 @@ DocumentLoadListener::RedirectToRealChannel(
           CreateAndReject(ipc::ResponseRejectReason::SendError, __func__);
     }
 
-    auto triggeringPrincipalOrErr =
-        PrincipalInfoToPrincipal(loadInfo.ref().triggeringPrincipalInfo());
-
-    if (triggeringPrincipalOrErr.isOk()) {
-      nsCOMPtr<nsIPrincipal> triggeringPrincipal =
-          triggeringPrincipalOrErr.unwrap();
-      cp->TransmitBlobDataIfBlobURL(args.uri(), triggeringPrincipal);
-    }
+    cp->TransmitBlobDataIfBlobURL(args.uri());
 
     return cp->SendCrossProcessRedirect(args,
                                         std::move(aStreamFilterEndpoints));
@@ -1972,7 +2082,8 @@ DocumentLoadListener::RedirectToRealChannel(
 }
 
 void DocumentLoadListener::TriggerRedirectToRealChannel(
-    const Maybe<uint64_t>& aDestinationProcess) {
+    const Maybe<ContentParent*>& aDestinationProcess,
+    nsTArray<StreamFilterRequest> aStreamFilterRequests) {
   LOG((
       "DocumentLoadListener::TriggerRedirectToRealChannel [this=%p] "
       "aDestinationProcess=%" PRId64,
@@ -1988,23 +2099,12 @@ void DocumentLoadListener::TriggerRedirectToRealChannel(
   // the registrar and copy across any needed state to the replacing
   // IPDL parent object.
 
-  nsTArray<ParentEndpoint> parentEndpoints(mStreamFilterRequests.Length());
-  if (!mStreamFilterRequests.IsEmpty()) {
-    base::ProcessId pid = OtherPid();
-    if (aDestinationProcess) {
-      if (*aDestinationProcess) {
-        dom::ContentParent* cp =
-            dom::ContentProcessManager::GetSingleton()->GetContentProcessById(
-                ContentParentId(*aDestinationProcess));
-        if (cp) {
-          pid = cp->OtherPid();
-        }
-      } else {
-        pid = 0;
-      }
-    }
+  nsTArray<ParentEndpoint> parentEndpoints(aStreamFilterRequests.Length());
+  if (!aStreamFilterRequests.IsEmpty()) {
+    ContentParent* cp = aDestinationProcess.valueOr(mContentParent);
+    base::ProcessId pid = cp ? cp->OtherPid() : base::ProcessId{0};
 
-    for (StreamFilterRequest& request : mStreamFilterRequests) {
+    for (StreamFilterRequest& request : aStreamFilterRequests) {
       if (!pid) {
         request.mPromise->Reject(false, __func__);
         request.mPromise = nullptr;
@@ -2012,7 +2112,7 @@ void DocumentLoadListener::TriggerRedirectToRealChannel(
       }
       ParentEndpoint parent;
       nsresult rv = extensions::PStreamFilter::CreateEndpoints(
-          pid, request.mChildProcessId, &parent, &request.mChildEndpoint);
+          &parent, &request.mChildEndpoint);
 
       if (NS_FAILED(rv)) {
         request.mPromise->Reject(false, __func__);
@@ -2060,7 +2160,7 @@ void DocumentLoadListener::TriggerRedirectToRealChannel(
                         std::move(parentEndpoints))
       ->Then(
           GetCurrentSerialEventTarget(), __func__,
-          [self, requests = std::move(mStreamFilterRequests)](
+          [self, requests = std::move(aStreamFilterRequests)](
               const nsresult& aResponse) mutable {
             for (StreamFilterRequest& request : requests) {
               if (request.mPromise) {
@@ -2121,6 +2221,14 @@ bool DocumentLoadListener::DocShellWillDisplayContent(nsresult aStatus) {
       aStatus, mChannel, mLoadStateLoadType, loadingContext->IsTop(),
       loadingContext->GetUseErrorPages(), isInitialDocument, nullptr);
 
+  if (NS_SUCCEEDED(rv)) {
+    MOZ_LOG(gProcessIsolationLog, LogLevel::Verbose,
+            ("Skipping process switch, as DocShell will not display content "
+             "(status: %s) %s",
+             GetStaticErrorName(aStatus),
+             GetChannelCreationURI()->GetSpecOrDefault().get()));
+  }
+
   // If filtering returned a failure code, then an error page will
   // be display for that code, so return true;
   return NS_FAILED(rv);
@@ -2176,6 +2284,41 @@ bool DocumentLoadListener::MaybeHandleLoadErrorWithURIFixup(nsresult aStatus) {
     loadState->SetIsExemptFromHTTPSOnlyMode(true);
   }
 
+  // Ensure to set referrer information in the fallback channel equally to the
+  // not-upgraded original referrer info.
+  //
+  // A simply copy of the referrer info from the upgraded one leads to problems.
+  // For example:
+  // 1. https://some-site.com redirects to http://other-site.com with referrer
+  // policy
+  //   "no-referrer-when-downgrade".
+  // 2. https-first upgrades the redirection, so redirects to
+  // https://other-site.com,
+  //    according to referrer policy the referrer will be send (https-> https)
+  // 3. Assume other-site.com is not supporting https, https-first performs
+  // fall-
+  //    back.
+  // If the referrer info from the upgraded channel gets copied into the
+  // http fallback channel, the referrer info would contain the referrer
+  // (https://some-site.com). That would violate the policy
+  // "no-referrer-when-downgrade". A recreation of the original referrer info
+  // would ensure us that the referrer is set according to the referrer policy.
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
+  if (httpChannel) {
+    nsCOMPtr<nsIReferrerInfo> referrerInfo = httpChannel->GetReferrerInfo();
+    if (referrerInfo) {
+      ReferrerPolicy referrerPolicy = referrerInfo->ReferrerPolicy();
+      nsCOMPtr<nsIURI> originalReferrer = referrerInfo->GetOriginalReferrer();
+      if (originalReferrer) {
+        // Create new ReferrerInfo with the original referrer and the referrer
+        // policy.
+        nsCOMPtr<nsIReferrerInfo> newReferrerInfo =
+            new ReferrerInfo(originalReferrer, referrerPolicy);
+        loadState->SetReferrerInfo(newReferrerInfo);
+      }
+    }
+  }
+
   bc->LoadURI(loadState, false);
   return true;
 }
@@ -2191,6 +2334,13 @@ DocumentLoadListener::OnStartRequest(nsIRequest* aRequest) {
     mChannel = do_QueryInterface(aRequest);
   }
   MOZ_DIAGNOSTIC_ASSERT(mChannel);
+
+  if (mHaveVisibleRedirect && GetDocumentBrowsingContext() &&
+      mLoadingSessionHistoryInfo) {
+    mLoadingSessionHistoryInfo =
+        GetDocumentBrowsingContext()->ReplaceLoadingSessionHistoryEntryForLoad(
+            mLoadingSessionHistoryInfo.get(), mChannel);
+  }
 
   RefPtr<nsHttpChannel> httpChannel = do_QueryObject(mChannel);
 
@@ -2220,6 +2370,23 @@ DocumentLoadListener::OnStartRequest(nsIRequest* aRequest) {
   if (!loadingContext || loadingContext->IsDiscarded()) {
     DisconnectListeners(NS_ERROR_UNEXPECTED, NS_ERROR_UNEXPECTED);
     return NS_ERROR_UNEXPECTED;
+  }
+
+  // Block top-level data URI navigations if triggered by the web. Logging is
+  // performed in AllowTopLevelNavigationToDataURI.
+  if (!nsContentSecurityManager::AllowTopLevelNavigationToDataURI(mChannel)) {
+    mChannel->Cancel(NS_ERROR_DOM_BAD_URI);
+    if (loadingContext) {
+      RefPtr<MaybeCloseWindowHelper> maybeCloseWindowHelper =
+          new MaybeCloseWindowHelper(loadingContext);
+      // If a new window was opened specifically for this request, close it
+      // after blocking the navigation.
+      maybeCloseWindowHelper->SetShouldCloseWindow(
+          IsFirstLoadInWindow(mChannel));
+      Unused << maybeCloseWindowHelper->MaybeCloseWindow();
+    }
+    DisconnectListeners(NS_ERROR_DOM_BAD_URI, NS_ERROR_DOM_BAD_URI);
+    return NS_OK;
   }
 
   // Generally we want to switch to a real channel even if the request failed,
@@ -2276,22 +2443,28 @@ DocumentLoadListener::OnStartRequest(nsIRequest* aRequest) {
   bool willBeRemote = false;
   if (!DocShellWillDisplayContent(status) ||
       !MaybeTriggerProcessSwitch(&willBeRemote)) {
+    // We're not going to be doing a process switch, so redirect to the real
+    // channel within our current process.
+    nsTArray<StreamFilterRequest> streamFilterRequests =
+        std::move(mStreamFilterRequests);
     if (!mSupportsRedirectToRealChannel) {
+      RefPtr<BrowserParent> browserParent = loadingContext->GetBrowserParent();
+      if (browserParent->Manager() != mContentParent) {
+        LOG(
+            ("DocumentLoadListener::RedirectToRealChannel failed because "
+             "browsingContext no longer owned by creator"));
+        Cancel(NS_BINDING_ABORTED);
+        return NS_OK;
+      }
+      MOZ_DIAGNOSTIC_ASSERT(
+          browserParent->GetBrowsingContext() == loadingContext,
+          "make sure the load is going to the right place");
+
       // If the existing process is right for this load, but the bridge doesn't
       // support redirects, then we need to do it manually, by faking a process
       // switch.
-      mDoingProcessSwitch = true;
-
-      // If we're not going to process switch, then we must have an existing
-      // window global, right?
-      MOZ_ASSERT(loadingContext->GetCurrentWindowGlobal());
-
-      RefPtr<BrowserParent> browserParent =
-          loadingContext->GetCurrentWindowGlobal()->GetBrowserParent();
-
-      // XXX(anny) This is currently a dead code path because parent-controlled
-      // DC pref is off. When we enable the pref, we might get extra STATE_START
-      // progress events
+      DisconnectListeners(NS_BINDING_ABORTED, NS_BINDING_ABORTED,
+                          /* aContinueNavigating */ true);
 
       // Notify the docshell that it should load using the newly connected
       // channel
@@ -2299,14 +2472,26 @@ DocumentLoadListener::OnStartRequest(nsIRequest* aRequest) {
 
       // Use the current process ID to run the 'process switch' path and connect
       // the channel into the current process.
-      TriggerRedirectToRealChannel(Some(loadingContext->OwnerProcessId()));
+      TriggerRedirectToRealChannel(Some(mContentParent),
+                                   std::move(streamFilterRequests));
     } else {
-      TriggerRedirectToRealChannel(Nothing());
+      TriggerRedirectToRealChannel(Nothing(), std::move(streamFilterRequests));
     }
 
     // If we're not switching, then check if we're currently remote.
-    if (loadingContext->GetContentParent()) {
+    if (mContentParent) {
       willBeRemote = true;
+    }
+  }
+
+  if (GetLoadingBrowsingContext()) {
+    if (httpChannel) {
+      uint32_t responseStatus;
+      Unused << httpChannel->GetResponseStatus(&responseStatus);
+      GetLoadingBrowsingContext()->mEarlyHintsService.FinalResponse(
+          responseStatus);
+    } else {
+      GetLoadingBrowsingContext()->mEarlyHintsService.Cancel();
     }
   }
 
@@ -2501,6 +2686,17 @@ DocumentLoadListener::AsyncOnChannelRedirect(
   // so just update our channel and tell the callback that we're good to go.
   mChannel = aNewChannel;
 
+  // We need the original URI of the current channel to use to open the real
+  // channel in the content process. Unfortunately we overwrite the original
+  // uri of the new channel with the original pre-redirect URI, so grab
+  // a copy of it now and save it on the loadInfo corresponding to the
+  // new channel.
+  nsCOMPtr<nsILoadInfo> loadInfoFromChannel = mChannel->LoadInfo();
+  MOZ_ASSERT(loadInfoFromChannel);
+  nsCOMPtr<nsIURI> uri;
+  mChannel->GetOriginalURI(getter_AddRefs(uri));
+  loadInfoFromChannel->SetChannelCreationOriginalURI(uri);
+
   // Since we're redirecting away from aOldChannel, we should check if it
   // had a COOP mismatch, since we want the final result for this to
   // include the state of all channels we redirected through.
@@ -2528,12 +2724,6 @@ DocumentLoadListener::AsyncOnChannelRedirect(
   }
 
   if (GetDocumentBrowsingContext()) {
-    if (mLoadingSessionHistoryInfo) {
-      mLoadingSessionHistoryInfo =
-          GetDocumentBrowsingContext()
-              ->ReplaceLoadingSessionHistoryEntryForLoad(
-                  mLoadingSessionHistoryInfo.get(), aNewChannel);
-    }
     if (!net::ChannelIsPost(aOldChannel)) {
       AddURIVisit(aOldChannel, 0);
 
@@ -2549,17 +2739,15 @@ DocumentLoadListener::AsyncOnChannelRedirect(
        "mHaveVisibleRedirect=%c",
        this, mHaveVisibleRedirect ? 'T' : 'F'));
 
-  // We need the original URI of the current channel to use to open the real
-  // channel in the content process. Unfortunately we overwrite the original
-  // uri of the new channel with the original pre-redirect URI, so grab
-  // a copy of it now.
-  aNewChannel->GetOriginalURI(getter_AddRefs(mChannelCreationURI));
-
   // Clear out our nsIParentChannel functions, since a normal parent
   // channel would actually redirect and not have those values on the new one.
   // We expect the URI classifier to run on the redirected channel with
   // the new URI and set these again.
   mIParentChannelFunctions.Clear();
+
+  // If we had a remote type override, ensure it's been cleared after a
+  // redirect, as it can't apply anymore.
+  mRemoteTypeOverride.reset();
 
 #ifdef ANDROID
   nsCOMPtr<nsIURI> uriBeingLoaded =
@@ -2601,6 +2789,23 @@ DocumentLoadListener::AsyncOnChannelRedirect(
   return NS_OK;
 }
 
+nsIURI* DocumentLoadListener::GetChannelCreationURI() const {
+  nsCOMPtr<nsILoadInfo> channelLoadInfo = mChannel->LoadInfo();
+
+  nsCOMPtr<nsIURI> uri;
+  channelLoadInfo->GetChannelCreationOriginalURI(getter_AddRefs(uri));
+  if (uri) {
+    // See channelCreationOriginalURI for more info. We use this instead of the
+    // originalURI of the channel to help us avoid the situation when we use
+    // the URI of a redirect that has failed to happen.
+    return uri;
+  }
+
+  // Otherwise, get the original URI from the channel.
+  mChannel->GetOriginalURI(getter_AddRefs(uri));
+  return uri;
+}
+
 // This method returns the cached result of running the Cross-Origin-Opener
 // policy compare algorithm by calling ComputeCrossOriginOpenerPolicyMismatch
 bool DocumentLoadListener::HasCrossOriginOpenerPolicyMismatch() const {
@@ -2622,13 +2827,12 @@ bool DocumentLoadListener::HasCrossOriginOpenerPolicyMismatch() const {
   return isCOOPMismatch;
 }
 
-auto DocumentLoadListener::AttachStreamFilter(base::ProcessId aChildProcessId)
+auto DocumentLoadListener::AttachStreamFilter()
     -> RefPtr<ChildEndpointPromise> {
   LOG(("DocumentLoadListener AttachStreamFilter [this=%p]", this));
 
   StreamFilterRequest* request = mStreamFilterRequests.AppendElement();
   request->mPromise = new ChildEndpointPromise::Private(__func__);
-  request->mChildProcessId = aChildProcessId;
   return request->mPromise;
 }
 
@@ -2653,6 +2857,16 @@ NS_IMETHODIMP DocumentLoadListener::OnStatus(nsIRequest* aRequest,
           webProgress->OnStatusChange(webProgress, channel, aStatus,
                                       message.get());
         }));
+  }
+  return NS_OK;
+}
+
+NS_IMETHODIMP DocumentLoadListener::EarlyHint(const nsACString& linkHeader) {
+  LOG(("DocumentLoadListener::EarlyHint.\n"));
+  if (GetLoadingBrowsingContext()) {
+    nsCOMPtr<nsILoadInfo> loadInfo = mChannel->LoadInfo();
+    GetLoadingBrowsingContext()->mEarlyHintsService.EarlyHint(
+        linkHeader, GetChannelCreationURI(), loadInfo);
   }
   return NS_OK;
 }

@@ -955,7 +955,7 @@ fr{
             ec{"Sydney"}
         }
         "Etc:UTC"{
-            ls{"Temps universel coordonné"}
+            ls{"temps universel coordonné"}
         }
         "Etc:Unknown"{
             ec{"ville inconnue"}
@@ -1222,6 +1222,9 @@ fr{
         }
         "Pacific:Johnston"{
             ec{"Johnston"}
+        }
+        "Pacific:Kanton"{
+            ec{"Canton"}
         }
         "Pacific:Kiritimati"{
             ec{"Kiritimati"}
@@ -1923,6 +1926,9 @@ fr{
             ld{"heure d’été d’Ekaterinbourg"}
             lg{"heure d’Ekaterinbourg"}
             ls{"heure normale d’Ekaterinbourg"}
+        }
+        "meta:Yukon"{
+            ls{"heure normale du Yukon"}
         }
         fallbackFormat{"{1} ({0})"}
         gmtFormat{"UTC{0}"}

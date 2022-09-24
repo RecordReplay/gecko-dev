@@ -7,7 +7,6 @@
 #define MEDIAENGINEWEBRTC_H_
 
 #include "AudioDeviceInfo.h"
-#include "CamerasChild.h"
 #include "CubebUtils.h"
 #include "DOMMediaStream.h"
 #include "MediaEngine.h"
@@ -20,7 +19,6 @@
 #include "VideoUtils.h"
 #include "CubebDeviceEnumerator.h"
 #include "ipc/IPCMessageUtils.h"
-#include "mozilla/Mutex.h"
 #include "mozilla/Mutex.h"
 #include "mozilla/Sprintf.h"
 #include "mozilla/StaticMutex.h"
@@ -36,61 +34,40 @@
 #include "prthread.h"
 
 // WebRTC library includes follow
-// Video Engine
-// conflicts with #include of scoped_ptr.h
-#undef FF
-#include "webrtc/modules/video_capture/video_capture_defines.h"
+#include "modules/video_capture/video_capture_defines.h"
 
 namespace mozilla {
 
 class MediaEngineWebRTC : public MediaEngine {
-  typedef MediaEngine Super;
-
  public:
-  explicit MediaEngineWebRTC(MediaEnginePrefs& aPrefs);
-
-  // Enable periodic fake "devicechange" event. Must always be called from the
-  // same thread, and must be disabled before shutdown.
-  void SetFakeDeviceChangeEventsEnabled(bool aEnable) override;
+  MediaEngineWebRTC();
 
   // Clients should ensure to clean-up sources video/audio sources
   // before invoking Shutdown on this class.
   void Shutdown() override;
 
-  // Returns whether the host supports duplex audio track.
-  bool SupportsDuplex();
-
-  void EnumerateDevices(uint64_t aWindowId, dom::MediaSourceEnum, MediaSinkEnum,
+  void EnumerateDevices(dom::MediaSourceEnum, MediaSinkEnum,
                         nsTArray<RefPtr<MediaDevice>>*) override;
+  RefPtr<MediaEngineSource> CreateSource(const MediaDevice* aDevice) override;
 
   MediaEventSource<void>& DeviceListChangeEvent() override {
     return mDeviceListChangeEvent;
   }
+  bool IsFake() const override { return false; }
 
  private:
   ~MediaEngineWebRTC() = default;
-  void EnumerateVideoDevices(uint64_t aWindowId,
-                             camera::CaptureEngine aCapEngine,
+  void EnumerateVideoDevices(dom::MediaSourceEnum,
                              nsTArray<RefPtr<MediaDevice>>*);
-  void EnumerateMicrophoneDevices(uint64_t aWindowId,
-                                  nsTArray<RefPtr<MediaDevice>>*);
-  void EnumerateSpeakerDevices(uint64_t aWindowId,
-                               nsTArray<RefPtr<MediaDevice>>*);
+  void EnumerateMicrophoneDevices(nsTArray<RefPtr<MediaDevice>>*);
+  void EnumerateSpeakerDevices(nsTArray<RefPtr<MediaDevice>>*);
 
   void DeviceListChanged() { mDeviceListChangeEvent.Notify(); }
 
-  static void FakeDeviceChangeEventTimerTick(nsITimer* aTimer, void* aClosure);
-
-  const bool mDelayAgnostic;
-  const bool mExtendedFilter;
-  // This also is set in the ctor and then never changed, but we can't make it
-  // const because we pass it to a function that takes bool* in the ctor.
-  bool mHasTabVideoSource;
   MediaEventListener mCameraListChangeListener;
   MediaEventListener mMicrophoneListChangeListener;
   MediaEventListener mSpeakerListChangeListener;
   MediaEventProducer<void> mDeviceListChangeEvent;
-  nsCOMPtr<nsITimer> mFakeDeviceChangeEventTimer;
 };
 
 }  // namespace mozilla

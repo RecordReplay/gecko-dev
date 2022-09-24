@@ -5,19 +5,26 @@
 include protocol PRemoteWorkerController;
 
 include ServiceWorkerOpArgs;
+include FetchTypes;
 
 namespace mozilla {
 namespace dom {
 
+[ManualDealloc]
 protocol PFetchEventOp {
   manager PRemoteWorkerController;
+
+ parent:
+  async PreloadResponse(ParentToParentInternalResponse aResponse);
+
+  async PreloadResponseEnd(ResponseEndArgs aArgs);
 
  child:
   async AsyncLog(nsCString aScriptSpec, uint32_t aLineNumber,
                  uint32_t aColumnNumber, nsCString aMessageName,
                  nsString[] aParams);
 
-  async RespondWith(IPCFetchEventRespondWithResult aResult);
+  async RespondWith(ParentToParentFetchEventRespondWithResult aResult);
 
   async __delete__(ServiceWorkerFetchEventOpResult aResult);
 };

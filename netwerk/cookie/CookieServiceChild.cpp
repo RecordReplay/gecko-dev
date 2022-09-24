@@ -20,16 +20,19 @@
 #include "mozilla/StoragePrincipalHelper.h"
 #include "nsNetCID.h"
 #include "nsNetUtil.h"
+#include "nsICookieJarSettings.h"
 #include "nsIChannel.h"
 #include "nsIClassifiedChannel.h"
 #include "nsIHttpChannel.h"
 #include "nsIEffectiveTLDService.h"
 #include "nsIURI.h"
 #include "nsIPrefBranch.h"
+#include "nsIWebProgressListener.h"
 #include "nsServiceManagerUtils.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TimeStamp.h"
 #include "ThirdPartyUtil.h"
+#include "nsIConsoleReportCollector.h"
 
 using namespace mozilla::ipc;
 
@@ -53,7 +56,7 @@ already_AddRefed<CookieServiceChild> CookieServiceChild::GetSingleton() {
 }
 
 NS_IMPL_ISUPPORTS(CookieServiceChild, nsICookieService, nsIObserver,
-                  nsITimerCallback, nsISupportsWeakReference)
+                  nsITimerCallback, nsINamed, nsISupportsWeakReference)
 
 CookieServiceChild::CookieServiceChild() {
   NS_ASSERTION(IsNeckoChild(), "not a child process");
@@ -116,6 +119,12 @@ CookieServiceChild::Notify(nsITimer* aTimer) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+CookieServiceChild::GetName(nsACString& aName) {
+  aName.AssignLiteral("CookieServiceChild");
+  return NS_OK;
+}
+
 CookieServiceChild::~CookieServiceChild() { gCookieChildService = nullptr; }
 
 void CookieServiceChild::TrackCookieLoad(nsIChannel* aChannel) {
@@ -136,13 +145,16 @@ void CookieServiceChild::TrackCookieLoad(nsIChannel* aChannel) {
       aChannel, attrs);
 
   bool isSafeTopLevelNav = CookieCommons::IsSafeTopLevelNav(aChannel);
-  bool isSameSiteForeign = CookieCommons::IsSameSiteForeign(aChannel, uri);
+  bool hadCrossSiteRedirects = false;
+  bool isSameSiteForeign =
+      CookieCommons::IsSameSiteForeign(aChannel, uri, &hadCrossSiteRedirects);
   SendPrepareCookieList(
       uri, result.contains(ThirdPartyAnalysis::IsForeign),
       result.contains(ThirdPartyAnalysis::IsThirdPartyTrackingResource),
       result.contains(ThirdPartyAnalysis::IsThirdPartySocialTrackingResource),
       result.contains(ThirdPartyAnalysis::IsStorageAccessPermissionGranted),
-      rejectedReason, isSafeTopLevelNav, isSameSiteForeign, attrs);
+      rejectedReason, isSafeTopLevelNav, isSameSiteForeign,
+      hadCrossSiteRedirects, attrs);
 }
 
 IPCResult CookieServiceChild::RecvRemoveAll() {
@@ -284,6 +296,7 @@ void CookieServiceChild::RecordDocumentCookie(Cookie* aCookie,
           cookie->Expiry() == aCookie->Expiry() &&
           cookie->IsSecure() == aCookie->IsSecure() &&
           cookie->SameSite() == aCookie->SameSite() &&
+          cookie->RawSameSite() == aCookie->RawSameSite() &&
           cookie->IsSession() == aCookie->IsSession() &&
           cookie->IsHttpOnly() == aCookie->IsHttpOnly()) {
         cookie->SetLastAccessed(aCookie->LastAccessed());
@@ -331,7 +344,7 @@ CookieServiceChild::Observe(nsISupports* aSubject, const char* aTopic,
 }
 
 NS_IMETHODIMP
-CookieServiceChild::GetCookieStringFromDocument(Document* aDocument,
+CookieServiceChild::GetCookieStringFromDocument(dom::Document* aDocument,
                                                 nsACString& aCookieString) {
   NS_ENSURE_ARG(aDocument);
 
@@ -342,9 +355,6 @@ CookieServiceChild::GetCookieStringFromDocument(Document* aDocument,
   if (!CookieCommons::IsSchemeSupported(principal)) {
     return NS_OK;
   }
-
-  nsICookie::schemeType schemeType =
-      CookieCommons::PrincipalToSchemeType(principal);
 
   nsAutoCString baseDomain;
   nsresult rv = CookieCommons::GetBaseDomain(principal, baseDomain);
@@ -374,8 +384,12 @@ CookieServiceChild::GetCookieStringFromDocument(Document* aDocument,
   // in gtests we don't have a window, let's consider those requests as 3rd
   // party.
   if (innerWindow) {
-    thirdParty = nsContentUtils::IsThirdPartyWindowOrChannel(innerWindow,
-                                                             nullptr, nullptr);
+    ThirdPartyUtil* thirdPartyUtil = ThirdPartyUtil::GetInstance();
+
+    if (thirdPartyUtil) {
+      Unused << thirdPartyUtil->IsThirdPartyWindow(
+          innerWindow->GetOuterWindow(), nullptr, &thirdParty);
+    }
   }
 
   bool isPotentiallyTrustworthy =
@@ -403,10 +417,6 @@ CookieServiceChild::GetCookieStringFromDocument(Document* aDocument,
 
     // if the cookie is secure and the host scheme isn't, we can't send it
     if (cookie->IsSecure() && !isPotentiallyTrustworthy) {
-      continue;
-    }
-
-    if (!CookieCommons::MaybeCompareScheme(cookie, schemeType)) {
       continue;
     }
 
@@ -446,7 +456,7 @@ CookieServiceChild::GetCookieStringFromHttp(nsIURI* /*aHostURI*/,
 
 NS_IMETHODIMP
 CookieServiceChild::SetCookieStringFromDocument(
-    Document* aDocument, const nsACString& aCookieString) {
+    dom::Document* aDocument, const nsACString& aCookieString) {
   NS_ENSURE_ARG(aDocument);
 
   nsCOMPtr<nsIURI> documentURI;
@@ -472,8 +482,12 @@ CookieServiceChild::SetCookieStringFromDocument(
   // in gtests we don't have a window, let's consider those requests as 3rd
   // party.
   if (innerWindow) {
-    thirdParty = nsContentUtils::IsThirdPartyWindowOrChannel(innerWindow,
-                                                             nullptr, nullptr);
+    ThirdPartyUtil* thirdPartyUtil = ThirdPartyUtil::GetInstance();
+
+    if (thirdPartyUtil) {
+      Unused << thirdPartyUtil->IsThirdPartyWindow(
+          innerWindow->GetOuterWindow(), nullptr, &thirdParty);
+    }
   }
 
   if (thirdParty &&
@@ -604,6 +618,7 @@ CookieServiceChild::SetCookieStringFromHttp(nsIURI* aHostURI,
     if (!CookieCommons::CheckCookiePermission(aChannel, cookieData)) {
       COOKIE_LOGFAILURE(SET_COOKIE, aHostURI, aCookieString,
                         "cookie rejected by permission manager");
+      constexpr auto CONSOLE_REJECTION_CATEGORY = "cookiesRejection"_ns;
       CookieLogging::LogMessageToConsole(
           crc, aHostURI, nsIScriptError::warningFlag,
           CONSOLE_REJECTION_CATEGORY, "CookieRejectedByPermissionManager"_ns,

@@ -1,28 +1,29 @@
-function handleRequest(request, response)
-{
-  var file = Components.classes["@mozilla.org/file/directory_service;1"]
-             .getService(Components.interfaces.nsIProperties)
-             .get("CurWorkD", Components.interfaces.nsIFile);
+function handleRequest(request, response) {
+  var file = Cc["@mozilla.org/file/directory_service;1"]
+    .getService(Ci.nsIProperties)
+    .get("CurWorkD", Ci.nsIFile);
 
   file.append("tests");
   file.append("image");
   file.append("test");
   file.append("mochitest");
 
-  if (request.getHeader("Accept") == "image/webp,*/*") {
-    file.append('blue.png');
+  if (request.getHeader("Accept") == "image/avif,image/webp,*/*") {
+    file.append("blue.png");
   } else {
-    file.append('red.png');
+    file.append("red.png");
   }
   response.setStatusLine(request.httpVersion, 200, "OK");
   response.setHeader("Content-Type", "image/png", false);
   response.setHeader("Cache-Control", "no-cache", false);
 
-  var fileStream = Components.classes['@mozilla.org/network/file-input-stream;1']
-                   .createInstance(Components.interfaces.nsIFileInputStream);
+  var fileStream = Cc[
+    "@mozilla.org/network/file-input-stream;1"
+  ].createInstance(Ci.nsIFileInputStream);
   fileStream.init(file, 1, 0, false);
-  var binaryStream = Components.classes['@mozilla.org/binaryinputstream;1']
-                     .createInstance(Components.interfaces.nsIBinaryInputStream);
+  var binaryStream = Cc["@mozilla.org/binaryinputstream;1"].createInstance(
+    Ci.nsIBinaryInputStream
+  );
   binaryStream.setInputStream(fileStream);
 
   response.bodyOutputStream.writeFrom(binaryStream, binaryStream.available());

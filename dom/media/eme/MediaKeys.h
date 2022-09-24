@@ -20,6 +20,7 @@
 #include "nsCycleCollectionParticipant.h"
 #include "nsIObserver.h"
 #include "nsRefPtrHashtable.h"
+#include "nsTHashMap.h"
 #include "nsWrapperCache.h"
 
 namespace mozilla {
@@ -55,7 +56,7 @@ class MediaKeys final : public nsIObserver,
 
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MediaKeys)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(MediaKeys)
 
   NS_DECL_NSIOBSERVER
 

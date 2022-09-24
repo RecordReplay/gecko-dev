@@ -47,7 +47,7 @@ class UsageInfo;
 // to participate in centralized quota and storage handling.
 class Client {
  public:
-  typedef Atomic<bool> AtomicBool;
+  using AtomicBool = Atomic<bool>;
 
   enum Type {
     IDB = 0,
@@ -156,6 +156,14 @@ class Client {
   virtual void StartIdleMaintenance() = 0;
 
   virtual void StopIdleMaintenance() = 0;
+
+  // Both variants just check for QuotaManager::IsShuttingDown()
+  // but assert to be on the right thread.
+  // They must not be used for re-entrance checks.
+  // Deprecated: This distinction is not needed anymore.
+  // QuotaClients should call QuotaManager::IsShuttingDown instead.
+  static bool IsShuttingDownOnBackgroundThread();
+  static bool IsShuttingDownOnNonBackgroundThread();
 
   // Returns true if there is work that needs to be waited for.
   bool InitiateShutdownWorkThreads();

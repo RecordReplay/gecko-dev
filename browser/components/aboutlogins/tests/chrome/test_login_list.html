@@ -272,6 +272,15 @@ add_task(async function test_breach_indicator() {
 });
 
 add_task(async function test_filtered_list() {
+  function findItemFromUsername(list, username) {
+    for (let item of list) {
+      if ((item._cachedUsername || (item._cachedUsername = item.querySelector('.username').textContent)) == username) {
+        return item;
+      }
+    }
+    ok(false, `The ${username} wasn't in the list of logins.`)
+    return list[0];
+  }
   gLoginList.setLogins([TEST_LOGIN_1, TEST_LOGIN_2]);
   let emptySearchText = gLoginList.shadowRoot.querySelector(".empty-search-message");
   ok(isHidden(emptySearchText), "The empty search text should be hidden when there are results in the list");
@@ -295,8 +304,8 @@ add_task(async function test_filtered_list() {
   is(JSON.parse(countSpan.getAttribute("data-l10n-args")).count, 1, "Count should match result amount");
   ok(isHidden(emptySearchText), "The empty search text should be hidden when there are results in the list");
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item[data-guid]");
-  ok(loginListItems[0].hidden, "user1 should be hidden");
-  ok(!loginListItems[1].hidden, "user2 should be visible");
+  ok(findItemFromUsername(loginListItems, 'user1').hidden, "user1 should be hidden");
+  ok(!findItemFromUsername(loginListItems, 'user2').hidden, "user2 should be visible");
   window.dispatchEvent(new CustomEvent("AboutLoginsFilterLogins", {
     bubbles: true,
     detail: "user",
@@ -305,8 +314,8 @@ add_task(async function test_filtered_list() {
   ok(!gLoginList._sortSelect.disabled, "The sort should be enabled when there are visible logins in the list");
   ok(isHidden(emptySearchText), "The empty search text should be hidden when there are results in the list");
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item[data-guid]");
-  ok(!loginListItems[0].hidden, "user1 should be visible");
-  ok(!loginListItems[1].hidden, "user2 should be visible");
+  ok(!findItemFromUsername(loginListItems, 'user1').hidden, "user1 should be visible");
+  ok(!findItemFromUsername(loginListItems, 'user2').hidden, "user2 should be visible");
   window.dispatchEvent(new CustomEvent("AboutLoginsFilterLogins", {
     bubbles: true,
     detail: "foo",
@@ -316,8 +325,8 @@ add_task(async function test_filtered_list() {
   ok(!isHidden(emptySearchText), "The empty search text should be visible when there are no results in the list");
   isnot(gLoginList.shadowRoot.querySelector(".container > ol").getAttribute("aria-activedescendant"), "new-login-list-item", "new-login-list-item shouldn't be the active descendant");
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item[data-guid]");
-  ok(loginListItems[0].hidden, "user1 should be hidden");
-  ok(loginListItems[1].hidden, "user2 should be hidden");
+  ok(findItemFromUsername(loginListItems, 'user1').hidden, "user1 should be hidden");
+  ok(findItemFromUsername(loginListItems, 'user2').hidden, "user2 should be hidden");
   window.dispatchEvent(new CustomEvent("AboutLoginsFilterLogins", {
     bubbles: true,
     detail: "",
@@ -326,8 +335,8 @@ add_task(async function test_filtered_list() {
   ok(isHidden(emptySearchText), "The empty search text should be hidden when there are results in the list");
   is(JSON.parse(countSpan.getAttribute("data-l10n-args")).count, 2, "Count should be reset to full list length");
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item[data-guid]");
-  ok(!loginListItems[0].hidden, "user1 should be visible");
-  ok(!loginListItems[1].hidden, "user2 should be visible");
+  ok(!findItemFromUsername(loginListItems, 'user1').hidden, "user1 should be visible");
+  ok(!findItemFromUsername(loginListItems, 'user2').hidden, "user2 should be visible");
 
   info("Add an HTTP Auth login");
   gLoginList.setLogins([TEST_LOGIN_1, TEST_LOGIN_2, TEST_HTTP_AUTH_LOGIN_1]);
@@ -340,10 +349,9 @@ add_task(async function test_filtered_list() {
   }));
   is(JSON.parse(countSpan.getAttribute("data-l10n-args")).count, 1, "Count should match result amount");
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item[data-guid]");
-  ok(loginListItems[0].hidden, "user1 should be hidden");
-  ok(loginListItems[1].hidden, "user2 should be hidden");
-  ok(!loginListItems[2].hidden, "http_auth_user should be visible");
-  is(loginListItems[2].querySelector(".username").textContent, "http_auth_user", "Verify the login with a matching httpRealm is visible");
+  ok(findItemFromUsername(loginListItems, 'user1').hidden, "user1 should be hidden");
+  ok(findItemFromUsername(loginListItems, 'user2').hidden, "user2 should be hidden");
+  ok(!findItemFromUsername(loginListItems, 'http_auth_user').hidden, "http_auth_user should be visible");
 
   gLoginList.setLogins([TEST_LOGIN_1, TEST_LOGIN_2]);
   window.dispatchEvent(new CustomEvent("AboutLoginsFilterLogins", {
@@ -471,6 +479,9 @@ add_task(async function test_sorted_list() {
   gLoginList._logins[guid1].login.title = "a";
   gLoginList._logins[guid2].login.title = "b";
   gLoginList._logins[guid3].login.title = "c";
+  gLoginList._logins[guid1].login.username = "a";
+  gLoginList._logins[guid2].login.username = "b";
+  gLoginList._logins[guid3].login.username = "c";
   gLoginList._logins[guid1].login.timePasswordChanged = 1;
   gLoginList._logins[guid2].login.timePasswordChanged = 2;
   gLoginList._logins[guid3].login.timePasswordChanged = 0;
@@ -527,6 +538,27 @@ add_task(async function test_sorted_list() {
   loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item:not(#new-login-list-item, [hidden])");
   is(loginListItems[0].classList.contains("breached"), true, "Breached login should be displayed at top of list");
   is(!loginListItems[1].classList.contains("breached"), true, "Non-breached login should be displayed below breached");
+
+  // sort by username
+  loginSort.value = "username";
+  dispatchChangeEvent(loginSort);
+  loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item:not(#new-login-list-item, [hidden])");
+  let username1 = gLoginList._logins[loginListItems[0].dataset.guid].login.username;
+  let username2 = gLoginList._logins[loginListItems[1].dataset.guid].login.username;
+  let username3 = gLoginList._logins[loginListItems[2].dataset.guid].login.username;
+  is(username1.localeCompare(username2), -1, "Logins sorted by username. First: " + username1 + "; Second: " + username2);
+  is(username2.localeCompare(username3), -1, "Logins sorted by username. Second: " + username2 + "; Third: " + username3);
+
+  // sort by username in reverse alphabetical order
+  loginSort.value = "username-reverse";
+  dispatchChangeEvent(loginSort);
+  loginListItems = gLoginList.shadowRoot.querySelectorAll(".login-list-item:not(#new-login-list-item, [hidden])");
+  username1 = gLoginList._logins[loginListItems[0].dataset.guid].login.username;
+  username2 = gLoginList._logins[loginListItems[1].dataset.guid].login.username;
+  username3 = gLoginList._logins[loginListItems[2].dataset.guid].login.username;
+  testDescription = "Logins sorted by username in reverse alphabetical order.";
+  is(username3.localeCompare(username2), -1, `${testDescription} First: ${username3} Second: ${username2}`);
+  is(username2.localeCompare(username1), -1, `${testDescription} Second: ${username2} Third: ${username1}`);
 
   // sort by name when there are no breached logins
   gLoginList.setBreaches(new Map());

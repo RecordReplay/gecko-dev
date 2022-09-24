@@ -234,7 +234,8 @@ var didRst = false;
 var rstConnection = null;
 var illegalheader_conn = null;
 
-var cname_confirm = 0;
+var gDoHPortsLog = [];
+var gDoHNewConnLog = {};
 
 // eslint-disable-next-line complexity
 function handleRequest(req, res) {
@@ -249,23 +250,62 @@ function handleRequest(req, res) {
   // PushService tests.
   var pushPushServer1, pushPushServer2, pushPushServer3, pushPushServer4;
 
-  function createCNameContent() {
-    let rContent;
-    if (0 == cname_confirm) {
-      // ... this sends a CNAME back to pointing-elsewhere.example.com
-      rContent = Buffer.from(
-        "00000100000100010000000005636E616D65076578616D706C6503636F6D0000050001C00C0005000100000037002012706F696E74696E672D656C73657768657265076578616D706C6503636F6D00",
-        "hex"
-      );
-      cname_confirm++;
-    } else {
-      // ... this sends an A 99.88.77.66 entry back for pointing-elsewhere.example.com
-      rContent = Buffer.from(
-        "00000100000100010000000012706F696E74696E672D656C73657768657265076578616D706C6503636F6D0000010001C00C0001000100000037000463584D42",
-        "hex"
-      );
+  function createCNameContent(payload) {
+    let packet = dnsPacket.decode(payload);
+    if (
+      packet.questions[0].name == "cname.example.com" &&
+      packet.questions[0].type == "A"
+    ) {
+      return dnsPacket.encode({
+        id: 0,
+        type: "response",
+        flags: dnsPacket.RECURSION_DESIRED,
+        questions: [{ name: packet.questions[0].name, type: "A", class: "IN" }],
+        answers: [
+          {
+            name: packet.questions[0].name,
+            ttl: 55,
+            type: "CNAME",
+            flush: false,
+            data: "pointing-elsewhere.example.com",
+          },
+        ],
+      });
     }
-    return rContent;
+    if (
+      packet.questions[0].name == "pointing-elsewhere.example.com" &&
+      packet.questions[0].type == "A"
+    ) {
+      return dnsPacket.encode({
+        id: 0,
+        type: "response",
+        flags: dnsPacket.RECURSION_DESIRED,
+        questions: [{ name: packet.questions[0].name, type: "A", class: "IN" }],
+        answers: [
+          {
+            name: packet.questions[0].name,
+            ttl: 55,
+            type: "A",
+            flush: false,
+            data: "99.88.77.66",
+          },
+        ],
+      });
+    }
+
+    return dnsPacket.encode({
+      id: 0,
+      type: "response",
+      flags: dnsPacket.RECURSION_DESIRED | dnsPacket.rcodes.toRcode("NXDOMAIN"),
+      questions: [
+        {
+          name: packet.questions[0].name,
+          type: packet.questions[0].type,
+          class: "IN",
+        },
+      ],
+      answers: [],
+    });
   }
 
   function createCNameARecord() {
@@ -336,7 +376,7 @@ function handleRequest(req, res) {
     return true;
   }
 
-  function createDNSAnswer(response, packet, responseIP) {
+  function createDNSAnswer(response, packet, responseIP, requestPayload) {
     // This shuts down the connection so we can test if the client reconnects
     if (
       packet.questions.length > 0 &&
@@ -344,6 +384,40 @@ function handleRequest(req, res) {
     ) {
       response.stream.connection.close("INTERNAL_ERROR", response.stream.id);
       return null;
+    }
+
+    if (
+      packet.questions.length > 0 &&
+      packet.questions[0].name.endsWith(".pd")
+    ) {
+      // Bug 1543811: test edns padding extension. Return whether padding was
+      // included via the first half of the ip address (1.1 vs 2.2) and the
+      // size of the request in the second half of the ip address allowing to
+      // verify that the correct amount of padding was added.
+      if (
+        packet.additionals.length > 0 &&
+        packet.additionals[0].type == "OPT" &&
+        packet.additionals[0].options.some(o => o.type === "PADDING")
+      ) {
+        responseIP =
+          "1.1." +
+          ((requestPayload.length >> 8) & 0xff) +
+          "." +
+          (requestPayload.length & 0xff);
+      } else {
+        responseIP =
+          "2.2." +
+          ((requestPayload.length >> 8) & 0xff) +
+          "." +
+          (requestPayload.length & 0xff);
+      }
+    }
+
+    if (u.query.corruptedAnswer) {
+      // DNS response header is 12 bytes, we check for this minimum length
+      // at the start of decoding so this is the simplest way to force
+      // a decode error.
+      return "\xFF\xFF\xFF\xFF";
     }
 
     function responseData() {
@@ -439,14 +513,23 @@ function handleRequest(req, res) {
         zlib.gzip(buffer, function(err, result) {
           resp.setHeader("Content-Encoding", "gzip");
           resp.setHeader("Content-Length", result.length);
-          resp.writeHead(200);
-          res.end(result);
+          try {
+            resp.writeHead(200);
+            resp.end(result);
+          } catch (e) {
+            // connection was closed by the time we started writing.
+          }
         });
       } else {
-        resp.setHeader("Content-Length", buffer.length);
-        resp.writeHead(200);
-        resp.write(buffer);
-        resp.end("");
+        const output = Buffer.from(buffer, "utf-8");
+        resp.setHeader("Content-Length", output.length);
+        try {
+          resp.writeHead(200);
+          resp.write(output);
+          resp.end("");
+        } catch (e) {
+          // connection was closed by the time we started writing.
+        }
       }
     }
 
@@ -794,17 +877,32 @@ function handleRequest(req, res) {
   // for use with test_trr.js
   else if (u.pathname === "/dns-cname") {
     // asking for cname.example.com
-    let rContent = createCNameContent();
 
-    res.setHeader("Content-Type", "application/dns-message");
+    function emitResponse(response, payload) {
+      let pcontent = createCNameContent(payload);
+      response.setHeader("Content-Type", "application/dns-message");
+      response.setHeader("Content-Length", pcontent.length);
+      response.writeHead(200);
+      response.write(pcontent);
+      response.end("");
+    }
+
+    let payload = Buffer.from("");
+    req.on("data", function receiveData(chunk) {
+      payload = Buffer.concat([payload, chunk]);
+    });
+    req.on("end", function finishedData() {
+      emitResponse(res, payload);
+    });
+    return;
+  } else if (u.pathname == "/get-doh-req-port-log") {
+    let rContent = JSON.stringify(gDoHPortsLog);
+    res.setHeader("Content-Type", "text/plain");
     res.setHeader("Content-Length", rContent.length);
-    res.writeHead(200);
-    res.write(rContent);
-    res.end("");
+    res.writeHead(400);
+    res.end(rContent);
     return;
   } else if (u.pathname == "/doh") {
-    cname_confirm = 0; // back to first reply for dns-cname
-
     let responseIP = u.query.responseIP;
     if (!responseIP) {
       responseIP = "5.5.5.5";
@@ -883,16 +981,21 @@ function handleRequest(req, res) {
 
     let payload = Buffer.from("");
 
-    function emitResponse(response, requestPayload) {
-      let packet = dnsPacket.decode(requestPayload);
-      let answer = createDNSAnswer(response, packet, responseIP);
+    function emitResponse(response, requestPayload, decodedPacket, delay) {
+      let packet = decodedPacket || dnsPacket.decode(requestPayload);
+      let answer = createDNSAnswer(
+        response,
+        packet,
+        responseIP,
+        requestPayload
+      );
       if (!answer) {
         return;
       }
       writeDNSResponse(
         response,
         answer,
-        getDelayFromPacket(packet, responseType(packet, responseIP)),
+        delay || getDelayFromPacket(packet, responseType(packet, responseIP)),
         "application/dns-message"
       );
     }
@@ -909,7 +1012,30 @@ function handleRequest(req, res) {
     req.on("end", function finishedData() {
       // parload is empty when we send redirect response.
       if (payload.length) {
-        emitResponse(res, payload);
+        let packet = dnsPacket.decode(payload);
+        let delay;
+        if (u.query.conncycle) {
+          let name = packet.questions[0].name;
+          if (name.startsWith("newconn")) {
+            // If we haven't seen a req for this newconn name before,
+            // or if we've seen one for the same name on the same port,
+            // synthesize a timeout.
+            if (
+              !gDoHNewConnLog[name] ||
+              gDoHNewConnLog[name] == req.remotePort
+            ) {
+              delay = 1000;
+            }
+            if (!gDoHNewConnLog[name]) {
+              gDoHNewConnLog[name] = req.remotePort;
+            }
+          }
+          gDoHPortsLog.push([packet.questions[0].name, req.remotePort]);
+        } else {
+          gDoHPortsLog = [];
+          gDoHNewConnLog = {};
+        }
+        emitResponse(res, payload, packet, delay);
       }
     });
     return;
@@ -938,7 +1064,7 @@ function handleRequest(req, res) {
             { key: "echconfig", value: "123..." },
             { key: "ipv6hint", value: "::1" },
             { key: 30, value: "somelargestring" },
-            { key: "odohconfig", value: "456..." },
+            { key: "odoh", value: "456..." },
           ],
         },
       });
@@ -956,7 +1082,7 @@ function handleRequest(req, res) {
             { key: "ipv4hint", value: ["1.2.3.4", "5.6.7.8"] },
             { key: "echconfig", value: "abc..." },
             { key: "ipv6hint", value: ["::1", "fe80::794f:6d2c:3d5e:7836"] },
-            { key: "odohconfig", value: "def..." },
+            { key: "odoh", value: "def..." },
           ],
         },
       });
@@ -1030,6 +1156,16 @@ function handleRequest(req, res) {
       } else {
         var b64encoded = Buffer.from(odohconfig).toString("base64");
         let packet = dnsPacket.decode(payload);
+        if (
+          u.query.failConfirmation == "true" &&
+          packet.questions[0].type == "NS" &&
+          packet.questions[0].name == "example.com"
+        ) {
+          res.writeHead(200);
+          res.write("<12bytes");
+          res.end("");
+          return;
+        }
         if (packet.questions[0].type == "HTTPS") {
           answers.push({
             name: packet.questions[0].name,
@@ -1042,7 +1178,7 @@ function handleRequest(req, res) {
               name: packet.questions[0].name,
               values: [
                 {
-                  key: "odohconfig",
+                  key: "odoh",
                   value: b64encoded,
                   needBase64Decode: true,
                 },
@@ -1088,7 +1224,12 @@ function handleRequest(req, res) {
     function emitResponse(response, requestPayload) {
       let decryptedQuery = odoh.decrypt_query(requestPayload);
       let packet = dnsPacket.decode(Buffer.from(decryptedQuery.buffer));
-      let answer = createDNSAnswer(response, packet, responseIP);
+      let answer = createDNSAnswer(
+        response,
+        packet,
+        responseIP,
+        requestPayload
+      );
       if (!answer) {
         return;
       }
@@ -1119,12 +1260,12 @@ function handleRequest(req, res) {
       }
 
       if (u.query.cname) {
-        odoh.decrypt_query(payload);
+        let decryptedQuery = odoh.decrypt_query(payload);
         let rContent;
         if (u.query.cname === "ARecord") {
           rContent = createCNameARecord();
         } else {
-          rContent = createCNameContent();
+          rContent = createCNameContent(Buffer.from(decryptedQuery.buffer));
         }
         let encryptedResponse = odoh.create_response(rContent);
         res.setHeader("Content-Type", "application/oblivious-dns-message");
@@ -1139,13 +1280,6 @@ function handleRequest(req, res) {
         emitResponse(res, payload);
       }
     });
-    return;
-  } else if (u.pathname === "/reset_cname_confirm") {
-    cname_confirm = 0;
-    res.setHeader("Content-Length", 4);
-    res.writeHead(200);
-    res.write("done");
-    res.end();
     return;
   } else if (u.pathname === "/httpssvc_as_altsvc") {
     let payload = Buffer.from("");
@@ -1676,6 +1810,29 @@ function handleRequest(req, res) {
     res.writeHead(307);
     res.end("");
     return;
+  } else if (u.pathname === "/103_response") {
+    let link_val = req.headers["link-to-set"];
+    if (link_val) {
+      res.setHeader("link", link_val);
+    }
+    res.setHeader("something", "something");
+    res.writeHead(103);
+
+    res.setHeader("Content-Type", "text/plain");
+    res.setHeader("Content-Length", "12");
+    res.writeHead(200);
+    res.write("data reached");
+    res.end();
+    return;
+  }
+
+  // response headers with invalid characters in the name
+  else if (u.pathname === "/invalid_response_header") {
+    res.setHeader("With Spaces", "Hello");
+    res.setHeader("Without-Spaces", "World");
+    res.writeHead(200);
+    res.end("");
+    return;
   }
 
   // response headers with invalid characters in the name
@@ -1856,7 +2013,9 @@ function forkProcess() {
       forked.resolve(msg);
       forked.resolve = null;
     } else {
-      console.log(`forked process without handler sent: ${msg}`);
+      console.log(
+        `forked process without handler sent: ${JSON.stringify(msg)}`
+      );
       forked.errors += `forked process without handler sent: ${JSON.stringify(
         msg
       )}\n`;

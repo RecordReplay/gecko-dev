@@ -5,7 +5,7 @@
 
 const TEST_FILE = "test-network-request.html";
 const TEST_PATH =
-  "http://example.com/browser/devtools/client/webconsole/" + "test/browser/";
+  "https://example.com/browser/devtools/client/webconsole/" + "test/browser/";
 const TEST_URI = TEST_PATH + TEST_FILE;
 
 const NET_PREF = "devtools.webconsole.filter.net";
@@ -39,7 +39,9 @@ add_task(async function task() {
   await onNetworkMessageUpdate;
 
   const xhrUrl = TEST_PATH + "test-data.json";
-  const messageNode = await waitFor(() => findMessage(hud, xhrUrl, ".network"));
+  const messageNode = await waitFor(() =>
+    findMessageByType(hud, xhrUrl, ".network")
+  );
   ok(!!messageNode, "Network message found.");
 
   const statusCodeNode = await waitFor(() =>

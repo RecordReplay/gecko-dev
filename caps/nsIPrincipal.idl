@@ -44,6 +44,8 @@ class OriginAttributes;
 
 interface nsIURI;
 
+webidl WebExtensionPolicy;
+
 [ptr] native JSContext(JSContext);
 [ptr] native JSPrincipals(JSPrincipals);
 [ref] native PrincipalArray(const nsTArray<nsCOMPtr<nsIPrincipal>>);
@@ -318,11 +320,19 @@ interface nsIPrincipal : nsISupports
     [infallible]
     boolean isURIInPrefList(in string pref);
 
+    /**
+     * Check if the Principal's URI is contained in the given list
+     * @param list The list to be checked
+     */
+    [infallible]
+    boolean isURIInList(in ACString list);
+
     /*
     * Uses NS_Security Compare to determine if the
     * other URI is same-origin as the uri of the Principal
     */
-    bool isSameOrigin(in nsIURI otherURI, in bool aIsPrivateWin);
+    [infallible]
+    boolean isSameOrigin(in nsIURI otherURI);
 
     /*
     * Checks if the Principal is allowed to load the Provided file:// URI
@@ -340,16 +350,16 @@ interface nsIPrincipal : nsISupports
 
 
     /*
-    *  Checks if the Principals URI has first party storage access 
-    *  when loaded inside the provided 3rd party resource window. 
+    *  Checks if the Principals URI has first party storage access
+    *  when loaded inside the provided 3rd party resource window.
     *  See also: ContentBlocking::ShouldAllowAccessFor
     */
     bool hasFirstpartyStorageAccess(in mozIDOMWindow aWindow, out uint32_t rejectedReason);
-    
-    
+
+
     /*
-    * Returns a Key for the LocalStorage Manager, used to 
-    * check the Principals Origin Storage usage. 
+    * Returns a Key for the LocalStorage Manager, used to
+    * check the Principals Origin Storage usage.
     */
     readonly attribute ACString localStorageQuotaKey;
 
@@ -432,7 +442,7 @@ interface nsIPrincipal : nsISupports
      */
     readonly attribute AString addonId;
 
-    readonly attribute nsISupports addonPolicy;
+    readonly attribute WebExtensionPolicy addonPolicy;
 
     /**
      * Gets the id of the user context this principal is inside.  If this
@@ -538,6 +548,20 @@ interface nsIPrincipal : nsISupports
      */
     [infallible] readonly attribute boolean isLocalIpAddress;
 
+    /**
+     * If this principal is a null principal, reconstruct the precursor
+     * principal which this null principal was derived from. This may be null,
+     * in which case this is not a null principal, there is no known precursor
+     * to this null principal, it was created by a privileged context, or there
+     * was a bugged origin in the precursor string.
+     *
+     * WARNING: Be careful when using this principal, as it is not part of the
+     * security properties of the null principal, and should NOT be used to
+     * grant a resource with a null principal access to resources from its
+     * precursor origin. This is only to be used for places where tracking how
+     * null principals were created is necessary.
+     */
+    [infallible] readonly attribute nsIPrincipal precursorPrincipal;
 };
 
 /**

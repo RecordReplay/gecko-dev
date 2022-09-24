@@ -313,10 +313,11 @@ def main(*args, **kwargs):
         args.extend(
             [
                 "--rootdir",
-                topsrcdir,
+                str(topsrcdir),
                 "-c",
                 os.path.join(here, "pytest.ini"),
                 "-vv",
+                "--tb=short",
                 "-p",
                 "mozlog.pytest_mozlog.plugin",
                 "-p",

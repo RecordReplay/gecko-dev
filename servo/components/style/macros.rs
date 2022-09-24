@@ -105,35 +105,6 @@ macro_rules! define_keyword_type {
     };
 }
 
-/// Place a Gecko profiler label on the stack.
-///
-/// The `label_type` argument must be the name of a variant of `ProfilerLabel`.
-#[cfg(feature = "gecko_profiler")]
-#[macro_export]
-macro_rules! profiler_label {
-    ($label_type:ident) => {
-        let mut _profiler_label =
-            ::std::mem::MaybeUninit::<$crate::gecko_bindings::structs::AutoProfilerLabel>::uninit();
-        let _profiler_label = if $crate::gecko::profiler::profiler_is_active() {
-            unsafe {
-                Some($crate::gecko::profiler::AutoProfilerLabel::new(
-                    &mut _profiler_label,
-                    $crate::gecko::profiler::ProfilerLabel::$label_type,
-                ))
-            }
-        } else {
-            None
-        };
-    };
-}
-
-/// No-op when the Gecko profiler is not available.
-#[cfg(not(feature = "gecko_profiler"))]
-#[macro_export]
-macro_rules! profiler_label {
-    ($label_type:ident) => {};
-}
-
 #[cfg(feature = "servo")]
 macro_rules! local_name {
     ($s:tt) => {
@@ -155,5 +126,13 @@ macro_rules! ns {
 macro_rules! local_name {
     ($s:tt) => {
         $crate::values::AtomIdent(atom!($s))
+    };
+}
+
+/// Asserts the size of a type at compile time.
+macro_rules! size_of_test {
+    ($t: ty, $expected_size: expr) => {
+        #[cfg(target_pointer_width = "64")]
+        const_assert_eq!(std::mem::size_of::<$t>(), $expected_size);
     };
 }

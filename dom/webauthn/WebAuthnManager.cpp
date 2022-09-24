@@ -28,8 +28,7 @@
 
 using namespace mozilla::ipc;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /***********************************************************************
  * Statics
@@ -46,14 +45,12 @@ NS_IMPL_CYCLE_COLLECTION_CLASS(WebAuthnManager)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(WebAuthnManager,
                                                 WebAuthnManagerBase)
-  AbortFollower::Unlink(static_cast<AbortFollower*>(tmp));
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mTransaction)
   tmp->mTransaction.reset();
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(WebAuthnManager,
                                                   WebAuthnManagerBase)
-  AbortFollower::Traverse(static_cast<AbortFollower*>(tmp), cb);
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mTransaction)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -225,14 +222,13 @@ WebAuthnManager::~WebAuthnManager() {
 
 already_AddRefed<Promise> WebAuthnManager::MakeCredential(
     const PublicKeyCredentialCreationOptions& aOptions,
-    const Optional<OwningNonNull<AbortSignal>>& aSignal) {
+    const Optional<OwningNonNull<AbortSignal>>& aSignal, ErrorResult& aError) {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mParent);
 
-  ErrorResult rv;
-  RefPtr<Promise> promise = Promise::Create(global, rv);
-  if (rv.Failed()) {
+  RefPtr<Promise> promise = Promise::Create(global, aError);
+  if (aError.Failed()) {
     return nullptr;
   }
 
@@ -258,9 +254,9 @@ already_AddRefed<Promise> WebAuthnManager::MakeCredential(
 
   nsString origin;
   nsCString rpId;
-  rv = GetOrigin(mParent, origin, rpId);
-  if (NS_WARN_IF(rv.Failed())) {
-    promise->MaybeReject(std::move(rv));
+  nsresult rv = GetOrigin(mParent, origin, rpId);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    promise->MaybeReject(rv);
     return promise.forget();
   }
 
@@ -308,18 +304,24 @@ already_AddRefed<Promise> WebAuthnManager::MakeCredential(
   }
 
   // Process each element of mPubKeyCredParams using the following steps, to
-  // produce a new sequence coseAlgos.
+  // produce a new sequence of coseAlgos.
   nsTArray<CoseAlg> coseAlgos;
-  for (size_t a = 0; a < aOptions.mPubKeyCredParams.Length(); ++a) {
-    // If current.type does not contain a PublicKeyCredentialType
-    // supported by this implementation, then stop processing current and move
-    // on to the next element in mPubKeyCredParams.
-    if (aOptions.mPubKeyCredParams[a].mType !=
-        PublicKeyCredentialType::Public_key) {
-      continue;
-    }
+  // If pubKeyCredParams is empty, append ES256 and RS256
+  if (aOptions.mPubKeyCredParams.IsEmpty()) {
+    coseAlgos.AppendElement(static_cast<long>(CoseAlgorithmIdentifier::ES256));
+    coseAlgos.AppendElement(static_cast<long>(CoseAlgorithmIdentifier::RS256));
+  } else {
+    for (size_t a = 0; a < aOptions.mPubKeyCredParams.Length(); ++a) {
+      // If current.type does not contain a PublicKeyCredentialType
+      // supported by this implementation, then stop processing current and move
+      // on to the next element in mPubKeyCredParams.
+      if (aOptions.mPubKeyCredParams[a].mType !=
+          PublicKeyCredentialType::Public_key) {
+        continue;
+      }
 
-    coseAlgos.AppendElement(aOptions.mPubKeyCredParams[a].mAlg);
+      coseAlgos.AppendElement(aOptions.mPubKeyCredParams[a].mAlg);
+    }
   }
 
   // If there are algorithms specified, but none are Public_key algorithms,
@@ -451,14 +453,13 @@ const size_t MAX_ALLOWED_CREDENTIALS = 20;
 
 already_AddRefed<Promise> WebAuthnManager::GetAssertion(
     const PublicKeyCredentialRequestOptions& aOptions,
-    const Optional<OwningNonNull<AbortSignal>>& aSignal) {
+    const Optional<OwningNonNull<AbortSignal>>& aSignal, ErrorResult& aError) {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mParent);
 
-  ErrorResult rv;
-  RefPtr<Promise> promise = Promise::Create(global, rv);
-  if (rv.Failed()) {
+  RefPtr<Promise> promise = Promise::Create(global, aError);
+  if (aError.Failed()) {
     return nullptr;
   }
 
@@ -484,9 +485,9 @@ already_AddRefed<Promise> WebAuthnManager::GetAssertion(
 
   nsString origin;
   nsCString rpId;
-  rv = GetOrigin(mParent, origin, rpId);
-  if (NS_WARN_IF(rv.Failed())) {
-    promise->MaybeReject(std::move(rv));
+  nsresult rv = GetOrigin(mParent, origin, rpId);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    promise->MaybeReject(rv);
     return promise.forget();
   }
 
@@ -539,9 +540,9 @@ already_AddRefed<Promise> WebAuthnManager::GetAssertion(
   }
 
   nsAutoCString clientDataJSON;
-  nsresult srv = AssembleClientData(origin, challenge, u"webauthn.get"_ns,
-                                    aOptions.mExtensions, clientDataJSON);
-  if (NS_WARN_IF(NS_FAILED(srv))) {
+  rv = AssembleClientData(origin, challenge, u"webauthn.get"_ns,
+                          aOptions.mExtensions, clientDataJSON);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
     promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
     return promise.forget();
   }
@@ -618,8 +619,8 @@ already_AddRefed<Promise> WebAuthnManager::GetAssertion(
     }
 
     // We need the SHA-256 hash of the appId.
-    srv = HashCString(NS_ConvertUTF16toUTF8(appId), appIdHash);
-    if (NS_WARN_IF(NS_FAILED(srv))) {
+    rv = HashCString(NS_ConvertUTF16toUTF8(appId), appIdHash);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
       promise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
       return promise.forget();
     }
@@ -661,15 +662,14 @@ already_AddRefed<Promise> WebAuthnManager::GetAssertion(
   return promise.forget();
 }
 
-already_AddRefed<Promise> WebAuthnManager::Store(
-    const Credential& aCredential) {
+already_AddRefed<Promise> WebAuthnManager::Store(const Credential& aCredential,
+                                                 ErrorResult& aError) {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(mParent);
 
-  ErrorResult rv;
-  RefPtr<Promise> promise = Promise::Create(global, rv);
-  if (rv.Failed()) {
+  RefPtr<Promise> promise = Promise::Create(global, aError);
+  if (aError.Failed()) {
     return nullptr;
   }
 
@@ -844,5 +844,4 @@ void WebAuthnManager::RunAbortAlgorithm() {
   CancelTransaction(NS_ERROR_DOM_ABORT_ERR);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

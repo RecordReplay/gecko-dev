@@ -12,8 +12,10 @@ use crate::gecko_bindings::structs;
 use crate::media_queries::MediaType;
 use crate::properties::ComputedValues;
 use crate::string_cache::Atom;
-use crate::values::computed::Length;
+use crate::values::computed::{ColorScheme, Length};
+use crate::values::specified::color::SystemColor;
 use crate::values::specified::font::FONT_MEDIUM_PX;
+use crate::values::specified::ViewportVariant;
 use crate::values::{CustomIdent, KeyframesName};
 use app_units::{Au, AU_PER_PX};
 use cssparser::RGBA;
@@ -53,6 +55,9 @@ pub struct Device {
     /// Whether any styles computed in the document relied on the viewport size
     /// by using vw/vh/vmin/vmax units.
     used_viewport_size: AtomicBool,
+    /// Whether any styles computed in the document relied on the viewport size
+    /// by using dvw/dvh/dvmin/dvmax units.
+    used_dynamic_viewport_size: AtomicBool,
     /// The CssEnvironment object responsible of getting CSS environment
     /// variables.
     environment: CssEnvironment,
@@ -89,9 +94,12 @@ impl Device {
             document,
             default_values: ComputedValues::default_values(doc),
             root_font_size: AtomicU32::new(FONT_MEDIUM_PX.to_bits()),
-            body_text_color: AtomicUsize::new(prefs.mDefaultColor as usize),
+            // This gets updated when we see the <body>, so it doesn't really
+            // matter which color-scheme we look at here.
+            body_text_color: AtomicUsize::new(prefs.mLightColors.mDefault as usize),
             used_root_font_size: AtomicBool::new(false),
             used_viewport_size: AtomicBool::new(false),
+            used_dynamic_viewport_size: AtomicBool::new(false),
             environment: CssEnvironment,
         }
     }
@@ -197,6 +205,8 @@ impl Device {
         self.reset_computed_values();
         self.used_root_font_size.store(false, Ordering::Relaxed);
         self.used_viewport_size.store(false, Ordering::Relaxed);
+        self.used_dynamic_viewport_size
+            .store(false, Ordering::Relaxed);
     }
 
     /// Returns whether we ever looked up the root font size of the Device.
@@ -267,7 +277,10 @@ impl Device {
 
     /// Returns the current viewport size in app units, recording that it's been
     /// used for viewport unit resolution.
-    pub fn au_viewport_size_for_viewport_unit_resolution(&self) -> Size2D<Au> {
+    pub fn au_viewport_size_for_viewport_unit_resolution(
+        &self,
+        variant: ViewportVariant,
+    ) -> Size2D<Au> {
         self.used_viewport_size.store(true, Ordering::Relaxed);
         let pc = match self.pres_context() {
             Some(pc) => pc,
@@ -278,13 +291,55 @@ impl Device {
             return self.page_size_minus_default_margin(pc);
         }
 
-        let size = &pc.mSizeForViewportUnits;
-        Size2D::new(Au(size.width), Au(size.height))
+        match variant {
+            ViewportVariant::UADefault => {
+                let size = &pc.mSizeForViewportUnits;
+                Size2D::new(Au(size.width), Au(size.height))
+            },
+            ViewportVariant::Small => {
+                let size = &pc.mVisibleArea;
+                Size2D::new(Au(size.width), Au(size.height))
+            },
+            ViewportVariant::Large => {
+                let size = &pc.mVisibleArea;
+                // Looks like IntCoordTyped is treated as if it's u32 in Rust.
+                debug_assert!(
+                    /* pc.mDynamicToolbarMaxHeight >=0 && */
+                    pc.mDynamicToolbarMaxHeight < i32::MAX as u32
+                );
+                Size2D::new(
+                    Au(size.width),
+                    Au(size.height +
+                        pc.mDynamicToolbarMaxHeight as i32 * pc.mCurAppUnitsPerDevPixel),
+                )
+            },
+            ViewportVariant::Dynamic => {
+                self.used_dynamic_viewport_size
+                    .store(true, Ordering::Relaxed);
+                let size = &pc.mVisibleArea;
+                // Looks like IntCoordTyped is treated as if it's u32 in Rust.
+                debug_assert!(
+                    /* pc.mDynamicToolbarHeight >=0 && */
+                    pc.mDynamicToolbarHeight < i32::MAX as u32
+                );
+                Size2D::new(
+                    Au(size.width),
+                    Au(size.height +
+                        (pc.mDynamicToolbarMaxHeight - pc.mDynamicToolbarHeight) as i32 *
+                            pc.mCurAppUnitsPerDevPixel),
+                )
+            },
+        }
     }
 
     /// Returns whether we ever looked up the viewport size of the Device.
     pub fn used_viewport_size(&self) -> bool {
         self.used_viewport_size.load(Ordering::Relaxed)
+    }
+
+    /// Returns whether we ever looked up the dynamic viewport size of the Device.
+    pub fn used_dynamic_viewport_size(&self) -> bool {
+        self.used_dynamic_viewport_size.load(Ordering::Relaxed)
     }
 
     /// Returns the device pixel ratio.
@@ -313,14 +368,30 @@ impl Device {
         self.pref_sheet_prefs().mUseDocumentColors
     }
 
+    /// Computes a system color and returns it as an nscolor.
+    pub(crate) fn system_nscolor(
+        &self,
+        system_color: SystemColor,
+        color_scheme: &ColorScheme,
+    ) -> u32 {
+        unsafe { bindings::Gecko_ComputeSystemColor(system_color, self.document(), color_scheme) }
+    }
+
     /// Returns the default background color.
+    ///
+    /// This is only for forced-colors/high-contrast, so looking at light colors
+    /// is ok.
     pub fn default_background_color(&self) -> RGBA {
-        convert_nscolor_to_rgba(self.pref_sheet_prefs().mDefaultBackgroundColor)
+        let normal = ColorScheme::normal();
+        convert_nscolor_to_rgba(self.system_nscolor(SystemColor::Canvas, &normal))
     }
 
     /// Returns the default foreground color.
+    ///
+    /// See above for looking at light colors only.
     pub fn default_color(&self) -> RGBA {
-        convert_nscolor_to_rgba(self.pref_sheet_prefs().mDefaultColor)
+        let normal = ColorScheme::normal();
+        convert_nscolor_to_rgba(self.system_nscolor(SystemColor::Canvastext, &normal))
     }
 
     /// Returns the current effective text zoom.
@@ -366,5 +437,11 @@ impl Device {
         unsafe {
             bindings::Gecko_IsSupportedImageMimeType(mime_type.as_ptr(), mime_type.len() as u32)
         }
+    }
+
+    /// Return whether the document is a chrome document.
+    #[inline]
+    pub fn is_chrome_document(&self) -> bool {
+        self.pref_sheet_prefs().mIsChrome
     }
 }

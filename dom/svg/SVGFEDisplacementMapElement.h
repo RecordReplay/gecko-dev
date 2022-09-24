@@ -13,8 +13,7 @@
 nsresult NS_NewSVGFEDisplacementMapElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFEDisplacementMapElementBase = SVGFE;
 
@@ -42,6 +41,8 @@ class SVGFEDisplacementMapElement : public SVGFEDisplacementMapElementBase {
   virtual void GetSourceImageNames(nsTArray<SVGStringInfo>& aSources) override;
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
+
+  virtual nsresult BindToTree(BindContext& aCtx, nsINode& aParent) override;
 
   // WebIDL
   already_AddRefed<DOMSVGAnimatedString> In1();
@@ -83,7 +84,6 @@ class SVGFEDisplacementMapElement : public SVGFEDisplacementMapElementBase {
   static StringInfo sStringInfo[3];
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFEDISPLACEMENTMAPELEMENT_H_

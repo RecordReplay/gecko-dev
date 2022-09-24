@@ -27,6 +27,7 @@ in particular.
    manifest
    lifecycle
    incognito
+   webidl_bindings
+   webext-storage
    other
    reference
-

@@ -11,6 +11,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  FilterAdult: "resource://activity-stream/lib/FilterAdult.jsm",
   Services: "resource://gre/modules/Services.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
@@ -36,6 +37,13 @@ XPCOMUtils.defineLazyGetter(this, "logConsole", function() {
 // defined as escaped strings so that we build them lazily.
 // We may want to migrate this list to Remote Settings in the future.
 let HOST_BLOCKLIST = {
+  auth0: [
+    // Auth0 OAuth.
+    // XXX: Used alone this could produce false positives where an auth0 URL
+    // appears after another valid domain and TLD, but since we limit this to
+    // the auth0 hostname those occurrences will be filtered out.
+    "^https:\\/\\/.*\\.auth0\\.com\\/login",
+  ],
   baidu: [
     // Baidu SERP
     "^(https?:\\/\\/)?(www\\.)?baidu\\.com\\/s.*(\\?|&)wd=.*",
@@ -51,6 +59,13 @@ let HOST_BLOCKLIST = {
   google: [
     // Google SERP
     "^(https?:\\/\\/)?(www\\.)?google\\.(\\w|\\.){2,}\\/search.*(\\?|&)q=.*",
+    // Google OAuth
+    "^https:\\/\\/accounts\\.google\\.com\\/o\\/oauth2\\/v2\\/auth",
+    "^https:\\/\\/accounts\\.google\\.com\\/signin\\/oauth\\/consent",
+  ],
+  microsoftonline: [
+    // Microsoft OAuth
+    "^https:\\/\\/login\\.microsoftonline\\.com\\/common\\/oauth2\\/v2\\.0\\/authorize",
   ],
   yandex: [
     // Yandex SERP
@@ -111,6 +126,45 @@ class _InteractionsBlocklist {
   }
 
   /**
+   * Only certain urls can be added as Interactions, either manually or
+   * automatically.
+   * @returns {Map} A Map keyed by protocol, for each protocol an object may
+   *          define stricter requirements, like extension.
+   */
+  get urlRequirements() {
+    return new Map([
+      ["http:", {}],
+      ["https:", {}],
+      ["file:", { extension: "pdf" }],
+    ]);
+  }
+
+  /**
+   * Whether to record interactions for a given URL.
+   * The rules are defined in InteractionsBlocklist.urlRequirements.
+   * @param {string|URL|nsIURI} url The URL to check.
+   * @returns {boolean} whether the url can be added to snapshots.
+   */
+  canRecordUrl(url) {
+    let protocol, pathname;
+    if (typeof url == "string") {
+      url = new URL(url);
+    }
+    if (url instanceof Ci.nsIURI) {
+      protocol = url.scheme + ":";
+      pathname = url.filePath;
+    } else {
+      protocol = url.protocol;
+      pathname = url.pathname;
+    }
+    let requirements = InteractionsBlocklist.urlRequirements.get(protocol);
+    return (
+      requirements &&
+      (!requirements.extension || pathname.endsWith(requirements.extension))
+    );
+  }
+
+  /**
    * Checks a URL against a blocklist of URLs. If the URL is blocklisted, we
    * should not record an interaction.
    *
@@ -120,6 +174,14 @@ class _InteractionsBlocklist {
    *  True if `url` is on a blocklist. False otherwise.
    */
   isUrlBlocklisted(urlToCheck) {
+    if (FilterAdult.isAdultUrl(urlToCheck)) {
+      return true;
+    }
+
+    if (!this.canRecordUrl(urlToCheck)) {
+      return true;
+    }
+
     // First, find the URL's base host: the hostname without any subdomains or a
     // public suffix.
     let url;
@@ -134,6 +196,11 @@ class _InteractionsBlocklist {
       );
       return false;
     }
+
+    if (url.protocol == "file:") {
+      return false;
+    }
+
     let hostWithoutSuffix = UrlbarUtils.stripPublicSuffixFromHost(url.host);
     let [hostWithSubdomains] = UrlbarUtils.stripPrefixAndTrim(
       hostWithoutSuffix,

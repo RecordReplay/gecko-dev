@@ -27,8 +27,7 @@ NS_IMPL_NS_NEW_SVG_ELEMENT(Path)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGPathElement::WrapNode(JSContext* aCx,
                                    JS::Handle<JSObject*> aGivenProto) {
@@ -66,9 +65,11 @@ uint32_t SVGPathElement::GetPathSegAtLength(float distance) {
     }
   };
 
-  if (StaticPrefs::layout_css_d_property_enabled() &&
-      SVGGeometryProperty::DoForComputedStyle(this, callback)) {
-    return seg;
+  if (StaticPrefs::layout_css_d_property_enabled()) {
+    FlushStyleIfNeeded();
+    if (SVGGeometryProperty::DoForComputedStyle(this, callback)) {
+      return seg;
+    }
   }
   return mD.GetAnimValue().GetPathSegAtLength(distance);
 }
@@ -219,17 +220,17 @@ SVGPathElement::CreateSVGPathSegCurvetoQuadraticSmoothRel(float x, float y) {
   return pathSeg.forget();
 }
 
+// FIXME: This API is enabled only if dom.svg.pathSeg.enabled is true. This
+// preference is off by default in Bug 1388931, and will be dropped later.
+// So we are not planning to map d property for this API.
 already_AddRefed<DOMSVGPathSegList> SVGPathElement::PathSegList() {
-  // FIXME: This should be removed by Bug 1388931, so we don't add this extra
-  // API from style system. This WebIDL API only supports the SVG d attribute
-  // for now.
   return DOMSVGPathSegList::GetDOMWrapper(mD.GetBaseValKey(), this, false);
 }
 
+// FIXME: This API is enabled only if dom.svg.pathSeg.enabled is true. This
+// preference is off by default in Bug 1388931, and will be dropped later.
+// So we are not planning to map d property for this API.
 already_AddRefed<DOMSVGPathSegList> SVGPathElement::AnimatedPathSegList() {
-  // FIXME: This should be removed by Bug 1388931, so we don't add this extra
-  // API from style system. This WebIDL API only supports the SVG d attribute
-  // for now.
   return DOMSVGPathSegList::GetDOMWrapper(mD.GetAnimValKey(), this, true);
 }
 
@@ -312,6 +313,23 @@ void SVGPathElement::GetMarkPoints(nsTArray<SVGMark>* aMarks) {
   mD.GetAnimValue().GetMarkerPositioningData(aMarks);
 }
 
+void SVGPathElement::GetAsSimplePath(SimplePath* aSimplePath) {
+  aSimplePath->Reset();
+  auto callback = [&](const ComputedStyle* s) {
+    const nsStyleSVGReset* styleSVGReset = s->StyleSVGReset();
+    if (styleSVGReset->mD.IsPath()) {
+      auto pathData = styleSVGReset->mD.AsPath()._0.AsSpan();
+      auto maybeRect = SVGPathToAxisAlignedRect(pathData);
+      if (maybeRect.isSome()) {
+        Rect r = maybeRect.value();
+        aSimplePath->SetRect(r.x, r.y, r.width, r.height);
+      }
+    }
+  };
+
+  SVGGeometryProperty::DoForComputedStyle(this, callback);
+}
+
 already_AddRefed<Path> SVGPathElement::BuildPath(PathBuilder* aBuilder) {
   // The Moz2D PathBuilder that our SVGPathData will be using only cares about
   // the fill rule. However, in order to fulfill the requirements of the SVG
@@ -381,5 +399,4 @@ bool SVGPathElement::IsDPropertyChangedViaCSS(const ComputedStyle& aNewStyle,
   return aNewStyle.StyleSVGReset()->mD != aOldStyle.StyleSVGReset()->mD;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

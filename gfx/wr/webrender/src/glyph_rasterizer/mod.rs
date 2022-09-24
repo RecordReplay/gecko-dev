@@ -2,10 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{FontInstanceFlags, FontSize, BaseFontInstance};
-use api::{FontKey, FontRenderMode, FontTemplate};
+use api::{FontInstanceData, FontInstanceFlags, FontInstanceKey};
+use api::{FontInstanceOptions, FontInstancePlatformOptions};
+use api::{FontKey, FontRenderMode, FontSize, FontTemplate, FontVariation};
 use api::{ColorU, GlyphIndex, GlyphDimensions, SyntheticItalics};
-use api::channel::{unbounded_channel, Receiver, Sender};
+use api::{IdNamespace, BlobImageResources};
+use api::channel::crossbeam::{unbounded, Receiver, Sender};
 use api::units::*;
 use api::{ImageDescriptor, ImageDescriptorFlags, ImageFormat, DirtyRect};
 use crate::internal_types::ResourceCacheError;
@@ -13,11 +15,12 @@ use crate::platform::font::FontContext;
 use crate::device::TextureFilter;
 use crate::gpu_types::UvRectKind;
 use crate::glyph_cache::{GlyphCache, CachedGlyphInfo, GlyphCacheEntry};
-use crate::internal_types::FastHashMap;
+use crate::internal_types::{FastHashMap, FastHashSet};
 use crate::resource_cache::CachedImageData;
 use crate::texture_cache::{TextureCache, TextureCacheHandle, Eviction, TargetShader};
 use crate::gpu_cache::GpuCache;
 use crate::profiler::{self, TransactionProfile};
+use crate::telemetry::Telemetry;
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
 use rayon::ThreadPool;
 use rayon::prelude::*;
@@ -29,7 +32,8 @@ use std::cell::Cell;
 use std::hash::{Hash, Hasher};
 use std::mem;
 use std::ops::Deref;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
+use std::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub static GLYPH_FLASHING: AtomicBool = AtomicBool::new(false);
@@ -37,8 +41,10 @@ pub static GLYPH_FLASHING: AtomicBool = AtomicBool::new(false);
 impl FontContexts {
     /// Get access to the font context associated to the current thread.
     pub fn lock_current_context(&self) -> MutexGuard<FontContext> {
-        let id = self.current_worker_id();
-        self.lock_context(id)
+        match self.current_worker_id() {
+            Some(id) => self.lock_context(id),
+            None => self.lock_any_context(),
+        }
     }
 
     pub(in super) fn current_worker_id(&self) -> Option<usize> {
@@ -67,13 +73,10 @@ impl GlyphRasterizer {
         texture_cache: &mut TextureCache,
         gpu_cache: &mut GpuCache,
     ) {
-        assert!(
-            self.font_contexts
-                .lock_shared_context()
-                .has_font(&font.font_key)
-        );
+        assert!(self.has_font(font.font_key));
 
         let glyph_key_cache = glyph_cache.insert_glyph_key_cache_for_font(&font);
+        let mut batch_size = 0;
 
         // select glyphs that have not been requested yet.
         for key in glyph_keys {
@@ -103,17 +106,7 @@ impl GlyphRasterizer {
             match self.pending_glyph_requests.get_mut(&font) {
                 Some(container) => {
                     container.push(*key);
-
-                    // If the batch for this font instance is big enough, kick off an async
-                    // job to start rasterizing these glyphs on other threads now.
-                    if container.len() == 8 {
-                        let glyphs = mem::replace(container, SmallVec::new());
-                        self.flush_glyph_requests(
-                            font.clone(),
-                            glyphs,
-                            true,
-                        );
-                    }
+                    batch_size = container.len();
                 }
                 None => {
                     // If no batch exists for this font instance, add the glyph to a new one.
@@ -125,6 +118,14 @@ impl GlyphRasterizer {
             }
 
             glyph_key_cache.add_glyph(*key, GlyphCacheEntry::Pending);
+        }
+
+        // If the batch for this font instance is big enough, kick off an async
+        // job to start rasterizing these glyphs on other threads now.
+        if batch_size >= 8 {
+            let container = self.pending_glyph_requests.get_mut(&font).unwrap();
+            let glyphs = mem::replace(container, SmallVec::new());
+            self.flush_glyph_requests(font, glyphs, true);
         }
     }
 
@@ -148,13 +149,14 @@ impl GlyphRasterizer {
 
         let can_use_r8_format = self.can_use_r8_format;
 
+        let job_font = font.clone();
         let process_glyph = move |key: &GlyphKey| -> GlyphRasterJob {
             profile_scope!("glyph-raster");
             let mut context = font_contexts.lock_current_context();
             let mut job = GlyphRasterJob {
-                font: Arc::clone(&font),
+                font: Arc::clone(&job_font),
                 key: key.clone(),
-                result: context.rasterize_glyph(&font, key),
+                result: context.rasterize_glyph(&job_font, key),
             };
 
             if let Ok(ref mut glyph) = job.result {
@@ -183,7 +185,7 @@ impl GlyphRasterizer {
                 assert_eq!((glyph.left.fract(), glyph.top.fract()), (0.0, 0.0));
 
                 // Check if the glyph has a bitmap that needs to be downscaled.
-                glyph.downscale_bitmap_if_required(&font);
+                glyph.downscale_bitmap_if_required(&job_font);
 
                 // Convert from BGRA8 to R8 if required. In the future we can make it the
                 // backends' responsibility to output glyphs in the desired format,
@@ -206,19 +208,33 @@ impl GlyphRasterizer {
             // possible and in that task use rayon's fork join dispatch to rasterize the
             // glyphs in the thread pool.
             profile_scope!("spawning process_glyph jobs");
-            let glyph_tx = &self.glyph_tx;
             self.workers.install(|| {
-                glyphs.par_iter().for_each(|key| {
-                    let job = process_glyph(key);
-                    glyph_tx.lock().unwrap().send(job).unwrap();
-                });
+                FontContext::begin_rasterize(&font);
+                // If the FontContext supports distributing a font across multiple threads,
+                // then use par_iter so different glyphs of the same font are processed on
+                // multiple threads.
+                if FontContext::distribute_across_threads() {
+                    glyphs.par_iter().for_each(|key| {
+                        let job = process_glyph(key);
+                        self.glyph_tx.send(job).unwrap();
+                    });
+                } else {
+                    // For FontContexts that prefer to localize a font to a single thread,
+                    // just process all the glyphs on the same worker to avoid contention.
+                    for key in glyphs {
+                        let job = process_glyph(&key);
+                        self.glyph_tx.send(job).unwrap();
+                    }
+                }
+                FontContext::end_rasterize(&font);
             });
         } else {
-            let glyph_tx = self.glyph_tx.lock().unwrap();
+            FontContext::begin_rasterize(&font);
             for key in glyphs {
                 let job = process_glyph(&key);
-                glyph_tx.send(job).unwrap();
+                self.glyph_tx.send(job).unwrap();
             }
+            FontContext::end_rasterize(&font);
         }
     }
 
@@ -230,6 +246,7 @@ impl GlyphRasterizer {
         profile: &mut TransactionProfile,
     ) {
         profile.start_time(profiler::GLYPH_RESOLVE_TIME);
+        let timer_id = Telemetry::start_rasterize_glyphs_time();
 
         // Work around the borrow checker, since we call flush_glyph_requests below
         let mut pending_glyph_requests = mem::replace(
@@ -317,6 +334,7 @@ impl GlyphRasterizer {
         // we can schedule removing the fonts if needed.
         self.remove_dead_fonts();
 
+        Telemetry::stop_and_accumulate_rasterize_glyphs_time(timer_id);
         profile.end_time(profiler::GLYPH_RESOLVE_TIME);
     }
 }
@@ -474,11 +492,477 @@ impl<'a> From<&'a LayoutToWorldTransform> for FontTransform {
 // Ensure glyph sizes are reasonably limited to avoid that scenario.
 pub const FONT_SIZE_LIMIT: f32 = 320.0;
 
+/// Immutable description of a font instance's shared state.
+///
+/// `BaseFontInstance` can be identified by a `FontInstanceKey` to avoid hashing it.
+#[derive(Clone, Debug, Ord, PartialOrd, MallocSizeOf)]
+#[cfg_attr(feature = "capture", derive(Serialize))]
+#[cfg_attr(feature = "replay", derive(Deserialize))]
+pub struct BaseFontInstance {
+    ///
+    pub instance_key: FontInstanceKey,
+    ///
+    pub font_key: FontKey,
+    ///
+    pub size: FontSize,
+    ///
+    pub options: FontInstanceOptions,
+    ///
+    #[cfg_attr(any(feature = "capture", feature = "replay"), serde(skip))]
+    pub platform_options: Option<FontInstancePlatformOptions>,
+    ///
+    pub variations: Vec<FontVariation>,
+}
+
+impl BaseFontInstance {
+    pub fn new(
+        instance_key: FontInstanceKey,
+        font_key: FontKey,
+        size: f32,
+        options: Option<FontInstanceOptions>,
+        platform_options: Option<FontInstancePlatformOptions>,
+        variations: Vec<FontVariation>,
+    ) -> Self {
+        BaseFontInstance {
+            instance_key,
+            font_key,
+            size: size.into(),
+            options: options.unwrap_or_default(),
+            platform_options,
+            variations,
+        }
+    }
+}
+
+impl Deref for BaseFontInstance {
+    type Target = FontInstanceOptions;
+    fn deref(&self) -> &FontInstanceOptions {
+        &self.options
+    }
+}
+
+impl Hash for BaseFontInstance {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // Skip the instance key.
+        self.font_key.hash(state);
+        self.size.hash(state);
+        self.options.hash(state);
+        self.platform_options.hash(state);
+        self.variations.hash(state);
+    }
+}
+
+impl PartialEq for BaseFontInstance {
+    fn eq(&self, other: &BaseFontInstance) -> bool {
+        // Skip the instance key.
+        self.font_key == other.font_key &&
+            self.size == other.size &&
+            self.options == other.options &&
+            self.platform_options == other.platform_options &&
+            self.variations == other.variations
+    }
+}
+impl Eq for BaseFontInstance {}
+
+struct MappedFontKey {
+    font_key: FontKey,
+    template: FontTemplate,
+}
+
+struct FontKeyMapLocked {
+    namespace: IdNamespace,
+    next_id: u32,
+    template_map: FastHashMap<FontTemplate, Arc<MappedFontKey>>,
+    key_map: FastHashMap<FontKey, Arc<MappedFontKey>>,
+}
+
+/// A shared map from fonts key local to a namespace to shared font keys that
+/// can be shared across many namespaces. Local keys are tracked in a hashmap
+/// that stores a strong reference per mapping so that their count can be
+/// tracked. A map of font templates is used to hash font templates to their
+/// final shared key. The shared key will stay alive so long as there are
+/// any strong references to the mapping entry. Care must be taken when
+/// clearing namespaces of shared keys as this may trigger shared font keys
+/// to expire which require individual processing. Shared font keys will be
+/// created within the provided unique namespace.
+#[derive(Clone)]
+pub struct FontKeyMap(Arc<RwLock<FontKeyMapLocked>>);
+
+impl FontKeyMap {
+    pub fn new(namespace: IdNamespace) -> Self {
+        FontKeyMap(Arc::new(RwLock::new(FontKeyMapLocked {
+            namespace,
+            next_id: 1,
+            template_map: FastHashMap::default(),
+            key_map: FastHashMap::default(),
+        })))
+    }
+
+    fn lock(&self) -> RwLockReadGuard<FontKeyMapLocked> {
+        self.0.read().unwrap()
+    }
+
+    fn lock_mut(&mut self) -> RwLockWriteGuard<FontKeyMapLocked> {
+        self.0.write().unwrap()
+    }
+
+    pub fn keys(&self) -> Vec<FontKey> {
+        self.lock().key_map.keys().cloned().collect()
+    }
+
+    pub fn map_key(&self, font_key: &FontKey) -> FontKey {
+        match self.lock().key_map.get(font_key) {
+            Some(mapped) => mapped.font_key,
+            None => *font_key,
+        }
+    }
+
+    pub fn add_key(&mut self, font_key: &FontKey, template: &FontTemplate) -> Option<FontKey> {
+        let mut locked = self.lock_mut();
+        if locked.key_map.contains_key(font_key) {
+            return None;
+        }
+        if let Some(mapped) = locked.template_map.get(template).cloned() {
+            locked.key_map.insert(*font_key, mapped);
+            return None;
+        }
+        let shared_key = FontKey::new(locked.namespace, locked.next_id);
+        locked.next_id += 1;
+        let mapped = Arc::new(MappedFontKey {
+            font_key: shared_key,
+            template: template.clone(),
+        });
+        locked.template_map.insert(template.clone(), mapped.clone());
+        locked.key_map.insert(*font_key, mapped);
+        Some(shared_key)
+    }
+
+    pub fn delete_key(&mut self, font_key: &FontKey) -> Option<FontKey> {
+        let mut locked = self.lock_mut();
+        let mapped = match locked.key_map.remove(font_key) {
+            Some(mapped) => mapped,
+            None => return Some(*font_key),
+        };
+        if Arc::strong_count(&mapped) <= 2 {
+            // Only the last mapped key and template map point to it.
+            locked.template_map.remove(&mapped.template);
+            Some(mapped.font_key)
+        } else {
+            None
+        }
+    }
+
+    pub fn clear_namespace(&mut self, namespace: IdNamespace) -> Vec<FontKey> {
+        let mut locked = self.lock_mut();
+        locked.key_map.retain(|key, _| {
+            if key.0 == namespace {
+                false
+            } else {
+                true
+            }
+        });
+        let mut deleted_keys = Vec::new();
+        locked.template_map.retain(|_, mapped| {
+            if Arc::strong_count(mapped) <= 1 {
+                // Only the template map points to it.
+                deleted_keys.push(mapped.font_key);
+                false
+            } else {
+                true
+            }
+        });
+        deleted_keys
+    }
+}
+
+type FontTemplateMapLocked = FastHashMap<FontKey, FontTemplate>;
+
+/// A map of font keys to font templates that might hold both namespace-local
+/// font templates as well as shared templates.
+#[derive(Clone)]
+pub struct FontTemplateMap(Arc<RwLock<FontTemplateMapLocked>>);
+
+impl FontTemplateMap {
+    pub fn new() -> Self {
+        FontTemplateMap(Arc::new(RwLock::new(FastHashMap::default())))
+    }
+
+    pub fn lock(&self) -> RwLockReadGuard<FontTemplateMapLocked> {
+        self.0.read().unwrap()
+    }
+
+    fn lock_mut(&mut self) -> RwLockWriteGuard<FontTemplateMapLocked> {
+        self.0.write().unwrap()
+    }
+
+    pub fn clear(&mut self) {
+        self.lock_mut().clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.lock().len()
+    }
+
+    pub fn has_font(&self, key: &FontKey) -> bool {
+        self.lock().contains_key(key)
+    }
+
+    pub fn get_font(&self, key: &FontKey) -> Option<FontTemplate> {
+        self.lock().get(key).cloned()
+    }
+
+    pub fn add_font(&mut self, key: FontKey, template: FontTemplate) -> bool {
+        self.lock_mut().insert(key, template).is_none()
+    }
+
+    pub fn delete_font(&mut self, key: &FontKey) -> Option<FontTemplate> {
+        self.lock_mut().remove(key)
+    }
+
+    pub fn delete_fonts(&mut self, keys: &[FontKey]) {
+        if !keys.is_empty() {
+            let mut map = self.lock_mut();
+            for key in keys {
+                map.remove(key);
+            }
+        }
+    }
+
+    pub fn clear_namespace(&mut self, namespace: IdNamespace) -> Vec<FontKey> {
+        let mut deleted_keys = Vec::new();
+        self.lock_mut().retain(|key, _| {
+            if key.0 == namespace {
+                deleted_keys.push(*key);
+                false
+            } else {
+                true
+            }
+        });
+        deleted_keys
+    }
+}
+
+struct FontInstanceKeyMapLocked {
+    namespace: IdNamespace,
+    next_id: u32,
+    instances: FastHashSet<Arc<BaseFontInstance>>,
+    key_map: FastHashMap<FontInstanceKey, Weak<BaseFontInstance>>,
+}
+
+/// A map of namespace-local font instance keys to shared keys. Weak references
+/// are used to track the liveness of each key mapping as other consumers of
+/// BaseFontInstance might hold strong references to the entry. A mapping from
+/// BaseFontInstance to the shared key is then used to determine which shared
+/// key to assign to that instance. When the weak count of the mapping is zero,
+/// the entry is allowed to expire. Again, care must be taken when clearing
+/// a namespace within the key map as it may cause shared key expirations that
+/// require individual processing. Shared instance keys will be created within
+/// the provided unique namespace.
+#[derive(Clone)]
+pub struct FontInstanceKeyMap(Arc<RwLock<FontInstanceKeyMapLocked>>);
+
+impl FontInstanceKeyMap {
+    pub fn new(namespace: IdNamespace) -> Self {
+        FontInstanceKeyMap(Arc::new(RwLock::new(FontInstanceKeyMapLocked {
+            namespace,
+            next_id: 1,
+            instances: FastHashSet::default(),
+            key_map: FastHashMap::default(),
+        })))
+    }
+
+    fn lock(&self) -> RwLockReadGuard<FontInstanceKeyMapLocked> {
+        self.0.read().unwrap()
+    }
+
+    fn lock_mut(&mut self) -> RwLockWriteGuard<FontInstanceKeyMapLocked> {
+        self.0.write().unwrap()
+    }
+
+    pub fn keys(&self) -> Vec<FontInstanceKey> {
+        self.lock().key_map.keys().cloned().collect()
+    }
+
+    pub fn map_key(&self, key: &FontInstanceKey) -> FontInstanceKey {
+        match self.lock().key_map.get(key).and_then(|weak| weak.upgrade()) {
+            Some(mapped) => mapped.instance_key,
+            None => *key,
+        }
+    }
+
+    pub fn add_key(&mut self, mut instance: BaseFontInstance) -> Option<Arc<BaseFontInstance>> {
+        let mut locked = self.lock_mut();
+        if locked.key_map.contains_key(&instance.instance_key) {
+            return None;
+        }
+        if let Some(weak) = locked.instances.get(&instance).map(|mapped| Arc::downgrade(mapped)) {
+            locked.key_map.insert(instance.instance_key, weak);
+            return None;
+        }
+        let unmapped_key = instance.instance_key;
+        instance.instance_key = FontInstanceKey::new(locked.namespace, locked.next_id);
+        locked.next_id += 1;
+        let shared_instance = Arc::new(instance);
+        locked.instances.insert(shared_instance.clone());
+        locked.key_map.insert(unmapped_key, Arc::downgrade(&shared_instance));
+        Some(shared_instance)
+    }
+
+    pub fn delete_key(&mut self, key: &FontInstanceKey) -> Option<FontInstanceKey> {
+        let mut locked = self.lock_mut();
+        let mapped = match locked.key_map.remove(key).and_then(|weak| weak.upgrade()) {
+            Some(mapped) => mapped,
+            None => return Some(*key),
+        };
+        if Arc::weak_count(&mapped) == 0 {
+            // Only the instance set points to it.
+            locked.instances.remove(&mapped);
+            Some(mapped.instance_key)
+        } else {
+            None
+        }
+    }
+
+    pub fn clear_namespace(&mut self, namespace: IdNamespace) -> Vec<FontInstanceKey> {
+        let mut locked = self.lock_mut();
+        locked.key_map.retain(|key, _| {
+            if key.0 == namespace {
+                false
+            } else {
+                true
+            }
+        });
+        let mut deleted_keys = Vec::new();
+        locked.instances.retain(|mapped| {
+            if Arc::weak_count(mapped) == 0 {
+                // Only the instance set points to it.
+                deleted_keys.push(mapped.instance_key);
+                false
+            } else {
+                true
+            }
+        });
+        deleted_keys
+    }
+}
+
+type FontInstanceMapLocked = FastHashMap<FontInstanceKey, Arc<BaseFontInstance>>;
+
+/// A map of font instance data accessed concurrently from multiple threads.
+#[derive(Clone)]
+pub struct FontInstanceMap(Arc<RwLock<FontInstanceMapLocked>>);
+
+impl FontInstanceMap {
+    /// Creates an empty shared map.
+    pub fn new() -> Self {
+        FontInstanceMap(Arc::new(RwLock::new(FastHashMap::default())))
+    }
+
+    /// Acquires a read lock on the shared map.
+    pub fn lock(&self) -> RwLockReadGuard<FontInstanceMapLocked> {
+        self.0.read().unwrap()
+    }
+
+    /// Acquires a read lock on the shared map.
+    fn lock_mut(&mut self) -> RwLockWriteGuard<FontInstanceMapLocked> {
+        self.0.write().unwrap()
+    }
+
+    ///
+    pub fn clear(&mut self) {
+        self.lock_mut().clear();
+    }
+
+    ///
+    pub fn get_font_instance_data(&self, key: FontInstanceKey) -> Option<FontInstanceData> {
+        match self.lock().get(&key) {
+            Some(instance) => Some(FontInstanceData {
+                font_key: instance.font_key,
+                size: instance.size.into(),
+                options: Some(FontInstanceOptions {
+                  render_mode: instance.render_mode,
+                  flags: instance.flags,
+                  bg_color: instance.bg_color,
+                  synthetic_italics: instance.synthetic_italics,
+                }),
+                platform_options: instance.platform_options,
+                variations: instance.variations.clone(),
+            }),
+            None => None,
+        }
+    }
+
+    ///
+    pub fn get_font_instance(&self, instance_key: FontInstanceKey) -> Option<Arc<BaseFontInstance>> {
+        let instance_map = self.lock();
+        instance_map.get(&instance_key).cloned()
+    }
+
+    ///
+    pub fn add_font_instance(&mut self, instance: Arc<BaseFontInstance>) {
+        self.lock_mut().insert(instance.instance_key, instance);
+    }
+
+    ///
+    pub fn delete_font_instance(&mut self, instance_key: FontInstanceKey) {
+        self.lock_mut().remove(&instance_key);
+    }
+
+    ///
+    pub fn delete_font_instances(&mut self, keys: &[FontInstanceKey]) {
+        if !keys.is_empty() {
+            let mut map = self.lock_mut();
+            for key in keys {
+                map.remove(key);
+            }
+        }
+    }
+
+    ///
+    pub fn clear_namespace(&mut self, namespace: IdNamespace) {
+        self.lock_mut().retain(|key, _| key.0 != namespace);
+    }
+}
+
+/// Shared font resources that may need to be passed between multiple threads
+/// such as font templates and font instances. They are individually protected
+/// by locks to ensure safety.
+#[derive(Clone)]
+pub struct SharedFontResources {
+    pub templates: FontTemplateMap,
+    pub instances: FontInstanceMap,
+    pub font_keys: FontKeyMap,
+    pub instance_keys: FontInstanceKeyMap,
+}
+
+impl SharedFontResources {
+    pub fn new(namespace: IdNamespace) -> Self {
+        SharedFontResources {
+            templates: FontTemplateMap::new(),
+            instances: FontInstanceMap::new(),
+            font_keys: FontKeyMap::new(namespace),
+            instance_keys: FontInstanceKeyMap::new(namespace),
+        }
+    }
+}
+
+impl BlobImageResources for SharedFontResources {
+    fn get_font_data(&self, key: FontKey) -> Option<FontTemplate> {
+        let shared_key = self.font_keys.map_key(&key);
+        self.templates.get_font(&shared_key)
+    }
+
+    fn get_font_instance_data(&self, key: FontInstanceKey) -> Option<FontInstanceData> {
+        let shared_key = self.instance_keys.map_key(&key);
+        self.instances.get_font_instance_data(shared_key)
+    }
+}
+
 /// A mutable font instance description.
 ///
 /// Performance is sensitive to the size of this structure, so it should only contain
 /// the fields that we need to modify from the original base font instance.
-#[derive(Clone, PartialEq, Eq, Debug, Ord, PartialOrd)]
+#[derive(Clone, Debug, Ord, PartialOrd)]
 #[cfg_attr(feature = "capture", derive(Serialize))]
 #[cfg_attr(feature = "replay", derive(Deserialize))]
 pub struct FontInstance {
@@ -504,6 +988,19 @@ impl Hash for FontInstance {
         self.size.hash(state);
     }
 }
+
+impl PartialEq for FontInstance {
+    fn eq(&self, other: &FontInstance) -> bool {
+        // Compare only the base instance's key.
+        self.base.instance_key == other.base.instance_key &&
+            self.transform == other.transform &&
+            self.render_mode == other.render_mode &&
+            self.flags == other.flags &&
+            self.color == other.color &&
+            self.size == other.size
+    }
+}
+impl Eq for FontInstance {}
 
 impl Deref for FontInstance {
     type Target = BaseFontInstance;
@@ -536,14 +1033,10 @@ impl FontInstance {
     pub fn from_base(
         base: Arc<BaseFontInstance>,
     ) -> Self {
-        FontInstance {
-            transform: FontTransform::identity(),
-            color: ColorU::new(0, 0, 0, 255),
-            size: base.size,
-            render_mode: base.render_mode,
-            flags: base.flags,
-            base,
-        }
+        let color = ColorU::new(0, 0, 0, 255);
+        let render_mode = base.render_mode;
+        let flags = base.flags;
+        Self::new(base, color, render_mode, flags)
     }
 
     pub fn use_texture_padding(&self) -> bool {
@@ -606,8 +1099,8 @@ impl FontInstance {
     }
 
     #[allow(dead_code)]
-    pub fn get_extra_strikes(&self, x_scale: f64) -> usize {
-        if self.flags.contains(FontInstanceFlags::SYNTHETIC_BOLD) {
+    pub fn get_extra_strikes(&self, flags: FontInstanceFlags, x_scale: f64) -> usize {
+        if self.flags.intersects(flags) {
             let mut bold_offset = self.size.to_f64_px() / 48.0;
             if bold_offset < 1.0 {
                 bold_offset = 0.25 + 0.75 * bold_offset;
@@ -774,6 +1267,119 @@ impl GlyphFormat {
     }
 }
 
+#[allow(dead_code)]
+#[inline]
+fn blend_strike_pixel(dest: u8, src: u32, src_alpha: u32) -> u8 {
+    // Assume premultiplied alpha such that src and dest are already multiplied
+    // by their respective alpha values and in range 0..=255. The rounded over
+    // blend is then (src * 255 + dest * (255 - src_alpha) + 128) / 255.
+    // We approximate (x + 128) / 255 as (x + 128 + ((x + 128) >> 8)) >> 8.
+    let x = src * 255 + dest as u32 * (255 - src_alpha) + 128;
+    ((x + (x >> 8)) >> 8) as u8
+}
+
+// Blends a single strike at a given offset into a destination buffer, assuming
+// the destination has been allocated with enough extra space to accommodate the
+// offset.
+#[allow(dead_code)]
+fn blend_strike(
+    dest_bitmap: &mut [u8],
+    src_bitmap: &[u8],
+    width: usize,
+    height: usize,
+    subpixel_mask: bool,
+    offset: f64,
+) {
+    let dest_stride = dest_bitmap.len() / height;
+    let src_stride = width * 4;
+    let offset_integer = offset.floor() as usize * 4;
+    let offset_fract = (offset.fract() * 256.0) as u32;
+    for (src_row, dest_row) in src_bitmap.chunks(src_stride).zip(dest_bitmap.chunks_mut(dest_stride)) {
+        let mut prev_px = [0u32; 4];
+        let dest_row_offset = &mut dest_row[offset_integer .. offset_integer + src_stride];
+        for (src, dest) in src_row.chunks(4).zip(dest_row_offset.chunks_mut(4)) {
+            let px = [src[0] as u32, src[1] as u32, src[2] as u32, src[3] as u32];
+            // Blend current pixel with previous pixel based on fractional offset.
+            let next_px = [px[0] * offset_fract,
+                           px[1] * offset_fract,
+                           px[2] * offset_fract,
+                           px[3] * offset_fract];
+            let offset_px = [(((px[0] << 8) - next_px[0]) + prev_px[0] + 128) >> 8,
+                             (((px[1] << 8) - next_px[1]) + prev_px[1] + 128) >> 8,
+                             (((px[2] << 8) - next_px[2]) + prev_px[2] + 128) >> 8,
+                             (((px[3] << 8) - next_px[3]) + prev_px[3] + 128) >> 8];
+            if subpixel_mask {
+                // Subpixel masks assume each component is an independent weight.
+                dest[0] = blend_strike_pixel(dest[0], offset_px[0], offset_px[0]);
+                dest[1] = blend_strike_pixel(dest[1], offset_px[1], offset_px[1]);
+                dest[2] = blend_strike_pixel(dest[2], offset_px[2], offset_px[2]);
+                dest[3] = blend_strike_pixel(dest[3], offset_px[3], offset_px[3]);
+            } else {
+                // Otherwise assume we have a premultiplied alpha BGRA value.
+                dest[0] = blend_strike_pixel(dest[0], offset_px[0], offset_px[3]);
+                dest[1] = blend_strike_pixel(dest[1], offset_px[1], offset_px[3]);
+                dest[2] = blend_strike_pixel(dest[2], offset_px[2], offset_px[3]);
+                dest[3] = blend_strike_pixel(dest[3], offset_px[3], offset_px[3]);
+            }
+            // Save the remainder for blending onto the next pixel.
+            prev_px = next_px;
+        }
+        if offset_fract > 0 {
+            // When there is fractional offset, there will be a remaining value
+            // from the previous pixel but no next pixel, so just use that.
+            let dest = &mut dest_row[offset_integer + src_stride .. ];
+            let offset_px = [(prev_px[0] + 128) >> 8,
+                             (prev_px[1] + 128) >> 8,
+                             (prev_px[2] + 128) >> 8,
+                             (prev_px[3] + 128) >> 8];
+            if subpixel_mask {
+                dest[0] = blend_strike_pixel(dest[0], offset_px[0], offset_px[0]);
+                dest[1] = blend_strike_pixel(dest[1], offset_px[1], offset_px[1]);
+                dest[2] = blend_strike_pixel(dest[2], offset_px[2], offset_px[2]);
+                dest[3] = blend_strike_pixel(dest[3], offset_px[3], offset_px[3]);
+            } else {
+                dest[0] = blend_strike_pixel(dest[0], offset_px[0], offset_px[3]);
+                dest[1] = blend_strike_pixel(dest[1], offset_px[1], offset_px[3]);
+                dest[2] = blend_strike_pixel(dest[2], offset_px[2], offset_px[3]);
+                dest[3] = blend_strike_pixel(dest[3], offset_px[3], offset_px[3]);
+            }
+        }
+    }
+}
+
+// Applies multistrike bold to a source bitmap. This assumes the source bitmap
+// is a tighly packed slice of BGRA pixel values of exactly the specified width
+// and height. The specified extra strikes and pixel step control where to put
+// each strike. The pixel step is allowed to have a fractional offset and does
+// not strictly need to be integer.
+#[allow(dead_code)]
+pub fn apply_multistrike_bold(
+    src_bitmap: &[u8],
+    width: usize,
+    height: usize,
+    subpixel_mask: bool,
+    extra_strikes: usize,
+    pixel_step: f64,
+) -> (Vec<u8>, usize) {
+    let src_stride = width * 4;
+    // The amount of extra width added to the bitmap from the extra strikes.
+    let extra_width = (extra_strikes as f64 * pixel_step).ceil() as usize;
+    let dest_width = width + extra_width;
+    let dest_stride = dest_width * 4;
+    // Zero out the initial bitmap so any extra width is cleared.
+    let mut dest_bitmap = vec![0u8; dest_stride * height];
+    for (src_row, dest_row) in src_bitmap.chunks(src_stride).zip(dest_bitmap.chunks_mut(dest_stride)) {
+        // Copy the initial bitmap strike rows directly from the source.
+        dest_row[0 .. src_stride].copy_from_slice(src_row);
+    }
+    // Finally blend each extra strike in turn.
+    for i in 1 ..= extra_strikes {
+        let offset = i as f64 * pixel_step;
+        blend_strike(&mut dest_bitmap, src_bitmap, width, height, subpixel_mask, offset);
+    }
+    (dest_bitmap, dest_width)
+}
+
 pub struct RasterizedGlyph {
     pub top: f32,
     pub left: f32,
@@ -871,9 +1477,6 @@ pub struct FontContexts {
     // These worker are mostly accessed from their corresponding worker threads.
     // The goal is that there should be no noticeable contention on the mutexes.
     worker_contexts: Vec<Mutex<FontContext>>,
-    // This worker should be accessed by threads that don't belong to the thread pool
-    // (in theory that's only the render backend thread so no contention expected either).
-    shared_context: Mutex<FontContext>,
     // Stored here as a convenience to get the current thread index.
     #[allow(dead_code)]
     workers: Arc<ThreadPool>,
@@ -885,19 +1488,21 @@ impl FontContexts {
 
     /// Get access to any particular font context.
     ///
-    /// The id is ```Some(i)``` where i is an index between 0 and num_worker_contexts
-    /// for font contexts associated to the thread pool, and None for the shared
-    /// global font context for use outside of the thread pool.
-    pub fn lock_context(&self, id: Option<usize>) -> MutexGuard<FontContext> {
-        match id {
-            Some(index) => self.worker_contexts[index].lock().unwrap(),
-            None => self.shared_context.lock().unwrap(),
-        }
+    /// The id is an index between 0 and num_worker_contexts for font contexts
+    /// associated to the thread pool.
+    pub fn lock_context(&self, id: usize) -> MutexGuard<FontContext> {
+        self.worker_contexts[id].lock().unwrap()
     }
 
-    /// Get access to the font context usable outside of the thread pool.
-    pub fn lock_shared_context(&self) -> MutexGuard<FontContext> {
-        self.shared_context.lock().unwrap()
+    // Find a context that is currently unlocked to use, otherwise defaulting
+    // to the first context.
+    pub fn lock_any_context(&self) -> MutexGuard<FontContext> {
+        for context in &self.worker_contexts {
+            if let Ok(mutex) = context.try_lock() {
+                return mutex;
+            }
+        }
+        self.lock_context(0)
     }
 
     // number of contexts associated to workers
@@ -921,10 +1526,9 @@ impl AsyncForEach<FontContext> for Arc<FontContexts> {
         // Spawn a new thread on which to run the for-each off the main thread.
         self.workers.spawn(move || {
             // Lock the shared and worker contexts up front.
-            let mut locks = Vec::with_capacity(font_contexts.num_worker_contexts() + 1);
-            locks.push(font_contexts.lock_shared_context());
+            let mut locks = Vec::with_capacity(font_contexts.num_worker_contexts());
             for i in 0 .. font_contexts.num_worker_contexts() {
-                locks.push(font_contexts.lock_context(Some(i)));
+                locks.push(font_contexts.lock_context(i));
             }
 
             // Signal the locked condition now that all contexts are locked.
@@ -951,6 +1555,9 @@ pub struct GlyphRasterizer {
     workers: Arc<ThreadPool>,
     font_contexts: Arc<FontContexts>,
 
+    /// The current set of loaded fonts.
+    fonts: FastHashSet<FontKey>,
+
     /// The current number of individual glyphs waiting in pending batches.
     pending_glyph_count: usize,
 
@@ -965,7 +1572,7 @@ pub struct GlyphRasterizer {
 
     // Receives the rendered glyphs.
     glyph_rx: Receiver<GlyphRasterJob>,
-    glyph_tx: Mutex<Sender<GlyphRasterJob>>,
+    glyph_tx: Sender<GlyphRasterJob>,
 
     // We defer removing fonts to the end of the frame so that:
     // - this work is done outside of the critical path,
@@ -984,32 +1591,30 @@ pub struct GlyphRasterizer {
 
 impl GlyphRasterizer {
     pub fn new(workers: Arc<ThreadPool>, can_use_r8_format: bool) -> Result<Self, ResourceCacheError> {
-        let (glyph_tx, glyph_rx) = unbounded_channel();
+        let (glyph_tx, glyph_rx) = unbounded();
 
         let num_workers = workers.current_num_threads();
         let mut contexts = Vec::with_capacity(num_workers);
-
-        let shared_context = FontContext::new()?;
 
         for _ in 0 .. num_workers {
             contexts.push(Mutex::new(FontContext::new()?));
         }
 
         let font_context = FontContexts {
-                worker_contexts: contexts,
-                shared_context: Mutex::new(shared_context),
-                workers: Arc::clone(&workers),
-                locked_mutex: Mutex::new(false),
-                locked_cond: Condvar::new(),
+            worker_contexts: contexts,
+            workers: Arc::clone(&workers),
+            locked_mutex: Mutex::new(false),
+            locked_cond: Condvar::new(),
         };
 
         Ok(GlyphRasterizer {
             font_contexts: Arc::new(font_context),
+            fonts: FastHashSet::default(),
             pending_glyph_jobs: 0,
             pending_glyph_count: 0,
             glyph_request_count: 0,
             glyph_rx,
-            glyph_tx: Mutex::new(glyph_tx),
+            glyph_tx,
             workers,
             fonts_to_remove: Vec::new(),
             font_instances_to_remove: Vec::new(),
@@ -1020,13 +1625,20 @@ impl GlyphRasterizer {
     }
 
     pub fn add_font(&mut self, font_key: FontKey, template: FontTemplate) {
-        self.font_contexts.async_for_each(move |mut context| {
-            context.add_font(&font_key, &template);
-        });
+        if self.fonts.insert(font_key.clone()) {
+            // Only add font to FontContexts if not previously added.
+            self.font_contexts.async_for_each(move |mut context| {
+                context.add_font(&font_key, &template);
+            });
+        }
     }
 
     pub fn delete_font(&mut self, font_key: FontKey) {
         self.fonts_to_remove.push(font_key);
+    }
+
+    pub fn delete_fonts(&mut self, font_keys: &[FontKey]) {
+        self.fonts_to_remove.extend_from_slice(font_keys);
     }
 
     pub fn delete_font_instance(&mut self, instance: &FontInstance) {
@@ -1044,6 +1656,10 @@ impl GlyphRasterizer {
         font.transform = font.transform.quantize();
     }
 
+    pub fn has_font(&self, font_key: FontKey) -> bool {
+        self.fonts.contains(&font_key)
+    }
+
     pub fn get_glyph_dimensions(
         &mut self,
         font: &FontInstance,
@@ -1056,13 +1672,13 @@ impl GlyphRasterizer {
         );
 
         self.font_contexts
-            .lock_shared_context()
+            .lock_any_context()
             .get_glyph_dimensions(font, &glyph_key)
     }
 
     pub fn get_glyph_index(&mut self, font_key: FontKey, ch: char) -> Option<u32> {
         self.font_contexts
-            .lock_shared_context()
+            .lock_any_context()
             .get_glyph_index(font_key, ch)
     }
 
@@ -1072,7 +1688,9 @@ impl GlyphRasterizer {
         }
 
         profile_scope!("remove_dead_fonts");
-        let fonts_to_remove = mem::replace(&mut self.fonts_to_remove, Vec::new());
+        let mut fonts_to_remove = mem::replace(& mut self.fonts_to_remove, Vec::new());
+        // Only remove font from FontContexts if previously added. 
+        fonts_to_remove.retain(|font| self.fonts.remove(font));
         let font_instances_to_remove = mem::replace(& mut self.font_instances_to_remove, Vec::new());
         self.font_contexts.async_for_each(move |mut context| {
             for font_key in &fonts_to_remove {
@@ -1148,8 +1766,7 @@ mod test_glyph_rasterizer {
         use crate::glyph_cache::GlyphCache;
         use crate::gpu_cache::GpuCache;
         use crate::profiler::TransactionProfile;
-        use api::{FontKey, FontInstanceKey, FontSize, FontTemplate, FontRenderMode,
-                  IdNamespace, ColorU};
+        use api::{FontKey, FontInstanceKey, FontTemplate, IdNamespace};
         use api::units::DevicePoint;
         use std::sync::Arc;
         use crate::glyph_rasterizer::{FontInstance, BaseFontInstance, GlyphKey, GlyphRasterizer};
@@ -1172,17 +1789,14 @@ mod test_glyph_rasterizer {
         let font_key = FontKey::new(IdNamespace(0), 0);
         glyph_rasterizer.add_font(font_key, FontTemplate::Raw(Arc::new(font_data), 0));
 
-        let font = FontInstance::from_base(Arc::new(BaseFontInstance {
-            instance_key: FontInstanceKey(IdNamespace(0), 0),
+        let font = FontInstance::from_base(Arc::new(BaseFontInstance::new(
+            FontInstanceKey::new(IdNamespace(0), 0),
             font_key,
-            size: FontSize::from_f32_px(32.0),
-            bg_color: ColorU::new(0, 0, 0, 0),
-            render_mode: FontRenderMode::Subpixel,
-            flags: Default::default(),
-            synthetic_italics: Default::default(),
-            platform_options: None,
-            variations: Vec::new(),
-        }));
+            32.0,
+            None,
+            None,
+            Vec::new(),
+        )));
 
         let subpx_dir = font.get_subpx_dir();
 
@@ -1226,8 +1840,7 @@ mod test_glyph_rasterizer {
         use crate::glyph_cache::GlyphCache;
         use crate::gpu_cache::GpuCache;
         use crate::profiler::TransactionProfile;
-        use api::{FontKey, FontInstanceKey, FontSize, FontTemplate, FontRenderMode,
-                  IdNamespace, ColorU};
+        use api::{FontKey, FontInstanceKey, FontTemplate, IdNamespace};
         use api::units::DevicePoint;
         use std::sync::Arc;
         use crate::glyph_rasterizer::{FontInstance, BaseFontInstance, GlyphKey, GlyphRasterizer};
@@ -1250,17 +1863,14 @@ mod test_glyph_rasterizer {
         let font_key = FontKey::new(IdNamespace(0), 0);
         glyph_rasterizer.add_font(font_key, FontTemplate::Raw(Arc::new(font_data), 0));
 
-        let font = FontInstance::from_base(Arc::new(BaseFontInstance {
-            instance_key: FontInstanceKey(IdNamespace(0), 0),
+        let font = FontInstance::from_base(Arc::new(BaseFontInstance::new(
+            FontInstanceKey::new(IdNamespace(0), 0),
             font_key,
-            size: FontSize::from_f32_px(200.0),
-            bg_color: ColorU::new(0, 0, 0, 0),
-            render_mode: FontRenderMode::Subpixel,
-            flags: Default::default(),
-            synthetic_italics: Default::default(),
-            platform_options: None,
-            variations: Vec::new(),
-        }));
+            200.0,
+            None,
+            None,
+            Vec::new(),
+        )));
 
         let subpx_dir = font.get_subpx_dir();
 

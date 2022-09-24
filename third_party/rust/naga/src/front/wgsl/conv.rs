@@ -1,24 +1,30 @@
-use super::Error;
+use super::{Error, Span};
 
-pub fn map_storage_class(word: &str) -> Result<crate::StorageClass, Error<'_>> {
+pub fn map_address_space(word: &str, span: Span) -> Result<crate::AddressSpace, Error<'_>> {
     match word {
-        "private" => Ok(crate::StorageClass::Private),
-        "uniform" => Ok(crate::StorageClass::Uniform),
-        "storage" => Ok(crate::StorageClass::Storage),
-        "push_constant" => Ok(crate::StorageClass::PushConstant),
-        _ => Err(Error::UnknownStorageClass(word)),
+        "private" => Ok(crate::AddressSpace::Private),
+        "workgroup" => Ok(crate::AddressSpace::WorkGroup),
+        "uniform" => Ok(crate::AddressSpace::Uniform),
+        "storage" => Ok(crate::AddressSpace::Storage {
+            access: crate::StorageAccess::default(),
+        }),
+        "push_constant" => Ok(crate::AddressSpace::PushConstant),
+        "function" => Ok(crate::AddressSpace::Function),
+        _ => Err(Error::UnknownAddressSpace(span)),
     }
 }
 
-pub fn map_built_in(word: &str) -> Result<crate::BuiltIn, Error<'_>> {
+pub fn map_built_in(word: &str, span: Span) -> Result<crate::BuiltIn, Error<'_>> {
     Ok(match word {
-        "position" => crate::BuiltIn::Position,
+        "position" => crate::BuiltIn::Position { invariant: false },
         // vertex
         "vertex_index" => crate::BuiltIn::VertexIndex,
         "instance_index" => crate::BuiltIn::InstanceIndex,
+        "view_index" => crate::BuiltIn::ViewIndex,
         // fragment
         "front_facing" => crate::BuiltIn::FrontFacing,
         "frag_depth" => crate::BuiltIn::FragDepth,
+        "primitive_index" => crate::BuiltIn::PrimitiveIndex,
         "sample_index" => crate::BuiltIn::SampleIndex,
         "sample_mask" => crate::BuiltIn::SampleMask,
         // compute
@@ -27,37 +33,30 @@ pub fn map_built_in(word: &str) -> Result<crate::BuiltIn, Error<'_>> {
         "local_invocation_index" => crate::BuiltIn::LocalInvocationIndex,
         "workgroup_id" => crate::BuiltIn::WorkGroupId,
         "workgroup_size" => crate::BuiltIn::WorkGroupSize,
-        _ => return Err(Error::UnknownBuiltin(word)),
+        "num_workgroups" => crate::BuiltIn::NumWorkGroups,
+        _ => return Err(Error::UnknownBuiltin(span)),
     })
 }
 
-pub fn map_shader_stage(word: &str) -> Result<crate::ShaderStage, Error<'_>> {
-    match word {
-        "vertex" => Ok(crate::ShaderStage::Vertex),
-        "fragment" => Ok(crate::ShaderStage::Fragment),
-        "compute" => Ok(crate::ShaderStage::Compute),
-        _ => Err(Error::UnknownShaderStage(word)),
-    }
-}
-
-pub fn map_interpolation(word: &str) -> Result<crate::Interpolation, Error<'_>> {
+pub fn map_interpolation(word: &str, span: Span) -> Result<crate::Interpolation, Error<'_>> {
     match word {
         "linear" => Ok(crate::Interpolation::Linear),
         "flat" => Ok(crate::Interpolation::Flat),
         "perspective" => Ok(crate::Interpolation::Perspective),
-        _ => Err(Error::UnknownAttribute(word)),
+        _ => Err(Error::UnknownAttribute(span)),
     }
 }
 
-pub fn map_sampling(word: &str) -> Result<crate::Sampling, Error<'_>> {
+pub fn map_sampling(word: &str, span: Span) -> Result<crate::Sampling, Error<'_>> {
     match word {
+        "center" => Ok(crate::Sampling::Center),
         "centroid" => Ok(crate::Sampling::Centroid),
         "sample" => Ok(crate::Sampling::Sample),
-        _ => Err(Error::UnknownAttribute(word)),
+        _ => Err(Error::UnknownAttribute(span)),
     }
 }
 
-pub fn map_storage_format(word: &str) -> Result<crate::StorageFormat, Error<'_>> {
+pub fn map_storage_format(word: &str, span: Span) -> Result<crate::StorageFormat, Error<'_>> {
     use crate::StorageFormat as Sf;
     Ok(match word {
         "r8unorm" => Sf::R8Unorm,
@@ -92,7 +91,7 @@ pub fn map_storage_format(word: &str) -> Result<crate::StorageFormat, Error<'_>>
         "rgba32uint" => Sf::Rgba32Uint,
         "rgba32sint" => Sf::Rgba32Sint,
         "rgba32float" => Sf::Rgba32Float,
-        _ => return Err(Error::UnknownStorageFormat(word)),
+        _ => return Err(Error::UnknownStorageFormat(span)),
     })
 }
 
@@ -118,7 +117,7 @@ pub fn map_derivative_axis(word: &str) -> Option<crate::DerivativeAxis> {
     match word {
         "dpdx" => Some(crate::DerivativeAxis::X),
         "dpdy" => Some(crate::DerivativeAxis::Y),
-        "dwidth" => Some(crate::DerivativeAxis::Width),
+        "fwidth" => Some(crate::DerivativeAxis::Width),
         _ => None,
     }
 }
@@ -128,8 +127,6 @@ pub fn map_relational_fun(word: &str) -> Option<crate::RelationalFunction> {
         "any" => Some(crate::RelationalFunction::Any),
         "all" => Some(crate::RelationalFunction::All),
         "isFinite" => Some(crate::RelationalFunction::IsFinite),
-        "isInf" => Some(crate::RelationalFunction::IsInf),
-        "isNan" => Some(crate::RelationalFunction::IsNan),
         "isNormal" => Some(crate::RelationalFunction::IsNormal),
         _ => None,
     }
@@ -154,6 +151,8 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         "asin" => Mf::Asin,
         "atan" => Mf::Atan,
         "atan2" => Mf::Atan2,
+        "radians" => Mf::Radians,
+        "degrees" => Mf::Degrees,
         // decomposition
         "ceil" => Mf::Ceil,
         "floor" => Mf::Floor,
@@ -183,7 +182,7 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         "fma" => Mf::Fma,
         "mix" => Mf::Mix,
         "step" => Mf::Step,
-        "smoothStep" => Mf::SmoothStep,
+        "smoothstep" => Mf::SmoothStep,
         "sqrt" => Mf::Sqrt,
         "inverseSqrt" => Mf::InverseSqrt,
         "transpose" => Mf::Transpose,
@@ -191,16 +190,35 @@ pub fn map_standard_fun(word: &str) -> Option<crate::MathFunction> {
         // bits
         "countOneBits" => Mf::CountOneBits,
         "reverseBits" => Mf::ReverseBits,
+        "extractBits" => Mf::ExtractBits,
+        "insertBits" => Mf::InsertBits,
+        "firstTrailingBit" => Mf::FindLsb,
+        "firstLeadingBit" => Mf::FindMsb,
+        // data packing
+        "pack4x8snorm" => Mf::Pack4x8snorm,
+        "pack4x8unorm" => Mf::Pack4x8unorm,
+        "pack2x16snorm" => Mf::Pack2x16snorm,
+        "pack2x16unorm" => Mf::Pack2x16unorm,
+        "pack2x16float" => Mf::Pack2x16float,
+        // data unpacking
+        "unpack4x8snorm" => Mf::Unpack4x8snorm,
+        "unpack4x8unorm" => Mf::Unpack4x8unorm,
+        "unpack2x16snorm" => Mf::Unpack2x16snorm,
+        "unpack2x16unorm" => Mf::Unpack2x16unorm,
+        "unpack2x16float" => Mf::Unpack2x16float,
         _ => return None,
     })
 }
 
-pub fn map_conservative_depth(word: &str) -> Result<crate::ConservativeDepth, Error<'_>> {
+pub fn map_conservative_depth(
+    word: &str,
+    span: Span,
+) -> Result<crate::ConservativeDepth, Error<'_>> {
     use crate::ConservativeDepth as Cd;
     match word {
         "greater_equal" => Ok(Cd::GreaterEqual),
         "less_equal" => Ok(Cd::LessEqual),
         "unchanged" => Ok(Cd::Unchanged),
-        _ => Err(Error::UnknownConservativeDepth(word)),
+        _ => Err(Error::UnknownConservativeDepth(span)),
     }
 }

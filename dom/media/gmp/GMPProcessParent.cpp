@@ -19,7 +19,7 @@
 #include <string>
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
-#  include "mozilla/dom/ContentChild.h"
+#  include "mozilla/Omnijar.h"
 #  include "mozilla/Preferences.h"
 #  include "mozilla/Sandbox.h"
 #  include "mozilla/SandboxSettings.h"
@@ -32,7 +32,9 @@ using std::vector;
 using mozilla::gmp::GMPProcessParent;
 using mozilla::ipc::GeckoChildProcessHost;
 
+#ifdef MOZ_WIDGET_ANDROID
 static const int kInvalidFd = -1;
+#endif
 
 namespace mozilla::gmp {
 
@@ -160,7 +162,6 @@ void GMPProcessParent::Delete(nsCOMPtr<nsIRunnable> aCallback) {
 
 void GMPProcessParent::DoDelete() {
   MOZ_ASSERT(MessageLoop::current() == XRE_GetIOMessageLoop());
-  Join();
 
   if (mDeletedCallback) {
     mDeletedCallback->Run();

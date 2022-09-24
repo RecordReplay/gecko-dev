@@ -706,14 +706,10 @@ class RecordedDrawSurface : public RecordedDrawingEvent<RecordedDrawSurface> {
 class RecordedDrawDependentSurface
     : public RecordedDrawingEvent<RecordedDrawDependentSurface> {
  public:
-  RecordedDrawDependentSurface(DrawTarget* aDT, uint64_t aId, const Rect& aDest,
-                               const DrawSurfaceOptions& aDSOptions,
-                               const DrawOptions& aOptions)
+  RecordedDrawDependentSurface(DrawTarget* aDT, uint64_t aId, const Rect& aDest)
       : RecordedDrawingEvent(DRAWDEPENDENTSURFACE, aDT),
         mId(aId),
-        mDest(aDest),
-        mDSOptions(aDSOptions),
-        mOptions(aOptions) {}
+        mDest(aDest) {}
 
   bool PlayEvent(Translator* aTranslator) const override;
 
@@ -731,23 +727,18 @@ class RecordedDrawDependentSurface
 
   uint64_t mId;
   Rect mDest;
-  DrawSurfaceOptions mDSOptions;
-  DrawOptions mOptions;
 };
 
 class RecordedDrawSurfaceWithShadow
     : public RecordedDrawingEvent<RecordedDrawSurfaceWithShadow> {
  public:
   RecordedDrawSurfaceWithShadow(DrawTarget* aDT, ReferencePtr aRefSource,
-                                const Point& aDest, const DeviceColor& aColor,
-                                const Point& aOffset, Float aSigma,
-                                CompositionOp aOp)
+                                const Point& aDest,
+                                const ShadowOptions& aShadow, CompositionOp aOp)
       : RecordedDrawingEvent(DRAWSURFACEWITHSHADOW, aDT),
         mRefSource(aRefSource),
         mDest(aDest),
-        mColor(aColor),
-        mOffset(aOffset),
-        mSigma(aSigma),
+        mShadow(aShadow),
         mOp(aOp) {}
 
   bool PlayEvent(Translator* aTranslator) const override;
@@ -766,9 +757,7 @@ class RecordedDrawSurfaceWithShadow
 
   ReferencePtr mRefSource;
   Point mDest;
-  DeviceColor mColor;
-  Point mOffset;
-  Float mSigma;
+  ShadowOptions mShadow;
   CompositionOp mOp;
 };
 
@@ -1553,6 +1542,31 @@ class RecordedLink : public RecordedDrawingEvent<RecordedLink> {
   MOZ_IMPLICIT RecordedLink(S& aStream);
 };
 
+class RecordedDestination : public RecordedDrawingEvent<RecordedDestination> {
+ public:
+  RecordedDestination(DrawTarget* aDT, const char* aDestination,
+                      const Point& aPoint)
+      : RecordedDrawingEvent(DESTINATION, aDT),
+        mDestination(aDestination),
+        mPoint(aPoint) {}
+
+  bool PlayEvent(Translator* aTranslator) const override;
+  template <class S>
+  void Record(S& aStream) const;
+  void OutputSimpleEventInfo(std::stringstream& aStringStream) const override;
+
+  std::string GetName() const override { return "Destination"; }
+
+ private:
+  friend class RecordedEvent;
+
+  std::string mDestination;
+  Point mPoint;
+
+  template <class S>
+  MOZ_IMPLICIT RecordedDestination(S& aStream);
+};
+
 static std::string NameFromBackend(BackendType aType) {
   switch (aType) {
     case BackendType::NONE:
@@ -1904,7 +1918,7 @@ RecordedDrawTargetCreation::RecordedDrawTargetCreation(S& aStream)
     : RecordedEventDerived(DRAWTARGETCREATION), mExistingData(nullptr) {
   ReadElement(aStream, mRefPtr);
   ReadElementConstrained(aStream, mBackendType, BackendType::NONE,
-                         BackendType::CAPTURE);
+                         BackendType::WEBRENDER_TEXT);
   ReadElement(aStream, mRect);
   ReadElementConstrained(aStream, mFormat, SurfaceFormat::A8R8G8B8_UINT32,
                          SurfaceFormat::UNKNOWN);
@@ -2401,9 +2415,8 @@ RecordedFillGlyphs::RecordedFillGlyphs(S& aStream)
 
   mGlyphs = new (fallible) Glyph[mNumGlyphs];
   if (!mGlyphs) {
-     gfxCriticalNote
-         << "RecordedFillGlyphs failed to allocate glyphs of size "
-         << mNumGlyphs;
+    gfxCriticalNote << "RecordedFillGlyphs failed to allocate glyphs of size "
+                    << mNumGlyphs;
     aStream.SetIsBad();
   } else {
     aStream.read((char*)mGlyphs, sizeof(Glyph) * mNumGlyphs);
@@ -2767,7 +2780,16 @@ inline bool RecordedSetTransform::PlayEvent(Translator* aTranslator) const {
     return false;
   }
 
-  dt->SetTransform(mTransform);
+  // If we're drawing to the reference DT, then we need to manually apply
+  // its initial transform, otherwise we'll just clobber it with only the
+  // the transform that was visible to the code doing the recording.
+  if (dt == aTranslator->GetReferenceDrawTarget()) {
+    dt->SetTransform(mTransform *
+                     aTranslator->GetReferenceDrawTargetTransform());
+  } else {
+    dt->SetTransform(mTransform);
+  }
+
   return true;
 }
 
@@ -2833,20 +2855,7 @@ inline void RecordedDrawSurface::OutputSimpleEventInfo(
 
 inline bool RecordedDrawDependentSurface::PlayEvent(
     Translator* aTranslator) const {
-  DrawTarget* dt = aTranslator->LookupDrawTarget(mDT);
-  if (!dt) {
-    return false;
-  }
-
-  // We still return true even if this fails, since dependent surfaces are
-  // used for cross-origin iframe drawing and can fail.
-  RefPtr<SourceSurface> surface = aTranslator->LookupExternalSurface(mId);
-  if (!surface) {
-    return true;
-  }
-
-  dt->DrawSurface(surface, mDest, Rect(Point(), Size(surface->GetSize())),
-                  mDSOptions, mOptions);
+  aTranslator->DrawDependentSurface(mDT, mId, mDest);
   return true;
 }
 
@@ -2855,8 +2864,6 @@ void RecordedDrawDependentSurface::Record(S& aStream) const {
   RecordedDrawingEvent::Record(aStream);
   WriteElement(aStream, mId);
   WriteElement(aStream, mDest);
-  WriteElement(aStream, mDSOptions);
-  WriteElement(aStream, mOptions);
 }
 
 template <class S>
@@ -2864,8 +2871,6 @@ RecordedDrawDependentSurface::RecordedDrawDependentSurface(S& aStream)
     : RecordedDrawingEvent(DRAWDEPENDENTSURFACE, aStream) {
   ReadElement(aStream, mId);
   ReadElement(aStream, mDest);
-  ReadDrawSurfaceOptions(aStream, mDSOptions);
-  ReadDrawOptions(aStream, mOptions);
 }
 
 inline void RecordedDrawDependentSurface::OutputSimpleEventInfo(
@@ -2923,7 +2928,7 @@ inline bool RecordedDrawSurfaceWithShadow::PlayEvent(
     return false;
   }
 
-  dt->DrawSurfaceWithShadow(surface, mDest, mColor, mOffset, mSigma, mOp);
+  dt->DrawSurfaceWithShadow(surface, mDest, mShadow, mOp);
   return true;
 }
 
@@ -2932,9 +2937,7 @@ void RecordedDrawSurfaceWithShadow::Record(S& aStream) const {
   RecordedDrawingEvent::Record(aStream);
   WriteElement(aStream, mRefSource);
   WriteElement(aStream, mDest);
-  WriteElement(aStream, mColor);
-  WriteElement(aStream, mOffset);
-  WriteElement(aStream, mSigma);
+  WriteElement(aStream, mShadow);
   WriteElement(aStream, mOp);
 }
 
@@ -2943,9 +2946,7 @@ RecordedDrawSurfaceWithShadow::RecordedDrawSurfaceWithShadow(S& aStream)
     : RecordedDrawingEvent(DRAWSURFACEWITHSHADOW, aStream) {
   ReadElement(aStream, mRefSource);
   ReadElement(aStream, mDest);
-  ReadElement(aStream, mColor);
-  ReadElement(aStream, mOffset);
-  ReadElement(aStream, mSigma);
+  ReadElement(aStream, mShadow);
   ReadElementConstrained(aStream, mOp, CompositionOp::OP_OVER,
                          CompositionOp::OP_COUNT);
 }
@@ -2953,8 +2954,9 @@ RecordedDrawSurfaceWithShadow::RecordedDrawSurfaceWithShadow(S& aStream)
 inline void RecordedDrawSurfaceWithShadow::OutputSimpleEventInfo(
     std::stringstream& aStringStream) const {
   aStringStream << "[" << mDT << "] DrawSurfaceWithShadow (" << mRefSource
-                << ") DeviceColor: (" << mColor.r << ", " << mColor.g << ", "
-                << mColor.b << ", " << mColor.a << ")";
+                << ") DeviceColor: (" << mShadow.mColor.r << ", "
+                << mShadow.mColor.g << ", " << mShadow.mColor.b << ", "
+                << mShadow.mColor.a << ")";
 }
 
 inline RecordedPathCreation::RecordedPathCreation(PathRecording* aPath)
@@ -3948,6 +3950,43 @@ inline void RecordedLink::OutputSimpleEventInfo(
   aStringStream << "Link [" << mDestination << " @ " << mRect << "]";
 }
 
+inline bool RecordedDestination::PlayEvent(Translator* aTranslator) const {
+  DrawTarget* dt = aTranslator->LookupDrawTarget(mDT);
+  if (!dt) {
+    return false;
+  }
+  dt->Destination(mDestination.c_str(), mPoint);
+  return true;
+}
+
+template <class S>
+void RecordedDestination::Record(S& aStream) const {
+  RecordedDrawingEvent::Record(aStream);
+  WriteElement(aStream, mPoint);
+  uint32_t len = mDestination.length();
+  WriteElement(aStream, len);
+  if (len) {
+    aStream.write(mDestination.data(), len);
+  }
+}
+
+template <class S>
+RecordedDestination::RecordedDestination(S& aStream)
+    : RecordedDrawingEvent(DESTINATION, aStream) {
+  ReadElement(aStream, mPoint);
+  uint32_t len;
+  ReadElement(aStream, len);
+  mDestination.resize(size_t(len));
+  if (len && aStream.good()) {
+    aStream.read(&mDestination.front(), len);
+  }
+}
+
+inline void RecordedDestination::OutputSimpleEventInfo(
+    std::stringstream& aStringStream) const {
+  aStringStream << "Destination [" << mDestination << " @ " << mPoint << "]";
+}
+
 #define FOR_EACH_EVENT(f)                                          \
   f(DRAWTARGETCREATION, RecordedDrawTargetCreation);               \
   f(DRAWTARGETDESTRUCTION, RecordedDrawTargetDestruction);         \
@@ -3997,7 +4036,8 @@ inline void RecordedLink::OutputSimpleEventInfo(
   f(FLUSH, RecordedFlush);                                         \
   f(DETACHALLSNAPSHOTS, RecordedDetachAllSnapshots);               \
   f(OPTIMIZESOURCESURFACE, RecordedOptimizeSourceSurface);         \
-  f(LINK, RecordedLink);
+  f(LINK, RecordedLink);                                           \
+  f(DESTINATION, RecordedDestination);
 
 #define DO_WITH_EVENT_TYPE(_typeenum, _class) \
   case _typeenum: {                           \

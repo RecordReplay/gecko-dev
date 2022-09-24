@@ -9,12 +9,12 @@ requestLongerTimeout(2);
 
 const TEST_FILE =
   "browser/devtools/client/webconsole/test/browser/test-warning-groups.html";
-const TEST_URI = "http://example.com/" + TEST_FILE;
+const TEST_URI = "https://example.com/" + TEST_FILE;
 
-const TRACKER_URL = "http://tracking.example.com/";
+const TRACKER_URL = "https://tracking.example.com/";
 const IMG_FILE =
   "browser/devtools/client/webconsole/test/browser/test-image.png";
-const TRACKER_IMG = "http://tracking.example.org/" + IMG_FILE;
+const TRACKER_IMG = "https://tracking.example.org/" + IMG_FILE;
 
 const CONTENT_BLOCKING_GROUP_LABEL =
   "The resource at “<URL>” was blocked because content blocking is enabled.";
@@ -54,15 +54,19 @@ add_task(cleanUp);
 
 add_task(async function testContentBlockingMessage() {
   const { hud, tab, win } = await openNewWindowAndConsole(
-    "http://tracking.example.org/" + TEST_FILE
+    "https://tracking.example.org/" + TEST_FILE
   );
   const now = Date.now();
 
   info("Test content blocking message");
   const message =
-    `The resource at \u201chttp://tracking.example.com/?1&${now}\u201d ` +
+    `The resource at \u201chttps://tracking.example.com/?1&${now}\u201d ` +
     `was blocked because content blocking is enabled`;
-  const onContentBlockingWarningMessage = waitForMessage(hud, message, ".warn");
+  const onContentBlockingWarningMessage = waitForMessageByType(
+    hud,
+    message,
+    ".warn"
+  );
   emitContentBlockingMessage(tab, `${TRACKER_URL}?1&${now}`);
   await onContentBlockingWarningMessage;
 
@@ -71,7 +75,7 @@ add_task(async function testContentBlockingMessage() {
   info(
     "Emit a new content blocking message to check that it causes a grouping"
   );
-  const onContentBlockingWarningGroupMessage = waitForMessage(
+  const onContentBlockingWarningGroupMessage = waitForMessageByType(
     hud,
     CONTENT_BLOCKING_GROUP_LABEL,
     ".warn"
@@ -84,18 +88,20 @@ add_task(async function testContentBlockingMessage() {
     "The badge has the expected text"
   );
 
-  checkConsoleOutputForWarningGroup(hud, [
+  await checkConsoleOutputForWarningGroup(hud, [
     `▶︎⚠ ${CONTENT_BLOCKING_GROUP_LABEL} 2`,
   ]);
 
   info("Open the group");
   node.querySelector(".arrow").click();
-  await waitFor(() => findMessage(hud, "http://tracking.example.com/?1"));
+  await waitFor(() =>
+    findWarningMessage(hud, "https://tracking.example.com/?1")
+  );
 
-  checkConsoleOutputForWarningGroup(hud, [
+  await checkConsoleOutputForWarningGroup(hud, [
     `▼︎⚠ ${CONTENT_BLOCKING_GROUP_LABEL} 2`,
-    `| The resource at \u201chttp://tracking.example.com/?1&${now}\u201d was blocked`,
-    `| The resource at \u201chttp://tracking.example.com/?2&${now}\u201d was blocked`,
+    `| The resource at \u201chttps://tracking.example.com/?1&${now}\u201d was blocked`,
+    `| The resource at \u201chttps://tracking.example.com/?2&${now}\u201d was blocked`,
   ]);
   await win.close();
 });
@@ -148,7 +154,7 @@ add_task(async function testCookieBlockedByPermissionMessage() {
   // Turn off tracking protection and add a block permission on the URL.
   await pushPref("privacy.trackingprotection.enabled", false);
   const p = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
-    "http://tracking.example.org/"
+    "https://tracking.example.org/"
   );
   Services.perms.addFromPrincipal(
     p,
@@ -179,9 +185,14 @@ async function testStorageAccessBlockedGrouping(groupLabel) {
 
   await clearOutput(hud);
 
+  // Bug 1763367 - Filter out message like:
+  //  Cookie “name=value” has been rejected as third-party.
+  // that appear in a random order.
+  await setFilterState(hud, { text: "-has been rejected" });
+
   const getWarningMessage = url => groupLabel.replace("<URL>", url);
 
-  const onStorageAccessBlockedMessage = waitForMessage(
+  const onStorageAccessBlockedMessage = waitForMessageByType(
     hud,
     getWarningMessage(`${TRACKER_IMG}?1&${now}`),
     ".warn"
@@ -193,7 +204,7 @@ async function testStorageAccessBlockedGrouping(groupLabel) {
     "Emit a new content blocking message to check that it causes a grouping"
   );
 
-  const onContentBlockingWarningGroupMessage = waitForMessage(
+  const onContentBlockingWarningGroupMessage = waitForMessageByType(
     hud,
     groupLabel,
     ".warn"
@@ -206,13 +217,13 @@ async function testStorageAccessBlockedGrouping(groupLabel) {
     "The badge has the expected text"
   );
 
-  checkConsoleOutputForWarningGroup(hud, [`▶︎⚠ ${groupLabel} 2`]);
+  await checkConsoleOutputForWarningGroup(hud, [`▶︎⚠ ${groupLabel} 2`]);
 
   info("Open the group");
   node.querySelector(".arrow").click();
-  await waitFor(() => findMessage(hud, TRACKER_IMG));
+  await waitFor(() => findWarningMessage(hud, TRACKER_IMG));
 
-  checkConsoleOutputForWarningGroup(hud, [
+  await checkConsoleOutputForWarningGroup(hud, [
     `▼︎⚠ ${groupLabel} 2`,
     `| ${getWarningMessage(TRACKER_IMG + "?1&" + now)}`,
     `| ${getWarningMessage(TRACKER_IMG + "?2&" + now)}`,

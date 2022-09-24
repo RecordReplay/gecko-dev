@@ -17,11 +17,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from . import lint
 from . import parser
-from . import csharp
 from . import javascript
 from . import kotlin
 from . import markdown
 from . import metrics
+from . import rust
 from . import swift
 from . import util
 
@@ -52,12 +52,12 @@ class Outputter:
 
 
 OUTPUTTERS = {
-    "csharp": Outputter(csharp.output_csharp, ["*.cs"]),
     "javascript": Outputter(javascript.output_javascript, []),
     "typescript": Outputter(javascript.output_typescript, []),
     "kotlin": Outputter(kotlin.output_kotlin, ["*.kt"]),
     "markdown": Outputter(markdown.output_markdown, []),
     "swift": Outputter(swift.output_swift, ["*.swift"]),
+    "rust": Outputter(rust.output_rust, []),
 }
 
 
@@ -136,6 +136,12 @@ def translate_metrics(
 
     input_filepaths = util.ensure_list(input_filepaths)
 
+    allow_missing_files = parser_config.get("allow_missing_files", False)
+    if not input_filepaths and not allow_missing_files:
+        print("❌ No metric files specified. ", end="")
+        print("Use `--allow-missing-files` to not treat this as an error.")
+        return 1
+
     if lint.glinter(input_filepaths, parser_config):
         return 1
 
@@ -147,6 +153,9 @@ def translate_metrics(
     # allow_reserved is also relevant to the translators, so copy it there
     if parser_config.get("allow_reserved"):
         options["allow_reserved"] = True
+
+    # We don't render tags anywhere yet.
+    all_objects.value.pop("tags", None)
 
     # Write everything out to a temporary directory, and then move it to the
     # real directory, for transactional integrity.

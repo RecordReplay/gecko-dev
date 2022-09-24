@@ -10,6 +10,8 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/MemoryReporting.h"
 
+#include "jsfriendapi.h"
+
 #include "gc/Barrier.h"
 #include "js/Conversions.h"
 #include "js/friend/ErrorMessages.h"  // JSErrNum
@@ -17,12 +19,10 @@
 #include "js/HeapAPI.h"
 #include "js/shadow/Zone.h"  // JS::shadow::Zone
 #include "js/Wrapper.h"
-#include "vm/BytecodeUtil.h"
 #include "vm/Printer.h"
 #include "vm/PropertyResult.h"
 #include "vm/Shape.h"
 #include "vm/StringType.h"
-#include "vm/Xdr.h"
 
 namespace JS {
 struct ClassInfo;
@@ -170,10 +170,14 @@ class JSObject
     return shape()->hasObjectFlag(flag);
   }
 
+  bool hasAnyFlag(js::ObjectFlags flags) const {
+    return shape()->objectFlags().hasAnyFlag(flags);
+  }
+
   // Change this object's shape for a prototype mutation.
   //
-  // Note: this does not reshape the proto chain to invalidate shape
-  // teleporting, check for an immutable proto, etc.
+  // Note: the caller must ensure the object has a mutable proto, is extensible,
+  // etc.
   static bool setProtoUnchecked(JSContext* cx, JS::HandleObject obj,
                                 js::Handle<js::TaggedProto> proto);
 
@@ -193,6 +197,14 @@ class JSObject
   }
   static bool setIsUsedAsPrototype(JSContext* cx, JS::HandleObject obj) {
     return setFlag(cx, obj, js::ObjectFlag::IsUsedAsPrototype);
+  }
+
+  bool useWatchtowerTestingCallback() const {
+    return hasFlag(js::ObjectFlag::UseWatchtowerTestingCallback);
+  }
+  static bool setUseWatchtowerTestingCallback(JSContext* cx,
+                                              JS::HandleObject obj) {
+    return setFlag(cx, obj, js::ObjectFlag::UseWatchtowerTestingCallback);
   }
 
   inline bool isBoundFunction() const;
@@ -227,17 +239,30 @@ class JSObject
   // exist on the scope chain) are kept.
   inline bool isUnqualifiedVarObj() const;
 
-  // An object with an "uncacheable proto" is a prototype object that either had
-  // its own proto mutated or it was on the proto chain of an object that had
-  // its proto mutated. This is used to opt-out of the shape teleporting
-  // optimization. See: ReshapeForProtoMutation, ProtoChainSupportsTeleporting.
-  inline bool hasUncacheableProto() const;
-  static bool setUncacheableProto(JSContext* cx, JS::HandleObject obj) {
+  // Once the "invalidated teleporting" flag is set for an object, it is never
+  // cleared and it may cause the JITs to insert additional guards when
+  // accessing properties on this object. While the flag remains clear, the
+  // shape teleporting optimization can be used to avoid those extra checks.
+  //
+  // The flag is set on the object if either:
+  //
+  // * Its own proto was mutated or it was on the proto chain of an object that
+  //   had its proto mutated.
+  //
+  // * It was on the proto chain of an object that started shadowing a property
+  //   on this object.
+  //
+  // See:
+  // - ReshapeForProtoMutation
+  // - ReshapeForShadowedProp
+  // - ProtoChainSupportsTeleporting
+  inline bool hasInvalidatedTeleporting() const;
+  static bool setInvalidatedTeleporting(JSContext* cx, JS::HandleObject obj) {
     MOZ_ASSERT(obj->isUsedAsPrototype());
     MOZ_ASSERT(obj->hasStaticPrototype(),
-               "uncacheability as a concept is only applicable to static "
+               "teleporting as a concept is only applicable to static "
                "(not dynamically-computed) prototypes");
-    return setFlag(cx, obj, js::ObjectFlag::UncacheableProto);
+    return setFlag(cx, obj, js::ObjectFlag::InvalidatedTeleporting);
   }
 
   /*
@@ -278,13 +303,16 @@ class JSObject
   /* Return the allocKind we would use if we were to tenure this object. */
   js::gc::AllocKind allocKindForTenure(const js::Nursery& nursery) const;
 
+  bool canHaveFixedElements() const;
+
   size_t tenuredSizeOfThis() const {
     MOZ_ASSERT(isTenured());
     return js::gc::Arena::thingSize(asTenured().getAllocKind());
   }
 
   void addSizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf,
-                              JS::ClassInfo* info);
+                              JS::ClassInfo* info,
+                              JS::RuntimeSizes* runtimeSizes);
 
   // We can only use addSizeOfExcludingThis on tenured objects: it assumes it
   // can apply mallocSizeOf to bits and pieces of the object, whereas objects
@@ -412,7 +440,7 @@ class JSObject
   MOZ_ALWAYS_INLINE JSNative callHook() const;
   MOZ_ALWAYS_INLINE JSNative constructHook() const;
 
-  MOZ_ALWAYS_INLINE void finalize(JSFreeOp* fop);
+  MOZ_ALWAYS_INLINE void finalize(JS::GCContext* gcx);
 
  public:
   static bool nonNativeSetProperty(JSContext* cx, js::HandleObject obj,
@@ -548,7 +576,7 @@ inline bool JSObject::is<JSObject>() const {
 
 template <typename Wrapper>
 template <typename U>
-MOZ_ALWAYS_INLINE JS::Handle<U*> js::RootedBase<JSObject*, Wrapper>::as()
+MOZ_ALWAYS_INLINE JS::Handle<U*> js::RootedOperations<JSObject*, Wrapper>::as()
     const {
   const Wrapper& self = *static_cast<const Wrapper*>(this);
   MOZ_ASSERT(self->template is<U>());
@@ -558,7 +586,7 @@ MOZ_ALWAYS_INLINE JS::Handle<U*> js::RootedBase<JSObject*, Wrapper>::as()
 
 template <typename Wrapper>
 template <class U>
-MOZ_ALWAYS_INLINE JS::Handle<U*> js::HandleBase<JSObject*, Wrapper>::as()
+MOZ_ALWAYS_INLINE JS::Handle<U*> js::HandleOperations<JSObject*, Wrapper>::as()
     const {
   const JS::Handle<JSObject*>& self =
       *static_cast<const JS::Handle<JSObject*>*>(this);
@@ -674,6 +702,12 @@ struct JSObject_Slots4 : JSObject {
   void* data[2];
   js::Value fslots[4];
 };
+struct JSObject_Slots6 : JSObject {
+  // Only used for extended functions which are required to have exactly six
+  // fixed slots due to JIT assumptions.
+  void* data[2];
+  js::Value fslots[6];
+};
 struct JSObject_Slots8 : JSObject {
   void* data[2];
   js::Value fslots[8];
@@ -697,15 +731,8 @@ namespace js {
 // JSFunction will not change. Note: the object can still be moved by GC.
 extern bool ObjectMayBeSwapped(const JSObject* obj);
 
-/**
- * This enum is used to select whether the defined functions should be marked as
- * builtin native instrinsics for self-hosted code.
- */
-enum DefineAsIntrinsic { NotIntrinsic, AsIntrinsic };
-
 extern bool DefineFunctions(JSContext* cx, HandleObject obj,
-                            const JSFunctionSpec* fs,
-                            DefineAsIntrinsic intrinsic);
+                            const JSFunctionSpec* fs);
 
 /* ES6 draft rev 36 (2015 March 17) 7.1.1 ToPrimitive(vp[, preferredType]) */
 extern bool ToPrimitiveSlow(JSContext* cx, JSType hint, MutableHandleValue vp);
@@ -748,11 +775,6 @@ JSObject* GetThisObjectOfWith(JSObject* env);
 } /* namespace js */
 
 namespace js {
-
-bool NewObjectWithTaggedProtoIsCachable(JSContext* cx,
-                                        Handle<TaggedProto> proto,
-                                        NewObjectKind newKind,
-                                        const JSClass* clasp);
 
 // ES6 9.1.15 GetPrototypeFromConstructor.
 extern bool GetPrototypeFromConstructor(JSContext* cx,
@@ -800,8 +822,6 @@ MOZ_ALWAYS_INLINE bool GetPrototypeFromBuiltinConstructor(
 // Generic call for constructing |this|.
 extern JSObject* CreateThis(JSContext* cx, const JSClass* clasp,
                             js::HandleObject callee);
-
-extern JSObject* DeepCloneObjectLiteral(JSContext* cx, HandleObject obj);
 
 /* ES6 draft rev 32 (2015 Feb 2) 6.2.4.5 ToPropertyDescriptor(Obj) */
 bool ToPropertyDescriptor(JSContext* cx, HandleValue descval,
@@ -939,9 +959,6 @@ MOZ_ALWAYS_INLINE JSObject* ToObjectFromStackForPropertyAccess(
   }
   return js::ToObjectSlowForPropertyAccess(cx, vp, vpIndex, key);
 }
-
-template <XDRMode mode>
-XDRResult XDRObjectLiteral(XDRState<mode>* xdr, MutableHandleObject obj);
 
 /*
  * Report a TypeError: "so-and-so is not an object".

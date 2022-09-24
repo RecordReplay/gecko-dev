@@ -10,9 +10,7 @@
 #include "mozilla/dom/RemoteBrowser.h"
 #include "mozilla/dom/BrowserBridgeChild.h"
 
-namespace mozilla {
-
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * BrowserBridgeHost manages a remote browser from a content process.
@@ -42,6 +40,7 @@ class BrowserBridgeHost : public RemoteBrowser {
   LayersId GetLayersId() const override;
   BrowsingContext* GetBrowsingContext() const override;
   nsILoadContext* GetLoadContext() const override;
+  bool CanRecv() const override;
 
   void LoadURL(nsDocShellLoadState* aLoadState) override;
   void ResumeLoad(uint64_t aPendingSwitchId) override;
@@ -64,7 +63,6 @@ class BrowserBridgeHost : public RemoteBrowser {
   EffectsInfo mEffectsInfo;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_BrowserBridgeHost_h

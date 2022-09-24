@@ -558,7 +558,7 @@ nsresult Dashboard::GetSockets(SocketData* aSocketData) {
     CopyASCIItoUTF16(socketData->mData[i].host, mSocket.mHost);
     mSocket.mPort = socketData->mData[i].port;
     mSocket.mActive = socketData->mData[i].active;
-    mSocket.mTcp = socketData->mData[i].tcp;
+    CopyASCIItoUTF16(socketData->mData[i].type, mSocket.mType);
     mSocket.mSent = (double)socketData->mData[i].sent;
     mSocket.mReceived = (double)socketData->mData[i].received;
     dict.mSent += socketData->mData[i].sent;
@@ -913,6 +913,7 @@ nsresult Dashboard::GetDNSCacheEntries(DnsData* dnsData) {
 
     entry.mOriginAttributesSuffix =
         NS_ConvertUTF8toUTF16(dnsData->mData[i].originAttributesSuffix);
+    entry.mFlags = NS_ConvertUTF8toUTF16(dnsData->mData[i].flags);
   }
 
   JS::RootedValue val(cx);

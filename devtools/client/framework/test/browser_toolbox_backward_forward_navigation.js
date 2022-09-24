@@ -3,18 +3,16 @@
 
 "use strict";
 
-/* import-globals-from ../../debugger/test/mochitest/helpers.js */
-/* import-globals-from ../../debugger/test/mochitest/helpers/context.js */
-
 // The test can take a while to run
 requestLongerTimeout(3);
 
 const FILENAME = "doc_backward_forward_navigation.html";
-const TEST_URI_ORG = `${URL_ROOT_ORG}${FILENAME}`;
-const TEST_URI_COM = `${URL_ROOT_COM}${FILENAME}`;
+const TEST_URI_ORG = `${URL_ROOT_ORG_SSL}${FILENAME}`;
+const TEST_URI_COM = `${URL_ROOT_COM_SSL}${FILENAME}`;
 
+/* import-globals-from ../../debugger/test/mochitest/shared-head.js */
 Services.scriptloader.loadSubScript(
-  "chrome://mochitests/content/browser/devtools/client/debugger/test/mochitest/helpers.js",
+  "chrome://mochitests/content/browser/devtools/client/debugger/test/mochitest/shared-head.js",
   this
 );
 

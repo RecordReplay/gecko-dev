@@ -1,7 +1,3 @@
-function setup_tests() {
-  SpecialPowers.pushPrefEnv({ set: [["dom.input.dirpicker", true]] }, next);
-}
-
 function getType(a) {
   if (a === null || a === undefined) {
     return "null";
@@ -126,15 +122,18 @@ function create_directory() {
     var fileList = document.getElementById("fileList");
     SpecialPowers.wrap(fileList).mozSetDirectory(message.dir);
 
-    fileList.getFilesAndDirectories().then(function(list) {
-      // Just a simple test
-      is(list.length, 1, "This list has 1 element");
-      ok(list[0] instanceof Directory, "We have a directory.");
+    SpecialPowers.wrap(fileList)
+      .getFilesAndDirectories()
+      .then(function(list) {
+        list = SpecialPowers.unwrap(list);
+        // Just a simple test
+        is(list.length, 1, "This list has 1 element");
+        ok(list[0] instanceof Directory, "We have a directory.");
 
-      clonableObjects.push({ target: "all", data: list[0] });
-      script.destroy();
-      next();
-    });
+        clonableObjects.push({ target: "all", data: list[0] });
+        script.destroy();
+        next();
+      });
   }
 
   script.addMessageListener("dir.opened", onOpened);
@@ -304,6 +303,54 @@ function runTests(obj) {
       });
     })
 
+    // maintaining order of transferred ports
+    .then(function() {
+      if (!obj.transferableObjects) {
+        return;
+      }
+
+      // MessagePort
+      return new Promise(function(r, rr) {
+        var mcs = [];
+        const NPORTS = 50;
+        for (let i = 0; i < NPORTS; i++) {
+          mcs.push(new MessageChannel());
+        }
+        obj
+          .send(
+            42,
+            mcs.map(channel => channel.port1)
+          )
+          .then(function(received) {
+            is(
+              received.ports.length,
+              NPORTS,
+              `all ${NPORTS} ports transferred`
+            );
+            const promises = Array(NPORTS)
+              .fill()
+              .map(
+                (_, i) =>
+                  new Promise(function(subr, subrr) {
+                    mcs[i].port2.postMessage(i);
+                    received.ports[i].onmessage = e => subr(e.data == i);
+                  })
+              );
+            return Promise.all(promises);
+          })
+          .then(function(result) {
+            let in_order = 0;
+            for (const correct of result) {
+              if (correct) {
+                in_order++;
+              }
+            }
+            is(in_order, NPORTS, "All transferred ports are in order");
+          })
+          .then(r);
+      });
+    })
+
     // non transfering tests
     .then(function() {
       if (obj.transferableObjects) {
@@ -343,4 +390,4 @@ function next() {
   test();
 }
 
-var tests = [setup_tests, create_fileList, create_directory, create_wasmModule];
+var tests = [create_fileList, create_directory, create_wasmModule];

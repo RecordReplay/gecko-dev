@@ -181,6 +181,10 @@ class ReleaseWorkerRunnable final : public WorkerControlRunnable {
   }
 
   nsresult Cancel() override {
+    // We need to check first if cancel is called twice
+    nsresult rv = WorkerRunnable::Cancel();
+    NS_ENSURE_SUCCESS(rv, rv);
+
     ReleaseMembers();
     return NS_OK;
   }
@@ -226,9 +230,13 @@ class RemoteWorkerChild::InitializeWorkerRunnable final
   }
 
   nsresult Cancel() override {
+    // We need to check first if cancel is called twice
+    nsresult rv = WorkerRunnable::Cancel();
+    NS_ENSURE_SUCCESS(rv, rv);
+
     MaybeAbort();
 
-    return WorkerRunnable::Cancel();
+    return NS_OK;
   }
 
   // Slowly running out of synonyms for cancel, abort, terminate, etc...
@@ -351,6 +359,7 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
 
   info.mReferrerInfo = aData.referrerInfo();
   info.mDomain = aData.domain();
+  info.mTrials = aData.originTrials();
   info.mPrincipal = principal;
   info.mPartitionedPrincipal = partitionedPrincipalOrErr.unwrap();
   info.mLoadingPrincipal = loadingPrincipalOrErr.unwrap();
@@ -358,15 +367,20 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
   info.mUseRegularPrincipal = aData.useRegularPrincipal();
   info.mHasStorageAccessPermissionGranted =
       aData.hasStorageAccessPermissionGranted();
+  info.mIsThirdPartyContextToTopWindow = aData.isThirdPartyContextToTopWindow();
   info.mOriginAttributes =
       BasePrincipal::Cast(principal)->OriginAttributesRef();
+  info.mShouldResistFingerprinting = nsContentUtils::ShouldResistFingerprinting(
+      info.mPrincipal, info.mOriginAttributes);
   net::CookieJarSettings::Deserialize(aData.cookieJarSettings(),
                                       getter_AddRefs(info.mCookieJarSettings));
 
   // Default CSP permissions for now.  These will be overrided if necessary
   // based on the script CSP headers during load in ScriptLoader.
   info.mEvalAllowed = true;
-  info.mReportCSPViolations = false;
+  info.mReportEvalCSPViolations = false;
+  info.mWasmEvalAllowed = true;
+  info.mReportWasmEvalCSPViolations = false;
   info.mSecureContext = aData.isSecureContext()
                             ? WorkerLoadInfo::eSecureContext
                             : WorkerLoadInfo::eInsecureContext;
@@ -460,6 +474,7 @@ nsresult RemoteWorkerChild::ExecWorkerOnMainThread(RemoteWorkerData&& aData) {
   {
     MOZ_ASSERT(workerPrivate);
     auto lock = mState.Lock();
+    // We MUST be pending here, so direct access is ok.
     lock->as<Pending>().mWorkerPrivate = std::move(workerPrivate);
   }
 
@@ -511,6 +526,12 @@ void RemoteWorkerChild::InitializeOnWorker() {
       return;
     }
 
+    // XXX: Are we sure we cannot be in any other state here?
+    // We are executed as part of the InitializeWorkerRunnable
+    // which is scheduled from ExecWorkerOnMainThread, so we
+    // assume that our state remains <Pending> as it was before
+    // the dispatch. There seem to be no crashes here, so for
+    // now this assumption holds apparently.
     workerPrivate = std::move(lock->as<Pending>().mWorkerPrivate);
   }
 
@@ -596,9 +617,11 @@ void RemoteWorkerChild::CreationFailedOnAnyThread() {
 void RemoteWorkerChild::CreationSucceededOrFailedOnAnyThread(
     bool aDidCreationSucceed) {
 #ifdef DEBUG
-  auto lock = mState.Lock();
-  MOZ_ASSERT_IF(aDidCreationSucceed, lock->is<Running>());
-  MOZ_ASSERT_IF(!aDidCreationSucceed, lock->is<Terminated>());
+  {
+    auto lock = mState.Lock();
+    MOZ_ASSERT_IF(aDidCreationSucceed, lock->is<Running>());
+    MOZ_ASSERT_IF(!aDidCreationSucceed, lock->is<Terminated>());
+  }
 #endif
 
   RefPtr<RemoteWorkerChild> self = this;
@@ -626,7 +649,13 @@ void RemoteWorkerChild::CloseWorkerOnMainThread(State& aState) {
   // WorkerPrivate::Cancel.
 
   if (aState.is<Pending>()) {
-    aState.as<Pending>().mWorkerPrivate->Cancel();
+    // SharedWorkerOp::MaybeStart would not block terminate operation while
+    // RemoteWorkerChild::mState is still Pending, and the
+    // Pending.mWorkerPrivate is still nullptr. For the case, just switching the
+    // State to PendingTerminated.
+    if (aState.as<Pending>().mWorkerPrivate) {
+      aState.as<Pending>().mWorkerPrivate->Cancel();
+    }
     TransitionStateToPendingTerminated(aState);
     return;
   }
@@ -684,6 +713,21 @@ void RemoteWorkerChild::ErrorPropagationOnMainThread(
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
       "RemoteWorkerChild::ErrorPropagationOnMainThread",
       [self = std::move(self), value]() { self->ErrorPropagation(value); });
+
+  GetOwningEventTarget()->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
+}
+
+void RemoteWorkerChild::NotifyLock(bool aCreated) {
+  nsCOMPtr<nsIRunnable> r =
+      NS_NewRunnableFunction(__func__, [self = RefPtr(this), aCreated] {
+        auto launcherData = self->mLauncherData.Access();
+
+        if (!launcherData->mIPCActive) {
+          return;
+        }
+
+        Unused << self->SendNotifyLock(aCreated);
+      });
 
   GetOwningEventTarget()->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
 }
@@ -770,8 +814,8 @@ void RemoteWorkerChild::TransitionStateToRunning(
 
   auto lock = mState.Lock();
 
-  MOZ_ASSERT(lock->is<Pending>());
-
+  // TransitionStateToRunning is supposed to be used only
+  // in InitializeOnWorker where we know we are <Pending>.
   auto pendingOps = std::move(lock->as<Pending>().mPendingOps);
 
   /**
@@ -788,6 +832,7 @@ void RemoteWorkerChild::TransitionStateToRunning(
   nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
       __func__, [pendingOps = std::move(pendingOps), self = std::move(self)]() {
         for (auto& op : pendingOps) {
+          // XXX: Is it on purpose that we renew the lock for each pending op ?
           auto lock = self->mState.Lock();
 
           DebugOnly<bool> started = op->MaybeStart(self.get(), lock.ref());
@@ -877,6 +922,7 @@ class RemoteWorkerChild::SharedWorkerOp : public RemoteWorkerChild::Op {
               self->Cancel();
               return;
             }
+            // XXX: All other possible states are ok here?
           }
 
           self->Exec(owner);
@@ -912,10 +958,14 @@ class RemoteWorkerChild::SharedWorkerOp : public RemoteWorkerChild::Op {
 
     auto lock = aOwner->mState.Lock();
 
-    MOZ_ASSERT(lock->is<Running>() || IsTerminationOp());
-
     if (IsTerminationOp()) {
       aOwner->CloseWorkerOnMainThread(lock.ref());
+      return;
+    }
+
+    MOZ_ASSERT(lock->is<Running>());
+    if (!lock->is<Running>()) {
+      aOwner->ErrorPropagationDispatch(NS_ERROR_DOM_INVALID_STATE_ERR);
       return;
     }
 
@@ -982,6 +1032,7 @@ void RemoteWorkerChild::MaybeStartOp(RefPtr<Op>&& aOp) {
   auto lock = mState.Lock();
 
   if (!aOp->MaybeStart(this, lock.ref())) {
+    // Maybestart returns false only if we are <Pending>.
     lock->as<Pending>().mPendingOps.AppendElement(std::move(aOp));
   }
 }
@@ -998,7 +1049,8 @@ IPCResult RemoteWorkerChild::RecvExecServiceWorkerOp(
     ServiceWorkerOpArgs&& aArgs, ExecServiceWorkerOpResolver&& aResolve) {
   MOZ_ASSERT(mIsServiceWorker);
   MOZ_ASSERT(
-      aArgs.type() != ServiceWorkerOpArgs::TServiceWorkerFetchEventOpArgs,
+      aArgs.type() !=
+          ServiceWorkerOpArgs::TParentToChildServiceWorkerFetchEventOpArgs,
       "FetchEvent operations should be sent via PFetchEventOp(Proxy) actors!");
 
   MaybeReportServiceWorkerShutdownProgress(aArgs);
@@ -1047,31 +1099,20 @@ RemoteWorkerChild::MaybeSendSetServiceWorkerSkipWaitingFlag() {
 /**
  * PFetchEventOpProxy methods
  */
-PFetchEventOpProxyChild* RemoteWorkerChild::AllocPFetchEventOpProxyChild(
-    const ServiceWorkerFetchEventOpArgs& aArgs) {
-  RefPtr<FetchEventOpProxyChild> actor = new FetchEventOpProxyChild();
-
-  return actor.forget().take();
+already_AddRefed<PFetchEventOpProxyChild>
+RemoteWorkerChild::AllocPFetchEventOpProxyChild(
+    const ParentToChildServiceWorkerFetchEventOpArgs& aArgs) {
+  return RefPtr{new FetchEventOpProxyChild()}.forget();
 }
 
 IPCResult RemoteWorkerChild::RecvPFetchEventOpProxyConstructor(
     PFetchEventOpProxyChild* aActor,
-    const ServiceWorkerFetchEventOpArgs& aArgs) {
+    const ParentToChildServiceWorkerFetchEventOpArgs& aArgs) {
   MOZ_ASSERT(aActor);
 
   (static_cast<FetchEventOpProxyChild*>(aActor))->Initialize(aArgs);
 
   return IPC_OK();
-}
-
-bool RemoteWorkerChild::DeallocPFetchEventOpProxyChild(
-    PFetchEventOpProxyChild* aActor) {
-  MOZ_ASSERT(aActor);
-
-  RefPtr<FetchEventOpProxyChild> actor =
-      dont_AddRef(static_cast<FetchEventOpProxyChild*>(aActor));
-
-  return true;
 }
 
 }  // namespace dom

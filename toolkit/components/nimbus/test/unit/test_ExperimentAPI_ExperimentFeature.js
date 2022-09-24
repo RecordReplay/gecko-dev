@@ -7,9 +7,6 @@ const {
 const { ExperimentFakes } = ChromeUtils.import(
   "resource://testing-common/NimbusTestUtils.jsm"
 );
-const { TestUtils } = ChromeUtils.import(
-  "resource://testing-common/TestUtils.jsm"
-);
 
 async function setupForExperimentFeature() {
   const sandbox = sinon.createSandbox();
@@ -28,6 +25,8 @@ function setDefaultBranch(pref, value) {
 
 const TEST_FALLBACK_PREF = "testprefbranch.config";
 const FAKE_FEATURE_MANIFEST = {
+  description: "Test feature",
+  exposureDescription: "Used in tests",
   variables: {
     enabled: {
       type: "boolean",
@@ -37,104 +36,22 @@ const FAKE_FEATURE_MANIFEST = {
       type: "json",
       fallbackPref: TEST_FALLBACK_PREF,
     },
+    remoteValue: {
+      type: "boolean",
+    },
+    test: {
+      type: "boolean",
+    },
+    title: {
+      type: "string",
+    },
   },
 };
 const FAKE_FEATURE_REMOTE_VALUE = {
-  variables: {
+  value: {
     enabled: true,
   },
-  targeting: "true",
 };
-
-/**
- * # ExperimentFeature.getValue
- */
-add_task(async function test_ExperimentFeature_ready() {
-  const { sandbox, manager } = await setupForExperimentFeature();
-  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-  let readyPromise = featureInstance.ready();
-  let stub = sandbox.stub();
-
-  featureInstance.onUpdate(stub);
-
-  const expected = ExperimentFakes.experiment("anexperiment", {
-    branch: {
-      slug: "treatment",
-      feature: {
-        featureId: "foo",
-        enabled: true,
-        value: { whoa: true },
-      },
-    },
-  });
-
-  manager.store.addExperiment(expected);
-
-  await readyPromise;
-
-  Assert.deepEqual(
-    featureInstance.getValue(),
-    { whoa: true },
-    "should return getValue after waiting on ready"
-  );
-  Assert.equal(stub.callCount, 1, "Called when experiment registered");
-  Assert.equal(stub.firstCall.args[1], "experiment-updated", "Verify reason");
-
-  Services.prefs.clearUserPref("testprefbranch.value");
-  sandbox.restore();
-});
-
-/**
- * # ExperimentFeature.getValue
- */
-add_task(async function test_ExperimentFeature_getValue() {
-  const { sandbox } = await setupForExperimentFeature();
-
-  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-
-  Services.prefs.setStringPref(TEST_FALLBACK_PREF, `{"bar": 123}`);
-
-  Assert.deepEqual(
-    featureInstance.getValue().config,
-    { bar: 123 },
-    "should return the fallback pref value"
-  );
-
-  Services.prefs.clearUserPref(TEST_FALLBACK_PREF);
-  sandbox.restore();
-});
-
-add_task(
-  async function test_ExperimentFeature_getValue_prefer_experiment_over_default() {
-    const { sandbox, manager } = await setupForExperimentFeature();
-
-    const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-
-    const expected = ExperimentFakes.experiment("anexperiment", {
-      branch: {
-        slug: "treatment",
-        feature: {
-          featureId: "foo",
-          enabled: true,
-          value: { whoa: true },
-        },
-      },
-    });
-
-    manager.store.addExperiment(expected);
-
-    setDefaultBranch(TEST_FALLBACK_PREF, `{"bar": 123}`);
-
-    Assert.deepEqual(
-      featureInstance.getValue(),
-      { whoa: true },
-      "should return the experiment feature value, not the fallback one."
-    );
-
-    Services.prefs.clearUserPref("testprefbranch.value");
-    sandbox.restore();
-  }
-);
 
 /**
  * # ExperimentFeature.isEnabled
@@ -181,6 +98,18 @@ add_task(async function test_ExperimentFeature_isEnabled_default() {
 
 add_task(async function test_ExperimentFeature_isEnabled_default_over_remote() {
   const { manager, sandbox } = await setupForExperimentFeature();
+  const rollout = ExperimentFakes.rollout("foo-rollout", {
+    branch: {
+      slug: "slug",
+      features: [
+        {
+          featureId: "foo",
+          enabled: true,
+          value: FAKE_FEATURE_REMOTE_VALUE,
+        },
+      ],
+    },
+  });
   await manager.store.ready();
 
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
@@ -193,12 +122,7 @@ add_task(async function test_ExperimentFeature_isEnabled_default_over_remote() {
     "should use the default pref value, including if it is false"
   );
 
-  manager.store.updateRemoteConfigs("foo", {
-    ...FAKE_FEATURE_REMOTE_VALUE,
-    variables: { enabled: true },
-  });
-
-  await featureInstance.ready();
+  await manager.store.addEnrollment(rollout);
 
   Assert.equal(
     featureInstance.isEnabled(),
@@ -223,15 +147,20 @@ add_task(async function test_ExperimentFeature_test_helper_ready() {
 
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
 
-  await ExperimentFakes.remoteDefaultsHelper({
-    feature: featureInstance,
-    store: manager.store,
-    configuration: { variables: { remoteValue: "mochitest" }, enabled: true },
-  });
+  await ExperimentFakes.enrollWithRollout(
+    {
+      featureId: "foo",
+      enabled: true,
+      value: { remoteValue: "mochitest", enabled: true },
+    },
+    {
+      manager,
+    }
+  );
 
   Assert.equal(featureInstance.isEnabled(), true, "enabled by remote config");
   Assert.equal(
-    featureInstance.getValue().remoteValue,
+    featureInstance.getVariable("remoteValue"),
     "mochitest",
     "set by remote config"
   );
@@ -243,25 +172,31 @@ add_task(
     const expected = ExperimentFakes.experiment("foo", {
       branch: {
         slug: "treatment",
-        feature: {
-          featureId: "foo",
-          value: { enabled: true },
-        },
+        features: [
+          {
+            featureId: "foo",
+            value: { enabled: true },
+          },
+        ],
       },
     });
     const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
 
     await manager.store.ready();
-
-    manager.store.addExperiment(expected);
+    await manager.store.addEnrollment(expected);
 
     const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
-    manager.store.updateRemoteConfigs("foo", {
-      ...FAKE_FEATURE_REMOTE_VALUE,
-      variables: { enabled: false },
-    });
 
-    await featureInstance.ready();
+    await ExperimentFakes.enrollWithRollout(
+      {
+        featureId: "foo",
+        enabled: false,
+        value: { enabled: false },
+      },
+      {
+        manager,
+      }
+    );
 
     Assert.equal(
       featureInstance.isEnabled(),
@@ -282,7 +217,7 @@ add_task(
 
     Assert.ok(exposureSpy.notCalled, "should not emit exposure by default");
 
-    featureInstance.isEnabled({ sendExposureEvent: true });
+    featureInstance.recordExposureEvent();
 
     Assert.ok(exposureSpy.calledOnce, "should emit exposure event");
 
@@ -290,41 +225,53 @@ add_task(
   }
 );
 
-add_task(async function test_ExperimentFeature_isEnabled_no_exposure() {
-  const { sandbox, manager } = await setupForExperimentFeature();
-  const expected = ExperimentFakes.experiment("blah", {
-    branch: {
-      slug: "treatment",
-      feature: {
-        featureId: "foo",
-        value: { enabled: false },
+add_task(
+  async function test_ExperimentFeature_isEnabled_prefer_experiment_over_remote_legacy() {
+    const { sandbox, manager } = await setupForExperimentFeature();
+    const expected = ExperimentFakes.experiment("foo", {
+      branch: {
+        slug: "treatment",
+        features: [
+          {
+            featureId: "foo",
+            enabled: true,
+            value: { legacy: true },
+          },
+        ],
       },
-    },
-  });
-  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
+    });
+    const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
 
-  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
+    await manager.store.ready();
+    await manager.store.addEnrollment(expected);
 
-  manager.store.addExperiment(expected);
+    await ExperimentFakes.enrollWithRollout(
+      {
+        featureId: "foo",
+        enabled: false,
+        value: { legacy: true, enabled: false },
+      },
+      {
+        manager,
+      }
+    );
 
-  const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
+    Assert.equal(
+      featureInstance.isEnabled(),
+      true,
+      "should return the enabled value defined in the experiment not the remote value"
+    );
 
-  const actual = featureInstance.isEnabled({ sendExposureEvent: false });
-
-  Assert.deepEqual(actual, false, "should return feature as disabled");
-  Assert.ok(
-    exposureSpy.notCalled,
-    "should not emit an exposure event when options = { sendExposureEvent: false}"
-  );
-
-  sandbox.restore();
-});
+    sandbox.restore();
+  }
+);
 
 add_task(async function test_record_exposure_event() {
   const { sandbox, manager } = await setupForExperimentFeature();
 
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
   const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
+  const getExperimentSpy = sandbox.spy(ExperimentAPI, "getExperimentMetaData");
   sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
 
   featureInstance.recordExposureEvent();
@@ -334,14 +281,16 @@ add_task(async function test_record_exposure_event() {
     "should not emit an exposure event when no experiment is active"
   );
 
-  manager.store.addExperiment(
+  await manager.store.addEnrollment(
     ExperimentFakes.experiment("blah", {
       branch: {
         slug: "treatment",
-        feature: {
-          featureId: "foo",
-          value: { enabled: false },
-        },
+        features: [
+          {
+            featureId: "foo",
+            value: { enabled: false },
+          },
+        ],
       },
     })
   );
@@ -352,6 +301,7 @@ add_task(async function test_record_exposure_event() {
     exposureSpy.calledOnce,
     "should emit an exposure event when there is an experiment"
   );
+  Assert.equal(getExperimentSpy.callCount, 2, "Should be called every time");
 
   sandbox.restore();
 });
@@ -363,115 +313,58 @@ add_task(async function test_record_exposure_event_once() {
   const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
   sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
 
-  manager.store.addExperiment(
+  await manager.store.addEnrollment(
     ExperimentFakes.experiment("blah", {
       branch: {
         slug: "treatment",
-        feature: {
-          featureId: "foo",
-          value: { enabled: false },
-        },
+        features: [
+          {
+            featureId: "foo",
+            value: { enabled: false },
+          },
+        ],
       },
     })
   );
 
-  featureInstance.recordExposureEvent();
-  featureInstance.recordExposureEvent();
-  featureInstance.recordExposureEvent();
+  featureInstance.recordExposureEvent({ once: true });
+  featureInstance.recordExposureEvent({ once: true });
+  featureInstance.recordExposureEvent({ once: true });
 
-  Assert.ok(exposureSpy.calledOnce, "Should emit a single exposure event.");
+  Assert.ok(
+    exposureSpy.calledOnce,
+    "Should emit a single exposure event when the once param is true."
+  );
 
   sandbox.restore();
 });
 
-add_task(async function test_prevent_double_exposure_getValue() {
+add_task(async function test_allow_multiple_exposure_events() {
   const { sandbox, manager } = await setupForExperimentFeature();
 
   const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
   const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
-  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
-
-  manager.store.addExperiment(
-    ExperimentFakes.experiment("blah", {
-      branch: {
-        slug: "treatment",
-        feature: {
-          featureId: "foo",
-          value: { enabled: false },
-        },
-      },
-    })
+  let doExperimentCleanup = await ExperimentFakes.enrollWithFeatureConfig(
+    {
+      featureId: "foo",
+      value: { enabled: false },
+    },
+    { manager }
   );
 
-  featureInstance.getValue({ sendExposureEvent: true });
-  featureInstance.getValue({ sendExposureEvent: true });
-  featureInstance.getValue({ sendExposureEvent: true });
+  featureInstance.recordExposureEvent();
+  featureInstance.recordExposureEvent();
+  featureInstance.recordExposureEvent();
 
-  Assert.ok(
-    exposureSpy.calledOnce,
-    "Should emit a single exposure event (getValue)."
+  Assert.ok(exposureSpy.called, "Should emit exposure event");
+  Assert.equal(
+    exposureSpy.callCount,
+    3,
+    "Should emit an exposure event for each function call"
   );
 
   sandbox.restore();
-});
-
-add_task(async function test_prevent_double_exposure_isEnabled() {
-  const { sandbox, manager } = await setupForExperimentFeature();
-
-  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-  const exposureSpy = sandbox.spy(ExperimentAPI, "recordExposureEvent");
-  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
-
-  manager.store.addExperiment(
-    ExperimentFakes.experiment("blah", {
-      branch: {
-        slug: "treatment",
-        feature: {
-          featureId: "foo",
-          value: { enabled: false },
-        },
-      },
-    })
-  );
-
-  featureInstance.isEnabled({ sendExposureEvent: true });
-  featureInstance.isEnabled({ sendExposureEvent: true });
-  featureInstance.isEnabled({ sendExposureEvent: true });
-
-  Assert.ok(
-    exposureSpy.calledOnce,
-    "Should emit a single exposure event (getValue)."
-  );
-
-  sandbox.restore();
-});
-
-add_task(async function test_set_remote_before_ready() {
-  let sandbox = sinon.createSandbox();
-  const manager = ExperimentFakes.manager();
-  sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
-  const feature = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
-
-  Assert.throws(
-    () =>
-      ExperimentFakes.remoteDefaultsHelper({
-        feature,
-        store: manager.store,
-        configuration: { variables: { test: true } },
-      }),
-    /Store not ready/,
-    "Throws if used before init finishes"
-  );
-
-  await manager.onStartup();
-
-  await ExperimentFakes.remoteDefaultsHelper({
-    feature,
-    store: manager.store,
-    configuration: { variables: { test: true } },
-  });
-
-  Assert.ok(feature.getValue().test, "Successfully set");
+  await doExperimentCleanup();
 });
 
 add_task(async function test_isEnabled_backwards_compatible() {
@@ -491,33 +384,35 @@ add_task(async function test_isEnabled_backwards_compatible() {
 
   await manager.onStartup();
 
-  await ExperimentFakes.remoteDefaultsHelper({
-    feature,
-    store: manager.store,
-    configuration: { variables: {}, enabled: false },
-  });
+  await ExperimentFakes.enrollWithRollout(
+    {
+      featureId: "foo",
+      value: { enabled: false },
+    },
+    {
+      manager,
+    }
+  );
 
   Assert.ok(!feature.isEnabled(), "Disabled based on remote configs");
 
-  manager.store.addExperiment(
+  await manager.store.addEnrollment(
     ExperimentFakes.experiment("blah", {
       branch: {
         slug: "treatment",
-        feature: {
-          featureId: "foo",
-          enabled: true,
-          value: {},
-        },
+        features: [
+          {
+            featureId: "foo",
+            enabled: true,
+            value: {},
+          },
+        ],
       },
     })
   );
 
   Assert.ok(exposureSpy.notCalled, "Not called until now");
-  Assert.ok(
-    feature.isEnabled({ sendExposureEvent: true }),
-    "Enabled based on experiment recipe"
-  );
-  Assert.ok(exposureSpy.calledOnce, "Exposure event sent");
+  Assert.ok(feature.isEnabled(), "Enabled based on experiment recipe");
 });
 
 add_task(async function test_onUpdate_before_store_ready() {
@@ -528,7 +423,15 @@ add_task(async function test_onUpdate_before_store_ready() {
   sandbox.stub(ExperimentAPI, "_store").get(() => manager.store);
   sandbox.stub(manager.store, "getAllActive").returns([
     ExperimentFakes.experiment("foo-experiment", {
-      branch: { slug: "control", feature: { featureId: "foo", value: null } },
+      branch: {
+        slug: "control",
+        features: [
+          {
+            featureId: "foo",
+            value: null,
+          },
+        ],
+      },
     }),
   ]);
 
@@ -552,21 +455,47 @@ add_task(async function test_onUpdate_before_store_ready() {
 add_task(async function test_ExperimentFeature_test_ready_late() {
   const { manager, sandbox } = await setupForExperimentFeature();
   const stub = sandbox.stub();
-  await manager.store.ready();
 
-  manager.store.finalizeRemoteConfigs([]);
+  const featureInstance = new ExperimentFeature(
+    "test-feature",
+    FAKE_FEATURE_MANIFEST
+  );
 
-  const featureInstance = new ExperimentFeature("foo", FAKE_FEATURE_MANIFEST);
+  const rollout = ExperimentFakes.rollout("foo", {
+    branch: {
+      slug: "slug",
+      features: [
+        {
+          featureId: featureInstance.featureId,
+          value: {
+            title: "hello",
+            enabled: true,
+          },
+        },
+      ],
+    },
+  });
+
+  sandbox.stub(manager.store, "getAllRollouts").returns([rollout]);
+
+  await manager.onStartup();
+
   featureInstance.onUpdate(stub);
 
-  // Setting a really high timeout so in case our ready function doesn't handle
-  // this late init + ready scenario correctly the test will time out
-  await featureInstance.ready(400 * 1000);
+  await featureInstance.ready();
 
   Assert.ok(stub.notCalled, "We register too late to catch any events");
 
-  Assert.ok(
-    !featureInstance.isEnabled(),
+  setDefaultBranch(TEST_FALLBACK_PREF, JSON.stringify({ foo: true }));
+
+  Assert.deepEqual(
+    featureInstance.getVariable("config"),
+    { foo: true },
     "Feature is ready even when initialized after store update"
+  );
+  Assert.equal(
+    featureInstance.getVariable("title"),
+    "hello",
+    "Returns the NimbusTestUtils rollout default value"
   );
 });

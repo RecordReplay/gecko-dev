@@ -30,13 +30,15 @@
 
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_layout.h"
+#include "mozilla/StaticPtr.h"
 
 using namespace mozilla;
 
 static int32_t gPropertyTableRefCount;
-static nsStaticCaseInsensitiveNameTable* gFontDescTable;
-static nsStaticCaseInsensitiveNameTable* gCounterDescTable;
-static nsTHashMap<nsCStringHashKey, nsCSSPropertyID>* gPropertyIDLNameTable;
+static StaticAutoPtr<nsStaticCaseInsensitiveNameTable> gFontDescTable;
+static StaticAutoPtr<nsStaticCaseInsensitiveNameTable> gCounterDescTable;
+static StaticAutoPtr<nsTHashMap<nsCStringHashKey, nsCSSPropertyID>>
+    gPropertyIDLNameTable;
 
 static const char* const kCSSRawFontDescs[] = {
 #define CSS_FONT_DESC(name_, method_) #name_,
@@ -76,10 +78,6 @@ void nsCSSProps::RecomputeEnabledState(const char* aPref, void*) {
 #else
       gPropertyEnabled[pref->mPropID] = Preferences::GetBool(pref->mPref);
 #endif
-      if (pref->mPropID == eCSSProperty_backdrop_filter) {
-        gPropertyEnabled[pref->mPropID] &=
-            gfx::gfxVars::GetUseWebRenderOrDefault();
-      }
     }
   }
   MOZ_ASSERT(foundPref);
@@ -125,13 +123,8 @@ void nsCSSProps::AddRefTable(void) {
 
 void nsCSSProps::ReleaseTable(void) {
   if (0 == --gPropertyTableRefCount) {
-    delete gFontDescTable;
     gFontDescTable = nullptr;
-
-    delete gCounterDescTable;
     gCounterDescTable = nullptr;
-
-    delete gPropertyIDLNameTable;
     gPropertyIDLNameTable = nullptr;
   }
 }
@@ -171,21 +164,20 @@ const nsCString& nsCSSProps::GetStringValue(nsCSSFontDesc aFontDescID) {
   MOZ_ASSERT(gFontDescTable, "no lookup table, needs addref");
   if (gFontDescTable) {
     return gFontDescTable->GetStringValue(int32_t(aFontDescID));
-  } else {
-    static nsDependentCString sNullStr("");
-    return sNullStr;
   }
+  static nsDependentCString sNullStr("");
+  return sNullStr;
 }
 
 const nsCString& nsCSSProps::GetStringValue(nsCSSCounterDesc aCounterDesc) {
   MOZ_ASSERT(gCounterDescTable, "no lookup table, needs addref");
   if (gCounterDescTable) {
     return gCounterDescTable->GetStringValue(int32_t(aCounterDesc));
-  } else {
-    static nsDependentCString sNullStr("");
-    return sNullStr;
   }
+  static nsDependentCString sNullStr("");
+  return sNullStr;
 }
+
 const CSSPropFlags nsCSSProps::kFlagsTable[eCSSProperty_COUNT] = {
 #define CSS_PROP_LONGHAND(name_, id_, method_, flags_, ...) flags_,
 #define CSS_PROP_SHORTHAND(name_, id_, method_, flags_, ...) flags_,
@@ -216,41 +208,5 @@ bool nsCSSProps::gPropertyEnabled[eCSSProperty_COUNT_with_aliases] = {
 
 #undef IS_ENABLED_BY_DEFAULT
 };
-
-/**
- * A singleton class to register as a receiver for gfxVars.
- * Updates the state of backdrop-filter's pref if the gfx
- * WebRender var changes state.
- */
-class nsCSSPropsGfxVarReceiver final : public gfx::gfxVarReceiver {
-  constexpr nsCSSPropsGfxVarReceiver() = default;
-
-  // WebRender's last known enabled state.
-  static bool sLastKnownUseWebRender;
-  static nsCSSPropsGfxVarReceiver sInstance;
-
- public:
-  static gfx::gfxVarReceiver& GetInstance() { return sInstance; }
-
-  void OnVarChanged(const gfx::GfxVarUpdate&) override {
-    bool enabled = gfxVars::UseWebRender();
-    if (sLastKnownUseWebRender != enabled) {
-      sLastKnownUseWebRender = enabled;
-      nsCSSProps::RecomputeEnabledState("layout.css.backdrop-filter.enabled");
-    }
-  }
-};
-
-/* static */
-nsCSSPropsGfxVarReceiver nsCSSPropsGfxVarReceiver::sInstance =
-    nsCSSPropsGfxVarReceiver();
-
-/* static */
-bool nsCSSPropsGfxVarReceiver::sLastKnownUseWebRender = false;
-
-/* static */
-gfx::gfxVarReceiver& nsCSSProps::GfxVarReceiver() {
-  return nsCSSPropsGfxVarReceiver::GetInstance();
-}
 
 #include "nsCSSPropsGenerated.inc"

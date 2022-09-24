@@ -10,6 +10,7 @@
 #include "js/GCAPI.h"
 #include "mozilla/dom/KeyboardEvent.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/Sprintf.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TextInputProcessor.h"
 #include "nsFocusManager.h"
@@ -23,25 +24,43 @@ namespace dom {
 /* static */
 void FuzzingFunctions::GarbageCollect(const GlobalObject&) {
   nsJSContext::GarbageCollectNow(JS::GCReason::COMPONENT_UTILS,
-                                 nsJSContext::NonIncrementalGC,
                                  nsJSContext::NonShrinkingGC);
 }
 
 /* static */
 void FuzzingFunctions::GarbageCollectCompacting(const GlobalObject&) {
   nsJSContext::GarbageCollectNow(JS::GCReason::COMPONENT_UTILS,
-                                 nsJSContext::NonIncrementalGC,
                                  nsJSContext::ShrinkingGC);
 }
 
 /* static */
+void FuzzingFunctions::Crash(const GlobalObject& aGlobalObject,
+                             const nsAString& aKeyValue) {
+  char msgbuf[250];
+
+  SprintfLiteral(msgbuf, "%s", NS_ConvertUTF16toUTF8(aKeyValue).get());
+  if (aKeyValue.Length() >= sizeof(msgbuf)) {
+    // Update the end of a truncated message to '...'.
+    strcpy(&msgbuf[sizeof(msgbuf) - 4], "...");
+  }
+  MOZ_CRASH_UNSAFE_PRINTF("%s", msgbuf);
+}
+
+/* static */
 void FuzzingFunctions::CycleCollect(const GlobalObject&) {
-  nsJSContext::CycleCollectNow();
+  nsJSContext::CycleCollectNow(CCReason::API);
 }
 
 void FuzzingFunctions::MemoryPressure(const GlobalObject&) {
   nsCOMPtr<nsIObserverService> os = services::GetObserverService();
   os->NotifyObservers(nullptr, "memory-pressure", u"heap-minimize");
+}
+
+/* static */
+void FuzzingFunctions::SignalIPCReady(const GlobalObject&) {
+#ifdef FUZZING_SNAPSHOT
+  ContentChild::GetSingleton()->SendSignalFuzzingReady();
+#endif
 }
 
 /* static */

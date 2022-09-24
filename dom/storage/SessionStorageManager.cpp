@@ -29,8 +29,7 @@
 #include "nsTHashMap.h"
 #include "nsThreadUtils.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using namespace StorageUtils;
 
@@ -95,8 +94,14 @@ bool RecvLoadSessionStorageData(
   }
 
   for (const auto& cacheInit : aCacheCopyList) {
-    manager->UpdateData(cacheInit.originAttributes(), cacheInit.originKey(),
-                        cacheInit.data());
+    OriginAttributes attrs;
+    StoragePrincipalHelper::GetOriginAttributes(cacheInit.principalInfo(),
+                                                attrs);
+
+    nsAutoCString originAttrs;
+    attrs.CreateSuffix(originAttrs);
+
+    manager->UpdateData(originAttrs, cacheInit.originKey(), cacheInit.data());
   }
 
   return true;
@@ -126,6 +131,67 @@ bool RecvGetSessionStorageData(
   manager->GetData(aSizeLimit, data);
 
   return true;
+}
+
+bool RecvClearStoragesForOrigin(const nsACString& aOriginAttrs,
+                                const nsACString& aOriginKey) {
+  mozilla::ipc::AssertIsInMainProcess();
+  mozilla::ipc::AssertIsOnBackgroundThread();
+
+  if (!sManagers) {
+    return true;
+  }
+
+  for (auto& entry : *sManagers) {
+    entry.GetData()->ClearStoragesForOrigin(aOriginAttrs, aOriginKey);
+  }
+
+  return true;
+}
+
+void SessionStorageManagerBase::ClearStoragesInternal(
+    const OriginAttributesPattern& aPattern, const nsACString& aOriginScope) {
+  for (const auto& oaEntry : mOATable) {
+    OriginAttributes oa;
+    DebugOnly<bool> ok = oa.PopulateFromSuffix(oaEntry.GetKey());
+    MOZ_ASSERT(ok);
+    if (!aPattern.Matches(oa)) {
+      // This table doesn't match the given origin attributes pattern
+      continue;
+    }
+
+    OriginKeyHashTable* table = oaEntry.GetWeak();
+    for (const auto& originKeyEntry : *table) {
+      if (aOriginScope.IsEmpty() ||
+          StringBeginsWith(originKeyEntry.GetKey(), aOriginScope)) {
+        const auto cache = originKeyEntry.GetData()->mCache;
+        cache->Clear(false);
+        cache->ResetWriteInfos();
+      }
+    }
+  }
+}
+
+void SessionStorageManagerBase::ClearStoragesForOriginInternal(
+    const nsACString& aOriginAttrs, const nsACString& aOriginKey) {
+  for (const auto& oaEntry : mOATable) {
+    // Filter tables which match the given origin attrs.
+    if (oaEntry.GetKey() != aOriginAttrs) {
+      continue;
+    }
+
+    OriginKeyHashTable* table = oaEntry.GetWeak();
+    for (const auto& originKeyEntry : *table) {
+      // Match exact origin (without origin attrs).
+      if (originKeyEntry.GetKey() != aOriginKey) {
+        continue;
+      }
+
+      const auto cache = originKeyEntry.GetData()->mCache;
+      cache->Clear(false);
+      cache->ResetWriteInfos();
+    }
+  }
 }
 
 SessionStorageManagerBase::OriginRecord*
@@ -261,11 +327,11 @@ nsresult SessionStorageManager::EnsureManager() {
 
   RefPtr<SessionStorageManagerChild> actor =
       new SessionStorageManagerChild(this);
-  MOZ_ASSERT(actor);
 
-  MOZ_ALWAYS_TRUE(
-      backgroundActor->SendPBackgroundSessionStorageManagerConstructor(
-          actor, mBrowsingContext->Top()->Id()));
+  if (!backgroundActor->SendPBackgroundSessionStorageManagerConstructor(
+          actor, mBrowsingContext->Top()->Id())) {
+    return NS_ERROR_FAILURE;
+  }
 
   SetActor(actor);
 
@@ -273,7 +339,7 @@ nsresult SessionStorageManager::EnsureManager() {
 }
 
 SessionStorageCacheChild* SessionStorageManager::EnsureCache(
-    const nsCString& aOriginAttrs, const nsCString& aOriginKey,
+    nsIPrincipal& aPrincipal, const nsCString& aOriginKey,
     SessionStorageCache& aCache) {
   AssertIsOnMainThread();
   MOZ_ASSERT(CanLoadData());
@@ -283,10 +349,19 @@ SessionStorageCacheChild* SessionStorageManager::EnsureCache(
     return aCache.Actor();
   }
 
+  mozilla::ipc::PrincipalInfo info;
+  nsresult rv = PrincipalToPrincipalInfo(&aPrincipal, &info);
+
+  if (NS_FAILED(rv)) {
+    return nullptr;
+  }
+
   RefPtr<SessionStorageCacheChild> actor =
       new SessionStorageCacheChild(&aCache);
-  MOZ_ALWAYS_TRUE(mActor->SendPBackgroundSessionStorageCacheConstructor(
-      actor, aOriginAttrs, aOriginKey));
+  if (!mActor->SendPBackgroundSessionStorageCacheConstructor(actor, info,
+                                                             aOriginKey)) {
+    return nullptr;
+  }
 
   aCache.SetActor(actor);
 
@@ -316,7 +391,11 @@ nsresult SessionStorageManager::LoadData(nsIPrincipal& aPrincipal,
   }
 
   RefPtr<SessionStorageCacheChild> cacheActor =
-      EnsureCache(originAttributes, originKey, aCache);
+      EnsureCache(aPrincipal, originKey, aCache);
+
+  if (!cacheActor) {
+    return NS_ERROR_FAILURE;
+  }
 
   nsTArray<SSSetItemInfo> data;
   if (!cacheActor->SendLoad(&data)) {
@@ -342,14 +421,11 @@ void SessionStorageManager::CheckpointData(nsIPrincipal& aPrincipal,
     return;
   }
 
-  nsAutoCString originAttributes;
-  aPrincipal.OriginAttributesRef().CreateSuffix(originAttributes);
-
-  return CheckpointDataInternal(originAttributes, originKey, aCache);
+  return CheckpointDataInternal(aPrincipal, originKey, aCache);
 }
 
 void SessionStorageManager::CheckpointDataInternal(
-    const nsCString& aOriginAttrs, const nsCString& aOriginKey,
+    nsIPrincipal& aPrincipal, const nsCString& aOriginKey,
     SessionStorageCache& aCache) {
   AssertIsOnMainThread();
   MOZ_ASSERT(mActor);
@@ -361,11 +437,24 @@ void SessionStorageManager::CheckpointDataInternal(
   }
 
   RefPtr<SessionStorageCacheChild> cacheActor =
-      EnsureCache(aOriginAttrs, aOriginKey, aCache);
+      EnsureCache(aPrincipal, aOriginKey, aCache);
+
+  if (!cacheActor) {
+    return;
+  }
 
   Unused << cacheActor->SendCheckpoint(writeInfos);
 
   aCache.ResetWriteInfos();
+}
+
+nsresult SessionStorageManager::ClearStoragesForOrigin(
+    const nsACString& aOriginAttrs, const nsACString& aOriginKey) {
+  AssertIsOnMainThread();
+
+  ClearStoragesForOriginInternal(aOriginAttrs, aOriginKey);
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -467,7 +556,7 @@ SessionStorageManager::CloneStorage(Storage* aStorage) {
     return NS_ERROR_UNEXPECTED;
   }
 
-  // ToDo: At the momnet, we clone the cache on the child process and then
+  // ToDo: At the moment, we clone the cache on the child process and then
   // send the checkpoint.  It would be nicer if we either serailizing all the
   // data and sync to the parent process directly or clonig storage on the
   // parnet process and sync it to the child process on demand.
@@ -542,32 +631,11 @@ void SessionStorageManager::ClearStorages(
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return;
     }
+
+    mActor->SendClearStorages(aPattern, nsCString(aOriginScope));
   }
 
-  for (const auto& oaEntry : mOATable) {
-    OriginAttributes oa;
-    DebugOnly<bool> ok = oa.PopulateFromSuffix(oaEntry.GetKey());
-    MOZ_ASSERT(ok);
-    if (!aPattern.Matches(oa)) {
-      // This table doesn't match the given origin attributes pattern
-      continue;
-    }
-
-    OriginKeyHashTable* table = oaEntry.GetWeak();
-    for (const auto& originKeyEntry : *table) {
-      if (aOriginScope.IsEmpty() ||
-          StringBeginsWith(originKeyEntry.GetKey(), aOriginScope)) {
-        const auto cache = originKeyEntry.GetData()->mCache;
-        cache->Clear(false);
-
-        if (CanLoadData()) {
-          MOZ_ASSERT(ActorExists());
-          CheckpointDataInternal(nsCString{oaEntry.GetKey()},
-                                 nsCString{originKeyEntry.GetKey()}, *cache);
-        }
-      }
-    }
-  }
+  ClearStoragesInternal(aPattern, aOriginScope);
 }
 
 nsresult SessionStorageManager::Observe(
@@ -758,23 +826,38 @@ BackgroundSessionStorageManager::GetData(BrowsingContext* aContext,
 
 void BackgroundSessionStorageManager::GetData(
     uint32_t aSizeLimit, nsTArray<SSCacheCopy>& aCacheCopyList) {
-  for (auto attributesIter = mOATable.ConstIter(); !attributesIter.Done();
-       attributesIter.Next()) {
-    for (auto originIter = attributesIter.UserData()->ConstIter();
-         !originIter.Done(); originIter.Next()) {
-      const auto& cache = originIter.UserData()->mCache;
-      if (cache->GetOriginQuotaUsage() > aSizeLimit) {
+  for (auto& managerActor : mParticipatingActors) {
+    for (auto* cacheActor :
+         managerActor->ManagedPBackgroundSessionStorageCacheParent()) {
+      auto* cache = static_cast<SessionStorageCacheParent*>(cacheActor);
+      ::mozilla::ipc::PrincipalInfo info = cache->PrincipalInfo();
+
+      OriginAttributes attributes;
+      StoragePrincipalHelper::GetOriginAttributes(cache->PrincipalInfo(),
+                                                  attributes);
+
+      nsAutoCString originAttrs;
+      attributes.CreateSuffix(originAttrs);
+
+      auto* record =
+          GetOriginRecord(originAttrs, cache->OriginKey(), false, nullptr);
+
+      if (!record) {
         continue;
       }
 
-      nsTArray<SSSetItemInfo> data = cache->SerializeData();
+      if (record->mCache->GetOriginQuotaUsage() > aSizeLimit) {
+        continue;
+      }
+
+      nsTArray<SSSetItemInfo> data = record->mCache->SerializeData();
       if (data.IsEmpty()) {
         continue;
       }
 
       SSCacheCopy& cacheCopy = *aCacheCopyList.AppendElement();
-      cacheCopy.originKey() = originIter.Key();
-      cacheCopy.originAttributes() = attributesIter.Key();
+      cacheCopy.originKey() = cache->OriginKey();
+      cacheCopy.principalInfo() = info;
       cacheCopy.data().SwapElements(data);
     }
   }
@@ -808,6 +891,26 @@ void BackgroundSessionStorageManager::UpdateData(
   originRecord->mCache->DeserializeData(aData);
 }
 
+void BackgroundSessionStorageManager::ClearStorages(
+    const OriginAttributesPattern& aPattern, const nsCString& aOriginScope) {
+  MOZ_ASSERT(XRE_IsParentProcess());
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+  ClearStoragesInternal(aPattern, aOriginScope);
+}
+
+void BackgroundSessionStorageManager::ClearStoragesForOrigin(
+    const nsACString& aOriginAttrs, const nsACString& aOriginKey) {
+  ::mozilla::ipc::AssertIsInMainProcess();
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+
+  for (auto& managerActor : mParticipatingActors) {
+    QM_WARNONLY_TRY(OkIf(managerActor->SendClearStoragesForOrigin(
+        nsCString(aOriginAttrs), nsCString(aOriginKey))));
+  }
+
+  ClearStoragesForOriginInternal(aOriginAttrs, aOriginKey);
+}
+
 void BackgroundSessionStorageManager::SetCurrentBrowsingContextId(
     uint64_t aBrowsingContextId) {
   MOZ_DIAGNOSTIC_ASSERT(aBrowsingContextId != mCurrentBrowsingContextId);
@@ -815,6 +918,10 @@ void BackgroundSessionStorageManager::SetCurrentBrowsingContextId(
 }
 
 void BackgroundSessionStorageManager::MaybeScheduleSessionStoreUpdate() {
+  if constexpr (!SessionStoreUtils::NATIVE_LISTENER) {
+    return;
+  }
+
   if (mSessionStoreCallbackTimer) {
     return;
   }
@@ -865,5 +972,16 @@ void BackgroundSessionStorageManager::CancelSessionStoreUpdate() {
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+void BackgroundSessionStorageManager::AddParticipatingActor(
+    SessionStorageManagerParent* aActor) {
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+  mParticipatingActors.AppendElement(aActor);
+}
+
+void BackgroundSessionStorageManager::RemoveParticipatingActor(
+    SessionStorageManagerParent* aActor) {
+  ::mozilla::ipc::AssertIsOnBackgroundThread();
+  mParticipatingActors.RemoveElement(aActor);
+}
+
+}  // namespace mozilla::dom

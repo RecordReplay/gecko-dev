@@ -48,19 +48,39 @@ static void CreateWebRenderCommands(wr::DisplayListBuilder& aBuilder,
                        sideBits.valueOr(SideBits::eNone));
 }
 
+HitTestInfoManager::HitTestInfoManager()
+    : mArea(nsRect()),
+      mFlags(gfx::CompositorHitTestInvisibleToHit),
+      mViewId(ScrollableLayerGuid::NULL_SCROLL_ID),
+      mSpaceAndClipChain(wr::InvalidScrollNodeWithChain()) {}
+
 void HitTestInfoManager::Reset() {
   mArea = nsRect();
   mFlags = gfx::CompositorHitTestInvisibleToHit;
+  mViewId = ScrollableLayerGuid::NULL_SCROLL_ID;
+  mSpaceAndClipChain = wr::InvalidScrollNodeWithChain();
+
   HITTEST_INFO_LOG("* HitTestInfoManager::Reset\n");
 }
 
-void HitTestInfoManager::ProcessItem(
+bool HitTestInfoManager::ProcessItem(
     nsDisplayItem* aItem, wr::DisplayListBuilder& aBuilder,
     nsDisplayListBuilder* aDisplayListBuilder) {
   MOZ_ASSERT(aItem);
 
+  HITTEST_INFO_LOG("* HitTestInfoManager::ProcessItem(%d, %s, has=%d)\n",
+                   getpid(), aItem->Frame()->ListTag().get(),
+                   aItem->HasHitTestInfo());
+
+  if (MOZ_UNLIKELY(aItem->GetType() == DisplayItemType::TYPE_REMOTE)) {
+    // Remote frames might contain hit-test-info items inside (but those
+    // aren't processed by this process of course), so we can't optimize out the
+    // next hit-test info item because it might be on top of the iframe.
+    Reset();
+  }
+
   if (!aItem->HasHitTestInfo()) {
-    return;
+    return false;
   }
 
   const HitTestInfo& hitTestInfo = aItem->GetHitTestInfo();
@@ -68,7 +88,7 @@ void HitTestInfoManager::ProcessItem(
   const gfx::CompositorHitTestInfo& flags = hitTestInfo.Info();
 
   if (flags == gfx::CompositorHitTestInvisibleToHit || area.IsEmpty()) {
-    return;
+    return false;
   }
 
   const auto viewId =
@@ -77,18 +97,20 @@ void HitTestInfoManager::ProcessItem(
 
   if (!Update(area, flags, viewId, spaceAndClipChain)) {
     // The previous hit test information is still valid.
-    return;
+    return false;
   }
 
-  HITTEST_INFO_LOG("+ [%d, %d, %d, %d]: flags: 0x%x, viewId: %llu\n", area.x,
+  HITTEST_INFO_LOG("+ [%d, %d, %d, %d]: flags: 0x%x, viewId: %lu\n", area.x,
                    area.y, area.width, area.height, flags.serialize(), viewId);
 
   CreateWebRenderCommands(aBuilder, aItem, area, flags, viewId);
+
+  return true;
 }
 
 /**
  * Updates the current hit testing information if necessary.
- * Returns true if the the hit testing information was changed.
+ * Returns true if the hit testing information was changed.
  */
 bool HitTestInfoManager::Update(const nsRect& aArea,
                                 const gfx::CompositorHitTestInfo& aFlags,
@@ -97,7 +119,7 @@ bool HitTestInfoManager::Update(const nsRect& aArea,
   if (mViewId == aViewId && mFlags == aFlags && mArea.Contains(aArea) &&
       mSpaceAndClipChain == aSpaceAndClip) {
     // The previous hit testing information can be reused.
-    HITTEST_INFO_LOG("s [%d, %d, %d, %d]: flags: 0x%x, viewId: %llu\n", aArea.x,
+    HITTEST_INFO_LOG("s [%d, %d, %d, %d]: flags: 0x%x, viewId: %lu\n", aArea.x,
                      aArea.y, aArea.width, aArea.height, aFlags.serialize(),
                      aViewId);
     return false;

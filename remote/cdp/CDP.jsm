@@ -11,13 +11,15 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
-  Services: "resource://gre/modules/Services.jsm",
-
   JSONHandler: "chrome://remote/content/cdp/JSONHandler.jsm",
+  Log: "chrome://remote/content/shared/Log.jsm",
   RecommendedPreferences:
     "chrome://remote/content/shared/RecommendedPreferences.jsm",
   TargetList: "chrome://remote/content/cdp/targets/TargetList.jsm",
 });
+
+XPCOMUtils.defineLazyGetter(this, "logger", () => Log.get(Log.TYPES.CDP));
+XPCOMUtils.defineLazyGetter(this, "textEncoder", () => new TextEncoder());
 
 // Map of CDP-specific preferences that should be set via
 // RecommendedPreferences.
@@ -50,12 +52,19 @@ class CDP {
   constructor(agent) {
     this.agent = agent;
     this.targetList = null;
+
     this._running = false;
+    this._activePortPath;
   }
 
   get address() {
     const mainTarget = this.targetList.getMainProcessTarget();
     return mainTarget.wsDebuggerURL;
+  }
+
+  get mainTargetPath() {
+    const mainTarget = this.targetList.getMainProcessTarget();
+    return mainTarget.path;
   }
 
   /**
@@ -73,6 +82,13 @@ class CDP {
 
     RecommendedPreferences.applyPreferences(RECOMMENDED_PREFS);
 
+    // Starting CDP too early can cause issues with clients in not being able
+    // to find any available target. Also when closing the application while
+    // it's still starting up can cause shutdown hangs. As such CDP will be
+    // started when the initial application window has finished initializing.
+    logger.debug(`Waiting for initial application window`);
+    await this.agent.browserStartupFinished;
+
     this.agent.server.registerPrefixHandler("/json/", new JSONHandler(this));
 
     this.targetList = new TargetList();
@@ -85,22 +101,37 @@ class CDP {
 
     await this.targetList.watchForTargets();
 
-    Services.obs.notifyObservers(
-      null,
-      "remote-listening",
-      `DevTools listening on ${this.address}`
+    Cu.printStderr(`DevTools listening on ${this.address}\n`);
+
+    // Write connection details to DevToolsActivePort file within the profile.
+    this._activePortPath = PathUtils.join(
+      PathUtils.profileDir,
+      "DevToolsActivePort"
     );
+
+    const data = `${this.agent.port}\n${this.mainTargetPath}`;
+    try {
+      await IOUtils.write(this._activePortPath, textEncoder.encode(data));
+    } catch (e) {
+      logger.warn(`Failed to create ${this._activePortPath} (${e.message})`);
+    }
   }
 
   /**
    * Stops the CDP support.
    */
-  stop() {
+  async stop() {
     if (!this._running) {
       return;
     }
 
     try {
+      try {
+        await IOUtils.remove(this._activePortPath);
+      } catch (e) {
+        logger.warn(`Failed to remove ${this._activePortPath} (${e.message})`);
+      }
+
       this.targetList?.destructor();
       this.targetList = null;
 

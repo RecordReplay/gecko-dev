@@ -58,7 +58,7 @@ class LoadInfo final : public nsILoadInfo {
   friend already_AddRefed<T> mozilla::MakeAndAddRef(Args&&... aArgs);
 
  public:
-  NS_DECL_ISUPPORTS
+  NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSILOADINFO
 
   // Used for TYPE_DOCUMENT load.
@@ -178,6 +178,13 @@ class LoadInfo final : public nsILoadInfo {
     mCspToInherit = aCspToInherit;
   }
 
+  bool HasIsThirdPartyContextToTopWindowSet() {
+    return mIsThirdPartyContextToTopWindow.isSome();
+  }
+  void ClearIsThirdPartyContextToTopWindow() {
+    mIsThirdPartyContextToTopWindow.reset();
+  }
+
  private:
   // private constructor that is only allowed to be called from within
   // HttpChannelParent and FTPChannelParent declared as friends undeneath.
@@ -185,12 +192,10 @@ class LoadInfo final : public nsILoadInfo {
   // Please note that aRedirectChain uses swapElements.
   LoadInfo(
       nsIPrincipal* aLoadingPrincipal, nsIPrincipal* aTriggeringPrincipal,
-      nsIPrincipal* aPrincipalToInherit,
-      nsIPrincipal* aSandboxedLoadingPrincipal,
-      nsIPrincipal* aTopLevelPrincipal,
-      nsIPrincipal* aTopLevelStorageAreaPrincipal, nsIURI* aResultPrincipalURI,
-      nsICookieJarSettings* aCookieJarSettings,
+      nsIPrincipal* aPrincipalToInherit, nsIPrincipal* aTopLevelPrincipal,
+      nsIURI* aResultPrincipalURI, nsICookieJarSettings* aCookieJarSettings,
       nsIContentSecurityPolicy* aCspToInherit,
+      const nsID& aSandboxedNullPrincipalID,
       const Maybe<mozilla::dom::ClientInfo>& aClientInfo,
       const Maybe<mozilla::dom::ClientInfo>& aReservedClientInfo,
       const Maybe<mozilla::dom::ClientInfo>& aInitialClientInfo,
@@ -206,8 +211,9 @@ class LoadInfo final : public nsILoadInfo {
       bool aForceInheritPrincipalDropped, uint64_t aInnerWindowID,
       uint64_t aBrowsingContextID, uint64_t aFrameBrowsingContextID,
       bool aInitialSecurityCheckDone, bool aIsThirdPartyContext,
-      bool aIsThirdPartyContextToTopWindow, bool aIsFormSubmission,
-      bool aSendCSPViolationEvents, const OriginAttributes& aOriginAttributes,
+      const Maybe<bool>& aIsThirdPartyContextToTopWindow,
+      bool aIsFormSubmission, bool aSendCSPViolationEvents,
+      const OriginAttributes& aOriginAttributes,
       RedirectHistoryArray&& aRedirectChainIncludingInternalRedirects,
       RedirectHistoryArray&& aRedirectChain,
       nsTArray<nsCOMPtr<nsIPrincipal>>&& aAncestorPrincipals,
@@ -220,8 +226,9 @@ class LoadInfo final : public nsILoadInfo {
       bool aSkipContentSniffing, uint32_t aHttpsOnlyStatus,
       bool aHasValidUserGestureActivation, bool aAllowDeprecatedSystemRequests,
       bool aIsInDevToolsContext, bool aParserCreatedScript,
-      bool aHasStoragePermission, bool aIsMetaRefresh,
-      uint32_t aRequestBlockingReason, nsINode* aLoadingContext,
+      nsILoadInfo::StoragePermissionState aStoragePermission,
+      bool aIsMetaRefresh, uint32_t aRequestBlockingReason,
+      nsINode* aLoadingContext,
       nsILoadInfo::CrossOriginEmbedderPolicy aLoadingEmbedderPolicy,
       nsIURI* aUnstrippedURI);
   LoadInfo(const LoadInfo& rhs);
@@ -234,7 +241,7 @@ class LoadInfo final : public nsILoadInfo {
       const Maybe<mozilla::net::LoadInfoArgs>& aLoadInfoArgs,
       nsINode* aCspToInheritLoadingContext, net::LoadInfo** outLoadInfo);
 
-  ~LoadInfo() = default;
+  ~LoadInfo();
 
   void ComputeIsThirdPartyContext(nsPIDOMWindowOuter* aOuterWindow);
   void ComputeIsThirdPartyContext(dom::WindowGlobalParent* aGlobal);
@@ -254,6 +261,8 @@ class LoadInfo final : public nsILoadInfo {
   void UpdateFrameBrowsingContextID(uint64_t aFrameBrowsingContextID) {
     mFrameBrowsingContextID = aFrameBrowsingContextID;
   }
+  bool DispatchRelease();
+  MOZ_NEVER_INLINE void ReleaseMembers();
 
   // if you add a member, please also update the copy constructor and consider
   // if it should be merged from parent channel through
@@ -261,13 +270,13 @@ class LoadInfo final : public nsILoadInfo {
   nsCOMPtr<nsIPrincipal> mLoadingPrincipal;
   nsCOMPtr<nsIPrincipal> mTriggeringPrincipal;
   nsCOMPtr<nsIPrincipal> mPrincipalToInherit;
-  nsCOMPtr<nsIPrincipal> mSandboxedLoadingPrincipal;
   nsCOMPtr<nsIPrincipal> mTopLevelPrincipal;
-  nsCOMPtr<nsIPrincipal> mTopLevelStorageAreaPrincipal;
   nsCOMPtr<nsIURI> mResultPrincipalURI;
+  nsCOMPtr<nsIURI> mChannelCreationOriginalURI;
   nsCOMPtr<nsICSPEventListener> mCSPEventListener;
   nsCOMPtr<nsICookieJarSettings> mCookieJarSettings;
   nsCOMPtr<nsIContentSecurityPolicy> mCspToInherit;
+  nsID mSandboxedNullPrincipalID;
 
   Maybe<mozilla::dom::ClientInfo> mClientInfo;
   UniquePtr<mozilla::dom::ClientSource> mReservedClientSource;
@@ -299,7 +308,7 @@ class LoadInfo final : public nsILoadInfo {
   bool mInitialSecurityCheckDone = false;
   // NB: TYPE_DOCUMENT implies !third-party.
   bool mIsThirdPartyContext = false;
-  bool mIsThirdPartyContextToTopWindow = true;
+  Maybe<bool> mIsThirdPartyContextToTopWindow;
   bool mIsFormSubmission = false;
   bool mSendCSPViolationEvents = true;
   OriginAttributes mOriginAttributes;
@@ -321,9 +330,11 @@ class LoadInfo final : public nsILoadInfo {
   uint32_t mHttpsOnlyStatus = nsILoadInfo::HTTPS_ONLY_UNINITIALIZED;
   bool mHasValidUserGestureActivation = false;
   bool mAllowDeprecatedSystemRequests = false;
+  bool mIsUserTriggeredSave = false;
   bool mIsInDevToolsContext = false;
   bool mParserCreatedScript = false;
-  bool mHasStoragePermission = false;
+  nsILoadInfo::StoragePermissionState mStoragePermission =
+      nsILoadInfo::NoStoragePermission;
   bool mIsMetaRefresh = false;
 
   // Is true if this load was triggered by processing the attributes of the
@@ -347,6 +358,10 @@ class LoadInfo final : public nsILoadInfo {
 
   nsCOMPtr<nsIURI> mUnstrippedURI;
 };
+
+// This is exposed solely for testing purposes and should not be used outside of
+// LoadInfo
+already_AddRefed<nsIPrincipal> CreateTruncatedPrincipal(nsIPrincipal*);
 
 }  // namespace net
 }  // namespace mozilla

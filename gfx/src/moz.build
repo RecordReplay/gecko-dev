@@ -25,6 +25,7 @@ EXPORTS += [
     "nsCoord.h",
     "nsDeviceContext.h",
     "nsFont.h",
+    "nsFontCache.h",
     "nsFontMetrics.h",
     "nsGfxCIID.h",
     "nsITheme.h",
@@ -49,7 +50,6 @@ EXPORTS.mozilla += [
 
 EXPORTS.mozilla.gfx += [
     "CompositorHitTestInfo.h",
-    "TiledRegion.h",
 ]
 
 if CONFIG["MOZ_X11"]:
@@ -65,12 +65,12 @@ UNIFIED_SOURCES += [
     "gfxTelemetry.cpp",
     "nsColor.cpp",
     "nsFont.cpp",
+    "nsFontCache.cpp",
     "nsFontMetrics.cpp",
     "nsRect.cpp",
     "nsRegion.cpp",
     "nsThebesFontEnumerator.cpp",
     "nsTransform2D.cpp",
-    "TiledRegion.cpp",
 ]
 
 # nsDeviceContext.cpp cannot be built in unified mode because it pulls in OS X system headers.
@@ -86,12 +86,11 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 LOCAL_INCLUDES += [
     "/dom/ipc",  # for ContentChild.h
+    "/gfx/cairo/cairo/src",
 ]
 
 FINAL_LIBRARY = "xul"
 
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-CXXFLAGS += CONFIG["TK_CFLAGS"]
-
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
     CXXFLAGS += CONFIG["MOZ_PANGO_CFLAGS"]

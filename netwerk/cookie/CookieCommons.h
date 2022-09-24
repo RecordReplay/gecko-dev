@@ -11,6 +11,7 @@
 #include "prtime.h"
 #include "nsString.h"
 #include "nsICookie.h"
+#include "mozilla/net/NeckoChannelParams.h"
 
 class nsIChannel;
 class nsIConsoleReportCollector;
@@ -110,13 +111,6 @@ class CookieCommons final {
 
   static bool ShouldIncludeCrossSiteCookieForDocument(Cookie* aCookie);
 
-  static bool MaybeCompareSchemeWithLogging(nsIConsoleReportCollector* aCRC,
-                                            nsIURI* aHostURI, Cookie* aCookie,
-                                            nsICookie::schemeType aSchemeType);
-
-  static bool MaybeCompareScheme(Cookie* aCookie,
-                                 nsICookie::schemeType aSchemeType);
-
   static bool IsSchemeSupported(nsIPrincipal* aPrincipal);
   static bool IsSchemeSupported(nsIURI* aURI);
   static bool IsSchemeSupported(const nsACString& aScheme);
@@ -133,8 +127,11 @@ class CookieCommons final {
 
   // Returns true if the channel is a foreign with respect to the host-uri.
   // For loads of TYPE_DOCUMENT, this function returns true if it's a cross
-  // origin navigation.
-  static bool IsSameSiteForeign(nsIChannel* aChannel, nsIURI* aHostURI);
+  // site navigation.
+  // `aHadCrossSiteRedirects` will be true iff the channel had a cross-site
+  // redirect before the final URI.
+  static bool IsSameSiteForeign(nsIChannel* aChannel, nsIURI* aHostURI,
+                                bool* aHadCrossSiteRedirects);
 };
 
 }  // namespace net

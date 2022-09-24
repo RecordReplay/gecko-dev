@@ -6,16 +6,18 @@
 
 #include "jit/WarpCacheIRTranspiler.h"
 
+#include "mozilla/Casting.h"
 #include "mozilla/Maybe.h"
 
 #include "jsmath.h"
 
 #include "builtin/DataViewObject.h"
+#include "builtin/MapObject.h"
 #include "jit/AtomicOp.h"
 #include "jit/CacheIR.h"
 #include "jit/CacheIRCompiler.h"
 #include "jit/CacheIROpsGenerated.h"
-#include "jit/CompileInfo.h"
+#include "jit/CacheIRReader.h"
 #include "jit/LIR.h"
 #include "jit/MIR.h"
 #include "jit/MIRGenerator.h"
@@ -26,9 +28,10 @@
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "vm/ArgumentsObject.h"
 #include "vm/BytecodeLocation.h"
-#include "wasm/WasmInstance.h"
+#include "wasm/WasmCode.h"
 
 #include "gc/ObjectKind-inl.h"
+#include "vm/NativeObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -156,8 +159,11 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
   const wasm::FuncExport* wasmFuncExportField(uint32_t offset) {
     return reinterpret_cast<const wasm::FuncExport*>(readStubWord(offset));
   }
-  gc::AllocSite* allocSiteStubField(uint32_t offset) {
-    return reinterpret_cast<gc::AllocSite*>(readStubWord(offset));
+  gc::InitialHeap allocSiteInitialHeapField(uint32_t offset) {
+    uintptr_t word = readStubWord(offset);
+    MOZ_ASSERT(word == uintptr_t(gc::DefaultHeap) ||
+               word == uintptr_t(gc::TenuredHeap));
+    return gc::InitialHeap(word);
   }
   const void* rawPointerField(uint32_t offset) {
     return reinterpret_cast<const void*>(readStubWord(offset));
@@ -179,6 +185,11 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
         static_cast<uint64_t>(stubInfo_->getStubRawInt64(stubData_, offset));
     return Value::fromRawBits(raw);
   }
+  double doubleStubField(uint32_t offset) {
+    uint64_t raw =
+        static_cast<uint64_t>(stubInfo_->getStubRawInt64(stubData_, offset));
+    return mozilla::BitwiseCast<double>(raw);
+  }
 
   // This must only be called when the caller knows the object is tenured and
   // not a nursery index.
@@ -189,6 +200,8 @@ class MOZ_RAII WarpCacheIRTranspiler : public WarpBuilderShared {
 
   // Returns either MConstant or MNurseryIndex. See WarpObjectField.
   MInstruction* objectStubField(uint32_t offset);
+
+  const JSClass* classForGuardClassKind(GuardClassKind kind);
 
   [[nodiscard]] bool emitGuardTo(ValOperandId inputId, MIRType type);
 
@@ -340,42 +353,44 @@ bool WarpCacheIRTranspiler::emitGuardClass(ObjOperandId objId,
                                            GuardClassKind kind) {
   MDefinition* def = getOperand(objId);
 
-  const JSClass* classp = nullptr;
-  switch (kind) {
-    case GuardClassKind::Array:
-      classp = &ArrayObject::class_;
-      break;
-    case GuardClassKind::ArrayBuffer:
-      classp = &ArrayBufferObject::class_;
-      break;
-    case GuardClassKind::SharedArrayBuffer:
-      classp = &SharedArrayBufferObject::class_;
-      break;
-    case GuardClassKind::DataView:
-      classp = &DataViewObject::class_;
-      break;
-    case GuardClassKind::MappedArguments:
-      classp = &MappedArgumentsObject::class_;
-      break;
-    case GuardClassKind::UnmappedArguments:
-      classp = &UnmappedArgumentsObject::class_;
-      break;
-    case GuardClassKind::WindowProxy:
-      classp = mirGen().runtime->maybeWindowProxyClass();
-      break;
-    case GuardClassKind::JSFunction:
-      classp = &JSFunction::class_;
-      break;
-    default:
-      MOZ_CRASH("not yet supported");
+  MInstruction* ins;
+  if (kind == GuardClassKind::JSFunction) {
+    ins = MGuardToFunction::New(alloc(), def);
+  } else {
+    const JSClass* classp = classForGuardClassKind(kind);
+    ins = MGuardToClass::New(alloc(), def, classp);
   }
-  MOZ_ASSERT(classp);
 
-  auto* ins = MGuardToClass::New(alloc(), def, classp);
   add(ins);
 
   setOperand(objId, ins);
   return true;
+}
+
+const JSClass* WarpCacheIRTranspiler::classForGuardClassKind(
+    GuardClassKind kind) {
+  switch (kind) {
+    case GuardClassKind::Array:
+      return &ArrayObject::class_;
+    case GuardClassKind::ArrayBuffer:
+      return &ArrayBufferObject::class_;
+    case GuardClassKind::SharedArrayBuffer:
+      return &SharedArrayBufferObject::class_;
+    case GuardClassKind::DataView:
+      return &DataViewObject::class_;
+    case GuardClassKind::MappedArguments:
+      return &MappedArgumentsObject::class_;
+    case GuardClassKind::UnmappedArguments:
+      return &UnmappedArgumentsObject::class_;
+    case GuardClassKind::WindowProxy:
+      return mirGen().runtime->maybeWindowProxyClass();
+    case GuardClassKind::Set:
+      return &SetObject::class_;
+    case GuardClassKind::Map:
+      return &MapObject::class_;
+    default:
+      MOZ_CRASH("not yet supported");
+  }
 }
 
 bool WarpCacheIRTranspiler::emitGuardAnyClass(ObjOperandId objId,
@@ -696,6 +711,16 @@ bool WarpCacheIRTranspiler::emitMegamorphicSetElement(ObjOperandId objId,
   return resumeAfter(ins);
 }
 
+bool WarpCacheIRTranspiler::emitValueToIteratorResult(ValOperandId valId) {
+  MDefinition* val = getOperand(valId);
+
+  auto* ins = MValueToIterator::New(alloc(), val);
+  addEffectful(ins);
+
+  pushResult(ins);
+  return resumeAfter(ins);
+}
+
 bool WarpCacheIRTranspiler::emitGuardIsNotArrayBufferMaybeShared(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
@@ -746,6 +771,37 @@ bool WarpCacheIRTranspiler::emitGuardDynamicSlotIsSpecificObject(
 
   auto* guard = MGuardObjectIdentity::New(alloc(), unbox, expected,
                                           /* bailOnEquality = */ false);
+  add(guard);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadDynamicSlot(ValOperandId resultId,
+                                                ObjOperandId objId,
+                                                uint32_t slotOffset) {
+  size_t slotIndex = int32StubField(slotOffset);
+  MDefinition* obj = getOperand(objId);
+
+  auto* slots = MSlots::New(alloc(), obj);
+  add(slots);
+
+  auto* load = MLoadDynamicSlot::New(alloc(), slots, slotIndex);
+  add(load);
+
+  return defineOperand(resultId, load);
+}
+
+bool WarpCacheIRTranspiler::emitGuardDynamicSlotIsNotObject(
+    ObjOperandId objId, uint32_t slotOffset) {
+  size_t slotIndex = int32StubField(slotOffset);
+  MDefinition* obj = getOperand(objId);
+
+  auto* slots = MSlots::New(alloc(), obj);
+  add(slots);
+
+  auto* load = MLoadDynamicSlot::New(alloc(), slots, slotIndex);
+  add(load);
+
+  auto* guard = MGuardIsNotObject::New(alloc(), load);
   add(guard);
   return true;
 }
@@ -1002,6 +1058,9 @@ bool WarpCacheIRTranspiler::emitGuardNonDoubleType(ValOperandId inputId,
     case ValueType::Magic:
     case ValueType::PrivateGCThing:
     case ValueType::Object:
+#ifdef ENABLE_RECORD_TUPLE
+    case ValueType::ExtendedPrimitive:
+#endif
       break;
   }
 
@@ -1331,6 +1390,13 @@ bool WarpCacheIRTranspiler::emitLoadInt32Constant(uint32_t valOffset,
   return defineOperand(resultId, valConst);
 }
 
+bool WarpCacheIRTranspiler::emitLoadDoubleConstant(uint32_t valOffset,
+                                                   NumberOperandId resultId) {
+  double val = doubleStubField(valOffset);
+  auto* valConst = constant(DoubleValue(val));
+  return defineOperand(resultId, valConst);
+}
+
 bool WarpCacheIRTranspiler::emitLoadBooleanConstant(bool val,
                                                     BooleanOperandId resultId) {
   auto* valConst = constant(BooleanValue(val));
@@ -1358,7 +1424,10 @@ bool WarpCacheIRTranspiler::emitLoadConstantStringResult(uint32_t strOffset) {
 
 bool WarpCacheIRTranspiler::emitLoadTypeOfObjectResult(ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
-  auto* ins = MTypeOf::New(alloc(), obj);
+  auto* typeOf = MTypeOf::New(alloc(), obj);
+  add(typeOf);
+
+  auto* ins = MTypeOfName::New(alloc(), typeOf);
   add(ins);
   pushResult(ins);
   return true;
@@ -1542,6 +1611,30 @@ bool WarpCacheIRTranspiler::emitLoadArgumentsObjectArgResult(
   return true;
 }
 
+bool WarpCacheIRTranspiler::emitLoadArgumentsObjectArgHoleResult(
+    ObjOperandId objId, Int32OperandId indexId) {
+  MDefinition* obj = getOperand(objId);
+  MDefinition* index = getOperand(indexId);
+
+  auto* load = MLoadArgumentsObjectArgHole::New(alloc(), obj, index);
+  add(load);
+
+  pushResult(load);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadArgumentsObjectArgExistsResult(
+    ObjOperandId objId, Int32OperandId indexId) {
+  MDefinition* obj = getOperand(objId);
+  MDefinition* index = getOperand(indexId);
+
+  auto* ins = MInArgumentsObjectArg::New(alloc(), obj, index);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
 bool WarpCacheIRTranspiler::emitLoadArgumentsObjectLengthResult(
     ObjOperandId objId) {
   MDefinition* obj = getOperand(objId);
@@ -1551,6 +1644,29 @@ bool WarpCacheIRTranspiler::emitLoadArgumentsObjectLengthResult(
 
   pushResult(length);
   return true;
+}
+
+bool WarpCacheIRTranspiler::emitLoadArgumentsObjectLength(
+    ObjOperandId objId, Int32OperandId resultId) {
+  MDefinition* obj = getOperand(objId);
+
+  auto* length = MArgumentsObjectLength::New(alloc(), obj);
+  add(length);
+
+  return defineOperand(resultId, length);
+}
+
+bool WarpCacheIRTranspiler::emitArrayFromArgumentsObjectResult(
+    ObjOperandId objId, uint32_t shapeOffset) {
+  MDefinition* obj = getOperand(objId);
+  Shape* shape = shapeStubField(shapeOffset);
+  MOZ_ASSERT(shape);
+
+  auto* array = MArrayFromArgumentsObject::New(alloc(), obj, shape);
+  addEffectful(array);
+
+  pushResult(array);
+  return resumeAfter(array);
 }
 
 bool WarpCacheIRTranspiler::emitLoadFunctionLengthResult(ObjOperandId objId) {
@@ -1686,8 +1802,7 @@ bool WarpCacheIRTranspiler::emitLoadDenseElementResult(ObjOperandId objId,
 
   index = addBoundsCheck(index, length);
 
-  bool needsHoleCheck = true;
-  auto* load = MLoadElement::New(alloc(), elements, index, needsHoleCheck);
+  auto* load = MLoadElement::New(alloc(), elements, index);
   add(load);
 
   pushResult(load);
@@ -1705,9 +1820,7 @@ bool WarpCacheIRTranspiler::emitLoadDenseElementHoleResult(
   auto* length = MInitializedLength::New(alloc(), elements);
   add(length);
 
-  bool needsHoleCheck = true;
-  auto* load =
-      MLoadElementHole::New(alloc(), elements, index, length, needsHoleCheck);
+  auto* load = MLoadElementHole::New(alloc(), elements, index, length);
   add(load);
 
   pushResult(load);
@@ -1808,6 +1921,31 @@ bool WarpCacheIRTranspiler::emitLoadTypedArrayElementExistsResult(
 
   pushResult(ins);
   return true;
+}
+
+static MIRType MIRTypeForArrayBufferViewRead(Scalar::Type arrayType,
+                                             bool forceDoubleForUint32) {
+  switch (arrayType) {
+    case Scalar::Int8:
+    case Scalar::Uint8:
+    case Scalar::Uint8Clamped:
+    case Scalar::Int16:
+    case Scalar::Uint16:
+    case Scalar::Int32:
+      return MIRType::Int32;
+    case Scalar::Uint32:
+      return forceDoubleForUint32 ? MIRType::Double : MIRType::Int32;
+    case Scalar::Float32:
+      return MIRType::Float32;
+    case Scalar::Float64:
+      return MIRType::Double;
+    case Scalar::BigInt64:
+    case Scalar::BigUint64:
+      return MIRType::BigInt;
+    default:
+      break;
+  }
+  MOZ_CRASH("Unknown typed array type");
 }
 
 bool WarpCacheIRTranspiler::emitLoadTypedArrayElementResult(
@@ -2044,6 +2182,18 @@ bool WarpCacheIRTranspiler::emitAllocateAndStoreDynamicSlot(
   addEffectful(allocateAndStore);
 
   return resumeAfter(allocateAndStore);
+}
+
+bool WarpCacheIRTranspiler::emitAddSlotAndCallAddPropHook(
+    ObjOperandId objId, ValOperandId rhsId, uint32_t newShapeOffset) {
+  Shape* shape = shapeStubField(newShapeOffset);
+  MDefinition* obj = getOperand(objId);
+  MDefinition* rhs = getOperand(rhsId);
+
+  auto* addProp = MAddSlotAndCallAddPropHook::New(alloc(), obj, rhs, shape);
+  addEffectful(addProp);
+
+  return resumeAfter(addProp);
 }
 
 bool WarpCacheIRTranspiler::emitStoreDenseElement(ObjOperandId objId,
@@ -2760,10 +2910,10 @@ bool WarpCacheIRTranspiler::emitMathRandomResult(uint32_t rngOffset) {
 #endif
 
   auto* ins = MRandom::New(alloc());
-  add(ins);
+  addEffectful(ins);
 
   pushResult(ins);
-  return true;
+  return resumeAfter(ins);
 }
 
 bool WarpCacheIRTranspiler::emitInt32MinMax(bool isMax, Int32OperandId firstId,
@@ -3113,6 +3263,26 @@ bool WarpCacheIRTranspiler::emitPackedArraySliceResult(
   return resumeAfter(ins);
 }
 
+bool WarpCacheIRTranspiler::emitArgumentsSliceResult(
+    uint32_t templateObjectOffset, ObjOperandId argsId, Int32OperandId beginId,
+    Int32OperandId endId) {
+  JSObject* templateObj = tenuredObjectStubField(templateObjectOffset);
+
+  MDefinition* args = getOperand(argsId);
+  MDefinition* begin = getOperand(beginId);
+  MDefinition* end = getOperand(endId);
+
+  // TODO: support pre-tenuring.
+  gc::InitialHeap heap = gc::DefaultHeap;
+
+  auto* ins =
+      MArgumentsSlice::New(alloc(), args, begin, end, templateObj, heap);
+  addEffectful(ins);
+
+  pushResult(ins);
+  return resumeAfter(ins);
+}
+
 bool WarpCacheIRTranspiler::emitHasClassResult(ObjOperandId objId,
                                                uint32_t claspOffset) {
   MDefinition* obj = getOperand(objId);
@@ -3169,6 +3339,10 @@ bool WarpCacheIRTranspiler::emitCallRegExpTesterResult(
 
 MInstruction* WarpCacheIRTranspiler::convertToBoolean(MDefinition* input) {
   // Convert to bool with the '!!' idiom.
+  //
+  // The FoldTests and GVN passes both specifically handle this pattern. If you
+  // change this code, make sure to update FoldTests and GVN, too.
+
   auto* resultInverted = MNot::New(alloc(), input);
   add(resultInverted);
   auto* result = MNot::New(alloc(), resultInverted);
@@ -3868,6 +4042,331 @@ bool WarpCacheIRTranspiler::emitBigIntAsUintNResult(Int32OperandId bitsId,
   return true;
 }
 
+bool WarpCacheIRTranspiler::emitGuardToNonGCThing(ValOperandId inputId) {
+  MDefinition* def = getOperand(inputId);
+  if (IsNonGCThing(def->type())) {
+    return true;
+  }
+
+  auto* ins = MGuardNonGCThing::New(alloc(), def);
+  add(ins);
+
+  setOperand(inputId, ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasNonGCThingResult(ObjOperandId setId,
+                                                       ValOperandId valId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* val = getOperand(valId);
+
+  auto* hashValue = MToHashableNonGCThing::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashNonGCThing::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MSetObjectHasNonBigInt::New(alloc(), set, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasStringResult(ObjOperandId setId,
+                                                   StringOperandId strId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* str = getOperand(strId);
+
+  auto* hashValue = MToHashableString::New(alloc(), str);
+  add(hashValue);
+
+  auto* hash = MHashString::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MSetObjectHasNonBigInt::New(alloc(), set, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasSymbolResult(ObjOperandId setId,
+                                                   SymbolOperandId symId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* sym = getOperand(symId);
+
+  auto* hash = MHashSymbol::New(alloc(), sym);
+  add(hash);
+
+  auto* ins = MSetObjectHasNonBigInt::New(alloc(), set, sym, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasBigIntResult(ObjOperandId setId,
+                                                   BigIntOperandId bigIntId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* bigInt = getOperand(bigIntId);
+
+  auto* hash = MHashBigInt::New(alloc(), bigInt);
+  add(hash);
+
+  auto* ins = MSetObjectHasBigInt::New(alloc(), set, bigInt, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasObjectResult(ObjOperandId setId,
+                                                   ObjOperandId objId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* obj = getOperand(objId);
+
+  auto* hash = MHashObject::New(alloc(), set, obj);
+  add(hash);
+
+  auto* ins = MSetObjectHasNonBigInt::New(alloc(), set, obj, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitSetHasResult(ObjOperandId setId,
+                                             ValOperandId valId) {
+  MDefinition* set = getOperand(setId);
+  MDefinition* val = getOperand(valId);
+
+#ifdef JS_PUNBOX64
+  auto* hashValue = MToHashableValue::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashValue::New(alloc(), set, hashValue);
+  add(hash);
+
+  auto* ins = MSetObjectHasValue::New(alloc(), set, hashValue, hash);
+  add(ins);
+#else
+  auto* ins = MSetObjectHasValueVMCall::New(alloc(), set, val);
+  add(ins);
+#endif
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasNonGCThingResult(ObjOperandId mapId,
+                                                       ValOperandId valId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* val = getOperand(valId);
+
+  auto* hashValue = MToHashableNonGCThing::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashNonGCThing::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectHasNonBigInt::New(alloc(), map, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasStringResult(ObjOperandId mapId,
+                                                   StringOperandId strId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* str = getOperand(strId);
+
+  auto* hashValue = MToHashableString::New(alloc(), str);
+  add(hashValue);
+
+  auto* hash = MHashString::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectHasNonBigInt::New(alloc(), map, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasSymbolResult(ObjOperandId mapId,
+                                                   SymbolOperandId symId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* sym = getOperand(symId);
+
+  auto* hash = MHashSymbol::New(alloc(), sym);
+  add(hash);
+
+  auto* ins = MMapObjectHasNonBigInt::New(alloc(), map, sym, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasBigIntResult(ObjOperandId mapId,
+                                                   BigIntOperandId bigIntId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* bigInt = getOperand(bigIntId);
+
+  auto* hash = MHashBigInt::New(alloc(), bigInt);
+  add(hash);
+
+  auto* ins = MMapObjectHasBigInt::New(alloc(), map, bigInt, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasObjectResult(ObjOperandId mapId,
+                                                   ObjOperandId objId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* obj = getOperand(objId);
+
+  auto* hash = MHashObject::New(alloc(), map, obj);
+  add(hash);
+
+  auto* ins = MMapObjectHasNonBigInt::New(alloc(), map, obj, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapHasResult(ObjOperandId mapId,
+                                             ValOperandId valId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* val = getOperand(valId);
+
+#ifdef JS_PUNBOX64
+  auto* hashValue = MToHashableValue::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashValue::New(alloc(), map, hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectHasValue::New(alloc(), map, hashValue, hash);
+  add(ins);
+#else
+  auto* ins = MMapObjectHasValueVMCall::New(alloc(), map, val);
+  add(ins);
+#endif
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetNonGCThingResult(ObjOperandId mapId,
+                                                       ValOperandId valId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* val = getOperand(valId);
+
+  auto* hashValue = MToHashableNonGCThing::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashNonGCThing::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectGetNonBigInt::New(alloc(), map, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetStringResult(ObjOperandId mapId,
+                                                   StringOperandId strId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* str = getOperand(strId);
+
+  auto* hashValue = MToHashableString::New(alloc(), str);
+  add(hashValue);
+
+  auto* hash = MHashString::New(alloc(), hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectGetNonBigInt::New(alloc(), map, hashValue, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetSymbolResult(ObjOperandId mapId,
+                                                   SymbolOperandId symId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* sym = getOperand(symId);
+
+  auto* hash = MHashSymbol::New(alloc(), sym);
+  add(hash);
+
+  auto* ins = MMapObjectGetNonBigInt::New(alloc(), map, sym, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetBigIntResult(ObjOperandId mapId,
+                                                   BigIntOperandId bigIntId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* bigInt = getOperand(bigIntId);
+
+  auto* hash = MHashBigInt::New(alloc(), bigInt);
+  add(hash);
+
+  auto* ins = MMapObjectGetBigInt::New(alloc(), map, bigInt, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetObjectResult(ObjOperandId mapId,
+                                                   ObjOperandId objId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* obj = getOperand(objId);
+
+  auto* hash = MHashObject::New(alloc(), map, obj);
+  add(hash);
+
+  auto* ins = MMapObjectGetNonBigInt::New(alloc(), map, obj, hash);
+  add(ins);
+
+  pushResult(ins);
+  return true;
+}
+
+bool WarpCacheIRTranspiler::emitMapGetResult(ObjOperandId mapId,
+                                             ValOperandId valId) {
+  MDefinition* map = getOperand(mapId);
+  MDefinition* val = getOperand(valId);
+
+#ifdef JS_PUNBOX64
+  auto* hashValue = MToHashableValue::New(alloc(), val);
+  add(hashValue);
+
+  auto* hash = MHashValue::New(alloc(), map, hashValue);
+  add(hash);
+
+  auto* ins = MMapObjectGetValue::New(alloc(), map, hashValue, hash);
+  add(ins);
+#else
+  auto* ins = MMapObjectGetValueVMCall::New(alloc(), map, val);
+  add(ins);
+#endif
+
+  pushResult(ins);
+  return true;
+}
+
 bool WarpCacheIRTranspiler::emitTruthyResult(OperandId inputId) {
   MDefinition* input = getOperand(inputId);
 
@@ -4157,8 +4656,8 @@ bool WarpCacheIRTranspiler::maybeCreateThis(MDefinition* callee,
   }
   MOZ_ASSERT(kind == CallKind::Scripted);
 
-  if (thisArg->isCreateThisWithTemplate()) {
-    // We have already updated |this| based on MetaTwoByte. We do
+  if (thisArg->isNewPlainObject()) {
+    // We have already updated |this| based on MetaScriptedThisShape. We do
     // not need to generate a check.
     return false;
   }
@@ -4238,8 +4737,8 @@ bool WarpCacheIRTranspiler::emitCallFunction(
       return true;
     }
     case CallInfo::ArgFormat::Array: {
-      MInstruction* call =
-          makeSpreadCall(*callInfo_, flags.isSameRealm(), wrappedTarget);
+      MInstruction* call = makeSpreadCall(*callInfo_, needsThisCheck,
+                                          flags.isSameRealm(), wrappedTarget);
       if (!call) {
         return false;
       }
@@ -4344,8 +4843,15 @@ bool WarpCacheIRTranspiler::emitCallInlinedFunction(ObjOperandId calleeId,
       // know that the constructor needs uninitialized this.
       MOZ_ALWAYS_FALSE(maybeCreateThis(callee, flags, CallKind::Scripted));
       mozilla::DebugOnly<MDefinition*> thisArg = callInfo_->thisArg();
-      MOZ_ASSERT(thisArg->isCreateThisWithTemplate() ||
+      MOZ_ASSERT(thisArg->isNewPlainObject() ||
                  thisArg->type() == MIRType::MagicUninitializedLexical);
+    }
+
+    if (flags.getArgFormat() == CallFlags::FunCall) {
+      callInfo_->setInliningResumeMode(ResumeMode::InlinedFunCall);
+    } else {
+      MOZ_ASSERT(flags.getArgFormat() == CallFlags::Standard);
+      callInfo_->setInliningResumeMode(ResumeMode::InlinedStandardCall);
     }
 
     switch (callInfo_->argFormat()) {
@@ -4551,6 +5057,7 @@ bool WarpCacheIRTranspiler::emitCallInlinedGetterResult(
     MDefinition* receiver = getOperand(receiverId);
     MDefinition* getter = objectStubField(getterOffset);
     callInfo_->initForGetterCall(getter, receiver);
+    callInfo_->setInliningResumeMode(ResumeMode::InlinedAccessor);
 
     // Make sure there's enough room to push the arguments on the stack.
     if (!current->ensureHasSlots(2)) {
@@ -4622,6 +5129,7 @@ bool WarpCacheIRTranspiler::emitCallInlinedSetter(
     MDefinition* setter = objectStubField(setterOffset);
     MDefinition* rhs = getOperand(rhsId);
     callInfo_->initForSetterCall(setter, receiver, rhs);
+    callInfo_->setInliningResumeMode(ResumeMode::InlinedAccessor);
 
     // Make sure there's enough room to push the arguments on the stack.
     if (!current->ensureHasSlots(3)) {
@@ -4644,16 +5152,25 @@ bool WarpCacheIRTranspiler::emitCallNativeSetter(ObjOperandId receiverId,
                         sameRealm, nargsAndFlagsOffset);
 }
 
-// TODO(post-Warp): rename the MetaTwoByte op when IonBuilder is gone.
-bool WarpCacheIRTranspiler::emitMetaTwoByte(uint32_t functionObjectOffset,
-                                            uint32_t templateObjectOffset) {
-  JSObject* templateObj = tenuredObjectStubField(templateObjectOffset);
-  MConstant* templateConst = constant(ObjectValue(*templateObj));
+bool WarpCacheIRTranspiler::emitMetaScriptedThisShape(
+    uint32_t thisShapeOffset) {
+  Shape* shape = shapeStubField(thisShapeOffset);
+  MOZ_ASSERT(shape->getObjectClass() == &PlainObject::class_);
+
+  MConstant* shapeConst = MConstant::NewShape(alloc(), shape);
+  add(shapeConst);
 
   // TODO: support pre-tenuring.
   gc::InitialHeap heap = gc::DefaultHeap;
 
-  auto* createThis = MCreateThisWithTemplate::New(alloc(), templateConst, heap);
+  uint32_t numFixedSlots = shape->numFixedSlots();
+  uint32_t numDynamicSlots = NativeObject::calculateDynamicSlots(shape);
+  gc::AllocKind kind = gc::GetGCObjectKind(numFixedSlots);
+  MOZ_ASSERT(gc::CanChangeToBackgroundAllocKind(kind, &PlainObject::class_));
+  kind = gc::ForegroundToBackgroundAllocKind(kind);
+
+  auto* createThis = MNewPlainObject::New(alloc(), shapeConst, numFixedSlots,
+                                          numDynamicSlots, kind, heap);
   add(createThis);
 
   callInfo_->thisArg()->setImplicitlyUsedUnchecked();
@@ -4699,7 +5216,7 @@ bool WarpCacheIRTranspiler::emitAssertRecoveredOnBailoutResult(
   add(nop);
 
   auto* resumePoint = MResumePoint::New(
-      alloc(), nop->block(), loc_.toRawBytecode(), MResumePoint::ResumeAfter);
+      alloc(), nop->block(), loc_.toRawBytecode(), ResumeMode::ResumeAfter);
   if (!resumePoint) {
     return false;
   }
@@ -4727,28 +5244,24 @@ bool WarpCacheIRTranspiler::emitNewPlainObjectResult(uint32_t numFixedSlots,
                                                      uint32_t shapeOffset,
                                                      uint32_t siteOffset) {
   Shape* shape = shapeStubField(shapeOffset);
-  gc::AllocSite* site = allocSiteStubField(siteOffset);
-
-  gc::InitialHeap heap = site->initialHeap();
+  gc::InitialHeap heap = allocSiteInitialHeapField(siteOffset);
 
   auto* shapeConstant = MConstant::NewShape(alloc(), shape);
   add(shapeConstant);
 
   auto* obj = MNewPlainObject::New(alloc(), shapeConstant, numFixedSlots,
                                    numDynamicSlots, allocKind, heap);
-  addEffectful(obj);
+  add(obj);
 
   pushResult(obj);
-  return resumeAfter(obj);
+  return true;
 }
 
 bool WarpCacheIRTranspiler::emitNewArrayObjectResult(uint32_t length,
                                                      uint32_t shapeOffset,
                                                      uint32_t siteOffset) {
   Shape* shape = shapeStubField(shapeOffset);
-  gc::AllocSite* site = allocSiteStubField(siteOffset);
-
-  gc::InitialHeap heap = site->initialHeap();
+  gc::InitialHeap heap = allocSiteInitialHeapField(siteOffset);
 
   auto* shapeConstant = MConstant::NewShape(alloc(), shape);
   add(shapeConstant);

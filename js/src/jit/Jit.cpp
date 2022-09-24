@@ -13,9 +13,12 @@
 #include "jit/JitRuntime.h"
 #include "js/friend/StackLimits.h"  // js::AutoCheckRecursionLimit
 #include "vm/Interpreter.h"
+#include "vm/JitActivation.h"
 #include "vm/JSContext.h"
+#include "vm/Realm.h"
 
-#include "vm/Stack-inl.h"
+#include "vm/Activation-inl.h"
+#include "vm/JSScript-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -81,13 +84,8 @@ static EnterJitStatus JS_HAZ_JSNATIVE_CALLER EnterJit(JSContext* cx,
   } else {
     numActualArgs = 0;
     constructing = false;
-    if (script->isDirectEvalInFunction()) {
-      maxArgc = 1;
-      maxArgv = state.asExecute()->addressOfNewTarget();
-    } else {
-      maxArgc = 0;
-      maxArgv = nullptr;
-    }
+    maxArgc = 0;
+    maxArgv = nullptr;
     envChain = state.asExecute()->environmentChain();
     calleeToken = CalleeToToken(state.script());
   }

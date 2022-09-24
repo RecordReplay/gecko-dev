@@ -7,15 +7,10 @@ job-defaults:
         category: reftest
     target:
         by-test-platform:
-            android-em-7.*: geckoview-androidTest.apk
-            android-hw-.*: geckoview-androidTest.apk
+            android-em-7.*: geckoview-test_runner.apk
+            android-hw-.*: geckoview-test_runner.apk
             default: null
-    variants: ['fission']
-    python-3: true
-    tier:
-        by-variant:
-            fission: 2
-            default: default
+    tier: default
     test-manifest-loader: null  # don't load tests in the taskgraph
     mozharness:
         script:
@@ -27,7 +22,7 @@ job-defaults:
             by-test-platform:
                 android-em-7.*:
                     - android/android_common.py
-                    - android/androidx86_7_0.py
+                    - android/android-x86_64.py
                 android-hw.*:
                     - android/android_common.py
                     - android/android_hw.py
@@ -43,68 +38,71 @@ crashtest:
     description: "Crashtest run"
     schedules-component: crashtest
     treeherder-symbol: R(C)
-    variants:
-        by-test-platform:
-            linux1804-64-qr/debug: ['webrender-sw', 'fission', 'wayland', 'noqr']
-            linux1804-64(-tsan|-asan)-qr/opt: ['webrender-sw', 'fission', 'wayland', 'noqr']
-            windows10-64-2004-qr/debug: ['webrender-sw', 'fission', 'noqr']
-            windows10-64-2004-asan-qr/opt: ['webrender-sw', 'fission', 'noqr']
-            windows10-aarch64-qr/.*: []
-            macosx101.*64-qr/debug: ['webrender-sw', 'fission', 'noqr']
-            android-em-7.0-x86_64-qr/debug: ['webrender-sw', 'fission', 'noqr']
-            .*(-tsan|10-32|7-32).*: ['fission']
-            .*ccov-qr.*: ['fission', 'noqr']
-            .*-qr.*: ['fission', 'noqr']
-            default: ['fission']
     chunks:
         by-test-platform:
             android-em-7.*: 1
             linux.*64-tsan-qr/opt: 32
             default: 1
-    e10s: true
+    variants:
+        - fission
+        - no-fission
+        - wayland
+        - webrender-sw+no-fission
+        - webrender-sw+fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
             fission:
                 by-test-platform:
-                    (windows10|linux1804)-64-qr/opt: ['autoland']
-                    (windows10|linux1804)-64-shippable-qr/opt: ['mozilla-central']
-                    (windows10|linux1804)-64-qr/debug: ['trunk']
-                    default: []
-            noqr: built-projects
-            default:
-                by-test-platform:
-                    windows10-aarch64-qr/.*: ['mozilla-central', 'mozilla-beta', 'mozilla-release']
-                    android-em-7.0-x86_64/debug-isolated-process: []
-                    linux.*asan/opt: []
-                    .*(-asan|-tsan|10-32|7-32).*: built-projects
-                    android.*: built-projects
-                    (linux|windows|macos)(?!.*-qr).*: []
+                    android.*: []
                     default: built-projects
+            wayland:
+                by-test-platform:
+                    linux1804-64-qr/debug: built-projects
+                    linux1804-64(-tsan|-asan)-qr/opt: built-projects
+                    default: []
+            webrender-sw+no-fission:
+                by-test-platform:
+                    android-em-7.0-x86_64-qr/debug: built-projects
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    default: []
+            webrender-sw+fission:
+                by-test-platform:
+                    macosx101.*64-qr/debug: built-projects
+                    linux.*-64-qr/debug: built-projects
+                    linux.*-64(-tsan|-asan)-qr/opt: built-projects
+                    windows10-64-2004-asan-qr/opt: built-projects
+                    windows10-64-2004-qr/debug: built-projects
+                    default: []
+            no-fission:
+                by-test-platform:
+                    android-em-7.0-x86_64-qr/debug-isolated-process: []
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    android.*: built-projects
+                    default: []
     max-run-time: 3600
     tier:
-        by-variant:
-            fission:
-                by-test-platform:
-                    linux1804-64-qr/debug: 1
-                    default: 2
-            default:
-                by-test-platform:
-                    windows10-aarch64-qr.*: 2
-                    macosx1100.*: 2
-                    android-hw-.*-qr/.*: 2
-                    android-em-7.0-x86_64/debug-isolated-process: 3
-                    default: default
+        by-test-platform:
+            windows10-aarch64-qr.*: 2
+            android-hw-.*-qr/.*: 2
+            android-em-7.0-x86_64-qr/debug-isolated-process: 3
+            default: default
 
 crashtest-qr:
     description: "Crashtest Webrender run"
     schedules-component: crashtest
     treeherder-symbol: R(C)
     chunks: 1
-    e10s: true
+    variants:
+        - fission
+        - no-fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
             fission: []
-            default: built-projects
+            no-fission: built-projects
     max-run-time: 1200
     tier: 2
     virtualization: virtual
@@ -120,7 +118,7 @@ jsreftest:
             android-hw.*/(opt|pgo)?: 6
             windows.*\/opt: 2
             windows10-64-2004-asan-qr/opt: 3
-            windows10-64-ccov-qr/opt: 5
+            windows10-64-2004-ccov-qr/opt: 5
             linux.*64-ccov.*/.*: 5
             linux1804-64-qr/opt: 4
             linux1804-64-qr/debug: 5
@@ -130,48 +128,37 @@ jsreftest:
             default: 3
     max-run-time:
         by-test-platform:
-            windows10-64-ccov.*/.*: 7200
-            macosx.*64-ccov.*/.*: 7200
-            linux.*64-ccov.*/.*: 7200
+            .*ccov.*: 7200
             default: 3600
-    tier:
-        by-test-platform:
-            macosx1100.*: 2
-            default: default
+    variants:
+        - fission
+        - no-fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
-            fission: []
-            default:
+            fission:
                 by-test-platform:
-                    android-hw-.*-aarch64(?:-shippable)?/.*: ['mozilla-central', 'release']
-                    android-hw-.*-arm7(?:-shippable)?/.*: ['mozilla-central', 'release']
+                    android.*/.*: []
                     default: built-projects
+            no-fission:
+                by-test-platform:
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    android-hw-.*-aarch64(?:-shippable)?-qr/.*: ['mozilla-central', 'release']
+                    android-hw-.*-arm7(?:-shippable)?-qr/.*: ['mozilla-central', 'release']
+                    android.*: built-projects
+                    default: []
     virtualization: virtual
 
 reftest:
     description: "Reftest run"
     treeherder-symbol: R(R)
     virtualization: virtual-with-gpu
-    variants:
-        by-test-platform:
-            linux1804-64-qr/debug: ['webrender-sw', 'fission', 'wayland', 'noqr']
-            linux1804-64(-asan|-tsan)-qr/opt: ['webrender-sw', 'fission', 'wayland', 'noqr']
-            windows10-64-2004(-asan)?-qr/opt: ['webrender-sw', 'fission', 'noqr']
-            windows10-aarch64-qr/.*: []
-            windows10-32(?:-shippable)?-qr/opt: ['webrender-sw', 'fission', 'noqr']
-            windows7-32(?:-shippable)?-qr/opt: ['webrender-sw', 'fission', 'noqr']
-            macosx101.*64-qr/debug: ['webrender-sw', 'fission', 'noqr']
-            android-em-7.0-x86_64-qr/debug: ['webrender-sw', 'fission', 'noqr']
-            android-.*/debug-isolated-process: ['fission']
-            .*(-asan|-tsan|windows10-32|windows7-32).*: ['fission']
-            .*ccov-qr.*: ['fission', 'noqr']
-            .*-qr.*: ['fission', 'noqr']
-            default: ['fission']
     chunks:
         by-test-platform:
-            linux.*64-tsan-qr/opt: 32
-            android-em-7.*: 2
+            android-em-7.*: 3
             linux1804-64(-shippable|-devedition|-qr)?/opt: 5
+            linux.*64-tsan-qr/opt: 32
             macosx101.*-64-shippable(-qr)?/opt: 3
             macosx101.*-64/debug: 4
             macosx101.*-64(-ccov.*|-qr)/debug: 6
@@ -179,31 +166,53 @@ reftest:
             windows10-64-2004.*/debug: 4
             windows10-32.*/debug: 6
             windows10-64-2004-asan-qr/opt: 3
-            windows10-64-ccov-qr/opt: 9
+            windows10-64-2004-ccov-qr/opt: 9
             default: 8
-    e10s: true
+    variants:
+        - fission
+        - no-fission
+        - wayland
+        - webrender-sw+no-fission
+        - webrender-sw+fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
             fission:
                 by-test-platform:
-                    (linux.*64|windows10-64)(-shippable)?-qr/(debug|opt): ['trunk']
-                    linux.*64-asan-qr/opt: ['trunk']
-                    default: []
-            noqr: built-projects
-            default:
-                by-test-platform:
-                    windows10-aarch64-qr/.*: ['mozilla-central', 'mozilla-beta', 'mozilla-release']
-                    android-em-7.0-x86_64/debug-isolated-process: []
+                    android.*/.*: []
                     linux.*asan/opt: []
-                    .*(mingwclang|-asan|-tsan|10-32|7-32).*: built-projects
-                    windows10-aarch64-qr/opt: built-projects
-                    android.*: built-projects
-                    (linux|windows|macos|android-em)(?!.*-qr).*: []
+                    windows10-aarch64-qr/opt: []
                     default: built-projects
+            wayland:
+                by-test-platform:
+                    linux1804-64-qr/debug: built-projects
+                    linux1804-64(-asan|-tsan)-qr/opt: built-projects
+                    default: []
+            webrender-sw+no-fission:
+                by-test-platform:
+                    android-em-7.0-x86_64-qr/debug: built-projects
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    default: []
+            webrender-sw+fission:
+                by-test-platform:
+                    linux1804-64-qr/debug: built-projects
+                    linux1804-64(-asan|-tsan)-qr/opt: built-projects
+                    macosx101.*64-qr/debug: built-projects
+                    windows10-64-2004(-asan)?-qr/opt: built-projects
+                    windows7-32(?:-shippable)?-qr/opt: built-projects
+                    default: []
+            no-fission:
+                by-test-platform:
+                    android-em-7.0-x86_64-qr/debug-isolated-process: []
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    android.*: built-projects
+                    default: []
     max-run-time:
         by-test-platform:
             windows10-32-mingwclang-qr/debug: 5400
-            windows10-64-ccov.*/.*: 5400
+            windows10-64-2004-ccov.*/.*: 5400
             windows10-64-2004-asan-qr/opt: 5400
             macosx.*64-ccov.*/.*: 5400
             default: 3600
@@ -215,32 +224,28 @@ reftest:
                 windows10-64-2004.*/opt: false
                 default: true
     tier:
-        by-variant:
-            fission:
-                by-test-platform:
-                    linux1804-64-qr/debug: 1
-                    default: 2
-            default:
-                by-test-platform:
-                    windows10-aarch64-qr.*: 2
-                    android-hw-.*-qr/.*: 2
-                    macosx1100.*: 2
-                    android-em-7.0-x86_64/debug-isolated-process: 3
-                    default: default
+        by-test-platform:
+            windows10-aarch64-qr.*: 2
+            android-hw-.*-qr/.*: 2
+            android-em-7.0-x86_64-qr/debug-isolated-process: 3
+            default: default
 
 reftest-qr:
     description: "Reftest webrender run"
     treeherder-symbol: R(R)
-    variants:
-        by-test-platform:
-            android-hw-p2-8-0-android-aarch64-qr/debug: ['webrender-sw']
-            default: []
     chunks: 2
-    e10s: true
+    variants:
+        - no-fission
+        - webrender-sw+no-fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
             fission: []
-            default: built-projects
+            webrender-sw+no-fission:
+                by-test-platform:
+                    android-hw-p2-8-0-android-aarch64-qr/debug: built-projects
+                    default: []
+            no-fission: built-projects
     max-run-time: 2400
     mozharness:
         chunked: true
@@ -251,18 +256,17 @@ reftest-snapshot:
     description: "Reftest snapshot"
     treeherder-symbol: R(Rs)
     virtualization: virtual
+    run-without-variant: false
     variants:
-        by-test-platform:
-            linux1804-64-qr/debug: ['webrender-sw']
-            linux1804-64-asan-qr/opt: ['webrender-sw']
-            default: []
+        - fission
     run-on-projects:
         by-variant:
             fission:
                 by-test-platform:
-                    linux1804-64/debug: ['trunk']
+                    linux1804-64-qr/debug: ['trunk']
                     default: []
             default: []
+    tier: default
     chunks: 8
     mozharness:
         chunked: true

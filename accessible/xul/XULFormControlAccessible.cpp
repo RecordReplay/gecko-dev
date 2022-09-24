@@ -49,17 +49,10 @@ XULButtonAccessible::~XULButtonAccessible() {}
 ////////////////////////////////////////////////////////////////////////////////
 // XULButtonAccessible: nsIAccessible
 
-uint8_t XULButtonAccessible::ActionCount() const { return 1; }
+bool XULButtonAccessible::HasPrimaryAction() const { return true; }
 
 void XULButtonAccessible::ActionNameAt(uint8_t aIndex, nsAString& aName) {
   if (aIndex == eAction_Click) aName.AssignLiteral("press");
-}
-
-bool XULButtonAccessible::DoAction(uint8_t aIndex) const {
-  if (aIndex != 0) return false;
-
-  DoCommand();
-  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -119,11 +112,6 @@ bool XULButtonAccessible::AreItemsOperable() const {
   return false;  // no items
 }
 
-LocalAccessible* XULButtonAccessible::ContainerWidget() const {
-  if (IsMenuButton() && mParent && mParent->IsAutoComplete()) return mParent;
-  return nullptr;
-}
-
 bool XULButtonAccessible::IsAcceptableChild(nsIContent* aEl) const {
   // In general XUL buttons should not have accessible children. However:
   return
@@ -153,7 +141,7 @@ XULDropmarkerAccessible::XULDropmarkerAccessible(nsIContent* aContent,
                                                  DocAccessible* aDoc)
     : LeafAccessible(aContent, aDoc) {}
 
-uint8_t XULDropmarkerAccessible::ActionCount() const { return 1; }
+bool XULDropmarkerAccessible::HasPrimaryAction() const { return true; }
 
 bool XULDropmarkerAccessible::DropmarkerOpen(bool aToggleOpen) const {
   bool isOpen = false;
@@ -366,8 +354,8 @@ XULToolbarButtonAccessible::XULToolbarButtonAccessible(nsIContent* aContent,
                                                        DocAccessible* aDoc)
     : XULButtonAccessible(aContent, aDoc) {}
 
-void XULToolbarButtonAccessible::GetPositionAndSizeInternal(int32_t* aPosInSet,
-                                                            int32_t* aSetSize) {
+void XULToolbarButtonAccessible::GetPositionAndSetSize(int32_t* aPosInSet,
+                                                       int32_t* aSetSize) {
   int32_t setSize = 0;
   int32_t posInSet = 0;
 

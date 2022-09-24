@@ -112,6 +112,16 @@ bool ProcessSelectorMatches(ProcessSelector aSelector) {
     return !!(aSelector & Module::ALLOW_IN_VR_PROCESS);
   }
 
+  if (type == GeckoProcessType_Utility) {
+    return !!(aSelector & Module::ALLOW_IN_UTILITY_PROCESS);
+  }
+
+  // Only allow XPCOM modules which can be loaded in all processes to be loaded
+  // in the IPDLUnitTest process.
+  if (type == GeckoProcessType_IPDLUnitTest) {
+    return size_t(aSelector) == Module::kMaxProcessSelector;
+  }
+
   if (aSelector & Module::MAIN_PROCESS_ONLY) {
     return type == GeckoProcessType_Default;
   }
@@ -168,14 +178,11 @@ class MOZ_STACK_CLASS EntryWrapper final {
    * side-steps the necessity of creating a nsIFactory instance for static
    * modules.
    */
-  nsresult CreateInstance(nsISupports* aOuter, const nsIID& aIID,
-                          void** aResult) {
+  nsresult CreateInstance(const nsIID& aIID, void** aResult) {
     if (mEntry.is<nsFactoryEntry*>()) {
-      return mEntry.as<nsFactoryEntry*>()->CreateInstance(aOuter, aIID,
-                                                          aResult);
+      return mEntry.as<nsFactoryEntry*>()->CreateInstance(aIID, aResult);
     }
-    return mEntry.as<const StaticModule*>()->CreateInstance(aOuter, aIID,
-                                                            aResult);
+    return mEntry.as<const StaticModule*>()->CreateInstance(aIID, aResult);
   }
 
   /**
@@ -216,7 +223,7 @@ class MOZ_STACK_CLASS EntryWrapper final {
 static already_AddRefed<nsIFile> GetLocationFromDirectoryService(
     const char* aProp) {
   nsCOMPtr<nsIProperties> directoryService;
-  nsDirectoryService::Create(nullptr, NS_GET_IID(nsIProperties),
+  nsDirectoryService::Create(NS_GET_IID(nsIProperties),
                              getter_AddRefs(directoryService));
 
   if (!directoryService) {
@@ -249,12 +256,7 @@ static already_AddRefed<nsIFile> CloneAndAppend(nsIFile* aBase,
 // nsComponentManagerImpl
 ////////////////////////////////////////////////////////////////////////////////
 
-nsresult nsComponentManagerImpl::Create(nsISupports* aOuter, REFNSIID aIID,
-                                        void** aResult) {
-  if (aOuter) {
-    return NS_ERROR_NO_AGGREGATION;
-  }
-
+nsresult nsComponentManagerImpl::Create(REFNSIID aIID, void** aResult) {
   if (!gComponentManager) {
     return NS_ERROR_FAILURE;
   }
@@ -279,7 +281,6 @@ extern const mozilla::Module kWidgetModule;
 extern const mozilla::Module kLayoutModule;
 extern const mozilla::Module kKeyValueModule;
 extern const mozilla::Module kXREModule;
-extern const mozilla::Module kEmbeddingModule;
 
 static nsTArray<const mozilla::Module*>* sExtraStaticModules;
 
@@ -341,9 +342,17 @@ nsresult nsComponentManagerImpl::Init() {
         ProcessSelectorMatches(
             ProcessSelector::ALLOW_IN_GPU_RDD_AND_SOCKET_PROCESS);
     gProcessMatchTable[size_t(
+        ProcessSelector::ALLOW_IN_GPU_RDD_SOCKET_AND_UTILITY_PROCESS)] =
+        ProcessSelectorMatches(
+            ProcessSelector::ALLOW_IN_GPU_RDD_SOCKET_AND_UTILITY_PROCESS);
+    gProcessMatchTable[size_t(
         ProcessSelector::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS)] =
         ProcessSelectorMatches(
             ProcessSelector::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS);
+    gProcessMatchTable[size_t(
+        ProcessSelector::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS)] =
+        ProcessSelectorMatches(
+            ProcessSelector::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS);
   }
 
   MOZ_ASSERT(NOT_INITIALIZED == mStatus);
@@ -366,7 +375,6 @@ nsresult nsComponentManagerImpl::Init() {
   RegisterModule(&kLayoutModule);
   RegisterModule(&kKeyValueModule);
   RegisterModule(&kXREModule);
-  RegisterModule(&kEmbeddingModule);
 
   for (uint32_t i = 0; i < sExtraStaticModules->Length(); ++i) {
     RegisterModule((*sExtraStaticModules)[i]);
@@ -396,7 +404,6 @@ nsresult nsComponentManagerImpl::Init() {
     // processes really need chrome manifests...?
     case GeckoProcessType_Default:
     case GeckoProcessType_Content:
-    case GeckoProcessType_IPDLUnitTest:
     case GeckoProcessType_GMPlugin:
       loadChromeManifests = true;
       break;
@@ -596,6 +603,7 @@ void nsComponentManagerImpl::RegisterCIDEntryLocked(
 #endif
 
   mFactories.WithEntryHandle(aEntry->cid, [&](auto&& entry) {
+    mLock.AssertCurrentThreadOwns();
     if (entry) {
       nsFactoryEntry* f = entry.Data();
       NS_WARNING("Re-registering a CID?");
@@ -1015,9 +1023,8 @@ nsComponentManagerImpl::GetClassObjectByContractID(const char* aContractID,
  * released and not held onto for any longer.
  */
 NS_IMETHODIMP
-nsComponentManagerImpl::CreateInstance(const nsCID& aClass,
-                                       nsISupports* aDelegate,
-                                       const nsIID& aIID, void** aResult) {
+nsComponentManagerImpl::CreateInstance(const nsCID& aClass, const nsIID& aIID,
+                                       void** aResult) {
   // test this first, since there's no point in creating a component during
   // shutdown -- whether it's available or not would depend on the order it
   // occurs in the list
@@ -1055,7 +1062,7 @@ nsComponentManagerImpl::CreateInstance(const nsCID& aClass,
   nsresult rv;
   nsCOMPtr<nsIFactory> factory = entry->GetFactory();
   if (factory) {
-    rv = factory->CreateInstance(aDelegate, aIID, aResult);
+    rv = factory->CreateInstance(aIID, aResult);
     if (NS_SUCCEEDED(rv) && !*aResult) {
       NS_ERROR("Factory did not return an object but returned success!");
       rv = NS_ERROR_SERVICE_NOT_AVAILABLE;
@@ -1090,7 +1097,6 @@ nsComponentManagerImpl::CreateInstance(const nsCID& aClass,
  */
 NS_IMETHODIMP
 nsComponentManagerImpl::CreateInstanceByContractID(const char* aContractID,
-                                                   nsISupports* aDelegate,
                                                    const nsIID& aIID,
                                                    void** aResult) {
   if (NS_WARN_IF(!aContractID)) {
@@ -1139,7 +1145,7 @@ nsComponentManagerImpl::CreateInstanceByContractID(const char* aContractID,
   nsresult rv;
   nsCOMPtr<nsIFactory> factory = entry->GetFactory();
   if (factory) {
-    rv = factory->CreateInstance(aDelegate, aIID, aResult);
+    rv = factory->CreateInstance(aIID, aResult);
     if (NS_SUCCEEDED(rv) && !*aResult) {
       NS_ERROR("Factory did not return an object but returned success!");
       rv = NS_ERROR_SERVICE_NOT_AVAILABLE;
@@ -1268,12 +1274,13 @@ nsresult nsComponentManagerImpl::GetServiceLocked(Maybe<MonitorAutoLock>& aLock,
     }
   });
   nsresult rv;
+  mLock.AssertCurrentThreadOwns();
   {
     MonitorAutoUnlock unlock(mLock);
     AUTO_PROFILER_MARKER_TEXT(
         "GetService", OTHER, MarkerStack::Capture(),
         nsDependentCString(nsIDToCString(aEntry.CID()).get()));
-    rv = aEntry.CreateInstance(nullptr, aIID, getter_AddRefs(service));
+    rv = aEntry.CreateInstance(aIID, getter_AddRefs(service));
   }
   if (NS_SUCCEEDED(rv) && !service) {
     NS_ERROR("Factory did not return an object but returned success");
@@ -1747,11 +1754,10 @@ already_AddRefed<nsIFactory> nsFactoryEntry::GetFactory() {
   return factory.forget();
 }
 
-nsresult nsFactoryEntry::CreateInstance(nsISupports* aOuter, const nsIID& aIID,
-                                        void** aResult) {
+nsresult nsFactoryEntry::CreateInstance(const nsIID& aIID, void** aResult) {
   nsCOMPtr<nsIFactory> factory = GetFactory();
   NS_ENSURE_TRUE(factory, NS_ERROR_FAILURE);
-  return factory->CreateInstance(aOuter, aIID, aResult);
+  return factory->CreateInstance(aIID, aResult);
 }
 
 size_t nsFactoryEntry::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) {

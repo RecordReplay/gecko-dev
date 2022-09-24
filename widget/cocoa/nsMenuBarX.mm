@@ -47,6 +47,7 @@ extern BOOL sTouchBarIsInitialized;
 // these items are always strong ref'd by their owning menu bar (instance variable).
 static nsIContent* sAboutItemContent = nullptr;
 static nsIContent* sPrefItemContent = nullptr;
+static nsIContent* sAccountItemContent = nullptr;
 static nsIContent* sQuitItemContent = nullptr;
 
 //
@@ -76,6 +77,7 @@ nsMenuBarX::nsMenuBarX(mozilla::dom::Element* aElement)
   NS_OBJC_BEGIN_TRY_ABORT_BLOCK;
 
   mMenuGroupOwner = new nsMenuGroupOwnerX(aElement, this);
+  mMenuGroupOwner->RegisterForLocaleChanges();
   mNativeMenu = [[GeckoNSMenu alloc] initWithTitle:@"MainMenuBar"];
 
   mContent = aElement;
@@ -109,6 +111,11 @@ nsMenuBarX::~nsMenuBarX() {
   if (sPrefItemContent == mPrefItemContent) {
     sPrefItemContent = nullptr;
   }
+  if (sAccountItemContent == mAccountItemContent) {
+    sAccountItemContent = nullptr;
+  }
+
+  mMenuGroupOwner->UnregisterForLocaleChanges();
 
   // make sure we unregister ourselves as a content observer
   if (mContent) {
@@ -263,14 +270,15 @@ void nsMenuBarX::ObserveContentRemoved(mozilla::dom::Document* aDocument, nsICon
                                        nsIContent* aChild, nsIContent* aPreviousSibling) {
   nsINode* parent = NODE_FROM(aContainer, aDocument);
   MOZ_ASSERT(parent);
-  int32_t index = parent->ComputeIndexOf(aPreviousSibling) + 1;
-  RemoveMenuAtIndex(index);
+  const Maybe<uint32_t> index = parent->ComputeIndexOf(aPreviousSibling);
+  MOZ_ASSERT(*index != UINT32_MAX);
+  RemoveMenuAtIndex(index.isSome() ? *index + 1u : 0u);
 }
 
 void nsMenuBarX::ObserveContentInserted(mozilla::dom::Document* aDocument, nsIContent* aContainer,
                                         nsIContent* aChild) {
   InsertMenuAtIndex(MakeRefPtr<nsMenuX>(this, mMenuGroupOwner, aChild),
-                    aContainer->ComputeIndexOf(aChild));
+                    aContainer->ComputeIndexOf(aChild).valueOr(UINT32_MAX));
 }
 
 void nsMenuBarX::ForceUpdateNativeMenuAt(const nsAString& aIndexString) {
@@ -512,6 +520,12 @@ void nsMenuBarX::AquifyMenuBar() {
       sPrefItemContent = mPrefItemContent;
     }
 
+    // remove Account Settings item.
+    mAccountItemContent = HideItem(domDoc, u"menu_accountmgr"_ns);
+    if (!sAccountItemContent) {
+      sAccountItemContent = mAccountItemContent;
+    }
+
     // hide items that we use for the Application menu
     HideItem(domDoc, u"menu_mac_services"_ns);
     HideItem(domDoc, u"menu_mac_hide_app"_ns);
@@ -618,6 +632,7 @@ void nsMenuBarX::CreateApplicationMenu(nsMenuX* aMenu) {
     = About This App       = <- aboutName
     ========================
     = Preferences...       = <- menu_preferences
+    = Account Settings     = <- menu_accountmgr      Only on Thunderbird
     ========================
     = Services     >       = <- menu_mac_services    <- (do not define key equivalent)
     ========================
@@ -654,6 +669,7 @@ void nsMenuBarX::CreateApplicationMenu(nsMenuX* aMenu) {
 
     NSMenuItem* itemBeingAdded = nil;
     BOOL addAboutSeparator = FALSE;
+    BOOL addPrefsSeparator = FALSE;
 
     // Add the About menu item
     itemBeingAdded = CreateNativeAppMenuItem(aMenu, u"aboutName"_ns, @selector(menuItemHit:),
@@ -679,7 +695,20 @@ void nsMenuBarX::CreateApplicationMenu(nsMenuX* aMenu) {
       [itemBeingAdded release];
       itemBeingAdded = nil;
 
-      // Add separator after Preferences menu
+      addPrefsSeparator = TRUE;
+    }
+
+    // Add the Account Settings menu item. This is Thunderbird only
+    itemBeingAdded = CreateNativeAppMenuItem(aMenu, u"menu_accountmgr"_ns, @selector(menuItemHit:),
+                                             eCommand_ID_Account, nsMenuBarX::sNativeEventTarget);
+    if (itemBeingAdded) {
+      [sApplicationMenu addItem:itemBeingAdded];
+      [itemBeingAdded release];
+      itemBeingAdded = nil;
+    }
+
+    // Add separator after Preferences menu
+    if (addPrefsSeparator) {
       [sApplicationMenu addItem:[NSMenuItem separatorItem]];
     }
 
@@ -906,6 +935,14 @@ static BOOL gMenuItemsExecuteCommands = YES;
     nsIContent* mostSpecificContent = sPrefItemContent;
     if (menuBar && menuBar->mPrefItemContent) {
       mostSpecificContent = menuBar->mPrefItemContent;
+    }
+    nsMenuUtilsX::DispatchCommandTo(mostSpecificContent, modifierFlags, button);
+    return;
+  }
+  if (tag == eCommand_ID_Account) {
+    nsIContent* mostSpecificContent = sAccountItemContent;
+    if (menuBar && menuBar->mAccountItemContent) {
+      mostSpecificContent = menuBar->mAccountItemContent;
     }
     nsMenuUtilsX::DispatchCommandTo(mostSpecificContent, modifierFlags, button);
     return;

@@ -40,6 +40,7 @@
 #include "common/mac/macho_utilities.h"
 #include "common/mac/scoped_task_suspend-inl.h"
 #include "google_breakpad/common/minidump_exception_mac.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/RecordReplay.h"
 
 #ifdef MOZ_PHC
@@ -126,7 +127,8 @@ struct ExceptionReplyMessage {
 // Only catch these three exceptions.  The other ones are nebulously defined
 // and may result in treating a non-fatal exception as fatal.
 exception_mask_t s_exception_mask = EXC_MASK_BAD_ACCESS |
-EXC_MASK_BAD_INSTRUCTION | EXC_MASK_ARITHMETIC | EXC_MASK_BREAKPOINT;
+EXC_MASK_BAD_INSTRUCTION | EXC_MASK_ARITHMETIC | EXC_MASK_BREAKPOINT |
+EXC_MASK_CRASH | EXC_MASK_RESOURCE | EXC_MASK_GUARD;
 
 kern_return_t ForwardException(mach_port_t task,
                                mach_port_t failed_thread,
@@ -413,10 +415,10 @@ bool ExceptionHandler::WriteMinidumpForChild(mach_port_t child,
 }
 
 #ifdef MOZ_PHC
-static void GetPHCAddrInfo(int64_t exception_subcode,
+static void GetPHCAddrInfo(int exception_type, int64_t exception_subcode,
                            mozilla::phc::AddrInfo* addr_info) {
   // Is this a crash involving a PHC allocation?
-  if (exception_subcode) {
+  if (exception_type == EXC_BAD_ACCESS) {
     // `exception_subcode` is only non-zero when it's a bad access, in which
     // case it holds the address of the bad access.
     char* addr = reinterpret_cast<char*>(exception_subcode);
@@ -427,7 +429,7 @@ static void GetPHCAddrInfo(int64_t exception_subcode,
 
 bool ExceptionHandler::WriteMinidumpWithException(
     int exception_type,
-    int exception_code,
+    int64_t exception_code,
     int64_t exception_subcode,
     breakpad_ucontext_t* task_context,
     mach_port_t thread_name,
@@ -443,7 +445,7 @@ bool ExceptionHandler::WriteMinidumpWithException(
 
     mozilla::phc::AddrInfo addr_info;
 #ifdef MOZ_PHC
-    GetPHCAddrInfo(exception_subcode, &addr_info);
+    GetPHCAddrInfo(exception_type, exception_subcode, &addr_info);
 #endif
 
   if (directCallback_) {
@@ -504,11 +506,12 @@ bool ExceptionHandler::WriteMinidumpWithException(
 
     // Call user specified callback (if any)
     if (callback_) {
+      result = callback_(dump_path_c_, next_minidump_id_c_, callback_context_,
+                         &addr_info, result);
       // If the user callback returned true and we're handling an exception
       // (rather than just writing out the file), then we should exit without
       // forwarding the exception to the next handler.
-      if (callback_(dump_path_c_, next_minidump_id_c_, callback_context_,
-                    &addr_info, result)) {
+      if (result) {
         if (exit_after_write)
           _exit(exception_type);
       }
@@ -548,7 +551,7 @@ kern_return_t ForwardException(mach_port_t task, mach_port_t failed_thread,
   // Nothing to forward
   if (found == current.count) {
     fprintf(stderr, "** No previous ports for forwarding!! \n");
-    exit(KERN_FAILURE);
+    _exit(KERN_FAILURE);
   }
 
   mach_port_t target_port = current.ports[found];
@@ -615,7 +618,7 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
 
         mach_port_t thread = MACH_PORT_NULL;
         int exception_type = 0;
-        int exception_code = 0;
+        int64_t exception_code = 0;
         if (receive.header.msgh_id == kWriteDumpWithExceptionMessage) {
           thread = receive.thread.name;
           exception_type = EXC_BREAKPOINT;
@@ -646,6 +649,8 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
         if (self->use_minidump_write_mutex_)
           pthread_mutex_unlock(&self->minidump_write_mutex_);
       } else {
+        bool crash_reported = false;
+
         // When forking a child process with the exception handler installed,
         // if the child crashes, it will send the exception back to the parent
         // process.  The check for task == self_task() ensures that only
@@ -660,13 +665,24 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
 #endif
 
           mach_exception_data_type_t subcode = 0;
-          if (receive.exception == EXC_BAD_ACCESS && receive.code_count > 1)
-            subcode = receive.code[1];
+          if (receive.code_count > 1) {
+            switch (receive.exception) {
+              case EXC_BAD_ACCESS:
+              case EXC_CRASH:
+              case EXC_RESOURCE:
+              case EXC_GUARD:
+                subcode = receive.code[1];
+                break;
+              default:
+                subcode = 0;
+            }
+          }
 
           // Generate the minidump with the exception data.
-          self->WriteMinidumpWithException(receive.exception, receive.code[0],
-                                           subcode, NULL, receive.thread.name,
-                                           mach_task_self(),  true, false);
+          crash_reported =
+            self->WriteMinidumpWithException(receive.exception, receive.code[0],
+                                             subcode, NULL, receive.thread.name,
+                                             mach_task_self(),  true, false);
 
 #if USE_PROTECTED_ALLOCATIONS
           // This may have become protected again within
@@ -685,8 +701,10 @@ void* ExceptionHandler::WaitForMessage(void* exception_handler_class) {
         }
 
         ExceptionReplyMessage reply;
-        if (!mach_exc_server(&receive.header, &reply.header))
-          exit(1);
+        if (!mach_exc_server(&receive.header, &reply.header)) {
+          MOZ_CRASH_UNSAFE_PRINTF("Mach message id: %d crash reported = %d",
+                                  receive.header.msgh_id, crash_reported);
+        }
 
         // Send a reply and exit
         mach_msg(&(reply.header), MACH_SEND_MSG,
@@ -727,8 +745,8 @@ void ExceptionHandler::SignalHandler(int sig, siginfo_t* info, void* uc) {
 
 // static
 bool ExceptionHandler::WriteForwardedExceptionMinidump(int exception_type,
-						       int exception_code,
-						       int exception_subcode,
+						       int64_t exception_code,
+						       int64_t exception_subcode,
 						       mach_port_t thread,
 						       mach_port_t task)
 {

@@ -12,8 +12,7 @@
 
 class nsIThread;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class MIDIPortInterface;
 
@@ -27,6 +26,7 @@ class TestMIDIPlatformService : public MIDIPlatformService {
  public:
   TestMIDIPlatformService();
   virtual void Init() override;
+  virtual void Refresh() override;
   virtual void Open(MIDIPortParent* aPort) override;
   virtual void Stop() override;
   virtual void ScheduleSend(const nsAString& aPort) override;
@@ -54,11 +54,12 @@ class TestMIDIPlatformService : public MIDIPlatformService {
   MIDIPortInfo mAlwaysClosedTestOutputPort;
   // IO Simulation thread. Runs all instances of ProcessMessages().
   nsCOMPtr<nsIThread> mClientThread;
+  // When true calling Refresh() will add new ports.
+  bool mDoRefresh;
   // True if server has been brought up already.
   bool mIsInitialized;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_TestMIDIPlatformService_h

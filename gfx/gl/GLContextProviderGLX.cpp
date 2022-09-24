@@ -32,7 +32,6 @@
 #include "nsDebug.h"
 #include "nsIWidget.h"
 #include "GLXLibrary.h"
-#include "gfxXlibSurface.h"
 #include "gfxContext.h"
 #include "gfxEnv.h"
 #include "gfxPlatform.h"
@@ -164,9 +163,6 @@ bool GLXLibrary::EnsureInitialized(Display* aDisplay) {
     }
   }
 
-  const SymLoadStruct symbols_texturefrompixmap[] = {
-      SYMBOL(BindTexImageEXT), SYMBOL(ReleaseTexImageEXT), END_OF_SYMBOLS};
-
   const SymLoadStruct symbols_createcontext[] = {
       SYMBOL(CreateContextAttribsARB), END_OF_SYMBOLS};
 
@@ -190,14 +186,6 @@ bool GLXLibrary::EnsureInitialized(Display* aDisplay) {
   const char* serverVendor =
       fQueryServerString(aDisplay, screen, LOCAL_GLX_VENDOR);
   const char* extensionsStr = fQueryExtensionsString(aDisplay, screen);
-
-  if (HasExtension(extensionsStr, "GLX_EXT_texture_from_pixmap") &&
-      fnLoadSymbols(symbols_texturefrompixmap)) {
-    mUseTextureFromPixmap = StaticPrefs::gfx_use_glx_texture_from_pixmap();
-  } else {
-    mUseTextureFromPixmap = false;
-    NS_WARNING("Texture from pixmap disabled");
-  }
 
   if (HasExtension(extensionsStr, "GLX_ARB_create_context") &&
       HasExtension(extensionsStr, "GLX_ARB_create_context_profile") &&
@@ -244,19 +232,6 @@ bool GLXLibrary::EnsureInitialized(Display* aDisplay) {
   return true;
 }
 
-bool GLXLibrary::SupportsTextureFromPixmap(gfxASurface* aSurface) {
-  if (aSurface->GetType() != gfxSurfaceType::Xlib) {
-    return false;
-  }
-
-  gfxXlibSurface* xs = static_cast<gfxXlibSurface*>(aSurface);
-  if (!EnsureInitialized(xs->XDisplay())) {
-    return false;
-  }
-
-  return mUseTextureFromPixmap;
-}
-
 bool GLXLibrary::SupportsVideoSync(Display* aDisplay) {
   if (!EnsureInitialized(aDisplay)) {
     return false;
@@ -265,192 +240,12 @@ bool GLXLibrary::SupportsVideoSync(Display* aDisplay) {
   return mHasVideoSync;
 }
 
-GLXPixmap GLXLibrary::CreatePixmap(gfxASurface* aSurface) {
-  if (!SupportsTextureFromPixmap(aSurface)) {
-    return X11None;
-  }
-
-  gfxXlibSurface* xs = static_cast<gfxXlibSurface*>(aSurface);
-  const XRenderPictFormat* format = xs->XRenderFormat();
-  if (!format || format->type != PictTypeDirect) {
-    return X11None;
-  }
-  const XRenderDirectFormat& direct = format->direct;
-  int alphaSize = FloorLog2(direct.alphaMask + 1);
-  NS_ASSERTION((1 << alphaSize) - 1 == direct.alphaMask,
-               "Unexpected render format with non-adjacent alpha bits");
-
-  int attribs[] = {LOCAL_GLX_DOUBLEBUFFER,
-                   X11False,
-                   LOCAL_GLX_DRAWABLE_TYPE,
-                   LOCAL_GLX_PIXMAP_BIT,
-                   LOCAL_GLX_ALPHA_SIZE,
-                   alphaSize,
-                   (alphaSize ? LOCAL_GLX_BIND_TO_TEXTURE_RGBA_EXT
-                              : LOCAL_GLX_BIND_TO_TEXTURE_RGB_EXT),
-                   X11True,
-                   LOCAL_GLX_RENDER_TYPE,
-                   LOCAL_GLX_RGBA_BIT,
-                   X11None};
-
-  int numConfigs = 0;
-  Display* display = xs->XDisplay();
-  int xscreen = DefaultScreen(display);
-
-  ScopedXFree<GLXFBConfig> cfgs(
-      fChooseFBConfig(display, xscreen, attribs, &numConfigs));
-
-  // Find an fbconfig that matches the pixel format used on the Pixmap.
-  int matchIndex = -1;
-  unsigned long redMask = static_cast<unsigned long>(direct.redMask)
-                          << direct.red;
-  unsigned long greenMask = static_cast<unsigned long>(direct.greenMask)
-                            << direct.green;
-  unsigned long blueMask = static_cast<unsigned long>(direct.blueMask)
-                           << direct.blue;
-  // This is true if the Pixmap has bits for alpha or unused bits.
-  bool haveNonColorBits =
-      ~(redMask | greenMask | blueMask) != -1UL << format->depth;
-
-  for (int i = 0; i < numConfigs; i++) {
-    int id = X11None;
-    sGLXLibrary.fGetFBConfigAttrib(display, cfgs[i], LOCAL_GLX_VISUAL_ID, &id);
-    Visual* visual;
-    int depth;
-    FindVisualAndDepth(display, id, &visual, &depth);
-    if (!visual || visual->c_class != TrueColor ||
-        visual->red_mask != redMask || visual->green_mask != greenMask ||
-        visual->blue_mask != blueMask) {
-      continue;
-    }
-
-    // Historically Xlib Visuals did not try to represent an alpha channel
-    // and there was no means to use an alpha channel on a Pixmap.  The
-    // Xlib Visual from the fbconfig was not intended to have any
-    // information about alpha bits.
-    //
-    // Since then, RENDER has added formats for 32 bit depth Pixmaps.
-    // Some of these formats have bits for alpha and some have unused
-    // bits.
-    //
-    // Then the Composite extension added a 32 bit depth Visual intended
-    // for Windows with an alpha channel, so bits not in the visual color
-    // masks were expected to be treated as alpha bits.
-    //
-    // Usually GLX counts only color bits in the Visual depth, but the
-    // depth of Composite's ARGB Visual includes alpha bits.  However,
-    // bits not in the color masks are not necessarily alpha bits because
-    // sometimes (NVIDIA) 32 bit Visuals are added for fbconfigs with 32
-    // bit BUFFER_SIZE but zero alpha bits and 24 color bits (NVIDIA
-    // again).
-    //
-    // This checks that the depth matches in one of the two ways.
-    // NVIDIA now forces format->depth == depth so only the first way
-    // is checked for NVIDIA
-    if (depth != format->depth &&
-        (mIsNVIDIA || depth != format->depth - alphaSize)) {
-      continue;
-    }
-
-    // If all bits of the Pixmap are color bits and the Pixmap depth
-    // matches the depth of the fbconfig visual, then we can assume that
-    // the driver will do whatever is necessary to ensure that any
-    // GLXPixmap alpha bits are treated as set.  We can skip the
-    // ALPHA_SIZE check in this situation.  We need to skip this check for
-    // situations (ATI) where there are no fbconfigs without alpha bits.
-    //
-    // glXChooseFBConfig should prefer configs with smaller
-    // LOCAL_GLX_BUFFER_SIZE, so we should still get zero alpha bits if
-    // available, except perhaps with NVIDIA drivers where buffer size is
-    // not the specified sum of the component sizes.
-    if (haveNonColorBits) {
-      // There are bits in the Pixmap format that haven't been matched
-      // against the fbconfig visual.  These bits could either represent
-      // alpha or be unused, so just check that the number of alpha bits
-      // matches.
-      int size = 0;
-      sGLXLibrary.fGetFBConfigAttrib(display, cfgs[i], LOCAL_GLX_ALPHA_SIZE,
-                                     &size);
-      if (size != alphaSize) {
-        continue;
-      }
-    }
-
-    matchIndex = i;
-    break;
-  }
-  if (matchIndex == -1) {
-    // GLX can't handle A8 surfaces, so this is not really unexpected. The
-    // caller should deal with this situation.
-    NS_WARNING_ASSERTION(
-        format->depth == 8,
-        "[GLX] Couldn't find a FBConfig matching Pixmap format");
-    return X11None;
-  }
-
-  int pixmapAttribs[] = {LOCAL_GLX_TEXTURE_TARGET_EXT, LOCAL_GLX_TEXTURE_2D_EXT,
-                         LOCAL_GLX_TEXTURE_FORMAT_EXT,
-                         (alphaSize ? LOCAL_GLX_TEXTURE_FORMAT_RGBA_EXT
-                                    : LOCAL_GLX_TEXTURE_FORMAT_RGB_EXT),
-                         X11None};
-
-  GLXPixmap glxpixmap =
-      fCreatePixmap(display, cfgs[matchIndex], xs->XDrawable(), pixmapAttribs);
-
-  return glxpixmap;
-}
-
-void GLXLibrary::DestroyPixmap(Display* aDisplay, GLXPixmap aPixmap) {
-  if (!mUseTextureFromPixmap) {
-    return;
-  }
-
-  fDestroyPixmap(aDisplay, aPixmap);
-}
-
-void GLXLibrary::BindTexImage(Display* aDisplay, GLXPixmap aPixmap) {
-  if (!mUseTextureFromPixmap) {
-    return;
-  }
-
-  // Make sure all X drawing to the surface has finished before binding to a
-  // texture.
-  if (mClientIsMesa) {
-    // Using XSync instead of Mesa's glXWaitX, because its glxWaitX is a
-    // noop when direct rendering unless the current drawable is a
-    // single-buffer window.
-    FinishX(aDisplay);
-  } else {
-    fWaitX();
-  }
-  fBindTexImage(aDisplay, aPixmap, LOCAL_GLX_FRONT_LEFT_EXT, nullptr);
-}
-
-void GLXLibrary::ReleaseTexImage(Display* aDisplay, GLXPixmap aPixmap) {
-  if (!mUseTextureFromPixmap) {
-    return;
-  }
-
-  fReleaseTexImage(aDisplay, aPixmap, LOCAL_GLX_FRONT_LEFT_EXT);
-}
-
-void GLXLibrary::UpdateTexImage(Display* aDisplay, GLXPixmap aPixmap) {
-  // NVIDIA drivers don't require a rebind of the pixmap in order
-  // to display an updated image, and it's faster not to do it.
-  if (mIsNVIDIA) {
-    fWaitX();
-    return;
-  }
-
-  ReleaseTexImage(aDisplay, aPixmap);
-  BindTexImage(aDisplay, aPixmap);
-}
-
 static int (*sOldErrorHandler)(Display*, XErrorEvent*);
-ScopedXErrorHandler::ErrorEvent sErrorEvent;
+static XErrorEvent sErrorEvent = {};
+
 static int GLXErrorHandler(Display* display, XErrorEvent* ev) {
-  if (!sErrorEvent.mError.error_code) {
-    sErrorEvent.mError = *ev;
+  if (!sErrorEvent.error_code) {
+    sErrorEvent = *ev;
   }
   return 0;
 }
@@ -469,21 +264,23 @@ GLXLibrary::WrapperScope::~WrapperScope() {
     if (mDisplay) {
       FinishX(mDisplay);
     }
-    if (sErrorEvent.mError.error_code) {
+    if (sErrorEvent.error_code) {
       char buffer[100] = {};
       if (mDisplay) {
-        XGetErrorText(mDisplay, sErrorEvent.mError.error_code, buffer,
-                      sizeof(buffer));
+        XGetErrorText(mDisplay, sErrorEvent.error_code, buffer, sizeof(buffer));
       } else {
-        SprintfLiteral(buffer, "%d", sErrorEvent.mError.error_code);
+        SprintfLiteral(buffer, "%d", sErrorEvent.error_code);
       }
       printf_stderr("X ERROR after %s: %s (%i) - Request: %i.%i, Serial: %lu",
-                    mFuncName, buffer, sErrorEvent.mError.error_code,
-                    sErrorEvent.mError.request_code,
-                    sErrorEvent.mError.minor_code, sErrorEvent.mError.serial);
+                    mFuncName, buffer, sErrorEvent.error_code,
+                    sErrorEvent.request_code, sErrorEvent.minor_code,
+                    sErrorEvent.serial);
       MOZ_ASSERT_UNREACHABLE("AfterGLXCall sErrorEvent");
     }
-    XSetErrorHandler(sOldErrorHandler);
+    const auto was = XSetErrorHandler(sOldErrorHandler);
+    if (was != GLXErrorHandler) {
+      NS_WARNING("Concurrent XSetErrorHandlers");
+    }
   }
 }
 
@@ -520,8 +317,7 @@ std::shared_ptr<XlibDisplay> GLXLibrary::GetDisplay() {
 
 already_AddRefed<GLContextGLX> GLContextGLX::CreateGLContext(
     const GLContextDesc& desc, std::shared_ptr<XlibDisplay> display,
-    GLXDrawable drawable, GLXFBConfig cfg, bool deleteDrawable,
-    gfxXlibSurface* pixmap) {
+    GLXDrawable drawable, GLXFBConfig cfg, Drawable ownedPixmap) {
   GLXLibrary& glx = sGLXLibrary;
 
   int isDoubleBuffered = 0;
@@ -543,24 +339,16 @@ already_AddRefed<GLContextGLX> GLContextGLX::CreateGLContext(
 
   const auto CreateWithAttribs =
       [&](const std::vector<int>& attribs) -> RefPtr<GLContextGLX> {
-    OffMainThreadScopedXErrorHandler handler;
-
     auto terminated = attribs;
     terminated.push_back(0);
 
-    // X Errors can happen even if this context creation returns non-null, and
-    // we should not try to use such contexts. (Errors may come from the
-    // distant server, or something)
     const auto glxContext = glx.fCreateContextAttribs(
         *display, cfg, nullptr, X11True, terminated.data());
     if (!glxContext) return nullptr;
-    const RefPtr<GLContextGLX> ret =
-        new GLContextGLX(desc, display, drawable, glxContext, deleteDrawable,
-                         isDoubleBuffered, pixmap);
-    if (handler.SyncAndGetError(*display)) return nullptr;
+    const RefPtr<GLContextGLX> ret = new GLContextGLX(
+        desc, display, drawable, glxContext, isDoubleBuffered, ownedPixmap);
 
     if (!ret->Init()) return nullptr;
-    if (handler.SyncAndGetError(*display)) return nullptr;
 
     return ret;
   };
@@ -644,18 +432,20 @@ GLContextGLX::~GLContextGLX() {
   }
 
   // see bug 659842 comment 76
-#ifdef DEBUG
-  bool success =
-#endif
-      mGLX->fMakeCurrent(*mDisplay, X11None, nullptr);
-  MOZ_ASSERT(success,
-             "glXMakeCurrent failed to release GL context before we call "
-             "glXDestroyContext!");
+  bool success = mGLX->fMakeCurrent(*mDisplay, X11None, nullptr);
+  if (!success) {
+    NS_WARNING(
+        "glXMakeCurrent failed to release GL context before we call "
+        "glXDestroyContext!");
+  }
 
   mGLX->fDestroyContext(*mDisplay, mContext);
 
-  if (mDeleteDrawable) {
+  // If we own the enclosed X pixmap, then free it after we free the enclosing
+  // GLX pixmap.
+  if (mOwnedPixmap) {
     mGLX->fDestroyPixmap(*mDisplay, mDrawable);
+    XFreePixmap(*mDisplay, mOwnedPixmap);
   }
 }
 
@@ -681,14 +471,18 @@ bool GLContextGLX::MakeCurrentImpl() const {
   }
 
   const bool succeeded = mGLX->fMakeCurrent(*mDisplay, mDrawable, mContext);
-  NS_ASSERTION(succeeded, "Failed to make GL context current!");
+  if (!succeeded) {
+    NS_WARNING("Failed to make GL context current!");
+  }
 
   if (!IsOffscreen() && mGLX->SupportsSwapControl()) {
     // Many GLX implementations default to blocking until the next
     // VBlank when calling glXSwapBuffers. We want to run unthrottled
     // in ASAP mode. See bug 1280744.
+    const bool swapInterval = gfxVars::SwapIntervalGLX();
     const bool isASAP = (StaticPrefs::layout_frame_rate() == 0);
-    mGLX->fSwapInterval(*mDisplay, mDrawable, isASAP ? 0 : 1);
+    const int interval = (swapInterval && !isASAP) ? 1 : 0;
+    mGLX->fSwapInterval(*mDisplay, mDrawable, interval);
   }
   return succeeded;
 }
@@ -755,16 +549,14 @@ bool GLContextGLX::RestoreDrawable() {
 GLContextGLX::GLContextGLX(const GLContextDesc& desc,
                            std::shared_ptr<XlibDisplay> aDisplay,
                            GLXDrawable aDrawable, GLXContext aContext,
-                           bool aDeleteDrawable, bool aDoubleBuffered,
-                           gfxXlibSurface* aPixmap)
+                           bool aDoubleBuffered, Drawable aOwnedPixmap)
     : GLContext(desc, nullptr),
       mContext(aContext),
       mDisplay(aDisplay),
       mDrawable(aDrawable),
-      mDeleteDrawable(aDeleteDrawable),
+      mOwnedPixmap(aOwnedPixmap),
       mDoubleBuffered(aDoubleBuffered),
-      mGLX(&sGLXLibrary),
-      mPixmap(aPixmap) {}
+      mGLX(&sGLXLibrary) {}
 
 static bool AreCompatibleVisuals(Visual* one, Visual* two) {
   if (one->c_class != two->c_class) {
@@ -802,6 +594,11 @@ already_AddRefed<GLContext> CreateForWidget(Display* aXDisplay, Window aXWindow,
     return nullptr;
   }
 
+  if (!aXWindow) {
+    NS_ERROR("X window required for GLX Context provider");
+    return nullptr;
+  }
+
   int xscreen = DefaultScreen(aXDisplay);
 
   ScopedXFree<GLXFBConfig> cfgs;
@@ -819,9 +616,8 @@ already_AddRefed<GLContext> CreateForWidget(Display* aXDisplay, Window aXWindow,
   } else {
     flags = CreateContextFlags::REQUIRE_COMPAT_PROFILE;
   }
-  return GLContextGLX::CreateGLContext({{flags}, false},
-                                       XlibDisplay::Borrow(aXDisplay), aXWindow,
-                                       config, false, nullptr);
+  return GLContextGLX::CreateGLContext(
+      {{flags}, false}, XlibDisplay::Borrow(aXDisplay), aXWindow, config);
 }
 
 already_AddRefed<GLContext> GLContextProviderGLX::CreateForCompositorWidget(
@@ -900,8 +696,8 @@ static bool ChooseConfig(GLXLibrary* glx, Display* display, int screen,
   return false;
 }
 
-bool GLContextGLX::FindVisual(Display* display, int screen, bool useWebRender,
-                              bool useAlpha, int* const out_visualId) {
+bool GLContextGLX::FindVisual(Display* display, int screen,
+                              int* const out_visualId) {
   if (!sGLXLibrary.EnsureInitialized(display)) {
     return false;
   }
@@ -936,9 +732,7 @@ bool GLContextGLX::FindVisual(Display* display, int screen, bool useWebRender,
     return false;
   }
 
-  const int bpp = useAlpha ? 32 : 24;
-  const int alphaSize = useAlpha ? 8 : 0;
-  const int depthSize = useWebRender ? 24 : 0;
+  const int bpp = 32;
 
   for (auto& cur : visualInfos) {
     const auto fnConfigMatches = [&](const int pname, const int expected) {
@@ -960,8 +754,7 @@ bool GLContextGLX::FindVisual(Display* display, int screen, bool useWebRender,
         fnConfigMatches(LOCAL_GLX_RED_SIZE, 8) &&
         fnConfigMatches(LOCAL_GLX_GREEN_SIZE, 8) &&
         fnConfigMatches(LOCAL_GLX_BLUE_SIZE, 8) &&
-        fnConfigMatches(LOCAL_GLX_ALPHA_SIZE, alphaSize) &&
-        fnConfigMatches(LOCAL_GLX_DEPTH_SIZE, depthSize)) {
+        fnConfigMatches(LOCAL_GLX_ALPHA_SIZE, 8)) {
       *out_visualId = cur.visualid;
       return true;
     }
@@ -1069,33 +862,27 @@ static already_AddRefed<GLContextGLX> CreateOffscreenPixmapContext(
   int depth;
   FindVisualAndDepth(*display, visid, &visual, &depth);
 
-  OffMainThreadScopedXErrorHandler xErrorHandler;
-  bool error = false;
-
   gfx::IntSize dummySize(16, 16);
-  RefPtr<gfxXlibSurface> surface = gfxXlibSurface::Create(
-      display, DefaultScreenOfDisplay(display->get()), visual, dummySize);
-  if (surface->CairoStatus() != 0) {
-    mozilla::Unused << xErrorHandler.SyncAndGetError(*display);
+  const auto drawable =
+      XCreatePixmap(*display, DefaultRootWindow(display->get()),
+                    dummySize.width, dummySize.height, depth);
+  if (!drawable) {
     return nullptr;
   }
 
   // Handle slightly different signature between glXCreatePixmap and
   // its pre-GLX-1.3 extension equivalent (though given the ABI, we
   // might not need to).
-  const auto drawable = surface->XDrawable();
   const auto pixmap = glx->fCreatePixmap(*display, config, drawable, nullptr);
   if (pixmap == 0) {
-    error = true;
+    XFreePixmap(*display, drawable);
+    return nullptr;
   }
-
-  bool serverError = xErrorHandler.SyncAndGetError(*display);
-  if (error || serverError) return nullptr;
 
   auto fullDesc = GLContextDesc{desc};
   fullDesc.isOffscreen = true;
-  return GLContextGLX::CreateGLContext(fullDesc, display, pixmap, config, true,
-                                       surface);
+  return GLContextGLX::CreateGLContext(fullDesc, display, pixmap, config,
+                                       drawable);
 }
 
 /*static*/

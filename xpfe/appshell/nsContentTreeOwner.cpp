@@ -192,6 +192,13 @@ nsContentTreeOwner::GetPrimaryRemoteTab(nsIRemoteTab** aTab) {
 }
 
 NS_IMETHODIMP
+nsContentTreeOwner::GetPrimaryContentBrowsingContext(
+    mozilla::dom::BrowsingContext** aBc) {
+  NS_ENSURE_STATE(mAppWindow);
+  return mAppWindow->GetPrimaryContentBrowsingContext(aBc);
+}
+
+NS_IMETHODIMP
 nsContentTreeOwner::GetPrimaryContentSize(int32_t* aWidth, int32_t* aHeight) {
   NS_ENSURE_STATE(mAppWindow);
   return mAppWindow->GetPrimaryContentSize(aWidth, aHeight);
@@ -521,9 +528,9 @@ NS_IMETHODIMP nsContentTreeOwner::SetTitle(const nsAString& aTitle) {
 NS_IMETHODIMP
 nsContentTreeOwner::ProvideWindow(
     nsIOpenWindowInfo* aOpenWindowInfo, uint32_t aChromeFlags,
-    bool aCalledFromJS, bool aWidthSpecified, nsIURI* aURI,
-    const nsAString& aName, const nsACString& aFeatures, bool aForceNoOpener,
-    bool aForceNoReferrer, nsDocShellLoadState* aLoadState, bool* aWindowIsNew,
+    bool aCalledFromJS, nsIURI* aURI, const nsAString& aName,
+    const nsACString& aFeatures, bool aForceNoOpener, bool aForceNoReferrer,
+    bool aIsPopupRequested, nsDocShellLoadState* aLoadState, bool* aWindowIsNew,
     dom::BrowsingContext** aReturn) {
   NS_ENSURE_ARG_POINTER(aOpenWindowInfo);
 
@@ -545,7 +552,7 @@ nsContentTreeOwner::ProvideWindow(
 #endif
 
   int32_t openLocation = nsWindowWatcher::GetWindowOpenLocation(
-      parent->GetDOMWindow(), aChromeFlags, aCalledFromJS, aWidthSpecified,
+      parent->GetDOMWindow(), aChromeFlags, aCalledFromJS,
       aOpenWindowInfo->GetIsForPrinting());
 
   if (openLocation != nsIBrowserDOMWindow::OPEN_NEWTAB &&

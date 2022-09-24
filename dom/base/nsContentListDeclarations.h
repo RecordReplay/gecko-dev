@@ -16,11 +16,9 @@ class nsAtom;
 class nsIContent;
 class nsINode;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Element;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 // Magic namespace id that means "match all namespaces".  This is
 // negative so it won't collide with actual namespace constants.
@@ -30,19 +28,19 @@ class Element;
 // arbitrary matching algorithm.  aContent is the content that may
 // match the list, while aNamespaceID, aAtom, and aData are whatever
 // was passed to the list's constructor.
-typedef bool (*nsContentListMatchFunc)(mozilla::dom::Element* aElement,
-                                       int32_t aNamespaceID, nsAtom* aAtom,
-                                       void* aData);
+using nsContentListMatchFunc = bool (*)(mozilla::dom::Element* aElement,
+                                        int32_t aNamespaceID, nsAtom* aAtom,
+                                        void* aData);
 
-typedef void (*nsContentListDestroyFunc)(void* aData);
+using nsContentListDestroyFunc = void (*)(void* aData);
 
 /**
  * A function that allocates the matching data for this
  * FuncStringContentList.  Returning aString is perfectly fine; in
  * that case the destructor function should be a no-op.
  */
-typedef void* (*nsFuncStringContentListDataAllocator)(nsINode* aRootNode,
-                                                      const nsString* aString);
+using nsFuncStringContentListDataAllocator = void* (*)(nsINode* aRootNode,
+                                                       const nsString* aString);
 
 // If aMatchNameSpaceId is kNameSpaceID_Unknown, this will return a
 // content list which matches ASCIIToLower(aTagname) against HTML

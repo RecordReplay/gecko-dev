@@ -57,11 +57,23 @@ var reloadPageAndWaitForStyleSheets = async function(ui, editorCount) {
   info("Reloading the page.");
 
   const onClear = ui.once("stylesheets-clear");
-  const browser = gBrowser.selectedBrowser;
-  await SpecialPowers.spawn(browser, [], () => content.location.reload());
+  let count = 0;
+  const onAllEditorAdded = new Promise(res => {
+    const off = ui.on("editor-added", editor => {
+      count++;
+      info(`Received ${editor.friendlyName} (${count}/${editorCount})`);
+      if (count == editorCount) {
+        res();
+        off();
+      }
+    });
+  });
+
+  await reloadBrowser();
   await onClear;
 
-  await waitUntil(() => ui.editors.length === editorCount);
+  await onAllEditorAdded;
+  info("All expected editors added");
 };
 
 /**
@@ -76,10 +88,6 @@ var openStyleEditor = async function(tab) {
   });
   const panel = toolbox.getPanel("styleeditor");
   const ui = panel.UI;
-
-  // The stylesheet list appears with an animation. Let this animation finish.
-  const animations = ui._root.getAnimations({ subtree: true });
-  await Promise.all(animations.map(a => a.finished));
 
   return { toolbox, panel, ui };
 };
@@ -171,4 +179,24 @@ function createNewStyleSheet(ui, panelWindow) {
       EventUtils.synthesizeMouseAtCenter(newButton, {}, panelWindow);
     }, panelWindow);
   });
+}
+
+/**
+ * Returns the panel root element (StyleEditorUI._root)
+ *
+ * @param {StyleEditorPanel} panel
+ * @returns {Element}
+ */
+function getRootElement(panel) {
+  return panel.panelWindow.document.getElementById("style-editor-chrome");
+}
+
+/**
+ * Returns the panel context menu element
+ *
+ * @param {StyleEditorPanel} panel
+ * @returns {Element}
+ */
+function getContextMenuElement(panel) {
+  return panel.panelWindow.document.getElementById("sidebar-context");
 }

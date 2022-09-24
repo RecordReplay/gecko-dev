@@ -27,7 +27,7 @@ class nsITreeView;
 namespace mozilla {
 
 class PresShell;
-
+class Monitor;
 namespace dom {
 class DOMStringList;
 class Element;
@@ -74,12 +74,10 @@ struct MarkupMapInfo {
   MarkupAttrInfo attrs[4];
 };
 
-#ifdef MOZ_XUL
 struct XULMarkupMapInfo {
   const nsStaticAtom* const tag;
   New_Accessible* new_func;
 };
-#endif
 
 /**
  * PREF_ACCESSIBILITY_FORCE_DISABLED preference change callback.
@@ -169,6 +167,14 @@ class nsAccessibilityService final : public mozilla::a11y::DocManager,
                             nsIContent* aStartChild, nsIContent* aEndChild);
 
   /**
+   * Triggers a re-evaluation of the a11y tree of aContent after the next
+   * refresh. This is important because whether we create accessibles may
+   * depend on the frame tree / style.
+   */
+  void ScheduleAccessibilitySubtreeUpdate(mozilla::PresShell* aPresShell,
+                                          nsIContent* aStartChild);
+
+  /**
    * Notification used to update the accessible tree when content is removed.
    */
   void ContentRemoved(mozilla::PresShell* aPresShell, nsIContent* aChild);
@@ -178,6 +184,12 @@ class nsAccessibilityService final : public mozilla::a11y::DocManager,
    */
   void TableLayoutGuessMaybeChanged(mozilla::PresShell* aPresShell,
                                     nsIContent* aContent);
+
+  /**
+   * Notifies when a combobox <option> text or label changes.
+   */
+  void ComboboxOptionMaybeChanged(mozilla::PresShell*,
+                                  nsIContent* aMutatingNode);
 
   void UpdateText(mozilla::PresShell* aPresShell, nsIContent* aContent);
 
@@ -221,14 +233,17 @@ class nsAccessibilityService final : public mozilla::a11y::DocManager,
 
   void FireAccessibleEvent(uint32_t aEvent, LocalAccessible* aTarget);
 
-  /**
-   * Notify accessibility that the size has become available for an image.
-   * This occurs when the size of an image is initially not known, but we've
-   * now loaded enough data to know the size.
-   * Called by layout.
-   */
-  void NotifyOfImageSizeAvailable(mozilla::PresShell* aPresShell,
-                                  nsIContent* aContent);
+  void NotifyOfPossibleBoundsChange(mozilla::PresShell* aPresShell,
+                                    nsIContent* aContent);
+
+  void NotifyOfComputedStyleChange(mozilla::PresShell* aPresShell,
+                                   nsIContent* aContent);
+
+  void NotifyOfResolutionChange(mozilla::PresShell* aPresShell,
+                                float aResolution);
+
+  void NotifyOfDevPixelRatioChange(mozilla::PresShell* aPresShell,
+                                   int32_t aAppUnitsPerDevPixel);
 
   // nsAccessibiltiyService
 
@@ -296,6 +311,10 @@ class nsAccessibilityService final : public mozilla::a11y::DocManager,
     eMainProcess = 1 << 1,
     ePlatformAPI = 1 << 2,
   };
+
+#if defined(ANDROID)
+  static mozilla::Monitor& GetAndroidMonitor();
+#endif
 
  private:
   // nsAccessibilityService creation is controlled by friend
@@ -376,10 +395,8 @@ class nsAccessibilityService final : public mozilla::a11y::DocManager,
     return nullptr;
   }
 
-#ifdef MOZ_XUL
   nsTHashMap<nsPtrHashKey<const nsAtom>, const mozilla::a11y::XULMarkupMapInfo*>
       mXULMarkupMap;
-#endif
 
   friend nsAccessibilityService* GetAccService();
   friend nsAccessibilityService* GetOrCreateAccService(uint32_t);
@@ -514,6 +531,7 @@ static const char kEventTypeNames[][40] = {
     "live region added",                // EVENT_LIVE_REGION_ADDED
     "live region removed",              // EVENT_LIVE_REGION_REMOVED
     "table styling changed",            // EVENT_TABLE_STYLING_CHANGED
+    "inner reorder",                    // EVENT_INNER_REORDER
 };
 
 #endif

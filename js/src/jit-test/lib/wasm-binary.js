@@ -25,7 +25,7 @@ const elemId           = 9;
 const codeId           = 10;
 const dataId           = 11;
 const dataCountId      = 12;
-const eventId          = 13;
+const tagId            = 13;
 
 // User-defined section names
 const nameName         = "name";
@@ -34,7 +34,7 @@ const nameName         = "name";
 const nameTypeModule    = 0;
 const nameTypeFunction  = 1;
 const nameTypeLocal     = 2;
-const nameTypeEvent     = 3;
+const nameTypeTag       = 3;
 
 // Type codes
 const I32Code          = 0x7f;
@@ -116,8 +116,6 @@ const RefFuncCode      = 0xd2;
 // SIMD opcodes
 const V128LoadCode = 0x00;
 const V128StoreCode = 0x0b;
-
-// Experimental SIMD opcodes as of August, 2020.
 const I32x4DotSI16x8Code = 0xba;
 const F32x4CeilCode = 0xd8;
 const F32x4FloorCode = 0xd9;
@@ -133,6 +131,28 @@ const F64x2PMinCode = 0xf6;
 const F64x2PMaxCode = 0xf7;
 const V128Load32ZeroCode = 0xfc;
 const V128Load64ZeroCode = 0xfd;
+
+// Relaxed SIMD opcodes.
+const I8x16RelaxedSwizzleCode = 0x100;
+const I32x4RelaxedTruncSSatF32x4Code = 0x101;
+const I32x4RelaxedTruncUSatF32x4Code = 0x102;
+const I32x4RelaxedTruncSatF64x2SZeroCode = 0x103;
+const I32x4RelaxedTruncSatF64x2UZeroCode = 0x104;
+const F32x4RelaxedFmaCode = 0x105;
+const F32x4RelaxedFmsCode = 0x106;
+const F64x2RelaxedFmaCode = 0x107;
+const F64x2RelaxedFmsCode = 0x108;
+const I8x16RelaxedLaneSelectCode = 0x109;
+const I16x8RelaxedLaneSelectCode = 0x10a;
+const I32x4RelaxedLaneSelectCode = 0x10b;
+const I64x2RelaxedLaneSelectCode = 0x10c;
+const F32x4RelaxedMinCode = 0x10d;
+const F32x4RelaxedMaxCode = 0x10e;
+const F64x2RelaxedMinCode = 0x10f;
+const F64x2RelaxedMaxCode = 0x110;
+const I16x8RelaxedQ15MulrS = 0x111;
+const I16x8DotI8x16I7x16S = 0x112;
+const I32x4DotI8x16I7x16AddS = 0x113;
 
 // SIMD wormhole opcodes.
 const WORMHOLE_SELFTEST = 0;
@@ -215,7 +235,7 @@ const FunctionCode     = 0x00;
 const TableCode        = 0x01;
 const MemoryCode       = 0x02;
 const GlobalCode       = 0x03;
-const EventCode        = 0x04;
+const TagCode          = 0x04;
 
 // ResizableFlags
 const HasMaximumFlag   = 0x1;
@@ -352,9 +372,9 @@ function exportSection(exports) {
         } else if (exp.hasOwnProperty("memIndex")) {
             body.push(...varU32(MemoryCode));
             body.push(...varU32(exp.memIndex));
-        } else if (exp.hasOwnProperty("eventIndex")) {
-            body.push(...varU32(EventCode));
-            body.push(...varU32(exp.eventIndex));
+        } else if (exp.hasOwnProperty("tagIndex")) {
+            body.push(...varU32(TagCode));
+            body.push(...varU32(exp.tagIndex));
         } else {
             throw "Bad export " + exp;
         }
@@ -379,14 +399,14 @@ function memorySection(initialSize) {
     return { name: memoryId, body };
 }
 
-function eventSection(events) {
+function tagSection(tags) {
     var body = [];
-    body.push(...varU32(events.length));
-    for (let event of events) {
+    body.push(...varU32(tags.length));
+    for (let tag of tags) {
         body.push(...varU32(0)); // exception attribute
-        body.push(...varU32(event.type));
+        body.push(...varU32(tag.type));
     }
-    return { name: eventId, body };
+    return { name: tagId, body };
 }
 
 function dataSection(segmentArrays) {

@@ -9,7 +9,6 @@ namespace mozilla {
 
 using namespace gfx;
 using layers::ImageContainer;
-using layers::LayerManager;
 
 namespace image {
 
@@ -52,49 +51,24 @@ bool FrozenImage::IsNonAnimated() const {
 }
 
 NS_IMETHODIMP_(bool)
-FrozenImage::IsImageContainerAvailable(LayerManager* aManager,
+FrozenImage::IsImageContainerAvailable(WindowRenderer* aRenderer,
                                        uint32_t aFlags) {
   if (IsNonAnimated()) {
-    return InnerImage()->IsImageContainerAvailable(aManager, aFlags);
-  }
-  return false;
-}
-
-NS_IMETHODIMP_(already_AddRefed<ImageContainer>)
-FrozenImage::GetImageContainer(layers::LayerManager* aManager,
-                               uint32_t aFlags) {
-  if (IsNonAnimated()) {
-    return InnerImage()->GetImageContainer(aManager, aFlags);
-  }
-  // XXX(seth): GetImageContainer does not currently support anything but the
-  // current frame. We work around this by always returning null, but if it ever
-  // turns out that FrozenImage is widely used on codepaths that can actually
-  // benefit from GetImageContainer, it would be a good idea to fix that method
-  // for performance reasons.
-  return nullptr;
-}
-
-NS_IMETHODIMP_(bool)
-FrozenImage::IsImageContainerAvailableAtSize(LayerManager* aManager,
-                                             const IntSize& aSize,
-                                             uint32_t aFlags) {
-  if (IsNonAnimated()) {
-    return InnerImage()->IsImageContainerAvailableAtSize(aManager, aSize,
-                                                         aFlags);
+    return InnerImage()->IsImageContainerAvailable(aRenderer, aFlags);
   }
   return false;
 }
 
 NS_IMETHODIMP_(ImgDrawResult)
-FrozenImage::GetImageContainerAtSize(layers::LayerManager* aManager,
-                                     const gfx::IntSize& aSize,
-                                     const Maybe<SVGImageContext>& aSVGContext,
-                                     const Maybe<ImageIntRegion>& aRegion,
-                                     uint32_t aFlags,
-                                     layers::ImageContainer** aOutContainer) {
+FrozenImage::GetImageProvider(WindowRenderer* aRenderer,
+                              const gfx::IntSize& aSize,
+                              const Maybe<SVGImageContext>& aSVGContext,
+                              const Maybe<ImageIntRegion>& aRegion,
+                              uint32_t aFlags,
+                              WebRenderImageProvider** aProvider) {
   if (IsNonAnimated()) {
-    return InnerImage()->GetImageContainerAtSize(
-        aManager, aSize, aSVGContext, aRegion, aFlags, aOutContainer);
+    return InnerImage()->GetImageProvider(aRenderer, aSize, aSVGContext,
+                                          aRegion, aFlags, aProvider);
   }
 
   // XXX(seth): GetImageContainer does not currently support anything but the
@@ -124,6 +98,10 @@ FrozenImage::StartDecoding(uint32_t aFlags, uint32_t aWhichFrame) {
 bool FrozenImage::StartDecodingWithResult(uint32_t aFlags,
                                           uint32_t aWhichFrame) {
   return InnerImage()->StartDecodingWithResult(aFlags, FRAME_FIRST);
+}
+
+bool FrozenImage::HasDecodedPixels() {
+  return InnerImage()->HasDecodedPixels();
 }
 
 imgIContainer::DecodeResult FrozenImage::RequestDecodeWithResult(

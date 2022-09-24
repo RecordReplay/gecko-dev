@@ -11,13 +11,14 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/UniquePtrExtensions.h"
 #include "DOMSVGAnimatedNumberList.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEConvolveMatrix)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEConvolveMatrixElement::WrapNode(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -220,6 +221,15 @@ bool SVGFEConvolveMatrixElement::AttributeAffectsRendering(
            aAttribute == nsGkAtoms::kernelMatrix));
 }
 
+nsresult SVGFEConvolveMatrixElement::BindToTree(BindContext& aCtx,
+                                                nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feConvolveMatrix);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -265,5 +275,4 @@ SVGFEConvolveMatrixElement::GetNumberListInfo() {
                                   ArrayLength(sNumberListInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

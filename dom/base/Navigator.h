@@ -42,6 +42,7 @@ class ServiceWorkerContainer;
 class DOMRequest;
 class CredentialsContainer;
 class Clipboard;
+class LockManager;
 }  // namespace dom
 namespace webgpu {
 class Instance;
@@ -52,8 +53,7 @@ class Instance;
 // Navigator: Script "navigator" object
 //*****************************************************************************
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Permissions;
 
@@ -91,12 +91,10 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   explicit Navigator(nsPIDOMWindowInner* aInnerWindow);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Navigator)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(Navigator)
 
   void Invalidate();
   nsPIDOMWindowInner* GetWindow() const { return mWindow; }
-
-  void RefreshMIMEArray();
 
   size_t SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf) const;
 
@@ -127,12 +125,15 @@ class Navigator final : public nsISupports, public nsWrapperCache {
                                ErrorResult& aRv);
   nsMimeTypeArray* GetMimeTypes(ErrorResult& aRv);
   nsPluginArray* GetPlugins(ErrorResult& aRv);
+  bool PdfViewerEnabled();
   Permissions* GetPermissions(ErrorResult& aRv);
   void GetDoNotTrack(nsAString& aResult);
+  bool GlobalPrivacyControl();
   Geolocation* GetGeolocation(ErrorResult& aRv);
   Promise* GetBattery(ErrorResult& aRv);
 
-  Promise* Share(const ShareData& aData, ErrorResult& aRv);
+  bool CanShare(const ShareData& aData);
+  already_AddRefed<Promise> Share(const ShareData& aData, ErrorResult& aRv);
 
   static void AppName(nsAString& aAppName, nsIPrincipal* aCallerPrincipal,
                       bool aUsePrefOverriddenValue);
@@ -177,6 +178,7 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   already_AddRefed<LegacyMozTCPSocket> MozTCPSocket();
   network::Connection* GetConnection(ErrorResult& aRv);
   MediaDevices* GetMediaDevices(ErrorResult& aRv);
+  MediaDevices* GetExtantMediaDevices() const { return mMediaDevices; };
 
   void GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads, ErrorResult& aRv);
   GamepadServiceTest* RequestGamepadServiceTest();
@@ -206,6 +208,7 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   mozilla::dom::CredentialsContainer* Credentials();
   dom::Clipboard* Clipboard();
   webgpu::Instance* Gpu();
+  dom::LockManager* Locks();
 
   static bool Webdriver();
 
@@ -242,11 +245,14 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   bool HasCreatedMediaSession() const;
 
  private:
+  void ValidateShareData(const ShareData& aData, ErrorResult& aRv);
   RefPtr<MediaKeySystemAccessManager> mMediaKeySystemAccessManager;
 
  public:
   void NotifyVRDisplaysUpdated();
   void NotifyActiveVRDisplaysChanged();
+
+  bool TestTrialGatedAttribute() const { return true; }
 
  private:
   virtual ~Navigator();
@@ -262,7 +268,6 @@ class Navigator final : public nsISupports, public nsWrapperCache {
     return mWindow ? mWindow->GetDocShell() : nullptr;
   }
 
-  RefPtr<nsMimeTypeArray> mMimeTypes;
   RefPtr<nsPluginArray> mPlugins;
   RefPtr<Permissions> mPermissions;
   RefPtr<Geolocation> mGeolocation;
@@ -285,9 +290,9 @@ class Navigator final : public nsISupports, public nsWrapperCache {
   RefPtr<AddonManager> mAddonManager;
   RefPtr<webgpu::Instance> mWebGpu;
   RefPtr<Promise> mSharePromise;  // Web Share API related
+  RefPtr<dom::LockManager> mLocks;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_Navigator_h

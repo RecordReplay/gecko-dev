@@ -33,7 +33,7 @@ PermissionStatus::PermissionStatus(nsPIDOMWindowInner* aWindow,
     : DOMEventTargetHelper(aWindow),
       mName(aName),
       mState(PermissionState::Denied) {
-  KeepAliveIfHasListenersFor(u"change"_ns);
+  KeepAliveIfHasListenersFor(nsGkAtoms::onchange);
 }
 
 nsresult PermissionStatus::Init() {
@@ -111,6 +111,10 @@ already_AddRefed<nsIPrincipal> PermissionStatus::GetPrincipal() const {
 }
 
 void PermissionStatus::PermissionChanged() {
+  nsCOMPtr<nsPIDOMWindowInner> window = GetOwner();
+  if (NS_WARN_IF(!window) || !window->IsFullyActive()) {
+    return;
+  }
   auto oldState = mState;
   UpdateState();
   if (mState != oldState) {
@@ -121,7 +125,7 @@ void PermissionStatus::PermissionChanged() {
 }
 
 void PermissionStatus::DisconnectFromOwner() {
-  IgnoreKeepAliveIfHasListenersFor(u"change"_ns);
+  IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onchange);
 
   if (mObserver) {
     mObserver->RemoveSink(this);

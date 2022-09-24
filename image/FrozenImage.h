@@ -42,20 +42,13 @@ class FrozenImage : public ImageWrapper {
   GetFrameAtSize(const gfx::IntSize& aSize, uint32_t aWhichFrame,
                  uint32_t aFlags) override;
   NS_IMETHOD_(bool)
-  IsImageContainerAvailable(layers::LayerManager* aManager,
+  IsImageContainerAvailable(WindowRenderer* aRenderer,
                             uint32_t aFlags) override;
-  NS_IMETHOD_(already_AddRefed<layers::ImageContainer>)
-  GetImageContainer(layers::LayerManager* aManager, uint32_t aFlags) override;
-  NS_IMETHOD_(bool)
-  IsImageContainerAvailableAtSize(layers::LayerManager* aManager,
-                                  const gfx::IntSize& aSize,
-                                  uint32_t aFlags) override;
   NS_IMETHOD_(ImgDrawResult)
-  GetImageContainerAtSize(layers::LayerManager* aManager,
-                          const gfx::IntSize& aSize,
-                          const Maybe<SVGImageContext>& aSVGContext,
-                          const Maybe<ImageIntRegion>& aRegion, uint32_t aFlags,
-                          layers::ImageContainer** aOutContainer) override;
+  GetImageProvider(WindowRenderer* aRenderer, const gfx::IntSize& aSize,
+                   const Maybe<SVGImageContext>& aSVGContext,
+                   const Maybe<ImageIntRegion>& aRegion, uint32_t aFlags,
+                   WebRenderImageProvider** aProvider) override;
   NS_IMETHOD_(ImgDrawResult)
   Draw(gfxContext* aContext, const nsIntSize& aSize, const ImageRegion& aRegion,
        uint32_t aWhichFrame, gfx::SamplingFilter aSamplingFilter,
@@ -64,6 +57,8 @@ class FrozenImage : public ImageWrapper {
   NS_IMETHOD StartDecoding(uint32_t aFlags, uint32_t aWhichFrame) override;
   NS_IMETHOD_(bool)
   StartDecodingWithResult(uint32_t aFlags, uint32_t aWhichFrame) override;
+  NS_IMETHOD_(bool)
+  HasDecodedPixels() override;
   NS_IMETHOD_(DecodeResult)
   RequestDecodeWithResult(uint32_t aFlags, uint32_t aWhichFrame) override;
   NS_IMETHOD RequestDecodeForSize(const nsIntSize& aSize, uint32_t aFlags,

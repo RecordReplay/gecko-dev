@@ -18,21 +18,19 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/SecurityPolicyViolationEvent.h"
 #include "mozilla/dom/SessionStoreRestoreData.h"
-#include "mozilla/dom/SessionStoreDataCollector.h"
 #include "mozilla/dom/WindowGlobalActorsBinding.h"
-#include "mozilla/dom/WindowGlobalParent.h"
 #include "mozilla/dom/WindowContext.h"
 #include "mozilla/dom/InProcessChild.h"
 #include "mozilla/dom/InProcessParent.h"
 #include "mozilla/ipc/Endpoint.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ScopeExit.h"
+#include "GeckoProfiler.h"
 #include "nsContentUtils.h"
 #include "nsDocShell.h"
 #include "nsFocusManager.h"
 #include "nsFrameLoaderOwner.h"
 #include "nsGlobalWindowInner.h"
-#include "nsFrameLoaderOwner.h"
 #include "nsNetUtil.h"
 #include "nsQueryObject.h"
 #include "nsSerializationHelper.h"
@@ -43,10 +41,6 @@
 #include "mozilla/dom/JSActorService.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsIURIMutator.h"
-
-#ifdef MOZ_GECKO_PROFILER
-#  include "GeckoProfiler.h"
-#endif
 
 using namespace mozilla::ipc;
 using namespace mozilla::dom::ipc;
@@ -66,7 +60,6 @@ WindowGlobalChild::WindowGlobalChild(dom::WindowContext* aWindowContext,
     NS_NewURI(getter_AddRefs(mDocumentURI), "about:blank");
   }
 
-#ifdef MOZ_GECKO_PROFILER
   // Registers a DOM Window with the profiler. It re-registers the same Inner
   // Window ID with different URIs because when a Browsing context is first
   // loaded, the first url loaded in it will be about:blank. This call keeps the
@@ -77,8 +70,8 @@ WindowGlobalChild::WindowGlobalChild(dom::WindowContext* aWindowContext,
   }
   profiler_register_page(BrowsingContext()->BrowserId(), InnerWindowId(),
                          aDocumentURI->GetSpecOrDefault(),
-                         embedderInnerWindowID);
-#endif
+                         embedderInnerWindowID,
+                         BrowsingContext()->UsePrivateBrowsing());
 }
 
 already_AddRefed<WindowGlobalChild> WindowGlobalChild::Create(
@@ -182,6 +175,7 @@ void WindowGlobalChild::OnNewDocument(Document* aDocument) {
   // added here should also be added to WindowGlobalActor::WindowInitializer.
 
   // FIXME: Perhaps these should be combined into a smaller number of messages?
+  SendSetIsInitialDocument(aDocument->IsInitialDocument());
   SetDocumentURI(aDocument->GetDocumentURI());
   SetDocumentPrincipal(aDocument->NodePrincipal(),
                        aDocument->EffectiveStoragePrincipal());
@@ -332,11 +326,6 @@ void WindowGlobalChild::Destroy() {
   if (!browserChild || !browserChild->IsDestroyed()) {
     SendDestroy();
   }
-
-  if (mSessionStoreDataCollector) {
-    mSessionStoreDataCollector->Cancel();
-    mSessionStoreDataCollector = nullptr;
-  }
 }
 
 mozilla::ipc::IPCResult WindowGlobalChild::RecvMakeFrameLocal(
@@ -408,6 +397,8 @@ mozilla::ipc::IPCResult WindowGlobalChild::RecvMakeFrameRemote(
     return IPC_OK();
   }
 
+  // Synchronously delete de actor here rather than using SendBeginDestroy(), as
+  // we haven't initialized it yet.
   auto deleteBridge =
       MakeScopeExit([&] { BrowserBridgeChild::Send__delete__(bridge); });
 
@@ -594,7 +585,6 @@ IPCResult WindowGlobalChild::RecvRawMessage(
 }
 
 void WindowGlobalChild::SetDocumentURI(nsIURI* aDocumentURI) {
-#ifdef MOZ_GECKO_PROFILER
   // Registers a DOM Window with the profiler. It re-registers the same Inner
   // Window ID with different URIs because when a Browsing context is first
   // loaded, the first url loaded in it will be about:blank. This call keeps the
@@ -605,8 +595,8 @@ void WindowGlobalChild::SetDocumentURI(nsIURI* aDocumentURI) {
   }
   profiler_register_page(BrowsingContext()->BrowserId(), InnerWindowId(),
                          aDocumentURI->GetSpecOrDefault(),
-                         embedderInnerWindowID);
-#endif
+                         embedderInnerWindowID,
+                         BrowsingContext()->UsePrivateBrowsing());
   mDocumentURI = aDocumentURI;
   SendUpdateDocumentURI(aDocumentURI);
 }
@@ -665,9 +655,7 @@ void WindowGlobalChild::ActorDestroy(ActorDestroyReason aWhy) {
   // marked as discarded at this point.
   mWindowContext->Discard();
 
-#ifdef MOZ_GECKO_PROFILER
   profiler_unregister_page(InnerWindowId());
-#endif
 
   // Destroy our JSActors, and reject any pending queries.
   JSActorDidDestroy();
@@ -709,20 +697,9 @@ nsISupports* WindowGlobalChild::GetParentObject() {
   return xpc::NativeGlobal(xpc::PrivilegedJunkScope());
 }
 
-void WindowGlobalChild::SetSessionStoreDataCollector(
-    SessionStoreDataCollector* aCollector) {
-  mSessionStoreDataCollector = aCollector;
-}
-
-SessionStoreDataCollector* WindowGlobalChild::GetSessionStoreDataCollector()
-    const {
-  return mSessionStoreDataCollector;
-}
-
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_WEAK_PTR(WindowGlobalChild, mWindowGlobal,
                                                mContainerFeaturePolicy,
-                                               mWindowContext,
-                                               mSessionStoreDataCollector)
+                                               mWindowContext)
 
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WindowGlobalChild)
   NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY

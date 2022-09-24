@@ -13,6 +13,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
   fxAccounts: "resource://gre/modules/FxAccounts.jsm",
   FXA_PWDMGR_HOST: "resource://gre/modules/FxAccountsCommon.js",
   FXA_PWDMGR_REALM: "resource://gre/modules/FxAccountsCommon.js",
@@ -314,7 +315,7 @@ class AboutProtectionsParent extends JSWindowActorParent {
   async VPNSubStatus() {
     // For testing, set vpn sub status manually
     if (gTestOverride && "vpnOverrides" in gTestOverride) {
-      return gTestOverride.vpnOverrides().hasSubscription;
+      return gTestOverride.vpnOverrides();
     }
 
     let vpnToken;
@@ -345,33 +346,6 @@ class AboutProtectionsParent extends JSWindowActorParent {
     return false;
   }
 
-  // VPN shows if we are in a supported region and supported languages
-  // VPN does not show in China - VPNs are illegal there, this is a requirement to hardcode, and not use in a pref.
-  VPNShouldShow() {
-    let currentRegion = "";
-    if (gTestOverride && "vpnOverrides" in gTestOverride) {
-      currentRegion = gTestOverride.vpnOverrides().location;
-    } else {
-      // The region we have detected the user to be in
-      // We cannot run this in tests due to it using a request
-      currentRegion = Region.current ? Region.current.toLowerCase() : "";
-    }
-
-    // The region that the user has set as their home region
-    const homeRegion = Region.home.toLowerCase() || "";
-    const regionsWithVPN = Services.prefs.getStringPref(
-      "browser.contentblocking.report.vpn_regions"
-    );
-    const language = Services.locale.appLocaleAsBCP47;
-
-    return (
-      currentRegion != "cn" &&
-      homeRegion != "cn" &&
-      regionsWithVPN.includes(currentRegion) &&
-      language.includes("en-")
-    );
-  }
-
   async receiveMessage(aMessage) {
     let win = this.browsingContext.top.embedderElement.ownerGlobal;
     switch (aMessage.name) {
@@ -390,20 +364,14 @@ class AboutProtectionsParent extends JSWindowActorParent {
         break;
       case "FetchContentBlockingEvents":
         let dataToSend = {};
-        let weekdays = Services.intl.getDisplayNames(undefined, {
-          style: "short",
-          keys: [
-            "dates/gregorian/weekdays/sunday",
-            "dates/gregorian/weekdays/monday",
-            "dates/gregorian/weekdays/tuesday",
-            "dates/gregorian/weekdays/wednesday",
-            "dates/gregorian/weekdays/thursday",
-            "dates/gregorian/weekdays/friday",
-            "dates/gregorian/weekdays/saturday",
-            "dates/gregorian/weekdays/sunday",
-          ],
+        let displayNames = new Services.intl.DisplayNames(undefined, {
+          type: "weekday",
+          style: "abbreviated",
+          calendar: "gregory",
         });
-        weekdays = Object.values(weekdays.values);
+
+        // Weekdays starting Sunday (7) to Saturday (6).
+        let weekdays = [7, 1, 2, 3, 4, 5, 6].map(day => displayNames.of(day));
         dataToSend.weekdays = weekdays;
 
         if (PrivateBrowsingUtils.isWindowPrivate(win)) {
@@ -462,7 +430,7 @@ class AboutProtectionsParent extends JSWindowActorParent {
         return this.VPNSubStatus();
 
       case "FetchShowVPNCard":
-        return this.VPNShouldShow();
+        return BrowserUtils.shouldShowVPNPromo();
     }
 
     return undefined;

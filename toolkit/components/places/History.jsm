@@ -135,15 +135,15 @@ var History = Object.freeze({
   /**
    * Fetch the available information for one page.
    *
-   * @param guidOrURI: (string) or (URL, nsIURI or href)
+   * @param {URL|nsIURI|string} guidOrURI: (string) or (URL, nsIURI or href)
    *      Either the full URI of the page or the GUID of the page.
-   * @param [optional] options (object)
+   * @param {object} [options]
    *      An optional object whose properties describe options:
    *        - `includeVisits` (boolean) set this to true if `visits` in the
    *           PageInfo needs to contain VisitInfo in a reverse chronological order.
    *           By default, `visits` is undefined inside the returned `PageInfo`.
    *        - `includeMeta` (boolean) set this to true to fetch page meta fields,
-   *           i.e. `description` and `preview_image_url`.
+   *           i.e. `description`, `site_name` and `preview_image_url`.
    *        - `includeAnnotations` (boolean) set this to true to fetch any
    *           annotations that are associated with the page.
    *
@@ -216,6 +216,30 @@ var History = Object.freeze({
 
     return PlacesUtils.promiseDBConnection().then(db =>
       fetchAnnotatedPages(db, annotations)
+    );
+  },
+
+  /**
+   * Fetch multiple pages.
+   *
+   * @param {string[]|nsIURI[]|URL[]} guidOrURIs: Array of href or URLs to fetch.
+   * @returns {Promise}
+   *   A promise resolved once the operation is complete.
+   * @resolves {Map<string, string>} Map of PageInfos, keyed by the input info,
+   *   either guid or href. We don't use nsIURI or URL as keys to avoid
+   *   complexity, in all the cases the caller knows which objects is handling,
+   *   and can unwrap them. Unknown input pages will have no entry in the Map.
+   * @throws (Error)
+   *   If input is invalid, for example not a valid GUID or URL.
+   */
+  fetchMany(guidOrURIs) {
+    if (!Array.isArray(guidOrURIs)) {
+      throw new TypeError("Input is not an array");
+    }
+    // First, normalize to guid or URL, throw if not possible
+    guidOrURIs = guidOrURIs.map(v => PlacesUtils.normalizeToURLOrGUID(v));
+    return PlacesUtils.promiseDBConnection().then(db =>
+      fetchMany(db, guidOrURIs)
     );
   },
 
@@ -487,7 +511,7 @@ var History = Object.freeze({
 
     if (
       hasURL &&
-      !(filter.url instanceof URL) &&
+      !URL.isInstance(filter.url) &&
       typeof filter.url != "string" &&
       !(filter.url instanceof Ci.nsIURI)
     ) {
@@ -697,6 +721,13 @@ var History = Object.freeze({
    *      2). Descriptions longer than DB_DESCRIPTION_LENGTH_MAX will be
    *          truncated.
    *
+   *      If a property `siteName` is provided, the site name of the
+   *      page is updated. Note that:
+   *      1). An empty string or null `siteName` will clear the existing
+   *          value in the database.
+   *      2). Descriptions longer than DB_SITENAME_LENGTH_MAX will be
+   *          truncated.
+   *
    *      If a property `previewImageURL` is provided, the preview image
    *      URL of the page is updated. Note that:
    *      1). A null `previewImageURL` will clear the existing value in the
@@ -732,11 +763,12 @@ var History = Object.freeze({
 
     if (
       info.description === undefined &&
+      info.siteName === undefined &&
       info.previewImageURL === undefined &&
       info.annotations === undefined
     ) {
       throw new TypeError(
-        "pageInfo object must at least have either a description, previewImageURL or annotations property."
+        "pageInfo object must at least have either a description, siteName, previewImageURL or annotations property."
       );
     }
 
@@ -835,18 +867,6 @@ function convertForUpdatePlaces(pageInfo) {
 }
 
 /**
- * Generates a list of "?" SQL bindings based on input array length.
- * @param {array} values an array of values.
- * @param {string} [prefix] a string to prefix to the placeholder.
- * @param {string} [suffix] a string to suffix to the placeholder.
- * @returns {string} placeholders is a string made of question marks and commas,
- *          one per value.
- */
-function sqlBindPlaceholders(values, prefix = "", suffix = "") {
-  return new Array(values.length).fill(prefix + "?" + suffix).join(",");
-}
-
-/**
  * Invalidate and recompute the frecency of a list of pages,
  * informing frecency observers.
  *
@@ -862,13 +882,13 @@ var invalidateFrecencies = async function(db, idList) {
     await db.execute(
       `UPDATE moz_places
        SET frecency = CALCULATE_FRECENCY(id)
-       WHERE id in (${sqlBindPlaceholders(chunk)})`,
+       WHERE id in (${PlacesUtils.sqlBindPlaceholders(chunk)})`,
       chunk
     );
     await db.execute(
       `UPDATE moz_places
        SET hidden = 0
-       WHERE id in (${sqlBindPlaceholders(chunk)})
+       WHERE id in (${PlacesUtils.sqlBindPlaceholders(chunk)})
        AND frecency <> 0`,
       chunk
     );
@@ -966,7 +986,7 @@ var cleanupPages = async function(db, pages) {
     let idsToRemove = chunk.map(p => p.id);
     await db.execute(
       `DELETE FROM moz_places
-       WHERE id IN ( ${sqlBindPlaceholders(idsToRemove)} )
+       WHERE id IN ( ${PlacesUtils.sqlBindPlaceholders(idsToRemove)} )
          AND foreign_count = 0 AND last_visit_date ISNULL`,
       idsToRemove
     );
@@ -975,18 +995,20 @@ var cleanupPages = async function(db, pages) {
     let hashesToRemove = chunk.map(p => p.hash);
     await db.executeCached(
       `DELETE FROM moz_pages_w_icons
-       WHERE page_url_hash IN (${sqlBindPlaceholders(hashesToRemove)})`,
+       WHERE page_url_hash IN (${PlacesUtils.sqlBindPlaceholders(
+         hashesToRemove
+       )})`,
       hashesToRemove
     );
 
     await db.execute(
       `DELETE FROM moz_annos
-       WHERE place_id IN ( ${sqlBindPlaceholders(idsToRemove)} )`,
+       WHERE place_id IN ( ${PlacesUtils.sqlBindPlaceholders(idsToRemove)} )`,
       idsToRemove
     );
     await db.execute(
       `DELETE FROM moz_inputhistory
-       WHERE place_id IN ( ${sqlBindPlaceholders(idsToRemove)} )`,
+       WHERE place_id IN ( ${PlacesUtils.sqlBindPlaceholders(idsToRemove)} )`,
       idsToRemove
     );
   }
@@ -1125,7 +1147,7 @@ var notifyOnResult = async function(data, onResult) {
 var fetch = async function(db, guidOrURL, options) {
   let whereClauseFragment = "";
   let params = {};
-  if (guidOrURL instanceof URL) {
+  if (URL.isInstance(guidOrURL)) {
     whereClauseFragment = "WHERE h.url_hash = hash(:url) AND h.url = :url";
     params.url = guidOrURL.href;
   } else {
@@ -1144,7 +1166,7 @@ var fetch = async function(db, guidOrURL, options) {
 
   let pageMetaSelectionFragment = "";
   if (options.includeMeta) {
-    pageMetaSelectionFragment = ", description, preview_image_url";
+    pageMetaSelectionFragment = ", description, site_name, preview_image_url";
   }
 
   let query = `SELECT h.id, guid, url, title, frecency
@@ -1167,6 +1189,7 @@ var fetch = async function(db, guidOrURL, options) {
     }
     if (options.includeMeta) {
       pageInfo.description = row.getResultByName("description") || "";
+      pageInfo.siteName = row.getResultByName("site_name") || "";
       let previewImageURL = row.getResultByName("preview_image_url");
       pageInfo.previewImageURL = previewImageURL
         ? new URL(previewImageURL)
@@ -1242,6 +1265,64 @@ var fetchAnnotatedPages = async function(db, annotations) {
   }
 
   return result;
+};
+
+// Inner implementation of History.fetchMany.
+var fetchMany = async function(db, guidOrURLs) {
+  let resultsMap = new Map();
+  for (let chunk of PlacesUtils.chunkArray(guidOrURLs, db.variableLimit)) {
+    let urls = [];
+    let guids = [];
+    for (let v of chunk) {
+      if (URL.isInstance(v)) {
+        urls.push(v);
+      } else {
+        guids.push(v);
+      }
+    }
+    let wheres = [];
+    let params = [];
+    if (urls.length) {
+      wheres.push(`
+        (
+          url_hash IN(${PlacesUtils.sqlBindPlaceholders(
+            urls,
+            "hash(",
+            ")"
+          )}) AND
+          url IN(${PlacesUtils.sqlBindPlaceholders(urls)})
+        )`);
+      let hrefs = urls.map(u => u.href);
+      params = [...params, ...hrefs, ...hrefs];
+    }
+    if (guids.length) {
+      wheres.push(`guid IN(${PlacesUtils.sqlBindPlaceholders(guids)})`);
+      params = [...params, ...guids];
+    }
+
+    let rows = await db.executeCached(
+      `
+      SELECT h.id, guid, url, title, frecency
+      FROM moz_places h
+      WHERE ${wheres.join(" OR ")}
+    `,
+      params
+    );
+    for (let row of rows) {
+      let pageInfo = {
+        guid: row.getResultByName("guid"),
+        url: new URL(row.getResultByName("url")),
+        frecency: row.getResultByName("frecency"),
+        title: row.getResultByName("title") || "",
+      };
+      if (guidOrURLs.includes(pageInfo.guid)) {
+        resultsMap.set(pageInfo.guid, pageInfo);
+      } else {
+        resultsMap.set(pageInfo.url.href, pageInfo);
+      }
+    }
+  }
+  return resultsMap;
 };
 
 // Inner implementation of History.removeVisitsByFilter.
@@ -1322,7 +1403,7 @@ var removeVisitsByFilter = async function(db, filter, onResult = null) {
     )) {
       await db.execute(
         `DELETE FROM moz_historyvisits
-         WHERE id IN (${sqlBindPlaceholders(chunk)})`,
+         WHERE id IN (${PlacesUtils.sqlBindPlaceholders(chunk)})`,
         chunk
       );
     }
@@ -1337,7 +1418,7 @@ var removeVisitsByFilter = async function(db, filter, onResult = null) {
           (foreign_count != 0) AS has_foreign,
           (last_visit_date NOTNULL) as has_visits
          FROM moz_places
-         WHERE id IN (${sqlBindPlaceholders(chunk)})`,
+         WHERE id IN (${PlacesUtils.sqlBindPlaceholders(chunk)})`,
         chunk,
         row => {
           let page = {
@@ -1455,7 +1536,7 @@ var removeByFilter = async function(db, filter, onResult = null) {
     for (let chunk of PlacesUtils.chunkArray(pageIds, db.variableLimit)) {
       await db.execute(
         `DELETE FROM moz_historyvisits
-         WHERE place_id IN(${sqlBindPlaceholders(chunk)})`,
+         WHERE place_id IN(${PlacesUtils.sqlBindPlaceholders(chunk)})`,
         chunk
       );
     }
@@ -1504,7 +1585,7 @@ var remove = async function(db, { guids, urls }, onResult = null) {
   for (let chunk of PlacesUtils.chunkArray(guids, db.variableLimit)) {
     let query = `SELECT id, url, url_hash, guid, foreign_count, title, frecency
        FROM moz_places
-       WHERE guid IN (${sqlBindPlaceholders(guids)})
+       WHERE guid IN (${PlacesUtils.sqlBindPlaceholders(guids)})
       `;
     await db.execute(query, chunk, onRow);
   }
@@ -1536,7 +1617,7 @@ var remove = async function(db, { guids, urls }, onResult = null) {
     for (let chunk of PlacesUtils.chunkArray(pageIds, db.variableLimit)) {
       await db.execute(
         `DELETE FROM moz_historyvisits
-         WHERE place_id IN (${sqlBindPlaceholders(chunk)})`,
+         WHERE place_id IN (${PlacesUtils.sqlBindPlaceholders(chunk)})`,
         chunk
       );
     }
@@ -1666,6 +1747,10 @@ var update = async function(db, pageInfo) {
   if ("description" in pageInfo) {
     updateFragments.push("description");
     params.description = pageInfo.description;
+  }
+  if ("siteName" in pageInfo) {
+    updateFragments.push("site_name");
+    params.site_name = pageInfo.siteName;
   }
   if ("previewImageURL" in pageInfo) {
     updateFragments.push("preview_image_url");

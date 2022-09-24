@@ -28,6 +28,7 @@ from .timeout import Timeouts
 CHROME_ELEMENT_KEY = "chromeelement-9fc5-4b51-a3c8-01716eedeb04"
 FRAME_KEY = "frame-075b-4da1-b6ba-e579c2d3230a"
 WEB_ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf"
+WEB_SHADOW_ROOT_KEY = "shadow-6066-11e4-a52e-4f735466cecf"
 WINDOW_KEY = "window-fcc6-11e5-b4f8-330a88ab9d7f"
 
 
@@ -353,6 +354,13 @@ class HTMLElement(object):
             "WebDriver:GetElementCSSValue", body, key="value"
         )
 
+    @property
+    def shadow_root(self):
+        """Gets the shadow root of the current element"""
+        return self.marionette._send_message(
+            "WebDriver:GetShadowRoot", {"id": self.id}, key="value"
+        )
+
     @classmethod
     def _from_json(cls, json, marionette):
         if isinstance(json, dict):
@@ -365,6 +373,35 @@ class HTMLElement(object):
             elif WINDOW_KEY in json:
                 return cls(marionette, json[WINDOW_KEY], WINDOW_KEY)
         raise ValueError("Unrecognised web element")
+
+
+class ShadowRoot(object):
+    """A Class to handling Shadow Roots"""
+
+    identifiers = (WEB_SHADOW_ROOT_KEY,)
+
+    def __init__(self, marionette, id, kind=WEB_SHADOW_ROOT_KEY):
+        self.marionette = marionette
+        assert id is not None
+        self.id = id
+        self.kind = kind
+
+    def __str__(self):
+        return self.id
+
+    def __eq__(self, other_element):
+        return self.id == other_element.id
+
+    def __hash__(self):
+        # pylint --py3k: W1641
+        return hash(self.id)
+
+    @classmethod
+    def _from_json(cls, json, marionette):
+        if isinstance(json, dict):
+            if WEB_SHADOW_ROOT_KEY in json:
+                return cls(marionette, json[WEB_SHADOW_ROOT_KEY])
+        raise ValueError("Unrecognised shadow root")
 
 
 class Alert(object):
@@ -455,6 +492,7 @@ class Marionette(object):
         self.bin = bin
         self.client = None
         self.instance = None
+        self.requested_capabilities = None
         self.session = None
         self.session_id = None
         self.process_id = None
@@ -630,19 +668,9 @@ class Marionette(object):
             self._handle_error(err)
 
         if key is not None:
-            return self._unwrap_response(res.get(key))
+            return self._from_json(res.get(key))
         else:
-            return self._unwrap_response(res)
-
-    def _unwrap_response(self, value):
-        if isinstance(value, dict) and any(
-            k in value.keys() for k in HTMLElement.identifiers
-        ):
-            return HTMLElement._from_json(value, self)
-        elif isinstance(value, list):
-            return list(self._unwrap_response(item) for item in value)
-        else:
-            return value
+            return self._from_json(res)
 
     def _handle_error(self, obj):
         error = obj["error"]
@@ -700,7 +728,8 @@ class Marionette(object):
                 crash_count = self.check_for_crash()
 
                 if crash_count > 0:
-                    if returncode == 0:
+                    # SIGUSR1 indicates a forced shutdown due to a content process crash
+                    if returncode == 245:
                         message = "Content process crashed"
                     else:
                         message = "Process crashed (Exit code: {returncode})"
@@ -740,7 +769,9 @@ class Marionette(object):
         with self.using_context(self.CONTEXT_CHROME):
             self.execute_script(
                 """
-               Components.utils.import("resource://gre/modules/Preferences.jsm");
+               const { Preferences } = ChromeUtils.import(
+                 "resource://gre/modules/Preferences.jsm"
+               );
                Preferences.reset(arguments[0]);
                """,
                 script_args=(pref,),
@@ -765,7 +796,9 @@ class Marionette(object):
         with self.using_context(self.CONTEXT_CHROME):
             pref_value = self.execute_script(
                 """
-                Components.utils.import("resource://gre/modules/Preferences.jsm");
+                const { Preferences } = ChromeUtils.import(
+                  "resource://gre/modules/Preferences.jsm"
+                );
 
                 let pref = arguments[0];
                 let defaultBranch = arguments[1];
@@ -802,7 +835,9 @@ class Marionette(object):
 
             self.execute_script(
                 """
-                Components.utils.import("resource://gre/modules/Preferences.jsm");
+                const { Preferences } = ChromeUtils.import(
+                  "resource://gre/modules/Preferences.jsm"
+                );
 
                 let pref = arguments[0];
                 let value = arguments[1];
@@ -904,50 +939,39 @@ class Marionette(object):
             self.delete_session()
             self.instance.restart(prefs)
             self.raise_for_port()
-            self.start_session()
+            self.start_session(self.requested_capabilities)
 
             # Restore the context as used before the restart
             self.set_context(context)
 
-    def _request_in_app_shutdown(self, *shutdown_flags):
+    def _request_in_app_shutdown(self, flags=None, safe_mode=False):
         """Attempt to quit the currently running instance from inside the
-        application.
-
-        Duplicate entries in `shutdown_flags` are removed, and
-        `"eForceQuit"` is added if no other `*Quit` flags are given.
-        This provides backwards compatible behaviour with earlier
-        Firefoxen.
+        application. If shutdown is prevented by some component the quit
+        will be forced.
 
         This method effectively calls `Services.startup.quit` in Gecko.
-        Possible flag values are listed at http://mzl.la/1X0JZsC.
+        Possible flag values are listed at https://bit.ly/3IYcjYi.
 
-        :param shutdown_flags: Optional additional quit masks to include.
-            Duplicates are removed, and `"eForceQuit"` is added if no
-            flags ending with `"Quit"` are present.
+        :param flags: Optional additional quit masks to include.
 
-        :throws InvalidArgumentException: If there are multiple
-            `shutdown_flags` ending with `"Quit"`.
+        :param safe_mode: Optional flag to indicate that the application has to
+            be restarted in safe mode.
 
         :returns: A dictionary containing details of the application shutdown.
                   The `cause` property reflects the reason, and `forced` indicates
                   that something prevented the shutdown and the application had
                   to be forced to shutdown.
+
+        :throws InvalidArgumentException: If there are multiple
+            `shutdown_flags` ending with `"Quit"`.
         """
-
-        # The vast majority of this function was implemented inside
-        # the quit command as part of bug 1337743, and can be
-        # removed from here in Firefox 55 at the earliest.
-
-        # remove duplicates
-        flags = set(shutdown_flags)
-
-        # add eForceQuit if there are no *Quits
-        if not any(flag.endswith("Quit") for flag in flags):
-            flags = flags | set(("eForceQuit",))
-
-        body = None
-        if len(flags) > 0:
-            body = {"flags": list(flags)}
+        body = {}
+        if flags is not None:
+            body["flags"] = list(
+                flags,
+            )
+        if safe_mode:
+            body["safeMode"] = safe_mode
 
         return self._send_message("Marionette:Quit", body)
 
@@ -1027,19 +1051,30 @@ class Marionette(object):
         return quit_details
 
     @do_process_check
-    def restart(self, clean=False, in_app=False, callback=None):
+    def restart(
+        self, callback=None, clean=False, in_app=False, safe_mode=False, silent=False
+    ):
         """
         This will terminate the currently running instance, and spawn a new instance
         with the same profile and then reuse the session id when creating a session again.
 
+        :param callback: If provided and `in_app` is True, the callback will be
+                         used to trigger the restart.
+
         :param clean: If False the same profile will be used after the restart. Note
                       that the in app initiated restart always maintains the same
                       profile.
+
         :param in_app: If True, marionette will cause a restart from within the
                        browser. Otherwise the browser will be restarted immediately
                        by killing the process.
-        :param callback: If provided and `in_app` is True, the callback will be
-                         used to trigger the restart.
+
+        :param safe_mode: Optional flag to indicate that the application has to
+            be restarted in safe mode.
+
+        :param silent: Optional flag to indicate that the application should
+            not open any window after a restart. Note that this flag is only
+            supported on MacOS.
 
         :returns: A dictionary containing details of the application restart.
                   The `cause` property reflects the reason, and `forced` indicates
@@ -1051,9 +1086,14 @@ class Marionette(object):
                 "restart() can only be called "
                 "on Gecko instances launched by Marionette"
             )
-        context = self._send_message("Marionette:GetContext", key="value")
 
+        context = self._send_message("Marionette:GetContext", key="value")
         restart_details = {"cause": "restart", "forced": False}
+
+        # Safe mode and the silent flag require in_app restarts.
+        if safe_mode or silent:
+            in_app = True
+
         if in_app:
             if clean:
                 raise ValueError(
@@ -1073,7 +1113,19 @@ class Marionette(object):
                 if callback is not None:
                     callback()
                 else:
-                    restart_details = self._request_in_app_shutdown("eRestart")
+                    flags = ["eRestart"]
+                    if silent:
+                        flags.append("eSilently")
+
+                    try:
+                        restart_details = self._request_in_app_shutdown(
+                            flags=flags, safe_mode=safe_mode
+                        )
+                    except Exception as e:
+                        self._send_message(
+                            "Marionette:AcceptConnections", {"value": True}
+                        )
+                        raise e
 
             except IOError:
                 # A possible IOError should be ignored at this point, given that
@@ -1126,7 +1178,7 @@ class Marionette(object):
                 "restarting the process".format(restart_details["cause"])
             )
 
-        self.start_session()
+        self.start_session(self.requested_capabilities)
         # Restore the context as used before the restart
         self.set_context(context)
 
@@ -1162,6 +1214,7 @@ class Marionette(object):
         """
         if capabilities is None:
             capabilities = {"strictFileInteractability": True}
+        self.requested_capabilities = capabilities
 
         if timeout is None:
             timeout = self.startup_timeout
@@ -1259,7 +1312,9 @@ class Marionette(object):
         :returns: unique window handle
         :rtype: string
         """
-        self.window = self._send_message("WebDriver:GetWindowHandle", key="value")
+        with self.using_context("content"):
+            self.window = self._send_message("WebDriver:GetWindowHandle", key="value")
+
         return self.window
 
     @property
@@ -1275,9 +1330,10 @@ class Marionette(object):
         :returns: unique window handle
         :rtype: string
         """
-        self.chrome_window = self._send_message(
-            "WebDriver:GetChromeWindowHandle", key="value"
-        )
+        with self.using_context("chrome"):
+            self.chrome_window = self._send_message(
+                "WebDriver:GetWindowHandle", key="value"
+            )
 
         return self.chrome_window
 
@@ -1317,16 +1373,15 @@ class Marionette(object):
         """Get list of windows in the current context.
 
         If called in the content context it will return a list of
-        references to all available browser windows.  Called in the
-        chrome context, it will list all available windows, not just
-        browser windows (e.g. not just navigator.browser).
+        references to all available browser windows.
 
         Each window handle is assigned by the server, and the list of
         strings returned does not have a guaranteed ordering.
 
         :returns: Unordered list of unique window handles as strings
         """
-        return self._send_message("WebDriver:GetWindowHandles")
+        with self.using_context("content"):
+            return self._send_message("WebDriver:GetWindowHandles")
 
     @property
     def chrome_window_handles(self):
@@ -1337,7 +1392,8 @@ class Marionette(object):
 
         :returns: Unordered list of unique chrome window handles as strings
         """
-        return self._send_message("WebDriver:GetChromeWindowHandles")
+        with self.using_context("chrome"):
+            return self._send_message("WebDriver:GetWindowHandles")
 
     @property
     def page_source(self):
@@ -1551,19 +1607,18 @@ class Marionette(object):
         return wrapped
 
     def _from_json(self, value):
-        if isinstance(value, list):
-            unwrapped = []
-            for item in value:
-                unwrapped.append(self._from_json(item))
-            return unwrapped
+        if isinstance(value, dict) and any(
+            k in value.keys() for k in HTMLElement.identifiers
+        ):
+            return HTMLElement._from_json(value, self)
+        elif isinstance(value, dict) and any(
+            k in value.keys() for k in ShadowRoot.identifiers
+        ):
+            return ShadowRoot._from_json(value, self)
         elif isinstance(value, dict):
-            unwrapped = {}
-            for key in value:
-                if key in HTMLElement.identifiers:
-                    return HTMLElement._from_json(value[key], self)
-                else:
-                    unwrapped[key] = self._from_json(value[key])
-            return unwrapped
+            return {key: self._from_json(val) for key, val in value.items()}
+        elif isinstance(value, list):
+            return list(self._from_json(item) for item in value)
         else:
             return value
 
@@ -1664,7 +1719,7 @@ class Marionette(object):
             if script_timeout is not None:
                 self.timeout.script = original_timeout
 
-        return self._from_json(rv)
+        return rv
 
     def execute_async_script(
         self,
@@ -1734,7 +1789,7 @@ class Marionette(object):
             if script_timeout is not None:
                 self.timeout.script = original_timeout
 
-        return self._from_json(rv)
+        return rv
 
     def find_element(self, method, target, id=None):
         """Returns an :class:`~marionette_driver.marionette.HTMLElement`

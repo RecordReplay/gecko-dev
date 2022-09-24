@@ -523,6 +523,61 @@
   !endif
 !macroend
 
+!macro GetCommonDirectory
+
+  !ifndef ${_MOZFUNC_UN}GetCommonDirectory
+    !verbose push
+    !verbose ${_MOZFUNC_VERBOSE}
+    !define ${_MOZFUNC_UN}GetCommonDirectory "!insertmacro ${_MOZFUNC_UN}GetCommonDirectoryCall"
+
+    Function ${_MOZFUNC_UN}GetCommonDirectory
+      Push $0   ; Save $0
+
+      ; This gets C:\ProgramData or the equivalent.
+      ${GetCommonAppDataFolder} $0
+
+      ; Add our subdirectory, this is hardcoded as grandparent of the update directory in
+      ; several other places.
+      StrCpy $0 "$0\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38"
+
+      Exch $0   ; Restore original $0 and put our $0 on the stack.
+    FunctionEnd
+
+    !verbose pop
+  !endif
+!macroend
+
+!macro GetCommonDirectoryCall _RESULT
+  !verbose push
+  !verbose ${_MOZFUNC_VERBOSE}
+  Call GetCommonDirectory
+  Pop ${_RESULT}
+  !verbose pop
+!macroend
+
+!macro un.GetCommonDirectoryCall _RESULT
+  !verbose push
+  !verbose ${_MOZFUNC_VERBOSE}
+  Call un.GetCommonDirectory
+  Pop ${_RESULT}
+  !verbose pop
+!macroend
+
+!macro un.GetCommonDirectory
+  !ifndef un.GetCommonDirectory
+    !verbose push
+    !verbose ${_MOZFUNC_VERBOSE}
+    !undef _MOZFUNC_UN
+    !define _MOZFUNC_UN "un."
+
+    !insertmacro GetCommonDirectory
+
+    !undef _MOZFUNC_UN
+    !define _MOZFUNC_UN
+    !verbose pop
+  !endif
+!macroend
+
 /**
  * The macros below will automatically prepend un. to the function names when
  * they are defined (e.g. !define un.RegCleanMain).
@@ -1569,6 +1624,42 @@
 !define RegisterDLL "!insertmacro RegisterDLL"
 !define UnregisterDLL "!insertmacro UnregisterDLL"
 
+
+################################################################################
+# Macros for retrieving special folders
+
+/**
+ * These macro get special folder paths directly, without depending on
+ * SetShellVarContext.
+ *
+ * Usage:
+ * ${GetProgramsFolder} $0
+ * ${GetLocalAppDataFolder} $0
+ * ${GetCommonAppDataFolder} $0
+ *
+ */
+!macro GetSpecialFolder _ID _RESULT
+  ; This system call gets the directory path. The arguments are:
+  ;   A null ptr for hwnd
+  ;   t.s puts the output string on the NSIS stack
+  ;   id indicates which dir to get
+  ;   false for fCreate (i.e. Do not create the folder if it doesn't exist)
+  System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.s, i ${_ID}, i 0)"
+  Pop ${_RESULT}
+!macroend
+
+!define CSIDL_PROGRAMS          0x0002
+!define CSIDL_LOCAL_APPDATA     0x001c
+!define CSIDL_COMMON_APPDATA    0x0023
+
+; Current User's Start Menu Programs
+!define GetProgramsFolder       "!insertmacro GetSpecialFolder ${CSIDL_PROGRAMS}"
+
+; Current User's Local App Data (e.g. C:\Users\<user>\AppData\Local)
+!define GetLocalAppDataFolder   "!insertmacro GetSpecialFolder ${CSIDL_LOCAL_APPDATA}"
+
+; Common App Data (e.g. C:\ProgramData)
+!define GetCommonAppDataFolder  "!insertmacro GetSpecialFolder ${CSIDL_COMMON_APPDATA}"
 
 ################################################################################
 # Macros for retrieving existing install paths
@@ -3338,6 +3429,7 @@
  * Removes the application's VirtualStore directory if present when the
  * installation directory is a sub-directory of the program files directory.
  *
+ * $R3 = Local App Data dir
  * $R4 = $PROGRAMFILES/$PROGRAMFILES64 for CleanVirtualStore_Internal
  * $R5 = various path values.
  * $R6 = length of the long path to $PROGRAMFILES32 or $PROGRAMFILES64
@@ -3365,6 +3457,7 @@
       Push $R6
       Push $R5
       Push $R4
+      Push $R3
 
       ${${_MOZFUNC_UN}GetLongPath} "$INSTDIR" $R9
       ${If} "$R9" != ""
@@ -3383,6 +3476,7 @@
 
       ClearErrors
 
+      Pop $R3
       Pop $R4
       Pop $R5
       Pop $R6
@@ -3401,7 +3495,8 @@
           ${If} "$R5" == "$R7"
             ; Remove the drive letter and colon from the $INSTDIR long path
             StrCpy $R5 "$R9" "" 2
-            StrCpy $R5 "$LOCALAPPDATA\VirtualStore$R5"
+            ${GetLocalAppDataFolder} $R3
+            StrCpy $R5 "$R3\VirtualStore$R5"
             ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
             ${If} "$R5" != ""
             ${AndIf} ${FileExists} "$R5"
@@ -3448,125 +3543,15 @@
 /**
  * If present removes the updates directory located in the profile's local
  * directory for this installation.
- * This macro is obsolete and should no longer be used. Please see
- * CleanUpdateDirectories.
- *
- * @param   _REL_PROFILE_PATH
- *          The relative path to the profile directory from $LOCALAPPDATA.
- *
- * $R4 = various path values.
- * $R5 = length of the long path to $PROGRAMFILES
- * $R6 = length of the long path to $INSTDIR
- * $R7 = long path to $PROGRAMFILES
- * $R8 = long path to $INSTDIR
- * $R9 = _REL_PROFILE_PATH
- */
-!macro CleanUpdatesDir
-
-  !ifndef ${_MOZFUNC_UN}CleanUpdatesDir
-    !define _MOZFUNC_UN_TMP ${_MOZFUNC_UN}
-    !insertmacro ${_MOZFUNC_UN_TMP}GetLongPath
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN ${_MOZFUNC_UN_TMP}
-    !undef _MOZFUNC_UN_TMP
-
-    !verbose push
-    !verbose ${_MOZFUNC_VERBOSE}
-    !define ${_MOZFUNC_UN}CleanUpdatesDir "!insertmacro ${_MOZFUNC_UN}CleanUpdatesDirCall"
-
-    Function ${_MOZFUNC_UN}CleanUpdatesDir
-      Exch $R9
-      Push $R8
-      Push $R7
-      Push $R6
-      Push $R5
-      Push $R4
-
-      StrCmp $R9 "" end +1 ; The relative path to the app's profiles is required
-      ${${_MOZFUNC_UN}GetLongPath} "$INSTDIR" $R8
-      StrCmp $R8 "" end +1
-      ${${_MOZFUNC_UN}GetLongPath} "$PROGRAMFILES" $R7
-      StrCmp $R7 "" end +1
-
-      StrLen $R6 "$R8"
-      StrLen $R5 "$R7"
-      ; Only continue If the length of $INSTDIR is greater than the length of
-      ; $PROGRAMFILES
-      IntCmp $R6 $R5 end end +1
-
-      ; Copy from the start of $INSTDIR the length of $PROGRAMFILES
-      StrCpy $R4 "$R8" $R5
-      StrCmp "$R4" "$R7" +1 end ; Check if $INSTDIR is under $PROGRAMFILES
-
-      ; Copy the relative path to $INSTDIR from $PROGRAMFILES
-      StrCpy $R4 "$R8" "" $R5
-
-      ; Concatenate the path to $LOCALAPPDATA the relative profile path and the
-      ; relative path to $INSTDIR from $PROGRAMFILES
-      StrCpy $R4 "$LOCALAPPDATA\$R9$R4"
-      ${${_MOZFUNC_UN}GetLongPath} "$R4" $R4
-      StrCmp $R4 "" end +1
-
-      IfFileExists "$R4\updates" +1 end
-      RmDir /r "$R4"
-
-      end:
-      ClearErrors
-
-      Pop $R4
-      Pop $R5
-      Pop $R6
-      Pop $R7
-      Pop $R8
-      Exch $R9
-    FunctionEnd
-
-    !verbose pop
-  !endif
-!macroend
-
-!macro CleanUpdatesDirCall _REL_PROFILE_PATH
-  !verbose push
-  !verbose ${_MOZFUNC_VERBOSE}
-  Push "${_REL_PROFILE_PATH}"
-  Call CleanUpdatesDir
-  !verbose pop
-!macroend
-
-!macro un.CleanUpdatesDirCall _REL_PROFILE_PATH
-  !verbose push
-  !verbose ${_MOZFUNC_VERBOSE}
-  Push "${_REL_PROFILE_PATH}"
-  Call un.CleanUpdatesDir
-  !verbose pop
-!macroend
-
-!macro un.CleanUpdatesDir
-  !ifndef un.CleanUpdatesDir
-    !verbose push
-    !verbose ${_MOZFUNC_VERBOSE}
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN "un."
-
-    !insertmacro CleanUpdatesDir
-
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN
-    !verbose pop
-  !endif
-!macroend
-
-/**
- * If present removes the updates directory located in the profile's local
- * directory for this installation.
  *
  * @param   _OLD_REL_PATH
- *          The relative path to the profile directory from $LOCALAPPDATA.
+ *          The relative path to the profile directory from Local AppData.
  *          Calculated for the old update directory not based on a hash.
  * @param   _NEW_REL_PATH
- *          The relative path to the profile directory from $LOCALAPPDATA.
+ *          The relative path to the profile directory from Local AppData.
  *          Calculated for the new update directory based on a hash.
  *
+ * $R9 = Local AppData
  * $R8 = _NEW_REL_PATH
  * $R7 = _OLD_REL_PATH
  * $R1 = taskBar ID hash located in registry at SOFTWARE\_OLD_REL_PATH\TaskBarIDs
@@ -3583,6 +3568,7 @@
   !ifndef ${_MOZFUNC_UN}CleanUpdateDirectories
     !define _MOZFUNC_UN_TMP ${_MOZFUNC_UN}
     !insertmacro ${_MOZFUNC_UN_TMP}GetLongPath
+    !insertmacro ${_MOZFUNC_UN_TMP}GetCommonDirectory
     !undef _MOZFUNC_UN
     !define _MOZFUNC_UN ${_MOZFUNC_UN_TMP}
     !undef _MOZFUNC_UN_TMP
@@ -3602,6 +3588,7 @@
       Push $R2
       Push $R1
       Push $R0
+      Push $R9
 
       ${${_MOZFUNC_UN}GetLongPath} "$INSTDIR" $R6
       StrLen $R4 "$R6"
@@ -3612,6 +3599,7 @@
       ${${_MOZFUNC_UN}GetLongPath} "$PROGRAMFILES" $R5
 !endif
       StrLen $R3 "$R5"
+      ${GetLocalAppDataFolder} $R9
 
       ${If} $R7 != "" ; _OLD_REL_PATH was passed
       ${AndIf} $R6 != "" ; We have the install dir path
@@ -3627,19 +3615,19 @@
           ; Copy the relative path to $INSTDIR from $PROGRAMFILES
           StrCpy $R2 "$R6" "" $R3
 
-          ; Concatenate the path $LOCALAPPDATA to the relative profile path and
+          ; Concatenate the local AppData path ($R9) to the relative profile path and
           ; the relative path to $INSTDIR from $PROGRAMFILES
-          StrCpy $R2 "$LOCALAPPDATA\$R7$R2"
+          StrCpy $R2 "$R9\$R7$R2"
           ${${_MOZFUNC_UN}GetLongPath} "$R2" $R2
 
           ${If} $R2 != ""
             ; Backup the old update directory logs and delete the directory
             ${If} ${FileExists} "$R2\updates\last-update.log"
-              Rename "$R2\updates\last-update.log" "$TEMP\moz-update-oldest-last-update.log"
+              Rename "$R2\updates\last-update.log" "$TEMP\moz-update-old-1-last-update.log"
             ${EndIf}
 
             ${If} ${FileExists} "$R2\updates\backup-update.log"
-              Rename "$R2\updates\backup-update.log" "$TEMP\moz-update-oldest-backup-update.log"
+              Rename "$R2\updates\backup-update.log" "$TEMP\moz-update-old-1-backup-update.log"
             ${EndIf}
 
             ${If} ${FileExists} "$R2\updates"
@@ -3657,14 +3645,14 @@
         ; If the taskbar ID hash exists then delete the new update directory
         ; Backup its logs before deleting it.
         ${If} $R1 != ""
-          StrCpy $R0 "$LOCALAPPDATA\$R8\$R1"
+          StrCpy $R0 "$R9\$R8\$R1"
 
           ${If} ${FileExists} "$R0\updates\last-update.log"
-            Rename "$R0\updates\last-update.log" "$TEMP\moz-update-older-last-update.log"
+            Rename "$R0\updates\last-update.log" "$TEMP\moz-update-old-2-last-update.log"
           ${EndIf}
 
           ${If} ${FileExists} "$R0\updates\backup-update.log"
-            Rename "$R0\updates\backup-update.log" "$TEMP\moz-update-older-backup-update.log"
+            Rename "$R0\updates\backup-update.log" "$TEMP\moz-update-old-2-backup-update.log"
           ${EndIf}
 
           ; Remove the old updates directory, located in the user's Windows profile directory
@@ -3672,19 +3660,37 @@
             RmDir /r "$R0"
           ${EndIf}
 
-          ; Get the new updates directory so we can remove that too
-          ; The new update directory is in the Program Data directory
-          ; (currently C:\ProgramData).
-          ; This system call gets that directory path. The arguments are:
-          ;   A null ptr for hwnd
-          ;   $R0 for the output string
-          ;   CSIDL_COMMON_APPDATA == 0x0023 == 35 for the csidl indicating which dir to get
-          ;   false for fCreate (i.e. Do not create the folder if it doesn't exist)
-          ; We could use %APPDATA% for this instead, but that requires state: the shell
-          ; var context would need to be saved, set, and reset. It is easier just to use
-          ; the system call.
-          System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.R0, i 35, i 0)"
+          ${GetCommonAppDataFolder} $R0
           StrCpy $R0 "$R0\$R8\$R1"
+
+          ${If} ${FileExists} "$R0\updates\last-update.log"
+            Rename "$R0\updates\last-update.log" "$TEMP\moz-update-old-3-last-update.log"
+          ${EndIf}
+
+          ${If} ${FileExists} "$R0\updates\backup-update.log"
+            Rename "$R0\updates\backup-update.log" "$TEMP\moz-update-old-3-backup-update.log"
+          ${EndIf}
+
+          ; Even though this is an old update directory, completely clear it out
+          ; on uninstall only, not on installation. If this is an installation,
+          ; it may be a paveover install and there may be un-migrated settings
+          ; in the update directory that we don't want to lose.
+          ; On install though, we should still remove pending updates and update
+          ; metadata since migrating that data could potentially confuse Firefox
+          ; into thinking that it failed to apply an update.
+          !if "${_MOZFUNC_UN}" == "un."
+            ${If} ${FileExists} "$R0"
+              RmDir /r "$R0"
+            ${EndIf}
+          !else
+            ${If} ${FileExists} "$R0\updates"
+              RmDir /r "$R0\updates"
+            ${EndIf}
+            Delete "$R0\active-update.xml"
+          !endif
+
+          ${${_MOZFUNC_UN}GetCommonDirectory} $R0
+          StrCpy $R0 "$R0\updates\$R1"
 
           ${If} ${FileExists} "$R0\updates\last-update.log"
             Rename "$R0\updates\last-update.log" "$TEMP\moz-update-newest-last-update.log"
@@ -3732,6 +3738,7 @@
 
       ClearErrors
 
+      Pop $R9
       Pop $R0
       Pop $R1
       Pop $R2
@@ -3782,325 +3789,37 @@
 !macroend
 
 /**
- * Create the update directory and sets the permissions correctly
+ * Removes relevant shortcuts from a given shortcuts log.
  *
- * @param   ROOT_DIR_NAME
- *          The name of the update directory to be created in the common
- *          application directory. For example, if ROOT_DIR_NAME is "Mozilla",
- *          the created directory will be "C:\ProgramData\Mozilla".
- *
- * $R0 = Used for checking errors
- * $R1 = The common application directory path
- * $R9 = An error message to be returned on the stack
- */
-!macro CreateUpdateDir ROOT_DIR_NAME
-  Push $R9
-  Push $R0
-  Push $R1
-
-  ; The update directory is in the Program Data directory
-  ; (currently C:\ProgramData).
-  ; This system call gets that directory path. The arguments are:
-  ;   A null ptr for hwnd
-  ;   $R1 for the output string
-  ;   CSIDL_COMMON_APPDATA == 0x0023 == 35 for the csidl indicating which dir to get
-  ;   true for fCreate (i.e. Do create the folder if it doesn't exist)
-  ; We could use %APPDATA% for this instead, but that requires state: the shell
-  ; var context would need to be saved, set, and reset. It is easier just to use
-  ; the system call.
-  System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.R1, i 35, i 1)"
-  StrCpy $R1 "$R1\${ROOT_DIR_NAME}"
-
-  ClearErrors
-  ${IfNot} ${FileExists} "$R1"
-    CreateDirectory "$R1"
-    ${If} ${Errors}
-      StrCpy $R9 "Unable to create directory: $R1"
-      GoTo end
-    ${EndIf}
-  ${EndIf}
-
-  ; Grant Full Access to the Builtin User group
-  AccessControl::SetOnFile "$R1" "(BU)" "FullAccess"
-  Pop $R0
-  ${If} $R0 == error
-    Pop $R9  ; Get AccessControl's Error Message
-    SetErrors
-    GoTo end
-  ${EndIf}
-
-  ; Grant Full Access to the Builtin Administrator group
-  AccessControl::SetOnFile "$R1" "(BA)" "FullAccess"
-  Pop $R0
-  ${If} $R0 == error
-    Pop $R9  ; Get AccessControl's Error Message
-    SetErrors
-    GoTo end
-  ${EndIf}
-
-  ; Grant Full Access to the SYSTEM user
-  AccessControl::SetOnFile "$R1" "(SY)" "FullAccess"
-  Pop $R0
-  ${If} $R0 == error
-    Pop $R9  ; Get AccessControl's Error Message
-    SetErrors
-    GoTo end
-  ${EndIf}
-
-  ; Remove inherited permissions
-  AccessControl::DisableFileInheritance "$R1"
-  Pop $R0
-  ${If} $R0 == error
-    Pop $R9  ; Get AccessControl's Error Message
-    SetErrors
-    GoTo end
-  ${EndIf}
-
-end:
-  Pop $R1
-  Pop $R0
-  ${If} ${Errors}
-    Exch $R9
-  ${Else}
-    Pop $R9
-  ${EndIf}
-!macroend
-!define CreateUpdateDir "!insertmacro CreateUpdateDir"
-
-/**
- * Deletes all relative profiles specified in an application's profiles.ini and
- * performs various other cleanup.
- *
- * @param   _REL_PROFILE_PATH
- *          The relative path to the profile directory.
- *
- * $R6 = value of IsRelative read from profiles.ini
- * $R7 = value of Path to profile read from profiles.ini
- * $R8 = counter for reading profiles (e.g. Profile0, Profile1, etc.)
- * $R9 = _REL_PROFILE_PATH
- */
-!macro DeleteRelativeProfiles
-
-  !ifndef ${_MOZFUNC_UN}DeleteRelativeProfiles
-    !define _MOZFUNC_UN_TMP ${_MOZFUNC_UN}
-    !insertmacro ${_MOZFUNC_UN_TMP}WordReplace
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN ${_MOZFUNC_UN_TMP}
-    !undef _MOZFUNC_UN_TMP
-
-    !verbose push
-    !verbose ${_MOZFUNC_VERBOSE}
-    !define ${_MOZFUNC_UN}DeleteRelativeProfiles "!insertmacro ${_MOZFUNC_UN}DeleteRelativeProfilesCall"
-
-    Function ${_MOZFUNC_UN}DeleteRelativeProfiles
-      Exch $R9
-      Push $R8
-      Push $R7
-      Push $R6
-
-      SetShellVarContext current
-      StrCpy $R8 -1
-
-      loop:
-      IntOp $R8 $R8 + 1  ; Increment the counter.
-      ReadINIStr $R7 "$APPDATA\$R9\profiles.ini" "Profile$R8" "Path"
-      IfErrors end +1
-
-      ; Only remove relative profiles
-      ReadINIStr $R6 "$APPDATA\$R9\profiles.ini" "Profile$R8" "IsRelative"
-      StrCmp "$R6" "1" +1 loop
-
-      ; Relative paths in profiles.ini use / as a separator
-      ${${_MOZFUNC_UN}WordReplace} "$R7" "/" "\" "+" $R7
-
-      IfFileExists "$LOCALAPPDATA\$R9\$R7" +1 +2
-      RmDir /r "$LOCALAPPDATA\$R9\$R7"
-      IfFileExists "$APPDATA\$R9\$R7" +1 +2
-      RmDir /r "$APPDATA\$R9\$R7"
-      GoTo loop
-
-      end:
-      ; Remove profiles directory under LOCALAPPDATA (e.g. cache, etc.) since
-      ; they are at times abandoned.
-      RmDir /r "$LOCALAPPDATA\$R9\Profiles"
-      RmDir /r "$APPDATA\$R9\Crash Reports"
-      Delete "$APPDATA\$R9\profiles.ini"
-      Delete "$APPDATA\$R9\console.log"
-      Delete "$APPDATA\$R9\pluginreg.dat"
-      RmDir "$APPDATA\$R9\Profiles"
-      RmDir "$APPDATA\$R9"
-
-      Pop $R6
-      Pop $R7
-      Pop $R8
-      Exch $R9
-    FunctionEnd
-
-    !verbose pop
-  !endif
-!macroend
-
-!macro DeleteRelativeProfilesCall _REL_PROFILE_PATH
-  !verbose push
-  !verbose ${_MOZFUNC_VERBOSE}
-  Push "${_REL_PROFILE_PATH}"
-  Call DeleteRelativeProfiles
-  !verbose pop
-!macroend
-
-!macro un.DeleteRelativeProfilesCall _REL_PROFILE_PATH
-  !verbose push
-  !verbose ${_MOZFUNC_VERBOSE}
-  Push "${_REL_PROFILE_PATH}"
-  Call un.DeleteRelativeProfiles
-  !verbose pop
-!macroend
-
-!macro un.DeleteRelativeProfiles
-  !ifndef un.DeleteRelativeProfiles
-    !verbose push
-    !verbose ${_MOZFUNC_VERBOSE}
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN "un."
-
-    !insertmacro DeleteRelativeProfiles
-
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN
-    !verbose pop
-  !endif
-!macroend
-
-/**
- * Deletes shortcuts and Start Menu directories under Programs as specified by
- * the shortcuts log ini file and on Windows 7 unpins TaskBar and Start Menu
- * shortcuts. The shortcuts will not be deleted if the shortcut target isn't for
- * this install location which is determined by the shortcut having a target of
- * $INSTDIR\${FileMainEXE}. The context (All Users or Current User) of the
- * $DESKTOP and $SMPROGRAMS constants depends on the
- * SetShellVarContext setting and must be set by the caller of this macro. There
- * is no All Users context for $QUICKLAUNCH but this will not cause a problem
- * since the macro will just continue past the $QUICKLAUNCH shortcut deletion
- * section on subsequent calls.
- *
- * The ini file sections must have the following format (the order of the
- * sections in the ini file is not important):
- * [SMPROGRAMS]
- * ; RelativePath is the directory relative from the Start Menu
- * ; Programs directory.
- * RelativePath=Mozilla App
- * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
- * ; on. There must not be a break in the sequence of the numbers.
- * Shortcut1=Mozilla App.lnk
- * Shortcut2=Mozilla App (Safe Mode).lnk
- * [DESKTOP]
- * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
- * ; on. There must not be a break in the sequence of the numbers.
- * Shortcut1=Mozilla App.lnk
- * Shortcut2=Mozilla App (Safe Mode).lnk
- * [QUICKLAUNCH]
- * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
- * ; on. There must not be a break in the sequence of the numbers for the
- * ; suffix.
- * Shortcut1=Mozilla App.lnk
- * Shortcut2=Mozilla App (Safe Mode).lnk
- * [STARTMENU]
- * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
- * ; on. There must not be a break in the sequence of the numbers for the
- * ; suffix.
- * Shortcut1=Mozilla App.lnk
- * Shortcut2=Mozilla App (Safe Mode).lnk
- *
+ * $R3 = return value from ShellLink::GetShortCutWorkingDirectory
  * $R4 = counter for appending to Shortcut for enumerating the ini file entries
- * $R5 = return value from ShellLink::GetShortCutTarget and
- *       ApplicationID::UninstallPinnedItem
- * $R6 = find handle and the long path to the Start Menu Programs directory
- *       (e.g. $SMPROGRAMS)
- * $R7 = path to the $QUICKLAUNCH\User Pinned directory and the return value
- *       from ReadINIStr for the relative path to the applications directory
- *       under the Start Menu Programs directory and the long path to this
+ * $R5 = return value from ShellLink::GetShortCutTarget
+ * $R6 = the long path to the Start Menu Programs directory (e.g. $SMPROGRAMS)
+ * $R7 = the return value from ReadINIStr for the relative path to the applications
+ *       directory under the Start Menu Programs directory and the long path to this
  *       directory
- * $R8 = return filename from FindFirst / FindNext and the return value from
- *       ReadINIStr for enumerating shortcuts
- * $R9 = long path to the shortcuts log ini file
+ * $R8 = the return value from ReadINIStr for enumerating shortcuts
+ * $R9 = [in] long path to the shortcuts ini file
  */
-!macro DeleteShortcuts
-
-  !ifndef ${_MOZFUNC_UN}DeleteShortcuts
-    !define _MOZFUNC_UN_TMP ${_MOZFUNC_UN}
+!macro DeleteShortcutsFromLog
+  !ifndef ${_MOZFUNC_UN}DeleteShortcutsFromLog
     !insertmacro ${_MOZFUNC_UN_TMP}GetLongPath
     !insertmacro ${_MOZFUNC_UN_TMP}GetParent
-    !undef _MOZFUNC_UN
-    !define _MOZFUNC_UN ${_MOZFUNC_UN_TMP}
-    !undef _MOZFUNC_UN_TMP
+    !insertmacro ${_MOZFUNC_UN_TMP}GetCommonDirectory
 
     !verbose push
     !verbose ${_MOZFUNC_VERBOSE}
-    !define ${_MOZFUNC_UN}DeleteShortcuts "!insertmacro ${_MOZFUNC_UN}DeleteShortcutsCall"
+    !define ${_MOZFUNC_UN}DeleteShortcutsFromLog "!insertmacro ${_MOZFUNC_UN}DeleteShortcutsFromLogCall"
 
-    Function ${_MOZFUNC_UN}DeleteShortcuts
-      Push $R9
+    Function ${_MOZFUNC_UN}DeleteShortcutsFromLog
+      Exch $R9
       Push $R8
       Push $R7
       Push $R6
       Push $R5
       Push $R4
+      Push $R3
 
-      ${If} ${AtLeastWin7}
-        ; Since shortcuts that are pinned can later be removed without removing
-        ; the pinned shortcut unpin the pinned shortcuts for the application's
-        ; main exe using the pinned shortcuts themselves.
-        StrCpy $R7 "$QUICKLAUNCH\User Pinned"
-
-        ${If} ${FileExists} "$R7\TaskBar"
-          ; Delete TaskBar pinned shortcuts for the application's main exe
-          FindFirst $R6 $R8 "$R7\TaskBar\*.lnk"
-          ${Do}
-            ${If} ${FileExists} "$R7\TaskBar\$R8"
-              ShellLink::GetShortCutTarget "$R7\TaskBar\$R8"
-              Pop $R5
-              ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
-              ${If} "$R5" == "$INSTDIR\${FileMainEXE}"
-                ApplicationID::UninstallPinnedItem "$R7\TaskBar\$R8"
-                Pop $R5
-              ${EndIf}
-            ${EndIf}
-            ClearErrors
-            FindNext $R6 $R8
-            ${If} ${Errors}
-              ${ExitDo}
-            ${EndIf}
-          ${Loop}
-          FindClose $R6
-        ${EndIf}
-
-        ${If} ${FileExists} "$R7\StartMenu"
-          ; Delete Start Menu pinned shortcuts for the application's main exe
-          FindFirst $R6 $R8 "$R7\StartMenu\*.lnk"
-          ${Do}
-            ${If} ${FileExists} "$R7\StartMenu\$R8"
-              ShellLink::GetShortCutTarget "$R7\StartMenu\$R8"
-              Pop $R5
-              ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
-              ${If} "$R5" == "$INSTDIR\${FileMainEXE}"
-                  ApplicationID::UninstallPinnedItem "$R7\StartMenu\$R8"
-                  Pop $R5
-              ${EndIf}
-            ${EndIf}
-            ClearErrors
-            FindNext $R6 $R8
-            ${If} ${Errors}
-              ${ExitDo}
-            ${EndIf}
-          ${Loop}
-          FindClose $R6
-        ${EndIf}
-      ${EndIf}
-
-      ; Don't call ApplicationID::UninstallPinnedItem since pinned items for
-      ; this application were removed above and removing them below will remove
-      ; the association of side by side installations.
-      ${${_MOZFUNC_UN}GetLongPath} "$INSTDIR\uninstall\${SHORTCUTS_LOG}" $R9
       ${If} ${FileExists} "$R9"
         ; Delete Start Menu shortcuts for this application
         StrCpy $R4 -1
@@ -4116,7 +3835,18 @@ end:
             ShellLink::GetShortCutTarget "$SMPROGRAMS\$R8"
             Pop $R5
             ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+            ; Shortcuts created outside of the installer may
+            ; have metadata set on them such that GetShortCutTarget
+            ; returns the wrong path on 64-bit systems.
+            ; GetShortCutWorkingDirectory is not _quite_ as good
+            ; of a test (because it may be unset), but it's not
+            ; subject to this bug, and is therefore the next best thing.
+            ; https://phabricator.services.mozilla.com/D138197
+            ; contains some additional background on this.
+            ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+            Pop $R3
             ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            ${OrIf} "$INSTDIR" == "$R3"
               Delete "$SMPROGRAMS\$R8"
             ${EndIf}
           ${EndIf}
@@ -4127,7 +3857,10 @@ end:
           ShellLink::GetShortCutTarget "$SMPROGRAMS\${BrandFullName}.lnk"
           Pop $R5
           ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+          Pop $R3
           ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+          ${OrIf} "$INSTDIR" == "$R3"
             Delete "$SMPROGRAMS\${BrandFullName}.lnk"
           ${EndIf}
         ${EndIf}
@@ -4146,7 +3879,10 @@ end:
             ShellLink::GetShortCutTarget "$QUICKLAUNCH\$R8"
             Pop $R5
             ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+            ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+            Pop $R3
             ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            ${OrIf} "$INSTDIR" == "$R3"
               Delete "$QUICKLAUNCH\$R8"
             ${EndIf}
           ${EndIf}
@@ -4157,7 +3893,10 @@ end:
           ShellLink::GetShortCutTarget "$QUICKLAUNCH\${BrandFullName}.lnk"
           Pop $R5
           ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+          Pop $R3
           ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+          ${OrIf} "$INSTDIR" == "$R3"
             Delete "$QUICKLAUNCH\${BrandFullName}.lnk"
           ${EndIf}
         ${EndIf}
@@ -4176,7 +3915,10 @@ end:
             ShellLink::GetShortCutTarget "$DESKTOP\$R8"
             Pop $R5
             ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+            ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+            Pop $R3
             ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
+            ${OrIf} "$INSTDIR" == "$R3"
               Delete "$DESKTOP\$R8"
             ${EndIf}
           ${EndIf}
@@ -4187,6 +3929,9 @@ end:
           ShellLink::GetShortCutTarget "$DESKTOP\${BrandFullName}.lnk"
           Pop $R5
           ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+          ; We don't bother checking working directory here because we know
+          ; these shortcuts were only created by the installer, and thus
+          ; not subject to the bug described above.
           ${If} "$INSTDIR\${FileMainEXE}" == "$R5"
             Delete "$DESKTOP\${BrandFullName}.lnk"
           ${EndIf}
@@ -4232,6 +3977,205 @@ end:
           ${Loop}
         ${EndUnless}
       ${EndIf}
+
+      ClearErrors
+
+      Pop $R3
+      Pop $R4
+      Pop $R5
+      Pop $R6
+      Pop $R7
+      Pop $R8
+      Exch $R9
+    FunctionEnd
+
+    !verbose pop
+  !endif
+!macroend
+
+!macro DeleteShortcutsFromLogCall _SHORTCUTS_LOG
+  !verbose push
+  !verbose ${_MOZFUNC_VERBOSE}
+  Push ${_SHORTCUTS_LOG}
+  Call DeleteShortcutsFromLog
+  !verbose pop
+!macroend
+
+!macro un.DeleteShortcutsFromLogCall _SHORTCUTS_LOG
+  !verbose push
+  !verbose ${_MOZFUNC_VERBOSE}
+  Push ${_SHORTCUTS_LOG}
+  Call un.DeleteShortcutsFromLog
+  !verbose pop
+!macroend
+
+!macro un.DeleteShortcutsFromLog
+  !ifndef un.DeleteShortcutsFromLog
+    !verbose push
+    !verbose ${_MOZFUNC_VERBOSE}
+    !undef _MOZFUNC_UN
+    !define _MOZFUNC_UN "un."
+
+    !insertmacro DeleteShortcutsFromLog
+
+    !undef _MOZFUNC_UN
+    !define _MOZFUNC_UN
+    !verbose pop
+  !endif
+!macroend
+
+/**
+ * Deletes shortcuts and Start Menu directories under Programs as specified by
+ * the shortcuts log ini files and on Windows 7 unpins TaskBar and Start Menu
+ * shortcuts. The shortcuts will not be deleted if the shortcut target isn't for
+ * this install location which is determined by the shortcut having a target of
+ * $INSTDIR\${FileMainEXE} _or_ the working directory of the shortcut being
+ * equal to $INSTDIR. The context (All Users or Current User) of the
+ * $DESKTOP and $SMPROGRAMS constants depends on the
+ * SetShellVarContext setting and must be set by the caller of this macro. There
+ * is no All Users context for $QUICKLAUNCH but this will not cause a problem
+ * since the macro will just continue past the $QUICKLAUNCH shortcut deletion
+ * section on subsequent calls.
+ *
+ * The meat of this is farmed out to DeleteShortcutsFromLog to facilitate
+ * the processing of multiple shortcuts logs.
+ *
+ * The ini file sections must have the following format (the order of the
+ * sections in the ini file is not important):
+ * [SMPROGRAMS] -- this section is optional and largely irrelevant these days
+ * ; RelativePath is the directory relative from the Start Menu
+ * ; Programs directory.
+ * RelativePath=Mozilla App
+ * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
+ * ; on. There must not be a break in the sequence of the numbers.
+ * Shortcut1=Mozilla App.lnk
+ * Shortcut2=Mozilla App (Safe Mode).lnk
+ * [DESKTOP]
+ * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
+ * ; on. There must not be a break in the sequence of the numbers.
+ * Shortcut1=Mozilla App.lnk
+ * Shortcut2=Mozilla App (Safe Mode).lnk
+ * [QUICKLAUNCH]
+ * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
+ * ; on. There must not be a break in the sequence of the numbers for the
+ * ; suffix.
+ * Shortcut1=Mozilla App.lnk
+ * Shortcut2=Mozilla App (Safe Mode).lnk
+ * [STARTMENU]
+ * ; Shortcut1 is the first shortcut, Shortcut2 is the second shortcut, and so
+ * ; on. There must not be a break in the sequence of the numbers for the
+ * ; suffix.
+ * Shortcut1=Mozilla App.lnk
+ * Shortcut2=Mozilla App (Safe Mode).lnk
+ *
+ * $R4 = return value from ShellLink::GetShortCutWorkingDirectory
+ * $R5 = return value from ShellLink::GetShortCutTarget and
+ *       ApplicationID::UninstallPinnedItem
+ * $R6 = find handle
+ * $R7 = path to the $QUICKLAUNCH\User Pinned directory
+ * $R8 = return filename from FindFirst / FindNext
+ * $R9 = long path to the shortcut log ini file and path to the ProgramData
+ *       directory that the application stores additional shortcut logs in
+ *       (Typically c:\ProgramData\Mozilla-1de4eec8-1241-4177-a864-e594e8d1fb38)
+ */
+!macro DeleteShortcuts
+
+  !ifndef ${_MOZFUNC_UN}DeleteShortcuts
+    !define _MOZFUNC_UN_TMP ${_MOZFUNC_UN}
+    !insertmacro ${_MOZFUNC_UN_TMP}GetLongPath
+    !insertmacro ${_MOZFUNC_UN_TMP}GetParent
+    !insertmacro ${_MOZFUNC_UN_TMP}DeleteShortcutsFromLog
+    !undef _MOZFUNC_UN
+    !define _MOZFUNC_UN ${_MOZFUNC_UN_TMP}
+    !undef _MOZFUNC_UN_TMP
+
+    !verbose push
+    !verbose ${_MOZFUNC_VERBOSE}
+    !define ${_MOZFUNC_UN}DeleteShortcuts "!insertmacro ${_MOZFUNC_UN}DeleteShortcutsCall"
+
+    Function ${_MOZFUNC_UN}DeleteShortcuts
+      Push $R9
+      Push $R8
+      Push $R7
+      Push $R6
+      Push $R5
+      Push $R4
+
+      ; We call ApplicationID::UninstallPinnedItem once per shortcut here
+      ; (and explicitly not in DeleteShortcutsFromLog). Calling it again later
+      ; would remove the association of side by side installations.
+      ${If} ${AtLeastWin7}
+        ; Since shortcuts that are pinned can later be removed without removing
+        ; the pinned shortcut unpin the pinned shortcuts for the application's
+        ; main exe using the pinned shortcuts themselves.
+        StrCpy $R7 "$QUICKLAUNCH\User Pinned"
+
+        ${If} ${FileExists} "$R7\TaskBar"
+          ; Delete TaskBar pinned shortcuts for the application's main exe
+          FindFirst $R6 $R8 "$R7\TaskBar\*.lnk"
+          ${Do}
+            ${If} ${FileExists} "$R7\TaskBar\$R8"
+              ShellLink::GetShortCutTarget "$R7\TaskBar\$R8"
+              Pop $R5
+              ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+              ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+              Pop $R4
+              ${If} "$R5" == "$INSTDIR\${FileMainEXE}"
+              ${OrIf} "$R4" == "$INSTDIR"
+                ApplicationID::UninstallPinnedItem "$R7\TaskBar\$R8"
+                Pop $R5
+              ${EndIf}
+            ${EndIf}
+            ClearErrors
+            FindNext $R6 $R8
+            ${If} ${Errors}
+              ${ExitDo}
+            ${EndIf}
+          ${Loop}
+          FindClose $R6
+        ${EndIf}
+
+        ${If} ${FileExists} "$R7\StartMenu"
+          ; Delete Start Menu pinned shortcuts for the application's main exe
+          FindFirst $R6 $R8 "$R7\StartMenu\*.lnk"
+          ${Do}
+            ${If} ${FileExists} "$R7\StartMenu\$R8"
+              ShellLink::GetShortCutTarget "$R7\StartMenu\$R8"
+              Pop $R5
+              ${${_MOZFUNC_UN}GetLongPath} "$R5" $R5
+              ShellLink::GetShortCutWorkingDirectory "$SMPROGRAMS\$R8"
+              Pop $R4
+              ${If} "$R5" == "$INSTDIR\${FileMainEXE}"
+              ${OrIf} "$R4" == "$INSTDIR"
+                  ApplicationID::UninstallPinnedItem "$R7\StartMenu\$R8"
+                  Pop $R5
+              ${EndIf}
+            ${EndIf}
+            ClearErrors
+            FindNext $R6 $R8
+            ${If} ${Errors}
+              ${ExitDo}
+            ${EndIf}
+          ${Loop}
+          FindClose $R6
+        ${EndIf}
+      ${EndIf}
+
+      ${${_MOZFUNC_UN}GetLongPath} "$INSTDIR\uninstall\${SHORTCUTS_LOG}" $R9
+      ${${_MOZFUNC_UN}DeleteShortcutsFromLog} $R9
+
+      ${${_MOZFUNC_UN}GetCommonDirectory} $R9
+      ; Shortcut logs created by an application are in a different directory,
+      ; and named after both the application and the user SID, eg:
+      ; Firefox_S-1-5-21-1004336348-1177238915-682003330-512_shortcuts.ini
+      FindFirst $R6 $R8 "$R9\*_shortcuts.ini"
+      ${DoUntil} ${Errors}
+        ${If} ${FileExists} "$R9\$R8"
+          ${${_MOZFUNC_UN}DeleteShortcutsFromLog} "$R9\$R8"
+        ${EndIf}
+        ClearErrors
+        FindNext $R6 $R8
+      ${Loop}
 
       ClearErrors
 
@@ -6220,20 +6164,18 @@ end:
 !endif
 
       ; If the user doesn't have write access to the installation directory set
-      ; the installation directory to a subdirectory of the All Users application
-      ; directory and if the user can't write to that location set the installation
-      ; directory to a subdirectory of the users local application directory
-      ; (e.g. non-roaming).
+      ; the installation directory to a subdirectory of the user's local
+      ; application directory (e.g. non-roaming).
       ${CanWriteToInstallDir} $R9
-      StrCmp "$R9" "false" +1 finish_check_install_dir
+      ${If} "$R9" == "false"
+        ; NOTE: This SetShellVarContext isn't directly needed anymore, but to
+        ; leave the state consistent with earlier code I'm leaving it here.
+        SetShellVarContext all      ; Set SHCTX to All Users
+        ${GetLocalAppDataFolder} $R9
+        StrCpy $INSTDIR "$R9\${BrandFullName}\"
+        ${CanWriteToInstallDir} $R9
+      ${EndIf}
 
-      SetShellVarContext all      ; Set SHCTX to All Users
-      StrCpy $INSTDIR "$APPDATA\${BrandFullName}\"
-      ${CanWriteToInstallDir} $R9
-      StrCmp "$R9" "false" +2 +1
-      StrCpy $INSTDIR "$LOCALAPPDATA\${BrandFullName}\"
-
-      finish_check_install_dir:
       IfFileExists "$INSTDIR" +3 +1
       Pop $R9
       Return
@@ -7229,14 +7171,6 @@ end:
 !macroend
 !define GetShortcutsLogPath "!insertmacro GetShortcutsLogPath"
 
-/**
- * Deletes the shortcuts log ini file.
- */
-!macro DeleteShortcutsLogFile
-  ${DeleteFile} "$INSTDIR\uninstall\${SHORTCUTS_LOG}"
-!macroend
-!define DeleteShortcutsLogFile "!insertmacro DeleteShortcutsLogFile"
-
 
 ################################################################################
 # Macros for managing specific Windows version features
@@ -7878,6 +7812,11 @@ end:
  * Subsequent calls will then retreive the stored hash value. On any failure,
  * $AppUserModelID will be set to an empty string.
  *
+ * A second string that will be used for Private Browsing mode is also generated by
+ * taking the regular $AppUserModelID and appending ";PrivateBrowsingAUMID" to it.
+ * This is stored in $AppUserModelIDPrivate upon successful completion of this
+ * function.
+ *
  * Registry format: root/_REG_PATH/"_EXE_PATH" = "hash"
  *
  * @param   _EXE_PATH
@@ -7885,7 +7824,8 @@ end:
  * @param   _REG_PATH
  *          The HKLM/HKCU agnostic registry path where the key hash should
  *          be stored. ex: "Software\Mozilla\Firefox\TaskBarIDs"
- * @result  (Var) $AppUserModelID contains the app model id.
+ * @result  (Var) $AppUserModelID and $AppUserModelIDPrivate contain the
+ *          app model id and the private app model id, respectively.
  */
 !macro InitHashAppModelId
   !ifndef ${_MOZFUNC_UN}InitHashAppModelId
@@ -7897,6 +7837,7 @@ end:
 
     !ifndef InitHashAppModelId
       Var AppUserModelID
+      Var AppUserModelIDPrivate
     !endif
 
     !verbose push
@@ -7933,6 +7874,9 @@ end:
       end:
       ${If} "$AppUserModelID" == "error"
         StrCpy $AppUserModelID ""
+        StrCpy $AppUserModelIDPrivate ""
+      ${Else}
+        StrCpy $AppUserModelIDPrivate "$AppUserModelID;PrivateBrowsingAUMID"
       ${EndIf}
 
       ClearErrors
@@ -8042,16 +7986,17 @@ end:
 
     Function CopyPostSigningData
       Push $0   ; Stack: old $0
+      Push $1   ; Stack: $1, old $0
 
       ${LineRead} "$EXEDIR\postSigningData" "1" $0
       ${If} ${Errors}
         ClearErrors
         StrCpy $0 "0"
       ${Else}
-        CreateDirectory "$LOCALAPPDATA\Mozilla\Firefox"
-        CopyFiles /SILENT "$EXEDIR\postSigningData" "$LOCALAPPDATA\Mozilla\Firefox"
+        CopyFiles /SILENT "$EXEDIR\postSigningData" "$INSTDIR"
       ${Endif}
 
+      Pop $1    ; Stack: old $0
       Exch $0   ; Stack: postSigningData
     FunctionEnd
 

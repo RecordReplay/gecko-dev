@@ -19,6 +19,9 @@ const {
 const {
   connectToFrame,
 } = require("devtools/server/connectors/frame-connector");
+const {
+  createWebExtensionSessionContext,
+} = require("devtools/server/actors/watcher/session-context");
 
 loader.lazyImporter(
   this,
@@ -30,6 +33,17 @@ loader.lazyImporter(
   "ExtensionParent",
   "resource://gre/modules/ExtensionParent.jsm"
 );
+loader.lazyRequireGetter(
+  this,
+  "WatcherActor",
+  "devtools/server/actors/watcher",
+  true
+);
+
+const BGSCRIPT_STATUSES = {
+  RUNNING: "RUNNING",
+  STOPPED: "STOPPED",
+};
 
 /**
  * Creates the actor that represents the addon in the parent process, which connects
@@ -65,9 +79,16 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
     },
 
     form() {
-      const policy = ExtensionParent.WebExtensionPolicy.getByID(this.addonId);
+      const { addonId } = this;
+      const policy = ExtensionParent.WebExtensionPolicy.getByID(addonId);
+      const persistentBackgroundScript = ExtensionParent.DebugUtils.hasPersistentBackgroundScript(
+        addonId
+      );
+      const backgroundScriptStatus = this._getBackgroundScriptStatus();
+
       return {
         actor: this.actorID,
+        backgroundScriptStatus,
         // Note that until the policy becomes active,
         // getTarget/connectToFrame will fail attaching to the web extension:
         // https://searchfox.org/mozilla-central/rev/526a5089c61db85d4d43eb0e46edaf1f632e853a/toolkit/components/extensions/WebExtensionPolicy.cpp#551-553
@@ -76,20 +97,48 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
         // iconDataURL is available after calling loadIconDataURL
         iconDataURL: this._iconDataURL,
         iconURL: this.addon.iconURL,
-        id: this.addonId,
+        id: addonId,
         isSystem: this.addon.isSystem,
         isWebExtension: this.addon.isWebExtension,
         manifestURL: policy && policy.getURL("manifest.json"),
         name: this.addon.name,
+        persistentBackgroundScript,
         temporarilyInstalled: this.addon.temporarilyInstalled,
         traits: {
           supportsReloadDescriptor: true,
+          // Supports the Watcher actor. Can be removed as part of Bug 1680280.
+          watcher: true,
         },
         url: this.addon.sourceURI ? this.addon.sourceURI.spec : undefined,
         warnings: ExtensionParent.DebugUtils.getExtensionManifestWarnings(
           this.addonId
         ),
       };
+    },
+
+    /**
+     * Return a Watcher actor, allowing to keep track of targets which
+     * already exists or will be created. It also helps knowing when they
+     * are destroyed.
+     */
+    async getWatcher(config = {}) {
+      if (!this.watcher) {
+        // Ensure connecting to the webextension frame in order to populate this._form
+        await this._extensionFrameConnect();
+        this.watcher = new WatcherActor(
+          this.conn,
+          createWebExtensionSessionContext(
+            {
+              addonId: this.addonId,
+              browsingContextID: this._form.browsingContextID,
+              innerWindowId: this._form.innerWindowId,
+            },
+            config
+          )
+        );
+        this.manage(this.watcher);
+      }
+      return this.watcher;
     },
 
     async getTarget() {
@@ -99,8 +148,6 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
       return Object.assign(form, {
         iconURL: this.addon.iconURL,
         id: this.addon.id,
-        // Set the isOOP attribute on the connected child actor form.
-        isOOP: this.isOOP,
         name: this.addon.name,
       });
     },
@@ -110,21 +157,29 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
     },
 
     async _extensionFrameConnect() {
-      if (this._browser) {
-        throw new Error(
-          "This actor is already connected to the extension process"
-        );
+      if (this._form) {
+        return this._form;
       }
 
       this._browser = await ExtensionParent.DebugUtils.getExtensionProcessBrowser(
         this
       );
 
+      const policy = ExtensionParent.WebExtensionPolicy.getByID(this.addonId);
       this._form = await connectToFrame(
         this.conn,
         this._browser,
         this.destroy,
-        { addonId: this.addonId }
+        {
+          addonId: this.addonId,
+          addonBrowsingContextGroupId: policy.browsingContextGroupId,
+          // Bug 1754452: This flag is passed by the client to getWatcher(), but the server
+          // doesn't support this anyway. So always pass false here and keep things simple.
+          // Once we enable this flag, we will stop using connectToFrame and instantiate
+          // the WebExtensionTargetActor from watcher code instead, so that shouldn't
+          // introduce an issue for the future.
+          isServerTargetSwitchingEnabled: false,
+        }
       );
 
       // connectToFrame may resolve to a null form,
@@ -154,10 +209,13 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
       return this.reload();
     },
 
-    /** WebExtension Actor Methods **/
     async reload() {
       await this.addon.reload();
       return {};
+    },
+
+    async terminateBackgroundScript() {
+      await ExtensionParent.DebugUtils.terminateBackgroundScript(this.addonId);
     },
 
     // This function will be called from RootActor in case that the devtools client
@@ -199,12 +257,21 @@ const WebExtensionDescriptorActor = protocol.ActorClassWithSpec(
       }
     },
 
-    // TODO: check if we need this, as it is only used in a test
-    get isOOP() {
-      return this._browser ? this._browser.isRemoteBrowser : undefined;
+    // Private Methods
+    _getBackgroundScriptStatus() {
+      const isRunning = ExtensionParent.DebugUtils.isBackgroundScriptRunning(
+        this.addonId
+      );
+      // The background script status doesn't apply to this addon (e.g. the addon
+      // type doesn't have any code, like staticthemes/langpacks/dictionaries, or
+      // the extension does not have a background script at all).
+      if (isRunning === undefined) {
+        return undefined;
+      }
+
+      return isRunning ? BGSCRIPT_STATUSES.RUNNING : BGSCRIPT_STATUSES.STOPPED;
     },
 
-    // Private Methods
     get _mm() {
       return (
         this._browser &&

@@ -159,11 +159,9 @@ class nsDisplayTextOverflowMarker final : public nsPaintedDisplayItem {
         mAscent(aAscent) {
     MOZ_COUNT_CTOR(nsDisplayTextOverflowMarker);
   }
-#ifdef NS_BUILD_REFCNT_LOGGING
-  virtual ~nsDisplayTextOverflowMarker() {
-    MOZ_COUNT_DTOR(nsDisplayTextOverflowMarker);
-  }
-#endif
+
+  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTextOverflowMarker)
+
   virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
                            bool* aSnap) const override {
     *aSnap = false;
@@ -211,16 +209,13 @@ static void PaintTextShadowCallback(gfxContext* aCtx, nsPoint aShadowOffset,
 
 void nsDisplayTextOverflowMarker::Paint(nsDisplayListBuilder* aBuilder,
                                         gfxContext* aCtx) {
-  DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
-                                                    IsSubpixelAADisabled());
-
   nscolor foregroundColor =
       nsLayoutUtils::GetColor(mFrame, &nsStyleText::mWebkitTextFillColor);
 
   // Paint the text-shadows for the overflow marker
-  nsLayoutUtils::PaintTextShadow(mFrame, aCtx, mRect, GetPaintRect(),
-                                 foregroundColor, PaintTextShadowCallback,
-                                 (void*)this);
+  nsLayoutUtils::PaintTextShadow(mFrame, aCtx, mRect,
+                                 GetPaintRect(aBuilder, aCtx), foregroundColor,
+                                 PaintTextShadowCallback, (void*)this);
   aCtx->SetColor(gfx::sRGBColor::FromABGR(foregroundColor));
   PaintTextToContext(aCtx, nsPoint(0, 0));
 }
@@ -290,10 +285,10 @@ TextOverflow::TextOverflow(nsDisplayListBuilder* aBuilder,
       mBuilder(aBuilder),
       mBlock(aBlockFrame),
       mScrollableFrame(nsLayoutUtils::GetScrollableFrameFor(aBlockFrame)),
+      mMarkerList(aBuilder),
       mBlockSize(aBlockFrame->GetSize()),
       mBlockWM(aBlockFrame->GetWritingMode()),
       mAdjustForPixelSnapping(false) {
-#ifdef MOZ_XUL
   if (!mScrollableFrame) {
     auto pseudoType = aBlockFrame->Style()->GetPseudoType();
     if (pseudoType == PseudoStyleType::mozXULAnonymousBlock) {
@@ -306,7 +301,6 @@ TextOverflow::TextOverflow(nsDisplayListBuilder* aBuilder,
       mAdjustForPixelSnapping = mBlockWM.IsBidiRTL();
     }
   }
-#endif
   mCanHaveInlineAxisScrollbar = false;
   if (mScrollableFrame) {
     auto scrollbarStyle = mBlockWM.IsVertical()
@@ -772,9 +766,7 @@ void TextOverflow::ProcessLine(const nsDisplayListSet& aLists, nsLineBox* aLine,
 void TextOverflow::PruneDisplayListContents(
     nsDisplayList* aList, const FrameHashtable& aFramesToHide,
     const LogicalRect& aInsideMarkersArea) {
-  nsDisplayList saved;
-  nsDisplayItem* item;
-  while ((item = aList->RemoveBottom())) {
+  for (nsDisplayItem* item : aList->TakeItems()) {
     nsIFrame* itemFrame = item->Frame();
     if (IsFrameDescendantOfAny(itemFrame, aFramesToHide, mBlock)) {
       item->Destroy(mBuilder);
@@ -810,9 +802,8 @@ void TextOverflow::PruneDisplayListContents(
       }
     }
 
-    saved.AppendToTop(item);
+    aList->AppendToTop(item);
   }
-  aList->AppendToTop(&saved);
 }
 
 /* static */

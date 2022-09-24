@@ -295,33 +295,42 @@ class BuildOptionParser(object):
         "arm-gradle-dependencies": path_base
         + "%s_arm_gradle_dependencies.py",  # NOQA: E501
         "arm": path_base + "%s_arm.py",
+        "arm-lite": path_base + "%s_arm_lite.py",
         "arm-beta": path_base + "%s_arm_beta.py",
         "arm-beta-debug": path_base + "%s_arm_beta_debug.py",
         "arm-debug": path_base + "%s_arm_debug.py",
+        "arm-lite-debug": path_base + "%s_arm_debug_lite.py",
         "arm-debug-ccov": path_base + "%s_arm_debug_ccov.py",
         "arm-debug-searchfox": path_base + "%s_arm_debug_searchfox.py",
         "arm-gradle": path_base + "%s_arm_gradle.py",
-        "arm-profile-generate": path_base + "%s_arm_profile_generate.py",
         "rusttests": path_base + "%s_rusttests.py",
         "rusttests-debug": path_base + "%s_rusttests_debug.py",
         "x86": path_base + "%s_x86.py",
+        "x86-lite": path_base + "%s_x86_lite.py",
         "x86-beta": path_base + "%s_x86_beta.py",
         "x86-beta-debug": path_base + "%s_x86_beta_debug.py",
         "x86-debug": path_base + "%s_x86_debug.py",
+        "x86-lite-debug": path_base + "%s_x86_debug_lite.py",
         "x86-fuzzing-debug": path_base + "%s_x86_fuzzing_debug.py",
+        "x86-profile-generate": path_base + "%s_x86_profile_generate.py",
         "x86_64": path_base + "%s_x86_64.py",
+        "x86_64-lite": path_base + "%s_x86_64_lite.py",
         "x86_64-beta": path_base + "%s_x86_64_beta.py",
         "x86_64-beta-debug": path_base + "%s_x86_64_beta_debug.py",
         "x86_64-debug": path_base + "%s_x86_64_debug.py",
+        "x86_64-lite-debug": path_base + "%s_x86_64_debug_lite.py",
         "x86_64-debug-isolated-process": path_base
         + "%s_x86_64_debug_isolated_process.py",
         "x86_64-fuzzing-asan": path_base + "%s_x86_64_fuzzing_asan.py",
+        "x86_64-profile-generate": path_base + "%s_x86_64_profile_generate.py",
         "arm-partner-sample1": path_base + "%s_arm_partner_sample1.py",
         "aarch64": path_base + "%s_aarch64.py",
+        "aarch64-lite": path_base + "%s_aarch64_lite.py",
         "aarch64-beta": path_base + "%s_aarch64_beta.py",
         "aarch64-beta-debug": path_base + "%s_aarch64_beta_debug.py",
         "aarch64-pgo": path_base + "%s_aarch64_pgo.py",
         "aarch64-debug": path_base + "%s_aarch64_debug.py",
+        "aarch64-lite-debug": path_base + "%s_aarch64_debug_lite.py",
         "android-geckoview-docs": path_base + "%s_geckoview_docs.py",
         "valgrind": path_base + "%s_valgrind.py",
     }
@@ -803,19 +812,7 @@ items from that key's value."
         )
 
     def _query_mach(self):
-        dirs = self.query_abs_dirs()
-
-        if "MOZILLABUILD" in os.environ:
-            # We found many issues with intermittent build failures when not
-            # invoking mach via bash.
-            # See bug 1364651 before considering changing.
-            mach = [
-                os.path.join(os.environ["MOZILLABUILD"], "msys", "bin", "bash.exe"),
-                os.path.join(dirs["abs_src_dir"], "mach"),
-            ]
-        else:
-            mach = [sys.executable, "mach"]
-        return mach
+        return [sys.executable, "mach"]
 
     def _run_mach_command_in_build_env(self, args, use_subprocess=False):
         """Run a mach command in a build context."""
@@ -917,7 +914,7 @@ items from that key's value."
         upload_cmd = ["make", "upload", "AB_CD=multi"]
         self.run_command(
             upload_cmd,
-            env=self.query_mach_build_env(multiLocale=False),
+            partial_env=self.query_mach_build_env(multiLocale=False),
             cwd=objdir,
             halt_on_failure=True,
             output_parser=parser,
@@ -1394,17 +1391,6 @@ items from that key's value."
         if not self.return_code:  # only overwrite return_code if it's 0
             self.error("setting return code to 2 because fatal was called")
             self.return_code = 2
-
-    @PostScriptRun
-    def _shutdown_sccache(self):
-        """If sccache was in use for this build, shut down the sccache server."""
-        if os.environ.get("USE_SCCACHE") == "1":
-            topsrcdir = self.query_abs_dirs()["abs_src_dir"]
-            sccache_base = os.environ["MOZ_FETCHES_DIR"]
-            sccache = os.path.join(sccache_base, "sccache", "sccache")
-            if self._is_windows():
-                sccache += ".exe"
-            self.run_command([sccache, "--stop-server"], cwd=topsrcdir)
 
     @PostScriptRun
     def _summarize(self):

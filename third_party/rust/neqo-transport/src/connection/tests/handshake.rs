@@ -4,7 +4,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use super::super::{Connection, Output, State, LOCAL_IDLE_TIMEOUT};
+use super::super::{Connection, Output, State};
 use super::{
     assert_error, connect, connect_force_idle, connect_with_rtt, default_client, default_server,
     get_tokens, handshake, maybe_authenticate, send_something, CountingConnectionIdGenerator,
@@ -14,7 +14,8 @@ use crate::connection::AddressValidation;
 use crate::events::ConnectionEvent;
 use crate::path::PATH_MTU_V6;
 use crate::server::ValidateAddress;
-use crate::tparams::TransportParameter;
+use crate::tparams::{TransportParameter, MIN_ACK_DELAY};
+use crate::tracking::DEFAULT_ACK_DELAY;
 use crate::{
     ConnectionError, ConnectionParameters, EmptyConnectionIdGenerator, Error, QuicVersion,
     StreamType,
@@ -25,6 +26,7 @@ use neqo_crypto::{
     constants::TLS_CHACHA20_POLY1305_SHA256, generate_ech_keys, AuthenticationStatus,
 };
 use std::cell::RefCell;
+use std::convert::TryFrom;
 use std::mem;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::rc::Rc;
@@ -486,7 +488,7 @@ fn reorder_handshake() {
     // It can only send another Initial packet.
     now += RTT / 2;
     let dgram = client.process(s_hs, now).dgram();
-    assertions::assert_initial(&dgram.as_ref().unwrap(), false);
+    assertions::assert_initial(dgram.as_ref().unwrap(), false);
     assert_eq!(client.stats().saved_datagrams, 1);
     assert_eq!(client.stats().packets_rx, 1);
 
@@ -531,7 +533,7 @@ fn reorder_handshake() {
 #[test]
 fn reorder_1rtt() {
     const RTT: Duration = Duration::from_millis(100);
-    const PACKETS: usize = 6; // Many, but not enough to overflow cwnd.
+    const PACKETS: usize = 4; // Many, but not enough to overflow cwnd.
     let mut client = default_client();
     let mut server = default_server();
     let mut now = now();
@@ -630,7 +632,8 @@ fn verify_pkt_honors_mtu() {
     let now = now();
 
     let res = client.process(None, now);
-    assert_eq!(res, Output::Callback(LOCAL_IDLE_TIMEOUT));
+    let idle_timeout = ConnectionParameters::default().get_idle_timeout();
+    assert_eq!(res, Output::Callback(idle_timeout));
 
     // Try to send a large stream and verify first packet is correctly sized
     let stream_id = client.stream_create(StreamType::UniDi).unwrap();
@@ -662,7 +665,7 @@ fn extra_initial_hs() {
     // another Initial packet.
     for _ in 0..=super::super::EXTRA_INITIALS {
         let c_init = client.process(undecryptable.clone(), now).dgram();
-        assertions::assert_initial(&c_init.as_ref().unwrap(), false);
+        assertions::assert_initial(c_init.as_ref().unwrap(), false);
         now += DEFAULT_RTT / 10;
     }
 
@@ -898,7 +901,7 @@ fn damaged_ech_config(config: &[u8]) -> Vec<u8> {
     let mut cfg = Vec::from(config);
     // Ensure that the version and config_id is correct.
     assert_eq!(cfg[2], 0xfe);
-    assert_eq!(cfg[3], 0x0a);
+    assert_eq!(cfg[3], 0x0d);
     assert_eq!(cfg[6], ECH_CONFIG_ID);
     // Change the config_id so that the server doesn't recognize it.
     cfg[6] ^= 0x94;
@@ -997,4 +1000,31 @@ fn ech_retry_fallback_rejected() {
         server.state().error(),
         Some(&ConnectionError::Transport(Error::PeerError(298)))
     ); // A bad_certificate alert.
+}
+
+#[test]
+fn bad_min_ack_delay() {
+    const EXPECTED_ERROR: ConnectionError =
+        ConnectionError::Transport(Error::TransportParameterError);
+    let mut server = default_server();
+    let max_ad = u64::try_from(DEFAULT_ACK_DELAY.as_micros()).unwrap();
+    server
+        .set_local_tparam(MIN_ACK_DELAY, TransportParameter::Integer(max_ad + 1))
+        .unwrap();
+    let mut client = default_client();
+
+    let dgram = client.process_output(now()).dgram();
+    let dgram = server.process(dgram, now()).dgram();
+    client.process_input(dgram.unwrap(), now());
+    client.authenticated(AuthenticationStatus::Ok, now());
+    assert_eq!(client.state().error(), Some(&EXPECTED_ERROR));
+    let dgram = client.process_output(now()).dgram();
+
+    server.process_input(dgram.unwrap(), now());
+    assert_eq!(
+        server.state().error(),
+        Some(&ConnectionError::Transport(Error::PeerError(
+            Error::TransportParameterError.code()
+        )))
+    );
 }

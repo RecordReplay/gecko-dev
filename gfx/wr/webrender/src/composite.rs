@@ -414,6 +414,7 @@ pub struct CompositeSurfaceDescriptor {
 #[derive(PartialEq, Clone)]
 pub struct CompositeDescriptor {
     pub surfaces: Vec<CompositeSurfaceDescriptor>,
+    pub external_surfaces_rect: DeviceRect,
 }
 
 impl CompositeDescriptor {
@@ -421,6 +422,7 @@ impl CompositeDescriptor {
     pub fn empty() -> Self {
         CompositeDescriptor {
             surfaces: Vec::new(),
+            external_surfaces_rect: DeviceRect::zero(),
         }
     }
 }
@@ -785,6 +787,11 @@ impl CompositeState {
                     }
                 );
 
+                let device_rect =
+                    self.get_device_rect(&local_rect, external_surface.transform_index);
+                self.descriptor.external_surfaces_rect =
+                    self.descriptor.external_surfaces_rect.union(&device_rect);
+
                 self.tiles.push(tile);
             }
         }
@@ -803,6 +810,20 @@ impl CompositeState {
 
         if old_descriptor.surfaces.len() != self.descriptor.surfaces.len() {
             self.dirty_rects_are_valid = false;
+            return;
+        }
+
+        // The entire area of external surfaces are treated as dirty, however,
+        // if a surface has moved or shrunk that is no longer valid, as we
+        // additionally need to ensure the area the surface used to occupy is
+        // composited.
+        if !self
+            .descriptor
+            .external_surfaces_rect
+            .contains_box(&old_descriptor.external_surfaces_rect)
+        {
+            self.dirty_rects_are_valid = false;
+            return;
         }
     }
 
@@ -989,6 +1010,32 @@ impl Default for CompositorCapabilities {
     }
 }
 
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub enum WindowSizeMode {
+    Normal,
+    Minimized,
+    Maximized,
+    Fullscreen,
+    Invalid,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct WindowVisibility {
+    pub size_mode: WindowSizeMode,
+    pub is_fully_occluded: bool,
+}
+
+impl Default for WindowVisibility {
+    fn default() -> Self {
+        WindowVisibility {
+            size_mode: WindowSizeMode::Normal,
+            is_fully_occluded: false,
+        }
+    }
+}
+
 /// The transform type to apply to Compositor surfaces.
 // TODO: Should transform from CompositorSurfacePixel instead, but this requires a cleanup of the
 // Compositor API to use CompositorSurface-space geometry instead of Device-space where necessary
@@ -1136,6 +1183,8 @@ pub trait Compositor {
     /// specify what features a compositor supports, depending on the
     /// underlying platform
     fn get_capabilities(&self) -> CompositorCapabilities;
+
+    fn get_window_visibility(&self) -> WindowVisibility;
 }
 
 /// Information about the underlying data buffer of a mapped tile.

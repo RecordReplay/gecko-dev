@@ -10,23 +10,32 @@
 #include <utility>
 
 #include "mozilla/MozPromise.h"
-#include "mozilla/RefPtr.h"
+#include "mozilla/Tuple.h"
+#include "mozilla/dom/SafeRefPtr.h"
 #include "mozilla/dom/ServiceWorkerOpArgs.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class InternalResponse;
 
 using SynthesizeResponseArgs =
-    std::pair<RefPtr<InternalResponse>, FetchEventRespondWithClosure>;
+    Tuple<SafeRefPtr<InternalResponse>, FetchEventRespondWithClosure,
+          FetchEventTimeStamps>;
 
 using FetchEventRespondWithResult =
     Variant<SynthesizeResponseArgs, ResetInterceptionArgs,
             CancelInterceptionArgs>;
 
 using FetchEventRespondWithPromise =
-    MozPromise<FetchEventRespondWithResult, nsresult, true>;
+    MozPromise<FetchEventRespondWithResult, CancelInterceptionArgs, true>;
+
+// The reject type int is arbitrary, since this promise will never get rejected.
+// Unfortunately void is not supported as a reject type.
+using FetchEventPreloadResponseAvailablePromise =
+    MozPromise<SafeRefPtr<InternalResponse>, int, true>;
+
+using FetchEventPreloadResponseEndPromise =
+    MozPromise<ResponseEndArgs, int, true>;
 
 using ServiceWorkerOpPromise =
     MozPromise<ServiceWorkerOpResult, nsresult, true>;
@@ -34,7 +43,6 @@ using ServiceWorkerOpPromise =
 using ServiceWorkerFetchEventOpPromise =
     MozPromise<ServiceWorkerFetchEventOpResult, nsresult, true>;
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_serviceworkeroppromise_h__

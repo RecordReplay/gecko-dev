@@ -6,10 +6,14 @@
 
 EXPORTS.mozilla.a11y += [
     "Accessible.h",
+    "HyperTextAccessibleBase.h",
+    "TableAccessibleBase.h",
+    "TableCellAccessibleBase.h",
 ]
 
 UNIFIED_SOURCES += [
     "Accessible.cpp",
+    "HyperTextAccessibleBase.cpp",
 ]
 
 LOCAL_INCLUDES += [
@@ -19,6 +23,3 @@ LOCAL_INCLUDES += [
 FINAL_LIBRARY = "xul"
 
 include("/ipc/chromium/chromium-config.mozbuild")
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

@@ -27,7 +27,6 @@ DIRS += [
     "certviewer",
     "cleardata",
     "clearsitedata",
-    "cloudstorage",
     "commandlines",
     "contentprefs",
     "contextualidentity",
@@ -38,11 +37,9 @@ DIRS += [
     "extensions",
     "featuregates",
     "formautofill",
-    "filewatcher",
     "finalizationwitness",
     "find",
     "forgetaboutsite",
-    "fuzzyfox",
     "glean",
     "httpsonlyerror",
     "jsoncpp/src/lib_json",
@@ -102,10 +99,7 @@ if CONFIG["MOZ_BUILD_APP"] != "mobile/android":
 if CONFIG["BUILD_CTYPES"]:
     DIRS += ["ctypes"]
 
-if CONFIG["MOZ_XUL"]:
-    DIRS += ["autocomplete", "printingui", "satchel"]
-
-DIRS += ["captivedetect"]
+DIRS += ["autocomplete", "printingui", "satchel", "captivedetect"]
 
 if CONFIG["OS_TARGET"] != "Android":
     DIRS += ["terminator"]
@@ -128,7 +122,9 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] != "android":
     ]
 
 if CONFIG["MOZ_BUILD_APP"] == "browser":
-    DIRS += ["normandy", "nimbus", "messaging-system"]
+    DIRS += ["normandy", "messaging-system"]
+
+DIRS += ["nimbus"]
 
 if CONFIG["MOZ_BACKGROUNDTASKS"]:
     DIRS += ["backgroundtasks"]
@@ -136,3 +132,13 @@ if CONFIG["MOZ_BACKGROUNDTASKS"]:
 # This is only packaged for browser since corrupt JAR and XPI files tend to be a desktop-OS problem.
 if CONFIG["MOZ_BUILD_APP"] == "browser":
     DIRS += ["corroborator"]
+
+if CONFIG["COMPILE_ENVIRONMENT"]:
+    CbindgenHeader(
+        "regex_ffi_generated.h",
+        inputs=["/toolkit/components/regex-ffi"],
+    )
+
+    EXPORTS.mozilla += [
+        "!regex_ffi_generated.h",
+    ]

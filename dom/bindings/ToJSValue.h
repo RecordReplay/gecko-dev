@@ -10,14 +10,15 @@
 #include <cstddef>  // for size_t
 #include <cstdint>  // for int32_t, int64_t, uint32_t, uint64_t
 #include <type_traits>  // for is_base_of, enable_if_t, enable_if, is_pointer, is_same, void_t
-#include <utility>          // for forward
-#include "ErrorList.h"      // for nsresult
-#include "js/Array.h"       // for NewArrayObject
-#include "js/GCVector.h"    // for RootedVector, MutableWrappedPtrOperations
-#include "js/RootingAPI.h"  // for MutableHandle, Rooted, Handle, Heap
-#include "js/Value.h"       // for Value
-#include "js/ValueArray.h"  // for HandleValueArray
-#include "jsapi.h"          // for CurrentGlobalOrNull
+#include <utility>        // for forward
+#include "ErrorList.h"    // for nsresult
+#include "js/Array.h"     // for NewArrayObject
+#include "js/GCVector.h"  // for RootedVector, MutableWrappedPtrOperations
+#include "js/PropertyAndElement.h"  // JS_DefineUCProperty
+#include "js/RootingAPI.h"          // for MutableHandle, Rooted, Handle, Heap
+#include "js/Value.h"               // for Value
+#include "js/ValueArray.h"          // for HandleValueArray
+#include "jsapi.h"                  // for CurrentGlobalOrNull
 #include "mozilla/Assertions.h"  // for AssertionConditionType, MOZ_ASSERT, MOZ_ASSERT_HELPER1
 #include "mozilla/UniquePtr.h"         // for UniquePtr
 #include "mozilla/Unused.h"            // for Unused
@@ -30,8 +31,7 @@
 #include "nsTArrayForwardDeclare.h"
 #include "xpcObjectHelper.h"  // for xpcObjectHelper
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class CallbackObject;
 class Promise;
@@ -274,6 +274,12 @@ template <typename T>
   return ToJSValue(aCx, *aArgument.get(), aValue);
 }
 
+template <typename T>
+[[nodiscard]] bool ToJSValue(JSContext* aCx, const OwningNonNull<T>& aArgument,
+                             JS::MutableHandle<JS::Value> aValue) {
+  return ToJSValue(aCx, *aArgument.get(), aValue);
+}
+
 // Accept WebIDL dictionaries
 template <class T>
 [[nodiscard]] std::enable_if_t<std::is_base_of<DictionaryBase, T>::value, bool>
@@ -434,7 +440,17 @@ template <typename K, typename V>
   return true;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+template <typename T>
+[[nodiscard]] bool ToJSValue(JSContext* aCx, const Nullable<T>& aArgument,
+                             JS::MutableHandle<JS::Value> aValue) {
+  if (aArgument.IsNull()) {
+    aValue.setNull();
+    return true;
+  }
+
+  return ToJSValue(aCx, aArgument.Value(), aValue);
+}
+
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_ToJSValue_h */

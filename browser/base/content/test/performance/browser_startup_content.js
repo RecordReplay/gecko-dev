@@ -47,19 +47,14 @@ const known_scripts = {
     // Extensions
     "resource://gre/modules/ExtensionProcessScript.jsm",
     "resource://gre/modules/ExtensionUtils.jsm",
-    "resource://gre/modules/MessageChannel.jsm",
   ]),
   frameScripts: new Set([
     // Test related
     "chrome://mochikit/content/shutdown-leaks-collector.js",
-
-    // Extensions
-    "resource://gre/modules/addons/Content.js",
   ]),
   processScripts: new Set([
     "chrome://global/content/process-content.js",
     "resource://gre/modules/extensionProcessScriptLoader.js",
-    "resource://gre/modules/URLQueryStrippingListProcessScript.js",
   ]),
 };
 
@@ -84,6 +79,8 @@ const intermittently_loaded_scripts = {
     "resource://webcompat/AboutCompat.jsm",
 
     // Test related
+    "chrome://remote/content/marionette/actors/MarionetteEventsChild.jsm",
+    "chrome://remote/content/shared/Log.jsm",
     "resource://testing-common/BrowserTestUtilsChild.jsm",
     "resource://testing-common/ContentEventListenerChild.jsm",
     "resource://specialpowers/AppTestDelegateChild.jsm",

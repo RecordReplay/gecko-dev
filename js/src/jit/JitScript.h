@@ -7,20 +7,50 @@
 #ifndef jit_JitScript_h
 #define jit_JitScript_h
 
+#include "mozilla/Assertions.h"
 #include "mozilla/Atomics.h"
+#include "mozilla/Attributes.h"
+#include "mozilla/HashFunctions.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/MemoryReporting.h"
+
+#include <stddef.h>
+#include <stdint.h>
 
 #include "jstypes.h"
+#include "NamespaceImports.h"
+
+#include "gc/Barrier.h"
 #include "jit/BaselineIC.h"
-#include "jit/TrialInlining.h"
+#include "jit/ICStubSpace.h"
+#include "js/TypeDecls.h"
 #include "js/UniquePtr.h"
+#include "js/Vector.h"
 #include "util/TrailingArray.h"
 #include "vm/EnvironmentObject.h"
 
 class JS_PUBLIC_API JSScript;
+class JS_PUBLIC_API JSTracer;
+struct JS_PUBLIC_API JSContext;
+
+namespace JS {
+class Zone;
+}
 
 namespace js {
+
+class SystemAllocPolicy;
+
+namespace gc {
+class AllocSite;
+}
+
 namespace jit {
 
+class BaselineScript;
+class InliningRoot;
+class IonScript;
+class JitScript;
 class JitZone;
 
 // Information about a script's bytecode, used by WarpBuilder. This is cached
@@ -28,7 +58,6 @@ class JitZone;
 struct IonBytecodeInfo {
   bool usesEnvironmentChain = false;
   bool modifiesArguments = false;
-  bool hasTryFinally = false;
 };
 
 // Magic BaselineScript value indicating Baseline compilation has been disabled.
@@ -46,9 +75,6 @@ static IonScript* const IonDisabledScriptPtr =
     reinterpret_cast<IonScript*>(IonDisabledScript);
 static IonScript* const IonCompilingScriptPtr =
     reinterpret_cast<IonScript*>(IonCompilingScript);
-
-class JitScript;
-class InliningRoot;
 
 /* [SMDOC] ICScript Lifetimes
  *
@@ -286,11 +312,11 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
 
   // Baseline code for the script. Either nullptr, BaselineDisabledScriptPtr or
   // a valid BaselineScript*.
-  BaselineScript* baselineScript_ = nullptr;
+  GCStructPtr<BaselineScript*> baselineScript_;
 
   // Ion code for this script. Either nullptr, IonDisabledScriptPtr,
   // IonCompilingScriptPtr or a valid IonScript*.
-  IonScript* ionScript_ = nullptr;
+  GCStructPtr<IonScript*> ionScript_;
 
   // The size of this allocation.
   Offset endOffset_ = 0;
@@ -341,17 +367,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   JitScript(JSScript* script, Offset fallbackStubsOffset, Offset endOffset,
             const char* profileString);
 
-#ifdef DEBUG
-  ~JitScript() {
-    // The contents of the stub space are removed and freed separately after the
-    // next minor GC. See prepareForDestruction.
-    MOZ_ASSERT(jitScriptStubSpace_.isEmpty());
-
-    // BaselineScript and IonScript must have been destroyed at this point.
-    MOZ_ASSERT(!hasBaselineScript());
-    MOZ_ASSERT(!hasIonScript());
-  }
-#endif
+  ~JitScript();
 
   [[nodiscard]] bool ensureHasCachedIonData(JSContext* cx, HandleScript script);
 
@@ -392,15 +408,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   void incWarmUpCount(uint32_t amount) { icScript_.warmUpCount_ += amount; }
   void resetWarmUpCount(uint32_t count);
 
-  void prepareForDestruction(Zone* zone) {
-    // When the script contains pointers to nursery things, the store buffer can
-    // contain entries that point into the stub space. Since we can destroy
-    // scripts outside the context of a GC, this situation could result in us
-    // trying to mark invalid store buffer entries.
-    //
-    // Defer freeing any allocated blocks until after the next minor GC.
-    jitScriptStubSpace_.freeAllAfterMinorGC(zone);
-  }
+  void prepareForDestruction(Zone* zone);
 
   JitScriptICStubSpace* jitScriptStubSpace() { return &jitScriptStubSpace_; }
 
@@ -445,9 +453,6 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   bool usesEnvironmentChain() const {
     return cachedIonData().bytecodeInfo.usesEnvironmentChain;
   }
-  bool hasTryFinally() const {
-    return cachedIonData().bytecodeInfo.hasTryFinally;
-  }
 
   gc::AllocSite* createAllocSite(JSScript* script);
 
@@ -457,7 +462,7 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
   // Methods to set baselineScript_ to a BaselineScript*, nullptr, or
   // BaselineDisabledScriptPtr.
   void setBaselineScriptImpl(JSScript* script, BaselineScript* baselineScript);
-  void setBaselineScriptImpl(JSFreeOp* fop, JSScript* script,
+  void setBaselineScriptImpl(JS::GCContext* gcx, JSScript* script,
                              BaselineScript* baselineScript);
 
  public:
@@ -476,17 +481,18 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
     setBaselineScriptImpl(script, baselineScript);
     MOZ_ASSERT(hasBaselineScript());
   }
-  [[nodiscard]] BaselineScript* clearBaselineScript(JSFreeOp* fop,
+  [[nodiscard]] BaselineScript* clearBaselineScript(JS::GCContext* gcx,
                                                     JSScript* script) {
     BaselineScript* baseline = baselineScript();
-    setBaselineScriptImpl(fop, script, nullptr);
+    setBaselineScriptImpl(gcx, script, nullptr);
     return baseline;
   }
 
  private:
   // Methods to set ionScript_ to an IonScript*, nullptr, or one of the special
   // Ion{Disabled,Compiling}ScriptPtr values.
-  void setIonScriptImpl(JSFreeOp* fop, JSScript* script, IonScript* ionScript);
+  void setIonScriptImpl(JS::GCContext* gcx, JSScript* script,
+                        IonScript* ionScript);
   void setIonScriptImpl(JSScript* script, IonScript* ionScript);
 
  public:
@@ -506,9 +512,10 @@ class alignas(uintptr_t) JitScript final : public TrailingArray {
     setIonScriptImpl(script, ionScript);
     MOZ_ASSERT(hasIonScript());
   }
-  [[nodiscard]] IonScript* clearIonScript(JSFreeOp* fop, JSScript* script) {
+  [[nodiscard]] IonScript* clearIonScript(JS::GCContext* gcx,
+                                          JSScript* script) {
     IonScript* ion = ionScript();
-    setIonScriptImpl(fop, script, nullptr);
+    setIonScriptImpl(gcx, script, nullptr);
     return ion;
   }
 

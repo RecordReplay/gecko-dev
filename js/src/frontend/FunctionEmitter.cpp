@@ -8,22 +8,16 @@
 
 #include "mozilla/Assertions.h"  // MOZ_ASSERT
 
-#include "builtin/ModuleObject.h"          // ModuleObject
 #include "frontend/AsyncEmitter.h"         // AsyncEmitter
 #include "frontend/BytecodeEmitter.h"      // BytecodeEmitter
 #include "frontend/FunctionSyntaxKind.h"   // FunctionSyntaxKind
 #include "frontend/ModuleSharedContext.h"  // ModuleSharedContext
 #include "frontend/NameAnalysisTypes.h"    // NameLocation
 #include "frontend/NameOpEmitter.h"        // NameOpEmitter
-#include "frontend/ParseContext.h"         // BindingIter
-#include "frontend/PropOpEmitter.h"        // PropOpEmitter
 #include "frontend/SharedContext.h"        // SharedContext
-#include "vm/AsyncFunctionResolveKind.h"   // AsyncFunctionResolveKind
-#include "vm/JSScript.h"                   // JSScript
 #include "vm/ModuleBuilder.h"              // ModuleBuilder
 #include "vm/Opcodes.h"                    // JSOp
 #include "vm/Scope.h"                      // BindingKind
-#include "wasm/AsmJS.h"                    // IsAsmJSModule
 
 using namespace js;
 using namespace js::frontend;
@@ -230,17 +224,6 @@ bool FunctionEmitter::emitNonHoisted(GCThingIndex index) {
 
   //                [stack]
 
-  // JSOp::LambdaArrow is always preceded by a opcode that pushes new.target.
-  // See below.
-  MOZ_ASSERT(funbox_->isArrow() == (syntaxKind_ == FunctionSyntaxKind::Arrow));
-
-  if (funbox_->isArrow()) {
-    if (!emitNewTargetForArrow()) {
-      //            [stack] NEW.TARGET/NULL
-      return false;
-    }
-  }
-
   if (syntaxKind_ == FunctionSyntaxKind::DerivedClassConstructor) {
     //              [stack] PROTO
     if (!bce_->emitGCIndexOp(JSOp::FunWithProto, index)) {
@@ -252,9 +235,7 @@ bool FunctionEmitter::emitNonHoisted(GCThingIndex index) {
 
   // This is a FunctionExpression, ArrowFunctionExpression, or class
   // constructor. Emit the single instruction (without location info).
-  JSOp op = syntaxKind_ == FunctionSyntaxKind::Arrow ? JSOp::LambdaArrow
-                                                     : JSOp::Lambda;
-  if (!bce_->emitGCIndexOp(op, index)) {
+  if (!bce_->emitGCIndexOp(JSOp::Lambda, index)) {
     //              [stack] FUN
     return false;
   }
@@ -312,24 +293,6 @@ bool FunctionEmitter::emitTopLevelFunction(GCThingIndex index) {
   // range of indices in `BytecodeEmitter::emitDeclarationInstantiation` instead
   // of discrete indices.
   (void)index;
-
-  return true;
-}
-
-bool FunctionEmitter::emitNewTargetForArrow() {
-  //                [stack]
-
-  if (bce_->sc->allowNewTarget()) {
-    if (!bce_->emit1(JSOp::NewTarget)) {
-      //            [stack] NEW.TARGET
-      return false;
-    }
-  } else {
-    if (!bce_->emit1(JSOp::Null)) {
-      //            [stack] NULL
-      return false;
-    }
-  }
 
   return true;
 }
@@ -414,6 +377,15 @@ bool FunctionScriptEmitter::prepareForParameters() {
     return false;
   }
 
+  if (funbox_->isClassConstructor()) {
+    if (!funbox_->isDerivedClassConstructor()) {
+      if (!bce_->emitInitializeInstanceMembers(false)) {
+        //          [stack]
+        return false;
+      }
+    }
+  }
+
 #ifdef DEBUG
   state_ = State::Parameters;
 #endif
@@ -439,15 +411,6 @@ bool FunctionScriptEmitter::prepareForBody() {
   if (funbox_->needsPromiseResult()) {
     if (!asyncEmitter_->prepareForBody()) {
       return false;
-    }
-  }
-
-  if (funbox_->isClassConstructor()) {
-    if (!funbox_->isDerivedClassConstructor()) {
-      if (!bce_->emitInitializeInstanceMembers()) {
-        //          [stack]
-        return false;
-      }
     }
   }
 
@@ -489,10 +452,10 @@ bool FunctionScriptEmitter::emitExtraBodyVarScope() {
       continue;
     }
 
-    // The '.this' and '.generator' function special
-    // bindings should never appear in the extra var
-    // scope. 'arguments', however, may.
+    // The '.this', '.newTarget', and '.generator' function special binding
+    // should never appear in the extra var scope. 'arguments', however, may.
     MOZ_ASSERT(name != TaggedParserAtomIndex::WellKnown::dotThis() &&
+               name != TaggedParserAtomIndex::WellKnown::dotNewTarget() &&
                name != TaggedParserAtomIndex::WellKnown::dotGenerator());
 
     NameOpEmitter noe(bce_, name, NameOpEmitter::Kind::Initialize);
@@ -610,7 +573,12 @@ bool FunctionScriptEmitter::emitEndBody() {
     }
   }
 
+  // Execute |CheckReturn| right before exiting the class constructor.
   if (funbox_->isDerivedClassConstructor()) {
+    if (!bce_->emitJumpTargetAndPatch(bce_->endOfDerivedClassConstructorBody)) {
+      return false;
+    }
+
     if (!bce_->emitCheckDerivedClassConstructorReturn()) {
       //            [stack]
       return false;

@@ -39,7 +39,7 @@ class CacheWorkerRef;
 class CacheStorage final : public nsISupports,
                            public nsWrapperCache,
                            public TypeUtils {
-  typedef mozilla::ipc::PBackgroundChild PBackgroundChild;
+  using PBackgroundChild = mozilla::ipc::PBackgroundChild;
 
  public:
   static already_AddRefed<CacheStorage> CreateOnMainThread(
@@ -108,7 +108,7 @@ class CacheStorage final : public nsISupports,
 
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(CacheStorage)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(CacheStorage)
 };
 
 }  // namespace cache

@@ -65,15 +65,21 @@ This GitHub repository is only used for issue tracking and making releases.
 [Mozilla Public License]: https://www.mozilla.org/en-US/MPL/2.0/
 [mozilla-central]: https://hg.mozilla.org/mozilla-central/file/tip/testing/geckodriver
 
+Custom release builds
+---------------------
+
+If a binary is not available for your platform, it's possibe to create a custom
+build using the [Rust] toolchain. To do this, checkout the release tag for the
+version of interest and run `cargo build`. Alternatively the latest version may
+be built and installed from `crates.io` using `cargo install geckodriver`.
+
+[Rust]: https://rustup.rs/
 
 Contact
 -------
 
 The mailing list for geckodriver discussion is
-tools-marionette@lists.mozilla.org ([subscribe], [archive]).
+https://groups.google.com/a/mozilla.org/g/dev-webdriver.
 
-There is also a Matrix channel to talk about using and developing
-geckodriver on `#interop:mozilla.org <https://chat.mozilla.org/#/room/#interop:mozilla.org>`__
-
-[subscribe]: https://lists.mozilla.org/listinfo/tools-marionette
-[archive]: https://lists.mozilla.org/pipermail/tools-marionette/
+There is also an Element channel to talk about using and developing
+geckodriver on `#webdriver:mozilla.org <https://chat.mozilla.org/#/room/#webdriver:mozilla.org>`__

@@ -14,6 +14,7 @@
 #include "mozilla/layers/LayersTypes.h"
 #include "mozilla/widget/WindowSurface.h"
 #include "Units.h"
+#include "mozilla/ScopeExit.h"
 
 #ifdef MOZ_X11
 #  include <X11/Xlib.h>  // for Window, Display, Visual, etc.
@@ -33,6 +34,7 @@ namespace widget {
 class WindowSurfaceProvider final {
  public:
   WindowSurfaceProvider();
+  ~WindowSurfaceProvider() = default;
 
   /**
    * Initializes the WindowSurfaceProvider by giving it the window
@@ -41,7 +43,7 @@ class WindowSurfaceProvider final {
    * while WindowSurfaceProvider is used.
    */
 #ifdef MOZ_WAYLAND
-  void Initialize(nsWindow* aWidget);
+  void Initialize(RefPtr<nsWindow> aWidget);
 #endif
 #ifdef MOZ_X11
   void Initialize(Window aWindow, Visual* aVisual, int aDepth, bool aIsShaped);
@@ -62,10 +64,22 @@ class WindowSurfaceProvider final {
 
  private:
   RefPtr<WindowSurface> CreateWindowSurface();
+  void CleanupWindowSurface();
 
   RefPtr<WindowSurface> mWindowSurface;
+
+  /* While CleanupResources() can be called from Main thread when nsWindow is
+   * destroyed/hidden, StartRemoteDrawingInRegion()/EndRemoteDrawingInRegion()
+   * is called from Compositor thread during rendering.
+   *
+   * As nsWindow CleanupResources() call comes from Gtk/X11 we can't synchronize
+   * that with WebRender so we use lock to synchronize the access.
+   */
+  mozilla::Mutex mMutex MOZ_UNANNOTATED;
+  // WindowSurface needs to be re-created as underlying window was changed.
+  mozilla::Atomic<bool> mWindowSurfaceValid;
 #ifdef MOZ_WAYLAND
-  nsWindow* mWidget;
+  RefPtr<nsWindow> mWidget;
 #endif
 #ifdef MOZ_X11
   bool mIsShaped;

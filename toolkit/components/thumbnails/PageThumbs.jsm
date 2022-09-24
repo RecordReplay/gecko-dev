@@ -186,17 +186,18 @@ var PageThumbs = {
    * window.
    *
    * @param aBrowser The <browser> to capture a thumbnail from.
+   * @param aArgs See captureToCanvas for accepted arguments.
    * @return {Promise}
    * @resolve {Blob} The thumbnail, as a Blob.
    */
-  captureToBlob: function PageThumbs_captureToBlob(aBrowser) {
+  captureToBlob: function PageThumbs_captureToBlob(aBrowser, aArgs) {
     if (!this._prefEnabled()) {
       return null;
     }
 
     return new Promise(resolve => {
       let canvas = this.createCanvas(aBrowser.ownerGlobal);
-      this.captureToCanvas(aBrowser, canvas)
+      this.captureToCanvas(aBrowser, canvas, aArgs)
         .then(() => {
           canvas.toBlob(blob => {
             resolve(blob, this.contentType);
@@ -221,6 +222,9 @@ var PageThumbs = {
    *   backgroundColor - background color to draw behind images.
    *   targetWidth - desired width for images.
    *   isBackgroundThumb - true if request is from the background thumb service.
+   *   fullViewport - request that a screenshot for the viewport be
+   *     captured. This makes it possible to get a screenshot that reflects
+   *     the current scroll position of aBrowser.
    * @param aSkipTelemetry skip recording telemetry
    */
   async captureToCanvas(aBrowser, aCanvas, aArgs, aSkipTelemetry = false) {
@@ -232,6 +236,7 @@ var PageThumbs = {
         aArgs?.backgroundColor ?? PageThumbUtils.THUMBNAIL_BG_COLOR,
       targetWidth: aArgs?.targetWidth ?? PageThumbUtils.THUMBNAIL_DEFAULT_SIZE,
       isBackgroundThumb: aArgs ? aArgs.isBackgroundThumb : false,
+      fullViewport: aArgs?.fullViewport ?? false,
     };
 
     return this._captureToCanvas(aBrowser, aCanvas, args).then(() => {
@@ -317,6 +322,9 @@ var PageThumbs = {
    *   backgroundColor - background color to draw behind images.
    *   targetWidth - desired width for images.
    *   isBackgroundThumb - true if request is from the background thumb service.
+   *   fullViewport - request that a screenshot for the viewport be
+   *     captured. This makes it possible to get a screenshot that reflects
+   *     the current scroll position of aBrowser.
    * @return a promise
    */
   async _captureRemoteThumbnail(aBrowser, aWidth, aHeight, aArgs) {
@@ -370,7 +378,8 @@ var PageThumbs = {
         contentWidth,
         contentHeight,
         scale,
-        aArgs.backgroundColor
+        aArgs.backgroundColor,
+        aArgs.fullViewport
       );
 
       thumbnail.width = fullScale ? contentWidth : aWidth;
@@ -561,7 +570,7 @@ var PageThumbsStorage = {
 
   // Generate an arbitrary revision tag, i.e. one that can't be used to
   // infer URL frecency.
-  _updateRevision(aURL) {
+  updateRevision(aURL) {
     // Initialize with a random value and increment on each update. Wrap around
     // modulo _revisionRange, so that even small values carry no meaning.
     let rev = this._revisionTable[aURL];
@@ -590,7 +599,7 @@ var PageThumbsStorage = {
   getRevision(aURL) {
     let rev = this._revisionTable[aURL];
     if (rev == null) {
-      this._updateRevision(aURL);
+      this.updateRevision(aURL);
       rev = this._revisionTable[aURL];
     }
     return rev;
@@ -627,7 +636,7 @@ var PageThumbsStorage = {
            as OS.Shared.Type.void_t.in_ptr.toMsg uses C-level
            memory tricks to enforce zero-copy*/
     ).then(
-      () => this._updateRevision(aURL),
+      () => this.updateRevision(aURL),
       this._eatNoOverwriteError(aNoOverwrite)
     );
   },
@@ -652,7 +661,7 @@ var PageThumbsStorage = {
       targetFile,
       options,
     ]).then(
-      () => this._updateRevision(aTargetURL),
+      () => this.updateRevision(aTargetURL),
       this._eatNoOverwriteError(aNoOverwrite)
     );
   },
@@ -737,7 +746,7 @@ var PageThumbsStorage = {
     return function onError(err) {
       if (
         !aNoOverwrite ||
-        !(err instanceof DOMException) ||
+        !DOMException.isInstance(err) ||
         err.name !== "TypeMismatchError"
       ) {
         throw err;

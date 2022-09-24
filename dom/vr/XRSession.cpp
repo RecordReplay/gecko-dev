@@ -37,8 +37,7 @@
  */
 const uint32_t kMaxPoolSize = 16;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(XRSession)
 
@@ -175,9 +174,17 @@ bool XRSession::IsImmersive() const {
   return mDisplayClient != nullptr;
 }
 
-XRVisibilityState XRSession::VisibilityState() {
+XRVisibilityState XRSession::VisibilityState() const {
   return XRVisibilityState::Visible;
   // TODO (Bug 1609771): Implement changing visibility state
+}
+
+// https://immersive-web.github.io/webxr/#poses-may-be-reported
+// Given that an XRSession cannot be requested without explicit consent
+// by the user, the only necessary check is whether the XRSession's
+// visiblityState is 'visible'.
+bool XRSession::CanReportPoses() const {
+  return VisibilityState() == XRVisibilityState::Visible;
 }
 
 // https://immersive-web.github.io/webxr/#dom-xrsession-updaterenderstate
@@ -519,5 +526,4 @@ RefPtr<XRFrame> XRSession::PooledFrame() {
   return frame;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

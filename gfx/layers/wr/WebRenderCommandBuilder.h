@@ -18,12 +18,16 @@
 #include "nsIFrame.h"
 #include "nsTHashSet.h"
 #include "DisplayItemCache.h"
+#include "ImgDrawResult.h"
 
 namespace mozilla {
 
+namespace image {
+class WebRenderImageProvider;
+}
+
 namespace layers {
 
-class CanvasLayer;
 class ImageClient;
 class ImageContainer;
 class WebRenderBridgeChild;
@@ -37,7 +41,6 @@ class WebRenderUserData;
 class WebRenderCommandBuilder final {
   typedef nsTHashSet<RefPtr<WebRenderUserData>> WebRenderUserDataRefTable;
   typedef nsTHashSet<RefPtr<WebRenderCanvasData>> CanvasDataSet;
-  typedef nsTHashSet<RefPtr<WebRenderLocalCanvasData>> LocalCanvasDataSet;
 
  public:
   explicit WebRenderCommandBuilder(WebRenderLayerManager* aManager);
@@ -66,8 +69,9 @@ class WebRenderCommandBuilder final {
       mozilla::wr::ImageRendering aRendering, const StackingContextHelper& aSc,
       gfx::IntSize& aSize, const Maybe<LayoutDeviceRect>& aAsyncImageBounds);
 
-  Maybe<wr::BlobImageKey> CreateBlobImageKey(
-      nsDisplayItem* aItem, ImageContainer* aContainer,
+  Maybe<wr::ImageKey> CreateImageProviderKey(
+      nsDisplayItem* aItem, image::WebRenderImageProvider* aProvider,
+      image::ImgDrawResult aDrawResult,
       mozilla::wr::IpcResourceUpdateQueue& aResources);
 
   WebRenderUserDataRefTable* GetWebRenderUserDataTable() {
@@ -80,11 +84,20 @@ class WebRenderCommandBuilder final {
                  const StackingContextHelper& aSc,
                  const LayoutDeviceRect& aRect, const LayoutDeviceRect& aClip);
 
-  bool PushBlobImage(nsDisplayItem* aItem, ImageContainer* aContainer,
-                     mozilla::wr::DisplayListBuilder& aBuilder,
-                     mozilla::wr::IpcResourceUpdateQueue& aResources,
-                     const LayoutDeviceRect& aRect,
-                     const LayoutDeviceRect& aClip);
+  bool PushImageProvider(nsDisplayItem* aItem,
+                         image::WebRenderImageProvider* aProvider,
+                         image::ImgDrawResult aDrawResult,
+                         mozilla::wr::DisplayListBuilder& aBuilder,
+                         mozilla::wr::IpcResourceUpdateQueue& aResources,
+                         const LayoutDeviceRect& aRect,
+                         const LayoutDeviceRect& aClip);
+
+  void PushInProcessImage(nsDisplayItem* aItem,
+                          const CompositableHandle& aHandle,
+                          mozilla::wr::DisplayListBuilder& aBuilder,
+                          mozilla::wr::IpcResourceUpdateQueue& aResources,
+                          const StackingContextHelper& aSc,
+                          const LayoutDeviceRect& aAsyncImageBounds);
 
   Maybe<wr::ImageMask> BuildWrMaskImage(
       nsDisplayMasksAndClipPaths* aMaskItem, wr::DisplayListBuilder& aBuilder,
@@ -101,7 +114,7 @@ class WebRenderCommandBuilder final {
       nsDisplayList* aDisplayList, nsDisplayItem* aWrappingItem,
       nsDisplayListBuilder* aDisplayListBuilder,
       const StackingContextHelper& aSc, wr::DisplayListBuilder& aBuilder,
-      wr::IpcResourceUpdateQueue& aResources);
+      wr::IpcResourceUpdateQueue& aResources, bool aNewClipList = true);
 
   // aWrappingItem has to be non-null.
   void DoGroupingForDisplayList(nsDisplayList* aDisplayList,
@@ -166,9 +179,6 @@ class WebRenderCommandBuilder final {
       case WebRenderUserData::UserDataType::eCanvas:
         mLastCanvasDatas.Insert(data->AsCanvasData());
         break;
-      case WebRenderUserData::UserDataType::eLocalCanvas:
-        mLastLocalCanvasDatas.Insert(data->AsLocalCanvasData());
-        break;
       default:
         break;
     }
@@ -205,14 +215,15 @@ class WebRenderCommandBuilder final {
   // need this so that WebRenderLayerScrollData items that deeper in the
   // tree don't duplicate scroll metadata that their ancestors already have.
   std::vector<const ActiveScrolledRoot*> mAsrStack;
+  // A similar stack to track the deferred transform that we decided to emit
+  // most recently.
+  std::vector<nsDisplayTransform*> mDeferredTransformStack;
   const ActiveScrolledRoot* mLastAsr;
 
   WebRenderUserDataRefTable mWebRenderUserDatas;
 
   // Store of WebRenderCanvasData objects for use in empty transactions
   CanvasDataSet mLastCanvasDatas;
-  // Store of WebRenderLocalCanvasData objects for use in empty transactions
-  LocalCanvasDataSet mLastLocalCanvasDatas;
 
   wr::usize mBuilderDumpIndex;
   wr::usize mDumpIndent;

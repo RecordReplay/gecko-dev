@@ -1,16 +1,21 @@
 use serde::{ser, Deserialize, Serialize};
 use std::io;
 
-use crate::error::{Error, Result};
-use crate::extensions::Extensions;
+use crate::{
+    error::{Error, Result},
+    extensions::Extensions,
+    parse::{is_ident_first_char, is_ident_other_char},
+};
 
+#[cfg(test)]
+mod tests;
 mod value;
 
 /// Serializes `value` into `writer`
 pub fn to_writer<W, T>(writer: W, value: &T) -> Result<()>
 where
     W: io::Write,
-    T: Serialize,
+    T: ?Sized + Serialize,
 {
     let mut s = Serializer::new(writer, None, false)?;
     value.serialize(&mut s)
@@ -20,7 +25,7 @@ where
 pub fn to_writer_pretty<W, T>(writer: W, value: &T, config: PrettyConfig) -> Result<()>
 where
     W: io::Write,
-    T: Serialize,
+    T: ?Sized + Serialize,
 {
     let mut s = Serializer::new(writer, Some(config), false)?;
     value.serialize(&mut s)
@@ -32,7 +37,7 @@ where
 /// if you want that, you can use `to_string_pretty` instead.
 pub fn to_string<T>(value: &T) -> Result<String>
 where
-    T: Serialize,
+    T: ?Sized + Serialize,
 {
     let buf = Vec::new();
     let mut s = Serializer::new(buf, None, false)?;
@@ -43,7 +48,7 @@ where
 /// Serializes `value` in the recommended RON layout in a pretty way.
 pub fn to_string_pretty<T>(value: &T, config: PrettyConfig) -> Result<String>
 where
-    T: Serialize,
+    T: ?Sized + Serialize,
 {
     let buf = Vec::new();
     let mut s = Serializer::new(buf, Some(config), false)?;
@@ -65,9 +70,9 @@ struct Pretty {
 /// use ron::ser::PrettyConfig;
 ///
 /// let my_config = PrettyConfig::new()
-///     .with_depth_limit(4)
+///     .depth_limit(4)
 ///     // definitely superior (okay, just joking)
-///     .with_indentor("\t".to_owned());
+///     .indentor("\t".to_owned());
 /// ```
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrettyConfig {
@@ -108,7 +113,7 @@ impl PrettyConfig {
     /// without pretty formatting.
     ///
     /// Default: [std::usize::MAX]
-    pub fn with_depth_limit(mut self, depth_limit: usize) -> Self {
+    pub fn depth_limit(mut self, depth_limit: usize) -> Self {
         self.depth_limit = depth_limit;
 
         self
@@ -117,7 +122,7 @@ impl PrettyConfig {
     /// Configures the newlines used for serialization.
     ///
     /// Default: `\r\n` on Windows, `\n` otherwise
-    pub fn with_new_line(mut self, new_line: String) -> Self {
+    pub fn new_line(mut self, new_line: String) -> Self {
         self.new_line = new_line;
 
         self
@@ -126,7 +131,7 @@ impl PrettyConfig {
     /// Configures the string sequence used for indentation.
     ///
     /// Default: 4 spaces
-    pub fn with_indentor(mut self, indentor: String) -> Self {
+    pub fn indentor(mut self, indentor: String) -> Self {
         self.indentor = indentor;
 
         self
@@ -138,7 +143,7 @@ impl PrettyConfig {
     /// newlines or indentations.
     ///
     /// Default: `false`
-    pub fn with_separate_tuple_members(mut self, separate_tuple_members: bool) -> Self {
+    pub fn separate_tuple_members(mut self, separate_tuple_members: bool) -> Self {
         self.separate_tuple_members = separate_tuple_members;
 
         self
@@ -148,7 +153,7 @@ impl PrettyConfig {
     /// indicating the index.
     ///
     /// Default: `false`
-    pub fn with_enumerate_arrays(mut self, enumerate_arrays: bool) -> Self {
+    pub fn enumerate_arrays(mut self, enumerate_arrays: bool) -> Self {
         self.enumerate_arrays = enumerate_arrays;
 
         self
@@ -159,7 +164,7 @@ impl PrettyConfig {
     /// When true `1.0` will serialize as `1.0`
     ///
     /// Default: `false`
-    pub fn with_decimal_floats(mut self, decimal_floats: bool) -> Self {
+    pub fn decimal_floats(mut self, decimal_floats: bool) -> Self {
         self.decimal_floats = decimal_floats;
 
         self
@@ -168,7 +173,7 @@ impl PrettyConfig {
     /// Configures extensions
     ///
     /// Default: Extensions::empty()
-    pub fn with_extensions(mut self, extensions: Extensions) -> Self {
+    pub fn extensions(mut self, extensions: Extensions) -> Self {
         self.extensions = extensions;
 
         self
@@ -335,6 +340,15 @@ impl<W: io::Write> Serializer<W> {
         self.output.write_all(b"\"")?;
         Ok(())
     }
+
+    fn write_identifier(&mut self, name: &str) -> io::Result<()> {
+        let mut bytes = name.as_bytes().iter().cloned();
+        if !bytes.next().map_or(false, is_ident_first_char) || !bytes.all(is_ident_other_char) {
+            self.output.write_all(b"r#")?;
+        }
+        self.output.write_all(name.as_bytes())?;
+        Ok(())
+    }
 }
 
 impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
@@ -354,19 +368,19 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     fn serialize_i8(self, v: i8) -> Result<()> {
-        self.serialize_i128(v as i128)
+        self.serialize_i128(i128::from(v))
     }
 
     fn serialize_i16(self, v: i16) -> Result<()> {
-        self.serialize_i128(v as i128)
+        self.serialize_i128(i128::from(v))
     }
 
     fn serialize_i32(self, v: i32) -> Result<()> {
-        self.serialize_i128(v as i128)
+        self.serialize_i128(i128::from(v))
     }
 
     fn serialize_i64(self, v: i64) -> Result<()> {
-        self.serialize_i128(v as i128)
+        self.serialize_i128(i128::from(v))
     }
 
     fn serialize_i128(self, v: i128) -> Result<()> {
@@ -376,19 +390,19 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     fn serialize_u8(self, v: u8) -> Result<()> {
-        self.serialize_u128(v as u128)
+        self.serialize_u128(u128::from(v))
     }
 
     fn serialize_u16(self, v: u16) -> Result<()> {
-        self.serialize_u128(v as u128)
+        self.serialize_u128(u128::from(v))
     }
 
     fn serialize_u32(self, v: u32) -> Result<()> {
-        self.serialize_u128(v as u128)
+        self.serialize_u128(u128::from(v))
     }
 
     fn serialize_u64(self, v: u64) -> Result<()> {
-        self.serialize_u128(v as u128)
+        self.serialize_u128(u128::from(v))
     }
 
     fn serialize_u128(self, v: u128) -> Result<()> {
@@ -399,7 +413,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_f32(self, v: f32) -> Result<()> {
         write!(self.output, "{}", v)?;
         // TODO: use f32::EPSILON when minimum supported rust version is 1.43
-        pub const EPSILON: f32 = 1.19209290e-07_f32;
+        pub const EPSILON: f32 = 1.192_092_9e-7;
         if self.decimal_floats() && (v - v.floor()).abs() < EPSILON {
             write!(self.output, ".0")?;
         }
@@ -409,7 +423,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     fn serialize_f64(self, v: f64) -> Result<()> {
         write!(self.output, "{}", v)?;
         // TODO: use f64::EPSILON when minimum supported rust version is 1.43
-        pub const EPSILON: f64 = 2.2204460492503131e-16_f64;
+        pub const EPSILON: f64 = 2.220_446_049_250_313e-16;
         if self.decimal_floats() && (v - v.floor()).abs() < EPSILON {
             write!(self.output, ".0")?;
         }
@@ -466,7 +480,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     fn serialize_unit_struct(self, name: &'static str) -> Result<()> {
         if self.struct_names {
-            self.output.write_all(name.as_bytes())?;
+            self.write_identifier(name)?;
 
             Ok(())
         } else {
@@ -475,7 +489,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     }
 
     fn serialize_unit_variant(self, _: &'static str, _: u32, variant: &'static str) -> Result<()> {
-        self.output.write_all(variant.as_bytes())?;
+        self.write_identifier(variant)?;
 
         Ok(())
     }
@@ -485,7 +499,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         T: ?Sized + Serialize,
     {
         if self.struct_names {
-            self.output.write_all(name.as_bytes())?;
+            self.write_identifier(name)?;
         }
 
         self.output.write_all(b"(")?;
@@ -504,7 +518,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
     where
         T: ?Sized + Serialize,
     {
-        self.output.write_all(variant.as_bytes())?;
+        self.write_identifier(variant)?;
         self.output.write_all(b"(")?;
 
         value.serialize(&mut *self)?;
@@ -526,7 +540,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
             pretty.sequence_index.push(0);
         }
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
@@ -541,7 +555,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
             self.start_indent()?;
         }
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
@@ -553,7 +567,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         len: usize,
     ) -> Result<Self::SerializeTupleStruct> {
         if self.struct_names {
-            self.output.write_all(name.as_bytes())?;
+            self.write_identifier(name)?;
         }
 
         self.serialize_tuple(len)
@@ -566,7 +580,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant> {
-        self.output.write_all(variant.as_bytes())?;
+        self.write_identifier(variant)?;
         self.output.write_all(b"(")?;
 
         if self.separate_tuple_members() {
@@ -575,7 +589,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
             self.start_indent()?;
         }
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
@@ -590,7 +604,7 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
         self.start_indent()?;
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
@@ -598,14 +612,14 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
 
     fn serialize_struct(self, name: &'static str, len: usize) -> Result<Self::SerializeStruct> {
         if self.struct_names {
-            self.output.write_all(name.as_bytes())?;
+            self.write_identifier(name)?;
         }
         self.output.write_all(b"(")?;
 
         self.is_empty = Some(len == 0);
         self.start_indent()?;
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
@@ -618,17 +632,26 @@ impl<'a, W: io::Write> ser::Serializer for &'a mut Serializer<W> {
         variant: &'static str,
         len: usize,
     ) -> Result<Self::SerializeStructVariant> {
-        self.output.write_all(variant.as_bytes())?;
+        self.write_identifier(variant)?;
         self.output.write_all(b"(")?;
 
         self.is_empty = Some(len == 0);
         self.start_indent()?;
 
-        Ok(Compound::Map {
+        Ok(Compound {
             ser: self,
             state: State::First,
         })
     }
+}
+
+pub enum State {
+    First,
+    Rest,
+}
+pub struct Compound<'a, W: io::Write> {
+    ser: &'a mut Serializer<W>,
+    state: State,
 }
 
 impl<'a, W: io::Write> ser::SerializeSeq for Compound<'a, W> {
@@ -639,78 +662,51 @@ impl<'a, W: io::Write> ser::SerializeSeq for Compound<'a, W> {
     where
         T: ?Sized + Serialize,
     {
-        let ser = match self {
-            Compound::Map {
-                state: ref mut s @ State::First,
-                ser,
-            } => {
-                *s = State::Rest;
-                ser
-            }
-            Compound::Map {
-                state: State::Rest,
-                ser,
-            } => {
-                ser.output.write_all(b",")?;
-                if let Some((ref config, ref mut pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        if config.enumerate_arrays {
-                            assert!(config.new_line.contains('\n'));
-                            let index = pretty.sequence_index.last_mut().unwrap();
-                            //TODO: when /**/ comments are supported, prepend the index
-                            // to an element instead of appending it.
-                            write!(ser.output, "// [{}]", index).unwrap();
-                            *index += 1;
-                        }
-                        ser.output.write_all(config.new_line.as_bytes())?;
+        if let State::First = self.state {
+            self.state = State::Rest;
+        } else {
+            self.ser.output.write_all(b",")?;
+            if let Some((ref config, ref mut pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    if config.enumerate_arrays {
+                        assert!(config.new_line.contains('\n'));
+                        let index = pretty.sequence_index.last_mut().unwrap();
+                        //TODO: when /**/ comments are supported, prepend the index
+                        // to an element instead of appending it.
+                        write!(self.ser.output, "// [{}]", index).unwrap();
+                        *index += 1;
                     }
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-        };
-        ser.indent()?;
+        }
+        self.ser.indent()?;
 
-        value.serialize(&mut **ser)?;
+        value.serialize(&mut *self.ser)?;
 
         Ok(())
     }
 
     fn end(self) -> Result<()> {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: State::Rest,
-            } => {
-                if let Some((ref config, ref mut pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(b",")?;
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+        if let State::Rest = self.state {
+            if let Some((ref config, ref mut pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(b",")?;
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-            Compound::Map { ser, .. } => ser,
-        };
-        ser.end_indent()?;
+        }
+        self.ser.end_indent()?;
 
-        if let Some((_, ref mut pretty)) = ser.pretty {
+        if let Some((_, ref mut pretty)) = self.ser.pretty {
             pretty.sequence_index.pop();
         }
 
-        ser.output.write_all(b"]")?;
+        self.ser.output.write_all(b"]")?;
         Ok(())
     }
 }
-pub enum State {
-    First,
-    Rest,
-}
-pub enum Compound<'a, W: io::Write> {
-    Map {
-        ser: &'a mut Serializer<W>,
-        state: State,
-    },
-}
+
 impl<'a, W: io::Write> ser::SerializeTuple for Compound<'a, W> {
     type Error = Error;
     type Ok = ();
@@ -719,59 +715,46 @@ impl<'a, W: io::Write> ser::SerializeTuple for Compound<'a, W> {
     where
         T: ?Sized + Serialize,
     {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: ref mut s @ State::First,
-            } => {
-                *s = State::Rest;
-                ser
-            }
-            Compound::Map { ser, .. } => {
-                ser.output.write_all(b",")?;
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(if ser.separate_tuple_members() {
+        if let State::First = self.state {
+            self.state = State::Rest;
+        } else {
+            self.ser.output.write_all(b",")?;
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser
+                        .output
+                        .write_all(if self.ser.separate_tuple_members() {
                             config.new_line.as_bytes()
                         } else {
                             b" "
                         })?;
-                    }
                 }
-                ser
             }
-        };
-
-        if ser.separate_tuple_members() {
-            ser.indent()?;
         }
 
-        value.serialize(&mut **ser)?;
+        if self.ser.separate_tuple_members() {
+            self.ser.indent()?;
+        }
+
+        value.serialize(&mut *self.ser)?;
 
         Ok(())
     }
 
     fn end(self) -> Result<()> {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: State::Rest,
-            } => {
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if ser.separate_tuple_members() && pretty.indent <= config.depth_limit {
-                        ser.output.write_all(b",")?;
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+        if let State::Rest = self.state {
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if self.ser.separate_tuple_members() && pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(b",")?;
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-            Compound::Map { ser, .. } => ser,
-        };
-        if ser.separate_tuple_members() {
-            ser.end_indent()?;
+        }
+        if self.ser.separate_tuple_members() {
+            self.ser.end_indent()?;
         }
 
-        ser.output.write_all(b")")?;
+        self.ser.output.write_all(b")")?;
 
         Ok(())
     }
@@ -818,70 +801,47 @@ impl<'a, W: io::Write> ser::SerializeMap for Compound<'a, W> {
     where
         T: ?Sized + Serialize,
     {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: ref mut s @ State::First,
-            } => {
-                *s = State::Rest;
-                ser
-            }
-            Compound::Map {
-                ser,
-                state: State::Rest,
-            } => {
-                ser.output.write_all(b",")?;
+        if let State::First = self.state {
+            self.state = State::Rest;
+        } else {
+            self.ser.output.write_all(b",")?;
 
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-        };
-        ser.indent()?;
-        key.serialize(&mut **ser)
+        }
+        self.ser.indent()?;
+        key.serialize(&mut *self.ser)
     }
 
     fn serialize_value<T>(&mut self, value: &T) -> Result<()>
     where
         T: ?Sized + Serialize,
     {
-        match self {
-            Compound::Map { ser, .. } => {
-                ser.output.write_all(b":")?;
+        self.ser.output.write_all(b":")?;
 
-                if ser.is_pretty() {
-                    ser.output.write_all(b" ")?;
-                }
-
-                value.serialize(&mut **ser)?;
-            }
+        if self.ser.is_pretty() {
+            self.ser.output.write_all(b" ")?;
         }
+
+        value.serialize(&mut *self.ser)?;
 
         Ok(())
     }
 
     fn end(self) -> Result<()> {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: State::Rest,
-            } => {
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(b",")?;
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+        if let State::Rest = self.state {
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(b",")?;
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-
-                ser
             }
-            Compound::Map { ser, .. } => ser,
-        };
-        ser.end_indent()?;
-        ser.output.write_all(b"}")?;
+        }
+        self.ser.end_indent()?;
+        self.ser.output.write_all(b"}")?;
         Ok(())
     }
 }
@@ -894,56 +854,41 @@ impl<'a, W: io::Write> ser::SerializeStruct for Compound<'a, W> {
     where
         T: ?Sized + Serialize,
     {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: ref mut s @ State::First,
-            } => {
-                *s = State::Rest;
-                ser
-            }
-            Compound::Map { ser, .. } => {
-                ser.output.write_all(b",")?;
+        if let State::First = self.state {
+            self.state = State::Rest;
+        } else {
+            self.ser.output.write_all(b",")?;
 
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-        };
-        ser.indent()?;
-        ser.output.write_all(key.as_bytes())?;
-        ser.output.write_all(b":")?;
+        }
+        self.ser.indent()?;
+        self.ser.write_identifier(key)?;
+        self.ser.output.write_all(b":")?;
 
-        if ser.is_pretty() {
-            ser.output.write_all(b" ")?;
+        if self.ser.is_pretty() {
+            self.ser.output.write_all(b" ")?;
         }
 
-        value.serialize(&mut **ser)?;
+        value.serialize(&mut *self.ser)?;
 
         Ok(())
     }
 
     fn end(self) -> Result<()> {
-        let ser = match self {
-            Compound::Map {
-                ser,
-                state: State::Rest,
-            } => {
-                if let Some((ref config, ref pretty)) = ser.pretty {
-                    if pretty.indent <= config.depth_limit {
-                        ser.output.write_all(b",")?;
-                        ser.output.write_all(config.new_line.as_bytes())?;
-                    }
+        if let State::Rest = self.state {
+            if let Some((ref config, ref pretty)) = self.ser.pretty {
+                if pretty.indent <= config.depth_limit {
+                    self.ser.output.write_all(b",")?;
+                    self.ser.output.write_all(config.new_line.as_bytes())?;
                 }
-                ser
             }
-            Compound::Map { ser, .. } => ser,
-        };
-        ser.end_indent()?;
-        ser.output.write_all(b")")?;
+        }
+        self.ser.end_indent()?;
+        self.ser.output.write_all(b")")?;
         Ok(())
     }
 }
@@ -961,129 +906,5 @@ impl<'a, W: io::Write> ser::SerializeStructVariant for Compound<'a, W> {
 
     fn end(self) -> Result<()> {
         ser::SerializeStruct::end(self)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Serialize)]
-    struct EmptyStruct1;
-
-    #[derive(Serialize)]
-    struct EmptyStruct2 {}
-
-    #[derive(Serialize)]
-    struct MyStruct {
-        x: f32,
-        y: f32,
-    }
-
-    #[derive(Serialize)]
-    enum MyEnum {
-        A,
-        B(bool),
-        C(bool, f32),
-        D { a: i32, b: i32 },
-    }
-
-    #[test]
-    fn test_empty_struct() {
-        assert_eq!(to_string(&EmptyStruct1).unwrap(), "()");
-        assert_eq!(to_string(&EmptyStruct2 {}).unwrap(), "()");
-    }
-
-    #[test]
-    fn test_struct() {
-        let my_struct = MyStruct { x: 4.0, y: 7.0 };
-
-        assert_eq!(to_string(&my_struct).unwrap(), "(x:4,y:7)");
-
-        #[derive(Serialize)]
-        struct NewType(i32);
-
-        assert_eq!(to_string(&NewType(42)).unwrap(), "(42)");
-
-        #[derive(Serialize)]
-        struct TupleStruct(f32, f32);
-
-        assert_eq!(to_string(&TupleStruct(2.0, 5.0)).unwrap(), "(2,5)");
-    }
-
-    #[test]
-    fn test_option() {
-        assert_eq!(to_string(&Some(1u8)).unwrap(), "Some(1)");
-        assert_eq!(to_string(&None::<u8>).unwrap(), "None");
-    }
-
-    #[test]
-    fn test_enum() {
-        assert_eq!(to_string(&MyEnum::A).unwrap(), "A");
-        assert_eq!(to_string(&MyEnum::B(true)).unwrap(), "B(true)");
-        assert_eq!(to_string(&MyEnum::C(true, 3.5)).unwrap(), "C(true,3.5)");
-        assert_eq!(to_string(&MyEnum::D { a: 2, b: 3 }).unwrap(), "D(a:2,b:3)");
-    }
-
-    #[test]
-    fn test_array() {
-        let empty: [i32; 0] = [];
-        assert_eq!(to_string(&empty).unwrap(), "()");
-        let empty_ref: &[i32] = &empty;
-        assert_eq!(to_string(&empty_ref).unwrap(), "[]");
-
-        assert_eq!(to_string(&[2, 3, 4i32]).unwrap(), "(2,3,4)");
-        assert_eq!(to_string(&(&[2, 3, 4i32] as &[i32])).unwrap(), "[2,3,4]");
-    }
-
-    #[test]
-    fn test_map() {
-        use std::collections::HashMap;
-
-        let mut map = HashMap::new();
-        map.insert((true, false), 4);
-        map.insert((false, false), 123);
-
-        let s = to_string(&map).unwrap();
-        s.starts_with("{");
-        s.contains("(true,false):4");
-        s.contains("(false,false):123");
-        s.ends_with("}");
-    }
-
-    #[test]
-    fn test_string() {
-        assert_eq!(to_string(&"Some string").unwrap(), "\"Some string\"");
-    }
-
-    #[test]
-    fn test_char() {
-        assert_eq!(to_string(&'c').unwrap(), "'c'");
-    }
-
-    #[test]
-    fn test_escape() {
-        assert_eq!(to_string(&r#""Quoted""#).unwrap(), r#""\"Quoted\"""#);
-    }
-
-    #[test]
-    fn test_byte_stream() {
-        use serde_bytes;
-
-        let small: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-        assert_eq!(
-            to_string(&small).unwrap(),
-            "(0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15)"
-        );
-
-        let large = vec![255u8; 64];
-        let large = serde_bytes::Bytes::new(&large);
-        assert_eq!(
-            to_string(&large).unwrap(),
-            concat!(
-                "\"/////////////////////////////////////////",
-                "////////////////////////////////////////////w==\""
-            )
-        );
     }
 }

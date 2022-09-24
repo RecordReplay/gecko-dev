@@ -25,7 +25,8 @@ loader.lazyRequireGetter(
     "isDirectShadowHostChild",
     "isMarkerPseudoElement",
     "isNativeAnonymous",
-    "isRemoteFrame",
+    "isFrameBlockedByCSP",
+    "isFrameWithChildTarget",
     "isShadowHost",
     "isShadowRoot",
     "isTemplateElement",
@@ -42,7 +43,6 @@ loader.lazyRequireGetter(
   [
     "allAnonymousContentTreeWalkerFilter",
     "findGridParentContainerForNode",
-    "isDocumentReady",
     "isNodeDead",
     "noAnonymousContentTreeWalkerFilter",
     "nodeDocument",
@@ -290,7 +290,7 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   },
 
   watchRootNode() {
-    if (this.rootNode && isDocumentReady(this.rootDoc)) {
+    if (this.rootNode) {
       this.emit("root-available", this.rootNode);
     }
   },
@@ -722,7 +722,8 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
       isShadowHost(rawNode) ||
       rawNode.nodeType != Node.ELEMENT_NODE ||
       rawNode.children.length > 0 ||
-      isRemoteFrame(rawNode)
+      isFrameWithChildTarget(this.targetActor, rawNode) ||
+      isFrameBlockedByCSP(rawNode)
     ) {
       return undefined;
     }
@@ -912,6 +913,10 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
   // eslint-disable-next-line complexity
   _getChildren: function(node, options = {}) {
     if (isNodeDead(node)) {
+      return { hasFirst: true, hasLast: true, nodes: [] };
+    }
+
+    if (isFrameBlockedByCSP(node.rawNode)) {
       return { hasFirst: true, hasLast: true, nodes: [] };
     }
 
@@ -1250,15 +1255,6 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     }
 
     return nodes;
-  },
-
-  /**
-   * Return a NodeListActor with all nodes that match the given selector in all
-   * frames of the current content page.
-   * @param {String} selector
-   */
-  multiFrameQuerySelectorAll: function(selector) {
-    return new NodeListActor(this, this._multiFrameQuerySelectorAll(selector));
   },
 
   /**
@@ -2794,12 +2790,16 @@ var WalkerActor = protocol.ActorClassWithSpec(walkerSpec, {
     return this.attachElement(rawNode);
   },
 
-  pick(doFocus) {
-    this.nodePicker.pick(doFocus);
+  pick(doFocus, isLocalTab) {
+    this.nodePicker.pick(doFocus, isLocalTab);
   },
 
   cancelPick() {
     this.nodePicker.cancelPick();
+  },
+
+  clearPicker() {
+    this.nodePicker.resetHoveredNodeReference();
   },
 
   /**

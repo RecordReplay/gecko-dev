@@ -22,7 +22,6 @@ class ErrorResult;
 
 namespace ipc {
 class PBackgroundParent;
-class AutoIPCStream;
 }  // namespace ipc
 
 namespace dom {
@@ -47,8 +46,8 @@ class StreamList;
 
 class MOZ_STACK_CLASS AutoChildOpArgs final {
  public:
-  typedef TypeUtils::BodyAction BodyAction;
-  typedef TypeUtils::SchemeAction SchemeAction;
+  using BodyAction = TypeUtils::BodyAction;
+  using SchemeAction = TypeUtils::SchemeAction;
 
   AutoChildOpArgs(TypeUtils* aTypeUtils, const CacheOpArgs& aOpArgs,
                   uint32_t aEntryCount);
@@ -65,7 +64,6 @@ class MOZ_STACK_CLASS AutoChildOpArgs final {
  private:
   TypeUtils* mTypeUtils;
   CacheOpArgs mOpArgs;
-  nsTArray<UniquePtr<mozilla::ipc::AutoIPCStream>> mStreamCleanupList;
   bool mSent;
 };
 
@@ -92,7 +90,6 @@ class MOZ_STACK_CLASS AutoParentOpResult final {
   mozilla::ipc::PBackgroundParent* mManager;
   CacheOpResult mOpResult;
   CacheStreamControlParent* mStreamControl;
-  nsTArray<UniquePtr<mozilla::ipc::AutoIPCStream>> mStreamCleanupList;
   bool mSent;
 };
 

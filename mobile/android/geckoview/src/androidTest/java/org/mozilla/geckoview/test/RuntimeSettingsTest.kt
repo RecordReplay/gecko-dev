@@ -8,19 +8,17 @@ import android.provider.Settings
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.filters.MediumTest
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import android.util.Log
 import org.hamcrest.Matchers.*
 import org.junit.Assume.assumeThat
 import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoResult
-import kotlin.math.roundToInt
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.NavigationDelegate
+import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import org.mozilla.geckoview.WebRequestError
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.AssertCalled
-import org.mozilla.geckoview.test.util.Callbacks
-import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(AndroidJUnit4::class)
 @MediumTest
@@ -83,25 +81,25 @@ class RuntimeSettingsTest : BaseSessionTest() {
     @Test fun fontSize() {
         val settings = sessionRule.runtime.settings
         settings.fontSizeFactor = 1.0f
-        sessionRule.session.loadTestPath(HELLO_HTML_PATH)
+        mainSession.loadTestPath(HELLO_HTML_PATH)
         sessionRule.waitForPageStop()
 
         val fontSizeJs = "parseFloat(window.getComputedStyle(document.querySelector('p')).fontSize)"
-        val initialFontSize = sessionRule.session.evaluateJS(fontSizeJs) as Double
+        val initialFontSize = mainSession.evaluateJS(fontSizeJs) as Double
 
         val textSizeFactor = 2.0f
         settings.fontSizeFactor = textSizeFactor
-        sessionRule.session.reload()
+        mainSession.reload()
         sessionRule.waitForPageStop()
-        var fontSize = sessionRule.session.evaluateJS(fontSizeJs) as Double
+        var fontSize = mainSession.evaluateJS(fontSizeJs) as Double
         val expectedFontSize = initialFontSize * textSizeFactor
         assertThat("old text size ${initialFontSize}px, new size should be ${expectedFontSize}px",
                 fontSize, closeTo(expectedFontSize, 0.1))
 
         settings.fontSizeFactor = 1.0f
-        sessionRule.session.reload()
+        mainSession.reload()
         sessionRule.waitForPageStop()
-        fontSize = sessionRule.session.evaluateJS(fontSizeJs) as Double
+        fontSize = mainSession.evaluateJS(fontSizeJs) as Double
         assertThat("text size should be ${initialFontSize}px again",
                 fontSize, closeTo(initialFontSize, 0.1))
     }
@@ -158,7 +156,7 @@ class RuntimeSettingsTest : BaseSessionTest() {
                 settings.aboutConfigEnabled, equalTo(false))
 
         mainSession.loadUri("about:config")
-        mainSession.waitUntilCalled(object : Callbacks.NavigationDelegate {
+        mainSession.waitUntilCalled(object : NavigationDelegate {
             @AssertCalled
             override fun onLoadError(session: GeckoSession, uri: String?, error: WebRequestError):
                     GeckoResult<String>? {
@@ -169,7 +167,7 @@ class RuntimeSettingsTest : BaseSessionTest() {
 
         settings.aboutConfigEnabled = true
 
-        mainSession.delegateDuringNextWait(object : Callbacks.ProgressDelegate {
+        mainSession.delegateDuringNextWait(object : ProgressDelegate {
             @AssertCalled
             override fun onPageStop(session: GeckoSession, success: Boolean) {
                 assertThat("about:config load should succeed", success, equalTo(true))

@@ -5,11 +5,7 @@
 
 // Test the Page navigation events
 
-const INITIAL_DOC = toDataURL("default-test-page");
-const IFRAME_DOC = toDataURL(
-  `<iframe src="data:text/html,somecontent"></iframe>`
-);
-const RANDOM_ID_DOC = toDataURL(
+const RANDOM_ID_PAGE_URL = toDataURL(
   `<script>window.randomId = Math.random() + "-" + Date.now();</script>`
 );
 
@@ -17,7 +13,7 @@ const promises = new Set();
 const resolutions = new Map();
 
 add_task(async function pageWithoutFrame({ client }) {
-  await loadURL(INITIAL_DOC);
+  await loadURL(PAGE_URL);
 
   const { Page } = client;
 
@@ -41,14 +37,18 @@ add_task(async function pageWithoutFrame({ client }) {
     recordPromise("frameNavigated", Page.frameNavigated());
     recordPromise("domContentEventFired", Page.domContentEventFired());
     recordPromise("loadEventFired", Page.loadEventFired());
-    recordPromise("navigatedWithinDocument", Page.navigatedWithinDocument());
     recordPromise("frameStoppedLoading", Page.frameStoppedLoading());
   }
 
   info("Test Page.navigate");
   recordPromises();
 
-  const url = RANDOM_ID_DOC;
+  let navigatedWithinDocumentResolved = false;
+  Page.navigatedWithinDocument().finally(
+    () => (navigatedWithinDocumentResolved = true)
+  );
+
+  const url = RANDOM_ID_PAGE_URL;
   const { frameId } = await Page.navigate({ url });
   info("A new page has been requested");
 
@@ -95,6 +95,11 @@ add_task(async function pageWithoutFrame({ client }) {
     randomId2,
     "Test tab randomId has been updated after reload"
   );
+
+  ok(
+    !navigatedWithinDocumentResolved,
+    "navigatedWithinDocument never resolved during the test"
+  );
 });
 
 add_task(async function pageWithSingleFrame({ client }) {
@@ -108,7 +113,7 @@ add_task(async function pageWithSingleFrame({ client }) {
 
   info("Navigate to a page containing an iframe");
   const onStoppedLoading = Page.frameStoppedLoading();
-  const { frameId } = await Page.navigate({ url: IFRAME_DOC });
+  const { frameId } = await Page.navigate({ url: FRAMESET_SINGLE_URL });
   await onStoppedLoading;
 
   is(frameNavigatedEvents.length, 2, "Received 2 frameNavigated events");
@@ -117,6 +122,48 @@ add_task(async function pageWithSingleFrame({ client }) {
     frameId,
     "Received the correct frameId for the frameNavigated event"
   );
+});
+
+add_task(async function sameDocumentNavigation({ client }) {
+  await loadURL(PAGE_URL);
+
+  const { Page } = client;
+
+  // turn on navigation related events, such as DOMContentLoaded et al.
+  await Page.enable();
+  info("Page domain has been enabled");
+
+  const { frameTree } = await Page.getFrameTree();
+
+  info("Test Page.navigate for a same document navigation");
+  const onNavigatedWithinDocument = Page.navigatedWithinDocument();
+
+  let unexpectedEventResolved = false;
+  Promise.race([
+    Page.frameStartedLoading(),
+    Page.frameNavigated(),
+    Page.domContentEventFired(),
+    Page.loadEventFired(),
+    Page.frameStoppedLoading(),
+  ]).then(() => (unexpectedEventResolved = true));
+
+  const url = `${PAGE_URL}#some-hash`;
+  const { frameId } = await Page.navigate({ url });
+  ok(frameId, "Page.navigate returned a frameId");
+  is(
+    frameId,
+    frameTree.frame.id,
+    "The Page.navigate's frameId is the same than getFrameTree's one"
+  );
+
+  const event = await onNavigatedWithinDocument;
+  is(
+    event.frameId,
+    frameId,
+    "The navigatedWithinDocument frameId is the same as in Page.navigate"
+  );
+  is(event.url, url, "The navigatedWithinDocument url is the expected url");
+  ok(!unexpectedEventResolved, "No unexpected navigation event resolved.");
 });
 
 async function assertNavigationEvents({ url, frameId }) {
@@ -129,7 +176,6 @@ async function assertNavigationEvents({ url, frameId }) {
     "frameNavigated",
     "domContentEventFired",
     "loadEventFired",
-    "navigatedWithinDocument",
     "frameStoppedLoading",
   ];
   Assert.deepEqual(
@@ -158,18 +204,6 @@ async function assertNavigationEvents({ url, frameId }) {
     "frameNavigated name isn't implemented yet"
   );
   is(frameNavigated.frame.url, url, "frameNavigated url is the right one");
-
-  const navigatedWithinDocument = resolutions.get("navigatedWithinDocument");
-  is(
-    navigatedWithinDocument.frameId,
-    frameId,
-    "navigatedWithinDocument frameId is the same one"
-  );
-  is(
-    navigatedWithinDocument.url,
-    url,
-    "navigatedWithinDocument url is the same one"
-  );
 
   const frameStoppedLoading = resolutions.get("frameStoppedLoading");
   is(

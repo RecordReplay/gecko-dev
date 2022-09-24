@@ -2,14 +2,24 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 "use strict";
+const DEFAULT_DOMAIN = "example.org";
+const ALT_DOMAIN = "example.net";
+const SECURE_DOMAIN = "example.com";
 
-const SJS_PATH = "/browser/remote/cdp/test/browser/network/sjs-cookies.sjs";
+const DEFAULT_HOST = "http://" + DEFAULT_DOMAIN;
+const ALT_HOST = "http://" + ALT_DOMAIN;
+const SECURE_HOST = "https://" + SECURE_DOMAIN;
 
-const DEFAULT_HOST = "http://example.org";
-const ALT_HOST = "http://example.net";
-const SECURE_HOST = "https://example.com";
+const BASE_PATH = "/browser/remote/cdp/test/browser/network";
+const SJS_PATH = `${BASE_PATH}/sjs-cookies.sjs`;
 
 const DEFAULT_URL = `${DEFAULT_HOST}${SJS_PATH}`;
+
+// Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
+Services.prefs.setBoolPref("network.cookie.sameSite.laxByDefault", false);
+registerCleanupFunction(() => {
+  Services.prefs.clearUserPref("network.cookie.sameSite.laxByDefault");
+});
 
 add_task(async function noCookiesWhenNoneAreSet({ client }) {
   const { Network } = client;
@@ -63,6 +73,26 @@ add_task(async function allCookiesFromCurrentURL({ client }) {
     is(cookies.length, 2, "All cookies have been found");
     assertCookie(cookies[0], cookie1);
     assertCookie(cookies[1], cookie2);
+  } finally {
+    Services.cookies.removeAll();
+  }
+});
+
+add_task(async function allCookiesIncludingSubFrames({ client }) {
+  const GET_COOKIES_PAGE_URL = `${DEFAULT_HOST}${BASE_PATH}/doc_get_cookies_page.html`;
+
+  const { Network } = client;
+  await loadURL(GET_COOKIES_PAGE_URL);
+
+  const cookie_page = { name: "page", value: "mainpage", path: BASE_PATH };
+  const cookie_frame = { name: "frame", value: "subframe", path: BASE_PATH };
+
+  try {
+    const { cookies } = await Network.getCookies();
+    cookies.sort((a, b) => a.name.localeCompare(b.name));
+    is(cookies.length, 2, "All cookies have been found including subframe");
+    assertCookie(cookies[0], cookie_frame);
+    assertCookie(cookies[1], cookie_page);
   } finally {
     Services.cookies.removeAll();
   }
@@ -217,4 +247,117 @@ add_task(async function sameSite({ client }) {
       Services.cookies.removeAll();
     }
   }
+});
+
+add_task(async function testUrlsMissing({ client }) {
+  const { Network } = client;
+  await loadURL(`${DEFAULT_HOST}${BASE_PATH}/doc_get_cookies_page.html`);
+  await loadURL(`${DEFAULT_URL}?name=foo&value=bar`);
+  await loadURL(`${ALT_HOST}${SJS_PATH}?name=alt&value=true`);
+
+  const cookie = {
+    name: "alt",
+    value: "true",
+    domain: ALT_DOMAIN,
+  };
+
+  try {
+    const { cookies } = await Network.getCookies();
+    is(cookies.length, 1, "A single cookie has been found");
+    assertCookie(cookies[0], cookie);
+  } finally {
+    Services.cookies.removeAll();
+  }
+});
+
+add_task(async function testUrls({ client }) {
+  const { Network } = client;
+  await loadURL(`${SECURE_HOST}${BASE_PATH}/doc_get_cookies_page.html`);
+  await loadURL(`${DEFAULT_HOST}${BASE_PATH}/doc_get_cookies_page.html`);
+  await loadURL(`${ALT_HOST}${SJS_PATH}?name=alt&value=true`);
+
+  const cookie1 = {
+    name: "page",
+    value: "mainpage",
+    path: BASE_PATH,
+    domain: DEFAULT_DOMAIN,
+  };
+  const cookie2 = {
+    name: "frame",
+    value: "subframe",
+    path: BASE_PATH,
+    domain: DEFAULT_DOMAIN,
+  };
+  const cookie3 = {
+    name: "page",
+    value: "mainpage",
+    path: BASE_PATH,
+    domain: SECURE_DOMAIN,
+  };
+  const cookie4 = {
+    name: "frame",
+    value: "subframe",
+    path: BASE_PATH,
+    domain: SECURE_DOMAIN,
+  };
+
+  try {
+    const { cookies } = await Network.getCookies({
+      urls: [`${DEFAULT_HOST}${BASE_PATH}`, `${SECURE_HOST}${BASE_PATH}`],
+    });
+    is(cookies.length, 4, "4 cookies have been found");
+    assertCookie(cookies[0], cookie1);
+    assertCookie(cookies[1], cookie2);
+    assertCookie(cookies[2], cookie3);
+    assertCookie(cookies[3], cookie4);
+  } finally {
+    Services.cookies.removeAll();
+  }
+});
+
+add_task(async function testUrlsInvalidTypes({ client }) {
+  const { Network } = client;
+
+  const testTable = [null, 1, "foo", true, {}];
+
+  for (const testCase of testTable) {
+    let errorThrown = "";
+    try {
+      await Network.getCookies({ urls: testCase });
+    } catch (e) {
+      errorThrown = e.message;
+    }
+
+    ok(
+      errorThrown.match(/urls: array expected/),
+      `Fails the argument type for urls`
+    );
+  }
+});
+
+add_task(async function testUrlsEntriesInvalidTypes({ client }) {
+  const { Network } = client;
+
+  const testTable = [[null], [1], [true]];
+
+  for (const testCase of testTable) {
+    let errorThrown = "";
+    try {
+      await Network.getCookies({ urls: testCase });
+    } catch (e) {
+      errorThrown = e.message;
+    }
+
+    ok(
+      errorThrown.match(/urls: string value expected at index 0/),
+      `Fails the argument type for urls`
+    );
+  }
+});
+
+add_task(async function testUrlsEmpty({ client }) {
+  const { Network } = client;
+
+  const { cookies } = await Network.getCookies({ urls: [] });
+  is(cookies.length, 0, "No cookies returned");
 });

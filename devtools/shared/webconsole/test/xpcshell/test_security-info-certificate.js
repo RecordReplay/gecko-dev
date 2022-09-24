@@ -5,8 +5,6 @@
 // Tests that NetworkHelper.parseCertificateInfo parses certificate information
 // correctly.
 
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
-
 Object.defineProperty(this, "NetworkHelper", {
   get: function() {
     return require("devtools/shared/webconsole/network-helper");
@@ -30,7 +28,10 @@ const DUMMY_CERT = {
 add_task(async function run_test() {
   info("Testing NetworkHelper.parseCertificateInfo.");
 
-  const result = await NetworkHelper.parseCertificateInfo(DUMMY_CERT);
+  const result = await NetworkHelper.parseCertificateInfo(
+    DUMMY_CERT,
+    new Map()
+  );
 
   // Subject
   equal(

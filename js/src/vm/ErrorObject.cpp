@@ -15,16 +15,14 @@
 
 #include <utility>
 
-#include "jsapi.h"
 #include "jsexn.h"
-#include "jsfriendapi.h"
 #include "jsnum.h"
 #include "jspubtd.h"
 #include "NamespaceImports.h"
 
 #include "builtin/Array.h"
 #include "gc/AllocKind.h"
-#include "gc/FreeOp.h"
+#include "gc/GCContext.h"
 #include "gc/Rooting.h"
 #include "js/CallArgs.h"
 #include "js/CallNonGenericMethod.h"
@@ -37,6 +35,7 @@
 #include "js/friend/StackLimits.h"    // js::AutoCheckRecursionLimit
 #include "js/PropertySpec.h"
 #include "js/RootingAPI.h"
+#include "js/Stack.h"
 #include "js/TypeDecls.h"
 #include "js/Utility.h"
 #include "js/Value.h"
@@ -174,7 +173,7 @@ const ClassSpec ErrorObject::classSpecs[JSEXN_ERROR_LIMIT] = {
 #define IMPLEMENT_ERROR_CLASS_MAYBE_WASM_TRAP(name) \
   IMPLEMENT_ERROR_CLASS_CORE(name, ErrorObject::RESERVED_SLOTS_MAYBE_WASM_TRAP)
 
-static void exn_finalize(JSFreeOp* fop, JSObject* obj);
+static void exn_finalize(JS::GCContext* gcx, JSObject* obj);
 
 static const JSClassOps ErrorObjectClassOps = {
     nullptr,       // addProperty
@@ -185,7 +184,6 @@ static const JSClassOps ErrorObjectClassOps = {
     nullptr,       // mayResolve
     exn_finalize,  // finalize
     nullptr,       // call
-    nullptr,       // hasInstance
     nullptr,       // construct
     nullptr,       // trace
 };
@@ -202,11 +200,10 @@ const JSClass ErrorObject::classes[JSEXN_ERROR_LIMIT] = {
     IMPLEMENT_ERROR_CLASS(CompileError), IMPLEMENT_ERROR_CLASS(LinkError),
     IMPLEMENT_ERROR_CLASS_MAYBE_WASM_TRAP(RuntimeError)};
 
-static void exn_finalize(JSFreeOp* fop, JSObject* obj) {
-  MOZ_ASSERT(fop->maybeOnHelperThread());
+static void exn_finalize(JS::GCContext* gcx, JSObject* obj) {
   if (JSErrorReport* report = obj->as<ErrorObject>().getErrorReport()) {
     // Bug 1560019: This allocation is not currently tracked.
-    fop->deleteUntracked(report);
+    gcx->deleteUntracked(report);
   }
 }
 

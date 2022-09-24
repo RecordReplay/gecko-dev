@@ -11,9 +11,11 @@
 #include <utility>
 
 #include "GeckoProfiler.h"
+#include "ProfilerControl.h"
 #include "ProfilerParent.h"
 #include "js/Array.h"  // JS::NewArrayObject
 #include "js/JSON.h"
+#include "js/PropertyAndElement.h"  // JS_SetElement
 #include "js/Value.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/SchedulerGroup.h"
@@ -26,7 +28,6 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsILoadContext.h"
-#include "nsIObserverService.h"
 #include "nsIWebNavigation.h"
 #include "nsLocalFile.h"
 #include "nsMemory.h"
@@ -44,65 +45,18 @@ using dom::AutoJSAPI;
 using dom::Promise;
 using std::string;
 
-NS_IMPL_ISUPPORTS(nsProfiler, nsIProfiler, nsIObserver)
+NS_IMPL_ISUPPORTS(nsProfiler, nsIProfiler)
 
-nsProfiler::nsProfiler()
-    : mLockedForPrivateBrowsing(false),
-      mPendingProfiles(0),
-      mGathering(false) {}
+nsProfiler::nsProfiler() : mGathering(false) {}
 
 nsProfiler::~nsProfiler() {
-  nsCOMPtr<nsIObserverService> observerService =
-      mozilla::services::GetObserverService();
-  if (observerService) {
-    observerService->RemoveObserver(this, "chrome-document-global-created");
-    observerService->RemoveObserver(this, "last-pb-context-exited");
-  }
   if (mSymbolTableThread) {
     mSymbolTableThread->Shutdown();
   }
   ResetGathering();
 }
 
-nsresult nsProfiler::Init() {
-  nsCOMPtr<nsIObserverService> observerService =
-      mozilla::services::GetObserverService();
-  if (observerService) {
-    observerService->AddObserver(this, "chrome-document-global-created", false);
-    observerService->AddObserver(this, "last-pb-context-exited", false);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsProfiler::Observe(nsISupports* aSubject, const char* aTopic,
-                    const char16_t* aData) {
-  // The profiler's handling of private browsing is as simple as possible: it
-  // is stopped when the first PB window opens, and left stopped when the last
-  // PB window closes.
-  if (strcmp(aTopic, "chrome-document-global-created") == 0) {
-    nsCOMPtr<nsIInterfaceRequestor> requestor = do_QueryInterface(aSubject);
-    nsCOMPtr<nsIWebNavigation> parentWebNav = do_GetInterface(requestor);
-    nsCOMPtr<nsILoadContext> loadContext = do_QueryInterface(parentWebNav);
-    if (loadContext && loadContext->UsePrivateBrowsing() &&
-        !mLockedForPrivateBrowsing) {
-      mLockedForPrivateBrowsing = true;
-      // Allow profiling tests that trigger private browsing.
-      if (!xpc::IsInAutomation()) {
-        profiler_stop();
-      }
-    }
-  } else if (strcmp(aTopic, "last-pb-context-exited") == 0) {
-    mLockedForPrivateBrowsing = false;
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsProfiler::CanProfile(bool* aCanProfile) {
-  *aCanProfile = !mLockedForPrivateBrowsing;
-  return NS_OK;
-}
+nsresult nsProfiler::Init() { return NS_OK; }
 
 static nsresult FillVectorFromStringArray(Vector<const char*>& aVector,
                                           const nsTArray<nsCString>& aArray) {
@@ -115,15 +69,46 @@ static nsresult FillVectorFromStringArray(Vector<const char*>& aVector,
   return NS_OK;
 }
 
+// Given a PromiseReturningFunction: () -> GenericPromise,
+// run the function, and return a JS Promise (through aPromise) that will be
+// resolved when the function's GenericPromise gets resolved.
+template <typename PromiseReturningFunction>
+static nsresult RunFunctionAndConvertPromise(
+    JSContext* aCx, Promise** aPromise,
+    PromiseReturningFunction&& aPromiseReturningFunction) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (NS_WARN_IF(!aCx)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsIGlobalObject* globalObject = xpc::CurrentNativeGlobal(aCx);
+  if (NS_WARN_IF(!globalObject)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ErrorResult result;
+  RefPtr<Promise> promise = Promise::Create(globalObject, result);
+  if (NS_WARN_IF(result.Failed())) {
+    return result.StealNSResult();
+  }
+
+  std::forward<PromiseReturningFunction>(aPromiseReturningFunction)()->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [promise](GenericPromise::ResolveOrRejectValue&&) {
+        promise->MaybeResolveWithUndefined();
+      });
+
+  promise.forget(aPromise);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 nsProfiler::StartProfiler(uint32_t aEntries, double aInterval,
                           const nsTArray<nsCString>& aFeatures,
                           const nsTArray<nsCString>& aFilters,
-                          uint64_t aActiveTabID, double aDuration) {
-  if (mLockedForPrivateBrowsing) {
-    return NS_ERROR_NOT_AVAILABLE;
-  }
-
+                          uint64_t aActiveTabID, double aDuration,
+                          JSContext* aCx, Promise** aPromise) {
   ResetGathering();
 
   Vector<const char*> featureStringVector;
@@ -140,20 +125,19 @@ nsProfiler::StartProfiler(uint32_t aEntries, double aInterval,
   if (NS_FAILED(rv)) {
     return rv;
   }
-  profiler_start(PowerOfTwo32(aEntries), aInterval, features,
-                 filterStringVector.begin(), filterStringVector.length(),
-                 aActiveTabID, duration);
 
-  return NS_OK;
+  return RunFunctionAndConvertPromise(aCx, aPromise, [&]() {
+    return profiler_start(PowerOfTwo32(aEntries), aInterval, features,
+                          filterStringVector.begin(),
+                          filterStringVector.length(), aActiveTabID, duration);
+  });
 }
 
 NS_IMETHODIMP
-nsProfiler::StopProfiler() {
+nsProfiler::StopProfiler(JSContext* aCx, Promise** aPromise) {
   ResetGathering();
-
-  profiler_stop();
-
-  return NS_OK;
+  return RunFunctionAndConvertPromise(aCx, aPromise,
+                                      []() { return profiler_stop(); });
 }
 
 NS_IMETHODIMP
@@ -163,15 +147,15 @@ nsProfiler::IsPaused(bool* aIsPaused) {
 }
 
 NS_IMETHODIMP
-nsProfiler::Pause() {
-  profiler_pause();
-  return NS_OK;
+nsProfiler::Pause(JSContext* aCx, Promise** aPromise) {
+  return RunFunctionAndConvertPromise(aCx, aPromise,
+                                      []() { return profiler_pause(); });
 }
 
 NS_IMETHODIMP
-nsProfiler::Resume() {
-  profiler_resume();
-  return NS_OK;
+nsProfiler::Resume(JSContext* aCx, Promise** aPromise) {
+  return RunFunctionAndConvertPromise(aCx, aPromise,
+                                      []() { return profiler_resume(); });
 }
 
 NS_IMETHODIMP
@@ -181,15 +165,15 @@ nsProfiler::IsSamplingPaused(bool* aIsSamplingPaused) {
 }
 
 NS_IMETHODIMP
-nsProfiler::PauseSampling() {
-  profiler_pause_sampling();
-  return NS_OK;
+nsProfiler::PauseSampling(JSContext* aCx, Promise** aPromise) {
+  return RunFunctionAndConvertPromise(
+      aCx, aPromise, []() { return profiler_pause_sampling(); });
 }
 
 NS_IMETHODIMP
-nsProfiler::ResumeSampling() {
-  profiler_resume_sampling();
-  return NS_OK;
+nsProfiler::ResumeSampling(JSContext* aCx, Promise** aPromise) {
+  return RunFunctionAndConvertPromise(
+      aCx, aPromise, []() { return profiler_resume_sampling(); });
 }
 
 NS_IMETHODIMP
@@ -235,17 +219,7 @@ nsProfiler::WaitOnePeriodicSampling(JSContext* aCx, Promise** aPromise) {
                 NS_NewRunnableFunction(
                     "nsProfiler::WaitOnePeriodicSampling result on main thread",
                     [promiseHandleInMT = std::move(promiseHandleInSampler),
-                     aSamplingState]() {
-                      AutoJSAPI jsapi;
-                      if (NS_WARN_IF(!jsapi.Init(
-                              promiseHandleInMT->GetGlobalObject()))) {
-                        // We're really hosed if we can't get a JS context for
-                        // some reason.
-                        promiseHandleInMT->MaybeReject(
-                            NS_ERROR_DOM_UNKNOWN_ERR);
-                        return;
-                      }
-
+                     aSamplingState]() mutable {
                       switch (aSamplingState) {
                         case SamplingState::JustStopped:
                         case SamplingState::SamplingPaused:
@@ -253,10 +227,17 @@ nsProfiler::WaitOnePeriodicSampling(JSContext* aCx, Promise** aPromise) {
                           break;
 
                         case SamplingState::NoStackSamplingCompleted:
-                        case SamplingState::SamplingCompleted: {
-                          JS::RootedValue val(jsapi.cx());
-                          promiseHandleInMT->MaybeResolve(val);
-                        } break;
+                        case SamplingState::SamplingCompleted:
+                          // The parent process has succesfully done a sampling,
+                          // check the child processes (if any).
+                          ProfilerParent::WaitOnePeriodicSampling()->Then(
+                              GetMainThreadSerialEventTarget(), __func__,
+                              [promiseHandleInMT =
+                                   std::move(promiseHandleInMT)](
+                                  GenericPromise::ResolveOrRejectValue&&) {
+                                promiseHandleInMT->MaybeResolveWithUndefined();
+                              });
+                          break;
 
                         default:
                           MOZ_ASSERT(false, "Unexpected SamplingState value");
@@ -482,6 +463,47 @@ nsProfiler::GetProfileDataAsArrayBuffer(double aSinceTime, JSContext* aCx,
   return NS_OK;
 }
 
+nsresult CompressString(const nsCString& aString,
+                        FallibleTArray<uint8_t>& aOutBuff) {
+  // Compress a buffer via zlib (as with `compress()`), but emit a
+  // gzip header as well. Like `compress()`, this is limited to 4GB in
+  // size, but that shouldn't be an issue for our purposes.
+  uLongf outSize = compressBound(aString.Length());
+  if (!aOutBuff.SetLength(outSize, fallible)) {
+    return NS_ERROR_OUT_OF_MEMORY;
+  }
+
+  int zerr;
+  z_stream stream;
+  stream.zalloc = nullptr;
+  stream.zfree = nullptr;
+  stream.opaque = nullptr;
+  stream.next_out = (Bytef*)aOutBuff.Elements();
+  stream.avail_out = aOutBuff.Length();
+  stream.next_in = (z_const Bytef*)aString.Data();
+  stream.avail_in = aString.Length();
+
+  // A windowBits of 31 is the default (15) plus 16 for emitting a
+  // gzip header; a memLevel of 8 is the default.
+  zerr =
+      deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
+                   /* windowBits */ 31, /* memLevel */ 8, Z_DEFAULT_STRATEGY);
+  if (zerr != Z_OK) {
+    return NS_ERROR_FAILURE;
+  }
+
+  zerr = deflate(&stream, Z_FINISH);
+  outSize = stream.total_out;
+  deflateEnd(&stream);
+
+  if (zerr != Z_STREAM_END) {
+    return NS_ERROR_FAILURE;
+  }
+
+  aOutBuff.TruncateLength(outSize);
+  return NS_OK;
+}
+
 NS_IMETHODIMP
 nsProfiler::GetProfileDataAsGzippedArrayBuffer(double aSinceTime,
                                                JSContext* aCx,
@@ -519,46 +541,13 @@ nsProfiler::GetProfileDataAsGzippedArrayBuffer(double aSinceTime,
               return;
             }
 
-            // Compress a buffer via zlib (as with `compress()`), but emit a
-            // gzip header as well. Like `compress()`, this is limited to 4GB in
-            // size, but that shouldn't be an issue for our purposes.
-            uLongf outSize = compressBound(aResult.Length());
             FallibleTArray<uint8_t> outBuff;
-            if (!outBuff.SetLength(outSize, fallible)) {
-              promise->MaybeReject(NS_ERROR_OUT_OF_MEMORY);
+            nsresult result = CompressString(aResult, outBuff);
+
+            if (result != NS_OK) {
+              promise->MaybeReject(result);
               return;
             }
-
-            int zerr;
-            z_stream stream;
-            stream.zalloc = nullptr;
-            stream.zfree = nullptr;
-            stream.opaque = nullptr;
-            stream.next_out = (Bytef*)outBuff.Elements();
-            stream.avail_out = outBuff.Length();
-            stream.next_in = (z_const Bytef*)aResult.Data();
-            stream.avail_in = aResult.Length();
-
-            // A windowBits of 31 is the default (15) plus 16 for emitting a
-            // gzip header; a memLevel of 8 is the default.
-            zerr = deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED,
-                                /* windowBits */ 31, /* memLevel */ 8,
-                                Z_DEFAULT_STRATEGY);
-            if (zerr != Z_OK) {
-              promise->MaybeReject(NS_ERROR_FAILURE);
-              return;
-            }
-
-            zerr = deflate(&stream, Z_FINISH);
-            outSize = stream.total_out;
-            deflateEnd(&stream);
-
-            if (zerr != Z_STREAM_END) {
-              promise->MaybeReject(NS_ERROR_FAILURE);
-              return;
-            }
-
-            outBuff.TruncateLength(outSize);
 
             JSContext* cx = jsapi.cx();
             JSObject* typedArray = dom::ArrayBuffer::Create(
@@ -761,6 +750,80 @@ nsProfiler::GetBufferInfo(uint32_t* aCurrentPosition, uint32_t* aTotalSize,
   return NS_OK;
 }
 
+bool nsProfiler::SendProgressRequest(PendingProfile& aPendingProfile) {
+  RefPtr<ProfilerParent::SingleProcessProgressPromise> progressPromise =
+      ProfilerParent::RequestGatherProfileProgress(aPendingProfile.childPid);
+  if (!progressPromise) {
+    LOG("RequestGatherProfileProgress(%u) -> null!",
+        unsigned(aPendingProfile.childPid));
+    // Failed to send request.
+    return false;
+  }
+
+  DEBUG_LOG("RequestGatherProfileProgress(%u) sent...",
+            unsigned(aPendingProfile.childPid));
+  aPendingProfile.lastProgressRequest = TimeStamp::Now();
+  progressPromise->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [self = RefPtr<nsProfiler>(this),
+       childPid = aPendingProfile.childPid](GatherProfileProgress&& aResult) {
+        if (!self->mGathering) {
+          return;
+        }
+        PendingProfile* pendingProfile = self->GetPendingProfile(childPid);
+        DEBUG_LOG(
+            "RequestGatherProfileProgress(%u) response: %.2f '%s' "
+            "(%u were pending, %s %u)",
+            unsigned(childPid),
+            ProportionValue::FromUnderlyingType(
+                aResult.progressProportionValueUnderlyingType())
+                    .ToDouble() *
+                100.0,
+            aResult.progressLocation().Data(),
+            unsigned(self->mPendingProfiles.length()),
+            pendingProfile ? "including" : "excluding", unsigned(childPid));
+        if (pendingProfile) {
+          // We have a progress report for a still-pending profile.
+          pendingProfile->lastProgressResponse = TimeStamp::Now();
+          // Has it actually made progress?
+          if (aResult.progressProportionValueUnderlyingType() !=
+              pendingProfile->progressProportion.ToUnderlyingType()) {
+            pendingProfile->lastProgressChange =
+                pendingProfile->lastProgressResponse;
+            pendingProfile->progressProportion =
+                ProportionValue::FromUnderlyingType(
+                    aResult.progressProportionValueUnderlyingType());
+            pendingProfile->progressLocation = aResult.progressLocation();
+            self->RestartGatheringTimer();
+          }
+        }
+      },
+      [self = RefPtr<nsProfiler>(this), childPid = aPendingProfile.childPid](
+          ipc::ResponseRejectReason&& aReason) {
+        if (!self->mGathering) {
+          return;
+        }
+        PendingProfile* pendingProfile = self->GetPendingProfile(childPid);
+        LOG("RequestGatherProfileProgress(%u) rejection: %d "
+            "(%u were pending, %s %u)",
+            unsigned(childPid), (int)aReason,
+            unsigned(self->mPendingProfiles.length()),
+            pendingProfile ? "including" : "excluding", unsigned(childPid));
+        if (pendingProfile) {
+          // Failure response, assume the child process is gone.
+          MOZ_ASSERT(self->mPendingProfiles.begin() <= pendingProfile &&
+                     pendingProfile < self->mPendingProfiles.end());
+          self->mPendingProfiles.erase(pendingProfile);
+          if (self->mPendingProfiles.empty()) {
+            // We've got all of the async profiles now. Let's finish off the
+            // profile and resolve the Promise.
+            self->FinishGathering();
+          }
+        }
+      });
+  return true;
+}
+
 /* static */ void nsProfiler::GatheringTimerCallback(nsITimer* aTimer,
                                                      void* aClosure) {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
@@ -779,6 +842,82 @@ nsProfiler::GetBufferInfo(uint32_t* aCurrentPosition, uint32_t* aTotalSize,
     // This timer was cancelled after this callback was queued.
     return;
   }
+
+  bool progressWasMade = false;
+
+  // Going backwards, it's easier and cheaper to erase elements if needed.
+  for (auto iPlus1 = self->mPendingProfiles.length(); iPlus1 != 0; --iPlus1) {
+    PendingProfile& pendingProfile = self->mPendingProfiles[iPlus1 - 1];
+
+    bool needToSendProgressRequest = false;
+    if (pendingProfile.lastProgressRequest.IsNull()) {
+      DEBUG_LOG("GatheringTimerCallback() - child %u: No data yet",
+                unsigned(pendingProfile.childPid));
+      // First time going through the list, send an initial progress request.
+      needToSendProgressRequest = true;
+      // We pretend that progress was made, so we don't give up yet.
+      progressWasMade = true;
+    } else if (pendingProfile.lastProgressResponse.IsNull()) {
+      LOG("GatheringTimerCallback() - child %u: Waiting for first response",
+          unsigned(pendingProfile.childPid));
+      // Still waiting for the first response, no progress made here, don't send
+      // another request.
+    } else if (pendingProfile.lastProgressResponse <=
+               pendingProfile.lastProgressRequest) {
+      LOG("GatheringTimerCallback() - child %u: Waiting for response",
+          unsigned(pendingProfile.childPid));
+      // Still waiting for a response to the last request, no progress made
+      // here, don't send another request.
+    } else if (pendingProfile.lastProgressChange.IsNull()) {
+      LOG("GatheringTimerCallback() - child %u: Still waiting for first change",
+          unsigned(pendingProfile.childPid));
+      // Still waiting for the first change, no progress made here, but send a
+      // new request.
+      needToSendProgressRequest = true;
+    } else if (pendingProfile.lastProgressRequest <
+               pendingProfile.lastProgressChange) {
+      DEBUG_LOG("GatheringTimerCallback() - child %u: Recent change",
+                unsigned(pendingProfile.childPid));
+      // We have a recent change, progress was made.
+      needToSendProgressRequest = true;
+      progressWasMade = true;
+    } else {
+      LOG("GatheringTimerCallback() - child %u: No recent change",
+          unsigned(pendingProfile.childPid));
+      needToSendProgressRequest = true;
+    }
+
+    // And send a new progress request.
+    if (needToSendProgressRequest) {
+      if (!self->SendProgressRequest(pendingProfile)) {
+        // Failed to even send the request, consider this process gone.
+        self->mPendingProfiles.erase(&pendingProfile);
+        LOG("... Failed to send progress request");
+      } else {
+        DEBUG_LOG("... Sent progress request");
+      }
+    } else {
+      DEBUG_LOG("... No progress request");
+    }
+  }
+
+  if (self->mPendingProfiles.empty()) {
+    // We've got all of the async profiles now. Let's finish off the profile
+    // and resolve the Promise.
+    self->FinishGathering();
+    return;
+  }
+
+  // Not finished yet.
+
+  if (progressWasMade) {
+    // We made some progress, just restart the timer.
+    DEBUG_LOG("GatheringTimerCallback() - Progress made, restart timer");
+    self->RestartGatheringTimer();
+    return;
+  }
+
+  DEBUG_LOG("GatheringTimerCallback() - Timeout!");
   self->mGatheringTimer = nullptr;
   if (!profiler_is_active() || !self->mGathering) {
     // Not gathering anymore.
@@ -790,7 +929,34 @@ nsProfiler::GetBufferInfo(uint32_t* aCurrentPosition, uint32_t* aTotalSize,
   self->FinishGathering();
 }
 
-void nsProfiler::GatheredOOPProfile(const nsACString& aProfile) {
+void nsProfiler::RestartGatheringTimer() {
+  if (mGatheringTimer) {
+    uint32_t delayMs = 0;
+    const nsresult r = mGatheringTimer->GetDelay(&delayMs);
+    mGatheringTimer->Cancel();
+    if (NS_FAILED(r) || delayMs == 0 ||
+        NS_FAILED(mGatheringTimer->InitWithNamedFuncCallback(
+            GatheringTimerCallback, this, delayMs,
+            nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
+            "nsProfilerGatheringTimer"))) {
+      // Can't restart the timer, so we can't wait any longer.
+      FinishGathering();
+    }
+  }
+}
+
+nsProfiler::PendingProfile* nsProfiler::GetPendingProfile(
+    base::ProcessId aChildPid) {
+  for (PendingProfile& pendingProfile : mPendingProfiles) {
+    if (pendingProfile.childPid == aChildPid) {
+      return &pendingProfile;
+    }
+  }
+  return nullptr;
+}
+
+void nsProfiler::GatheredOOPProfile(base::ProcessId aChildPid,
+                                    const nsACString& aProfile) {
   MOZ_RELEASE_ASSERT(NS_IsMainThread());
 
   if (!profiler_is_active()) {
@@ -812,33 +978,45 @@ void nsProfiler::GatheredOOPProfile(const nsACString& aProfile) {
     mWriter->Splice(PromiseFlatCString(aProfile));
   }
 
-  mPendingProfiles--;
+  if (PendingProfile* pendingProfile = GetPendingProfile(aChildPid);
+      pendingProfile) {
+    mPendingProfiles.erase(pendingProfile);
 
-  if (mPendingProfiles == 0) {
-    // We've got all of the async profiles now. Let's
-    // finish off the profile and resolve the Promise.
-    FinishGathering();
+    if (mPendingProfiles.empty()) {
+      // We've got all of the async profiles now. Let's finish off the profile
+      // and resolve the Promise.
+      FinishGathering();
+    }
   }
 
   // Not finished yet, restart the timer to let any remaining child enough time
   // to do their profile-streaming.
-  if (mGatheringTimer) {
-    uint32_t delayMs = 0;
-    const nsresult r = mGatheringTimer->GetDelay(&delayMs);
-    mGatheringTimer->Cancel();
-    mGatheringTimer = nullptr;
-    if (NS_SUCCEEDED(r) && delayMs != 0) {
-      Unused << NS_NewTimerWithFuncCallback(
-          getter_AddRefs(mGatheringTimer), GatheringTimerCallback, this,
-          delayMs, nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY, "",
-          GetMainThreadSerialEventTarget());
-    }
-  }
+  RestartGatheringTimer();
 }
 
-void nsProfiler::ReceiveShutdownProfile(const nsCString& aProfile) {
-  MOZ_RELEASE_ASSERT(NS_IsMainThread());
-  profiler_received_exit_profile(aProfile);
+RefPtr<nsProfiler::GatheringPromiseAndroid>
+nsProfiler::GetProfileDataAsGzippedArrayBufferAndroid(double aSinceTime) {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  if (!profiler_is_active()) {
+    return GatheringPromiseAndroid::CreateAndReject(NS_ERROR_FAILURE, __func__);
+  }
+
+  return StartGathering(aSinceTime)
+      ->Then(
+          GetMainThreadSerialEventTarget(), __func__,
+          [](const nsCString& profileResult) {
+            FallibleTArray<uint8_t> outBuff;
+            nsresult result = CompressString(profileResult, outBuff);
+            if (result != NS_OK) {
+              return GatheringPromiseAndroid::CreateAndReject(result, __func__);
+            }
+            return GatheringPromiseAndroid::CreateAndResolve(std::move(outBuff),
+                                                             __func__);
+          },
+          [](nsresult aRv) {
+            return GatheringPromiseAndroid::CreateAndReject(aRv, __func__);
+          });
 }
 
 RefPtr<nsProfiler::GatheringPromise> nsProfiler::StartGathering(
@@ -864,12 +1042,15 @@ RefPtr<nsProfiler::GatheringPromise> nsProfiler::StartGathering(
   // Do this before the call to profiler_stream_json_for_this_process() because
   // that call is slow and we want to let the other processes grab their
   // profiles as soon as possible.
-  nsTArray<RefPtr<ProfilerParent::SingleProcessProfilePromise>> profiles =
+  nsTArray<ProfilerParent::SingleProcessProfilePromiseAndChildPid> profiles =
       ProfilerParent::GatherProfiles();
 
-  mWriter.emplace();
+  MOZ_ASSERT(mPendingProfiles.empty());
+  if (!mPendingProfiles.reserve(profiles.Length())) {
+    return GatheringPromise::CreateAndReject(NS_ERROR_NOT_AVAILABLE, __func__);
+  }
 
-  TimeStamp streamingStart = TimeStamp::NowUnfuzzed();
+  mWriter.emplace();
 
   UniquePtr<ProfilerCodeAddressService> service =
       profiler_code_address_service_for_presymbolication();
@@ -904,53 +1085,51 @@ RefPtr<nsProfiler::GatheringPromise> nsProfiler::StartGathering(
   // come in, they will be inserted and end up in the right spot.
   // FinishGathering() will close the array and the root object.
 
-  mPendingProfiles = profiles.Length();
-  if (mPendingProfiles != 0) {
+  if (!profiles.IsEmpty()) {
     // There *are* pending profiles, let's add handlers for their promises.
 
-    // We want a reasonable timeout value while waiting for child profiles.
-    // We know how long the parent process took to serialize its profile:
-    const uint32_t parentTimeMs = static_cast<uint32_t>(
-        (TimeStamp::NowUnfuzzed() - streamingStart).ToMilliseconds());
-    // We will multiply this by the number of children, to cover the worst case
-    // where all processes take the same time, but because they are working in
-    // parallel on a potential single CPU, they all finish around the same later
-    // time.
-    // And multiply again by 2, for the extra processing and comms, and other
-    // work that may happen.
-    const uint32_t parentToChildrenFactor = mPendingProfiles * 2;
-    // And we add a number seconds by default. In some lopsided cases, the
-    // parent-to-child serializing ratio could be much greater than expected,
-    // so the user could force it to be a bigger number if needed.
+    // This timeout value is used to monitor progress while gathering child
+    // profiles. The timer will be restarted after we receive a response with
+    // any progress.
+    constexpr uint32_t cMinChildTimeoutS = 1u;  // 1 second minimum and default.
+    constexpr uint32_t cMaxChildTimeoutS = 60u;  // 1 minute max.
     uint32_t childTimeoutS = Preferences::GetUint(
-        "devtools.performance.recording.child.timeout_s", 0u);
-    if (childTimeoutS == 0) {
-      // If absent or 0, use hard-coded default.
-      childTimeoutS = 1;
+        "devtools.performance.recording.child.timeout_s", cMinChildTimeoutS);
+    if (childTimeoutS < cMinChildTimeoutS) {
+      childTimeoutS = cMinChildTimeoutS;
+    } else if (childTimeoutS > cMaxChildTimeoutS) {
+      childTimeoutS = cMaxChildTimeoutS;
     }
-    // And this gives us a timeout value. The timer will be restarted after we
-    // receive each response.
-    // TODO: Instead of a timeout to cover the whole request-to-response time,
-    // there should be more of a continuous dialog between processes, to only
-    // give up if some processes are really unresponsive. See bug 1673513.
-    const uint32_t streamingTimeoutMs =
-        parentTimeMs * parentToChildrenFactor + childTimeoutS * 1000;
+    const uint32_t childTimeoutMs = childTimeoutS * PR_MSEC_PER_SEC;
     Unused << NS_NewTimerWithFuncCallback(
         getter_AddRefs(mGatheringTimer), GatheringTimerCallback, this,
-        streamingTimeoutMs, nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY, "",
-        GetMainThreadSerialEventTarget());
+        childTimeoutMs, nsITimer::TYPE_ONE_SHOT_LOW_PRIORITY,
+        "nsProfilerGatheringTimer", GetMainThreadSerialEventTarget());
 
-    for (auto profile : profiles) {
-      profile->Then(
+    MOZ_ASSERT(mPendingProfiles.capacity() >= profiles.Length());
+    for (const auto& profile : profiles) {
+      mPendingProfiles.infallibleAppend(PendingProfile{profile.childPid});
+      profile.profilePromise->Then(
           GetMainThreadSerialEventTarget(), __func__,
-          [self = RefPtr<nsProfiler>(this)](mozilla::ipc::Shmem&& aResult) {
+          [self = RefPtr<nsProfiler>(this),
+           childPid = profile.childPid](mozilla::ipc::Shmem&& aResult) {
+            PendingProfile* pendingProfile = self->GetPendingProfile(childPid);
+            LOG("GatherProfile(%u) response: %u bytes (%u were pending, %s %u)",
+                unsigned(childPid), unsigned(aResult.Size<char>()),
+                unsigned(self->mPendingProfiles.length()),
+                pendingProfile ? "including" : "excluding", unsigned(childPid));
             const nsDependentCSubstring profileString(aResult.get<char>(),
                                                       aResult.Size<char>() - 1);
-            self->GatheredOOPProfile(profileString);
+            self->GatheredOOPProfile(childPid, profileString);
           },
-          [self =
-               RefPtr<nsProfiler>(this)](ipc::ResponseRejectReason&& aReason) {
-            self->GatheredOOPProfile(""_ns);
+          [self = RefPtr<nsProfiler>(this),
+           childPid = profile.childPid](ipc::ResponseRejectReason&& aReason) {
+            PendingProfile* pendingProfile = self->GetPendingProfile(childPid);
+            LOG("GatherProfile(%u) rejection: %d (%u were pending, %s %u)",
+                unsigned(childPid), (int)aReason,
+                unsigned(self->mPendingProfiles.length()),
+                pendingProfile ? "including" : "excluding", unsigned(childPid));
+            self->GatheredOOPProfile(childPid, ""_ns);
           });
     }
   } else {
@@ -1028,7 +1207,7 @@ void nsProfiler::ResetGathering() {
     mPromiseHolder->RejectIfExists(NS_ERROR_DOM_ABORT_ERR, __func__);
     mPromiseHolder.reset();
   }
-  mPendingProfiles = 0;
+  mPendingProfiles.clearAndFree();
   mGathering = false;
   if (mGatheringTimer) {
     mGatheringTimer->Cancel();

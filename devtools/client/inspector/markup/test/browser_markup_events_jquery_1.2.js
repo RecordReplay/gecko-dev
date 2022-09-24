@@ -7,7 +7,7 @@
 // and jQuery Live events (jQuery version 1.2).
 
 const TEST_LIB = "lib_jquery_1.2_min.js";
-const TEST_URL = URL_ROOT + "doc_markup_events_jquery.html?" + TEST_LIB;
+const TEST_URL = URL_ROOT_SSL + "doc_markup_events_jquery.html?" + TEST_LIB;
 
 loadHelperScript("helper_events_test_runner.js");
 
@@ -19,10 +19,7 @@ const TEST_DATA = [
       {
         type: "load",
         filename: TEST_URL + ":29:38",
-        attributes: [
-          "Bubbling",
-          "DOM2"
-        ],
+        attributes: ["Bubbling"],
         handler: `
           () => {
             const handler1 = function liveDivDblClick() {
@@ -76,9 +73,9 @@ const TEST_DATA = [
             $(div).click(handler7);
             $(div).click(handler8);
             $(div).keydown(handler9);
-          }`
+          }`,
       },
-    ]
+    ],
   },
   {
     selector: "#testdiv",
@@ -86,67 +83,55 @@ const TEST_DATA = [
       {
         type: "click",
         filename: TEST_URL + ":36:43",
-        attributes: [
-          "jQuery"
-        ],
+        attributes: ["jQuery"],
         handler: `
           function divClick1() {
             alert(7);
-          }`
+          }`,
       },
       {
         type: "click",
         filename: TEST_URL + ":37:43",
-        attributes: [
-          "jQuery"
-        ],
+        attributes: ["jQuery"],
         handler: `
           function divClick2() {
             alert(8);
-          }`
+          }`,
       },
       {
         type: "click",
-        filename: URL_ROOT + TEST_LIB + ":24:10040",
-        attributes: [
-          "Bubbling",
-          "DOM2"
-        ],
+        filename: URL_ROOT_SSL + TEST_LIB + ":24:10040",
+        attributes: ["Bubbling"],
         handler: `
           function() {
             var val;
             if (typeof jQuery == "undefined" || jQuery.event.triggered) return val;
             val = jQuery.event.handle.apply(element, arguments);
             return val;
-          }`
+          }`,
       },
       {
         type: "keydown",
         filename: TEST_URL + ":38:44",
-        attributes: [
-          "jQuery"
-        ],
+        attributes: ["jQuery"],
         handler: `
           function divKeyDown() {
             alert(9);
-          }`
+          }`,
       },
       {
         type: "keydown",
-        filename: URL_ROOT + TEST_LIB + ":24:10040",
-        attributes: [
-          "Bubbling",
-          "DOM2"
-        ],
+        filename: URL_ROOT_SSL + TEST_LIB + ":24:10040",
+        attributes: ["Bubbling"],
         handler: `
           function() {
             var val;
             if (typeof jQuery == "undefined" || jQuery.event.triggered) return val;
             val = jQuery.event.handle.apply(element, arguments);
             return val;
-          }`
-      }
-    ]
+          }`,
+      },
+    ],
   },
 ];
 /* eslint-enable */

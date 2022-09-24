@@ -35,6 +35,11 @@ const TEST_CASES = [
     testQueryString: "paramToKeep=123",
     strippedQueryString: "paramToKeep=123",
   },
+  // Test to make sure we don't encode the unstripped parameters.
+  {
+    testQueryString: "paramToStrip1=123&paramToKeep=?$!%",
+    strippedQueryString: "paramToKeep=?$!%",
+  },
 ];
 
 function observeChannel(uri, expected) {
@@ -64,7 +69,7 @@ async function verifyQueryString(browser, expected) {
   });
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["privacy.query_stripping.strip_list", "paramToStrip1 paramToStrip2"],

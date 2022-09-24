@@ -8,7 +8,7 @@
 #include "mozilla/PRDDParent.h"
 
 #include "mozilla/RefPtr.h"
-#include "mozilla/media/MediaUtils.h"
+#include "mozilla/ipc/AsyncBlockers.h"
 
 namespace mozilla {
 
@@ -22,14 +22,15 @@ class RDDParent final : public PRDDParent {
 
   static RDDParent* GetSingleton();
 
-  AsyncBlockers& AsyncShutdownService() { return mShutdownBlockers; }
+  ipc::AsyncBlockers& AsyncShutdownService() { return mShutdownBlockers; }
 
   bool Init(base::ProcessId aParentPid, const char* aParentBuildID,
             mozilla::ipc::ScopedPort aPort);
 
   mozilla::ipc::IPCResult RecvInit(nsTArray<GfxVarUpdate>&& vars,
                                    const Maybe<ipc::FileDescriptor>& aBrokerFd,
-                                   const bool& aCanRecordReleaseTelemetry);
+                                   const bool& aCanRecordReleaseTelemetry,
+                                   const bool& aIsReadyForBackgroundProcessing);
   mozilla::ipc::IPCResult RecvInitProfiler(
       Endpoint<PProfilerChild>&& aEndpoint);
 
@@ -44,8 +45,11 @@ class RDDParent final : public PRDDParent {
       const bool& minimizeMemoryUsage,
       const Maybe<ipc::FileDescriptor>& DMDFile,
       const RequestMemoryReportResolver& aResolver);
+#if defined(XP_WIN)
   mozilla::ipc::IPCResult RecvGetUntrustedModulesData(
       GetUntrustedModulesDataResolver&& aResolver);
+  mozilla::ipc::IPCResult RecvUnblockUntrustedModulesThread();
+#endif  // defined(XP_WIN)
   mozilla::ipc::IPCResult RecvPreferenceUpdate(const Pref& pref);
   mozilla::ipc::IPCResult RecvUpdateVar(const GfxVarUpdate& pref);
 
@@ -55,10 +59,15 @@ class RDDParent final : public PRDDParent {
 #endif
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
+  mozilla::ipc::IPCResult RecvFlushFOGData(FlushFOGDataResolver&& aResolver);
+
+  mozilla::ipc::IPCResult RecvTestTriggerMetrics(
+      TestTriggerMetricsResolver&& aResolve);
+
  private:
   const TimeStamp mLaunchTime;
   RefPtr<ChildProfilerController> mProfilerController;
-  AsyncBlockers mShutdownBlockers;
+  ipc::AsyncBlockers mShutdownBlockers;
 };
 
 }  // namespace mozilla

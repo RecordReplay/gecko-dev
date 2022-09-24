@@ -13,10 +13,12 @@
 #  include "mozilla/Atomics.h"
 #  include "mozilla/Monitor.h"
 #  include "mozilla/MozPromise.h"
+#  include "mozilla/ProfilerUtils.h"
 #  include "mozilla/RefPtr.h"
 #  include "mozilla/Result.h"
 #  include "mozilla/TimeStamp.h"
 #  include "mozilla/UniquePtr.h"
+#  include "mozilla/SPSCQueue.h"
 #  include "nsCOMPtr.h"
 #  include "nsThreadUtils.h"
 #  include "WavDumper.h"
@@ -33,61 +35,98 @@ struct CubebDestroyPolicy {
   }
 };
 
+enum class ShutdownCause {
+  // Regular shutdown, signal the end of the audio stream.
+  Regular,
+  // Shutdown for muting, don't signal the end of the audio stream.
+  Muting
+};
+
 class AudioStream;
 class FrameHistory;
 class AudioConfig;
 
+// A struct that contains the number of frames serviced or underrun by a
+// callback, alongside the sample-rate for this callback (in case of playback
+// rate change, it can be variable).
+struct CallbackInfo {
+  CallbackInfo() = default;
+  CallbackInfo(uint32_t aServiced, uint32_t aUnderrun, uint32_t aOutputRate)
+      : mServiced(aServiced), mUnderrun(aUnderrun), mOutputRate(aOutputRate) {}
+  uint32_t mServiced = 0;
+  uint32_t mUnderrun = 0;
+  uint32_t mOutputRate = 0;
+};
+
 class AudioClock {
  public:
-  AudioClock();
-
-  // Initialize the clock with the current sampling rate.
-  // Need to be called before querying the clock.
-  void Init(uint32_t aRate);
+  explicit AudioClock(uint32_t aInRate);
 
   // Update the number of samples that has been written in the audio backend.
-  // Called on the state machine thread.
-  void UpdateFrameHistory(uint32_t aServiced, uint32_t aUnderrun);
+  // Called on the audio thread only.
+  void UpdateFrameHistory(uint32_t aServiced, uint32_t aUnderrun,
+                          bool aAudioThreadChanged);
 
   /**
    * @param aFrames The playback position in frames of the audio engine.
    * @return The playback position in frames of the stream,
    *         adjusted by playback rate changes and underrun frames.
    */
-  int64_t GetPositionInFrames(int64_t aFrames) const;
+  int64_t GetPositionInFrames(int64_t aFrames);
 
   /**
    * @param frames The playback position in frames of the audio engine.
    * @return The playback position in microseconds of the stream,
    *         adjusted by playback rate changes and underrun frames.
    */
-  int64_t GetPosition(int64_t frames) const;
+  int64_t GetPosition(int64_t frames);
 
   // Set the playback rate.
-  // Called on the audio thread.
+  // Called on the audio thread only.
   void SetPlaybackRate(double aPlaybackRate);
   // Get the current playback rate.
-  // Called on the audio thread.
+  // Called on the audio thread only.
   double GetPlaybackRate() const;
   // Set if we are preserving the pitch.
-  // Called on the audio thread.
+  // Called on the audio thread only.
   void SetPreservesPitch(bool aPreservesPitch);
   // Get the current pitch preservation state.
-  // Called on the audio thread.
+  // Called on the audio thread only.
   bool GetPreservesPitch() const;
 
+  // Called on either thread.
   uint32_t GetInputRate() const { return mInRate; }
   uint32_t GetOutputRate() const { return mOutRate; }
 
  private:
-  // Output rate in Hz (characteristic of the playback rate)
-  uint32_t mOutRate;
-  // Input rate in Hz (characteristic of the media being played)
-  uint32_t mInRate;
-  // True if the we are timestretching, false if we are resampling.
+  // Output rate in Hz (characteristic of the playback rate). Written on the
+  // audio thread, read on either thread.
+  Atomic<uint32_t> mOutRate;
+  // Input rate in Hz (characteristic of the media being played).
+  const uint32_t mInRate;
+  // True if the we are timestretching, false if we are resampling. Accessed on
+  // the audio thread only.
   bool mPreservesPitch;
   // The history of frames sent to the audio engine in each DataCallback.
-  const UniquePtr<FrameHistory> mFrameHistory;
+  // Only accessed from non-audio threads on macOS, accessed on both threads and
+  // protected by the AudioStream monitor on other platforms.
+  const UniquePtr<FrameHistory> mFrameHistory
+#  ifndef XP_MACOSX
+      GUARDED_BY(mMutex)
+#  endif
+          ;
+#  ifdef XP_MACOSX
+  // Enqueued on the audio thread, dequeued from the other thread. The maximum
+  // size of this queue has been chosen empirically.
+  SPSCQueue<CallbackInfo> mCallbackInfoQueue{100};
+  // If it isn't possible to send the callback info to the non-audio thread,
+  // store them here until it's possible to send them. This is an unlikely
+  // fallback path. The size of this array has been chosen empirically. Only
+  // ever accessed on the audio thread.
+  AutoTArray<CallbackInfo, 5> mAudioThreadCallbackInfo;
+#  else
+  Mutex mMutex{"AudioClock"};
+#  endif
 };
 
 /*
@@ -133,7 +172,7 @@ class AudioBufferCursor {
  * A helper class to encapsulate pointer arithmetic and provide means to modify
  * the underlying audio buffer.
  */
-class AudioBufferWriter : private AudioBufferCursor {
+class AudioBufferWriter : public AudioBufferCursor {
  public:
   AudioBufferWriter(Span<AudioDataValue> aSpan, uint32_t aChannels,
                     uint32_t aFrames)
@@ -192,9 +231,10 @@ class AudioStream final {
 
   class DataSource {
    public:
-    // Return a chunk which contains at most aFrames frames or zero if no
-    // frames in the source at all.
-    virtual UniquePtr<Chunk> PopFrames(uint32_t aFrames) = 0;
+    // Attempt to acquire aFrames frames of audio, and returns the number of
+    // frames successfuly acquired.
+    virtual uint32_t PopFrames(AudioDataValue* aAudio, uint32_t aFrames,
+                               bool aAudioThreadChanged) = 0;
     // Return true if no more data will be added to the source.
     virtual bool Ended() const = 0;
 
@@ -202,18 +242,18 @@ class AudioStream final {
     virtual ~DataSource() = default;
   };
 
-  explicit AudioStream(DataSource& aSource);
-
-  // Initialize the audio stream. aNumChannels is the number of audio
-  // channels (1 for mono, 2 for stereo, etc), aChannelMap is the indicator for
-  // channel layout(mono, stereo, 5.1 or 7.1 ) and aRate is the sample rate
+  // aOutputChannels is the number of audio channels (1 for mono, 2 for stereo,
+  // etc), aChannelMap is the indicator for channel layout(mono, stereo, 5.1 or
+  // 7.1 ). Initialize the audio stream.and aRate is the sample rate
   // (22050Hz, 44100Hz, etc).
-  nsresult Init(uint32_t aNumChannels,
-                AudioConfig::ChannelLayout::ChannelMap aChannelMap,
-                uint32_t aRate, AudioDeviceInfo* aSinkInfo);
+  AudioStream(DataSource& aSource, uint32_t aInRate, uint32_t aOutputChannels,
+              AudioConfig::ChannelLayout::ChannelMap aChannelMap);
+
+  nsresult Init(AudioDeviceInfo* aSinkInfo);
 
   // Closes the stream. All future use of the stream is an error.
-  void Shutdown();
+  Maybe<MozPromiseHolder<MediaSink::EndedPromise>> Shutdown(
+      ShutdownCause = ShutdownCause::Regular);
 
   void Reset();
 
@@ -223,9 +263,8 @@ class AudioStream final {
 
   void SetStreamName(const nsAString& aStreamName);
 
-  // Start the stream and return a promise that will be resolve when the
-  // playback completes.
-  Result<already_AddRefed<MediaSink::EndedPromise>, nsresult> Start();
+  // Start the stream.
+  nsresult Start(MozPromiseHolder<MediaSink::EndedPromise>& aEndedPromise);
 
   // Pause audio playback.
   void Pause();
@@ -245,10 +284,10 @@ class AudioStream final {
     return CubebUtils::PreferredSampleRate();
   }
 
-  uint32_t GetOutChannels() { return mOutChannels; }
+  uint32_t GetOutChannels() const { return mOutChannels; }
 
-  // Set playback rate as a multiple of the intrinsic playback rate. This is to
-  // be called only with aPlaybackRate > 0.0.
+  // Set playback rate as a multiple of the intrinsic playback rate. This is
+  // to be called only with aPlaybackRate > 0.0.
   nsresult SetPlaybackRate(double aPlaybackRate);
   // Switch between resampling (if false) and time stretching (if true,
   // default).
@@ -257,6 +296,9 @@ class AudioStream final {
   size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 
   bool IsPlaybackCompleted() const;
+
+  // Returns true if at least one DataCallback has been called.
+  bool CallbackStarted() const { return mCallbacksStarted; }
 
  protected:
   friend class AudioClock;
@@ -285,30 +327,36 @@ class AudioStream final {
   long DataCallback(void* aBuffer, long aFrames);
   void StateCallback(cubeb_state aState);
 
-  nsresult EnsureTimeStretcherInitializedUnlocked();
+  // Audio thread only
+  nsresult EnsureTimeStretcherInitialized();
+  void GetUnprocessed(AudioBufferWriter& aWriter);
+  void GetTimeStretched(AudioBufferWriter& aWriter);
+  void UpdatePlaybackRateIfNeeded();
 
   // Return true if audio frames are valid (correct sampling rate and valid
   // channel count) otherwise false.
-  bool IsValidAudioFormat(Chunk* aChunk);
-
-  void GetUnprocessed(AudioBufferWriter& aWriter);
-  void GetTimeStretched(AudioBufferWriter& aWriter);
+  bool IsValidAudioFormat(Chunk* aChunk) REQUIRES(mMonitor);
 
   template <typename Function, typename... Args>
-  int InvokeCubeb(Function aFunction, Args&&... aArgs);
+  int InvokeCubeb(Function aFunction, Args&&... aArgs) REQUIRES(mMonitor);
   bool CheckThreadIdChanged();
+  void AssertIsOnAudioThread() const;
 
-  // The monitor is held to protect all access to member variables.
-  Monitor mMonitor;
-
-  uint32_t mChannels;
-  uint32_t mOutChannels;
-  AudioClock mAudioClock;
   soundtouch::SoundTouch* mTimeStretcher;
+
+  AudioClock mAudioClock;
 
   WavDumper mDumpFile;
 
-  // Owning reference to a cubeb_stream.
+  const AudioConfig::ChannelLayout::ChannelMap mChannelMap;
+
+  // The monitor is held to protect all access to member variables below.
+  Monitor mMonitor MOZ_UNANNOTATED;
+
+  const uint32_t mOutChannels;
+
+  // Owning reference to a cubeb_stream.  Set in Init(), cleared in Shutdown, so
+  // no lock is needed to access.
   UniquePtr<cubeb_stream, CubebDestroyPolicy> mCubebStream;
 
   enum StreamState {
@@ -320,22 +368,28 @@ class AudioStream final {
     SHUTDOWN      // Shutdown has been called
   };
 
-  StreamState mState;
+  std::atomic<StreamState> mState;
 
+  // DataSource::PopFrames can never be called concurrently.
+  // DataSource::IsEnded uses only atomics.
   DataSource& mDataSource;
-
-  bool mPrefillQuirk;
 
   // The device info of the current sink. If null
   // the default device is used. It is set
   // during the Init() in decoder thread.
   RefPtr<AudioDeviceInfo> mSinkInfo;
-  /* Contains the id of the audio thread, from profiler_get_thread_id. */
-  std::atomic<int> mAudioThreadId;
+  // Contains the id of the audio thread, from profiler_get_thread_id.
+  std::atomic<ProfilerThreadId> mAudioThreadId;
   const bool mSandboxed = false;
 
-  MozPromiseHolder<MediaSink::EndedPromise> mEndedPromise;
-  Atomic<bool> mPlaybackComplete;
+  MozPromiseHolder<MediaSink::EndedPromise> mEndedPromise GUARDED_BY(mMonitor);
+  std::atomic<bool> mPlaybackComplete;
+  // Both written on the MDSM thread, read on the audio thread.
+  std::atomic<float> mPlaybackRate;
+  std::atomic<bool> mPreservesPitch;
+  // Audio thread only
+  bool mAudioThreadChanged = false;
+  Atomic<bool> mCallbacksStarted;
 };
 
 }  // namespace mozilla

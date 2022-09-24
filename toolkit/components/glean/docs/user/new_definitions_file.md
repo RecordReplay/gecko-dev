@@ -1,13 +1,8 @@
 # New Metrics and Pings
 
-**Note:** FOG is not ready to be used without assistance,
-so you probably should not be adding metrics and pings using this guide yet.
-Instead, please use Firefox Telemetry unless you have explicitly been given permission by a
-[Telemetry Module Peer](https://wiki.mozilla.org/Modules/All#Telemetry).
-
 To add a new metric or ping to Firefox Desktop you should follow the
 [Glean SDK documentation on the subject](https://mozilla.github.io/glean/book/user/adding-new-metrics.html),
-with some few twists.
+with some few twists we detail herein:
 
 ## IPC
 
@@ -34,8 +29,29 @@ to see the list of all currently-known definitions files.
 If you _are_ the first person in your component to ask that question,
 you get to choose where to start them!
 We recommend adding them in the root of your component, next to a `moz.build`.
+Be sure to link to this document at the top of the file!
+It contains many useful tidbits of information that anyone adding new metrics should know.
+Preferably, use this blank template to get started,
+substituting your component's `product :: component` tag from
+[the list](https://searchfox.org/mozilla-central/source/toolkit/components/glean/tags.yaml):
 
-When you do so, be sure to edit `toolkit/components/glean/metrics_index.py`,
+```yaml
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# Adding a new metric? We have docs for that!
+# https://firefox-source-docs.mozilla.org/toolkit/components/glean/user/new_definitions_file.html
+
+---
+$schema: moz://mozilla.org/schemas/glean/metrics/2-0-0
+$tags:
+  - 'Your Product :: Your Component'
+
+```
+
+If you add a new definitions file, be sure to edit
+`toolkit/components/glean/metrics_index.py`,
 adding your definitions files to the Python lists therein.
 If you don't, no API will be generated for your metrics and your build will fail.
 
@@ -69,7 +85,8 @@ There are three values accepted in the `expires` field of `metrics.yaml`s for FO
 * `expired` - For marking a metric as manually expired.
   Not usually used, but sometimes helpful for internal tests.
 * `never` - For marking a metric as part of a permanent data collection.
-  Metrics marked with `never` must have [instrumentation tests](testing.md).
+  Metrics marked with `never` must have
+  [instrumentation tests](instrumentation_tests).
 
 For more information on what expiry means and the
 `metrics.yaml` format, see

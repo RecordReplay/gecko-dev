@@ -462,9 +462,6 @@ class PageAction {
     this.window.document
       .getElementById("contextual-feature-recommendation-notification")
       .setAttribute("data-notification-bucket", content.bucket_id);
-    let notification = this.window.document.getElementById(
-      "notification-popup"
-    );
 
     let primaryBtnString = await this.getStrings(primary.label);
     let primaryActionCallback = () => {
@@ -508,29 +505,6 @@ class PageAction {
       },
     ];
 
-    let style = this.window.document.createElement("style");
-    style.textContent = `
-      .cfr-notification-milestone .panel-arrow {
-        fill: #0250BB !important;
-      }
-    `;
-    style.classList.add("milestone-style");
-
-    let arrow;
-    let manageClass = event => {
-      if (event === "dismissed" || event === "removed") {
-        style = notification.shadowRoot.querySelector(".milestone-style");
-        if (style) {
-          notification.shadowRoot.removeChild(style);
-        }
-        arrow.classList.remove("cfr-notification-milestone");
-      } else if (event === "showing") {
-        notification.shadowRoot.appendChild(style);
-        arrow = notification.shadowRoot.querySelector(".panel-arrowcontainer");
-        arrow.classList.add("cfr-notification-milestone");
-      }
-    };
-
     // Actually show the notification
     this.currentNotification = this.window.PopupNotifications.show(
       browser,
@@ -541,7 +515,6 @@ class PageAction {
       secondaryActions,
       {
         hideClose: true,
-        eventCallback: manageClass,
         persistWhileVisible: true,
       }
     );
@@ -578,7 +551,8 @@ class PageAction {
     );
     const { primary, secondary } = content.buttons;
     let primaryActionCallback;
-    let options = { persistent: !!content.persistent_doorhanger };
+    let persistent = !!content.persistent_doorhanger;
+    let options = { persistent, persistWhileVisible: persistent };
     let panelTitle;
 
     headerLabel.value = await this.getStrings(content.heading_text);
@@ -878,16 +852,18 @@ const CFRPageActions = {
         // The browser has a recommendation specified with this host, so show
         // the page action
         pageAction.showAddressBarNotifier(recommendation);
-      } else if (recommendation.retain) {
-        // Keep the recommendation first time the user navigates away just in
-        // case they will go back to the previous page
-        pageAction.hideAddressBarNotifier();
-        recommendation.retain = false;
-      } else {
-        // The user has navigated away from the specified host in the given
-        // browser, so the recommendation is no longer valid and should be removed
-        RecommendationMap.delete(browser);
-        pageAction.hideAddressBarNotifier();
+      } else if (!recommendation.content.persistent_doorhanger) {
+        if (recommendation.retain) {
+          // Keep the recommendation first time the user navigates away just in
+          // case they will go back to the previous page
+          pageAction.hideAddressBarNotifier();
+          recommendation.retain = false;
+        } else {
+          // The user has navigated away from the specified host in the given
+          // browser, so the recommendation is no longer valid and should be removed
+          RecommendationMap.delete(browser);
+          pageAction.hideAddressBarNotifier();
+        }
       }
     } else {
       // There's no recommendation specified for this browser, so hide the page action

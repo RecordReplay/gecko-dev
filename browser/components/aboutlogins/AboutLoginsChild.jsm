@@ -14,12 +14,6 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "AppConstants",
-  "resource://gre/modules/AppConstants.jsm"
-);
-
 XPCOMUtils.defineLazyServiceGetter(
   this,
   "ClipboardHelper",
@@ -30,9 +24,9 @@ XPCOMUtils.defineLazyServiceGetter(
 const TELEMETRY_EVENT_CATEGORY = "pwmgr";
 const TELEMETRY_MIN_MS_BETWEEN_OPEN_MANAGEMENT = 5000;
 
-let lastOpenManagementBrowserId = null;
-let lastOpenManagementEventTime = Number.NEGATIVE_INFINITY;
-let masterPasswordPromise;
+let gLastOpenManagementBrowserId = null;
+let gLastOpenManagementEventTime = Number.NEGATIVE_INFINITY;
+let gPrimaryPasswordPromise;
 
 function recordTelemetryEvent(event) {
   try {
@@ -55,201 +49,264 @@ class AboutLoginsChild extends JSWindowActorChild {
   handleEvent(event) {
     switch (event.type) {
       case "AboutLoginsInit": {
-        this.sendAsyncMessage("AboutLogins:Subscribe");
-
-        let documentElement = this.document.documentElement;
-        documentElement.classList.toggle(
-          "official-branding",
-          AppConstants.MOZILLA_OFFICIAL
-        );
-
-        let win = this.browsingContext.window;
-        let waivedContent = Cu.waiveXrays(win);
-        let that = this;
-        let AboutLoginsUtils = {
-          doLoginsMatch(loginA, loginB) {
-            return LoginHelper.doLoginsMatch(loginA, loginB, {});
-          },
-          getLoginOrigin(uriString) {
-            return LoginHelper.getLoginOrigin(uriString);
-          },
-          setFocus(element) {
-            Services.focus.setFocus(element, Services.focus.FLAG_BYKEY);
-          },
-          /**
-           * Shows the Master Password prompt if enabled, or the
-           * OS auth dialog otherwise.
-           * @param resolve Callback that is called with result of authentication.
-           * @param messageId The string ID that corresponds to a string stored in aboutLogins.ftl.
-           *                  This string will be displayed only when the OS auth dialog is used.
-           */
-          async promptForMasterPassword(resolve, messageId) {
-            masterPasswordPromise = {
-              resolve,
-            };
-
-            that.sendAsyncMessage(
-              "AboutLogins:MasterPasswordRequest",
-              messageId
-            );
-
-            return masterPasswordPromise;
-          },
-          fileImportEnabled: Services.prefs.getBoolPref(
-            "signon.management.page.fileImport.enabled"
-          ),
-          // Default to enabled just in case a search is attempted before we get a response.
-          masterPasswordEnabled: true,
-          passwordRevealVisible: true,
-        };
-        waivedContent.AboutLoginsUtils = Cu.cloneInto(
-          AboutLoginsUtils,
-          waivedContent,
-          {
-            cloneFunctions: true,
-          }
-        );
+        this.#aboutLoginsInit();
         break;
       }
       case "AboutLoginsImportReportInit": {
-        this.sendAsyncMessage("AboutLogins:ImportReportInit");
-        let documentElement = this.document.documentElement;
-        documentElement.classList.toggle(
-          "official-branding",
-          AppConstants.MOZILLA_OFFICIAL
-        );
+        this.#aboutLoginsImportReportInit();
         break;
       }
       case "AboutLoginsCopyLoginDetail": {
-        ClipboardHelper.copyString(event.detail, ClipboardHelper.Sensitive);
+        this.#aboutLoginsCopyLoginDetail(event.detail);
         break;
       }
       case "AboutLoginsCreateLogin": {
-        this.sendAsyncMessage("AboutLogins:CreateLogin", {
-          login: event.detail,
-        });
+        this.#aboutLoginsCreateLogin(event.detail);
         break;
       }
       case "AboutLoginsDeleteLogin": {
-        this.sendAsyncMessage("AboutLogins:DeleteLogin", {
-          login: event.detail,
-        });
+        this.#aboutLoginsDeleteLogin(event.detail);
         break;
       }
       case "AboutLoginsExportPasswords": {
-        this.sendAsyncMessage("AboutLogins:ExportPasswords");
+        this.#aboutLoginsExportPasswords();
         break;
       }
       case "AboutLoginsGetHelp": {
-        this.sendAsyncMessage("AboutLogins:GetHelp");
+        this.#aboutLoginsGetHelp();
         break;
       }
       case "AboutLoginsImportFromBrowser": {
-        this.sendAsyncMessage("AboutLogins:Import");
-        recordTelemetryEvent({
-          object: "import_from_browser",
-          method: "mgmt_menu_item_used",
-        });
+        this.#aboutLoginsImportFromBrowser();
         break;
       }
       case "AboutLoginsImportFromFile": {
-        this.sendAsyncMessage("AboutLogins:ImportPasswords");
-        recordTelemetryEvent({
-          object: "import_from_csv",
-          method: "mgmt_menu_item_used",
-        });
+        this.#aboutLoginsImportFromFile();
         break;
       }
       case "AboutLoginsOpenPreferences": {
-        this.sendAsyncMessage("AboutLogins:OpenPreferences");
-        recordTelemetryEvent({
-          object: "preferences",
-          method: "mgmt_menu_item_used",
-        });
+        this.#aboutLoginsOpenPreferences();
         break;
       }
       case "AboutLoginsRecordTelemetryEvent": {
-        let { method } = event.detail;
-
-        if (method == "open_management") {
-          let { docShell } = this.browsingContext;
-          // Compare to the last time open_management was recorded for the same
-          // outerWindowID to not double-count them due to a redirect to remove
-          // the entryPoint query param (since replaceState isn't allowed for
-          // about:). Don't use performance.now for the tab since you can't
-          // compare that number between different tabs and this JSM is shared.
-          let now = docShell.now();
-          if (
-            this.browsingContext.browserId == lastOpenManagementBrowserId &&
-            now - lastOpenManagementEventTime <
-              TELEMETRY_MIN_MS_BETWEEN_OPEN_MANAGEMENT
-          ) {
-            return;
-          }
-          lastOpenManagementEventTime = now;
-          lastOpenManagementBrowserId = this.browsingContext.browserId;
-        }
-        recordTelemetryEvent(event.detail);
+        this.#aboutLoginsRecordTelemetryEvent(event);
         break;
       }
       case "AboutLoginsRemoveAllLogins": {
-        this.sendAsyncMessage("AboutLogins:RemoveAllLogins");
+        this.#aboutLoginsRemoveAllLogins();
         break;
       }
       case "AboutLoginsSortChanged": {
-        this.sendAsyncMessage("AboutLogins:SortChanged", event.detail);
+        this.#aboutLoginsSortChanged(event.detail);
         break;
       }
       case "AboutLoginsSyncEnable": {
-        this.sendAsyncMessage("AboutLogins:SyncEnable");
+        this.#aboutLoginsSyncEnable();
         break;
       }
       case "AboutLoginsSyncOptions": {
-        this.sendAsyncMessage("AboutLogins:SyncOptions");
+        this.#aboutLoginsSyncOptions();
         break;
       }
       case "AboutLoginsUpdateLogin": {
-        this.sendAsyncMessage("AboutLogins:UpdateLogin", {
-          login: event.detail,
-        });
+        this.#aboutLoginsUpdateLogin(event.detail);
         break;
       }
     }
+  }
+
+  #aboutLoginsInit() {
+    this.sendAsyncMessage("AboutLogins:Subscribe");
+
+    let win = this.browsingContext.window;
+    let waivedContent = Cu.waiveXrays(win);
+    let that = this;
+    let AboutLoginsUtils = {
+      doLoginsMatch(loginA, loginB) {
+        return LoginHelper.doLoginsMatch(loginA, loginB, {});
+      },
+      getLoginOrigin(uriString) {
+        return LoginHelper.getLoginOrigin(uriString);
+      },
+      setFocus(element) {
+        Services.focus.setFocus(element, Services.focus.FLAG_BYKEY);
+      },
+      /**
+       * Shows the Primary Password prompt if enabled, or the
+       * OS auth dialog otherwise.
+       * @param resolve Callback that is called with result of authentication.
+       * @param messageId The string ID that corresponds to a string stored in aboutLogins.ftl.
+       *                  This string will be displayed only when the OS auth dialog is used.
+       */
+      async promptForPrimaryPassword(resolve, messageId) {
+        gPrimaryPasswordPromise = {
+          resolve,
+        };
+
+        that.sendAsyncMessage("AboutLogins:PrimaryPasswordRequest", messageId);
+
+        return gPrimaryPasswordPromise;
+      },
+      fileImportEnabled: Services.prefs.getBoolPref(
+        "signon.management.page.fileImport.enabled"
+      ),
+      // Default to enabled just in case a search is attempted before we get a response.
+      primaryPasswordEnabled: true,
+      passwordRevealVisible: true,
+    };
+    waivedContent.AboutLoginsUtils = Cu.cloneInto(
+      AboutLoginsUtils,
+      waivedContent,
+      {
+        cloneFunctions: true,
+      }
+    );
+  }
+
+  #aboutLoginsImportReportInit() {
+    this.sendAsyncMessage("AboutLogins:ImportReportInit");
+  }
+
+  #aboutLoginsCopyLoginDetail(detail) {
+    ClipboardHelper.copyString(detail, ClipboardHelper.Sensitive);
+  }
+
+  #aboutLoginsCreateLogin(login) {
+    this.sendAsyncMessage("AboutLogins:CreateLogin", {
+      login,
+    });
+  }
+
+  #aboutLoginsDeleteLogin(login) {
+    this.sendAsyncMessage("AboutLogins:DeleteLogin", {
+      login,
+    });
+  }
+
+  #aboutLoginsExportPasswords() {
+    this.sendAsyncMessage("AboutLogins:ExportPasswords");
+  }
+
+  #aboutLoginsGetHelp() {
+    this.sendAsyncMessage("AboutLogins:GetHelp");
+  }
+
+  #aboutLoginsImportFromBrowser() {
+    this.sendAsyncMessage("AboutLogins:ImportFromBrowser");
+    recordTelemetryEvent({
+      object: "import_from_browser",
+      method: "mgmt_menu_item_used",
+    });
+  }
+
+  #aboutLoginsImportFromFile() {
+    this.sendAsyncMessage("AboutLogins:ImportFromFile");
+    recordTelemetryEvent({
+      object: "import_from_csv",
+      method: "mgmt_menu_item_used",
+    });
+  }
+
+  #aboutLoginsOpenPreferences() {
+    this.sendAsyncMessage("AboutLogins:OpenPreferences");
+    recordTelemetryEvent({
+      object: "preferences",
+      method: "mgmt_menu_item_used",
+    });
+  }
+
+  #aboutLoginsRecordTelemetryEvent(event) {
+    let { method } = event.detail;
+
+    if (method == "open_management") {
+      let { docShell } = this.browsingContext;
+      // Compare to the last time open_management was recorded for the same
+      // outerWindowID to not double-count them due to a redirect to remove
+      // the entryPoint query param (since replaceState isn't allowed for
+      // about:). Don't use performance.now for the tab since you can't
+      // compare that number between different tabs and this JSM is shared.
+      let now = docShell.now();
+      if (
+        this.browsingContext.browserId == gLastOpenManagementBrowserId &&
+        now - gLastOpenManagementEventTime <
+          TELEMETRY_MIN_MS_BETWEEN_OPEN_MANAGEMENT
+      ) {
+        return;
+      }
+      gLastOpenManagementEventTime = now;
+      gLastOpenManagementBrowserId = this.browsingContext.browserId;
+    }
+    recordTelemetryEvent(event.detail);
+  }
+
+  #aboutLoginsRemoveAllLogins() {
+    this.sendAsyncMessage("AboutLogins:RemoveAllLogins");
+  }
+
+  #aboutLoginsSortChanged(detail) {
+    this.sendAsyncMessage("AboutLogins:SortChanged", detail);
+  }
+
+  #aboutLoginsSyncEnable() {
+    this.sendAsyncMessage("AboutLogins:SyncEnable");
+  }
+
+  #aboutLoginsSyncOptions() {
+    this.sendAsyncMessage("AboutLogins:SyncOptions");
+  }
+
+  #aboutLoginsUpdateLogin(login) {
+    this.sendAsyncMessage("AboutLogins:UpdateLogin", {
+      login,
+    });
   }
 
   receiveMessage(message) {
     switch (message.name) {
       case "AboutLogins:ImportReportData":
-        this.sendToContent("ImportReportData", message.data);
+        this.#importReportData(message.data);
         break;
-      case "AboutLogins:MasterPasswordResponse":
-        if (masterPasswordPromise) {
-          masterPasswordPromise.resolve(message.data.result);
-          recordTelemetryEvent(message.data.telemetryEvent);
-        }
+      case "AboutLogins:PrimaryPasswordResponse":
+        this.#primaryPasswordResponse(message.data);
         break;
       case "AboutLogins:RemaskPassword":
-        this.sendToContent("RemaskPassword", message.data);
+        this.#remaskPassword(message.data);
         break;
       case "AboutLogins:Setup":
-        let waivedContent = Cu.waiveXrays(this.browsingContext.window);
-        waivedContent.AboutLoginsUtils.masterPasswordEnabled =
-          message.data.masterPasswordEnabled;
-        waivedContent.AboutLoginsUtils.passwordRevealVisible =
-          message.data.passwordRevealVisible;
-        waivedContent.AboutLoginsUtils.importVisible =
-          message.data.importVisible;
-        waivedContent.AboutLoginsUtils.supportBaseURL = Services.urlFormatter.formatURLPref(
-          "app.support.baseURL"
-        );
-        this.sendToContent("Setup", message.data);
+        this.#setup(message.data);
         break;
       default:
-        this.passMessageDataToContent(message);
+        this.#passMessageDataToContent(message);
     }
   }
 
-  passMessageDataToContent(message) {
+  #importReportData(data) {
+    this.sendToContent("ImportReportData", data);
+  }
+
+  #primaryPasswordResponse(data) {
+    if (gPrimaryPasswordPromise) {
+      gPrimaryPasswordPromise.resolve(data.result);
+      recordTelemetryEvent(data.telemetryEvent);
+    }
+  }
+
+  #remaskPassword(data) {
+    this.sendToContent("RemaskPassword", data);
+  }
+
+  #setup(data) {
+    let utils = Cu.waiveXrays(this.browsingContext.window).AboutLoginsUtils;
+    utils.primaryPasswordEnabled = data.primaryPasswordEnabled;
+    utils.passwordRevealVisible = data.passwordRevealVisible;
+    utils.importVisible = data.importVisible;
+    utils.supportBaseURL = Services.urlFormatter.formatURLPref(
+      "app.support.baseURL"
+    );
+    this.sendToContent("Setup", data);
+  }
+
+  #passMessageDataToContent(message) {
     this.sendToContent(message.name.replace("AboutLogins:", ""), message.data);
   }
 

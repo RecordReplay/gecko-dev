@@ -11,8 +11,6 @@ const _path = require("path");
 const mappings = {
   "./source-editor": "devtools/client/shared/sourceeditor/editor",
   "../editor/source-editor": "devtools/client/shared/sourceeditor/editor",
-  immutable: "devtools/client/shared/vendor/immutable",
-  lodash: "devtools/client/shared/vendor/lodash",
   react: "devtools/client/shared/vendor/react",
   "react-dom": "devtools/client/shared/vendor/react-dom",
   "react-dom-factories": "devtools/client/shared/vendor/react-dom-factories",
@@ -23,7 +21,6 @@ const mappings = {
   "devtools-services": "Services",
   "wasmparser/dist/cjs/WasmParser": "devtools/client/shared/vendor/WasmParser",
   "wasmparser/dist/cjs/WasmDis": "devtools/client/shared/vendor/WasmDis",
-  "whatwg-url": "devtools/client/shared/vendor/whatwg-url",
   "framework-actions": "devtools/client/framework/actions/index",
   "inspector-shared-utils": "devtools/client/inspector/shared/utils",
 };
@@ -43,10 +40,7 @@ function isRequire(t, node) {
 const VENDORS = [
   "classnames",
   "devtools-environment",
-  "devtools-splitter",
-  "devtools-utils",
   "fuzzaldrin-plus",
-  "lodash-move",
   "react-aria-components/src/tabs",
   "react-transition-group/Transition",
   "Svg",
@@ -93,18 +87,6 @@ function transformMC({ types: t }) {
         // Handle require() to files mapped to other mozilla-central files.
         if (Object.keys(mappings).includes(value)) {
           path.replaceWith(t.stringLiteral(mappings[value]));
-          return;
-        }
-
-        // Handle require() to lodash submodules
-        // e.g. require("lodash/escapeRegExp")
-        //   -> require("devtools/client/shared/vendor/lodash").escapeRegExp
-        if (value.startsWith("lodash/")) {
-          const lodashSubModule = value.split("/").pop();
-          path.replaceWith(t.stringLiteral(mappings.lodash));
-          path.parentPath.replaceWith(
-            t.memberExpression(path.parent, t.identifier(lodashSubModule))
-          );
           return;
         }
 

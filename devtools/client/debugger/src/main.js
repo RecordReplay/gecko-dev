@@ -25,6 +25,8 @@ async function syncBreakpoints() {
   return Promise.all(
     breakpointValues.map(({ disabled, options, generatedLocation }) => {
       if (!disabled) {
+        // Set the breakpoint on the server using the generated location as generated
+        // sources are known on server, not original sources.
         return firefox.clientCommands.setBreakpoint(generatedLocation, options);
       }
     })
@@ -56,10 +58,10 @@ async function loadInitialState() {
   );
   const tabs = { tabs: await asyncStore.tabs };
   const xhrBreakpoints = await asyncStore.xhrBreakpoints;
-  const tabsBlackBoxed = await asyncStore.tabsBlackBoxed;
+  const blackboxedRanges = await asyncStore.blackboxedRanges;
   const eventListenerBreakpoints = await asyncStore.eventListenerBreakpoints;
   const breakpoints = initialBreakpointsState(xhrBreakpoints);
-  const sources = initialSourcesState({ tabsBlackBoxed });
+  const sources = initialSourcesState({ blackboxedRanges });
 
   return {
     pendingBreakpoints,
@@ -72,6 +74,7 @@ async function loadInitialState() {
 
 export async function bootstrap({
   commands,
+  fluentBundles,
   resourceCommand,
   workers: panelWorkers,
   panel,
@@ -108,7 +111,10 @@ export async function bootstrap({
     client: firefox.clientCommands,
   });
 
-  bootstrapApp(store, panel);
+  bootstrapApp(store, panel.getToolboxStore(), {
+    fluentBundles,
+    toolboxDoc: panel.panelWin.parent.document,
+  });
   await connected;
   return { store, actions, selectors, client: firefox.clientCommands };
 }

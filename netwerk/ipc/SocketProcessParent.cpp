@@ -12,20 +12,21 @@
 #include "SocketProcessHost.h"
 #include "mozilla/Components.h"
 #include "mozilla/dom/MemoryReportRequest.h"
-#include "mozilla/ipc/FileDescriptorSetParent.h"
-#include "mozilla/ipc/IPCStreamAlloc.h"
-#include "mozilla/ipc/PChildToParentStreamParent.h"
-#include "mozilla/ipc/PParentToChildStreamParent.h"
+#include "mozilla/FOGIPC.h"
 #include "mozilla/net/DNSRequestParent.h"
 #include "mozilla/net/ProxyConfigLookupParent.h"
 #include "mozilla/RemoteLazyInputStreamParent.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/TelemetryIPC.h"
 #include "nsIAppStartup.h"
+#include "nsIConsoleService.h"
 #include "nsIHttpActivityObserver.h"
 #include "nsIObserverService.h"
+#include "nsNSSComponent.h"
 #include "nsNSSIOLayer.h"
-#include "PSMIPCCommon.h"
+#include "nsIOService.h"
+#include "nsHttpHandler.h"
+#include "nsHttpConnectionInfo.h"
 #include "secerr.h"
 #ifdef MOZ_WEBRTC
 #  include "mozilla/dom/ContentProcessManager.h"
@@ -36,6 +37,9 @@
 #  include "mozilla/java/GeckoProcessManagerWrappers.h"
 #  include "mozilla/java/GeckoProcessTypeWrappers.h"
 #endif  // defined(MOZ_WIDGET_ANDROID)
+#if defined(XP_WIN)
+#  include "mozilla/WinDllServices.h"
+#endif
 
 namespace mozilla {
 namespace net {
@@ -207,8 +211,9 @@ bool SocketProcessParent::DeallocPWebrtcTCPSocketParent(
 }
 
 already_AddRefed<PDNSRequestParent> SocketProcessParent::AllocPDNSRequestParent(
-    const nsCString& aHost, const nsCString& aTrrServer, const uint16_t& aType,
-    const OriginAttributes& aOriginAttributes, const uint32_t& aFlags) {
+    const nsCString& aHost, const nsCString& aTrrServer, const int32_t& port,
+    const uint16_t& aType, const OriginAttributes& aOriginAttributes,
+    const uint32_t& aFlags) {
   RefPtr<DNSRequestHandler> handler = new DNSRequestHandler();
   RefPtr<DNSRequestParent> actor = new DNSRequestParent(handler);
   return actor.forget();
@@ -216,60 +221,14 @@ already_AddRefed<PDNSRequestParent> SocketProcessParent::AllocPDNSRequestParent(
 
 mozilla::ipc::IPCResult SocketProcessParent::RecvPDNSRequestConstructor(
     PDNSRequestParent* aActor, const nsCString& aHost,
-    const nsCString& aTrrServer, const uint16_t& aType,
+    const nsCString& aTrrServer, const int32_t& port, const uint16_t& aType,
     const OriginAttributes& aOriginAttributes, const uint32_t& aFlags) {
   RefPtr<DNSRequestParent> actor = static_cast<DNSRequestParent*>(aActor);
   RefPtr<DNSRequestHandler> handler =
       actor->GetDNSRequest()->AsDNSRequestHandler();
-  handler->DoAsyncResolve(aHost, aTrrServer, aType, aOriginAttributes, aFlags);
+  handler->DoAsyncResolve(aHost, aTrrServer, port, aType, aOriginAttributes,
+                          aFlags);
   return IPC_OK();
-}
-
-mozilla::ipc::PFileDescriptorSetParent*
-SocketProcessParent::AllocPFileDescriptorSetParent(const FileDescriptor& aFD) {
-  return new mozilla::ipc::FileDescriptorSetParent(aFD);
-}
-
-bool SocketProcessParent::DeallocPFileDescriptorSetParent(
-    PFileDescriptorSetParent* aActor) {
-  delete static_cast<mozilla::ipc::FileDescriptorSetParent*>(aActor);
-  return true;
-}
-
-mozilla::ipc::PChildToParentStreamParent*
-SocketProcessParent::AllocPChildToParentStreamParent() {
-  return mozilla::ipc::AllocPChildToParentStreamParent();
-}
-
-bool SocketProcessParent::DeallocPChildToParentStreamParent(
-    PChildToParentStreamParent* aActor) {
-  delete aActor;
-  return true;
-}
-
-mozilla::ipc::PParentToChildStreamParent*
-SocketProcessParent::AllocPParentToChildStreamParent() {
-  MOZ_CRASH("PParentToChildStreamChild actors should be manually constructed!");
-}
-
-bool SocketProcessParent::DeallocPParentToChildStreamParent(
-    PParentToChildStreamParent* aActor) {
-  delete aActor;
-  return true;
-}
-
-mozilla::ipc::PParentToChildStreamParent*
-SocketProcessParent::SendPParentToChildStreamConstructor(
-    PParentToChildStreamParent* aActor) {
-  MOZ_ASSERT(NS_IsMainThread());
-  return PSocketProcessParent::SendPParentToChildStreamConstructor(aActor);
-}
-
-mozilla::ipc::PFileDescriptorSetParent*
-SocketProcessParent::SendPFileDescriptorSetConstructor(
-    const FileDescriptor& aFD) {
-  MOZ_ASSERT(NS_IsMainThread());
-  return PSocketProcessParent::SendPFileDescriptorSetConstructor(aFD);
 }
 
 mozilla::ipc::IPCResult SocketProcessParent::RecvObserveHttpActivity(
@@ -287,9 +246,9 @@ mozilla::ipc::IPCResult SocketProcessParent::RecvObserveHttpActivity(
 }
 
 mozilla::ipc::IPCResult SocketProcessParent::RecvInitBackground(
-    Endpoint<PBackgroundParent>&& aEndpoint) {
+    Endpoint<PBackgroundStarterParent>&& aEndpoint) {
   LOG(("SocketProcessParent::RecvInitBackground\n"));
-  if (!ipc::BackgroundParent::Alloc(nullptr, std::move(aEndpoint))) {
+  if (!ipc::BackgroundParent::AllocStarter(nullptr, std::move(aEndpoint))) {
     return IPC_FAIL(this, "BackgroundParent::Alloc failed");
   }
 
@@ -307,8 +266,7 @@ mozilla::ipc::IPCResult SocketProcessParent::RecvGetTLSClientCert(
     const int32_t& aPort, const uint32_t& aProviderFlags,
     const uint32_t& aProviderTlsFlags, const ByteArray& aServerCert,
     Maybe<ByteArray>&& aClientCert, nsTArray<ByteArray>&& aCollectedCANames,
-    bool* aSucceeded, ByteArray* aOutCert, ByteArray* aOutKey,
-    nsTArray<ByteArray>* aBuiltChain) {
+    bool* aSucceeded, ByteArray* aOutCert, nsTArray<ByteArray>* aBuiltChain) {
   *aSucceeded = false;
 
   SECItem serverCertItem = {
@@ -322,12 +280,7 @@ mozilla::ipc::IPCResult SocketProcessParent::RecvGetTLSClientCert(
 
   RefPtr<nsIX509Cert> clientCert;
   if (aClientCert) {
-    clientCert = nsNSSCertificate::ConstructFromDER(
-        BitwiseCast<char*, uint8_t*>(aClientCert->data().Elements()),
-        aClientCert->data().Length());
-    if (!clientCert) {
-      return IPC_OK();
-    }
+    clientCert = new nsNSSCertificate(std::move(aClientCert->data()));
   }
 
   ClientAuthInfo info(aHostName, aOriginAttributes, aPort, aProviderFlags,
@@ -338,16 +291,15 @@ mozilla::ipc::IPCResult SocketProcessParent::RecvGetTLSClientCert(
   }
 
   UniqueCERTCertificate cert;
-  UniqueSECKEYPrivateKey key;
   UniqueCERTCertList builtChain;
   SECStatus status =
       DoGetClientAuthData(std::move(info), serverCert,
-                          std::move(collectedCANames), cert, key, builtChain);
+                          std::move(collectedCANames), cert, builtChain);
   if (status != SECSuccess) {
     return IPC_OK();
   }
 
-  SerializeClientCertAndKey(cert, key, *aOutCert, *aOutKey);
+  aOutCert->data().AppendElements(cert->derCert.data, cert->derCert.len);
 
   if (builtChain) {
     for (CERTCertListNode* n = CERT_LIST_HEAD(builtChain);
@@ -408,25 +360,6 @@ void SocketProcessParent::Destroy(UniquePtr<SocketProcessParent>&& aParent) {
       new DeferredDeleteSocketProcessParent(std::move(aParent)));
 }
 
-already_AddRefed<PRemoteLazyInputStreamParent>
-SocketProcessParent::AllocPRemoteLazyInputStreamParent(const nsID& aID,
-                                                       const uint64_t& aSize) {
-  RefPtr<RemoteLazyInputStreamParent> actor =
-      RemoteLazyInputStreamParent::Create(aID, aSize, this);
-  return actor.forget();
-}
-
-mozilla::ipc::IPCResult
-SocketProcessParent::RecvPRemoteLazyInputStreamConstructor(
-    PRemoteLazyInputStreamParent* aActor, const nsID& aID,
-    const uint64_t& aSize) {
-  if (!static_cast<RemoteLazyInputStreamParent*>(aActor)->HasValidStream()) {
-    return IPC_FAIL_NO_REASON(this);
-  }
-
-  return IPC_OK();
-}
-
 mozilla::ipc::IPCResult SocketProcessParent::RecvODoHServiceActivated(
     const bool& aActivated) {
   nsCOMPtr<nsIObserverService> observerService =
@@ -438,6 +371,54 @@ mozilla::ipc::IPCResult SocketProcessParent::RecvODoHServiceActivated(
   }
   return IPC_OK();
 }
+
+mozilla::ipc::IPCResult SocketProcessParent::RecvExcludeHttp2OrHttp3(
+    const HttpConnectionInfoCloneArgs& aArgs) {
+  RefPtr<nsHttpConnectionInfo> cinfo =
+      nsHttpConnectionInfo::DeserializeHttpConnectionInfoCloneArgs(aArgs);
+  if (!cinfo) {
+    MOZ_ASSERT(false, "failed to deserizlize http connection info");
+    return IPC_OK();
+  }
+
+  if (cinfo->IsHttp3()) {
+    gHttpHandler->ExcludeHttp3(cinfo);
+  } else {
+    gHttpHandler->ExcludeHttp2(cinfo);
+  }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult SocketProcessParent::RecvOnConsoleMessage(
+    const nsString& aMessage) {
+  nsCOMPtr<nsIConsoleService> consoleService =
+      do_GetService(NS_CONSOLESERVICE_CONTRACTID);
+  if (consoleService) {
+    consoleService->LogStringMessage(aMessage.get());
+  }
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult SocketProcessParent::RecvFOGData(ByteBuf&& aBuf) {
+  glean::FOGData(std::move(aBuf));
+  return IPC_OK();
+}
+
+#if defined(XP_WIN)
+mozilla::ipc::IPCResult SocketProcessParent::RecvGetModulesTrust(
+    ModulePaths&& aModPaths, bool aRunAtNormalPriority,
+    GetModulesTrustResolver&& aResolver) {
+  RefPtr<DllServices> dllSvc(DllServices::Get());
+  dllSvc->GetModulesTrust(std::move(aModPaths), aRunAtNormalPriority)
+      ->Then(
+          GetMainThreadSerialEventTarget(), __func__,
+          [aResolver](ModulesMapResult&& aResult) {
+            aResolver(Some(ModulesMapResult(std::move(aResult))));
+          },
+          [aResolver](nsresult aRv) { aResolver(Nothing()); });
+  return IPC_OK();
+}
+#endif  // defined(XP_WIN)
 
 }  // namespace net
 }  // namespace mozilla

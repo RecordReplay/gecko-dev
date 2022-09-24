@@ -91,7 +91,6 @@
 #include "mozilla/dom/nsCSPContext.h"
 #include "mozilla/net/DocumentChannel.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
-#include "mozilla/LoadInfo.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_browser.h"
@@ -264,7 +263,8 @@ class AutoSetLoadingToFalse {
 /// Helper functions
 ///
 
-static bool IsSuccessfulRequest(nsIRequest* aRequest, nsresult* aStatus) {
+bool nsObjectLoadingContent::IsSuccessfulRequest(nsIRequest* aRequest,
+                                                 nsresult* aStatus) {
   nsresult rv = aRequest->GetStatus(aStatus);
   if (NS_FAILED(rv) || NS_FAILED(*aStatus)) {
     return false;
@@ -2052,7 +2052,7 @@ nsObjectLoadingContent::ObjectType nsObjectLoadingContent::GetTypeOfContent(
        this, aMIMEType.get(), thisContent.get()));
   auto ret =
       static_cast<ObjectType>(nsContentUtils::HtmlObjectContentTypeForMIMEType(
-          aMIMEType, aNoFakePlugin, thisContent));
+          aMIMEType, aNoFakePlugin));
   LOG(("OBJLC[%p]: called HtmlObjectContentTypeForMIMEType\n", this));
   return ret;
 }

@@ -63,8 +63,22 @@ class PerformancePanel {
 
     const perfFront = await this.commands.client.mainRoot.getFront("perf");
 
-    this.panelWin.gInit(perfFront, "devtools");
+    // Note: we are not using traits in the panel at the moment but we keep the
+    // wiring in case we need it later on.
+    const traits = {};
+
+    await this.panelWin.gInit(
+      perfFront,
+      traits,
+      "devtools",
+      this._openAboutProfiling
+    );
     return this;
+  }
+
+  _openAboutProfiling() {
+    const { openTrustedLink } = require("devtools/client/shared/link");
+    openTrustedLink("about:profiling", {});
   }
 
   // DevToolPanel API:

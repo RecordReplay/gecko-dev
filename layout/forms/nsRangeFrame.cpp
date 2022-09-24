@@ -14,7 +14,9 @@
 #include "nsContentCreatorFunctions.h"
 #include "nsCSSPseudoElements.h"
 #include "nsCSSRendering.h"
+#include "nsDisplayList.h"
 #include "nsIContent.h"
+#include "nsLayoutUtils.h"
 #include "mozilla/dom/Document.h"
 #include "nsNameSpaceManager.h"
 #include "nsGkAtoms.h"
@@ -670,9 +672,6 @@ double nsRangeFrame::GetValue() const {
       .toDouble();
 }
 
-#define STYLES_DISABLING_NATIVE_THEMING \
-  NS_AUTHOR_SPECIFIED_BORDER_OR_BACKGROUND | NS_AUTHOR_SPECIFIED_PADDING
-
 bool nsRangeFrame::ShouldUseNativeStyle() const {
   nsIFrame* trackFrame = mTrackDiv->GetPrimaryFrame();
   nsIFrame* progressFrame = mProgressDiv->GetPrimaryFrame();
@@ -680,12 +679,9 @@ bool nsRangeFrame::ShouldUseNativeStyle() const {
 
   return StyleDisplay()->EffectiveAppearance() == StyleAppearance::Range &&
          trackFrame &&
-         !PresContext()->HasAuthorSpecifiedRules(
-             trackFrame, STYLES_DISABLING_NATIVE_THEMING) &&
+         !trackFrame->Style()->HasAuthorSpecifiedBorderOrBackground() &&
          progressFrame &&
-         !PresContext()->HasAuthorSpecifiedRules(
-             progressFrame, STYLES_DISABLING_NATIVE_THEMING) &&
+         !progressFrame->Style()->HasAuthorSpecifiedBorderOrBackground() &&
          thumbFrame &&
-         !PresContext()->HasAuthorSpecifiedRules(
-             thumbFrame, STYLES_DISABLING_NATIVE_THEMING);
+         !thumbFrame->Style()->HasAuthorSpecifiedBorderOrBackground();
 }

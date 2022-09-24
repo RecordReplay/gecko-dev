@@ -17,6 +17,7 @@
 #include "mozStorageAsyncStatementParams.h"
 
 #include "jsapi.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_DefinePropertyById
 
 #include "xpc_make_class.h"
 
@@ -97,7 +98,7 @@ NS_IMETHODIMP
 AsyncStatementJSHelper::Resolve(nsIXPConnectWrappedNative* aWrapper,
                                 JSContext* aCtx, JSObject* aScopeObj, jsid aId,
                                 bool* resolvedp, bool* _retval) {
-  if (!JSID_IS_STRING(aId)) return NS_OK;
+  if (!aId.isString()) return NS_OK;
 
   // Cast to async via mozI* since direct from nsISupports is ambiguous.
   JS::RootedObject scope(aCtx, aScopeObj);
@@ -114,7 +115,7 @@ AsyncStatementJSHelper::Resolve(nsIXPConnectWrappedNative* aWrapper,
   }
 #endif
 
-  if (::JS_LinearStringEqualsLiteral(JSID_TO_LINEAR_STRING(id), "params")) {
+  if (::JS_LinearStringEqualsLiteral(id.toLinearString(), "params")) {
     JS::RootedValue val(aCtx);
     nsresult rv = getParams(stmt, aCtx, scope, val.address());
     NS_ENSURE_SUCCESS(rv, rv);

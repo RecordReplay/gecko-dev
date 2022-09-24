@@ -70,13 +70,16 @@ void APZUpdater::SetUpdaterThread(const wr::WrWindowId& aWindowId) {
   }
 }
 
+// Takes a conditional lock!
 /*static*/
-void APZUpdater::PrepareForSceneSwap(const wr::WrWindowId& aWindowId) {
+void APZUpdater::PrepareForSceneSwap(const wr::WrWindowId& aWindowId)
+    NO_THREAD_SAFETY_ANALYSIS {
   if (RefPtr<APZUpdater> updater = GetUpdater(aWindowId)) {
     updater->mApz->LockTree();
   }
 }
 
+// Assumes we took a conditional lock!
 /*static*/
 void APZUpdater::CompleteSceneSwap(const wr::WrWindowId& aWindowId,
                                    const wr::WrPipelineInfo& aInfo) {
@@ -88,6 +91,7 @@ void APZUpdater::CompleteSceneSwap(const wr::WrWindowId& aWindowId,
     // to have gotten removed from sWindowIdMap in between the two calls.
     return;
   }
+  updater->mApz->mTreeLock.AssertCurrentThreadIn();
 
   for (const auto& removedPipeline : aInfo.removed_pipelines) {
     LayersId layersId = wr::AsLayersId(removedPipeline.pipeline_id);
@@ -159,15 +163,6 @@ void APZUpdater::UpdateFocusState(LayersId aRootLayerTreeId,
                          "APZUpdater::UpdateFocusState", mApz,
                          &APZCTreeManager::UpdateFocusState, aRootLayerTreeId,
                          aOriginatingLayersId, aFocusTarget));
-}
-
-void APZUpdater::UpdateHitTestingTree(Layer* aRoot, bool aIsFirstPaint,
-                                      LayersId aOriginatingLayersId,
-                                      uint32_t aPaintSequenceNumber) {
-  MOZ_ASSERT(CompositorThreadHolder::IsInCompositorThread());
-  AssertOnUpdaterThread();
-  mApz->UpdateHitTestingTree(aRoot, aIsFirstPaint, aOriginatingLayersId,
-                             aPaintSequenceNumber);
 }
 
 void APZUpdater::UpdateScrollDataAndTreeState(
@@ -399,10 +394,11 @@ void APZUpdater::RunOnControllerThread(LayersId aLayersId,
 
   RefPtr<Runnable> task = aTask;
 
-  RunOnUpdaterThread(aLayersId,
-                     NewRunnableFunction("APZUpdater::RunOnControllerThread",
-                                         &APZThreadUtils::RunOnControllerThread,
-                                         std::move(task)));
+  RunOnUpdaterThread(
+      aLayersId,
+      NewRunnableFunction("APZUpdater::RunOnControllerThread",
+                          &APZThreadUtils::RunOnControllerThread,
+                          std::move(task), nsIThread::DISPATCH_NORMAL));
 }
 
 bool APZUpdater::UsingWebRenderUpdaterThread() const {

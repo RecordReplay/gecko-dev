@@ -9,8 +9,7 @@
 
 #include "mozilla/dom/InputType.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class NumericInputTypeBase : public InputType {
  public:
@@ -46,6 +45,8 @@ class NumberInputType final : public NumericInputTypeBase {
   nsresult GetValueMissingMessage(nsAString& aMessage) override;
   nsresult GetBadInputMessage(nsAString& aMessage) override;
 
+  bool ConvertStringToNumber(nsAString& aValue,
+                             Decimal& aResultValue) const override;
   bool ConvertNumberToString(Decimal aValue,
                              nsAString& aResultString) const override;
 
@@ -72,7 +73,6 @@ class RangeInputType : public NumericInputTypeBase {
       : NumericInputTypeBase(aInputElement) {}
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_NumericInputTypes_h__ */

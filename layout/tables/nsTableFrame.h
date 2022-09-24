@@ -16,6 +16,7 @@
 #include "TableArea.h"
 
 struct BCPaintBorderAction;
+struct BCPropertyData;
 class nsTableCellFrame;
 class nsTableCellMap;
 class nsTableColFrame;
@@ -23,17 +24,17 @@ class nsTableRowGroupFrame;
 class nsTableRowFrame;
 class nsTableColGroupFrame;
 class nsITableLayoutStrategy;
+
 namespace mozilla {
+
 class LogicalMargin;
 class PresShell;
 class WritingMode;
 struct TableReflowInput;
+
 namespace layers {
 class StackingContextHelper;
 }
-}  // namespace mozilla
-
-struct BCPropertyData;
 
 class nsDisplayTableItem : public nsPaintedDisplayItem {
  public:
@@ -94,11 +95,11 @@ class nsDisplayTableBackgroundSet {
 
   const nsRect& GetDirtyRect() { return mDirtyRect; }
 
-  const mozilla::DisplayItemClipChain* GetTableClipChain() {
+  const DisplayItemClipChain* GetTableClipChain() {
     return mCombinedTableClipChain;
   }
 
-  const mozilla::ActiveScrolledRoot* GetTableASR() { return mTableASR; }
+  const ActiveScrolledRoot* GetTableASR() { return mTableASR; }
 
  private:
   // This class is only used on stack, so we don't have to worry about leaking
@@ -116,9 +117,11 @@ class nsDisplayTableBackgroundSet {
   nsPoint mToReferenceFrame;
   nsRect mDirtyRect;
 
-  const mozilla::DisplayItemClipChain* mCombinedTableClipChain;
-  const mozilla::ActiveScrolledRoot* mTableASR;
+  const DisplayItemClipChain* mCombinedTableClipChain;
+  const ActiveScrolledRoot* mTableASR;
 };
+
+}  // namespace mozilla
 
 /* ========================================================================== */
 
@@ -168,8 +171,6 @@ class nsTableFrame : public nsContainerFrame {
   virtual void Init(nsIContent* aContent, nsContainerFrame* aParent,
                     nsIFrame* aPrevInFlow) override;
 
-  static float GetTwipsToPixels(nsPresContext* aPresContext);
-
   // Return true if aParentReflowInput.frame or any of its ancestors within
   // the containing table have non-auto bsize. (e.g. pct or fixed bsize)
   static bool AncestorsHaveStyleBSize(const ReflowInput& aParentReflowInput);
@@ -194,8 +195,6 @@ class nsTableFrame : public nsContainerFrame {
   // Unregister a positioned table part with its nsTableFrame.
   static void UnregisterPositionedTablePart(nsIFrame* aFrame,
                                             nsIFrame* aDestructRoot);
-
-  nsPoint GetFirstSectionOrigin(const ReflowInput& aReflowInput) const;
 
   /*
    * Notification that rowspan or colspan has changed for content inside a
@@ -583,7 +582,6 @@ class nsTableFrame : public nsContainerFrame {
   explicit nsTableFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
                         ClassID aID = kClassID);
 
-  /** destructor, responsible for mColumnLayoutData */
   virtual ~nsTableFrame();
 
   void InitChildReflowInput(ReflowInput& aReflowInput);
@@ -642,7 +640,8 @@ class nsTableFrame : public nsContainerFrame {
   void ClearAllPositionedTableParts();
 
   nsITableLayoutStrategy* LayoutStrategy() const {
-    return static_cast<nsTableFrame*>(FirstInFlow())->mTableLayoutStrategy;
+    return static_cast<nsTableFrame*>(FirstInFlow())
+        ->mTableLayoutStrategy.get();
   }
 
   // Helper for InsertFrames.
@@ -873,11 +872,11 @@ class nsTableFrame : public nsContainerFrame {
 
   std::map<int32_t, int32_t> mDeletedRowIndexRanges;  // maintains ranges of row
                                                       // indices of deleted rows
-  nsTableCellMap* mCellMap;  // maintains the relationships between rows, cols,
-                             // and cells
-  nsITableLayoutStrategy* mTableLayoutStrategy;  // the layout strategy for this
-                                                 // frame
-  nsFrameList mColGroups;                        // the list of colgroup frames
+  mozilla::UniquePtr<nsTableCellMap> mCellMap;  // maintains the relationships
+                                                // between rows, cols, and cells
+  // the layout strategy for this frame
+  mozilla::UniquePtr<nsITableLayoutStrategy> mTableLayoutStrategy;
+  nsFrameList mColGroups;  // the list of colgroup frames
 };
 
 inline bool nsTableFrame::IsRowGroup(mozilla::StyleDisplay aDisplayType) const {

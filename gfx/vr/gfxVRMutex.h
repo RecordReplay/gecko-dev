@@ -7,6 +7,10 @@
 #ifndef GFX_VR_MUTEX_H
 #define GFX_VR_MUTEX_H
 
+#if defined(XP_WIN)
+#  include "nsTString.h"
+#endif
+
 namespace mozilla {
 namespace gfx {
 
@@ -41,7 +45,7 @@ class WaitForMutex {
     if (mHandle && !ReleaseMutex(mHandle)) {
 #  ifdef MOZILLA_INTERNAL_API
       nsAutoCString msg;
-      msg.AppendPrintf("WaitForMutex %d ReleaseMutex error \"%lu\".", mHandle,
+      msg.AppendPrintf("WaitForMutex %p ReleaseMutex error \"%lu\".", mHandle,
                        GetLastError());
       NS_WARNING(msg.get());
 #  endif

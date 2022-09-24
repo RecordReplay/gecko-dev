@@ -17,10 +17,8 @@
 
 #include "mozilla/Attributes.h"
 #include "mozilla/gfx/gfxVars.h"
-#include "mozilla/layers/AsyncCompositionManager.h"  // for ViewTransform
 #include "mozilla/layers/GeckoContentController.h"
 #include "mozilla/layers/CompositorBridgeParent.h"
-#include "mozilla/layers/LayerMetricsWrapper.h"
 #include "mozilla/layers/APZThreadUtils.h"
 #include "mozilla/layers/MatrixMessage.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -30,8 +28,10 @@
 #include "apz/src/AsyncPanZoomController.h"
 #include "apz/src/HitTestingTreeNode.h"
 #include "base/task.h"
+#include "gfxPlatform.h"
 #include "Layers.h"
 #include "TestLayers.h"
+#include "TestWRScrollData.h"
 #include "UnitTransforms.h"
 
 using namespace mozilla;
@@ -99,6 +99,10 @@ class ScopedGfxSetting {
   Storage mOldVal;
 };
 
+static inline constexpr auto kDefaultTouchBehavior =
+    AllowedTouchBehavior::VERTICAL_PAN | AllowedTouchBehavior::HORIZONTAL_PAN |
+    AllowedTouchBehavior::PINCH_ZOOM | AllowedTouchBehavior::DOUBLE_TAP_ZOOM;
+
 #define FRESH_PREF_VAR_PASTE(id, line) id##line
 #define FRESH_PREF_VAR_EXPAND(id, line) FRESH_PREF_VAR_PASTE(id, line)
 #define FRESH_PREF_VAR FRESH_PREF_VAR_EXPAND(pref, __LINE__)
@@ -120,12 +124,6 @@ class ScopedGfxSetting {
       [=]() { return Preferences::GetFloat(prefName); },                      \
       [=](float aPrefValue) { Preferences::SetFloat(prefName, aPrefValue); }, \
       prefValue)
-
-#define SCOPED_GFX_VAR_MAYBE_TYPE(varType) \
-  Maybe<ScopedGfxSetting<const varType&, varType>>
-
-#define SCOPED_GFX_VAR_MAYBE_EMPLACE(varName, varBase, varValue) \
-  varName.emplace(&(gfxVars::varBase), &(gfxVars::Set##varBase), varValue)
 
 class MockContentController : public GeckoContentController {
  public:
@@ -230,8 +228,9 @@ class MockContentControllerDelayed : public MockContentController {
 
 class TestAPZCTreeManager : public APZCTreeManager {
  public:
-  explicit TestAPZCTreeManager(MockContentControllerDelayed* aMcc)
-      : APZCTreeManager(LayersId{0}, gfx::gfxVars::UseWebRender()), mcc(aMcc) {}
+  explicit TestAPZCTreeManager(MockContentControllerDelayed* aMcc,
+                               UniquePtr<IAPZHitTester> aHitTester = nullptr)
+      : APZCTreeManager(LayersId{0}, std::move(aHitTester)), mcc(aMcc) {}
 
   RefPtr<InputQueue> GetInputQueue() const { return mInputQueue; }
 
@@ -264,13 +263,16 @@ class TestAsyncPanZoomController : public AsyncPanZoomController {
         mWaitForMainThread(false),
         mcc(aMcc) {}
 
-  APZEventResult ReceiveInputEvent(InputData& aEvent) {
+  APZEventResult ReceiveInputEvent(
+      InputData& aEvent,
+      const Maybe<nsTArray<uint32_t>>& aTouchBehaviors = Nothing()) {
     // This is a function whose signature matches exactly the ReceiveInputEvent
     // on APZCTreeManager. This allows us to templates for functions like
     // TouchDown, TouchUp, etc so that we can reuse the code for dispatching
     // events into both APZC and APZCTM.
     return GetInputQueue()->ReceiveInputEvent(
-        this, TargetConfirmationFlags{!mWaitForMainThread}, aEvent);
+        this, TargetConfirmationFlags{!mWaitForMainThread}, aEvent,
+        aTouchBehaviors);
   }
 
   void ContentReceivedInputBlock(uint64_t aInputBlockId, bool aPreventDefault) {
@@ -325,25 +327,62 @@ class TestAsyncPanZoomController : public AsyncPanZoomController {
     EXPECT_EQ(FLING, mState);
   }
 
+  void AssertStateIsSmoothScroll() const {
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(SMOOTH_SCROLL, mState);
+  }
+
   void AssertStateIsSmoothMsdScroll() const {
     RecursiveMutexAutoLock lock(mRecursiveMutex);
     EXPECT_EQ(SMOOTHMSD_SCROLL, mState);
   }
 
-  void AssertNotAxisLocked() const {
+  void AssertStateIsPanningLockedY() {
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(PANNING_LOCKED_Y, mState);
+  }
+
+  void AssertStateIsPanningLockedX() {
+    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(PANNING_LOCKED_X, mState);
+  }
+
+  void AssertStateIsPanning() {
     RecursiveMutexAutoLock lock(mRecursiveMutex);
     EXPECT_EQ(PANNING, mState);
   }
 
-  void AssertAxisLocked(ScrollDirection aDirection) const {
+  void AssertStateIsPanMomentum() {
     RecursiveMutexAutoLock lock(mRecursiveMutex);
+    EXPECT_EQ(PAN_MOMENTUM, mState);
+  }
+
+  void SetAxisLocked(ScrollDirections aDirections, bool aLockValue) {
+    if (aDirections.contains(ScrollDirection::eVertical)) {
+      mY.SetAxisLocked(aLockValue);
+    }
+    if (aDirections.contains(ScrollDirection::eHorizontal)) {
+      mX.SetAxisLocked(aLockValue);
+    }
+  }
+
+  void AssertNotAxisLocked() const {
+    EXPECT_FALSE(mY.IsAxisLocked());
+    EXPECT_FALSE(mX.IsAxisLocked());
+  }
+
+  void AssertAxisLocked(ScrollDirection aDirection) const {
     switch (aDirection) {
       case ScrollDirection::eHorizontal:
-        EXPECT_EQ(PANNING_LOCKED_X, mState);
+        EXPECT_TRUE(mY.IsAxisLocked());
+        EXPECT_FALSE(mX.IsAxisLocked());
         break;
       case ScrollDirection::eVertical:
-        EXPECT_EQ(PANNING_LOCKED_Y, mState);
+        EXPECT_TRUE(mX.IsAxisLocked());
+        EXPECT_FALSE(mY.IsAxisLocked());
         break;
+      default:
+        FAIL() << "input direction must be either vertical or horizontal";
     }
   }
 
@@ -529,8 +568,7 @@ APZEventResult APZCTesterBase::Tap(const RefPtr<InputReceiver>& aTarget,
 
   // If touch-action is enabled then simulate the allowed touch behaviour
   // notification that the main thread is supposed to deliver.
-  if (StaticPrefs::layout_css_touch_action_enabled() &&
-      touchDownResult.GetStatus() != nsEventStatus_eConsumeNoDefault) {
+  if (touchDownResult.GetStatus() != nsEventStatus_eConsumeNoDefault) {
     SetDefaultAllowedTouchBehavior(aTarget, touchDownResult.mInputBlockId);
   }
 
@@ -609,7 +647,7 @@ void APZCTesterBase::Pan(const RefPtr<InputReceiver>& aTarget,
       EXPECT_EQ(1UL, aAllowedTouchBehaviors->Length());
       aTarget->SetAllowedTouchBehavior(*aOutInputBlockId,
                                        *aAllowedTouchBehaviors);
-    } else if (StaticPrefs::layout_css_touch_action_enabled()) {
+    } else {
       SetDefaultAllowedTouchBehavior(aTarget, *aOutInputBlockId);
     }
   }
@@ -702,8 +740,7 @@ void APZCTesterBase::DoubleTap(const RefPtr<InputReceiver>& aTarget,
 
   // If touch-action is enabled then simulate the allowed touch behaviour
   // notification that the main thread is supposed to deliver.
-  if (StaticPrefs::layout_css_touch_action_enabled() &&
-      result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
+  if (result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
     SetDefaultAllowedTouchBehavior(aTarget, result.mInputBlockId);
   }
 
@@ -721,8 +758,7 @@ void APZCTesterBase::DoubleTap(const RefPtr<InputReceiver>& aTarget,
   }
   mcc->AdvanceByMillis(10);
 
-  if (StaticPrefs::layout_css_touch_action_enabled() &&
-      result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
+  if (result.GetStatus() != nsEventStatus_eConsumeNoDefault) {
     SetDefaultAllowedTouchBehavior(aTarget, result.mInputBlockId);
   }
 
@@ -798,7 +834,7 @@ void APZCTesterBase::PinchWithTouchInput(
     EXPECT_EQ(2UL, aAllowedTouchBehaviors->Length());
     aTarget->SetAllowedTouchBehavior(*aOutInputBlockId,
                                      *aAllowedTouchBehaviors);
-  } else if (StaticPrefs::layout_css_touch_action_enabled()) {
+  } else {
     SetDefaultAllowedTouchBehavior(aTarget, *aOutInputBlockId, 2);
   }
 
@@ -941,20 +977,11 @@ void APZCTesterBase::PinchWithPinchInputAndCheckStatus(
   EXPECT_EQ(expectedStatus, statuses[1]);
 }
 
-AsyncPanZoomController* TestAPZCTreeManager::NewAPZCInstance(
-    LayersId aLayersId, GeckoContentController* aController) {
-  MockContentControllerDelayed* mcc =
-      static_cast<MockContentControllerDelayed*>(aController);
-  return new TestAsyncPanZoomController(
-      aLayersId, mcc, this, AsyncPanZoomController::USE_GESTURE_DETECTOR);
-}
-
 inline FrameMetrics TestFrameMetrics() {
   FrameMetrics fm;
 
   fm.SetDisplayPort(CSSRect(0, 0, 10, 10));
   fm.SetCompositionBounds(ParentLayerRect(0, 0, 10, 10));
-  fm.SetCriticalDisplayPort(CSSRect(0, 0, 10, 10));
   fm.SetScrollableRect(CSSRect(0, 0, 100, 100));
 
   return fm;

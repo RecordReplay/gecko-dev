@@ -10,8 +10,7 @@
 #include "mozilla/dom/AbortFollower.h"
 #include "mozilla/DOMEventTargetHelper.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // AbortSignal the spec concept includes the concept of a child signal
 // "following" a parent signal -- internally, adding abort steps to the parent
@@ -25,33 +24,44 @@ namespace dom {
 // it appears only to be used internally in the Fetch API.  It might be a good
 // idea to split AbortSignal into an implementation that can follow, and an
 // implementation that can't, to provide this complexity only when it's needed.
-class AbortSignal final : public DOMEventTargetHelper,
-                          public AbortSignalImpl,
-                          public AbortFollower {
+class AbortSignal : public DOMEventTargetHelper,
+                    public AbortSignalImpl,
+                    public AbortFollower {
  public:
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(AbortSignal, DOMEventTargetHelper)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(AbortSignal,
+                                                         DOMEventTargetHelper)
 
-  AbortSignal(nsIGlobalObject* aGlobalObject, bool aAborted);
+  AbortSignal(nsIGlobalObject* aGlobalObject, bool aAborted,
+              JS::Handle<JS::Value> aReason);
 
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
 
   IMPL_EVENT_HANDLER(abort);
 
-  static already_AddRefed<AbortSignal> Abort(GlobalObject& aGlobal);
+  static already_AddRefed<AbortSignal> Abort(GlobalObject& aGlobal,
+                                             JS::Handle<JS::Value> aReason,
+                                             ErrorResult& aRv);
+
+  static already_AddRefed<AbortSignal> Timeout(GlobalObject& aGlobal,
+                                               uint64_t aMilliseconds,
+                                               ErrorResult& aRv);
+
+  void ThrowIfAborted(JSContext* aCx, ErrorResult& aRv);
 
   // AbortSignalImpl
-  void SignalAbort() override;
+  void SignalAbort(JS::Handle<JS::Value> aReason) override;
 
   // AbortFollower
-  void RunAbortAlgorithm() override { SignalAbort(); }
+  void RunAbortAlgorithm() override;
 
- private:
-  ~AbortSignal() = default;
+  virtual bool IsTaskSignal() const { return false; }
+
+ protected:
+  ~AbortSignal();
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_AbortSignal_h

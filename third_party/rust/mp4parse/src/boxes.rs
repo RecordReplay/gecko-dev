@@ -51,7 +51,7 @@ impl fmt::Debug for BoxType {
     }
 }
 
-#[derive(Default, PartialEq, Clone)]
+#[derive(Default, Eq, Hash, PartialEq, Clone)]
 pub struct FourCC {
     pub value: [u8; 4],
 }
@@ -98,11 +98,11 @@ impl PartialEq<&[u8; 4]> for FourCC {
     }
 }
 
-#[deny(unreachable_patterns)]
 box_database!(
     FileTypeBox                       0x6674_7970, // "ftyp"
     MediaDataBox                      0x6d64_6174, // "mdat"
     PrimaryItemBox                    0x7069_746d, // "pitm"
+    ItemDataBox                       0x6964_6174, // "idat"
     ItemInfoBox                       0x6969_6e66, // "iinf"
     ItemInfoEntry                     0x696e_6665, // "infe"
     ItemLocationBox                   0x696c_6f63, // "iloc"
@@ -120,13 +120,17 @@ box_database!(
     ItemPropertiesBox                 0x6970_7270, // "iprp"
     ItemPropertyContainerBox          0x6970_636f, // "ipco"
     ItemPropertyAssociationBox        0x6970_6d61, // "ipma"
-    ColorInformationBox               0x636f_6c72, // "colr"
+    ColourInformationBox              0x636f_6c72, // "colr"
     ImageSpatialExtentsProperty       0x6973_7065, // "ispe"
+    PixelAspectRatioBox               0x7061_7370, // "pasp"
     PixelInformationBox               0x7069_7869, // "pixi"
     AuxiliaryTypeProperty             0x6175_7843, // "auxC"
     CleanApertureBox                  0x636c_6170, // "clap"
     ImageRotation                     0x6972_6f74, // "irot"
     ImageMirror                       0x696d_6972, // "imir"
+    OperatingPointSelectorProperty    0x6131_6f70, // "a1op"
+    AV1LayeredImageIndexingProperty   0x6131_6c78, // "a1lx"
+    LayerSelectorProperty             0x6c73_656c, // "lsel"
     SampleTableBox                    0x7374_626c, // "stbl"
     SampleDescriptionBox              0x7374_7364, // "stsd"
     TimeToSampleBox                   0x7374_7473, // "stts"

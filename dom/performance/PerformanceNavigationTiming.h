@@ -24,8 +24,7 @@ class nsIHttpChannel;
 class nsITimedChannel;
 struct JSContext;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Performance;
 class PerformanceTimingData;
@@ -67,6 +66,12 @@ class PerformanceNavigationTiming final : public PerformanceResourceTiming {
   DOMHighResTimeStamp DomComplete() const;
   DOMHighResTimeStamp LoadEventStart() const;
   DOMHighResTimeStamp LoadEventEnd() const;
+
+  DOMHighResTimeStamp RedirectStart(
+      Maybe<nsIPrincipal*>& aSubjectPrincipal) const override;
+  DOMHighResTimeStamp RedirectEnd(
+      Maybe<nsIPrincipal*>& aSubjectPrincipal) const override;
+
   NavigationType Type() const;
   uint16_t RedirectCount() const;
 
@@ -83,7 +88,6 @@ class PerformanceNavigationTiming final : public PerformanceResourceTiming {
   ~PerformanceNavigationTiming() = default;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_PerformanceNavigationTiming_h___

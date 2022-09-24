@@ -6,15 +6,27 @@ mod atomic_u32;
 mod atomic_u64;
 mod atomic_u8;
 mod atomic_usize;
+mod mutex;
+#[cfg(feature = "parking_lot")]
+mod parking_lot;
 mod unsafe_cell;
 
 pub(crate) mod cell {
     pub(crate) use super::unsafe_cell::UnsafeCell;
 }
 
-#[cfg(any(feature = "sync", feature = "io-driver"))]
+#[cfg(any(
+    feature = "net",
+    feature = "process",
+    feature = "signal",
+    feature = "sync",
+))]
 pub(crate) mod future {
     pub(crate) use crate::sync::AtomicWaker;
+}
+
+pub(crate) mod hint {
+    pub(crate) use std::hint::spin_loop;
 }
 
 pub(crate) mod rand {
@@ -39,10 +51,7 @@ pub(crate) mod rand {
 }
 
 pub(crate) mod sync {
-    pub(crate) use std::sync::Arc;
-
-    #[cfg(feature = "parking_lot")]
-    mod pl_wrappers;
+    pub(crate) use std::sync::{Arc, Weak};
 
     // Below, make sure all the feature-influenced types are exported for
     // internal use. Note however that some are not _currently_ named by
@@ -50,15 +59,16 @@ pub(crate) mod sync {
 
     #[cfg(feature = "parking_lot")]
     #[allow(unused_imports)]
-    pub(crate) use pl_wrappers::{Condvar, Mutex};
-
-    #[cfg(feature = "parking_lot")]
-    #[allow(unused_imports)]
-    pub(crate) use parking_lot::{MutexGuard, WaitTimeoutResult};
+    pub(crate) use crate::loom::std::parking_lot::{
+        Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, WaitTimeoutResult,
+    };
 
     #[cfg(not(feature = "parking_lot"))]
     #[allow(unused_imports)]
-    pub(crate) use std::sync::{Condvar, Mutex, MutexGuard, WaitTimeoutResult};
+    pub(crate) use std::sync::{Condvar, MutexGuard, RwLock, RwLockReadGuard, WaitTimeoutResult};
+
+    #[cfg(not(feature = "parking_lot"))]
+    pub(crate) use crate::loom::std::mutex::Mutex;
 
     pub(crate) mod atomic {
         pub(crate) use crate::loom::std::atomic_ptr::AtomicPtr;
@@ -68,20 +78,31 @@ pub(crate) mod sync {
         pub(crate) use crate::loom::std::atomic_u8::AtomicU8;
         pub(crate) use crate::loom::std::atomic_usize::AtomicUsize;
 
-        pub(crate) use std::sync::atomic::{spin_loop_hint, AtomicBool};
+        pub(crate) use std::sync::atomic::{fence, AtomicBool, Ordering};
     }
 }
 
 pub(crate) mod sys {
-    #[cfg(feature = "rt-threaded")]
+    #[cfg(feature = "rt-multi-thread")]
     pub(crate) fn num_cpus() -> usize {
         usize::max(1, num_cpus::get())
     }
 
-    #[cfg(not(feature = "rt-threaded"))]
+    #[cfg(not(feature = "rt-multi-thread"))]
     pub(crate) fn num_cpus() -> usize {
         1
     }
 }
 
-pub(crate) use std::thread;
+pub(crate) mod thread {
+    #[inline]
+    pub(crate) fn yield_now() {
+        std::hint::spin_loop();
+    }
+
+    #[allow(unused_imports)]
+    pub(crate) use std::thread::{
+        current, panicking, park, park_timeout, sleep, spawn, Builder, JoinHandle, LocalKey,
+        Result, Thread, ThreadId,
+    };
+}

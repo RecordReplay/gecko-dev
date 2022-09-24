@@ -14,6 +14,7 @@ import os
 import socket
 import sys
 import traceback
+import subprocess
 
 try:
     import urlparse
@@ -263,6 +264,10 @@ class VirtualenvMixin(object):
 
         pip install -r requirements1.txt -r requirements2.txt module_url
         """
+        import urllib.request
+        import urllib.error
+        import time
+
         c = self.config
         dirs = self.query_abs_dirs()
         env = self.query_env()
@@ -305,16 +310,58 @@ class VirtualenvMixin(object):
                 % install_method
             )
 
+        # find_links connection check while loop
+        find_links_added = 0
+        fl_retry_sleep_seconds = 10
+        fl_max_retry_minutes = 5
+        fl_retry_loops = (fl_max_retry_minutes * 60) / fl_retry_sleep_seconds
         for link in c.get("find_links", []):
             parsed = urlparse.urlparse(link)
+            dns_result = None
+            get_result = None
+            retry_counter = 0
+            while retry_counter < fl_retry_loops and (
+                dns_result is None or get_result is None
+            ):
+                try:
+                    dns_result = socket.gethostbyname(parsed.hostname)
+                    get_result = urllib.request.urlopen(link, timeout=10).read()
+                    break
+                except socket.gaierror:
+                    retry_counter += 1
+                    self.warning(
+                        "find_links: dns check failed for %s, sleeping %ss and retrying..."
+                        % (parsed.hostname, fl_retry_sleep_seconds)
+                    )
+                    time.sleep(fl_retry_sleep_seconds)
+                except (
+                    urllib.error.HTTPError,
+                    urllib.error.URLError,
+                    socket.timeout,
+                ) as e:
+                    retry_counter += 1
+                    self.warning(
+                        "find_links: connection check failed for %s, sleeping %ss and retrying..."
+                        % (link, fl_retry_sleep_seconds)
+                    )
+                    self.warning("find_links: exception: %s" % e)
+                    time.sleep(fl_retry_sleep_seconds)
+            # now that the connectivity check is good, add the link
+            if dns_result and get_result:
+                self.info("find_links: connection checks passed for %s, adding." % link)
+                find_links_added += 1
+                command.extend(["--find-links", link])
+            else:
+                self.warning(
+                    "find_links: connection checks failed for %s" % link,
+                    ", but max retries reached. continuing...",
+                )
 
-            try:
-                socket.gethostbyname(parsed.hostname)
-            except socket.gaierror as e:
-                self.info("error resolving %s (ignoring): %s" % (parsed.hostname, e))
-                continue
-
-            command.extend(["--find-links", link])
+        # TODO: make this fatal if we always see failures after this
+        if find_links_added == 0:
+            self.warning(
+                "find_links: no find_links added. pip installation will probably fail!"
+            )
 
         # module_url can be None if only specifying requirements files
         if module_url:
@@ -461,6 +508,31 @@ class VirtualenvMixin(object):
                 error_list=VirtualenvErrorList,
                 partial_env={"VIRTUALENV_NO_DOWNLOAD": "1"},
                 halt_on_failure=True,
+            )
+        self.info(self.platform_name())
+        if self.platform_name().startswith("macos"):
+            tmp_path = "{}/bin/bak".format(venv_path)
+            self.info(
+                "Copying venv python binaries to {} to clear for re-sign".format(
+                    tmp_path
+                )
+            )
+            subprocess.call("mkdir -p {}".format(tmp_path), shell=True)
+            subprocess.call(
+                "cp {}/bin/python* {}/".format(venv_path, tmp_path), shell=True
+            )
+            self.info("Replacing venv python binaries with reset copies")
+            subprocess.call(
+                "mv -f {}/* {}/bin/".format(tmp_path, venv_path), shell=True
+            )
+            self.info(
+                "codesign -s - --preserve-metadata=identifier,entitlements,flags,runtime "
+                "-f {}/bin/*".format(venv_path)
+            )
+            subprocess.call(
+                "codesign -s - --preserve-metadata=identifier,entitlements,flags,runtime -f "
+                "{}/bin/python*".format(venv_path),
+                shell=True,
             )
 
         if not modules:
@@ -861,7 +933,7 @@ class ResourceMonitoringMixin(PerfherderResourceOptionsMixin):
 
 # This needs to be inherited only if you have already inherited ScriptMixin
 class Python3Virtualenv(object):
-    """ Support Python3.5+ virtualenv creation."""
+    """Support Python3.5+ virtualenv creation."""
 
     py3_initialized_venv = False
 

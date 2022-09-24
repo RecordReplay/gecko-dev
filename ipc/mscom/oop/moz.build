@@ -8,6 +8,7 @@ Library("mscom_oop")
 
 SOURCES += [
     "../ActivationContext.cpp",
+    "../COMWrappers.cpp",
     "../Objref.cpp",
     "../Registration.cpp",
     "../StructStream.cpp",
@@ -38,3 +39,5 @@ FORCE_STATIC_LIB = True
 # This DLL may be loaded into other processes, so we need static libs for
 # Windows 7 and Windows 8.
 USE_STATIC_LIBS = True
+
+REQUIRES_UNIFIED_BUILD = True

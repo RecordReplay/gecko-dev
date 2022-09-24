@@ -38,6 +38,7 @@ class Document;
 class InternalRequest;
 class InternalResponse;
 class PerformanceStorage;
+class PerformanceTimingData;
 
 /**
  * Provides callbacks to be called when response is available or on error.
@@ -51,11 +52,7 @@ class FetchDriverObserver {
       : mReporter(new ConsoleReportCollector()), mGotResponseAvailable(false) {}
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(FetchDriverObserver);
-  void OnResponseAvailable(InternalResponse* aResponse) {
-    MOZ_ASSERT(!mGotResponseAvailable);
-    mGotResponseAvailable = true;
-    OnResponseAvailableInternal(aResponse);
-  }
+  void OnResponseAvailable(SafeRefPtr<InternalResponse> aResponse);
 
   enum EndReason {
     eAborted,
@@ -80,7 +77,8 @@ class FetchDriverObserver {
  protected:
   virtual ~FetchDriverObserver() = default;
 
-  virtual void OnResponseAvailableInternal(InternalResponse* aResponse) = 0;
+  virtual void OnResponseAvailableInternal(
+      SafeRefPtr<InternalResponse> aResponse) = 0;
 
   nsCOMPtr<nsIConsoleReportCollector> mReporter;
 
@@ -127,6 +125,9 @@ class FetchDriver final : public nsIStreamListener,
     mOriginStack = std::move(aOriginStack);
   }
 
+  PerformanceTimingData* GetPerformanceTimingData(nsAString& aInitiatorType,
+                                                  nsAString& aEntryName);
+
   // AbortFollower
   void RunAbortAlgorithm() override;
 
@@ -134,7 +135,7 @@ class FetchDriver final : public nsIStreamListener,
   nsCOMPtr<nsIPrincipal> mPrincipal;
   nsCOMPtr<nsILoadGroup> mLoadGroup;
   SafeRefPtr<InternalRequest> mRequest;
-  RefPtr<InternalResponse> mResponse;
+  SafeRefPtr<InternalResponse> mResponse;
   nsCOMPtr<nsIOutputStream> mPipeOutputStream;
   RefPtr<FetchDriverObserver> mObserver;
   RefPtr<Document> mDocument;
@@ -192,8 +193,8 @@ class FetchDriver final : public nsIStreamListener,
 
   nsresult HttpFetch(const nsACString& aPreferredAlternativeDataType = ""_ns);
   // Returns the filtered response sent to the observer.
-  already_AddRefed<InternalResponse> BeginAndGetFilteredResponse(
-      InternalResponse* aResponse, bool aFoundOpaqueRedirect);
+  SafeRefPtr<InternalResponse> BeginAndGetFilteredResponse(
+      SafeRefPtr<InternalResponse> aResponse, bool aFoundOpaqueRedirect);
   // Utility since not all cases need to do any post processing of the filtered
   // response.
   void FailWithNetworkError(nsresult rv);

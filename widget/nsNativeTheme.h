@@ -62,10 +62,6 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
   bool IsWidgetStyled(nsPresContext* aPresContext, nsIFrame* aFrame,
                       mozilla::StyleAppearance aAppearance);
 
-  // Accessors to widget-specific state information
-
-  bool IsDisabled(nsIFrame* aFrame, mozilla::EventStates aEventStates);
-
   // RTL chrome direction
   static bool IsFrameRTL(nsIFrame* aFrame);
 
@@ -77,23 +73,6 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
   }
 
   bool IsButtonTypeMenu(nsIFrame* aFrame);
-
-  // checkbox:
-  bool IsChecked(nsIFrame* aFrame) {
-    return GetCheckedOrSelected(aFrame, false);
-  }
-
-  // radiobutton:
-  bool IsSelected(nsIFrame* aFrame) {
-    return GetCheckedOrSelected(aFrame, true);
-  }
-
-  static bool IsFocused(nsIFrame* aFrame) {
-    return CheckBooleanAttr(aFrame, nsGkAtoms::focused);
-  }
-
-  // scrollbar button:
-  int32_t GetScrollbarButtonType(nsIFrame* aFrame);
 
   // tab:
   bool IsSelectedTab(nsIFrame* aFrame) {
@@ -147,8 +126,6 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
   bool IsHorizontal(nsIFrame* aFrame);
 
   // progressbar:
-  bool IsIndeterminateProgress(nsIFrame* aFrame,
-                               mozilla::EventStates aEventStates);
   bool IsVerticalProgress(nsIFrame* aFrame);
 
   // meter:
@@ -162,9 +139,6 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
   // menupopup:
   bool IsSubmenu(nsIFrame* aFrame, bool* aLeftOfParent);
 
-  // True if it's not a menubar item or menulist item
-  bool IsRegularMenuItem(nsIFrame* aFrame);
-
   static bool CheckBooleanAttr(nsIFrame* aFrame, nsAtom* aAtom);
   static int32_t CheckIntAttr(nsIFrame* aFrame, nsAtom* aAtom,
                               int32_t defaultValue);
@@ -172,9 +146,6 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
   // Helpers for progressbar.
   static double GetProgressValue(nsIFrame* aFrame);
   static double GetProgressMaxValue(nsIFrame* aFrame);
-
-  bool GetCheckedOrSelected(nsIFrame* aFrame, bool aCheckSelected);
-  bool GetIndeterminate(nsIFrame* aFrame);
 
   bool QueueAnimatedContentForRefresh(nsIContent* aContent,
                                       uint32_t aMinimumFrameRate);
@@ -184,16 +155,9 @@ class nsNativeTheme : public nsITimerCallback, public nsINamed {
 
   bool IsRangeHorizontal(nsIFrame* aFrame);
 
-  static bool IsDarkBackground(nsIFrame* aFrame);
-  static bool IsDarkColor(nscolor aColor) {
-    // Consider a color dark if the sum of the r, g and b values is less than
-    // 384 in a semi-transparent document.  This heuristic matches what WebKit
-    // does, and we can improve it later if needed.
-    return NS_GET_A(aColor) > 127 &&
-           NS_GET_R(aColor) + NS_GET_G(aColor) + NS_GET_B(aColor) < 384;
-  }
+  static bool IsDarkBackground(nsIFrame*);
 
-  static bool IsWidgetScrollbarPart(mozilla::StyleAppearance aAppearance);
+  static bool IsWidgetScrollbarPart(mozilla::StyleAppearance);
 
  private:
   uint32_t mAnimatedContentTimeout;

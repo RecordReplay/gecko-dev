@@ -4,7 +4,7 @@
 // the color of the tab line are applied properly.
 
 add_task(async function test_support_tab_line() {
-  let newWin = await BrowserTestUtils.openNewWindowWithFlushedXULCacheForMozSupports();
+  let newWin = await BrowserTestUtils.openNewBrowserWindow();
 
   const TAB_LINE_COLOR = "#ff0000";
   let extension = ExtensionTestUtils.loadExtension({
@@ -25,9 +25,10 @@ add_task(async function test_support_tab_line() {
   let selectedTab = newWin.document.querySelector(".tabbrowser-tab[selected]");
   let tab = selectedTab.querySelector(".tab-background");
   let element = tab;
-  let property = "boxShadow";
+  let property = "outline-color";
   let computedValue = newWin.getComputedStyle(element)[property];
   let expectedColor = `rgb(${hexToRGB(TAB_LINE_COLOR).join(", ")})`;
+
   Assert.ok(
     computedValue.includes(expectedColor),
     `Tab line should be displayed in the box shadow of the tab: ${computedValue}`

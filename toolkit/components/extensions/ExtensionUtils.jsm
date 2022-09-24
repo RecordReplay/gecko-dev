@@ -59,7 +59,7 @@ class ExtensionError extends DOMException {
   }
   // Custom JS classes can't survive IPC, so need to check error name.
   static [Symbol.hasInstance](e) {
-    return e instanceof DOMException && e.name === "ExtensionError";
+    return DOMException.isInstance(e) && e.name === "ExtensionError";
   }
 }
 
@@ -68,6 +68,19 @@ function filterStack(error) {
     /(^.*(Task\.jsm|Promise-backend\.js).*\n)+/gm,
     "<Promise Chain>\n"
   );
+}
+
+/**
+ * An Error subclass used to recognize the errors that should
+ * to be forwarded to the worker thread and being accessible
+ * to the extension worker script (vs. the errors that should be
+ * only logged internally and raised to the worker script as
+ * the generic unexpected error).
+ */
+class WorkerExtensionError extends DOMException {
+  constructor(message) {
+    super(message, "Error");
+  }
 }
 
 /**
@@ -340,4 +353,5 @@ var ExtensionUtils = {
   DefaultWeakMap,
   ExtensionError,
   LimitedSet,
+  WorkerExtensionError,
 };

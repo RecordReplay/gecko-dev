@@ -4,7 +4,6 @@
 
 "use strict";
 
-const promise = require("promise");
 const Services = require("Services");
 const MarkupContainer = require("devtools/client/inspector/markup/views/markup-container");
 const ElementEditor = require("devtools/client/inspector/markup/views/element-editor");
@@ -13,7 +12,7 @@ const { extend } = require("devtools/shared/extend");
 
 loader.lazyRequireGetter(
   this,
-  "setEventTooltip",
+  "EventTooltip",
   "devtools/client/shared/widgets/tooltip/EventTooltipHelper",
   true
 );
@@ -75,10 +74,33 @@ MarkupElementContainer.prototype = extend(MarkupContainer.prototype, {
 
     const toolbox = this.markup.toolbox;
 
-    setEventTooltip(tooltip, listenerInfo, toolbox);
+    // Create the EventTooltip which will populate the tooltip content.
+    const eventTooltip = new EventTooltip(
+      tooltip,
+      listenerInfo,
+      toolbox,
+      this.node
+    );
+
+    // Add specific styling to the "event" badge when at least one event is disabled.
+    // The eventTooltip will take care of clearing the event listener when it's destroyed.
+    eventTooltip.on(
+      "event-tooltip-listener-toggled",
+      ({ hasDisabledEventListeners }) => {
+        const className = "has-disabled-events";
+        if (hasDisabledEventListeners) {
+          this.editor._eventBadge.classList.add(className);
+        } else {
+          this.editor._eventBadge.classList.remove(className);
+        }
+      }
+    );
+
     // Disable the image preview tooltip while we display the event details
     this.markup._disableImagePreviewTooltip();
     tooltip.once("hidden", () => {
+      eventTooltip.destroy();
+
       // Enable the image preview tooltip after closing the event details
       this.markup._enableImagePreviewTooltip();
 
@@ -113,7 +135,7 @@ MarkupElementContainer.prototype = extend(MarkupContainer.prototype, {
    */
   _getPreview: function() {
     if (!this.isPreviewable()) {
-      return promise.reject("_getPreview called on a non-previewable element.");
+      return Promise.reject("_getPreview called on a non-previewable element.");
     }
 
     if (this.tooltipDataPromise) {

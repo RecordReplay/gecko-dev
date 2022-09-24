@@ -66,6 +66,18 @@ nsBrowserStatusFilter::RemoveProgressListener(
 }
 
 NS_IMETHODIMP
+nsBrowserStatusFilter::GetBrowsingContextXPCOM(
+    mozilla::dom::BrowsingContext** aResult) {
+  MOZ_ASSERT_UNREACHABLE("nsBrowserStatusFilter::GetBrowsingContextXPCOM");
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+mozilla::dom::BrowsingContext* nsBrowserStatusFilter::GetBrowsingContext() {
+  MOZ_ASSERT_UNREACHABLE("nsBrowserStatusFilter::GetBrowsingContext");
+  return nullptr;
+}
+
+NS_IMETHODIMP
 nsBrowserStatusFilter::GetDOMWindow(mozIDOMWindowProxy** aResult) {
   MOZ_ASSERT_UNREACHABLE("nsBrowserStatusFilter::GetDOMWindow");
   return NS_ERROR_NOT_IMPLEMENTED;
@@ -259,7 +271,7 @@ nsBrowserStatusFilter::OnProgressChange64(nsIWebProgress* aWebProgress,
 
 NS_IMETHODIMP
 nsBrowserStatusFilter::OnRefreshAttempted(nsIWebProgress* aWebProgress,
-                                          nsIURI* aUri, int32_t aDelay,
+                                          nsIURI* aUri, uint32_t aDelay,
                                           bool aSameUri, bool* allowRefresh) {
   nsCOMPtr<nsIWebProgressListener2> listener = do_QueryInterface(mListener);
   if (!listener) {
@@ -341,4 +353,10 @@ void nsBrowserStatusFilter::TimeoutHandler(nsITimer* aTimer, void* aClosure) {
   }
 
   self->CallDelayedProgressListeners();
+}
+
+NS_IMETHODIMP
+nsBrowserStatusFilter::GetDocumentRequest(nsIRequest** aRequest) {
+  *aRequest = nullptr;
+  return NS_ERROR_NOT_IMPLEMENTED;
 }

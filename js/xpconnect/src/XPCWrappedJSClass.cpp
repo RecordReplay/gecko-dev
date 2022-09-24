@@ -7,8 +7,10 @@
 /* Sharable code and data for wrapper around JSObjects. */
 
 #include "xpcprivate.h"
-#include "js/Object.h"  // JS::GetClass
+#include "js/CallAndConstruct.h"  // JS_CallFunctionValue
+#include "js/Object.h"            // JS::GetClass
 #include "js/Printf.h"
+#include "js/PropertyAndElement.h"  // JS_Enumerate, JS_GetProperty, JS_GetPropertyById, JS_HasProperty, JS_HasPropertyById, JS_SetProperty, JS_SetPropertyById
 #include "nsArrayEnumerator.h"
 #include "nsINamed.h"
 #include "nsIScriptError.h"
@@ -764,6 +766,14 @@ nsXPCWrappedJS::CallMethod(uint16_t methodIndex, const nsXPTMethodInfo* info,
     return NS_ERROR_UNEXPECTED;
   }
 
+  // We need to reject an attempt to call a non-reflectable method before
+  // we do anything like AutoEntryScript which might allocate in the JS engine,
+  // because the method isn't marked with JS_HAZ_CAN_RUN_SCRIPT, and we want
+  // to be able to take advantage of that in the GC hazard analysis.
+  if (!info->IsReflectable()) {
+    return NS_ERROR_FAILURE;
+  }
+
   Value* sp = nullptr;
   Value* argv = nullptr;
   uint8_t i;
@@ -790,14 +800,7 @@ nsXPCWrappedJS::CallMethod(uint16_t methodIndex, const nsXPTMethodInfo* info,
 
   JSContext* cx = ccx.GetJSContext();
 
-  if (!cx || !info->IsReflectable()) {
-    return NS_ERROR_FAILURE;
-  }
-
-  const nsXPTInterfaceInfo* interfaceInfo = GetInfo();
-  JS::RootedId id(cx);
-  const char* name = info->NameOrDescription();
-  if (!info->GetId(cx, id.get())) {
+  if (!cx) {
     return NS_ERROR_FAILURE;
   }
 
@@ -807,6 +810,13 @@ nsXPCWrappedJS::CallMethod(uint16_t methodIndex, const nsXPTMethodInfo* info,
   // when we started pointing to our JSObject*.
   RootedObject scope(cx, GetJSObjectGlobal());
   JSAutoRealm ar(cx, scope);
+
+  const nsXPTInterfaceInfo* interfaceInfo = GetInfo();
+  JS::RootedId id(cx);
+  const char* name = info->NameOrDescription();
+  if (!info->GetId(cx, id.get())) {
+    return NS_ERROR_FAILURE;
+  }
 
   // [optional_argc] has a different calling convention, which we don't
   // support for JS-implemented components.

@@ -9,9 +9,33 @@
         "description": {
           "type": "string"
         },
+        "hasExposure": {
+          "type": "boolean",
+          "description": "If the feature sends an exposure event."
+        },
+        "exposureDescription": {
+          "type": "string",
+          "description": "A description of the implementation details of the exposure event, if one is sent."
+        },
         "isEarlyStartup": {
           "type": "boolean",
           "description": "If the feature values should be cached in prefs for fast early startup."
+        },
+        "schema": {
+          "type": "object",
+          "description": "For features with large number of variables we instead point to a JSONSchema file instead of specifying them in the variables field",
+          "properties": {
+            "uri": {
+              "type": "string",
+              "description": "A resource:// URI that can be loaded at runtime from within Firefox.",
+              "format": "uri"
+            },
+            "path": {
+              "type": "string",
+              "description": "The path to the schema file relative to the repository root"
+            }
+          },
+          "required": ["uri", "path"]
         },
         "variables": {
           "additionalProperties": false,
@@ -27,6 +51,9 @@
                 "fallbackPref": {
                   "type": "string"
                 },
+                "enum": {
+                  "description": "Validate feature value using a list of possible options (for string only values)."
+                },
                 "description": {
                   "type": "string",
                   "description": "Explain how this value is being used"
@@ -38,7 +65,17 @@
           }
         }
       },
-      "required": ["description"]
+      "required": ["description", "hasExposure"],
+      "if": {
+        "properties": {
+          "hasExposure": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": ["exposureDescription"]
+      }
     }
   }
 }

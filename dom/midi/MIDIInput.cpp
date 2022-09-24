@@ -12,10 +12,12 @@
 #include "mozilla/dom/MIDIMessageEventBinding.h"
 #include "nsDOMNavigationTiming.h"
 
+#include "MIDILog.h"
+
 namespace mozilla::dom {
 
 MIDIInput::MIDIInput(nsPIDOMWindowInner* aWindow, MIDIAccess* aMIDIAccessParent)
-    : MIDIPort(aWindow, aMIDIAccessParent) {}
+    : MIDIPort(aWindow, aMIDIAccessParent), mKeepAlive(false) {}
 
 // static
 MIDIInput* MIDIInput::Create(nsPIDOMWindowInner* aWindow,
@@ -24,7 +26,7 @@ MIDIInput* MIDIInput::Create(nsPIDOMWindowInner* aWindow,
                              const bool aSysexEnabled) {
   MOZ_ASSERT(static_cast<MIDIPortType>(aPortInfo.type()) ==
              MIDIPortType::Input);
-  auto port = new MIDIInput(aWindow, aMIDIAccessParent);
+  auto* port = new MIDIInput(aWindow, aMIDIAccessParent);
   if (!port->Initialize(aPortInfo, aSysexEnabled)) {
     return nullptr;
   }
@@ -37,26 +39,63 @@ JSObject* MIDIInput::WrapObject(JSContext* aCx,
 }
 
 void MIDIInput::Receive(const nsTArray<MIDIMessage>& aMsgs) {
-  nsCOMPtr<Document> doc = GetOwner() ? GetOwner()->GetDoc() : nullptr;
+  if (!GetOwner()) {
+    return;  // Ignore messages once we've been disconnected from the owner
+  }
+
+  nsCOMPtr<Document> doc = GetOwner()->GetDoc();
   if (!doc) {
     NS_WARNING("No document available to send MIDIMessageEvent to!");
     return;
   }
-  for (auto& msg : aMsgs) {
+  for (const auto& msg : aMsgs) {
     RefPtr<MIDIMessageEvent> event(
         MIDIMessageEvent::Constructor(this, msg.timestamp(), msg.data()));
     DispatchTrustedEvent(event);
   }
 }
 
-EventHandlerNonNull* MIDIInput::GetOnmidimessage() {
-  return GetEventHandler(nsGkAtoms::onmidimessage);
+void MIDIInput::StateChange() {
+  if (mPort->ConnectionState() == MIDIPortConnectionState::Open ||
+      (mPort->DeviceState() == MIDIPortDeviceState::Connected &&
+       mPort->ConnectionState() == MIDIPortConnectionState::Pending)) {
+    KeepAliveOnMidimessage();
+  } else {
+    DontKeepAliveOnMidimessage();
+  }
 }
 
-void MIDIInput::SetOnmidimessage(EventHandlerNonNull* aCallback) {
-  SetEventHandler(nsGkAtoms::onmidimessage, aCallback);
-  if (mPort->ConnectionState() != MIDIPortConnectionState::Open) {
-    mPort->SendOpen();
+void MIDIInput::EventListenerAdded(nsAtom* aType) {
+  if (aType == nsGkAtoms::onmidimessage) {
+    // HACK: the Web MIDI spec states that we should open a port only when
+    // setting the midimessage event handler but Chrome does it even when
+    // adding event listeners hence this.
+    if (mPort->ConnectionState() != MIDIPortConnectionState::Open) {
+      LOG("onmidimessage event listener added, sending implicit Open");
+      mPort->SendOpen();
+    }
+  }
+
+  DOMEventTargetHelper::EventListenerAdded(aType);
+}
+
+void MIDIInput::DisconnectFromOwner() {
+  DontKeepAliveOnMidimessage();
+
+  MIDIPort::DisconnectFromOwner();
+}
+
+void MIDIInput::KeepAliveOnMidimessage() {
+  if (!mKeepAlive) {
+    mKeepAlive = true;
+    KeepAliveIfHasListenersFor(nsGkAtoms::onmidimessage);
+  }
+}
+
+void MIDIInput::DontKeepAliveOnMidimessage() {
+  if (mKeepAlive) {
+    IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onmidimessage);
+    mKeepAlive = false;
   }
 }
 

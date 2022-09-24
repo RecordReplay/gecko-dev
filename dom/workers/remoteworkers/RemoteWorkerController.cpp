@@ -13,7 +13,6 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/RemoteLazyInputStreamUtils.h"
 #include "mozilla/RemoteLazyInputStreamStorage.h"
 #include "mozilla/dom/FetchEventOpParent.h"
 #include "mozilla/dom/FetchEventOpProxyParent.h"
@@ -134,6 +133,12 @@ void RemoteWorkerController::ErrorPropagation(const ErrorValue& aValue) {
   AssertIsOnBackgroundThread();
 
   mObserver->ErrorReceived(aValue);
+}
+
+void RemoteWorkerController::NotifyLock(bool aCreated) {
+  AssertIsOnBackgroundThread();
+
+  mObserver->LockNotified(aCreated);
 }
 
 void RemoteWorkerController::WorkerTerminated() {
@@ -285,7 +290,7 @@ RefPtr<ServiceWorkerOpPromise> RemoteWorkerController::ExecServiceWorkerOp(
 
 RefPtr<ServiceWorkerFetchEventOpPromise>
 RemoteWorkerController::ExecServiceWorkerFetchEventOp(
-    const ServiceWorkerFetchEventOpArgs& aArgs,
+    const ParentToParentServiceWorkerFetchEventOpArgs& aArgs,
     RefPtr<FetchEventOpParent> aReal) {
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(mIsServiceWorker);
@@ -510,7 +515,7 @@ void RemoteWorkerController::PendingServiceWorkerOp::Cancel() {
 }
 
 RemoteWorkerController::PendingSWFetchEventOp::PendingSWFetchEventOp(
-    const ServiceWorkerFetchEventOpArgs& aArgs,
+    const ParentToParentServiceWorkerFetchEventOpArgs& aArgs,
     RefPtr<ServiceWorkerFetchEventOpPromise::Private> aPromise,
     RefPtr<FetchEventOpParent>&& aReal)
     : mArgs(aArgs), mPromise(std::move(aPromise)), mReal(aReal) {
@@ -519,7 +524,7 @@ RemoteWorkerController::PendingSWFetchEventOp::PendingSWFetchEventOp(
 
   // If there is a TParentToParentStream in the request body, we need to
   // save it to our stream.
-  IPCInternalRequest& req = mArgs.internalRequest();
+  IPCInternalRequest& req = mArgs.common().internalRequest();
   if (req.body().isSome() &&
       req.body().ref().type() == BodyStreamVariant::TParentToParentStream) {
     nsCOMPtr<nsIInputStream> stream;

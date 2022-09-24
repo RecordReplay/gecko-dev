@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import React, { Component } from "react";
+import PropTypes from "prop-types";
 import classnames from "classnames";
 import { Tab, Tabs, TabList, TabPanels } from "react-aria-components/src/tabs";
 
@@ -33,8 +34,15 @@ class PrimaryPanes extends Component {
     };
   }
 
-  componentDidCatch(error) {
-    console.log(error);
+  static get propTypes() {
+    return {
+      clearProjectDirectoryRoot: PropTypes.func.isRequired,
+      cx: PropTypes.object.isRequired,
+      projectRootName: PropTypes.string.isRequired,
+      selectedTab: PropTypes.oneOf(["sources", "outline"]).isRequired,
+      setPrimaryPaneTab: PropTypes.func.isRequired,
+      threads: PropTypes.array.isRequired,
+    };
   }
 
   showPane = selectedPane => {

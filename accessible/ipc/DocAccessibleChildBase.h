@@ -45,7 +45,7 @@ class DocAccessibleChildBase : public PDocAccessibleChild {
    * Serializes a shown tree and sends it to the chrome process.
    */
   void InsertIntoIpcTree(LocalAccessible* aParent, LocalAccessible* aChild,
-                         uint32_t aIdxInParent);
+                         uint32_t aIdxInParent, bool aSuppressShowEvent);
   void ShowEvent(AccShowEvent* aShowEvent);
 
   virtual void ActorDestroy(ActorDestroyReason) override {
@@ -57,9 +57,30 @@ class DocAccessibleChildBase : public PDocAccessibleChild {
     mDoc = nullptr;
   }
 
+  virtual mozilla::ipc::IPCResult RecvTakeFocus(const uint64_t& aID) override;
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  virtual mozilla::ipc::IPCResult RecvScrollTo(
+      const uint64_t& aID, const uint32_t& aScrollType) override;
+
+  virtual mozilla::ipc::IPCResult RecvTakeSelection(
+      const uint64_t& aID) override;
+  virtual mozilla::ipc::IPCResult RecvSetSelected(const uint64_t& aID,
+                                                  const bool& aSelect) override;
+
+  virtual mozilla::ipc::IPCResult RecvVerifyCache(
+      const uint64_t& aID, const uint64_t& aCacheDomain,
+      AccAttributes* aFields) override;
+
+  virtual mozilla::ipc::IPCResult RecvDoActionAsync(
+      const uint64_t& aID, const uint8_t& aIndex) override;
+
  protected:
-  static void SerializeTree(LocalAccessible* aRoot,
-                            nsTArray<AccessibleData>& aTree);
+  static void FlattenTree(LocalAccessible* aRoot,
+                          nsTArray<LocalAccessible*>& aTree);
+
+  static void SerializeTree(nsTArray<LocalAccessible*>& aTree,
+                            nsTArray<AccessibleData>& aData);
 
   virtual void MaybeSendShowEvent(ShowEventData& aData, bool aFromUser) {
     Unused << SendShowEvent(aData, aFromUser);
@@ -74,6 +95,8 @@ class DocAccessibleChildBase : public PDocAccessibleChild {
 
   bool IsConstructedInParentProcess() const { return mIsRemoteConstructed; }
   void SetConstructedInParentProcess() { mIsRemoteConstructed = true; }
+
+  LocalAccessible* IdToAccessible(const uint64_t& aID) const;
 
   DocAccessible* mDoc;
   bool mIsRemoteConstructed;

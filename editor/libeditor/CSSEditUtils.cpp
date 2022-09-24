@@ -3,15 +3,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "mozilla/CSSEditUtils.h"
+#include "CSSEditUtils.h"
+
+#include "ChangeStyleTransaction.h"
+#include "HTMLEditor.h"
+#include "HTMLEditUtils.h"
 
 #include "mozilla/Assertions.h"
-#include "mozilla/ChangeStyleTransaction.h"
-#include "mozilla/HTMLEditor.h"
-#include "mozilla/Preferences.h"
 #include "mozilla/DeclarationBlock.h"
-#include "mozilla/dom/Element.h"
 #include "mozilla/mozalloc.h"
+#include "mozilla/Preferences.h"
+#include "mozilla/StaticPrefs_editor.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/Element.h"
 #include "nsAString.h"
 #include "nsCOMPtr.h"
 #include "nsCSSProps.h"
@@ -24,7 +28,6 @@
 #include "nsAtom.h"
 #include "nsIContent.h"
 #include "nsICSSDeclaration.h"
-#include "mozilla/dom/Document.h"
 #include "nsINode.h"
 #include "nsISupportsImpl.h"
 #include "nsISupportsUtils.h"
@@ -278,10 +281,8 @@ const CSSEditUtils::CSSEquivTable hrAlignEquivTable[] = {
 #undef CSS_EQUIV_TABLE_NONE
 
 CSSEditUtils::CSSEditUtils(HTMLEditor* aHTMLEditor)
-    : mHTMLEditor(aHTMLEditor), mIsCSSPrefChecked(true) {
-  // let's retrieve the value of the "CSS editing" pref
-  mIsCSSPrefChecked = Preferences::GetBool("editor.use_css", mIsCSSPrefChecked);
-}
+    : mHTMLEditor(aHTMLEditor),
+      mIsCSSPrefChecked(StaticPrefs::editor_use_css()) {}
 
 // Answers true if we have some CSS equivalence for the HTML style defined
 // by aProperty and/or aAttribute for the node aNode
@@ -562,8 +563,9 @@ already_AddRefed<nsComputedDOMStyle> CSSEditUtils::GetComputedStyle(
     return nullptr;
   }
 
-  RefPtr<nsComputedDOMStyle> computedDOMStyle =
-      NS_NewComputedDOMStyle(aElement, u""_ns, document);
+  RefPtr<nsComputedDOMStyle> computedDOMStyle = NS_NewComputedDOMStyle(
+      aElement, u""_ns, document, nsComputedDOMStyle::StyleType::All,
+      IgnoreErrors());
   return computedDOMStyle.forget();
 }
 
@@ -586,12 +588,20 @@ nsresult CSSEditUtils::RemoveCSSInlineStyleWithTransaction(
   }
 
   OwningNonNull<HTMLEditor> htmlEditor(*mHTMLEditor);
-  rv = htmlEditor->RemoveContainerWithTransaction(aStyledElement);
-  if (NS_WARN_IF(htmlEditor->Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  const Result<EditorDOMPoint, nsresult> unwrapStyledElementResult =
+      htmlEditor->RemoveContainerWithTransaction(aStyledElement);
+  if (MOZ_UNLIKELY(unwrapStyledElementResult.isErr())) {
+    NS_WARNING("HTMLEditor::RemoveContainerWithTransaction() failed");
+    return unwrapStyledElementResult.inspectErr();
   }
+  const EditorDOMPoint& pointToPutCaret = unwrapStyledElementResult.inspect();
+  if (!htmlEditor->AllowsTransactionsToChangeSelection() ||
+      !pointToPutCaret.IsSet()) {
+    return NS_OK;
+  }
+  rv = htmlEditor->CollapseSelectionTo(pointToPutCaret);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::RemoveContainerWithTransaction() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -608,7 +618,7 @@ bool CSSEditUtils::IsCSSInvertible(nsAtom& aProperty, nsAtom* aAttribute) {
 
 // static
 void CSSEditUtils::GetDefaultBackgroundColor(nsAString& aColor) {
-  if (Preferences::GetBool("editor.use_custom_colors", false)) {
+  if (MOZ_UNLIKELY(StaticPrefs::editor_use_custom_colors())) {
     nsresult rv = Preferences::GetString("editor.background_color", aColor);
     // XXX Why don't you validate the pref value?
     if (NS_FAILED(rv)) {
@@ -635,10 +645,9 @@ void CSSEditUtils::GetDefaultBackgroundColor(nsAString& aColor) {
 
 // static
 void CSSEditUtils::GetDefaultLengthUnit(nsAString& aLengthUnit) {
-  nsresult rv =
-      Preferences::GetString("editor.css.default_length_unit", aLengthUnit);
   // XXX Why don't you validate the pref value?
-  if (NS_FAILED(rv)) {
+  if (MOZ_UNLIKELY(NS_FAILED(Preferences::GetString(
+          "editor.css.default_length_unit", aLengthUnit)))) {
     aLengthUnit.AssignLiteral("px");
   }
 }
@@ -970,7 +979,7 @@ nsresult CSSEditUtils::GetCSSEquivalentToHTMLInlineStyleSetInternal(
     }
     // append the value to aValue (possibly with a leading white-space)
     if (index) {
-      aValue.Append(char16_t(' '));
+      aValue.Append(HTMLEditUtils::kSpace);
     }
     aValue.Append(valueString);
   }
@@ -986,8 +995,8 @@ nsresult CSSEditUtils::GetCSSEquivalentToHTMLInlineStyleSetInternal(
 // The nsIContent variant returns aIsSet instead of using an out parameter, and
 // does not modify aValue.
 
-// static
-bool CSSEditUtils::IsCSSEquivalentToHTMLInlineStyleSetInternal(
+Result<bool, nsresult>
+CSSEditUtils::IsCSSEquivalentToHTMLInlineStyleSetInternal(
     nsIContent& aContent, nsAtom* aHTMLProperty, nsAtom* aAttribute,
     nsAString& aValue, StyleType aStyleType) {
   MOZ_ASSERT(aHTMLProperty || aAttribute);
@@ -1004,14 +1013,17 @@ bool CSSEditUtils::IsCSSEquivalentToHTMLInlineStyleSetInternal(
     // get the value of the CSS equivalent styles
     nsresult rv = GetCSSEquivalentToHTMLInlineStyleSetInternal(
         *content, aHTMLProperty, aAttribute, aValue, aStyleType);
+    if (NS_WARN_IF(!mHTMLEditor || mHTMLEditor->Destroyed())) {
+      return Err(NS_ERROR_EDITOR_DESTROYED);
+    }
     if (NS_FAILED(rv)) {
       NS_WARNING(
           "CSSEditUtils::GetCSSEquivalentToHTMLInlineStyleSetInternal() "
           "failed");
-      return false;
+      return Err(rv);
     }
     if (NS_WARN_IF(parentNode != content->GetParentNode())) {
-      return false;
+      return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
     }
 
     // early way out if we can
@@ -1101,7 +1113,7 @@ bool CSSEditUtils::IsCSSEquivalentToHTMLInlineStyleSetInternal(
     } else if (nsGkAtoms::font == aHTMLProperty && aAttribute &&
                aAttribute == nsGkAtoms::face) {
       if (!htmlValueString.IsEmpty()) {
-        const char16_t commaSpace[] = {char16_t(','), char16_t(' '), 0};
+        const char16_t commaSpace[] = {char16_t(','), HTMLEditUtils::kSpace, 0};
         const char16_t comma[] = {char16_t(','), 0};
         htmlValueString.ReplaceSubstring(commaSpace, comma);
         nsAutoString valueStringNorm(aValue);
@@ -1142,10 +1154,9 @@ bool CSSEditUtils::IsCSSEquivalentToHTMLInlineStyleSetInternal(
   return isSet;
 }
 
-bool CSSEditUtils::HaveCSSEquivalentStylesInternal(nsIContent& aContent,
-                                                   nsAtom* aHTMLProperty,
-                                                   nsAtom* aAttribute,
-                                                   StyleType aStyleType) {
+Result<bool, nsresult> CSSEditUtils::HaveCSSEquivalentStylesInternal(
+    nsIContent& aContent, nsAtom* aHTMLProperty, nsAtom* aAttribute,
+    StyleType aStyleType) {
   MOZ_ASSERT(aHTMLProperty || aAttribute);
 
   // FYI: Unfortunately, we cannot use InclusiveAncestorsOfType here
@@ -1158,14 +1169,17 @@ bool CSSEditUtils::HaveCSSEquivalentStylesInternal(nsIContent& aContent,
     // get the value of the CSS equivalent styles
     nsresult rv = GetCSSEquivalentToHTMLInlineStyleSetInternal(
         *content, aHTMLProperty, aAttribute, valueString, aStyleType);
+    if (NS_WARN_IF(!mHTMLEditor || mHTMLEditor->Destroyed())) {
+      return Err(NS_ERROR_EDITOR_DESTROYED);
+    }
     if (NS_FAILED(rv)) {
       NS_WARNING(
           "CSSEditUtils::GetCSSEquivalentToHTMLInlineStyleSetInternal() "
           "failed");
-      return false;
+      return Err(rv);
     }
     if (NS_WARN_IF(parentNode != content->GetParentNode())) {
-      return false;
+      return Err(NS_ERROR_EDITOR_UNEXPECTED_DOM_TREE);
     }
 
     if (!valueString.IsEmpty()) {

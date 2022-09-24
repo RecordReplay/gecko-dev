@@ -64,6 +64,10 @@ bool nsIFrame::IsFixedPosContainingBlock() const {
   return StyleDisplay()->IsFixedPosContainingBlock(this);
 }
 
+bool nsIFrame::IsRelativelyOrStickyPositioned() const {
+  return StyleDisplay()->IsRelativelyOrStickyPositioned(this);
+}
+
 bool nsIFrame::IsRelativelyPositioned() const {
   return StyleDisplay()->IsRelativelyPositioned(this);
 }
@@ -257,17 +261,12 @@ nsIFrame* nsIFrame::GetClosestFlattenedTreeAncestorPrimaryFrame() const {
 }
 
 nsPoint nsIFrame::GetNormalPosition(bool* aHasProperty) const {
-  nsPoint* normalPosition = GetProperty(NormalPositionProperty());
-  if (normalPosition) {
-    if (aHasProperty) {
-      *aHasProperty = true;
-    }
-    return *normalPosition;
-  }
+  bool hasProperty;
+  nsPoint normalPosition = GetProperty(NormalPositionProperty(), &hasProperty);
   if (aHasProperty) {
-    *aHasProperty = false;
+    *aHasProperty = hasProperty;
   }
-  return GetPosition();
+  return hasProperty ? normalPosition : GetPosition();
 }
 
 mozilla::LogicalPoint nsIFrame::GetLogicalNormalPosition(

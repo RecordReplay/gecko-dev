@@ -269,4 +269,214 @@ async function testCaseInsensitive() {
       ],
     });
   }
+
+  await cleanupPlaces();
 }
+
+// Checks a URL with an origin that looks like a prefix: a scheme with no dots +
+// a port.
+add_task(async function originLooksLikePrefix1() {
+  await PlacesTestUtils.addVisits([
+    {
+      uri: "http://localhost:8888/foo",
+    },
+  ]);
+  const context = createContext("localhost:8888/f", { isPrivate: false });
+  await check_results({
+    context,
+    autofilled: "localhost:8888/foo",
+    completed: "http://localhost:8888/foo",
+    matches: [
+      makeVisitResult(context, {
+        uri: "http://localhost:8888/foo",
+        title: "localhost:8888/foo",
+        heuristic: true,
+      }),
+    ],
+  });
+  await cleanupPlaces();
+});
+
+// Same as previous (originLooksLikePrefix1) but uses a URL whose path has two
+// slashes, not one.
+add_task(async function originLooksLikePrefix2() {
+  await PlacesTestUtils.addVisits([
+    {
+      uri: "http://localhost:8888/foo/bar",
+    },
+  ]);
+
+  let context = createContext("localhost:8888/f", { isPrivate: false });
+  await check_results({
+    context,
+    autofilled: "localhost:8888/foo/",
+    completed: "http://localhost:8888/foo/",
+    matches: [
+      makeVisitResult(context, {
+        uri: "http://localhost:8888/foo/",
+        title: "localhost:8888/foo/",
+        heuristic: true,
+      }),
+      makeVisitResult(context, {
+        uri: "http://localhost:8888/foo/bar",
+        title: "test visit for http://localhost:8888/foo/bar",
+        providerName: PLACES_PROVIDERNAME,
+        tags: [],
+      }),
+    ],
+  });
+
+  context = createContext("localhost:8888/foo/b", { isPrivate: false });
+  await check_results({
+    context,
+    autofilled: "localhost:8888/foo/bar",
+    completed: "http://localhost:8888/foo/bar",
+    matches: [
+      makeVisitResult(context, {
+        uri: "http://localhost:8888/foo/bar",
+        title: "localhost:8888/foo/bar",
+        heuristic: true,
+      }),
+    ],
+  });
+  await cleanupPlaces();
+});
+
+// Checks view-source pages as a prefix
+// Uses bookmark because addVisits does not allow non-http uri's
+add_task(async function viewSourceAsPrefix() {
+  let address = "view-source:https://www.example.com/";
+  let title = "A view source bookmark";
+  await PlacesTestUtils.addBookmarkWithDetails({
+    uri: address,
+    title,
+  });
+
+  let testData = [
+    {
+      input: "view-source:h",
+      completed: "view-source:https:/",
+      autofilled: "view-source:https:/",
+    },
+    {
+      input: "view-source:http",
+      completed: "view-source:https:/",
+      autofilled: "view-source:https:/",
+    },
+    {
+      input: "VIEW-SOURCE:http",
+      completed: "view-source:https:/",
+      autofilled: "VIEW-SOURCE:https:/",
+    },
+  ];
+
+  // Only autofills from view-source:h to view-source:https:/
+  for (let { input, completed, autofilled } of testData) {
+    let context = createContext(input, { isPrivate: false });
+    await check_results({
+      context,
+      completed,
+      autofilled,
+      matches: [
+        {
+          heuristic: true,
+          type: UrlbarUtils.RESULT_TYPE.URL,
+          source: UrlbarUtils.RESULT_SOURCE.HISTORY,
+        },
+        makeBookmarkResult(context, {
+          uri: address,
+          iconUri: "chrome://global/skin/icons/defaultFavicon.svg",
+          title,
+        }),
+      ],
+    });
+  }
+
+  await cleanupPlaces();
+});
+
+// Checks data url prefixes
+// Uses bookmark because addVisits does not allow non-http uri's
+add_task(async function dataAsPrefix() {
+  let address = "data:text/html,%3Ch1%3EHello%2C World!%3C%2Fh1%3E";
+  let title = "A data url bookmark";
+  await PlacesTestUtils.addBookmarkWithDetails({
+    uri: address,
+    title,
+  });
+
+  let testData = [
+    {
+      input: "data:t",
+      completed: "data:text/",
+      autofilled: "data:text/",
+    },
+    {
+      input: "data:text",
+      completed: "data:text/",
+      autofilled: "data:text/",
+    },
+    {
+      input: "DATA:text",
+      completed: "data:text/",
+      autofilled: "DATA:text/",
+    },
+  ];
+
+  for (let { input, completed, autofilled } of testData) {
+    let context = createContext(input, { isPrivate: false });
+    await check_results({
+      context,
+      completed,
+      autofilled,
+      matches: [
+        {
+          heuristic: true,
+          type: UrlbarUtils.RESULT_TYPE.URL,
+          source: UrlbarUtils.RESULT_SOURCE.HISTORY,
+        },
+        makeBookmarkResult(context, {
+          uri: address,
+          iconUri: "chrome://global/skin/icons/defaultFavicon.svg",
+          title,
+        }),
+      ],
+    });
+  }
+
+  await cleanupPlaces();
+});
+
+// Checks about prefixes
+add_task(async function aboutAsPrefix() {
+  let testData = [
+    {
+      input: "about:abou",
+      completed: "about:about",
+      autofilled: "about:about",
+    },
+    {
+      input: "ABOUT:abou",
+      completed: "about:about",
+      autofilled: "ABOUT:about",
+    },
+  ];
+
+  for (let { input, completed, autofilled } of testData) {
+    let context = createContext(input, { isPrivate: false });
+    await check_results({
+      context,
+      completed,
+      autofilled,
+      matches: [
+        {
+          heuristic: true,
+          type: UrlbarUtils.RESULT_TYPE.URL,
+          source: UrlbarUtils.RESULT_SOURCE.HISTORY,
+        },
+      ],
+    });
+  }
+
+  await cleanupPlaces();
+});

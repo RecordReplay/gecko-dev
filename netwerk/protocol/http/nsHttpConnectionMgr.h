@@ -27,8 +27,7 @@
 
 class nsIHttpUpgradeListener;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 class EventTokenBucket;
 class NullHttpTransaction;
 struct HttpRetParams;
@@ -40,11 +39,13 @@ class nsHttpConnectionMgr;
 using nsConnEventHandler = void (nsHttpConnectionMgr::*)(int32_t, ARefBase*);
 
 class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
-                                  public nsIObserver {
+                                  public nsIObserver,
+                                  nsINamed {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_HTTPCONNECTIONMGRSHELL
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSINAMED
 
   //-------------------------------------------------------------------------
   // NOTE: functions below may only be called on the main thread.
@@ -71,7 +72,8 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
 
   // Remove a transaction from the pendingQ of it's connection entry. Returns
   // true if the transaction is removed successfully, otherwise returns false.
-  bool RemoveTransFromConnEntry(nsHttpTransaction* aTrans);
+  bool RemoveTransFromConnEntry(nsHttpTransaction* aTrans,
+                                const nsACString& aHashKey);
 
   // Directly dispatch the transaction or insert it in to the pendingQ.
   [[nodiscard]] nsresult ProcessNewTransaction(nsHttpTransaction* aTrans);
@@ -81,6 +83,9 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // that the network peer has closed the transport.
   [[nodiscard]] nsresult CloseIdleConnection(nsHttpConnection*);
   [[nodiscard]] nsresult RemoveIdleConnection(nsHttpConnection*);
+
+  // Close a single connection and prevent it from being reused.
+  [[nodiscard]] nsresult DoSingleConnectionCleanup(nsHttpConnectionInfo*);
 
   // The connection manager needs to know when a normal HTTP connection has been
   // upgraded to SPDY because the dispatch and idle semantics are a little
@@ -202,8 +207,15 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   //-------------------------------------------------------------------------
 
   ReentrantMonitor mReentrantMonitor{"nsHttpConnectionMgr.mReentrantMonitor"};
-  nsCOMPtr<nsIEventTarget> mSocketThreadTarget;
+  // This is used as a flag that we're shut down, and no new events should be
+  // dispatched.
+  nsCOMPtr<nsIEventTarget> mSocketThreadTarget GUARDED_BY(mReentrantMonitor);
 
+  Atomic<bool, mozilla::Relaxed> mIsShuttingDown{false};
+
+  //-------------------------------------------------------------------------
+  // NOTE: these members are only accessed on the socket transport thread
+  //-------------------------------------------------------------------------
   // connection limits
   uint16_t mMaxUrgentExcessiveConns{0};
   uint16_t mMaxConns{0};
@@ -219,11 +231,6 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   uint32_t mThrottleHoldTime{0};
   TimeDuration mThrottleMaxTime;
   bool mBeConservativeForProxy{true};
-  Atomic<bool, mozilla::Relaxed> mIsShuttingDown{false};
-
-  //-------------------------------------------------------------------------
-  // NOTE: these members are only accessed on the socket transport thread
-  //-------------------------------------------------------------------------
 
   [[nodiscard]] bool ProcessPendingQForEntry(ConnectionEntry*,
                                              bool considerAll);
@@ -305,7 +312,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   void OnMsgNewTransaction(int32_t, ARefBase*);
   void OnMsgNewTransactionWithStickyConn(int32_t, ARefBase*);
   void OnMsgReschedTransaction(int32_t, ARefBase*);
-  void OnMsgUpdateClassOfServiceOnTransaction(int32_t, ARefBase*);
+  void OnMsgUpdateClassOfServiceOnTransaction(ClassOfService, ARefBase*);
   void OnMsgCancelTransaction(int32_t, ARefBase*);
   void OnMsgCancelTransactions(int32_t, ARefBase*);
   void OnMsgProcessPendingQ(int32_t, ARefBase*);
@@ -314,6 +321,7 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   void OnMsgCompleteUpgrade(int32_t, ARefBase*);
   void OnMsgUpdateParam(int32_t, ARefBase*);
   void OnMsgDoShiftReloadConnectionCleanup(int32_t, ARefBase*);
+  void OnMsgDoSingleConnectionCleanup(int32_t, ARefBase*);
   void OnMsgProcessFeedback(int32_t, ARefBase*);
   void OnMsgProcessAllSpdyPendingQ(int32_t, ARefBase*);
   void OnMsgUpdateRequestTokenBucket(int32_t, ARefBase*);
@@ -447,9 +455,10 @@ class nsHttpConnectionMgr final : public HttpConnectionMgrShell,
   // Then, it notifies selected transactions' connection of the new active tab
   // id.
   void NotifyConnectionOfBrowsingContextIdChange(uint64_t previousId);
+
+  void CheckTransInPendingQueue(nsHttpTransaction* aTrans);
 };
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 #endif  // !nsHttpConnectionMgr_h__

@@ -79,6 +79,7 @@ class MediaTrackGraphShutdownThreadRunnable : public Runnable {
       already_AddRefed<nsIThread> aThread)
       : Runnable("MediaTrackGraphShutdownThreadRunnable"), mThread(aThread) {}
   NS_IMETHOD Run() override {
+    TRACE("MediaTrackGraphShutdownThreadRunnable");
     MOZ_ASSERT(NS_IsMainThread());
     MOZ_ASSERT(mThread);
 
@@ -104,6 +105,7 @@ class MediaTrackGraphInitThreadRunnable : public Runnable {
   explicit MediaTrackGraphInitThreadRunnable(ThreadedDriver* aDriver)
       : Runnable("MediaTrackGraphInitThreadRunnable"), mDriver(aDriver) {}
   NS_IMETHOD Run() override {
+    TRACE("MediaTrackGraphInitThreadRunnable");
     MOZ_ASSERT(!mDriver->ThreadRunning());
     LOG(LogLevel::Debug, ("Starting a new system driver for graph %p",
                           mDriver->mGraphInterface.get()));
@@ -500,13 +502,16 @@ AudioCallbackDriver::AudioCallbackDriver(
       mInputDeviceID(aInputDeviceID),
       mIterationDurationMS(MEDIA_GRAPH_TARGET_PERIOD_MS),
       mStarted(false),
-      mInitShutdownThread(SharedThreadPool::Get("CubebOperation"_ns, 1)),
-      mAudioThreadId(0),
+      mInitShutdownThread(CUBEB_TASK_THREAD),
+      mAudioThreadId(ProfilerThreadId{}),
       mAudioThreadIdInCb(std::thread::id()),
       mAudioStreamState(AudioStreamState::None),
       mFallback("AudioCallbackDriver::mFallback"),
       mSandboxed(CubebUtils::SandboxEnabled()) {
-  LOG(LogLevel::Debug, ("%p: AudioCallbackDriver ctor", Graph()));
+  LOG(LogLevel::Debug, ("%p: AudioCallbackDriver %p ctor - input: device %p, "
+                        "channel %d, output: device %p, channel %d",
+                        Graph(), this, mInputDeviceID, mInputChannelCount,
+                        mOutputDeviceID, mOutputChannelCount));
 
   NS_WARNING_ASSERTION(mOutputChannelCount != 0,
                        "Invalid output channel count");
@@ -541,7 +546,6 @@ bool IsMacbookOrMacbookAir() {
     UniquePtr<char[]> model(new char[len]);
     // This string can be
     // MacBook%d,%d for a normal MacBook
-    // MacBookPro%d,%d for a MacBook Pro
     // MacBookAir%d,%d for a Macbook Air
     sysctlbyname("hw.model", model.get(), &len, NULL, 0);
     char* substring = strstr(model.get(), "MacBook");
@@ -558,7 +562,7 @@ bool IsMacbookOrMacbookAir() {
 }
 
 void AudioCallbackDriver::Init() {
-  TRACE();
+  TRACE("AudioCallbackDriver::Init");
   MOZ_ASSERT(OnCubebOperationThread());
   MOZ_ASSERT(mAudioStreamState == AudioStreamState::Pending);
   FallbackDriverState fallbackState = mFallbackDriverState;
@@ -588,11 +592,13 @@ void AudioCallbackDriver::Init() {
 
   output.rate = mSampleRate;
 
-  if (AUDIO_OUTPUT_FORMAT == AUDIO_FORMAT_S16) {
-    output.format = CUBEB_SAMPLE_S16NE;
-  } else {
-    output.format = CUBEB_SAMPLE_FLOAT32NE;
-  }
+#ifdef MOZ_SAMPLE_TYPE_S16
+  MOZ_ASSERT(AUDIO_OUTPUT_FORMAT == AUDIO_FORMAT_S16);
+  output.format = CUBEB_SAMPLE_S16NE;
+#else
+  MOZ_ASSERT(AUDIO_OUTPUT_FORMAT == AUDIO_FORMAT_FLOAT32);
+  output.format = CUBEB_SAMPLE_FLOAT32NE;
+#endif
 
   if (!mOutputChannelCount) {
     LOG(LogLevel::Warning, ("Output number of channels is 0."));
@@ -665,13 +671,11 @@ void AudioCallbackDriver::Init() {
   CubebUtils::AudioDeviceID outputId = mOutputDeviceID;
   CubebUtils::AudioDeviceID inputId = mInputDeviceID;
 
-  // XXX Only pass input input if we have an input listener.  Always
-  // set up output because it's easier, and it will just get silence.
-  if (cubeb_stream_init(cubebContext, &stream, "AudioCallbackDriver", inputId,
-                        inputWanted ? &input : nullptr,
-                        forcedOutputDeviceId ? forcedOutputDeviceId : outputId,
-                        &output, latencyFrames, DataCallback_s, StateCallback_s,
-                        this) == CUBEB_OK) {
+  if (CubebUtils::CubebStreamInit(
+          cubebContext, &stream, "AudioCallbackDriver", inputId,
+          inputWanted ? &input : nullptr,
+          forcedOutputDeviceId ? forcedOutputDeviceId : outputId, &output,
+          latencyFrames, DataCallback_s, StateCallback_s, this) == CUBEB_OK) {
     mAudioStream.own(stream);
     DebugOnly<int> rv =
         cubeb_stream_set_volume(mAudioStream, CubebUtils::GetVolumeScale());
@@ -751,7 +755,7 @@ void AudioCallbackDriver::Start() {
 }
 
 bool AudioCallbackDriver::StartStream() {
-  TRACE();
+  TRACE("AudioCallbackDriver::StartStream");
   MOZ_ASSERT(!IsStarted() && OnCubebOperationThread());
   // Set mStarted before cubeb_stream_start, since starting the cubeb stream can
   // result in a callback (that may read mStarted) before mStarted would
@@ -767,7 +771,7 @@ bool AudioCallbackDriver::StartStream() {
 }
 
 void AudioCallbackDriver::Stop() {
-  TRACE();
+  TRACE("AudioCallbackDriver::Stop");
   MOZ_ASSERT(OnCubebOperationThread());
   cubeb_stream_register_device_changed_callback(mAudioStream, nullptr);
   if (cubeb_stream_stop(mAudioStream) != CUBEB_OK) {
@@ -834,13 +838,11 @@ AudioCallbackDriver::AutoInCallback::~AutoInCallback() {
 }
 
 bool AudioCallbackDriver::CheckThreadIdChanged() {
-#ifdef MOZ_GECKO_PROFILER
-  auto id = profiler_current_thread_id();
+  ProfilerThreadId id = profiler_current_thread_id();
   if (id != mAudioThreadId) {
     mAudioThreadId = id;
     return true;
   }
-#endif
   return false;
 }
 
@@ -881,7 +883,7 @@ long AudioCallbackDriver::DataCallback(const AudioDataValue* aInputBuffer,
 
   MOZ_ASSERT(ThreadRunning());
   TRACE_AUDIO_CALLBACK_BUDGET(aFrames, mSampleRate);
-  TRACE();
+  TRACE("AudioCallbackDriver::DataCallback");
 
 #ifdef DEBUG
   AutoInCallback aic(this);
@@ -943,22 +945,10 @@ long AudioCallbackDriver::DataCallback(const AudioDataValue* aInputBuffer,
                              mSampleRate, mInputChannelCount, alreadyBuffered);
   }
 
-  bool iterate = mBuffer.Available();
   IterationResult result =
-      iterate
-          ? Graph()->OneIteration(nextStateComputedTime, mIterationEnd, &mMixer)
-          : IterationResult::CreateStillProcessing();
-  if (iterate) {
-    // We totally filled the buffer (and mScratchBuffer isn't empty).
-    // We don't need to run an iteration and if we do so we may overflow.
-    mStateComputedTime = nextStateComputedTime;
-  } else {
-    LOG(LogLevel::Verbose,
-        ("%p: DataCallback buffer filled entirely from scratch "
-         "buffer, skipping iteration.",
-         Graph()));
-    result = IterationResult::CreateStillProcessing();
-  }
+      Graph()->OneIteration(nextStateComputedTime, mIterationEnd, &mMixer);
+
+  mStateComputedTime = nextStateComputedTime;
 
   MOZ_ASSERT(mBuffer.Available() == 0,
              "The graph should have filled the buffer");
@@ -1097,7 +1087,7 @@ void AudioCallbackDriver::MixerCallback(AudioDataValue* aMixedBuffer,
   MOZ_ASSERT(InIteration());
   uint32_t toWrite = mBuffer.Available();
 
-  if (!mBuffer.Available()) {
+  if (!mBuffer.Available() && aFrames > 0) {
     NS_WARNING("DataCallback buffer full, expect frame drops.");
   }
 
@@ -1114,7 +1104,7 @@ void AudioCallbackDriver::MixerCallback(AudioDataValue* aMixedBuffer,
 
 void AudioCallbackDriver::PanOutputIfNeeded(bool aMicrophoneActive) {
 #ifdef XP_MACOSX
-  TRACE();
+  TRACE("AudioCallbackDriver::PanOutputIfNeeded");
   cubeb_device* out = nullptr;
   int rv;
   char name[128];
@@ -1203,7 +1193,7 @@ void AudioCallbackDriver::EnsureNextIteration() {
 bool AudioCallbackDriver::IsStarted() { return mStarted; }
 
 TimeDuration AudioCallbackDriver::AudioOutputLatency() {
-  TRACE();
+  TRACE("AudioCallbackDriver::AudioOutputLatency");
   uint32_t latencyFrames;
   int rv = cubeb_stream_get_latency(mAudioStream, &latencyFrames);
   if (rv || mSampleRate == 0) {

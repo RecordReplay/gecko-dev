@@ -53,9 +53,11 @@ add_task(async function testWebExtensionToolboxReload() {
 
   info("Wait for the initial background message to appear in the console");
   const initialMessage = await waitFor(() =>
-    findMessage(hud, "background script executed")
+    findMessagesByType(hud, "background script executed", ".console-api")
   );
   ok(initialMessage, "Found the expected message from the background script");
+
+  const waitForLoadedPanelsReload = await watchForLoadedPanelsReload(toolbox);
 
   info("Reload the addon using a toolbox reload shortcut");
   toolbox.win.focus();
@@ -63,16 +65,17 @@ add_task(async function testWebExtensionToolboxReload() {
 
   info("Wait until a new background log message is logged");
   await waitFor(() => {
-    const newMessage = findMessage(hud, "background script executed");
+    const newMessage = findMessagesByType(
+      hud,
+      "background script executed",
+      ".console-api"
+    );
     return newMessage && newMessage !== initialMessage;
   });
+
+  await waitForLoadedPanelsReload();
 
   await closeAboutDevtoolsToolbox(document, devtoolsTab, window);
   await removeTemporaryExtension(ADDON_NAME, document);
   await removeTab(tab);
 });
-
-function findMessage(hud, text) {
-  const messages = hud.ui.outputNode.querySelectorAll(".message");
-  return [...messages].find(el => el.textContent.includes(text));
-}

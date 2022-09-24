@@ -11,6 +11,7 @@
 #include "AudioWorkletImpl.h"
 #include "jsapi.h"
 #include "js/ForOfIterator.h"
+#include "js/PropertyAndElement.h"  // JS_GetProperty
 #include "mozilla/dom/AudioWorkletGlobalScopeBinding.h"
 #include "mozilla/dom/AudioWorkletProcessor.h"
 #include "mozilla/dom/BindingCallContext.h"
@@ -20,6 +21,7 @@
 #include "mozilla/dom/AudioParamDescriptorBinding.h"
 #include "nsPrintfCString.h"
 #include "nsTHashSet.h"
+#include "Tracing.h"
 
 namespace mozilla::dom {
 
@@ -33,15 +35,17 @@ NS_IMPL_ADDREF_INHERITED(AudioWorkletGlobalScope, WorkletGlobalScope)
 NS_IMPL_RELEASE_INHERITED(AudioWorkletGlobalScope, WorkletGlobalScope)
 
 AudioWorkletGlobalScope::AudioWorkletGlobalScope(AudioWorkletImpl* aImpl)
-    : WorkletGlobalScope(aImpl->GetAgentClusterId(),
-                         aImpl->IsSharedMemoryAllowed()),
-      mImpl(aImpl) {}
+    : WorkletGlobalScope(aImpl) {}
+
+AudioWorkletImpl* AudioWorkletGlobalScope::Impl() const {
+  return static_cast<AudioWorkletImpl*>(mImpl.get());
+}
 
 bool AudioWorkletGlobalScope::WrapGlobalObject(
     JSContext* aCx, JS::MutableHandle<JSObject*> aReflector) {
   // |this| is being exposed to JS and content script will soon be running.
   // The graph needs a handle on the JSContext so it can interrupt JS.
-  mImpl->DestinationTrack()->Graph()->NotifyJSContext(aCx);
+  Impl()->DestinationTrack()->Graph()->NotifyJSContext(aCx);
 
   JS::RealmOptions options;
 
@@ -60,6 +64,9 @@ bool AudioWorkletGlobalScope::WrapGlobalObject(
 void AudioWorkletGlobalScope::RegisterProcessor(
     JSContext* aCx, const nsAString& aName,
     AudioWorkletProcessorConstructor& aProcessorCtor, ErrorResult& aRv) {
+  TRACE_COMMENT("AudioWorkletGlobalScope::RegisterProcessor", "%s",
+                NS_ConvertUTF16toUTF8(aName).get());
+
   JS::Rooted<JSObject*> processorConstructor(aCx,
                                              aProcessorCtor.CallableOrNull());
 
@@ -154,8 +161,8 @@ void AudioWorkletGlobalScope::RegisterProcessor(
       return;
     }
     if (!iter.valueIsIterable()) {
-      aRv.ThrowTypeError<MSG_NOT_SEQUENCE>(
-          "AudioWorkletProcessor.parameterDescriptors");
+      aRv.ThrowTypeError<MSG_CONVERSION_ERROR>(
+          "AudioWorkletProcessor.parameterDescriptors", "sequence");
       return;
     }
     /*
@@ -184,7 +191,8 @@ void AudioWorkletGlobalScope::RegisterProcessor(
    */
   NS_DispatchToMainThread(NS_NewRunnableFunction(
       "AudioWorkletGlobalScope: parameter descriptors",
-      [impl = mImpl, name = nsString(aName), map = std::move(map)]() mutable {
+      [impl = RefPtr{Impl()}, name = nsString(aName),
+       map = std::move(map)]() mutable {
         AudioNode* destinationNode =
             impl->DestinationTrack()->Engine()->NodeMainThread();
         if (!destinationNode) {
@@ -194,10 +202,8 @@ void AudioWorkletGlobalScope::RegisterProcessor(
       }));
 }
 
-WorkletImpl* AudioWorkletGlobalScope::Impl() const { return mImpl; }
-
 uint64_t AudioWorkletGlobalScope::CurrentFrame() const {
-  AudioNodeTrack* destinationTrack = mImpl->DestinationTrack();
+  AudioNodeTrack* destinationTrack = Impl()->DestinationTrack();
   GraphTime processedTime = destinationTrack->Graph()->ProcessedTime();
   return destinationTrack->GraphTimeToTrackTime(processedTime);
 }
@@ -207,7 +213,7 @@ double AudioWorkletGlobalScope::CurrentTime() const {
 }
 
 float AudioWorkletGlobalScope::SampleRate() const {
-  return static_cast<float>(mImpl->DestinationTrack()->mSampleRate);
+  return static_cast<float>(Impl()->DestinationTrack()->mSampleRate);
 }
 
 AudioParamDescriptorMap AudioWorkletGlobalScope::DescriptorsFromJS(
@@ -282,6 +288,8 @@ bool AudioWorkletGlobalScope::ConstructProcessor(
     NotNull<StructuredCloneHolder*> aSerializedOptions,
     UniqueMessagePortId& aPortIdentifier,
     JS::MutableHandle<JSObject*> aRetProcessor) {
+  TRACE_COMMENT("AudioWorkletProcessor::ConstructProcessor", "%s",
+                NS_ConvertUTF16toUTF8(aName).get());
   /**
    * See
    * https://webaudio.github.io/web-audio-api/#AudioWorkletProcessor-instantiation

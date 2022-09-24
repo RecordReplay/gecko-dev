@@ -5,14 +5,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "jit/IonCacheIRCompiler.h"
-#include "mozilla/DebugOnly.h"
 #include "mozilla/Maybe.h"
 
 #include <algorithm>
 
-#include "jit/ABIFunctions.h"
-#include "jit/BaselineIC.h"
 #include "jit/CacheIRCompiler.h"
+#include "jit/CacheIRWriter.h"
 #include "jit/IonIC.h"
 #include "jit/JitFrames.h"
 #include "jit/JitZone.h"
@@ -20,22 +18,23 @@
 #include "jit/Linker.h"
 #include "jit/SharedICHelpers.h"
 #include "jit/VMFunctions.h"
-#include "js/friend/DOMProxy.h"  // JS::ExpandoAndGeneration
 #include "proxy/DeadObjectProxy.h"
 #include "proxy/Proxy.h"
 #include "util/Memory.h"
+#include "vm/StaticStrings.h"
 
-#include "jit/ABIFunctionList-inl.h"
 #include "jit/JSJitFrameIter-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "jit/VMFunctionList-inl.h"
-#include "vm/Realm-inl.h"
 
 using namespace js;
 using namespace js::jit;
 
-using mozilla::DebugOnly;
 using mozilla::Maybe;
+
+namespace JS {
+struct ExpandoAndGeneration;
+}
 
 using JS::ExpandoAndGeneration;
 
@@ -389,14 +388,13 @@ bool IonCacheIRCompiler::init() {
     }
     case CacheKind::OptimizeSpreadCall: {
       auto* ic = ic_->asOptimizeSpreadCallIC();
-      Register output = ic->output();
+      ValueOperand output = ic->output();
 
       available.add(output);
       available.add(ic->temp());
 
       liveRegs_.emplace(ic->liveRegs());
-      outputUnchecked_.emplace(
-          TypedOrValueRegister(MIRType::Boolean, AnyRegister(output)));
+      outputUnchecked_.emplace(output);
 
       MOZ_ASSERT(numInputs == 1);
       allocator.initInputLocation(0, ic->value());
@@ -534,6 +532,8 @@ bool IonCacheIRCompiler::init() {
 }
 
 JitCode* IonCacheIRCompiler::compile(IonICStub* stub) {
+  AutoCreatedBy acb(masm, "IonCacheIRCompiler::compile");
+
   masm.setFramePushed(ionScript_->frameSize());
   if (cx_->runtime()->geckoProfiler().enabled()) {
     masm.enableProfilingInstrumentation();
@@ -929,7 +929,7 @@ bool IonCacheIRCompiler::emitCallNativeGetterResult(
   MOZ_ASSERT(target->isNativeFun());
 
   AutoScratchRegisterMaybeOutput argJSContext(allocator, masm, output);
-  AutoScratchRegister argUintN(allocator, masm);
+  AutoScratchRegisterMaybeOutputType argUintN(allocator, masm, output);
   AutoScratchRegister argVp(allocator, masm);
   AutoScratchRegister scratch(allocator, masm);
 
@@ -1051,7 +1051,7 @@ bool IonCacheIRCompiler::emitProxyGetResult(ObjOperandId objId,
   // ProxyGetProperty(JSContext* cx, HandleObject proxy, HandleId id,
   //                  MutableHandleValue vp)
   AutoScratchRegisterMaybeOutput argJSContext(allocator, masm, output);
-  AutoScratchRegister argProxy(allocator, masm);
+  AutoScratchRegisterMaybeOutputType argProxy(allocator, masm, output);
   AutoScratchRegister argId(allocator, masm);
   AutoScratchRegister argVp(allocator, masm);
   AutoScratchRegister scratch(allocator, masm);
@@ -1426,7 +1426,12 @@ bool IonCacheIRCompiler::emitCallNativeSetter(ObjOperandId receiverId,
   AutoScratchRegister argJSContext(allocator, masm);
   AutoScratchRegister argVp(allocator, masm);
   AutoScratchRegister argUintN(allocator, masm);
+#ifndef JS_CODEGEN_X86
   AutoScratchRegister scratch(allocator, masm);
+#else
+  // Not enough registers on x86.
+  Register scratch = argUintN;
+#endif
 
   allocator.discardStack(masm);
 
@@ -1461,6 +1466,10 @@ bool IonCacheIRCompiler::emitCallNativeSetter(ObjOperandId receiverId,
 
   // Make the call.
   masm.setupUnalignedABICall(scratch);
+#ifdef JS_CODEGEN_X86
+  // Reload argUintN because it was clobbered.
+  masm.move32(Imm32(1), argUintN);
+#endif
   masm.passABIArg(argJSContext);
   masm.passABIArg(argUintN);
   masm.passABIArg(argVp);
@@ -1708,8 +1717,9 @@ bool IonCacheIRCompiler::emitGuardAndGetIterator(ObjOperandId objId,
 
   // Load our PropertyIteratorObject* and its NativeIterator.
   masm.movePtr(ImmGCPtr(iterobj), output);
-  masm.loadObjPrivate(output, PropertyIteratorObject::NUM_FIXED_SLOTS,
-                      niScratch);
+
+  Address slotAddr(output, PropertyIteratorObject::offsetOfIteratorSlot());
+  masm.loadPrivate(slotAddr, niScratch);
 
   // Ensure the iterator is reusable: see NativeIterator::isReusable.
   masm.branchIfNativeIteratorNotReusable(niScratch, failure->label());
@@ -1984,6 +1994,13 @@ bool IonCacheIRCompiler::emitPackedArraySliceResult(
   MOZ_CRASH("Call ICs not used in ion");
 }
 
+bool IonCacheIRCompiler::emitArgumentsSliceResult(uint32_t templateObjectOffset,
+                                                  ObjOperandId argsId,
+                                                  Int32OperandId beginId,
+                                                  Int32OperandId endId) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
+
 bool IonCacheIRCompiler::emitIsArrayResult(ValOperandId inputId) {
   MOZ_CRASH("Call ICs not used in ion");
 }
@@ -2016,6 +2033,21 @@ bool IonCacheIRCompiler::emitHasClassResult(ObjOperandId objId,
 
 bool IonCacheIRCompiler::emitSameValueResult(ValOperandId lhs,
                                              ValOperandId rhs) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
+
+bool IonCacheIRCompiler::emitSetHasStringResult(ObjOperandId setId,
+                                                StringOperandId strId) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
+
+bool IonCacheIRCompiler::emitMapHasStringResult(ObjOperandId mapId,
+                                                StringOperandId strId) {
+  MOZ_CRASH("Call ICs not used in ion");
+}
+
+bool IonCacheIRCompiler::emitMapGetStringResult(ObjOperandId mapId,
+                                                StringOperandId strId) {
   MOZ_CRASH("Call ICs not used in ion");
 }
 

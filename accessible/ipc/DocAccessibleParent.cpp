@@ -4,10 +4,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+#include "CachedTableAccessible.h"
 #include "DocAccessibleParent.h"
 #include "mozilla/a11y/Platform.h"
 #include "mozilla/dom/BrowserBridgeParent.h"
 #include "mozilla/dom/BrowserParent.h"
+#include "mozilla/StaticPrefs_accessibility.h"
 #include "xpcAccessibleDocument.h"
 #include "xpcAccEvents.h"
 #include "nsAccUtils.h"
@@ -22,6 +24,15 @@
 #  include "RootAccessible.h"
 #else
 #  include "mozilla/a11y/DocAccessiblePlatformExtParent.h"
+#endif
+
+#if defined(ANDROID)
+#  define ACQUIRE_ANDROID_LOCK \
+    MonitorAutoLock mal(nsAccessibilityService::GetAndroidMonitor());
+#else
+#  define ACQUIRE_ANDROID_LOCK \
+    do {                       \
+    } while (0);
 #endif
 
 namespace mozilla {
@@ -44,6 +55,7 @@ uint64_t DocAccessibleParent::sMaxDocID = 0;
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvShowEvent(
     const ShowEventData& aData, const bool& aFromUser) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) return IPC_OK();
 
   MOZ_ASSERT(CheckDocTree());
@@ -126,37 +138,45 @@ uint32_t DocAccessibleParent::AddSubtree(
 
   const AccessibleData& newChild = aNewTree[aIdx];
 
-  if (mAccessibles.Contains(newChild.ID())) {
-    NS_ERROR("ID already in use");
-    return 0;
-  }
+  RemoteAccessible* newProxy;
+  if ((newProxy = GetAccessible(newChild.ID()))) {
+    // This is a move. Reuse the Accessible; don't destroy it.
+    MOZ_ASSERT(!newProxy->RemoteParent());
+    aParent->AddChildAt(aIdxInParent, newProxy);
+    newProxy->SetParent(aParent);
+  } else {
+    newProxy = new RemoteAccessible(
+        newChild.ID(), aParent, this, newChild.Role(), newChild.Type(),
+        newChild.GenericTypes(), newChild.RoleMapEntryIndex());
 
-  RemoteAccessible* newProxy = new RemoteAccessible(
-      newChild.ID(), aParent, this, newChild.Role(), newChild.Type(),
-      newChild.GenericTypes(), newChild.RoleMapEntryIndex());
-
-  aParent->AddChildAt(aIdxInParent, newProxy);
-  mAccessibles.PutEntry(newChild.ID())->mProxy = newProxy;
-  ProxyCreated(newProxy);
+    aParent->AddChildAt(aIdxInParent, newProxy);
+    mAccessibles.PutEntry(newChild.ID())->mProxy = newProxy;
+    ProxyCreated(newProxy);
 
 #if defined(XP_WIN)
-  if (!StaticPrefs::accessibility_cache_enabled_AtStartup()) {
-    WrapperFor(newProxy)->GetMsaa()->SetID(newChild.MsaaID());
-  }
+    if (!StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+      MsaaAccessible::GetFrom(newProxy)->SetID(newChild.MsaaID());
+    }
 #endif
 
-  mPendingOOPChildDocs.RemoveIf([&](dom::BrowserBridgeParent* bridge) {
-    MOZ_ASSERT(bridge->GetBrowserParent(),
-               "Pending BrowserBridgeParent should be alive");
-    if (bridge->GetEmbedderAccessibleId() != newChild.ID()) {
-      return false;
-    }
-    MOZ_ASSERT(bridge->GetEmbedderAccessibleDoc() == this);
-    if (DocAccessibleParent* childDoc = bridge->GetDocAccessibleParent()) {
-      AddChildDoc(childDoc, newChild.ID(), false);
-    }
-    return true;
-  });
+    mPendingOOPChildDocs.RemoveIf([&](dom::BrowserBridgeParent* bridge) {
+      MOZ_ASSERT(bridge->GetBrowserParent(),
+                 "Pending BrowserBridgeParent should be alive");
+      if (bridge->GetEmbedderAccessibleId() != newChild.ID()) {
+        return false;
+      }
+      MOZ_ASSERT(bridge->GetEmbedderAccessibleDoc() == this);
+      if (DocAccessibleParent* childDoc = bridge->GetDocAccessibleParent()) {
+        AddChildDoc(childDoc, newChild.ID(), false);
+      }
+      return true;
+    });
+  }
+
+  if (newProxy->IsTableCell()) {
+    CachedTableAccessible::Invalidate(newProxy);
+  }
+
   DebugOnly<bool> isOuterDoc = newProxy->ChildCount() == 1;
 
   uint32_t accessibles = 1;
@@ -173,8 +193,37 @@ uint32_t DocAccessibleParent::AddSubtree(
   return accessibles;
 }
 
+void DocAccessibleParent::ShutdownOrPrepareForMove(RemoteAccessible* aAcc) {
+  uint64_t id = aAcc->ID();
+  if (!mMovingIDs.Contains(id)) {
+    // This Accessible is being removed.
+    aAcc->Shutdown();
+    return;
+  }
+  // This is a move. Moves are sent as a hide and then a show, but for a move,
+  // we want to keep the Accessible alive for reuse later.
+  aAcc->SetParent(nullptr);
+  if (aAcc->IsTable() || aAcc->IsTableCell()) {
+    CachedTableAccessible::Invalidate(aAcc);
+  }
+  mMovingIDs.EnsureRemoved(id);
+  if (aAcc->IsOuterDoc()) {
+    // Leave child documents alone. They are added and removed differently to
+    // normal children.
+    return;
+  }
+  // Some children might be removed. Handle children the same way.
+  for (RemoteAccessible* child : aAcc->mChildren) {
+    ShutdownOrPrepareForMove(child);
+  }
+  // Even if some children are kept, those will be re-attached when we handle
+  // the show event. For now, clear all of them.
+  aAcc->mChildren.Clear();
+}
+
 mozilla::ipc::IPCResult DocAccessibleParent::RecvHideEvent(
     const uint64_t& aRootID, const bool& aFromUser) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) return IPC_OK();
 
   MOZ_ASSERT(CheckDocTree());
@@ -216,7 +265,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvHideEvent(
   }
 
   parent->RemoveChild(root);
-  root->Shutdown();
+  ShutdownOrPrepareForMove(root);
 
   MOZ_ASSERT(CheckDocTree());
 
@@ -229,35 +278,55 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvHideEvent(
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvEvent(
     const uint64_t& aID, const uint32_t& aEventType) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
 
-  RemoteAccessible* proxy = GetAccessible(aID);
-  if (!proxy) {
+  RemoteAccessible* remote = GetAccessible(aID);
+  if (!remote) {
     NS_ERROR("no proxy for event!");
     return IPC_OK();
   }
 
-  ProxyEvent(proxy, aEventType);
+  FireEvent(remote, aEventType);
+  return IPC_OK();
+}
 
-  if (!nsCoreUtils::AccEventObserversExist()) {
-    return IPC_OK();
+void DocAccessibleParent::FireEvent(RemoteAccessible* aAcc,
+                                    const uint32_t& aEventType) {
+  if (aEventType == nsIAccessibleEvent::EVENT_FOCUS) {
+    mFocus = aAcc->ID();
   }
 
-  xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(proxy);
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    if (aEventType == nsIAccessibleEvent::EVENT_REORDER ||
+        aEventType == nsIAccessibleEvent::EVENT_INNER_REORDER) {
+      for (RemoteAccessible* child = aAcc->RemoteFirstChild(); child;
+           child = child->RemoteNextSibling()) {
+        child->InvalidateGroupInfo();
+      }
+    }
+  }
+
+  ProxyEvent(aAcc, aEventType);
+
+  if (!nsCoreUtils::AccEventObserversExist()) {
+    return;
+  }
+
+  xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(aAcc);
   xpcAccessibleDocument* doc = GetAccService()->GetXPCDocument(this);
   nsINode* node = nullptr;
   bool fromUser = true;  // XXX fix me
   RefPtr<xpcAccEvent> event =
       new xpcAccEvent(aEventType, xpcAcc, doc, node, fromUser);
   nsCoreUtils::DispatchAccEvent(std::move(event));
-
-  return IPC_OK();
 }
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvStateChangeEvent(
     const uint64_t& aID, const uint64_t& aState, const bool& aEnabled) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -268,6 +337,9 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvStateChangeEvent(
     return IPC_OK();
   }
 
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    target->UpdateStateCache(aState, aEnabled);
+  }
   ProxyStateChangeEvent(target, aState, aEnabled);
 
   if (!nsCoreUtils::AccEventObserversExist()) {
@@ -293,7 +365,9 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvCaretMoveEvent(
 #if defined(XP_WIN)
     const LayoutDeviceIntRect& aCaretRect,
 #endif  // defined (XP_WIN)
-    const int32_t& aOffset, const bool& aIsSelectionCollapsed) {
+    const int32_t& aOffset, const bool& aIsSelectionCollapsed,
+    const bool& aIsAtEndOfLine, const int32_t& aGranularity) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -304,10 +378,21 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvCaretMoveEvent(
     return IPC_OK();
   }
 
+  mCaretId = aID;
+  mCaretOffset = aOffset;
+  mIsCaretAtEndOfLine = aIsAtEndOfLine;
+  if (aIsSelectionCollapsed) {
+    // We don't fire selection events for collapsed selections, but we need to
+    // ensure we don't have a stale cached selection; e.g. when selecting
+    // forward and then unselecting backward.
+    mTextSelections.ClearAndRetainStorage();
+    mTextSelections.AppendElement(TextRangeData(aID, aID, aOffset, aOffset));
+  }
+
 #if defined(XP_WIN)
-  ProxyCaretMoveEvent(proxy, aCaretRect);
+  ProxyCaretMoveEvent(proxy, aCaretRect, aGranularity);
 #else
-  ProxyCaretMoveEvent(proxy, aOffset, aIsSelectionCollapsed);
+  ProxyCaretMoveEvent(proxy, aOffset, aIsSelectionCollapsed, aGranularity);
 #endif
 
   if (!nsCoreUtils::AccEventObserversExist()) {
@@ -320,7 +405,8 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvCaretMoveEvent(
   bool fromUser = true;  // XXX fix me
   uint32_t type = nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED;
   RefPtr<xpcAccCaretMoveEvent> event = new xpcAccCaretMoveEvent(
-      type, xpcAcc, doc, node, fromUser, aOffset, aIsSelectionCollapsed);
+      type, xpcAcc, doc, node, fromUser, aOffset, aIsSelectionCollapsed,
+      aIsAtEndOfLine, aGranularity);
   nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
@@ -329,6 +415,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvCaretMoveEvent(
 mozilla::ipc::IPCResult DocAccessibleParent::RecvTextChangeEvent(
     const uint64_t& aID, const nsString& aStr, const int32_t& aStart,
     const uint32_t& aLen, const bool& aIsInsert, const bool& aFromUser) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -369,6 +456,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvSyncTextChangeEvent(
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvSelectionEvent(
     const uint64_t& aID, const uint64_t& aWidgetID, const uint32_t& aType) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -399,6 +487,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvVirtualCursorChangeEvent(
     const uint64_t& aNewPositionID, const int32_t& aNewStartOffset,
     const int32_t& aNewEndOffset, const int16_t& aReason,
     const int16_t& aBoundaryType, const bool& aFromUser) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -439,6 +528,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvScrollingEvent(
     const uint64_t& aID, const uint64_t& aType, const uint32_t& aScrollX,
     const uint32_t& aScrollY, const uint32_t& aMaxScrollX,
     const uint32_t& aMaxScrollY) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -472,10 +562,45 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvScrollingEvent(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult DocAccessibleParent::RecvCache(
+    const mozilla::a11y::CacheUpdateType& aUpdateType,
+    nsTArray<CacheData>&& aData, const bool& aFinal) {
+  ACQUIRE_ANDROID_LOCK
+  if (mShutdown) {
+    return IPC_OK();
+  }
+
+  for (auto& entry : aData) {
+    RemoteAccessible* remote = GetAccessible(entry.ID());
+    if (!remote) {
+      MOZ_ASSERT_UNREACHABLE("No remote found!");
+      continue;
+    }
+
+    remote->ApplyCache(aUpdateType, entry.Fields());
+  }
+
+  if (nsCOMPtr<nsIObserverService> obsService =
+          services::GetObserverService()) {
+    obsService->NotifyObservers(nullptr, NS_ACCESSIBLE_CACHE_TOPIC, nullptr);
+  }
+
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult DocAccessibleParent::RecvAccessiblesWillMove(
+    nsTArray<uint64_t>&& aIDs) {
+  for (uint64_t id : aIDs) {
+    mMovingIDs.EnsureInserted(id);
+  }
+  return IPC_OK();
+}
+
 #if !defined(XP_WIN)
 mozilla::ipc::IPCResult DocAccessibleParent::RecvAnnouncementEvent(
     const uint64_t& aID, const nsString& aAnnouncement,
     const uint16_t& aPriority) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -503,10 +628,11 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvAnnouncementEvent(
 
   return IPC_OK();
 }
+#endif  // !defined(XP_WIN)
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvTextSelectionChangeEvent(
     const uint64_t& aID, nsTArray<TextRangeData>&& aSelection) {
-#  ifdef MOZ_WIDGET_COCOA
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -517,18 +643,35 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvTextSelectionChangeEvent(
     return IPC_OK();
   }
 
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    mTextSelections.ClearAndRetainStorage();
+    mTextSelections.AppendElements(aSelection);
+  }
+
+#ifdef MOZ_WIDGET_COCOA
   ProxyTextSelectionChangeEvent(target, aSelection);
+#else
+  ProxyEvent(target, nsIAccessibleEvent::EVENT_TEXT_SELECTION_CHANGED);
+#endif
+
+  if (!nsCoreUtils::AccEventObserversExist()) {
+    return IPC_OK();
+  }
+  xpcAccessibleGeneric* xpcAcc = GetXPCAccessible(target);
+  xpcAccessibleDocument* doc = nsAccessibilityService::GetXPCDocument(this);
+  nsINode* node = nullptr;
+  bool fromUser = true;  // XXX fix me
+  RefPtr<xpcAccEvent> event =
+      new xpcAccEvent(nsIAccessibleEvent::EVENT_TEXT_SELECTION_CHANGED, xpcAcc,
+                      doc, node, fromUser);
+  nsCoreUtils::DispatchAccEvent(std::move(event));
 
   return IPC_OK();
-#  else
-  return RecvEvent(aID, nsIAccessibleEvent::EVENT_TEXT_SELECTION_CHANGED);
-#  endif
 }
-
-#endif
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvRoleChangedEvent(
     const a11y::role& aRole) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -544,6 +687,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvRoleChangedEvent(
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvBindChildDoc(
     PDocAccessibleParent* aChildDoc, const uint64_t& aID) {
+  ACQUIRE_ANDROID_LOCK
   // One document should never directly be the child of another.
   // We should always have at least an outer doc accessible in between.
   MOZ_ASSERT(aID);
@@ -640,7 +784,7 @@ ipc::IPCResult DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
         // Send a COM proxy for the embedder OuterDocAccessible to the embedded
         // document process. This will be returned as the parent of the
         // embedded document.
-        aChildDoc->SendParentCOMProxy(WrapperFor(outerDoc));
+        aChildDoc->SendParentCOMProxy(outerDoc);
         if (nsWinUtils::IsWindowEmulationStarted()) {
           // The embedded document should use the same emulated window handle as
           // its embedder. It will return the embedder document (not a window
@@ -683,8 +827,8 @@ ipc::IPCResult DocAccessibleParent::AddChildDoc(DocAccessibleParent* aChildDoc,
       // For same-process documents, this is fired by the content process, but
       // this isn't possible when the document is in a different process to its
       // embedder.
-      // RecvEvent fires both OS and XPCOM events.
-      Unused << RecvEvent(aParentID, nsIAccessibleEvent::EVENT_REORDER);
+      // FireEvent fires both OS and XPCOM events.
+      FireEvent(outerDoc, nsIAccessibleEvent::EVENT_REORDER);
     }
   }
 
@@ -708,6 +852,7 @@ ipc::IPCResult DocAccessibleParent::AddChildDoc(
 }
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvShutdown() {
+  ACQUIRE_ANDROID_LOCK
   Destroy();
 
   auto mgr = static_cast<dom::BrowserParent*>(Manager());
@@ -788,6 +933,14 @@ void DocAccessibleParent::Destroy() {
   }
 }
 
+void DocAccessibleParent::ActorDestroy(ActorDestroyReason aWhy) {
+  MOZ_ASSERT(CheckDocTree());
+  if (!mShutdown) {
+    ACQUIRE_ANDROID_LOCK
+    Destroy();
+  }
+}
+
 DocAccessibleParent* DocAccessibleParent::ParentDoc() const {
   if (mParentDoc == kNoParentDoc) {
     return nullptr;
@@ -835,10 +988,10 @@ void DocAccessibleParent::MaybeInitWindowEmulation() {
   MOZ_ASSERT(rootDocument);
 
   bool isActive = true;
-  nsIntRect rect(CW_USEDEFAULT, CW_USEDEFAULT, 0, 0);
+  LayoutDeviceIntRect rect(CW_USEDEFAULT, CW_USEDEFAULT, 0, 0);
   if (Compatibility::IsDolphin()) {
     rect = Bounds();
-    nsIntRect rootRect = rootDocument->Bounds();
+    LayoutDeviceIntRect rootRect = rootDocument->Bounds();
     rect.MoveToX(rootRect.X() - rect.X());
     rect.MoveToY(rect.Y() - rootRect.Y());
 
@@ -879,7 +1032,7 @@ void DocAccessibleParent::MaybeInitWindowEmulation() {
   MOZ_ASSERT(hWnd);
 }
 
-void DocAccessibleParent::SendParentCOMProxy(LocalAccessible* aOuterDoc) {
+void DocAccessibleParent::SendParentCOMProxy(Accessible* aOuterDoc) {
   // Make sure that we're not racing with a tab shutdown
   auto tab = static_cast<dom::BrowserParent*>(Manager());
   MOZ_ASSERT(tab);
@@ -887,8 +1040,8 @@ void DocAccessibleParent::SendParentCOMProxy(LocalAccessible* aOuterDoc) {
     return;
   }
 
-  RefPtr<IAccessible> nativeAcc;
-  aOuterDoc->GetNativeInterface(getter_AddRefs(nativeAcc));
+  RefPtr<IDispatch> nativeAcc =
+      already_AddRefed<IDispatch>(MsaaAccessible::NativeAccessible(aOuterDoc));
   if (NS_WARN_IF(!nativeAcc)) {
     // Couldn't get a COM proxy for the outer doc. That probably means it died,
     // but the parent process hasn't received a message to remove it from the
@@ -919,6 +1072,7 @@ void DocAccessibleParent::SetEmulatedWindowHandle(HWND aWindowHandle) {
 
 mozilla::ipc::IPCResult DocAccessibleParent::RecvFocusEvent(
     const uint64_t& aID, const LayoutDeviceIntRect& aCaretRect) {
+  ACQUIRE_ANDROID_LOCK
   if (mShutdown) {
     return IPC_OK();
   }
@@ -929,6 +1083,7 @@ mozilla::ipc::IPCResult DocAccessibleParent::RecvFocusEvent(
     return IPC_OK();
   }
 
+  mFocus = aID;
   ProxyFocusEvent(proxy, aCaretRect);
 
   if (!nsCoreUtils::AccEventObserversExist()) {
@@ -997,6 +1152,17 @@ DocAccessiblePlatformExtParent* DocAccessibleParent::GetPlatformExtension() {
 }
 
 #endif  // !defined(XP_WIN)
+
+void DocAccessibleParent::SelectionRanges(nsTArray<TextRange>* aRanges) const {
+  for (const auto& data : mTextSelections) {
+    aRanges->AppendElement(
+        TextRange(const_cast<DocAccessibleParent*>(this),
+                  const_cast<RemoteAccessible*>(GetAccessible(data.StartID())),
+                  data.StartOffset(),
+                  const_cast<RemoteAccessible*>(GetAccessible(data.EndID())),
+                  data.EndOffset()));
+  }
+}
 
 }  // namespace a11y
 }  // namespace mozilla

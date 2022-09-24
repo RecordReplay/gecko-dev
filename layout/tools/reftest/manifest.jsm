@@ -7,10 +7,34 @@
 
 var EXPORTED_SYMBOLS = ["ReadTopManifest", "CreateUrls"];
 
-Cu.import("resource://reftest/globals.jsm", this);
-Cu.import("resource://reftest/reftest.jsm", this);
-Cu.import("resource://gre/modules/Services.jsm");
-Cu.import("resource://gre/modules/NetUtil.jsm");
+const {
+    NS_GFXINFO_CONTRACTID,
+
+    TYPE_REFTEST_EQUAL,
+    TYPE_REFTEST_NOTEQUAL,
+    TYPE_LOAD,
+    TYPE_SCRIPT,
+    TYPE_PRINT,
+
+    EXPECTED_PASS,
+    EXPECTED_FAIL,
+    EXPECTED_RANDOM,
+    EXPECTED_FUZZY,
+
+    PREF_BOOLEAN,
+    PREF_STRING,
+    PREF_INTEGER,
+
+    FOCUS_FILTER_NEEDS_FOCUS_TESTS,
+    FOCUS_FILTER_NON_NEEDS_FOCUS_TESTS,
+
+    g,
+} = ChromeUtils.import("resource://reftest/globals.jsm", this);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
+const { AppConstants } = ChromeUtils.import(
+    "resource://gre/modules/AppConstants.jsm"
+);
 
 const NS_SCRIPTSECURITYMANAGER_CONTRACTID = "@mozilla.org/scriptsecuritymanager;1";
 const NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX = "@mozilla.org/network/protocol;1?name=";
@@ -502,15 +526,8 @@ function BuildConditionSandbox(aURL) {
       g.windowUtils.layerManagerType == "OpenGL";
     sandbox.swgl =
       g.windowUtils.layerManagerType.startsWith("WebRender (Software");
-    sandbox.webrender =
-      g.windowUtils.layerManagerType.startsWith("WebRender");
     sandbox.layersOMTC =
       g.windowUtils.layerManagerRemote == true;
-    sandbox.advancedLayers =
-      g.windowUtils.usingAdvancedLayers == true;
-    sandbox.layerChecksEnabled = !sandbox.webrender;
-
-    sandbox.usesOverlayScrollbars = g.windowUtils.usesOverlayScrollbars;
 
     // Shortcuts for widget toolkits.
     sandbox.Android = xr.OS == "Android";
@@ -532,6 +549,10 @@ function BuildConditionSandbox(aURL) {
     sandbox.retainedDisplayList =
       prefs.getBoolPref("layout.display-list.retain") && !sandbox.useDrawSnapshot;
 
+    // Needed to specifically test the new and old behavior. This will eventually be removed.
+    sandbox.retainedDisplayListNew =
+        sandbox.retainedDisplayList && prefs.getBoolPref("layout.display-list.retain.sc");
+
     // GeckoView is currently uniquely identified by "android + e10s" but
     // we might want to make this condition more precise in the future.
     sandbox.geckoview = (sandbox.Android && g.browserIsRemote);
@@ -551,39 +572,14 @@ function BuildConditionSandbox(aURL) {
 
     sandbox.MinGW = sandbox.winWidget && sysInfo.getPropertyAsBool("isMinGW");
 
-#if MOZ_ASAN
-    sandbox.AddressSanitizer = true;
-#else
-    sandbox.AddressSanitizer = false;
-#endif
+    sandbox.AddressSanitizer = AppConstants.ASAN;
+    sandbox.ThreadSanitizer = AppConstants.TSAN;
+    sandbox.webrtc = AppConstants.MOZ_WEBRTC;
+    sandbox.jxl = AppConstants.MOZ_JXL;
 
-#if MOZ_TSAN
-    sandbox.ThreadSanitizer = true;
-#else
-    sandbox.ThreadSanitizer = false;
-#endif
-
-#if MOZ_WEBRTC
-    sandbox.webrtc = true;
-#else
-    sandbox.webrtc = false;
-#endif
-
-#if MOZ_JXL
-    sandbox.jxl = true;
-#else
-    sandbox.jxl = false;
-#endif
-
-    let retainedDisplayListsEnabled = prefs.getBoolPref("layout.display-list.retain", false);
-    sandbox.retainedDisplayLists = retainedDisplayListsEnabled && !g.compareRetainedDisplayLists && !sandbox.useDrawSnapshot;
     sandbox.compareRetainedDisplayLists = g.compareRetainedDisplayLists;
 
-#ifdef RELEASE_OR_BETA
-    sandbox.release_or_beta = true;
-#else
-    sandbox.release_or_beta = false;
-#endif
+    sandbox.release_or_beta = AppConstants.RELEASE_OR_BETA;
 
     var hh = Cc[NS_NETWORK_PROTOCOL_CONTRACTID_PREFIX + "http"].
                  getService(Ci.nsIHttpProtocolHandler);
@@ -640,8 +636,11 @@ function BuildConditionSandbox(aURL) {
     sandbox.serviceWorkerE10s = true;
 
     if (!g.dumpedConditionSandbox) {
-        g.logger.info("Dumping JSON representation of sandbox");
-        g.logger.info(JSON.stringify(Cu.waiveXrays(sandbox)));
+        g.logger.info("Dumping representation of sandbox which can be used for expectation annotations");
+        for (let entry of Object.entries(Cu.waiveXrays(sandbox)).sort((a, b) => a[0].localeCompare(b[0]))) {
+            let value = typeof entry[1] === "object" ? JSON.stringify(entry[1]) : entry[1];
+            g.logger.info(`    ${entry[0]}: ${value}`);
+        }
         g.dumpedConditionSandbox = true;
     }
 
@@ -713,6 +712,8 @@ function ServeTestBase(aURL, depth) {
     g.count++;
     var path = "/" + Date.now() + "/" + g.count;
     g.server.registerDirectory(path + "/", directory);
+    // this one is needed so tests can use example.org urls for cross origin testing
+    g.server.registerDirectory("/", directory);
 
     var secMan = Cc[NS_SCRIPTSECURITYMANAGER_CONTRACTID]
                      .getService(Ci.nsIScriptSecurityManager);

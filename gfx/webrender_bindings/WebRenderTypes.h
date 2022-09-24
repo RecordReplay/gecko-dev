@@ -18,13 +18,16 @@
 #include "mozilla/layers/LayersTypes.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Range.h"
+#include "mozilla/ScrollGeneration.h"
 #include "mozilla/TypeTraits.h"
 #include "Units.h"
+#include "nsIWidgetListener.h"
 
 namespace mozilla {
 
 enum class StyleBorderStyle : uint8_t;
 enum class StyleBorderImageRepeat : uint8_t;
+enum class StyleImageRendering : uint8_t;
 
 namespace ipc {
 class ByteBuf;
@@ -57,6 +60,14 @@ struct ExternalImageKeyPair {
 
 /* Generate a brand new window id and return it. */
 WindowId NewWindowId();
+
+inline bool WindowSizeSanityCheck(int32_t aWidth, int32_t aHeight) {
+  if (aWidth < 0 || aWidth > wr::MAX_RENDER_TASK_SIZE || aHeight < 0 ||
+      aHeight > wr::MAX_RENDER_TASK_SIZE) {
+    return false;
+  }
+  return true;
+}
 
 inline DebugFlags NewDebugFlags(uint32_t aFlags) { return {aFlags}; }
 
@@ -101,6 +112,30 @@ inline gfx::SurfaceFormat ImageFormatToSurfaceFormat(ImageFormat aFormat) {
   }
 }
 
+// This extra piece of data is used to differentiate when spatial nodes that are
+// created by Gecko that have the same mFrame and PerFrameKey. This currently
+// only occurs with sticky display list items that are also zoomable, which
+// results in Gecko creating both a sticky spatial node, and then a property
+// animated reference frame for APZ
+enum class SpatialKeyKind : uint32_t {
+  Transform,
+  Perspective,
+  Scroll,
+  Sticky,
+  ImagePipeline,
+  APZ,
+};
+
+// Construct a unique, persistent spatial key based on the frame tree pointer,
+// per-frame key and a spatial key kind. For now, this covers all the ways Gecko
+// creates spatial nodes. In future, we may need to be more clever with the
+// SpatialKeyKind.
+inline wr::SpatialTreeItemKey SpatialKey(uint64_t aFrame, uint32_t aPerFrameKey,
+                                         SpatialKeyKind aKind) {
+  return wr::SpatialTreeItemKey{
+      aFrame, uint64_t(aPerFrameKey) | (uint64_t(aKind) << 32)};
+}
+
 struct ImageDescriptor : public wr::WrImageDescriptor {
   // We need a default constructor for ipdl serialization.
   ImageDescriptor() {
@@ -114,7 +149,7 @@ struct ImageDescriptor : public wr::WrImageDescriptor {
 
   ImageDescriptor(const gfx::IntSize& aSize, gfx::SurfaceFormat aFormat,
                   bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).value();
+    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
     width = aSize.width;
     height = aSize.height;
     stride = 0;
@@ -126,7 +161,7 @@ struct ImageDescriptor : public wr::WrImageDescriptor {
   ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride,
                   gfx::SurfaceFormat aFormat,
                   bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).value();
+    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
     width = aSize.width;
     height = aSize.height;
     stride = aByteStride;
@@ -138,7 +173,7 @@ struct ImageDescriptor : public wr::WrImageDescriptor {
   ImageDescriptor(const gfx::IntSize& aSize, uint32_t aByteStride,
                   gfx::SurfaceFormat aFormat, OpacityType aOpacity,
                   bool aPreferCompositorSurface = false) {
-    format = wr::SurfaceFormatToImageFormat(aFormat).value();
+    format = wr::SurfaceFormatToImageFormat(aFormat).valueOr((ImageFormat)0);
     width = aSize.width;
     height = aSize.height;
     stride = aByteStride;
@@ -216,10 +251,7 @@ inline PipelineId AsPipelineId(const mozilla::layers::LayersId& aId) {
   return AsPipelineId(uint64_t(aId));
 }
 
-inline ImageRendering ToImageRendering(gfx::SamplingFilter aFilter) {
-  return aFilter == gfx::SamplingFilter::POINT ? ImageRendering::Pixelated
-                                               : ImageRendering::Auto;
-}
+ImageRendering ToImageRendering(StyleImageRendering);
 
 static inline FontRenderMode ToFontRenderMode(gfx::AntialiasMode aMode,
                                               bool aPermitSubpixelAA = true) {
@@ -267,6 +299,8 @@ static inline MixBlendMode ToMixBlendMode(gfx::CompositionOp compositionOp) {
       return MixBlendMode::Color;
     case gfx::CompositionOp::OP_LUMINOSITY:
       return MixBlendMode::Luminosity;
+    case gfx::CompositionOp::OP_ADD:
+      return MixBlendMode::PlusLighter;
     default:
       return MixBlendMode::Normal;
   }
@@ -738,7 +772,9 @@ struct ByteBuffer {
 };
 
 struct BuiltDisplayList {
-  wr::VecU8 dl;
+  wr::VecU8 dl_items;
+  wr::VecU8 dl_cache;
+  wr::VecU8 dl_spatial_tree;
   wr::BuiltDisplayListDescriptor dl_desc;
 };
 
@@ -755,8 +791,9 @@ struct WrClipChainId {
   }
 };
 
-WrSpaceAndClip RootScrollNode();
+WrSpatialId RootScrollNode();
 WrSpaceAndClipChain RootScrollNodeWithChain();
+WrSpaceAndClipChain InvalidScrollNodeWithChain();
 
 enum class WebRenderError : int8_t {
   INITIALIZE = 0,
@@ -845,6 +882,33 @@ static inline wr::SyntheticItalics DegreesToSyntheticItalics(float aDegrees) {
   synthetic_italics.angle =
       int16_t(std::min(std::max(aDegrees, -89.0f), 89.0f) * 256.0f);
   return synthetic_italics;
+}
+
+static inline wr::WindowSizeMode ToWrWindowSizeMode(nsSizeMode aSizeMode) {
+  switch (aSizeMode) {
+    case nsSizeMode_Normal:
+      return wr::WindowSizeMode::Normal;
+    case nsSizeMode_Minimized:
+      return wr::WindowSizeMode::Minimized;
+    case nsSizeMode_Maximized:
+      return wr::WindowSizeMode::Maximized;
+    case nsSizeMode_Fullscreen:
+      return wr::WindowSizeMode::Fullscreen;
+    default:
+      MOZ_ASSERT_UNREACHABLE("Tried to convert invalid size mode.");
+      return wr::WindowSizeMode::Invalid;
+  }
+}
+
+static inline wr::APZScrollGeneration ToWrAPZScrollGeneration(
+    const mozilla::APZScrollGeneration& aGeneration) {
+  return wr::APZScrollGeneration(aGeneration.Raw());
+}
+
+static inline wr::HasScrollLinkedEffect ToWrHasScrollLinkedEffect(
+    bool aHasScrollLinkedEffect) {
+  return aHasScrollLinkedEffect ? wr::HasScrollLinkedEffect::Yes
+                                : wr::HasScrollLinkedEffect::No;
 }
 
 }  // namespace wr

@@ -15,6 +15,7 @@
 #include "mozilla/StaticPrefs_accessibility.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Unused.h"
+#include "nsAccessibilityService.h"
 #include "nsTHashMap.h"
 #include "sdnAccessible.h"
 
@@ -28,7 +29,7 @@ static const uint32_t kNumFullIDBits = 31UL;
 // maximum permitted number of e10s content processes. If the e10s maximum
 // number of content processes changes, then kNumContentProcessIDBits must also
 // be updated if necessary to accommodate that new value!
-static const uint32_t kNumContentProcessIDBits = 7UL;
+static const uint32_t kNumContentProcessIDBits = 8UL;
 static const uint32_t kNumUniqueIDBits = (31UL - kNumContentProcessIDBits);
 
 static_assert(
@@ -85,6 +86,15 @@ uint32_t MsaaIdGenerator::GetID() {
         MakeUnique<IDSet>(StaticPrefs::accessibility_cache_enabled_AtStartup()
                               ? kNumFullIDBits
                               : kNumUniqueIDBits);
+    if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+      // this is a static instance, so capturing this here is safe.
+      RunOnShutdown([this] {
+        if (mReleaseIDTimer) {
+          mReleaseIDTimer->Cancel();
+          ReleasePendingIDs();
+        }
+      });
+    }
   }
   uint32_t id = mIDSet->GetID();
   if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
@@ -93,6 +103,14 @@ uint32_t MsaaIdGenerator::GetID() {
   }
   MOZ_ASSERT(id <= ((1UL << kNumUniqueIDBits) - 1UL));
   return detail::BuildMsaaID(id, ResolveContentProcessID());
+}
+
+void MsaaIdGenerator::ReleasePendingIDs() {
+  for (auto id : mIDsToRelease) {
+    mIDSet->ReleaseID(~id);
+  }
+  mIDsToRelease.Clear();
+  mReleaseIDTimer = nullptr;
 }
 
 bool MsaaIdGenerator::ReleaseID(uint32_t aID) {
@@ -104,7 +122,31 @@ bool MsaaIdGenerator::ReleaseID(uint32_t aID) {
     return false;
   }
   if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
-    mIDSet->ReleaseID(~aID);
+    // Releasing an id means it can be reused. Reusing ids too quickly can
+    // cause problems for clients which process events asynchronously.
+    // Therefore, we release ids after a short delay. This doesn't seem to be
+    // necessary when the cache is disabled, perhaps because the COM runtime
+    // holds references to our objects for longer.
+    if (nsAccessibilityService::IsShutdown()) {
+      // If accessibility is shut down, no more Accessibles will be created.
+      // Also, if the service is shut down, it's possible XPCOM is also shutting
+      // down, in which case timers won't work. Thus, we release the id
+      // immediately.
+      mIDSet->ReleaseID(~aID);
+      return true;
+    }
+    const uint32_t kReleaseDelay = 1000;
+    mIDsToRelease.AppendElement(aID);
+    if (mReleaseIDTimer) {
+      mReleaseIDTimer->SetDelay(kReleaseDelay);
+    } else {
+      NS_NewTimerWithCallback(
+          getter_AddRefs(mReleaseIDTimer),
+          // mReleaseIDTimer is cancelled on shutdown and this is a static
+          // instance, so capturing this here is safe.
+          [this](nsITimer* aTimer) { ReleasePendingIDs(); }, kReleaseDelay,
+          nsITimer::TYPE_ONE_SHOT, "a11y::MsaaIdGenerator::ReleaseIDDelayed");
+    }
     return true;
   }
   detail::MsaaIDCracker cracked(aID);

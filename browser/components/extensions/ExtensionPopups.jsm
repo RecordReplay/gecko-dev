@@ -314,13 +314,11 @@ class BasePopup {
     browser.setAttribute("type", "content");
     browser.setAttribute("disableglobalhistory", "true");
     browser.setAttribute("messagemanagergroup", "webext-browsers");
-    browser.setAttribute("transparent", "true");
     browser.setAttribute("class", "webextension-popup-browser");
     browser.setAttribute("webextension-view-type", "popup");
     browser.setAttribute("tooltip", "aHTMLTooltip");
     browser.setAttribute("contextmenu", "contentAreaContextMenu");
     browser.setAttribute("autocompletepopup", "PopupAutoComplete");
-    browser.setAttribute("selectmenulist", "ContentSelectDropdown");
     browser.setAttribute("selectmenuconstrained", "false");
 
     // Ensure the browser will initially load in the same group as other
@@ -426,6 +424,12 @@ class BasePopup {
       if (this.destroyed) {
         return;
       }
+      // Only block the parser for the preloaded browser, initBrowser will be
+      // called again when the browserAction popup is navigated and we should
+      // not block the parser in that case, otherwise the navigating the popup
+      // to another extension page will never complete and the popup will
+      // stay stuck on the previous extension page. See Bug 1747813.
+      this.blockParser = false;
       this.browser.messageManager.sendAsyncMessage("Extension:UnblockParser");
     });
   }
@@ -495,6 +499,7 @@ class PanelPopup extends BasePopup {
     if (extension.remote) {
       panel.setAttribute("remote", "true");
     }
+    panel.setAttribute("neverhidden", "true");
 
     document.getElementById("mainPopupSet").appendChild(panel);
 
@@ -550,6 +555,7 @@ class ViewPopup extends BasePopup {
       if (remote) {
         panel.setAttribute("remote", "true");
       }
+      panel.setAttribute("neverhidden", "true");
 
       document.getElementById("mainPopupSet").appendChild(panel);
       return panel;
@@ -579,6 +585,11 @@ class ViewPopup extends BasePopup {
     this.tempPanel = panel;
     this.tempBrowser = this.browser;
 
+    // NOTE: this class is added to the preload browser and never removed because
+    // the preload browser is then switched with a new browser once we are about to
+    // make the popup visible (this class is not actually used anywhere but it may
+    // be useful to keep it around to be able to identify the preload buffer while
+    // investigating issues).
     this.browser.classList.add("webextension-preload-browser");
   }
 

@@ -324,7 +324,7 @@ void DispatchToGeckoPriorityQueue(already_AddRefed<nsIRunnable> aCall) {
 int GetAPIVersion() {
   static int32_t apiVersion = 0;
   if (!apiVersion && IsAvailable()) {
-    apiVersion = java::sdk::VERSION::SDK_INT();
+    apiVersion = java::sdk::Build::VERSION::SDK_INT();
   }
   return apiVersion;
 }
@@ -335,6 +335,13 @@ pid_t GetUIThreadId() {
     uiThreadId = pid_t(java::GeckoThread::UiThreadId());
   }
   return uiThreadId;
+}
+
+bool IsOOMException(JNIEnv* aEnv) {
+  MOZ_ASSERT(aEnv->ExceptionCheck());
+  Throwable::LocalRef e =
+      Throwable::LocalRef::Adopt(aEnv, aEnv->ExceptionOccurred());
+  return sOOMErrorClass && aEnv->IsInstanceOf(e.Get(), sOOMErrorClass);
 }
 
 }  // namespace jni

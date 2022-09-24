@@ -206,8 +206,7 @@ impl RenderNotifier for Notifier {
     fn new_frame_ready(&self,
                        _: DocumentId,
                        _scrolled: bool,
-                       _composite_needed: bool,
-                       _render_time: Option<u64>) {
+                       _composite_needed: bool) {
         self.tx.send(()).ok();
     }
 }
@@ -240,7 +239,9 @@ fn push_rotated_rect(
         ReferenceFrameKind::Transform {
             is_2d_scale_translation: false,
             should_snap: false,
+            paired_with_perspective: false,
         },
+        SpatialTreeItemKey::new(0, 0),
     );
     builder.push_rect(
         &CommonItemProperties::new(
@@ -278,8 +279,10 @@ fn build_display_list(
         scroll_id,
         LayoutRect::from_size(layout_size),
         LayoutRect::from_size(layout_size),
-        ScrollSensitivity::Script,
         LayoutVector2D::zero(),
+        APZScrollGeneration::default(),
+        HasScrollLinkedEffect::No,
+        SpatialTreeItemKey::new(0, 1),
     );
 
     builder.push_rect(
@@ -466,6 +469,7 @@ fn main() {
 
     if let Invalidations::Scrolling = inv_mode {
         let mut root_builder = DisplayListBuilder::new(root_pipeline_id);
+        root_builder.begin();
 
         build_display_list(
             &mut root_builder,
@@ -480,12 +484,11 @@ fn main() {
             current_epoch,
             None,
             layout_size,
-            root_builder.finalize(),
-            true,
+            root_builder.end(),
         );
     }
 
-    txn.generate_frame(0);
+    txn.generate_frame(0, RenderReasons::empty());
     api.send_transaction(document_id, txn);
 
     // Tick the compositor (in this sample, we don't block on UI events)
@@ -504,6 +507,7 @@ fn main() {
             match inv_mode {
                 Invalidations::Small | Invalidations::Large => {
                     let mut root_builder = DisplayListBuilder::new(root_pipeline_id);
+                    root_builder.begin();
 
                     build_display_list(
                         &mut root_builder,
@@ -518,21 +522,19 @@ fn main() {
                         current_epoch,
                         None,
                         layout_size,
-                        root_builder.finalize(),
-                        true,
+                        root_builder.end(),
                     );
                 }
                 Invalidations::Scrolling => {
                     let d = 0.5 - 0.5 * (2.0 * f32::consts::PI * 5.0 * time).cos();
-                    txn.scroll_node_with_id(
-                        LayoutPoint::new(0.0, (d * 100.0).round()),
+                    txn.set_scroll_offset(
                         scroll_id,
-                        ScrollClamping::NoClamping,
+                        LayoutPoint::new(0.0, (d * 100.0).round()),
                     );
                 }
             }
 
-            txn.generate_frame(0);
+            txn.generate_frame(0, RenderReasons::empty());
             api.send_transaction(document_id, txn);
             current_epoch.0 += 1;
             time += 0.001;

@@ -14,9 +14,11 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/NullPrincipal.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/ChromeUtilsBinding.h"
 #include "nsContentUtils.h"
 #include "nsJSPrincipals.h"
 #include "nsIScriptError.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 #include "js/Wrapper.h"
 #include "mozilla/Utf8.h"
 
@@ -30,7 +32,7 @@ using mozilla::dom::AutoJSAPI;
 
 static JS::PersistentRooted<JSObject*> autoconfigSystemSb;
 static JS::PersistentRooted<JSObject*> autoconfigSb;
-static bool sandboxEnabled;
+bool sandboxEnabled;
 
 nsresult CentralizedAdminPrefManagerInit(bool aSandboxEnabled) {
   // If the sandbox is already created, no need to create it again.
@@ -71,6 +73,11 @@ nsresult CentralizedAdminPrefManagerInit(bool aSandboxEnabled) {
   if (!JS_WrapValue(cx, &value) ||
       !JS_DefineProperty(cx, autoconfigSystemSb, "gSandbox", value,
                          JSPROP_ENUMERATE)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Define ChromeUtils for ChromeUtils.import.
+  if (!mozilla::dom::ChromeUtils_Binding::GetConstructorObject(cx)) {
     return NS_ERROR_FAILURE;
   }
 

@@ -18,22 +18,19 @@
  */
 
 struct nsID {
-  /**
-   * @name Identifier values
-   */
-
-  //@{
   uint32_t m0;
   uint16_t m1;
   uint16_t m2;
   uint8_t m3[8];
-  //@}
 
   /**
-   * @name Methods
+   * Create a new random UUID.
+   * GenerateUUIDInPlace() is fallible, whereas GenerateUUID() will abort in
+   * the unlikely case that the OS RNG returns an error.
    */
+  [[nodiscard]] static nsresult GenerateUUIDInPlace(nsID& aId);
+  static nsID GenerateUUID();
 
-  //@{
   /**
    * Ensures everything is zeroed out.
    */
@@ -41,7 +38,7 @@ struct nsID {
 
   /**
    * Equivalency method. Compares this nsID with another.
-   * @return <b>true</b> if they are the same, <b>false</b> if not.
+   * @return true if they are the same, false if not.
    */
 
   inline bool Equals(const nsID& aOther) const {
@@ -89,8 +86,6 @@ struct nsID {
 
   // Infallibly duplicate an nsID. Must be freed with free().
   nsID* Clone() const;
-
-  //@}
 };
 
 #ifndef XPCOM_GLUE_AVOID_NSPR
@@ -138,13 +133,6 @@ typedef nsID nsIID;
  */
 
 #define REFNSIID const nsIID&
-
-/**
- * Define an IID
- * obsolete - do not use this macro
- */
-
-#define NS_DEFINE_IID(_name, _iidspec) const nsIID _name = _iidspec
 
 /**
  * A macro to build the static const IID accessor method. The Dummy

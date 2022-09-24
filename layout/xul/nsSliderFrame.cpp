@@ -207,7 +207,7 @@ nsresult nsSliderFrame::AttributeChanged(int32_t aNameSpaceID,
         scrollbarFrame->SetIncrementToWhole(direction);
         if (mediator) {
           mediator->ScrollByWhole(scrollbarFrame, direction,
-                                  nsIScrollbarMediator::ENABLE_SNAP);
+                                  ScrollSnapFlags::IntendedEndPosition);
         }
       }
       // 'this' might be destroyed here
@@ -226,6 +226,8 @@ nsresult nsSliderFrame::AttributeChanged(int32_t aNameSpaceID,
 
   return rv;
 }
+
+namespace mozilla {
 
 // Draw any tick marks that show the position of find in page results.
 class nsDisplaySliderMarks final : public nsPaintedDisplayItem {
@@ -307,6 +309,11 @@ void nsDisplaySliderMarks::PaintMarks(nsDisplayListBuilder* aDisplayListBuilder,
                              ->DeviceContext()
                              ->GetDesktopToDeviceScale()
                              .scale;
+  bool isHorizontal = sliderFrame->IsXULHorizontal();
+  float increasePixelsX = isHorizontal ? increasePixels : 0;
+  float increasePixelsY = isHorizontal ? 0 : increasePixels;
+  nsSize initialSize =
+      isHorizontal ? nsSize(0, sliderRect.height) : nsSize(sliderRect.width, 0);
 
   nsTArray<uint32_t>& marks = window->GetScrollMarks();
   for (uint32_t m = 0; m < marks.Length(); m++) {
@@ -318,25 +325,30 @@ void nsDisplaySliderMarks::PaintMarks(nsDisplayListBuilder* aDisplayListBuilder,
       markValue = minPos;
     }
 
-    // The values in the marks array range up to the window's scrollMaxY
-    // (the same as the slider's maxpos). Scale the values to fit within
-    // the slider's height.
-    nsRect markRect(refPoint, nsSize(sliderRect.width, 0));
-    markRect.y +=
-        (nscoord)((double)markValue / (maxPos - minPos) * sliderRect.height);
+    // The values in the marks array range up to the window's
+    // scrollMax{X,Y} - scrollMin{X,Y} (the same as the slider's maxpos).
+    // Scale the values to fit within the slider's width or height.
+    nsRect markRect(refPoint, initialSize);
+    if (isHorizontal) {
+      markRect.x +=
+          (nscoord)((double)markValue / (maxPos - minPos) * sliderRect.width);
+    } else {
+      markRect.y +=
+          (nscoord)((double)markValue / (maxPos - minPos) * sliderRect.height);
+    }
 
     if (drawTarget) {
       Rect devPixelRect =
           NSRectToSnappedRect(markRect, appUnitsPerDevPixel, *drawTarget);
-      devPixelRect.Inflate(0, increasePixels);
+      devPixelRect.Inflate(increasePixelsX, increasePixelsY);
       drawTarget->FillRect(devPixelRect, ColorPattern(fillColor));
     } else {
       LayoutDeviceIntRect dRect = LayoutDeviceIntRect::FromAppUnitsToNearest(
           markRect, appUnitsPerDevPixel);
-      dRect.Inflate(0, increasePixels);
+      dRect.Inflate(increasePixelsX, increasePixelsY);
       wr::LayoutRect layoutRect = wr::ToLayoutRect(dRect);
-      aBuilder->PushRect(layoutRect, layoutRect, BackfaceIsHidden(),
-                         wr::ToColorF(fillColor));
+      aBuilder->PushRect(layoutRect, layoutRect, BackfaceIsHidden(), false,
+                         false, wr::ToColorF(fillColor));
     }
   }
 }
@@ -355,6 +367,8 @@ void nsDisplaySliderMarks::Paint(nsDisplayListBuilder* aBuilder,
   PaintMarks(aBuilder, nullptr, aCtx);
 }
 
+}  // namespace mozilla
+
 void nsSliderFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
                                      const nsDisplayListSet& aLists) {
   if (aBuilder->IsForEventDelivery() && isDraggingThumb()) {
@@ -370,7 +384,7 @@ void nsSliderFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   // Markers are not drawn for other scrollbars.
   if (!aBuilder->IsForEventDelivery()) {
     nsIFrame* scrollbarBox = GetScrollbar();
-    if (scrollbarBox && !IsXULHorizontal()) {
+    if (scrollbarBox) {
       if (nsIScrollableFrame* scrollFrame =
               do_QueryFrame(scrollbarBox->GetParent())) {
         if (scrollFrame->IsRootScrollFrameOfDocument()) {
@@ -378,7 +392,9 @@ void nsSliderFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
           if (doc) {
             nsGlobalWindowInner* window =
                 nsGlobalWindowInner::Cast(doc->GetInnerWindow());
-            if (window && window->GetScrollMarks().Length() > 0) {
+            if (window &&
+                window->GetScrollMarksOnHScrollbar() == IsXULHorizontal() &&
+                window->GetScrollMarks().Length() > 0) {
               aLists.Content()->AppendNewToTop<nsDisplaySliderMarks>(aBuilder,
                                                                      this);
             }
@@ -496,7 +512,7 @@ void nsSliderFrame::BuildDisplayListForChildren(
 
       // This is a bit of a hack. Collect up all descendant display items
       // and merge them into a single Content() list.
-      nsDisplayList masterList;
+      nsDisplayList masterList(aBuilder);
       masterList.AppendToTop(tempLists.BorderBackground());
       masterList.AppendToTop(tempLists.BlockBorderBackgrounds());
       masterList.AppendToTop(tempLists.Floats());
@@ -1263,8 +1279,9 @@ void nsSliderFrame::DragThumb(bool aGrabMouseEvents) {
   mDragFinished = !aGrabMouseEvents;
 
   if (aGrabMouseEvents) {
-    PresShell::SetCapturingContent(GetContent(),
-                                   CaptureFlags::IgnoreAllowedState);
+    PresShell::SetCapturingContent(
+        GetContent(),
+        CaptureFlags::IgnoreAllowedState | CaptureFlags::PreventDragStart);
   } else {
     PresShell::ReleaseCapturingContent();
   }
@@ -1552,7 +1569,9 @@ void nsSliderFrame::PageScroll(nscoord aChange) {
     nsIScrollbarMediator* m = sb->GetScrollbarMediator();
     sb->SetIncrementToPage(aChange);
     if (m) {
-      m->ScrollByPage(sb, aChange, nsIScrollbarMediator::ENABLE_SNAP);
+      m->ScrollByPage(sb, aChange,
+                      ScrollSnapFlags::IntendedDirection |
+                          ScrollSnapFlags::IntendedEndPosition);
       return;
     }
   }

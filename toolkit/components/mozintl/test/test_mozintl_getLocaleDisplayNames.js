@@ -2,30 +2,32 @@
    http://creativecommons.org/publicdomain/zero/1.0/ */
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-const { L10nRegistry, FileSource } = ChromeUtils.import(
-  "resource://gre/modules/L10nRegistry.jsm"
-);
 
-const fs = {
-  "toolkit/intl/languageNames.ftl": `
+const fs = [
+  {
+    path: "resource://mock_source/toolkit/intl/languageNames.ftl",
+    source: `
 language-name-en = English
   `,
-  "toolkit/intl/regionNames.ftl": `
+  },
+  {
+    path: "resource://mock_source/toolkit/intl/regionNames.ftl",
+    source: `
 region-name-us = United States
 region-name-ru = Russia
   `,
-};
-
-L10nRegistry.loadSync = function(url) {
-  if (!fs.hasOwnProperty(url)) {
-    return false;
-  }
-  return fs[url];
-};
+  },
+];
 
 let locales = Services.locale.packagedLocales;
-const mockSource = new FileSource("mock", locales, "");
-L10nRegistry.registerSources([mockSource]);
+const mockSource = L10nFileSource.createMock(
+  "mock",
+  "app",
+  locales,
+  "resource://mock_source",
+  fs
+);
+L10nRegistry.getInstance().registerSources([mockSource]);
 
 const gLangDN = Services.intl.getLanguageDisplayNames.bind(
   Services.intl,
@@ -42,6 +44,16 @@ const gLocDN = Services.intl.getLocaleDisplayNames.bind(
   Services.intl,
   undefined
 );
+
+add_test(function test_native_tag() {
+  const options = { preferNative: true };
+  deepEqual(gLocDN([], options), []);
+  deepEqual(gLocDN(["ca-valencia"], options), ["Català (Valencià)"]);
+  deepEqual(gLocDN(["en-US"], options), ["English (US)"]);
+  deepEqual(gLocDN(["en-RU"], options), ["English (Russia)"]);
+  deepEqual(gLocDN(["ja-JP-mac"], options), ["日本語"]);
+  run_next_test();
+});
 
 add_test(function test_valid_language_tag() {
   deepEqual(gLocDN([]), []);

@@ -14,7 +14,7 @@ const { l10n } = require("devtools/client/webconsole/utils/messages");
 
 var ChromeUtils = require("ChromeUtils");
 const { BrowserLoader } = ChromeUtils.import(
-  "resource://devtools/client/shared/browser-loader.js"
+  "resource://devtools/shared/loader/browser-loader.js"
 );
 const {
   getAdHocFrontOrPrimitiveGrip,
@@ -62,7 +62,7 @@ class WebConsoleUI {
     this.isBrowserConsole = this.hud.isBrowserConsole;
 
     this.isBrowserToolboxConsole =
-      this.hud.commands.descriptorFront.isParentProcessDescriptor &&
+      this.hud.commands.descriptorFront.isBrowserProcessDescriptor &&
       !this.isBrowserConsole;
     this.fissionSupport = Services.prefs.getBoolPref(
       constants.PREFS.FEATURES.BROWSER_TOOLBOX_FISSION
@@ -208,11 +208,11 @@ class WebConsoleUI {
     }
 
     // Stop listening for targets
-    this.hud.commands.targetCommand.unwatchTargets(
-      this.hud.commands.targetCommand.ALL_TYPES,
-      this._onTargetAvailable,
-      this._onTargetDestroy
-    );
+    this.hud.commands.targetCommand.unwatchTargets({
+      types: this.hud.commands.targetCommand.ALL_TYPES,
+      onAvailable: this._onTargetAvailable,
+      onDestroyed: this._onTargetDestroy,
+    });
 
     const resourceCommand = this.hud.resourceCommand;
     resourceCommand.unwatchResources(
@@ -239,6 +239,9 @@ class WebConsoleUI {
     }
     this.proxy = null;
     this.additionalProxies = null;
+
+    this.networkDataProvider.destroy();
+    this.networkDataProvider = null;
 
     // Nullify `hud` last as it nullify also target which is used on destroy
     this.window = this.hud = this.wrapper = null;
@@ -316,27 +319,6 @@ class WebConsoleUI {
   }
 
   /**
-   * Setter for saving of network request and response bodies.
-   *
-   * @param boolean value
-   *        The new value you want to set.
-   */
-  async setSaveRequestAndResponseBodies(value) {
-    if (!this.webConsoleFront) {
-      // Don't continue if the webconsole disconnected.
-      return null;
-    }
-
-    const newValue = !!value;
-    const toSet = {
-      "NetworkMonitor.saveRequestAndResponseBodies": newValue,
-    };
-
-    // Make sure the web console client connection is established first.
-    return this.webConsoleFront.setPreferences(toSet);
-  }
-
-  /**
    * Connect to the server using the remote debugging protocol.
    *
    * @private
@@ -353,6 +335,7 @@ class WebConsoleUI {
         updateRequest: (id, data) =>
           this.wrapper.batchedRequestUpdates({ id, data }),
       },
+      owner: this,
     });
 
     // Listen for all target types, including:
@@ -361,11 +344,11 @@ class WebConsoleUI {
     // - workers, for similar reason. When we open a toolbox
     // for just a worker, the top level target is a worker target.
     // - processes, as we want to spawn additional proxies for them.
-    await commands.targetCommand.watchTargets(
-      commands.targetCommand.ALL_TYPES,
-      this._onTargetAvailable,
-      this._onTargetDestroy
-    );
+    await commands.targetCommand.watchTargets({
+      types: this.hud.commands.targetCommand.ALL_TYPES,
+      onAvailable: this._onTargetAvailable,
+      onDestroyed: this._onTargetDestroy,
+    });
 
     const resourceCommand = commands.resourceCommand;
     await resourceCommand.watchResources(
@@ -383,6 +366,25 @@ class WebConsoleUI {
         onUpdated: this._onResourceUpdated,
       }
     );
+
+    // Until we enable NETWORK_EVENT server watcher in the browser toolbox
+    // we still have to support the console actor codepath.
+    const hasNetworkResourceCommandSupport = resourceCommand.hasResourceCommandSupport(
+      resourceCommand.TYPES.NETWORK_EVENT
+    );
+    const supportsWatcherRequest = commands.targetCommand.hasTargetWatcherSupport();
+    if (hasNetworkResourceCommandSupport && supportsWatcherRequest) {
+      const networkFront = await commands.watcherFront.getNetworkParentActor();
+      //
+      // There is no way to view response bodies from the Browser Console, so do
+      // not waste the memory.
+      const saveBodies =
+        !this.isBrowserConsole &&
+        Services.prefs.getBoolPref(
+          "devtools.netmonitor.saveRequestAndResponseBodies"
+        );
+      await networkFront.setSaveRequestAndResponseBodies(saveBodies);
+    }
   }
 
   handleDocumentEvent(resource) {
@@ -412,6 +414,9 @@ class WebConsoleUI {
    *        object by the page itself.
    */
   async handleNavigated({ hasNativeConsoleAPI }) {
+    // Updates instant evaluation on page navigation
+    this.wrapper.dispatchUpdateInstantEvaluationResultForCurrentExpression();
+
     // Wait for completion of any async dispatch before notifying that the console
     // is fully updated after a page reload
     await this.wrapper.waitAsyncDispatches();
@@ -502,7 +507,7 @@ class WebConsoleUI {
    * @param Front targetFront
    *        The Front of the target that is available.
    *        This Front inherits from TargetMixin and is typically
-   *        composed of a BrowsingContextTargetFront or ContentProcessTargetFront.
+   *        composed of a WindowGlobalTargetFront or ContentProcessTargetFront.
    */
   async _onTargetAvailable({ targetFront }) {
     const dispatchTargetAvailable = () => {
@@ -687,10 +692,6 @@ class WebConsoleUI {
     }
   }
 
-  getLongString(grip) {
-    return this.getProxy().webConsoleFront.getString(grip);
-  }
-
   /**
    * Sets the focus to JavaScript input field when the web console tab is
    * selected or when there is a split console present.
@@ -718,44 +719,6 @@ class WebConsoleUI {
 
   attachRef(id, node) {
     this[id] = node;
-  }
-
-  /**
-   * Retrieves the actorID of the debugger's currently selected FrameFront.
-   *
-   * @return {String} actorID of the FrameFront
-   */
-  getFrameActor() {
-    const state = this.hud.getDebuggerFrames();
-    if (!state) {
-      return null;
-    }
-
-    const frame = state.frames[state.selected];
-
-    if (!frame) {
-      return null;
-    }
-
-    return frame.actor;
-  }
-
-  getWebconsoleFront({ frameActorId } = {}) {
-    if (frameActorId) {
-      const frameFront = this.hud.getFrontByID(frameActorId);
-      return frameFront.getWebConsoleFront();
-    }
-
-    if (!this.hud.toolbox) {
-      return this.webConsoleFront;
-    }
-
-    const targetFront = this.hud.toolbox.getSelectedTargetFront();
-    if (!targetFront) {
-      return this.webConsoleFront;
-    }
-
-    return targetFront.getFront("console");
   }
 
   getSelectedNodeActorID() {

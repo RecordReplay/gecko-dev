@@ -31,10 +31,11 @@ InProcessCompositorSession::InProcessCompositorSession(
 
 /* static */
 RefPtr<InProcessCompositorSession> InProcessCompositorSession::Create(
-    nsBaseWidget* aWidget, LayerManager* aLayerManager,
+    nsBaseWidget* aWidget, WebRenderLayerManager* aLayerManager,
     const LayersId& aRootLayerTreeId, CSSToLayoutDeviceScale aScale,
     const CompositorOptions& aOptions, bool aUseExternalSurfaceSize,
-    const gfx::IntSize& aSurfaceSize, uint32_t aNamespace) {
+    const gfx::IntSize& aSurfaceSize, uint32_t aNamespace,
+    uint64_t aInnerWindowId) {
   widget::CompositorWidgetInitData initData;
   aWidget->GetCompositorWidgetInitData(&initData);
 
@@ -42,7 +43,8 @@ RefPtr<InProcessCompositorSession> InProcessCompositorSession::Create(
       CompositorWidget::CreateLocal(initData, aOptions, aWidget);
   RefPtr<CompositorBridgeParent> parent =
       CompositorManagerParent::CreateSameProcessWidgetCompositorBridge(
-          aScale, aOptions, aUseExternalSurfaceSize, aSurfaceSize);
+          aScale, aOptions, aUseExternalSurfaceSize, aSurfaceSize,
+          aInnerWindowId);
   MOZ_ASSERT(parent);
   parent->InitSameProcess(widget, aRootLayerTreeId);
 
@@ -50,6 +52,10 @@ RefPtr<InProcessCompositorSession> InProcessCompositorSession::Create(
       CompositorManagerChild::CreateSameProcessWidgetCompositorBridge(
           aLayerManager, aNamespace);
   MOZ_ASSERT(child);
+  if (!child) {
+    gfxCriticalNote << "Failed to create CompositorBridgeChild";
+    return nullptr;
+  }
 
   return new InProcessCompositorSession(aWidget, widget, child, parent);
 }
@@ -86,8 +92,10 @@ void InProcessCompositorSession::Shutdown() {
     mUiCompositorControllerChild = nullptr;
   }
 #endif  // defined(MOZ_WIDGET_ANDROID)
-  mCompositorBridgeChild->Destroy();
-  mCompositorBridgeChild = nullptr;
+  if (mCompositorBridgeChild) {
+    mCompositorBridgeChild->Destroy();
+    mCompositorBridgeChild = nullptr;
+  }
   mCompositorBridgeParent = nullptr;
   mCompositorWidget = nullptr;
   gfx::GPUProcessManager::Get()->UnregisterInProcessSession(this);

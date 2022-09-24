@@ -219,67 +219,27 @@ impl super::Instruction {
         instruction
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn type_image(
         id: Word,
         sampled_type_id: Word,
         dim: spirv::Dim,
-        arrayed: bool,
-        image_class: crate::ImageClass,
+        flags: super::ImageTypeFlags,
+        image_format: spirv::ImageFormat,
     ) -> Self {
         let mut instruction = Self::new(Op::TypeImage);
         instruction.set_result(id);
         instruction.add_operand(sampled_type_id);
         instruction.add_operand(dim as u32);
-
-        let (depth, multi, sampled) = match image_class {
-            crate::ImageClass::Sampled { kind: _, multi } => (false, multi, true),
-            crate::ImageClass::Depth => (true, false, true),
-            crate::ImageClass::Storage(_) => (false, false, false),
-        };
-        instruction.add_operand(depth as u32);
-        instruction.add_operand(arrayed as u32);
-        instruction.add_operand(multi as u32);
-        instruction.add_operand(if sampled { 1 } else { 2 });
-
-        let format = match image_class {
-            crate::ImageClass::Storage(format) => match format {
-                crate::StorageFormat::R8Unorm => spirv::ImageFormat::R8,
-                crate::StorageFormat::R8Snorm => spirv::ImageFormat::R8Snorm,
-                crate::StorageFormat::R8Uint => spirv::ImageFormat::R8ui,
-                crate::StorageFormat::R8Sint => spirv::ImageFormat::R8i,
-                crate::StorageFormat::R16Uint => spirv::ImageFormat::R16ui,
-                crate::StorageFormat::R16Sint => spirv::ImageFormat::R16i,
-                crate::StorageFormat::R16Float => spirv::ImageFormat::R16f,
-                crate::StorageFormat::Rg8Unorm => spirv::ImageFormat::Rg8,
-                crate::StorageFormat::Rg8Snorm => spirv::ImageFormat::Rg8Snorm,
-                crate::StorageFormat::Rg8Uint => spirv::ImageFormat::Rg8ui,
-                crate::StorageFormat::Rg8Sint => spirv::ImageFormat::Rg8i,
-                crate::StorageFormat::R32Uint => spirv::ImageFormat::R32ui,
-                crate::StorageFormat::R32Sint => spirv::ImageFormat::R32i,
-                crate::StorageFormat::R32Float => spirv::ImageFormat::R32f,
-                crate::StorageFormat::Rg16Uint => spirv::ImageFormat::Rg16ui,
-                crate::StorageFormat::Rg16Sint => spirv::ImageFormat::Rg16i,
-                crate::StorageFormat::Rg16Float => spirv::ImageFormat::Rg16f,
-                crate::StorageFormat::Rgba8Unorm => spirv::ImageFormat::Rgba8,
-                crate::StorageFormat::Rgba8Snorm => spirv::ImageFormat::Rgba8Snorm,
-                crate::StorageFormat::Rgba8Uint => spirv::ImageFormat::Rgba8ui,
-                crate::StorageFormat::Rgba8Sint => spirv::ImageFormat::Rgba8i,
-                crate::StorageFormat::Rgb10a2Unorm => spirv::ImageFormat::Rgb10a2ui,
-                crate::StorageFormat::Rg11b10Float => spirv::ImageFormat::R11fG11fB10f,
-                crate::StorageFormat::Rg32Uint => spirv::ImageFormat::Rg32ui,
-                crate::StorageFormat::Rg32Sint => spirv::ImageFormat::Rg32i,
-                crate::StorageFormat::Rg32Float => spirv::ImageFormat::Rg32f,
-                crate::StorageFormat::Rgba16Uint => spirv::ImageFormat::Rgba16ui,
-                crate::StorageFormat::Rgba16Sint => spirv::ImageFormat::Rgba16i,
-                crate::StorageFormat::Rgba16Float => spirv::ImageFormat::Rgba16f,
-                crate::StorageFormat::Rgba32Uint => spirv::ImageFormat::Rgba32ui,
-                crate::StorageFormat::Rgba32Sint => spirv::ImageFormat::Rgba32i,
-                crate::StorageFormat::Rgba32Float => spirv::ImageFormat::Rgba32f,
-            },
-            _ => spirv::ImageFormat::Unknown,
-        };
-
-        instruction.add_operand(format as u32);
+        instruction.add_operand(flags.contains(super::ImageTypeFlags::DEPTH) as u32);
+        instruction.add_operand(flags.contains(super::ImageTypeFlags::ARRAYED) as u32);
+        instruction.add_operand(flags.contains(super::ImageTypeFlags::MULTISAMPLED) as u32);
+        instruction.add_operand(if flags.contains(super::ImageTypeFlags::SAMPLED) {
+            1
+        } else {
+            2
+        });
+        instruction.add_operand(image_format as u32);
         instruction
     }
 
@@ -439,19 +399,49 @@ impl super::Instruction {
         instruction
     }
 
+    pub(super) fn atomic_load(
+        result_type_id: Word,
+        id: Word,
+        pointer_id: Word,
+        scope_id: Word,
+        semantics_id: Word,
+    ) -> Self {
+        let mut instruction = Self::new(Op::AtomicLoad);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction.add_operand(pointer_id);
+        instruction.add_operand(scope_id);
+        instruction.add_operand(semantics_id);
+        instruction
+    }
+
     pub(super) fn store(
         pointer_id: Word,
-        object_id: Word,
+        value_id: Word,
         memory_access: Option<spirv::MemoryAccess>,
     ) -> Self {
         let mut instruction = Self::new(Op::Store);
         instruction.add_operand(pointer_id);
-        instruction.add_operand(object_id);
+        instruction.add_operand(value_id);
 
         if let Some(memory_access) = memory_access {
             instruction.add_operand(memory_access.bits());
         }
 
+        instruction
+    }
+
+    pub(super) fn atomic_store(
+        pointer_id: Word,
+        scope_id: Word,
+        semantics_id: Word,
+        value_id: Word,
+    ) -> Self {
+        let mut instruction = Self::new(Op::AtomicStore);
+        instruction.add_operand(pointer_id);
+        instruction.add_operand(scope_id);
+        instruction.add_operand(semantics_id);
+        instruction.add_operand(value_id);
         instruction
     }
 
@@ -512,7 +502,7 @@ impl super::Instruction {
         instruction
     }
 
-    pub(super) fn function_end() -> Self {
+    pub(super) const fn function_end() -> Self {
         Self::new(Op::FunctionEnd)
     }
 
@@ -579,27 +569,41 @@ impl super::Instruction {
         instruction
     }
 
-    pub(super) fn image_fetch(
+    pub(super) fn image_gather(
         result_type_id: Word,
         id: Word,
-        image: Word,
+        sampled_image: Word,
         coordinates: Word,
+        component_id: Word,
+        depth_ref: Option<Word>,
     ) -> Self {
-        let mut instruction = Self::new(Op::ImageFetch);
+        let op = match depth_ref {
+            None => Op::ImageGather,
+            Some(_) => Op::ImageDrefGather,
+        };
+
+        let mut instruction = Self::new(op);
         instruction.set_type(result_type_id);
         instruction.set_result(id);
-        instruction.add_operand(image);
+        instruction.add_operand(sampled_image);
         instruction.add_operand(coordinates);
+        if let Some(dref) = depth_ref {
+            instruction.add_operand(dref);
+        } else {
+            instruction.add_operand(component_id);
+        }
+
         instruction
     }
 
-    pub(super) fn image_read(
+    pub(super) fn image_fetch_or_read(
+        op: Op,
         result_type_id: Word,
         id: Word,
         image: Word,
         coordinates: Word,
     ) -> Self {
-        let mut instruction = Self::new(Op::ImageRead);
+        let mut instruction = Self::new(op);
         instruction.set_type(result_type_id);
         instruction.set_result(id);
         instruction.add_operand(image);
@@ -726,11 +730,66 @@ impl super::Instruction {
         instruction
     }
 
+    pub(super) fn ternary(
+        op: Op,
+        result_type_id: Word,
+        id: Word,
+        operand_1: Word,
+        operand_2: Word,
+        operand_3: Word,
+    ) -> Self {
+        let mut instruction = Self::new(op);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction.add_operand(operand_1);
+        instruction.add_operand(operand_2);
+        instruction.add_operand(operand_3);
+        instruction
+    }
+
+    pub(super) fn quaternary(
+        op: Op,
+        result_type_id: Word,
+        id: Word,
+        operand_1: Word,
+        operand_2: Word,
+        operand_3: Word,
+        operand_4: Word,
+    ) -> Self {
+        let mut instruction = Self::new(op);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction.add_operand(operand_1);
+        instruction.add_operand(operand_2);
+        instruction.add_operand(operand_3);
+        instruction.add_operand(operand_4);
+        instruction
+    }
+
     pub(super) fn relational(op: Op, result_type_id: Word, id: Word, expr_id: Word) -> Self {
         let mut instruction = Self::new(op);
         instruction.set_type(result_type_id);
         instruction.set_result(id);
         instruction.add_operand(expr_id);
+        instruction
+    }
+
+    pub(super) fn atomic_binary(
+        op: Op,
+        result_type_id: Word,
+        id: Word,
+        pointer: Word,
+        scope_id: Word,
+        semantics_id: Word,
+        value: Word,
+    ) -> Self {
+        let mut instruction = Self::new(op);
+        instruction.set_type(result_type_id);
+        instruction.set_result(id);
+        instruction.add_operand(pointer);
+        instruction.add_operand(scope_id);
+        instruction.add_operand(semantics_id);
+        instruction.add_operand(value);
         instruction
     }
 
@@ -757,6 +816,21 @@ impl super::Instruction {
     //
     // Control-Flow Instructions
     //
+
+    pub(super) fn phi(
+        result_type_id: Word,
+        result_id: Word,
+        var_parent_pairs: &[(Word, Word)],
+    ) -> Self {
+        let mut instruction = Self::new(Op::Phi);
+        instruction.add_operand(result_type_id);
+        instruction.add_operand(result_id);
+        for &(variable, parent) in var_parent_pairs {
+            instruction.add_operand(variable);
+            instruction.add_operand(parent);
+        }
+        instruction
+    }
 
     pub(super) fn selection_merge(
         merge_id: Word,
@@ -832,11 +906,11 @@ impl super::Instruction {
         instruction
     }
 
-    pub(super) fn kill() -> Self {
+    pub(super) const fn kill() -> Self {
         Self::new(Op::Kill)
     }
 
-    pub(super) fn return_void() -> Self {
+    pub(super) const fn return_void() -> Self {
         Self::new(Op::Return)
     }
 
@@ -866,5 +940,57 @@ impl super::Instruction {
         instruction.add_operand(mem_scope_id);
         instruction.add_operand(semantics_id);
         instruction
+    }
+}
+
+impl From<crate::StorageFormat> for spirv::ImageFormat {
+    fn from(format: crate::StorageFormat) -> Self {
+        use crate::StorageFormat as Sf;
+        match format {
+            Sf::R8Unorm => Self::R8,
+            Sf::R8Snorm => Self::R8Snorm,
+            Sf::R8Uint => Self::R8ui,
+            Sf::R8Sint => Self::R8i,
+            Sf::R16Uint => Self::R16ui,
+            Sf::R16Sint => Self::R16i,
+            Sf::R16Float => Self::R16f,
+            Sf::Rg8Unorm => Self::Rg8,
+            Sf::Rg8Snorm => Self::Rg8Snorm,
+            Sf::Rg8Uint => Self::Rg8ui,
+            Sf::Rg8Sint => Self::Rg8i,
+            Sf::R32Uint => Self::R32ui,
+            Sf::R32Sint => Self::R32i,
+            Sf::R32Float => Self::R32f,
+            Sf::Rg16Uint => Self::Rg16ui,
+            Sf::Rg16Sint => Self::Rg16i,
+            Sf::Rg16Float => Self::Rg16f,
+            Sf::Rgba8Unorm => Self::Rgba8,
+            Sf::Rgba8Snorm => Self::Rgba8Snorm,
+            Sf::Rgba8Uint => Self::Rgba8ui,
+            Sf::Rgba8Sint => Self::Rgba8i,
+            Sf::Rgb10a2Unorm => Self::Rgb10a2ui,
+            Sf::Rg11b10Float => Self::R11fG11fB10f,
+            Sf::Rg32Uint => Self::Rg32ui,
+            Sf::Rg32Sint => Self::Rg32i,
+            Sf::Rg32Float => Self::Rg32f,
+            Sf::Rgba16Uint => Self::Rgba16ui,
+            Sf::Rgba16Sint => Self::Rgba16i,
+            Sf::Rgba16Float => Self::Rgba16f,
+            Sf::Rgba32Uint => Self::Rgba32ui,
+            Sf::Rgba32Sint => Self::Rgba32i,
+            Sf::Rgba32Float => Self::Rgba32f,
+        }
+    }
+}
+
+impl From<crate::ImageDimension> for spirv::Dim {
+    fn from(dim: crate::ImageDimension) -> Self {
+        use crate::ImageDimension as Id;
+        match dim {
+            Id::D1 => Self::Dim1D,
+            Id::D2 => Self::Dim2D,
+            Id::D3 => Self::Dim3D,
+            Id::Cube => Self::DimCube,
+        }
     }
 }

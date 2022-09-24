@@ -18,45 +18,57 @@
 #  include "mozilla/layers/NativeLayerWayland.h"
 #endif
 
+#ifdef MOZ_LOGGING
+#  undef LOG
+#  define LOG(...)                                    \
+    MOZ_LOG(IsPopup() ? gWidgetPopupLog : gWidgetLog, \
+            mozilla::LogLevel::Debug, (__VA_ARGS__))
+#endif /* MOZ_LOGGING */
+
 namespace mozilla {
 namespace widget {
 
 GtkCompositorWidget::GtkCompositorWidget(
     const GtkCompositorWidgetInitData& aInitData,
-    const layers::CompositorOptions& aOptions, nsWindow* aWindow)
+    const layers::CompositorOptions& aOptions, RefPtr<nsWindow> aWindow)
     : CompositorWidget(aOptions),
-      mWidget(aWindow),
-      mClientSize("GtkCompositorWidget::mClientSize") {
+      mWidget(std::move(aWindow)),
+      mClientSize("GtkCompositorWidget::mClientSize"),
+      mIsRenderingSuspended(true) {
 #if defined(MOZ_WAYLAND)
   if (GdkIsWaylandDisplay()) {
-    if (!aWindow) {
-      NS_WARNING("GtkCompositorWidget: We're missing nsWindow!");
-    }
-    mProvider.Initialize(aWindow);
+    ConfigureWaylandBackend(mWidget);
   }
 #endif
 #if defined(MOZ_X11)
   if (GdkIsX11Display()) {
     mXWindow = (Window)aInitData.XWindow();
-
-    // Grab the window's visual and depth
-    XWindowAttributes windowAttrs;
-    if (!XGetWindowAttributes(DefaultXDisplay(), mXWindow, &windowAttrs)) {
-      NS_WARNING("GtkCompositorWidget(): XGetWindowAttributes() failed!");
-    }
-
-    Visual* visual = windowAttrs.visual;
-    int depth = windowAttrs.depth;
-
-    // Initialize the window surface provider
-    mProvider.Initialize(mXWindow, visual, depth, aInitData.Shaped());
+    ConfigureX11Backend(mXWindow, aInitData.Shaped());
   }
 #endif
   auto size = mClientSize.Lock();
   *size = aInitData.InitialClientSize();
+
+#if defined(MOZ_X11)
+  if (GdkIsX11Display()) {
+    LOG("GtkCompositorWidget::GtkCompositorWidget() [%p] mXWindow %p "
+        "mIsRenderingSuspended %d\n",
+        (void*)mWidget.get(), (void*)mXWindow, !!mIsRenderingSuspended);
+  }
+#endif
+#if defined(MOZ_WAYLAND)
+  if (GdkIsWaylandDisplay()) {
+    LOG("GtkCompositorWidget::GtkCompositorWidget() [%p] mWidget %p "
+        "mIsRenderingSuspended %d\n",
+        (void*)mWidget.get(), (void*)mWidget, !!mIsRenderingSuspended);
+  }
+#endif
 }
 
-GtkCompositorWidget::~GtkCompositorWidget() { mProvider.CleanupResources(); }
+GtkCompositorWidget::~GtkCompositorWidget() {
+  LOG("GtkCompositorWidget::~GtkCompositorWidget [%p]\n", (void*)mWidget.get());
+  DisableRendering();
+}
 
 already_AddRefed<gfx::DrawTarget> GtkCompositorWidget::StartRemoteDrawing() {
   return nullptr;
@@ -88,8 +100,20 @@ LayoutDeviceIntSize GtkCompositorWidget::GetClientSize() {
   return *size;
 }
 
-uintptr_t GtkCompositorWidget::GetWidgetKey() {
-  return reinterpret_cast<uintptr_t>(mWidget);
+void GtkCompositorWidget::RemoteLayoutSizeUpdated(
+    const LayoutDeviceRect& aSize) {
+  if (!mWidget || !mWidget->IsWaitingForCompositorResume()) {
+    return;
+  }
+
+  // We're waiting for layout to match widget size.
+  auto clientSize = mClientSize.Lock();
+  if (clientSize->width != (int)aSize.width ||
+      clientSize->height != (int)aSize.height) {
+    return;
+  }
+
+  mWidget->ResumeCompositorFromCompositorThread();
 }
 
 EGLNativeWindowType GtkCompositorWidget::GetEGLNativeWindow() {
@@ -137,6 +161,80 @@ GtkCompositorWidget::GetNativeLayerRoot() {
     return mNativeLayerRoot;
   }
   return nullptr;
+}
+#endif
+
+void GtkCompositorWidget::DisableRendering() {
+  LOG("GtkCompositorWidget::DisableRendering [%p]\n", (void*)mWidget.get());
+  mIsRenderingSuspended = true;
+  mProvider.CleanupResources();
+#if defined(MOZ_X11)
+  mXWindow = {};
+#endif
+}
+
+#if defined(MOZ_WAYLAND)
+bool GtkCompositorWidget::ConfigureWaylandBackend(RefPtr<nsWindow> aWindow) {
+  mProvider.Initialize(aWindow);
+  return true;
+}
+#endif
+
+#if defined(MOZ_X11)
+bool GtkCompositorWidget::ConfigureX11Backend(Window aXWindow, bool aShaped) {
+  mXWindow = aXWindow;
+
+  // We don't have X window yet.
+  if (!mXWindow) {
+    mIsRenderingSuspended = true;
+    return false;
+  }
+
+  // Grab the window's visual and depth
+  XWindowAttributes windowAttrs;
+  if (!XGetWindowAttributes(DefaultXDisplay(), mXWindow, &windowAttrs)) {
+    NS_WARNING("GtkCompositorWidget(): XGetWindowAttributes() failed!");
+    return false;
+  }
+
+  Visual* visual = windowAttrs.visual;
+  int depth = windowAttrs.depth;
+
+  // Initialize the window surface provider
+  mProvider.Initialize(mXWindow, visual, depth, aShaped);
+  return true;
+}
+#endif
+
+void GtkCompositorWidget::EnableRendering(const uintptr_t aXWindow,
+                                          const bool aShaped) {
+  LOG("GtkCompositorWidget::EnableRendering() [%p]\n", (void*)mWidget.get());
+
+  if (!mIsRenderingSuspended) {
+    LOG("  quit, mIsRenderingSuspended = false\n");
+    return;
+  }
+#if defined(MOZ_WAYLAND)
+  if (GdkIsWaylandDisplay()) {
+    LOG("  configure widget %p\n", mWidget.get());
+    if (!ConfigureWaylandBackend(mWidget)) {
+      return;
+    }
+  }
+#endif
+#if defined(MOZ_X11)
+  if (GdkIsX11Display()) {
+    LOG("  configure XWindow %p shaped %d\n", (void*)aXWindow, aShaped);
+    if (!ConfigureX11Backend((Window)aXWindow, aShaped)) {
+      return;
+    }
+  }
+#endif
+  mIsRenderingSuspended = false;
+}
+#ifdef MOZ_LOGGING
+bool GtkCompositorWidget::IsPopup() {
+  return mWidget ? mWidget->IsPopup() : false;
 }
 #endif
 

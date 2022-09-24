@@ -24,7 +24,6 @@ MOCHITEST_CHROME_MANIFESTS += [
 BROWSER_CHROME_MANIFESTS += ["test/browser.ini"]
 
 XPIDL_SOURCES += [
-    "nsIFormSubmitObserver.idl",
     "nsIMenuBuilder.idl",
 ]
 
@@ -35,7 +34,6 @@ EXPORTS += [
     "nsGenericHTMLFrameElement.h",
     "nsHTMLDocument.h",
     "nsIConstraintValidation.h",
-    "nsIForm.h",
     "nsIFormControl.h",
     "nsIHTMLCollection.h",
     "nsIRadioGroupContainer.h",
@@ -49,6 +47,7 @@ EXPORTS.mozilla += [
 ]
 
 EXPORTS.mozilla.dom += [
+    "ConstraintValidation.h",
     "ElementInternals.h",
     "HTMLAllCollection.h",
     "HTMLAnchorElement.h",
@@ -64,6 +63,7 @@ EXPORTS.mozilla.dom += [
     "HTMLDialogElement.h",
     "HTMLDivElement.h",
     "HTMLDNSPrefetch.h",
+    "HTMLElement.h",
     "HTMLEmbedElement.h",
     "HTMLFieldSetElement.h",
     "HTMLFontElement.h",
@@ -131,6 +131,7 @@ EXPORTS.mozilla.dom += [
 ]
 
 UNIFIED_SOURCES += [
+    "ConstraintValidation.cpp",
     "ElementInternals.cpp",
     "HTMLAllCollection.cpp",
     "HTMLAnchorElement.cpp",
@@ -249,12 +250,10 @@ LOCAL_INCLUDES += [
     "/layout/tables",
     "/layout/xul",
     "/netwerk/base",
+    "/parser/htmlparser",
 ]
 
 FINAL_LIBRARY = "xul"
 
 if CONFIG["MOZ_ANDROID_HLS_SUPPORT"]:
     DEFINES["MOZ_ANDROID_HLS_SUPPORT"] = True
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

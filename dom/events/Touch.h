@@ -17,8 +17,7 @@
 
 class nsPresContext;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class EventTarget;
 
@@ -40,7 +39,7 @@ class Touch final : public nsISupports,
   Touch(const Touch& aOther);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(Touch)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(Touch)
 
   void InitializePoints(nsPresContext* aPresContext, WidgetEvent* aEvent);
 
@@ -96,7 +95,6 @@ class Touch final : public nsISupports,
   bool mPointsInitialized;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_Touch_h_

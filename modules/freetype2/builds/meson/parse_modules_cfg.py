@@ -1,4 +1,14 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
+#
+# Copyright (C) 2020-2022 by
+# David Turner, Robert Wilhelm, and Werner Lemberg.
+#
+# This file is part of the FreeType project, and may only be used, modified,
+# and distributed under the terms of the FreeType project license,
+# LICENSE.TXT.  By continuing to use, modify, or distribute this file you
+# indicate that you have read the license and understand and accept it
+# fully.
+
 """Parse modules.cfg and dump its output either as ftmodule.h or a list of
 base extensions.
 """
@@ -77,6 +87,7 @@ def generate_ftmodule(lists):
         name = {
             "raster": "ft_raster1",
             "smooth": "ft_smooth",
+            "svg": "ft_svg",
         }.get(module)
         result += (
             "FT_USE_MODULE( FT_Renderer_Class, %s_renderer_class )\n" % name

@@ -9,6 +9,7 @@
 #ifndef nsPresContext_h___
 #define nsPresContext_h___
 
+#include "mozilla/intl/Bidi.h"
 #include "mozilla/AppUnits.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EnumeratedArray.h"
@@ -26,9 +27,11 @@
 #include "nsCompatibility.h"
 #include "nsCoord.h"
 #include "nsCOMPtr.h"
+#include "nsFontMetrics.h"
 #include "nsHashKeys.h"
 #include "nsRect.h"
 #include "nsStringFwd.h"
+#include "nsTHashSet.h"
 #include "nsTHashtable.h"
 #include "nsAtom.h"
 #include "nsIWidgetListener.h"  // for nsSizeMode
@@ -41,7 +44,6 @@
 #include "nsThreadUtils.h"
 #include "Units.h"
 
-class nsBidi;
 class nsIPrintSettings;
 class nsDocShell;
 class nsIDocShell;
@@ -52,21 +54,20 @@ class nsIFrame;
 class nsFrameManager;
 class nsAtom;
 class nsIRunnable;
+class gfxFontFamily;
 class gfxFontFeatureValueSet;
 class gfxUserFontEntry;
 class gfxUserFontSet;
 class gfxTextPerfMetrics;
 class nsCSSFontFeatureValuesRule;
 class nsCSSFrameConstructor;
-class nsDisplayList;
-class nsDisplayListBuilder;
+class nsFontCache;
 class nsTransitionManager;
 class nsAnimationManager;
 class nsRefreshDriver;
 class nsIWidget;
 class nsDeviceContext;
 class gfxMissingFontRecorder;
-struct FontMatchingStats;
 
 namespace mozilla {
 class AnimationEventDispatcher;
@@ -81,6 +82,7 @@ class ServoStyleSet;
 class StaticPresData;
 struct MediaFeatureChange;
 enum class MediaFeatureChangePropagation : uint8_t;
+enum class ColorScheme : uint8_t;
 namespace layers {
 class ContainerLayer;
 class LayerManager;
@@ -88,6 +90,7 @@ class LayerManager;
 namespace dom {
 class Document;
 class Element;
+enum class PrefersColorSchemeOverride : uint8_t;
 }  // namespace dom
 }  // namespace mozilla
 
@@ -117,10 +120,6 @@ enum class nsLayoutPhase : uint8_t {
   COUNT
 };
 #endif
-
-/* Used by nsPresContext::HasAuthorSpecifiedRules */
-#define NS_AUTHOR_SPECIFIED_BORDER_OR_BACKGROUND (1 << 0)
-#define NS_AUTHOR_SPECIFIED_PADDING (1 << 1)
 
 class nsRootPresContext;
 
@@ -155,6 +154,39 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
    * Initialize the presentation context from a particular device.
    */
   nsresult Init(nsDeviceContext* aDeviceContext);
+
+  /*
+   * Initialize the font cache if it hasn't been initialized yet.
+   * (Needed for stylo)
+   */
+  void InitFontCache();
+
+  void UpdateFontCacheUserFonts(gfxUserFontSet* aUserFontSet);
+
+  FontVisibility GetFontVisibility() const { return mFontVisibility; }
+  void ReportBlockedFontFamily(const mozilla::fontlist::Family& aFamily);
+  void ReportBlockedFontFamily(const gfxFontFamily& aFamily);
+
+  /**
+   * Get the nsFontMetrics that describe the properties of
+   * an nsFont.
+   * @param aFont font description to obtain metrics for
+   */
+  already_AddRefed<nsFontMetrics> GetMetricsFor(
+      const nsFont& aFont, const nsFontMetrics::Params& aParams);
+
+  /**
+   * Notification when a font metrics instance created for this context is
+   * about to be deleted
+   */
+  nsresult FontMetricsDeleted(const nsFontMetrics* aFontMetrics);
+
+  /**
+   * Attempt to free up resources by flushing out any fonts no longer
+   * referenced by anything other than the font cache itself.
+   * @return error status
+   */
+  nsresult FlushFontCache();
 
   /**
    * Set and detach presentation shell that this context is bound to.
@@ -202,13 +234,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   /**
    * Returns the root widget for this.
    */
-  nsIWidget* GetRootWidget() const;
+  already_AddRefed<nsIWidget> GetRootWidget() const;
 
   /**
    * Returns the widget which may have native focus and handles text input
    * like keyboard input, IME, etc.
    */
-  nsIWidget* GetTextInputHandlingWidget() const {
+  already_AddRefed<nsIWidget> GetTextInputHandlingWidget() const {
     // Currently, root widget for each PresContext handles text input.
     return GetRootWidget();
   }
@@ -347,9 +379,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   const mozilla::PreferenceSheet::Prefs& PrefSheetPrefs() const {
     return mozilla::PreferenceSheet::PrefsFor(*mDocument);
   }
-  nscolor DefaultBackgroundColor() const {
-    return PrefSheetPrefs().mDefaultBackgroundColor;
+
+  bool ForcingColors() const {
+    return mozilla::PreferenceSheet::MayForceColors() &&
+           !PrefSheetPrefs().mUseDocumentColors;
   }
+
+  nscolor DefaultBackgroundColor() const;
 
   nsISupports* GetContainerWeak() const;
 
@@ -513,9 +549,10 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   void RegisterManagedPostRefreshObserver(mozilla::ManagedPostRefreshObserver*);
   void UnregisterManagedPostRefreshObserver(
       mozilla::ManagedPostRefreshObserver*);
-  void CancelManagedPostRefreshObservers();
 
  protected:
+  void CancelManagedPostRefreshObservers();
+
   void UpdateEffectiveTextZoom();
 
 #ifdef DEBUG
@@ -543,14 +580,22 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   float GetOverrideDPPX() const { return mMediaEmulationData.mDPPX; }
 
+  // Gets the forced color-scheme if any via either our embedder, or DevTools
+  // emulation, or printing.
+  //
+  // NOTE(emilio): This might be called from an stylo thread.
+  Maybe<mozilla::ColorScheme> GetOverriddenOrEmbedderColorScheme() const;
+
   /**
    * Recomputes the data dependent on the browsing context, like zoom and text
    * zoom.
-   *
-   * TODO(emilio): Eventually stuff like the media emulation data, overrideDPPX
-   * and such should also move here.
    */
   void RecomputeBrowsingContextDependentData();
+
+  /**
+   * Sets the effective color scheme override, and invalidate stuff as needed.
+   */
+  void SetColorSchemeOverride(mozilla::dom::PrefersColorSchemeOverride);
 
   mozilla::CSSCoord GetAutoQualityMinFontSize() const {
     return DevPixelsToFloatCSSPixels(mAutoQualityMinFontSizePixelsPref);
@@ -787,6 +832,10 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
     return EnsureTheme();
   }
 
+  void RecomputeTheme();
+
+  bool UseOverlayScrollbars() const;
+
   /*
    * Notify the pres context that the theme has changed.  An internal switch
    * means it's one of our Mozilla themes that changed (e.g., Modern to
@@ -841,35 +890,20 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   }
 
   gfxTextPerfMetrics* GetTextPerfMetrics() { return mTextPerf.get(); }
-  FontMatchingStats* GetFontMatchingStats() { return mFontStats.get(); }
 
-  bool IsDynamic() {
-    return (mType == eContext_PageLayout || mType == eContext_Galley);
+  bool IsDynamic() const {
+    return mType == eContext_PageLayout || mType == eContext_Galley;
   }
-  bool IsScreen() {
-    return (mMedium == nsGkAtoms::screen || mType == eContext_PageLayout ||
-            mType == eContext_PrintPreview);
+  bool IsScreen() const {
+    return mMedium == nsGkAtoms::screen || mType == eContext_PageLayout ||
+           mType == eContext_PrintPreview;
   }
-  bool IsPrintingOrPrintPreview() {
-    return (mType == eContext_Print || mType == eContext_PrintPreview);
+  bool IsPrintingOrPrintPreview() const {
+    return mType == eContext_Print || mType == eContext_PrintPreview;
   }
 
   // Is this presentation in a chrome docshell?
   bool IsChrome() const;
-
-  // Public API for native theme code to get style internals.
-  bool HasAuthorSpecifiedRules(const nsIFrame* aFrame,
-                               uint32_t ruleTypeMask) const;
-
-  // Explicitly enable and disable paint flashing.
-  void SetPaintFlashing(bool aPaintFlashing) {
-    mPaintFlashing = aPaintFlashing;
-    mPaintFlashingInitialized = true;
-  }
-
-  // This method should be used instead of directly accessing mPaintFlashing,
-  // as that value may be out of date when mPaintFlashingInitialized is false.
-  bool GetPaintFlashing() const;
 
   bool SuppressingResizeReflow() const { return mSuppressResizeReflow; }
 
@@ -906,17 +940,11 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
       TransactionId aTransactionId = TransactionId{0},
       const mozilla::TimeStamp& aTimeStamp = mozilla::TimeStamp());
   void NotifyRevokingDidPaint(TransactionId aTransactionId);
-  void FireDOMPaintEvent(nsTArray<nsRect>* aList, TransactionId aTransactionId,
-                         mozilla::TimeStamp aTimeStamp = mozilla::TimeStamp());
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void FireDOMPaintEvent(
+      nsTArray<nsRect>* aList, TransactionId aTransactionId,
+      mozilla::TimeStamp aTimeStamp = mozilla::TimeStamp());
 
-  // Callback for catching invalidations in ContainerLayers
-  // Passed to LayerProperties::ComputeDifference
-  static void NotifySubDocInvalidation(
-      mozilla::layers::ContainerLayer* aContainer, const nsIntRegion* aRegion);
-  void SetNotifySubDocInvalidationData(
-      mozilla::layers::ContainerLayer* aContainer);
-  static void ClearNotifySubDocInvalidationData(
-      mozilla::layers::ContainerLayer* aContainer);
   bool IsDOMPaintEventPending();
 
   /**
@@ -1031,9 +1059,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   bool HasEverBuiltInvisibleText() const { return mHasEverBuiltInvisibleText; }
   void SetBuiltInvisibleText() { mHasEverBuiltInvisibleText = true; }
 
-  bool UsesExChUnits() const { return mUsesExChUnits; }
+  bool UsesFontMetricDependentFontUnits() const {
+    return mUsesFontMetricDependentFontUnits;
+  }
 
-  void SetUsesExChUnits(bool aValue) { mUsesExChUnits = aValue; }
+  void SetUsesFontMetricDependentFontUnits(bool aValue) {
+    mUsesFontMetricDependentFontUnits = aValue;
+  }
 
   bool IsDeviceSizePageSize();
 
@@ -1053,7 +1085,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
     mHasWarnedAboutTooLargeDashedOrDottedRadius = true;
   }
 
-  nsBidi& GetBidiEngine();
+  mozilla::intl::Bidi& GetBidiEngine();
 
   gfxFontFeatureValueSet* GetFontFeatureValuesLookup() const {
     return mFontFeatureValuesLookup;
@@ -1078,29 +1110,22 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   static void PreferenceChanged(const char* aPrefName, void* aSelf);
   void PreferenceChanged(const char* aPrefName);
 
-  void UpdateAfterPreferencesChanged();
-  void DispatchPrefChangedRunnableIfNeeded();
-
   void GetUserPreferences();
 
   void UpdateCharSet(NotNull<const Encoding*> aCharSet);
 
+  void DoForceReflowForFontInfoUpdateFromStyle();
+
  public:
   // Used by the PresShell to force a reflow when some aspect of font info
   // has been updated, potentially affecting font selection and layout.
-  void ForceReflowForFontInfoUpdate();
+  void ForceReflowForFontInfoUpdate(bool aNeedsReframe);
+  void ForceReflowForFontInfoUpdateFromStyle();
 
   /**
    * Checks for MozAfterPaint listeners on the document
    */
   bool MayHavePaintEventListener();
-
-  /**
-   * Checks for MozAfterPaint listeners on the document and
-   * any subdocuments, except for subdocuments that are non-top-level
-   * content documents.
-   */
-  bool MayHavePaintEventListenerInSubDocument();
 
   void InvalidatePaintedLayers();
 
@@ -1140,6 +1165,13 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   // mDynamicToolbarMaxHeight or `app units per device pixels` changes.
   void AdjustSizeForViewportUnits();
 
+  // Call in response to prefs changes that might affect what fonts should be
+  // visibile to CSS. Returns whether the current visibility value actually
+  // changed (in which case content should be reflowed).
+  bool UpdateFontVisibility();
+  void ReportBlockedFontFamilyName(const nsCString& aFamily,
+                                   FontVisibility aVisibility);
+
   // IMPORTANT: The ownership implicit in the following member variables
   // has been explicitly checked.  If you add any members to this class,
   // please make the ownership explicit (pinkerton, scc).
@@ -1153,6 +1185,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
                                            // Cannot reintroduce cycles
                                            // since there is no dependency
                                            // from gfx back to layout.
+  RefPtr<nsFontCache> mFontCache;
   RefPtr<mozilla::EventStateManager> mEventManager;
   RefPtr<nsRefreshDriver> mRefreshDriver;
   RefPtr<mozilla::AnimationEventDispatcher> mAnimationEventDispatcher;
@@ -1180,14 +1213,12 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   nsCOMPtr<nsITheme> mTheme;
   nsCOMPtr<nsIPrintSettings> mPrintSettings;
 
-  mozilla::UniquePtr<nsBidi> mBidiEngine;
+  mozilla::UniquePtr<mozilla::intl::Bidi> mBidiEngine;
 
   AutoTArray<TransactionInvalidations, 4> mTransactions;
 
   // text performance metrics
   mozilla::UniquePtr<gfxTextPerfMetrics> mTextPerf;
-
-  mozilla::UniquePtr<FontMatchingStats> mFontStats;
 
   mozilla::UniquePtr<gfxMissingFontRecorder> mMissingFonts;
 
@@ -1248,8 +1279,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   // last time we did a full style flush
   mozilla::TimeStamp mLastStyleUpdateForAllAnimations;
 
-  nsChangeHint mChangeHintForPrefChange;
-
   uint32_t mInterruptChecksToSkip;
 
   // During page load we use slower frame rate.
@@ -1257,6 +1286,12 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 
   nsTArray<RefPtr<mozilla::ManagedPostRefreshObserver>>
       mManagedPostRefreshObservers;
+
+  // If we block the use of a font-family that is explicitly requested,
+  // due to font visibility settings, we log a message to the web console;
+  // this hash-set keeps track of names we've logged for this context, so
+  // that we can avoid repeatedly reporting the same font.
+  nsTHashSet<nsCString> mBlockedFonts;
 
   ScrollStyles mViewportScrollStyles;
 
@@ -1298,7 +1333,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   // widget::ThemeChangeKind
   unsigned mPendingThemeChangeKind : kThemeChangeKindBits;
   unsigned mPendingUIResolutionChanged : 1;
-  unsigned mPostedPrefChangedRunnable : 1;
+  unsigned mPendingFontInfoUpdateReflowFromStyle : 1;
 
   // Are we currently drawing an SVG glyph?
   unsigned mIsGlyph : 1;
@@ -1307,7 +1342,7 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   //
   // TODO(emilio): It's a bit weird that this lives here but all the other
   // relevant bits live in Device on the rust side.
-  unsigned mUsesExChUnits : 1;
+  unsigned mUsesFontMetricDependentFontUnits : 1;
 
   // Is the current mCounterStyleManager valid?
   unsigned mCounterStylesDirty : 1;
@@ -1320,11 +1355,6 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
   unsigned mSuppressResizeReflow : 1;
 
   unsigned mIsVisual : 1;
-
-  // Should we paint flash in this context? Do not use this variable directly.
-  // Use GetPaintFlashing() method instead.
-  mutable unsigned mPaintFlashing : 1;
-  mutable unsigned mPaintFlashingInitialized : 1;
 
   unsigned mHasWarnedAboutPositionedTableParts : 1;
 
@@ -1348,6 +1378,11 @@ class nsPresContext : public nsISupports, public mozilla::SupportsWeakPtr {
 #ifdef DEBUG
   unsigned mInitialized : 1;
 #endif
+
+  // FIXME(emilio): These would be better packed on top of the bitfields, but
+  // that breaks bindgen in win32.
+  FontVisibility mFontVisibility = FontVisibility::Unknown;
+  mozilla::dom::PrefersColorSchemeOverride mOverriddenOrEmbedderColorScheme;
 
  protected:
   virtual ~nsPresContext();

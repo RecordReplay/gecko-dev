@@ -13,16 +13,10 @@ const {
 } = require(`${CHROME_URL_ROOT}stub-generator-helpers`);
 
 const TEST_URI =
-  "http://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-css-message.html";
+  "https://example.com/browser/devtools/client/webconsole/test/browser/stub-generators/test-css-message.html";
 const STUB_FILE = "cssMessage.js";
 
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
-  });
-
   const isStubsUpdate = env.get(STUBS_UPDATE_ENV) == "true";
   info(`${isStubsUpdate ? "Update" : "Check"} ${STUB_FILE}`);
 

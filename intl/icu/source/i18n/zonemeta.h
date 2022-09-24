@@ -18,11 +18,11 @@
 
 U_NAMESPACE_BEGIN
 
-typedef struct OlsonToMetaMappingEntry {
+struct OlsonToMetaMappingEntry : public UMemory {
     const UChar *mzid; // const because it's a reference to a resource bundle string.
     UDate from;
     UDate to;
-} OlsonToMetaMappingEntry;
+};
 
 class UVector;
 class TimeZone;
@@ -40,7 +40,7 @@ public:
 
     /**
      * Return the canonical id for this tzid defined by CLDR, which might be the id itself.
-     * This overload method returns a persistent const UChar*, which is guranteed to persist
+     * This overload method returns a persistent const UChar*, which is guaranteed to persist
      * (a pointer to a resource). If the given system tzid is not known, U_ILLEGAL_ARGUMENT_ERROR
      * is set in the status.
      * @param tzid Zone ID

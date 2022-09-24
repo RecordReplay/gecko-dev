@@ -19,6 +19,7 @@
 #ifndef wasm_generator_h
 #define wasm_generator_h
 
+#include "mozilla/Attributes.h"
 #include "mozilla/MemoryReporting.h"
 
 #include "jit/MacroAssembler.h"
@@ -27,6 +28,10 @@
 #include "wasm/WasmCompile.h"
 #include "wasm/WasmModule.h"
 #include "wasm/WasmValidate.h"
+
+namespace JS {
+class OptimizedEncodingListener;
+}
 
 namespace js {
 namespace wasm {
@@ -77,9 +82,7 @@ struct CompiledCode {
   jit::CodeLabelVector codeLabels;
   StackMaps stackMaps;
   CraneliftReusableData craneliftReusableData;
-#ifdef ENABLE_WASM_EXCEPTIONS
   WasmTryNoteVector tryNotes;
-#endif
 
   [[nodiscard]] bool swap(jit::MacroAssembler& masm);
   [[nodiscard]] bool swapCranelift(jit::MacroAssembler& masm,
@@ -94,9 +97,7 @@ struct CompiledCode {
     symbolicAccesses.clear();
     codeLabels.clear();
     stackMaps.clear();
-#ifdef ENABLE_WASM_EXCEPTIONS
     tryNotes.clear();
-#endif
     // The cranelift reusable data resets itself lazily.
     MOZ_ASSERT(empty());
   }
@@ -104,12 +105,8 @@ struct CompiledCode {
   bool empty() {
     return bytes.empty() && codeRanges.empty() && callSites.empty() &&
            callSiteTargets.empty() && trapSites.empty() &&
-           symbolicAccesses.empty() && codeLabels.empty() &&
-#ifdef ENABLE_WASM_EXCEPTIONS
-           tryNotes.empty() && stackMaps.empty();
-#else
+           symbolicAccesses.empty() && codeLabels.empty() && tryNotes.empty() &&
            stackMaps.empty();
-#endif
   }
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
@@ -185,6 +182,7 @@ class MOZ_STACK_CLASS ModuleGenerator {
   // Constant parameters
   SharedCompileArgs const compileArgs_;
   UniqueChars* const error_;
+  UniqueCharsVector* const warnings_;
   const Atomic<bool>* const cancelled_;
   ModuleEnvironment* const moduleEnv_;
   CompilerEnvironment* const compilerEnv_;
@@ -206,7 +204,6 @@ class MOZ_STACK_CLASS ModuleGenerator {
   CallSiteTargetVector callSiteTargets_;
   uint32_t lastPatchedCallSite_;
   uint32_t startOfUnpatchedCallsites_;
-  CodeOffsetVector debugTrapFarJumps_;
 
   // Parallel compilation
   bool parallel_;
@@ -241,10 +238,13 @@ class MOZ_STACK_CLASS ModuleGenerator {
   CompileMode mode() const { return compilerEnv_->mode(); }
   bool debugEnabled() const { return compilerEnv_->debugEnabled(); }
 
+  void warnf(const char* msg, ...) MOZ_FORMAT_PRINTF(2, 3);
+
  public:
   ModuleGenerator(const CompileArgs& args, ModuleEnvironment* moduleEnv,
                   CompilerEnvironment* compilerEnv,
-                  const Atomic<bool>* cancelled, UniqueChars* error);
+                  const Atomic<bool>* cancelled, UniqueChars* error,
+                  UniqueCharsVector* warnings);
   ~ModuleGenerator();
   [[nodiscard]] bool init(Metadata* maybeAsmJSMetadata = nullptr);
 

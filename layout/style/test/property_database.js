@@ -270,19 +270,15 @@ var validNonUrlImageValues = [
   "radial-gradient(at calc(100px + -25px) top, red, blue)",
   "radial-gradient(at left calc(100px + -25px), red, blue)",
 
-  ...(IsCSSPropertyPrefEnabled("layout.css.image-set.enabled")
-    ? [
-        "image-set(linear-gradient(green, green) 1x, url(foobar.png) 2x)",
-        "image-set(linear-gradient(red, red), url(foobar.png) 2x)",
-        "image-set(url(foobar.png) 2x)",
-        "image-set(url(foobar.png) 1x, url(bar.png) 2x, url(baz.png) 3x)",
-        "image-set('foobar.png', 'bar.png' 2x, url(baz.png) 3x)",
-        "image-set(image-set('foobar.png', 'bar.png' 2x) 1x, url(baz.png) 3x)",
-        "image-set(url(foobar.png) type('image/png'))",
-        "image-set(url(foobar.png) 1x type('image/png'))",
-        "image-set(url(foobar.png) type('image/png') 1x)",
-      ]
-    : []),
+  "image-set(linear-gradient(green, green) 1x, url(foobar.png) 2x)",
+  "image-set(linear-gradient(red, red), url(foobar.png) 2x)",
+  "image-set(url(foobar.png) 2x)",
+  "image-set(url(foobar.png) 1x, url(bar.png) 2x, url(baz.png) 3x)",
+  "image-set('foobar.png', 'bar.png' 2x, url(baz.png) 3x)",
+  "image-set(image-set('foobar.png', 'bar.png' 2x) 1x, url(baz.png) 3x)",
+  "image-set(url(foobar.png) type('image/png'))",
+  "image-set(url(foobar.png) 1x type('image/png'))",
+  "image-set(url(foobar.png) type('image/png') 1x)",
 
   ...(IsCSSPropertyPrefEnabled("layout.css.cross-fade.enabled")
     ? [
@@ -821,19 +817,15 @@ var invalidNonUrlImageValues = [
   "-webkit-repeating-conic-gradient(red, blue)",
   "-moz-repeating-conic-gradient(red, blue)",
 
-  ...(IsCSSPropertyPrefEnabled("layout.css.image-set.enabled")
-    ? [
-        "image-set(url(foobar.png) 1x, none)",
-        "image-set(garbage)",
-        "image-set(image-set(garbage))",
-        "image-set()",
-        "image-set(type('image/png') url(foobar.png) 1x)",
-        "image-set(url(foobar.png) type('image/png') 1x type('image/png'))",
-        "image-set(url(foobar.png) type('image/png') type('image/png'))",
-        "image-set(url(foobar.png) type(image/png))",
-        "image-set(url(foobar.png) epyt('image/png'))",
-      ]
-    : []),
+  "image-set(url(foobar.png) 1x, none)",
+  "image-set(garbage)",
+  "image-set(image-set(garbage))",
+  "image-set()",
+  "image-set(type('image/png') url(foobar.png) 1x)",
+  "image-set(url(foobar.png) type('image/png') 1x type('image/png'))",
+  "image-set(url(foobar.png) type('image/png') type('image/png'))",
+  "image-set(url(foobar.png) type(image/png))",
+  "image-set(url(foobar.png) epyt('image/png'))",
 
   ...(IsCSSPropertyPrefEnabled("layout.css.cross-fade.enabled")
     ? [
@@ -2551,13 +2543,20 @@ var gCSSProperties = {
     alias_for: "box-sizing",
     subproperties: ["box-sizing"],
   },
-  "color-adjust": {
-    domProp: "colorAdjust",
+  "print-color-adjust": {
+    domProp: "printColorAdjust",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["economy"],
     other_values: ["exact"],
     invalid_values: [],
+  },
+  "color-adjust": {
+    domProp: "colorAdjust",
+    inherited: true,
+    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    alias_for: "print-color-adjust",
+    subproperties: ["print-color-adjust"],
   },
   columns: {
     domProp: "columns",
@@ -4057,7 +4056,7 @@ var gCSSProperties = {
       "color",
       "luminosity",
     ],
-    invalid_values: ["none", "10px", "multiply multiply"],
+    invalid_values: ["none", "10px", "multiply multiply", "plus-lighter"],
   },
   "background-clip": {
     /*
@@ -5204,7 +5203,6 @@ var gCSSProperties = {
       "buttonface",
       "field",
       "highlight",
-      "highlighttext",
       "graytext",
       /* Preserve previously available specially prefixed colors */
       "-moz-activehyperlinktext",
@@ -5769,8 +5767,8 @@ var gCSSProperties = {
     applies_to_marker: true,
     applies_to_placeholder: true,
     applies_to_cue: true,
-    initial_values: ["weight style"],
-    other_values: ["none", "weight", "style"],
+    initial_values: ["weight style small-caps"],
+    other_values: ["none", "weight", "style", "small-caps"],
     invalid_values: [
       "weight none",
       "style none",
@@ -5778,6 +5776,8 @@ var gCSSProperties = {
       "weight 10px",
       "weight weight",
       "style style",
+      "small-caps none",
+      "small-caps small-caps",
     ],
   },
   "font-variant": {
@@ -6045,6 +6045,7 @@ var gCSSProperties = {
       "15%",
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -6125,6 +6126,7 @@ var gCSSProperties = {
     domProp: "lineHeight",
     inherited: true,
     type: CSS_TYPE_LONGHAND,
+    applies_to_marker: true,
     applies_to_first_letter: true,
     applies_to_first_line: true,
     applies_to_placeholder: true,
@@ -6489,6 +6491,7 @@ var gCSSProperties = {
       "0",
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -6523,6 +6526,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -6553,6 +6557,7 @@ var gCSSProperties = {
       "50%",
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -6585,6 +6590,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -6809,14 +6815,12 @@ var gCSSProperties = {
       "auto",
       "scroll",
       "hidden",
-      "-moz-hidden-unscrollable",
       "clip",
       "auto auto",
       "auto scroll",
       "hidden scroll",
       "auto hidden",
       "clip clip",
-      "-moz-hidden-unscrollable -moz-hidden-unscrollable",
     ],
     invalid_values: [
       "clip -moz-scrollbars-none",
@@ -6836,13 +6840,7 @@ var gCSSProperties = {
       contain: "none",
     },
     initial_values: ["visible"],
-    other_values: [
-      "auto",
-      "scroll",
-      "hidden",
-      "clip",
-      "-moz-hidden-unscrollable",
-    ],
+    other_values: ["auto", "scroll", "hidden", "clip"],
     invalid_values: [],
   },
   "overflow-y": {
@@ -6856,13 +6854,7 @@ var gCSSProperties = {
       contain: "none",
     },
     initial_values: ["visible"],
-    other_values: [
-      "auto",
-      "scroll",
-      "hidden",
-      "clip",
-      "-moz-hidden-unscrollable",
-    ],
+    other_values: ["auto", "scroll", "hidden", "clip"],
     invalid_values: [],
   },
   "overflow-inline": {
@@ -6877,7 +6869,7 @@ var gCSSProperties = {
       contain: "none",
     },
     initial_values: ["visible"],
-    other_values: ["auto", "scroll", "hidden", "-moz-hidden-unscrollable"],
+    other_values: ["auto", "scroll", "hidden", "clip"],
     invalid_values: [],
   },
   "overflow-block": {
@@ -6892,8 +6884,16 @@ var gCSSProperties = {
       contain: "none",
     },
     initial_values: ["visible"],
-    other_values: ["auto", "scroll", "hidden", "-moz-hidden-unscrollable"],
+    other_values: ["auto", "scroll", "hidden", "clip"],
     invalid_values: [],
+  },
+  "overflow-clip-margin": {
+    domProp: "overflowClipMargin",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["0px"],
+    other_values: ["1px", "2em", "calc(10px + 1vh)"],
+    invalid_values: ["-10px"],
   },
   padding: {
     domProp: "padding",
@@ -7095,15 +7095,18 @@ var gCSSProperties = {
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["auto"],
-    other_values: ["avoid"],
+    other_values: ["avoid", "avoid-page", "avoid-column"],
     invalid_values: ["left", "right", "always"],
   },
   "page-break-inside": {
     domProp: "pageBreakInside",
     inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
+    type: CSS_TYPE_LEGACY_SHORTHAND,
     alias_for: "break-inside",
     subproperties: ["break-inside"],
+    initial_values: ["auto"],
+    other_values: ["avoid"],
+    invalid_values: ["avoid-page", "avoid-column"],
   },
   "paint-order": {
     domProp: "paintOrder",
@@ -8376,6 +8379,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       // these two keywords are the aliases of above first two.
       "-moz-max-content",
@@ -8569,13 +8573,19 @@ var gCSSProperties = {
     type: CSS_TYPE_LONGHAND,
     initial_values: ["none"],
     other_values: [
+      "path(evenodd, '')",
+      "path(nonzero, 'M 10 10 h 100 v 100 h-100 v-100 z')",
+      "path(evenodd, 'M 10 10 h 100 v 100 h-100 v-100 z')",
+      "path('M10,30A20,20 0,0,1 50,30A20,20 0,0,1 90,30Q90,60 50,90Q10,60 10,30z')",
       "url(#mypath)",
       "url('404.svg#mypath')",
       "url(#my-clip-path)",
     ]
       .concat(basicShapeSVGBoxValues)
       .concat(basicShapeOtherValues),
-    invalid_values: basicShapeInvalidValues,
+    invalid_values: ["path(nonzero)", "path(abs, 'M 10 10 L 10 10 z')"].concat(
+      basicShapeInvalidValues
+    ),
     unbalanced_values: basicShapeUnbalancedValues,
   },
   "clip-rule": {
@@ -8932,7 +8942,14 @@ var gCSSProperties = {
     inherited: true,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["auto"],
-    other_values: ["optimizeSpeed", "optimizeQuality", "-moz-crisp-edges"],
+    other_values: [
+      "optimizeSpeed",
+      "optimizeQuality",
+      "-moz-crisp-edges",
+      "crisp-edges",
+      "smooth",
+      "pixelated",
+    ],
     invalid_values: [],
   },
   isolation: {
@@ -9024,6 +9041,7 @@ var gCSSProperties = {
       "saturation",
       "color",
       "luminosity",
+      "plus-lighter",
     ],
     invalid_values: [],
   },
@@ -9705,6 +9723,7 @@ var gCSSProperties = {
       "15%",
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-max-content",
       "-moz-min-content",
       "-moz-fit-content",
@@ -10127,6 +10146,7 @@ var gCSSProperties = {
       // These keywords are treated as initial value.
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       "-moz-max-content",
@@ -10479,6 +10499,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       // these two keywords are the aliases of above first two.
       "-moz-max-content",
@@ -10629,6 +10650,7 @@ var gCSSProperties = {
       // These keywords are treated as initial value.
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       "-moz-max-content",
@@ -10660,6 +10682,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -10690,6 +10713,7 @@ var gCSSProperties = {
       // These keywords are treated as initial value.
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       "-moz-max-content",
@@ -10722,6 +10746,7 @@ var gCSSProperties = {
       // writing mode
       "max-content",
       "min-content",
+      "fit-content",
       "-moz-fit-content",
       "-moz-available",
       // these two keywords are the aliases of above first two.
@@ -11608,6 +11633,20 @@ if (IsCSSPropertyPrefEnabled("layout.css.caption-side-non-standard.enabled")) {
   );
 }
 
+{
+  const enabled = IsCSSPropertyPrefEnabled(
+    "layout.css.overflow-moz-hidden-unscrollable.enabled"
+  );
+  for (let p of ["overflow", "overflow-x", "overflow-y"]) {
+    let prop = gCSSProperties[p];
+    let values = enabled ? prop.other_values : prop.invalid_values;
+    values.push("-moz-hidden-unscrollable");
+    if (p == "overflow") {
+      values.push("-moz-hidden-unscrollable -moz-hidden-unscrollable");
+    }
+  }
+}
+
 if (IsCSSPropertyPrefEnabled("layout.css.individual-transform.enabled")) {
   gCSSProperties.rotate = {
     domProp: "rotate",
@@ -11725,156 +11764,165 @@ if (IsCSSPropertyPrefEnabled("layout.css.individual-transform.enabled")) {
   };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.touch_action.enabled")) {
-  gCSSProperties["touch-action"] = {
-    domProp: "touchAction",
+gCSSProperties["touch-action"] = {
+  domProp: "touchAction",
+  inherited: false,
+  type: CSS_TYPE_LONGHAND,
+  initial_values: ["auto"],
+  other_values: [
+    "none",
+    "pan-x",
+    "pan-y",
+    "pinch-zoom",
+    "pan-x pan-y",
+    "pan-y pan-x",
+    "pinch-zoom pan-x",
+    "pinch-zoom pan-y",
+    "pan-x pinch-zoom",
+    "pan-y pinch-zoom",
+    "pinch-zoom pan-x pan-y",
+    "pinch-zoom pan-y pan-x",
+    "pan-x pinch-zoom pan-y",
+    "pan-y pinch-zoom pan-x",
+    "pan-x pan-y pinch-zoom",
+    "pan-y pan-x pinch-zoom",
+    "manipulation",
+  ],
+  invalid_values: [
+    "zoom",
+    "pinch",
+    "tap",
+    "10px",
+    "2",
+    "auto pan-x",
+    "pan-x auto",
+    "none pan-x",
+    "pan-x none",
+    "auto pan-y",
+    "pan-y auto",
+    "none pan-y",
+    "pan-y none",
+    "pan-x pan-x",
+    "pan-y pan-y",
+    "auto pinch-zoom",
+    "pinch-zoom auto",
+    "none pinch-zoom",
+    "pinch-zoom none",
+    "pinch-zoom pinch-zoom",
+    "pan-x pan-y none",
+    "pan-x none pan-y",
+    "none pan-x pan-y",
+    "pan-y pan-x none",
+    "pan-y none pan-x",
+    "none pan-y pan-x",
+    "pan-x pinch-zoom none",
+    "pan-x none pinch-zoom",
+    "none pan-x pinch-zoom",
+    "pinch-zoom pan-x none",
+    "pinch-zoom none pan-x",
+    "none pinch-zoom pan-x",
+    "pinch-zoom pan-y none",
+    "pinch-zoom none pan-y",
+    "none pinch-zoom pan-y",
+    "pan-y pinch-zoom none",
+    "pan-y none pinch-zoom",
+    "none pan-y pinch-zoom",
+    "pan-x pan-y auto",
+    "pan-x auto pan-y",
+    "auto pan-x pan-y",
+    "pan-y pan-x auto",
+    "pan-y auto pan-x",
+    "auto pan-y pan-x",
+    "pan-x pinch-zoom auto",
+    "pan-x auto pinch-zoom",
+    "auto pan-x pinch-zoom",
+    "pinch-zoom pan-x auto",
+    "pinch-zoom auto pan-x",
+    "auto pinch-zoom pan-x",
+    "pinch-zoom pan-y auto",
+    "pinch-zoom auto pan-y",
+    "auto pinch-zoom pan-y",
+    "pan-y pinch-zoom auto",
+    "pan-y auto pinch-zoom",
+    "auto pan-y pinch-zoom",
+    "pan-x pan-y zoom",
+    "pan-x zoom pan-y",
+    "zoom pan-x pan-y",
+    "pan-y pan-x zoom",
+    "pan-y zoom pan-x",
+    "zoom pan-y pan-x",
+    "pinch-zoom pan-y zoom",
+    "pinch-zoom zoom pan-y",
+    "zoom pinch-zoom pan-y",
+    "pan-y pinch-zoom zoom",
+    "pan-y zoom pinch-zoom",
+    "zoom pan-y pinch-zoom",
+    "pan-x pinch-zoom zoom",
+    "pan-x zoom pinch-zoom",
+    "zoom pan-x pinch-zoom",
+    "pinch-zoom pan-x zoom",
+    "pinch-zoom zoom pan-x",
+    "zoom pinch-zoom pan-x",
+    "pan-x pan-y pan-x",
+    "pan-x pan-x pan-y",
+    "pan-y pan-x pan-x",
+    "pan-y pan-x pan-y",
+    "pan-y pan-y pan-x",
+    "pan-x pan-y pan-y",
+    "pan-x pinch-zoom pan-x",
+    "pan-x pan-x pinch-zoom",
+    "pinch-zoom pan-x pan-x",
+    "pinch-zoom pan-x pinch-zoom",
+    "pinch-zoom pinch-zoom pan-x",
+    "pan-x pinch-zoom pinch-zoom",
+    "pinch-zoom pan-y pinch-zoom",
+    "pinch-zoom pinch-zoom pan-y",
+    "pan-y pinch-zoom pinch-zoom",
+    "pan-y pinch-zoom pan-y",
+    "pan-y pan-y pinch-zoom",
+    "pinch-zoom pan-y pan-y",
+    "manipulation none",
+    "none manipulation",
+    "manipulation auto",
+    "auto manipulation",
+    "manipulation zoom",
+    "zoom manipulation",
+    "manipulation manipulation",
+    "manipulation pan-x",
+    "pan-x manipulation",
+    "manipulation pan-y",
+    "pan-y manipulation",
+    "manipulation pinch-zoom",
+    "pinch-zoom manipulation",
+    "manipulation pan-x pan-y",
+    "pan-x manipulation pan-y",
+    "pan-x pan-y manipulation",
+    "manipulation pan-y pan-x",
+    "pan-y manipulation pan-x",
+    "pan-y pan-x manipulation",
+    "manipulation pinch-zoom pan-y",
+    "pinch-zoom manipulation pan-y",
+    "pinch-zoom pan-y manipulation",
+    "manipulation pan-y pinch-zoom",
+    "pan-y manipulation pinch-zoom",
+    "pan-y pinch-zoom manipulation",
+    "manipulation pan-x pinch-zoom",
+    "pan-x manipulation pinch-zoom",
+    "pan-x pinch-zoom manipulation",
+    "manipulation pinch-zoom pan-x",
+    "pinch-zoom manipulation pan-x",
+    "pinch-zoom pan-x manipulation",
+  ],
+};
+
+if (IsCSSPropertyPrefEnabled("layout.css.named-pages.enabled")) {
+  gCSSProperties["page"] = {
+    domProp: "page",
     inherited: false,
     type: CSS_TYPE_LONGHAND,
     initial_values: ["auto"],
-    other_values: [
-      "none",
-      "pan-x",
-      "pan-y",
-      "pinch-zoom",
-      "pan-x pan-y",
-      "pan-y pan-x",
-      "pinch-zoom pan-x",
-      "pinch-zoom pan-y",
-      "pan-x pinch-zoom",
-      "pan-y pinch-zoom",
-      "pinch-zoom pan-x pan-y",
-      "pinch-zoom pan-y pan-x",
-      "pan-x pinch-zoom pan-y",
-      "pan-y pinch-zoom pan-x",
-      "pan-x pan-y pinch-zoom",
-      "pan-y pan-x pinch-zoom",
-      "manipulation",
-    ],
-    invalid_values: [
-      "zoom",
-      "pinch",
-      "tap",
-      "10px",
-      "2",
-      "auto pan-x",
-      "pan-x auto",
-      "none pan-x",
-      "pan-x none",
-      "auto pan-y",
-      "pan-y auto",
-      "none pan-y",
-      "pan-y none",
-      "pan-x pan-x",
-      "pan-y pan-y",
-      "auto pinch-zoom",
-      "pinch-zoom auto",
-      "none pinch-zoom",
-      "pinch-zoom none",
-      "pinch-zoom pinch-zoom",
-      "pan-x pan-y none",
-      "pan-x none pan-y",
-      "none pan-x pan-y",
-      "pan-y pan-x none",
-      "pan-y none pan-x",
-      "none pan-y pan-x",
-      "pan-x pinch-zoom none",
-      "pan-x none pinch-zoom",
-      "none pan-x pinch-zoom",
-      "pinch-zoom pan-x none",
-      "pinch-zoom none pan-x",
-      "none pinch-zoom pan-x",
-      "pinch-zoom pan-y none",
-      "pinch-zoom none pan-y",
-      "none pinch-zoom pan-y",
-      "pan-y pinch-zoom none",
-      "pan-y none pinch-zoom",
-      "none pan-y pinch-zoom",
-      "pan-x pan-y auto",
-      "pan-x auto pan-y",
-      "auto pan-x pan-y",
-      "pan-y pan-x auto",
-      "pan-y auto pan-x",
-      "auto pan-y pan-x",
-      "pan-x pinch-zoom auto",
-      "pan-x auto pinch-zoom",
-      "auto pan-x pinch-zoom",
-      "pinch-zoom pan-x auto",
-      "pinch-zoom auto pan-x",
-      "auto pinch-zoom pan-x",
-      "pinch-zoom pan-y auto",
-      "pinch-zoom auto pan-y",
-      "auto pinch-zoom pan-y",
-      "pan-y pinch-zoom auto",
-      "pan-y auto pinch-zoom",
-      "auto pan-y pinch-zoom",
-      "pan-x pan-y zoom",
-      "pan-x zoom pan-y",
-      "zoom pan-x pan-y",
-      "pan-y pan-x zoom",
-      "pan-y zoom pan-x",
-      "zoom pan-y pan-x",
-      "pinch-zoom pan-y zoom",
-      "pinch-zoom zoom pan-y",
-      "zoom pinch-zoom pan-y",
-      "pan-y pinch-zoom zoom",
-      "pan-y zoom pinch-zoom",
-      "zoom pan-y pinch-zoom",
-      "pan-x pinch-zoom zoom",
-      "pan-x zoom pinch-zoom",
-      "zoom pan-x pinch-zoom",
-      "pinch-zoom pan-x zoom",
-      "pinch-zoom zoom pan-x",
-      "zoom pinch-zoom pan-x",
-      "pan-x pan-y pan-x",
-      "pan-x pan-x pan-y",
-      "pan-y pan-x pan-x",
-      "pan-y pan-x pan-y",
-      "pan-y pan-y pan-x",
-      "pan-x pan-y pan-y",
-      "pan-x pinch-zoom pan-x",
-      "pan-x pan-x pinch-zoom",
-      "pinch-zoom pan-x pan-x",
-      "pinch-zoom pan-x pinch-zoom",
-      "pinch-zoom pinch-zoom pan-x",
-      "pan-x pinch-zoom pinch-zoom",
-      "pinch-zoom pan-y pinch-zoom",
-      "pinch-zoom pinch-zoom pan-y",
-      "pan-y pinch-zoom pinch-zoom",
-      "pan-y pinch-zoom pan-y",
-      "pan-y pan-y pinch-zoom",
-      "pinch-zoom pan-y pan-y",
-      "manipulation none",
-      "none manipulation",
-      "manipulation auto",
-      "auto manipulation",
-      "manipulation zoom",
-      "zoom manipulation",
-      "manipulation manipulation",
-      "manipulation pan-x",
-      "pan-x manipulation",
-      "manipulation pan-y",
-      "pan-y manipulation",
-      "manipulation pinch-zoom",
-      "pinch-zoom manipulation",
-      "manipulation pan-x pan-y",
-      "pan-x manipulation pan-y",
-      "pan-x pan-y manipulation",
-      "manipulation pan-y pan-x",
-      "pan-y manipulation pan-x",
-      "pan-y pan-x manipulation",
-      "manipulation pinch-zoom pan-y",
-      "pinch-zoom manipulation pan-y",
-      "pinch-zoom pan-y manipulation",
-      "manipulation pan-y pinch-zoom",
-      "pan-y manipulation pinch-zoom",
-      "pan-y pinch-zoom manipulation",
-      "manipulation pan-x pinch-zoom",
-      "pan-x manipulation pinch-zoom",
-      "pan-x pinch-zoom manipulation",
-      "manipulation pinch-zoom pan-x",
-      "pinch-zoom manipulation pan-x",
-      "pinch-zoom pan-x manipulation",
-    ],
+    other_values: ["page", "small_page", "large_page", "A4"],
+    invalid_values: ["page1 page2", "auto page", "1cm"],
   };
 }
 
@@ -12824,6 +12872,77 @@ if (IsCSSPropertyPrefEnabled("layout.css.webkit-line-clamp.enabled")) {
   };
 }
 
+if (IsCSSPropertyPrefEnabled("layout.css.hyphenate-character.enabled")) {
+  gCSSProperties["hyphenate-character"] = {
+    domProp: "hyphenateCharacter",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_first_letter: true,
+    applies_to_first_line: true,
+    applies_to_placeholder: true,
+    initial_values: ["auto"],
+    other_values: ['"="', '"/-/"', '"\1400"', '""'],
+    invalid_values: ["none", "auto auto", "1400", "U+1400"],
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.content-visibility.enabled")) {
+  gCSSProperties["content-visibility"] = {
+    domProp: "contentVisibility",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["visible"],
+    other_values: ["auto", "invisible"],
+    invalid_values: ["partially-visible", "auto auto", "visible invisible"],
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.container-queries.enabled")) {
+  gCSSProperties["container-type"] = {
+    domProp: "containerType",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["none"],
+    other_values: [
+      "style",
+      "inline-size",
+      "block-size",
+      "size",
+      "style inline-size",
+      "block-size style",
+      "size style",
+    ],
+    invalid_values: [
+      "none style",
+      "none inline-size",
+      "inline-size none",
+      "style none",
+      "style style",
+      "inline-size style inline-size",
+      "inline-size block-size",
+      "size inline-size",
+      "size block-size",
+    ],
+  };
+  gCSSProperties["container-name"] = {
+    domProp: "containerName",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["none"],
+    other_values: ["foo bar", "foo", "baz bazz", "foo foo"],
+    invalid_values: ["foo unset", "none bar", "foo initial", "initial foo"],
+  };
+  gCSSProperties["container"] = {
+    domProp: "container",
+    inherited: false,
+    type: CSS_TYPE_TRUE_SHORTHAND,
+    subproperties: ["container-type", "container-name"],
+    initial_values: ["none"],
+    other_values: ["size", "size / foo bar", "inline-size style / foo"],
+    invalid_values: ["foo / size", "foo bar / size"],
+  };
+}
+
 if (false) {
   // TODO These properties are chrome-only, and are not exposed via CSSOM.
   // We may still want to find a way to test them. See bug 1206999.
@@ -13224,20 +13343,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.motion-path.enabled")) {
   };
 }
 
-if (IsCSSPropertyPrefEnabled("layout.css.clip-path-path.enabled")) {
-  gCSSProperties["clip-path"].other_values.push(
-    "path(evenodd, '')",
-    "path(nonzero, 'M 10 10 h 100 v 100 h-100 v-100 z')",
-    "path(evenodd, 'M 10 10 h 100 v 100 h-100 v-100 z')",
-    "path('M10,30A20,20 0,0,1 50,30A20,20 0,0,1 90,30Q90,60 50,90Q10,60 10,30z')"
-  );
-
-  gCSSProperties["clip-path"].invalid_values.push(
-    "path(nonzero)",
-    "path(abs, 'M 10 10 L 10 10 z')"
-  );
-}
-
 if (IsCSSPropertyPrefEnabled("layout.css.d-property.enabled")) {
   gCSSProperties["d"] = {
     domProp: "d",
@@ -13300,92 +13405,6 @@ if (IsCSSPropertyPrefEnabled("layout.css.zoom-transform-hack.enabled")) {
     initial_values: ["normal", "1.0", "0", "0%", "100%"],
     other_values: ["10%", "2", "2.5"],
     invalid_values: ["0 0", "foo", "10px"],
-  };
-}
-
-if (IsCSSPropertyPrefEnabled("layout.css.prefixes.columns")) {
-  gCSSProperties["-moz-columns"] = {
-    domProp: "MozColumns",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    alias_for: "columns",
-    subproperties: ["column-count", "column-width"],
-  };
-
-  gCSSProperties["-moz-column-count"] = {
-    domProp: "MozColumnCount",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-count",
-    subproperties: ["column-count"],
-  };
-
-  gCSSProperties["-moz-column-fill"] = {
-    domProp: "MozColumnFill",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-fill",
-    subproperties: ["column-fill"],
-  };
-
-  gCSSProperties["-moz-column-gap"] = {
-    domProp: "MozColumnGap",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-gap",
-    subproperties: ["column-gap"],
-  };
-
-  gCSSProperties["-moz-column-rule"] = {
-    domProp: "MozColumnRule",
-    inherited: false,
-    type: CSS_TYPE_TRUE_SHORTHAND,
-    alias_for: "column-rule",
-    subproperties: [
-      "column-rule-width",
-      "column-rule-style",
-      "column-rule-color",
-    ],
-  };
-
-  gCSSProperties["-moz-column-rule-width"] = {
-    domProp: "MozColumnRuleWidth",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-rule-width",
-    subproperties: ["column-rule-width"],
-  };
-
-  gCSSProperties["-moz-column-rule-style"] = {
-    domProp: "MozColumnRuleStyle",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-rule-style",
-    subproperties: ["column-rule-style"],
-  };
-
-  gCSSProperties["-moz-column-rule-color"] = {
-    domProp: "MozColumnRuleColor",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-rule-color",
-    subproperties: ["column-rule-color"],
-  };
-
-  gCSSProperties["-moz-column-span"] = {
-    domProp: "MozColumnSpan",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-span",
-    subproperties: ["column-span"],
-  };
-
-  gCSSProperties["-moz-column-width"] = {
-    domProp: "MozColumnWidth",
-    inherited: false,
-    type: CSS_TYPE_SHORTHAND_AND_LONGHAND,
-    alias_for: "column-width",
-    subproperties: ["column-width"],
   };
 }
 
@@ -13457,6 +13476,114 @@ if (IsCSSPropertyPrefEnabled("layout.css.color-mix.enabled")) {
     "color-mix(in srgb, red blue)",
     "color-mix(in srgb, red 10% blue)"
   );
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.color-scheme.enabled")) {
+  gCSSProperties["color-scheme"] = {
+    domProp: "colorScheme",
+    inherited: true,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["normal"],
+    other_values: [
+      "light",
+      "dark",
+      "light dark",
+      "light dark purple",
+      "light light dark",
+      "only light",
+      "only light dark",
+      "only light dark purple",
+      "light only",
+    ],
+    invalid_values: ["only normal", "normal only", "only light only"],
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.scroll-linked-animations.enabled")) {
+  // Basically, web-platform-tests should cover most cases, so here we only
+  // put some basic test cases.
+  gCSSProperties["animation"].subproperties.push("animation-timeline");
+  gCSSProperties["animation"].initial_values.push(
+    "none none 0s 0s ease normal running 1.0 auto",
+    "none none auto"
+  );
+  gCSSProperties["animation"].other_values.push(
+    "none none 0s 0s cubic-bezier(0.25, 0.1, 0.25, 1.0) normal running 1.0 auto",
+    "bounce 1s linear 2s timeline",
+    "bounce 1s 2s linear none",
+    "bounce timeline",
+    "2s, 1s bounce timeline",
+    "1s bounce timeline, 2s",
+    "1s bounce none, 2s none auto"
+  );
+
+  gCSSProperties["-moz-animation"].subproperties.push("animation-timeline");
+  gCSSProperties["-webkit-animation"].subproperties.push("animation-timeline");
+
+  gCSSProperties["animation-timeline"] = {
+    domProp: "animationTimeline",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    applies_to_marker: true,
+    initial_values: ["auto"],
+    other_values: [
+      "none",
+      "all",
+      "ball",
+      "mall",
+      "color",
+      "bounce, bubble, opacity",
+      "foobar",
+      "\\32bounce",
+      "-bounce",
+      "-\\32bounce",
+      "\\32 0bounce",
+      "-\\32 0bounce",
+      "\\2bounce",
+      "-\\2bounce",
+      "scroll()",
+      "scroll(block)",
+      "scroll(inline)",
+      "scroll(horizontal)",
+      "scroll(vertical)",
+      "scroll(root)",
+      "scroll(nearest)",
+      "scroll(inline nearest)",
+      "scroll(vertical root)",
+    ],
+    invalid_values: [
+      "bounce, initial",
+      "initial, bounce",
+      "bounce, inherit",
+      "inherit, bounce",
+      "bounce, unset",
+      "unset, bounce",
+    ],
+  };
+}
+
+if (IsCSSPropertyPrefEnabled("layout.css.scrollbar-gutter.enabled")) {
+  gCSSProperties["scrollbar-gutter"] = {
+    domProp: "scrollbarGutter",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: ["auto"],
+    other_values: ["stable", "stable both-edges", "both-edges stable"],
+    invalid_values: [
+      "auto stable",
+      "auto both-edges",
+      "both-edges",
+      "stable mirror",
+      // The following values are from scrollbar-gutter extension in CSS
+      // Overflow 4 https://drafts.csswg.org/css-overflow-4/#sbg-ext.
+      "always",
+      "always both-edges",
+      "always force",
+      "always both-edges force",
+      "stable both-edges force",
+      "match-parent",
+    ],
+  };
 }
 
 // Copy aliased properties' fields from their alias targets. Keep this logic

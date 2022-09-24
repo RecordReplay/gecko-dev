@@ -306,7 +306,7 @@ reexport! {
     mod alias;
     mod assert_expr;
     mod custom;
-    mod event;
+    mod tag;
     mod export;
     mod expr;
     mod func;
@@ -330,6 +330,7 @@ pub mod kw {
     custom_keyword!(anyref);
     custom_keyword!(arg);
     custom_keyword!(array);
+    custom_keyword!(assert_exception);
     custom_keyword!(assert_exhaustion);
     custom_keyword!(assert_invalid);
     custom_keyword!(assert_malformed);
@@ -356,7 +357,7 @@ pub mod kw {
     custom_keyword!(r#do = "do");
     custom_keyword!(elem);
     custom_keyword!(end);
-    custom_keyword!(event);
+    custom_keyword!(tag);
     custom_keyword!(export);
     custom_keyword!(r#extern = "extern");
     custom_keyword!(externref);

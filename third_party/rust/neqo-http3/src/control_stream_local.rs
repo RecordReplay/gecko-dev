@@ -4,30 +4,34 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use crate::hframe::HFrame;
-use crate::{Res, HTTP3_UNI_STREAM_TYPE_CONTROL};
+use crate::frames::HFrame;
+use crate::{BufferedStream, Http3StreamType, RecvStream, Res};
 use neqo_common::{qtrace, Encoder};
-use neqo_transport::{Connection, StreamType};
+use neqo_transport::{Connection, StreamId, StreamType};
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryFrom;
 
-// The local control stream, responsible for encoding frames and sending them
+pub const HTTP3_UNI_STREAM_TYPE_CONTROL: u64 = 0x0;
+
+/// The local control stream, responsible for encoding frames and sending them
 #[derive(Debug)]
 pub(crate) struct ControlStreamLocal {
-    stream_id: Option<u64>,
-    buf: Vec<u8>,
+    stream: BufferedStream,
+    /// `stream_id`s of outstanding request streams
+    outstanding_priority_update: VecDeque<StreamId>,
 }
 
 impl ::std::fmt::Display for ControlStreamLocal {
     fn fmt(&self, f: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
-        write!(f, "Local control stream {:?}", self.stream_id)
+        write!(f, "Local control stream {:?}", self.stream)
     }
 }
 
 impl ControlStreamLocal {
     pub fn new() -> Self {
         Self {
-            stream_id: None,
-            buf: vec![u8::try_from(HTTP3_UNI_STREAM_TYPE_CONTROL).unwrap()],
+            stream: BufferedStream::default(),
+            outstanding_priority_update: VecDeque::new(),
         }
     }
 
@@ -35,20 +39,52 @@ impl ControlStreamLocal {
     pub fn queue_frame(&mut self, f: &HFrame) {
         let mut enc = Encoder::default();
         f.encode(&mut enc);
-        self.buf.append(&mut enc.into());
+        self.stream.buffer(&enc);
+    }
+
+    pub fn queue_update_priority(&mut self, stream_id: StreamId) {
+        self.outstanding_priority_update.push_back(stream_id);
     }
 
     /// Send control data if available.
-    pub fn send(&mut self, conn: &mut Connection) -> Res<()> {
-        if let Some(stream_id) = self.stream_id {
-            if !self.buf.is_empty() {
-                qtrace!([self], "sending data.");
-                let sent = conn.stream_send(stream_id, &self.buf[..])?;
-                if sent == self.buf.len() {
-                    self.buf.clear();
+    pub fn send(
+        &mut self,
+        conn: &mut Connection,
+        recv_conn: &mut HashMap<StreamId, Box<dyn RecvStream>>,
+    ) -> Res<()> {
+        self.stream.send_buffer(conn)?;
+        self.send_priority_update(conn, recv_conn)
+    }
+
+    fn send_priority_update(
+        &mut self,
+        conn: &mut Connection,
+        recv_conn: &mut HashMap<StreamId, Box<dyn RecvStream>>,
+    ) -> Res<()> {
+        // send all necessary priority updates
+        while let Some(update_id) = self.outstanding_priority_update.pop_front() {
+            let update_stream = match recv_conn.get_mut(&update_id) {
+                Some(update_stream) => update_stream,
+                None => continue,
+            };
+
+            // can assert and unwrap here, because priority updates can only be added to
+            // HttpStreams in [Http3Connection::queue_update_priority}
+            debug_assert!(matches!(
+                update_stream.stream_type(),
+                Http3StreamType::Http | Http3StreamType::Push
+            ));
+            let stream = update_stream.http_stream().unwrap();
+
+            // in case multiple priority_updates were issued, ignore now irrelevant
+            if let Some(hframe) = stream.priority_update_frame() {
+                let mut enc = Encoder::new();
+                hframe.encode(&mut enc);
+                if self.stream.send_atomic(conn, &enc)? {
+                    stream.priority_update_sent();
                 } else {
-                    let b = self.buf.split_off(sent);
-                    self.buf = b;
+                    self.outstanding_priority_update.push_front(update_id);
+                    break;
                 }
             }
         }
@@ -58,12 +94,14 @@ impl ControlStreamLocal {
     /// Create a control stream.
     pub fn create(&mut self, conn: &mut Connection) -> Res<()> {
         qtrace!([self], "Create a control stream.");
-        self.stream_id = Some(conn.stream_create(StreamType::UniDi)?);
+        self.stream.init(conn.stream_create(StreamType::UniDi)?);
+        self.stream
+            .buffer(&[u8::try_from(HTTP3_UNI_STREAM_TYPE_CONTROL).unwrap()]);
         Ok(())
     }
 
     #[must_use]
-    pub fn stream_id(&self) -> Option<u64> {
-        self.stream_id
+    pub fn stream_id(&self) -> Option<StreamId> {
+        (&self.stream).into()
     }
 }

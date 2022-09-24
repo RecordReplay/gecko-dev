@@ -21,11 +21,50 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 
 const { debug, warn } = GeckoViewUtils.initLogging("Startup");
 
+var { DelayedInit } = ChromeUtils.import(
+  "resource://gre/modules/DelayedInit.jsm"
+);
+
+function InitLater(fn, object, name) {
+  return DelayedInit.schedule(fn, object, name, 15000 /* 15s max wait */);
+}
+
+const JSPROCESSACTORS = {
+  GeckoViewPermissionProcess: {
+    parent: {
+      moduleURI: "resource:///actors/GeckoViewPermissionProcessParent.jsm",
+    },
+    child: {
+      moduleURI: "resource:///actors/GeckoViewPermissionProcessChild.jsm",
+      observers: [
+        "getUserMedia:ask-device-permission",
+        "getUserMedia:request",
+        "recording-device-events",
+        "PeerConnection:request",
+      ],
+    },
+  },
+};
+
 const JSWINDOWACTORS = {
   LoadURIDelegate: {
+    parent: {
+      moduleURI: "resource:///actors/LoadURIDelegateParent.jsm",
+    },
     child: {
       moduleURI: "resource:///actors/LoadURIDelegateChild.jsm",
     },
+    messageManagerGroups: ["browsers"],
+  },
+  GeckoViewPermission: {
+    parent: {
+      moduleURI: "resource:///actors/GeckoViewPermissionParent.jsm",
+    },
+    child: {
+      moduleURI: "resource:///actors/GeckoViewPermissionChild.jsm",
+    },
+    allFrames: true,
+    includeChrome: true,
   },
   GeckoViewPrompt: {
     child: {
@@ -33,10 +72,24 @@ const JSWINDOWACTORS = {
       events: {
         click: { capture: false, mozSystemGroup: true },
         contextmenu: { capture: false, mozSystemGroup: true },
+        mozshowdropdown: {},
+        "mozshowdropdown-sourcetouch": {},
+        MozOpenDateTimePicker: {},
         DOMPopupBlocked: { capture: false, mozSystemGroup: true },
       },
     },
     allFrames: true,
+    messageManagerGroups: ["browsers"],
+  },
+  GeckoViewFormValidation: {
+    child: {
+      moduleURI: "resource:///actors/GeckoViewFormValidationChild.jsm",
+      events: {
+        MozInvalidForm: {},
+      },
+    },
+    allFrames: true,
+    messageManagerGroups: ["browsers"],
   },
 };
 
@@ -45,54 +98,10 @@ class GeckoViewStartup {
   observe(aSubject, aTopic, aData) {
     debug`observe: ${aTopic}`;
     switch (aTopic) {
+      case "content-process-ready-for-script":
       case "app-startup": {
-        // Parent and content process.
-        GeckoViewUtils.addLazyGetter(this, "GeckoViewPermission", {
-          service: "@mozilla.org/content-permission/prompt;1",
-          observers: [
-            "getUserMedia:ask-device-permission",
-            "getUserMedia:request",
-            "PeerConnection:request",
-          ],
-          ppmm: ["GeckoView:AddCameraPermission"],
-        });
-
-        GeckoViewUtils.addLazyGetter(this, "GeckoViewRecordingMedia", {
-          module: "resource://gre/modules/GeckoViewMedia.jsm",
-          observers: ["recording-device-events"],
-        });
-
         GeckoViewUtils.addLazyGetter(this, "GeckoViewConsole", {
           module: "resource://gre/modules/GeckoViewConsole.jsm",
-        });
-
-        GeckoViewUtils.addLazyGetter(this, "GeckoViewWebExtension", {
-          module: "resource://gre/modules/GeckoViewWebExtension.jsm",
-          ged: [
-            "GeckoView:ActionDelegate:Attached",
-            "GeckoView:BrowserAction:Click",
-            "GeckoView:PageAction:Click",
-            "GeckoView:RegisterWebExtension",
-            "GeckoView:UnregisterWebExtension",
-            "GeckoView:WebExtension:CancelInstall",
-            "GeckoView:WebExtension:Disable",
-            "GeckoView:WebExtension:Enable",
-            "GeckoView:WebExtension:EnsureBuiltIn",
-            "GeckoView:WebExtension:Get",
-            "GeckoView:WebExtension:Install",
-            "GeckoView:WebExtension:InstallBuiltIn",
-            "GeckoView:WebExtension:List",
-            "GeckoView:WebExtension:PortDisconnect",
-            "GeckoView:WebExtension:PortMessageFromApp",
-            "GeckoView:WebExtension:SetPBAllowed",
-            "GeckoView:WebExtension:Uninstall",
-            "GeckoView:WebExtension:Update",
-          ],
-          observers: [
-            "devtools-installed-addon",
-            "testing-installed-addon",
-            "testing-uninstalled-addon",
-          ],
         });
 
         GeckoViewUtils.addLazyGetter(this, "GeckoViewStorageController", {
@@ -114,24 +123,6 @@ class GeckoViewStartup {
           ged: ["GeckoView:PushEvent", "GeckoView:PushSubscriptionChanged"],
         });
 
-        GeckoViewUtils.addLazyGetter(
-          this,
-          "GeckoViewContentBlockingController",
-          {
-            module:
-              "resource://gre/modules/GeckoViewContentBlockingController.jsm",
-            ged: [
-              "ContentBlocking:AddException",
-              "ContentBlocking:RemoveException",
-              "ContentBlocking:RemoveExceptionByPrincipal",
-              "ContentBlocking:CheckException",
-              "ContentBlocking:SaveList",
-              "ContentBlocking:RestoreList",
-              "ContentBlocking:ClearList",
-            ],
-          }
-        );
-
         GeckoViewUtils.addLazyPrefObserver(
           {
             name: "geckoview.console.enabled",
@@ -142,52 +133,55 @@ class GeckoViewStartup {
           }
         );
 
-        // Handle invalid form submission. If we don't hook up to this,
-        // invalid forms are allowed to be submitted!
-        Services.obs.addObserver(
-          {
-            QueryInterface: ChromeUtils.generateQI([
-              "nsIObserver",
-              "nsIFormSubmitObserver",
-            ]),
-            notifyInvalidSubmit: (form, element) => {
-              // We should show the validation message here, bug 1510450.
-            },
-          },
-          "invalidformsubmit"
-        );
-
+        // Parent process only
         if (
           Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_DEFAULT
         ) {
           ActorManagerParent.addJSWindowActors(JSWINDOWACTORS);
+          ActorManagerParent.addJSProcessActors(JSPROCESSACTORS);
 
-          Services.mm.loadFrameScript(
-            "chrome://geckoview/content/GeckoViewPromptChild.js",
-            true
-          );
-
-          GeckoViewUtils.addLazyGetter(this, "ContentCrashHandler", {
-            module: "resource://gre/modules/ContentCrashHandler.jsm",
-            observers: ["ipc:content-shutdown"],
+          GeckoViewUtils.addLazyGetter(this, "GeckoViewWebExtension", {
+            module: "resource://gre/modules/GeckoViewWebExtension.jsm",
+            ged: [
+              "GeckoView:ActionDelegate:Attached",
+              "GeckoView:BrowserAction:Click",
+              "GeckoView:PageAction:Click",
+              "GeckoView:RegisterWebExtension",
+              "GeckoView:UnregisterWebExtension",
+              "GeckoView:WebExtension:CancelInstall",
+              "GeckoView:WebExtension:Disable",
+              "GeckoView:WebExtension:Enable",
+              "GeckoView:WebExtension:EnsureBuiltIn",
+              "GeckoView:WebExtension:Get",
+              "GeckoView:WebExtension:Install",
+              "GeckoView:WebExtension:InstallBuiltIn",
+              "GeckoView:WebExtension:List",
+              "GeckoView:WebExtension:PortDisconnect",
+              "GeckoView:WebExtension:PortMessageFromApp",
+              "GeckoView:WebExtension:SetPBAllowed",
+              "GeckoView:WebExtension:Uninstall",
+              "GeckoView:WebExtension:Update",
+            ],
+            observers: [
+              "devtools-installed-addon",
+              "testing-installed-addon",
+              "testing-uninstalled-addon",
+            ],
           });
+
+          GeckoViewUtils.addLazyGetter(this, "ChildCrashHandler", {
+            module: "resource://gre/modules/ChildCrashHandler.jsm",
+            observers: ["ipc:content-shutdown", "compositor:process-aborted"],
+          });
+
+          EventDispatcher.instance.registerListener(this, [
+            "GeckoView:StorageDelegate:Attached",
+          ]);
         }
         break;
       }
 
       case "profile-after-change": {
-        // Parent process only.
-        // ContentPrefServiceParent is needed for e10s file picker.
-        GeckoViewUtils.addLazyGetter(this, "ContentPrefServiceParent", {
-          module: "resource://gre/modules/ContentPrefServiceParent.jsm",
-          init: cpsp => cpsp.alwaysInit(),
-          ppmm: [
-            "ContentPrefs:FunctionCall",
-            "ContentPrefs:AddObserverForName",
-            "ContentPrefs:RemoveObserverForName",
-          ],
-        });
-
         GeckoViewUtils.addLazyGetter(this, "GeckoViewRemoteDebugger", {
           module: "resource://gre/modules/GeckoViewRemoteDebugger.jsm",
           init: gvrd => gvrd.onInit(),
@@ -217,10 +211,14 @@ class GeckoViewStartup {
           "GeckoView:SetLocale",
         ]);
 
+        Services.obs.addObserver(this, "browser-idle-startup-tasks-finished");
+
         Services.obs.notifyObservers(null, "geckoview-startup-complete");
         break;
       }
       case "browser-idle-startup-tasks-finished": {
+        // TODO bug 1730026: when an alternative is introduced that runs once,
+        // replace this observer topic with that alternative.
         // This only needs to happen once during startup.
         Services.obs.removeObserver(this, aTopic);
         // Notify the start up crash tracker that the browser has successfully
@@ -264,6 +262,15 @@ class GeckoViewStartup {
           Ci.nsIPrefLocalizedString,
           pls
         );
+        break;
+
+      case "GeckoView:StorageDelegate:Attached":
+        InitLater(() => {
+          const loginDetection = Cc[
+            "@mozilla.org/login-detection-service;1"
+          ].createInstance(Ci.nsILoginDetectionService);
+          loginDetection.init();
+        });
         break;
     }
   }

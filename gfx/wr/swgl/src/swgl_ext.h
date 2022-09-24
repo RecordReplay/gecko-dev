@@ -552,6 +552,11 @@ static ALWAYS_INLINE int spanNeedsScale(int span, T P) {
 // without diverging too much from the linear filter.
 template <typename S, typename T>
 static inline LinearFilter needsTextureLinear(S sampler, T P, int span) {
+  // If each row is not wide enough for linear filtering, then just use nearest
+  // filtering.
+  if (sampler->width < 2) {
+    return LINEAR_FILTER_NEAREST;
+  }
   // First verify if the row Y doesn't change across samples
   if (P.y.x != P.y.y) {
     return LINEAR_FILTER_FALLBACK;
@@ -630,7 +635,7 @@ template <bool BLEND, typename S, typename C, typename P>
 static inline int blendTextureLinearR8(S sampler, vec2 uv, int span,
                                        const vec4_scalar& uv_rect, C color,
                                        P* buf) {
-  if (!swgl_isTextureR8(sampler)) {
+  if (!swgl_isTextureR8(sampler) || sampler->width < 2) {
     return 0;
   }
   LINEAR_QUANTIZE_UV(sampler, uv, uv_step, uv_rect, min_uv, max_uv);
@@ -806,9 +811,9 @@ static int blendTextureNearestRepeat(S sampler, vec2 uv, int span,
   // greater than one pixel, we can still check if we don't move far enough from
   // the pixel center on that axis to hit the next pixel.
   if ((int(min_uv.x) + (REPEAT ? 1 : 0) >= int(max_uv.x) ||
-       (uv_step.x * span * (REPEAT ? uv_scale.x : 1.0f) < 0.5f)) &&
+       (abs(uv_step.x) * span * (REPEAT ? uv_scale.x : 1.0f) < 0.5f)) &&
       (int(min_uv.y) + (REPEAT ? 1 : 0) >= int(max_uv.y) ||
-       (uv_step.y * span * (REPEAT ? uv_scale.y : 1.0f) < 0.5f))) {
+       (abs(uv_step.y) * span * (REPEAT ? uv_scale.y : 1.0f) < 0.5f))) {
     vec2 repeated_uv = REPEAT
                            ? tileRepeatUV(uv, tile_repeat) * uv_scale + min_uv
                            : clamp(uv, min_uv, max_uv);
@@ -1045,7 +1050,7 @@ template <typename S0, typename S1>
 static ALWAYS_INLINE PackedRGBA8 sampleYUV(S0 sampler0, ivec2 uv0, S1 sampler1,
                                            ivec2 uv1,
                                            const YUVMatrix& rgb_from_ycbcr,
-                                           UNUSED int rescaleFactor) {
+                                           int rescaleFactor) {
   switch (sampler1->format) {
     case TextureFormat::RG8: {
       assert(sampler0->format == TextureFormat::R8);
@@ -1060,6 +1065,21 @@ static ALWAYS_INLINE PackedRGBA8 sampleYUV(S0 sampler0, ivec2 uv0, S1 sampler1,
       auto planar = textureLinearPlanarRGBA8(sampler1, uv1);
       return convertYUV(rgb_from_ycbcr, y, lowHalf(planar.ba),
                         highHalf(planar.rg));
+    }
+    case TextureFormat::RG16: {
+      assert(sampler0->format == TextureFormat::R16);
+      // The rescaling factor represents how many bits to add to renormalize the
+      // texture to 16 bits, and so the color depth is actually 16 minus the
+      // rescaling factor.
+      // Need to right shift the sample by the amount of bits over 8 it
+      // occupies. On output from textureLinearUnpackedR16, we have lost 1 bit
+      // of precision at the low end already, hence 1 is subtracted from the
+      // color depth.
+      int colorDepth = 16 - rescaleFactor;
+      int rescaleBits = (colorDepth - 1) - 8;
+      auto y = textureLinearUnpackedR16(sampler0, uv0) >> rescaleBits;
+      auto uv = textureLinearUnpackedRG16(sampler1, uv1) >> rescaleBits;
+      return rgb_from_ycbcr.convert(zip(y, y), uv);
     }
     default:
       assert(false);

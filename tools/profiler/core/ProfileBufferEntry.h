@@ -19,6 +19,7 @@
 #include "mozilla/Maybe.h"
 #include "mozilla/ProfileBufferEntryKinds.h"
 #include "mozilla/ProfileJSONWriter.h"
+#include "mozilla/ProfilerUtils.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Variant.h"
 #include "mozilla/Vector.h"
@@ -45,6 +46,7 @@ class ProfileBufferEntry {
   ProfileBufferEntry(Kind aKind, int64_t aInt64);
   ProfileBufferEntry(Kind aKind, uint64_t aUint64);
   ProfileBufferEntry(Kind aKind, int aInt);
+  ProfileBufferEntry(Kind aKind, ProfilerThreadId aThreadId);
 
  public:
 #define CTOR(KIND, TYPE, SIZE)                   \
@@ -78,6 +80,7 @@ class ProfileBufferEntry {
   int GetInt() const;
   int64_t GetInt64() const;
   uint64_t GetUint64() const;
+  ProfilerThreadId GetThreadId() const;
   void CopyCharsInto(char (&aOutArray)[kNumChars]) const;
 };
 
@@ -141,7 +144,8 @@ struct JITFrameInfoForBufferRange final {
 struct JITFrameInfo final {
   JITFrameInfo() : mUniqueStrings(mozilla::MakeUnique<UniqueJSONStrings>()) {}
 
-  MOZ_IMPLICIT JITFrameInfo(const JITFrameInfo& aOther);
+  MOZ_IMPLICIT JITFrameInfo(const JITFrameInfo& aOther,
+                            mozilla::ProgressLogger aProgressLogger);
 
   // Creates a new JITFrameInfoForBufferRange object in mRanges by looking up
   // information about the provided JIT return addresses using aCx.
@@ -308,7 +312,9 @@ class UniqueStacks {
     }
   };
 
-  explicit UniqueStacks(JITFrameInfo&& aJITFrameInfo);
+  explicit UniqueStacks(
+      JITFrameInfo&& aJITFrameInfo,
+      ProfilerCodeAddressService* aCodeAddressService = nullptr);
 
   // Return a StackKey for aFrame as the stack's root frame (no prefix).
   [[nodiscard]] StackKey BeginStack(const FrameKey& aFrame);

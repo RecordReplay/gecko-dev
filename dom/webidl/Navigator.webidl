@@ -105,18 +105,23 @@ partial interface Navigator {
   readonly attribute Permissions permissions;
 };
 
-// Things that definitely need to be in the spec and and are not for some
-// reason.  See https://www.w3.org/Bugs/Public/show_bug.cgi?id=22406
 partial interface Navigator {
-  [Throws]
+  [Throws, SameObject]
   readonly attribute MimeTypeArray mimeTypes;
-  [Throws]
+  [Throws, SameObject]
   readonly attribute PluginArray plugins;
+  readonly attribute boolean pdfViewerEnabled;
 };
 
 // http://www.w3.org/TR/tracking-dnt/ sort of
 partial interface Navigator {
   readonly attribute DOMString doNotTrack;
+};
+
+// https://globalprivacycontrol.github.io/gpc-spec/
+partial interface Navigator {
+  [Pref="privacy.globalprivacycontrol.functionality.enabled"]
+  readonly attribute boolean globalPrivacyControl;
 };
 
 // http://www.w3.org/TR/geolocation-API/#geolocation_interface
@@ -210,7 +215,7 @@ partial interface Navigator {
 
 // https://immersive-web.github.io/webvr/spec/1.1/#interface-navigator
 partial interface Navigator {
-  [Throws, SecureContext, Pref="dom.vr.enabled"]
+  [NewObject, SecureContext, Pref="dom.vr.enabled"]
   Promise<sequence<VRDisplay>> getVRDisplays();
   // TODO: Use FrozenArray once available. (Bug 1236777)
   [SecureContext, Frozen, Cached, Pure, Pref="dom.vr.enabled"]
@@ -235,7 +240,7 @@ partial interface Navigator {
 
 // http://webaudio.github.io/web-midi-api/#requestmidiaccess
 partial interface Navigator {
-  [Throws, Pref="dom.webmidi.enabled"]
+  [SecureContext, NewObject, Pref="dom.webmidi.enabled"]
   Promise<MIDIAccess> requestMIDIAccess(optional MIDIOptions options = {});
 };
 
@@ -298,20 +303,31 @@ interface mixin NavigatorAutomationInformation {
 
 // https://www.w3.org/TR/clipboard-apis/#navigator-interface
 partial interface Navigator {
-  [Pref="dom.events.asyncClipboard", SecureContext, SameObject]
+  [SecureContext, SameObject]
   readonly attribute Clipboard clipboard;
+};
+
+// Used for testing of origin trials.
+partial interface Navigator {
+  [Trial="TestTrial"]
+  readonly attribute boolean testTrialGatedAttribute;
 };
 
 // https://wicg.github.io/web-share/#navigator-interface
 partial interface Navigator {
-  [SecureContext, Throws, Func="Navigator::HasShareSupport"]
+  [SecureContext, NewObject, Func="Navigator::HasShareSupport"]
   Promise<void> share(optional ShareData data = {});
+  [SecureContext, Func="Navigator::HasShareSupport"]
+  boolean canShare(optional ShareData data = {});
 };
 // https://wicg.github.io/web-share/#sharedata-dictionary
 dictionary ShareData {
   USVString title;
   USVString text;
   USVString url;
+  // Note: we don't actually support files yet
+  // we have it here for the .canShare() checks.
+  sequence<File> files;
 };
 
 // https://w3c.github.io/mediasession/#idl-index
@@ -320,3 +336,11 @@ partial interface Navigator {
   [Pref="dom.media.mediasession.enabled", SameObject]
   readonly attribute MediaSession mediaSession;
 };
+
+// https://wicg.github.io/web-locks/#navigator-mixins
+[SecureContext]
+interface mixin NavigatorLocks {
+  [Pref="dom.weblocks.enabled"]
+  readonly attribute LockManager locks;
+};
+Navigator includes NavigatorLocks;

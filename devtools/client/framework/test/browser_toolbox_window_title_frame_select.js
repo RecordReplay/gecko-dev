@@ -10,12 +10,28 @@
  */
 
 var { Toolbox } = require("devtools/client/framework/toolbox");
-const URL = URL_ROOT + "browser_toolbox_window_title_frame_select_page.html";
-const IFRAME_URL = URL_ROOT + "browser_toolbox_window_title_changes_page.html";
+const URL =
+  URL_ROOT_SSL + "browser_toolbox_window_title_frame_select_page.html";
+const IFRAME_URL =
+  URL_ROOT_SSL + "browser_toolbox_window_title_changes_page.html";
 const { LocalizationHelper } = require("devtools/shared/l10n");
 const L10N = new LocalizationHelper(
   "devtools/client/locales/toolbox.properties"
 );
+
+/**
+ * Wait for a given toolbox to get its title updated.
+ */
+function waitForTitleChange(toolbox) {
+  return new Promise(resolve => {
+    toolbox.topWindow.addEventListener("message", function onmessage(event) {
+      if (event.data.name == "set-host-title") {
+        toolbox.topWindow.removeEventListener("message", onmessage);
+        resolve();
+      }
+    });
+  });
+}
 
 add_task(async function() {
   Services.prefs.setBoolPref("devtools.command-button-frames.enabled", true);
@@ -98,7 +114,10 @@ add_task(async function() {
   info("Select the iframe");
   iframeBtn.click();
 
-  await willNavigate;
+  // will-navigate isn't emitted in the targetCommand-based iframe picker.
+  if (!isEveryFrameTargetEnabled()) {
+    await willNavigate;
+  }
   await onInspectorReloaded;
   // wait a bit more in case an eventual title update would happen later
   await wait(1000);

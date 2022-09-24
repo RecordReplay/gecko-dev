@@ -6,12 +6,19 @@
 #include "nsPrinterListBase.h"
 #include "PrintBackgroundTask.h"
 #include "mozilla/ErrorResult.h"
+#include "mozilla/gfx/Rect.h"
+#include "mozilla/IntegerRange.h"
 #include "mozilla/intl/Localization.h"
+#include "mozilla/Maybe.h"
+#include "mozilla/RefPtr.h"
 #include "xpcpublic.h"
+
+using namespace mozilla;
 
 using mozilla::ErrorResult;
 using mozilla::intl::Localization;
 using PrinterInfo = nsPrinterListBase::PrinterInfo;
+using MarginDouble = mozilla::gfx::MarginDouble;
 
 nsPrinterListBase::nsPrinterListBase() = default;
 nsPrinterListBase::~nsPrinterListBase() = default;
@@ -133,9 +140,10 @@ void nsPrinterListBase::EnsureCommonPaperInfo(JSContext* aCx) {
   // available (otherwise leave them as the internal keys, which are at least
   // somewhat recognizable).
   IgnoredErrorResult rv;
-  nsCOMPtr<nsIGlobalObject> global = xpc::CurrentNativeGlobal(aCx);
-  RefPtr<Localization> l10n = Localization::Create(global, true, {});
-  l10n->AddResourceId(u"toolkit/printing/printUI.ftl"_ns);
+  nsTArray<nsCString> resIds = {
+      "toolkit/printing/printUI.ftl"_ns,
+  };
+  RefPtr<Localization> l10n = Localization::Create(resIds, true);
 
   for (auto i : IntegerRange(nsPaper::kNumCommonPaperSizes)) {
     const CommonPaperSize& size = nsPaper::kCommonPaperSizes[i];
@@ -144,7 +152,7 @@ void nsPrinterListBase::EnsureCommonPaperInfo(JSContext* aCx) {
     nsAutoCString key{"printui-paper-"};
     key.Append(size.mLocalizableNameKey);
     nsAutoCString name;
-    l10n->FormatValueSync(aCx, key, {}, name, rv);
+    l10n->FormatValueSync(key, {}, name, rv);
 
     // Fill out the info with our PWG size and the localized name.
     info.mId = size.mPWGName;

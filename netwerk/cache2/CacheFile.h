@@ -26,6 +26,10 @@ class CacheFileOutputStream;
 class CacheOutputCloseListener;
 class MetadataWriteTimer;
 
+namespace CacheFileUtils {
+class CacheFileLock;
+};
+
 #define CACHEFILELISTENER_IID                        \
   { /* 95e7f284-84ba-48f9-b1fc-3a7336b4c33c */       \
     0x95e7f284, 0x84ba, 0x48f9, {                    \
@@ -115,9 +119,9 @@ class CacheFile final : public CacheFileChunkListener,
   nsresult OnFetched();
 
   bool DataSize(int64_t* aSize);
-  void Key(nsACString& aKey) { aKey = mKey; }
+  void Key(nsACString& aKey);
   bool IsDoomed();
-  bool IsPinned() const { return mPinned; }
+  bool IsPinned();
   // Returns true when there is a potentially unfinished write operation.
   bool IsWriteInProgress();
   bool EntryWouldExceedLimit(int64_t aOffset, int64_t aSize, bool aIsAltData);
@@ -136,9 +140,17 @@ class CacheFile final : public CacheFileChunkListener,
 
   virtual ~CacheFile();
 
-  void Lock();
-  void Unlock();
-  void AssertOwnsLock() const;
+  PUSH_IGNORE_THREAD_SAFETY
+  void Lock() { mLock->Lock().Lock(); }
+  void Unlock() {
+    // move the elements out of mObjsToRelease
+    // so that they can be released after we unlock
+    nsTArray<RefPtr<nsISupports>> objs = std::move(mObjsToRelease);
+
+    mLock->Lock().Unlock();
+  }
+  POP_THREAD_SAFETY
+  void AssertOwnsLock() const { mLock->Lock().AssertCurrentThreadOwns(); }
   void ReleaseOutsideLock(RefPtr<nsISupports> aObject);
 
   enum ECallerType { READER = 0, WRITER = 1, PRELOADER = 2 };
@@ -189,7 +201,6 @@ class CacheFile final : public CacheFileChunkListener,
 
   nsresult InitIndexEntry();
 
-  mozilla::Mutex mLock{"CacheFile.mLock"};
   bool mOpeningFile{false};
   bool mReady{false};
   bool mMemoryOnly{false};
@@ -235,6 +246,7 @@ class CacheFile final : public CacheFileChunkListener,
   CacheFileOutputStream* mOutput{nullptr};
 
   nsTArray<RefPtr<nsISupports>> mObjsToRelease;
+  RefPtr<CacheFileUtils::CacheFileLock> mLock;
 };
 
 class CacheFileAutoLock {

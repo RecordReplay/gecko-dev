@@ -5,8 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 // This header contains most functions that give information about the Profiler:
-// Whether it is active or not, paused, the selected features, and some generic
-// process and thread information.
+// Whether it is active or not, paused, and the selected features.
 // It is safe to include unconditionally, but uses of structs and functions must
 // be guarded by `#ifdef MOZ_GECKO_PROFILER`.
 
@@ -15,6 +14,7 @@
 
 #include <mozilla/DefineEnum.h>
 #include <mozilla/EnumSet.h>
+#include "mozilla/ProfilerUtils.h"
 
 #include <functional>
 
@@ -27,6 +27,7 @@
 // values are used internally only and so can be changed without consequence.
 // Any changes to this list should also be applied to the feature list in
 // toolkit/components/extensions/schemas/geckoProfiler.json.
+// *** Synchronize with lists in BaseProfilerState.h and geckoProfiler.json ***
 #define PROFILER_FOR_EACH_FEATURE(MACRO)                                     \
   MACRO(0, "java", Java, "Profile Java code, Android only")                  \
                                                                              \
@@ -56,47 +57,61 @@
   MACRO(9, "stackwalk", StackWalk,                                           \
         "Walk the C++ stack, not available on all platforms")                \
                                                                              \
-  MACRO(10, "threads", Threads, "Profile the registered secondary threads")  \
+  MACRO(10, "jstracer", JSTracer, "Enable tracing of the JavaScript engine") \
                                                                              \
-  MACRO(11, "jstracer", JSTracer, "Enable tracing of the JavaScript engine") \
-                                                                             \
-  MACRO(12, "jsallocations", JSAllocations,                                  \
+  MACRO(11, "jsallocations", JSAllocations,                                  \
         "Have the JavaScript engine track allocations")                      \
                                                                              \
-  MACRO(13, "nostacksampling", NoStackSampling,                              \
+  MACRO(12, "nostacksampling", NoStackSampling,                              \
         "Disable all stack sampling: Cancels \"js\", \"leaf\", "             \
         "\"stackwalk\" and labels")                                          \
                                                                              \
-  MACRO(14, "preferencereads", PreferenceReads,                              \
+  MACRO(13, "preferencereads", PreferenceReads,                              \
         "Track when preferences are read")                                   \
                                                                              \
-  MACRO(15, "nativeallocations", NativeAllocations,                          \
+  MACRO(14, "nativeallocations", NativeAllocations,                          \
         "Collect the stacks from a smaller subset of all native "            \
         "allocations, biasing towards collecting larger allocations")        \
                                                                              \
-  MACRO(16, "ipcmessages", IPCMessages,                                      \
+  MACRO(15, "ipcmessages", IPCMessages,                                      \
         "Have the IPC layer track cross-process messages")                   \
                                                                              \
-  MACRO(17, "audiocallbacktracing", AudioCallbackTracing,                    \
+  MACRO(16, "audiocallbacktracing", AudioCallbackTracing,                    \
         "Audio callback tracing")                                            \
                                                                              \
-  MACRO(18, "cpu", CPUUtilization, "CPU utilization")                        \
+  MACRO(17, "cpu", CPUUtilization, "CPU utilization")                        \
                                                                              \
-  MACRO(19, "notimerresolutionchange", NoTimerResolutionChange,              \
+  MACRO(18, "notimerresolutionchange", NoTimerResolutionChange,              \
         "Do not adjust the timer resolution for sampling, so that other "    \
-        "Firefox timers do not get affected")
+        "Firefox timers do not get affected")                                \
+                                                                             \
+  MACRO(19, "cpuallthreads", CPUAllThreads,                                  \
+        "Sample the CPU utilization of all registered threads")              \
+                                                                             \
+  MACRO(20, "samplingallthreads", SamplingAllThreads,                        \
+        "Sample the stacks of all registered threads")                       \
+                                                                             \
+  MACRO(21, "markersallthreads", MarkersAllThreads,                          \
+        "Record markers from all registered threads")                        \
+                                                                             \
+  MACRO(22, "unregisteredthreads", UnregisteredThreads,                      \
+        "Discover and profile unregistered threads -- beware: expensive!")   \
+                                                                             \
+  MACRO(23, "processcpu", ProcessCPU,                                        \
+        "Sample the CPU utilization of each process")
+// *** Synchronize with lists in BaseProfilerState.h and geckoProfiler.json ***
 
 struct ProfilerFeature {
-#define DECLARE(n_, str_, Name_, desc_)                     \
-  static constexpr uint32_t Name_ = (1u << n_);             \
-  static constexpr bool Has##Name_(uint32_t aFeatures) {    \
-    return aFeatures & Name_;                               \
-  }                                                         \
-  static constexpr void Set##Name_(uint32_t& aFeatures) {   \
-    aFeatures |= Name_;                                     \
-  }                                                         \
-  static constexpr void Clear##Name_(uint32_t& aFeatures) { \
-    aFeatures &= ~Name_;                                    \
+#define DECLARE(n_, str_, Name_, desc_)                                \
+  static constexpr uint32_t Name_ = (1u << n_);                        \
+  [[nodiscard]] static constexpr bool Has##Name_(uint32_t aFeatures) { \
+    return aFeatures & Name_;                                          \
+  }                                                                    \
+  static constexpr void Set##Name_(uint32_t& aFeatures) {              \
+    aFeatures |= Name_;                                                \
+  }                                                                    \
+  static constexpr void Clear##Name_(uint32_t& aFeatures) {            \
+    aFeatures &= ~Name_;                                               \
   }
 
   // Define a bitfield constant, a getter, and two setters for each feature.
@@ -119,7 +134,7 @@ MOZ_DEFINE_ENUM_CLASS(ProfilingState,(
 ));
 // clang-format on
 
-inline static const char* ProfilingStateToString(
+[[nodiscard]] inline static const char* ProfilingStateToString(
     ProfilingState aProfilingState) {
   switch (aProfilingState) {
     case ProfilingState::AlreadyActive:
@@ -146,7 +161,7 @@ inline static const char* ProfilingStateToString(
 
 using ProfilingStateSet = mozilla::EnumSet<ProfilingState>;
 
-constexpr ProfilingStateSet AllProfilingStates() {
+[[nodiscard]] constexpr ProfilingStateSet AllProfilingStates() {
   ProfilingStateSet set;
   using Value = std::underlying_type_t<ProfilingState>;
   for (Value stateValue = 0;
@@ -162,13 +177,14 @@ using ProfilingStateChangeCallback = std::function<void(ProfilingState)>;
 
 #ifndef MOZ_GECKO_PROFILER
 
-inline bool profiler_is_active() { return false; }
-inline bool profiler_can_accept_markers() { return false; }
-inline bool profiler_thread_is_being_profiled() { return false; }
-inline bool profiler_is_active_and_thread_is_registered() { return false; }
-inline bool profiler_feature_active(uint32_t aFeature) { return false; }
-inline bool profiler_is_locked_on_current_thread() { return false; }
-inline int profiler_current_thread_id() { return 0; }
+[[nodiscard]] inline bool profiler_is_active() { return false; }
+[[nodiscard]] inline bool profiler_is_active_and_unpaused() { return false; }
+[[nodiscard]] inline bool profiler_feature_active(uint32_t aFeature) {
+  return false;
+}
+[[nodiscard]] inline bool profiler_is_locked_on_current_thread() {
+  return false;
+}
 inline void profiler_add_state_change_callback(
     ProfilingStateSet aProfilingStateSet,
     ProfilingStateChangeCallback&& aCallback, uintptr_t aUniqueIdentifier = 0) {
@@ -183,9 +199,7 @@ inline void profiler_remove_state_change_callback(uintptr_t aUniqueIdentifier) {
 
 #  include <stdint.h>
 
-namespace mozilla {
-namespace profiler {
-namespace detail {
+namespace mozilla::profiler::detail {
 
 // RacyFeatures is only defined in this header file so that its methods can
 // be inlined into profiler_is_active(). Please do not use anything from the
@@ -211,7 +225,7 @@ class RacyFeatures {
 
   static void SetSamplingUnpaused() { sActiveAndFeatures &= ~SamplingPaused; }
 
-  static mozilla::Maybe<uint32_t> FeaturesIfActive() {
+  [[nodiscard]] static mozilla::Maybe<uint32_t> FeaturesIfActive() {
     if (uint32_t af = sActiveAndFeatures; af & Active) {
       // Active, remove the Active&Paused bits to get all features.
       return Some(af & ~(Active | Paused | SamplingPaused));
@@ -219,7 +233,7 @@ class RacyFeatures {
     return Nothing();
   }
 
-  static mozilla::Maybe<uint32_t> FeaturesIfActiveAndUnpaused() {
+  [[nodiscard]] static mozilla::Maybe<uint32_t> FeaturesIfActiveAndUnpaused() {
     if (uint32_t af = sActiveAndFeatures; (af & (Active | Paused)) == Active) {
       // Active but not fully paused, remove the Active and sampling-paused bits
       // to get all features.
@@ -228,23 +242,29 @@ class RacyFeatures {
     return Nothing();
   }
 
-  static bool IsActive() { return uint32_t(sActiveAndFeatures) & Active; }
+  // This implementation must be kept in sync with `gecko_profiler::is_active`
+  // in the Profiler Rust API.
+  [[nodiscard]] static bool IsActive() {
+    return uint32_t(sActiveAndFeatures) & Active;
+  }
 
-  static bool IsActiveWithFeature(uint32_t aFeature) {
+  [[nodiscard]] static bool IsActiveWithFeature(uint32_t aFeature) {
     uint32_t af = sActiveAndFeatures;  // copy it first
     return (af & Active) && (af & aFeature);
   }
 
   // True if profiler is active, and not fully paused.
   // Note that periodic sampling *could* be paused!
-  static bool IsActiveAndUnpaused() {
+  // This implementation must be kept in sync with
+  // `gecko_profiler::can_accept_markers` in the Profiler Rust API.
+  [[nodiscard]] static bool IsActiveAndUnpaused() {
     uint32_t af = sActiveAndFeatures;  // copy it first
     return (af & Active) && !(af & Paused);
   }
 
   // True if profiler is active, and sampling is not paused (though generic
   // `SetPaused()` or specific `SetSamplingPaused()`).
-  static bool IsActiveAndSamplingUnpaused() {
+  [[nodiscard]] static bool IsActiveAndSamplingUnpaused() {
     uint32_t af = sActiveAndFeatures;  // copy it first
     return (af & Active) && !(af & (Paused | SamplingPaused));
   }
@@ -270,12 +290,7 @@ class RacyFeatures {
       sActiveAndFeatures;
 };
 
-bool IsThreadBeingProfiled();
-bool IsThreadRegistered();
-
-}  // namespace detail
-}  // namespace profiler
-}  // namespace mozilla
+}  // namespace mozilla::profiler::detail
 
 //---------------------------------------------------------------------------
 // Get information from the profiler
@@ -297,63 +312,39 @@ bool IsThreadRegistered();
 // expensive data will end up being created but not used if another thread
 // stops the profiler between the CreateExpensiveData() and PROFILER_OPERATION
 // calls.
-inline bool profiler_is_active() {
+[[nodiscard]] inline bool profiler_is_active() {
   return mozilla::profiler::detail::RacyFeatures::IsActive();
 }
 
-// Same as profiler_is_active(), but with the same extra checks that determine
-// if the profiler would currently store markers. So this should be used before
-// doing some potentially-expensive work that's used in a marker. E.g.:
-//
-//   if (profiler_can_accept_markers()) {
-//     ExpensiveMarkerPayload expensivePayload = CreateExpensivePayload();
-//     BASE_PROFILER_ADD_MARKER_WITH_PAYLOAD(name, OTHER, expensivePayload);
-//   }
-inline bool profiler_can_accept_markers() {
+// Same as profiler_is_active(), but also checks if the profiler is not paused.
+[[nodiscard]] inline bool profiler_is_active_and_unpaused() {
   return mozilla::profiler::detail::RacyFeatures::IsActiveAndUnpaused();
 }
 
-// Is the profiler active, and is the current thread being profiled?
-// (Same caveats and recommented usage as profiler_is_active().)
-inline bool profiler_thread_is_being_profiled() {
-  return profiler_is_active() &&
-         mozilla::profiler::detail::IsThreadBeingProfiled();
-}
-
-// During profiling, if the current thread is registered, return true
-// (regardless of whether it is actively being profiled).
-// (Same caveats and recommented usage as profiler_is_active().)
-inline bool profiler_is_active_and_thread_is_registered() {
-  return profiler_is_active() &&
-         mozilla::profiler::detail::IsThreadRegistered();
-}
-
 // Is the profiler active and paused? Returns false if the profiler is inactive.
-bool profiler_is_paused();
+[[nodiscard]] bool profiler_is_paused();
 
 // Is the profiler active and sampling is paused? Returns false if the profiler
 // is inactive.
-bool profiler_is_sampling_paused();
-
-// Is the current thread sleeping?
-bool profiler_thread_is_sleeping();
+[[nodiscard]] bool profiler_is_sampling_paused();
 
 // Get all the features supported by the profiler that are accepted by
 // profiler_start(). The result is the same whether the profiler is active or
 // not.
-uint32_t profiler_get_available_features();
+[[nodiscard]] uint32_t profiler_get_available_features();
 
 // Returns the full feature set if the profiler is active.
 // Note: the return value can become immediately out-of-date, much like the
 // return value of profiler_is_active().
-inline mozilla::Maybe<uint32_t> profiler_features_if_active() {
+[[nodiscard]] inline mozilla::Maybe<uint32_t> profiler_features_if_active() {
   return mozilla::profiler::detail::RacyFeatures::FeaturesIfActive();
 }
 
 // Returns the full feature set if the profiler is active and unpaused.
 // Note: the return value can become immediately out-of-date, much like the
 // return value of profiler_is_active().
-inline mozilla::Maybe<uint32_t> profiler_features_if_active_and_unpaused() {
+[[nodiscard]] inline mozilla::Maybe<uint32_t>
+profiler_features_if_active_and_unpaused() {
   return mozilla::profiler::detail::RacyFeatures::FeaturesIfActiveAndUnpaused();
 }
 
@@ -361,29 +352,13 @@ inline mozilla::Maybe<uint32_t> profiler_features_if_active_and_unpaused() {
 // active. Returns false if the profiler is inactive. Note: the return value
 // can become immediately out-of-date, much like the return value of
 // profiler_is_active().
-bool profiler_feature_active(uint32_t aFeature);
-
-// Get the current process's ID.
-int profiler_current_process_id();
-
-// Get the current thread's ID.
-int profiler_current_thread_id();
-
-// Statically initialized to 0, then set once from profiler_init(), which should
-// be called from the main thread before any other use of the profiler.
-extern int scProfilerMainThreadId;
-
-inline int profiler_main_thread_id() { return scProfilerMainThreadId; }
-
-inline bool profiler_is_main_thread() {
-  return profiler_current_thread_id() == profiler_main_thread_id();
-}
+[[nodiscard]] bool profiler_feature_active(uint32_t aFeature);
 
 // Returns true if any of the profiler mutexes are currently locked *on the
 // current thread*. This may be used by re-entrant code that may call profiler
 // functions while the same of a different profiler mutex is locked, which could
 // deadlock.
-bool profiler_is_locked_on_current_thread();
+[[nodiscard]] bool profiler_is_locked_on_current_thread();
 
 // Install a callback to be invoked at any of the given profiling state changes.
 // An optional non-zero identifier may be given, to allow later removal of the

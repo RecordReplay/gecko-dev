@@ -33,6 +33,7 @@ const testData = [
   ["r", {}, "rebeccapurple", OPEN, SELECTED, CHANGE],
   ["VK_DOWN", {}, "red", OPEN, SELECTED, CHANGE],
   ["VK_DOWN", {}, "revert", OPEN, SELECTED, CHANGE],
+  ["VK_DOWN", {}, "revert-layer", OPEN, SELECTED, CHANGE],
   ["VK_DOWN", {}, "rgb", OPEN, SELECTED, CHANGE],
   ["VK_DOWN", {}, "rgba", OPEN, SELECTED, CHANGE],
   ["VK_DOWN", {}, "rosybrown", OPEN, SELECTED, CHANGE],
@@ -60,7 +61,7 @@ add_task(async function() {
   await runAutocompletionTest(toolbox, inspector, view);
 
   info("Test autocompletion after page navigation");
-  await refreshTab();
+  await reloadBrowser();
   await runAutocompletionTest(toolbox, inspector, view);
 });
 

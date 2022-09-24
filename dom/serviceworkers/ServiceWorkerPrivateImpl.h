@@ -17,7 +17,9 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/MozPromise.h"
 #include "mozilla/RefPtr.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/dom/FetchService.h"
 #include "mozilla/dom/RemoteWorkerController.h"
 #include "mozilla/dom/RemoteWorkerTypes.h"
 #include "mozilla/dom/ServiceWorkerOpArgs.h"
@@ -39,6 +41,9 @@ class ServiceWorkerRegistrationInfo;
 
 class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
                                        public RemoteWorkerObserver {
+  using PromiseExtensionWorkerHasListener =
+      ServiceWorkerPrivate::PromiseExtensionWorkerHasListener;
+
  public:
   NS_INLINE_DECL_REFCOUNTING(ServiceWorkerPrivateImpl, override);
 
@@ -47,6 +52,18 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
   nsresult Initialize();
 
   RefPtr<GenericPromise> SetSkipWaitingFlag();
+
+  static void RunningShutdown() {
+    // Force a final update of the number of running ServiceWorkers
+    UpdateRunning(0, 0);
+    MOZ_ASSERT(sRunningServiceWorkers == 0);
+    MOZ_ASSERT(sRunningServiceWorkersFetch == 0);
+  }
+
+  /**
+   * Update Telemetry for # of running ServiceWorkers
+   */
+  static void UpdateRunning(int32_t aDelta, int32_t aFetchDelta);
 
  private:
   class RAIIActorPtrHolder;
@@ -87,6 +104,10 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
                           const nsAString& aClientId,
                           const nsAString& aResultingClientId) override;
 
+  RefPtr<PromiseExtensionWorkerHasListener> WakeForExtensionAPIEvent(
+      const nsAString& aExtensionAPINamespace,
+      const nsAString& aExtensionAPIEventName) override;
+
   nsresult SpawnWorkerIfNeeded() override;
 
   void TerminateWorker() override;
@@ -106,6 +127,10 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
 
   void ErrorReceived(const ErrorValue& aError) override;
 
+  void LockNotified(bool aCreated) final {
+    // no-op for service workers
+  }
+
   void Terminated() override;
 
   // Refreshes only the parts of mRemoteWorkerData that may change over time.
@@ -116,10 +141,17 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
       RefPtr<ServiceWorkerRegistrationInfo>&& aRegistration,
       ServiceWorkerPushEventOpArgs&& aArgs);
 
+  // Setup the navigation preload by the intercepted channel and the
+  // RegistrationInfo.
+  RefPtr<FetchServicePromises> SetupNavigationPreload(
+      nsCOMPtr<nsIInterceptedChannel>& aChannel,
+      const RefPtr<ServiceWorkerRegistrationInfo>& aRegistration);
+
   nsresult SendFetchEventInternal(
       RefPtr<ServiceWorkerRegistrationInfo>&& aRegistration,
-      ServiceWorkerFetchEventOpArgs&& aArgs,
-      nsCOMPtr<nsIInterceptedChannel>&& aChannel);
+      ParentToParentServiceWorkerFetchEventOpArgs&& aArgs,
+      nsCOMPtr<nsIInterceptedChannel>&& aChannel,
+      RefPtr<FetchServicePromises>&& aPreloadResponseReadyPromises);
 
   void Shutdown();
 
@@ -160,18 +192,27 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
 
   class PendingFetchEvent final : public PendingFunctionalEvent {
    public:
-    PendingFetchEvent(ServiceWorkerPrivateImpl* aOwner,
-                      RefPtr<ServiceWorkerRegistrationInfo>&& aRegistration,
-                      ServiceWorkerFetchEventOpArgs&& aArgs,
-                      nsCOMPtr<nsIInterceptedChannel>&& aChannel);
+    PendingFetchEvent(
+        ServiceWorkerPrivateImpl* aOwner,
+        RefPtr<ServiceWorkerRegistrationInfo>&& aRegistration,
+        ParentToParentServiceWorkerFetchEventOpArgs&& aArgs,
+        nsCOMPtr<nsIInterceptedChannel>&& aChannel,
+        RefPtr<FetchServicePromises>&& aPreloadResponseReadyPromises);
 
     nsresult Send() override;
 
     ~PendingFetchEvent();
 
    private:
-    ServiceWorkerFetchEventOpArgs mArgs;
+    ParentToParentServiceWorkerFetchEventOpArgs mArgs;
     nsCOMPtr<nsIInterceptedChannel> mChannel;
+    // The promises from FetchService. It indicates if the preload response is
+    // ready or not. The promise's resolve/reject value should be handled in
+    // FetchEventOpChild, such that the preload result can be propagated to the
+    // ServiceWorker through IPC. However, FetchEventOpChild creation could be
+    // pending here, so this member is needed. And it will be forwarded to
+    // FetchEventOpChild when crearting the FetchEventOpChild.
+    RefPtr<FetchServicePromises> mPreloadResponseReadyPromises;
   };
 
   nsTArray<UniquePtr<PendingFunctionalEvent>> mPendingFunctionalEvents;
@@ -225,6 +266,20 @@ class ServiceWorkerPrivateImpl final : public ServiceWorkerPrivate::Inner,
   RefPtr<ServiceWorkerPrivate> mOuter;
 
   RemoteWorkerData mRemoteWorkerData;
+
+  TimeStamp mServiceWorkerLaunchTimeStart;
+
+  // Counters for Telemetry - totals running simultaneously, and those that
+  // handle Fetch, plus Max values for each
+  static uint32_t sRunningServiceWorkers;
+  static uint32_t sRunningServiceWorkersFetch;
+  static uint32_t sRunningServiceWorkersMax;
+  static uint32_t sRunningServiceWorkersFetchMax;
+
+  // We know the state after we've evaluated the worker, and we then store
+  // it in the registration.  The only valid state transition should be
+  // from Unknown to Enabled or Disabled.
+  enum { Unknown, Enabled, Disabled } mHandlesFetch{Unknown};
 };
 
 }  // namespace dom

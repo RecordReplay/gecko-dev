@@ -30,6 +30,7 @@ pub type DeviceIntPoint = Point2D<i32, DevicePixel>;
 pub type DeviceIntSize = Size2D<i32, DevicePixel>;
 pub type DeviceIntLength = Length<i32, DevicePixel>;
 pub type DeviceIntSideOffsets = SideOffsets2D<i32, DevicePixel>;
+pub type DeviceIntVector2D = Vector2D<i32, DevicePixel>;
 
 pub type DeviceRect = Box2D<f32, DevicePixel>;
 pub type DeviceBox2D = Box2D<f32, DevicePixel>;
@@ -96,7 +97,7 @@ pub type LayoutIntPoint = Point2D<i32, LayoutPixel>;
 pub type LayoutIntSize = Size2D<i32, LayoutPixel>;
 
 /// Geometry in the document's coordinate space (logical pixels).
-#[derive(Hash, Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, Ord, PartialOrd)]
+#[derive(Hash, Clone, Copy, Debug, Eq, MallocSizeOf, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct WorldPixel;
 
 pub type WorldRect = Box2D<f32, WorldPixel>;

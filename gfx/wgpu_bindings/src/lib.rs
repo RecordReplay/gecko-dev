@@ -62,15 +62,9 @@ impl ByteBuf {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct AdapterInformation {
     id: id::AdapterId,
-    //inner: wgt::AdapterInfo, //TODO: not C-friendly
+    ty: wgt::DeviceType,
     limits: wgt::Limits,
     features: wgt::Features,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-enum ShaderModuleSource<'a> {
-    SpirV(Cow<'a, [u32]>),
-    Wgsl(Cow<'a, str>),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -96,7 +90,7 @@ enum DeviceAction<'a> {
     CreateShaderModule(
         id::ShaderModuleId,
         wgc::pipeline::ShaderModuleDescriptor<'a>,
-        ShaderModuleSource<'a>,
+        Cow<'a, str>,
     ),
     CreateComputePipeline(
         id::ComputePipelineId,
@@ -117,6 +111,7 @@ enum DeviceAction<'a> {
         id::CommandEncoderId,
         wgt::CommandEncoderDescriptor<wgc::Label<'a>>,
     ),
+    Error(String),
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

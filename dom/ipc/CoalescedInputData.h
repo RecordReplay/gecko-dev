@@ -13,15 +13,14 @@
 
 class nsRefreshDriver;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class BrowserChild;
 
 template <class InputEventType>
 class CoalescedInputData {
  protected:
-  typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
+  using ScrollableLayerGuid = mozilla::layers::ScrollableLayerGuid;
 
   UniquePtr<InputEventType> mCoalescedInputEvent;
   ScrollableLayerGuid mGuid;
@@ -70,7 +69,6 @@ class CoalescedInputFlusher : public nsARefreshObserver {
   BrowserChild* mBrowserChild;
   RefPtr<nsRefreshDriver> mRefreshDriver;
 };
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_CoalescedInputData_h

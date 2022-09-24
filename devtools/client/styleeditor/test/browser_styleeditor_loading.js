@@ -4,7 +4,7 @@
 
 // Test that style editor loads correctly.
 
-const TESTCASE_URI = TEST_BASE_HTTP + "longload.html";
+const TESTCASE_URI = TEST_BASE_HTTPS + "longload.html";
 
 add_task(async function() {
   // launch Style Editor right when the tab is created (before load)
@@ -21,10 +21,10 @@ add_task(async function() {
 
   const toolbox = await gDevTools.getToolboxForTab(tab);
   const panel = toolbox.getPanel("styleeditor");
-  const { panelWindow, UI: ui } = panel;
+  const { panelWindow } = panel;
 
   ok(
-    !ui._root.classList.contains("loading"),
+    !getRootElement(panel).classList.contains("loading"),
     "style editor root element does not have 'loading' class name anymore"
   );
 

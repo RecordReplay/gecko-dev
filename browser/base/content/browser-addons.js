@@ -434,6 +434,8 @@ var gXPInstallObserver = {
     "addon-install-confirmation",
     "addon-install-failed",
     "addon-install-origin-blocked",
+    "addon-install-webapi-blocked",
+    "addon-install-policy-blocked",
     "addon-progress",
     "addon-webext-permissions",
     "xpinstall-disabled",
@@ -552,11 +554,19 @@ var gXPInstallObserver = {
         this.logWarningFullScreenInstallBlocked();
         break;
       }
+      case "addon-install-webapi-blocked":
+      case "addon-install-policy-blocked":
       case "addon-install-origin-blocked": {
-        messageString = gNavigatorBundle.getFormattedString(
-          "xpinstallPromptMessage",
-          [brandShortName]
-        );
+        if (aTopic == "addon-install-policy-blocked") {
+          messageString = gNavigatorBundle.getString(
+            "addonDomainBlockedByPolicy"
+          );
+        } else {
+          messageString = gNavigatorBundle.getFormattedString(
+            "xpinstallPromptMessage",
+            [brandShortName]
+          );
+        }
 
         if (Services.policies) {
           let extensionSettings = Services.policies.getExtensionSettings("*");
@@ -803,12 +813,18 @@ var gXPInstallObserver = {
               install.sourceURI.host;
           }
 
+          // Construct the l10n ID for the error, e.g. "addonInstallError-3"
           let error =
             host || install.error == 0
               ? "addonInstallError"
               : "addonLocalInstallError";
           let args;
           if (install.error < 0) {
+            // Append the error code for the installation failure to get the
+            // matching translation of the error. The error code is defined in
+            // AddonManager's _errors Map. Not all error codes listed there are
+            // translated, since errors that are only triggered during updates
+            // will never reach this code.
             error += install.error;
             args = [brandShortName, install.name];
           } else if (

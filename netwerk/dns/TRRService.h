@@ -31,12 +31,18 @@ class TRRServiceParent;
 class TRRService : public TRRServiceBase,
                    public nsIObserver,
                    public nsSupportsWeakReference,
-                   public AHostResolver {
+                   public AHostResolver,
+                   public SingleWriterLockOwner {
  public:
-  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSIPROXYCONFIGCHANGEDCALLBACK
 
   TRRService();
+  static TRRService* Get();
+
+  bool OnWritingThread() const override { return NS_IsMainThread(); }
+
   nsresult Init();
   nsresult Start();
   bool Enabled(nsIRequest::TRRMode aRequestMode = nsIRequest::TRR_DEFAULT_MODE);
@@ -44,9 +50,10 @@ class TRRService : public TRRServiceBase,
   uint32_t ConfirmationState() { return mConfirmation.State(); }
 
   bool DisableIPv6() { return mDisableIPv6; }
-  nsresult GetURI(nsACString& result);
+  void GetURI(nsACString& result) override;
   nsresult GetCredentials(nsCString& result);
   uint32_t GetRequestTimeout();
+  void StrictModeConfirm();
 
   LookupStatus CompleteLookup(nsHostRecord*, nsresult, mozilla::net::AddrInfo*,
                               bool pb, const nsACString& aOriginSuffix,
@@ -75,6 +82,8 @@ class TRRService : public TRRServiceBase,
   // Returns a reference to a static string identifying the current DoH server
   // If the DoH server is not one of the built-in ones it will return "(other)"
   static const nsCString& ProviderKey();
+
+  void InitTRRConnectionInfo() override;
 
  private:
   virtual ~TRRService();
@@ -113,17 +122,16 @@ class TRRService : public TRRServiceBase,
   void AddEtcHosts(const nsTArray<nsCString>&);
 
   bool mInitialized{false};
-  Atomic<uint32_t, Relaxed> mBlocklistDurationSeconds{60};
-
-  Mutex mLock{"TRRService"};
+  MutexSingleWriter mLock;
 
   nsCString mPrivateCred;  // main thread only
-  nsCString mConfirmationNS{"example.com"_ns};
-  nsCString mBootstrapAddr;
+  nsCString mConfirmationNS GUARDED_BY(mLock){"example.com"_ns};
+  nsCString mBootstrapAddr GUARDED_BY(mLock);
 
   Atomic<bool, Relaxed> mCaptiveIsPassed{
       false};  // set when captive portal check is passed
   Atomic<bool, Relaxed> mDisableIPv6;  // don't even try
+  Atomic<bool, Relaxed> mShutdown{false};
 
   // TRR Blocklist storage
   // mTRRBLStorage is only modified on the main thread, but we query whether it
@@ -133,15 +141,16 @@ class TRRService : public TRRServiceBase,
       "DataMutex::TRRBlocklist"};
 
   // A set of domains that we should not use TRR for.
-  nsTHashSet<nsCString> mExcludedDomains;
-  nsTHashSet<nsCString> mDNSSuffixDomains;
-  nsTHashSet<nsCString> mEtcHostsDomains;
+  nsTHashSet<nsCString> mExcludedDomains GUARDED_BY(mLock);
+  nsTHashSet<nsCString> mDNSSuffixDomains GUARDED_BY(mLock);
+  nsTHashSet<nsCString> mEtcHostsDomains GUARDED_BY(mLock);
 
   enum class ConfirmationEvent {
     Init,
     PrefChange,
     Retry,
     FailedLookups,
+    StrictMode,
     URIChange,
     CaptivePortalConnectivity,
     NetworkUp,
@@ -149,7 +158,7 @@ class TRRService : public TRRServiceBase,
     ConfirmFail,
   };
 
-  //                                 (FailedLookups/URIChange/NetworkUp)
+  //                            (FailedLookups/StrictMode/URIChange/NetworkUp)
   //                                    +-------------------------+
   // +-----------+                      |                         |
   // |   (Init)  |               +------v---------+             +-+--+
@@ -185,9 +194,10 @@ class TRRService : public TRRServiceBase,
     CONFIRM_DISABLED = 5,
   };
 
-  class ConfirmationContext final : public nsITimerCallback {
+  class ConfirmationContext final : public nsITimerCallback, public nsINamed {
     NS_DECL_ISUPPORTS_INHERITED
     NS_DECL_NSITIMERCALLBACK
+    NS_DECL_NSINAMED
 
    private:
     static const size_t RESULTS_SIZE = 32;
@@ -227,10 +237,12 @@ class TRRService : public TRRServiceBase,
     // confirmation.
     nsCString mFailedLookups;
 
+    void SetState(enum ConfirmationState aNewState);
+
    public:
     // Called when a confirmation completes successfully or when the
     // confirmation context changes.
-    void RecordEvent(const char* aReason);
+    void RecordEvent(const char* aReason, const MutexSingleWriterAutoLock&);
 
     // Called when a confirmation request is completed. The status is recorded
     // in the results.
@@ -242,8 +254,11 @@ class TRRService : public TRRServiceBase,
 
     void RecordTRRStatus(nsresult aChannelStatus);
 
-    void HandleEvent(ConfirmationEvent aEvent);
-    void HandleEvent(ConfirmationEvent aEvent, const MutexAutoLock&);
+    // Returns true when handling the event caused a new confirmation task to be
+    // dispatched.
+    bool HandleEvent(ConfirmationEvent aEvent);
+    bool HandleEvent(ConfirmationEvent aEvent,
+                     const MutexSingleWriterAutoLock&);
 
     void SetCaptivePortalStatus(int32_t aStatus) {
       mCaptivePortalStatus = aStatus;
@@ -279,8 +294,9 @@ class TRRService : public TRRServiceBase,
    public:
     // Called when a confirmation completes successfully or when the
     // confirmation context changes.
-    void RecordEvent(const char* aReason) {
-      mConfirmation.RecordEvent(aReason);
+    void RecordEvent(const char* aReason,
+                     const MutexSingleWriterAutoLock& aLock) {
+      mConfirmation.RecordEvent(aReason, aLock);
     }
 
     // Called when a confirmation request is completed. The status is recorded
@@ -299,19 +315,18 @@ class TRRService : public TRRServiceBase,
       mConfirmation.RecordTRRStatus(aChannelStatus);
     }
 
-    void HandleEvent(ConfirmationEvent aEvent) {
-      mConfirmation.HandleEvent(aEvent);
+    bool HandleEvent(ConfirmationEvent aEvent) {
+      return mConfirmation.HandleEvent(aEvent);
     }
 
-    void HandleEvent(ConfirmationEvent aEvent, const MutexAutoLock& lock) {
-      mConfirmation.HandleEvent(aEvent, lock);
+    bool HandleEvent(ConfirmationEvent aEvent,
+                     const MutexSingleWriterAutoLock& lock) {
+      return mConfirmation.HandleEvent(aEvent, lock);
     }
 
     void SetCaptivePortalStatus(int32_t aStatus) {
       mConfirmation.SetCaptivePortalStatus(aStatus);
     }
-
-    uintptr_t TaskAddr() { return mConfirmation.TaskAddr(); }
 
    private:
     friend TRRService* ConfirmationContext::OwningObject();
@@ -321,11 +336,12 @@ class TRRService : public TRRServiceBase,
   ConfirmationWrapper mConfirmation;
 
   bool mParentalControlEnabled{false};
+  // This is used to track whether a confirmation was triggered by a URI change,
+  // so we don't trigger another one just because other prefs have changed.
+  bool mConfirmationTriggered{false};
   RefPtr<ODoHService> mODoHService;
   nsCOMPtr<nsINetworkLinkService> mLinkService;
 };
-
-extern TRRService* gTRRService;
 
 }  // namespace net
 }  // namespace mozilla

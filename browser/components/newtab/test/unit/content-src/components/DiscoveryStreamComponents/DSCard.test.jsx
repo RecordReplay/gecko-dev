@@ -1,5 +1,7 @@
 import {
   _DSCard as DSCard,
+  readTimeFromWordCount,
+  DSSource,
   DefaultMeta,
   PlaceholderDSCard,
   CTAButtonMeta,
@@ -7,8 +9,9 @@ import {
 import {
   DSContextFooter,
   StatusMessage,
+  SponsorLabel,
 } from "content-src/components/DiscoveryStreamComponents/DSContextFooter/DSContextFooter";
-import { actionCreators as ac } from "common/Actions.jsm";
+import { actionCreators as ac, actionTypes as at } from "common/Actions.jsm";
 import { DSLinkMenu } from "content-src/components/DiscoveryStreamComponents/DSLinkMenu/DSLinkMenu";
 import React from "react";
 import { SafeAnchor } from "content-src/components/DiscoveryStreamComponents/SafeAnchor/SafeAnchor";
@@ -16,6 +19,8 @@ import { shallow, mount } from "enzyme";
 import { FluentOrText } from "content-src/components/FluentOrText/FluentOrText";
 
 const DEFAULT_PROPS = {
+  url: "url",
+  title: "title",
   App: {
     isForStartupCache: false,
   },
@@ -24,11 +29,13 @@ const DEFAULT_PROPS = {
 describe("<DSCard>", () => {
   let wrapper;
   let sandbox;
+  let dispatch;
 
   beforeEach(() => {
-    wrapper = shallow(<DSCard {...DEFAULT_PROPS} />);
-    wrapper.setState({ isSeen: true });
     sandbox = sinon.createSandbox();
+    dispatch = sandbox.stub();
+    wrapper = shallow(<DSCard dispatch={dispatch} {...DEFAULT_PROPS} />);
+    wrapper.setState({ isSeen: true });
   });
 
   afterEach(() => {
@@ -105,13 +112,29 @@ describe("<DSCard>", () => {
     assert.equal(contextFooter.find(".story-sponsored-label").text(), context);
   });
 
+  it("should render Sponsored Context for a spoc element", () => {
+    wrapper = mount(
+      <DSCard displayReadTime={true} time_to_read={4} {...DEFAULT_PROPS} />
+    );
+    wrapper.setState({ isSeen: true });
+    const defaultMeta = wrapper.find(DefaultMeta);
+    assert.lengthOf(defaultMeta, 1);
+    assert.equal(defaultMeta.props().timeToRead, 4);
+  });
+
   describe("onLinkClick", () => {
-    let dispatch;
+    let fakeWindow;
 
     beforeEach(() => {
-      dispatch = sandbox.stub();
-      wrapper = shallow(<DSCard dispatch={dispatch} {...DEFAULT_PROPS} />);
-      wrapper.setState({ isSeen: true });
+      fakeWindow = {
+        requestIdleCallback: sinon.stub().returns(1),
+        cancelIdleCallback: sinon.stub(),
+        innerWidth: 1000,
+        innerHeight: 900,
+      };
+      wrapper = mount(
+        <DSCard {...DEFAULT_PROPS} dispatch={dispatch} windowObj={fakeWindow} />
+      );
     });
 
     it("should call dispatch with the correct events", () => {
@@ -135,6 +158,8 @@ describe("<DSCard>", () => {
           click: 0,
           source: "FOO",
           tiles: [{ id: "fooidx", pos: 1 }],
+          window_inner_width: 1000,
+          window_inner_height: 900,
         })
       );
     });
@@ -160,6 +185,8 @@ describe("<DSCard>", () => {
           click: 0,
           source: "FOO",
           tiles: [{ id: "fooidx", pos: 1 }],
+          window_inner_width: 1000,
+          window_inner_height: 900,
         })
       );
     });
@@ -192,6 +219,8 @@ describe("<DSCard>", () => {
           click: 0,
           source: "FOO",
           tiles: [{ id: "fooidx", pos: 1, shim: "click shim" }],
+          window_inner_width: 1000,
+          window_inner_height: 900,
         })
       );
     });
@@ -271,6 +300,7 @@ describe("<DSCard>", () => {
       );
     });
   });
+
   describe("DSCard with Intersection Observer", () => {
     beforeEach(() => {
       wrapper = shallow(<DSCard {...DEFAULT_PROPS} />);
@@ -309,6 +339,7 @@ describe("<DSCard>", () => {
       assert.isTrue(!!wrapper.instance().observer);
     });
   });
+
   describe("DSCard with Idle Callback", () => {
     let windowStub = {
       requestIdleCallback: sinon.stub().returns(1),
@@ -327,6 +358,7 @@ describe("<DSCard>", () => {
       assert.calledOnce(windowStub.cancelIdleCallback);
     });
   });
+
   describe("DSCard when rendered for about:home startup cache", () => {
     beforeEach(() => {
       const props = {
@@ -339,6 +371,118 @@ describe("<DSCard>", () => {
 
     it("should be set as isSeen automatically", () => {
       assert.isTrue(wrapper.instance().state.isSeen);
+    });
+  });
+
+  describe("DSCard onSaveClick", () => {
+    it("should fire telemetry for onSaveClick", () => {
+      wrapper.setProps({ id: "fooidx", pos: 1, type: "foo" });
+      wrapper.instance().onSaveClick();
+
+      assert.calledThrice(dispatch);
+      assert.calledWith(
+        dispatch,
+        ac.AlsoToMain({
+          type: at.SAVE_TO_POCKET,
+          data: { site: { url: "url", title: "title" } },
+        })
+      );
+      assert.calledWith(
+        dispatch,
+        ac.UserEvent({
+          event: "SAVE_TO_POCKET",
+          source: "CARDGRID_HOVER",
+          action_position: 1,
+        })
+      );
+      assert.calledWith(
+        dispatch,
+        ac.ImpressionStats({
+          source: "CARDGRID_HOVER",
+          pocket: 0,
+          tiles: [
+            {
+              id: "fooidx",
+              pos: 1,
+            },
+          ],
+        })
+      );
+    });
+  });
+
+  describe("DSCard menu open states", () => {
+    let cardNode;
+    let fakeDocument;
+    let fakeWindow;
+
+    beforeEach(() => {
+      fakeDocument = { l10n: { translateFragment: sinon.stub() } };
+      fakeWindow = {
+        document: fakeDocument,
+        requestIdleCallback: sinon.stub().returns(1),
+        cancelIdleCallback: sinon.stub(),
+      };
+      wrapper = mount(<DSCard {...DEFAULT_PROPS} windowObj={fakeWindow} />);
+      wrapper.setState({ isSeen: true });
+      cardNode = wrapper.getDOMNode();
+    });
+
+    it("Should remove active on Menu Update", () => {
+      // Add active class name to DSCard wrapper
+      // to simulate menu open state
+      cardNode.classList.add("active");
+      assert.equal(
+        cardNode.className,
+        "ds-card ds-card-title-lines-3 ds-card-desc-lines-3 active"
+      );
+
+      wrapper.instance().onMenuUpdate(false);
+      wrapper.update();
+
+      assert.equal(
+        cardNode.className,
+        "ds-card ds-card-title-lines-3 ds-card-desc-lines-3"
+      );
+    });
+
+    it("Should add active on Menu Show", async () => {
+      await wrapper.instance().onMenuShow();
+      wrapper.update();
+      assert.equal(
+        cardNode.className,
+        "ds-card ds-card-title-lines-3 ds-card-desc-lines-3 active"
+      );
+    });
+
+    it("Should add last-item to support resized window", async () => {
+      fakeWindow.scrollMaxX = 20;
+      await wrapper.instance().onMenuShow();
+      wrapper.update();
+      assert.equal(
+        cardNode.className,
+        "ds-card ds-card-title-lines-3 ds-card-desc-lines-3 last-item active"
+      );
+    });
+
+    it("should remove .active and .last-item classes", () => {
+      const instance = wrapper.instance();
+      const remove = sinon.stub();
+      instance.contextMenuButtonHostElement = {
+        classList: { remove },
+      };
+      instance.onMenuUpdate();
+      assert.calledOnce(remove);
+    });
+
+    it("should add .active and .last-item classes", async () => {
+      const instance = wrapper.instance();
+      const add = sinon.stub();
+      instance.contextMenuButtonHostElement = {
+        classList: { add },
+      };
+      await instance.onMenuShow();
+      assert.calledOnce(add);
     });
   });
 });
@@ -369,5 +513,70 @@ describe("<PlaceholderDSCard> component", () => {
     wrapper.setState({ isSeen: true });
     const linkMenu = wrapper.find(DSLinkMenu);
     assert.lengthOf(linkMenu, 0);
+  });
+});
+
+describe("<DSSource> component", () => {
+  it("should return a default source without compact", () => {
+    const wrapper = shallow(<DSSource source="Mozilla" />);
+
+    let sourceElement = wrapper.find(".source");
+    assert.equal(sourceElement.text(), "Mozilla");
+  });
+  it("should return a default source with compact without a sponsor or time to read", () => {
+    const wrapper = shallow(<DSSource compact={true} source="Mozilla" />);
+
+    let sourceElement = wrapper.find(".source");
+    assert.equal(sourceElement.text(), "Mozilla");
+  });
+  it("should return a SponsorLabel with compact and a sponsor", () => {
+    const wrapper = shallow(
+      <DSSource newSponsoredLabel={true} sponsor="Mozilla" />
+    );
+    const sponsorLabel = wrapper.find(SponsorLabel);
+    assert.lengthOf(sponsorLabel, 1);
+  });
+  it("should return a time to read with compact and without a sponsor but with a time to read", () => {
+    const wrapper = shallow(
+      <DSSource compact={true} source="Mozilla" timeToRead="2000" />
+    );
+
+    let timeToRead = wrapper.find(".time-to-read");
+    assert.lengthOf(timeToRead, 1);
+
+    // Weirdly, we can test for the pressence of fluent, because time to read needs to be translated.
+    // This is also because we did a shallow render, that th contents of fluent would be empty anyway.
+    const fluentOrText = wrapper.find(FluentOrText);
+    assert.lengthOf(fluentOrText, 1);
+  });
+  it("should prioritize a SponsorLabel if for some reason it gets everything", () => {
+    const wrapper = shallow(
+      <DSSource
+        newSponsoredLabel={true}
+        sponsor="Mozilla"
+        source="Mozilla"
+        timeToRead="2000"
+      />
+    );
+    const sponsorLabel = wrapper.find(SponsorLabel);
+    assert.lengthOf(sponsorLabel, 1);
+  });
+});
+
+describe("readTimeFromWordCount function", () => {
+  it("should return proper read time", () => {
+    const result = readTimeFromWordCount(2000);
+    assert.equal(result, 10);
+  });
+  it("should return false with falsey word count", () => {
+    assert.isFalse(readTimeFromWordCount());
+    assert.isFalse(readTimeFromWordCount(0));
+    assert.isFalse(readTimeFromWordCount(""));
+    assert.isFalse(readTimeFromWordCount(null));
+    assert.isFalse(readTimeFromWordCount(undefined));
+  });
+  it("should return NaN with invalid word count", () => {
+    assert.isNaN(readTimeFromWordCount("zero"));
+    assert.isNaN(readTimeFromWordCount({}));
   });
 });

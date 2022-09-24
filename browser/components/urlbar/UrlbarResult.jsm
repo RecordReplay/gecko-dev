@@ -21,7 +21,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserUIUtils: "resource:///modules/BrowserUIUtils.jsm",
   JsonSchemaValidator:
     "resource://gre/modules/components-utils/JsonSchemaValidator.jsm",
-  Services: "resource://gre/modules/Services.jsm",
   UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarUtils: "resource:///modules/UrlbarUtils.jsm",
 });
@@ -248,7 +247,7 @@ class UrlbarResult {
           }
         }
       }
-      payloadInfo.displayUrl[0] = Services.textToSubURI.unEscapeURIForUI(url);
+      payloadInfo.displayUrl[0] = UrlbarUtils.unEscapeURIForUI(url);
     }
 
     // For performance reasons limit excessive string lengths, to reduce the
@@ -297,7 +296,7 @@ class UrlbarResult {
    */
   static addDynamicResultType(name, type = {}) {
     if (/[^a-z0-9_-]/i.test(name)) {
-      Cu.reportError(`Illegal dynamic type name: ${name}`);
+      this.logger.error(`Illegal dynamic type name: ${name}`);
       return;
     }
     this._dynamicResultTypesByName.set(name, type);

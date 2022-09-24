@@ -2,9 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/* global clearConsoleEvents */
+
 "use strict";
 
-/* global XPCNativeWrapper */
 const { ActorClassWithSpec, Actor } = require("devtools/shared/protocol");
 const { webconsoleSpec } = require("devtools/shared/specs/webconsole");
 
@@ -21,6 +22,7 @@ const {
 } = require("devtools/server/actors/object/utils");
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const ErrorDocs = require("devtools/server/actors/errordocs");
+const Targets = require("devtools/server/actors/targets/index");
 
 loader.lazyRequireGetter(
   this,
@@ -198,11 +200,6 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
         "last-pb-context-exited"
       );
     }
-
-    this.traits = {
-      // Supports retrieving blocked urls
-      blockedUrls: true,
-    };
   },
   /**
    * Debugger instance.
@@ -240,12 +237,6 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
   conn: null,
 
   /**
-   * List of supported features by the console actor.
-   * @type object
-   */
-  traits: null,
-
-  /**
    * The global we work with (this can be a Window, a Worker global or even a Sandbox
    * for processes and addons).
    *
@@ -261,6 +252,9 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
   /**
    * Get a window to use for the browser console.
    *
+   * (note that is is also used for browser toolbox and webextension
+   *  i.e. all targets flagged with isRootActor=true)
+   *
    * @private
    * @return nsIDOMWindow
    *         The window to use, or null if no window could be found.
@@ -269,7 +263,9 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
     // Check if our last used chrome window is still live.
     let window = this._lastChromeWindow && this._lastChromeWindow.get();
     // If not, look for a new one.
-    if (!window || window.closed) {
+    // In case of WebExtension reload of the background page, the last
+    // chrome window might be a dead wrapper, from which we can't check for window.closed.
+    if (!window || Cu.isDeadWrapper(window) || window.closed) {
       window = this.parentActor.window;
       if (!window) {
         // Try to find the Browser Console window to use instead.
@@ -380,28 +376,6 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
 
   grip: function() {
     return { actor: this.actorID };
-  },
-
-  hasNativeConsoleAPI: function(window) {
-    if (isWorker || !(window instanceof Ci.nsIDOMWindow)) {
-      // We can only use XPCNativeWrapper on non-worker nsIDOMWindow.
-      return true;
-    }
-
-    let isNative = false;
-    try {
-      // We are very explicitly examining the "console" property of
-      // the non-Xrayed object here.
-      const console = window.wrappedJSObject.console;
-      // In xpcshell tests, console ends up being undefined and XPCNativeWrapper
-      // crashes in debug builds.
-      if (console) {
-        isNative = new XPCNativeWrapper(console).IS_NATIVE_CONSOLE;
-      }
-    } catch (ex) {
-      // ignored
-    }
-    return isNative;
   },
 
   _findProtoChain: ThreadActor.prototype._findProtoChain,
@@ -615,6 +589,8 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
   startListeners: async function(listeners) {
     const startedListeners = [];
     const global = !this.parentActor.isRootActor ? this.global : null;
+    const isTargetActorContentProcess =
+      this.parentActor.targetType === Targets.TYPES.PROCESS;
 
     for (const event of listeners) {
       switch (event) {
@@ -626,7 +602,10 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
           if (!this.consoleServiceListener) {
             this.consoleServiceListener = new ConsoleServiceListener(
               global,
-              this.onConsoleServiceMessage
+              this.onConsoleServiceMessage,
+              {
+                matchExactWindow: this.parentActor.ignoreSubFrames,
+              }
             );
             this.consoleServiceListener.init();
           }
@@ -639,7 +618,10 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
             this.consoleAPIListener = new ConsoleAPIListener(
               global,
               this.onConsoleAPICall,
-              this.parentActor.consoleAPIListenerOptions
+              {
+                matchExactWindow: this.parentActor.ignoreSubFrames,
+                ...(this.parentActor.consoleAPIListenerOptions || {}),
+              }
             );
             this.consoleAPIListener.init();
           }
@@ -696,7 +678,10 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
             // service workers requests)
             new NetworkMonitorActor(
               this.conn,
-              { window: global },
+              {
+                window: global,
+                matchExactWindow: this.parentActor.ignoreSubFrames,
+              },
               this.actorID,
               mmMockParent
             );
@@ -711,7 +696,10 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
             // requests, as well with the NetworkMonitorActor running in the parent
             // process. It will communicate via message manager for this one.
             this.stackTraceCollector = new StackTraceCollector(
-              { window: global },
+              {
+                window: global,
+                matchExactWindow: this.parentActor.ignoreSubFrames,
+              },
               this.netmonitors
             );
             this.stackTraceCollector.init();
@@ -761,14 +749,24 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
           break;
         case "DocumentEvents":
           // Workers don't support this message type
-          if (isWorker) {
+          if (isWorker || isTargetActorContentProcess) {
             break;
           }
           if (!this.documentEventsListener) {
             this.documentEventsListener = new DocumentEventsListener(
               this.parentActor
             );
-            this.documentEventsListener.on("*", this.onDocumentEvent);
+
+            this.documentEventsListener.on("dom-loading", data =>
+              this.onDocumentEvent("dom-loading", data)
+            );
+            this.documentEventsListener.on("dom-interactive", data =>
+              this.onDocumentEvent("dom-interactive", data)
+            );
+            this.documentEventsListener.on("dom-complete", data =>
+              this.onDocumentEvent("dom-complete", data)
+            );
+
             this.documentEventsListener.listen();
           }
           startedListeners.push(event);
@@ -780,9 +778,7 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
     startedListeners.forEach(this._listeners.add, this._listeners);
 
     return {
-      startedListeners: startedListeners,
-      nativeConsoleAPI: this.hasNativeConsoleAPI(this.global),
-      traits: this.traits,
+      startedListeners,
     };
   },
 
@@ -1005,7 +1001,10 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
 
     // Execute the evaluation in the next event loop in order to immediately
     // reply with the resultID.
-    DevToolsUtils.executeSoon(async () => {
+    //
+    // The console input should be evaluated with micro task level != 0,
+    // so that microtask checkpoint isn't performed while evaluating it.
+    DevToolsUtils.executeSoonWithMicroTask(async () => {
       try {
         // Execute the script that may pause.
         let response = await this.evaluateJS(request);
@@ -1478,11 +1477,8 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
    */
   clearMessagesCache: function() {
     if (isWorker) {
-      // At the moment there is no mechanism available to clear the Console API cache for
-      // a given worker target (See https://bugzilla.mozilla.org/show_bug.cgi?id=1674336).
-      // Worker messages from the console service (e.g. error) are emitted from the main
-      // thread, so this cache will be cleared when the associated document target cache
-      // is cleared.
+      // Defined on WorkerScope
+      clearConsoleEvents();
       return;
     }
 
@@ -1503,6 +1499,8 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
       // If were dealing with the root actor (e.g. the browser console), we want
       // to remove all cached messages, not only the ones specific to a window.
       Services.console.reset();
+    } else if (this.parentActor.ignoreSubFrames) {
+      Services.console.resetWindow(windowId);
     } else {
       WebConsoleUtils.getInnerWindowIDsForFrames(this.global).forEach(id =>
         Services.console.resetWindow(id)
@@ -1808,17 +1806,15 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
    *        - dom-complete
    * @param {Number} time
    *        The time that the event is fired.
+   * @param {Boolean} hasNativeConsoleAPI
+   *        Tells if the window.console object is native or overwritten by script in the page.
+   *        Only passed when `name` is "dom-complete" (see devtools/server/actors/webconsole/listeners/document-events.js).
    */
-  onDocumentEvent: function(name, { time }) {
-    // will-navigate event has been added in Fx91 and is only expected to be used
-    // by DOCUMENT_EVENT watcher. For toolbox still not using watcher actor and DOCUMENT_EVENT watcher
-    // will-navigate will be emitted based on target actor's will-navigate events.
-    if (name == "will-navigate") {
-      return;
-    }
+  onDocumentEvent: function(name, { time, hasNativeConsoleAPI }) {
     this.emit("documentEvent", {
       name,
       time,
+      hasNativeConsoleAPI,
     });
   },
 
@@ -2048,7 +2044,7 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
    * instance.
    *
    * @param object message
-   *        The original message received from console-api-log-event.
+   *        The original message received from the console storage listener.
    * @param boolean aUseObjectGlobal
    *        If |true| the object global is determined and added as a debuggee,
    *        otherwise |this.global| is used when makeDebuggeeValue() is invoked.
@@ -2056,18 +2052,38 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
    *         The object that can be sent to the remote client.
    */
   prepareConsoleMessageForRemote: function(message, useObjectGlobal = true) {
-    const result = WebConsoleUtils.cloneObject(message);
+    const result = {
+      arguments: message.arguments
+        ? message.arguments.map(obj => {
+            const dbgObj = this.makeDebuggeeValue(obj, useObjectGlobal);
+            return this.createValueGrip(dbgObj);
+          })
+        : [],
+      chromeContext: message.chromeContext,
+      columnNumber: message.columnNumber,
+      filename: message.filename,
+      level: message.level,
+      lineNumber: message.lineNumber,
+      timeStamp: message.timeStamp,
+      sourceId: this.getActorIdForInternalSourceId(message.sourceId),
+      category: message.category || "webdev",
+      innerWindowID: message.innerID,
+    };
 
-    result.workerType = WebConsoleUtils.getWorkerType(result) || "none";
-    result.sourceId = this.getActorIdForInternalSourceId(result.sourceId);
+    // It only make sense to include the following properties in the message when they have
+    // a meaningful value. Otherwise we simply don't include them so we save cycles in JSActor communication.
+    if (message.counter) {
+      result.counter = message.counter;
+    }
+    if (message.private) {
+      result.private = message.private;
+    }
+    if (message.prefix) {
+      result.prefix = message.prefix;
+    }
 
-    delete result.wrappedJSObject;
-    delete result.ID;
-    delete result.innerID;
-    delete result.consoleID;
-
-    if (result.stacktrace) {
-      result.stacktrace = result.stacktrace.map(frame => {
+    if (message.stacktrace) {
+      result.stacktrace = message.stacktrace.map(frame => {
         return {
           ...frame,
           sourceId: this.getActorIdForInternalSourceId(frame.sourceId),
@@ -2075,16 +2091,17 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
       });
     }
 
-    result.arguments = (message.arguments || []).map(obj => {
-      const dbgObj = this.makeDebuggeeValue(obj, useObjectGlobal);
-      return this.createValueGrip(dbgObj);
-    });
+    if (message.styles && message.styles.length > 0) {
+      result.styles = message.styles.map(string => {
+        return this.createValueGrip(string);
+      });
+    }
 
-    result.styles = (message.styles || []).map(string => {
-      return this.createValueGrip(string);
-    });
+    if (message.timer) {
+      result.timer = message.timer;
+    }
 
-    if (result.level === "table") {
+    if (message.level === "table") {
       const tableItems = this._getConsoleTableMessageItems(result);
       if (tableItems) {
         result.arguments[0].ownProperties = tableItems;
@@ -2094,9 +2111,6 @@ const WebConsoleActor = ActorClassWithSpec(webconsoleSpec, {
       // Only return the 2 first params.
       result.arguments = result.arguments.slice(0, 2);
     }
-
-    result.category = message.category || "webdev";
-    result.innerWindowID = message.innerID;
 
     return result;
   },

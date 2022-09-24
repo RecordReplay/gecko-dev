@@ -26,18 +26,11 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   ShellService: "resource:///modules/ShellService.jsm",
   UpdatePing: "resource://gre/modules/UpdatePing.jsm",
 });
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "WindowsUIUtils",
-  "@mozilla.org/windows-ui-utils;1",
-  "nsIWindowsUIUtils"
-);
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "UpdateManager",
-  "@mozilla.org/updates/update-manager;1",
-  "nsIUpdateManager"
-);
+XPCOMUtils.defineLazyServiceGetters(this, {
+  UpdateManager: ["@mozilla.org/updates/update-manager;1", "nsIUpdateManager"],
+  WinTaskbar: ["@mozilla.org/windows-taskbar;1", "nsIWinTaskbar"],
+  WindowsUIUtils: ["@mozilla.org/windows-ui-utils;1", "nsIWindowsUIUtils"],
+});
 
 XPCOMUtils.defineLazyGetter(this, "gSystemPrincipal", () =>
   Services.scriptSecurityManager.getSystemPrincipal()
@@ -52,6 +45,11 @@ const ONCE_PREF = "browser.startup.homepage_override.once";
 function getNewInstallPage() {
   return Services.prefs.getCharPref('startup.homepage_welcome_url', NEWINSTALL_PAGE);
 }
+
+// Index of Private Browsing icon in firefox.exe
+// Must line up with the one in nsNativeAppSupportWin.h.
+const PRIVATE_BROWSING_ICON_INDEX = 5;
+const PRIVACY_SEGMENTATION_PREF = "browser.privacySegmentation.enabled";
 
 function shouldLoadURI(aURI) {
   if (aURI && !aURI.schemeIs("chrome")) {
@@ -281,6 +279,20 @@ function openBrowserWindow(
         win.docShell.QueryInterface(
           Ci.nsILoadContext
         ).usePrivateBrowsing = true;
+        if (Services.prefs.getBoolPref(PRIVACY_SEGMENTATION_PREF)) {
+          // TODO: Changing this after the Window has been painted causes it to
+          // change Taskbar icons if the original one had a different AUMID.
+          // This must stay pref'ed off until this is resolved.
+          // https://bugzilla.mozilla.org/show_bug.cgi?id=1751010
+          WinTaskbar.setGroupIdForWindow(win, WinTaskbar.defaultPrivateGroupId);
+          WindowsUIUtils.setWindowIconFromExe(
+            win,
+            Services.dirsvc.get("XREExeF", Ci.nsIFile).path,
+            // This corresponds to the definitions in
+            // nsNativeAppSupportWin.h
+            PRIVATE_BROWSING_ICON_INDEX
+          );
+        }
       }
 
       let openTime = win.openTime;
@@ -844,7 +856,7 @@ nsBrowserContentHandler.prototype = {
       var webNavInfo = Cc["@mozilla.org/webnavigation-info;1"].getService(
         Ci.nsIWebNavigationInfo
       );
-      if (!webNavInfo.isTypeSupported(contentType, null)) {
+      if (!webNavInfo.isTypeSupported(contentType)) {
         throw NS_ERROR_WONT_HANDLE_CONTENT;
       }
     } catch (e) {
@@ -933,6 +945,53 @@ function handURIToExistingBrowser(
   );
 }
 
+/**
+ * If given URI is a file type or a protocol, record telemetry that
+ * Firefox was invoked or launched (if `isLaunch` is truth-y).  If the
+ * file type or protocol is not registered by default, record it as
+ * ".<other extension>" or "<other protocol>".
+ *
+ * @param uri
+ *        The URI Firefox was asked to handle.
+ * @param isLaunch
+ *        truth-y if Firefox was launched/started rather than running and invoked.
+ */
+function maybeRecordToHandleTelemetry(uri, isLaunch) {
+  let scalar = isLaunch
+    ? "os.environment.launched_to_handle"
+    : "os.environment.invoked_to_handle";
+
+  if (uri instanceof Ci.nsIFileURL) {
+    let extension = "." + uri.fileExtension.toLowerCase();
+    // Keep synchronized with https://searchfox.org/mozilla-central/source/browser/installer/windows/nsis/shared.nsh
+    // and https://searchfox.org/mozilla-central/source/browser/installer/windows/msix/AppxManifest.xml.in.
+    let registeredExtensions = new Set([
+      ".avif",
+      ".htm",
+      ".html",
+      ".pdf",
+      ".shtml",
+      ".xht",
+      ".xhtml",
+      ".svg",
+      ".webp",
+    ]);
+    if (registeredExtensions.has(extension)) {
+      Services.telemetry.keyedScalarAdd(scalar, extension, 1);
+    } else {
+      Services.telemetry.keyedScalarAdd(scalar, ".<other extension>", 1);
+    }
+  } else if (uri) {
+    let scheme = uri.scheme.toLowerCase();
+    let registeredSchemes = new Set(["about", "http", "https", "mailto"]);
+    if (registeredSchemes.has(scheme)) {
+      Services.telemetry.keyedScalarAdd(scalar, scheme, 1);
+    } else {
+      Services.telemetry.keyedScalarAdd(scalar, "<other protocol>", 1);
+    }
+  }
+}
+
 function nsDefaultCommandLineHandler() {}
 
 nsDefaultCommandLineHandler.prototype = {
@@ -944,6 +1003,21 @@ nsDefaultCommandLineHandler.prototype = {
   /* nsICommandLineHandler */
   handle: function dch_handle(cmdLine) {
     var urilist = [];
+
+    if (
+      cmdLine.state == Ci.nsICommandLine.STATE_INITIAL_LAUNCH &&
+      Services.startup.wasSilentlyStarted
+    ) {
+      // If we are starting up in silent mode, don't open a window. We also need
+      // to make sure that the application doesn't immediately exit, so stay in
+      // a LastWindowClosingSurvivalArea until a window opens.
+      Services.startup.enterLastWindowClosingSurvivalArea();
+      Services.obs.addObserver(function windowOpenObserver() {
+        Services.startup.exitLastWindowClosingSurvivalArea();
+        Services.obs.removeObserver(windowOpenObserver, "domwindowopened");
+      }, "domwindowopened");
+      return;
+    }
 
     if (AppConstants.platform == "win") {
       // If we don't have a profile selected yet (e.g. the Profile Manager is
@@ -965,11 +1039,32 @@ nsDefaultCommandLineHandler.prototype = {
       }
     }
 
+    // `-osint` and handling registered file types and protocols is Windows-only.
+    let launchedWithArg_osint =
+      AppConstants.platform == "win" && cmdLine.findFlag("osint", false) == 0;
+    if (launchedWithArg_osint) {
+      cmdLine.handleFlag("osint", false);
+    }
+
     try {
       var ar;
       while ((ar = cmdLine.handleFlagWithParam("url", false))) {
         var uri = resolveURIInternal(cmdLine, ar);
         urilist.push(uri);
+
+        if (launchedWithArg_osint) {
+          launchedWithArg_osint = false;
+
+          // We use the resolved URI here, even though it can produce
+          // surprising results where-by `-osint -url test.pdf` resolves to
+          // a query with search parameter "test.pdf".  But that shouldn't
+          // happen when Firefox is launched by Windows itself: files should
+          // exist and be resolved to file URLs.
+          const isLaunch =
+            cmdLine && cmdLine.state == Ci.nsICommandLine.STATE_INITIAL_LAUNCH;
+
+          maybeRecordToHandleTelemetry(uri, isLaunch);
+        }
       }
     } catch (e) {
       Cu.reportError(e);

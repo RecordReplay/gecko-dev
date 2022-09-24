@@ -27,20 +27,19 @@ namespace hwy {
 
 // API version (https://semver.org/); keep in sync with CMakeLists.txt.
 #define HWY_MAJOR 0
-#define HWY_MINOR 12
-#define HWY_PATCH 1
+#define HWY_MINOR 16
+#define HWY_PATCH 0
 
 //------------------------------------------------------------------------------
-// Shorthand for descriptors (defined in shared-inl.h) used to select overloads.
-
-// Because Highway functions take descriptor and/or vector arguments, ADL finds
-// these functions without requiring users in project::HWY_NAMESPACE to
-// qualify Highway functions with hwy::HWY_NAMESPACE. However, ADL rules for
-// templates require `using hwy::HWY_NAMESPACE::ShiftLeft;` etc. declarations.
+// Shorthand for tags (defined in shared-inl.h) used to select overloads.
+// Note that ScalableTag<T> is preferred over HWY_FULL, and CappedTag<T, N> over
+// HWY_CAPPED(T, N).
 
 // HWY_FULL(T[,LMUL=1]) is a native vector/group. LMUL is the number of
 // registers in the group, and is ignored on targets that do not support groups.
-#define HWY_FULL1(T) hwy::HWY_NAMESPACE::Simd<T, HWY_LANES(T)>
+#define HWY_FULL1(T) hwy::HWY_NAMESPACE::ScalableTag<T>
+#define HWY_FULL2(T, LMUL) \
+  hwy::HWY_NAMESPACE::ScalableTag<T, CeilLog2(HWY_MAX(0, LMUL))>
 #define HWY_3TH_ARG(arg1, arg2, arg3, ...) arg3
 // Workaround for MSVC grouping __VA_ARGS__ into a single argument
 #define HWY_FULL_RECOMPOSER(args_with_paren) HWY_3TH_ARG args_with_paren
@@ -49,9 +48,9 @@ namespace hwy {
   HWY_FULL_RECOMPOSER((__VA_ARGS__, HWY_FULL2, HWY_FULL1, ))
 #define HWY_FULL(...) HWY_CHOOSE_FULL(__VA_ARGS__())(__VA_ARGS__)
 
-// Vector of up to MAX_N lanes. Discouraged, when possible, use Half<> instead.
+// Vector of up to MAX_N lanes. It's better to use full vectors where possible.
 #define HWY_CAPPED(T, MAX_N) \
-  hwy::HWY_NAMESPACE::Simd<T, HWY_MIN(MAX_N, HWY_LANES(T))>
+  hwy::HWY_NAMESPACE::CappedTag<T, HWY_MIN(MAX_N, HWY_LANES(T))>
 
 //------------------------------------------------------------------------------
 // Export user functions for static/dynamic dispatch
@@ -71,6 +70,8 @@ namespace hwy {
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_SCALAR::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_RVV
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_RVV::FUNC_NAME
+#elif HWY_STATIC_TARGET == HWY_WASM2
+#define HWY_STATIC_DISPATCH(FUNC_NAME) N_WASM2::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_WASM
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_WASM::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_NEON
@@ -81,12 +82,16 @@ namespace hwy {
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_SVE2::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_PPC8
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_PPC8::FUNC_NAME
+#elif HWY_STATIC_TARGET == HWY_SSSE3
+#define HWY_STATIC_DISPATCH(FUNC_NAME) N_SSSE3::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_SSE4
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_SSE4::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_AVX2
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_AVX2::FUNC_NAME
 #elif HWY_STATIC_TARGET == HWY_AVX3
 #define HWY_STATIC_DISPATCH(FUNC_NAME) N_AVX3::FUNC_NAME
+#elif HWY_STATIC_TARGET == HWY_AVX3_DL
+#define HWY_STATIC_DISPATCH(FUNC_NAME) N_AVX3_DL::FUNC_NAME
 #endif
 
 // Dynamic dispatch declarations.
@@ -106,6 +111,7 @@ struct FunctionCache {
   template <FunctionType* const table[]>
   static RetType ChooseAndCall(Args... args) {
     // If we are running here it means we need to update the chosen target.
+    ChosenTarget& chosen_target = GetChosenTarget();
     chosen_target.Update();
     return (table[chosen_target.GetIndex()])(args...);
   }
@@ -127,6 +133,12 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 // were disabled at runtime we fall back to the baseline with
 // HWY_STATIC_DISPATCH()
 #define HWY_CHOOSE_SCALAR(FUNC_NAME) &HWY_STATIC_DISPATCH(FUNC_NAME)
+#endif
+
+#if HWY_TARGETS & HWY_WASM2
+#define HWY_CHOOSE_WASM2(FUNC_NAME) &N_WASM2::FUNC_NAME
+#else
+#define HWY_CHOOSE_WASM2(FUNC_NAME) nullptr
 #endif
 
 #if HWY_TARGETS & HWY_WASM
@@ -165,6 +177,12 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 #define HWY_CHOOSE_PPC8(FUNC_NAME) nullptr
 #endif
 
+#if HWY_TARGETS & HWY_SSSE3
+#define HWY_CHOOSE_SSSE3(FUNC_NAME) &N_SSSE3::FUNC_NAME
+#else
+#define HWY_CHOOSE_SSSE3(FUNC_NAME) nullptr
+#endif
+
 #if HWY_TARGETS & HWY_SSE4
 #define HWY_CHOOSE_SSE4(FUNC_NAME) &N_SSE4::FUNC_NAME
 #else
@@ -181,6 +199,12 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 #define HWY_CHOOSE_AVX3(FUNC_NAME) &N_AVX3::FUNC_NAME
 #else
 #define HWY_CHOOSE_AVX3(FUNC_NAME) nullptr
+#endif
+
+#if HWY_TARGETS & HWY_AVX3_DL
+#define HWY_CHOOSE_AVX3_DL(FUNC_NAME) &N_AVX3_DL::FUNC_NAME
+#else
+#define HWY_CHOOSE_AVX3_DL(FUNC_NAME) nullptr
 #endif
 
 #define HWY_DISPATCH_TABLE(FUNC_NAME) \
@@ -242,9 +266,14 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
           HWY_CHOOSE_SCALAR(FUNC_NAME),                                    \
   }
 #define HWY_DYNAMIC_DISPATCH(FUNC_NAME) \
-  (*(HWY_DISPATCH_TABLE(FUNC_NAME)[hwy::chosen_target.GetIndex()]))
+  (*(HWY_DISPATCH_TABLE(FUNC_NAME)[hwy::GetChosenTarget().GetIndex()]))
 
 #endif  // HWY_IDE || ((HWY_TARGETS & (HWY_TARGETS - 1)) == 0)
+
+// DEPRECATED names; please use HWY_HAVE_* instead.
+#define HWY_CAP_INTEGER64 HWY_HAVE_INTEGER64
+#define HWY_CAP_FLOAT16 HWY_HAVE_FLOAT16
+#define HWY_CAP_FLOAT64 HWY_HAVE_FLOAT64
 
 }  // namespace hwy
 
@@ -262,19 +291,12 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 #define HWY_HIGHWAY_PER_TARGET
 #endif
 
-#undef HWY_FULL2
-#if HWY_TARGET == HWY_RVV
-#define HWY_FULL2(T, LMUL) hwy::HWY_NAMESPACE::Simd<T, HWY_LANES(T) * (LMUL)>
-#else
-#define HWY_FULL2(T, LMUL) hwy::HWY_NAMESPACE::Simd<T, HWY_LANES(T)>
-#endif
-
 // These define ops inside namespace hwy::HWY_NAMESPACE.
-#if HWY_TARGET == HWY_SSE4
+#if HWY_TARGET == HWY_SSSE3 || HWY_TARGET == HWY_SSE4
 #include "hwy/ops/x86_128-inl.h"
 #elif HWY_TARGET == HWY_AVX2
 #include "hwy/ops/x86_256-inl.h"
-#elif HWY_TARGET == HWY_AVX3
+#elif HWY_TARGET == HWY_AVX3 || HWY_TARGET == HWY_AVX3_DL
 #include "hwy/ops/x86_512-inl.h"
 #elif HWY_TARGET == HWY_PPC8
 #error "PPC is not yet supported"
@@ -282,6 +304,8 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 #include "hwy/ops/arm_neon-inl.h"
 #elif HWY_TARGET == HWY_SVE || HWY_TARGET == HWY_SVE2
 #include "hwy/ops/arm_sve-inl.h"
+#elif HWY_TARGET == HWY_WASM2
+#include "hwy/ops/wasm_256-inl.h"
 #elif HWY_TARGET == HWY_WASM
 #include "hwy/ops/wasm_128-inl.h"
 #elif HWY_TARGET == HWY_RVV
@@ -292,65 +316,6 @@ FunctionCache<RetType, Args...> FunctionCacheFactory(RetType (*)(Args...)) {
 #pragma message("HWY_TARGET does not match any known target")
 #endif  // HWY_TARGET
 
-// Commonly used functions/types that must come after ops are defined.
-HWY_BEFORE_NAMESPACE();
-namespace hwy {
-namespace HWY_NAMESPACE {
-
-// The lane type of a vector type, e.g. float for Vec<Simd<float, 4>>.
-template <class V>
-using LaneType = decltype(GetLane(V()));
-
-// Vector type, e.g. Vec128<float> for Simd<float, 4>. Useful as the return type
-// of functions that do not take a vector argument, or as an argument type if
-// the function only has a template argument for D, or for explicit type names
-// instead of auto. This may be a built-in type.
-template <class D>
-using Vec = decltype(Zero(D()));
-
-// Mask type. Useful as the return type of functions that do not take a mask
-// argument, or as an argument type if the function only has a template argument
-// for D, or for explicit type names instead of auto.
-template <class D>
-using Mask = decltype(MaskFromVec(Zero(D())));
-
-// Returns the closest value to v within [lo, hi].
-template <class V>
-HWY_API V Clamp(const V v, const V lo, const V hi) {
-  return Min(Max(lo, v), hi);
-}
-
-// CombineShiftRightBytes (and ..Lanes) are not available for the scalar target.
-// TODO(janwas): implement for RVV
-#if HWY_TARGET != HWY_SCALAR && HWY_TARGET != HWY_RVV
-
-template <size_t kLanes, class V>
-HWY_API V CombineShiftRightLanes(const V hi, const V lo) {
-  return CombineShiftRightBytes<kLanes * sizeof(LaneType<V>)>(hi, lo);
-}
-
-#endif
-
-// Returns lanes with the most significant bit set and all other bits zero.
-template <class D>
-HWY_API Vec<D> SignBit(D d) {
-  using Unsigned = MakeUnsigned<TFromD<D>>;
-  const Unsigned bit = Unsigned(1) << (sizeof(Unsigned) * 8 - 1);
-  return BitCast(d, Set(Rebind<Unsigned, D>(), bit));
-}
-
-// Returns quiet NaN.
-template <class D>
-HWY_API Vec<D> NaN(D d) {
-  const RebindToSigned<D> di;
-  // LimitsMax sets all exponent and mantissa bits to 1. The exponent plus
-  // mantissa MSB (to indicate quiet) would be sufficient.
-  return BitCast(d, Set(di, LimitsMax<TFromD<decltype(di)>>()));
-}
-
-// NOLINTNEXTLINE(google-readability-namespace-comments)
-}  // namespace HWY_NAMESPACE
-}  // namespace hwy
-HWY_AFTER_NAMESPACE();
+#include "hwy/ops/generic_ops-inl.h"
 
 #endif  // HWY_HIGHWAY_PER_TARGET

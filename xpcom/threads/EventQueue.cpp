@@ -33,6 +33,9 @@ void EventQueueInternal<ItemsPerPage>::PutEvent(
       static_cast<uint32_t>(EventQueuePriority::InputHigh));
   static_assert(static_cast<uint32_t>(nsIRunnablePriority::PRIORITY_VSYNC) ==
                 static_cast<uint32_t>(EventQueuePriority::Vsync));
+  static_assert(
+      static_cast<uint32_t>(nsIRunnablePriority::PRIORITY_RENDER_BLOCKING) ==
+      static_cast<uint32_t>(EventQueuePriority::RenderBlocking));
   static_assert(static_cast<uint32_t>(nsIRunnablePriority::PRIORITY_CONTROL) ==
                 static_cast<uint32_t>(EventQueuePriority::Control));
 
@@ -54,7 +57,7 @@ void EventQueueInternal<ItemsPerPage>::PutEvent(
     return;
   }
 
-  if (profiler_thread_is_being_profiled()) {
+  if (profiler_thread_is_being_profiled(ThreadProfilingFeatures::Sampling)) {
     // check to see if the profiler has been enabled since the last PutEvent
     while (mDispatchTimes.Count() < mQueue.Count()) {
       mDispatchTimes.Push(TimeStamp());

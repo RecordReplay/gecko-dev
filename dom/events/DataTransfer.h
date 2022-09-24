@@ -33,6 +33,7 @@ class EventStateManager;
 
 namespace dom {
 
+class IPCDataTransfer;
 class DataTransferItem;
 class DataTransferItemList;
 class DOMStringList;
@@ -58,7 +59,7 @@ class DataTransfer final : public nsISupports, public nsWrapperCache {
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
 
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(DataTransfer)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(DataTransfer)
 
   friend class mozilla::EventStateManager;
 
@@ -221,13 +222,6 @@ class DataTransfer final : public nsISupports, public nsWrapperCache {
    */
   already_AddRefed<FileList> GetFiles(nsIPrincipal& aSubjectPrincipal);
 
-  already_AddRefed<Promise> GetFilesAndDirectories(
-      nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aRv);
-
-  already_AddRefed<Promise> GetFiles(bool aRecursiveFlag,
-                                     nsIPrincipal& aSubjectPrincipal,
-                                     ErrorResult& aRv);
-
   void AddElement(Element& aElement, mozilla::ErrorResult& aRv);
 
   uint32_t MozItemCount() const;
@@ -242,20 +236,18 @@ class DataTransfer final : public nsISupports, public nsWrapperCache {
   void SetMozCursor(const nsAString& aCursor);
 
   already_AddRefed<DOMStringList> MozTypesAt(uint32_t aIndex,
-                                             CallerType aCallerType,
                                              mozilla::ErrorResult& aRv) const;
 
   void MozClearDataAt(const nsAString& aFormat, uint32_t aIndex,
-                      nsIPrincipal& aSubjectPrincipal,
                       mozilla::ErrorResult& aRv);
 
   void MozSetDataAt(JSContext* aCx, const nsAString& aFormat,
                     JS::Handle<JS::Value> aData, uint32_t aIndex,
-                    nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aRv);
+                    mozilla::ErrorResult& aRv);
 
   void MozGetDataAt(JSContext* aCx, const nsAString& aFormat, uint32_t aIndex,
                     JS::MutableHandle<JS::Value> aRetval,
-                    nsIPrincipal& aSubjectPrincipal, mozilla::ErrorResult& aRv);
+                    mozilla::ErrorResult& aRv);
 
   bool MozUserCancelled() const { return mUserCancelled; }
 
@@ -341,6 +333,11 @@ class DataTransfer final : public nsISupports, public nsWrapperCache {
 
   // Variation of SetDataWithPrincipal with handles extracting
   // kCustomTypesMime data into separate types.
+  //
+  // @param aHidden if true and `aFormat != kCustomTypesMime`, the data will be
+  //                hidden from non-chrome code.
+  //                TODO: unclear, whether `aHidden` should be considered for
+  //                the custom types.
   void SetDataWithPrincipalFromOtherProcess(const nsAString& aFormat,
                                             nsIVariant* aData, uint32_t aIndex,
                                             nsIPrincipal* aPrincipal,
@@ -397,6 +394,14 @@ class DataTransfer final : public nsISupports, public nsWrapperCache {
                                              nsTArray<nsCString>* aResult);
 
  protected:
+  // Non-text items are ignored.
+  //
+  // @param aHidden true, iff the data should be hidden from non-chrome code.
+  // @param aDataTransfer expected to be empty.
+  static void IPCDataTransferTextItemsToDataTransfer(
+      const IPCDataTransfer& aIpcDataTransfer, bool aHidden,
+      DataTransfer& aDataTransfer);
+
   // caches text and uri-list data formats that exist in the drag service or
   // clipboard for retrieval later.
   nsresult CacheExternalData(const char* aFormat, uint32_t aIndex,

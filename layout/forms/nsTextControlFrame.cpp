@@ -32,8 +32,10 @@
 #include "nsILayoutHistoryState.h"
 
 #include "nsFocusManager.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/PresState.h"
+#include "mozilla/TextEditor.h"
 #include "nsAttrValueInlines.h"
 #include "mozilla/dom/Selection.h"
 #include "nsContentUtils.h"
@@ -43,6 +45,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/Text.h"
 #include "mozilla/MathAlgorithms.h"
+#include "mozilla/StaticPrefs_layout.h"
 #include "nsFrameSelection.h"
 
 #define DEFAULT_COLUMN_WIDTH 20
@@ -139,14 +142,36 @@ void nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
 
   // Unbind the text editor state object from the frame.  The editor will live
   // on, but things like controllers will be released.
-  RefPtr<TextControlElement> textControlElement =
-      TextControlElement::FromNode(GetContent());
+  RefPtr textControlElement = TextControlElement::FromNode(GetContent());
   MOZ_ASSERT(textControlElement);
-  textControlElement->UnbindFromFrame(this);
-
   if (mMutationObserver) {
+    textControlElement->UnbindFromFrame(this);
     mRootNode->RemoveMutationObserver(mMutationObserver);
     mMutationObserver = nullptr;
+  }
+
+  // If there is a drag session, user may be dragging selection in removing
+  // text node in the text control.  If so, we should set source node to the
+  // text control because another text node may be recreated soon if the text
+  // control is just reframed.
+  if (nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession()) {
+    if (dragSession->IsDraggingTextInTextControl() && mRootNode &&
+        mRootNode->GetFirstChild()) {
+      nsCOMPtr<nsINode> sourceNode;
+      if (NS_SUCCEEDED(
+              dragSession->GetSourceNode(getter_AddRefs(sourceNode))) &&
+          mRootNode->Contains(sourceNode)) {
+        MOZ_ASSERT(sourceNode->IsText());
+        dragSession->UpdateSource(textControlElement, nullptr);
+      }
+    }
+  }
+  // Otherwise, EventStateManager may track gesture to start drag with native
+  // anonymous nodes in the text control element.
+  else if (textControlElement->GetPresContext(Element::eForComposedDoc)) {
+    textControlElement->GetPresContext(Element::eForComposedDoc)
+        ->EventStateManager()
+        ->TextControlRootWillBeRemoved(*textControlElement);
   }
 
   // If we're a subclass like nsNumberControlFrame, then it owns the root of the
@@ -154,6 +179,7 @@ void nsTextControlFrame::DestroyFrom(nsIFrame* aDestructRoot,
   aPostDestroyData.AddAnonymousContent(mRootNode.forget());
   aPostDestroyData.AddAnonymousContent(mPlaceholderDiv.forget());
   aPostDestroyData.AddAnonymousContent(mPreviewDiv.forget());
+  aPostDestroyData.AddAnonymousContent(mRevealButton.forget());
 
   nsContainerFrame::DestroyFrom(aDestructRoot, aPostDestroyData);
 }
@@ -418,6 +444,17 @@ nsresult nsTextControlFrame::CreateAnonymousContent(
   // background on the placeholder doesn't obscure the caret.
   aElements.AppendElement(mRootNode);
 
+  if (StaticPrefs::layout_forms_reveal_password_button_enabled() &&
+      IsPasswordTextControl()) {
+    mRevealButton =
+        MakeAnonElement(PseudoStyleType::mozReveal, nullptr, nsGkAtoms::button);
+    mRevealButton->SetAttr(kNameSpaceID_None, nsGkAtoms::aria_hidden,
+                           u"true"_ns, false);
+    mRevealButton->SetAttr(kNameSpaceID_None, nsGkAtoms::tabindex, u"-1"_ns,
+                           false);
+    aElements.AppendElement(mRevealButton);
+  }
+
   rv = UpdateValueDisplay(false);
   NS_ENSURE_SUCCESS(rv, rv);
 
@@ -444,6 +481,20 @@ bool nsTextControlFrame::ShouldInitializeEagerly() const {
   if (auto* htmlElement = nsGenericHTMLElement::FromNode(mContent)) {
     if (htmlElement->Spellcheck()) {
       return true;
+    }
+  }
+
+  // If text in the editor is being dragged, we need the editor to create
+  // new source node for the drag session (TextEditor creates the text node
+  // in the anonymous <div> element.
+  if (nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession()) {
+    if (dragSession->IsDraggingTextInTextControl()) {
+      nsCOMPtr<nsINode> sourceNode;
+      if (NS_SUCCEEDED(
+              dragSession->GetSourceNode(getter_AddRefs(sourceNode))) &&
+          sourceNode == textControlElement) {
+        return true;
+      }
     }
   }
 
@@ -525,6 +576,10 @@ void nsTextControlFrame::AppendAnonymousContentTo(
 
   if (mPreviewDiv) {
     aElements.AppendElement(mPreviewDiv);
+  }
+
+  if (mRevealButton) {
+    aElements.AppendElement(mRevealButton);
   }
 
   aElements.AppendElement(mRootNode);
@@ -613,7 +668,8 @@ Maybe<nscoord> nsTextControlFrame::ComputeBaseline(
 static bool IsButtonBox(const nsIFrame* aFrame) {
   auto pseudoType = aFrame->Style()->GetPseudoType();
   return pseudoType == PseudoStyleType::mozNumberSpinBox ||
-         pseudoType == PseudoStyleType::mozSearchClearButton;
+         pseudoType == PseudoStyleType::mozSearchClearButton ||
+         pseudoType == PseudoStyleType::mozReveal;
 }
 
 void nsTextControlFrame::Reflow(nsPresContext* aPresContext,
@@ -695,6 +751,11 @@ void nsTextControlFrame::ReflowTextControlChild(
   // or percentage, if we're not the button box.
   auto overridePadding =
       isButtonBox ? Nothing() : Some(aReflowInput.ComputedLogicalPadding(wm));
+  if (!isButtonBox && aButtonBoxISize) {
+    // Button box respects inline-end-padding, so we don't need to.
+    overridePadding->IEnd(outerWM) = 0;
+  }
+
   // We want to let our button box fill the frame in the block axis, up to the
   // edge of the control's border. So, we use the control's padding-box as the
   // containing block size for our button box.
@@ -703,8 +764,6 @@ void nsTextControlFrame::ReflowTextControlChild(
   kidReflowInput.Init(aPresContext, overrideCBSize, Nothing(), overridePadding);
 
   LogicalPoint position(wm);
-  const auto& bp = aReflowInput.ComputedLogicalBorderPadding(outerWM);
-
   if (!isButtonBox) {
     MOZ_ASSERT(wm == outerWM,
                "Shouldn't have to care about orthogonal "
@@ -712,10 +771,13 @@ void nsTextControlFrame::ReflowTextControlChild(
                "except for the number spin-box which forces "
                "horizontal-tb");
 
-    // Offset the frame by the size of the parent's border
-    const auto& padding = aReflowInput.ComputedLogicalPadding(wm);
-    position.B(wm) = bp.BStart(wm) - padding.BStart(wm);
-    position.I(wm) = bp.IStart(wm) - padding.IStart(wm);
+    const auto& border = aReflowInput.ComputedLogicalBorder(wm);
+
+    // Offset the frame by the size of the parent's border. Note that we don't
+    // have to account for the parent's padding here, because this child
+    // actually "inherits" that padding and manages it on behalf of the parent.
+    position.B(wm) = border.BStart(wm);
+    position.I(wm) = border.IStart(wm);
 
     // Set computed width and computed height for the child (the button box is
     // the only exception, which has an auto size).
@@ -733,17 +795,21 @@ void nsTextControlFrame::ReflowTextControlChild(
               containerSize, ReflowChildFlags::Default, aStatus);
 
   if (isButtonBox) {
+    const auto& bp = aReflowInput.ComputedLogicalBorderPadding(outerWM);
     auto size = desiredSize.Size(outerWM);
     // Center button in the block axis of our content box. We do this
     // computation in terms of outerWM for simplicity.
-    position = LogicalPoint(outerWM);
-    position.B(outerWM) =
+    LogicalRect buttonRect(outerWM);
+    buttonRect.BSize(outerWM) = size.BSize(outerWM);
+    buttonRect.ISize(outerWM) = size.ISize(outerWM);
+    buttonRect.BStart(outerWM) =
         bp.BStart(outerWM) +
         (aReflowInput.ComputedBSize() - size.BSize(outerWM)) / 2;
     // Align to the inline-end of the content box.
-    position.I(outerWM) =
+    buttonRect.IStart(outerWM) =
         bp.IStart(outerWM) + aReflowInput.ComputedISize() - size.ISize(outerWM);
-    position = position.ConvertTo(wm, outerWM, containerSize);
+    buttonRect = buttonRect.ConvertTo(wm, outerWM, containerSize);
+    position = buttonRect.Origin(wm);
     aButtonBoxISize = size.ISize(outerWM);
   }
 
@@ -1141,16 +1207,17 @@ void nsTextControlFrame::SetInitialChildList(ChildListID aListID,
     MOZ_ASSERT(textControlElement);
     textControlElement->InitializeKeyboardEventListeners();
 
-    if (nsPoint* contentScrollPos = TakeProperty(ContentScrollPos())) {
+    bool hasProperty;
+    nsPoint contentScrollPos = TakeProperty(ContentScrollPos(), &hasProperty);
+    if (hasProperty) {
       // If we have a scroll pos stored to be passed to our anonymous
       // div, do it here!
       nsIStatefulFrame* statefulFrame = do_QueryFrame(frame);
       NS_ASSERTION(statefulFrame,
                    "unexpected type of frame for the anonymous div");
       UniquePtr<PresState> fakePresState = NewPresState();
-      fakePresState->scrollState() = *contentScrollPos;
+      fakePresState->scrollState() = contentScrollPos;
       statefulFrame->RestoreState(fakePresState.get());
-      delete contentScrollPos;
     }
   } else {
     MOZ_ASSERT(!mRootNode || PrincipalChildList().IsEmpty());
@@ -1178,7 +1245,6 @@ nsresult nsTextControlFrame::UpdateValueDisplay(bool aNotify,
     if (IsPasswordTextControl()) {
       textNode->MarkAsMaybeMasked();
     }
-
     mRootNode->AppendChildTo(textNode, aNotify, IgnoreErrors());
     textContent = textNode;
   } else {
@@ -1245,7 +1311,7 @@ nsTextControlFrame::RestoreState(PresState* aState) {
   // Most likely, we don't have our anonymous content constructed yet, which
   // would cause us to end up here.  In this case, we'll just store the scroll
   // pos ourselves, and forward it to the scroll frame later when it's created.
-  SetProperty(ContentScrollPos(), new nsPoint(aState->scrollState()));
+  SetProperty(ContentScrollPos(), aState->scrollState());
   return NS_OK;
 }
 
@@ -1290,6 +1356,47 @@ nsTextControlFrame::EditorInitializer::Run() {
   // bug 682684.
   if (!mFrame) {
     return NS_ERROR_FAILURE;
+  }
+
+  // If there is a drag session which is for dragging text in a text control
+  // and its source node is the text control element, we're being reframed.
+  // In this case we should restore the source node of the drag session to
+  // new text node because it's required for dispatching `dragend` event.
+  if (nsCOMPtr<nsIDragSession> dragSession = nsContentUtils::GetDragSession()) {
+    if (dragSession->IsDraggingTextInTextControl()) {
+      nsCOMPtr<nsINode> sourceNode;
+      if (NS_SUCCEEDED(
+              dragSession->GetSourceNode(getter_AddRefs(sourceNode))) &&
+          mFrame->GetContent() == sourceNode) {
+        if (TextControlElement* textControlElement =
+                TextControlElement::FromNode(mFrame->GetContent())) {
+          if (TextEditor* textEditor =
+                  textControlElement->GetTextEditorWithoutCreation()) {
+            if (Element* anonymousDivElement = textEditor->GetRoot()) {
+              if (anonymousDivElement && anonymousDivElement->GetFirstChild()) {
+                MOZ_ASSERT(anonymousDivElement->GetFirstChild()->IsText());
+                dragSession->UpdateSource(anonymousDivElement->GetFirstChild(),
+                                          textEditor->GetSelection());
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // Otherwise, EventStateManager may be tracking gesture to start a drag.
+  else if (TextControlElement* textControlElement =
+               TextControlElement::FromNode(mFrame->GetContent())) {
+    if (nsPresContext* presContext =
+            textControlElement->GetPresContext(Element::eForComposedDoc)) {
+      if (TextEditor* textEditor =
+              textControlElement->GetTextEditorWithoutCreation()) {
+        if (Element* anonymousDivElement = textEditor->GetRoot()) {
+          presContext->EventStateManager()->TextControlRootAdded(
+              *anonymousDivElement, *textControlElement);
+        }
+      }
+    }
   }
 
   mFrame->FinishedInitializer();

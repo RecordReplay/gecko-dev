@@ -3,6 +3,7 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 import React, { Component } from "react";
+import PropTypes from "prop-types";
 import { showMenu } from "../../context-menu/menu";
 import { connect } from "../../utils/connect";
 import { score as fuzzaldrinScore } from "fuzzaldrin-plus";
@@ -14,7 +15,8 @@ import { findFunctionText } from "../../utils/function";
 
 import actions from "../../actions";
 import {
-  getSelectedSourceWithContent,
+  getSelectedSource,
+  getSelectedSourceTextContent,
   getSymbols,
   getCursorPosition,
   getContext,
@@ -23,7 +25,6 @@ import {
 import OutlineFilter from "./OutlineFilter";
 import "./Outline.css";
 import PreviewFunction from "../shared/PreviewFunction";
-import { uniq, sortBy } from "lodash";
 
 // Set higher to make the fuzzaldrin filter more specific
 const FUZZALDRIN_FILTER_THRESHOLD = 15000;
@@ -61,6 +62,20 @@ export class Outline extends Component {
     super(props);
     this.focusedElRef = null;
     this.state = { filter: "", focusedItem: null };
+  }
+
+  static get propTypes() {
+    return {
+      alphabetizeOutline: PropTypes.bool.isRequired,
+      cursorPosition: PropTypes.object,
+      cx: PropTypes.object.isRequired,
+      flashLineRange: PropTypes.func.isRequired,
+      getFunctionText: PropTypes.func.isRequired,
+      onAlphabetizeClick: PropTypes.func.isRequired,
+      selectLocation: PropTypes.func.isRequired,
+      selectedSource: PropTypes.object.isRequired,
+      symbols: PropTypes.object.isRequired,
+    };
   }
 
   componentDidUpdate(prevProps) {
@@ -245,20 +260,21 @@ export class Outline extends Component {
 
   renderFunctions(functions) {
     const { filter } = this.state;
-    let classes = uniq(functions.map(({ klass }) => klass));
-    let namedFunctions = functions.filter(
+    let classes = [...new Set(functions.map(({ klass }) => klass))];
+    const namedFunctions = functions.filter(
       ({ name, klass }) =>
         filterOutlineItem(name, filter) && !klass && !classes.includes(name)
     );
 
-    let classFunctions = functions.filter(
+    const classFunctions = functions.filter(
       ({ name, klass }) => filterOutlineItem(name, filter) && !!klass
     );
 
     if (this.props.alphabetizeOutline) {
-      namedFunctions = sortBy(namedFunctions, "name");
+      const sortByName = (a, b) => (a.name < b.name ? -1 : 1);
+      namedFunctions.sort(sortByName);
       classes = classes.sort();
-      classFunctions = sortBy(classFunctions, "name");
+      classFunctions.sort(sortByName);
     }
 
     return (
@@ -319,17 +335,23 @@ export class Outline extends Component {
 }
 
 const mapStateToProps = state => {
-  const selectedSource = getSelectedSourceWithContent(state);
+  const selectedSource = getSelectedSource(state);
   const symbols = selectedSource ? getSymbols(state, selectedSource) : null;
 
   return {
     cx: getContext(state),
     symbols,
-    selectedSource: selectedSource,
+    selectedSource,
     cursorPosition: getCursorPosition(state),
     getFunctionText: line => {
       if (selectedSource) {
-        return findFunctionText(line, selectedSource, symbols);
+        const selectedSourceTextContent = getSelectedSourceTextContent(state);
+        return findFunctionText(
+          line,
+          selectedSource,
+          selectedSourceTextContent,
+          symbols
+        );
       }
 
       return null;

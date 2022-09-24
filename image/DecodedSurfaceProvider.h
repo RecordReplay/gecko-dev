@@ -55,6 +55,15 @@ class DecodedSurfaceProvider final : public ISurfaceProvider,
   // don't block layout or page load.
   TaskPriority Priority() const override { return TaskPriority::eLow; }
 
+  //////////////////////////////////////////////////////////////////////////////
+  // WebRenderImageProvider implementation.
+  //////////////////////////////////////////////////////////////////////////////
+
+ public:
+  nsresult UpdateKey(layers::RenderRootStateManager* aManager,
+                     wr::IpcResourceUpdateQueue& aResources,
+                     wr::ImageKey& aKey) override;
+
  private:
   virtual ~DecodedSurfaceProvider();
 
@@ -66,7 +75,7 @@ class DecodedSurfaceProvider final : public ISurfaceProvider,
   RefPtr<RasterImage> mImage;
 
   /// Mutex protecting access to mDecoder.
-  Mutex mMutex;
+  Mutex mMutex MOZ_UNANNOTATED;
 
   /// The decoder that will generate our surface. Dropped after decoding.
   RefPtr<Decoder> mDecoder;

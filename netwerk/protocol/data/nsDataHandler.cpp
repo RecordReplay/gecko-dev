@@ -17,8 +17,7 @@
 
 NS_IMPL_ISUPPORTS(nsDataHandler, nsIProtocolHandler, nsISupportsWeakReference)
 
-nsresult nsDataHandler::Create(nsISupports* aOuter, const nsIID& aIID,
-                               void** aResult) {
+nsresult nsDataHandler::Create(const nsIID& aIID, void** aResult) {
   RefPtr<nsDataHandler> ph = new nsDataHandler();
   return ph->QueryInterface(aIID, aResult);
 }
@@ -51,38 +50,26 @@ nsDataHandler::GetProtocolFlags(uint32_t* result) {
                                                   const char* aCharset,
                                                   nsIURI* aBaseURI,
                                                   nsIURI** result) {
-  nsresult rv;
   nsCOMPtr<nsIURI> uri;
+  nsAutoCString contentType;
+  bool base64;
+  MOZ_TRY(ParseURI(aSpec, contentType, /* contentCharset = */ nullptr, base64,
+                   /* dataBuffer = */ nullptr));
 
-  const nsPromiseFlatCString& spec = PromiseFlatCString(aSpec);
-
-  if (aBaseURI && !spec.IsEmpty() && spec[0] == '#') {
-    // Looks like a reference instead of a fully-specified URI.
-    // --> initialize |uri| as a clone of |aBaseURI|, with ref appended.
-    rv = NS_MutateURI(aBaseURI).SetRef(spec).Finalize(uri);
+  // Strip whitespace unless this is text, where whitespace is important
+  // Don't strip escaped whitespace though (bug 391951)
+  nsresult rv;
+  if (base64 || (strncmp(contentType.get(), "text/", 5) != 0 &&
+                 contentType.Find("xml") == kNotFound)) {
+    // it's ascii encoded binary, don't let any spaces in
+    rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
+             .Apply(&nsISimpleURIMutator::SetSpecAndFilterWhitespace, aSpec,
+                    nullptr)
+             .Finalize(uri);
   } else {
-    // Otherwise, we'll assume |spec| is a fully-specified data URI
-    nsAutoCString contentType;
-    bool base64;
-    rv = ParseURI(spec, contentType, /* contentCharset = */ nullptr, base64,
-                  /* dataBuffer = */ nullptr);
-    if (NS_FAILED(rv)) return rv;
-
-    // Strip whitespace unless this is text, where whitespace is important
-    // Don't strip escaped whitespace though (bug 391951)
-    if (base64 || (strncmp(contentType.get(), "text/", 5) != 0 &&
-                   contentType.Find("xml") == kNotFound)) {
-      // it's ascii encoded binary, don't let any spaces in
-      rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
-               .Apply(NS_MutatorMethod(
-                   &nsISimpleURIMutator::SetSpecAndFilterWhitespace, spec,
-                   nullptr))
-               .Finalize(uri);
-    } else {
-      rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
-               .SetSpec(spec)
-               .Finalize(uri);
-    }
+    rv = NS_MutateURI(new mozilla::net::nsSimpleURI::Mutator())
+             .SetSpec(aSpec)
+             .Finalize(uri);
   }
 
   if (NS_FAILED(rv)) return rv;
@@ -231,18 +218,28 @@ nsresult nsDataHandler::ParsePathWithoutRef(
   return NS_OK;
 }
 
-nsresult nsDataHandler::ParseURI(const nsCString& spec, nsCString& contentType,
+static inline char ToLower(const char c) {
+  if (c >= 'A' && c <= 'Z') {
+    return char(c + ('a' - 'A'));
+  }
+  return c;
+}
+
+nsresult nsDataHandler::ParseURI(const nsACString& spec, nsCString& contentType,
                                  nsCString* contentCharset, bool& isBase64,
                                  nsCString* dataBuffer) {
   static constexpr auto kDataScheme = "data:"_ns;
 
   // move past "data:"
-  int32_t scheme = spec.Find(kDataScheme, /* aIgnoreCase = */ true);
-  if (scheme == kNotFound) {
-    // malformed uri
+  const char* pos = std::search(
+      spec.BeginReading(), spec.EndReading(), kDataScheme.BeginReading(),
+      kDataScheme.EndReading(),
+      [](const char a, const char b) { return ToLower(a) == ToLower(b); });
+  if (pos == spec.EndReading()) {
     return NS_ERROR_MALFORMED_URI;
   }
 
+  uint32_t scheme = pos - spec.BeginReading();
   scheme += kDataScheme.Length();
 
   // Find the start of the hash ref if present.

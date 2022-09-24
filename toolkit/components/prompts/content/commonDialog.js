@@ -13,6 +13,19 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var propBag, args, Dialog;
 
+// Inherit color scheme overrides from parent window. This is to inherit the
+// color scheme of dark themed PBM windows.
+{
+  let openerColorSchemeOverride =
+    window.opener?.browsingContext?.top.prefersColorSchemeOverride;
+  if (
+    openerColorSchemeOverride &&
+    window.browsingContext == window.browsingContext.top
+  ) {
+    window.browsingContext.prefersColorSchemeOverride = openerColorSchemeOverride;
+  }
+}
+
 function commonDialogOnLoad() {
   propBag = window.arguments[0]
     .QueryInterface(Ci.nsIWritablePropertyBag2)
@@ -51,7 +64,7 @@ function commonDialogOnLoad() {
         title.raw = promptPrincipal.URI.displayHostPort;
       } catch (ex) {
         // hostPort getter can throw, e.g. for about URIs.
-        title.raw = promptPrincipal.origin;
+        title.raw = promptPrincipal.originNoSuffix;
       }
       // hostPort can be empty for file URIs.
       if (!title.raw) {

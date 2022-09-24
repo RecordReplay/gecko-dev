@@ -59,6 +59,7 @@
 #include "jsapi.h"
 #include "jsfriendapi.h"
 #include "js/friend/ErrorMessages.h"  // js::GetErrorMessage, JSMSG_*
+#include "js/PropertyAndElement.h"  // JS_DefineObject, JS_DefineProperty, JS_GetProperty, JS_SetProperty
 #include "BindingUtils.h"
 
 // Used to provide information on the OS
@@ -922,27 +923,6 @@ bool OSFileConstantsService::DefineOSFileConstants(
   if (!mPaths->localProfileDir.IsVoid() &&
       !SetStringProperty(aCx, objPath, "localProfileDir",
                          mPaths->localProfileDir)) {
-    return false;
-  }
-
-  // sqlite3 is linked from different places depending on the platform
-  nsAutoString libsqlite3;
-#if defined(ANDROID)
-  // On Android, we use the system's libsqlite3
-  libsqlite3.AppendLiteral(MOZ_DLL_PREFIX);
-  libsqlite3.AppendLiteral("sqlite3");
-  libsqlite3.AppendLiteral(MOZ_DLL_SUFFIX);
-#elif defined(XP_WIN)
-  // On Windows, for some reason, this is part of nss3.dll
-  libsqlite3.AppendLiteral(MOZ_DLL_PREFIX);
-  libsqlite3.AppendLiteral("nss3");
-  libsqlite3.AppendLiteral(MOZ_DLL_SUFFIX);
-#else
-  // On other platforms, we link sqlite3 into libxul
-  libsqlite3 = libxul;
-#endif  // defined(ANDROID) || defined(XP_WIN)
-
-  if (!SetStringProperty(aCx, objPath, "libsqlite3", libsqlite3)) {
     return false;
   }
 

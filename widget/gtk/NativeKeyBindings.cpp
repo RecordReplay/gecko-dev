@@ -6,6 +6,8 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/Maybe.h"
+#include "mozilla/NativeKeyBindingsType.h"
+#include "mozilla/StaticPrefs_ui.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/WritingModes.h"
 
@@ -200,10 +202,20 @@ static void paste_clipboard_cb(GtkWidget* w, gpointer user_data) {
 }
 
 // GtkTextView-only signals
-static void select_all_cb(GtkWidget* w, gboolean select, gpointer user_data) {
-  AddCommand(Command::SelectAll);
-  g_signal_stop_emission_by_name(w, "select_all");
-  gHandled = true;
+static void select_all_cb(GtkWidget* aWidget, gboolean aSelect,
+                          gpointer aUserData) {
+  // We don't support "Unselect All" command.
+  // Note that if we'd support it, `Ctrl-Shift-a` will be mapped to it and
+  // overrides open `about:addons` shortcut.
+  if (aSelect) {
+    AddCommand(Command::SelectAll);
+  }
+  g_signal_stop_emission_by_name(aWidget, "select_all");
+  // Although we prevent the default of `GtkTExtView` with
+  // `g_signal_stop_emission_by_name`, but `gHandled` is used for asserting
+  // if it does not match with the emptiness of the command array.
+  // Therefore, we should not set it to `true` if we don't add a command.
+  gHandled |= aSelect;
 }
 
 NativeKeyBindings* NativeKeyBindings::sInstanceForSingleLineEditor = nullptr;
@@ -212,7 +224,7 @@ NativeKeyBindings* NativeKeyBindings::sInstanceForMultiLineEditor = nullptr;
 // static
 NativeKeyBindings* NativeKeyBindings::GetInstance(NativeKeyBindingsType aType) {
   switch (aType) {
-    case nsIWidget::NativeKeyBindingsForSingleLineEditor:
+    case NativeKeyBindingsType::SingleLineEditor:
       if (!sInstanceForSingleLineEditor) {
         sInstanceForSingleLineEditor = new NativeKeyBindings();
         sInstanceForSingleLineEditor->Init(aType);
@@ -222,8 +234,8 @@ NativeKeyBindings* NativeKeyBindings::GetInstance(NativeKeyBindingsType aType) {
     default:
       // fallback to multiline editor case in release build
       MOZ_FALLTHROUGH_ASSERT("aType is invalid or not yet implemented");
-    case nsIWidget::NativeKeyBindingsForMultiLineEditor:
-    case nsIWidget::NativeKeyBindingsForRichTextEditor:
+    case NativeKeyBindingsType::MultiLineEditor:
+    case NativeKeyBindingsType::RichTextEditor:
       if (!sInstanceForMultiLineEditor) {
         sInstanceForMultiLineEditor = new NativeKeyBindings();
         sInstanceForMultiLineEditor->Init(aType);
@@ -242,20 +254,13 @@ void NativeKeyBindings::Shutdown() {
 
 void NativeKeyBindings::Init(NativeKeyBindingsType aType) {
   switch (aType) {
-    case nsIWidget::NativeKeyBindingsForSingleLineEditor:
+    case NativeKeyBindingsType::SingleLineEditor:
       mNativeTarget = gtk_entry_new();
       break;
     default:
       mNativeTarget = gtk_text_view_new();
-      if (gtk_major_version > 2 ||
-          (gtk_major_version == 2 &&
-           (gtk_minor_version > 2 ||
-            (gtk_minor_version == 2 && gtk_micro_version >= 2)))) {
-        // select_all only exists in gtk >= 2.2.2.  Prior to that,
-        // ctrl+a is bound to (move to beginning, select to end).
-        g_signal_connect(mNativeTarget, "select_all", G_CALLBACK(select_all_cb),
-                         this);
-      }
+      g_signal_connect(mNativeTarget, "select_all", G_CALLBACK(select_all_cb),
+                       this);
       break;
   }
 
@@ -334,6 +339,23 @@ void NativeKeyBindings::GetEditCommands(const WidgetKeyboardEvent& aEvent,
     }
   }
 
+  // If the key event does not cause any commands, and we're for single line
+  // editor, let's check whether the key combination is for "select-all" in
+  // GtkTextView because the signal is not supported by GtkEntry.
+  if (aCommands.IsEmpty() && this == sInstanceForSingleLineEditor &&
+      StaticPrefs::ui_key_use_select_all_in_single_line_editor()) {
+    if (NativeKeyBindings* bindingsForMultilineEditor =
+            GetInstance(NativeKeyBindingsType::MultiLineEditor)) {
+      bindingsForMultilineEditor->GetEditCommands(aEvent, aWritingMode,
+                                                  aCommands);
+      if (aCommands.Length() == 1u &&
+          aCommands[0u] == static_cast<CommandInt>(Command::SelectAll)) {
+        return;
+      }
+      aCommands.Clear();
+    }
+  }
+
   /*
   gtk_bindings_activate_event is preferable, but it has unresolved bug:
   http://bugzilla.gnome.org/show_bug.cgi?id=162726
@@ -403,7 +425,7 @@ void NativeKeyBindings::GetEditCommandsForTests(
           break;
         case 'u':
         case 'U':
-          if (aType == nsIWidget::NativeKeyBindingsForSingleLineEditor &&
+          if (aType == NativeKeyBindingsType::SingleLineEditor &&
               aEvent.IsControl() && !aEvent.IsShift()) {
             command = sDeleteCommands[GTK_DELETE_PARAGRAPH_ENDS][kBackward];
           }

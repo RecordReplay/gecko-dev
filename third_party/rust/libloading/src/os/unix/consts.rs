@@ -7,7 +7,7 @@ use std::os::raw::c_int;
 /// Specifying `RTLD_LAZY` should improve performance on implementations supporting dynamic
 /// symbol binding since a process might not reference all of the symbols in an executable
 /// object file. And, for systems supporting dynamic symbol resolution for normal process
-/// execution, this behavior mimics the normal handling of process execution.
+/// execution, this behaviour mimics the normal handling of process execution.
 ///
 /// Conflicts with [`RTLD_NOW`].
 ///
@@ -18,7 +18,7 @@ pub const RTLD_LAZY: c_int = posix::RTLD_LAZY;
 ///
 /// All necessary relocations shall be performed when the executable object file is first
 /// loaded. This may waste some processing if relocations are performed for symbols
-/// that are never referenced. This behavior may be useful for applications that need to
+/// that are never referenced. This behaviour may be useful for applications that need to
 /// know that all symbols referenced during execution will be available before
 /// [`Library::open`] returns.
 ///
@@ -43,7 +43,7 @@ pub const RTLD_GLOBAL: c_int = posix::RTLD_GLOBAL;
 /// any other executable object file. This mode of operation is most appropriate for e.g. plugins.
 pub const RTLD_LOCAL: c_int = posix::RTLD_LOCAL;
 
-#[cfg(all(docsrs, not(unix)))]
+#[cfg(all(libloading_docs, not(unix)))]
 mod posix {
     use super::c_int;
     pub(super) const RTLD_LAZY: c_int = !0;
@@ -52,7 +52,7 @@ mod posix {
     pub(super) const RTLD_LOCAL: c_int = !0;
 }
 
-#[cfg(any(not(docsrs), unix))]
+#[cfg(any(not(libloading_docs), unix))]
 mod posix {
     extern crate cfg_if;
     use self::cfg_if::cfg_if;

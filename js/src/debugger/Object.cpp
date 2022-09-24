@@ -34,7 +34,8 @@
 #include "js/friend/WindowProxy.h"  // for IsWindow, IsWindowProxy, ToWindowIfWindowProxy
 #include "js/HeapAPI.h"             // for IsInsideNursery
 #include "js/Promise.h"             // for PromiseState
-#include "js/Proxy.h"               // for PropertyDescriptor
+#include "js/PropertyAndElement.h"       // for JS_GetProperty
+#include "js/Proxy.h"                    // for PropertyDescriptor
 #include "js/SourceText.h"               // for SourceText
 #include "js/StableStringChars.h"        // for AutoStableStringChars
 #include "js/String.h"                   // for JS::StringHasLatin1Chars
@@ -93,23 +94,20 @@ const JSClassOps DebuggerObject::classOps_ = {
     nullptr,                          // mayResolve
     nullptr,                          // finalize
     nullptr,                          // call
-    nullptr,                          // hasInstance
     nullptr,                          // construct
     CallTraceMethod<DebuggerObject>,  // trace
 };
 
 const JSClass DebuggerObject::class_ = {
-    "Object", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS),
-    &classOps_};
+    "Object", JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS), &classOps_};
 
 void DebuggerObject::trace(JSTracer* trc) {
   // There is a barrier on private pointers, so the Unbarriered marking
   // is okay.
-  if (JSObject* referent = (JSObject*)getPrivate()) {
-    TraceManuallyBarrieredCrossCompartmentEdge(
-        trc, static_cast<JSObject*>(this), &referent,
-        "Debugger.Object referent");
-    setPrivateUnbarriered(referent);
+  if (JSObject* referent = maybeReferent()) {
+    TraceManuallyBarrieredCrossCompartmentEdge(trc, this, &referent,
+                                               "Debugger.Object referent");
+    setReservedSlotGCThingAsPrivateUnbarriered(OBJECT_SLOT, referent);
   }
 }
 
@@ -199,6 +197,7 @@ struct MOZ_STACK_CLASS DebuggerObject::CallData {
   bool getPropertyMethod();
   bool setPropertyMethod();
   bool getOwnPropertyNamesMethod();
+  bool getOwnPropertyNamesLengthMethod();
   bool getOwnPropertySymbolsMethod();
   bool getOwnPrivatePropertiesMethod();
   bool getOwnPropertyDescriptorMethod();
@@ -772,12 +771,12 @@ bool DebuggerObject::CallData::isFrozenMethod() {
 }
 
 bool DebuggerObject::CallData::getOwnPropertyNamesMethod() {
-  Rooted<IdVector> ids(cx, IdVector(cx));
+  RootedIdVector ids(cx);
   if (!DebuggerObject::getOwnPropertyNames(cx, object, &ids)) {
     return false;
   }
 
-  RootedObject obj(cx, IdVectorToArray(cx, ids));
+  JSObject* obj = IdVectorToArray(cx, ids);
   if (!obj) {
     return false;
   }
@@ -786,13 +785,24 @@ bool DebuggerObject::CallData::getOwnPropertyNamesMethod() {
   return true;
 }
 
+bool DebuggerObject::CallData::getOwnPropertyNamesLengthMethod() {
+  size_t ownPropertiesLength;
+  if (!DebuggerObject::getOwnPropertyNamesLength(cx, object,
+                                                 &ownPropertiesLength)) {
+    return false;
+  }
+
+  args.rval().setNumber(ownPropertiesLength);
+  return true;
+}
+
 bool DebuggerObject::CallData::getOwnPropertySymbolsMethod() {
-  Rooted<IdVector> ids(cx, IdVector(cx));
+  RootedIdVector ids(cx);
   if (!DebuggerObject::getOwnPropertySymbols(cx, object, &ids)) {
     return false;
   }
 
-  RootedObject obj(cx, IdVectorToArray(cx, ids));
+  JSObject* obj = IdVectorToArray(cx, ids);
   if (!obj) {
     return false;
   }
@@ -802,12 +812,12 @@ bool DebuggerObject::CallData::getOwnPropertySymbolsMethod() {
 }
 
 bool DebuggerObject::CallData::getOwnPrivatePropertiesMethod() {
-  Rooted<IdVector> ids(cx, IdVector(cx));
+  RootedIdVector ids(cx);
   if (!DebuggerObject::getOwnPrivateProperties(cx, object, &ids)) {
     return false;
   }
 
-  RootedObject obj(cx, IdVectorToArray(cx, ids));
+  JSObject* obj = IdVectorToArray(cx, ids);
   if (!obj) {
     return false;
   }
@@ -1458,7 +1468,7 @@ struct DebuggerObject::PromiseReactionRecordBuilder
 
   bool then(JSContext* cx, HandleObject resolve, HandleObject reject,
             HandleObject result) override {
-    RootedPlainObject record(cx, NewBuiltinClassInstance<PlainObject>(cx));
+    RootedPlainObject record(cx, NewPlainObject(cx));
     if (!record) {
       return false;
     }
@@ -1591,6 +1601,8 @@ const JSFunctionSpec DebuggerObject::methods_[] = {
     JS_DEBUG_FN("getProperty", getPropertyMethod, 0),
     JS_DEBUG_FN("setProperty", setPropertyMethod, 0),
     JS_DEBUG_FN("getOwnPropertyNames", getOwnPropertyNamesMethod, 0),
+    JS_DEBUG_FN("getOwnPropertyNamesLength", getOwnPropertyNamesLengthMethod,
+                0),
     JS_DEBUG_FN("getOwnPropertySymbols", getOwnPropertySymbolsMethod, 0),
     JS_DEBUG_FN("getOwnPrivateProperties", getOwnPrivatePropertiesMethod, 0),
     JS_DEBUG_FN("getOwnPropertyDescriptor", getOwnPropertyDescriptorMethod, 1),
@@ -1652,7 +1664,7 @@ DebuggerObject* DebuggerObject::create(JSContext* cx, HandleObject proto,
     return nullptr;
   }
 
-  obj->setPrivateGCThing(referent);
+  obj->setReservedSlotGCThingAsPrivate(OBJECT_SLOT, referent);
   obj->setReservedSlot(OWNER_SLOT, ObjectValue(*debugger));
 
   return obj;
@@ -2043,7 +2055,32 @@ bool DebuggerObject::getPrototypeOf(JSContext* cx, HandleDebuggerObject object,
 /* static */
 bool DebuggerObject::getOwnPropertyNames(JSContext* cx,
                                          HandleDebuggerObject object,
-                                         MutableHandle<IdVector> result) {
+                                         MutableHandleIdVector result) {
+  MOZ_ASSERT(result.empty());
+
+  RootedObject referent(cx, object->referent());
+  {
+    Maybe<AutoRealm> ar;
+    EnterDebuggeeObjectRealm(cx, ar, referent);
+
+    ErrorCopier ec(ar);
+    if (!GetPropertyKeys(cx, referent, JSITER_OWNONLY | JSITER_HIDDEN,
+                         result)) {
+      return false;
+    }
+  }
+
+  for (size_t i = 0; i < result.length(); i++) {
+    cx->markId(result[i]);
+  }
+
+  return true;
+}
+
+/* static */
+bool DebuggerObject::getOwnPropertyNamesLength(JSContext* cx,
+                                               HandleDebuggerObject object,
+                                               size_t* result) {
   RootedObject referent(cx, object->referent());
 
   RootedIdVector ids(cx);
@@ -2057,16 +2094,13 @@ bool DebuggerObject::getOwnPropertyNames(JSContext* cx,
     }
   }
 
-  for (size_t i = 0; i < ids.length(); i++) {
-    cx->markId(ids[i]);
-  }
-
-  return result.append(ids.begin(), ids.end());
+  *result = ids.length();
+  return true;
 }
 
-bool GetSymbolPropertyKeys(JSContext* cx, HandleDebuggerObject object,
-                           JS::MutableHandleIdVector props,
-                           bool includePrivate) {
+static bool GetSymbolPropertyKeys(JSContext* cx, HandleDebuggerObject object,
+                                  JS::MutableHandleIdVector props,
+                                  bool includePrivate) {
   RootedObject referent(cx, object->referent());
 
   {
@@ -2091,50 +2125,49 @@ bool GetSymbolPropertyKeys(JSContext* cx, HandleDebuggerObject object,
 /* static */
 bool DebuggerObject::getOwnPropertySymbols(JSContext* cx,
                                            HandleDebuggerObject object,
-                                           MutableHandle<IdVector> result) {
-  RootedIdVector ids(cx);
-  if (!GetSymbolPropertyKeys(cx, object, &ids, false)) {
+                                           MutableHandleIdVector result) {
+  MOZ_ASSERT(result.empty());
+
+  if (!GetSymbolPropertyKeys(cx, object, result, false)) {
     return false;
   }
 
-  for (size_t i = 0; i < ids.length(); i++) {
-    cx->markId(ids[i]);
+  for (size_t i = 0; i < result.length(); i++) {
+    cx->markAtom(result[i].toSymbol());
   }
 
-  return result.append(ids.begin(), ids.end());
+  return true;
 }
 
 /* static */
 bool DebuggerObject::getOwnPrivateProperties(JSContext* cx,
                                              HandleDebuggerObject object,
-                                             MutableHandle<IdVector> result) {
-  RootedIdVector ids(cx);
-  if (!GetSymbolPropertyKeys(cx, object, &ids, true)) {
+                                             MutableHandleIdVector result) {
+  MOZ_ASSERT(result.empty());
+
+  if (!GetSymbolPropertyKeys(cx, object, result, true)) {
     return false;
   }
 
-  for (size_t i = 0; i < ids.length(); i++) {
-    PropertyKey id = ids[i];
-
-    if (id.isPrivateName()) {
-      // Private *methods* create a Private Brand, a special private name
-      // stamped onto the symbol, to indicate it is possible to execute private
-      // methods from the class on this object. We don't want to return such
-      // items here, so we check if we're dealing with a private property, e.g.
-      // the Symbol description starts with a "#" character
-      JSAtom* privateDescription = id.toSymbol()->description();
-      char16_t firstChar;
-      if (!privateDescription->getChar(cx, 0, &firstChar)) {
-        return false;
-      }
-
-      if (firstChar == '#') {
-        cx->markId(id);
-        if (!result.append(id)) {
-          return false;
-        }
-      }
+  result.eraseIf([](PropertyKey key) {
+    if (!key.isPrivateName()) {
+      return true;
     }
+    // Private *methods* create a Private Brand, a special private name
+    // stamped onto the symbol, to indicate it is possible to execute private
+    // methods from the class on this object. We don't want to return such
+    // items here, so we check if we're dealing with a private property, e.g.
+    // the Symbol description starts with a "#" character.
+    JSAtom* privateDescription = key.toSymbol()->description();
+    if (privateDescription->length() == 0) {
+      return true;
+    }
+    char16_t firstChar = privateDescription->latin1OrTwoByteChar(0);
+    return firstChar != '#';
+  });
+
+  for (size_t i = 0; i < result.length(); i++) {
+    cx->markAtom(result[i].toSymbol());
   }
 
   return true;
@@ -2446,7 +2479,7 @@ Maybe<Completion> DebuggerObject::call(JSContext* cx,
 /* static */
 bool DebuggerObject::forceLexicalInitializationByName(
     JSContext* cx, HandleDebuggerObject object, HandleId id, bool& result) {
-  if (!JSID_IS_STRING(id)) {
+  if (!id.isString()) {
     JS_ReportErrorNumberASCII(
         cx, GetErrorMessage, nullptr, JSMSG_NOT_EXPECTED_TYPE,
         "Debugger.Object.prototype.forceLexicalInitializationByName", "string",

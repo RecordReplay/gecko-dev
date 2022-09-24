@@ -24,6 +24,8 @@
 #include "nsWindowsHelpers.h"
 #include "nsIWindowsRegKey.h"
 #include "nsXULAppAPI.h"
+#include "TelemetryFixture.h"
+#include "TelemetryTestHelpers.h"
 
 using namespace mozilla;
 
@@ -47,7 +49,7 @@ bool WaitUntil(const ConditionT& aCondition, uint32_t aTimeoutMs) {
       },
       &isTimeout, aTimeoutMs, nsITimer::TYPE_ONE_SHOT, __func__);
 
-  SpinEventLoopUntil([&]() -> bool {
+  SpinEventLoopUntil("xpcom-tests:WaitUntil"_ns, [&]() -> bool {
     if (isTimeout) {
       return true;
     }
@@ -132,6 +134,7 @@ class MemoryEater {
       // and dereference it.
       x ^= *(base + i * kPageSize + rand() % kPageSize);
     }
+    (void)x;
   }
 
   static uint32_t GetAvailablePhysicalMemoryInMb() {
@@ -147,7 +150,6 @@ class MemoryEater {
     constexpr size_t kMinGranularity = 64 * 1024;
 
     size_t currentSize = aSize;
-    size_t consumed = 0;
     while (aSize >= kMinGranularity) {
       if (!GetAvailablePhysicalMemoryInMb()) {
         // If the available physical memory is less than 1MB, we finish
@@ -170,7 +172,6 @@ class MemoryEater {
       }
 
       aSize -= currentSize;
-      consumed += currentSize;
 
       // VirtualAlloc consumes the commit space, but we need to *touch* memory
       // to consume physical memory
@@ -280,7 +281,7 @@ NS_IMPL_ISUPPORTS(MockTabUnloader, nsITabUnloader)
 
 }  // namespace
 
-class AvailableMemoryWatcherFixture : public ::testing::Test {
+class AvailableMemoryWatcherFixture : public TelemetryTestFixture {
   static const char kPrefLowCommitSpaceThreshold[];
 
   RefPtr<nsAvailableMemoryWatcherBase> mWatcher;
@@ -384,8 +385,8 @@ class AvailableMemoryWatcherFixture : public ::testing::Test {
     Preferences::SetUint(kPrefLowCommitSpaceThreshold, newVal);
   }
 
-  static constexpr uint32_t kStateChangeTimeoutMs = 10000;
-  static constexpr uint32_t kNotificationTimeoutMs = 5000;
+  static constexpr uint32_t kStateChangeTimeoutMs = 20000;
+  static constexpr uint32_t kNotificationTimeoutMs = 20000;
 
   RefPtr<Spinner> mHighMemoryObserver;
   RefPtr<MockTabUnloader> mTabUnloader;
@@ -393,6 +394,8 @@ class AvailableMemoryWatcherFixture : public ::testing::Test {
   nsAutoHandle mLowMemoryHandle;
 
   void SetUp() override {
+    TelemetryTestFixture::SetUp();
+
     mObserverSvc = do_GetService(NS_OBSERVERSERVICE_CONTRACTID);
     ASSERT_TRUE(mObserverSvc);
 
@@ -400,7 +403,7 @@ class AvailableMemoryWatcherFixture : public ::testing::Test {
         new Spinner(mObserverSvc, "memory-pressure-stop", nullptr);
     mTabUnloader = new MockTabUnloader;
 
-    mWatcher = CreateAvailableMemoryWatcher();
+    mWatcher = nsAvailableMemoryWatcherBase::GetSingleton();
     mWatcher->RegisterTabUnloader(mTabUnloader);
 
     mLowMemoryHandle.own(
@@ -419,11 +422,13 @@ class AvailableMemoryWatcherFixture : public ::testing::Test {
   }
 
   bool WaitForMemoryResourceNotification() {
+    uint64_t t0 = ::GetTickCount64();
     if (::WaitForSingleObject(mLowMemoryHandle, kNotificationTimeoutMs) !=
         WAIT_OBJECT_0) {
       fprintf(stderr, "The memory notification was not triggered.\n");
       return false;
     }
+    fprintf(stderr, "Notified in %llu msec\n", ::GetTickCount64() - t0);
     return true;
   }
 
@@ -440,7 +445,69 @@ class AvailableMemoryWatcherFixture : public ::testing::Test {
 const char AvailableMemoryWatcherFixture::kPrefLowCommitSpaceThreshold[] =
     "browser.low_commit_space_threshold_mb";
 
+class MemoryWatcherTelemetryEvent {
+  static nsLiteralString sEventCategory;
+  static nsLiteralString sEventMethod;
+  static nsLiteralString sEventObject;
+
+  uint32_t mLastCountOfEvents;
+
+ public:
+  explicit MemoryWatcherTelemetryEvent(JSContext* aCx) : mLastCountOfEvents(0) {
+    JS::RootedValue snapshot(aCx);
+    TelemetryTestHelpers::GetEventSnapshot(aCx, &snapshot);
+    nsTArray<nsString> eventValues = TelemetryTestHelpers::EventValuesToArray(
+        aCx, snapshot, sEventCategory, sEventMethod, sEventObject);
+    mLastCountOfEvents = eventValues.Length();
+  }
+
+  void ValidateLastEvent(JSContext* aCx) {
+    JS::RootedValue snapshot(aCx);
+    TelemetryTestHelpers::GetEventSnapshot(aCx, &snapshot);
+    nsTArray<nsString> eventValues = TelemetryTestHelpers::EventValuesToArray(
+        aCx, snapshot, sEventCategory, sEventMethod, sEventObject);
+
+    // A new event was generated.
+    EXPECT_EQ(eventValues.Length(), mLastCountOfEvents + 1);
+    if (eventValues.IsEmpty()) {
+      return;
+    }
+
+    // Update mLastCountOfEvents for a subsequent call to ValidateLastEvent
+    ++mLastCountOfEvents;
+
+    nsTArray<nsString> tokens;
+    for (const nsAString& token : eventValues.LastElement().Split(',')) {
+      tokens.AppendElement(token);
+    }
+    EXPECT_EQ(tokens.Length(), 3U);
+    if (tokens.Length() != 3U) {
+      const wchar_t* valueStr = eventValues.LastElement().get();
+      fprintf(stderr, "Unexpected event value: %S\n", valueStr);
+      return;
+    }
+
+    // Since this test does not involve TabUnloader, the first two numbers
+    // are always expected to be zero.
+    EXPECT_STREQ(tokens[0].get(), L"0");
+    EXPECT_STREQ(tokens[1].get(), L"0");
+
+    // The third token should be a valid floating number.
+    nsresult rv;
+    tokens[2].ToDouble(&rv);
+    EXPECT_TRUE(NS_SUCCEEDED(rv));
+  }
+};
+
+nsLiteralString MemoryWatcherTelemetryEvent::sEventCategory =
+    u"memory_watcher"_ns;
+nsLiteralString MemoryWatcherTelemetryEvent::sEventMethod =
+    u"on_high_memory"_ns;
+nsLiteralString MemoryWatcherTelemetryEvent::sEventObject = u"stats"_ns;
+
 TEST_F(AvailableMemoryWatcherFixture, AlwaysActive) {
+  AutoJSContextWithGlobal cx(mCleanGlobal);
+  MemoryWatcherTelemetryEvent telemetryEvent(cx.GetJSContext());
   StartUserInteraction();
 
   const size_t allocSize = GetAllocationSizeToTriggerMemoryNotification();
@@ -464,9 +531,13 @@ TEST_F(AvailableMemoryWatcherFixture, AlwaysActive) {
   mHighMemoryObserver->StartListening();
   mMemEater.RequestFree();
   EXPECT_TRUE(mHighMemoryObserver->Wait(kStateChangeTimeoutMs));
+
+  telemetryEvent.ValidateLastEvent(cx.GetJSContext());
 }
 
 TEST_F(AvailableMemoryWatcherFixture, InactiveToActive) {
+  AutoJSContextWithGlobal cx(mCleanGlobal);
+  MemoryWatcherTelemetryEvent telemetryEvent(cx.GetJSContext());
   const size_t allocSize = GetAllocationSizeToTriggerMemoryNotification();
   if (!allocSize) {
     // Not enough memory to safely create a low-memory situation.
@@ -495,5 +566,97 @@ TEST_F(AvailableMemoryWatcherFixture, InactiveToActive) {
   StartUserInteraction();
 
   // After user is active, we expect true.
+  EXPECT_TRUE(mHighMemoryObserver->Wait(kStateChangeTimeoutMs));
+
+  telemetryEvent.ValidateLastEvent(cx.GetJSContext());
+}
+
+TEST_F(AvailableMemoryWatcherFixture, HighCommitSpace_AlwaysActive) {
+  // Setting a low threshold simulates a high commit space.
+  SetThresholdAsPercentageOfCommitSpace(1);
+  StartUserInteraction();
+
+  const size_t allocSize = GetAllocationSizeToTriggerMemoryNotification();
+  if (!allocSize) {
+    // Not enough memory to safely create a low-memory situation.
+    // Aborting the test without failure.
+    return;
+  }
+
+  mTabUnloader->ResetCounter();
+  mMemEater.RequestAlloc(allocSize);
+  if (!WaitForMemoryResourceNotification()) {
+    // If the notification was not triggered, abort the test without failure
+    // because it's not a fault in nsAvailableMemoryWatcher.
+    return;
+  }
+
+  // Tab unload will not be triggered because the commit space is not low.
+  EXPECT_FALSE(WaitUntil([this]() { return mTabUnloader->GetCounter() >= 1; },
+                         kStateChangeTimeoutMs / 2));
+
+  mMemEater.RequestFree();
+  ::Sleep(kStateChangeTimeoutMs / 2);
+
+  // Set a high threshold and make sure the watcher will trigger the tab
+  // unloader next time.
+  SetThresholdAsPercentageOfCommitSpace(50);
+
+  mMemEater.RequestAlloc(allocSize);
+  if (!WaitForMemoryResourceNotification()) {
+    return;
+  }
+
+  EXPECT_TRUE(WaitUntil([this]() { return mTabUnloader->GetCounter() >= 1; },
+                        kStateChangeTimeoutMs));
+
+  mHighMemoryObserver->StartListening();
+  mMemEater.RequestFree();
+  EXPECT_TRUE(mHighMemoryObserver->Wait(kStateChangeTimeoutMs));
+}
+
+TEST_F(AvailableMemoryWatcherFixture, HighCommitSpace_InactiveToActive) {
+  // Setting a low threshold simulates a high commit space.
+  SetThresholdAsPercentageOfCommitSpace(1);
+
+  const size_t allocSize = GetAllocationSizeToTriggerMemoryNotification();
+  if (!allocSize) {
+    // Not enough memory to safely create a low-memory situation.
+    // Aborting the test without failure.
+    return;
+  }
+
+  mTabUnloader->ResetCounter();
+  mMemEater.RequestAlloc(allocSize);
+  if (!WaitForMemoryResourceNotification()) {
+    // If the notification was not triggered, abort the test without failure
+    // because it's not a fault in nsAvailableMemoryWatcher.
+    return;
+  }
+
+  // Tab unload will not be triggered because the commit space is not low.
+  EXPECT_FALSE(WaitUntil([this]() { return mTabUnloader->GetCounter() >= 1; },
+                         kStateChangeTimeoutMs / 2));
+
+  mMemEater.RequestFree();
+  ::Sleep(kStateChangeTimeoutMs / 2);
+
+  // Set a high threshold and make sure the watcher will trigger the tab
+  // unloader next time.
+  SetThresholdAsPercentageOfCommitSpace(50);
+
+  // When the user becomes active, the watcher will resume the timer.
+  StartUserInteraction();
+
+  mMemEater.RequestAlloc(allocSize);
+  if (!WaitForMemoryResourceNotification()) {
+    return;
+  }
+
+  EXPECT_TRUE(WaitUntil([this]() { return mTabUnloader->GetCounter() >= 1; },
+                        kStateChangeTimeoutMs));
+
+  mHighMemoryObserver->StartListening();
+  mMemEater.RequestFree();
   EXPECT_TRUE(mHighMemoryObserver->Wait(kStateChangeTimeoutMs));
 }

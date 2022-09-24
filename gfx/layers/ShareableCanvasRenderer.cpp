@@ -117,8 +117,6 @@ void ShareableCanvasRenderer::UpdateCompositableClient() {
   const auto context = mData.GetContext();
   if (!context) return;
   const auto& provider = context->GetBufferProvider();
-  const auto webgl = context->AsWebgl();
-
   const auto& forwarder = GetForwarder();
 
   // -
@@ -134,6 +132,10 @@ void ShareableCanvasRenderer::UpdateCompositableClient() {
   // -
 
   const auto fnGetExistingTc = [&]() -> RefPtr<TextureClient> {
+    const auto desc = context->GetFrontBuffer(nullptr);
+    if (desc) {
+      return GetFrontBufferFromDesc(*desc, flags);
+    }
     if (provider) {
       if (!provider->SetKnowsCompositor(forwarder)) {
         gfxCriticalNote << "BufferProvider::SetForwarder failed";
@@ -142,12 +144,7 @@ void ShareableCanvasRenderer::UpdateCompositableClient() {
 
       return provider->GetTextureClient();
     }
-
-    if (!webgl) return nullptr;
-
-    const auto desc = webgl->GetFrontBuffer(nullptr);
-    if (!desc) return nullptr;
-    return GetFrontBufferFromDesc(*desc, flags);
+    return nullptr;
   };
 
   // -
@@ -177,10 +174,9 @@ void ShareableCanvasRenderer::UpdateCompositableClient() {
       const RefPtr<DrawTarget> dt = tc->BorrowDrawTarget();
 
       const bool requireAlphaPremult = false;
-      const auto borrowed = BorrowSnapshot(requireAlphaPremult);
-      if (!borrowed) return nullptr;
-
-      dt->CopySurface(borrowed->mSurf, {{0, 0}, size}, {0, 0});
+      if (!CopySnapshotTo(dt, requireAlphaPremult)) {
+        return nullptr;
+      }
     }
 
     return tc;

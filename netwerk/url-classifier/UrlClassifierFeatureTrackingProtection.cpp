@@ -13,6 +13,9 @@
 #include "nsIHttpChannelInternal.h"
 #include "nsILoadContext.h"
 #include "nsNetUtil.h"
+#include "mozilla/StaticPtr.h"
+#include "nsXULAppAPI.h"
+#include "nsIWebProgressListener.h"
 
 namespace mozilla {
 namespace net {
@@ -37,7 +40,7 @@ StaticRefPtr<UrlClassifierFeatureTrackingProtection> gFeatureTrackingProtection;
 }  // namespace
 
 UrlClassifierFeatureTrackingProtection::UrlClassifierFeatureTrackingProtection()
-    : UrlClassifierFeatureBase(
+    : UrlClassifierFeatureAntiTrackingBase(
           nsLiteralCString(TRACKING_PROTECTION_FEATURE_NAME),
           nsLiteralCString(URLCLASSIFIER_TRACKING_BLOCKLIST),
           nsLiteralCString(URLCLASSIFIER_TRACKING_ENTITYLIST),

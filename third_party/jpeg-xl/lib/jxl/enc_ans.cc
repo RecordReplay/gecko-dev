@@ -392,20 +392,33 @@ uint32_t ComputeBestMethod(
     HistogramParams::ANSHistogramStrategy ans_histogram_strategy) {
   size_t method = 0;
   float fcost = ComputeHistoAndDataCost(histogram, alphabet_size, 0);
-  for (uint32_t shift = 0; shift <= ANS_LOG_TAB_SIZE;
-       ans_histogram_strategy != HistogramParams::ANSHistogramStrategy::kPrecise
-           ? shift += 2
-           : shift++) {
+  auto try_shift = [&](size_t shift) {
     float c = ComputeHistoAndDataCost(histogram, alphabet_size, shift + 1);
     if (c < fcost) {
       method = shift + 1;
       fcost = c;
-    } else if (ans_histogram_strategy ==
-               HistogramParams::ANSHistogramStrategy::kFast) {
-      // do not be as precise if estimating cost.
+    }
+  };
+  switch (ans_histogram_strategy) {
+    case HistogramParams::ANSHistogramStrategy::kPrecise: {
+      for (uint32_t shift = 0; shift <= ANS_LOG_TAB_SIZE; shift++) {
+        try_shift(shift);
+      }
       break;
     }
-  }
+    case HistogramParams::ANSHistogramStrategy::kApproximate: {
+      for (uint32_t shift = 0; shift <= ANS_LOG_TAB_SIZE; shift += 2) {
+        try_shift(shift);
+      }
+      break;
+    }
+    case HistogramParams::ANSHistogramStrategy::kFast: {
+      try_shift(0);
+      try_shift(ANS_LOG_TAB_SIZE / 2);
+      try_shift(ANS_LOG_TAB_SIZE);
+      break;
+    }
+  };
   *cost = fcost;
   return method;
 }
@@ -421,11 +434,9 @@ size_t BuildAndStoreANSEncodingData(
   if (use_prefix_code) {
     if (alphabet_size <= 1) return 0;
     std::vector<uint32_t> histo(alphabet_size);
-    size_t total = 0;
     for (size_t i = 0; i < alphabet_size; i++) {
       histo[i] = histogram[i];
       JXL_CHECK(histogram[i] >= 0);
-      total += histo[i];
     }
     size_t cost = 0;
     {
@@ -543,7 +554,14 @@ void ChooseUintConfigs(const HistogramParams& params,
                        std::vector<Histogram>* clustered_histograms,
                        EntropyEncodingData* codes, size_t* log_alpha_size) {
   codes->uint_config.resize(clustered_histograms->size());
+
   if (params.uint_method == HistogramParams::HybridUintMethod::kNone) return;
+  if (params.uint_method == HistogramParams::HybridUintMethod::k000) {
+    codes->uint_config.clear();
+    codes->uint_config.resize(clustered_histograms->size(),
+                              HybridUintConfig(0, 0, 0));
+    return;
+  }
   if (params.uint_method == HistogramParams::HybridUintMethod::kContextMap) {
     codes->uint_config.clear();
     codes->uint_config.resize(clustered_histograms->size(),
@@ -624,6 +642,9 @@ void ChooseUintConfigs(const HistogramParams& params,
     for (size_t i = 0; i < clustered_histograms->size(); i++) {
       if (!is_valid[i]) continue;
       float cost = (*clustered_histograms)[i].PopulationCost() + extra_bits[i];
+      // add signaling cost of the hybriduintconfig itself
+      cost += CeilLog2Nonzero(cfg.split_exponent + 1);
+      cost += CeilLog2Nonzero(cfg.split_exponent - cfg.msb_in_token + 1);
       if (cost < costs[i]) {
         codes->uint_config[i] = cfg;
         costs[i] = cost;
@@ -1297,7 +1318,6 @@ void ApplyLZ77_Optimal(const HistogramParams& params, size_t num_contexts,
   if (!lz77.enabled) return;
   SymbolCostEstimator sce(num_contexts + 1, params.force_huffman,
                           tokens_for_cost_estimate, lz77);
-  size_t total_symbols = 0;
   tokens_lz77.resize(tokens.size());
   HybridUintConfig uint_config;
   std::vector<float> sym_cost;
@@ -1307,7 +1327,6 @@ void ApplyLZ77_Optimal(const HistogramParams& params, size_t num_contexts,
         params.image_widths.size() > stream ? params.image_widths[stream] : 0;
     const auto& in = tokens[stream];
     auto& out = tokens_lz77[stream];
-    total_symbols += in.size();
     // Cumulative sum of bit costs.
     sym_cost.resize(in.size() + 1);
     for (size_t i = 0; i < in.size(); i++) {
@@ -1492,18 +1511,39 @@ size_t BuildAndEncodeHistograms(const HistogramParams& params,
   if (params.uint_method == HistogramParams::HybridUintMethod::kContextMap) {
     uint_config = HybridUintConfig(2, 0, 1);
   }
+  if (params.uint_method == HistogramParams::HybridUintMethod::k000) {
+    uint_config = HybridUintConfig(0, 0, 0);
+  }
   if (ans_fuzzer_friendly_) {
     uint_config = HybridUintConfig(10, 0, 0);
   }
   for (size_t i = 0; i < tokens.size(); ++i) {
-    for (size_t j = 0; j < tokens[i].size(); ++j) {
-      const Token token = tokens[i][j];
-      total_tokens++;
-      uint32_t tok, nbits, bits;
-      (token.is_lz77_length ? codes->lz77.length_uint_config : uint_config)
-          .Encode(token.value, &tok, &nbits, &bits);
-      tok += token.is_lz77_length ? codes->lz77.min_symbol : 0;
-      builder.VisitSymbol(tok, token.context);
+    if (codes->lz77.enabled) {
+      for (size_t j = 0; j < tokens[i].size(); ++j) {
+        const Token& token = tokens[i][j];
+        total_tokens++;
+        uint32_t tok, nbits, bits;
+        (token.is_lz77_length ? codes->lz77.length_uint_config : uint_config)
+            .Encode(token.value, &tok, &nbits, &bits);
+        tok += token.is_lz77_length ? codes->lz77.min_symbol : 0;
+        builder.VisitSymbol(tok, token.context);
+      }
+    } else if (num_contexts == 1) {
+      for (size_t j = 0; j < tokens[i].size(); ++j) {
+        const Token& token = tokens[i][j];
+        total_tokens++;
+        uint32_t tok, nbits, bits;
+        uint_config.Encode(token.value, &tok, &nbits, &bits);
+        builder.VisitSymbol(tok, /*token.context=*/0);
+      }
+    } else {
+      for (size_t j = 0; j < tokens[i].size(); ++j) {
+        const Token& token = tokens[i][j];
+        total_tokens++;
+        uint32_t tok, nbits, bits;
+        uint_config.Encode(token.value, &tok, &nbits, &bits);
+        builder.VisitSymbol(tok, token.context);
+      }
     }
   }
 
@@ -1569,33 +1609,49 @@ size_t WriteTokens(const std::vector<Token>& tokens,
   size_t numallbits = 0;
   // Writes in *reversed* order.
   auto addbits = [&](size_t bits, size_t nbits) {
-    JXL_DASSERT(bits >> nbits == 0);
-    if (JXL_UNLIKELY(numallbits + nbits > BitWriter::kMaxBitsPerCall)) {
-      out.push_back(allbits);
-      out_nbits.push_back(numallbits);
-      numallbits = allbits = 0;
+    if (JXL_UNLIKELY(nbits)) {
+      JXL_DASSERT(bits >> nbits == 0);
+      if (JXL_UNLIKELY(numallbits + nbits > BitWriter::kMaxBitsPerCall)) {
+        out.push_back(allbits);
+        out_nbits.push_back(numallbits);
+        numallbits = allbits = 0;
+      }
+      allbits <<= nbits;
+      allbits |= bits;
+      numallbits += nbits;
     }
-    allbits <<= nbits;
-    allbits |= bits;
-    numallbits += nbits;
   };
   const int end = tokens.size();
   ANSCoder ans;
-  for (int i = end - 1; i >= 0; --i) {
-    const Token token = tokens[i];
-    const uint8_t histo = context_map[token.context];
-    uint32_t tok, nbits, bits;
-    (token.is_lz77_length ? codes.lz77.length_uint_config
-                          : codes.uint_config[histo])
-        .Encode(tokens[i].value, &tok, &nbits, &bits);
-    tok += token.is_lz77_length ? codes.lz77.min_symbol : 0;
-    const ANSEncSymbolInfo& info = codes.encoding_info[histo][tok];
-    // Extra bits first as this is reversed.
-    addbits(bits, nbits);
-    num_extra_bits += nbits;
-    uint8_t ans_nbits = 0;
-    uint32_t ans_bits = ans.PutSymbol(info, &ans_nbits);
-    addbits(ans_bits, ans_nbits);
+  if (codes.lz77.enabled || context_map.size() > 1) {
+    for (int i = end - 1; i >= 0; --i) {
+      const Token token = tokens[i];
+      const uint8_t histo = context_map[token.context];
+      uint32_t tok, nbits, bits;
+      (token.is_lz77_length ? codes.lz77.length_uint_config
+                            : codes.uint_config[histo])
+          .Encode(tokens[i].value, &tok, &nbits, &bits);
+      tok += token.is_lz77_length ? codes.lz77.min_symbol : 0;
+      const ANSEncSymbolInfo& info = codes.encoding_info[histo][tok];
+      // Extra bits first as this is reversed.
+      addbits(bits, nbits);
+      num_extra_bits += nbits;
+      uint8_t ans_nbits = 0;
+      uint32_t ans_bits = ans.PutSymbol(info, &ans_nbits);
+      addbits(ans_bits, ans_nbits);
+    }
+  } else {
+    for (int i = end - 1; i >= 0; --i) {
+      uint32_t tok, nbits, bits;
+      codes.uint_config[0].Encode(tokens[i].value, &tok, &nbits, &bits);
+      const ANSEncSymbolInfo& info = codes.encoding_info[0][tok];
+      // Extra bits first as this is reversed.
+      addbits(bits, nbits);
+      num_extra_bits += nbits;
+      uint8_t ans_nbits = 0;
+      uint32_t ans_bits = ans.PutSymbol(info, &ans_nbits);
+      addbits(ans_bits, ans_nbits);
+    }
   }
   const uint32_t state = ans.GetState();
   writer->Write(32, state);
@@ -1619,7 +1675,7 @@ void WriteTokens(const std::vector<Token>& tokens,
 }
 
 void SetANSFuzzerFriendly(bool ans_fuzzer_friendly) {
-#if JXL_IS_DEBUG_BUILD  // Guard against accidential / malicious changes.
+#if JXL_IS_DEBUG_BUILD  // Guard against accidental / malicious changes.
   ans_fuzzer_friendly_ = ans_fuzzer_friendly;
 #endif
 }

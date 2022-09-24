@@ -32,7 +32,6 @@ XPIDL_SOURCES += [
     "nsIContentSniffer.idl",
     "nsIDashboard.idl",
     "nsIDashboardEventNotifier.idl",
-    "nsIDeprecationWarner.idl",
     "nsIDHCPClient.idl",
     "nsIDownloader.idl",
     "nsIEncodedChannel.idl",
@@ -155,6 +154,7 @@ EXPORTS.mozilla += [
 ]
 
 EXPORTS.mozilla.net += [
+    "CacheInfoIPCTypes.h",
     "CaptivePortalService.h",
     "Dashboard.h",
     "DashboardTypes.h",
@@ -162,7 +162,6 @@ EXPORTS.mozilla.net += [
     "IOActivityMonitor.h",
     "MemoryDownloader.h",
     "NetworkConnectivityService.h",
-    "PartiallySeekableInputStream.h",
     "Predictor.h",
     "PrivateBrowsingChannel.h",
     "RedirectChannelRegistrar.h",
@@ -227,7 +226,6 @@ UNIFIED_SOURCES += [
     "nsSyncStreamListener.cpp",
     "nsTransportUtils.cpp",
     "nsUDPSocket.cpp",
-    "PartiallySeekableInputStream.cpp",
     "PollableEvent.cpp",
     "Predictor.cpp",
     "ProxyAutoConfig.cpp",
@@ -311,6 +309,7 @@ FINAL_LIBRARY = "xul"
 LOCAL_INCLUDES += [
     "/docshell/base",
     "/dom/base",
+    "/netwerk/dns",
     "/netwerk/protocol/http",
     "/netwerk/socket",
     "/netwerk/url-classifier",
@@ -322,5 +321,8 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
         "/xpcom/base",
     ]
 
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
+GeneratedFile(
+    "ascii_pac_utils.inc", script="makecppstring.py", inputs=["ascii_pac_utils.js"]
+)
+
+REQUIRES_UNIFIED_BUILD = True

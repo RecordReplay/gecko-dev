@@ -36,6 +36,7 @@
 #endif
 
 namespace mozilla {
+enum class NativeKeyBindingsType : uint8_t;
 namespace widget {
 
 class HeadlessWidget : public nsBaseWidget {
@@ -69,18 +70,12 @@ class HeadlessWidget : public nsBaseWidget {
   virtual void Resize(double aWidth, double aHeight, bool aRepaint) override;
   virtual void Resize(double aX, double aY, double aWidth, double aHeight,
                       bool aRepaint) override;
+  virtual nsSizeMode SizeMode() override { return mSizeMode; }
   virtual void SetSizeMode(nsSizeMode aMode) override;
-  virtual nsresult MakeFullScreen(bool aFullScreen,
-                                  nsIScreen* aTargetScreen = nullptr) override;
+  virtual nsresult MakeFullScreen(bool aFullScreen) override;
   virtual void Enable(bool aState) override;
   virtual bool IsEnabled() const override;
   virtual void SetFocus(Raise, mozilla::dom::CallerType aCallerType) override;
-  virtual nsresult ConfigureChildren(
-      const nsTArray<Configuration>& aConfigurations) override {
-    MOZ_ASSERT_UNREACHABLE(
-        "Headless widgets do not support configuring children.");
-    return NS_ERROR_FAILURE;
-  }
   virtual void Invalidate(const LayoutDeviceIntRect& aRect) override {
     // TODO: see if we need to do anything here.
   }
@@ -100,10 +95,7 @@ class HeadlessWidget : public nsBaseWidget {
   }
   virtual InputContext GetInputContext() override { return mInputContext; }
 
-  virtual LayerManager* GetLayerManager(
-      PLayerTransactionChild* aShadowManager = nullptr,
-      LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
-      LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
+  virtual WindowRenderer* GetWindowRenderer() override;
 
   void SetCompositorWidgetDelegate(CompositorWidgetDelegate* delegate) override;
 
@@ -140,8 +132,8 @@ class HeadlessWidget : public nsBaseWidget {
                                               nsIObserver* aObserver) override;
 
   virtual nsresult SynthesizeNativeTouchPadPinch(
-      TouchpadPinchPhase aEventPhase, float aScale, LayoutDeviceIntPoint aPoint,
-      int32_t aModifierFlags) override;
+      TouchpadGesturePhase aEventPhase, float aScale,
+      LayoutDeviceIntPoint aPoint, int32_t aModifierFlags) override;
 
  private:
   ~HeadlessWidget();
@@ -150,6 +142,7 @@ class HeadlessWidget : public nsBaseWidget {
   bool mDestroyed;
   nsIWidget* mTopLevel;
   HeadlessCompositorWidget* mCompositorWidget;
+  nsSizeMode mSizeMode;
   // The size mode before entering fullscreen mode.
   nsSizeMode mLastSizeMode;
   // The last size mode set while the window was visible.

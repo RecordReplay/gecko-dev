@@ -6,12 +6,16 @@
 #include "SocketProcessHost.h"
 
 #include "SocketProcessParent.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/ipc/FileDescriptor.h"
 #include "mozilla/ipc/ProcessUtils.h"
 #include "nsAppRunner.h"
 #include "nsIOService.h"
 #include "nsIObserverService.h"
 #include "ProfilerParent.h"
+#include "nsNetUtil.h"
+#include "mozilla/ipc/Endpoint.h"
+#include "mozilla/ipc/ProcessChild.h"
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
 #  include "mozilla/SandboxBroker.h"
@@ -21,6 +25,10 @@
 
 #if defined(XP_MACOSX) && defined(MOZ_SANDBOX)
 #  include "mozilla/Sandbox.h"
+#endif
+
+#if defined(XP_WIN)
+#  include "mozilla/WinDllServices.h"
 #endif
 
 using namespace mozilla::ipc;
@@ -35,7 +43,7 @@ bool SocketProcessHost::sLaunchWithMacSandbox = false;
 SocketProcessHost::SocketProcessHost(Listener* aListener)
     : GeckoChildProcessHost(GeckoProcessType_Socket),
       mListener(aListener),
-      mTaskFactory(this),
+      mTaskFactory(Some(this)),
       mLaunchPhase(LaunchPhase::Unlaunched),
       mShutdownRequested(false),
       mChannelClosed(false) {
@@ -58,13 +66,11 @@ bool SocketProcessHost::Launch() {
   MOZ_ASSERT(NS_IsMainThread());
 
   std::vector<std::string> extraArgs;
-
-  nsAutoCString parentBuildID(mozilla::PlatformBuildID());
-  extraArgs.push_back("-parentBuildID");
-  extraArgs.push_back(parentBuildID.get());
+  ProcessChild::AddPlatformBuildID(extraArgs);
 
   SharedPreferenceSerializer prefSerializer;
-  if (!prefSerializer.SerializeToSharedMemory()) {
+  if (!prefSerializer.SerializeToSharedMemory(GeckoProcessType_VR,
+                                              /* remoteType */ ""_ns)) {
     return false;
   }
   prefSerializer.AddSharedPrefCmdLineArgs(*this, extraArgs);
@@ -78,7 +84,19 @@ bool SocketProcessHost::Launch() {
   return true;
 }
 
-void SocketProcessHost::OnChannelConnected(int32_t peer_pid) {
+static void HandleErrorAfterDestroy(
+    RefPtr<SocketProcessHost::Listener>&& aListener) {
+  if (!aListener) {
+    return;
+  }
+
+  NS_DispatchToMainThread(NS_NewRunnableFunction(
+      "HandleErrorAfterDestroy", [listener = std::move(aListener)]() {
+        listener->OnProcessLaunchComplete(nullptr, false);
+      }));
+}
+
+void SocketProcessHost::OnChannelConnected(base::ProcessId peer_pid) {
   MOZ_ASSERT(!NS_IsMainThread());
 
   GeckoChildProcessHost::OnChannelConnected(peer_pid);
@@ -88,8 +106,13 @@ void SocketProcessHost::OnChannelConnected(int32_t peer_pid) {
   RefPtr<Runnable> runnable;
   {
     MonitorAutoLock lock(mMonitor);
-    runnable = mTaskFactory.NewRunnableMethod(
-        &SocketProcessHost::OnChannelConnectedTask);
+    if (!mTaskFactory) {
+      HandleErrorAfterDestroy(std::move(mListener));
+      return;
+    }
+    runnable =
+        (*mTaskFactory)
+            .NewRunnableMethod(&SocketProcessHost::OnChannelConnectedTask);
   }
   NS_DispatchToMainThread(runnable);
 }
@@ -103,8 +126,12 @@ void SocketProcessHost::OnChannelError() {
   RefPtr<Runnable> runnable;
   {
     MonitorAutoLock lock(mMonitor);
-    runnable =
-        mTaskFactory.NewRunnableMethod(&SocketProcessHost::OnChannelErrorTask);
+    if (!mTaskFactory) {
+      HandleErrorAfterDestroy(std::move(mListener));
+      return;
+    }
+    runnable = (*mTaskFactory)
+                   .NewRunnableMethod(&SocketProcessHost::OnChannelErrorTask);
   }
   NS_DispatchToMainThread(runnable);
 }
@@ -152,6 +179,12 @@ void SocketProcessHost::InitAfterConnect(bool aSucceeded) {
   MOZ_ASSERT(NS_SUCCEEDED(result), "Failed getting connectivity?");
 
   attributes.mInitSandbox() = false;
+
+#if defined(XP_WIN)
+  RefPtr<DllServices> dllSvc(DllServices::Get());
+  attributes.mIsReadyForBackgroundProcessing() =
+      dllSvc->IsReadyForBackgroundProcessing();
+#endif
 
 #if defined(XP_LINUX) && defined(MOZ_SANDBOX)
   if (GetEffectiveSocketProcessSandboxLevel() > 0) {
@@ -223,7 +256,7 @@ void SocketProcessHost::OnChannelClosed() {
 void SocketProcessHost::DestroyProcess() {
   {
     MonitorAutoLock lock(mMonitor);
-    mTaskFactory.RevokeAll();
+    mTaskFactory.reset();
   }
 
   GetCurrentSerialEventTarget()->Dispatch(NS_NewRunnableFunction(

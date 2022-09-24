@@ -32,19 +32,16 @@ enum class SurfaceType : int8_t {
   COREGRAPHICS_IMAGE,     /* Surface wrapping a CoreGraphics Image */
   COREGRAPHICS_CGCONTEXT, /* Surface wrapping a CG context */
   SKIA,                   /* Surface wrapping a Skia bitmap */
-  DUAL_DT,                /* Snapshot of a dual drawtarget */
   D2D1_1_IMAGE,           /* A D2D 1.1 ID2D1Image SourceSurface */
   RECORDING,              /* Surface used for recording */
-  WRAP_AND_RECORD,        /* Surface used for wrap and record */
-  TILED,                  /* Surface from a tiled DrawTarget */
   DATA_SHARED,            /* Data surface using shared memory */
-  CAPTURE,                /* Data from a DrawTargetCapture */
   DATA_RECYCLING_SHARED,  /* Data surface using shared memory */
   OFFSET,                 /* Offset */
   DATA_ALIGNED,           /* Data surface using aligned heap memory */
   DATA_SHARED_WRAPPER,    /* Shared memory mapped in from another process */
   BLOB_IMAGE,             /* Recorded blob image */
   DATA_MAPPED,            /* Data surface wrapping a ScopedMap */
+  WEBGL,                  /* Surface wrapping a DrawTargetWebgl texture */
 };
 
 enum class SurfaceFormat : int8_t {
@@ -198,6 +195,140 @@ inline bool IsOpaque(SurfaceFormat aFormat) {
   }
 }
 
+// These are standardized Coding-independent Code Points
+// See [Rec. ITU-T H.273
+// (12/2016)](https://www.itu.int/rec/T-REC-H.273-201612-I/en)
+//
+// We deliberately use an unscoped enum with fixed uint8_t representation since
+// all possible values [0, 255] are legal, but it's unwieldy to declare 200+
+// "RESERVED" enumeration values. Having a fixed underlying type avoids any
+// potential UB and avoids the need for a cast when passing these values across
+// FFI to functions like qcms_profile_create_cicp.
+namespace CICP {
+enum ColourPrimaries : uint8_t {
+  CP_RESERVED_MIN = 0,  // 0, 3, [13, 21], [23, 255] are all reserved
+  CP_BT709 = 1,
+  CP_UNSPECIFIED = 2,
+  CP_BT470M = 4,
+  CP_BT470BG = 5,
+  CP_BT601 = 6,
+  CP_SMPTE240 = 7,
+  CP_GENERIC_FILM = 8,
+  CP_BT2020 = 9,
+  CP_XYZ = 10,
+  CP_SMPTE431 = 11,
+  CP_SMPTE432 = 12,
+  CP_EBU3213 = 22,
+};
+
+inline bool IsReserved(ColourPrimaries aIn) {
+  switch (aIn) {
+    case CP_BT709:
+    case CP_UNSPECIFIED:
+    case CP_BT470M:
+    case CP_BT470BG:
+    case CP_BT601:
+    case CP_SMPTE240:
+    case CP_GENERIC_FILM:
+    case CP_BT2020:
+    case CP_XYZ:
+    case CP_SMPTE431:
+    case CP_SMPTE432:
+    case CP_EBU3213:
+      return false;
+    default:
+      return true;
+  }
+}
+
+enum TransferCharacteristics : uint8_t {
+  TC_RESERVED_MIN = 0,  // 0, 3, [19, 255] are all reserved
+  TC_BT709 = 1,
+  TC_UNSPECIFIED = 2,
+  TC_BT470M = 4,
+  TC_BT470BG = 5,
+  TC_BT601 = 6,
+  TC_SMPTE240 = 7,
+  TC_LINEAR = 8,
+  TC_LOG_100 = 9,
+  TC_LOG_100_SQRT10 = 10,
+  TC_IEC61966 = 11,
+  TC_BT_1361 = 12,
+  TC_SRGB = 13,
+  TC_BT2020_10BIT = 14,
+  TC_BT2020_12BIT = 15,
+  TC_SMPTE2084 = 16,
+  TC_SMPTE428 = 17,
+  TC_HLG = 18,
+};
+
+inline bool IsReserved(TransferCharacteristics aIn) {
+  switch (aIn) {
+    case TC_BT709:
+    case TC_UNSPECIFIED:
+    case TC_BT470M:
+    case TC_BT470BG:
+    case TC_BT601:
+    case TC_SMPTE240:
+    case TC_LINEAR:
+    case TC_LOG_100:
+    case TC_LOG_100_SQRT10:
+    case TC_IEC61966:
+    case TC_BT_1361:
+    case TC_SRGB:
+    case TC_BT2020_10BIT:
+    case TC_BT2020_12BIT:
+    case TC_SMPTE2084:
+    case TC_SMPTE428:
+    case TC_HLG:
+      return false;
+    default:
+      return true;
+  }
+}
+
+enum MatrixCoefficients : uint8_t {
+  MC_IDENTITY = 0,
+  MC_BT709 = 1,
+  MC_UNSPECIFIED = 2,
+  MC_RESERVED_MIN = 3,  // 3, [15, 255] are all reserved
+  MC_FCC = 4,
+  MC_BT470BG = 5,
+  MC_BT601 = 6,
+  MC_SMPTE240 = 7,
+  MC_YCGCO = 8,
+  MC_BT2020_NCL = 9,
+  MC_BT2020_CL = 10,
+  MC_SMPTE2085 = 11,
+  MC_CHROMAT_NCL = 12,
+  MC_CHROMAT_CL = 13,
+  MC_ICTCP = 14,
+};
+
+inline bool IsReserved(MatrixCoefficients aIn) {
+  switch (aIn) {
+    case MC_IDENTITY:
+    case MC_BT709:
+    case MC_UNSPECIFIED:
+    case MC_RESERVED_MIN:
+    case MC_FCC:
+    case MC_BT470BG:
+    case MC_BT601:
+    case MC_SMPTE240:
+    case MC_YCGCO:
+    case MC_BT2020_NCL:
+    case MC_BT2020_CL:
+    case MC_SMPTE2085:
+    case MC_CHROMAT_NCL:
+    case MC_CHROMAT_CL:
+    case MC_ICTCP:
+      return false;
+    default:
+      return true;
+  }
+}
+}  // namespace CICP
+
 // The matrix coeffiecients used for YUV to RGB conversion.
 enum class YUVColorSpace : uint8_t {
   BT601,
@@ -218,6 +349,15 @@ enum class ColorDepth : uint8_t {
   _Last = COLOR_16,
 };
 
+enum class TransferFunction : uint8_t {
+  SRGB,
+  PQ,
+  HLG,
+  _First = SRGB,
+  _Last = HLG,
+  Default = SRGB,
+};
+
 enum class ColorRange : uint8_t {
   LIMITED,
   FULL,
@@ -225,7 +365,7 @@ enum class ColorRange : uint8_t {
   _Last = FULL,
 };
 
-// Really "YcbcrColorSpace"
+// Really "YcbcrColorColorSpace"
 enum class YUVRangedColorSpace : uint8_t {
   BT601_Narrow = 0,
   BT601_Full,
@@ -238,6 +378,23 @@ enum class YUVRangedColorSpace : uint8_t {
   _First = BT601_Narrow,
   _Last = GbrIdentity,
   Default = BT709_Narrow,
+};
+
+// I can either come up with a longer "very clever" name that doesn't conflict
+// with FilterSupport.h, embrace and expand FilterSupport, or rename the old
+// one.
+// Some times Worse Is Better.
+enum class ColorSpace2 : uint8_t {
+  UNKNOWN,  // Eventually we will remove this.
+  SRGB,
+  BT601_525,  // aka smpte170m NTSC
+  BT709,      // Same gamut as SRGB, but different gamma.
+  BT601_625 =
+      BT709,  // aka bt470bg PAL. Basically BT709, just Xg is 0.290 not 0.300.
+  BT2020,
+  DISPLAY_P3,
+  _First = UNKNOWN,
+  _Last = DISPLAY_P3,
 };
 
 struct FromYUVRangedColorSpaceT final {
@@ -321,8 +478,8 @@ static inline SurfaceFormat SurfaceFormatForColorDepth(ColorDepth aColorDepth) {
   return format;
 }
 
-static inline uint32_t BitDepthForColorDepth(ColorDepth aColorDepth) {
-  uint32_t depth = 8;
+static inline uint8_t BitDepthForColorDepth(ColorDepth aColorDepth) {
+  uint8_t depth = 8;
   switch (aColorDepth) {
     case ColorDepth::COLOR_8:
       break;
@@ -376,6 +533,27 @@ static inline uint32_t RescalingFactorForColorDepth(ColorDepth aColorDepth) {
   return factor;
 }
 
+enum class ChromaSubsampling : uint8_t {
+  FULL,
+  HALF_WIDTH,
+  HALF_WIDTH_AND_HEIGHT,
+  _First = FULL,
+  _Last = HALF_WIDTH_AND_HEIGHT,
+};
+
+template <typename T>
+static inline T ChromaSize(const T& aYSize, ChromaSubsampling aSubsampling) {
+  switch (aSubsampling) {
+    case ChromaSubsampling::FULL:
+      return aYSize;
+    case ChromaSubsampling::HALF_WIDTH:
+      return T((aYSize.width + 1) / 2, aYSize.height);
+    case ChromaSubsampling::HALF_WIDTH_AND_HEIGHT:
+      return T((aYSize.width + 1) / 2, (aYSize.height + 1) / 2);
+  }
+  MOZ_CRASH("bad ChromaSubsampling");
+}
+
 enum class FilterType : int8_t {
   BLEND = 0,
   TRANSFORM,
@@ -420,7 +598,7 @@ enum class BackendType : int8_t {
   RECORDING,
   DIRECT2D1_1,
   WEBRENDER_TEXT,
-  CAPTURE,  // Used for paths
+  WEBGL,
 
   // Add new entries above this line.
   BACKEND_LAST
@@ -440,7 +618,8 @@ enum class NativeSurfaceType : int8_t {
   CAIRO_CONTEXT,
   CGCONTEXT,
   CGCONTEXT_ACCELERATED,
-  OPENGL_TEXTURE
+  OPENGL_TEXTURE,
+  WEBGL_CONTEXT
 };
 
 enum class FontStyle : int8_t { NORMAL, ITALIC, BOLD, BOLD_ITALIC };
@@ -726,6 +905,8 @@ namespace mozilla {
 
 // Side constants for use in various places.
 enum Side : uint8_t { eSideTop, eSideRight, eSideBottom, eSideLeft };
+
+std::ostream& operator<<(std::ostream&, const mozilla::Side&);
 
 constexpr auto AllPhysicalSides() {
   return mozilla::MakeInclusiveEnumeratedRange(eSideTop, eSideLeft);

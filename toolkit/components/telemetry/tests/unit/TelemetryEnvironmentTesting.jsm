@@ -14,7 +14,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   CommonUtils: "resource://services-common/utils.js",
   MockRegistrar: "resource://testing-common/MockRegistrar.jsm",
   OS: "resource://gre/modules/osfile.jsm",
-  Preferences: "resource://gre/modules/Preferences.jsm",
+  Services: "resource://gre/modules/Services.jsm",
 });
 
 var EXPORTED_SYMBOLS = ["TelemetryEnvironmentTesting"];
@@ -147,7 +147,9 @@ var TelemetryEnvironmentTesting = {
 
     // Spoof the preferences.
     for (let pref in prefsToSpoof) {
-      Preferences.set(pref, prefsToSpoof[pref]);
+      Services.prefs
+        .getDefaultBranch(null)
+        .setStringPref(pref, prefsToSpoof[pref]);
     }
   },
 
@@ -317,7 +319,7 @@ var TelemetryEnvironmentTesting = {
 
       let win32kLockdownState =
         data.settings.sandbox.contentWin32kLockdownState;
-      Assert.ok(win32kLockdownState >= 1 && win32kLockdownState <= 4);
+      Assert.ok(win32kLockdownState >= 1 && win32kLockdownState <= 17);
     }
 
     // Check "defaultSearchEngine" separately, as it can either be undefined or string.
@@ -494,6 +496,18 @@ var TelemetryEnvironmentTesting = {
             typeof data.system.isWowARM64,
             "boolean",
             "isWowARM64 must be available on Windows and have the correct type."
+          );
+          Assert.equal(
+            typeof data.system.hasWinPackageId,
+            "boolean",
+            "hasWinPackageId must be available on Windows and have the correct type."
+          );
+          // This is only sent for Mozilla produced MSIX packages
+          Assert.ok(
+            !("winPackageFamilyName" in data.system) ||
+              data.system.winPackageFamilyName === null ||
+              typeof data.system.winPackageFamilyName === "string",
+            "winPackageFamilyName must be a string if non null"
           );
           Assert.ok(
             "virtualMaxMB" in data.system,

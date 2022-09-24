@@ -36,10 +36,6 @@ interface nsIGfxInfo : nsISupports
   readonly attribute AString ContentBackend;
   readonly attribute boolean WebRenderEnabled;
   readonly attribute boolean isHeadless;
-  readonly attribute boolean UsesTiling;
-  readonly attribute boolean ContentUsesTiling;
-  readonly attribute boolean OffMainThreadPaintEnabled;
-  readonly attribute long OffMainThreadPaintWorkerCount;
   readonly attribute unsigned long TargetFrameRate;
 
   // XXX: Switch to a list of devices, rather than explicitly numbering them.
@@ -83,13 +79,6 @@ interface nsIGfxInfo : nsISupports
   readonly attribute ACString drmRenderDevice;
 
   /**
-   * Information about display devices
-   */
-  readonly attribute Array<AString> displayInfo;
-  readonly attribute Array<unsigned long> displayWidth;
-  readonly attribute Array<unsigned long> displayHeight;
-
-  /**
    * Returns an array of objects describing each monitor. Guaranteed properties
    * are "screenWidth" and "screenHeight". This is only implemented on Desktop.
    *
@@ -99,8 +88,6 @@ interface nsIGfxInfo : nsISupports
    */
   [implicit_jscontext]
   jsval getMonitors();
-
-  void refreshMonitors();
 
   Array<ACString> getFailures(out Array<long> indices);
 
@@ -171,18 +158,26 @@ interface nsIGfxInfo : nsISupports
   const long FEATURE_ALLOW_WEBGL_OUT_OF_PROCESS = 30;
   /* Is OpenGL threadsafe (starting in 83) */
   const long FEATURE_THREADSAFE_GL = 31;
-  /* Support running WebRender using the software backend, starting in 84. */
-  const long FEATURE_WEBRENDER_SOFTWARE = 32;
   /* Whether webrender uses pre-optimized shaders, starting in 87. */
-  const long FEATURE_WEBRENDER_OPTIMIZED_SHADERS = 33;
+  const long FEATURE_WEBRENDER_OPTIMIZED_SHADERS = 32;
   /* Whether we prefer EGL over GLX with X11, starting in 88. */
-  const long FEATURE_X11_EGL = 34;
+  const long FEATURE_X11_EGL = 33;
   /* Whether DMABUF is supported, starting in 88. */
-  const long FEATURE_DMABUF = 35;
+  const long FEATURE_DMABUF = 34;
   /* Whether webrender caches shader program binaries to disk, starting in 89. */
-  const long FEATURE_WEBRENDER_SHADER_CACHE = 36;
+  const long FEATURE_WEBRENDER_SHADER_CACHE = 35;
+  /* Whether partial present is allowed with WebRender, starting in 98. */
+  const long FEATURE_WEBRENDER_PARTIAL_PRESENT = 36;
+  /* Whether VA-API is supported, starting in 96. */
+  const long FEATURE_VAAPI = 37;
+  /* Whether WebGPU is supported, starting in 100. */
+  const long FEATURE_WEBGPU = 38;
+  /* Whether video overlay is supported, starting in 100. */
+  const long FEATURE_VIDEO_OVERLAY = 39;
+  /* Whether hardware decoded video zero copy is supported, starting in 101. */
+  const long FEATURE_HW_DECODED_VIDEO_ZERO_COPY = 40;
   /* the maximum feature value. */
-  const long FEATURE_MAX_VALUE = FEATURE_WEBRENDER_SHADER_CACHE;
+  const long FEATURE_MAX_VALUE = FEATURE_HW_DECODED_VIDEO_ZERO_COPY;
 
   /*
    * A set of return values from GetFeatureStatus
@@ -230,7 +225,7 @@ interface nsIGfxInfo : nsISupports
   /**
    * Maximum refresh rate among detected monitors. -1 if unknown. aMixed is set
    * to true if we know there are multiple displays and they have different
-   * refresh rates, else false.
+   * refresh rates, else false. The returned value is in Hz.
    */
   [noscript, notxpcom] long GetMaxRefreshRate(out boolean aMixed);
 
@@ -320,6 +315,13 @@ interface nsIGfxInfo : nsISupports
   // Forces the GPU process to start or shutdown. This is intended only for
   // xpcshell-tests.
   boolean controlGPUProcessForXPCShell(in boolean aEnable);
+
+  // Kills the GPU process cleanly, without generating a crash dump.
+  // This is intended only for use by tests.
+  void killGPUProcessForTests();
+
+  // Causes the GPU process to crash. This is intended only for use by tests.
+  void crashGPUProcessForTests();
 };
 
 

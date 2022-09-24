@@ -21,11 +21,13 @@
 
     return Promise.resolve()
       .then(() => pushPrefs(["media.getusermedia.browser.enabled", true]))
-      .then(() => getUserMedia({
-        video: { mediaSource: "browser",
-                 scrollWithPage: true },
-        fake: false
-      }))
+      .then(() => {
+        SpecialPowers.wrap(document).notifyUserGestureActivation();
+        return getUserMedia({
+          video: { mediaSource: "browser",
+                   scrollWithPage: true },
+        });
+      })
       .then(stream => {
         var playback = new MediaStreamPlayback(testVideo, stream);
         return playback.playMedia(false);
@@ -38,7 +40,6 @@
           viewportWidth: 100,
           viewportHeight: 100
         },
-        fake: false
       }))
       .then(stream => {
         var playback = new MediaStreamPlayback(testVideo, stream);

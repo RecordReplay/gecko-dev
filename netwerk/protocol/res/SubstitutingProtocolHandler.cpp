@@ -33,7 +33,6 @@ namespace net {
 // name of "nsResProtocol" to avoid disruption.
 static LazyLogModule gResLog("nsResProtocol");
 
-static NS_DEFINE_CID(kSubstitutingURLCID, NS_SUBSTITUTINGURL_CID);
 static NS_DEFINE_CID(kSubstitutingJARURIImplCID,
                      NS_SUBSTITUTINGJARURI_IMPL_CID);
 
@@ -351,11 +350,11 @@ nsresult SubstitutingProtocolHandler::NewURI(const nsACString& aSpec,
 
   nsCOMPtr<nsIURI> base(aBaseURI);
   nsCOMPtr<nsIURL> uri;
-  rv = NS_MutateURI(new SubstitutingURL::Mutator())
-           .Apply(NS_MutatorMethod(&nsIStandardURLMutator::Init,
-                                   nsIStandardURL::URLTYPE_STANDARD, -1, spec,
-                                   aCharset, base, nullptr))
-           .Finalize(uri);
+  rv =
+      NS_MutateURI(new SubstitutingURL::Mutator())
+          .Apply(&nsIStandardURLMutator::Init, nsIStandardURL::URLTYPE_STANDARD,
+                 -1, spec, aCharset, base, nullptr)
+          .Finalize(uri);
   if (NS_FAILED(rv)) return rv;
 
   nsAutoCString host;

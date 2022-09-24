@@ -126,8 +126,9 @@ bool mozilla::fallocate(PRFileDesc* aFD, int64_t aLength) {
 
   PR_Seek64(aFD, oldpos, PR_SEEK_SET);
   return nWrite == 1;
-#  endif
+#  else
   return false;
+#  endif
 }
 
 void mozilla::ReadAheadLib(nsIFile* aFile) {
@@ -274,6 +275,9 @@ class ScopedMMap {
     }
     size = st.st_size;
     buf = (char*)mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (buf == MAP_FAILED) {
+      buf = nullptr;
+    }
   }
   ~ScopedMMap() {
     if (buf) {
@@ -362,8 +366,7 @@ void mozilla::ReadAheadLib(mozilla::pathstr_t aFilePath) {
     return;
   }
 
-#ifdef MOZ_GECKO_PROFILER
-#  ifdef XP_WIN
+#ifdef XP_WIN
   auto WideToUTF8 = [](const wchar_t* aStr) -> std::string {
     std::string s;
     // Determine the number of output bytes (including null terminator).
@@ -381,16 +384,15 @@ void mozilla::ReadAheadLib(mozilla::pathstr_t aFilePath) {
     }
     return s;
   };
-#  endif
+#endif
 
   AUTO_BASE_PROFILER_MARKER_TEXT("ReadAheadLib", OTHER, {},
-#  ifdef XP_WIN
+#ifdef XP_WIN
                                  WideToUTF8(aFilePath)
-#  else
+#else
                                  aFilePath
-#  endif
-  );
 #endif
+  );
 
 #if defined(XP_WIN)
   if (!CanPrefetchMemory()) {

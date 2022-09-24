@@ -8,6 +8,7 @@
 interface nsIPrincipal;
 webidl Element;
 webidl WindowGlobalParent;
+webidl BrowsingContext;
 
 [builtinclass, scriptable, uuid(8e49f7b0-1f98-4939-bf91-e9c39cd56434)]
 interface nsIRemoteTab : nsISupports
@@ -24,6 +25,12 @@ interface nsIRemoteTab : nsISupports
    * receiving them.
    */
   readonly attribute boolean hasLayers;
+
+  /**
+   * When set to true, this priority hint indicates that the content
+   * processes of this tab should be set to a higher process priority.
+   */
+  attribute boolean priorityHint;
 
   /**
    * Adjusts the tab's active state in the process priority manager,
@@ -50,6 +57,11 @@ interface nsIRemoteTab : nsISupports
   readonly attribute int32_t osPid;
 
   /**
+   * The toplevel BrowsingContext loaded in this remote tab.
+   */
+  readonly attribute BrowsingContext browsingContext;
+
+  /**
    * True if we've previously received layers for this tab when switching to
    * it.
    */
@@ -72,26 +84,6 @@ interface nsIRemoteTab : nsISupports
    */
   void createAboutBlankContentViewer(in nsIPrincipal aPrincipal,
                                      in nsIPrincipal aPartitionedPrincipal);
-
-  /**
-   * Notify APZ to start autoscrolling.
-   * (aAnchorX, aAnchorY) are the coordinates of the autoscroll anchor,
-   * in CSS coordinates relative to the screen. aScrollId and
-   * aPresShellId identify the scroll frame that content chose to scroll.
-   * Returns whether we were successfully able to notify APZ.
-   * If this function returns true, APZ (which may live in another process)
-   * may still reject the autoscroll, but it's then APZ's reponsibility
-   * to notify content via an "autoscroll-rejected-by-apz" message.
-   */
-  boolean startApzAutoscroll(in float aAnchorX, in float aAnchorY,
-                             in nsViewID aScrollId, in uint32_t aPresShellId);
-
-  /**
-   * Notify APZ to stop autoscrolling.
-   * aScrollId and aPresShellId identify the scroll frame that is being
-   * autoscrolled.
-   */
-  void stopApzAutoscroll(in nsViewID aScrollId, in uint32_t aPresShellId);
 
   /**
    * Finish the recording being made by the current tab. If aInvalidateReason is

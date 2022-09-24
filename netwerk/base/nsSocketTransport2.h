@@ -345,11 +345,13 @@ class nsSocketTransport final : public nsASocketHandler,
   bool RecoverFromError();
 
   void OnMsgInputPending() {
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
     if (mState == STATE_TRANSFERRING) {
       mPollFlags |= (PR_POLL_READ | PR_POLL_EXCEPT);
     }
   }
   void OnMsgOutputPending() {
+    MOZ_ASSERT(OnSocketThread(), "not on socket thread");
     if (mState == STATE_TRANSFERRING) {
       mPollFlags |= (PR_POLL_WRITE | PR_POLL_EXCEPT);
     }
@@ -365,7 +367,7 @@ class nsSocketTransport final : public nsASocketHandler,
   // the exception of some specific methods (XXX).
 
   // protects members in this section.
-  Mutex mLock{"nsSocketTransport.mLock"};
+  Mutex mLock MOZ_UNANNOTATED{"nsSocketTransport.mLock"};
   LockedPRFileDesc mFD;
   nsrefcnt mFDref{0};        // mFD is closed when mFDref goes to zero.
   bool mFDconnected{false};  // mFD is available to consumer when TRUE.

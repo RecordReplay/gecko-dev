@@ -9,8 +9,7 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {})
-    .ConsoleAPI;
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
   let consoleOptions = {
     // tip: set maxLogLevel to "debug" and use log.debug() to create detailed
     // messages during development. See LOG_LEVELS in Console.jsm for details.
@@ -20,7 +19,6 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   };
   return new ConsoleAPI(consoleOptions);
 });
-ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 ChromeUtils.defineModuleGetter(
   this,
   "Services",
@@ -54,7 +52,7 @@ function getQuarantineDatabasePath() {
  * @throws NS_ERROR_UNEXPECTED if there is a quarantine GUID, but it is malformed.
  */
 async function getQuarantineAttributes(path) {
-  let bytes = await OS.File.macGetXAttr(path, "com.apple.quarantine");
+  let bytes = await IOUtils.getMacXAttr(path, "com.apple.quarantine");
   if (!bytes) {
     throw new Components.Exception(
       `No macOS quarantine xattrs found for ${path}`,

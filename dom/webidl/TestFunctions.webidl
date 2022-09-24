@@ -7,11 +7,17 @@
 // A dumping ground for random testing functions
 
 callback PromiseReturner = Promise<any>();
+callback PromiseReturner2 = Promise<any>(any arg, DOMString arg2);
 
 [Pref="dom.expose_test_interfaces",
  Exposed=Window]
 interface WrapperCachedNonISupportsTestInterface {
   [Pref="dom.webidl.test1"] constructor();
+};
+
+[Trial="TestTrial", Exposed=*]
+interface TestTrialInterface {
+  constructor();
 };
 
 // The type of string C++ sees.

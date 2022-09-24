@@ -17,9 +17,6 @@
 #include "nsIObserverService.h"
 #include "nsIThreadManager.h"
 #include "nsThreadPool.h"
-#ifdef XP_WIN
-#  include "ThreadPoolCOMListener.h"
-#endif
 
 namespace mozilla {
 
@@ -88,7 +85,7 @@ bool SharedThreadPool::IsEmpty() {
 /* static */
 void SharedThreadPool::SpinUntilEmpty() {
   MOZ_ASSERT(NS_IsMainThread());
-  SpinEventLoopUntil([]() -> bool {
+  SpinEventLoopUntil("SharedThreadPool::SpinUntilEmpty"_ns, []() -> bool {
     sMonitor->AssertNotCurrentThreadIn();
     return IsEmpty();
   });
@@ -182,9 +179,7 @@ NS_IMETHODIMP_(MozExternalRefCountType) SharedThreadPool::Release(void) {
 NS_IMPL_QUERY_INTERFACE(SharedThreadPool, nsIThreadPool, nsIEventTarget)
 
 SharedThreadPool::SharedThreadPool(const nsCString& aName, nsIThreadPool* aPool)
-    : mName(aName), mPool(aPool), mRefCnt(0) {
-  mEventTarget = aPool;
-}
+    : mName(aName), mPool(aPool), mRefCnt(0) {}
 
 SharedThreadPool::~SharedThreadPool() = default;
 
@@ -225,13 +220,6 @@ static already_AddRefed<nsIThreadPool> CreateThreadPool(
 
   rv = pool->SetThreadStackSize(nsIThreadManager::kThreadPoolStackSize);
   NS_ENSURE_SUCCESS(rv, nullptr);
-
-#ifdef XP_WIN
-  // Ensure MSCOM is initialized on the thread pools threads.
-  nsCOMPtr<nsIThreadPoolListener> listener = new MSCOMInitThreadPoolListener();
-  rv = pool->SetListener(listener);
-  NS_ENSURE_SUCCESS(rv, nullptr);
-#endif
 
   return pool.forget();
 }

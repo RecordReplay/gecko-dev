@@ -6,10 +6,6 @@
 
 SPHINX_TREES["/toolkit/components/glean"] = "docs"
 
-PYTHON_UNITTEST_MANIFESTS += [
-    "pytest/python.ini",
-]
-
 # Needed so that we can include IPC things.
 include("/ipc/chromium/chromium-config.mozbuild")
 
@@ -35,19 +31,24 @@ EXPORTS.mozilla.glean.bindings += [
     "bindings/GleanPings.h",
     "bindings/MetricTypes.h",
     "bindings/private/Boolean.h",
+    "bindings/private/Common.h",
     "bindings/private/Counter.h",
     "bindings/private/CustomDistribution.h",
     "bindings/private/Datetime.h",
+    "bindings/private/Denominator.h",
     "bindings/private/DistributionData.h",
     "bindings/private/Event.h",
     "bindings/private/Labeled.h",
     "bindings/private/MemoryDistribution.h",
+    "bindings/private/Numerator.h",
     "bindings/private/Ping.h",
     "bindings/private/Quantity.h",
+    "bindings/private/Rate.h",
     "bindings/private/String.h",
     "bindings/private/StringList.h",
     "bindings/private/Timespan.h",
     "bindings/private/TimingDistribution.h",
+    "bindings/private/Url.h",
     "bindings/private/Uuid.h",
 ]
 
@@ -67,28 +68,27 @@ UNIFIED_SOURCES += [
     "bindings/private/Counter.cpp",
     "bindings/private/CustomDistribution.cpp",
     "bindings/private/Datetime.cpp",
+    "bindings/private/Denominator.cpp",
     "bindings/private/Event.cpp",
     "bindings/private/Labeled.cpp",
     "bindings/private/MemoryDistribution.cpp",
+    "bindings/private/Numerator.cpp",
     "bindings/private/Ping.cpp",
     "bindings/private/Quantity.cpp",
+    "bindings/private/Rate.cpp",
     "bindings/private/String.cpp",
     "bindings/private/StringList.cpp",
     "bindings/private/Timespan.cpp",
     "bindings/private/TimingDistribution.cpp",
+    "bindings/private/Url.cpp",
     "bindings/private/Uuid.cpp",
     "ipc/FOGIPC.cpp",
+    "ipc/Support.cpp",
 ]
 
 SOURCES += [
     "!EventExtraGIFFTMaps.cpp",
 ]
-
-TEST_DIRS += [
-    "gtest",
-]
-
-XPCSHELL_TESTS_MANIFESTS += ["xpcshell/xpcshell.ini"]
 
 # Provides us the list of dependent metrics|pings.yaml.
 include("metrics_index.py")
@@ -96,6 +96,7 @@ include("metrics_index.py")
 # The yamls arrays are relative to topsrcdir, so we need to transform:
 metrics_yamls = ["../../../" + x for x in metrics_yamls]
 pings_yamls = ["../../../" + x for x in pings_yamls]
+tags_yamls = ["../../../" + x for x in tags_yamls]
 # If you change the length of this deps list, update DEPS_LEN in run_glean_parser.py
 deps = [
     "metrics_index.py",
@@ -119,7 +120,7 @@ GeneratedFile(
     "api/src/metrics.rs",
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -127,7 +128,7 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="cpp_metrics",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -135,14 +136,14 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="js_metrics",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 GeneratedFile(
     "api/src/pings.rs",
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + pings_yamls,
+    inputs=deps + pings_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -150,7 +151,7 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="cpp_metrics",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + pings_yamls,
+    inputs=deps + pings_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -158,7 +159,7 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="js_metrics",
     flags=[CONFIG["MOZ_APP_VERSION"]],
-    inputs=deps + pings_yamls,
+    inputs=deps + pings_yamls + tags_yamls,
 )
 
 # Glean Interface For Firefox Telemetry Maps from Glean MetricId to Telemetry ProbeId
@@ -168,7 +169,7 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="gifft_map",
     flags=[CONFIG["MOZ_APP_VERSION"], "Event"],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -176,7 +177,7 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="gifft_map",
     flags=[CONFIG["MOZ_APP_VERSION"], "Histogram"],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 GeneratedFile(
@@ -184,10 +185,11 @@ GeneratedFile(
     script="build_scripts/glean_parser_ext/run_glean_parser.py",
     entry_point="gifft_map",
     flags=[CONFIG["MOZ_APP_VERSION"], "Scalar"],
-    inputs=deps + metrics_yamls,
+    inputs=deps + metrics_yamls + tags_yamls,
 )
 
 DIRS += [
+    "tests",  # Must be in DIRS, not TEST_DIRS or python-test won't find it.
     "xpcom",
 ]
 
@@ -196,3 +198,5 @@ with Files("docs/**"):
 
 with Files("**"):
     BUG_COMPONENT = ("Toolkit", "Telemetry")
+
+REQUIRES_UNIFIED_BUILD = True

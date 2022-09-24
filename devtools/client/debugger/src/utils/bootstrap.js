@@ -64,13 +64,20 @@ export function teardownWorkers() {
   search.stop();
 }
 
-export function bootstrapApp(store, panel) {
+/**
+ * Create and mount the root App component.
+ *
+ * @param {ReduxStore} store
+ * @param {ReduxStore} toolboxStore
+ * @param {Object} appComponentAttributes
+ * @param {Array} appComponentAttributes.fluentBundles
+ * @param {Document} appComponentAttributes.toolboxDoc
+ */
+export function bootstrapApp(store, toolboxStore, appComponentAttributes = {}) {
   const mount = getMountElement();
   if (!mount) {
     return;
   }
-
-  const toolboxDoc = panel.panelWin.parent.document;
 
   ReactDOM.render(
     React.createElement(
@@ -78,8 +85,8 @@ export function bootstrapApp(store, panel) {
       { store },
       React.createElement(
         ToolboxProvider,
-        { store: panel.getToolboxStore() },
-        React.createElement(App, { toolboxDoc })
+        { store: toolboxStore },
+        React.createElement(App, appComponentAttributes)
       )
     ),
     mount
@@ -129,7 +136,7 @@ function updatePrefs(state, oldState) {
     asyncStore.xhrBreakpoints = selectors.getXHRBreakpoints(state);
   }
 
-  if (hasChanged(selectors.getBlackBoxList)) {
-    asyncStore.tabsBlackBoxed = selectors.getBlackBoxList(state);
+  if (hasChanged(selectors.getBlackBoxRanges)) {
+    asyncStore.blackboxedRanges = selectors.getBlackBoxRanges(state);
   }
 }

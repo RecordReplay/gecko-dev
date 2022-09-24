@@ -7,8 +7,6 @@
 
 #include "nsIAccessibleTypes.h"
 
-#include "nsIBaseWindow.h"
-#include "nsIDocShellTreeOwner.h"
 #include "mozilla/dom/Document.h"
 #include "nsRange.h"
 #include "nsXULElement.h"
@@ -31,7 +29,9 @@
 #include "nsComponentManagerUtils.h"
 
 #include "XULTreeElement.h"
+#include "nsIContentInlines.h"
 #include "nsTreeColumns.h"
+#include "mozilla/dom/DocumentInlines.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLLabelElement.h"
 #include "mozilla/dom/MouseEventBinding.h"
@@ -253,12 +253,12 @@ nsresult nsCoreUtils::ScrollSubstringTo(nsIFrame* aFrame, nsRange* aRange,
 
 void nsCoreUtils::ScrollFrameToPoint(nsIFrame* aScrollableFrame,
                                      nsIFrame* aFrame,
-                                     const nsIntPoint& aPoint) {
+                                     const LayoutDeviceIntPoint& aPoint) {
   nsIScrollableFrame* scrollableFrame = do_QueryFrame(aScrollableFrame);
   if (!scrollableFrame) return;
 
-  nsPoint point =
-      ToAppUnits(aPoint, aFrame->PresContext()->AppUnitsPerDevPixel());
+  nsPoint point = LayoutDeviceIntPoint::ToAppUnits(
+      aPoint, aFrame->PresContext()->AppUnitsPerDevPixel());
   nsRect frameRect = aFrame->GetScreenRectInAppUnits();
   nsPoint deltaPoint = point - frameRect.TopLeft();
 
@@ -320,23 +320,6 @@ void nsCoreUtils::ConvertScrollTypeToPercents(uint32_t aScrollType,
   *aHorizontal = ScrollAxis(whereX, whenX);
 }
 
-nsIntPoint nsCoreUtils::GetScreenCoordsForWindow(nsINode* aNode) {
-  nsIntPoint coords(0, 0);
-  nsCOMPtr<nsIDocShellTreeItem> treeItem(GetDocShellFor(aNode));
-  if (!treeItem) return coords;
-
-  nsCOMPtr<nsIDocShellTreeOwner> treeOwner;
-  treeItem->GetTreeOwner(getter_AddRefs(treeOwner));
-  if (!treeOwner) return coords;
-
-  nsCOMPtr<nsIBaseWindow> baseWindow = do_QueryInterface(treeOwner);
-  if (baseWindow) {
-    baseWindow->GetPosition(&coords.x, &coords.y);  // in device pixels
-  }
-
-  return coords;
-}
-
 already_AddRefed<nsIDocShell> nsCoreUtils::GetDocShellFor(nsINode* aNode) {
   if (!aNode) return nullptr;
 
@@ -352,13 +335,6 @@ bool nsCoreUtils::IsRootDocument(Document* aDocument) {
   docShellTreeItem->GetInProcessParent(getter_AddRefs(parentTreeItem));
 
   return !parentTreeItem;
-}
-
-bool nsCoreUtils::IsContentDocument(Document* aDocument) {
-  nsCOMPtr<nsIDocShellTreeItem> docShellTreeItem = aDocument->GetDocShell();
-  NS_ASSERTION(docShellTreeItem, "No document shell tree item for document!");
-
-  return (docShellTreeItem->ItemType() == nsIDocShellTreeItem::typeContent);
 }
 
 bool nsCoreUtils::IsTopLevelContentDocInProcess(Document* aDocumentNode) {
@@ -585,8 +561,26 @@ void nsCoreUtils::DispatchAccEvent(RefPtr<nsIAccessibleEvent> event) {
 }
 
 bool nsCoreUtils::IsDisplayContents(nsIContent* aContent) {
-  return aContent && aContent->IsElement() &&
-         aContent->AsElement()->IsDisplayContents();
+  auto* element = Element::FromNodeOrNull(aContent);
+  return element && element->IsDisplayContents();
+}
+
+bool nsCoreUtils::CanCreateAccessibleWithoutFrame(nsIContent* aContent) {
+  auto* element = Element::FromNodeOrNull(aContent);
+  if (!element) {
+    return false;
+  }
+  if (!element->HasServoData() || Servo_Element_IsDisplayNone(element)) {
+    // Out of the flat tree or in a display: none subtree.
+    return false;
+  }
+  if (element->IsDisplayContents()) {
+    return true;
+  }
+  // We don't have a frame, but we're not display: contents either.
+  // For now, only create accessibles for <option>/<optgroup> as our combobox
+  // select code depends on it.
+  return element->IsAnyOfHTMLElements(nsGkAtoms::option, nsGkAtoms::optgroup);
 }
 
 bool nsCoreUtils::IsDocumentVisibleConsideringInProcessAncestors(

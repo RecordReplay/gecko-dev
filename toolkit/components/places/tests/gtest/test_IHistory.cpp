@@ -60,7 +60,8 @@ class VisitURIObserver final : public nsIObserver {
   }
 
   void WaitForNotification() {
-    SpinEventLoopUntil([&]() { return mVisits >= mExpectedVisits; });
+    SpinEventLoopUntil("places:VisitURIObserver::WaitForNotification"_ns,
+                       [&]() { return mVisits >= mExpectedVisits; });
   }
 
   NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
@@ -165,7 +166,8 @@ void test_unvisited_does_not_notify_part2() {
   using namespace test_unvisited_does_not_notify;
 
   if (StaticPrefs::layout_css_notify_of_unvisited()) {
-    SpinEventLoopUntil([&]() { return testLink->GotNotified(); });
+    SpinEventLoopUntil("places:test_unvisited_does_not_notify_part2"_ns,
+                       [&]() { return testLink->GotNotified(); });
   }
 
   // We would have had a failure at this point had the content node been told it
@@ -237,7 +239,8 @@ void test_new_visit_notifies_waiting_Link() {
   history->RegisterVisitedCallback(testURI, link);
 
   if (StaticPrefs::layout_css_notify_of_unvisited()) {
-    SpinEventLoopUntil([&]() { return link->GotNotified(); });
+    SpinEventLoopUntil("places:test_new_visit_notifies_waiting_Link"_ns,
+                       [&]() { return link->GotNotified(); });
   }
 
   link->AwaitNewNotification(expect_visit);
@@ -412,29 +415,6 @@ void test_new_visit_adds_place_guid() {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
-//// IPC-only Tests
-
-void test_two_null_links_same_uri() {
-  // Tests that we do not crash when we have had two nullptr Links passed to
-  // RegisterVisitedCallback and then the visit occurs (bug 607469).  This only
-  // happens in IPC builds.
-  nsCOMPtr<nsIURI> testURI = new_test_uri();
-
-  nsCOMPtr<IHistory> history = do_get_IHistory();
-  history->RegisterVisitedCallback(testURI, nullptr);
-  history->RegisterVisitedCallback(testURI, nullptr);
-
-  nsresult rv = history->VisitURI(nullptr, testURI, nullptr,
-                                  mozilla::IHistory::TOP_LEVEL);
-  do_check_success(rv);
-
-  RefPtr<VisitURIObserver> finisher = new VisitURIObserver();
-  finisher->WaitForNotification();
-
-  run_next_test();
-}
-
-////////////////////////////////////////////////////////////////////////////////
 //// Test Harness
 
 /**
@@ -457,9 +437,6 @@ Test gTests[] = {
     PTEST(test_visituri_transition_typed),
     PTEST(test_visituri_transition_embed),
     PTEST(test_new_visit_adds_place_guid),
-
-    // The rest of these tests are tests that are only run in IPC builds.
-    PTEST(test_two_null_links_same_uri),
 };
 
 #define TEST_NAME "IHistory"

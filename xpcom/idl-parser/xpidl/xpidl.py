@@ -186,10 +186,10 @@ builtinNames = [
     Builtin("octet", "uint8_t", "u8", False, True),
     Builtin("short", "int16_t", "i16", True, True),
     Builtin("long", "int32_t", "i32", True, True),
-    Builtin("long long", "int64_t", "i64", True, False),
+    Builtin("long long", "int64_t", "i64", True, True),
     Builtin("unsigned short", "uint16_t", "u16", False, True),
     Builtin("unsigned long", "uint32_t", "u32", False, True),
-    Builtin("unsigned long long", "uint64_t", "u64", False, False),
+    Builtin("unsigned long long", "uint64_t", "u64", False, True),
     Builtin("float", "float", "libc::c_float", True, False),
     Builtin("double", "double", "libc::c_double", True, False),
     Builtin("char", "char", "libc::c_char", True, False),
@@ -527,7 +527,7 @@ class Native(object):
         "utf8string": ("const nsACString&", "nsACString&", "nsCString"),
         "cstring": ("const nsACString&", "nsACString&", "nsCString"),
         "astring": ("const nsAString&", "nsAString&", "nsString"),
-        "jsval": ("JS::HandleValue", "JS::MutableHandleValue", "JS::Value"),
+        "jsval": ("JS::Handle<JS::Value>", "JS::MutableHandle<JS::Value>", "JS::Value"),
         "promise": "::mozilla::dom::Promise",
     }
 
@@ -849,7 +849,7 @@ class Interface(object):
         return False
 
     def countEntries(self):
-        """ Returns the number of entries in the vtable for this interface. """
+        """Returns the number of entries in the vtable for this interface."""
         total = sum(member.count() for member in self.members)
         if self.base is not None:
             realbase = self.idl.getName(TypeId(self.base), self.location)
@@ -953,6 +953,15 @@ class ConstMember(object):
         self.basetype = basetype
         # Value is a lambda. Resolve it.
         self.value = self.valueFn(self.iface)
+
+        min_val = -(2 ** 31) if basetype.signed else 0
+        max_val = 2 ** 31 - 1 if basetype.signed else 2 ** 32 - 1
+        if self.value < min_val or self.value > max_val:
+            raise IDLError(
+                "xpidl constants must fit within %s"
+                % ("int32_t" if basetype.signed else "uint32_t"),
+                self.location,
+            )
 
     def getValue(self):
         return self.value
@@ -1638,7 +1647,7 @@ class IDLParser(object):
         p[0] = IDL(p[1])
 
     def p_productions_start(self, p):
-        """productions : """
+        """productions :"""
         p[0] = []
 
     def p_productions_cdata(self, p):
@@ -1678,7 +1687,7 @@ class IDLParser(object):
         )
 
     def p_afternativeid(self, p):
-        """afternativeid : """
+        """afternativeid :"""
         # this is a place marker: we switch the lexer into literal identifier
         # mode here, to slurp up everything until the closeparen
         self.lexer.begin("nativeid")
@@ -1765,7 +1774,7 @@ class IDLParser(object):
             p[0] = p[2]
 
     def p_members_start(self, p):
-        """members : """
+        """members :"""
         p[0] = []
 
     def p_members_continue(self, p):
@@ -1778,7 +1787,7 @@ class IDLParser(object):
         p[0] = CDATA(p[1], self.getLocation(p, 1))
 
     def p_member_const(self, p):
-        """member : CONST type IDENTIFIER '=' number ';' """
+        """member : CONST type IDENTIFIER '=' number ';'"""
         p[0] = ConstMember(
             type=p[2],
             name=p[3],
@@ -1854,7 +1863,7 @@ class IDLParser(object):
         )
 
     def p_variants_start(self, p):
-        """variants : """
+        """variants :"""
         p[0] = []
 
     def p_variants_single(self, p):

@@ -4,6 +4,7 @@
 
 import React from "react";
 import ReactDOM from "react-dom";
+import { AboutWelcomeUtils } from "../lib/aboutwelcome-utils";
 import { MultiStageAboutWelcome } from "./components/MultiStageAboutWelcome";
 import { ReturnToAMO } from "./components/ReturnToAMO";
 
@@ -22,30 +23,17 @@ class AboutWelcome extends React.PureComponent {
     if (!this.props.skipFxA) {
       this.fetchFxAFlowUri();
     }
-
-    // Rely on shared proton in-content styling for consistency.
-    if (this.props.design === "proton") {
-      const sheet = document.head.appendChild(document.createElement("link"));
-      sheet.rel = "stylesheet";
-      sheet.href = "chrome://global/skin/in-content/common.css";
-    }
-
     // Record impression with performance data after allowing the page to load
     const recordImpression = domState => {
       const { domComplete, domInteractive } = performance
         .getEntriesByType("navigation")
         .pop();
-      window.AWSendEventTelemetry({
-        event: "IMPRESSION",
-        event_context: {
-          domComplete,
-          domInteractive,
-          mountStart: performance.getEntriesByName("mount").pop().startTime,
-          domState,
-          source: this.props.UTMTerm,
-          page: "about:welcome",
-        },
-        message_id: this.props.messageId,
+      AboutWelcomeUtils.sendImpressionTelemetry(this.props.messageId, {
+        domComplete,
+        domInteractive,
+        mountStart: performance.getEntriesByName("mount").pop().startTime,
+        domState,
+        source: this.props.UTMTerm,
       });
     };
     if (document.readyState === "complete") {
@@ -70,22 +58,24 @@ class AboutWelcome extends React.PureComponent {
       return (
         <ReturnToAMO
           message_id={props.messageId}
+          type={props.type}
           name={props.name}
           url={props.url}
           iconURL={props.iconURL}
+          themeScreenshots={props.screenshots}
+          metricsFlowUri={this.state.metricsFlowUri}
         />
       );
     }
-
     return (
       <MultiStageAboutWelcome
+        message_id={props.messageId}
         screens={props.screens}
         metricsFlowUri={this.state.metricsFlowUri}
-        message_id={props.messageId}
         utm_term={props.UTMTerm}
-        design={props.design}
         transitions={props.transitions}
-        background_url={props.background_url}
+        backdrop={props.backdrop}
+        appAndSystemLocaleInfo={props.appAndSystemLocaleInfo}
       />
     );
   }
@@ -95,8 +85,8 @@ class AboutWelcome extends React.PureComponent {
 function ComputeTelemetryInfo(welcomeContent, experimentId, branchId) {
   let messageId =
     welcomeContent.template === "return_to_amo"
-      ? "RTAMO_DEFAULT_WELCOME"
-      : "DEFAULT_ABOUTWELCOME";
+      ? `RTAMO_DEFAULT_WELCOME_${welcomeContent.type.toUpperCase()}`
+      : "DEFAULT_ID";
   let UTMTerm = "default";
 
   if (welcomeContent.id) {

@@ -18,14 +18,6 @@
       "background/startBackground.js"
     ]
   },
-  "commands": {
-    "take-screenshot": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+S"
-      },
-      "description": "Open the Firefox Screenshots UI"
-    }
-  },
   "content_scripts": [
     {
       "matches": ["https://screenshots.firefox.com/*"],
@@ -38,14 +30,7 @@
     }
   ],
   "web_accessible_resources": [
-    "blank.html",
-    "icons/cancel.svg",
-    "icons/download.svg",
-    "icons/copy.svg",
-    "icons/icon-256.png",
-    "icons/menu-fullpage.svg",
-    "icons/menu-visible.svg",
-    "icons/icon-welcome-face-without-eyes.svg"
+    "blank.html"
   ],
   "permissions": [
     "activeTab",

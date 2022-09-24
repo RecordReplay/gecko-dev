@@ -39,6 +39,7 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/TabContext.h"
 #include "mozilla/dom/BrowserParent.h"
+#include "mozilla/dom/MaybeDiscarded.h"
 #include "mozilla/dom/network/TCPSocketParent.h"
 #include "mozilla/dom/network/TCPServerSocketParent.h"
 #include "mozilla/dom/network/UDPSocketParent.h"
@@ -55,6 +56,7 @@
 #include "nsISpeculativeConnect.h"
 #include "nsHttpHandler.h"
 #include "nsNetUtil.h"
+#include "nsIOService.h"
 
 using IPC::SerializedLoadContext;
 using mozilla::OriginAttributes;
@@ -268,7 +270,7 @@ bool NeckoParent::DeallocPAltDataOutputStreamParent(
 
 already_AddRefed<PDocumentChannelParent>
 NeckoParent::AllocPDocumentChannelParent(
-    const MaybeDiscarded<BrowsingContext>& aContext,
+    const dom::MaybeDiscarded<dom::BrowsingContext>& aContext,
     const DocumentChannelCreationArgs& args) {
   RefPtr<DocumentChannelParent> p = new DocumentChannelParent();
   return p.forget();
@@ -276,7 +278,7 @@ NeckoParent::AllocPDocumentChannelParent(
 
 mozilla::ipc::IPCResult NeckoParent::RecvPDocumentChannelConstructor(
     PDocumentChannelParent* aActor,
-    const MaybeDiscarded<BrowsingContext>& aContext,
+    const dom::MaybeDiscarded<dom::BrowsingContext>& aContext,
     const DocumentChannelCreationArgs& aArgs) {
   DocumentChannelParent* p = static_cast<DocumentChannelParent*>(aActor);
 
@@ -504,8 +506,9 @@ bool NeckoParent::DeallocPUDPSocketParent(PUDPSocketParent* actor) {
 }
 
 already_AddRefed<PDNSRequestParent> NeckoParent::AllocPDNSRequestParent(
-    const nsCString& aHost, const nsCString& aTrrServer, const uint16_t& aType,
-    const OriginAttributes& aOriginAttributes, const uint32_t& aFlags) {
+    const nsCString& aHost, const nsCString& aTrrServer, const int32_t& aPort,
+    const uint16_t& aType, const OriginAttributes& aOriginAttributes,
+    const uint32_t& aFlags) {
   RefPtr<DNSRequestHandler> handler = new DNSRequestHandler();
   RefPtr<DNSRequestParent> actor = new DNSRequestParent(handler);
   return actor.forget();
@@ -513,12 +516,13 @@ already_AddRefed<PDNSRequestParent> NeckoParent::AllocPDNSRequestParent(
 
 mozilla::ipc::IPCResult NeckoParent::RecvPDNSRequestConstructor(
     PDNSRequestParent* aActor, const nsCString& aHost,
-    const nsCString& aTrrServer, const uint16_t& aType,
+    const nsCString& aTrrServer, const int32_t& aPort, const uint16_t& aType,
     const OriginAttributes& aOriginAttributes, const uint32_t& aFlags) {
   RefPtr<DNSRequestParent> actor = static_cast<DNSRequestParent*>(aActor);
   RefPtr<DNSRequestHandler> handler =
       actor->GetDNSRequest()->AsDNSRequestHandler();
-  handler->DoAsyncResolve(aHost, aTrrServer, aType, aOriginAttributes, aFlags);
+  handler->DoAsyncResolve(aHost, aTrrServer, aPort, aType, aOriginAttributes,
+                          aFlags);
   return IPC_OK();
 }
 
@@ -542,7 +546,7 @@ mozilla::ipc::IPCResult NeckoParent::RecvSpeculativeConnect(
 mozilla::ipc::IPCResult NeckoParent::RecvHTMLDNSPrefetch(
     const nsString& hostname, const bool& isHttps,
     const OriginAttributes& aOriginAttributes, const uint32_t& flags) {
-  HTMLDNSPrefetch::Prefetch(hostname, isHttps, aOriginAttributes, flags);
+  dom::HTMLDNSPrefetch::Prefetch(hostname, isHttps, aOriginAttributes, flags);
   return IPC_OK();
 }
 
@@ -550,8 +554,8 @@ mozilla::ipc::IPCResult NeckoParent::RecvCancelHTMLDNSPrefetch(
     const nsString& hostname, const bool& isHttps,
     const OriginAttributes& aOriginAttributes, const uint32_t& flags,
     const nsresult& reason) {
-  HTMLDNSPrefetch::CancelPrefetch(hostname, isHttps, aOriginAttributes, flags,
-                                  reason);
+  dom::HTMLDNSPrefetch::CancelPrefetch(hostname, isHttps, aOriginAttributes,
+                                       flags, reason);
   return IPC_OK();
 }
 
@@ -763,7 +767,12 @@ mozilla::ipc::IPCResult NeckoParent::RecvInitSocketProcessBridge(
 
   // Initing the socket process bridge must be async here in order to
   // wait for the socket process launch before executing.
-  auto task = [self = this, resolver = std::move(aResolver)]() {
+  auto task = [self = RefPtr{this}, resolver = std::move(aResolver)]() {
+    // The content process might be already destroyed.
+    if (!self->CanSend()) {
+      return;
+    }
+
     Endpoint<PSocketProcessBridgeChild> invalidEndpoint;
     if (NS_WARN_IF(self->mSocketProcessBridgeInited)) {
       resolver(std::move(invalidEndpoint));

@@ -6,17 +6,19 @@
 
 #include <math.h>
 
+#include "EditAction.h"
 #include "HTMLEditorEventListener.h"
 #include "HTMLEditUtils.h"
-#include "mozilla/EditAction.h"
+
 #include "mozilla/EventListenerManager.h"
+#include "mozilla/mozalloc.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPrefs_editor.h"
 #include "mozilla/dom/AncestorIterator.h"
 #include "mozilla/dom/Selection.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/EventTarget.h"
-#include "mozilla/mozalloc.h"
 #include "nsAString.h"
 #include "nsAlgorithm.h"
 #include "nsCOMPtr.h"
@@ -489,7 +491,7 @@ nsresult HTMLEditor::StartMoving() {
   return NS_OK;  // XXX Looks like nobody refers this result
 }
 
-void HTMLEditor::SnapToGrid(int32_t& newX, int32_t& newY) {
+void HTMLEditor::SnapToGrid(int32_t& newX, int32_t& newY) const {
   if (mSnapToGridEnabled && mGridSize) {
     newX = (int32_t)floor(((float)newX / (float)mGridSize) + 0.5f) * mGridSize;
     newY = (int32_t)floor(((float)newY / (float)mGridSize) + 0.5f) * mGridSize;
@@ -565,8 +567,8 @@ nsresult HTMLEditor::SetFinalPosition(int32_t aX, int32_t aY) {
   y.AppendInt(newY);
 
   // we want one transaction only from a user's point of view
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
 
   if (NS_WARN_IF(!mAbsolutelyPositionedObject)) {
     return NS_ERROR_FAILURE;
@@ -611,9 +613,7 @@ nsresult HTMLEditor::SetFinalPosition(int32_t aX, int32_t aY) {
 
 void HTMLEditor::AddPositioningOffset(int32_t& aX, int32_t& aY) {
   // Get the positioning offset
-  int32_t positioningOffset =
-      Preferences::GetInt("editor.positioning.offset", 0);
-
+  const int32_t positioningOffset = StaticPrefs::editor_positioning_offset();
   aX += positioningOffset;
   aY += positioningOffset;
 }
@@ -647,8 +647,8 @@ nsresult HTMLEditor::SetPositionToAbsoluteOrStatic(Element& aElement,
 nsresult HTMLEditor::SetPositionToAbsolute(Element& aElement) {
   MOZ_ASSERT(IsEditActionDataAvailable());
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
 
   int32_t x, y;
   DebugOnly<nsresult> rvIgnored = GetElementOrigin(aElement, x, y);
@@ -692,14 +692,20 @@ nsresult HTMLEditor::SetPositionToAbsolute(Element& aElement) {
   if (parentNode->GetChildCount() != 1) {
     return NS_OK;
   }
-  Result<RefPtr<Element>, nsresult> resultOfInsertingBRElement =
-      InsertBRElementWithTransaction(EditorDOMPoint(parentNode, 0));
-  if (resultOfInsertingBRElement.isErr()) {
-    NS_WARNING("HTMLEditor::InsertBRElementWithTransaction() failed");
-    return resultOfInsertingBRElement.unwrapErr();
+  CreateElementResult insertBRElementResult =
+      InsertBRElement(WithTransaction::Yes, EditorDOMPoint(parentNode, 0u));
+  if (insertBRElementResult.isErr()) {
+    NS_WARNING("HTMLEditor::InsertBRElement(WithTransaction::Yes) failed");
+    return insertBRElementResult.unwrapErr();
   }
-  MOZ_ASSERT(resultOfInsertingBRElement.inspect());
-  return NS_OK;
+  // XXX Is this intentional selection change?
+  nsresult rv = insertBRElementResult.SuggestCaretPointTo(
+      *this, {SuggestCaret::OnlyIfHasSuggestion,
+              SuggestCaret::OnlyIfTransactionsAllowedToDoIt});
+  NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
+                       "CreateElementResult::SuggestCaretPointTo() failed");
+  MOZ_ASSERT(insertBRElementResult.GetNewNode());
+  return rv;
 }
 
 nsresult HTMLEditor::SetPositionToStatic(Element& aElement) {
@@ -708,8 +714,8 @@ nsresult HTMLEditor::SetPositionToStatic(Element& aElement) {
     return NS_ERROR_INVALID_ARG;
   }
 
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
 
   nsresult rv;
   // MOZ_KnownLive(*styledElement): aElement's lifetime must be guarantted
@@ -823,12 +829,19 @@ nsresult HTMLEditor::SetPositionToStatic(Element& aElement) {
   }
   // MOZ_KnownLive(*styledElement): aElement's lifetime must be guarantted
   // by the caller because of MOZ_CAN_RUN_SCRIPT method.
-  rv = RemoveContainerWithTransaction(MOZ_KnownLive(*styledElement));
-  if (NS_WARN_IF(Destroyed())) {
-    return NS_ERROR_EDITOR_DESTROYED;
+  const Result<EditorDOMPoint, nsresult> unwrapStyledElementResult =
+      RemoveContainerWithTransaction(MOZ_KnownLive(*styledElement));
+  if (MOZ_UNLIKELY(unwrapStyledElementResult.isErr())) {
+    NS_WARNING("HTMLEditor::RemoveContainerWithTransaction() failed");
+    return unwrapStyledElementResult.inspectErr();
   }
+  const EditorDOMPoint& pointToPutCaret = unwrapStyledElementResult.inspect();
+  if (!AllowsTransactionsToChangeSelection() || !pointToPutCaret.IsSet()) {
+    return NS_OK;
+  }
+  rv = CollapseSelectionTo(pointToPutCaret);
   NS_WARNING_ASSERTION(NS_SUCCEEDED(rv),
-                       "HTMLEditor::RemoveContainerWithTransaction() failed");
+                       "EditorBase::CollapseSelectionTo() failed");
   return rv;
 }
 
@@ -854,8 +867,8 @@ NS_IMETHODIMP HTMLEditor::GetGridSize(uint32_t* aSize) {
 
 nsresult HTMLEditor::SetTopAndLeftWithTransaction(
     nsStyledElement& aStyledElement, int32_t aX, int32_t aY) {
-  AutoPlaceholderBatch treatAsOneTransaction(*this,
-                                             ScrollSelectionIntoView::Yes);
+  AutoPlaceholderBatch treatAsOneTransaction(
+      *this, ScrollSelectionIntoView::Yes, __FUNCTION__);
   nsresult rv;
   rv = mCSSEditUtils->SetCSSPropertyPixelsWithTransaction(aStyledElement,
                                                           *nsGkAtoms::left, aX);
@@ -924,8 +937,8 @@ nsresult HTMLEditor::GetTemporaryStyleForFocusedPositionedElement(
     return NS_OK;
   }
 
-  RefPtr<ComputedStyle> style =
-      nsComputedDOMStyle::GetComputedStyle(&aElement, nullptr);
+  RefPtr<const ComputedStyle> style =
+      nsComputedDOMStyle::GetComputedStyle(&aElement);
   if (NS_WARN_IF(Destroyed())) {
     return NS_ERROR_EDITOR_DESTROYED;
   }

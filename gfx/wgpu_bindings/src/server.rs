@@ -4,14 +4,36 @@
 
 use crate::{
     cow_label, identity::IdentityRecyclerFactory, AdapterInformation, ByteBuf,
-    CommandEncoderAction, DeviceAction, DropAction, QueueWriteAction, RawString,
-    ShaderModuleSource, TextureAction,
+    CommandEncoderAction, DeviceAction, DropAction, QueueWriteAction, RawString, TextureAction,
 };
 
 use wgc::{gfx_select, id};
 
 use std::{error::Error, os::raw::c_char, ptr, slice};
+use std::sync::atomic::{AtomicU32, Ordering};
 
+/// We limit the size of buffer allocations for stability reason.
+/// We can reconsider this limit in the future. Note that some drivers (mesa for example),
+/// have issues when the size of a buffer, mapping or copy command does not fit into a
+/// signed 32 bits integer, so beyond a certain size, large allocations will need some form
+/// of driver allow/blocklist.
+const MAX_BUFFER_SIZE: wgt::BufferAddress = 1 << 30;
+// Mesa has issues with height/depth that don't fit in a 16 bits signed integers.
+const MAX_TEXTURE_EXTENT: u32 = std::i16::MAX as u32;
+
+/// A fixed-capacity, null-terminated error buffer owned by C++.
+///
+/// This type points to space owned by a C++ `mozilla::webgpu::ErrorBuffer`
+/// object, owned by our callers in `WebGPUParent.cpp`. If we catch a
+/// `Result::Err` here, we convert the error to a string, copy as much of that
+/// string as fits into this buffer, and null-terminate it. The caller
+/// determines whether a error occurred by simply checking if there's any text
+/// before the first null byte.
+///
+/// C++ callers of Rust functions that expect one of these structs can create a
+/// `mozilla::webgpu::ErrorBuffer` object, and call its `ToFFI` method to
+/// construct a value of this type, available to C++ as
+/// `mozilla::webgpu::ffi::WGPUErrorBuffer`.
 #[repr(C)]
 pub struct ErrorBuffer {
     string: *mut c_char,
@@ -19,6 +41,16 @@ pub struct ErrorBuffer {
 }
 
 impl ErrorBuffer {
+    /// Fill this buffer with the textual representation of `error`.
+    ///
+    /// If the error message is too long, truncate it as needed. In either case,
+    /// the error message is always terminated by a zero byte.
+    ///
+    /// Note that there is no explicit indication of the message's length, only
+    /// the terminating zero byte. If the textual form of `error` itself
+    /// includes a zero byte (as Rust strings can), then the C++ code receiving
+    /// this error message has no way to distinguish that from the terminating
+    /// zero byte, and will see the message as shorter than it is.
     fn init(&mut self, error: impl Error) {
         use std::fmt::Write;
 
@@ -29,6 +61,10 @@ impl ErrorBuffer {
             e = source.source();
         }
 
+        self.init_str(string);
+    }
+
+    fn init_str(&mut self, string: String) {
         assert_ne!(self.capacity, 0);
         let length = if string.len() >= self.capacity {
             log::warn!(
@@ -63,7 +99,7 @@ pub extern "C" fn wgpu_server_new(factory: IdentityRecyclerFactory) -> *mut Glob
     let global = Global(wgc::hub::Global::new(
         "wgpu",
         factory,
-        wgt::BackendBit::PRIMARY,
+        wgt::Backends::PRIMARY | wgt::Backends::GL,
     ));
     Box::into_raw(Box::new(global))
 }
@@ -123,9 +159,10 @@ pub unsafe extern "C" fn wgpu_server_adapter_pack_info(
     let mut data = Vec::new();
     match self_id {
         Some(id) => {
+            let raw_info = gfx_select!(id => global.adapter_get_info(id)).unwrap();
             let info = AdapterInformation {
                 id,
-                //inner: gfx_select!(self_id => global.adapter_get_info(self_id)).unwrap(),
+                ty: raw_info.device_type,
                 limits: gfx_select!(id => global.adapter_limits(id)).unwrap(),
                 features: gfx_select!(id => global.adapter_features(id)).unwrap(),
             };
@@ -138,6 +175,8 @@ pub unsafe extern "C" fn wgpu_server_adapter_pack_info(
     *byte_buf = ByteBuf::from_vec(data);
 }
 
+static TRACE_IDX: AtomicU32 = AtomicU32::new(0);
+
 #[no_mangle]
 pub unsafe extern "C" fn wgpu_server_adapter_request_device(
     global: &Global,
@@ -147,7 +186,16 @@ pub unsafe extern "C" fn wgpu_server_adapter_request_device(
     mut error_buf: ErrorBuffer,
 ) {
     let desc: wgc::device::DeviceDescriptor = bincode::deserialize(byte_buf.as_slice()).unwrap();
-    let trace_string = std::env::var("WGPU_TRACE").ok();
+    let trace_string = std::env::var("WGPU_TRACE").ok().map(|s| {
+        let idx = TRACE_IDX.fetch_add(1, Ordering::Relaxed);
+        let path = format!("{}/{}/", s, idx);
+
+        if std::fs::create_dir_all(&path).is_err() {
+            log::warn!("Failed to create directory {:?} for wgpu recording.", path);
+        }
+
+        path
+    });
     let trace_path = trace_string
         .as_ref()
         .map(|string| std::path::Path::new(string.as_str()));
@@ -176,6 +224,12 @@ pub extern "C" fn wgpu_server_device_create_buffer(
     new_id: id::BufferId,
     mut error_buf: ErrorBuffer,
 ) {
+    // Don't trust the graphics driver with buffer sizes larger than our conservative max texture size.
+    if desc.size > MAX_BUFFER_SIZE {
+        error_buf.init_str("Out of memory".to_string());
+        return;
+    }
+
     let desc = desc.map_label(cow_label);
     let (_, error) = gfx_select!(self_id => global.device_create_buffer(self_id, &desc, new_id));
     if let Some(err) = error {
@@ -229,29 +283,8 @@ pub extern "C" fn wgpu_server_buffer_drop(global: &Global, self_id: id::BufferId
     gfx_select!(self_id => global.buffer_drop(self_id, false));
 }
 
-trait GlobalExt {
-    fn device_action<B: wgc::hub::GfxBackend>(
-        &self,
-        self_id: id::DeviceId,
-        action: DeviceAction,
-        error_buf: ErrorBuffer,
-    );
-    fn texture_action<B: wgc::hub::GfxBackend>(
-        &self,
-        self_id: id::TextureId,
-        action: TextureAction,
-        error_buf: ErrorBuffer,
-    );
-    fn command_encoder_action<B: wgc::hub::GfxBackend>(
-        &self,
-        self_id: id::CommandEncoderId,
-        action: CommandEncoderAction,
-        error_buf: ErrorBuffer,
-    );
-}
-
-impl GlobalExt for Global {
-    fn device_action<B: wgc::hub::GfxBackend>(
+impl Global {
+    fn device_action<A: wgc::hub::HalApi>(
         &self,
         self_id: id::DeviceId,
         action: DeviceAction,
@@ -259,49 +292,48 @@ impl GlobalExt for Global {
     ) {
         match action {
             DeviceAction::CreateBuffer(id, desc) => {
-                let (_, error) = self.device_create_buffer::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_buffer::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateTexture(id, desc) => {
-                let (_, error) = self.device_create_texture::<B>(self_id, &desc, id);
+                let max = MAX_TEXTURE_EXTENT;
+                if desc.size.width > max || desc.size.height > max || desc.size.depth_or_array_layers > max {
+                    panic!("Allocation error");
+                }
+                let (_, error) = self.device_create_texture::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateSampler(id, desc) => {
-                let (_, error) = self.device_create_sampler::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_sampler::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateBindGroupLayout(id, desc) => {
-                let (_, error) = self.device_create_bind_group_layout::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_bind_group_layout::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreatePipelineLayout(id, desc) => {
-                let (_, error) = self.device_create_pipeline_layout::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_pipeline_layout::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateBindGroup(id, desc) => {
-                let (_, error) = self.device_create_bind_group::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_bind_group::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
-            DeviceAction::CreateShaderModule(id, desc, source) => {
-                let source = match source {
-                    ShaderModuleSource::SpirV(data) => {
-                        wgc::pipeline::ShaderModuleSource::SpirV(data)
-                    }
-                    ShaderModuleSource::Wgsl(data) => wgc::pipeline::ShaderModuleSource::Wgsl(data),
-                };
-                let (_, error) = self.device_create_shader_module::<B>(self_id, &desc, source, id);
+            DeviceAction::CreateShaderModule(id, desc, code) => {
+                let source = wgc::pipeline::ShaderModuleSource::Wgsl(code);
+                let (_, error) = self.device_create_shader_module::<A>(self_id, &desc, source, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
@@ -314,7 +346,7 @@ impl GlobalExt for Global {
                         group_ids: &imp.bind_groups,
                     });
                 let (_, error) =
-                    self.device_create_compute_pipeline::<B>(self_id, &desc, id, implicit_ids);
+                    self.device_create_compute_pipeline::<A>(self_id, &desc, id, implicit_ids);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
@@ -327,27 +359,30 @@ impl GlobalExt for Global {
                         group_ids: &imp.bind_groups,
                     });
                 let (_, error) =
-                    self.device_create_render_pipeline::<B>(self_id, &desc, id, implicit_ids);
+                    self.device_create_render_pipeline::<A>(self_id, &desc, id, implicit_ids);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateRenderBundle(id, encoder, desc) => {
-                let (_, error) = self.render_bundle_encoder_finish::<B>(encoder, &desc, id);
+                let (_, error) = self.render_bundle_encoder_finish::<A>(encoder, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
             DeviceAction::CreateCommandEncoder(id, desc) => {
-                let (_, error) = self.device_create_command_encoder::<B>(self_id, &desc, id);
+                let (_, error) = self.device_create_command_encoder::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
             }
+            DeviceAction::Error(message) => {
+                error_buf.init_str(message);
+            }
         }
     }
 
-    fn texture_action<B: wgc::hub::GfxBackend>(
+    fn texture_action<A: wgc::hub::HalApi>(
         &self,
         self_id: id::TextureId,
         action: TextureAction,
@@ -355,7 +390,7 @@ impl GlobalExt for Global {
     ) {
         match action {
             TextureAction::CreateView(id, desc) => {
-                let (_, error) = self.texture_create_view::<B>(self_id, &desc, id);
+                let (_, error) = self.texture_create_view::<A>(self_id, &desc, id);
                 if let Some(err) = error {
                     error_buf.init(err);
                 }
@@ -363,7 +398,7 @@ impl GlobalExt for Global {
         }
     }
 
-    fn command_encoder_action<B: wgc::hub::GfxBackend>(
+    fn command_encoder_action<A: wgc::hub::HalApi>(
         &self,
         self_id: id::CommandEncoderId,
         action: CommandEncoderAction,
@@ -377,7 +412,7 @@ impl GlobalExt for Global {
                 dst_offset,
                 size,
             } => {
-                if let Err(err) = self.command_encoder_copy_buffer_to_buffer::<B>(
+                if let Err(err) = self.command_encoder_copy_buffer_to_buffer::<A>(
                     self_id, src, src_offset, dst, dst_offset, size,
                 ) {
                     error_buf.init(err);
@@ -385,28 +420,28 @@ impl GlobalExt for Global {
             }
             CommandEncoderAction::CopyBufferToTexture { src, dst, size } => {
                 if let Err(err) =
-                    self.command_encoder_copy_buffer_to_texture::<B>(self_id, &src, &dst, &size)
+                    self.command_encoder_copy_buffer_to_texture::<A>(self_id, &src, &dst, &size)
                 {
                     error_buf.init(err);
                 }
             }
             CommandEncoderAction::CopyTextureToBuffer { src, dst, size } => {
                 if let Err(err) =
-                    self.command_encoder_copy_texture_to_buffer::<B>(self_id, &src, &dst, &size)
+                    self.command_encoder_copy_texture_to_buffer::<A>(self_id, &src, &dst, &size)
                 {
                     error_buf.init(err);
                 }
             }
             CommandEncoderAction::CopyTextureToTexture { src, dst, size } => {
                 if let Err(err) =
-                    self.command_encoder_copy_texture_to_texture::<B>(self_id, &src, &dst, &size)
+                    self.command_encoder_copy_texture_to_texture::<A>(self_id, &src, &dst, &size)
                 {
                     error_buf.init(err);
                 }
             }
             CommandEncoderAction::RunComputePass { base } => {
                 if let Err(err) =
-                    self.command_encoder_run_compute_pass_impl::<B>(self_id, base.as_ref())
+                    self.command_encoder_run_compute_pass_impl::<A>(self_id, base.as_ref())
                 {
                     error_buf.init(err);
                 }
@@ -416,7 +451,7 @@ impl GlobalExt for Global {
                 query_index,
             } => {
                 if let Err(err) =
-                    self.command_encoder_write_timestamp::<B>(self_id, query_set_id, query_index)
+                    self.command_encoder_write_timestamp::<A>(self_id, query_set_id, query_index)
                 {
                     error_buf.init(err);
                 }
@@ -428,7 +463,7 @@ impl GlobalExt for Global {
                 destination,
                 destination_offset,
             } => {
-                if let Err(err) = self.command_encoder_resolve_query_set::<B>(
+                if let Err(err) = self.command_encoder_resolve_query_set::<A>(
                     self_id,
                     query_set_id,
                     start_query,
@@ -444,7 +479,7 @@ impl GlobalExt for Global {
                 target_colors,
                 target_depth_stencil,
             } => {
-                if let Err(err) = self.command_encoder_run_render_pass_impl::<B>(
+                if let Err(err) = self.command_encoder_run_render_pass_impl::<A>(
                     self_id,
                     base.as_ref(),
                     &target_colors,
@@ -454,18 +489,33 @@ impl GlobalExt for Global {
                 }
             }
             CommandEncoderAction::ClearBuffer { dst, offset, size } => {
-                if let Err(err) = self.command_encoder_clear_buffer::<B>(self_id, dst, offset, size)
+                if let Err(err) = self.command_encoder_clear_buffer::<A>(self_id, dst, offset, size)
                 {
                     error_buf.init(err);
                 }
             }
-            CommandEncoderAction::ClearImage {
+            CommandEncoderAction::ClearTexture {
                 dst,
-                subresource_range,
+                ref subresource_range,
             } => {
                 if let Err(err) =
-                    self.command_encoder_clear_image::<B>(self_id, dst, subresource_range)
+                    self.command_encoder_clear_texture::<A>(self_id, dst, subresource_range)
                 {
+                    error_buf.init(err);
+                }
+            }
+            CommandEncoderAction::PushDebugGroup(marker) => {
+                if let Err(err) = self.command_encoder_push_debug_group::<A>(self_id, &marker) {
+                    error_buf.init(err);
+                }
+            }
+            CommandEncoderAction::PopDebugGroup => {
+                if let Err(err) = self.command_encoder_pop_debug_group::<A>(self_id) {
+                    error_buf.init(err);
+                }
+            }
+            CommandEncoderAction::InsertDebugMarker(marker) => {
+                if let Err(err) = self.command_encoder_insert_debug_marker::<A>(self_id, &marker) {
                     error_buf.init(err);
                 }
             }
@@ -601,7 +651,7 @@ pub unsafe extern "C" fn wgpu_server_queue_write_action(
             gfx_select!(self_id => global.queue_write_buffer(self_id, dst, offset, data))
         }
         QueueWriteAction::Texture { dst, layout, size } => {
-            gfx_select!(self_id => global.queue_write_texture(self_id, &dst, &data, &layout, &size))
+            gfx_select!(self_id => global.queue_write_texture(self_id, &dst, data, &layout, &size))
         }
     };
     if let Err(err) = result {

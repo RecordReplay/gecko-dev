@@ -16,6 +16,7 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/Result.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "nsDebug.h"
 #include "prio.h"
 
@@ -23,11 +24,11 @@ namespace mozilla::dom::quota {
 
 template <class FileStreamBase>
 NS_IMETHODIMP FileQuotaStream<FileStreamBase>::SetEOF() {
-  QM_TRY(FileStreamBase::SetEOF());
+  QM_TRY(MOZ_TO_RESULT(FileStreamBase::SetEOF()));
 
   if (mQuotaObject) {
     int64_t offset;
-    QM_TRY(FileStreamBase::Tell(&offset));
+    QM_TRY(MOZ_TO_RESULT(FileStreamBase::Tell(&offset)));
 
     DebugOnly<bool> res =
         mQuotaObject->MaybeUpdateSize(offset, /* aTruncate */ true);
@@ -39,7 +40,7 @@ NS_IMETHODIMP FileQuotaStream<FileStreamBase>::SetEOF() {
 
 template <class FileStreamBase>
 NS_IMETHODIMP FileQuotaStream<FileStreamBase>::Close() {
-  QM_TRY(FileStreamBase::Close());
+  QM_TRY(MOZ_TO_RESULT(FileStreamBase::Close()));
 
   mQuotaObject = nullptr;
 
@@ -49,14 +50,14 @@ NS_IMETHODIMP FileQuotaStream<FileStreamBase>::Close() {
 template <class FileStreamBase>
 nsresult FileQuotaStream<FileStreamBase>::DoOpen() {
   QuotaManager* quotaManager = QuotaManager::Get();
-  NS_ASSERTION(quotaManager, "Shouldn't be null!");
+  MOZ_ASSERT(quotaManager, "Shouldn't be null!");
 
-  NS_ASSERTION(!mQuotaObject, "Creating quota object more than once?");
+  MOZ_ASSERT(!mQuotaObject, "Creating quota object more than once?");
   mQuotaObject = quotaManager->GetQuotaObject(
       mPersistenceType, mOriginMetadata, mClientType,
       FileStreamBase::mOpenParams.localFile);
 
-  QM_TRY(FileStreamBase::DoOpen());
+  QM_TRY(MOZ_TO_RESULT(FileStreamBase::DoOpen()));
 
   if (mQuotaObject && (FileStreamBase::mOpenParams.ioFlags & PR_TRUNCATE)) {
     DebugOnly<bool> res =
@@ -72,7 +73,7 @@ NS_IMETHODIMP FileQuotaStreamWithWrite<FileStreamBase>::Write(
     const char* aBuf, uint32_t aCount, uint32_t* _retval) {
   if (FileQuotaStreamWithWrite::mQuotaObject) {
     int64_t offset;
-    QM_TRY(FileStreamBase::Tell(&offset));
+    QM_TRY(MOZ_TO_RESULT(FileStreamBase::Tell(&offset)));
 
     MOZ_ASSERT(INT64_MAX - offset >= int64_t(aCount));
 
@@ -83,7 +84,7 @@ NS_IMETHODIMP FileQuotaStreamWithWrite<FileStreamBase>::Write(
     }
   }
 
-  QM_TRY(FileStreamBase::Write(aBuf, aCount, _retval));
+  QM_TRY(MOZ_TO_RESULT(FileStreamBase::Write(aBuf, aCount, _retval)));
 
   return NS_OK;
 }
@@ -95,7 +96,7 @@ Result<NotNull<RefPtr<FileInputStream>>, nsresult> CreateFileInputStream(
   const auto stream = MakeNotNull<RefPtr<FileInputStream>>(
       aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
+  QM_TRY(MOZ_TO_RESULT(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags)));
 
   return stream;
 }
@@ -107,7 +108,7 @@ Result<NotNull<RefPtr<FileOutputStream>>, nsresult> CreateFileOutputStream(
   const auto stream = MakeNotNull<RefPtr<FileOutputStream>>(
       aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
+  QM_TRY(MOZ_TO_RESULT(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags)));
 
   return stream;
 }
@@ -119,7 +120,7 @@ Result<NotNull<RefPtr<FileStream>>, nsresult> CreateFileStream(
   const auto stream = MakeNotNull<RefPtr<FileStream>>(
       aPersistenceType, aOriginMetadata, aClientType);
 
-  QM_TRY(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags));
+  QM_TRY(MOZ_TO_RESULT(stream->Init(aFile, aIOFlags, aPerm, aBehaviorFlags)));
 
   return stream;
 }

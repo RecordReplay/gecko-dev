@@ -1,3 +1,6 @@
+var MockFilePicker = SpecialPowers.MockFilePicker;
+MockFilePicker.init(window);
+
 function waitForNewWindow() {
   return new Promise(resolve => {
     var listener = {
@@ -23,19 +26,29 @@ function waitForNewWindow() {
     };
 
     Services.wm.addListener(listener);
+    registerCleanupFunction(() => {
+      try {
+        Services.wm.removeListener(listener);
+      } catch (e) {}
+    });
   });
 }
 
-async function testLink(link, name) {
-  info("Checking " + link + " with name: " + name);
-
-  let winPromise = waitForNewWindow();
+async function waitForFilePickerTest(link, name) {
+  let filePickerShownPromise = new Promise(resolve => {
+    MockFilePicker.showCallback = function(fp) {
+      ok(true, "Filepicker shown.");
+      is(name, fp.defaultString, " filename matches download name");
+      setTimeout(resolve, 0);
+      return Ci.nsIFilePicker.returnCancel;
+    };
+  });
 
   SpecialPowers.spawn(gBrowser.selectedBrowser, [link], contentLink => {
     content.document.getElementById(contentLink).click();
   });
 
-  let win = await winPromise;
+  await filePickerShownPromise;
 
   await SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {
     Assert.equal(
@@ -44,14 +57,43 @@ async function testLink(link, name) {
       "beforeunload shouldn't have fired"
     );
   });
+}
 
-  is(
-    win.document.getElementById("location").value,
-    name,
-    `file name should match (${link})`
-  );
+async function testLink(link, name) {
+  info("Checking " + link + " with name: " + name);
 
-  await BrowserTestUtils.closeWindow(win);
+  if (
+    Services.prefs.getBoolPref(
+      "browser.download.always_ask_before_handling_new_types",
+      false
+    )
+  ) {
+    let winPromise = waitForNewWindow();
+
+    SpecialPowers.spawn(gBrowser.selectedBrowser, [link], contentLink => {
+      content.document.getElementById(contentLink).click();
+    });
+
+    let win = await winPromise;
+
+    await SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {
+      Assert.equal(
+        content.document.getElementById("unload-flag").textContent,
+        "Okay",
+        "beforeunload shouldn't have fired"
+      );
+    });
+
+    is(
+      win.document.getElementById("location").value,
+      name,
+      `file name should match (${link})`
+    );
+
+    await BrowserTestUtils.closeWindow(win);
+  } else {
+    await waitForFilePickerTest(link, name);
+  }
 }
 
 // Cross-origin URL does not trigger a download
@@ -110,13 +152,50 @@ async function runTest(url) {
   await testLink("link16", "download_page_3.txt");
   await testLink("link17", "download_page_4.txt");
   await testLink("link18", "download_page_4.txt");
+  await testLink("link19", "download_page_4.txt");
+  await testLink("link20", "download_page_4.txt");
+  await testLink("link21", "download_page_4.txt");
+  await testLink("link22", "download_page_4.txt");
 
   BrowserTestUtils.removeTab(tab);
+}
+
+async function setDownloadDir() {
+  let tmpDir = PathUtils.join(
+    PathUtils.tempDir,
+    "testsavedir" + Math.floor(Math.random() * 2 ** 32)
+  );
+  // Create this dir if it doesn't exist (ignores existing dirs)
+  await IOUtils.makeDirectory(tmpDir);
+  registerCleanupFunction(async function() {
+    try {
+      await IOUtils.remove(tmpDir, { recursive: true });
+    } catch (e) {
+      Cu.reportError(e);
+    }
+    Services.prefs.clearUserPref("browser.download.folderList");
+    Services.prefs.clearUserPref("browser.download.dir");
+  });
+  Services.prefs.setIntPref("browser.download.folderList", 2);
+  Services.prefs.setCharPref("browser.download.dir", tmpDir);
 }
 
 add_task(async function() {
   requestLongerTimeout(3);
   waitForExplicitFinish();
+
+  await setDownloadDir();
+
+  info(
+    "Test with browser.download.always_ask_before_handling_new_types enabled."
+  );
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.download.improvements_to_download_panel", false],
+      ["browser.download.always_ask_before_handling_new_types", true],
+      ["browser.download.useDownloadDir", true],
+    ],
+  });
 
   await runTest(
     "http://mochi.test:8888/browser/browser/base/content/test/general/download_page.html"
@@ -124,4 +203,24 @@ add_task(async function() {
   await runTest(
     "https://example.com:443/browser/browser/base/content/test/general/download_page.html"
   );
+
+  info(
+    "Test with browser.download.always_ask_before_handling_new_types disabled."
+  );
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.download.improvements_to_download_panel", true],
+      ["browser.download.always_ask_before_handling_new_types", false],
+      ["browser.download.useDownloadDir", false],
+    ],
+  });
+
+  await runTest(
+    "http://mochi.test:8888/browser/browser/base/content/test/general/download_page.html"
+  );
+  await runTest(
+    "https://example.com:443/browser/browser/base/content/test/general/download_page.html"
+  );
+
+  MockFilePicker.cleanup();
 });

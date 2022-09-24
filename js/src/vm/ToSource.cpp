@@ -12,12 +12,11 @@
 #include <iterator>  // std::size
 #include <stdint.h>  // uint32_t
 
-#include "jsfriendapi.h"  // CheckRecursionLimit
-
 #include "builtin/Array.h"          // ArrayToSource
 #include "builtin/Boolean.h"        // BooleanToString
 #include "builtin/Object.h"         // ObjectToSource
 #include "gc/Allocator.h"           // CanGC
+#include "js/CallAndConstruct.h"    // JS::IsCallable
 #include "js/Class.h"               // ESClass
 #include "js/friend/StackLimits.h"  // js::AutoCheckRecursionLimit
 #include "js/Object.h"              // JS::GetBuiltinClass
@@ -34,8 +33,13 @@
 #include "vm/Printer.h"         // QuoteString
 #include "vm/SelfHosting.h"     // CallSelfHostedFunction
 #include "vm/Stack.h"           // FixedInvokeArgs
+#include "vm/StaticStrings.h"   // StaticStrings
 #include "vm/StringType.h"      // NewStringCopy{N,Z}, ToString
 #include "vm/SymbolType.h"      // Symbol
+#ifdef ENABLE_RECORD_TUPLE
+#  include "vm/RecordType.h"
+#  include "vm/TupleType.h"
+#endif
 
 #include "vm/JSContext-inl.h"         // JSContext::check
 #include "vm/JSObject-inl.h"          // IsCallable
@@ -161,6 +165,20 @@ JSString* js::ValueToSource(JSContext* cx, HandleValue v) {
 
       return ConcatStrings<CanGC>(cx, str, n);
     }
+
+#ifdef ENABLE_RECORD_TUPLE
+    case ValueType::ExtendedPrimitive: {
+      RootedObject obj(cx, &v.toExtendedPrimitive());
+      if (obj->is<TupleType>()) {
+        Rooted<TupleType*> tup(cx, &obj->as<TupleType>());
+        return TupleToSource(cx, tup);
+      }
+      if (obj->is<RecordType>()) {
+        return RecordToSource(cx, obj.as<RecordType>());
+      }
+      MOZ_CRASH("Unsupported ExtendedPrimitive");
+    }
+#endif
 
     case JS::ValueType::Object: {
       RootedValue fval(cx);

@@ -5,7 +5,7 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html;charset=UTF-8,test";
+const TEST_URI = "data:text/html;charset=UTF-8,<!DOCTYPE html>test";
 const COMMANDS = ["document", "window", "window.location"];
 
 add_task(async function() {
@@ -15,7 +15,7 @@ add_task(async function() {
 
   for (const command of COMMANDS) {
     info(`Executing command ${command}`);
-    await executeAndWaitForMessage(hud, command, "", ".result");
+    await executeAndWaitForResultMessage(hud, command, "");
   }
 
   for (let x = COMMANDS.length - 1; x != -1; x--) {

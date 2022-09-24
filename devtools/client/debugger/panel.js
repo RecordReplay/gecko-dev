@@ -2,7 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-const { LocalizationHelper } = require("devtools/shared/l10n");
+"use strict";
+
+const { MultiLocalizationHelper } = require("devtools/shared/l10n");
+const {
+  FluentL10n,
+} = require("devtools/client/shared/fluent-l10n/fluent-l10n");
 
 loader.lazyRequireGetter(
   this,
@@ -23,8 +28,13 @@ loader.lazyRequireGetter(
   true
 );
 
-const DBG_STRINGS_URI = "devtools/client/locales/debugger.properties";
-const L10N = new LocalizationHelper(DBG_STRINGS_URI);
+const DBG_STRINGS_URI = [
+  "devtools/client/locales/debugger.properties",
+  // These are used in the AppErrorBoundary component
+  "devtools/client/locales/startup.properties",
+  "devtools/client/locales/components.properties",
+];
+const L10N = new MultiLocalizationHelper(...DBG_STRINGS_URI);
 
 async function getNodeFront(gripOrFront, toolbox) {
   // Given a NodeFront
@@ -40,11 +50,16 @@ class DebuggerPanel {
   constructor(iframeWindow, toolbox, commands) {
     this.panelWin = iframeWindow;
     this.panelWin.L10N = L10N;
+
     this.toolbox = toolbox;
     this.commands = commands;
   }
 
   async open() {
+    // whypaused-* strings are in devtools/shared as they're used in the PausedDebuggerOverlay as well
+    const fluentL10n = new FluentL10n();
+    await fluentL10n.init(["devtools/shared/debugger-paused-reasons.ftl"]);
+
     const {
       actions,
       store,
@@ -52,6 +67,7 @@ class DebuggerPanel {
       client,
     } = await this.panelWin.Debugger.bootstrap({
       commands: this.commands,
+      fluentBundles: fluentL10n.getBundles(),
       resourceCommand: this.toolbox.resourceCommand,
       workers: {
         sourceMaps: this.toolbox.sourceMapService,
@@ -64,15 +80,6 @@ class DebuggerPanel {
     this._store = store;
     this._selectors = selectors;
     this._client = client;
-
-    this.panelWin.document.addEventListener(
-      "drag:start",
-      this.toolbox.toggleDragging
-    );
-    this.panelWin.document.addEventListener(
-      "drag:end",
-      this.toolbox.toggleDragging
-    );
 
     registerStoreObserver(this._store, this._onDebuggerStateChange.bind(this));
 
@@ -153,40 +160,43 @@ class DebuggerPanel {
 
   unHighlightDomElement() {
     if (!this._unhighlight) {
-      return;
+      return Promise.resolve();
     }
 
     return this._unhighlight();
   }
 
-  getFrames() {
+  /**
+   * Return the Frame Actor ID of the currently selected frame,
+   * or null if the debugger isn't paused.
+   */
+  getSelectedFrameActorID() {
     const thread = this._selectors.getCurrentThread(this._getState());
-    const frames = this._selectors.getFrames(this._getState(), thread);
-
-    // Frames is null when the debugger is not paused.
-    if (!frames) {
-      return {
-        frames: [],
-        selected: -1,
-      };
-    }
-
     const selectedFrame = this._selectors.getSelectedFrame(
       this._getState(),
       thread
     );
-    const selected = frames.findIndex(frame => frame.id == selectedFrame.id);
-
-    frames.forEach(frame => {
-      frame.actor = frame.id;
-    });
-    const target = this._client.lookupTarget(thread);
-
-    return { frames, selected, target };
+    if (selectedFrame) {
+      return selectedFrame.id;
+    }
+    return null;
   }
 
   getMappedExpression(expression) {
     return this._actions.getMappedExpression(expression);
+  }
+
+  /**
+   * Return the source-mapped variables for the current scope.
+   * @returns {{[String]: String} | null} A dictionary mapping original variable names to generated
+   * variable names if map scopes is enabled, otherwise null.
+   */
+  getMappedVariables() {
+    if (!this._selectors.isMapScopesEnabled(this._getState())) {
+      return null;
+    }
+    const thread = this._selectors.getCurrentThread(this._getState());
+    return this._selectors.getSelectedScopeMappings(this._getState(), thread);
   }
 
   isPaused() {
@@ -263,6 +273,10 @@ class DebuggerPanel {
 
   getSource(sourceId) {
     return this._selectors.getSource(this._getState(), sourceId);
+  }
+
+  getLocationSource(location) {
+    return this._selectors.getLocationSource(this._getState(), location);
   }
 
   destroy() {

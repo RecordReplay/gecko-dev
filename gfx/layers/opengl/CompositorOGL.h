@@ -54,7 +54,6 @@ class TextureSourceOGL;
 class BufferTextureHost;
 struct Effect;
 struct EffectChain;
-class GLBlitTextureImageHelper;
 
 /**
  * Interface for pools of temporary gl textures for the compositor.
@@ -112,9 +111,9 @@ class CompositorOGL final : public Compositor {
   RefPtr<ShaderProgramOGLsHolder> mProgramsHolder;
 
  public:
-  CompositorOGL(CompositorBridgeParent* aParent,
-                widget::CompositorWidget* aWidget, int aSurfaceWidth = -1,
-                int aSurfaceHeight = -1, bool aUseExternalSurfaceSize = false);
+  explicit CompositorOGL(widget::CompositorWidget* aWidget,
+                         int aSurfaceWidth = -1, int aSurfaceHeight = -1,
+                         bool aUseExternalSurfaceSize = false);
 
  protected:
   virtual ~CompositorOGL();
@@ -125,12 +124,6 @@ class CompositorOGL final : public Compositor {
   already_AddRefed<DataTextureSource> CreateDataTextureSource(
       TextureFlags aFlags = TextureFlags::NO_FLAGS) override;
 
-  already_AddRefed<DataTextureSource> CreateDataTextureSourceAroundYCbCr(
-      TextureHost* aTexture) override;
-
-  already_AddRefed<DataTextureSource> CreateDataTextureSourceAround(
-      gfx::DataSourceSurface* aSurface) override;
-
   bool Initialize(GLContext* aGLContext,
                   RefPtr<ShaderProgramOGLsHolder> aProgramsHolder,
                   nsCString* const out_failureReason);
@@ -138,15 +131,6 @@ class CompositorOGL final : public Compositor {
   bool Initialize(nsCString* const out_failureReason) override;
 
   void Destroy() override;
-
-  TextureFactoryIdentifier GetTextureFactoryIdentifier() override {
-    TextureFactoryIdentifier result = TextureFactoryIdentifier(
-        LayersBackend::LAYERS_OPENGL, XRE_GetProcessType(), GetMaxTextureSize(),
-        SupportsTextureDirectMapping(), false,
-        mFBOTextureTarget == LOCAL_GL_TEXTURE_2D,
-        SupportsPartialTextureUpdate());
-    return result;
-  }
 
   // Returns a render target for the native layer.
   // aInvalidRegion is in window coordinates, i.e. in the same space as
@@ -156,10 +140,6 @@ class CompositorOGL final : public Compositor {
 
   already_AddRefed<CompositingRenderTarget> CreateRenderTarget(
       const gfx::IntRect& aRect, SurfaceInitMode aInit) override;
-
-  already_AddRefed<CompositingRenderTarget> CreateRenderTargetFromSource(
-      const gfx::IntRect& aRect, const CompositingRenderTarget* aSource,
-      const gfx::IntPoint& aSourcePoint) override;
 
   void SetRenderTarget(CompositingRenderTarget* aSurface) override;
   already_AddRefed<CompositingRenderTarget> GetCurrentRenderTarget()
@@ -182,29 +162,7 @@ class CompositorOGL final : public Compositor {
                 const gfx::Matrix4x4& aTransform,
                 const gfx::Rect& aVisibleRect) override;
 
-  void DrawTriangles(const nsTArray<gfx::TexturedTriangle>& aTriangles,
-                     const gfx::Rect& aRect, const gfx::IntRect& aClipRect,
-                     const EffectChain& aEffectChain, gfx::Float aOpacity,
-                     const gfx::Matrix4x4& aTransform,
-                     const gfx::Rect& aVisibleRect) override;
-
-  bool SupportsLayerGeometry() const override;
-
-  void NormalDrawingDone() override;
-
   void EndFrame() override;
-
-  void WaitForGPU() override;
-
-  RefPtr<SurfacePoolHandle> GetSurfacePoolHandle() override;
-
-  bool SupportsPartialTextureUpdate() override;
-
-  bool CanUseCanvasLayerForSize(const gfx::IntSize& aSize) override {
-    if (!mGLContext) return false;
-    int32_t maxSize = GetMaxTextureSize();
-    return aSize <= gfx::IntSize(maxSize, maxSize);
-  }
 
   int32_t GetMaxTextureSize() const override;
 
@@ -214,26 +172,19 @@ class CompositorOGL final : public Compositor {
    */
   void SetDestinationSurfaceSize(const gfx::IntSize& aSize) override;
 
-  void MakeCurrent(MakeCurrentFlags aFlags = 0) override;
+  typedef uint32_t MakeCurrentFlags;
+  static const MakeCurrentFlags ForceMakeCurrent = 0x1;
+  void MakeCurrent(MakeCurrentFlags aFlags = 0);
 
 #ifdef MOZ_DUMP_PAINTING
   const char* Name() const override { return "OGL"; }
 #endif  // MOZ_DUMP_PAINTING
-
-  LayersBackend GetBackendType() const override {
-    return LayersBackend::LAYERS_OPENGL;
-  }
 
   void Pause() override;
   bool Resume() override;
 
   GLContext* gl() const { return mGLContext; }
   GLContext* GetGLContext() const override { return mGLContext; }
-
-#ifdef XP_DARWIN
-  void MaybeUnlockBeforeNextComposition(TextureHost* aTextureHost) override;
-  void TryUnlockTextures() override;
-#endif
 
   /**
    * Clear the program state. This must be called
@@ -243,8 +194,6 @@ class CompositorOGL final : public Compositor {
   gfx::SurfaceFormat GetFBOFormat() const {
     return gfx::SurfaceFormat::R8G8B8A8;
   }
-
-  GLBlitTextureImageHelper* BlitTextureImageHelper();
 
   /**
    * The compositor provides with temporary textures for use with direct
@@ -281,8 +230,6 @@ class CompositorOGL final : public Compositor {
 
   void PrepareViewport(CompositingRenderTargetOGL* aRenderTarget);
 
-  bool SupportsTextureDirectMapping();
-
   void InsertFrameDoneSync();
 
   bool NeedToRecreateFullWindowRenderTarget() const;
@@ -292,13 +239,8 @@ class CompositorOGL final : public Compositor {
   RefPtr<GLContext> mGLContext;
   bool mOwnsGLContext = true;
   RefPtr<SurfacePoolHandle> mSurfacePoolHandle;
-  UniquePtr<GLBlitTextureImageHelper> mBlitTextureImageHelper;
   gfx::Matrix4x4 mProjMatrix;
   bool mCanRenderToDefaultFramebuffer = true;
-
-#ifdef XP_DARWIN
-  nsTArray<RefPtr<BufferTextureHost>> mMaybeUnlockBeforeNextComposition;
-#endif
 
   /** The size of the surface we are rendering to */
   gfx::IntSize mSurfaceSize;
@@ -362,11 +304,6 @@ class CompositorOGL final : public Compositor {
   // full window render target needed to be recreated in the current frame.
   bool mShouldInvalidateWindow = false;
 
-  /*
-   * Clear aRect on current render target.
-   */
-  void ClearRect(const gfx::Rect& aRect) override;
-
   /* Start a new frame.
    */
   Maybe<gfx::IntRect> BeginFrameForWindow(
@@ -374,28 +311,13 @@ class CompositorOGL final : public Compositor {
       const gfx::IntRect& aRenderBounds,
       const nsIntRegion& aOpaqueRegion) override;
 
-  Maybe<gfx::IntRect> BeginFrameForTarget(
-      const nsIntRegion& aInvalidRegion, const Maybe<gfx::IntRect>& aClipRect,
-      const gfx::IntRect& aRenderBounds, const nsIntRegion& aOpaqueRegion,
-      gfx::DrawTarget* aTarget, const gfx::IntRect& aTargetBounds) override;
-
-  void BeginFrameForNativeLayers() override;
-
-  Maybe<gfx::IntRect> BeginRenderingToNativeLayer(
-      const nsIntRegion& aInvalidRegion, const Maybe<gfx::IntRect>& aClipRect,
-      const nsIntRegion& aOpaqueRegion, NativeLayer* aNativeLayer) override;
-
-  void EndRenderingToNativeLayer() override;
-
   Maybe<gfx::IntRect> BeginFrame(const nsIntRegion& aInvalidRegion,
                                  const Maybe<gfx::IntRect>& aClipRect,
                                  const gfx::IntRect& aRenderBounds,
                                  const nsIntRegion& aOpaqueRegion);
 
-  ShaderConfigOGL GetShaderConfigFor(
-      Effect* aEffect, TextureSourceOGL* aSourceMask = nullptr,
-      gfx::CompositionOp aOp = gfx::CompositionOp::OP_OVER,
-      bool aColorMatrix = false, bool aDEAAEnabled = false) const;
+  ShaderConfigOGL GetShaderConfigFor(Effect* aEffect,
+                                     bool aDEAAEnabled = false) const;
 
   ShaderProgramOGL* GetShaderProgramFor(const ShaderConfigOGL& aConfig);
 
@@ -463,13 +385,6 @@ class CompositorOGL final : public Compositor {
 
   gfx::Rect GetTextureCoordinates(gfx::Rect textureRect,
                                   TextureSource* aTexture);
-
-  /**
-   * Bind the texture behind the current render target as the backdrop for a
-   * mix-blend shader.
-   */
-  void BindBackdrop(ShaderProgramOGL* aProgram, GLuint aBackdrop,
-                    GLenum aTexUnit);
 
   /**
    * Copies the content of the current render target to the set transaction

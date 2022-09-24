@@ -58,7 +58,7 @@ var Readerable = {
   ],
 
   shouldCheckUri(uri, isBaseUri = false) {
-    if (!["http", "https", "file"].includes(uri.scheme)) {
+    if (!["http", "https", "file", "moz-nullprincipal"].includes(uri.scheme)) {
       return false;
     }
 
@@ -66,6 +66,14 @@ var Readerable = {
       // Sadly, some high-profile pages have false positives, so bail early for those:
       let { host } = uri;
       if (this._blockedHosts.some(blockedHost => host.endsWith(blockedHost))) {
+        // Allow github on non-project pages
+        if (
+          host == "github.com" &&
+          !uri.filePath.includes("/projects") &&
+          !uri.filePath.includes("/issues")
+        ) {
+          return true;
+        }
         return false;
       }
 

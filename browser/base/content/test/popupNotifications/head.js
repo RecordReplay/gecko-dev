@@ -245,11 +245,6 @@ function checkPopup(popup, notifyObj) {
       notifyObj.mainAction.accessKey,
       "main action accesskey matches"
     );
-    is(
-      notification.hasAttribute("buttonhighlight"),
-      !notifyObj.mainAction.disableHighlight,
-      "main action highlight matches"
-    );
   }
   if (notifyObj.secondaryActions && notifyObj.secondaryActions.length) {
     let secondaryAction = notifyObj.secondaryActions[0];
@@ -353,7 +348,7 @@ function triggerSecondaryCommand(popup, index) {
   }
 
   // Extra secondary actions appear in a menu.
-  notification.secondaryButton.nextElementSibling.nextElementSibling.focus();
+  notification.secondaryButton.nextElementSibling.focus();
 
   popup.addEventListener(
     "popupshown",

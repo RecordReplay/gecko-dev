@@ -10,11 +10,16 @@ if (AppConstants.MOZ_APP_NAME == "thunderbird") {
     "chrome://messenger/locale/addons.properties"
   );
 } else {
+  // For Android, these strings are only used in tests. In the actual UI, the
+  // warnings are in Android-Components, as explained in bug 1671453.
   bundle = Services.strings.createBundle(
     "chrome://browser/locale/browser.properties"
   );
 }
 const DUMMY_APP_NAME = "Dummy brandName";
+
+// nativeMessaging is in PRIVILEGED_PERMS on Android.
+const IS_NATIVE_MESSAGING_PRIVILEGED = AppConstants.platform == "android";
 
 const { createAppInfo } = AddonTestUtils;
 
@@ -23,15 +28,26 @@ AddonTestUtils.overrideCertDB();
 AddonTestUtils.usePrivilegedSignatures = id => id.startsWith("privileged");
 createAppInfo("xpcshell@tests.mozilla.org", "XPCShell", "1", "42");
 
+Services.prefs.setBoolPref("extensions.manifestV3.enabled", true);
+
 async function getManifestPermissions(extensionData) {
   let extension = ExtensionTestCommon.generate(extensionData);
   // Some tests contain invalid permissions; ignore the warnings about their invalidity.
   ExtensionTestUtils.failOnSchemaWarnings(false);
   await extension.loadManifest();
   ExtensionTestUtils.failOnSchemaWarnings(true);
-  const { manifestPermissions } = extension;
+  let result = extension.manifestPermissions;
+
+  if (extension.manifest.manifest_version >= 3) {
+    // In MV3, host permissions are optional by default.
+    deepEqual(result.origins, [], "No origins by default in MV3");
+    let optional = extension.manifestOptionalPermissions;
+    deepEqual(optional.permissions, [], "No tests use optional_permissions");
+    result.origins = optional.origins;
+  }
+
   await extension.cleanupGeneratedFile();
-  return manifestPermissions;
+  return result;
 }
 
 function getPermissionWarnings(
@@ -341,30 +357,40 @@ add_task(async function host_permissions() {
       ],
     },
   ];
-  for (let {
-    description,
-    manifest,
-    expectedOrigins,
-    expectedWarnings,
-    options,
-  } of permissionTestCases) {
-    let manifestPermissions = await getManifestPermissions({
+  for (let manifest_version of [2, 3]) {
+    for (let {
+      description,
       manifest,
-    });
-
-    deepEqual(
-      manifestPermissions.origins,
       expectedOrigins,
-      `Expected origins (${description})`
-    );
-    deepEqual(
-      manifestPermissions.permissions,
-      [],
-      `Expected no non-host permissions (${description})`
-    );
+      expectedWarnings,
+      options,
+    } of permissionTestCases) {
+      manifest = Object.assign({}, manifest, { manifest_version });
+      if (manifest_version > 2) {
+        manifest.host_permissions = manifest.permissions;
+        manifest.permissions = [];
+      }
 
-    let warnings = getPermissionWarnings(manifestPermissions, options);
-    deepEqual(warnings, expectedWarnings, `Expected warnings (${description})`);
+      let manifestPermissions = await getManifestPermissions({ manifest });
+
+      deepEqual(
+        manifestPermissions.origins,
+        expectedOrigins,
+        `Expected origins (${description})`
+      );
+      deepEqual(
+        manifestPermissions.permissions,
+        [],
+        `Expected no non-host permissions (${description})`
+      );
+
+      let warnings = getPermissionWarnings(manifestPermissions, options);
+      deepEqual(
+        warnings,
+        expectedWarnings,
+        `Expected warnings (${description})`
+      );
+    }
   }
 });
 
@@ -372,6 +398,7 @@ add_task(async function host_permissions() {
 // permissions and API permissions.
 add_task(async function api_permissions() {
   let manifestPermissions = await getManifestPermissions({
+    isPrivileged: IS_NATIVE_MESSAGING_PRIVILEGED,
     manifest: {
       permissions: [
         "activeTab",
@@ -384,6 +411,7 @@ add_task(async function api_permissions() {
       ],
     },
   });
+
   deepEqual(
     manifestPermissions,
     {
@@ -415,6 +443,32 @@ add_task(async function api_permissions() {
     ],
     "Expected warnings"
   );
+});
+
+add_task(async function nativeMessaging_permission() {
+  let manifestPermissions = await getManifestPermissions({
+    // isPrivileged: false, by default.
+    manifest: {
+      permissions: ["nativeMessaging"],
+    },
+  });
+
+  if (IS_NATIVE_MESSAGING_PRIVILEGED) {
+    // The behavior of nativeMessaging for unprivileged extensions on Android
+    // is covered in
+    // mobile/android/components/extensions/test/xpcshell/test_ext_native_messaging_permissions.js
+    deepEqual(
+      manifestPermissions,
+      { origins: [], permissions: [] },
+      "nativeMessaging perm ignored for unprivileged extensions on Android"
+    );
+  } else {
+    deepEqual(
+      manifestPermissions,
+      { origins: [], permissions: ["nativeMessaging"] },
+      "nativeMessaging permission recognized for unprivileged extensions"
+    );
+  }
 });
 
 // Tests that the expected permission warnings are generated for a mix of host
@@ -623,26 +677,28 @@ add_task(async function update_unprivileged_with_mozillaAddons() {
 });
 
 // Tests that invalid permission warning for privileged permissions requested
-// without the privilged signature are emitted by the Extension class instance
-// but not for the ExtensionData instances (on which the signature is not
-// available and the warning would be emitted even for the ones signed correctly).
+// are not emitted for privileged extensions, only for unprivileged extensions.
 add_task(
   async function test_invalid_permission_warning_on_privileged_permission() {
     await AddonTestUtils.promiseStartupManager();
+
+    const MANIFEST_WARNINGS = [
+      "Reading manifest: Invalid extension permission: mozillaAddons",
+      "Reading manifest: Invalid extension permission: resource://x/",
+      "Reading manifest: Invalid extension permission: about:reader*",
+    ];
 
     async function testInvalidPermissionWarning({ isPrivileged }) {
       let id = isPrivileged
         ? "privileged-addon@mochi.test"
         : "nonprivileged-addon@mochi.test";
 
-      let expectedWarnings = isPrivileged
-        ? []
-        : ["Reading manifest: Invalid extension permission: mozillaAddons"];
+      let expectedWarnings = isPrivileged ? [] : MANIFEST_WARNINGS;
 
       const ext = ExtensionTestUtils.loadExtension({
         useAddonManager: "permanent",
         manifest: {
-          permissions: ["mozillaAddons"],
+          permissions: ["mozillaAddons", "resource://x/", "about:reader*"],
           applications: { gecko: { id } },
         },
         background() {},
@@ -666,28 +722,67 @@ add_task(
     // ExtensionData instance created below).
     let generatedExt = ExtensionTestCommon.generate({
       manifest: {
-        permissions: ["mozillaAddons"],
+        permissions: ["mozillaAddons", "resource://x/", "about:reader*"],
         applications: { gecko: { id: "extension-data@mochi.test" } },
       },
     });
 
     // Verify that XPIInstall.jsm will not collect the warning for the
     // privileged permission as expected.
-    const extData = new ExtensionData(generatedExt.rootURI);
-    await extData.loadManifest();
+    async function getWarningsFromExtensionData({ isPrivileged }) {
+      let extData;
+      if (typeof isPrivileged == "function") {
+        // isPrivileged expected to be computed asynchronously.
+        extData = await ExtensionData.constructAsync({
+          rootURI: generatedExt.rootURI,
+          checkPrivileged: isPrivileged,
+        });
+      } else {
+        extData = new ExtensionData(generatedExt.rootURI, isPrivileged);
+      }
+      await extData.loadManifest();
+
+      // This assertion is just meant to prevent the test to pass if there were
+      // no warnings because some errors prevented the warnings to be
+      // collected).
+      Assert.deepEqual(
+        extData.errors,
+        [],
+        "No errors collected by the ExtensionData instance"
+      );
+      return extData.warnings;
+    }
+
     Assert.deepEqual(
-      extData.warnings,
-      [],
-      "No warnings for mozillaAddons permission collected for the ExtensionData instance"
+      await getWarningsFromExtensionData({ isPrivileged: undefined }),
+      MANIFEST_WARNINGS,
+      "Got warnings about privileged permissions by default"
     );
 
-    // This assertion is just meant to prevent the test to pass if there were no warnings
-    // because some errors prevented the warnings to be collected).
     Assert.deepEqual(
-      extData.errors,
-      [],
-      "No errors collected by the ExtensionData instance"
+      await getWarningsFromExtensionData({ isPrivileged: false }),
+      MANIFEST_WARNINGS,
+      "Got warnings about privileged permissions for non-privileged extensions"
     );
+
+    Assert.deepEqual(
+      await getWarningsFromExtensionData({ isPrivileged: true }),
+      [],
+      "No warnings about privileged permissions on privileged extensions"
+    );
+
+    Assert.deepEqual(
+      await getWarningsFromExtensionData({ isPrivileged: async () => false }),
+      MANIFEST_WARNINGS,
+      "Got warnings about privileged permissions for non-privileged extensions (async)"
+    );
+
+    Assert.deepEqual(
+      await getWarningsFromExtensionData({ isPrivileged: async () => true }),
+      [],
+      "No warnings about privileged permissions on privileged extensions (async)"
+    );
+
     // Cleanup the generated xpi file.
     await generatedExt.cleanupGeneratedFile();
 

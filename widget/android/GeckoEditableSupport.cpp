@@ -410,19 +410,14 @@ static nscolor ConvertAndroidColor(uint32_t aArgb) {
 }
 
 static jni::ObjectArray::LocalRef ConvertRectArrayToJavaRectFArray(
-    const nsTArray<LayoutDeviceIntRect>& aRects,
-    const CSSToLayoutDeviceScale aScale) {
+    const nsTArray<LayoutDeviceIntRect>& aRects) {
   const size_t length = aRects.Length();
   auto rects = jni::ObjectArray::New<java::sdk::RectF>(length);
 
   for (size_t i = 0; i < length; i++) {
     const LayoutDeviceIntRect& tmp = aRects[i];
 
-    // Character bounds in CSS units.
-    auto rect =
-        java::sdk::RectF::New(tmp.x / aScale.scale, tmp.y / aScale.scale,
-                              (tmp.x + tmp.width) / aScale.scale,
-                              (tmp.y + tmp.height) / aScale.scale);
+    auto rect = java::sdk::RectF::New(tmp.x, tmp.y, tmp.XMost(), tmp.YMost());
     rects->SetElement(i, rect);
   }
   return rects;
@@ -687,18 +682,30 @@ void GeckoEditableSupport::FlushIMEChanges(FlushChangesFlag aFlags) {
   int32_t selEnd = -1;
 
   if (mIMESelectionChanged) {
-    WidgetQueryContentEvent querySelectedTextEvent(true, eQuerySelectedText,
-                                                   widget);
-    widget->DispatchEvent(&querySelectedTextEvent, status);
+    if (mCachedSelection.IsValid()) {
+      selStart = mCachedSelection.mStartOffset;
+      selEnd = mCachedSelection.mEndOffset;
+    } else {
+      // XXX Unfortunately we don't know current selection via selection
+      //     change notification.
+      //     eQuerySelectedText might be newer data than text change data.
+      //     It means that GeckoEditableChild.onSelectionChange may throw
+      //     IllegalArgumentException since we don't merge with newer text
+      //     change.
+      WidgetQueryContentEvent querySelectedTextEvent(true, eQuerySelectedText,
+                                                     widget);
+      widget->DispatchEvent(&querySelectedTextEvent, status);
 
-    if (shouldAbort(NS_WARN_IF(querySelectedTextEvent.DidNotFindSelection()))) {
-      return;
+      if (shouldAbort(
+              NS_WARN_IF(querySelectedTextEvent.DidNotFindSelection()))) {
+        return;
+      }
+
+      selStart =
+          static_cast<int32_t>(querySelectedTextEvent.mReply->AnchorOffset());
+      selEnd =
+          static_cast<int32_t>(querySelectedTextEvent.mReply->FocusOffset());
     }
-
-    selStart = static_cast<int32_t>(
-        querySelectedTextEvent.mReply->SelectionStartOffset());
-    selEnd = static_cast<int32_t>(
-        querySelectedTextEvent.mReply->SelectionEndOffset());
 
     if (aFlags == FLUSH_FLAG_RECOVER && textTransaction.IsValid()) {
       // Sometimes we get out-of-bounds selection during recovery.
@@ -736,7 +743,8 @@ void GeckoEditableSupport::FlushIMEChanges(FlushChangesFlag aFlags) {
 
   if (textTransaction.IsValid()) {
     mEditable->OnTextChange(textTransaction.text, textTransaction.start,
-                            textTransaction.oldEnd, textTransaction.newEnd);
+                            textTransaction.oldEnd, textTransaction.newEnd,
+                            causedOnlyByComposition);
     if (flushOnException()) {
       return;
     }
@@ -788,25 +796,40 @@ void GeckoEditableSupport::UpdateCompositionRects() {
   RefPtr<TextComposition> composition(GetComposition());
   NS_ENSURE_TRUE_VOID(mDispatcher && widget);
 
-  if (!composition) {
-    return;
+  jni::ObjectArray::LocalRef rects;
+  if (composition) {
+    nsEventStatus status = nsEventStatus_eIgnore;
+    uint32_t offset = composition->NativeOffsetOfStartComposition();
+    WidgetQueryContentEvent queryTextRectsEvent(true, eQueryTextRectArray,
+                                                widget);
+    queryTextRectsEvent.InitForQueryTextRectArray(
+        offset, composition->String().Length());
+    widget->DispatchEvent(&queryTextRectsEvent, status);
+    rects = ConvertRectArrayToJavaRectFArray(
+        queryTextRectsEvent.Succeeded()
+            ? queryTextRectsEvent.mReply->mRectArray
+            : CopyableTArray<mozilla::LayoutDeviceIntRect>());
+  } else {
+    rects = ConvertRectArrayToJavaRectFArray(
+        CopyableTArray<mozilla::LayoutDeviceIntRect>());
   }
 
+  WidgetQueryContentEvent queryCaretRectEvent(true, eQueryCaretRect, widget);
+  WidgetQueryContentEvent::Options options;
+  options.mRelativeToInsertionPoint = true;
+  queryCaretRectEvent.InitForQueryCaretRect(0, options);
+
   nsEventStatus status = nsEventStatus_eIgnore;
-  uint32_t offset = composition->NativeOffsetOfStartComposition();
-  WidgetQueryContentEvent queryTextRectsEvent(true, eQueryTextRectArray,
-                                              widget);
-  queryTextRectsEvent.InitForQueryTextRectArray(offset,
-                                                composition->String().Length());
-  widget->DispatchEvent(&queryTextRectsEvent, status);
+  widget->DispatchEvent(&queryCaretRectEvent, status);
+  auto caretRect =
+      queryCaretRectEvent.Succeeded()
+          ? java::sdk::RectF::New(queryCaretRectEvent.mReply->mRect.x,
+                                  queryCaretRectEvent.mReply->mRect.y,
+                                  queryCaretRectEvent.mReply->mRect.XMost(),
+                                  queryCaretRectEvent.mReply->mRect.YMost())
+          : java::sdk::RectF::New();
 
-  auto rects = ConvertRectArrayToJavaRectFArray(
-      queryTextRectsEvent.Succeeded()
-          ? queryTextRectsEvent.mReply->mRectArray
-          : CopyableTArray<mozilla::LayoutDeviceIntRect>(),
-      widget->GetDefaultScale());
-
-  mEditable->UpdateCompositionRects(rects);
+  mEditable->UpdateCompositionRects(rects, caretRect);
 }
 
 void GeckoEditableSupport::OnImeSynchronize() {
@@ -954,11 +977,13 @@ bool GeckoEditableSupport::DoReplaceText(int32_t aStart, int32_t aEnd,
       }
     }
   } else if (composition->String().Equals(string)) {
-    /* If the new text is the same as the existing composition text,
-     * the NS_COMPOSITION_CHANGE event does not generate a text
-     * change notification. However, the Java side still expects
-     * one, so we manually generate a notification. */
-    IMENotification::TextChangeData dummyChange(aStart, aEnd, aEnd, false,
+    // If the new text is the same as the existing composition text,
+    // the NS_COMPOSITION_CHANGE event does not generate a text
+    // change notification. However, the Java side still expects
+    // one, so we manually generate a notification.
+    //
+    // Also, since this is IME change, we have to set mCausedOnlyByComposition.
+    IMENotification::TextChangeData dummyChange(aStart, aEnd, aEnd, true,
                                                 false);
     PostFlushIMEChanges();
     mIMESelectionChanged = true;
@@ -1293,6 +1318,8 @@ nsresult GeckoEditableSupport::NotifyIME(
         mDispatcher = dispatcher;
         mIMEKeyEvents.Clear();
 
+        mCachedSelection.Reset();
+
         mIMEDelaySynchronizeReply = false;
         mIMEActiveCompositionCount = 0;
         FlushIMEText();
@@ -1332,6 +1359,15 @@ nsresult GeckoEditableSupport::NotifyIME(
     case NOTIFY_IME_OF_SELECTION_CHANGE: {
       ALOGIME("IME: NOTIFY_IME_OF_SELECTION_CHANGE: SelectionChangeData=%s",
               ToString(aNotification.mSelectionChangeData).c_str());
+
+      if (aNotification.mSelectionChangeData.HasRange()) {
+        mCachedSelection.mStartOffset = static_cast<int32_t>(
+            aNotification.mSelectionChangeData.AnchorOffset());
+        mCachedSelection.mEndOffset = static_cast<int32_t>(
+            aNotification.mSelectionChangeData.FocusOffset());
+      } else {
+        mCachedSelection.Reset();
+      }
 
       PostFlushIMEChanges();
       mIMESelectionChanged = true;
@@ -1413,6 +1449,17 @@ GeckoEditableSupport::GetIMENotificationRequests() {
   return IMENotificationRequests(IMENotificationRequests::NOTIFY_TEXT_CHANGE);
 }
 
+static bool ShouldKeyboardDismiss(const nsAString& aInputType,
+                                  const nsAString& aInputmode) {
+  // Some input type uses the prompt to input value. So it is unnecessary to
+  // show software keyboard.
+  return aInputmode.EqualsLiteral("none") || aInputType.EqualsLiteral("date") ||
+         aInputType.EqualsLiteral("time") ||
+         aInputType.EqualsLiteral("month") ||
+         aInputType.EqualsLiteral("week") ||
+         aInputType.EqualsLiteral("datetime-local");
+}
+
 void GeckoEditableSupport::SetInputContext(const InputContext& aContext,
                                            const InputContextAction& aAction) {
   // SetInputContext is called from chrome process only
@@ -1428,7 +1475,8 @@ void GeckoEditableSupport::SetInputContext(const InputContext& aContext,
   mInputContext = aContext;
 
   if (mInputContext.mIMEState.mEnabled != IMEEnabled::Disabled &&
-      !mInputContext.mHTMLInputInputmode.EqualsLiteral("none") &&
+      !ShouldKeyboardDismiss(mInputContext.mHTMLInputType,
+                             mInputContext.mHTMLInputInputmode) &&
       aAction.UserMightRequestOpenVKB()) {
     // Don't reset keyboard when we should simply open the vkb
     mEditable->NotifyIME(EditableListener::NOTIFY_IME_OPEN_VKB);
@@ -1459,7 +1507,10 @@ void GeckoEditableSupport::NotifyIMEContext(const InputContext& aContext,
       (aAction.IsHandlingUserInput() || aContext.mHasHandledUserInput);
   const int32_t flags =
       (inPrivateBrowsing ? EditableListener::IME_FLAG_PRIVATE_BROWSING : 0) |
-      (isUserAction ? EditableListener::IME_FLAG_USER_ACTION : 0);
+      (isUserAction ? EditableListener::IME_FLAG_USER_ACTION : 0) |
+      (aAction.mFocusChange == InputContextAction::FOCUS_NOT_CHANGED
+           ? EditableListener::IME_FOCUS_NOT_CHANGED
+           : 0);
 
   mEditable->NotifyIMEContext(
       static_cast<int32_t>(aContext.mIMEState.mEnabled),

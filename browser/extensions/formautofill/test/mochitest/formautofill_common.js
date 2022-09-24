@@ -7,9 +7,10 @@
 
 let formFillChromeScript;
 let defaultTextColor;
+let defaultDisabledTextColor;
 let expectingPopup = null;
 
-const { FormAutofillUtils } = SpecialPowers.Cu.import(
+const { FormAutofillUtils } = SpecialPowers.ChromeUtils.import(
   "resource://autofill/FormAutofillUtils.jsm"
 );
 
@@ -93,13 +94,10 @@ function _getAdaptedProfile(profile) {
   return adaptedProfile;
 }
 
-// We could not get ManuallyManagedState of element now, so directly check if
-// filter and text color style are applied.
 async function checkFieldHighlighted(elem, expectedValue) {
   let isHighlightApplied;
   await SimpleTest.promiseWaitForCondition(function checkHighlight() {
-    const computedStyle = window.getComputedStyle(elem);
-    isHighlightApplied = computedStyle.getPropertyValue("filter") !== "none";
+    isHighlightApplied = elem.matches(":autofill");
     return isHighlightApplied === expectedValue;
   }, `Checking #${elem.id} highlight style`);
 
@@ -115,12 +113,37 @@ async function checkFieldPreview(elem, expectedValue) {
   let isTextColorApplied;
   await SimpleTest.promiseWaitForCondition(function checkPreview() {
     const computedStyle = window.getComputedStyle(elem);
-    isTextColorApplied =
-      computedStyle.getPropertyValue("color") !== defaultTextColor;
+    const actualColor = computedStyle.getPropertyValue("color");
+    if (elem.disabled) {
+      isTextColorApplied = actualColor !== defaultDisabledTextColor;
+    } else {
+      isTextColorApplied = actualColor !== defaultTextColor;
+    }
     return isTextColorApplied === !!expectedValue;
   }, `Checking #${elem.id} preview style`);
 
   is(isTextColorApplied, !!expectedValue, `Checking #${elem.id} preview style`);
+}
+
+async function checkFormFieldsStyle(profile, isPreviewing = true) {
+  const elems = document.querySelectorAll("input, select");
+
+  for (const elem of elems) {
+    let fillableValue;
+    let previewValue;
+    let isElementEligible =
+      FormAutofillUtils.isCreditCardOrAddressFieldType(elem) &&
+      FormAutofillUtils.isFieldAutofillable(elem);
+    if (!isElementEligible) {
+      fillableValue = "";
+      previewValue = "";
+    } else {
+      fillableValue = profile && profile[elem.id];
+      previewValue = (isPreviewing && fillableValue) || "";
+    }
+    await checkFieldHighlighted(elem, !!fillableValue);
+    await checkFieldPreview(elem, previewValue);
+  }
 }
 
 function checkFieldValue(elem, expectedValue) {
@@ -131,13 +154,8 @@ function checkFieldValue(elem, expectedValue) {
 }
 
 async function triggerAutofillAndCheckProfile(profile) {
-  const adaptedProfile = _getAdaptedProfile(profile);
+  let adaptedProfile = _getAdaptedProfile(profile);
   const promises = [];
-
-  await SpecialPowers.pushPrefEnv({
-    set: [["dom.input_events.beforeinput.enabled", true]],
-  });
-
   for (const [fieldName, value] of Object.entries(adaptedProfile)) {
     info(`triggerAutofillAndCheckProfile: ${fieldName}`);
     const element = document.getElementById(fieldName);
@@ -436,6 +454,14 @@ function formAutoFillCommonSetup() {
       defaultTextColor = window
         .getComputedStyle(document.querySelector("input"))
         .getPropertyValue("color");
+
+      // This is needed for test_formautofill_preview_highlight.html to work properly
+      let disabledInput = document.querySelector(`input[disabled]`);
+      if (disabledInput) {
+        defaultDisabledTextColor = window
+          .getComputedStyle(disabledInput)
+          .getPropertyValue("color");
+      }
     },
     { once: true }
   );

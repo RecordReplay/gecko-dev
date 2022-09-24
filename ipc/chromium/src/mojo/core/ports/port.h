@@ -13,7 +13,8 @@
 #include "mojo/core/ports/event.h"
 #include "mojo/core/ports/message_queue.h"
 #include "mojo/core/ports/user_data.h"
-#include "mozilla/Mutex.h"
+#include "mozilla/Atomics.h"
+#include "mozilla/PlatformMutex.h"
 #include "mozilla/RefPtr.h"
 #include "nsISupportsImpl.h"
 

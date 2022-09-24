@@ -34,8 +34,6 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
   typedef mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize, nsMargin>
       Super;
 
-  static void VERIFY_COORD(nscoord aValue) { ::VERIFY_COORD(aValue); }
-
   // Constructors
   nsRect() : Super() { MOZ_COUNT_CTOR(nsRect); }
   nsRect(const nsRect& aRect) : Super(aRect) { MOZ_COUNT_CTOR(nsRect); }
@@ -54,6 +52,9 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
   // overflowing nscoord values in the 'width' and 'height' fields by
   // clamping the width and height values to nscoord_MAX if necessary.
 
+  // Returns the smallest rectangle that contains both the area of both
+  // this and aRect. Thus, empty input rectangles are ignored.
+  // Note: if both rectangles are empty, returns aRect.
   [[nodiscard]] nsRect SaturatingUnion(const nsRect& aRect) const {
     if (IsEmpty()) {
       return aRect;
@@ -65,9 +66,6 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
   }
 
   [[nodiscard]] nsRect SaturatingUnionEdges(const nsRect& aRect) const {
-#ifdef NS_COORD_IS_FLOAT
-    return UnionEdges(aRect);
-#else
     nscoord resultX = std::min(aRect.X(), x);
     int64_t w =
         std::max(int64_t(aRect.X()) + aRect.Width(), int64_t(x) + width) -
@@ -96,10 +94,8 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
       }
     }
     return nsRect(resultX, resultY, nscoord(w), nscoord(h));
-#endif
   }
 
-#ifndef NS_COORD_IS_FLOAT
   // Make all nsRect Union methods be saturating.
   [[nodiscard]] nsRect UnionEdges(const nsRect& aRect) const {
     return SaturatingUnionEdges(aRect);
@@ -114,8 +110,8 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
     *this = aRect1.Union(aRect2);
   }
 
-#  if defined(_MSC_VER) && !defined(__clang__) && \
-      (defined(_M_X64) || defined(_M_IX86))
+#if defined(_MSC_VER) && !defined(__clang__) && \
+    (defined(_M_X64) || defined(_M_IX86))
   // Only MSVC supports inlining intrinsics for archs you're not compiling for.
   [[nodiscard]] nsRect Intersect(const nsRect& aRect) const {
     nsRect result;
@@ -215,15 +211,7 @@ struct nsRect : public mozilla::gfx::BaseRect<nscoord, nsRect, nsPoint, nsSize,
     }
     return true;
   }
-#  endif
 #endif
-
-  void SaturatingUnionRect(const nsRect& aRect1, const nsRect& aRect2) {
-    *this = aRect1.SaturatingUnion(aRect2);
-  }
-  void SaturatingUnionRectEdges(const nsRect& aRect1, const nsRect& aRect2) {
-    *this = aRect1.SaturatingUnionEdges(aRect2);
-  }
 
   // Return whether this rect's right or bottom edge overflow int32.
   bool Overflows() const;

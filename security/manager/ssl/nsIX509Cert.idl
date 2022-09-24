@@ -12,17 +12,17 @@ interface nsICertVerificationListener;
 
 %{ C++
 namespace IPC {
-  class Message;
+class MessageReader;
+class MessageWriter;
 }
-class PickleIterator;
 
  /* forward declaration */
  typedef struct CERTCertificateStr CERTCertificate;
 %}
 
 [ptr] native CERTCertificatePtr(CERTCertificate);
-[ptr] native IpcMessagePtr(IPC::Message);
-[ptr] native PickleIteratorPtr(PickleIterator);
+[ptr] native IpcMessageReaderPtr(IPC::MessageReader);
+[ptr] native IpcMessageWriterPtr(IPC::MessageWriter);
 
 /**
  * This represents a X.509 certificate.
@@ -186,15 +186,6 @@ interface nsIX509Cert : nsISupports {
   ACString getBase64DERString();
 
   /**
-   *  Test whether two certificate instances represent the
-   *  same certificate.
-   *
-   *  @return Whether the certificates are equal
-   */
-  [must_use]
-  boolean equals(in nsIX509Cert other);
-
-  /**
    * The base64 encoding of the DER encoded public key info using the specified
    * digest.
    */
@@ -208,8 +199,8 @@ interface nsIX509Cert : nsISupports {
   CERTCertificatePtr getCert();
 
   [notxpcom, noscript]
-  void SerializeToIPC(in IpcMessagePtr aMsg);
+  void SerializeToIPC(in IpcMessageWriterPtr aWriter);
 
   [notxpcom, noscript]
-  bool DeserializeFromIPC([const] in IpcMessagePtr aMsg, in PickleIteratorPtr aIter);
+  bool DeserializeFromIPC(in IpcMessageReaderPtr aReader);
 };

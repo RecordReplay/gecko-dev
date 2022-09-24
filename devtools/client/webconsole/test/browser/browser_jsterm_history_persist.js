@@ -9,7 +9,7 @@
 requestLongerTimeout(2);
 
 const TEST_URI =
-  "data:text/html;charset=utf-8,Web Console test for persisting history";
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console test for persisting history";
 const INPUT_HISTORY_COUNT = 10;
 
 const {
@@ -78,11 +78,10 @@ add_task(async function() {
   // Set input value separately from execute so UP arrow accurately navigates
   // history.
   setInputValue(hud3, '"hello from third tab"');
-  await executeAndWaitForMessage(
+  await executeAndWaitForResultMessage(
     hud3,
     '"hello from third tab"',
-    '"hello from third tab"',
-    ".result"
+    '"hello from third tab"'
   );
 
   state1 = hud1.ui.wrapper.getStore().getState();
@@ -149,7 +148,7 @@ add_task(async function() {
 async function populateInputHistory(hud) {
   for (let i = 0; i < INPUT_HISTORY_COUNT; i++) {
     const input = i.toString();
-    await executeAndWaitForMessage(hud, input, input, ".result");
+    await executeAndWaitForResultMessage(hud, input, input);
   }
 }
 

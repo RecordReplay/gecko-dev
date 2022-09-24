@@ -11,19 +11,11 @@
 #include "mozilla/ipc/InputStreamUtils.h"
 #include "mozilla/ipc/PBackgroundParent.h"
 
-namespace mozilla {
-namespace ipc {
+namespace mozilla::ipc {
 
 // Instances of this class should never be created directly. This class is meant
 // to be inherited in BackgroundImpl.
-class BackgroundParentImpl : public PBackgroundParent,
-                             public ParentToChildStreamActorManager {
- public:
-  PParentToChildStreamParent* SendPParentToChildStreamConstructor(
-      PParentToChildStreamParent* aActor) override;
-  PFileDescriptorSetParent* SendPFileDescriptorSetConstructor(
-      const FileDescriptor& aFD) override;
-
+class BackgroundParentImpl : public PBackgroundParent {
  protected:
   BackgroundParentImpl();
   virtual ~BackgroundParentImpl();
@@ -139,15 +131,10 @@ class BackgroundParentImpl : public PBackgroundParent,
   AllocPBackgroundSessionStorageManagerParent(
       const uint64_t& aTopContextId) override;
 
+  already_AddRefed<PBackgroundSessionStorageServiceParent>
+  AllocPBackgroundSessionStorageServiceParent() override;
+
   already_AddRefed<PIdleSchedulerParent> AllocPIdleSchedulerParent() override;
-
-  already_AddRefed<PRemoteLazyInputStreamParent>
-  AllocPRemoteLazyInputStreamParent(const nsID& aID,
-                                    const uint64_t& aSize) override;
-
-  mozilla::ipc::IPCResult RecvPRemoteLazyInputStreamConstructor(
-      PRemoteLazyInputStreamParent* aActor, const nsID& aID,
-      const uint64_t& aSize) override;
 
   PTemporaryIPCBlobParent* AllocPTemporaryIPCBlobParent() override;
 
@@ -205,21 +192,12 @@ class BackgroundParentImpl : public PBackgroundParent,
 
   bool DeallocPSharedWorkerParent(PSharedWorkerParent* aActor) override;
 
-  PFileDescriptorSetParent* AllocPFileDescriptorSetParent(
-      const FileDescriptor& aFileDescriptor) override;
-
-  bool DeallocPFileDescriptorSetParent(
-      PFileDescriptorSetParent* aActor) override;
-
-  PVsyncParent* AllocPVsyncParent() override;
-
-  bool DeallocPVsyncParent(PVsyncParent* aActor) override;
+  already_AddRefed<PVsyncParent> AllocPVsyncParent() override;
 
   already_AddRefed<mozilla::psm::PVerifySSLServerCertParent>
   AllocPVerifySSLServerCertParent(
-      const ByteArray& aServerCert, const nsTArray<ByteArray>& aPeerCertChain,
-      const nsCString& aHostName, const int32_t& aPort,
-      const OriginAttributes& aOriginAttributes,
+      const nsTArray<ByteArray>& aPeerCertChain, const nsCString& aHostName,
+      const int32_t& aPort, const OriginAttributes& aOriginAttributes,
       const Maybe<ByteArray>& aStapledOCSPResponse,
       const Maybe<ByteArray>& aSctsFromTLSExtension,
       const Maybe<DelegatedCredentialInfoArg>& aDcInfo,
@@ -227,9 +205,9 @@ class BackgroundParentImpl : public PBackgroundParent,
       const uint32_t& aCertVerifierFlags) override;
 
   mozilla::ipc::IPCResult RecvPVerifySSLServerCertConstructor(
-      PVerifySSLServerCertParent* aActor, const ByteArray& aServerCert,
-      nsTArray<ByteArray>&& aPeerCertChain, const nsCString& aHostName,
-      const int32_t& aPort, const OriginAttributes& aOriginAttributes,
+      PVerifySSLServerCertParent* aActor, nsTArray<ByteArray>&& aPeerCertChain,
+      const nsCString& aHostName, const int32_t& aPort,
+      const OriginAttributes& aOriginAttributes,
       const Maybe<ByteArray>& aStapledOCSPResponse,
       const Maybe<ByteArray>& aSctsFromTLSExtension,
       const Maybe<DelegatedCredentialInfoArg>& aDcInfo,
@@ -246,23 +224,16 @@ class BackgroundParentImpl : public PBackgroundParent,
 
   bool DeallocPBroadcastChannelParent(PBroadcastChannelParent* aActor) override;
 
-  PChildToParentStreamParent* AllocPChildToParentStreamParent() override;
-
-  bool DeallocPChildToParentStreamParent(
-      PChildToParentStreamParent* aActor) override;
-
-  PParentToChildStreamParent* AllocPParentToChildStreamParent() override;
-
-  bool DeallocPParentToChildStreamParent(
-      PParentToChildStreamParent* aActor) override;
-
   PServiceWorkerManagerParent* AllocPServiceWorkerManagerParent() override;
 
   bool DeallocPServiceWorkerManagerParent(
       PServiceWorkerManagerParent* aActor) override;
 
   PCamerasParent* AllocPCamerasParent() override;
-
+#ifdef MOZ_WEBRTC
+  mozilla::ipc::IPCResult RecvPCamerasConstructor(
+      PCamerasParent* aActor) override;
+#endif
   bool DeallocPCamerasParent(PCamerasParent* aActor) override;
 
   mozilla::ipc::IPCResult RecvShutdownServiceWorkerRegistrar() override;
@@ -295,6 +266,8 @@ class BackgroundParentImpl : public PBackgroundParent,
   mozilla::ipc::IPCResult RecvPMessagePortConstructor(
       PMessagePortParent* aActor, const nsID& aUUID,
       const nsID& aDestinationUUID, const uint32_t& aSequenceID) override;
+
+  already_AddRefed<PIPCClientCertsParent> AllocPIPCClientCertsParent() override;
 
   bool DeallocPMessagePortParent(PMessagePortParent* aActor) override;
 
@@ -405,6 +378,9 @@ class BackgroundParentImpl : public PBackgroundParent,
   mozilla::ipc::IPCResult RecvEnsureRDDProcessAndCreateBridge(
       EnsureRDDProcessAndCreateBridgeResolver&& aResolver) override;
 
+  mozilla::ipc::IPCResult RecvEnsureUtilityProcessAndCreateBridge(
+      EnsureUtilityProcessAndCreateBridgeResolver&& aResolver) override;
+
   bool DeallocPEndpointForReportParent(
       PEndpointForReportParent* aActor) override;
 
@@ -415,9 +391,16 @@ class BackgroundParentImpl : public PBackgroundParent,
   dom::PMediaTransportParent* AllocPMediaTransportParent() override;
   bool DeallocPMediaTransportParent(
       dom::PMediaTransportParent* aActor) override;
+
+  already_AddRefed<mozilla::net::PWebSocketConnectionParent>
+  AllocPWebSocketConnectionParent(const uint32_t& aListenerId) override;
+  mozilla::ipc::IPCResult RecvPWebSocketConnectionConstructor(
+      PWebSocketConnectionParent* actor, const uint32_t& aListenerId) override;
+
+  already_AddRefed<PLockManagerParent> AllocPLockManagerParent(
+      const ContentPrincipalInfo& aPrincipalInfo, const nsID& aClientId) final;
 };
 
-}  // namespace ipc
-}  // namespace mozilla
+}  // namespace mozilla::ipc
 
 #endif  // mozilla_ipc_backgroundparentimpl_h__

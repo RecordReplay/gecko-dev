@@ -28,8 +28,7 @@
 #define SRIERROR(args) \
   MOZ_LOG(SRILogHelper::GetSriLog(), mozilla::LogLevel::Error, args)
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * Returns whether or not the sub-resource about to be loaded is eligible
@@ -74,7 +73,7 @@ static nsresult IsEligible(nsIChannel* aChannel,
     SRILOG(("SRICheck::IsEligible, same-origin"));
     return NS_OK;
   }
-  SRILOG(("SRICheck::IsEligible, NOT same origin"));
+  SRILOG(("SRICheck::IsEligible, NOT same-origin"));
 
   NS_ConvertUTF8toUTF16 requestSpecUTF16(requestSpec);
   nsTArray<nsString> params;
@@ -491,5 +490,4 @@ nsresult SRICheckDataVerifier::ExportEmptyDataSummary(uint32_t aDataLen,
   return NS_OK;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

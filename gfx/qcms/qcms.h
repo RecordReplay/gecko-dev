@@ -1,6 +1,8 @@
 #ifndef QCMS_H
 #define QCMS_H
 
+/* clang-format off */
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -148,6 +150,13 @@ void qcms_data_create_rgb_with_gamma(
                 float gamma,
                 void **mem,
                 size_t *size);
+
+/* The arguments are standardized Coding-independent Code Points
+ * See [Rec. ITU-T H.273 (12/2016)](https://www.itu.int/rec/T-REC-H.273-201612-I/en)
+ *
+ * Don't use enums here because they can't go safely across FFI. */
+qcms_profile* qcms_profile_create_cicp(uint8_t colour_primaries,
+                                       uint8_t transfer_characteristics);
 
 qcms_profile* qcms_profile_from_memory(const void *mem, size_t size);
 

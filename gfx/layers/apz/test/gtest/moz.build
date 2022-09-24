@@ -5,6 +5,10 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 UNIFIED_SOURCES += [
+    "APZTestAccess.cpp",
+    "APZTestCommon.cpp",
+    "MockHitTester.cpp",
+    "TestAxisLock.cpp",
     "TestBasic.cpp",
     "TestEventRegions.cpp",
     "TestEventResult.cpp",
@@ -19,19 +23,16 @@ UNIFIED_SOURCES += [
     "TestSnapping.cpp",
     "TestSnappingOnMomentum.cpp",
     "TestTreeManager.cpp",
+    "TestWRScrollData.cpp",
 ]
 
 include("/ipc/chromium/chromium-config.mozbuild")
 
 LOCAL_INCLUDES += [
     "/gfx/2d",
+    "/gfx/cairo/cairo/src",
     "/gfx/layers",
     "/gfx/tests/gtest",  # for TestLayers.h, which is shared with the gfx gtests
 ]
 
 FINAL_LIBRARY = "xul-gtest"
-
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

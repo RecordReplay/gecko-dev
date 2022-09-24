@@ -92,23 +92,58 @@ this.test = class extends ExtensionAPI {
   getAPI(context) {
     const { extension } = context;
 
-    function getStack() {
+    function getStack(savedFrame = null) {
+      if (savedFrame) {
+        return ChromeUtils.createError("", savedFrame).stack.replace(
+          /^/gm,
+          "    "
+        );
+      }
       return new context.Error().stack.replace(/^/gm, "    ");
     }
 
     function assertTrue(value, msg) {
-      extension.emit("test-result", Boolean(value), String(msg), getStack());
+      extension.emit(
+        "test-result",
+        Boolean(value),
+        String(msg),
+        getStack(context.getCaller())
+      );
     }
 
     class TestEventManager extends EventManager {
+      constructor(...args) {
+        super(...args);
+
+        // A map to keep track of the listeners wrappers being added in
+        // addListener (the wrapper will be needed to be able to remove
+        // the listener from this EventManager instance if the extension
+        // does call test.onMessage.removeListener).
+        this._listenerWrappers = new Map();
+        context.callOnClose({
+          close: () => this._listenerWrappers.clear(),
+        });
+      }
+
       addListener(callback, ...args) {
-        super.addListener(function(...args) {
+        const listenerWrapper = function(...args) {
           try {
             callback.call(this, ...args);
           } catch (e) {
             assertTrue(false, `${e}\n${e.stack}`);
           }
-        }, ...args);
+        };
+        super.addListener(listenerWrapper, ...args);
+        this._listenerWrappers.set(callback, listenerWrapper);
+      }
+
+      removeListener(callback) {
+        if (!this._listenerWrappers.has(callback)) {
+          return;
+        }
+
+        super.removeListener(this._listenerWrappers.get(callback));
+        this._listenerWrappers.delete(callback);
       }
     }
 
@@ -139,15 +174,20 @@ this.test = class extends ExtensionAPI {
         },
 
         notifyPass(msg) {
-          extension.emit("test-done", true, msg, getStack());
+          extension.emit("test-done", true, msg, getStack(context.getCaller()));
         },
 
         notifyFail(msg) {
-          extension.emit("test-done", false, msg, getStack());
+          extension.emit(
+            "test-done",
+            false,
+            msg,
+            getStack(context.getCaller())
+          );
         },
 
         log(msg) {
-          extension.emit("test-log", true, msg, getStack());
+          extension.emit("test-log", true, msg, getStack(context.getCaller()));
         },
 
         fail(msg) {
@@ -181,7 +221,7 @@ this.test = class extends ExtensionAPI {
             String(msg),
             expected,
             actual,
-            getStack()
+            getStack(context.getCaller())
           );
         },
 
@@ -191,16 +231,24 @@ this.test = class extends ExtensionAPI {
 
           return promise.then(
             result => {
-              assertTrue(false, `Promise resolved, expected rejection: ${msg}`);
+              let message = `Promise resolved, expected rejection '${toSource(
+                expectedError
+              )}'`;
+              if (msg) {
+                message += `: ${msg}`;
+              }
+              assertTrue(false, message);
             },
             error => {
-              let errorMessage = toSource(error && error.message);
+              let expected = toSource(expectedError);
+              let message = `got '${toSource(error)}'`;
+              if (msg) {
+                message += `: ${msg}`;
+              }
 
               assertTrue(
                 errorMatches(error, expectedError, context),
-                `Promise rejected, expecting rejection to match ${toSource(
-                  expectedError
-                )}, got ${errorMessage}: ${msg}`
+                `Promise rejected, expecting rejection to match '${expected}', ${message}`
               );
             }
           );
@@ -210,15 +258,23 @@ this.test = class extends ExtensionAPI {
           try {
             func();
 
-            assertTrue(false, `Function did not throw, expected error: ${msg}`);
+            let message = `Function did not throw, expected error '${toSource(
+              expectedError
+            )}'`;
+            if (msg) {
+              message += `: ${msg}`;
+            }
+            assertTrue(false, message);
           } catch (error) {
-            let errorMessage = toSource(error && error.message);
+            let expected = toSource(expectedError);
+            let message = `got '${toSource(error)}'`;
+            if (msg) {
+              message += `: ${msg}`;
+            }
 
             assertTrue(
               errorMatches(error, expectedError, context),
-              `Function threw, expecting error to match ${toSource(
-                expectedError
-              )}, got ${errorMessage}: ${msg}`
+              `Function threw, expecting error to match '${expected}', ${message}`
             );
           }
         },

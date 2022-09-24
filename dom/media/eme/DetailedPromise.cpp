@@ -5,6 +5,8 @@
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "DetailedPromise.h"
+
+#include "VideoUtils.h"
 #include "mozilla/dom/DOMException.h"
 #include "nsPrintfCString.h"
 
@@ -61,17 +63,6 @@ void DetailedPromise::MaybeReject(ErrorResult&& aArg,
 already_AddRefed<DetailedPromise> DetailedPromise::Create(
     nsIGlobalObject* aGlobal, ErrorResult& aRv, const nsACString& aName) {
   RefPtr<DetailedPromise> promise = new DetailedPromise(aGlobal, aName);
-  promise->CreateWrapper(aRv);
-  return aRv.Failed() ? nullptr : promise.forget();
-}
-
-/* static */
-already_AddRefed<DetailedPromise> DetailedPromise::Create(
-    nsIGlobalObject* aGlobal, ErrorResult& aRv, const nsACString& aName,
-    Telemetry::HistogramID aSuccessLatencyProbe,
-    Telemetry::HistogramID aFailureLatencyProbe) {
-  RefPtr<DetailedPromise> promise = new DetailedPromise(
-      aGlobal, aName, aSuccessLatencyProbe, aFailureLatencyProbe);
   promise->CreateWrapper(aRv);
   return aRv.Failed() ? nullptr : promise.forget();
 }

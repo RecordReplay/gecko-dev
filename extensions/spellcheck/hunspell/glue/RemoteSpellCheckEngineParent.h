@@ -23,15 +23,19 @@ class RemoteSpellcheckEngineParent : public PRemoteSpellcheckEngineParent {
   virtual mozilla::ipc::IPCResult RecvSetDictionary(
       const nsCString& aDictionary, bool* success);
 
+  virtual mozilla::ipc::IPCResult RecvSetDictionaries(
+      const nsTArray<nsCString>& aDictionaries,
+      SetDictionariesResolver&& aResolve);
+
   virtual mozilla::ipc::IPCResult RecvSetDictionaryFromList(
       nsTArray<nsCString>&& aList, SetDictionaryFromListResolver&& aResolve);
 
   virtual mozilla::ipc::IPCResult RecvCheckAsync(nsTArray<nsString>&& aWord,
                                                  CheckAsyncResolver&& aResolve);
 
-  virtual mozilla::ipc::IPCResult RecvCheckAndSuggest(
-      const nsString& aWord, bool* aIsMisspelled,
-      nsTArray<nsString>* aSuggestions);
+  virtual mozilla::ipc::IPCResult RecvSuggest(const nsString& aWord,
+                                              uint32_t aCount,
+                                              SuggestResolver&& aResolve);
 
  private:
   RefPtr<mozSpellChecker> mSpellChecker;

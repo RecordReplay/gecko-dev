@@ -2,17 +2,17 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ---
-loader: taskgraph.loader.transform:loader
+loader: gecko_taskgraph.loader.transform:loader
 
 kind-dependencies:
     - toolchain
     - build
 
 transforms:
-    - taskgraph.transforms.perftest:transforms
-    - taskgraph.transforms.source_test:transforms
-    - taskgraph.transforms.job:transforms
-    - taskgraph.transforms.task:transforms
+    - gecko_taskgraph.transforms.perftest:transforms
+    - gecko_taskgraph.transforms.source_test:transforms
+    - gecko_taskgraph.transforms.job:transforms
+    - gecko_taskgraph.transforms.task:transforms
 
 jobs-from:
     - android.yml
@@ -21,6 +21,8 @@ jobs-from:
     - windows.yml
 
 job-defaults:
+    attributes:
+        retrigger: true
     run-on-projects: []
     treeherder:
         kind: other
@@ -30,6 +32,7 @@ job-defaults:
         max-run-time: 10800
         env:
             USE_ARTIFACT: '1'
+            HOSTUTILS_MANIFEST_PATH: "testing/config/tooltool-manifests/linux64/hostutils.manifest"
         artifacts:
             - type: directory
               name: public/build

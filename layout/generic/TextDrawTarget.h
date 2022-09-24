@@ -76,7 +76,7 @@ class TextDrawTarget : public DrawTarget {
     mHasUnsupportedFeatures = false;
     mHasShadows = false;
 
-    SetPermitSubpixelAA(!aItem->IsSubpixelAADisabled());
+    SetPermitSubpixelAA(true);
 
     // Compute clip/bounds
     auto appUnitsPerDevPixel =
@@ -211,9 +211,9 @@ class TextDrawTarget : public DrawTarget {
         wr::ToFontRenderMode(aOptions.mAntialiasMode, GetPermitSubpixelAA());
     glyphOptions.flags = mWRGlyphFlags;
 
-    mManager->WrBridge()->PushGlyphs(mBuilder, glyphs, aFont, color, *mSc,
-                                     mBoundsRect, ClipRect(), mBackfaceVisible,
-                                     &glyphOptions);
+    mManager->WrBridge()->PushGlyphs(mBuilder, *mResources, glyphs, aFont,
+                                     color, *mSc, mBoundsRect, ClipRect(),
+                                     mBackfaceVisible, &glyphOptions);
   }
 
   void PushClipRect(const Rect& aRect) override {
@@ -243,7 +243,7 @@ class TextDrawTarget : public DrawTarget {
                            const DeviceColor& aColor) {
     auto rect = wr::ToLayoutRect(aRect);
     auto color = wr::ToColorF(aColor);
-    mBuilder.PushRect(rect, ClipRect(), mBackfaceVisible, color);
+    mBuilder.PushRect(rect, ClipRect(), mBackfaceVisible, false, false, color);
   }
 
   // This function is basically designed to slide into the decoration drawing
@@ -341,7 +341,7 @@ class TextDrawTarget : public DrawTarget {
       return;
     }
     mBuilder.PushImage(wr::ToLayoutRect(aBounds), wr::ToLayoutRect(aClip), true,
-                       aFilter, aKey, true, aColor);
+                       false, aFilter, aKey, true, aColor);
   }
 
  private:
@@ -406,7 +406,6 @@ class TextDrawTarget : public DrawTarget {
   }
 
   bool IsRecording() const override { return true; }
-  bool IsCaptureDT() const override { return false; }
 
   already_AddRefed<SourceSurface> Snapshot() override {
     MOZ_CRASH("TextDrawTarget: Method shouldn't be called");
@@ -423,11 +422,6 @@ class TextDrawTarget : public DrawTarget {
     MOZ_CRASH("TextDrawTarget: Method shouldn't be called");
   }
 
-  void DrawCapturedDT(DrawTargetCapture* aCaptureDT,
-                      const Matrix& aTransform) override {
-    MOZ_CRASH("TextDrawTarget: Method shouldn't be called");
-  }
-
   void DrawSurface(SourceSurface* aSurface, const Rect& aDest,
                    const Rect& aSource, const DrawSurfaceOptions& aSurfOptions,
                    const DrawOptions& aOptions) override {
@@ -441,8 +435,8 @@ class TextDrawTarget : public DrawTarget {
   }
 
   void DrawSurfaceWithShadow(SourceSurface* aSurface, const Point& aDest,
-                             const DeviceColor& aColor, const Point& aOffset,
-                             Float aSigma, CompositionOp aOperator) override {
+                             const ShadowOptions& aShadow,
+                             CompositionOp aOperator) override {
     MOZ_CRASH("TextDrawTarget: Method shouldn't be called");
   }
 
@@ -465,7 +459,7 @@ class TextDrawTarget : public DrawTarget {
     auto rect = wr::ToLayoutRect(LayoutDeviceRect::FromUnknownRect(aRect));
     auto color =
         wr::ToColorF(static_cast<const ColorPattern&>(aPattern).mColor);
-    mBuilder.PushRect(rect, ClipRect(), mBackfaceVisible, color);
+    mBuilder.PushRect(rect, ClipRect(), mBackfaceVisible, false, false, color);
   }
 
   void StrokeRect(const Rect& aRect, const Pattern& aPattern,

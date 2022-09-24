@@ -5,7 +5,7 @@
 
 // Check evaluating getters on prototype nodes in the console.
 const TEST_URI =
-  "data:text/html;charset=utf8,<h1>Object Inspector on Getters</h1>";
+  "data:text/html;charset=utf8,<!DOCTYPE html><h1>Object Inspector on Getters</h1>";
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
@@ -43,7 +43,7 @@ add_task(async function() {
     content.wrappedJSObject.console.log("oi-test", a, b, c, d);
   });
 
-  const node = await waitFor(() => findMessage(hud, "oi-test"));
+  const node = await waitFor(() => findConsoleAPIMessage(hud, "oi-test"));
   const [a, b, c, d] = node.querySelectorAll(".tree");
 
   await testObject(a, {

@@ -32,6 +32,9 @@ let tests = [
 ];
 
 add_task(async function test_unknownContentType_dialog_layout() {
+  forcePromptForFiles("text/plain", "txt");
+  forcePromptForFiles("application/octet-stream", "pif");
+
   for (let test of tests) {
     let UCTObserver = {
       opened: PromiseUtils.defer(),

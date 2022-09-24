@@ -18,7 +18,7 @@ display_list_stats = ["api/display_list_stats"]
 serialize_program = ["serde", "webrender_build/serialize_program"]
 no_static_freetype = []
 leak_checks = []
-gecko = []
+gecko = ["fog"]
 sw_compositor = ["swgl"]
 
 [build-dependencies]
@@ -30,7 +30,6 @@ webrender_build = { version = "0.0.1", path = "../webrender_build" }
 bincode = "1.0"
 bitflags = "1.2"
 byteorder = "1.0"
-cstr = "0.2"
 euclid = { version = "0.22.0", features = ["serde"] }
 fxhash = "0.2.1"
 gleam = "0.13.1"
@@ -41,7 +40,7 @@ num-traits = "0.2"
 plane-split = "0.17"
 png = { optional = true, version = "0.16" }
 rayon = "1"
-ron = { optional = true, version = "0.6.2" }
+ron = { optional = true, version = "0.7" }
 serde = { optional = true, version = "1.0", features = ["serde_derive"] }
 smallvec = "1"
 time = "0.1"
@@ -51,8 +50,11 @@ malloc_size_of = { version = "0.0.1", path = "../wr_malloc_size_of", package = "
 svg_fmt = "0.4"
 tracy-rs = "0.1.2"
 derive_more = "0.99"
-etagere = "0.2.4"
+etagere = "0.2.6"
+glean = "44.0.0"
+fog = { version = "0.1.0", optional = true }
 swgl = { path = "../swgl", optional = true }
+topological-sort = "0.1"
 
 [dev-dependencies]
 mozangle = "0.3.3"
@@ -66,8 +68,8 @@ libc = "0.2"
 dwrote = "0.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "0.9"
-core-graphics = "0.22"
-core-text = { version = "19", default-features = false }
+core-foundation = "0.9.2"
+core-graphics = "0.22.3"
+core-text = { version = "19.2", default-features = false }
 objc = "0.2"
 foreign-types = "0.3.0"

@@ -19,7 +19,8 @@ with Files("*IMContextWrapper*"):
 with Files("*nsGtkKeyUtils*"):
     BUG_COMPONENT = ("Core", "DOM: UI Events & Focus Handling")
 
-DIRS += ["mozgtk"]
+if CONFIG["COMPILE_ENVIRONMENT"]:
+    DIRS += ["mozgtk"]
 
 if CONFIG["MOZ_WAYLAND"]:
     DIRS += ["wayland", "mozwayland"]
@@ -30,7 +31,11 @@ EXPORTS += [
     "nsImageToPixbuf.h",
 ]
 
-EXPORTS.mozilla += ["WidgetUtilsGtk.h"]
+EXPORTS.mozilla += [
+    "GRefPtr.h",
+    "GUniquePtr.h",
+    "WidgetUtilsGtk.h",
+]
 
 EXPORTS.mozilla.widget += [
     "WindowSurface.h",
@@ -38,6 +43,7 @@ EXPORTS.mozilla.widget += [
 ]
 
 UNIFIED_SOURCES += [
+    "AsyncGtkClipboardRequest.cpp",
     "GfxInfo.cpp",
     "gtk3drawing.cpp",
     "GtkCompositorWidget.cpp",
@@ -45,6 +51,8 @@ UNIFIED_SOURCES += [
     "MozContainer.cpp",
     "MPRISServiceHandler.cpp",
     "NativeKeyBindings.cpp",
+    "NativeMenuGtk.cpp",
+    "NativeMenuSupport.cpp",
     "nsApplicationChooser.cpp",
     "nsAppShell.cpp",
     "nsBidiKeyboard.cpp",
@@ -55,7 +63,6 @@ UNIFIED_SOURCES += [
     "nsGtkKeyUtils.cpp",
     "nsImageToPixbuf.cpp",
     "nsLookAndFeel.cpp",
-    "nsNativeBasicThemeGTK.cpp",
     "nsSound.cpp",
     "nsToolkit.cpp",
     "nsWidgetFactory.cpp",
@@ -87,8 +94,8 @@ if CONFIG["MOZ_WAYLAND"]:
         "MozContainerWayland.cpp",
         "nsClipboardWayland.cpp",
         "nsWaylandDisplay.cpp",
-        "WaylandShmBuffer.cpp",
-        "WindowSurfaceWayland.cpp",
+        "VAAPIUtils.cpp",
+        "WaylandBuffer.cpp",
         "WindowSurfaceWaylandMultiBuffer.cpp",
     ]
     EXPORTS.mozilla.widget += [
@@ -96,27 +103,37 @@ if CONFIG["MOZ_WAYLAND"]:
         "DMABufSurface.h",
         "MozContainerWayland.h",
         "nsWaylandDisplay.h",
-        "WaylandShmBuffer.h",
+        "VAAPIUtils.h",
+        "WaylandBuffer.h",
+    ]
+    LOCAL_INCLUDES += [
+        "/media/mozva",
+    ]
+    USE_LIBS += [
+        "mozva",
     ]
 
-if CONFIG["MOZ_X11"]:
+if CONFIG["MOZ_X11"] or CONFIG["MOZ_WAYLAND"]:
     UNIFIED_SOURCES += [
         "CompositorWidgetChild.cpp",
         "CompositorWidgetParent.cpp",
         "InProcessGtkCompositorWidget.cpp",
-        "nsClipboardX11.cpp",
-        "nsShmImage.cpp",
         "nsUserIdleServiceGTK.cpp",
-        "WindowSurfaceX11.cpp",
-        "WindowSurfaceX11Image.cpp",
-        "WindowSurfaceX11SHM.cpp",
-        "WindowSurfaceXRender.cpp",
     ]
     EXPORTS.mozilla.widget += [
         "CompositorWidgetChild.h",
         "CompositorWidgetParent.h",
         "GtkCompositorWidget.h",
         "InProcessGtkCompositorWidget.h",
+    ]
+
+if CONFIG["MOZ_X11"]:
+    UNIFIED_SOURCES += [
+        "nsClipboardX11.cpp",
+        "nsShmImage.cpp",
+        "WindowSurfaceX11.cpp",
+        "WindowSurfaceX11Image.cpp",
+        "WindowSurfaceX11SHM.cpp",
     ]
 
 if CONFIG["NS_PRINTING"]:
@@ -146,7 +163,7 @@ LOCAL_INCLUDES += [
     "/widget/headless",
 ]
 
-if CONFIG["MOZ_X11"]:
+if CONFIG["MOZ_X11"] or CONFIG["MOZ_WAYLAND"]:
     LOCAL_INCLUDES += [
         "/widget/x11",
     ]
@@ -155,25 +172,21 @@ DEFINES["CAIRO_GFX"] = True
 
 DEFINES["MOZ_APP_NAME"] = '"%s"' % CONFIG["MOZ_APP_NAME"]
 
-# When building with GTK3, the widget code always needs to use
-# system Cairo headers, regardless of whether we are also linked
-# against and using in-tree Cairo. By not using in-tree Cairo
-# headers, we avoid picking up our renamed symbols, and instead
-# use only system Cairo symbols that GTK3 uses. This allows that
-# any Cairo objects created can be freely passed back and forth
-# between the widget code and GTK3.
-if not (CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" and CONFIG["MOZ_TREE_CAIRO"]):
-    CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-
-CFLAGS += CONFIG["TK_CFLAGS"]
-CXXFLAGS += CONFIG["TK_CFLAGS"]
+CFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
 
 if CONFIG["MOZ_WAYLAND"]:
     CFLAGS += CONFIG["MOZ_WAYLAND_CFLAGS"]
     CXXFLAGS += CONFIG["MOZ_WAYLAND_CFLAGS"]
 
 if CONFIG["MOZ_ENABLE_DBUS"]:
+    EXPORTS.mozilla.widget += [
+        "AsyncDBus.h",
+    ]
+    UNIFIED_SOURCES += [
+        "AsyncDBus.cpp",
+    ]
     CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
-
-CXXFLAGS += ["-Wno-error=shadow"]
 CXXFLAGS += ["-Werror=switch"]
+
+REQUIRES_UNIFIED_BUILD = True

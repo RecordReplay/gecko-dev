@@ -1,7 +1,7 @@
 /* Any copyright is dedicated to the Public Domain.
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
-add_task(async function setup() {
+add_setup(async function() {
   await BrowserTestUtils.openNewForegroundTab({
     gBrowser,
     url: "about:logins",
@@ -62,7 +62,7 @@ add_task(async function test_no_logins_class() {
       ok(
         loginIntro.shadowRoot
           .querySelector("a.intro-help-link")
-          .href.includes("lockwise"),
+          .href.includes("password-manager-remember-delete-edit-logins"),
         "Check support href populated"
       );
 

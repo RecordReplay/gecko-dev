@@ -5,9 +5,6 @@
 include protocol PBackground;
 include protocol PCacheOp;
 include protocol PCacheStreamControl;
-include protocol PFileDescriptorSet;
-include protocol PChildToParentStream;
-include protocol PParentToChildStream;
 
 include CacheTypes;
 
@@ -15,6 +12,7 @@ namespace mozilla {
 namespace dom {
 namespace cache {
 
+[ManualDealloc]
 protocol PCache
 {
   manager PBackground;

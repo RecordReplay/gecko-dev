@@ -58,7 +58,7 @@ static already_AddRefed<SourceSurface> CheckDecoderState(
             bool(progress & FLAG_IS_ANIMATED));
 
   // The decoder should get the correct size.
-  IntSize size = aDecoder->Size();
+  OrientedIntSize size = aDecoder->Size();
   EXPECT_EQ(aTestCase.mSize.width, size.width);
   EXPECT_EQ(aTestCase.mSize.height, size.height);
 
@@ -316,7 +316,7 @@ static void CheckAnimationDecoderResults(const ImageTestCase& aTestCase,
   }
 
   // The decoder should get the correct size.
-  IntSize size = aDecoder->Size();
+  OrientedIntSize size = aDecoder->Size();
   EXPECT_EQ(aTestCase.mSize.width, size.width);
   EXPECT_EQ(aTestCase.mSize.height, size.height);
 
@@ -438,12 +438,12 @@ static void CheckDecoderFrameFirst(const ImageTestCase& aTestCase) {
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into the image.
-  rv = image->OnImageDataAvailable(nullptr, nullptr, inputStream, 0,
+  rv = image->OnImageDataAvailable(nullptr, inputStream, 0,
                                    static_cast<uint32_t>(length));
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Let the image know we've sent all the data.
-  rv = image->OnImageDataComplete(nullptr, nullptr, NS_OK, true);
+  rv = image->OnImageDataComplete(nullptr, NS_OK, true);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   RefPtr<ProgressTracker> tracker = image->GetProgressTracker();
@@ -548,12 +548,12 @@ static void CheckDecoderFrameCurrent(const ImageTestCase& aTestCase) {
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into the image.
-  rv = image->OnImageDataAvailable(nullptr, nullptr, inputStream, 0,
+  rv = image->OnImageDataAvailable(nullptr, inputStream, 0,
                                    static_cast<uint32_t>(length));
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Let the image know we've sent all the data.
-  rv = image->OnImageDataComplete(nullptr, nullptr, NS_OK, true);
+  rv = image->OnImageDataComplete(nullptr, NS_OK, true);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   RefPtr<ProgressTracker> tracker = image->GetProgressTracker();
@@ -706,6 +706,14 @@ TEST_F(ImageDecoders, WebPTransparentNoAlphaHeaderSingleChunk) {
 
 TEST_F(ImageDecoders, AVIFSingleChunk) {
   CheckDecoderSingleChunk(GreenAVIFTestCase());
+}
+
+TEST_F(ImageDecoders, AVIFSingleChunkNonzeroReserved) {
+  CheckDecoderSingleChunk(NonzeroReservedAVIFTestCase());
+}
+
+TEST_F(ImageDecoders, AVIFSingleChunkMultipleColr) {
+  CheckDecoderSingleChunk(MultipleColrAVIFTestCase());
 }
 
 TEST_F(ImageDecoders, AVIFSingleChunkTransparent10bit420) {
@@ -1049,12 +1057,12 @@ TEST_F(ImageDecoders, MultipleSizesICOSingleChunk) {
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Write the data into the image.
-  rv = image->OnImageDataAvailable(nullptr, nullptr, inputStream, 0,
+  rv = image->OnImageDataAvailable(nullptr, inputStream, 0,
                                    static_cast<uint32_t>(length));
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   // Let the image know we've sent all the data.
-  rv = image->OnImageDataComplete(nullptr, nullptr, NS_OK, true);
+  rv = image->OnImageDataComplete(nullptr, NS_OK, true);
   ASSERT_TRUE(NS_SUCCEEDED(rv));
 
   RefPtr<ProgressTracker> tracker = image->GetProgressTracker();

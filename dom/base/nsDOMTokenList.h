@@ -34,14 +34,14 @@ class nsAtom;
 
 class nsDOMTokenList : public nsISupports, public nsWrapperCache {
  protected:
-  typedef mozilla::dom::Element Element;
-  typedef mozilla::dom::DocGroup DocGroup;
-  typedef nsWhitespaceTokenizerTemplate<nsContentUtils::IsHTMLWhitespace>
-      WhitespaceTokenizer;
+  using Element = mozilla::dom::Element;
+  using DocGroup = mozilla::dom::DocGroup;
+  using WhitespaceTokenizer =
+      nsWhitespaceTokenizerTemplate<nsContentUtils::IsHTMLWhitespace>;
 
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsDOMTokenList)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(nsDOMTokenList)
 
   nsDOMTokenList(Element* aElement, nsAtom* aAttrAtom,
                  const mozilla::dom::DOMTokenListSupportedTokenArray = nullptr);
@@ -53,7 +53,6 @@ class nsDOMTokenList : public nsISupports, public nsWrapperCache {
 
   DocGroup* GetDocGroup() const;
 
-  void RemoveDuplicates(const nsAttrValue* aAttr);
   uint32_t Length();
   void Item(uint32_t aIndex, nsAString& aResult) {
     bool found;

@@ -10,10 +10,8 @@
 #include "nsString.h"
 #include "mozilla/MozPromise.h"
 
-typedef mozilla::MozPromise<bool, nsresult, /* IsExclusive */ true>
-    SharePromise;
-
-enum TabletModeState { eTabletModeUnknown = 0, eTabletModeOff, eTabletModeOn };
+using SharePromise =
+    mozilla::MozPromise<bool, nsresult, /* IsExclusive */ true>;
 
 class WindowsUIUtils final : public nsIWindowsUIUtils {
  public:
@@ -25,10 +23,14 @@ class WindowsUIUtils final : public nsIWindowsUIUtils {
   static RefPtr<SharePromise> Share(nsAutoString aTitle, nsAutoString aText,
                                     nsAutoString aUrl);
 
+  static void UpdateInTabletMode();
+  static bool GetInTabletMode();
+
+  // Use LookAndFeel for a cached getter.
+  static bool ComputeOverlayScrollbars();
+
  protected:
   ~WindowsUIUtils();
-
-  TabletModeState mInTabletMode;
 };
 
 #endif  // mozilla_widget_WindowsUIUtils_h__

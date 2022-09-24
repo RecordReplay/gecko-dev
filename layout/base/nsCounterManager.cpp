@@ -13,8 +13,12 @@
 #include "mozilla/PresShell.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/WritingModes.h"
+#include "mozilla/dom/Element.h"
 #include "nsContentUtils.h"
 #include "nsIContent.h"
+#include "nsIContentInlines.h"
+#include "nsIFrame.h"
+#include "nsContainerFrame.h"
 #include "nsTArray.h"
 #include "mozilla/dom/Text.h"
 
@@ -129,6 +133,20 @@ void nsCounterUseNode::GetText(WritingMode aWM, CounterStyle* aStyle,
   }
 }
 
+static const nsIContent* GetParentContentForScope(nsIFrame* frame) {
+  // We do not want elements with `display: contents` to establish scope for
+  // counters. We'd like to do something like
+  // `nsIFrame::GetClosestFlattenedTreeAncestorPrimaryFrame()` above, but this
+  // may be called before the primary frame is set on frames.
+  nsIContent* content = frame->GetContent()->GetFlattenedTreeParent();
+  while (content && content->IsElement() &&
+         content->AsElement()->IsDisplayContents()) {
+    content = content->GetFlattenedTreeParent();
+  }
+
+  return content;
+}
+
 void nsCounterList::SetScope(nsCounterNode* aNode) {
   // This function is responsible for setting |mScopeStart| and
   // |mScopePrev| (whose purpose is described in nsCounterManager.h).
@@ -140,11 +158,31 @@ void nsCounterList::SetScope(nsCounterNode* aNode) {
   // frame tree, so we walk up parent scopes until we find something
   // appropriate.
 
-  if (aNode == First()) {
+  auto setNullScopeFor = [](nsCounterNode* aNode) {
     aNode->mScopeStart = nullptr;
     aNode->mScopePrev = nullptr;
+    if (aNode->IsUnitializedIncrementNode()) {
+      aNode->ChangeNode()->mChangeValue = 1;
+    }
+  };
+
+  if (aNode == First()) {
+    setNullScopeFor(aNode);
     return;
   }
+
+  auto didSetScopeFor = [this](nsCounterNode* aNode) {
+    if (aNode->mType == nsCounterNode::USE) {
+      return;
+    }
+    if (aNode->mScopeStart->IsContentBasedReset()) {
+      mDirty = true;
+    }
+    if (aNode->IsUnitializedIncrementNode()) {
+      aNode->ChangeNode()->mChangeValue =
+          aNode->mScopeStart->IsReversed() ? -1 : 1;
+    }
+  };
 
   // If there exist an explicit RESET scope created by an ancestor or
   // the element itself, then we use that scope.
@@ -152,32 +190,45 @@ void nsCounterList::SetScope(nsCounterNode* aNode) {
   // their descendants) in reverse document order.
   if (aNode->mType != nsCounterNode::USE &&
       StaticPrefs::layout_css_counter_ancestor_scope_enabled()) {
-    nsIContent* const counterNode = aNode->mPseudoFrame->GetContent();
-    nsCounterNode* lastPrev = nullptr;
-    for (nsCounterNode* prev = Prev(aNode); prev; prev = prev->mScopePrev) {
-      if (prev->mType == nsCounterNode::RESET) {
-        if (aNode->mPseudoFrame == prev->mPseudoFrame) {
+    for (auto* p = aNode->mPseudoFrame; p; p = p->GetParent()) {
+      // This relies on the fact that a RESET node is always the first
+      // CounterNode for a frame if it has any.
+      auto* counter = GetFirstNodeFor(p);
+      if (!counter || counter->mType != nsCounterNode::RESET) {
+        continue;
+      }
+      if (p == aNode->mPseudoFrame) {
+        break;
+      }
+      aNode->mScopeStart = counter;
+      aNode->mScopePrev = counter;
+      for (nsCounterNode* prev = Prev(aNode); prev; prev = prev->mScopePrev) {
+        if (prev->mScopeStart == counter) {
+          aNode->mScopePrev =
+              prev->mType == nsCounterNode::RESET ? prev->mScopePrev : prev;
           break;
         }
-        // FIXME(bug 1477524): should use flattened tree here:
-        nsIContent* resetNode = prev->mPseudoFrame->GetContent();
-        if (counterNode->IsInclusiveDescendantOf(resetNode)) {
-          aNode->mScopeStart = prev;
-          aNode->mScopePrev = lastPrev ? lastPrev : prev;
-          return;
+        if (prev->mType != nsCounterNode::RESET) {
+          prev = prev->mScopeStart;
+          if (!prev) {
+            break;
+          }
         }
-        lastPrev = prev->mScopePrev;
-      } else if (!lastPrev) {
-        lastPrev = prev;
       }
+      didSetScopeFor(aNode);
+      return;
     }
   }
 
   // Get the content node for aNode's rendering object's *parent*,
   // since scope includes siblings, so we want a descendant check on
-  // parents.
-  nsIContent* nodeContent = aNode->mPseudoFrame->GetContent()->GetParent();
-
+  // parents. Note here that mPseudoFrame is a bit of a misnomer, as it
+  // might not be a pseudo element at all, but a normal element that
+  // happens to increment a counter. We want to respect the flat tree
+  // here, but skipping any <slot> element that happens to contain
+  // mPseudoFrame. That's why this uses GetInFlowParent() instead
+  // of GetFlattenedTreeParent().
+  const nsIContent* nodeContent = GetParentContentForScope(aNode->mPseudoFrame);
   for (nsCounterNode *prev = Prev(aNode), *start; prev;
        prev = start->mScopePrev) {
     // If |prev| starts a scope (because it's a real or implied
@@ -190,7 +241,8 @@ void nsCounterList::SetScope(nsCounterNode* aNode) {
                 : prev->mScopeStart;
 
     // |startContent| is analogous to |nodeContent| (see above).
-    nsIContent* startContent = start->mPseudoFrame->GetContent()->GetParent();
+    const nsIContent* startContent =
+        GetParentContentForScope(start->mPseudoFrame);
     NS_ASSERTION(nodeContent || !startContent,
                  "null check on startContent should be sufficient to "
                  "null check nodeContent as well, since if nodeContent "
@@ -202,33 +254,59 @@ void nsCounterList::SetScope(nsCounterNode* aNode) {
           nodeContent == startContent) &&
         // everything is inside the root (except the case above,
         // a second reset on the root)
-        // FIXME(bug 1477524): should use flattened tree here:
-        (!startContent || nodeContent->IsInclusiveDescendantOf(startContent))) {
+        (!startContent ||
+         nodeContent->IsInclusiveFlatTreeDescendantOf(startContent))) {
       aNode->mScopeStart = start;
       aNode->mScopePrev = prev;
+      didSetScopeFor(aNode);
       return;
     }
   }
 
-  aNode->mScopeStart = nullptr;
-  aNode->mScopePrev = nullptr;
+  setNullScopeFor(aNode);
 }
 
 void nsCounterList::RecalcAll() {
-  mDirty = false;
-
-  // Setup the scope and calculate the default start value for <ol reversed>.
+  // Setup the scope and calculate the default start value for content-based
+  // reversed() counters.  We need to track the last increment for each of
+  // those scopes so that we can add it in an extra time at the end.
+  // https://drafts.csswg.org/css-lists/#instantiating-counters
+  nsTHashMap<nsPtrHashKey<nsCounterChangeNode>, int32_t> scopes;
   for (nsCounterNode* node = First(); node; node = Next(node)) {
     SetScope(node);
     if (node->IsContentBasedReset()) {
-      node->mValueAfter = 1;
-    } else if (node->mType == nsCounterChangeNode::INCREMENT &&
-               node->mScopeStart && node->mScopeStart->IsContentBasedReset() &&
-               node->mPseudoFrame->StyleDisplay()->IsListItem()) {
-      ++node->mScopeStart->mValueAfter;
+      node->ChangeNode()->mSeenSetNode = false;
+      node->mValueAfter = 0;
+      scopes.InsertOrUpdate(node->ChangeNode(), 0);
+    } else if (node->mScopeStart && node->mScopeStart->IsContentBasedReset() &&
+               !node->mScopeStart->ChangeNode()->mSeenSetNode) {
+      if (node->mType == nsCounterChangeNode::INCREMENT) {
+        auto incrementNegated = -node->ChangeNode()->mChangeValue;
+        if (auto entry = scopes.Lookup(node->mScopeStart->ChangeNode())) {
+          entry.Data() = incrementNegated;
+        }
+        auto* next = Next(node);
+        if (next && next->mPseudoFrame == node->mPseudoFrame &&
+            next->mType == nsCounterChangeNode::SET) {
+          continue;
+        }
+        node->mScopeStart->mValueAfter += incrementNegated;
+      } else if (node->mType == nsCounterChangeNode::SET) {
+        node->mScopeStart->mValueAfter += node->ChangeNode()->mChangeValue;
+        // We have a 'counter-set' for this scope so we're done.
+        // The counter is incremented from that value for the remaining nodes.
+        node->mScopeStart->ChangeNode()->mSeenSetNode = true;
+      }
     }
   }
 
+  // For all the content-based reversed() counters we found, add in the
+  // incrementNegated from its last counter-increment.
+  for (auto iter = scopes.ConstIter(); !iter.Done(); iter.Next()) {
+    iter.Key()->mValueAfter += iter.Data();
+  }
+
+  mDirty = false;
   for (nsCounterNode* node = First(); node; node = Next(node)) {
     node->Calc(this, /* aNotify = */ true);
   }
@@ -238,12 +316,12 @@ static bool AddCounterChangeNode(nsCounterManager& aManager, nsIFrame* aFrame,
                                  int32_t aIndex,
                                  const nsStyleContent::CounterPair& aPair,
                                  nsCounterNode::Type aType) {
-  auto* node = new nsCounterChangeNode(aFrame, aType, aPair.value, aIndex);
+  auto* node = new nsCounterChangeNode(aFrame, aType, aPair.value, aIndex,
+                                       aPair.is_reversed);
   nsCounterList* counterList = aManager.CounterListFor(aPair.name.AsAtom());
   counterList->Insert(node);
   if (!counterList->IsLast(node)) {
-    // Tell the caller it's responsible for recalculating the entire
-    // list.
+    // Tell the caller it's responsible for recalculating the entire list.
     counterList->SetDirty();
     return true;
   }
@@ -253,7 +331,7 @@ static bool AddCounterChangeNode(nsCounterManager& aManager, nsIFrame* aFrame,
   if (MOZ_LIKELY(!counterList->IsDirty())) {
     node->Calc(counterList);
   }
-  return false;
+  return counterList->IsDirty();
 }
 
 static bool HasCounters(const nsStyleContent& aStyle) {
@@ -305,11 +383,12 @@ bool nsCounterManager::AddCounterChanges(nsIFrame* aFrame) {
   }
 
   if (requiresListItemIncrement && !hasListItemIncrement) {
-    bool reversed =
-        aFrame->StyleList()->mMozListReversed == StyleMozListReversed::True;
     RefPtr<nsAtom> atom = nsGkAtoms::list_item;
+    // We use a magic value here to signal to SetScope() that it should
+    // set the value to -1 or 1 depending on if the scope is reversed()
+    // or not.
     auto listItemIncrement = nsStyleContent::CounterPair{
-        {StyleAtom(atom.forget())}, reversed ? -1 : 1};
+        {StyleAtom(atom.forget())}, std::numeric_limits<int32_t>::min()};
     dirty |= AddCounterChangeNode(
         *this, aFrame, styleContent->mCounterIncrement.Length(),
         listItemIncrement, nsCounterChangeNode::INCREMENT);
@@ -392,8 +471,8 @@ void nsCounterManager::GetSpokenCounterText(nsIFrame* aFrame,
 }
 #endif
 
-#ifdef DEBUG
-void nsCounterManager::Dump() {
+#if defined(DEBUG) || defined(MOZ_LAYOUT_DEBUGGER)
+void nsCounterManager::Dump() const {
   printf("\n\nCounter Manager Lists:\n");
   for (const auto& entry : mNames) {
     printf("Counter named \"%s\":\n", nsAtomCString(entry.GetKey()).get());

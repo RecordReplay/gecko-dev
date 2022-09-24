@@ -6,7 +6,6 @@
 
 #include <algorithm>
 #include <iterator>
-#include <limits.h>
 #include <string.h>
 #include <stdio.h>
 #include "readstrings.h"
@@ -337,7 +336,7 @@ int IniReader::Read() {
     return mMaybeStatusCode.value();
   }
 
-  if (mKeys.size() < 1) {
+  if (mKeys.empty()) {
     // If there's nothing to read, just report success and return.
     mMaybeStatusCode = mozilla::Some(OK);
     return OK;

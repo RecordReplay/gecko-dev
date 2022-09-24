@@ -529,14 +529,14 @@ describe("PageError component:", () => {
         serviceContainer,
       })
     );
-    let indentEl = wrapper.find(".indent");
+    expect(wrapper.prop("data-indent")).toBe(`${indent}`);
+    const indentEl = wrapper.find(".indent");
     expect(indentEl.prop("style").width).toBe(`${indent * INDENT_WIDTH}px`);
-    expect(indentEl.prop("data-indent")).toBe(`${indent}`);
 
     wrapper = render(PageError({ message, serviceContainer }));
-    indentEl = wrapper.find(".indent");
-    expect(indentEl.prop("style").width).toBe(`0`);
-    expect(indentEl.prop("data-indent")).toBe(`0`);
+    expect(wrapper.prop("data-indent")).toBe(`0`);
+    // there's no indent element where the indent is 0
+    expect(wrapper.find(".indent").length).toBe(0);
   });
 
   it("has empty error notes", () => {
@@ -559,7 +559,7 @@ describe("PageError component:", () => {
         {
           messageBody: "test note",
           frame: {
-            source: "http://example.com/test.js",
+            source: "https://example.com/test.js",
             line: 2,
             column: 6,
           },
@@ -590,7 +590,7 @@ describe("PageError component:", () => {
         {
           messageBody: "test note 1",
           frame: {
-            source: "http://example.com/test1.js",
+            source: "https://example.com/test1.js",
             line: 2,
             column: 6,
           },
@@ -598,7 +598,7 @@ describe("PageError component:", () => {
         {
           messageBody: "test note 2",
           frame: {
-            source: "http://example.com/test2.js",
+            source: "https://example.com/test2.js",
             line: 10,
             column: 18,
           },
@@ -606,7 +606,7 @@ describe("PageError component:", () => {
         {
           messageBody: "test note 3",
           frame: {
-            source: "http://example.com/test3.js",
+            source: "https://example.com/test3.js",
             line: 9,
             column: 4,
           },

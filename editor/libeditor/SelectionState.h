@@ -7,6 +7,7 @@
 #define mozilla_SelectionState_h
 
 #include "mozilla/EditorDOMPoint.h"
+#include "mozilla/EditorForwards.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/OwningNonNull.h"
 #include "nsCOMPtr.h"
@@ -19,7 +20,6 @@
 class nsCycleCollectionTraversalCallback;
 class nsRange;
 namespace mozilla {
-class RangeUpdater;
 namespace dom {
 class Element;
 class Selection;
@@ -51,11 +51,22 @@ struct RangeItem final {
     mStartContainer = mEndContainer = nullptr;
     mStartOffset = mEndOffset = 0;
   }
-  already_AddRefed<nsRange> GetRange();
-  bool IsCollapsed() const {
+  already_AddRefed<nsRange> GetRange() const;
+
+  // Same as the API of dom::AbstractRange
+  [[nodiscard]] nsINode* GetRoot() const;
+  [[nodiscard]] bool Collapsed() const {
     return mStartContainer == mEndContainer && mStartOffset == mEndOffset;
   }
-  bool IsSet() const { return mStartContainer && mEndContainer; }
+  [[nodiscard]] bool IsPositioned() const {
+    return mStartContainer && mEndContainer;
+  }
+  [[nodiscard]] bool Equals(const RangeItem& aOther) const {
+    return mStartContainer == aOther.mStartContainer &&
+           mEndContainer == aOther.mEndContainer &&
+           mStartOffset == aOther.mStartOffset &&
+           mEndOffset == aOther.mEndOffset;
+  }
   EditorDOMPoint StartPoint() const {
     return EditorDOMPoint(mStartContainer, mStartOffset);
   }
@@ -88,20 +99,74 @@ struct RangeItem final {
 
 class SelectionState final {
  public:
-  SelectionState();
-  ~SelectionState() { Clear(); }
+  /**
+   * Same as the API as dom::Selection
+   */
+  [[nodiscard]] bool IsCollapsed() const {
+    if (mArray.Length() != 1) {
+      return false;
+    }
+    return mArray[0]->Collapsed();
+  }
 
+  void RemoveAllRanges() {
+    mArray.Clear();
+    mDirection = eDirNext;
+  }
+
+  [[nodiscard]] uint32_t RangeCount() const { return mArray.Length(); }
+
+  /**
+   * Saving all ranges of aSelection.
+   */
   void SaveSelection(dom::Selection& aSelection);
+
+  /**
+   * Setting aSelection to have all ranges stored by this instance.
+   */
   MOZ_CAN_RUN_SCRIPT_BOUNDARY nsresult
   RestoreSelection(dom::Selection& aSelection);
-  bool IsCollapsed() const;
-  bool Equals(SelectionState& aOther) const;
-  void Clear();
-  bool IsEmpty() const;
+
+  /**
+   * HasOnlyCollapsedRange() returns true only when there is a positioned range
+   * which is collapsed.  I.e., the selection represents a caret point.
+   */
+  [[nodiscard]] bool HasOnlyCollapsedRange() const {
+    if (mArray.Length() != 1) {
+      return false;
+    }
+    if (!mArray[0]->IsPositioned() || !mArray[0]->Collapsed()) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Equals() returns true only when there are same number of ranges and
+   * all their containers and offsets are exactly same.  This won't check
+   * the validity of each range with the current DOM tree.
+   */
+  [[nodiscard]] bool Equals(const SelectionState& aOther) const;
+
+  /**
+   * Returns common root node of all ranges' start and end containers.
+   * Some of them have different root nodes, this returns nullptr.
+   */
+  [[nodiscard]] nsINode* GetCommonRootNode() const {
+    nsINode* rootNode = nullptr;
+    for (const RefPtr<RangeItem>& rangeItem : mArray) {
+      nsINode* newRootNode = rangeItem->GetRoot();
+      if (!newRootNode || (rootNode && rootNode != newRootNode)) {
+        return nullptr;
+      }
+      rootNode = newRootNode;
+    }
+    return rootNode;
+  }
 
  private:
   CopyableAutoTArray<RefPtr<RangeItem>, 1> mArray;
-  nsDirection mDirection;
+  nsDirection mDirection = eDirNext;
 
   friend class RangeUpdater;
   friend void ImplCycleCollectionTraverse(nsCycleCollectionTraversalCallback&,
@@ -140,10 +205,39 @@ class MOZ_STACK_CLASS RangeUpdater final {
   template <typename PT, typename CT>
   nsresult SelAdjInsertNode(const EditorDOMPointBase<PT, CT>& aPoint);
   void SelAdjDeleteNode(nsINode& aNode);
-  nsresult SelAdjSplitNode(nsIContent& aRightNode, nsIContent& aNewLeftNode);
-  nsresult SelAdjJoinNodes(nsINode& aLeftNode, nsINode& aRightNode,
-                           nsINode& aParent, uint32_t aOffset,
-                           uint32_t aOldLeftNodeLength);
+
+  /**
+   * SelAdjSplitNode() is called immediately after spliting aOriginalNode
+   * and inserted aNewContent into the DOM tree.
+   *
+   * @param aOriginalContent    The node which was split.
+   * @param aSplitOffset        The old offset in aOriginalContent at splitting
+   *                            it.
+   * @param aNewContent         The new content node which was inserted into
+   *                            the DOM tree.
+   * @param aSplitNodeDirection Whether aNewNode was inserted before or after
+   *                            aOriginalContent.
+   */
+  nsresult SelAdjSplitNode(nsIContent& aOriginalContent, uint32_t aSplitOffset,
+                           nsIContent& aNewContent,
+                           SplitNodeDirection aSplitNodeDirection);
+
+  /**
+   * SelAdjJoinNodes() is called immediately after joining aRemovedContent and
+   * the container of aStartOfRightContent.
+   *
+   * @param aStartOfRightContent    The container is joined content node which
+   *                                now has all children or text data which were
+   *                                in aRemovedContent.  And this points where
+   *                                the joined position.
+   * @param aRemovedContent         The removed content.
+   * @param aOffsetOfJoinedContent  The offset which the container of
+   *                                aStartOfRightContent was in its parent.
+   */
+  nsresult SelAdjJoinNodes(const EditorRawDOMPoint& aStartOfRightContent,
+                           const nsIContent& aRemovedContent,
+                           uint32_t aOffsetOfJoinedContent,
+                           JoinNodesDirection aJoinNodesDirection);
   void SelAdjInsertText(const dom::Text& aTextNode, uint32_t aOffset,
                         uint32_t aInsertedLength);
   void SelAdjDeleteText(const dom::Text& aTextNode, uint32_t aOffset,
@@ -178,7 +272,6 @@ class MOZ_STACK_CLASS RangeUpdater final {
     NS_WARNING_ASSERTION(mLocked, "Not locked");
     mLocked = false;
   }
-  void WillMoveNode() { mLocked = true; }
   void DidMoveNode(const nsINode& aOldParent, uint32_t aOldOffset,
                    const nsINode& aNewParent, uint32_t aNewOffset);
 
@@ -363,7 +456,7 @@ class MOZ_STACK_CLASS AutoRemoveContainerSelNotify final {
  public:
   AutoRemoveContainerSelNotify() = delete;
   AutoRemoveContainerSelNotify(RangeUpdater& aRangeUpdater,
-                               const EditorDOMPoint& aAtRemovingElement)
+                               const EditorRawDOMPoint& aAtRemovingElement)
       : mRangeUpdater(aRangeUpdater),
         mRemovingElement(*aAtRemovingElement.GetChild()->AsElement()),
         mParentNode(*aAtRemovingElement.GetContainer()),
@@ -411,15 +504,15 @@ class MOZ_STACK_CLASS AutoInsertContainerSelNotify final {
 
 /**
  * Another helper class for SelectionState.  Stack based class for doing
- * Will/DidMoveNode()
+ * DidMoveNode()
  */
 
 class MOZ_STACK_CLASS AutoMoveNodeSelNotify final {
  public:
   AutoMoveNodeSelNotify() = delete;
   AutoMoveNodeSelNotify(RangeUpdater& aRangeUpdater,
-                        const EditorDOMPoint& aOldPoint,
-                        const EditorDOMPoint& aNewPoint)
+                        const EditorRawDOMPoint& aOldPoint,
+                        const EditorRawDOMPoint& aNewPoint)
       : mRangeUpdater(aRangeUpdater),
         mOldParent(*aOldPoint.GetContainer()),
         mNewParent(*aNewPoint.GetContainer()),
@@ -427,26 +520,18 @@ class MOZ_STACK_CLASS AutoMoveNodeSelNotify final {
         mNewOffset(aNewPoint.Offset()) {
     MOZ_ASSERT(aOldPoint.IsSet());
     MOZ_ASSERT(aNewPoint.IsSet());
-    mRangeUpdater.WillMoveNode();
   }
 
   ~AutoMoveNodeSelNotify() {
     mRangeUpdater.DidMoveNode(mOldParent, mOldOffset, mNewParent, mNewOffset);
   }
 
-  EditorRawDOMPoint ComputeInsertionPoint() const {
-    if (&mOldParent == &mNewParent && mOldOffset < mNewOffset) {
-      return EditorRawDOMPoint(&mNewParent, mNewOffset - 1);
-    }
-    return EditorRawDOMPoint(&mNewParent, mNewOffset);
-  }
-
  private:
   RangeUpdater& mRangeUpdater;
   nsINode& mOldParent;
   nsINode& mNewParent;
-  uint32_t mOldOffset;
-  uint32_t mNewOffset;
+  const uint32_t mOldOffset;
+  const uint32_t mNewOffset;
 };
 
 }  // namespace mozilla

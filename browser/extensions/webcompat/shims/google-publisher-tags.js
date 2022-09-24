@@ -32,7 +32,7 @@ if (window.googletag?.apiReady === undefined) {
       requestAnimationFrame(() => {
         const size = [0, 0];
         for (const cb of eventCallbacks.get(name) || []) {
-          cb({ isEmpty: true, size, slot });
+          cb({ isEmpty: false, size, slot });
         }
         resolve();
       });
@@ -47,8 +47,16 @@ if (window.googletag?.apiReady === undefined) {
       const f = document.createElement("iframe");
       f.id = eid;
       f.srcdoc = "<body></body>";
-      f.style = "unset: all; position: absolute; z-index: -1; border: 0";
+      f.style =
+        "position:absolute; width:0; height:0; left:0; right:0; z-index:-1; border:0";
       node.appendChild(f);
+    }
+  };
+
+  const emptySlotElement = slot => {
+    const node = document.getElementById(slot.getSlotElementId());
+    while (node?.lastChild) {
+      node.lastChild.remove();
     }
   };
 
@@ -57,6 +65,7 @@ if (window.googletag?.apiReady === undefined) {
     if (!slot || !refreshedSlots.has(id) || !displayedSlots.has(id)) {
       return;
     }
+    emptySlotElement(slot);
     recreateIframeForSlot(slot);
     await fireSlotEvent("slotRenderEnded", slot);
     await fireSlotEvent("slotRequested", slot);
@@ -124,6 +133,15 @@ if (window.googletag?.apiReady === undefined) {
     return [];
   };
 
+  const updateTargeting = (targeting, map) => {
+    if (typeof map === "object") {
+      const entries = Object.entries(map || {});
+      for (const [k, v] of entries) {
+        targeting.set(k, getTargetingValue(v));
+      }
+    }
+  };
+
   const newSlot = (adUnitPath, size, opt_div) => {
     const attributes = new Map();
     const targeting = new Map();
@@ -181,9 +199,16 @@ if (window.googletag?.apiReady === undefined) {
       getSizes: () => sizes,
       getSlotElementId: () => opt_div,
       getSlotId: () => slot,
-      getTargeting: k => targeting.get(k) || [],
-      getTargetingKeys: () => Array.from(targeting.keys()),
-      getTargetingMap: () => targeting.keys(),
+      getTargeting: k => targeting.get(k) || gTargeting.get(k) || [],
+      getTargetingKeys: () =>
+        Array.from(
+          new Set(Array.of(...gTargeting.keys(), ...targeting.keys()))
+        ),
+      getTargetingMap: () =>
+        Object.assign(
+          Object.fromEntries(gTargeting.entries()),
+          Object.fromEntries(targeting.entries())
+        ),
       set(k, v) {
         attributes.set(k, v);
         return slot;
@@ -208,10 +233,7 @@ if (window.googletag?.apiReady === undefined) {
       },
       toString: () => id,
       updateTargetingFromMap(map) {
-        const entries = map?.entries() || {};
-        for (const [k, v] of entries) {
-          targeting.set(k, getTargetingValue(v));
-        }
+        updateTargeting(targeting, map);
         return slot;
       },
     };
@@ -271,7 +293,7 @@ if (window.googletag?.apiReady === undefined) {
     getTagSessionCorrelator() {},
     getTargeting: k => gTargeting.get(k) || [],
     getTargetingKeys: () => Array.from(gTargeting.keys()),
-    getTargetingMap: () => gTargeting.keys(),
+    getTargetingMap: () => Object.fromEntries(gTargeting.entries()),
     getVersion: () => version,
     getVideoContent: () => videoContent,
     isInitialLoadDisabled: () => initialLoadDisabled,
@@ -326,10 +348,7 @@ if (window.googletag?.apiReady === undefined) {
     },
     updateCorrelator() {},
     updateTargetingFromMap(map) {
-      const entries = map?.entries() || {};
-      for (const [k, v] of entries) {
-        gTargeting.set(k, getTargetingValue(v));
-      }
+      updateTargeting(gTargeting, map);
       return this;
     },
   };

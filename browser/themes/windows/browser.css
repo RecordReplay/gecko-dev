@@ -2,12 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-@namespace html url("http://www.w3.org/1999/xhtml");
+@import url("chrome://browser/skin/browser-shared.css");
+@import url("chrome://browser/skin/contextmenu.css");
+@import url("chrome://browser/skin/browser-custom-colors.css");
 
-%include ../shared/browser.inc.css
-%include ../shared/browser-custom-colors.inc.css
-%filter substitution
-%define glassShadowColor hsla(240,5%,5%,0.3)
+@namespace html url("http://www.w3.org/1999/xhtml");
 
 :root {
   --toolbar-non-lwt-bgcolor: -moz-dialog;
@@ -16,22 +15,17 @@
 
   --toolbarbutton-vertical-text-padding: calc(var(--toolbarbutton-inner-padding) - 1px);
   --toolbarbutton-border-radius: 4px;
-  --toolbarbutton-icon-fill-opacity: 1;
 
   --panel-separator-color: ThreeDLightShadow;
 
   --chrome-content-separator-color: ThreeDShadow;
-  --tabs-border-color: threedshadow;
 }
 
 @media (-moz-windows-default-theme) {
   :root {
-    --toolbar-non-lwt-textcolor: #0c0c0d;
     --toolbar-non-lwt-bgimage: none;
 
     --panel-separator-color: hsla(210,4%,10%,.14);
-
-    --chrome-content-separator-color: #e1e1e2;
   }
 }
 
@@ -64,15 +58,15 @@
  * illegible.
  */
 @media (-moz-windows-default-theme) {
-  @media not (-moz-os-version: windows-win7) {
+  @media not (-moz-platform: windows-win7) {
     #toolbar-menubar:not(:-moz-lwtheme):-moz-window-inactive {
       color: ThreeDShadow;
     }
   }
 }
 
-@media not (-moz-os-version: windows-win7) {
-  @media not (-moz-os-version: windows-win8) {
+@media not (-moz-platform: windows-win7) {
+  @media not (-moz-platform: windows-win8) {
     /* On Windows 10, when temporarily showing the menu bar, make it at least as
      * tall as the tab bar such that the window controls don't appear to move up. */
     :root[tabsintitlebar] #toolbar-menubar[autohide="true"] {
@@ -85,7 +79,7 @@
 }
 
 /* Add 4px extra margin on top of the tabs toolbar on Windows 7. */
-@media (-moz-os-version: windows-win7) {
+@media (-moz-platform: windows-win7) {
   :root[sizemode="normal"][chromehidden~="menubar"] #TabsToolbar > .toolbar-items,
   :root[sizemode="normal"] #toolbar-menubar[autohide="true"][inactive] + #TabsToolbar > .toolbar-items {
     padding-top: 4px;
@@ -105,7 +99,7 @@
 }
 
 /* Add a fog for background tabs to be visible on Windows 7 glass window background */
-@media (-moz-os-version: windows-win7) {
+@media (-moz-platform: windows-win7) {
   @media (-moz-windows-default-theme) {
     #TabsToolbar:not(:-moz-lwtheme) {
       background-image: radial-gradient(ellipse at bottom, rgba(255,255,255,0.8), rgba(255,255,255,0.5) 80%, transparent);
@@ -115,15 +109,15 @@
 
 @media (-moz-windows-compositor: 0),
        (-moz-windows-default-theme: 0),
-       (-moz-os-version: windows-win8) {
+       (-moz-platform: windows-win8) {
   /* Please keep the menu text colors in this media block in sync with
-   * compacttheme.css, minus the :not(:-moz-lwtheme) condition - see Bug 1165718.
+   * light-dark-overrides.css, minus the :not(:-moz-lwtheme) condition - see Bug 1165718.
    */
-  :root[tabsintitlebar]:not([inFullscreen], :-moz-lwtheme) {
+  :root[tabsintitlebar]:not(:-moz-lwtheme) {
     color: CaptionText;
   }
 
-  :root[tabsintitlebar]:not([inFullscreen], :-moz-lwtheme):-moz-window-inactive {
+  :root[tabsintitlebar]:not(:-moz-lwtheme):-moz-window-inactive {
     color: InactiveCaptionText;
   }
 }
@@ -152,7 +146,7 @@
           ActiveBorder 2px, ActiveBorder 4px, transparent 4px);
   }
 
-  :root[tabsintitlebar]:not([inFullscreen]) :is(#TabsToolbar, #toolbar-menubar) toolbarbutton:not(:-moz-lwtheme) {
+  :root[tabsintitlebar] :is(#TabsToolbar, #toolbar-menubar) toolbarbutton:not(:-moz-lwtheme) {
     color: inherit;
   }
 }
@@ -162,8 +156,13 @@
   position: relative;
 }
 
-#nav-bar {
-  box-shadow: 0 calc(-1 * var(--tabs-navbar-shadow-size)) 0 var(--tabs-border-color);
+@media (-moz-windows-default-theme: 0) {
+  #nav-bar:not(:-moz-lwtheme) {
+    box-shadow: 0 calc(-1 * var(--tabs-navbar-shadow-size)) 0 ThreeDShadow;
+  }
+}
+#nav-bar:-moz-lwtheme {
+  box-shadow: 0 calc(-1 * var(--tabs-navbar-shadow-size)) 0 var(--lwt-tabs-border-color, rgba(0,0,0,.3));
 }
 @media (-moz-windows-compositor: 0) {
   #nav-bar[tabs-hidden="true"] {
@@ -235,8 +234,8 @@
   -moz-box-align: stretch;
 }
 
-@media (-moz-os-version: windows-win7),
-       (-moz-os-version: windows-win8) {
+@media (-moz-platform: windows-win7),
+       (-moz-platform: windows-win8) {
   /* Preserve window control buttons position at the top of the button box. */
   .titlebar-buttonbox-container {
     -moz-box-align: start;
@@ -304,155 +303,14 @@ menuitem.bookmark-item {
 }
 
 
-%include ../shared/toolbarbuttons.inc.css
-%include ../shared/toolbarbutton-icons.inc.css
-%include ../shared/menupanel.inc.css
-
-/* Fullscreen window controls */
-
-#minimize-button,
-#restore-button,
-#close-button {
-  appearance: none;
-  padding: 6px 12px;
-  -moz-context-properties: stroke;
-  stroke: currentColor;
-  color: inherit;
-}
-
-#minimize-button {
-  list-style-image: url(chrome://browser/skin/window-controls/minimize.svg);
-}
-
-#restore-button {
-  list-style-image: url(chrome://browser/skin/window-controls/restore.svg);
-}
-
-#restore-button > .toolbarbutton-icon:-moz-locale-dir(rtl) {
-  transform: scaleX(-1);
-}
-
-#minimize-button:hover,
-#restore-button:hover {
-  background-color: hsla(0,0%,0%,.12);
-}
-
-#minimize-button:hover:active,
-#restore-button:hover:active {
-  background-color: hsla(0,0%,0%,.22);
-}
-
-#TabsToolbar[brighttext] > #window-controls > #minimize-button:hover,
-#TabsToolbar[brighttext] > #window-controls > #restore-button:hover {
-  background-color: hsla(0,0%,100%,.12);
-}
-
-#TabsToolbar[brighttext] > #window-controls > #minimize-button:hover:active,
-#TabsToolbar[brighttext] > #window-controls > #restore-button:hover:active {
-  background-color: hsla(0,0%,100%,.22);
-}
-
-#close-button {
-  list-style-image: url(chrome://browser/skin/window-controls/close.svg);
-}
-
-#close-button:hover {
-  background-color: hsl(355, 86%, 49%);
-  stroke: white;
-}
-
-#close-button:hover:active {
-  background-color: hsl(355, 82%, 69%);
-}
-
-@media (-moz-os-version: windows-win7) {
-  #window-controls {
-    -moz-box-align: start;
-    margin-inline-start: 4px;
-  }
-
-  #minimize-button,
-  #restore-button,
-  #close-button {
-    appearance: none;
-    border-style: none;
-    margin: 0;
-    /* Important to ensure this applies even on toolbar[brighttext] */
-    list-style-image: url("chrome://global/skin/icons/windowControls.png") !important;
-    /* Also override background color to a avoid hover background styling
-     * leaking through around the image. */
-    background-color: transparent !important;
-    padding: 0;
-    -moz-context-properties: unset;
-  }
-
-  #minimize-button {
-    -moz-image-region: rect(0, 16px, 16px, 0);
-  }
-
-  #minimize-button:hover {
-    -moz-image-region: rect(16px, 16px, 32px, 0);
-  }
-
-  #minimize-button:hover:active {
-    -moz-image-region: rect(32px, 16px, 48px, 0);
-  }
-
-  #restore-button {
-    -moz-image-region: rect(0, 32px, 16px, 16px);
-  }
-
-  #restore-button:hover {
-    -moz-image-region: rect(16px, 32px, 32px, 16px);
-  }
-
-  #restore-button:hover:active {
-    -moz-image-region: rect(32px, 32px, 48px, 16px);
-  }
-
-  #close-button {
-    -moz-image-region: rect(0, 48px, 16px, 32px);
-  }
-
-  #close-button:hover {
-    -moz-image-region: rect(16px, 48px, 32px, 32px);
-  }
-
-  #close-button:hover:active {
-    -moz-image-region: rect(32px, 48px, 48px, 32px);
-  }
-
-  #close-button {
-    -moz-image-region: rect(0, 49px, 16px, 32px);
-  }
-
-  #close-button:hover {
-    -moz-image-region: rect(16px, 49px, 32px, 32px);
-  }
-
-  #close-button:hover:active {
-    -moz-image-region: rect(32px, 49px, 48px, 32px);
-  }
-
-  /* Normally there's no need to mirror these buttons for RTL,
-     but both have curves at their bottom right/left, and without
-     mirroring them their curves would appear in the wrong spot. */
-  #minimize-button > .toolbarbutton-icon:-moz-locale-dir(rtl),
-  #close-button > .toolbarbutton-icon:-moz-locale-dir(rtl) {
-    transform: scaleX(-1);
-  }
-}
-
 /* Address bar */
 
-%include ../shared/urlbar-searchbar.inc.css
-
 @media not (prefers-contrast) {
-  :root:not(:-moz-lwtheme) #urlbar:not([focused="true"]) {
+  :root:not(:-moz-lwtheme) #urlbar {
     --urlbar-box-bgcolor: white;
   }
-  :root[lwt-default-theme-in-dark-mode] #urlbar:not([focused="true"]) {
-    --urlbar-box-bgcolor: var(--lwt-toolbar-field-focus);
+  :root[lwt-default-theme-in-dark-mode] #urlbar {
+    --urlbar-box-bgcolor: var(--toolbar-field-focus-background-color);
   }
 }
 
@@ -468,19 +326,22 @@ menuitem.bookmark-item {
 }
 
 @media (-moz-windows-default-theme: 0) {
+  /* Windows HCM conventions use these colors for chiclets. We can't use them on
+     other platforms because -moz-accent-color can be shown atop SelectedItem,
+     which has zero contrast. */
+  :root {
+    --urlbar-box-hover-bgcolor: SelectedItem;
+    --urlbar-box-active-bgcolor: SelectedItem;
+    --urlbar-box-hover-text-color: SelectedItemText;
+  }
+
   #urlbar:not(:-moz-lwtheme, [focused="true"]) > #urlbar-background,
   #searchbar:not(:-moz-lwtheme, :focus-within) {
     border-color: ThreeDShadow;
   }
 }
 
-%include ../shared/identity-block/identity-block.inc.css
-%include ../shared/notification-icons.inc.css
-%include ../shared/addon-notification.inc.css
-
 /* Address bar results view */
-
-%include ../shared/urlbarView.inc.css
 
 @media (-moz-windows-default-theme: 0) {
   :root:not(:-moz-lwtheme) {
@@ -490,19 +351,11 @@ menuitem.bookmark-item {
 
 /* Autocomplete */
 
-%include ../shared/autocomplete.inc.css
-
 #PopupAutoComplete > richlistbox > richlistitem[originaltype~="datalist-first"] {
   border-top: 1px solid ThreeDShadow;
 }
 
-/* Bookmarking panel */
-
-%include ../shared/places/editBookmarkPanel.inc.css
-
 /* Content area */
-
-%include ../shared/sidebar.inc.css
 
 #browser {
   --sidebar-border-color: ThreeDLightShadow;
@@ -514,8 +367,6 @@ menuitem.bookmark-item {
   min-height: 0;
   padding: 0;
 }
-
-%include ../shared/tabs.inc.css
 
 @media (-moz-windows-default-theme: 0) {
   /* For high contrast themes. */
@@ -533,13 +384,10 @@ menuitem.bookmark-item {
 
 toolbarbutton.bookmark-item[dragover="true"][open="true"] {
   appearance: none;
-  background: Highlight !important;
-  color: HighlightText !important;
+  background: SelectedItem !important;
+  color: SelectedItemText !important;
+  fill: SelectedItemText;
 }
-
-/* Translation infobar */
-
-%include ../shared/translation/infobar.inc.css
 
 /* Bookmarks roots menu-items */
 
@@ -548,6 +396,10 @@ toolbarbutton.bookmark-item[dragover="true"][open="true"] {
 #panelMenu_bookmarksToolbar {
   list-style-image: url("chrome://browser/skin/places/bookmarksToolbar.svg");
   -moz-image-region: auto;
+}
+
+#PlacesToolbar menu menupopup {
+  margin-top: -12px;
 }
 
 /* Status panel */
@@ -569,7 +421,7 @@ toolbarbutton.bookmark-item[dragover="true"][open="true"] {
   }
 }
 
-@media (prefers-color-scheme: dark) {
+@media (-moz-content-prefers-color-scheme: dark) {
   #statuspanel-label {
     background-color: hsl(240, 1%, 20%);
     border-color: hsl(240, 1%, 40%);
@@ -595,15 +447,6 @@ toolbarbutton.bookmark-item[dragover="true"][open="true"] {
   margin-left: 1em;
 }
 
-%include ../shared/fullscreen/warning.inc.css
-%include ../shared/ctrlTab.inc.css
-
-/* Customization mode */
-
-%include ../shared/customizableui/customizeMode.inc.css
-
-/* End customization mode */
-
 /* Prevent window controls from overlapping the nav bar's shadow on the tab
  * bar. */
 #TabsToolbar > .titlebar-buttonbox-container {
@@ -622,8 +465,6 @@ toolbarbutton.bookmark-item[dragover="true"][open="true"] {
 
 /* End private browsing and accessibility indicators */
 
-%include ../shared/UITour.inc.css
-
 #UITourTooltipButtons {
   /**
    * Override the --arrowpanel-padding so the background extends
@@ -633,19 +474,12 @@ toolbarbutton.bookmark-item[dragover="true"][open="true"] {
   margin-bottom: -10px;
 }
 
-%include ../shared/contextmenu.inc.css
-
 /* Make menu items larger when opened through touch. */
 #widget-overflow[touchmode] .toolbarbutton-1,
 panel[touchmode] .PanelUI-subView .subviewbutton,
 menupopup[touchmode] menu,
 menupopup[touchmode] menuitem {
   padding-block: 12px;
-}
-
-panel[touchmode] .PanelUI-subView #appMenu-edit-controls > .subviewbutton,
-panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic {
-  padding-inline: 12px;
 }
 
 #contentAreaContextMenu[touchmode] > #context-navigation > menuitem {
@@ -749,8 +583,6 @@ panel[touchmode] .PanelUI-subView #appMenu-zoom-controls > .subviewbutton-iconic
     margin-inline: 0;
   }
 }
-
-%include browser-aero.css
 
 .cui-widget-panelview[id^=PanelUI-webext-] {
   border-radius: var(--arrowpanel-border-radius);

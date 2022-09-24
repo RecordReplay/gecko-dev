@@ -47,7 +47,7 @@ class ProcessedMediaTrack;
 class FrameStatistics;
 class VideoFrameContainer;
 class MediaFormatReader;
-class MediaDecoderStateMachine;
+class MediaDecoderStateMachineBase;
 struct MediaPlaybackEvent;
 struct SharedDummyTrack;
 
@@ -258,8 +258,8 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   // SetLoadInBackground() on mResource.
   virtual void SetLoadInBackground(bool aLoadInBackground) {}
 
-  MediaDecoderStateMachine* GetStateMachine() const;
-  void SetStateMachine(MediaDecoderStateMachine* aStateMachine);
+  MediaDecoderStateMachineBase* GetStateMachine() const;
+  void SetStateMachine(MediaDecoderStateMachineBase* aStateMachine);
 
   // Constructs the time ranges representing what segments of the media
   // are buffered and playable.
@@ -318,7 +318,7 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   void UpdateVideoDecodeMode();
 
   void SetSecondaryVideoContainer(
-      RefPtr<VideoFrameContainer> aSecondaryVideoContainer);
+      const RefPtr<VideoFrameContainer>& aSecondaryVideoContainer);
 
   void SetIsBackgroundVideoDecodingAllowed(bool aAllowed);
 
@@ -377,10 +377,6 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   static bool IsOpusEnabled();
   static bool IsWaveEnabled();
   static bool IsWebMEnabled();
-
-#  ifdef MOZ_WMF
-  static bool IsWMFEnabled();
-#  endif
 
   // Return the frame decode/paint related statistics.
   FrameStatistics& GetFrameStatistics() { return *mFrameStats; }
@@ -493,13 +489,13 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   void OnNextFrameStatus(MediaDecoderOwner::NextFrameStatus);
 
   void OnSecondaryVideoContainerInstalled(
-      const RefPtr<VideoFrameContainer>& aSecondaryContainer);
+      const RefPtr<VideoFrameContainer>& aSecondaryVideoContainer);
 
   void OnStoreDecoderBenchmark(const VideoInfo& aInfo);
 
   void FinishShutdown();
 
-  void ConnectMirrors(MediaDecoderStateMachine* aObject);
+  void ConnectMirrors(MediaDecoderStateMachineBase* aObject);
   void DisconnectMirrors();
 
   virtual bool CanPlayThroughImpl() = 0;
@@ -511,7 +507,7 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
   // is safe to access it during this period.
   //
   // Explicitly prievate to force access via accessors.
-  RefPtr<MediaDecoderStateMachine> mDecoderStateMachine;
+  RefPtr<MediaDecoderStateMachineBase> mDecoderStateMachine;
 
  protected:
   void NotifyReaderDataArrived();
@@ -718,10 +714,15 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
 
   TelemetryProbesReporter::Visibility OwnerVisibility() const;
 
-  // They are used for reporting telemetry related results.
-  double GetTotalPlayTimeInSeconds() const;
+  // Those methods exist to report telemetry related metrics.
+  double GetTotalVideoPlayTimeInSeconds() const;
+  double GetVisibleVideoPlayTimeInSeconds() const;
   double GetInvisibleVideoPlayTimeInSeconds() const;
   double GetVideoDecodeSuspendedTimeInSeconds() const;
+  double GetTotalAudioPlayTimeInSeconds() const;
+  double GetAudiblePlayTimeInSeconds() const;
+  double GetInaudiblePlayTimeInSeconds() const;
+  double GetMutedPlayTimeInSeconds() const;
 
  private:
   /**
@@ -739,6 +740,8 @@ class MediaDecoder : public DecoderDoctorLifeLogger<MediaDecoder> {
 
   // Notify owner when the audible state changed
   void NotifyAudibleStateChanged();
+
+  void NotifyVolumeChanged();
 
   bool mTelemetryReported;
   const MediaContainerType mContainerType;

@@ -29,7 +29,7 @@ class WorkerRef;
 class BroadcastChannel final : public DOMEventTargetHelper {
   friend class BroadcastChannelChild;
 
-  typedef mozilla::ipc::PrincipalInfo PrincipalInfo;
+  using PrincipalInfo = mozilla::ipc::PrincipalInfo;
 
  public:
   NS_DECL_ISUPPORTS_INHERITED
@@ -78,7 +78,7 @@ class BroadcastChannel final : public DOMEventTargetHelper {
   RefPtr<WorkerRef> mWorkerRef;
 
   nsString mChannel;
-  nsString mOriginNoSuffix;
+  nsString mOriginForEvents;
 
   enum { StateActive, StateClosed } mState;
 

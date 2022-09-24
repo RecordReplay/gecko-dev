@@ -74,10 +74,9 @@ class TextureForwarder : public LayersIPCChannel {
    * parent side.
    */
   virtual PTextureChild* CreateTexture(
-      const SurfaceDescriptor& aSharedData, const ReadLockDescriptor& aReadLock,
+      const SurfaceDescriptor& aSharedData, ReadLockDescriptor&& aReadLock,
       LayersBackend aLayersBackend, TextureFlags aFlags, uint64_t aSerial,
-      wr::MaybeExternalImageId& aExternalImageId,
-      nsISerialEventTarget* aTarget = nullptr) = 0;
+      wr::MaybeExternalImageId& aExternalImageId) = 0;
 
   /**
    * Returns the CanvasChild for this TextureForwarder.

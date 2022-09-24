@@ -109,9 +109,6 @@
 @BINPATH@/@DLL_PREFIX@mozwayland@DLL_SUFFIX@
 #endif
 #endif
-#ifdef MOZ_USING_WASM_SANDBOXING
-@BINPATH@/@DLL_PREFIX@rlbox@DLL_SUFFIX@
-#endif
 
 ; We don't have a complete view of which dlls to expect when doing an artifact
 ; build because we haven't run the relevant parts of configure, so we guess
@@ -196,8 +193,6 @@
 
 ; WebDriver (Marionette, Remote Agent) remote protocols
 #ifdef ENABLE_WEBDRIVER
-@RESPATH@/components/marionette.manifest
-@RESPATH@/components/marionette.js
 @RESPATH@/chrome/remote@JAREXT@
 @RESPATH@/chrome/remote.manifest
 #endif
@@ -240,8 +235,6 @@
 @RESPATH@/chrome/pdfjs/*
 @RESPATH@/chrome/toolkit@JAREXT@
 @RESPATH@/chrome/toolkit.manifest
-@RESPATH@/chrome/recording.manifest
-@RESPATH@/chrome/recording/*
 #ifdef MOZ_GTK
 @RESPATH@/browser/chrome/icons/default/default16.png
 @RESPATH@/browser/chrome/icons/default/default32.png
@@ -378,6 +371,8 @@ bin/libfreebl_64int_3.so
 #endif
 #endif
 
+@BINPATH@/@DLL_PREFIX@ipcclientcerts@DLL_SUFFIX@
+
 ; For process sandboxing
 #if defined(MOZ_SANDBOX)
 #if defined(XP_LINUX)
@@ -437,10 +432,6 @@ bin/libfreebl_64int_3.so
 
 #ifdef LLVM_SYMBOLIZER
 @BINPATH@/@LLVM_SYMBOLIZER@
-; On Windows, llvm-symbolizer depends on the MS DIA library.
-#ifdef WIN_DIA_SDK_BIN_DIR
-@BINPATH@/msdia140.dll
-#endif
 #endif
 
 #ifdef MOZ_CLANG_RT_ASAN_LIB

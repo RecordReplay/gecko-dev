@@ -32,6 +32,7 @@
 #include "mozilla/Variant.h"
 #include "mozilla/dom/quota/PQuota.h"
 #include "mozilla/dom/quota/PersistenceType.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/fallible.h"
 #include "mozilla/hal_sandbox/PHal.h"
 #include "mozilla/ipc/BackgroundChild.h"
@@ -597,6 +598,41 @@ QuotaManagerService::InitializeTemporaryOrigin(
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return rv;
   }
+
+  request.forget(_retval);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+QuotaManagerService::GetFullOriginMetadata(const nsACString& aPersistenceType,
+                                           nsIPrincipal* aPrincipal,
+                                           nsIQuotaRequest** _retval) {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(nsContentUtils::IsCallerChrome());
+
+  QM_TRY(OkIf(StaticPrefs::dom_quotaManager_testing()), NS_ERROR_UNEXPECTED);
+
+  const auto maybePersistenceType =
+      PersistenceTypeFromString(aPersistenceType, fallible);
+  QM_TRY(OkIf(maybePersistenceType.isSome()), NS_ERROR_INVALID_ARG);
+  QM_TRY(OkIf(IsBestEffortPersistenceType(*maybePersistenceType)),
+         NS_ERROR_INVALID_ARG);
+
+  PrincipalInfo principalInfo;
+  QM_TRY(MOZ_TO_RESULT(PrincipalToPrincipalInfo(aPrincipal, &principalInfo)));
+  QM_TRY(OkIf(QuotaManager::IsPrincipalInfoValid(principalInfo)),
+         NS_ERROR_INVALID_ARG);
+
+  RefPtr<Request> request = new Request();
+
+  GetFullOriginMetadataParams params;
+
+  params.persistenceType() = *maybePersistenceType;
+  params.principalInfo() = std::move(principalInfo);
+
+  RequestInfo info(request, params);
+
+  QM_TRY(MOZ_TO_RESULT(InitiateRequest(info)));
 
   request.forget(_retval);
   return NS_OK;

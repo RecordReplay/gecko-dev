@@ -9,13 +9,21 @@ const ALL_CHANNELS = Ci.nsITelemetry.DATASET_ALL_CHANNELS;
  * Test the edit_resend telemetry event.
  */
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
+  if (
+    Services.prefs.getBoolPref(
+      "devtools.netmonitor.features.newEditAndResend",
+      true
+    )
+  ) {
+    ok(
+      true,
+      "Skip this test when pref is true, because this panel won't be default when that is the case."
+    );
+    return;
+  }
+  const { monitor } = await initNetMonitor(HTTPS_SIMPLE_URL, {
+    requestCount: 1,
   });
-
-  const { monitor } = await initNetMonitor(SIMPLE_URL, { requestCount: 1 });
   info("Starting test... ");
 
   const { document, store, windowRequire } = monitor.panelWin;
@@ -31,7 +39,7 @@ add_task(async function() {
 
   // Reload to have one request in the list.
   const waitForEvents = waitForNetworkEvents(monitor, 1);
-  await navigateTo(SIMPLE_URL);
+  await navigateTo(HTTPS_SIMPLE_URL);
   await waitForEvents;
 
   // Open context menu and execute "Edit & Resend".
@@ -59,5 +67,5 @@ add_task(async function() {
     }
   );
 
-  return teardown(monitor);
+  await teardown(monitor);
 });

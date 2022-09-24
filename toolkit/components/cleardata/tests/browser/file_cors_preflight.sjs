@@ -2,9 +2,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-'use strict';
+"use strict";
 
-Components.utils.importGlobalProperties(["URLSearchParams"]);
+Cu.importGlobalProperties(["URLSearchParams"]);
 
 function handleRequest(request, response) {
   let query = new URLSearchParams(request.queryString);
@@ -18,7 +18,8 @@ function handleRequest(request, response) {
     response.setHeader(
       "Access-Control-Allow-Methods",
       request.getHeader("Access-Control-Request-Method"),
-      false);
+      false
+    );
     response.setHeader("Access-Control-Max-Age", "20", false);
 
     setState(token, token);

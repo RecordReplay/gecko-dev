@@ -12,8 +12,7 @@
 #include "nsContentUtils.h"
 #include "nsHTMLDocument.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using namespace mozilla::css;
 
@@ -108,17 +107,19 @@ void CSSMozDocumentRule::List(FILE* out, int32_t aIndent) const {
 }
 #endif
 
-void CSSMozDocumentRule::GetConditionText(nsACString& aConditionText) {
-  Servo_MozDocumentRule_GetConditionText(mRawRule, &aConditionText);
+void CSSMozDocumentRule::SetRawAfterClone(
+    RefPtr<RawServoMozDocumentRule> aRaw) {
+  mRawRule = std::move(aRaw);
+  css::ConditionRule::SetRawAfterClone(
+      Servo_MozDocumentRule_GetRules(mRawRule).Consume());
 }
 
-void CSSMozDocumentRule::SetConditionText(const nsACString& aConditionText,
-                                          ErrorResult& aRv) {
-  if (IsReadOnly()) {
-    return;
-  }
+StyleCssRuleType CSSMozDocumentRule::Type() const {
+  return StyleCssRuleType::Document;
+}
 
-  aRv.Throw(NS_ERROR_NOT_IMPLEMENTED);
+void CSSMozDocumentRule::GetConditionText(nsACString& aConditionText) {
+  Servo_MozDocumentRule_GetConditionText(mRawRule, &aConditionText);
 }
 
 /* virtual */
@@ -133,5 +134,4 @@ size_t CSSMozDocumentRule::SizeOfIncludingThis(
   return aMallocSizeOf(this);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

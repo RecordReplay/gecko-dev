@@ -19,7 +19,7 @@ namespace mozilla {
 namespace net {
 
 //-------------------------------------------------------------------
-async refcounted protocol PHttpBackgroundChannel
+async protocol PHttpBackgroundChannel
 {
   manager PBackground;
 
@@ -27,7 +27,8 @@ child:
   async OnStartRequest(nsHttpResponseHead  responseHead,
                        bool                useResponseHead,
                        nsHttpHeaderArray   requestHeaders,
-                       HttpChannelOnStartRequestArgs args);
+                       HttpChannelOnStartRequestArgs args,
+                       HttpChannelAltDataStream altData);
 
   // Combines a single OnDataAvailable and its associated OnProgress &
   // OnStatus calls into one IPDL message

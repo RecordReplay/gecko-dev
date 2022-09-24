@@ -11,6 +11,9 @@
 #include "nsStringStream.h"
 #include "nsIPrivateBrowsingChannel.h"
 #include "nsIInterfaceRequestor.h"
+#include "nsContentUtils.h"
+
+using namespace mozilla;
 
 class FakeListener : public nsIStreamListener, public nsIInterfaceRequestor {
  public:
@@ -127,5 +130,6 @@ TEST(TestHttpChannel, PBAsyncOpen)
   ASSERT_EQ(isPrivate, true);
 
   MOZ_ALWAYS_TRUE(mozilla::SpinEventLoopUntil(
+      "TEST(TestHttpChannel, PBAsyncOpen)"_ns,
       [&]() -> bool { return listener->mOnStop.isSome(); }));
 }

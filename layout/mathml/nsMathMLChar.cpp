@@ -11,6 +11,7 @@
 #include "gfxUtils.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/intl/UnicodeScriptCodes.h"
 #include "mozilla/ComputedStyle.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/UniquePtr.h"
@@ -42,7 +43,6 @@
 #include <algorithm>
 
 #include "gfxMathTable.h"
-#include "nsUnicodeScriptCodes.h"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -58,7 +58,6 @@ static const float kLargeOpFactor = float(M_SQRT2);
 static const float kIntegralFactor = 2.0;
 
 static void NormalizeDefaultFont(nsFont& aFont, float aFontSizeInflation) {
-  Servo_FontFamilyList_Normalize(&aFont.family.families);
   aFont.size.ScaleBy(aFontSizeInflation);
 }
 
@@ -861,10 +860,8 @@ bool nsMathMLChar::SetFontFamily(nsPresContext* aPresContext,
     params.explicitLanguage = styleFont->mExplicitLanguage;
     params.userFontSet = aPresContext->GetUserFontSet();
     params.textPerf = aPresContext->GetTextPerfMetrics();
-    params.fontStats = aPresContext->GetFontMatchingStats();
     params.featureValueLookup = aPresContext->GetFontFeatureValuesLookup();
-    RefPtr<nsFontMetrics> fm =
-        aPresContext->DeviceContext()->GetMetricsFor(font, params);
+    RefPtr<nsFontMetrics> fm = aPresContext->GetMetricsFor(font, params);
     // Set the font if it is an unicode table or if the same family name has
     // been found.
     const bool shouldSetFont = [&] {
@@ -1388,9 +1385,7 @@ nsresult nsMathMLChar::StretchInternal(
   params.explicitLanguage = styleFont->mExplicitLanguage;
   params.userFontSet = presContext->GetUserFontSet();
   params.textPerf = presContext->GetTextPerfMetrics();
-  params.fontStats = presContext->GetFontMatchingStats();
-  RefPtr<nsFontMetrics> fm =
-      presContext->DeviceContext()->GetMetricsFor(font, params);
+  RefPtr<nsFontMetrics> fm = presContext->GetMetricsFor(font, params);
   uint32_t len = uint32_t(mData.Length());
   mGlyphs[0] = fm->GetThebesFontGroup()->MakeTextRun(
       static_cast<const char16_t*>(mData.get()), len, aDrawTarget,
@@ -1496,9 +1491,16 @@ nsresult nsMathMLChar::StretchInternal(
     // really shouldn't be doing things this way but for now
     // insert fallbacks into the list
     AutoTArray<nsCString, 16> mathFallbacks;
-    gfxFontUtils::GetPrefsFontList("font.name.serif.x-math", mathFallbacks);
-    gfxFontUtils::AppendPrefsFontList("font.name-list.serif.x-math",
-                                      mathFallbacks);
+    nsAutoCString value;
+    gfxPlatformFontList* pfl = gfxPlatformFontList::PlatformFontList();
+    pfl->Lock();
+    if (pfl->GetFontPrefs()->LookupName("serif.x-math"_ns, value)) {
+      gfxFontUtils::ParseFontList(value, mathFallbacks);
+    }
+    if (pfl->GetFontPrefs()->LookupNameList("serif.x-math"_ns, value)) {
+      gfxFontUtils::ParseFontList(value, mathFallbacks);
+    }
+    pfl->Unlock();
     InsertMathFallbacks(font.family.families, mathFallbacks);
 
 #ifdef NOISY_SEARCH
@@ -1546,7 +1548,7 @@ nsresult nsMathMLChar::StretchInternal(
   // and record missing math script otherwise.
   gfxMissingFontRecorder* MFR = presContext->MissingFontRecorder();
   if (MFR && !fm->GetThebesFontGroup()->GetFirstMathFont()) {
-    MFR->RecordScript(unicode::Script::MATHEMATICAL_NOTATION);
+    MFR->RecordScript(intl::Script::MATHEMATICAL_NOTATION);
   }
 
   // If the scale_stretchy_operators option is disabled, we are done.
@@ -1679,6 +1681,8 @@ nscoord nsMathMLChar::GetMaxWidth(nsIFrame* aForFrame, DrawTarget* aDrawTarget,
   return std::max(bm.width, bm.rightBearing) - std::min(0, bm.leftBearing);
 }
 
+namespace mozilla {
+
 class nsDisplayMathMLSelectionRect final : public nsPaintedDisplayItem {
  public:
   nsDisplayMathMLSelectionRect(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
@@ -1701,8 +1705,7 @@ void nsDisplayMathMLSelectionRect::Paint(nsDisplayListBuilder* aBuilder,
                                   mFrame->PresContext()->AppUnitsPerDevPixel(),
                                   *drawTarget);
   // get color to use for selection from the look&feel object
-  nscolor bgColor =
-      LookAndFeel::Color(LookAndFeel::ColorID::TextSelectBackground, mFrame);
+  nscolor bgColor = LookAndFeel::Color(LookAndFeel::ColorID::Highlight, mFrame);
   drawTarget->FillRect(rect, ColorPattern(ToDeviceColor(bgColor)));
 }
 
@@ -1783,13 +1786,16 @@ void nsDisplayMathMLCharDebug::Paint(nsDisplayListBuilder* aBuilder,
   // Since this is used only for debugging, we don't need to worry about
   // tracking the ImgDrawResult.
   Unused << nsCSSRendering::PaintBorder(presContext, *aCtx, mFrame,
-                                        GetPaintRect(), rect, computedStyle,
-                                        flags, skipSides);
+                                        GetPaintRect(aBuilder, aCtx), rect,
+                                        computedStyle, flags, skipSides);
 
   nsCSSRendering::PaintNonThemedOutline(presContext, *aCtx, mFrame,
-                                        GetPaintRect(), rect, computedStyle);
+                                        GetPaintRect(aBuilder, aCtx), rect,
+                                        computedStyle);
 }
 #endif
+
+}  // namespace mozilla
 
 void nsMathMLChar::Display(nsDisplayListBuilder* aBuilder, nsIFrame* aForFrame,
                            const nsDisplayListSet& aLists, uint32_t aIndex,
@@ -1857,8 +1863,8 @@ void nsMathMLChar::PaintForeground(nsIFrame* aForFrame,
       &nsStyleText::mWebkitTextFillColor);
   if (aIsSelected) {
     // get color to use for selection from the look&feel object
-    fgColor = LookAndFeel::Color(LookAndFeel::ColorID::TextSelectForeground,
-                                 aForFrame, fgColor);
+    fgColor = LookAndFeel::Color(LookAndFeel::ColorID::Highlighttext, aForFrame,
+                                 fgColor);
   }
   aRenderingContext.SetColor(sRGBColor::FromABGR(fgColor));
   aRenderingContext.Save();

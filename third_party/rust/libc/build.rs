@@ -31,6 +31,7 @@ fn main() {
         Some(11) if libc_ci => println!("cargo:rustc-cfg=freebsd11"),
         Some(12) if libc_ci => println!("cargo:rustc-cfg=freebsd12"),
         Some(13) if libc_ci => println!("cargo:rustc-cfg=freebsd13"),
+        Some(14) if libc_ci => println!("cargo:rustc-cfg=freebsd14"),
         Some(_) | None => println!("cargo:rustc-cfg=freebsd11"),
     }
 
@@ -59,6 +60,11 @@ fn main() {
         println!("cargo:rustc-cfg=libc_align");
     }
 
+    // Rust >= 1.26 supports i128 and u128:
+    if rustc_minor_ver >= 26 || rustc_dep_of_std {
+        println!("cargo:rustc-cfg=libc_int128");
+    }
+
     // Rust >= 1.30 supports `core::ffi::c_void`, so libc can just re-export it.
     // Otherwise, it defines an incompatible type to retaining
     // backwards-compatibility.
@@ -70,6 +76,20 @@ fn main() {
     if rustc_minor_ver >= 33 || rustc_dep_of_std {
         println!("cargo:rustc-cfg=libc_packedN");
         println!("cargo:rustc-cfg=libc_cfg_target_vendor");
+    }
+
+    // Rust >= 1.40 supports #[non_exhaustive].
+    if rustc_minor_ver >= 40 || rustc_dep_of_std {
+        println!("cargo:rustc-cfg=libc_non_exhaustive");
+    }
+
+    if rustc_minor_ver >= 51 || rustc_dep_of_std {
+        println!("cargo:rustc-cfg=libc_ptr_addr_of");
+    }
+
+    // Rust >= 1.37.0 allows underscores as anonymous constant names.
+    if rustc_minor_ver >= 37 || rustc_dep_of_std {
+        println!("cargo:rustc-cfg=libc_underscore_const_names");
     }
 
     // #[thread_local] is currently unstable
@@ -141,6 +161,7 @@ fn which_freebsd() -> Option<i32> {
         s if s.starts_with("11") => Some(11),
         s if s.starts_with("12") => Some(12),
         s if s.starts_with("13") => Some(13),
+        s if s.starts_with("14") => Some(14),
         _ => None,
     }
 }

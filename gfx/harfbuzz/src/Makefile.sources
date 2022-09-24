@@ -19,9 +19,13 @@ HB_BASE_sources = \
 	hb-array.hh \
 	hb-atomic.hh \
 	hb-bimap.hh \
+	hb-bit-page.hh \
+	hb-bit-set.hh \
+	hb-bit-set-invertible.hh \
 	hb-blob.cc \
 	hb-blob.hh \
 	hb-buffer-serialize.cc \
+	hb-buffer-verify.cc \
 	hb-buffer.cc \
 	hb-buffer.hh \
 	hb-cache.hh \
@@ -47,6 +51,7 @@ HB_BASE_sources = \
 	hb-map.cc \
 	hb-map.hh \
 	hb-meta.hh \
+	hb-ms-feature-ranges.hh \
 	hb-mutex.hh \
 	hb-null.hh \
 	hb-number.cc \
@@ -138,6 +143,7 @@ HB_BASE_sources = \
 	hb-ot-tag-table.hh \
 	hb-ot-tag.cc \
 	hb-ot-var-avar-table.hh \
+	hb-ot-var-common.hh \
 	hb-ot-var-fvar-table.hh \
 	hb-ot-var-gvar-table.hh \
 	hb-ot-var-hvar-table.hh \
@@ -256,6 +262,8 @@ HB_SUBSET_sources = \
 	hb-number.hh \
 	hb-ot-cff1-table.cc \
 	hb-ot-cff2-table.cc \
+	hb-ot-color-colrv1-closure.hh \
+	hb-ot-post-table-v2subset.hh \
 	hb-static.cc \
 	hb-subset-cff-common.cc \
 	hb-subset-cff-common.hh \
@@ -267,6 +275,7 @@ HB_SUBSET_sources = \
 	hb-subset-input.hh \
 	hb-subset-plan.cc \
 	hb-subset-plan.hh \
+	hb-subset-repacker.cc \
 	hb-subset.cc \
 	hb-subset.hh \
 	hb-repacker.hh \
@@ -274,6 +283,7 @@ HB_SUBSET_sources = \
 
 HB_SUBSET_headers = \
 	hb-subset.h \
+	hb-subset-repacker.h \
 	$(NULL)
 
 HB_GOBJECT_DIST_sources = hb-gobject-structs.cc

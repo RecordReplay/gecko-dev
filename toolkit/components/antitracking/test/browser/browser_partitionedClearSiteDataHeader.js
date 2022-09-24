@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/
  */
 
-"use-strict";
+"use strict";
 
 /**
  * Tests that when receiving the "clear-site-data" header - with dFPI enabled -
@@ -27,7 +27,9 @@ const STORAGE_KEY = "testKey";
 // Skip localStorage tests when using legacy localStorage. The legacy
 // localStorage implementation does not support clearing data by principal. See
 // Bug 1688221, Bug 1688665.
-let skipLocalStorageTests = !Services.prefs.getBoolPref("dom.storage.next_gen");
+const skipLocalStorageTests = Services.prefs.getBoolPref(
+  "dom.storage.enable_unsupported_legacy_implementation"
+);
 
 /**
  * Creates an iframe in the passed browser and waits for it to load.
@@ -144,10 +146,7 @@ async function runClearSiteDataTest(
   if (clearDataContext == "firstParty") {
     // Open in new tab so we keep our current test tab intact. The
     // post-clear-callback might need it.
-    await BrowserTestUtils.withNewTab(
-      (browserA, CLEAR_SITE_DATA_URL_ORIGIN_A),
-      () => {}
-    );
+    await BrowserTestUtils.withNewTab(CLEAR_SITE_DATA_URL_ORIGIN_A, () => {});
   } else if (clearDataContext == "thirdPartyPartitioned") {
     // Navigate frame to path with clear-site-data header
     await SpecialPowers.spawn(
@@ -372,7 +371,7 @@ async function setupInitialStorageState(storageType) {
   );
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   info("Starting ClearSiteData test");
 
   await SpecialPowers.flushPrefEnv();

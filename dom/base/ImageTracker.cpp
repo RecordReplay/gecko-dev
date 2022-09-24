@@ -16,7 +16,7 @@
 
 namespace mozilla::dom {
 
-ImageTracker::ImageTracker() : mLocking(false), mAnimating(true) {}
+ImageTracker::ImageTracker() = default;
 
 ImageTracker::~ImageTracker() { SetLockingState(false); }
 
@@ -93,15 +93,11 @@ nsresult ImageTracker::Remove(imgIRequest* aImage, uint32_t aFlags) {
   return rv;
 }
 
-nsresult ImageTracker::SetLockingState(bool aLocked) {
-  if (XRE_IsContentProcess() &&
-      !Preferences::GetBool("image.mem.allow_locking_in_content_processes",
-                            true)) {
-    return NS_OK;
-  }
-
+void ImageTracker::SetLockingState(bool aLocked) {
   // If there's no change, there's nothing to do.
-  if (mLocking == aLocked) return NS_OK;
+  if (mLocking == aLocked) {
+    return;
+  }
 
   // Otherwise, iterate over our images and perform the appropriate action.
   for (imgIRequest* image : mImages.Keys()) {
@@ -114,8 +110,6 @@ nsresult ImageTracker::SetLockingState(bool aLocked) {
 
   // Update state.
   mLocking = aLocked;
-
-  return NS_OK;
 }
 
 void ImageTracker::SetAnimatingState(bool aAnimating) {

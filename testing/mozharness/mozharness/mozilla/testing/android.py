@@ -7,6 +7,7 @@
 
 from __future__ import absolute_import
 import datetime
+import functools
 import glob
 import os
 import posixpath
@@ -19,6 +20,16 @@ import tempfile
 from threading import Timer
 from mozharness.mozilla.automation import TBPL_RETRY, EXIT_STATUS_DICT
 from mozharness.base.script import PreScriptAction, PostScriptAction
+
+
+def ensure_dir(dir):
+    """Ensures the given directory exists"""
+    if dir and not os.path.exists(dir):
+        try:
+            os.makedirs(dir)
+        except OSError as error:
+            if error.errno != errno.EEXIST:
+                raise
 
 
 class AndroidMixin(object):
@@ -69,7 +80,10 @@ class AndroidMixin(object):
         return (
             self.device_serial is not None
             or self.is_emulator
-            or (installer_url is not None and installer_url.endswith(".apk"))
+            or (
+                installer_url is not None
+                and (installer_url.endswith(".apk") or installer_url.endswith(".aab"))
+            )
         )
 
     @property
@@ -136,6 +150,7 @@ class AndroidMixin(object):
             except Exception:
                 self.warning("failed to remove %s" % AUTH_FILE)
 
+        env["ANDROID_EMULATOR_HOME"] = avd_home_dir
         avd_path = os.path.join(avd_home_dir, "avd")
         if os.path.exists(avd_path):
             env["ANDROID_AVD_HOME"] = avd_path
@@ -149,15 +164,39 @@ class AndroidMixin(object):
             sdk_path = self.abs_dirs["abs_sdk_dir"]
         if os.path.exists(sdk_path):
             env["ANDROID_SDK_HOME"] = sdk_path
+            env["ANDROID_SDK_ROOT"] = sdk_path
             self.info("Found sdk at %s" % sdk_path)
         else:
             self.warning("Android sdk missing? Not found at %s" % sdk_path)
 
-        if self.use_gles3:
-            # enable EGL 3.0 in advancedFeatures.ini
-            AF_FILE = os.path.join(sdk_path, "advancedFeatures.ini")
-            with open(AF_FILE, "w") as f:
+        avd_config_path = os.path.join(
+            avd_path, "%s.ini" % self.config["emulator_avd_name"]
+        )
+        avd_folder = os.path.join(avd_path, "%s.avd" % self.config["emulator_avd_name"])
+        if os.path.isfile(avd_config_path):
+            # The ini file points to the absolute path to the emulator folder,
+            # which might be different, so we need to update it.
+            old_config = ""
+            with open(avd_config_path, "r") as config_file:
+                old_config = config_file.readlines()
+                self.info("Old Config: %s" % old_config)
+            with open(avd_config_path, "w") as config_file:
+                for line in old_config:
+                    if line.startswith("path="):
+                        config_file.write("path=%s\n" % avd_folder)
+                        self.info("Updating path from: %s" % line)
+                    else:
+                        config_file.write("%s\n" % line)
+        else:
+            self.warning("Could not find config path at %s" % avd_config_path)
+
+        # enable EGL 3.0 in advancedFeatures.ini
+        AF_FILE = os.path.join(avd_home_dir, "advancedFeatures.ini")
+        with open(AF_FILE, "w") as f:
+            if self.use_gles3:
                 f.write("GLESDynamicVersion=on\n")
+            else:
+                f.write("GLESDynamicVersion=off\n")
 
         # extra diagnostics for kvm acceleration
         emu = self.config.get("emulator_process_name")
@@ -169,9 +208,10 @@ class AndroidMixin(object):
             except Exception as e:
                 self.warning("Extra kvm diagnostics failed: %s" % str(e))
 
+        self.info("emulator env: %s" % str(env))
         command = ["emulator", "-avd", self.config["emulator_avd_name"]]
         if "emulator_extra_args" in self.config:
-            command += self.config["emulator_extra_args"].split()
+            command += self.config["emulator_extra_args"]
 
         dir = self.query_abs_dirs()["abs_blob_upload_dir"]
         tmp_file = tempfile.NamedTemporaryFile(
@@ -348,14 +388,20 @@ class AndroidMixin(object):
             self.logcat_proc.kill()
             self.logcat_file.close()
 
-    def install_apk(self, apk, replace=False):
-        """
-        Install the specified apk.
-        """
+    def _install_android_app_retry(self, app_path, replace):
         import mozdevice
 
         try:
-            self.device.run_as_package = self.device.install_app(apk, replace=replace)
+            if app_path.endswith(".aab"):
+                self.device.install_app_bundle(
+                    self.query_abs_dirs()["abs_bundletool_path"], app_path, timeout=120
+                )
+                self.device.run_as_package = self.query_package_name()
+            else:
+                self.device.run_as_package = self.device.install_app(
+                    app_path, replace=replace, timeout=120
+                )
+            return True
         except (
             mozdevice.ADBError,
             mozdevice.ADBProcessError,
@@ -363,17 +409,30 @@ class AndroidMixin(object):
         ) as e:
             self.info(
                 "Failed to install %s on %s: %s %s"
-                % (apk, self.device_name, type(e).__name__, e)
+                % (app_path, self.device_name, type(e).__name__, e)
             )
+            return False
+
+    def install_android_app(self, app_path, replace=False):
+        """
+        Install the specified app.
+        """
+        app_installed = self._retry(
+            5,
+            10,
+            functools.partial(self._install_android_app_retry, app_path, replace),
+            "Install app",
+        )
+
+        if not app_installed:
             self.fatal(
-                "INFRA-ERROR: %s Failed to install %s"
-                % (type(e).__name__, os.path.basename(apk)),
+                "INFRA-ERROR: Failed to install %s" % os.path.basename(app_path),
                 EXIT_STATUS_DICT[TBPL_RETRY],
             )
 
-    def uninstall_apk(self):
+    def uninstall_android_app(self):
         """
-        Uninstall the app associated with the configured apk, if it is
+        Uninstall the app associated with the configured app, if it is
         installed.
         """
         import mozdevice
@@ -400,9 +459,7 @@ class AndroidMixin(object):
         import mozdevice
 
         try:
-            out = self.device.get_prop("sys.boot_completed", timeout=30)
-            if out.strip() == "1":
-                return True
+            return self.device.is_device_ready(timeout=30)
         except (ValueError, mozdevice.ADBError, mozdevice.ADBTimeoutError):
             pass
         return False
@@ -474,6 +531,8 @@ class AndroidMixin(object):
             # target looks like geckoview.
             if "androidTest" in self.installer_path:
                 self.app_name = "org.mozilla.geckoview.test"
+            elif "test_runner" in self.installer_path:
+                self.app_name = "org.mozilla.geckoview.test_runner"
             elif "geckoview" in self.installer_path:
                 self.app_name = "org.mozilla.geckoview_example"
         if self.app_name is None:
@@ -484,12 +543,12 @@ class AndroidMixin(object):
             # other variations. 'aapt dump badging <apk>' could be used as an
             # alternative to package-name.txt, but introduces a dependency
             # on aapt, found currently in the Android SDK build-tools component.
-            apk_dir = self.abs_dirs["abs_work_dir"]
-            self.apk_path = os.path.join(apk_dir, self.installer_path)
+            app_dir = self.abs_dirs["abs_work_dir"]
+            self.app_path = os.path.join(app_dir, self.installer_path)
             unzip = self.query_exe("unzip")
-            package_path = os.path.join(apk_dir, "package-name.txt")
-            unzip_cmd = [unzip, "-q", "-o", self.apk_path]
-            self.run_command(unzip_cmd, cwd=apk_dir, halt_on_failure=True)
+            package_path = os.path.join(app_dir, "package-name.txt")
+            unzip_cmd = [unzip, "-q", "-o", self.app_path]
+            self.run_command(unzip_cmd, cwd=app_dir, halt_on_failure=True)
             self.app_name = str(
                 self.read_from_file(package_path, verbose=True)
             ).rstrip()
@@ -579,44 +638,6 @@ class AndroidMixin(object):
 
     # Script actions
 
-    def setup_avds(self):
-        """
-        If tooltool cache mechanism is enabled, the cached version is used by
-        the fetch command. If the manifest includes an "unpack" field, tooltool
-        will unpack all compressed archives mentioned in the manifest.
-        """
-        if not self.is_emulator:
-            return
-
-        c = self.config
-        dirs = self.query_abs_dirs()
-        self.mkdir_p(dirs["abs_work_dir"])
-        self.mkdir_p(dirs["abs_blob_upload_dir"])
-
-        # Always start with a clean AVD: AVD includes Android images
-        # which can be stateful.
-        self.rmtree(dirs["abs_avds_dir"])
-        self.mkdir_p(dirs["abs_avds_dir"])
-        if "avd_url" in c:
-            # Intended for experimental setups to evaluate an avd prior to
-            # tooltool deployment.
-            url = c["avd_url"]
-            self.download_unpack(url, dirs["abs_avds_dir"])
-        else:
-            url = self._get_repo_url(c["tooltool_manifest_path"])
-            self._tooltool_fetch(url, dirs["abs_avds_dir"])
-
-        avd_home_dir = self.abs_dirs["abs_avds_dir"]
-        if avd_home_dir != "/home/cltbld/.android":
-            # Modify the downloaded avds to point to the right directory.
-            cmd = [
-                "bash",
-                "-c",
-                'sed -i "s|/home/cltbld/.android|%s|" %s/test-*.ini'
-                % (avd_home_dir, os.path.join(avd_home_dir, "avd")),
-            ]
-            subprocess.check_call(cmd)
-
     def start_emulator(self):
         """
         Starts the emulator
@@ -624,20 +645,10 @@ class AndroidMixin(object):
         if not self.is_emulator:
             return
 
-        if "emulator_url" in self.config or "emulator_manifest" in self.config:
-            dirs = self.query_abs_dirs()
-            if self.config.get("emulator_url"):
-                self.download_unpack(self.config["emulator_url"], dirs["abs_work_dir"])
-            elif self.config.get("emulator_manifest"):
-                manifest_path = self.create_tooltool_manifest(
-                    self.config["emulator_manifest"]
-                )
-                dirs = self.query_abs_dirs()
-                cache = self.config.get("tooltool_cache", None)
-                if self.tooltool_fetch(
-                    manifest_path, output_dir=dirs["abs_work_dir"], cache=cache
-                ):
-                    self.fatal("Unable to download emulator via tooltool!")
+        dirs = self.query_abs_dirs()
+        ensure_dir(dirs["abs_work_dir"])
+        ensure_dir(dirs["abs_blob_upload_dir"])
+
         if not os.path.isfile(self.adb_path):
             self.fatal("The adb binary '%s' is not a valid file!" % self.adb_path)
         self.kill_processes("xpcshell")

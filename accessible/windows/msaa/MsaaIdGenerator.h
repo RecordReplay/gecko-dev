@@ -12,6 +12,7 @@
 #include "mozilla/dom/ipc/IdType.h"
 #include "mozilla/NotNull.h"
 #include "mozilla/UniquePtr.h"
+#include "nsITimer.h"
 
 namespace mozilla {
 namespace a11y {
@@ -53,9 +54,12 @@ class MsaaIdGenerator {
  private:
   bool ReleaseID(uint32_t aID);
   uint32_t ResolveContentProcessID();
+  void ReleasePendingIDs();
 
  private:
   UniquePtr<IDSet> mIDSet;
+  nsTArray<uint32_t> mIDsToRelease;
+  nsCOMPtr<nsITimer> mReleaseIDTimer;
 };
 
 }  // namespace a11y

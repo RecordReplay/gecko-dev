@@ -90,7 +90,8 @@ bool RemoteSandboxBroker::LaunchApp(
       ->Then(target, __func__, std::move(resolve), std::move(reject));
 
   // Spin the event loop while the sandbox launcher process launches.
-  SpinEventLoopUntil([&]() { return res != Pending; });
+  SpinEventLoopUntil("RemoteSandboxBroker::LaunchApp"_ns,
+                     [&]() { return res != Pending; });
 
   if (res == Failed) {
     return false;
@@ -98,7 +99,7 @@ bool RemoteSandboxBroker::LaunchApp(
 
   uint64_t handle = 0;
   bool ok = false;
-  bool rv = mParent.CallLaunchApp(std::move(mParameters), &ok, &handle) && ok;
+  bool rv = mParent.SendLaunchApp(std::move(mParameters), &ok, &handle) && ok;
   mParameters.shareHandles().Clear();
   if (!rv) {
     return false;
@@ -155,6 +156,12 @@ bool RemoteSandboxBroker::SetSecurityLevelForRDDProcess() {
 bool RemoteSandboxBroker::SetSecurityLevelForSocketProcess() {
   MOZ_CRASH(
       "RemoteSandboxBroker::SetSecurityLevelForSocketProcess not Implemented");
+}
+
+bool RemoteSandboxBroker::SetSecurityLevelForUtilityProcess(
+    mozilla::ipc::SandboxingKind aSandbox) {
+  MOZ_CRASH(
+      "RemoteSandboxBroker::SetSecurityLevelForUtilityProcess not Implemented");
 }
 
 AbstractSandboxBroker* CreateRemoteSandboxBroker() {

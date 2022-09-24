@@ -6,9 +6,15 @@
 // The target front holds resources that happend before ResourceCommand addeed listeners.
 // Test whether that feature works correctly or not.
 const TEST_URI =
-  "http://example.com/browser/devtools/client/framework/test/doc_cached-resource.html";
+  "https://example.com/browser/devtools/client/framework/test/doc_cached-resource.html";
 const PARENT_MESSAGE = "Hello from parent";
 const CHILD_MESSAGE = "Hello from child";
+
+/* import-globals-from ../../webconsole/test/browser/shared-head.js */
+Services.scriptloader.loadSubScript(
+  "chrome://mochitests/content/browser/devtools/client/webconsole/test/browser/shared-head.js",
+  this
+);
 
 add_task(async function() {
   info("Open console");
@@ -18,31 +24,28 @@ add_task(async function() {
 
   info("Check the initial messages");
   ok(
-    findMessage(hud, PARENT_MESSAGE),
-    "Message from parent doument is in console"
+    findMessageByType(hud, PARENT_MESSAGE, ".console-api"),
+    "Message from parent document is in console"
   );
   ok(
-    findMessage(hud, CHILD_MESSAGE),
-    "Message from child doument is in console"
+    findMessageByType(hud, CHILD_MESSAGE, ".console-api"),
+    "Message from child document is in console"
   );
 
   info("Clear the messages");
   hud.ui.window.document.querySelector(".devtools-clear-icon").click();
-  await waitUntil(() => !findMessage(hud, PARENT_MESSAGE));
+  await waitUntil(
+    () => !findMessageByType(hud, PARENT_MESSAGE, ".console-api")
+  );
 
   info("Reload the browsing page");
   await navigateTo(TEST_URI);
 
   info("Check the messages after reloading");
   await waitUntil(
-    () => findMessage(hud, PARENT_MESSAGE) && findMessage(hud, CHILD_MESSAGE)
+    () =>
+      findMessageByType(hud, PARENT_MESSAGE, ".console-api") &&
+      findMessageByType(hud, CHILD_MESSAGE, ".console-api")
   );
   ok(true, "All messages are shown correctly");
 });
-
-function findMessage(hud, text, selector = ".message") {
-  const messages = hud.ui.outputNode.querySelectorAll(selector);
-  return Array.prototype.find.call(messages, el =>
-    el.textContent.includes(text)
-  );
-}

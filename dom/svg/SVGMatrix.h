@@ -43,8 +43,7 @@
 #include "nsWrapperCache.h"
 #include "mozilla/Attributes.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * DOM wrapper for an SVG matrix.
@@ -52,7 +51,7 @@ namespace dom {
 class SVGMatrix final : public nsWrapperCache {
  public:
   NS_INLINE_DECL_CYCLE_COLLECTING_NATIVE_REFCOUNTING(SVGMatrix)
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_NATIVE_CLASS(SVGMatrix)
+  NS_DECL_CYCLE_COLLECTION_NATIVE_WRAPPERCACHE_CLASS(SVGMatrix)
 
   /**
    * Ctor for SVGMatrix objects that belong to a DOMSVGTransform.
@@ -125,7 +124,6 @@ class SVGMatrix final : public nsWrapperCache {
   gfxMatrix mMatrix;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGMATRIX_H_

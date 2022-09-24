@@ -9,6 +9,7 @@
 #include "GfxDriverInfo.h"
 #include "gfxWindowsPlatform.h"
 #include "jsapi.h"
+#include "js/PropertyAndElement.h"  // JS_SetElement, JS_SetProperty
 #include "nsExceptionHandler.h"
 #include "nsPrintfCString.h"
 #include "nsUnicharUtils.h"
@@ -30,8 +31,6 @@
 #include <setupapi.h>  // for SetupDi*
 #include <winioctl.h>  // for IOCTL_*
 #include <batclass.h>  // for BATTERY_*
-
-#define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -84,24 +83,6 @@ GfxInfo::GetHasBattery(bool* aHasBattery) {
   return NS_OK;
 }
 
-int32_t GfxInfo::GetMaxRefreshRate(bool* aMixed) {
-  AssertNotWin32kLockdown();
-
-  int32_t maxRefreshRate = -1;
-  if (aMixed) {
-    *aMixed = false;
-  }
-
-  for (auto displayInfo : mDisplayInfo) {
-    int32_t refreshRate = int32_t(displayInfo.mRefreshRate);
-    if (aMixed && maxRefreshRate > 0 && maxRefreshRate != refreshRate) {
-      *aMixed = true;
-    }
-    maxRefreshRate = std::max(maxRefreshRate, refreshRate);
-  }
-  return maxRefreshRate;
-}
-
 NS_IMETHODIMP
 GfxInfo::GetEmbeddedInFirefoxReality(bool* aEmbeddedInFirefoxReality) {
   *aEmbeddedInFirefoxReality = gfxVars::FxREmbedded();
@@ -125,7 +106,8 @@ GfxInfo::GetCleartypeParameters(nsAString& aCleartypeParams) {
     ClearTypeParameterInfo& params = clearTypeParams[d];
 
     if (displayNames) {
-      outStr.AppendPrintf("%S [ ", params.displayName.get());
+      outStr.AppendPrintf(
+          "%S [ ", static_cast<const wchar_t*>(params.displayName.get()));
     }
 
     if (params.gamma >= 0) {
@@ -138,8 +120,8 @@ GfxInfo::GetCleartypeParameters(nsAString& aCleartypeParams) {
       if (params.pixelStructure == PIXEL_STRUCT_RGB ||
           params.pixelStructure == PIXEL_STRUCT_BGR) {
         outStr.AppendPrintf(
-            "Pixel Structure: %S ",
-            (params.pixelStructure == PIXEL_STRUCT_RGB ? u"RGB" : u"BGR"));
+            "Pixel Structure: %s ",
+            (params.pixelStructure == PIXEL_STRUCT_RGB ? "RGB" : "BGR"));
       } else {
         outStr.AppendPrintf("Pixel Structure: %d ", params.pixelStructure);
       }
@@ -884,9 +866,6 @@ nsresult GfxInfo::Init() {
     }
   }
 
-  // Get monitor information
-  RefreshMonitors();
-
   const char* spoofedDriverVersionString =
       PR_GetEnv("MOZ_GFX_SPOOF_DRIVER_VERSION");
   if (spoofedDriverVersionString) {
@@ -921,45 +900,6 @@ GfxInfo::GetAdapterDescription2(nsAString& aAdapterDescription) {
   AssertNotWin32kLockdown();
 
   aAdapterDescription = mDeviceString[1 - mActiveGPUIndex];
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-GfxInfo::RefreshMonitors() {
-  AssertNotWin32kLockdown();
-
-  mDisplayInfo.Clear();
-
-  for (int deviceIndex = 0;; deviceIndex++) {
-    DISPLAY_DEVICEW device;
-    device.cb = sizeof(device);
-    if (!::EnumDisplayDevicesW(nullptr, deviceIndex, &device, 0)) {
-      break;
-    }
-
-    if (!(device.StateFlags & DISPLAY_DEVICE_ACTIVE)) {
-      continue;
-    }
-
-    DEVMODEW mode;
-    mode.dmSize = sizeof(mode);
-    mode.dmDriverExtra = 0;
-    if (!::EnumDisplaySettingsW(device.DeviceName, ENUM_CURRENT_SETTINGS,
-                                &mode)) {
-      continue;
-    }
-
-    DisplayInfo displayInfo;
-
-    displayInfo.mScreenWidth = mode.dmPelsWidth;
-    displayInfo.mScreenHeight = mode.dmPelsHeight;
-    displayInfo.mRefreshRate = mode.dmDisplayFrequency;
-    displayInfo.mIsPseudoDisplay =
-        !!(device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER);
-    displayInfo.mDeviceString = device.DeviceString;
-
-    mDisplayInfo.AppendElement(displayInfo);
-  }
   return NS_OK;
 }
 
@@ -1129,43 +1069,6 @@ GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active) {
 }
 
 NS_IMETHODIMP
-GfxInfo::GetDisplayInfo(nsTArray<nsString>& aDisplayInfo) {
-  AssertNotWin32kLockdown();
-
-  for (auto displayInfo : mDisplayInfo) {
-    nsString value;
-    value.AppendPrintf("%dx%d@%dHz %s %s", displayInfo.mScreenWidth,
-                       displayInfo.mScreenHeight, displayInfo.mRefreshRate,
-                       displayInfo.mIsPseudoDisplay ? "Pseudo Display :" : ":",
-                       NS_ConvertUTF16toUTF8(displayInfo.mDeviceString).get());
-
-    aDisplayInfo.AppendElement(value);
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-GfxInfo::GetDisplayWidth(nsTArray<uint32_t>& aDisplayWidth) {
-  AssertNotWin32kLockdown();
-
-  for (auto displayInfo : mDisplayInfo) {
-    aDisplayWidth.AppendElement((uint32_t)displayInfo.mScreenWidth);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-GfxInfo::GetDisplayHeight(nsTArray<uint32_t>& aDisplayHeight) {
-  AssertNotWin32kLockdown();
-
-  for (auto displayInfo : mDisplayInfo) {
-    aDisplayHeight.AppendElement((uint32_t)displayInfo.mScreenHeight);
-  }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
 GfxInfo::GetDrmRenderDevice(nsACString& aDrmRenderDevice) {
   return NS_ERROR_NOT_IMPLEMENTED;
 }
@@ -1284,9 +1187,9 @@ static bool OnlyAllowFeatureOnWhitelistedVendor(int32_t aFeature) {
     case nsIGfxInfo::FEATURE_GPU_PROCESS:
     // We can mostly assume that ANGLE will work
     case nsIGfxInfo::FEATURE_DIRECT3D_11_ANGLE:
-    // Software WebRender is our Basic compositor replacement. It needs to
-    // always work.
-    case nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE:
+    // Remote WebGL is needed for Win32k Lockdown, so it should be enabled
+    // regardless of HW support or not
+    case nsIGfxInfo::FEATURE_ALLOW_WEBGL_OUT_OF_PROCESS:
       return false;
     default:
       return true;
@@ -1558,6 +1461,20 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
                                 nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
                                 DRIVER_BUILD_ID_LESS_THAN_OR_EQUAL, 4578,
                                 "FEATURE_FAILURE_BUG_1432610");
+    /**
+     * Disable VP8 HW decoding on Windows 8.1 on Intel Haswel and a certain
+     * driver version. See bug 1760464 comment 6 and bug 1761332.
+     */
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows8_1, DeviceFamily::IntelHaswell,
+        nsIGfxInfo::FEATURE_VP8_HW_DECODE, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+        DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions,
+        "FEATURE_FAILURE_BUG_1760464");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows8_1, DeviceFamily::IntelAll,
+        nsIGfxInfo::FEATURE_VP8_HW_DECODE, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+        DRIVER_EQUAL, V(10, 18, 14, 4264), "FEATURE_FAILURE_BUG_1761332");
 
     /* Disable D2D on Win7 on Intel HD Graphics on driver <= 8.15.10.2302
      * See bug 806786
@@ -1688,18 +1605,12 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         V(8, 15, 10, 2869), "FEATURE_FAILURE_INTEL_W7_HW_DECODING");
 
     /* Bug 1203199/1092166: DXVA startup crashes on some intel drivers. */
-    APPEND_TO_DRIVER_BLOCKLIST_RANGE(OperatingSystem::Windows, DeviceFamily::IntelAll,
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+        OperatingSystem::Windows, DeviceFamily::IntelAll,
         nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING,
-        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
-        DRIVER_BETWEEN_INCLUSIVE, V(9,17,10,0), V(9,17,10,2849),
-        "FEATURE_FAILURE_BUG_1203199_1", "Intel driver > 9.17.10.2849");
-
-    /* Bug 1203199/1092166: DXVA startup crashes on some intel drivers. */
-    APPEND_TO_DRIVER_BLOCKLIST_RANGE(OperatingSystem::Windows, DeviceFamily::IntelAll,
-        nsIGfxInfo::FEATURE_HARDWARE_VIDEO_DECODING,
-        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
-        DRIVER_BETWEEN_INCLUSIVE, V(8,15,10,0), V(8,15,10,2849),
-        "FEATURE_FAILURE_BUG_1203199_1", "Intel driver > 8.15.10.2849");
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
+        V(9, 17, 10, 0), V(9, 17, 10, 2849), "FEATURE_FAILURE_BUG_1203199_1",
+        "Intel driver > 9.17.10.2849");
 
     APPEND_TO_DRIVER_BLOCKLIST2(
         OperatingSystem::Windows, DeviceFamily::Nvidia8800GTS,
@@ -1832,6 +1743,65 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         "FEATURE_UNQUALIFIED_P010_NVIDIA");
 
     ////////////////////////////////////
+    // FEATURE_VIDEO_OVERLAY - ALLOWLIST
+#ifdef NIGHTLY_BUILD
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::All,
+        nsIGfxInfo::FEATURE_VIDEO_OVERLAY, nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
+        DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0), "FEATURE_ROLLOUT_ALL");
+#else
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::IntelAll,
+        nsIGfxInfo::FEATURE_VIDEO_OVERLAY, nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
+        DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0), "FEATURE_ROLLOUT_INTEL");
+#endif
+
+    ////////////////////////////////////
+    // FEATURE_HW_DECODED_VIDEO_ZERO_COPY
+
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+        OperatingSystem::Windows10, DeviceFamily::IntelSkylake,
+        nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
+        V(20, 19, 15, 4285), V(20, 19, 15, 4380), "FEATURE_FAILURE_BUG_1763280",
+        "Intel driver 20.19.15.*");
+
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+        OperatingSystem::Windows10, DeviceFamily::IntelSkylake,
+        nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
+        V(10, 18, 15, 4256), V(10, 18, 15, 4293), "FEATURE_FAILURE_BUG_1763280",
+        "Intel driver 10.18.15.*");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::NvidiaAll,
+        nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_LESS_THAN,
+        V(21, 21, 13, 7576), "FEATURE_FAILURE_BUG_1767212");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
+                                nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+                                nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
+                                DRIVER_LESS_THAN, V(23, 20, 826, 5120),
+                                "FEATURE_FAILURE_BUG_1767212");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::RadeonBlockNoVideoCopy,
+        nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_LESS_THAN,
+        V(26, 20, 15000, 37), "FEATURE_FAILURE_BUG_1767212");
+
+    ////////////////////////////////////
+    // FEATURE_HW_DECODED_VIDEO_ZERO_COPY - ALLOWLIST
+#ifdef NIGHTLY_BUILD
+    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::All,
+                                nsIGfxInfo::FEATURE_HW_DECODED_VIDEO_ZERO_COPY,
+                                nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
+                                DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0),
+                                "FEATURE_ROLLOUT_ALL");
+#endif
+
+    ////////////////////////////////////
     // FEATURE_WEBRENDER
     // Block 8.56.1.15/16
     APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::AtiAll,
@@ -1839,6 +1809,25 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
                                 nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION,
                                 DRIVER_LESS_THAN_OR_EQUAL, V(8, 56, 1, 16),
                                 "CRASHY_DRIVERS_BUG_1678808");
+
+    // Shader compilation startup crashes with WebRender on Windows 7.
+    APPEND_TO_DRIVER_BLOCKLIST_RANGE(
+        OperatingSystem::Windows7, DeviceFamily::NvidiaAll,
+        nsIGfxInfo::FEATURE_WEBRENDER,
+        nsIGfxInfo::FEATURE_BLOCKED_DRIVER_VERSION, DRIVER_BETWEEN_INCLUSIVE,
+        V(8, 17, 12, 8019), V(8, 17, 12, 8026), "FEATURE_FAILURE_BUG_1709629",
+        "nVidia driver > 280.26");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::IntelWebRenderBlocked,
+        nsIGfxInfo::FEATURE_WEBRENDER, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+        DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions,
+        "INTEL_DEVICE_GEN5_OR_OLDER");
+
+    APPEND_TO_DRIVER_BLOCKLIST2(
+        OperatingSystem::Windows, DeviceFamily::NvidiaWebRenderBlocked,
+        nsIGfxInfo::FEATURE_WEBRENDER, nsIGfxInfo::FEATURE_BLOCKED_DEVICE,
+        DRIVER_LESS_THAN, GfxDriverInfo::allDriverVersions, "EARLY_NVIDIA");
 
     ////////////////////////////////////
     // FEATURE_WEBRENDER - ALLOWLIST
@@ -1852,14 +1841,14 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
         DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
-        DeviceFamily::NvidiaRolloutWebRender, nsIGfxInfo::FEATURE_WEBRENDER,
+        DeviceFamily::NvidiaAll, nsIGfxInfo::FEATURE_WEBRENDER,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_ROLLOUT_NV");
 
     APPEND_TO_DRIVER_BLOCKLIST2_EXT(
         OperatingSystem::Windows, ScreenSizeStatus::All, BatteryStatus::All,
         DesktopEnvironment::All, WindowProtocol::All, DriverVendor::All,
-        DeviceFamily::IntelRolloutWebRender, nsIGfxInfo::FEATURE_WEBRENDER,
+        DeviceFamily::IntelAll, nsIGfxInfo::FEATURE_WEBRENDER,
         nsIGfxInfo::FEATURE_ALLOW_ALWAYS, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_ROLLOUT_INTEL");
 
@@ -1894,25 +1883,6 @@ const nsTArray<GfxDriverInfo>& GfxInfo::GetGfxDriverInfo() {
         nsIGfxInfo::FEATURE_WEBRENDER_SCISSORED_CACHE_CLEARS,
         nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_COMPARISON_IGNORED,
         V(0, 0, 0, 0), "FEATURE_FAILURE_BUG_1603515");
-
-    ////////////////////////////////////
-    // FEATURE_WEBRENDER_SOFTWARE
-
-    // TODO(aosmond): Bug 1678044 - wdspec tests ignore enable/disable-webrender
-    // Once the test infrastructure is fixed, we can remove this blocklist rule
-    APPEND_TO_DRIVER_BLOCKLIST2(
-        OperatingSystem::Windows, DeviceFamily::AmazonAll,
-        nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
-        nsIGfxInfo::FEATURE_BLOCKED_DEVICE, DRIVER_COMPARISON_IGNORED,
-        V(0, 0, 0, 0), "FEATURE_FAILURE_BUG_1678044");
-
-    ////////////////////////////////////
-    // FEATURE_WEBRENDER_SOFTWARE - ALLOWLIST
-    APPEND_TO_DRIVER_BLOCKLIST2(OperatingSystem::Windows, DeviceFamily::All,
-                                nsIGfxInfo::FEATURE_WEBRENDER_SOFTWARE,
-                                nsIGfxInfo::FEATURE_ALLOW_ALWAYS,
-                                DRIVER_COMPARISON_IGNORED, V(0, 0, 0, 0),
-                                "FEATURE_ROLLOUT_SOFTWARE_WR");
   }
   return *sDriverInfo;
 }
@@ -2015,6 +1985,7 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     }
 
     if (mHasDriverVersionMismatch) {
+      aFailureId = "FEATURE_FAILURE_MISMATCHED_VERSION";
       *aStatus = nsIGfxInfo::FEATURE_BLOCKED_MISMATCHED_VERSION;
       return NS_OK;
     }
@@ -2022,35 +1993,6 @@ nsresult GfxInfo::GetFeatureStatusImpl(
 
   return GfxInfoBase::GetFeatureStatusImpl(
       aFeature, aStatus, aSuggestedDriverVersion, aDriverInfo, aFailureId, &os);
-}
-
-nsresult GfxInfo::FindMonitors(JSContext* aCx, JS::HandleObject aOutArray) {
-  AssertNotWin32kLockdown();
-
-  int deviceCount = 0;
-  for (auto displayInfo : mDisplayInfo) {
-    JS::Rooted<JSObject*> obj(aCx, JS_NewPlainObject(aCx));
-
-    JS::Rooted<JS::Value> screenWidth(aCx,
-                                      JS::Int32Value(displayInfo.mScreenWidth));
-    JS_SetProperty(aCx, obj, "screenWidth", screenWidth);
-
-    JS::Rooted<JS::Value> screenHeight(
-        aCx, JS::Int32Value(displayInfo.mScreenHeight));
-    JS_SetProperty(aCx, obj, "screenHeight", screenHeight);
-
-    JS::Rooted<JS::Value> refreshRate(aCx,
-                                      JS::Int32Value(displayInfo.mRefreshRate));
-    JS_SetProperty(aCx, obj, "refreshRate", refreshRate);
-
-    JS::Rooted<JS::Value> pseudoDisplay(
-        aCx, JS::BooleanValue(displayInfo.mIsPseudoDisplay));
-    JS_SetProperty(aCx, obj, "pseudoDisplay", pseudoDisplay);
-
-    JS::Rooted<JS::Value> element(aCx, JS::ObjectValue(*obj));
-    JS_SetElement(aCx, aOutArray, deviceCount++, element);
-  }
-  return NS_OK;
 }
 
 void GfxInfo::DescribeFeatures(JSContext* aCx, JS::Handle<JSObject*> aObj) {

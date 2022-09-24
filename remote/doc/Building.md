@@ -27,8 +27,6 @@ Component files include the likes of components.conf,
 RemoteAgent.manifest, moz.build files, and jar.mn.
 All the JS modules (files ending with `.jsm`) are symlinked into
 the build and can be changed without rebuilding.
-The Remote Agent’s startup code found under remote/components/rust/
-is written in Rust and requires rebuilds when changed.
 
 You may also opt out of building all the WebDriver specific components
 ([Marionette], and the Remote Agent) by setting the following flag in
@@ -48,6 +46,6 @@ them, place this in your [mozconfig]:
 
 
 [remote/ in central]: https://searchfox.org/mozilla-central/source/remote
-[mozconfig]: ../build/buildsystem/mozconfigs.html
-[artifact builds]: https://developer.mozilla.org/en-US/docs/Mozilla/Developer_guide/Build_Instructions/Artifact_builds
-[Marionette]: ../testing/marionette/index.html
+[mozconfig]: /build/buildsystem/mozconfigs.rst
+[artifact builds]: /contributing/build/artifact_builds.rst
+[Marionette]: /testing/marionette/index.rst

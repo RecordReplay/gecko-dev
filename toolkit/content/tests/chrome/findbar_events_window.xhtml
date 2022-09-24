@@ -44,11 +44,11 @@
     async function startTestWithBrowser(browserId) {
       info("Starting test with browser '" + browserId + "'");
       gBrowser = document.getElementById(browserId);
-      gFindBar.browser = gBrowser;
       const url = "data:text/html,hello there";
       let promise = BrowserTestUtils.browserLoaded(gBrowser, false, url);
       BrowserTestUtils.loadURI(gBrowser, url);
       await promise;
+      gFindBar.browser = gBrowser;
       await onDocumentLoaded();
     }
 
@@ -103,9 +103,13 @@
       let promise = once(gFindBar, "find");
 
       // Put some text in the find box.
-      let event = document.createEvent("KeyboardEvent");
-      event.initKeyEvent("keypress", true, true, null, false, false,
-                         false, false, 0, query.charCodeAt(0));
+      let event = new KeyboardEvent("keypress", {
+        bubbles: true,
+        cancelable: true,
+        view: null,
+        keyCode: 0,
+        charCode: query.charCodeAt(0),
+      });
       gFindBar._findField.dispatchEvent(event);
 
       let e = await promise;

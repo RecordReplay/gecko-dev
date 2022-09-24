@@ -17,7 +17,6 @@ function runTest(obj) {
         ["privacy.trackingprotection.enabled", false],
         ["privacy.trackingprotection.pbmode.enabled", false],
         ["privacy.trackingprotection.annotate_channels", true],
-        ["privacy.storagePrincipal.enabledForTrackers", false],
         [
           "privacy.trackingprotection.socialtracking.enabled",
           obj.protectionEnabled,
@@ -132,7 +131,9 @@ runTest({
     [Ci.nsIWebProgressListener.STATE_COOKIES_LOADED, true, 1],
     [Ci.nsIWebProgressListener.STATE_COOKIES_LOADED_SOCIALTRACKER, true, 1],
     [Ci.nsIWebProgressListener.STATE_LOADED_SOCIALTRACKING_CONTENT, true, 2],
-    [Ci.nsIWebProgressListener.STATE_COOKIES_BLOCKED_SOCIALTRACKER, true, 2],
+    // We cache the storage allowed decision, so we will only get one block
+    // event per window and origin.
+    [Ci.nsIWebProgressListener.STATE_COOKIES_BLOCKED_SOCIALTRACKER, true, 1],
   ],
 });
 

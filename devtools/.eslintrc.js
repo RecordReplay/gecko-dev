@@ -110,18 +110,18 @@ module.exports = {
       excludedFiles: [
         // Enable the rule on JSM, test head files and some specific files.
         "**/*.jsm",
+        "**/*.sjs",
         "**/test/**/head.js",
         "**/test/**/shared-head.js",
         "client/debugger/test/mochitest/code_frame-script.js",
         "client/responsive.html/browser/content.js",
-        "client/shared/browser-loader.js",
         "server/actors/webconsole/content-process-forward.js",
         "server/startup/content-process.js",
         "server/startup/frame.js",
-        "shared/base-loader.js",
-        "shared/worker/loader.js",
+        "shared/loader/base-loader.js",
+        "shared/loader/browser-loader.js",
+        "shared/loader/worker-loader.js",
         "startup/aboutdebugging-registration.js",
-        "startup/aboutdevtools/aboutdevtools-registration.js",
         "startup/aboutdevtoolstoolbox-registration.js",
         "startup/devtools-startup.js",
       ],
@@ -135,7 +135,7 @@ module.exports = {
       excludedFiles: [
         // Debugger modules have a custom bundling logic which relies on relative
         // paths.
-        "client/debugger/**",
+        "client/debugger/src/**",
         // `client/shared/build` contains node helpers to build the debugger and
         // not devtools modules.
         "client/shared/build/**",
@@ -155,7 +155,6 @@ module.exports = {
     // See bug 1224289.
     "mozilla/reject-importGlobalProperties": ["error", "everything"],
     "mozilla/var-only-at-top-level": "error",
-    "mozilla/use-chromeutils-import": ["error", { allowCu: true }],
 
     // Rules from the React plugin
     "react/display-name": "error",
@@ -394,5 +393,10 @@ module.exports = {
     // require assignment operator shorthand where possible or prohibit it
     // entirely
     "operator-assignment": "off",
+  },
+  settings: {
+    react: {
+      version: "16.8",
+    },
   },
 };

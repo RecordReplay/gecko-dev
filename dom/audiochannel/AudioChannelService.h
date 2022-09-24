@@ -21,8 +21,7 @@
 class nsPIDOMWindowOuter;
 struct PRLogModuleInfo;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class AudioPlaybackConfig {
  public:
@@ -152,8 +151,6 @@ class AudioChannelService final : public nsIObserver {
 
   void RefreshAgentsVolume(nsPIDOMWindowOuter* aWindow, float aVolume,
                            bool aMuted);
-  void RefreshAgentsSuspend(nsPIDOMWindowOuter* aWindow,
-                            nsSuspendedTypes aSuspend);
 
   // This method needs to know the inner window that wants to capture audio. We
   // group agents per top outer window, but we can have multiple innerWindow per
@@ -162,7 +159,7 @@ class AudioChannelService final : public nsIObserver {
   void SetWindowAudioCaptured(nsPIDOMWindowOuter* aWindow,
                               uint64_t aInnerWindowID, bool aCapture);
 
-  void NotifyMediaResumedFromBlock(nsPIDOMWindowOuter* aWindow);
+  void NotifyResumingDelayedMedia(nsPIDOMWindowOuter* aWindow);
 
  private:
   AudioChannelService();
@@ -170,6 +167,9 @@ class AudioChannelService final : public nsIObserver {
 
   void RefreshAgents(nsPIDOMWindowOuter* aWindow,
                      const std::function<void(AudioChannelAgent*)>& aFunc);
+
+  void RefreshAgentsSuspend(nsPIDOMWindowOuter* aWindow,
+                            nsSuspendedTypes aSuspend);
 
   static void CreateServiceIfNeeded();
 
@@ -240,7 +240,6 @@ const char* AudibleStateToStr(
 const char* AudibleChangedReasonToStr(
     const AudioChannelService::AudibleChangedReasons& aReason);
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif

@@ -10,6 +10,7 @@
 #include "js/GCAnnotations.h"
 #include "js/Id.h"
 #include "js/RootingAPI.h"
+#include "js/String.h"
 #include "jsapi.h"
 
 class JSString;
@@ -24,7 +25,7 @@ class PinnedStringId {
   jsid id;
 
  public:
-  constexpr PinnedStringId() : id(JSID_VOID) {}
+  constexpr PinnedStringId() : id(JS::PropertyKey::Void()) {}
 
   bool init(JSContext* cx, const char* string) {
     JSString* str = JS_AtomizeAndPinString(cx, string);

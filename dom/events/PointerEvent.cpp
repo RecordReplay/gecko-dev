@@ -87,6 +87,7 @@ already_AddRefed<PointerEvent> PointerEvent::Constructor(
                     aParam.mClientX, aParam.mClientY, false, false, false,
                     false, aParam.mButton, aParam.mRelatedTarget);
   e->InitializeExtraMouseEventDictionaryMembers(aParam);
+  e->mPointerType = Some(aParam.mPointerType);
 
   WidgetPointerEvent* widgetEvent = e->mEvent->AsPointerEvent();
   widgetEvent->pointerId = aParam.mPointerId;
@@ -140,6 +141,11 @@ NS_IMPL_RELEASE_INHERITED(PointerEvent, MouseEvent)
 
 void PointerEvent::GetPointerType(nsAString& aPointerType,
                                   CallerType aCallerType) {
+  if (mPointerType.isSome()) {
+    aPointerType = mPointerType.value();
+    return;
+  }
+
   if (ShouldResistFingerprinting(aCallerType)) {
     aPointerType.AssignLiteral("mouse");
     return;
@@ -245,7 +251,7 @@ void PointerEvent::GetCoalescedEvents(
       mCoalescedEvents.AppendElement(domEvent);
     }
   }
-  if (mEvent->mTarget) {
+  if (mEvent->IsTrusted() && mEvent->mTarget) {
     for (RefPtr<PointerEvent>& pointerEvent : mCoalescedEvents) {
       // Only set event target when it's null.
       if (!pointerEvent->mEvent->mTarget) {
@@ -259,7 +265,7 @@ void PointerEvent::GetCoalescedEvents(
 void PointerEvent::GetPredictedEvents(
     nsTArray<RefPtr<PointerEvent>>& aPointerEvents) {
   // XXX Add support for native predicted events, bug 1550461
-  if (mEvent->mTarget) {
+  if (mEvent->IsTrusted() && mEvent->mTarget) {
     for (RefPtr<PointerEvent>& pointerEvent : mPredictedEvents) {
       // Only set event target when it's null.
       if (!pointerEvent->mEvent->mTarget) {
@@ -288,7 +294,7 @@ bool PointerEvent::ShouldResistFingerprinting(CallerType aCallerType) {
 
   nsCOMPtr<Document> doc = GetDocument();
 
-  return doc && !nsContentUtils::IsChromeDoc(doc);
+  return nsContentUtils::ShouldResistFingerprinting(doc);
 }
 
 }  // namespace mozilla::dom

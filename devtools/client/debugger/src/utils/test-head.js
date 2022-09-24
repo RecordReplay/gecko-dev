@@ -15,7 +15,7 @@ import * as selectors from "../selectors";
 import { parserWorker, evaluationsParser } from "../test/tests-setup";
 import configureStore from "../actions/utils/create-store";
 import sourceQueue from "../utils/source-queue";
-
+import { setupCreate } from "../client/firefox/create";
 /**
  * This file contains older interfaces used by tests that have not been
  * converted to use test-mockup.js
@@ -40,8 +40,8 @@ function createStore(client, initialState = {}, sourceMapsMock) {
   })(combineReducers(reducers), initialState);
   sourceQueue.clear();
   sourceQueue.initialize({
-    newQueuedSources: sources =>
-      store.dispatch(actions.newQueuedSources(sources)),
+    newOriginalSources: sources =>
+      store.dispatch(actions.newOriginalSources(sources)),
   });
 
   store.thunkArgs = () => ({
@@ -54,6 +54,8 @@ function createStore(client, initialState = {}, sourceMapsMock) {
 
   // Put the initial context in the store, for convenience to unit tests.
   store.cx = selectors.getThreadContext(store.getState());
+
+  setupCreate({ store });
 
   return store;
 }
@@ -80,6 +82,7 @@ function createSourceObject(filename, props = {}) {
   return {
     id: filename,
     url: makeSourceURL(filename),
+    thread: props.thread || "FakeThread",
     isBlackBoxed: !!props.isBlackBoxed,
     isPrettyPrinted: false,
     isExtension: false,
@@ -107,18 +110,30 @@ function createMakeSource() {
     const index = (indicies[name] | 0) + 1;
     indicies[name] = index;
 
+    // Mock a SOURCE Resource, which happens to be the SourceActor's form
+    // with resourceType and targetFront additional attributes
     return {
-      id: name,
-      thread: "FakeThread",
-      source: {
-        actor: `${name}-${index}-actor`,
-        url: `http://localhost:8000/examples/${name}`,
-        sourceMapBaseURL: props.sourceMapBaseURL || null,
-        sourceMapURL: props.sourceMapURL || null,
-        introductionType: props.introductionType || null,
-        isBlackBoxed: !!props.isBlackBoxed,
-        extensionName: null,
+      resourceType: "source",
+      // Mock the targetFront to support makeSourceId function
+      targetFront: {
+        isDestroyed() {
+          return false;
+        },
+        getCachedFront(typeName) {
+          if (typeName == "thread") {
+            return { actorID: "FakeThread" };
+          }
+        },
       },
+      // Allow to use custom ID's for reducer source objects
+      mockedJestID: name,
+      actor: `${name}-${index}-actor`,
+      url: `http://localhost:8000/examples/${name}`,
+      sourceMapBaseURL: props.sourceMapBaseURL || null,
+      sourceMapURL: props.sourceMapURL || null,
+      introductionType: props.introductionType || null,
+      isBlackBoxed: !!props.isBlackBoxed,
+      extensionName: null,
     };
   };
 }

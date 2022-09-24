@@ -14,19 +14,16 @@
 
 #include "mozilla/Attributes.h"
 #include "nsIContent.h"
+#include "nsIMutationObserver.h"
 
 #include "nsTextFragment.h"
 #include "nsError.h"
 #include "nsCycleCollectionParticipant.h"
 
-#include "mozilla/dom/ShadowRoot.h"
-
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Element;
 class HTMLSlotElement;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #define CHARACTER_DATA_FLAG_BIT(n_) \
   NODE_FLAG_BIT(NODE_TYPE_SPECIFIC_BITS_OFFSET + (n_))
@@ -73,8 +70,7 @@ ASSERT_NODE_FLAGS_SPACE(NODE_TYPE_SPECIFIC_BITS_OFFSET + 8);
 
 #undef CHARACTER_DATA_FLAG_BIT
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class CharacterData : public nsIContent {
  public:
@@ -169,11 +165,6 @@ class CharacterData : public nsIContent {
 
   bool IsNodeOfType(uint32_t aFlags) const override { return false; }
 
-  bool IsLink(nsIURI** aURI) const final {
-    *aURI = nullptr;
-    return false;
-  }
-
   nsresult Clone(dom::NodeInfo* aNodeInfo, nsINode** aResult) const override {
     RefPtr<CharacterData> result = CloneDataNode(aNodeInfo, true);
     result.forget(aResult);
@@ -199,8 +190,8 @@ class CharacterData : public nsIContent {
 
   //----------------------------------------
 
-  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_SCRIPT_HOLDER_CLASS_INHERITED(
-      CharacterData, nsIContent)
+  NS_DECL_CYCLE_COLLECTION_SKIPPABLE_WRAPPERCACHE_CLASS_INHERITED(CharacterData,
+                                                                  nsIContent)
 
   /**
    * Compare two CharacterData nodes for text equality.
@@ -236,7 +227,6 @@ class CharacterData : public nsIContent {
   already_AddRefed<nsAtom> GetCurrentValueAtom();
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_CharacterData_h */

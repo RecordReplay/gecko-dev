@@ -6,7 +6,6 @@
 
 #include "mozilla/dom/KeyframeEffect.h"
 
-#include "FrameLayerBuilder.h"
 #include "mozilla/dom/Animation.h"
 #include "mozilla/dom/KeyframeAnimationOptionsBinding.h"
 // For UnrestrictedDoubleOrKeyframeAnimationOptions;
@@ -39,6 +38,8 @@
 #include "nsIScrollableFrame.h"
 #include "nsPresContextInlines.h"
 #include "nsRefreshDriver.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
+#include "WindowRenderer.h"
 
 namespace mozilla {
 
@@ -144,7 +145,8 @@ void KeyframeEffect::SetComposite(const CompositeOperation& aComposite) {
   }
 
   if (mTarget) {
-    RefPtr<ComputedStyle> computedStyle = GetTargetComputedStyle(Flush::None);
+    RefPtr<const ComputedStyle> computedStyle =
+        GetTargetComputedStyle(Flush::None);
     if (computedStyle) {
       UpdateProperties(computedStyle);
     }
@@ -240,7 +242,7 @@ void KeyframeEffect::SetKeyframes(JSContext* aContext,
     return;
   }
 
-  RefPtr<ComputedStyle> style = GetTargetComputedStyle(Flush::None);
+  RefPtr<const ComputedStyle> style = GetTargetComputedStyle(Flush::None);
   SetKeyframes(std::move(keyframes), style);
 }
 
@@ -524,7 +526,7 @@ void KeyframeEffect::EnsureBaseStyles(
              " we should have also failed to calculate the computed values"
              " passed-in as aProperties");
 
-  RefPtr<ComputedStyle> baseComputedStyle;
+  RefPtr<const ComputedStyle> baseComputedStyle;
   for (const AnimationProperty& property : aProperties) {
     EnsureBaseStyle(property, presContext, aComputedValues, baseComputedStyle);
   }
@@ -542,7 +544,7 @@ void KeyframeEffect::EnsureBaseStyles(
 void KeyframeEffect::EnsureBaseStyle(
     const AnimationProperty& aProperty, nsPresContext* aPresContext,
     const ComputedStyle* aComputedStyle,
-    RefPtr<ComputedStyle>& aBaseComputedStyle) {
+    RefPtr<const ComputedStyle>& aBaseComputedStyle) {
   bool hasAdditiveValues = false;
 
   for (const AnimationPropertySegment& segment : aProperty.mSegments) {
@@ -735,8 +737,8 @@ void KeyframeEffect::ResetPartialPrerendered() {
     return;
   }
 
-  if (layers::LayerManager* layerManager = widget->GetLayerManager()) {
-    layerManager->RemovePartialPrerenderedAnimation(
+  if (WindowRenderer* windowRenderer = widget->GetWindowRenderer()) {
+    windowRenderer->RemovePartialPrerenderedAnimation(
         mAnimation->IdOnCompositor(), mAnimation);
   }
 }
@@ -781,9 +783,9 @@ static KeyframeEffectParams KeyframeEffectParamsFromUnion(
     return result;
   }
 
-  RefPtr<nsAtom> pseudoAtom =
-      nsCSSPseudoElements::GetPseudoAtom(options.mPseudoElement);
-  if (!pseudoAtom) {
+  Maybe<PseudoStyleType> pseudoType =
+      nsCSSPseudoElements::GetPseudoType(options.mPseudoElement);
+  if (!pseudoType) {
     // Per the spec, we throw SyntaxError for syntactically invalid pseudos.
     aRv.ThrowSyntaxError(
         nsPrintfCString("'%s' is a syntactically invalid pseudo-element.",
@@ -791,8 +793,7 @@ static KeyframeEffectParams KeyframeEffectParamsFromUnion(
     return result;
   }
 
-  result.mPseudoType = nsCSSPseudoElements::GetPseudoType(
-      pseudoAtom, CSSEnabledState::ForAllContent);
+  result.mPseudoType = *pseudoType;
   if (!IsSupportedPseudoForWebAnimation(result.mPseudoType)) {
     // Per the spec, we throw SyntaxError for unsupported pseudos.
     aRv.ThrowSyntaxError(
@@ -919,7 +920,8 @@ void KeyframeEffect::UpdateTarget(Element* aElement,
 
   if (mTarget) {
     UpdateTargetRegistration();
-    RefPtr<ComputedStyle> computedStyle = GetTargetComputedStyle(Flush::None);
+    RefPtr<const ComputedStyle> computedStyle =
+        GetTargetComputedStyle(Flush::None);
     if (computedStyle) {
       UpdateProperties(computedStyle);
     }
@@ -1005,7 +1007,7 @@ void KeyframeEffect::RequestRestyle(
   }
 }
 
-already_AddRefed<ComputedStyle> KeyframeEffect::GetTargetComputedStyle(
+already_AddRefed<const ComputedStyle> KeyframeEffect::GetTargetComputedStyle(
     Flush aFlushType) const {
   if (!GetRenderedDocument()) {
     return nullptr;
@@ -1014,16 +1016,13 @@ already_AddRefed<ComputedStyle> KeyframeEffect::GetTargetComputedStyle(
   MOZ_ASSERT(mTarget,
              "Should only have a document when we have a target element");
 
-  nsAtom* pseudo = PseudoStyle::IsPseudoElement(mTarget.mPseudoType)
-                       ? nsCSSPseudoElements::GetPseudoAtom(mTarget.mPseudoType)
-                       : nullptr;
-
   OwningAnimationTarget kungfuDeathGrip(mTarget.mElement, mTarget.mPseudoType);
 
   return aFlushType == Flush::Style
-             ? nsComputedDOMStyle::GetComputedStyle(mTarget.mElement, pseudo)
+             ? nsComputedDOMStyle::GetComputedStyle(mTarget.mElement,
+                                                    mTarget.mPseudoType)
              : nsComputedDOMStyle::GetComputedStyleNoFlush(mTarget.mElement,
-                                                           pseudo);
+                                                           mTarget.mPseudoType);
 }
 
 #ifdef DEBUG
@@ -1087,17 +1086,16 @@ already_AddRefed<KeyframeEffect> KeyframeEffect::Constructor(
 
 void KeyframeEffect::SetPseudoElement(const nsAString& aPseudoElement,
                                       ErrorResult& aRv) {
-  PseudoStyleType pseudoType = PseudoStyleType::NotPseudo;
   if (DOMStringIsNull(aPseudoElement)) {
-    UpdateTarget(mTarget.mElement, pseudoType);
+    UpdateTarget(mTarget.mElement, PseudoStyleType::NotPseudo);
     return;
   }
 
-  // Note: GetPseudoAtom() also returns nullptr for the null string,
+  // Note: GetPseudoType() returns Some(NotPseudo) for the null string,
   // so we handle null case before this.
-  RefPtr<nsAtom> pseudoAtom =
-      nsCSSPseudoElements::GetPseudoAtom(aPseudoElement);
-  if (!pseudoAtom) {
+  Maybe<PseudoStyleType> pseudoType =
+      nsCSSPseudoElements::GetPseudoType(aPseudoElement);
+  if (!pseudoType || *pseudoType == PseudoStyleType::NotPseudo) {
     // Per the spec, we throw SyntaxError for syntactically invalid pseudos.
     aRv.ThrowSyntaxError(
         nsPrintfCString("'%s' is a syntactically invalid pseudo-element.",
@@ -1105,9 +1103,7 @@ void KeyframeEffect::SetPseudoElement(const nsAString& aPseudoElement,
     return;
   }
 
-  pseudoType = nsCSSPseudoElements::GetPseudoType(
-      pseudoAtom, CSSEnabledState::ForAllContent);
-  if (!IsSupportedPseudoForWebAnimation(pseudoType)) {
+  if (!IsSupportedPseudoForWebAnimation(*pseudoType)) {
     // Per the spec, we throw SyntaxError for unsupported pseudos.
     aRv.ThrowSyntaxError(
         nsPrintfCString("'%s' is an unsupported pseudo-element.",
@@ -1115,7 +1111,7 @@ void KeyframeEffect::SetPseudoElement(const nsAString& aPseudoElement,
     return;
   }
 
-  UpdateTarget(mTarget.mElement, pseudoType);
+  UpdateTarget(mTarget.mElement, *pseudoType);
 }
 
 static void CreatePropertyValue(
@@ -1236,7 +1232,7 @@ void KeyframeEffect::GetKeyframes(JSContext* aCx, nsTArray<JSObject*>& aResult,
   // be consistent with Gecko, we just expand the variables (assuming we have
   // enough context to do so). For that we need to grab the ComputedStyle so we
   // know what custom property values to provide.
-  RefPtr<ComputedStyle> computedStyle;
+  RefPtr<const ComputedStyle> computedStyle;
   if (isCSSAnimation) {
     // The following will flush style but that's ok since if you update
     // a variable's computed value, you expect to see that updated value in the
@@ -1538,26 +1534,16 @@ bool KeyframeEffect::CanThrottleOverflowChangesInScrollable(
     return true;
   }
 
-  bool hasIntersectionObservers = doc->HasIntersectionObservers();
-
   // If we know that the animation cannot cause overflow,
   // we can just disable flushes for this animation.
 
-  // If we don't show scrollbars and have no intersection observers, we don't
-  // care about overflow.
-  if (LookAndFeel::GetInt(LookAndFeel::IntID::ShowHideScrollbars) == 0 &&
-      !hasIntersectionObservers) {
+  // If we have no intersection observers, we don't care about overflow.
+  if (!doc->HasIntersectionObservers()) {
     return true;
   }
 
   if (CanThrottleOverflowChanges(aFrame)) {
     return true;
-  }
-
-  // If we have any intersection observers, we unthrottle this transform
-  // animation periodically.
-  if (hasIntersectionObservers) {
-    return false;
   }
 
   // If the nearest scrollable ancestor has overflow:hidden,
@@ -1703,9 +1689,13 @@ bool KeyframeEffect::ShouldBlockAsyncTransformAnimations(
     return true;
   }
 
+  MOZ_ASSERT(mAnimation);
+  // Note: If the geometric animations are using scroll-timeline, we don't need
+  // to synchronize transform animations with them.
   const bool enableMainthreadSynchronizationWithGeometricAnimations =
       StaticPrefs::
-          dom_animations_mainthread_synchronization_with_geometric_animations();
+          dom_animations_mainthread_synchronization_with_geometric_animations() &&
+      !mAnimation->UsingScrollTimeline();
 
   for (const AnimationProperty& property : mProperties) {
     // If there is a property for animations level that is overridden by
@@ -1768,7 +1758,7 @@ void KeyframeEffect::SetPerformanceWarning(
   }
 }
 
-already_AddRefed<ComputedStyle>
+already_AddRefed<const ComputedStyle>
 KeyframeEffect::CreateComputedStyleForAnimationValue(
     nsCSSPropertyID aProperty, const AnimationValue& aValue,
     nsPresContext* aPresContext, const ComputedStyle* aBaseComputedStyle) {
@@ -1839,16 +1829,20 @@ void KeyframeEffect::CalculateCumulativeChangeHint(
         continue;
       }
 
-      RefPtr<ComputedStyle> fromContext = CreateComputedStyleForAnimationValue(
-          property.mProperty, segment.mFromValue, presContext, aComputedStyle);
+      RefPtr<const ComputedStyle> fromContext =
+          CreateComputedStyleForAnimationValue(property.mProperty,
+                                               segment.mFromValue, presContext,
+                                               aComputedStyle);
       if (!fromContext) {
         mCumulativeChangeHint = ~nsChangeHint_Hints_CanIgnoreIfNotVisible;
         mNeedsStyleData = true;
         return;
       }
 
-      RefPtr<ComputedStyle> toContext = CreateComputedStyleForAnimationValue(
-          property.mProperty, segment.mToValue, presContext, aComputedStyle);
+      RefPtr<const ComputedStyle> toContext =
+          CreateComputedStyleForAnimationValue(property.mProperty,
+                                               segment.mToValue, presContext,
+                                               aComputedStyle);
       if (!toContext) {
         mCumulativeChangeHint = ~nsChangeHint_Hints_CanIgnoreIfNotVisible;
         mNeedsStyleData = true;
@@ -2041,6 +2035,22 @@ KeyframeEffect::MatchForCompositor KeyframeEffect::IsMatchForCompositor(
     return KeyframeEffect::MatchForCompositor::NoAndBlockThisProperty;
   }
 
+  if (mAnimation->UsingScrollTimeline()) {
+    const ScrollTimeline* scrollTimeline =
+        mAnimation->GetTimeline()->AsScrollTimeline();
+    // We don't send this animation to the compositor if
+    // 1. the APZ is disabled entirely or for the source, or
+    // 2. the associated scroll-timeline is inactive, or
+    // 3. the scrolling direction is not available (i.e. no scroll range).
+    // 4. the scroll style of the scroller is overflow:hidden.
+    if (!scrollTimeline->APZIsActiveForSource() ||
+        !scrollTimeline->IsActive() ||
+        !scrollTimeline->ScrollingDirectionIsAvailable() ||
+        scrollTimeline->SourceScrollStyle() == StyleOverflow::Hidden) {
+      return KeyframeEffect::MatchForCompositor::No;
+    }
+  }
+
   if (!HasEffectiveAnimationOfPropertySet(aPropertySet, aEffects)) {
     return KeyframeEffect::MatchForCompositor::No;
   }
@@ -2059,11 +2069,12 @@ KeyframeEffect::MatchForCompositor KeyframeEffect::IsMatchForCompositor(
     }
 
     // We don't yet support off-main-thread background-color animations on
-    // canvas frame or on <body> which genarate nsDisplayCanvasBackgroundColor
-    // or nsDisplaySolidColor display item.
+    // canvas frame or on <html> or <body> which genarate
+    // nsDisplayCanvasBackgroundColor or nsDisplaySolidColor display item.
     if (nsCSSRendering::IsCanvasFrame(aFrame) ||
         (aFrame->GetContent() &&
-         aFrame->GetContent()->IsHTMLElement(nsGkAtoms::body))) {
+         (aFrame->GetContent()->IsHTMLElement(nsGkAtoms::body) ||
+          aFrame->GetContent()->IsHTMLElement(nsGkAtoms::html)))) {
       return KeyframeEffect::MatchForCompositor::No;
     }
   }

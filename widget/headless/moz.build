@@ -32,7 +32,6 @@ UNIFIED_SOURCES += [
 if widget_dir == "gtk":
     UNIFIED_SOURCES += [
         "HeadlessLookAndFeelGTK.cpp",
-        "HeadlessThemeGTK.cpp",
     ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
@@ -47,3 +46,5 @@ else:
 include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
+
+REQUIRES_UNIFIED_BUILD = True

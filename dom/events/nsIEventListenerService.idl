@@ -45,6 +45,12 @@ interface nsIEventListenerInfo : nsISupports
   readonly attribute boolean inSystemEventGroup;
 
   /**
+   * Changing the enabled state works only with listeners implemented in
+   * JS. An error is thrown for native listeners.
+   */
+  attribute boolean enabled;
+
+  /**
    * The underlying JS object of the event listener, if this listener
    * has one.  Null otherwise.
    */
@@ -76,6 +82,7 @@ interface nsIEventListenerService : nsISupports
    * @note Some events, especially 'load', may actually have a shorter
    *       event target chain than what this methods returns.
    */
+  [can_run_script]
   Array<EventTarget> getEventTargetChainFor(in EventTarget aEventTarget,
                                             in boolean composed);
 

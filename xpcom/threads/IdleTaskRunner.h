@@ -23,6 +23,7 @@ class IdleTaskRunnerTask;
 // true to completely remove the runner.
 class IdleTaskRunner {
  public:
+  friend class IdleTaskRunnerTask;
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(IdleTaskRunner)
 
   // Return true if some meaningful work was done.
@@ -32,6 +33,12 @@ class IdleTaskRunner {
   // stop processing. This can be an alternative to Cancel() or
   // work together in different way.
   using MayStopProcessingCallbackType = std::function<bool()>;
+
+  // A callback to be invoked when an interrupt is requested
+  // (eg during an idle activity when the user presses a key.)
+  // The callback takes an "interrupt priority" value as its
+  // sole parameter.
+  using RequestInterruptCallbackType = std::function<void(uint32_t)>;
 
  public:
   // An IdleTaskRunner has (up to) three phases:
@@ -51,8 +58,10 @@ class IdleTaskRunner {
   //
   static already_AddRefed<IdleTaskRunner> Create(
       const CallbackType& aCallback, const char* aRunnableName,
-      uint32_t aStartDelay, uint32_t aMaxDelay, int64_t aMinimumUsefulBudget,
-      bool aRepeating, const MayStopProcessingCallbackType& aMayStopProcessing);
+      TimeDuration aStartDelay, TimeDuration aMaxDelay,
+      TimeDuration aMinimumUsefulBudget, bool aRepeating,
+      const MayStopProcessingCallbackType& aMayStopProcessing,
+      const RequestInterruptCallbackType& aRequestInterrupt = nullptr);
 
   void Run();
 
@@ -60,7 +69,7 @@ class IdleTaskRunner {
   // period, or null if not running during idle time.
   void SetIdleDeadline(mozilla::TimeStamp aDeadline);
 
-  void SetTimer(uint32_t aDelay, nsIEventTarget* aTarget);
+  void SetTimer(TimeDuration aDelay, nsIEventTarget* aTarget);
 
   // Update the minimum idle time that this callback would be invoked for.
   void SetMinimumUsefulBudget(int64_t aMinimumUsefulBudget);
@@ -74,11 +83,13 @@ class IdleTaskRunner {
  private:
   explicit IdleTaskRunner(
       const CallbackType& aCallback, const char* aRunnableName,
-      uint32_t aStartDelay, uint32_t aMaxDelay, int64_t aMinimumUsefulBudget,
-      bool aRepeating, const MayStopProcessingCallbackType& aMayStopProcessing);
+      TimeDuration aStartDelay, TimeDuration aMaxDelay,
+      TimeDuration aMinimumUsefulBudget, bool aRepeating,
+      const MayStopProcessingCallbackType& aMayStopProcessing,
+      const RequestInterruptCallbackType& aRequestInterrupt);
   ~IdleTaskRunner();
   void CancelTimer();
-  void SetTimerInternal(uint32_t aDelay);
+  void SetTimerInternal(TimeDuration aDelay);
 
   nsCOMPtr<nsITimer> mTimer;
   nsCOMPtr<nsITimer> mScheduleTimer;
@@ -89,7 +100,7 @@ class IdleTaskRunner {
 
   // Wait this long for idle time before giving up and running a non-idle
   // callback.
-  uint32_t mMaxDelay;
+  TimeDuration mMaxDelay;
 
   // If running during idle time, the expected end of the current idle period.
   // The null timestamp when the run is triggered by aMaxDelay instead of idle.
@@ -101,6 +112,7 @@ class IdleTaskRunner {
   bool mRepeating;
   bool mTimerActive;
   MayStopProcessingCallbackType mMayStopProcessing;
+  RequestInterruptCallbackType mRequestInterrupt;
   const char* mName;
   RefPtr<IdleTaskRunnerTask> mTask;
 };

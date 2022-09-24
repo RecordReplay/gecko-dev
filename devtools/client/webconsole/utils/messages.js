@@ -7,6 +7,9 @@
 const Services = require("Services");
 const l10n = require("devtools/client/webconsole/utils/l10n");
 const ResourceCommand = require("devtools/shared/commands/resource/resource-command");
+const {
+  isSupportedByConsoleTable,
+} = require("devtools/shared/webconsole/messages");
 
 // URL Regex, common idioms:
 //
@@ -79,9 +82,6 @@ function prepareMessage(resource, idGenerator) {
     resource = transformResource(resource);
   }
 
-  if (resource.allowRepeating) {
-    resource.repeatId = getRepeatId(resource);
-  }
   resource.id = idGenerator.getNextId(resource);
   return resource;
 }
@@ -204,21 +204,7 @@ function transformConsoleAPICallResource(consoleMessageResource) {
       }
       break;
     case "table":
-      const supportedClasses = [
-        "Object",
-        "Map",
-        "Set",
-        "WeakMap",
-        "WeakSet",
-      ].concat(getArrayTypeNames());
-
-      if (
-        !Array.isArray(parameters) ||
-        parameters.length === 0 ||
-        !parameters[0] ||
-        !parameters[0].getGrip ||
-        !supportedClasses.includes(parameters[0].getGrip().class)
-      ) {
+      if (!isSupportedByConsoleTable(parameters)) {
         // If the class of the first parameter is not supported,
         // we handle the call as a simple console.log
         type = "log";
@@ -290,7 +276,6 @@ function transformNavigationMessagePacket(packet) {
 
 function transformPlatformMessageResource(platformMessageResource) {
   const { message, timeStamp, targetFront } = platformMessageResource;
-
   return new ConsoleMessage({
     targetFront,
     source: MESSAGE_SOURCE.CONSOLE_API,
@@ -298,8 +283,7 @@ function transformPlatformMessageResource(platformMessageResource) {
     level: MESSAGE_LEVEL.LOG,
     messageText: message,
     timeStamp,
-    private: message.private,
-    chromeContext: message.chromeContext,
+    chromeContext: true,
   });
 }
 
@@ -385,7 +369,10 @@ function transformEvaluationResultPacket(packet) {
     parameter = helperResult.object;
   } else if (helperResult?.type === "error") {
     try {
-      exceptionMessage = l10n.getStr(helperResult.message);
+      exceptionMessage = l10n.getFormatStr(
+        helperResult.message,
+        helperResult.messageArgs || []
+      );
     } catch (ex) {
       exceptionMessage = helperResult.message;
     }
@@ -417,34 +404,147 @@ function transformEvaluationResultPacket(packet) {
   });
 }
 
-// Helpers
-function getRepeatId(message) {
-  return JSON.stringify(
-    {
-      frame: message.frame,
-      groupId: message.groupId,
-      indent: message.indent,
-      level: message.level,
-      messageText: message.messageText,
-      parameters: message.parameters,
-      source: message.source,
-      type: message.type,
-      userProvidedStyles: message.userProvidedStyles,
-      private: message.private,
-      stacktrace: message.stacktrace,
-    },
-    function(_, value) {
-      if (typeof value === "bigint") {
-        return value.toString() + "n";
-      }
+/**
+ * Return if passed messages are similar and can thus be "repeated".
+ * ⚠ This function is on a hot path, called for (almost) every message being sent by
+ * the server. This should be kept as fast as possible.
+ *
+ * @param {Message} message1
+ * @param {Message} message2
+ * @returns {Boolean}
+ */
+// eslint-disable-next-line complexity
+function areMessagesSimilar(message1, message2) {
+  if (!message1 || !message2) {
+    return false;
+  }
 
-      if (value && value._grip) {
-        return value._grip;
-      }
+  if (!areMessagesParametersSimilar(message1, message2)) {
+    return false;
+  }
 
-      return value;
+  if (!areMessagesStacktracesSimilar(message1, message2)) {
+    return false;
+  }
+
+  if (
+    !message1.allowRepeating ||
+    !message2.allowRepeating ||
+    message1.type !== message2.type ||
+    message1.level !== message2.level ||
+    message1.source !== message2.source ||
+    message1.category !== message2.category ||
+    message1.frame?.source !== message2.frame?.source ||
+    message1.frame?.line !== message2.frame?.line ||
+    message1.frame?.column !== message2.frame?.column ||
+    message1.messageText !== message2.messageText ||
+    message1.private !== message2.private ||
+    message1.errorMessageName !== message2.errorMessageName ||
+    message1.hasException !== message2.hasException ||
+    message1.isPromiseRejection !== message2.isPromiseRejection ||
+    message1.userProvidedStyles?.length !==
+      message2.userProvidedStyles?.length ||
+    `${message1.userProvidedStyles}` !== `${message2.userProvidedStyles}`
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Return if passed messages parameters are similar
+ * ⚠ This function is on a hot path, called for (almost) every message being sent by
+ * the server. This should be kept as fast as possible.
+ *
+ * @param {Message} message1
+ * @param {Message} message2
+ * @returns {Boolean}
+ */
+function areMessagesParametersSimilar(message1, message2) {
+  const message1ParamsLength = message1.parameters?.length;
+  if (message1ParamsLength !== message2.parameters?.length) {
+    return false;
+  }
+
+  if (!message1ParamsLength) {
+    return true;
+  }
+
+  for (let i = 0; i < message1ParamsLength; i++) {
+    const message1Parameter = message1.parameters[i];
+    const message2Parameter = message2.parameters[i];
+    // exceptions have a grip, but we want to consider 2 messages similar as long as
+    // they refer to the same error.
+    if (
+      message1.hasException &&
+      message2.hasException &&
+      message1Parameter._grip?.class == message2Parameter._grip?.class &&
+      message1Parameter._grip?.preview?.message ==
+        message2Parameter._grip?.preview?.message &&
+      message1Parameter._grip?.preview?.stack ==
+        message2Parameter._grip?.preview?.stack
+    ) {
+      continue;
     }
-  );
+
+    // For object references (grips), that are not exceptions, we don't want to consider
+    // messages to be the same as we only have a preview of what they look like, and not
+    // some kind of property that would give us the state of a given instance at a given
+    // time.
+    if (message1Parameter._grip || message2Parameter._grip) {
+      return false;
+    }
+
+    if (message1Parameter.type !== message2Parameter.type) {
+      return false;
+    }
+
+    if (message1Parameter.type) {
+      if (message1Parameter.text !== message2Parameter.text) {
+        return false;
+      }
+    } else if (message1Parameter !== message2Parameter) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Return if passed messages stacktraces are similar
+ *
+ * @param {Message} message1
+ * @param {Message} message2
+ * @returns {Boolean}
+ */
+function areMessagesStacktracesSimilar(message1, message2) {
+  const message1StackLength = message1.stacktrace?.length;
+  if (message1StackLength !== message2.stacktrace?.length) {
+    return false;
+  }
+
+  if (!message1StackLength) {
+    return true;
+  }
+
+  for (let i = 0; i < message1StackLength; i++) {
+    const message1Frame = message1.stacktrace[i];
+    const message2Frame = message2.stacktrace[i];
+
+    if (message1Frame.filename !== message2Frame.filename) {
+      return false;
+    }
+
+    if (message1Frame.columnNumber !== message2Frame.columnNumber) {
+      return false;
+    }
+
+    if (message1Frame.lineNumber !== message2Frame.lineNumber) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**
@@ -492,11 +592,6 @@ function isGroupType(type) {
   ].includes(type);
 }
 
-function getInitialMessageCountForViewport(win) {
-  const minMessageHeight = 20;
-  return Math.ceil(win.innerHeight / minMessageHeight);
-}
-
 function isPacketPrivate(packet) {
   return (
     packet.private === true ||
@@ -516,6 +611,18 @@ function createWarningGroupMessage(id, type, firstMessage) {
     messageText: getWarningGroupLabel(firstMessage),
     timeStamp: firstMessage.timeStamp,
     innerWindowID: firstMessage.innerWindowID,
+  });
+}
+
+function createSimpleTableMessage(columns, items, timeStamp) {
+  return new ConsoleMessage({
+    allowRepeating: false,
+    level: MESSAGE_LEVEL.LOG,
+    source: MESSAGE_SOURCE.CONSOLE_FRONTEND,
+    type: MESSAGE_TYPE.SIMPLE_TABLE,
+    columns,
+    items,
+    timeStamp: timeStamp,
   });
 }
 
@@ -603,6 +710,14 @@ function replaceURL(text, replacementText = "") {
  * @returns {String|null} null if the message can't be part of a warningGroup.
  */
 function getWarningGroupType(message) {
+  if (
+    message.level !== MESSAGE_LEVEL.WARN &&
+    // CookieSameSite messages are not warnings but infos
+    message.level !== MESSAGE_LEVEL.INFO
+  ) {
+    return null;
+  }
+
   if (isContentBlockingMessage(message)) {
     return MESSAGE_TYPE.CONTENT_BLOCKING_GROUP;
   }
@@ -699,23 +814,6 @@ function isCookieSameSiteMessage(message) {
   return category == "cookieSameSite";
 }
 
-function getArrayTypeNames() {
-  return [
-    "Array",
-    "Int8Array",
-    "Uint8Array",
-    "Int16Array",
-    "Uint16Array",
-    "Int32Array",
-    "Uint32Array",
-    "Float32Array",
-    "Float64Array",
-    "Uint8ClampedArray",
-    "BigInt64Array",
-    "BigUint64Array",
-  ];
-}
-
 function getDescriptorValue(descriptor) {
   if (!descriptor) {
     return descriptor;
@@ -774,10 +872,10 @@ function isMessageNetworkError(message) {
 }
 
 module.exports = {
+  areMessagesSimilar,
   createWarningGroupMessage,
-  getArrayTypeNames,
+  createSimpleTableMessage,
   getDescriptorValue,
-  getInitialMessageCountForViewport,
   getNaturalOrder,
   getParentWarningGroupMessageId,
   getWarningGroupType,
@@ -788,6 +886,4 @@ module.exports = {
   isWarningGroup,
   l10n,
   prepareMessage,
-  // Export for use in testing.
-  getRepeatId,
 };

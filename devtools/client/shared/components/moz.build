@@ -16,6 +16,7 @@ DIRS += [
 
 DevToolsModules(
     "Accordion.js",
+    "AppErrorBoundary.js",
     "Frame.js",
     "HSplitBox.js",
     "List.js",
@@ -33,4 +34,7 @@ DevToolsModules(
 )
 
 MOCHITEST_CHROME_MANIFESTS += ["test/chrome/chrome.ini"]
-BROWSER_CHROME_MANIFESTS += ["test/browser/browser.ini"]
+BROWSER_CHROME_MANIFESTS += [
+    "test/browser/browser.ini",
+    "test/node/stubs/reps/stubs.ini",
+]

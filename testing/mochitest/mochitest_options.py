@@ -522,7 +522,7 @@ class MochitestArguments(ArgumentContainer):
             {
                 "action": "store_true",
                 "default": False,
-                "help": "Start the browser JS debugger before running the test. Implies --no-autorun.",  # NOQA: E501
+                "help": "Start the browser JS debugger before running the test.",
             },
         ],
         [
@@ -563,11 +563,12 @@ class MochitestArguments(ArgumentContainer):
             },
         ],
         [
-            ["--enable-fission"],
+            ["--disable-fission"],
             {
                 "action": "store_true",
                 "default": False,
-                "help": "Run tests with fission (site isolation) enabled.",
+                "dest": "disable_fission",
+                "help": "Run tests with fission (site isolation) disabled.",
             },
         ],
         [
@@ -853,15 +854,6 @@ class MochitestArguments(ArgumentContainer):
                 "type": int,
                 "default": 3600,
                 "help": "Maximum time, in seconds, to run in --verify mode.",
-            },
-        ],
-        [
-            ["--enable-webrender"],
-            {
-                "action": "store_true",
-                "dest": "enable_webrender",
-                "default": False,
-                "help": "Enable the WebRender compositor in Gecko.",
             },
         ],
         [
@@ -1164,8 +1156,9 @@ class MochitestArguments(ArgumentContainer):
                 "--disable-e10s.".format(options.flavor)
             )
 
-        if options.enable_fission:
-            options.extraPrefs.append("fission.autostart=true")
+        # If e10s explicitly disabled and no fission option specified, disable fission
+        if (not options.e10s) and (not options.disable_fission):
+            options.disable_fission = True
 
         options.leakThresholds = {
             "default": options.defaultLeakThreshold,
@@ -1202,6 +1195,14 @@ class AndroidArguments(ArgumentContainer):
                 "action": "store_true",
                 "default": False,
                 "help": "Skip the installation of the APK.",
+            },
+        ],
+        [
+            ["--aab"],
+            {
+                "action": "store_true",
+                "default": False,
+                "help": "Install the test_runner app using AAB.",
             },
         ],
         [
@@ -1307,7 +1308,7 @@ class AndroidArguments(ArgumentContainer):
         options.webServer = options.remoteWebServer
 
         if options.app is None:
-            options.app = "org.mozilla.geckoview.test"
+            options.app = "org.mozilla.geckoview.test_runner"
 
         if build_obj and "MOZ_HOST_BIN" in os.environ:
             options.xrePath = os.environ["MOZ_HOST_BIN"]

@@ -18,6 +18,7 @@ pub const RESERVED: &[&str] = &[
     "bool",
     "char",
     "int",
+    "uint",
     "long",
     "float",
     "double",
@@ -55,6 +56,7 @@ pub const RESERVED: &[&str] = &[
     "vec_step",
     "visible",
     "as_type",
+    "this",
     // qualifiers
     "mutable",
     "static",
@@ -209,4 +211,7 @@ pub const RESERVED: &[&str] = &[
     "M_2_SQRTPI",
     "M_SQRT2",
     "M_SQRT1_2",
+    // Naga utilities
+    "DefaultConstructible",
+    "clamped_lod_e",
 ];

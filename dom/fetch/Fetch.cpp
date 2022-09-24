@@ -6,7 +6,10 @@
 
 #include "Fetch.h"
 
+#include "js/Value.h"
+#include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "nsIGlobalObject.h"
 
 #include "nsDOMString.h"
@@ -28,6 +31,7 @@
 #include "mozilla/dom/Headers.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PromiseWorkerProxy.h"
+#include "mozilla/dom/ReadableStreamDefaultReader.h"
 #include "mozilla/dom/RemoteWorkerChild.h"
 #include "mozilla/dom/Request.h"
 #include "mozilla/dom/Response.h"
@@ -36,13 +40,11 @@
 #include "mozilla/net/CookieJarSettings.h"
 
 #include "BodyExtractor.h"
-#include "EmptyBody.h"
 #include "FetchObserver.h"
 #include "InternalRequest.h"
 #include "InternalResponse.h"
 
 #include "mozilla/dom/WorkerCommon.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
@@ -51,29 +53,19 @@ namespace mozilla::dom {
 
 namespace {
 
-void AbortStream(JSContext* aCx, JS::Handle<JSObject*> aStream,
+void AbortStream(JSContext* aCx, ReadableStream* aReadableStream,
                  ErrorResult& aRv) {
-  aRv.MightThrowJSException();
-
-  bool isReadable;
-  if (!JS::ReadableStreamIsReadable(aCx, aStream, &isReadable)) {
-    aRv.StealExceptionFromJSContext(aCx);
-    return;
-  }
-  if (!isReadable) {
+  if (aReadableStream->State() != ReadableStream::ReaderState::Readable) {
     return;
   }
 
   RefPtr<DOMException> e = DOMException::Create(NS_ERROR_DOM_ABORT_ERR);
-
   JS::Rooted<JS::Value> value(aCx);
   if (!GetOrCreateDOMReflector(aCx, e, &value)) {
     return;
   }
 
-  if (!JS::ReadableStreamError(aCx, aStream, value)) {
-    aRv.StealExceptionFromJSContext(aCx);
-  }
+  ReadableStreamError(aCx, aReadableStream, value, aRv);
 }
 
 }  // namespace
@@ -81,12 +73,15 @@ void AbortStream(JSContext* aCx, JS::Handle<JSObject*> aStream,
 class AbortSignalMainThread final : public AbortSignalImpl {
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_CLASS(AbortSignalMainThread)
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(AbortSignalMainThread)
 
-  explicit AbortSignalMainThread(bool aAborted) : AbortSignalImpl(aAborted) {}
+  explicit AbortSignalMainThread(bool aAborted)
+      : AbortSignalImpl(aAborted, JS::UndefinedHandleValue) {
+    mozilla::HoldJSObjects(this);
+  }
 
  private:
-  ~AbortSignalMainThread() = default;
+  ~AbortSignalMainThread() { mozilla::DropJSObjects(this); };
 };
 
 NS_IMPL_CYCLE_COLLECTION_CLASS(AbortSignalMainThread)
@@ -99,6 +94,10 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(AbortSignalMainThread)
   AbortSignalImpl::Traverse(static_cast<AbortSignalImpl*>(tmp), cb);
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
+NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(AbortSignalMainThread)
+  NS_IMPL_CYCLE_COLLECTION_TRACE_JS_MEMBER_CALLBACK(mReason)
+NS_IMPL_CYCLE_COLLECTION_TRACE_END
+
 NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(AbortSignalMainThread)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
@@ -108,47 +107,17 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(AbortSignalMainThread)
 
 class AbortSignalProxy;
 
-class WorkerSignalFollower final : public AbortFollower {
- public:
-  // This runnable propagates changes from the AbortSignalImpl on workers to the
-  // AbortSignalImpl on main-thread.
-  class AbortSignalProxyRunnable final : public Runnable {
-    RefPtr<AbortSignalProxy> mProxy;
-
-   public:
-    explicit AbortSignalProxyRunnable(AbortSignalProxy* aProxy)
-        : Runnable("dom::WorkerSignalFollower::AbortSignalProxyRunnable"),
-          mProxy(aProxy) {}
-
-    NS_IMETHOD Run() override;
-  };
+// This runnable propagates changes from the AbortSignalImpl on workers to the
+// AbortSignalImpl on main-thread.
+class AbortSignalProxyRunnable final : public Runnable {
+  RefPtr<AbortSignalProxy> mProxy;
 
  public:
-  NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_CLASS(WorkerSignalFollower)
+  explicit AbortSignalProxyRunnable(AbortSignalProxy* aProxy)
+      : Runnable("dom::AbortSignalProxyRunnable"), mProxy(aProxy) {}
 
-  void RunAbortAlgorithm() override {}
-
- private:
-  ~WorkerSignalFollower() = default;
+  NS_IMETHOD Run() override;
 };
-
-NS_IMPL_CYCLE_COLLECTION_CLASS(WorkerSignalFollower)
-
-NS_IMPL_CYCLE_COLLECTING_ADDREF(WorkerSignalFollower)
-NS_IMPL_CYCLE_COLLECTING_RELEASE(WorkerSignalFollower)
-
-NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(WorkerSignalFollower)
-  AbortFollower::Unlink(static_cast<AbortFollower*>(tmp));
-NS_IMPL_CYCLE_COLLECTION_UNLINK_END
-
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(WorkerSignalFollower)
-  AbortFollower::Traverse(static_cast<AbortFollower*>(tmp), cb);
-NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(WorkerSignalFollower)
-  NS_INTERFACE_MAP_ENTRY(nsISupports)
-NS_INTERFACE_MAP_END
 
 // This class orchestrates the proxying of AbortSignal operations between the
 // main thread and a worker thread.
@@ -209,17 +178,15 @@ class AbortSignalProxy final : public AbortFollower {
 
 NS_IMPL_ISUPPORTS0(AbortSignalProxy)
 
-NS_IMETHODIMP WorkerSignalFollower::AbortSignalProxyRunnable::Run() {
+NS_IMETHODIMP AbortSignalProxyRunnable::Run() {
   MOZ_ASSERT(NS_IsMainThread());
   AbortSignalImpl* signalImpl = mProxy->GetOrCreateSignalImplForMainThread();
-  signalImpl->SignalAbort();
+  signalImpl->SignalAbort(JS::UndefinedHandleValue);
   return NS_OK;
 }
 
 void AbortSignalProxy::RunAbortAlgorithm() {
   MOZ_ASSERT(!NS_IsMainThread());
-  using AbortSignalProxyRunnable =
-      WorkerSignalFollower::AbortSignalProxyRunnable;
   RefPtr<AbortSignalProxyRunnable> runnable =
       new AbortSignalProxyRunnable(this);
   MainThreadEventTarget()->Dispatch(runnable.forget(), NS_DISPATCH_NORMAL);
@@ -310,9 +277,10 @@ class WorkerFetchResolver final : public FetchDriverObserver {
     return mFetchObserver;
   }
 
-  void OnResponseAvailableInternal(InternalResponse* aResponse) override;
+  void OnResponseAvailableInternal(
+      SafeRefPtr<InternalResponse> aResponse) override;
 
-  void OnResponseEnd(FetchDriverObserver::EndReason eReason) override;
+  void OnResponseEnd(FetchDriverObserver::EndReason aReason) override;
 
   bool NeedOnDataAvailable() override;
 
@@ -358,6 +326,13 @@ class WorkerFetchResolver final : public FetchDriverObserver {
   virtual void FlushConsoleReport() override;
 };
 
+void FetchDriverObserver::OnResponseAvailable(
+    SafeRefPtr<InternalResponse> aResponse) {
+  MOZ_ASSERT(!mGotResponseAvailable);
+  mGotResponseAvailable = true;
+  OnResponseAvailableInternal(std::move(aResponse));
+}
+
 class MainThreadFetchResolver final : public FetchDriverObserver {
   RefPtr<Promise> mPromise;
   RefPtr<Response> mResponse;
@@ -376,7 +351,8 @@ class MainThreadFetchResolver final : public FetchDriverObserver {
         mSignalImpl(aSignalImpl),
         mMozErrors(aMozErrors) {}
 
-  void OnResponseAvailableInternal(InternalResponse* aResponse) override;
+  void OnResponseAvailableInternal(
+      SafeRefPtr<InternalResponse> aResponse) override;
 
   void SetLoadGroup(nsILoadGroup* aLoadGroup) { mLoadGroup = aLoadGroup; }
 
@@ -518,6 +494,11 @@ already_AddRefed<Promise> FetchRequest(nsIGlobalObject* aGlobal,
     return nullptr;
   }
 
+  JS::Realm* realm = JS::GetCurrentRealmOrNull(cx);
+  if (realm && JS::GetDebuggerObservesWasm(realm)) {
+    r->SetSkipWasmCaching();
+  }
+
   RefPtr<FetchObserver> observer;
   if (aInit.mObserve.WasPassed()) {
     observer = new FetchObserver(aGlobal, signalImpl);
@@ -616,7 +597,7 @@ class ResolveFetchPromise : public Runnable {
         mPromise(aPromise),
         mResponse(aResponse) {}
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     mPromise->MaybeResolve(mResponse);
     return NS_OK;
   }
@@ -625,7 +606,7 @@ class ResolveFetchPromise : public Runnable {
 };
 
 void MainThreadFetchResolver::OnResponseAvailableInternal(
-    InternalResponse* aResponse) {
+    SafeRefPtr<InternalResponse> aResponse) {
   NS_ASSERT_OWNINGTHREAD(MainThreadFetchResolver);
   AssertIsOnMainThread();
 
@@ -646,7 +627,7 @@ void MainThreadFetchResolver::OnResponseAvailableInternal(
       mFetchObserver->SetState(FetchState::Complete);
     }
 
-    mResponse = new Response(go, aResponse, mSignalImpl);
+    mResponse = new Response(go, std::move(aResponse), mSignalImpl);
     BrowsingContext* bc = inner ? inner->GetBrowsingContext() : nullptr;
     bc = bc ? bc->Top() : nullptr;
     if (bc && bc->IsLoading()) {
@@ -694,15 +675,15 @@ MainThreadFetchResolver::~MainThreadFetchResolver() {
 class WorkerFetchResponseRunnable final : public MainThreadWorkerRunnable {
   RefPtr<WorkerFetchResolver> mResolver;
   // Passed from main thread to worker thread after being initialized.
-  RefPtr<InternalResponse> mInternalResponse;
+  SafeRefPtr<InternalResponse> mInternalResponse;
 
  public:
   WorkerFetchResponseRunnable(WorkerPrivate* aWorkerPrivate,
                               WorkerFetchResolver* aResolver,
-                              InternalResponse* aResponse)
+                              SafeRefPtr<InternalResponse> aResponse)
       : MainThreadWorkerRunnable(aWorkerPrivate),
         mResolver(aResolver),
-        mInternalResponse(aResponse) {
+        mInternalResponse(std::move(aResponse)) {
     MOZ_ASSERT(mResolver);
   }
 
@@ -721,7 +702,7 @@ class WorkerFetchResponseRunnable final : public MainThreadWorkerRunnable {
 
       RefPtr<nsIGlobalObject> global = aWorkerPrivate->GlobalScope();
       RefPtr<Response> response =
-          new Response(global, mInternalResponse,
+          new Response(global, mInternalResponse.clonePtr(),
                        mResolver->GetAbortSignalForTargetThread());
       promise->MaybeResolve(response);
     } else {
@@ -800,10 +781,14 @@ class WorkerFetchResponseEndRunnable final : public MainThreadWorkerRunnable,
   }
 
   nsresult Cancel() override {
+    // We need to check first if cancel is called twice
+    nsresult rv = WorkerRunnable::Cancel();
+    NS_ENSURE_SUCCESS(rv, rv);
+
     // Execute Run anyway to make sure we cleanup our promise proxy to avoid
     // leaking the worker thread
     Run();
-    return WorkerRunnable::Cancel();
+    return NS_OK;
   }
 };
 
@@ -825,7 +810,7 @@ class WorkerFetchResponseEndControlRunnable final
 };
 
 void WorkerFetchResolver::OnResponseAvailableInternal(
-    InternalResponse* aResponse) {
+    SafeRefPtr<InternalResponse> aResponse) {
   AssertIsOnMainThread();
 
   MutexAutoLock lock(mPromiseProxy->Lock());
@@ -834,7 +819,7 @@ void WorkerFetchResolver::OnResponseAvailableInternal(
   }
 
   RefPtr<WorkerFetchResponseRunnable> r = new WorkerFetchResponseRunnable(
-      mPromiseProxy->GetWorkerPrivate(), this, aResponse);
+      mPromiseProxy->GetWorkerPrivate(), this, std::move(aResponse));
 
   if (!r->Dispatch()) {
     NS_WARNING("Could not dispatch fetch response");
@@ -1079,16 +1064,15 @@ nsresult ExtractByteStreamFromBody(const fetch::ResponseBodyInit& aBodyInit,
 template <class Derived>
 FetchBody<Derived>::FetchBody(nsIGlobalObject* aOwner)
     : mOwner(aOwner),
-      mWorkerPrivate(nullptr),
       mReadableStreamBody(nullptr),
       mReadableStreamReader(nullptr),
       mBodyUsed(false) {
   MOZ_ASSERT(aOwner);
 
   if (!NS_IsMainThread()) {
-    mWorkerPrivate = GetCurrentThreadWorkerPrivate();
-    MOZ_ASSERT(mWorkerPrivate);
-    mMainThreadEventTarget = mWorkerPrivate->MainThreadEventTarget();
+    WorkerPrivate* wp = GetCurrentThreadWorkerPrivate();
+    MOZ_ASSERT(wp);
+    mMainThreadEventTarget = wp->MainThreadEventTarget();
   } else {
     mMainThreadEventTarget = aOwner->EventTargetFor(TaskCategory::Other);
   }
@@ -1117,30 +1101,7 @@ bool FetchBody<Derived>::GetBodyUsed(ErrorResult& aRv) const {
 
   // If this stream is disturbed, return true.
   if (mReadableStreamBody) {
-    aRv.MightThrowJSException();
-
-    AutoJSAPI jsapi;
-    if (!jsapi.Init(mOwner)) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return true;
-    }
-
-    JSContext* cx = jsapi.cx();
-    JS::Rooted<JSObject*> body(cx, mReadableStreamBody);
-
-    // Attempt to workaround compartment mismatches seen in logs.
-    Maybe<JSAutoRealm> ar;
-    if (!IsCrossCompartmentWrapper(body)) {
-      ar.emplace(cx, body);
-    }
-
-    bool disturbed;
-    if (!JS::ReadableStreamIsDisturbed(cx, body, &disturbed)) {
-      aRv.StealExceptionFromJSContext(cx);
-      return false;
-    }
-
-    return disturbed;
+    return mReadableStreamBody->Disturbed();
   }
 
   return false;
@@ -1161,6 +1122,10 @@ bool FetchBody<Derived>::CheckBodyUsed() const {
   return bodyUsed;
 }
 
+template bool FetchBody<Request>::CheckBodyUsed() const;
+
+template bool FetchBody<Response>::CheckBodyUsed() const;
+
 template <class Derived>
 void FetchBody<Derived>::SetBodyUsed(JSContext* aCx, ErrorResult& aRv) {
   MOZ_ASSERT(aCx);
@@ -1175,34 +1140,22 @@ void FetchBody<Derived>::SetBodyUsed(JSContext* aCx, ErrorResult& aRv) {
   // If we already have a ReadableStreamBody and it has been created by DOM, we
   // have to lock it now because it can have been shared with other objects.
   if (mReadableStreamBody) {
-    aRv.MightThrowJSException();
-
-    JSAutoRealm ar(aCx, mOwner->GetGlobalJSObject());
-
-    JS::Rooted<JSObject*> readableStreamObj(aCx, mReadableStreamBody);
-
-    JS::ReadableStreamMode mode;
-    if (!JS::ReadableStreamGetMode(aCx, readableStreamObj, &mode)) {
-      aRv.StealExceptionFromJSContext(aCx);
-      return;
-    }
-
-    if (mode == JS::ReadableStreamMode::ExternalSource) {
-      LockStream(aCx, readableStreamObj, aRv);
+    if (mReadableStreamBody->HasNativeUnderlyingSource()) {
+      LockStream(aCx, mReadableStreamBody, aRv);
       if (NS_WARN_IF(aRv.Failed())) {
         return;
       }
     } else {
-      // If this is not a native ReadableStream, let's activate the
-      // FetchStreamReader.
       MOZ_ASSERT(mFetchStreamReader);
-      JS::Rooted<JSObject*> reader(aCx);
-      mFetchStreamReader->StartConsuming(aCx, readableStreamObj, &reader, aRv);
+      //  Let's activate the FetchStreamReader.
+      RefPtr<ReadableStreamDefaultReader> reader;
+      mFetchStreamReader->StartConsuming(aCx, mReadableStreamBody,
+                                         getter_AddRefs(reader), aRv);
       if (NS_WARN_IF(aRv.Failed())) {
         return;
       }
 
-      mReadableStreamReader = reader;
+      mReadableStreamReader = reader.forget();
     }
   }
 }
@@ -1217,7 +1170,8 @@ already_AddRefed<Promise> FetchBody<Derived>::ConsumeBody(
     JSContext* aCx, BodyConsumer::ConsumeType aType, ErrorResult& aRv) {
   aRv.MightThrowJSException();
 
-  RefPtr<AbortSignalImpl> signalImpl = DerivedClass()->GetSignalImpl();
+  RefPtr<AbortSignalImpl> signalImpl =
+      DerivedClass()->GetSignalImplToConsumeBody();
   if (signalImpl && signalImpl->Aborted()) {
     aRv.Throw(NS_ERROR_DOM_ABORT_ERR);
     return nullptr;
@@ -1345,7 +1299,7 @@ template const nsAString& FetchBody<EmptyBody>::BodyLocalPath() const;
 
 template <class Derived>
 void FetchBody<Derived>::SetReadableStreamBody(JSContext* aCx,
-                                               JSObject* aBody) {
+                                               ReadableStream* aBody) {
   MOZ_ASSERT(!mReadableStreamBody);
   MOZ_ASSERT(aBody);
   mReadableStreamBody = aBody;
@@ -1357,9 +1311,8 @@ void FetchBody<Derived>::SetReadableStreamBody(JSContext* aCx,
 
   bool aborted = signalImpl->Aborted();
   if (aborted) {
-    JS::Rooted<JSObject*> body(aCx, mReadableStreamBody);
     IgnoredErrorResult result;
-    AbortStream(aCx, body, result);
+    AbortStream(aCx, mReadableStreamBody, result);
     if (NS_WARN_IF(result.Failed())) {
       return;
     }
@@ -1369,47 +1322,45 @@ void FetchBody<Derived>::SetReadableStreamBody(JSContext* aCx,
 }
 
 template void FetchBody<Request>::SetReadableStreamBody(JSContext* aCx,
-                                                        JSObject* aBody);
+                                                        ReadableStream* aBody);
 
 template void FetchBody<Response>::SetReadableStreamBody(JSContext* aCx,
-                                                         JSObject* aBody);
+                                                         ReadableStream* aBody);
 
 template <class Derived>
-void FetchBody<Derived>::GetBody(JSContext* aCx,
-                                 JS::MutableHandle<JSObject*> aBodyOut,
-                                 ErrorResult& aRv) {
+already_AddRefed<ReadableStream> FetchBody<Derived>::GetBody(JSContext* aCx,
+                                                             ErrorResult& aRv) {
   if (mReadableStreamBody) {
-    aBodyOut.set(mReadableStreamBody);
-    return;
+    RefPtr<ReadableStream> body(mReadableStreamBody);
+    return body.forget();
   }
 
   nsCOMPtr<nsIInputStream> inputStream;
   DerivedClass()->GetBody(getter_AddRefs(inputStream));
 
   if (!inputStream) {
-    aBodyOut.set(nullptr);
-    return;
+    return nullptr;
   }
 
   BodyStream::Create(aCx, this, DerivedClass()->GetParentObject(), inputStream,
                      aRv);
   if (NS_WARN_IF(aRv.Failed())) {
-    return;
+    return nullptr;
   }
 
   MOZ_ASSERT(mReadableStreamBody);
 
-  JS::Rooted<JSObject*> body(aCx, mReadableStreamBody);
+  RefPtr<ReadableStream> body(mReadableStreamBody);
 
   // If the body has been already consumed, we lock the stream.
   bool bodyUsed = GetBodyUsed(aRv);
   if (NS_WARN_IF(aRv.Failed())) {
-    return;
+    return nullptr;
   }
   if (bodyUsed) {
     LockStream(aCx, body, aRv);
     if (NS_WARN_IF(aRv.Failed())) {
-      return;
+      return nullptr;
     }
   }
 
@@ -1418,43 +1369,29 @@ void FetchBody<Derived>::GetBody(JSContext* aCx,
     if (signalImpl->Aborted()) {
       AbortStream(aCx, body, aRv);
       if (NS_WARN_IF(aRv.Failed())) {
-        return;
+        return nullptr;
       }
     } else if (!IsFollowing()) {
       Follow(signalImpl);
     }
   }
 
-  aBodyOut.set(mReadableStreamBody);
+  return body.forget();
 }
 
-template void FetchBody<Request>::GetBody(JSContext* aCx,
-                                          JS::MutableHandle<JSObject*> aMessage,
-                                          ErrorResult& aRv);
+template already_AddRefed<ReadableStream> FetchBody<Request>::GetBody(
+    JSContext* aCx, ErrorResult& aRv);
 
-template void FetchBody<Response>::GetBody(
-    JSContext* aCx, JS::MutableHandle<JSObject*> aMessage, ErrorResult& aRv);
+template already_AddRefed<ReadableStream> FetchBody<Response>::GetBody(
+    JSContext* aCx, ErrorResult& aRv);
 
 template <class Derived>
-void FetchBody<Derived>::LockStream(JSContext* aCx, JS::HandleObject aStream,
+void FetchBody<Derived>::LockStream(JSContext* aCx, ReadableStream* aStream,
                                     ErrorResult& aRv) {
-  aRv.MightThrowJSException();
-
-#if DEBUG
-  JS::ReadableStreamMode streamMode;
-  if (!JS::ReadableStreamGetMode(aCx, aStream, &streamMode)) {
-    aRv.StealExceptionFromJSContext(aCx);
-    return;
-  }
-  MOZ_ASSERT(streamMode == JS::ReadableStreamMode::ExternalSource);
-#endif  // DEBUG
-
   // This is native stream, creating a reader will not execute any JS code.
-  JS::Rooted<JSObject*> reader(
-      aCx, JS::ReadableStreamGetReader(aCx, aStream,
-                                       JS::ReadableStreamReaderMode::Default));
-  if (!reader) {
-    aRv.StealExceptionFromJSContext(aCx);
+  RefPtr<ReadableStreamDefaultReader> reader =
+      AcquireReadableStreamDefaultReader(aStream, aRv);
+  if (aRv.Failed()) {
     return;
   }
 
@@ -1462,23 +1399,23 @@ void FetchBody<Derived>::LockStream(JSContext* aCx, JS::HandleObject aStream,
 }
 
 template void FetchBody<Request>::LockStream(JSContext* aCx,
-                                             JS::HandleObject aStream,
+                                             ReadableStream* aStream,
                                              ErrorResult& aRv);
 
 template void FetchBody<Response>::LockStream(JSContext* aCx,
-                                              JS::HandleObject aStream,
+                                              ReadableStream* aStream,
                                               ErrorResult& aRv);
 
 template <class Derived>
 void FetchBody<Derived>::MaybeTeeReadableStreamBody(
-    JSContext* aCx, JS::MutableHandle<JSObject*> aBodyOut,
+    JSContext* aCx, ReadableStream** aBodyOut,
     FetchStreamReader** aStreamReader, nsIInputStream** aInputStream,
     ErrorResult& aRv) {
   MOZ_DIAGNOSTIC_ASSERT(aStreamReader);
   MOZ_DIAGNOSTIC_ASSERT(aInputStream);
   MOZ_DIAGNOSTIC_ASSERT(!CheckBodyUsed());
 
-  aBodyOut.set(nullptr);
+  *aBodyOut = nullptr;
   *aStreamReader = nullptr;
   *aInputStream = nullptr;
 
@@ -1486,35 +1423,22 @@ void FetchBody<Derived>::MaybeTeeReadableStreamBody(
     return;
   }
 
-  aRv.MightThrowJSException();
-
-  JSAutoRealm ar(aCx, mOwner->GetGlobalJSObject());
-
-  JS::Rooted<JSObject*> stream(aCx, mReadableStreamBody);
-
-  // If this is a ReadableStream with an external source, this has been
+  // If this is a ReadableStream with an native source, this has been
   // generated by a Fetch. In this case, Fetch will be able to recreate it
   // again when GetBody() is called.
-  JS::ReadableStreamMode streamMode;
-  if (!JS::ReadableStreamGetMode(aCx, stream, &streamMode)) {
-    aRv.StealExceptionFromJSContext(aCx);
-    return;
-  }
-  if (streamMode == JS::ReadableStreamMode::ExternalSource) {
-    aBodyOut.set(nullptr);
+  if (mReadableStreamBody->HasNativeUnderlyingSource()) {
+    *aBodyOut = nullptr;
     return;
   }
 
-  JS::Rooted<JSObject*> branch1(aCx);
-  JS::Rooted<JSObject*> branch2(aCx);
-
-  if (!JS::ReadableStreamTee(aCx, stream, &branch1, &branch2)) {
-    aRv.StealExceptionFromJSContext(aCx);
+  nsTArray<RefPtr<ReadableStream> > branches;
+  MOZ_KnownLive(mReadableStreamBody)->Tee(aCx, branches, aRv);
+  if (aRv.Failed()) {
     return;
   }
 
-  mReadableStreamBody = branch1;
-  aBodyOut.set(branch2);
+  mReadableStreamBody = branches[0];
+  branches[1].forget(aBodyOut);
 
   aRv = FetchStreamReader::Create(aCx, mOwner, aStreamReader, aInputStream);
   if (NS_WARN_IF(aRv.Failed())) {
@@ -1523,12 +1447,12 @@ void FetchBody<Derived>::MaybeTeeReadableStreamBody(
 }
 
 template void FetchBody<Request>::MaybeTeeReadableStreamBody(
-    JSContext* aCx, JS::MutableHandle<JSObject*> aMessage,
+    JSContext* aCx, ReadableStream** aBodyOut,
     FetchStreamReader** aStreamReader, nsIInputStream** aInputStream,
     ErrorResult& aRv);
 
 template void FetchBody<Response>::MaybeTeeReadableStreamBody(
-    JSContext* aCx, JS::MutableHandle<JSObject*> aMessage,
+    JSContext* aCx, ReadableStream** aBodyOut,
     FetchStreamReader** aStreamReader, nsIInputStream** aInputStream,
     ErrorResult& aRv);
 
@@ -1545,7 +1469,7 @@ void FetchBody<Derived>::RunAbortAlgorithm() {
 
   JSContext* cx = jsapi.cx();
 
-  JS::Rooted<JSObject*> body(cx, mReadableStreamBody);
+  RefPtr<ReadableStream> body(mReadableStreamBody);
   IgnoredErrorResult result;
   AbortStream(cx, body, result);
 }
@@ -1553,5 +1477,77 @@ void FetchBody<Derived>::RunAbortAlgorithm() {
 template void FetchBody<Request>::RunAbortAlgorithm();
 
 template void FetchBody<Response>::RunAbortAlgorithm();
+
+NS_IMPL_ADDREF_INHERITED(EmptyBody, FetchBody<EmptyBody>)
+NS_IMPL_RELEASE_INHERITED(EmptyBody, FetchBody<EmptyBody>)
+
+NS_IMPL_CYCLE_COLLECTION_CLASS(EmptyBody)
+
+NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(EmptyBody, FetchBody<EmptyBody>)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mAbortSignalImpl)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mFetchStreamReader)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mReadableStreamBody)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mReadableStreamReader)
+NS_IMPL_CYCLE_COLLECTION_UNLINK_END
+
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(EmptyBody,
+                                                  FetchBody<EmptyBody>)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mOwner)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAbortSignalImpl)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mFetchStreamReader)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mReadableStreamBody)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mReadableStreamReader)
+NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
+
+NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(EmptyBody, FetchBody<EmptyBody>)
+NS_IMPL_CYCLE_COLLECTION_TRACE_END
+
+NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(EmptyBody)
+NS_INTERFACE_MAP_END_INHERITING(FetchBody<EmptyBody>)
+
+EmptyBody::EmptyBody(nsIGlobalObject* aGlobal,
+                     mozilla::ipc::PrincipalInfo* aPrincipalInfo,
+                     AbortSignalImpl* aAbortSignalImpl,
+                     const nsACString& aMimeType,
+                     already_AddRefed<nsIInputStream> aBodyStream)
+    : FetchBody<EmptyBody>(aGlobal),
+      mAbortSignalImpl(aAbortSignalImpl),
+      mMimeType(aMimeType),
+      mBodyStream(std::move(aBodyStream)) {
+  if (aPrincipalInfo) {
+    mPrincipalInfo = MakeUnique<mozilla::ipc::PrincipalInfo>(*aPrincipalInfo);
+  }
+}
+
+EmptyBody::~EmptyBody() = default;
+
+/* static */
+already_AddRefed<EmptyBody> EmptyBody::Create(
+    nsIGlobalObject* aGlobal, mozilla::ipc::PrincipalInfo* aPrincipalInfo,
+    AbortSignalImpl* aAbortSignalImpl, const nsACString& aMimeType,
+    ErrorResult& aRv) {
+  nsCOMPtr<nsIInputStream> bodyStream;
+  aRv = NS_NewCStringInputStream(getter_AddRefs(bodyStream), ""_ns);
+  if (NS_WARN_IF(aRv.Failed())) {
+    return nullptr;
+  }
+
+  RefPtr<EmptyBody> emptyBody =
+      new EmptyBody(aGlobal, aPrincipalInfo, aAbortSignalImpl, aMimeType,
+                    bodyStream.forget());
+  return emptyBody.forget();
+}
+
+void EmptyBody::GetBody(nsIInputStream** aStream, int64_t* aBodyLength) {
+  MOZ_ASSERT(aStream);
+
+  if (aBodyLength) {
+    *aBodyLength = 0;
+  }
+
+  nsCOMPtr<nsIInputStream> bodyStream = mBodyStream;
+  bodyStream.forget(aStream);
+}
 
 }  // namespace mozilla::dom

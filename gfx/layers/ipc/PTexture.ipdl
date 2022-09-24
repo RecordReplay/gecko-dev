@@ -6,7 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 include LayersSurfaces;
-include protocol PLayerTransaction;
 include protocol PCompositorBridge;
 include protocol PImageBridge;
 include protocol PVideoBridge;
@@ -21,6 +20,7 @@ namespace layers {
 /**
  * PTexture is the IPDL glue between a TextureClient and a TextureHost.
  */
+[ManualDealloc, ChildImpl=virtual, ParentImpl=virtual]
 sync protocol PTexture {
     manager PImageBridge or PCompositorBridge or PVideoBridge;
 

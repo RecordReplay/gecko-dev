@@ -28,8 +28,14 @@
         src="data:text/html,&lt;body onload='document.designMode=%22on%22'&gt;body content&lt;/body&gt;"></iframe><br/>
 <iframe id="iframe4" width="300" height="150"
         src="data:text/html,&lt;div contenteditable id='contenteditable'&gt;&lt;/div&gt;"></iframe><br/>
-<iframe id="iframe5" width="200" height="50" src="data:text/html,&lt;input id='input'&gt;"></iframe>
-<iframe id="iframe6" width="200" height="50" src="data:text/html,&lt;input id='password' type='password'&gt;"></iframe><br/>
+<!--
+  NOTE: the width for the next two iframes is chosen to be small enough to make
+  the Show Password button (for type=password) be outside the viewport so that
+  it doesn't affect the rendering compared to the type=text control.
+  But still large enough to comfortably fit the input values we test.
+-->
+<iframe id="iframe5" style="width:10ch" height="50" src="data:text/html,&lt;input id='input'&gt;"></iframe>
+<iframe id="iframe6" style="width:10ch" height="50" src="data:text/html,&lt;input id='password' type='password'&gt;"></iframe><br/>
 <iframe id="iframe7" width="300" height="150"
         src="data:text/html,&lt;span contenteditable id='contenteditable'&gt;&lt;/span&gt;"></iframe><br/>
 <input id="input" type="text"/><br/>
@@ -94,6 +100,46 @@ function isGreaterThan(aLeft, aRight, aMessage)
 {
   ok(aLeft > aRight, aMessage + ", got=" + aLeft + ", expected minimum value=" + aRight);
 }
+
+/**
+ * synthesizeSimpleCompositionChange synthesizes a composition which has only
+ * one clause and put caret end of it.
+ *
+ * @param aComposition  string or object.  If string, it's treated as
+ *                      composition string whose attribute is
+ *                      COMPOSITION_ATTR_RAW_CLAUSE.
+ *                      If object, it must have .string whose type is "string".
+ *                      Additionally, .attr can be specified if you'd like to
+ *                      use the other attribute instead of
+ *                      COMPOSITION_ATTR_RAW_CLAUSE.
+ */
+function synthesizeSimpleCompositionChange(aComposition, aWindow, aCallback) {
+  const comp = (() => {
+    if (typeof aComposition == "string") {
+      return { string: aComposition, attr: COMPOSITION_ATTR_RAW_CLAUSE };
+    }
+    return {
+      string: aComposition.string,
+      attr: aComposition.attr === undefined
+        ? COMPOSITION_ATTR_RAW_CLAUSE
+        : aComposition.attr
+    };
+  })();
+  synthesizeCompositionChange(
+    {
+      composition: {
+        string: comp.string,
+        clauses: [
+          { length: comp.string.length, attr: comp.attr },
+        ],
+      },
+      caret: { start: comp.string.length, length: 0 },
+    },
+    aWindow,
+    aCallback
+  );
+}
+
 
 var div = document.getElementById("div");
 var textarea = document.getElementById("textarea");
@@ -197,20 +243,55 @@ function checkSelection(aExpectedOffset, aExpectedText, aMessage, aID)
                                ": synthesizeQuerySelectedText " + aID)) {
     return false;
   }
-  is(selectedText.offset, aExpectedOffset,
-     aMessage + ": selection offset is wrong " + aID);
-  is(selectedText.text, aExpectedText,
-     aMessage + ": selected text is wrong " + aID);
+  if (aExpectedOffset === null) {
+    is(
+      selectedText.notFound,
+      true,
+      `${aMessage}: selection should not be found ${aID}`
+    );
+    return selectedText.notFound;
+  }
+
+  is(
+    selectedText.notFound,
+    false,
+    `${aMessage}: selection should be found ${aID}`
+  );
+  if (selectedText.notFound) {
+    return false;
+  }
+  is(
+    selectedText.offset,
+    aExpectedOffset,
+    `${aMessage}: selection offset should be ${aExpectedOffset} ${aID}`
+  );
+  is(
+    selectedText.text,
+    aExpectedText,
+    `${aMessage}: selected text should be "${aExpectedText}" ${aID}`
+  );
   return selectedText.offset == aExpectedOffset &&
          selectedText.text == aExpectedText;
 }
 
-function checkIMESelection(aSelectionType, aExpectedFound, aExpectedOffset, aExpectedText, aMessage, aID)
-{
+function checkIMESelection(
+  aSelectionType,
+  aExpectedFound,
+  aExpectedOffset,
+  aExpectedText,
+  aMessage,
+  aID,
+  aToDo = {}
+) {
   if (!aID) {
     aID = "";
   }
   aMessage += " (" + aSelectionType + ")";
+  let {
+    notFound = is,
+    offset = is,
+    text = is,
+  } = aToDo;
   let selectionType = 0;
   switch (aSelectionType) {
     case "RawClause":
@@ -234,16 +315,26 @@ function checkIMESelection(aSelectionType, aExpectedFound, aExpectedOffset, aExp
                                ": synthesizeQuerySelectedText " + aID)) {
     return false;
   }
-  is(selectedText.notFound, !aExpectedFound,
-     aMessage + ": selection should " + (aExpectedFound ? "" : "not") + " be found " + aID);
+  notFound(
+    selectedText.notFound,
+    !aExpectedFound,
+    `${aMessage}: selection should ${
+      aExpectedFound ? "" : "not"
+    } be found ${aID}`);
   if (selectedText.notFound) {
     return selectedText.notFound == !aExpectedFound;
   }
 
-  is(selectedText.offset, aExpectedOffset,
-     aMessage + ": selection offset is wrong " + aID);
-  is(selectedText.text, aExpectedText,
-     aMessage + ": selected text is wrong " + aID);
+  offset(
+    selectedText.offset,
+    aExpectedOffset,
+    `${aMessage}: selection offset is wrong ${aID}`
+  );
+  text(
+    selectedText.text,
+    aExpectedText,
+    `${aMessage}: selected text is wrong ${aID}`
+  );
   return selectedText.offset == aExpectedOffset &&
          selectedText.text == aExpectedText;
 }
@@ -2530,6 +2621,813 @@ function runCompositionEventTest()
                             formEventHandlerForInput, true);
 }
 
+function runCompositionTestWhoseTextNodeModified() {
+  const selection = windowOfContenteditable.getSelection();
+
+  (function testInsertTextBeforeComposition() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testInsertTextBeforeComposition:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>def</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "def".length);
+    // Insert composition to the end of a text node
+    synthesizeSimpleCompositionChange("g");
+    is(
+      textNode.data,
+      "defg",
+      `${description} Composition should be inserted to end of the text node`
+    );
+
+    // Insert a character before the composition string
+    textNode.insertData(0, "c");
+    is(
+      textNode.data,
+      "cdefg",
+      `${
+        description
+      } Composition should be shifted when a character is inserted before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}cdef`.length,
+      "g",
+      `${
+        description
+      } IME selection should be shifted when a character is inserted before it`
+    );
+
+    // Update composition string (appending a character)
+    synthesizeSimpleCompositionChange("gh");
+    is(
+      textNode.data,
+      "cdefgh",
+      `${
+        description
+      } Composition should be updated correctly after inserted a character before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}cdef`.length,
+      "gh",
+      `${
+        description
+      } IME selection should be extended correctly at updating composition after inserted a character before it`
+    );
+
+    // Insert another character before the composition
+    textNode.insertData(0, "b");
+    is(
+      textNode.data,
+      "bcdefgh",
+      `${
+        description
+      } Composition should be shifted when a character is inserted again before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}bcdef`.length,
+      "gh",
+      `${
+        description
+      } IME selection should be shifted when a character is inserted again before it`
+    );
+
+    // Update the composition string again (appending another character)
+    synthesizeSimpleCompositionChange("ghi");
+    is(
+      textNode.data,
+      "bcdefghi",
+      `${
+        description
+      } Composition should be updated correctly after inserted 2 characters before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}bcdef`.length,
+      "ghi",
+      `${
+        description
+      } IME selection should be extended correctly at updating composition after inserted 2 characters before it`
+    );
+
+    // Insert a new character before the composition string
+    textNode.insertData(0, "a");
+    is(
+      textNode.data,
+      "abcdefghi",
+      `${
+        description
+      } Composition should be shifted when a character is inserted again and again before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}abcdef`.length,
+      "ghi",
+      `${
+        description
+      } IME selection should be shifted when a character is inserted again and again before it`
+    );
+
+    // Commit the composition string
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abcdefghi",
+      `${
+        description
+      } Composition should be committed as is`
+    );
+    is(
+      selection.focusOffset,
+      "abcdefghi".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+
+    // Undo the commit
+    synthesizeKey("z", { accelKey: true });
+    is(
+      textNode.data,
+      "abcdef",
+      `${
+        description
+      } Composition should be undone correctly`
+    );
+    is(
+      selection.focusOffset,
+      "abcdef".length,
+      `${
+        description
+      } Selection should be collapsed at where the composition was after undoing`
+    );
+
+    // Redo the commit
+    synthesizeKey("z", { accelKey: true, shiftKey: true });
+    is(
+      textNode.data,
+      "abcdefghi",
+      `${
+        description
+      } Composition should be redone correctly`
+    );
+    is(
+      selection.focusOffset,
+      "abcdefghi".length,
+      `${
+        description
+      } focus offset of Selection should be at end of the commit string after redoing`
+    );
+  })();
+
+  (function testInsertTextImmediatelyBeforeComposition() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testInsertTextImmediatelyBeforeComposition:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>d</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, 0);
+    // Insert composition at start of the text node
+    synthesizeSimpleCompositionChange("b");
+    is(
+      textNode.data,
+      "bd",
+      `${description} Composition should be inserted to start of the text node`
+    );
+
+    // Insert a character before the composition string
+    textNode.insertData(0, "a");
+    is(
+      textNode.data,
+      "abd",
+      `${
+        description
+      } Composition should be shifted when a character is inserted immediately before it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "b",
+      `${
+        description
+      } IME selection should be shifted when a character is inserted immediately before it`,
+      "",
+      { offset: todo_is, text: todo_is }
+    );
+
+    // Update the composition string after inserting character immediately before it
+    synthesizeSimpleCompositionChange("bc");
+    is(
+      textNode.data,
+      "abcd",
+      `${description} Composition should be updated after the inserted character`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "bc",
+      `${
+        description
+      } IME selection should be set at the composition string after the inserted character`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abcd",
+      `${
+        description
+      } Composition should be committed after the inserted character`
+    );
+    is(
+      selection.focusOffset,
+      "abc".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  (function testInsertTextImmediatelyAfterComposition() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testInsertTextImmediatelyAfterComposition:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>a</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "a".length);
+    // Insert composition at end of the text node
+    synthesizeSimpleCompositionChange("b");
+    is(
+      textNode.data,
+      "ab",
+      `${description} Composition should be inserted to start of the text node`
+    );
+
+    // Insert a character after the composition string
+    textNode.insertData("ab".length, "d");
+    is(
+      textNode.data,
+      "abd",
+      `${
+        description
+      } Composition should stay when a character is inserted immediately after it`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "b",
+      `${
+        description
+      } IME selection should stay when a character is inserted immediately after it`
+    );
+
+    // Update the composition string after inserting character immediately after it
+    synthesizeSimpleCompositionChange("bc");
+    is(
+      textNode.data,
+      "abcd",
+      `${description} Composition should be updated before the inserted character`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "bc",
+      `${
+        description
+      } IME selection should be set at the composition string before the inserted character`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abcd",
+      `${
+        description
+      } Composition should be committed before the inserted character`
+    );
+    is(
+      selection.focusOffset,
+      "abc".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  // Inserting/replacing text before the last character of composition string
+  // should be contained by the composition, i.e., updated by next composition
+  // update.  This is Chrome compatible.
+  (function testInsertTextMiddleOfComposition() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testInsertTextMiddleOfComposition:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>a</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "a".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("bd");
+    is(
+      textNode.data,
+      "abd",
+      `${description} Composition should be inserted to end of the text node`
+    );
+
+    // Insert a character before the composition string
+    textNode.insertData("ab".length, "c");
+    is(
+      textNode.data,
+      "abcd",
+      `${
+        description
+      } Inserted string should inserted into the middle of composition string`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "bcd",
+      `${
+        description
+      } IME selection should be extended when a character is inserted into middle of it`
+    );
+
+    // Update the composition string after inserting character into it
+    synthesizeSimpleCompositionChange("BD");
+    is(
+      textNode.data,
+      "aBD",
+      `${
+        description
+      } Composition should be replace the range containing the inserted character`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "BD",
+      `${
+        description
+      } IME selection should be set at the updated composition string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "aBD",
+      `${
+        description
+      } Composition should be committed without the inserted character`
+    );
+    is(
+      selection.focusOffset,
+      "aBD".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  (function testReplaceFirstCharOfCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceFirstCharOfCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("ab".length, "c".length, "XYZ");
+    is(
+      textNode.data,
+      "abXYZdefg",
+      `${description} First character of the composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "XYZde",
+      `${description} IME selection should contain the replace string`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "abCDEfg",
+      `${description} Composition should update the replace string too`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "CDE",
+      `${description} IME selection should update the replace string too`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abCDEfg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "abCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  // Although Chrome commits composition if all composition string is removed,
+  // let's keep composition for making TSF stable...
+  (function testReplaceAllCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceAllCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted to the text node`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("ab".length, "cde".length, "XYZ");
+    is(
+      textNode.data,
+      "abXYZfg",
+      `${description} Composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "",
+      `${
+        description
+      } IME selection should be collapsed before the replace string`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "abCDEXYZfg",
+      `${description} Composition should be inserted again`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "CDE",
+      `${description} IME selection should not contain the replace string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abCDEXYZfg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "abCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  (function testReplaceCompositionStringAndSurroundedCharacters() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceCompositionStringAndSurroundedCharacters:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted to the text node`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("a".length, "bcdef".length, "XYZ");
+    is(
+      textNode.data,
+      "aXYZg",
+      `${description} Composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "",
+      `${
+        description
+      } IME selection should be collapsed before the replace string`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "aCDEXYZg",
+      `${description} Composition should be inserted again`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "CDE",
+      `${description} IME selection should not contain the replace string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "aCDEXYZg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "aCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  // If start boundary characters are replaced, the replace string should be
+  // contained into the composition range.  This is Chrome compatible.
+  (function testReplaceStartBoundaryOfCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceStartBoundaryOfCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted to the text node`
+    );
+
+    // Replace some text
+    textNode.replaceData("a".length, "bc".length, "XYZ");
+    is(
+      textNode.data,
+      "aXYZdefg",
+      `${
+        description
+      } Start of the composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "XYZde",
+      `${description} IME selection should contain the replace string`
+    );
+
+    // Update the replace string and remaining composition.
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "aCDEfg",
+      `${description} Composition should update the replace string too`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}a`.length,
+      "CDE",
+      `${description} IME selection should contain the replace string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "aCDEfg",
+      `${
+        description
+      } Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "aCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  // If start boundary characters are replaced, the replace string should NOT
+  // be contained in the composition range.  This is Chrome compatible.
+  (function testReplaceEndBoundaryOfCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceEndBoundaryOfCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted to the text node`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("abcd".length, "ef".length, "XYZ");
+    is(
+      textNode.data,
+      "abcdXYZg",
+      `${
+        description
+      } End half of the composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "cd",
+      `${
+        description
+      } IME selection should be shrunken to the non-replaced part`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "abCDEXYZg",
+      `${description} Only the remaining composition string should be updated`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "CDE",
+      `${description} IME selection should NOT include the replace string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abCDEXYZg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "abCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  // If the last character of composition is replaced, i.e., it should NOT be
+  // treated as a part of composition string.  This is Chrome compatible.
+  (function testReplaceLastCharOfCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceLastCharOfCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("abcd".length, "e".length, "XYZ");
+    is(
+      textNode.data,
+      "abcdXYZfg",
+      `${description} Last character of the composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "cd",
+      `${description} IME selection should be shrunken`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "abCDEXYZfg",
+      `${description} Composition should NOT update the replace string`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "CDE",
+      `${description} IME selection should not contain the replace string`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abCDEXYZfg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "abCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+
+  (function testReplaceMiddleCharOfCompositionString() {
+    const description =
+      "runCompositionTestWhoseTextNodeModified: testReplaceMiddleCharOfCompositionString:";
+    contenteditable.focus();
+    contenteditable.innerHTML = "<p>abfg</p>";
+    const textNode = contenteditable.firstChild.firstChild;
+    selection.collapse(textNode, "ab".length);
+    // Insert composition at middle of the text node
+    synthesizeSimpleCompositionChange("cde");
+    is(
+      textNode.data,
+      "abcdefg",
+      `${description} Composition should be inserted`
+    );
+
+    // Replace the composition string
+    textNode.replaceData("abc".length, "d".length, "XYZ");
+    is(
+      textNode.data,
+      "abcXYZefg",
+      `${
+        description
+      } Middle character of the composition should be replaced`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "cXYZe",
+      `${description} IME selection should be extended by the replace string`
+    );
+
+    // Update the composition string after replaced
+    synthesizeSimpleCompositionChange("CDE");
+    is(
+      textNode.data,
+      "abCDEfg",
+      `${description} Composition should update the replace string`
+    );
+    checkIMESelection(
+      "RawClause",
+      true,
+      `${kLF}ab`.length,
+      "CDE",
+      `${description} IME selection should be shrunken after update`
+    );
+
+    // Commit it
+    synthesizeComposition({ type: "compositioncommitasis" });
+    is(
+      textNode.data,
+      "abCDEfg",
+      `${description} Composition should be committed`
+    );
+    is(
+      selection.focusOffset,
+      "abCDE".length,
+      `${description} Selection should be collapsed at end of the commit string`
+    );
+  })();
+}
+
 // eslint-disable-next-line complexity
 function runQueryTextRectInContentEditableTest()
 {
@@ -4545,18 +5443,54 @@ function runQuerySelectionEventTest()
 
   // #1
   contenteditable.innerHTML = "<br/>a";
-  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild, 1);
-  checkSelection(0, kLF + "a", "runQuerySelectionEventTest #1, \"" + contenteditable.innerHTML + "\"");
+  selection.setBaseAndExtent(
+    contenteditable.firstChild,
+    0,
+    contenteditable.lastChild,
+    1
+  );
+  checkSelection(
+    0,
+    `${kLF}a`,
+    `runQuerySelectionEventTest #1, "${contenteditable.innerHTML}"`
+  );
 
   // #2
   contenteditable.innerHTML = "<p></p><p>abc</p>";
-  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild.firstChild, 1);
-  checkSelection(kLFLen, kLF + "a", "runQuerySelectionEventTest #2, \"" + contenteditable.innerHTML + "\"");
+  selection.setBaseAndExtent(
+    contenteditable.firstChild,
+    0,
+    contenteditable.lastChild.firstChild,
+    1
+  );
+  checkSelection(
+    kLFLen,
+    `${kLF}a`,
+    `runQuerySelectionEventTest #2, "${contenteditable.innerHTML}"`
+  );
 
   // #3
   contenteditable.innerHTML = "<p>abc</p><p>def</p>";
-  selection.setBaseAndExtent(contenteditable.firstChild, 0, contenteditable.lastChild.firstChild, 1);
-  checkSelection(kLFLen, "abc" + kLF + "d", "runQuerySelectionEventTest #3, \"" + contenteditable.innerHTML + "\"");
+  selection.setBaseAndExtent(
+    contenteditable.firstChild,
+    0,
+    contenteditable.lastChild.firstChild,
+    1
+  );
+  checkSelection(
+    kLFLen,
+    `abc${kLF}d`,
+    `runQuerySelectionEventTest #3, "${contenteditable.innerHTML}"`
+  );
+
+  // #4
+  contenteditable.innerHTML = "<p>abc</p>";
+  selection.removeAllRanges();
+  checkSelection(
+    null,
+    null,
+    `runQuerySelectionEventTest #4, "${contenteditable.innerHTML}"`
+  );
 }
 
 function runQueryIMESelectionTest()
@@ -5706,6 +6640,115 @@ function runBug722639Test()
     }
     previousTop = currentLine.top;
   }
+}
+
+function runCompositionWithSelectionChange() {
+  function doTest(aEditor, aDescription) {
+    aEditor.focus();
+    const isHTMLEditor =
+      aEditor.nodeName.toLowerCase() != "input" && aEditor.nodeName.toLowerCase() != "textarea";
+    const win = isHTMLEditor ? windowOfContenteditable : window;
+    function getValue() {
+      return isHTMLEditor ? aEditor.innerHTML : aEditor.value;
+    }
+    function setSelection(aStart, aLength) {
+      if (isHTMLEditor) {
+        win.getSelection().setBaseAndExtent(aEditor.firstChild, aStart, aEditor.firstChild, aStart + aLength);
+      } else {
+        aEditor.setSelectionRange(aStart, aStart + aLength);
+      }
+    }
+
+    if (isHTMLEditor) {
+      aEditor.innerHTML = "abcxyz";
+    } else {
+      aEditor.value = "abcxyz";
+    }
+    setSelection("abc".length, 0);
+
+    synthesizeCompositionChange({
+      composition: {
+        string: "1",
+        clauses: [{ length: 1, attr: COMPOSITION_ATTR_RAW_CLAUSE}],
+        caret: { start: 1, length: 0 },
+      }
+    });
+
+    is(getValue(), "abc1xyz",
+      `${aDescription}: First composing character should be inserted middle of the text`);
+
+    aEditor.addEventListener("compositionupdate", () => {
+      setSelection("abc".length, "1".length);
+    }, {once: true});
+
+    synthesizeCompositionChange({
+      composition: {
+        string: "12",
+        clauses: [{ length: 2, attr: COMPOSITION_ATTR_RAW_CLAUSE}],
+        caret: { start: 2, length: 0 },
+      }
+    });
+
+    is(getValue(), "abc12xyz",
+      `${aDescription}: Only composition string should be updated even if selection range is updated by "compositionupdate" event listener`);
+
+    aEditor.addEventListener("compositionupdate", () => {
+      setSelection("abc1".length, "2d".length);
+    }, {once: true});
+
+    synthesizeCompositionChange({
+      composition: {
+        string: "123",
+        clauses: [{ length: 3, attr: COMPOSITION_ATTR_RAW_CLAUSE}],
+        caret: { start: 3, length: 0 },
+      }
+    });
+
+    is(getValue(), "abc123xyz",
+      `${aDescription}: Only composition string should be updated even if selection range wider than composition string is updated by "compositionupdate" event listener`);
+
+    aEditor.addEventListener("compositionupdate", () => {
+      setSelection("ab".length, "c123d".length);
+    }, {once: true});
+
+    synthesizeCompositionChange({
+      composition: {
+        string: "456",
+        clauses: [{ length: 3, attr: COMPOSITION_ATTR_RAW_CLAUSE}],
+        caret: { start: 3, length: 0 },
+      }
+    });
+
+    is(getValue(), "abc456xyz",
+      `${aDescription}: Only composition string should be updated even if selection range which covers all over the composition string is updated by "compositionupdate" event listener`);
+
+    aEditor.addEventListener("beforeinput", () => {
+      setSelection("abc456d".length, 0);
+    }, {once: true});
+
+    synthesizeComposition({ type: "compositioncommitasis" });
+
+    is(getValue(), "abc456xyz",
+      `${aDescription}: Only composition string should be updated when committing composition but selection is updated by "beforeinput" event listener`);
+    if (isHTMLEditor) {
+      is(win.getSelection().focusNode, aEditor.firstChild,
+        `${aDescription}: The focus node after composition should be the text node`);
+      is(win.getSelection().focusOffset, "abc456".length,
+        `${aDescription}: The focus offset after composition should be end of the composition string`);
+      is(win.getSelection().anchorNode, aEditor.firstChild,
+        `${aDescription}: The anchor node after composition should be the text node`);
+      is(win.getSelection().anchorOffset, "abc456".length,
+        `${aDescription}: The anchor offset after composition should be end of the composition string`);
+    } else {
+      is(aEditor.selectionStart, "abc456".length,
+        `${aDescription}: The selectionStart after composition should be end of the composition string`);
+      is(aEditor.selectionEnd, "abc456".length,
+        `${aDescription}: The selectionEnd after composition should be end of the composition string`);
+    }
+  }
+  doTest(textarea, "runCompositionWithSelectionChange(textarea)");
+  doTest(input, "runCompositionWithSelectionChange(input)");
+  doTest(contenteditable, "runCompositionWithSelectionChange(contenteditable)");
 }
 
 function runForceCommitTest()
@@ -6869,7 +7912,6 @@ function runIsComposingTest()
 
   // XXX These cases shouldn't occur in actual native key events because we
   //     don't dispatch key events while composition (bug 354358).
-  Services.prefs.setBoolPref("dom.keyboardevent.dispatch_during_composition", true);
   description = "events before dispatching compositionstart";
   synthesizeKey("KEY_ArrowLeft");
 
@@ -6898,8 +7940,6 @@ function runIsComposingTest()
   // Then, its isComposing should be false.
   description = "events after dispatching compositioncommitasis";
   synthesizeKey("KEY_Enter", {type: "keyup"});
-
-  Services.prefs.clearUserPref("dom.keyboardevent.dispatch_during_composition");
 
   textarea.removeEventListener("keydown", eventHandler, true);
   textarea.removeEventListener("keypress", eventHandler, true);
@@ -9566,12 +10606,47 @@ async function runPasswordMaskDelayTest() {
                  "runPasswordMaskDelayTest(): committed string should be masked after a while");
 }
 
-async function runTest()
+async function runInputModeTest()
 {
-  await SpecialPowers.pushPrefEnv({
-    set: [["dom.input_events.beforeinput.enabled", true]],
+  await SpecialPowers.setBoolPref("dom.forms.inputmode", true);
+
+  let result = [];
+
+  function handler(aEvent)
+  {
+    result.push(aEvent);
+  }
+
+  textarea.inputMode = "text";
+  textarea.value = "";
+  textarea.focus();
+
+  textarea.addEventListener("compositionupdate", handler, true);
+  textarea.addEventListener("compositionend", handler, true);
+
+  synthesizeCompositionChange({
+    composition: {string: "a ", clauses: [{length: 2, attr: COMPOSITION_ATTR_RAW_CLAUSE}]},
   });
 
+  is(result[0].type, "compositionupdate", "Set initial composition for inputmode test");
+  result = [];
+
+  textarea.inputMode = "tel";
+  is(result.length, 0, "No compositonend event even if inputmode is updated");
+
+  // Clean up
+  synthesizeComposition({ type: "compositioncommitasis" });
+  textarea.inputMode = "";
+  textarea.value = "";
+  textarea.removeEventListener("compositionupdate", handler, true);
+  textarea.removeEventListener("compositionend", handler, true);
+
+  await SpecialPowers.clearUserPref("dom.forms.inputmode");
+}
+
+
+async function runTest()
+{
   window.addEventListener("unload", window.arguments[0].SimpleTest.finish, {once: true, capture: true});
 
   contenteditable = document.getElementById("iframe4").contentDocument.getElementById("contenteditable");
@@ -9588,12 +10663,14 @@ async function runTest()
   await runPanelTest();
   await runPasswordMaskDelayTest();
   await runBug1584901Test();
+  await runInputModeTest();
 
   runUndoRedoTest();
   runCompositionTest();
   runCompositionCommitAsIsTest();
   runCompositionCommitTest();
   runCompositionEventTest();
+  runCompositionTestWhoseTextNodeModified();
   runQueryTextRectInContentEditableTest();
   runCharAtPointTest(textarea, "textarea in the document");
   runCharAtPointAtOutsideTest();
@@ -9610,6 +10687,7 @@ async function runTest()
   runBug1571375Test();
   runBug1675313Test();
   runCommitCompositionWithSpaceKey();
+  runCompositionWithSelectionChange();
   runForceCommitTest();
   runNestedSettingValue();
   runBug811755Test();

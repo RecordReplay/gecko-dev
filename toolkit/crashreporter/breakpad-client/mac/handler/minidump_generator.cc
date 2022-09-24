@@ -1147,10 +1147,31 @@ MinidumpGenerator::WriteExceptionStream(MDRawDirectory *exception_stream) {
   MDRawExceptionStream *exception_ptr = exception.get();
   exception_ptr->thread_id = exception_thread_;
 
+  uint64_t u_exception_code = exception_code_;
+  if (exception_type_ == EXC_CRASH) {
+    if (!IsValidExcCrash(exception_code_)) {
+      return false;
+    }
+
+    [[maybe_unused]] int signal_number;
+    RecoverExceptionDataFromExcCrash(u_exception_code, signal_number);
+  }
+
   // This naming is confusing, but it is the proper translation from
   // mach naming to minidump naming.
   exception_ptr->exception_record.exception_code = exception_type_;
-  exception_ptr->exception_record.exception_flags = exception_code_;
+
+  uint32_t exception_flags = 0;
+  if (exception_type_ == EXC_RESOURCE || exception_type_ == EXC_GUARD) {
+    // For EXC_RESOURCE and EXC_GUARD crashes Crashpad records the uppermost
+    // 32 bits of the exception code in the exception flags, let's do the same
+    // here.
+    exception_flags = u_exception_code >> 32;
+  } else {
+    exception_flags = exception_code_;
+  }
+
+  exception_ptr->exception_record.exception_flags = exception_flags;
 
   breakpad_thread_state_data_t state;
   mach_msg_type_number_t state_count
@@ -1166,6 +1187,14 @@ MinidumpGenerator::WriteExceptionStream(MDRawDirectory *exception_stream) {
     exception_ptr->exception_record.exception_address = exception_subcode_;
   else
     exception_ptr->exception_record.exception_address = CurrentPCForStack(state);
+
+  // Crashpad stores the exception type and the optional exception codes in
+  // the exception information field, so we do the same here.
+  exception_ptr->exception_record.number_parameters =
+    (exception_subcode_ != 0) ? 3 : 2;
+  exception_ptr->exception_record.exception_information[0] = exception_type_;
+  exception_ptr->exception_record.exception_information[1] = exception_code_;
+  exception_ptr->exception_record.exception_information[2] = exception_subcode_;
 
   return true;
 }
@@ -1426,6 +1455,26 @@ int MinidumpGenerator::FindExecutableModule() {
 
   // failed - just use the first image
   return 0;
+}
+
+bool MinidumpGenerator::IsValidExcCrash(uint64_t exception_code) {
+  switch ((exception_code >> 20) & 0xf) {
+    case EXC_CRASH:         // EXC_CRASH cannot wrap EXC_CRASH
+    case EXC_RESOURCE:      // EXC_RESOURCE would lose data if wrapped
+    case EXC_GUARD:         // EXC_GUARD would lose data if wrapped
+    case EXC_CORPSE_NOTIFY: // EXC_CRASH cannot wrap EXC_CORPSE_NOTIFY
+      return false;
+    default:
+      return true;
+  }
+}
+
+void MinidumpGenerator::RecoverExceptionDataFromExcCrash(
+  uint64_t exception_code, int& signal_number)
+{
+  exception_type_ = (exception_code >> 20) & 0xf;
+  exception_code_ = exception_code & 0xfffff;
+  signal_number = (exception_code >> 24) & 0xff;
 }
 
 bool MinidumpGenerator::WriteCVRecord(MDRawModule *module, int cpu_type, int cpu_subtype,

@@ -379,10 +379,15 @@ async function doTestForAllTabsFavicon(
   tabBrowser.removeAttribute("overflow");
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   // Make sure first party isolation is enabled.
   await SpecialPowers.pushPrefEnv({
-    set: [["privacy.firstparty.isolate", true]],
+    set: [
+      ["privacy.firstparty.isolate", true],
+      ["dom.security.https_first", false],
+      // Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
+      ["network.cookie.sameSite.laxByDefault", false],
+    ],
   });
 });
 

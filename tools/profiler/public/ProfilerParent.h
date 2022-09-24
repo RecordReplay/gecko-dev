@@ -37,8 +37,16 @@ class ProfilerParent final : public PProfilerParent {
       base::ProcessId aOtherPid);
 
 #ifdef MOZ_GECKO_PROFILER
-  typedef MozPromise<Shmem, ResponseRejectReason, true>
-      SingleProcessProfilePromise;
+  using SingleProcessProfilePromise =
+      MozPromise<Shmem, ResponseRejectReason, true>;
+
+  struct SingleProcessProfilePromiseAndChildPid {
+    RefPtr<SingleProcessProfilePromise> profilePromise;
+    base::ProcessId childPid;
+  };
+
+  using SingleProcessProgressPromise =
+      MozPromise<GatherProfileProgress, ResponseRejectReason, true>;
 
   // The following static methods can be called on any thread, but they are
   // no-ops on anything other than the main thread.
@@ -51,19 +59,32 @@ class ProfilerParent final : public PProfilerParent {
   // the ProfilerChild background thread, but those processes don't need to
   // forward these calls any further.
 
-  // Returns the number of profiles to expect. The gathered profiles will be
-  // provided asynchronously with a call to
-  // ProfileGatherer::ReceiveGatheredProfile.
-  static nsTArray<RefPtr<SingleProcessProfilePromise>> GatherProfiles();
+  // Returns the profiles to expect, as promises and child pids.
+  static nsTArray<SingleProcessProfilePromiseAndChildPid> GatherProfiles();
 
-  static void ProfilerStarted(nsIProfilerStartParams* aParams);
+  // Send a request to get the GatherProfiles() progress update from one child
+  // process, returns a promise to be resolved with that progress.
+  // The promise RefPtr may be null if the child process is unknown.
+  // Progress may be invalid, if the request arrived after the child process
+  // had already responded to the main GatherProfile() IPC, or something went
+  // very wrong in that process.
+  static RefPtr<SingleProcessProgressPromise> RequestGatherProfileProgress(
+      base::ProcessId aChildPid);
+
+  // This will start the profiler in all child processes. The returned promise
+  // will be resolved when all child have completed their operation
+  // (successfully or not.)
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerStarted(
+      nsIProfilerStartParams* aParams);
   static void ProfilerWillStopIfStarted();
-  static void ProfilerStopped();
-  static void ProfilerPaused();
-  static void ProfilerResumed();
-  static void ProfilerPausedSampling();
-  static void ProfilerResumedSampling();
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerStopped();
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerPaused();
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerResumed();
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerPausedSampling();
+  [[nodiscard]] static RefPtr<GenericPromise> ProfilerResumedSampling();
   static void ClearAllPages();
+
+  [[nodiscard]] static RefPtr<GenericPromise> WaitOnePeriodicSampling();
 
   // Create a "Final" update that the Child can return to its Parent.
   static ProfileBufferChunkManagerUpdate MakeFinalUpdate();

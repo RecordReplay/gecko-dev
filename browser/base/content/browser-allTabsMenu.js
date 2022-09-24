@@ -48,10 +48,14 @@ var gTabsPanel = {
       insertBefore: document.getElementById("allTabsMenu-tabsSeparator"),
       filterFn: tab => tab.hidden && tab.soundPlaying,
     });
+    let showPinnedTabs = Services.prefs.getBoolPref(
+      "browser.tabs.tabmanager.enabled"
+    );
     this.allTabsPanel = new TabsPanel({
       view: this.allTabsView,
       containerNode: this.allTabsViewTabs,
-      filterFn: tab => !tab.pinned && !tab.hidden,
+      filterFn: tab =>
+        !tab.hidden && (!tab.pinned || (showPinnedTabs && tab.pinned)),
     });
 
     this.allTabsView.addEventListener("ViewShowing", e => {
@@ -73,12 +77,11 @@ var gTabsPanel = {
       ).hidden = !hasHiddenTabs;
     });
 
-    this.allTabsView.addEventListener("ViewShown", e => {
-      let selectedRow = this.allTabsView.querySelector(
-        ".all-tabs-item[selected]"
-      );
-      selectedRow.scrollIntoView({ block: "center" });
-    });
+    this.allTabsView.addEventListener("ViewShown", e =>
+      this.allTabsView
+        .querySelector(".all-tabs-item[selected]")
+        ?.scrollIntoView({ block: "center" })
+    );
 
     let containerTabsMenuSeparator = this.containerTabsView.querySelector(
       "toolbarseparator"
@@ -136,6 +139,12 @@ var gTabsPanel = {
   },
 
   showAllTabsPanel(event) {
+    // Note that event may be null.
+
+    // Only space and enter should open the popup, ignore other keypresses:
+    if (event?.type == "keypress" && event.key != "Enter" && event.key != " ") {
+      return;
+    }
     this.init();
     if (this.canOpen) {
       PanelUI.showSubView(

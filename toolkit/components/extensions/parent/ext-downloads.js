@@ -34,6 +34,7 @@ const DOWNLOAD_ITEM_FIELDS = [
   "referrer",
   "filename",
   "incognito",
+  "cookieStoreId",
   "danger",
   "mime",
   "startTime",
@@ -186,6 +187,15 @@ class DownloadItem {
   }
   get incognito() {
     return this.download.source.isPrivate;
+  }
+  get cookieStoreId() {
+    if (this.download.source.isPrivate) {
+      return PRIVATE_STORE;
+    }
+    if (this.download.source.userContextId) {
+      return getCookieStoreIdForContainer(this.download.source.userContextId);
+    }
+    return DEFAULT_STORE;
   }
   get danger() {
     return "safe";
@@ -526,6 +536,7 @@ const downloadQuery = query => {
       "paused",
       "error",
       "incognito",
+      "cookieStoreId",
       "bytesReceived",
       "totalBytes",
       "fileSize",
@@ -598,32 +609,65 @@ const queryHelper = query => {
   });
 };
 
-function downloadEventManagerAPI(context, name, event, listener) {
-  let register = fire => {
-    const handler = (what, item) => {
-      if (context.privateBrowsingAllowed || !item.incognito) {
-        listener(fire, what, item);
-      }
-    };
-    let registerPromise = DownloadMap.getDownloadList().then(() => {
-      DownloadMap.on(event, handler);
-    });
-    return () => {
-      registerPromise.then(() => {
-        DownloadMap.off(event, handler);
+this.downloads = class extends ExtensionAPIPersistent {
+  downloadEventRegistrar(event, listener) {
+    let { extension } = this;
+    return ({ fire }) => {
+      const handler = (what, item) => {
+        if (extension.privateBrowsingAllowed || !item.incognito) {
+          listener(fire, what, item);
+        }
+      };
+      let registerPromise = DownloadMap.getDownloadList().then(() => {
+        DownloadMap.on(event, handler);
       });
+      return {
+        unregister() {
+          registerPromise.then(() => {
+            DownloadMap.off(event, handler);
+          });
+        },
+        convert(_fire) {
+          fire = _fire;
+        },
+      };
     };
+  }
+
+  PERSISTENT_EVENTS = {
+    onChanged: this.downloadEventRegistrar("change", (fire, what, item) => {
+      let changes = {};
+      const noundef = val => (val === undefined ? null : val);
+      DOWNLOAD_ITEM_CHANGE_FIELDS.forEach(fld => {
+        if (item[fld] != item.prechange[fld]) {
+          changes[fld] = {
+            previous: noundef(item.prechange[fld]),
+            current: noundef(item[fld]),
+          };
+        }
+      });
+      if (Object.keys(changes).length) {
+        changes.id = item.id;
+        fire.async(changes);
+      }
+    }),
+
+    onCreated: this.downloadEventRegistrar("create", (fire, what, item) => {
+      fire.async(item.serialize());
+    }),
+
+    onErased: this.downloadEventRegistrar("erase", (fire, what, item) => {
+      fire.async(item.id);
+    }),
   };
 
-  return new EventManager({ context, name, register }).api();
-}
-
-this.downloads = class extends ExtensionAPI {
   getAPI(context) {
     let { extension } = context;
     return {
       downloads: {
         download(options) {
+          const isHandlingUserInput =
+            context.callContextData?.isHandlingUserInput;
           let { filename } = options;
           if (filename && AppConstants.platform === "win") {
             // cross platform javascript code uses "/"
@@ -686,6 +730,15 @@ this.downloads = class extends ExtensionAPI {
                 });
               }
             }
+          }
+
+          let userContextId = null;
+          if (options.cookieStoreId != null) {
+            userContextId = getUserContextIdForCookieStoreId(
+              extension,
+              options.cookieStoreId,
+              options.incognito
+            );
           }
 
           // Handle method, headers and body options.
@@ -775,7 +828,10 @@ this.downloads = class extends ExtensionAPI {
               let uri = Services.io.newURI(options.url);
               if (uri instanceof Ci.nsIURL) {
                 filename = DownloadPaths.sanitize(
-                  Services.textToSubURI.unEscapeURIForUI(uri.fileName)
+                  Services.textToSubURI.unEscapeURIForUI(
+                    uri.fileName,
+                    /* dontEscape = */ true
+                  )
                 );
               }
             }
@@ -931,6 +987,10 @@ this.downloads = class extends ExtensionAPI {
                 cookieJarSettings,
               };
 
+              if (userContextId) {
+                source.userContextId = userContextId;
+              }
+
               // blob:-URLs can only be loaded by the principal with which they
               // are associated. This principal may have origin attributes.
               // `context.principal` does sometimes not have these attributes
@@ -956,6 +1016,9 @@ this.downloads = class extends ExtensionAPI {
               }
 
               return Downloads.createDownload({
+                // Only open the download panel if the method has been called
+                // while handling user input (See Bug 1759231).
+                openDownloadsListOnStart: isHandlingUserInput,
                 source,
                 target: {
                   path: target,
@@ -1216,45 +1279,26 @@ this.downloads = class extends ExtensionAPI {
         //   ...
         // }
 
-        onChanged: downloadEventManagerAPI(
+        onChanged: new EventManager({
           context,
-          "downloads.onChanged",
-          "change",
-          (fire, what, item) => {
-            let changes = {};
-            const noundef = val => (val === undefined ? null : val);
-            DOWNLOAD_ITEM_CHANGE_FIELDS.forEach(fld => {
-              if (item[fld] != item.prechange[fld]) {
-                changes[fld] = {
-                  previous: noundef(item.prechange[fld]),
-                  current: noundef(item[fld]),
-                };
-              }
-            });
-            if (Object.keys(changes).length) {
-              changes.id = item.id;
-              fire.async(changes);
-            }
-          }
-        ),
+          module: "downloads",
+          event: "onChanged",
+          extensionApi: this,
+        }).api(),
 
-        onCreated: downloadEventManagerAPI(
+        onCreated: new EventManager({
           context,
-          "downloads.onCreated",
-          "create",
-          (fire, what, item) => {
-            fire.async(item.serialize());
-          }
-        ),
+          module: "downloads",
+          event: "onCreated",
+          extensionApi: this,
+        }).api(),
 
-        onErased: downloadEventManagerAPI(
+        onErased: new EventManager({
           context,
-          "downloads.onErased",
-          "erase",
-          (fire, what, item) => {
-            fire.async(item.id);
-          }
-        ),
+          module: "downloads",
+          event: "onErased",
+          extensionApi: this,
+        }).api(),
 
         onDeterminingFilename: ignoreEvent(
           context,

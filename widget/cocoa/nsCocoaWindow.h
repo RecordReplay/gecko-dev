@@ -22,6 +22,10 @@ class nsChildView;
 class nsMenuBarX;
 @class ChildView;
 
+namespace mozilla {
+enum class NativeKeyBindingsType : uint8_t;
+}  // namespace mozilla
+
 typedef struct _nsCocoaWindowList {
   _nsCocoaWindowList() : prev(nullptr), window(nullptr) {}
   struct _nsCocoaWindowList* prev;
@@ -208,7 +212,7 @@ typedef struct _nsCocoaWindowList {
 - (void)setSheetAttachmentPosition:(CGFloat)aY;
 - (CGFloat)sheetAttachmentPosition;
 - (void)placeWindowButtons:(NSRect)aRect;
-- (NSPoint)windowButtonsPositionWithDefaultPosition:(NSPoint)aDefaultPosition;
+- (NSRect)windowButtonsRect;
 - (void)windowMainStateChanged;
 @end
 
@@ -252,6 +256,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   virtual void ConstrainPosition(bool aAllowSlop, int32_t* aX, int32_t* aY) override;
   virtual void SetSizeConstraints(const SizeConstraints& aConstraints) override;
   virtual void Move(double aX, double aY) override;
+  virtual nsSizeMode SizeMode() override { return mSizeMode; }
   virtual void SetSizeMode(nsSizeMode aMode) override;
   virtual void GetWorkspaceID(nsAString& workspaceID) override;
   virtual void MoveToWorkspace(const nsAString& workspaceID) override;
@@ -264,9 +269,8 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   virtual void PerformFullscreenTransition(FullscreenTransitionStage aStage, uint16_t aDuration,
                                            nsISupports* aData, nsIRunnable* aCallback) override;
   virtual void CleanupFullscreenTransition() override;
-  nsresult MakeFullScreen(bool aFullScreen, nsIScreen* aTargetScreen = nullptr) final;
-  nsresult MakeFullScreenWithNativeTransition(bool aFullScreen,
-                                              nsIScreen* aTargetScreen = nullptr) final;
+  nsresult MakeFullScreen(bool aFullScreen) final;
+  nsresult MakeFullScreenWithNativeTransition(bool aFullScreen) final;
   NSAnimation* FullscreenTransitionAnimation() const { return mFullscreenTransitionAnimation; }
   void ReleaseFullscreenTransitionAnimation() {
     MOZ_ASSERT(mFullscreenTransitionAnimation, "Should only be called when there is animation");
@@ -295,11 +299,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   virtual nsresult SetTitle(const nsAString& aTitle) override;
 
   virtual void Invalidate(const LayoutDeviceIntRect& aRect) override;
-  virtual nsresult ConfigureChildren(const nsTArray<Configuration>& aConfigurations) override;
-  virtual LayerManager* GetLayerManager(
-      PLayerTransactionChild* aShadowManager = nullptr,
-      LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
-      LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
+  virtual WindowRenderer* GetWindowRenderer() override;
   virtual nsresult DispatchEvent(mozilla::WidgetGUIEvent* aEvent, nsEventStatus& aStatus) override;
   virtual void CaptureRollupEvents(nsIRollupListener* aListener, bool aDoCapture) override;
   [[nodiscard]] virtual nsresult GetAttention(int32_t aCycleCount) override;
@@ -310,6 +310,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   virtual void SetWindowOpacity(float aOpacity) override;
   virtual void SetWindowTransform(const mozilla::gfx::Matrix& aTransform) override;
   virtual void SetWindowMouseTransparent(bool aIsTransparent) override;
+  virtual void SetColorScheme(const mozilla::Maybe<mozilla::ColorScheme>&) override;
   virtual void SetShowsToolbarButton(bool aShow) override;
   virtual void SetSupportsNativeFullscreen(bool aShow) override;
   virtual void SetWindowAnimationType(WindowAnimationType aType) override;
@@ -347,7 +348,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
                                const InputContextAction& aAction) override;
   virtual InputContext GetInputContext() override { return mInputContext; }
   MOZ_CAN_RUN_SCRIPT virtual bool GetEditCommands(
-      NativeKeyBindingsType aType, const mozilla::WidgetKeyboardEvent& aEvent,
+      mozilla::NativeKeyBindingsType aType, const mozilla::WidgetKeyboardEvent& aEvent,
       nsTArray<mozilla::CommandInt>& aCommands) override;
 
   void SetPopupWindowLevel();
@@ -404,6 +405,7 @@ class nsCocoaWindow final : public nsBaseWidget, public nsPIWidgetCocoa {
   bool mWindowMadeHere;  // true if we created the window, false for embedding
   bool mSheetNeedsShow;  // if this is a sheet, are we waiting to be shown?
                          // this is used for sibling sheet contention only
+  nsSizeMode mSizeMode;
   bool mInFullScreenMode;
   bool mInFullScreenTransition;  // true from the request to enter/exit fullscreen
                                  // (MakeFullScreen() call) to EnteredFullScreen()

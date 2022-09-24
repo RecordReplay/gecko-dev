@@ -16,36 +16,15 @@ experimental-features-web-gpu-description2 = This new API provides low-level sup
 
 # The title of the experiment should be kept in English as it may be referenced
 # by various online articles and is technical in nature.
-experimental-features-media-avif =
-    .label = Media: AVIF
-experimental-features-media-avif-description = With this feature enabled, { -brand-short-name } supports the AV1 Image File (AVIF) format. This is a still image file format that leverages the capabilities of the AV1 video compression algorithms to reduce image size. See <a data-l10n-name="bugzilla">bug 1443863</a> for more details.
-
-# The title of the experiment should be kept in English as it may be referenced
-# by various online articles and is technical in nature.
 experimental-features-media-jxl =
     .label = Media: JPEG XL
 experimental-features-media-jxl-description = With this feature enabled, { -brand-short-name } supports the JPEG XL (JXL) format. This is an enhanced image file format that supports lossless transition from traditional JPEG files. See <a data-l10n-name="bugzilla">bug 1539075</a> for more details.
 
 # The title of the experiment should be kept in English as it may be referenced
 # by various online articles and is technical in nature.
-experimental-features-web-api-inputmode =
-    .label = Web API: inputmode
-# "inputmode" and "contenteditable" are technical terms and shouldn't be translated.
-experimental-features-web-api-inputmode-description = Our implementation of the <a data-l10n-name="mdn-inputmode">inputmode</a> global attribute has been updated as per <a data-l10n-name="whatwg">the WHATWG specification</a>, but we still need to make other changes too, like making it available on contenteditable content. See <a data-l10n-name="bugzilla">bug 1205133</a> for more details.
-
-# The title of the experiment should be kept in English as it may be referenced
-# by various online articles and is technical in nature.
 experimental-features-css-constructable-stylesheets =
     .label = CSS: Constructable Stylesheets
 experimental-features-css-constructable-stylesheets-description = The addition of a constructor to the <a data-l10n-name="mdn-cssstylesheet">CSSStyleSheet</a> interface as well as a variety of related changes makes it possible to directly create new stylesheets without having to add the sheet to the HTML. This makes it much easier to create reusable stylesheets for use with <a data-l10n-name="mdn-shadowdom">Shadow DOM</a>. See <a data-l10n-name="bugzilla">bug 1520690</a> for more details.
-
-experimental-features-devtools-color-scheme-simulation =
-    .label = Developer Tools: Color Scheme Simulation
-experimental-features-devtools-color-scheme-simulation-description = Adds an option to simulate different color schemes allowing you to test <a data-l10n-name="mdn-preferscolorscheme">@prefers-color-scheme</a> media queries. Using this media query lets your stylesheet respond to whether the user prefers a light or dark user interface. This feature lets you test your code without having to change settings in your browser (or operating system, if the browser follows a system-wide color scheme setting). See <a data-l10n-name="bugzilla1">bug 1550804</a> and <a data-l10n-name="bugzilla2">bug 1137699</a> for more details.
-
-experimental-features-devtools-execution-context-selector =
-    .label = Developer Tools: Execution Context Selector
-experimental-features-devtools-execution-context-selector-description = This feature displays a button on the console’s command line that lets you change the context in which the expression you enter will be executed. See <a data-l10n-name="bugzilla1">bug 1605154</a> and <a data-l10n-name="bugzilla2">bug 1605153</a> for more details.
 
 experimental-features-devtools-compatibility-panel =
     .label = Developer Tools: Compatibility Panel
@@ -84,25 +63,10 @@ experimental-features-webrtc-global-mute-toggles =
     .label = WebRTC Global Mute Toggles
 experimental-features-webrtc-global-mute-toggles-description = Add controls to the WebRTC global sharing indicator that allow users to globally mute their microphone and camera feeds.
 
-# Win32k Lockdown
-experimental-features-win32k-lockdown =
-    .label = Win32k Lockdown
-experimental-features-win32k-lockdown-description = Disable use of Win32k APIs in browser tabs. Provides an increase in security but may currently be unstable or glitchy. (Windows only)
-
 # JS JIT Warp project
 experimental-features-js-warp =
     .label = JavaScript JIT: Warp
 experimental-features-js-warp-description = Enable Warp, a project to improve JavaScript performance and memory usage.
-
-# Fission is the name of the feature and should not be translated.
-experimental-features-fission =
-    .label = Fission (Site Isolation)
-experimental-features-fission-description = Fission (site isolation) is an experimental feature in { -brand-short-name } to provide an additional layer of defense against security bugs. By isolating each site into a separate process, Fission makes it harder for malicious websites to get access to information from other pages you are visiting. This is a major architectural change in { -brand-short-name } and we appreciate you testing and reporting any issues you might encounter. For more details, see <a data-l10n-name="wiki">the wiki</a>.
-
-# Support for having multiple Picture-in-Picture windows open simultaneously
-experimental-features-multi-pip =
-    .label = Multiple Picture-in-Picture Support
-experimental-features-multi-pip-description = Experimental support for allowing multiple Picture-in-Picture windows to be open at the same time.
 
 # Search during IME
 experimental-features-ime-search =

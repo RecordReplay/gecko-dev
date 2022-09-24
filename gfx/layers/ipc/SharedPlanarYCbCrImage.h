@@ -38,8 +38,8 @@ class SharedPlanarYCbCrImage : public PlanarYCbCrImage {
   already_AddRefed<gfx::SourceSurface> GetAsSourceSurface() override;
   bool CopyData(const PlanarYCbCrData& aData) override;
   bool AdoptData(const Data& aData) override;
-
-  bool Allocate(PlanarYCbCrData& aData);
+  bool CreateEmptyBuffer(const Data& aData, const gfx::IntSize& aYSize,
+                         const gfx::IntSize& aCbCrSize) override;
 
   bool IsValid() const override;
 

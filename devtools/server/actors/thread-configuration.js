@@ -9,11 +9,11 @@ const {
   threadConfigurationSpec,
 } = require("devtools/shared/specs/thread-configuration");
 const {
-  WatchedDataHelpers,
-} = require("devtools/server/actors/watcher/WatchedDataHelpers.jsm");
+  SessionDataHelpers,
+} = require("devtools/server/actors/watcher/SessionDataHelpers.jsm");
 const {
   SUPPORTED_DATA: { THREAD_CONFIGURATION },
-} = WatchedDataHelpers;
+} = SessionDataHelpers;
 
 // List of options supported by this thread configuration actor.
 const SUPPORTED_OPTIONS = {
@@ -34,6 +34,7 @@ const SUPPORTED_OPTIONS = {
   // Enable debugging asm & wasm.
   // See https://searchfox.org/mozilla-central/source/js/src/doc/Debugger/Debugger.md#16-26
   observeAsmJS: true,
+  observeWasm: true,
   // Should pause all the workers untill thread has attached.
   pauseWorkersUntilAttach: true,
 };

@@ -44,10 +44,10 @@ class GLPresenter;
 }  // namespace
 
 namespace mozilla {
+enum class NativeKeyBindingsType : uint8_t;
+
 class InputData;
 class PanGestureInput;
-class SwipeTracker;
-struct SwipeEventQueue;
 class VibrancyManager;
 namespace layers {
 class GLManager;
@@ -308,6 +308,10 @@ class nsChildView final : public nsBaseWidget {
 
   virtual void Enable(bool aState) override;
   virtual bool IsEnabled() const override;
+
+  virtual nsSizeMode SizeMode() override { return mSizeMode; }
+  virtual void SetSizeMode(nsSizeMode aMode) override { mSizeMode = aMode; }
+
   virtual void SetFocus(Raise, mozilla::dom::CallerType aCallerType) override;
   virtual LayoutDeviceIntRect GetBounds() override;
   virtual LayoutDeviceIntRect GetClientBounds() override;
@@ -344,13 +348,9 @@ class nsChildView final : public nsBaseWidget {
   void EnsureContentLayerForMainThreadPainting();
 
   virtual void* GetNativeData(uint32_t aDataType) override;
-  virtual nsresult ConfigureChildren(const nsTArray<Configuration>& aConfigurations) override;
   virtual LayoutDeviceIntPoint WidgetToScreenOffset() override;
   virtual bool ShowsResizeIndicator(LayoutDeviceIntRect* aResizerRect) override { return false; }
 
-  static bool ConvertStatus(nsEventStatus aStatus) {
-    return aStatus == nsEventStatus_eConsumeNoDefault;
-  }
   virtual nsresult DispatchEvent(mozilla::WidgetGUIEvent* aEvent, nsEventStatus& aStatus) override;
 
   virtual bool WidgetTypeSupportsAcceleration() override;
@@ -377,7 +377,7 @@ class nsChildView final : public nsBaseWidget {
   [[nodiscard]] virtual nsresult AttachNativeKeyEvent(
       mozilla::WidgetKeyboardEvent& aEvent) override;
   MOZ_CAN_RUN_SCRIPT virtual bool GetEditCommands(
-      NativeKeyBindingsType aType, const mozilla::WidgetKeyboardEvent& aEvent,
+      mozilla::NativeKeyBindingsType aType, const mozilla::WidgetKeyboardEvent& aEvent,
       nsTArray<mozilla::CommandInt>& aCommands) override;
 
   virtual void SuppressAnimation(bool aSuppress) override;
@@ -414,9 +414,6 @@ class nsChildView final : public nsBaseWidget {
                                                      uint32_t aModifierFlags) override;
 
   // Mac specific methods
-
-  virtual bool DispatchWindowEvent(mozilla::WidgetGUIEvent& event);
-
   void WillPaintWindow();
   bool PaintWindow(LayoutDeviceIntRegion aRegion);
   bool PaintWindowInDrawTarget(mozilla::gfx::DrawTarget* aDT, const LayoutDeviceIntRegion& aRegion,
@@ -441,8 +438,6 @@ class nsChildView final : public nsBaseWidget {
 
   virtual void UpdateWindowDraggingRegion(const LayoutDeviceIntRegion& aRegion) override;
   LayoutDeviceIntRegion GetNonDraggableRegion() { return mNonDraggableRegion.Region(); }
-
-  virtual void ReportSwipeStarted(uint64_t aInputBlockId, bool aStartSwipe) override;
 
   virtual void LookUpDictionary(const nsAString& aText,
                                 const nsTArray<mozilla::FontRange>& aFontRangeArray,
@@ -492,8 +487,6 @@ class nsChildView final : public nsBaseWidget {
                                 LayoutDeviceIntPoint aScreenPosition,
                                 mozilla::Modifiers aModifiers);
 
-  void SwipeFinished();
-
   // Called when the main thread enters a phase during which visual changes
   // are imminent and any layer updates on the compositor thread would interfere
   // with visual atomicity.
@@ -510,6 +503,12 @@ class nsChildView final : public nsBaseWidget {
   // (such as a window resize) and we can start modifying CALayers from the
   // compositor thread again.
   void UnsuspendAsyncCATransactions();
+
+  // Called by nsCocoaWindow when the window's fullscreen state changes.
+  void UpdateFullscreen(bool aFullscreen);
+
+  // Called by nsCocoaWindow when a mouse move has occurred.
+  void NoteMouseMoveAtTime(const mozilla::TimeStamp& aTime);
 
  protected:
   virtual ~nsChildView();
@@ -531,15 +530,6 @@ class nsChildView final : public nsBaseWidget {
 
   nsIWidget* GetWidgetForListenerEvents();
 
-  struct SwipeInfo {
-    bool wantsSwipe;
-    uint32_t allowedDirections;
-  };
-
-  SwipeInfo SendMayStartSwipe(const mozilla::PanGestureInput& aSwipeStartEvent);
-  void TrackScrollEventAsSwipe(const mozilla::PanGestureInput& aSwipeStartEvent,
-                               uint32_t aAllowedDirections);
-
  protected:
   ChildView* mView;  // my parallel cocoa view, [STRONG]
   RefPtr<mozilla::widget::TextInputHandler> mTextInputHandler;
@@ -557,7 +547,7 @@ class nsChildView final : public nsBaseWidget {
   // Held while the compositor (or WR renderer) thread is compositing.
   // Protects from tearing down the view during compositing and from presenting
   // half-composited layers to the screen.
-  mozilla::Mutex mCompositingLock;
+  mozilla::Mutex mCompositingLock MOZ_UNANNOTATED;
 
   mozilla::ViewRegion mNonDraggableRegion;
 
@@ -568,6 +558,7 @@ class nsChildView final : public nsBaseWidget {
   mutable CGFloat mBackingScaleFactor;
 
   bool mVisible;
+  nsSizeMode mSizeMode;
   bool mDrawing;
   bool mIsDispatchPaint;  // Is a paint event being dispatched
 
@@ -584,18 +575,8 @@ class nsChildView final : public nsBaseWidget {
   LayoutDeviceIntRegion mContentLayerInvalidRegion;
 
   mozilla::UniquePtr<mozilla::VibrancyManager> mVibrancyManager;
-  RefPtr<mozilla::SwipeTracker> mSwipeTracker;
-  mozilla::UniquePtr<mozilla::SwipeEventQueue> mSwipeEventQueue;
 
   RefPtr<mozilla::CancelableRunnable> mUnsuspendAsyncCATransactionsRunnable;
-
-  // This flag is only used when APZ is off. It indicates that the current pan
-  // gesture was processed as a swipe. Sometimes the swipe animation can finish
-  // before momentum events of the pan gesture have stopped firing, so this
-  // flag tells us that we shouldn't allow the remaining events to cause
-  // scrolling. It is reset to false once a new gesture starts (as indicated by
-  // a PANGESTURE_(MAY)START event).
-  bool mCurrentPanGestureBelongsToSwipe;
 
   static uint32_t sLastInputEventCount;
 

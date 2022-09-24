@@ -26,7 +26,8 @@
 #include "Cookie.h"
 #include "nsIURI.h"
 
-using mozilla::Unused;
+using namespace mozilla;
+using namespace mozilla::net;
 
 static NS_DEFINE_CID(kCookieServiceCID, NS_COOKIESERVICE_CID);
 static NS_DEFINE_CID(kPrefServiceCID, NS_PREFSERVICE_CID);
@@ -174,10 +175,10 @@ static inline bool CheckResult(const char* aLhs, uint32_t aRule,
       return PL_strcmp(aLhs, aRhs);
 
     case MUST_CONTAIN:
-      return PL_strstr(aLhs, aRhs) != nullptr;
+      return strstr(aLhs, aRhs) != nullptr;
 
     case MUST_NOT_CONTAIN:
-      return PL_strstr(aLhs, aRhs) == nullptr;
+      return strstr(aLhs, aRhs) == nullptr;
 
     default:
       return false;  // failure
@@ -200,7 +201,7 @@ void InitPrefs(nsIPrefBranch* aPrefBranch) {
   // default"
   Preferences::SetBool("network.cookie.sameSite.laxByDefault", false);
   Preferences::SetBool("network.cookieJarSettings.unblocked_for_testing", true);
-  Preferences::SetBool("dom.securecontext.whitelist_onions", false);
+  Preferences::SetBool("dom.securecontext.allowlist_onions", false);
   Preferences::SetBool("network.cookie.sameSite.schemeful", false);
 }
 
@@ -739,11 +740,6 @@ TEST(TestCookie, TestCookieMain)
   GetACookieNoHttp(cookieService, "http://www.security.test/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_CONTAIN, "test=non-security2"));
 
-  Preferences::SetBool("network.cookie.sameSite.schemeful", true);
-  GetACookieNoHttp(cookieService, "http://www.security.test/", cookie);
-  EXPECT_FALSE(CheckResult(cookie.get(), MUST_CONTAIN, "test=security3"));
-  Preferences::SetBool("network.cookie.sameSite.schemeful", false);
-
   // *** nsICookieManager interface tests
   nsCOMPtr<nsICookieManager> cookieMgr =
       do_GetService(NS_COOKIEMANAGER_CONTRACTID, &rv0);
@@ -1028,12 +1024,12 @@ TEST(TestCookie, SameSiteLax)
 
   cookie = static_cast<Cookie*>(cookies[0].get());
   EXPECT_EQ(cookie->RawSameSite(), nsICookie::SAMESITE_NONE);
-  EXPECT_EQ(cookie->SameSite(), nsICookie::SAMESITE_NONE);
+  EXPECT_EQ(cookie->SameSite(), nsICookie::SAMESITE_LAX);
 }
 
 TEST(TestCookie, OnionSite)
 {
-  Preferences::SetBool("dom.securecontext.whitelist_onions", true);
+  Preferences::SetBool("dom.securecontext.allowlist_onions", true);
   Preferences::SetBool("network.cookie.sameSite.laxByDefault", false);
 
   nsresult rv;
@@ -1060,4 +1056,30 @@ TEST(TestCookie, OnionSite)
              "test=onion-security4");
   GetACookieNoHttp(cookieService, "http://123456789abcdef.onion/", cookie);
   EXPECT_TRUE(CheckResult(cookie.get(), MUST_EQUAL, "test=onion-security4"));
+}
+
+TEST(TestCookie, HiddenPrefix)
+{
+  nsresult rv;
+  nsCString cookie;
+
+  nsCOMPtr<nsICookieService> cookieService =
+      do_GetService(kCookieServiceCID, &rv);
+  ASSERT_TRUE(NS_SUCCEEDED(rv));
+
+  SetACookie(cookieService, "http://hiddenprefix.test/", "=__Host-test=a");
+  GetACookie(cookieService, "http://hiddenprefix.test/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+
+  SetACookie(cookieService, "http://hiddenprefix.test/", "=__Secure-test=a");
+  GetACookie(cookieService, "http://hiddenprefix.test/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+
+  SetACookie(cookieService, "http://hiddenprefix.test/", "=__Host-check");
+  GetACookie(cookieService, "http://hiddenprefix.test/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
+
+  SetACookie(cookieService, "http://hiddenprefix.test/", "=__Secure-check");
+  GetACookie(cookieService, "http://hiddenprefix.test/", cookie);
+  EXPECT_TRUE(CheckResult(cookie.get(), MUST_BE_NULL));
 }

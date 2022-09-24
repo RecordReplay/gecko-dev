@@ -28,7 +28,6 @@
 #include "nsDisplayList.h"
 #include "nsLayoutUtils.h"
 #include "nsTextFrame.h"
-#include "FrameLayerBuilder.h"
 #include <algorithm>
 
 // TABLECELL SELECTION
@@ -42,36 +41,6 @@
 using namespace mozilla;
 using namespace mozilla::gfx;
 using namespace mozilla::image;
-
-class nsDisplayTableCellSelection final : public nsPaintedDisplayItem {
- public:
-  nsDisplayTableCellSelection(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
-      : nsPaintedDisplayItem(aBuilder, aFrame) {
-    MOZ_COUNT_CTOR(nsDisplayTableCellSelection);
-  }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTableCellSelection)
-
-  void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override {
-    static_cast<nsTableCellFrame*>(mFrame)->DecorateForSelection(
-        aCtx->GetDrawTarget(), ToReferenceFrame());
-  }
-  NS_DISPLAY_DECL_NAME("TableCellSelection", TYPE_TABLE_CELL_SELECTION)
-
-  bool CreateWebRenderCommands(
-      mozilla::wr::DisplayListBuilder& aBuilder,
-      mozilla::wr::IpcResourceUpdateQueue& aResources,
-      const StackingContextHelper& aSc,
-      mozilla::layers::RenderRootStateManager* aManager,
-      nsDisplayListBuilder* aDisplayListBuilder) override {
-    RefPtr<nsFrameSelection> frameSelection =
-        mFrame->PresShell()->FrameSelection();
-    if (frameSelection->IsInTableSelectionMode()) {
-      return false;
-    }
-
-    return true;
-  }
-};
 
 nsTableCellFrame::nsTableCellFrame(ComputedStyle* aStyle,
                                    nsTableFrame* aTableFrame, ClassID aID)
@@ -294,8 +263,7 @@ void nsTableCellFrame::DecorateForSelection(DrawTarget* aDrawTarget,
       if (displaySelection == nsISelectionController::SELECTION_DISABLED) {
         bordercolor = NS_RGB(176, 176, 176);  // disabled color
       } else {
-        bordercolor = LookAndFeel::Color(
-            LookAndFeel::ColorID::TextSelectBackground, this);
+        bordercolor = LookAndFeel::Color(LookAndFeel::ColorID::Highlight, this);
       }
       nscoord threePx = nsPresContext::CSSPixelsToAppUnits(3);
       if ((mRect.width > threePx) && (mRect.height > threePx)) {
@@ -368,49 +336,13 @@ nsresult nsTableCellFrame::ProcessBorders(nsTableFrame* aFrame,
   return NS_OK;
 }
 
-class nsDisplayTableCellBackground : public nsDisplayTableItem {
- public:
-  nsDisplayTableCellBackground(nsDisplayListBuilder* aBuilder,
-                               nsTableCellFrame* aFrame)
-      : nsDisplayTableItem(aBuilder, aFrame) {
-    MOZ_COUNT_CTOR(nsDisplayTableCellBackground);
-  }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTableCellBackground)
-
-  virtual void HitTest(nsDisplayListBuilder* aBuilder, const nsRect& aRect,
-                       HitTestState* aState,
-                       nsTArray<nsIFrame*>* aOutFrames) override {
-    aOutFrames->AppendElement(mFrame);
-  }
-  virtual void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder,
-                           bool* aSnap) const override;
-  NS_DISPLAY_DECL_NAME("TableCellBackground", TYPE_TABLE_CELL_BACKGROUND)
-};
-
-void nsDisplayTableCellBackground::Paint(nsDisplayListBuilder* aBuilder,
-                                         gfxContext* aCtx) {
-  ImgDrawResult result =
-      static_cast<nsTableCellFrame*>(mFrame)->PaintBackground(
-          *aCtx, GetPaintRect(), ToReferenceFrame(),
-          aBuilder->GetBackgroundPaintFlags());
-
-  nsDisplayTableItemGeometry::UpdateDrawResult(this, result);
-}
-
-nsRect nsDisplayTableCellBackground::GetBounds(nsDisplayListBuilder* aBuilder,
-                                               bool* aSnap) const {
-  // revert from nsDisplayTableItem's implementation ... cell backgrounds
-  // don't overflow the cell
-  return nsDisplayItem::GetBounds(aBuilder, aSnap);
-}
-
 void nsTableCellFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                        bool aRebuildDisplayItems) {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
   if (GetTableFrame()->IsBorderCollapse()) {
+    const bool rebuild = StaticPrefs::layout_display_list_retain_sc();
     GetParent()->InvalidateFrameWithRect(InkOverflowRect() + GetPosition(),
-                                         aDisplayItemKey, false);
+                                         aDisplayItemKey, rebuild);
   }
 }
 
@@ -423,7 +355,7 @@ void nsTableCellFrame::InvalidateFrameWithRect(const nsRect& aRect,
   // we get an inactive layer created and this is computed
   // within FrameLayerBuilder
   GetParent()->InvalidateFrameWithRect(aRect + GetPosition(), aDisplayItemKey,
-                                       false);
+                                       aRebuildDisplayItems);
 }
 
 bool nsTableCellFrame::ShouldPaintBordersAndBackgrounds() const {
@@ -447,121 +379,6 @@ bool nsTableCellFrame::ShouldPaintBordersAndBackgrounds() const {
 
 bool nsTableCellFrame::ShouldPaintBackground(nsDisplayListBuilder* aBuilder) {
   return ShouldPaintBordersAndBackgrounds();
-}
-
-void nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
-                                        const nsDisplayListSet& aLists) {
-  DO_GLOBAL_REFLOW_COUNT_DSP("nsTableCellFrame");
-  if (ShouldPaintBordersAndBackgrounds()) {
-    // display outset box-shadows if we need to.
-    bool hasBoxShadow = !StyleEffects()->mBoxShadow.IsEmpty();
-    if (hasBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop<nsDisplayBoxShadowOuter>(
-          aBuilder, this);
-    }
-
-    nsRect bgRect = GetRectRelativeToSelf() + aBuilder->ToReferenceFrame(this);
-
-    // display background if we need to.
-    AppendedBackgroundType result = AppendedBackgroundType::None;
-    if (aBuilder->IsForEventDelivery() ||
-        !StyleBackground()->IsTransparent(this) ||
-        StyleDisplay()->HasAppearance()) {
-      result = nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
-          aBuilder, this, bgRect, aLists.BorderBackground());
-    }
-
-    if (result == AppendedBackgroundType::None) {
-      aBuilder->BuildCompositorHitTestInfoIfNeeded(this,
-                                                   aLists.BorderBackground());
-    }
-
-    // display inset box-shadows if we need to.
-    if (hasBoxShadow) {
-      aLists.BorderBackground()->AppendNewToTop<nsDisplayBoxShadowInner>(
-          aBuilder, this);
-    }
-
-    // display borders if we need to
-    ProcessBorders(GetTableFrame(), aBuilder, aLists);
-
-    // and display the selection border if we need to
-    if (IsSelected()) {
-      aLists.BorderBackground()->AppendNewToTop<nsDisplayTableCellSelection>(
-          aBuilder, this);
-    }
-
-    // This can be null if display list building initiated in the middle
-    // of the table, which can happen with background-clip:text and
-    // -moz-element.
-    nsDisplayTableBackgroundSet* backgrounds =
-        aBuilder->GetTableBackgroundSet();
-    if (backgrounds) {
-      // Compute bgRect relative to reference frame, but using the
-      // normal (without position:relative offsets) positions for the
-      // cell, row and row group.
-      bgRect = GetRectRelativeToSelf() + GetNormalPosition();
-
-      nsTableRowFrame* row = GetTableRowFrame();
-      bgRect += row->GetNormalPosition();
-
-      nsTableRowGroupFrame* rowGroup = row->GetTableRowGroupFrame();
-      bgRect += rowGroup->GetNormalPosition();
-
-      bgRect += backgrounds->TableToReferenceFrame();
-
-      DisplayListClipState::AutoSaveRestore clipState(aBuilder);
-      nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter asrSetter(
-          aBuilder);
-      if (IsStackingContext()) {
-        // The col/colgroup items we create below will be inserted directly into the
-        // BorderBackgrounds list of the table frame. That means that they'll be moved
-        // *outside* of any wrapper items from this table cell, and will not participate in
-        // this table cell's opacity / transform / filter / mask effects.
-        // If this cell is a stacking context, then we may have one or more of those
-        // wrapper items, and one of them may have captured a clip. In order to ensure
-        // correct clipping and scrolling of the col/colgroup items, restore the clip and ASR
-        // that we observed when we entered the table frame.
-        // If this cell is a stacking context but doesn't have any clip capturing wrapper items,
-        // then we'll double-apply the clip. That's ok.
-        clipState.SetClipChainForContainingBlockDescendants(
-            backgrounds->GetTableClipChain());
-        asrSetter.SetCurrentActiveScrolledRoot(backgrounds->GetTableASR());
-      }
-
-      // Create backgrounds items as needed for the column and column
-      // group that this cell occupies.
-      nsTableColFrame* col = backgrounds->GetColForIndex(ColIndex());
-      nsTableColGroupFrame* colGroup = col->GetTableColGroupFrame();
-
-      Maybe<nsDisplayListBuilder::AutoBuildingDisplayList> buildingForColGroup;
-      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
-          aBuilder, colGroup, bgRect, backgrounds->ColGroupBackgrounds(), false,
-          nullptr, colGroup->GetRect() + backgrounds->TableToReferenceFrame(),
-          this, &buildingForColGroup);
-
-      Maybe<nsDisplayListBuilder::AutoBuildingDisplayList> buildingForCol;
-      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
-          aBuilder, col, bgRect, backgrounds->ColBackgrounds(), false, nullptr,
-          col->GetRect() + colGroup->GetPosition() +
-              backgrounds->TableToReferenceFrame(),
-          this, &buildingForCol);
-    }
-  }
-
-  // the 'empty-cells' property has no effect on 'outline'
-  DisplayOutline(aBuilder, aLists);
-
-  nsIFrame* kid = mFrames.FirstChild();
-  NS_ASSERTION(kid && !kid->GetNextSibling(),
-               "Table cells should have just one child");
-  // The child's background will go in our BorderBackground() list.
-  // This isn't a problem since it won't have a real background except for
-  // event handling. We do not call BuildDisplayListForNonBlockChildren
-  // because that/ would put the child's background in the Content() list
-  // which isn't right (e.g., would end up on top of our child floats for
-  // event handling).
-  BuildDisplayListForChild(aBuilder, kid, aLists);
 }
 
 LogicalSides nsTableCellFrame::GetLogicalSkipSides() const {
@@ -1183,4 +1000,150 @@ ImgDrawResult nsBCTableCellFrame::PaintBackground(gfxContext& aRenderingContext,
                                                   rect, this, aFlags);
   return nsCSSRendering::PaintStyleImageLayerWithSC(params, aRenderingContext,
                                                     Style(), myBorder);
+}
+
+namespace mozilla {
+
+class nsDisplayTableCellSelection final : public nsPaintedDisplayItem {
+ public:
+  nsDisplayTableCellSelection(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
+      : nsPaintedDisplayItem(aBuilder, aFrame) {
+    MOZ_COUNT_CTOR(nsDisplayTableCellSelection);
+  }
+  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTableCellSelection)
+
+  void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override {
+    static_cast<nsTableCellFrame*>(mFrame)->DecorateForSelection(
+        aCtx->GetDrawTarget(), ToReferenceFrame());
+  }
+  NS_DISPLAY_DECL_NAME("TableCellSelection", TYPE_TABLE_CELL_SELECTION)
+
+  bool CreateWebRenderCommands(
+      mozilla::wr::DisplayListBuilder& aBuilder,
+      mozilla::wr::IpcResourceUpdateQueue& aResources,
+      const StackingContextHelper& aSc,
+      mozilla::layers::RenderRootStateManager* aManager,
+      nsDisplayListBuilder* aDisplayListBuilder) override {
+    RefPtr<nsFrameSelection> frameSelection =
+        mFrame->PresShell()->FrameSelection();
+    return !frameSelection->IsInTableSelectionMode();
+  }
+};
+
+}  // namespace mozilla
+
+void nsTableCellFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
+                                        const nsDisplayListSet& aLists) {
+  DO_GLOBAL_REFLOW_COUNT_DSP("nsTableCellFrame");
+  if (ShouldPaintBordersAndBackgrounds()) {
+    // display outset box-shadows if we need to.
+    bool hasBoxShadow = !StyleEffects()->mBoxShadow.IsEmpty();
+    if (hasBoxShadow) {
+      aLists.BorderBackground()->AppendNewToTop<nsDisplayBoxShadowOuter>(
+          aBuilder, this);
+    }
+
+    nsRect bgRect = GetRectRelativeToSelf() + aBuilder->ToReferenceFrame(this);
+
+    // display background if we need to.
+    AppendedBackgroundType result = AppendedBackgroundType::None;
+    if (aBuilder->IsForEventDelivery() ||
+        !StyleBackground()->IsTransparent(this) ||
+        StyleDisplay()->HasAppearance()) {
+      result = nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+          aBuilder, this, bgRect, aLists.BorderBackground());
+    }
+
+    if (result == AppendedBackgroundType::None) {
+      aBuilder->BuildCompositorHitTestInfoIfNeeded(this,
+                                                   aLists.BorderBackground());
+    }
+
+    // display inset box-shadows if we need to.
+    if (hasBoxShadow) {
+      aLists.BorderBackground()->AppendNewToTop<nsDisplayBoxShadowInner>(
+          aBuilder, this);
+    }
+
+    // display borders if we need to
+    ProcessBorders(GetTableFrame(), aBuilder, aLists);
+
+    // and display the selection border if we need to
+    if (IsSelected()) {
+      aLists.BorderBackground()->AppendNewToTop<nsDisplayTableCellSelection>(
+          aBuilder, this);
+    }
+
+    // This can be null if display list building initiated in the middle
+    // of the table, which can happen with background-clip:text and
+    // -moz-element.
+    nsDisplayTableBackgroundSet* backgrounds =
+        aBuilder->GetTableBackgroundSet();
+    if (backgrounds) {
+      // Compute bgRect relative to reference frame, but using the
+      // normal (without position:relative offsets) positions for the
+      // cell, row and row group.
+      bgRect = GetRectRelativeToSelf() + GetNormalPosition();
+
+      nsTableRowFrame* row = GetTableRowFrame();
+      bgRect += row->GetNormalPosition();
+
+      nsTableRowGroupFrame* rowGroup = row->GetTableRowGroupFrame();
+      bgRect += rowGroup->GetNormalPosition();
+
+      bgRect += backgrounds->TableToReferenceFrame();
+
+      DisplayListClipState::AutoSaveRestore clipState(aBuilder);
+      nsDisplayListBuilder::AutoCurrentActiveScrolledRootSetter asrSetter(
+          aBuilder);
+      if (IsStackingContext()) {
+        // The col/colgroup items we create below will be inserted directly into
+        // the BorderBackgrounds list of the table frame. That means that
+        // they'll be moved *outside* of any wrapper items from this table cell,
+        // and will not participate in this table cell's opacity / transform /
+        // filter / mask effects. If this cell is a stacking context, then we
+        // may have one or more of those wrapper items, and one of them may have
+        // captured a clip. In order to ensure correct clipping and scrolling of
+        // the col/colgroup items, restore the clip and ASR that we observed
+        // when we entered the table frame. If this cell is a stacking context
+        // but doesn't have any clip capturing wrapper items, then we'll
+        // double-apply the clip. That's ok.
+        clipState.SetClipChainForContainingBlockDescendants(
+            backgrounds->GetTableClipChain());
+        asrSetter.SetCurrentActiveScrolledRoot(backgrounds->GetTableASR());
+      }
+
+      // Create backgrounds items as needed for the column and column
+      // group that this cell occupies.
+      nsTableColFrame* col = backgrounds->GetColForIndex(ColIndex());
+      nsTableColGroupFrame* colGroup = col->GetTableColGroupFrame();
+
+      Maybe<nsDisplayListBuilder::AutoBuildingDisplayList> buildingForColGroup;
+      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+          aBuilder, colGroup, bgRect, backgrounds->ColGroupBackgrounds(), false,
+          nullptr, colGroup->GetRect() + backgrounds->TableToReferenceFrame(),
+          this, &buildingForColGroup);
+
+      Maybe<nsDisplayListBuilder::AutoBuildingDisplayList> buildingForCol;
+      nsDisplayBackgroundImage::AppendBackgroundItemsToTop(
+          aBuilder, col, bgRect, backgrounds->ColBackgrounds(), false, nullptr,
+          col->GetRect() + colGroup->GetPosition() +
+              backgrounds->TableToReferenceFrame(),
+          this, &buildingForCol);
+    }
+  }
+
+  // the 'empty-cells' property has no effect on 'outline'
+  DisplayOutline(aBuilder, aLists);
+
+  nsIFrame* kid = mFrames.FirstChild();
+  NS_ASSERTION(kid && !kid->GetNextSibling(),
+               "Table cells should have just one child");
+  // The child's background will go in our BorderBackground() list.
+  // This isn't a problem since it won't have a real background except for
+  // event handling. We do not call BuildDisplayListForNonBlockChildren
+  // because that/ would put the child's background in the Content() list
+  // which isn't right (e.g., would end up on top of our child floats for
+  // event handling).
+  BuildDisplayListForChild(aBuilder, kid, aLists);
 }

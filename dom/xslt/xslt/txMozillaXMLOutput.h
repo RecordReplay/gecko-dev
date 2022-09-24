@@ -9,7 +9,7 @@
 #include "txXMLEventHandler.h"
 #include "nsIScriptLoaderObserver.h"
 #include "txOutputFormat.h"
-#include "nsCOMArray.h"
+#include "nsTArray.h"
 #include "nsCOMPtr.h"
 #include "nsICSSLoaderObserver.h"
 #include "txStack.h"
@@ -21,13 +21,11 @@ class nsITransformObserver;
 class nsNodeInfoManager;
 class nsINode;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Document;
 class DocumentFragment;
 class Element;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 class txTransformNotifier final : public nsIScriptLoaderObserver,
                                   public nsICSSLoaderObserver {
@@ -42,7 +40,7 @@ class txTransformNotifier final : public nsIScriptLoaderObserver,
                               nsresult aStatus) override;
 
   void Init(nsITransformObserver* aObserver);
-  nsresult AddScriptElement(nsIScriptElement* aElement);
+  void AddScriptElement(nsIScriptElement* aElement);
   void AddPendingStylesheet();
   void OnTransformEnd(nsresult aResult = NS_OK);
   void OnTransformStart();
@@ -55,7 +53,7 @@ class txTransformNotifier final : public nsIScriptLoaderObserver,
   nsCOMPtr<mozilla::dom::Document> mSourceDocument;
   nsCOMPtr<mozilla::dom::Document> mDocument;
   nsCOMPtr<nsITransformObserver> mObserver;
-  nsCOMArray<nsIScriptElement> mScriptElements;
+  nsTArray<nsCOMPtr<nsIScriptElement>> mScriptElements;
   uint32_t mPendingStylesheetCount;
   bool mInTransform;
 };
@@ -80,7 +78,7 @@ class txMozillaXMLOutput : public txAOutputXMLEventHandler {
  private:
   nsresult createTxWrapper();
   nsresult startHTMLElement(nsIContent* aElement, bool aXHTML);
-  nsresult endHTMLElement(nsIContent* aElement);
+  void endHTMLElement(nsIContent* aElement);
   nsresult createHTMLElement(nsAtom* aName, mozilla::dom::Element** aResult);
 
   nsresult attributeInternal(nsAtom* aPrefix, nsAtom* aLocalName, int32_t aNsID,
@@ -97,7 +95,7 @@ class txMozillaXMLOutput : public txAOutputXMLEventHandler {
   nsCOMPtr<mozilla::dom::Element> mOpenedElement;
   RefPtr<nsNodeInfoManager> mNodeInfoManager;
 
-  nsCOMArray<nsINode> mCurrentNodeStack;
+  nsTArray<nsCOMPtr<nsINode>> mCurrentNodeStack;
 
   nsCOMPtr<nsIContent> mNonAddedNode;
 

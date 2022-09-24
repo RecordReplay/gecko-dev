@@ -434,3 +434,7 @@ fn allocation_granularity() -> usize {
         info.dwAllocationGranularity as usize
     }
 }
+
+pub fn file_len(file: &File) -> io::Result<u64> {
+    Ok(file.metadata()?.len())
+}

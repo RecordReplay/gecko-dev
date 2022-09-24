@@ -123,13 +123,33 @@ void WebGLContext::ClearStencil(GLint v) {
   gl->fClearStencil(v);
 }
 
-void WebGLContext::ColorMask(WebGLboolean r, WebGLboolean g, WebGLboolean b,
-                             WebGLboolean a) {
+void WebGLContext::ColorMask(const Maybe<GLuint> i, const uint8_t mask) {
   const FuncScope funcScope(*this, "colorMask");
   if (IsContextLost()) return;
 
-  mColorWriteMask = uint8_t(bool(r) << 0) | uint8_t(bool(g) << 1) |
-                    uint8_t(bool(b) << 2) | uint8_t(bool(a) << 3);
+  if (i) {
+    MOZ_RELEASE_ASSERT(
+        IsExtensionEnabled(WebGLExtensionID::OES_draw_buffers_indexed));
+    const auto limit = MaxValidDrawBuffers();
+    if (*i >= limit) {
+      ErrorInvalidValue("`index` (%u) must be < %s (%u)", *i,
+                        "MAX_DRAW_BUFFERS", limit);
+      return;
+    }
+    if (*i == 0) {
+      mColorWriteMask0 = mask;
+    }
+    mColorWriteMaskNonzero[*i] = bool(mask);
+  } else {
+    mColorWriteMask0 = mask;
+    if (mask) {
+      mColorWriteMaskNonzero.set();
+    } else {
+      mColorWriteMaskNonzero.reset();
+    }
+  }
+
+  DoColorMask(i, mask);
 }
 
 void WebGLContext::DepthMask(WebGLboolean b) {

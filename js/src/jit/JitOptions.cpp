@@ -9,7 +9,7 @@
 #include <cstdlib>
 #include <type_traits>
 
-#include "vm/JSFunction.h"
+#include "vm/JSScript.h"
 
 using namespace js;
 using namespace js::jit;
@@ -114,6 +114,9 @@ DefaultJitOptions::DefaultJitOptions() {
   // Toggles whether sink code motion is globally disabled.
   SET_DEFAULT(disableSink, true);
 
+  // Toggles whether redundant shape guard elimination is globally disabled.
+  SET_DEFAULT(disableRedundantShapeGuards, false);
+
   // Toggles whether we verify that we don't recompile with the same CacheIR.
   SET_DEFAULT(disableBailoutLoopCheck, false);
 
@@ -150,6 +153,10 @@ DefaultJitOptions::DefaultJitOptions() {
 
   // Toggles whether functions may be entered at loop headers.
   SET_DEFAULT(osr, true);
+
+  // Whether the JIT backend (used by JITs, Wasm, Baseline Interpreter) has been
+  // disabled for this process. See JS::DisableJitBackend.
+  SET_DEFAULT(disableJitBackend, false);
 
   // Whether to enable extra code to perform dynamic validations.
   SET_DEFAULT(runExtraChecks, false);
@@ -246,7 +253,8 @@ DefaultJitOptions::DefaultJitOptions() {
     }
   }
 
-#if defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
+#if defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64) || \
+    defined(JS_CODEGEN_LOONG64)
   SET_DEFAULT(spectreIndexMasking, false);
   SET_DEFAULT(spectreObjectMitigations, false);
   SET_DEFAULT(spectreStringMitigations, false);
@@ -260,8 +268,7 @@ DefaultJitOptions::DefaultJitOptions() {
   SET_DEFAULT(spectreJitToCxxCalls, true);
 #endif
 
-  // These are set to their actual values in InitializeJit.
-  SET_DEFAULT(supportsFloatingPoint, false);
+  // This is set to its actual value in InitializeJit.
   SET_DEFAULT(supportsUnalignedAccesses, false);
 
   // Toggles the optimization whereby offsets are folded into loads and not
@@ -300,6 +307,12 @@ DefaultJitOptions::DefaultJitOptions() {
   SET_DEFAULT(traceRegExpInterpreter, false);
   // Dumps the changes made by the regexp peephole optimizer to stderr
   SET_DEFAULT(traceRegExpPeephole, false);
+
+  // Controls how much assertion checking code is emitted
+  SET_DEFAULT(lessDebugCode, false);
+
+  // Whether the MegamorphicCache is enabled.
+  SET_DEFAULT(enableWatchtowerMegamorphic, true);
 
   SET_DEFAULT(enableWasmJitExit, true);
   SET_DEFAULT(enableWasmJitEntry, true);

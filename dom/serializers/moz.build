@@ -32,3 +32,7 @@ UNIFIED_SOURCES += [
 ]
 
 FINAL_LIBRARY = "xul"
+
+REQUIRES_UNIFIED_BUILD = True
+
+CRASHTEST_MANIFESTS += ["crashtests/crashtests.list"]

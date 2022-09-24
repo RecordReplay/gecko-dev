@@ -8,7 +8,6 @@
 #include "CompositableClient.h"
 #include "mozilla/layers/CompositableForwarder.h"
 #include "mozilla/layers/TextureForwarder.h"
-#include "mozilla/layers/TiledContentClient.h"
 #include "mozilla/StaticPrefs_layers.h"
 
 #include "nsComponentManagerUtils.h"
@@ -134,12 +133,6 @@ void TextureClientPool::AllocateTextureClient() {
           mOutstandingClients);
 
   TextureAllocationFlags allocFlags = ALLOC_DEFAULT;
-
-  if (mKnowsCompositor->SupportsTextureDirectMapping() &&
-      std::max(mSize.width, mSize.height) <= GetMaxTextureSize()) {
-    allocFlags =
-        TextureAllocationFlags(allocFlags | ALLOC_ALLOW_DIRECT_MAPPING);
-  }
 
   RefPtr<TextureClient> newClient;
   if (StaticPrefs::layers_force_shmem_tiles_AtStartup()) {

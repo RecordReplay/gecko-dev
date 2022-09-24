@@ -120,6 +120,7 @@ class SVGElement : public SVGElementBase  // nsIContent
                                               int32_t aModType) const override;
 
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
+  virtual bool IsSVGGraphicsElement() const { return false; }
 
   /**
    * We override the default to unschedule computation of Servo declaration
@@ -325,8 +326,6 @@ class SVGElement : public SVGElementBase  // nsIContent
   void AnimationNeedsResample();
   void FlushAnimations();
 
-  virtual void RecompileScriptEventListeners() override;
-
   void GetStringBaseValue(uint8_t aAttrEnum, nsAString& aResult) const;
   void SetStringBaseValue(uint8_t aAttrEnum, const nsAString& aValue);
 
@@ -384,7 +383,7 @@ class SVGElement : public SVGElementBase  // nsIContent
                       const mozAutoDocUpdate& aProofOfUpdate);
   void MaybeSerializeAttrBeforeRemoval(nsAtom* aName, bool aNotify);
 
-  nsAtom* GetEventNameForAttr(nsAtom* aAttr);
+  nsAtom* GetEventNameForAttr(nsAtom* aAttr) override;
 
   struct LengthInfo {
     nsStaticAtom* const mName;

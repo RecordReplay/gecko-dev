@@ -35,9 +35,9 @@ class MIDIMessageQueue {
   void Add(nsTArray<MIDIMessage>& aMsg);
   // Retrieve all pending messages before the time specified.
   void GetMessagesBefore(TimeStamp aTimestamp,
-                         nsTArray<MIDIMessage>& aMsgArray);
+                         nsTArray<MIDIMessage>& aMsgQueue);
   // Get all pending messages.
-  void GetMessages(nsTArray<MIDIMessage>& aMsgArray);
+  void GetMessages(nsTArray<MIDIMessage>& aMsgQueue);
   // Erase all pending messages.
   void Clear();
   // Erase all pending messages that would be sent in the future. Useful for
@@ -49,7 +49,7 @@ class MIDIMessageQueue {
   // Array of messages to be sent.
   nsTArray<MIDIMessage> mMessageQueue;
   // Mutex for coordinating cross thread array access.
-  Mutex mMutex;
+  Mutex mMutex MOZ_UNANNOTATED;
 };
 
 }  // namespace dom

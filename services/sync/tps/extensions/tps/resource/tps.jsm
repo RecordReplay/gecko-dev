@@ -3,7 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 /* This is a JavaScript module (JSM) to be imported via
- * Components.utils.import() and acts as a singleton. Only the following
+ * ChromeUtils.import() and acts as a singleton. Only the following
  * listed symbols will exposed on import, and only when and where imported.
  */
 
@@ -23,13 +23,12 @@ var EXPORTED_SYMBOLS = [
   "Windows",
 ];
 
-var module = this;
-
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
 XPCOMUtils.defineLazyModuleGetters(this, {
+  Authentication: "resource://tps/auth/fxaccounts.jsm",
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   Async: "resource://services-common/async.js",
   BrowserTabs: "resource://tps/modules/tabs.jsm",
@@ -37,6 +36,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   CommonUtils: "resource://services-common/utils.js",
   extensionStorageSync: "resource://gre/modules/ExtensionStorageSync.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
+  JsonSchema: "resource://gre/modules/JsonSchema.jsm",
   Log: "resource://gre/modules/Log.jsm",
   Logger: "resource://tps/logger.jsm",
   OS: "resource://gre/modules/osfile.jsm",
@@ -44,7 +44,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   PromiseUtils: "resource://gre/modules/PromiseUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
   SessionStore: "resource:///modules/sessionstore/SessionStore.jsm",
-  setTimeout: "resource://gre/modules/Timer.jsm",
   Svc: "resource://services-sync/util.js",
   SyncTelemetry: "resource://services-sync/telemetry.js",
   Weave: "resource://services-sync/main.js",
@@ -171,9 +170,6 @@ var TPS = {
     OBSERVER_TOPICS.forEach(function(aTopic) {
       Services.obs.addObserver(this, aTopic, true);
     }, this);
-
-    /* global Authentication */
-    ChromeUtils.import("resource://tps/auth/fxaccounts.jsm", module);
 
     // Some engines bump their score during their sync, which then causes
     // another sync immediately (notably, prefs and addons). We don't want
@@ -365,14 +361,6 @@ var TPS = {
         default:
           Logger.AssertTrue(false, "invalid action: " + action);
       }
-    }
-    if (action === ACTION_ADD) {
-      // Ideally we'd do the right thing (probably resolving bug 1383832, or
-      // waiting for sessionstore events in TPS), but waiting enough time to
-      // be reasonably confident the sessionstore time has fired is simpler.
-      // Without this timeout, we are likely to see "error locating tab"
-      // on subsequent syncs.
-      await new Promise(resolve => setTimeout(resolve, 2500));
     }
     Logger.logPass("executing action " + action.toUpperCase() + " on tabs");
   },
@@ -996,11 +984,21 @@ var TPS = {
     return root;
   },
 
+  _pingValidator: null,
+
   // Default ping validator that always says the ping passes. This should be
   // overridden unless the `testing.tps.skipPingValidation` pref is true.
-  pingValidator(ping) {
-    Logger.logInfo("Not validating ping -- disabled by pref");
-    return true;
+  get pingValidator() {
+    return this._pingValidator
+      ? this._pingValidator
+      : {
+          validate() {
+            Logger.logInfo(
+              "Not validating ping -- disabled by pref or failure to load schema"
+            );
+            return { valid: true, errors: [] };
+          },
+        };
   },
 
   // Attempt to load the sync_ping_schema.json and initialize `this.pingValidator`
@@ -1026,20 +1024,10 @@ var TPS = {
       let schema = JSON.parse(gTextDecoder.decode(bytes));
       Logger.logInfo("Successfully loaded schema");
 
-      // Importing resource://testing-common/* isn't possible from within TPS,
-      // so we load Ajv manually.
-      let ajvFile = this._getFileRelativeToSourceRoot(
-        testFile,
-        "testing/modules/ajv-4.1.1.js"
-      );
-      let ajvURL = fileProtocolHandler.getURLSpecFromFile(ajvFile);
-      let ns = {};
-      ChromeUtils.import(ajvURL, ns);
-      let ajv = new ns.Ajv({ async: "co*" });
-      this.pingValidator = ajv.compile(schema);
+      this._pingValidator = new JsonSchema.Validator(schema);
     } catch (e) {
       this.DumpError(
-        `Failed to load ping schema and AJV relative to "${testFile}".`,
+        `Failed to load ping schema relative to "${testFile}".`,
         e
       );
     }
@@ -1217,11 +1205,16 @@ var TPS = {
         // fail validation).
         return;
       }
-      if (!this.pingValidator(record)) {
+      // Our ping may have some undefined values, which we rely on JSON stripping
+      // out as part of the ping submission - but our validator fails with them,
+      // so round-trip via JSON here to avoid that.
+      record = JSON.parse(JSON.stringify(record));
+      const result = this.pingValidator.validate(record);
+      if (!result.valid) {
         // Note that we already logged the record.
         this.DumpError(
           "Sync ping validation failed with errors: " +
-            JSON.stringify(this.pingValidator.errors)
+            JSON.stringify(result.errors)
         );
       }
     };

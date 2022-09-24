@@ -19,11 +19,13 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(ExtensionEventManager)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ExtensionEventManager)
   tmp->mListeners.clear();
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mExtensionBrowser)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(ExtensionEventManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGlobal)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExtensionBrowser)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(ExtensionEventManager)
@@ -38,17 +40,18 @@ NS_INTERFACE_MAP_BEGIN_CYCLE_COLLECTION(ExtensionEventManager)
   NS_INTERFACE_MAP_ENTRY(nsISupports)
 NS_INTERFACE_MAP_END
 
-ExtensionEventManager::ExtensionEventManager(nsIGlobalObject* aGlobal,
-                                             const nsAString& aNamespace,
-                                             const nsAString& aEventName,
-                                             const nsAString& aObjectType,
-                                             const nsAString& aObjectId)
+ExtensionEventManager::ExtensionEventManager(
+    nsIGlobalObject* aGlobal, ExtensionBrowser* aExtensionBrowser,
+    const nsAString& aNamespace, const nsAString& aEventName,
+    const nsAString& aObjectType, const nsAString& aObjectId)
     : mGlobal(aGlobal),
+      mExtensionBrowser(aExtensionBrowser),
       mAPINamespace(aNamespace),
       mEventName(aEventName),
       mAPIObjectType(aObjectType),
       mAPIObjectId(aObjectId) {
   MOZ_DIAGNOSTIC_ASSERT(mGlobal);
+  MOZ_DIAGNOSTIC_ASSERT(mExtensionBrowser);
 
   RefPtr<ExtensionEventManager> self = this;
   mozilla::HoldJSObjects(this);
@@ -93,7 +96,7 @@ void ExtensionEventManager::AddListener(
 
   IgnoredErrorResult rv;
   RefPtr<ExtensionEventListener> wrappedCb = ExtensionEventListener::Create(
-      mGlobal, &aCallback,
+      mGlobal, mExtensionBrowser, &aCallback,
       [self = std::move(self)]() { self->ReleaseListeners(); }, rv);
 
   if (NS_WARN_IF(rv.Failed())) {
@@ -109,6 +112,10 @@ void ExtensionEventManager::AddListener(
 
   auto request = SendAddListener(mEventName);
   request->Run(mGlobal, aCx, {}, wrappedCb, aRv);
+
+  if (!aRv.Failed() && mAPIObjectType.IsEmpty()) {
+    mExtensionBrowser->TrackWakeupEventListener(aCx, mAPINamespace, mEventName);
+  }
 }
 
 void ExtensionEventManager::RemoveListener(dom::Function& aCallback,
@@ -134,6 +141,11 @@ void ExtensionEventManager::RemoveListener(dom::Function& aCallback,
 
   if (NS_WARN_IF(aRv.Failed())) {
     return;
+  }
+
+  if (mAPIObjectType.IsEmpty()) {
+    mExtensionBrowser->UntrackWakeupEventListener(cx, mAPINamespace,
+                                                  mEventName);
   }
 
   mListeners.remove(cb);

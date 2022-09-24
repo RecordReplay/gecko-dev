@@ -3,13 +3,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/intl/Calendar.h"
-#include "unicode/udat.h"
+
+#include "unicode/ucal.h"
+#include "unicode/uloc.h"
 #include "unicode/utypes.h"
 
 namespace mozilla::intl {
 
 /* static */
-Result<UniquePtr<Calendar>, Calendar::Error> Calendar::TryCreate(
+Result<UniquePtr<Calendar>, ICUError> Calendar::TryCreate(
     const char* aLocale, Maybe<Span<const char16_t>> aTimeZoneOverride) {
   UErrorCode status = U_ZERO_ERROR;
   const UChar* zoneID = nullptr;
@@ -23,47 +25,107 @@ Result<UniquePtr<Calendar>, Calendar::Error> Calendar::TryCreate(
       ucal_open(zoneID, zoneIDLen, aLocale, UCAL_DEFAULT, &status);
 
   if (U_FAILURE(status)) {
-    return Err(Calendar::Error::InternalError);
+    return Err(ToICUError(status));
   }
 
   return MakeUnique<Calendar>(calendar);
 }
 
-Result<const char*, Calendar::Error> Calendar::GetBcp47Type() {
+Result<Span<const char>, ICUError> Calendar::GetBcp47Type() {
   UErrorCode status = U_ZERO_ERROR;
   const char* oldType = ucal_getType(mCalendar, &status);
   if (U_FAILURE(status)) {
-    return Err(Error::InternalError);
+    return Err(ToICUError(status));
   }
   const char* bcp47Type = uloc_toUnicodeLocaleType("calendar", oldType);
 
   if (!bcp47Type) {
-    return Err(Error::InternalError);
+    return Err(ICUError::InternalError);
   }
 
-  return bcp47Type;
+  return MakeStringSpan(bcp47Type);
 }
 
-Result<int32_t, Calendar::Error> Calendar::GetDefaultTimeZoneOffsetMs() {
+static Weekday WeekdayFromDaysOfWeek(UCalendarDaysOfWeek weekday) {
+  switch (weekday) {
+    case UCAL_MONDAY:
+      return Weekday::Monday;
+    case UCAL_TUESDAY:
+      return Weekday::Tuesday;
+    case UCAL_WEDNESDAY:
+      return Weekday::Wednesday;
+    case UCAL_THURSDAY:
+      return Weekday::Thursday;
+    case UCAL_FRIDAY:
+      return Weekday::Friday;
+    case UCAL_SATURDAY:
+      return Weekday::Saturday;
+    case UCAL_SUNDAY:
+      return Weekday::Sunday;
+  }
+  MOZ_CRASH("unexpected weekday value");
+}
+
+Result<EnumSet<Weekday>, ICUError> Calendar::GetWeekend() {
+  static_assert(static_cast<int32_t>(UCAL_SUNDAY) == 1);
+  static_assert(static_cast<int32_t>(UCAL_SATURDAY) == 7);
+
   UErrorCode status = U_ZERO_ERROR;
-  int32_t offset = ucal_get(mCalendar, UCAL_ZONE_OFFSET, &status);
-  if (U_FAILURE(status)) {
-    return Err(Error::InternalError);
+
+  EnumSet<Weekday> weekend;
+  for (int32_t i = UCAL_SUNDAY; i <= UCAL_SATURDAY; i++) {
+    auto dayOfWeek = static_cast<UCalendarDaysOfWeek>(i);
+    auto type = ucal_getDayOfWeekType(mCalendar, dayOfWeek, &status);
+    if (U_FAILURE(status)) {
+      return Err(ToICUError(status));
+    }
+
+    switch (type) {
+      case UCAL_WEEKEND_ONSET:
+        // Treat days which start as a weekday as weekdays.
+        [[fallthrough]];
+      case UCAL_WEEKDAY:
+        break;
+
+      case UCAL_WEEKEND_CEASE:
+        // Treat days which start as a weekend day as weekend days.
+        [[fallthrough]];
+      case UCAL_WEEKEND:
+        weekend += WeekdayFromDaysOfWeek(dayOfWeek);
+        break;
+    }
   }
-  return offset;
+
+  return weekend;
 }
 
-Result<Ok, Calendar::Error> Calendar::SetTimeInMs(double aUnixEpoch) {
+Weekday Calendar::GetFirstDayOfWeek() {
+  int32_t firstDayOfWeek = ucal_getAttribute(mCalendar, UCAL_FIRST_DAY_OF_WEEK);
+  MOZ_ASSERT(UCAL_SUNDAY <= firstDayOfWeek && firstDayOfWeek <= UCAL_SATURDAY);
+
+  return WeekdayFromDaysOfWeek(
+      static_cast<UCalendarDaysOfWeek>(firstDayOfWeek));
+}
+
+int32_t Calendar::GetMinimalDaysInFirstWeek() {
+  int32_t minimalDays =
+      ucal_getAttribute(mCalendar, UCAL_MINIMAL_DAYS_IN_FIRST_WEEK);
+  MOZ_ASSERT(1 <= minimalDays && minimalDays <= 7);
+
+  return minimalDays;
+}
+
+Result<Ok, ICUError> Calendar::SetTimeInMs(double aUnixEpoch) {
   UErrorCode status = U_ZERO_ERROR;
   ucal_setMillis(mCalendar, aUnixEpoch, &status);
   if (U_FAILURE(status)) {
-    return Err(Error::InternalError);
+    return Err(ToICUError(status));
   }
   return Ok{};
 }
 
 /* static */
-Result<SpanEnumeration<char>, InternalError>
+Result<SpanEnumeration<char>, ICUError>
 Calendar::GetLegacyKeywordValuesForLocale(const char* aLocale) {
   UErrorCode status = U_ZERO_ERROR;
   UEnumeration* enumeration = ucal_getKeywordValuesForLocale(
@@ -73,7 +135,7 @@ Calendar::GetLegacyKeywordValuesForLocale(const char* aLocale) {
     return SpanEnumeration<char>(enumeration);
   }
 
-  return Err(InternalError{});
+  return Err(ToICUError(status));
 }
 
 /* static */
@@ -88,17 +150,18 @@ SpanResult<char> Calendar::LegacyIdentifierToBcp47(const char* aIdentifier,
 }
 
 /* static */
-Result<Calendar::Bcp47IdentifierEnumeration, InternalError>
-Calendar::GetBcp47KeywordValuesForLocale(const char* aLocale) {
+Result<Calendar::Bcp47IdentifierEnumeration, ICUError>
+Calendar::GetBcp47KeywordValuesForLocale(const char* aLocale,
+                                         CommonlyUsed aCommonlyUsed) {
   UErrorCode status = U_ZERO_ERROR;
   UEnumeration* enumeration = ucal_getKeywordValuesForLocale(
-      "calendar", aLocale, /* commonlyUsed */ false, &status);
+      "calendar", aLocale, static_cast<bool>(aCommonlyUsed), &status);
 
   if (U_SUCCESS(status)) {
     return Bcp47IdentifierEnumeration(enumeration);
   }
 
-  return Err(InternalError{});
+  return Err(ToICUError(status));
 }
 
 Calendar::~Calendar() {

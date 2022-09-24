@@ -7,17 +7,13 @@
 #ifndef DOM_QUOTA_QMRESULT_H_
 #define DOM_QUOTA_QMRESULT_H_
 
-#include "mozilla/dom/quota/Config.h"
-
 #include "ErrorList.h"
+#include "mozilla/dom/quota/Config.h"
+#include "mozilla/dom/quota/ForwardDecls.h"
 
 namespace mozilla {
 
 #ifdef QM_ERROR_STACKS_ENABLED
-struct Ok;
-template <typename V, typename E>
-class Result;
-
 // A wrapped nsresult, primarily intended for use along with mozilla::Result
 // and QM_TRY macros. The wrapper contains stack id and frame id which are
 // reported in LogError besides the error result itself.
@@ -49,23 +45,13 @@ class QMResult {
     return QMResult{mStackId, mFrameId + 1, mNSResult};
   }
 
-  operator nsresult() const { return mNSResult; }
-
  private:
   QMResult(uint64_t aStackId, uint32_t aFrameId, nsresult aNSResult)
       : mStackId(aStackId), mFrameId(aFrameId), mNSResult(aNSResult) {}
 };
-#else
-using QMResult = nsresult;
 #endif
 
 inline QMResult ToQMResult(nsresult aValue) { return QMResult(aValue); }
-
-#ifdef QM_ERROR_STACKS_ENABLED
-inline Result<Ok, QMResult> ToResult(const QMResult& aValue);
-
-inline Result<Ok, QMResult> ToResult(QMResult&& aValue);
-#endif
 
 }  // namespace mozilla
 

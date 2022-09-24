@@ -12,6 +12,7 @@
 
 #include "base/platform_thread.h"           // for PlatformThreadId
 #include "mozilla/layers/OMTAController.h"  // for OMTAController
+#include "mozilla/Atomics.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/StaticPtr.h"
@@ -118,7 +119,7 @@ class OMTASampler final {
   RefPtr<OMTAController> mController;
   // Can only be accessed or modified while holding mStorageLock.
   RefPtr<CompositorAnimationStorage> mAnimStorage;
-  mutable Mutex mStorageLock;
+  mutable Mutex mStorageLock MOZ_UNANNOTATED;
 
   // Used to manage the mapping from a WR window id to OMTASampler. These are
   // only used if WebRender is enabled. Both sWindowIdMap and mWindowId should
@@ -126,19 +127,19 @@ class OMTASampler final {
   // StaticAutoPtr wrapper on sWindowIdMap to avoid a static initializer for the
   // unordered_map. This also avoids the initializer/memory allocation in cases
   // where we're not using WebRender.
-  static StaticMutex sWindowIdLock;
+  static StaticMutex sWindowIdLock MOZ_UNANNOTATED;
   static StaticAutoPtr<std::unordered_map<uint64_t, RefPtr<OMTASampler>>>
       sWindowIdMap;
   Maybe<wr::WrWindowId> mWindowId;
 
   // Lock used to protected mSamplerThreadId
-  mutable Mutex mThreadIdLock;
+  mutable Mutex mThreadIdLock MOZ_UNANNOTATED;
   // If WebRender is enabled, this holds the thread id of the render backend
   // thread (which is the sampler thread) for the compositor associated with
   // this OMTASampler instance.
   Maybe<PlatformThreadId> mSamplerThreadId;
 
-  Mutex mSampleTimeLock;
+  Mutex mSampleTimeLock MOZ_UNANNOTATED;
   // Can only be accessed or modified while holding mSampleTimeLock.
   TimeStamp mSampleTime;
   // Same as |mSampleTime|, can only be accessed or modified while holding
@@ -146,7 +147,7 @@ class OMTASampler final {
   // We basically use this time stamp instead of |mSampleTime| to make
   // animations more in sync with other animations on the main thread.
   TimeStamp mPreviousSampleTime;
-  bool mIsInTestMode;
+  Atomic<bool> mIsInTestMode;
 };
 
 }  // namespace layers

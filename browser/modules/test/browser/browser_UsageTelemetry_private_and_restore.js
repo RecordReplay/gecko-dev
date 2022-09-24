@@ -29,6 +29,7 @@ function promiseBrowserStateRestored() {
 add_task(async function test_privateMode() {
   // Let's reset the counts.
   Services.telemetry.clearScalars();
+  Services.fog.testResetFOG();
 
   // Open a private window and load a website in it.
   let privateWin = await BrowserTestUtils.openNewBrowserWindow({
@@ -80,6 +81,11 @@ add_task(async function test_privateMode() {
     1,
     "We should include URIs in private mode as part of the actual total URI count."
   );
+  is(
+    Glean.browserEngagement.uriCount.testGetValue(),
+    1,
+    "We should record the URI count in Glean as well."
+  );
 
   // Clean up.
   await BrowserTestUtils.closeWindow(privateWin);
@@ -114,10 +120,9 @@ add_task(async function test_sessionRestore() {
   };
 
   // Save the current session.
-  let SessionStore = ChromeUtils.import(
-    "resource:///modules/sessionstore/SessionStore.jsm",
-    {}
-  ).SessionStore;
+  let { SessionStore } = ChromeUtils.import(
+    "resource:///modules/sessionstore/SessionStore.jsm"
+  );
 
   // Load the custom state and wait for SSTabRestored, as we want to make sure
   // that the URI counting code was hit.

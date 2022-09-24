@@ -13,6 +13,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   ContextualIdentityService:
     "resource://gre/modules/ContextualIdentityService.jsm",
+  Services: "resource://gre/modules/Services.jsm",
 
   Domain: "chrome://remote/content/cdp/domains/Domain.jsm",
   MainProcessTarget:
@@ -21,13 +22,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   TabSession: "chrome://remote/content/cdp/sessions/TabSession.jsm",
   windowManager: "chrome://remote/content/shared/WindowManager.jsm",
 });
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "UUIDGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
-);
 
 let browserContextIds = 1;
 
@@ -91,9 +85,13 @@ class Target extends Domain {
 
   async createTarget(options = {}) {
     const { browserContextId } = options;
-    const { targetList } = this.session.target;
+    const { targetList, window } = this.session.target;
     const onTarget = targetList.once("target-created");
-    const tab = TabManager.addTab({ userContextId: browserContextId });
+    const tab = await TabManager.addTab({
+      focus: true,
+      userContextId: browserContextId,
+      window,
+    });
     const target = await onTarget;
     if (tab.linkedBrowser != target.browser) {
       throw new Error(
@@ -126,7 +124,7 @@ class Target extends Domain {
 
     // Focus the window, and select the corresponding tab
     await windowManager.focusWindow(window);
-    TabManager.selectTab(target.tab);
+    await TabManager.selectTab(target.tab);
   }
 
   attachToTarget(options = {}) {
@@ -141,7 +139,8 @@ class Target extends Domain {
     const tabSession = new TabSession(
       this.session.connection,
       target,
-      UUIDGen.generateUUID()
+      Services.uuid
+        .generateUUID()
         .toString()
         .slice(1, -1)
     );

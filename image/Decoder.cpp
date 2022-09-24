@@ -175,7 +175,7 @@ LexerResult Decoder::Decode(IResumable* aOnResume /* = nullptr */) {
 
   LexerResult lexerResult(TerminalState::FAILURE);
   {
-    AUTO_PROFILER_LABEL_CATEGORY_PAIR(GRAPHICS_ImageDecoding);
+    AUTO_PROFILER_LABEL_CATEGORY_PAIR_RELEVANT_FOR_JS(GRAPHICS_ImageDecoding);
     AutoRecordDecoderTelemetry telemetry(this);
 
     lexerResult = DoDecode(*mIterator, aOnResume);
@@ -252,7 +252,9 @@ void Decoder::CompleteDecode() {
 
   // If PostDecodeDone() has not been called, we may need to send teardown
   // notifications if it is unrecoverable.
-  if (!mDecodeDone) {
+  if (mDecodeDone) {
+    MOZ_ASSERT(HasError() || mCurrentFrame, "Should have an error or a frame");
+  } else {
     // We should always report an error to the console in this case.
     mShouldReportError = true;
 
@@ -266,26 +268,14 @@ void Decoder::CompleteDecode() {
       mProgress |= FLAG_DECODE_COMPLETE | FLAG_HAS_ERROR;
     }
   }
-
-  if (mDecodeDone) {
-    MOZ_ASSERT(HasError() || mCurrentFrame, "Should have an error or a frame");
-
-    // If this image wasn't animated and isn't a transient image, mark its frame
-    // as optimizable. We don't support optimizing animated images and
-    // optimizing transient images isn't worth it.
-    if (!HasAnimation() &&
-        !(mDecoderFlags & DecoderFlags::IMAGE_IS_TRANSIENT) && mCurrentFrame) {
-      mCurrentFrame->SetOptimizable();
-    }
-  }
 }
 
-void Decoder::SetOutputSize(const gfx::IntSize& aSize) {
+void Decoder::SetOutputSize(const OrientedIntSize& aSize) {
   mOutputSize = Some(aSize);
   mHaveExplicitOutputSize = true;
 }
 
-Maybe<gfx::IntSize> Decoder::ExplicitOutputSize() const {
+Maybe<OrientedIntSize> Decoder::ExplicitOutputSize() const {
   MOZ_ASSERT_IF(mHaveExplicitOutputSize, mOutputSize);
   return mHaveExplicitOutputSize ? mOutputSize : Nothing();
 }
@@ -354,11 +344,6 @@ RawAccessFrameRef Decoder::AllocateFrameInternal(
     return RawAccessFrameRef();
   }
 
-  if (frameNum == 1) {
-    MOZ_ASSERT(aPreviousFrame, "Must provide a previous frame when animated");
-    aPreviousFrame->SetRawAccessOnly();
-  }
-
   if (frameNum > 0) {
     if (aPreviousFrame->GetDisposalMethod() !=
         DisposalMethod::RESTORE_PREVIOUS) {
@@ -424,10 +409,6 @@ RawAccessFrameRef Decoder::AllocateFrameInternal(
       frame->Abort();
       return RawAccessFrameRef();
     }
-
-    if (frameNum > 0) {
-      frame->SetRawAccessOnly();
-    }
   }
 
   mFrameCount++;
@@ -471,10 +452,11 @@ void Decoder::PostSize(int32_t aWidth, int32_t aHeight,
 
   // Set our output size if it's not already set.
   if (!mOutputSize) {
-    mOutputSize = Some(IntSize(aWidth, aHeight));
+    mOutputSize = Some(mImageMetadata.GetSize());
   }
 
-  MOZ_ASSERT(mOutputSize->width <= aWidth && mOutputSize->height <= aHeight,
+  MOZ_ASSERT(mOutputSize->width <= mImageMetadata.GetSize().width &&
+                 mOutputSize->height <= mImageMetadata.GetSize().height,
              "Output size will result in upscaling");
 
   // Record this notification.
@@ -499,7 +481,10 @@ void Decoder::PostFrameStop(Opacity aFrameOpacity) {
   mInFrame = false;
   mFinishedNewFrame = true;
 
-  mCurrentFrame->Finish(aFrameOpacity, mFinalizeFrames);
+  mCurrentFrame->Finish(
+      aFrameOpacity, mFinalizeFrames,
+      /* aOrientationSwapsWidthAndHeight = */ mImageMetadata.HasOrientation() &&
+          mImageMetadata.GetOrientation().SwapsWidthAndHeight());
 
   mProgress |= FLAG_FRAME_COMPLETE;
 
@@ -509,7 +494,8 @@ void Decoder::PostFrameStop(Opacity aFrameOpacity) {
     // If we're not sending partial invalidations, then we send an invalidation
     // here when the first frame is complete.
     if (!ShouldSendPartialInvalidations()) {
-      mInvalidRect.UnionRect(mInvalidRect, IntRect(IntPoint(), Size()));
+      mInvalidRect.UnionRect(mInvalidRect,
+                             OrientedIntRect(OrientedIntPoint(), Size()));
     }
 
     // If we dispose of the first frame by clearing it, then the first frame's
@@ -521,7 +507,7 @@ void Decoder::PostFrameStop(Opacity aFrameOpacity) {
       case DisposalMethod::CLEAR:
       case DisposalMethod::CLEAR_ALL:
       case DisposalMethod::RESTORE_PREVIOUS:
-        mFirstFrameRefreshArea = IntRect(IntPoint(), Size());
+        mFirstFrameRefreshArea = IntRect(IntPoint(), Size().ToUnknownSize());
         break;
       case DisposalMethod::KEEP:
       case DisposalMethod::NOT_SPECIFIED:
@@ -535,8 +521,8 @@ void Decoder::PostFrameStop(Opacity aFrameOpacity) {
   }
 }
 
-void Decoder::PostInvalidation(const gfx::IntRect& aRect,
-                               const Maybe<gfx::IntRect>& aRectAtOutputSize
+void Decoder::PostInvalidation(const OrientedIntRect& aRect,
+                               const Maybe<OrientedIntRect>& aRectAtOutputSize
                                /* = Nothing() */) {
   // We should be mid-frame
   MOZ_ASSERT(mInFrame, "Can't invalidate when not mid-frame!");
@@ -546,7 +532,8 @@ void Decoder::PostInvalidation(const gfx::IntRect& aRect,
   // or we're past the first frame.
   if (ShouldSendPartialInvalidations() && mFrameCount == 1) {
     mInvalidRect.UnionRect(mInvalidRect, aRect);
-    mCurrentFrame->ImageUpdated(aRectAtOutputSize.valueOr(aRect));
+    mCurrentFrame->ImageUpdated(
+        aRectAtOutputSize.valueOr(aRect).ToUnknownRect());
   }
 }
 

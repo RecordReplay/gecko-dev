@@ -29,6 +29,7 @@
 #include "js/Class.h"
 #include "js/Date.h"
 #include "js/Object.h"  // JS::GetClass
+#include "js/PropertyAndElement.h"  // JS_GetProperty, JS_GetPropertyById, JS_HasOwnProperty, JS_HasOwnPropertyById
 #include "js/StructuredClone.h"
 #include "mozilla/EndianUtils.h"
 #include "mozilla/ErrorResult.h"
@@ -773,18 +774,29 @@ RefPtr<IDBRequest> IDBObjectStore::AddOrPut(JSContext* aCx,
   StructuredCloneWriteInfo cloneWriteInfo(mTransaction->Database());
   nsTArray<IndexUpdateInfo> updateInfos;
 
-  {
-    const auto autoStateRestore =
-        mTransaction->TemporarilyTransitionToInactive();
-    GetAddInfo(aCx, aValueWrapper, aKey, cloneWriteInfo, key, updateInfos, aRv);
+  // According to spec https://w3c.github.io/IndexedDB/#clone-value,
+  // the transaction must be in inactive state during clone
+  mTransaction->TransitionToInactive();
+
+#ifdef DEBUG
+  const uint32_t previousPendingRequestCount{
+      mTransaction->GetPendingRequestCount()};
+#endif
+  GetAddInfo(aCx, aValueWrapper, aKey, cloneWriteInfo, key, updateInfos, aRv);
+  // Check that new requests were rejected in the Inactive state
+  // and possibly in the Finished state, if the transaction has been aborted,
+  // during the structured cloning.
+  MOZ_ASSERT(mTransaction->GetPendingRequestCount() ==
+             previousPendingRequestCount);
+
+  if (!mTransaction->IsAborted()) {
+    mTransaction->TransitionToActive();
+  } else if (!aRv.Failed()) {
+    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_ABORT_ERR);
+    return nullptr;  // It is mandatory to return right after throw
   }
 
   if (aRv.Failed()) {
-    return nullptr;
-  }
-
-  if (!mTransaction->IsActive()) {
-    aRv.Throw(NS_ERROR_DOM_INDEXEDDB_TRANSACTION_INACTIVE_ERR);
     return nullptr;
   }
 
@@ -1162,7 +1174,7 @@ RefPtr<IDBIndex> IDBObjectStore::Index(const nsAString& aName,
   return index;
 }
 
-NS_IMPL_CYCLE_COLLECTION_MULTI_ZONE_JSHOLDER_CLASS(IDBObjectStore)
+NS_IMPL_CYCLE_COLLECTION_CLASS(IDBObjectStore)
 
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN(IDBObjectStore)
   NS_IMPL_CYCLE_COLLECTION_TRACE_PRESERVED_WRAPPER
@@ -1385,7 +1397,7 @@ RefPtr<IDBIndex> IDBObjectStore::CreateIndex(
     return keyPath;
   };
 
-  QM_NOTEONLY_TRY_UNWRAP(
+  QM_INFOONLY_TRY_UNWRAP(
       const auto maybeKeyPath,
       ([&aKeyPath, checkValid]() -> Result<KeyPath, nsresult> {
         if (aKeyPath.IsString()) {

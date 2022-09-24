@@ -55,9 +55,7 @@ LOCAL_INCLUDES += [
     "../xpath",
     "/dom/base",
     "/js/xpconnect/src",
+    "/parser/htmlparser",
 ]
 
 FINAL_LIBRARY = "xul"
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

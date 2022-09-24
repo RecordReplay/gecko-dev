@@ -1696,7 +1696,7 @@ bool nsTableRowGroupFrame::GetDirection() {
 }
 
 Result<nsILineIterator::LineInfo, nsresult> nsTableRowGroupFrame::GetLine(
-    int32_t aLineNumber) const {
+    int32_t aLineNumber) {
   if ((aLineNumber < 0) || (aLineNumber >= GetRowCount())) {
     return Err(NS_ERROR_FAILURE);
   }
@@ -1750,7 +1750,7 @@ NS_IMETHODIMP
 nsTableRowGroupFrame::FindFrameAt(int32_t aLineNumber, nsPoint aPos,
                                   nsIFrame** aFrameFound,
                                   bool* aPosIsBeforeFirstFrame,
-                                  bool* aPosIsAfterLastFrame) const {
+                                  bool* aPosIsAfterLastFrame) {
   nsTableFrame* table = GetTableFrame();
   nsTableCellMap* cellMap = table->GetCellMap();
 
@@ -1830,14 +1830,6 @@ nsTableRowGroupFrame::FindFrameAt(int32_t aLineNumber, nsPoint aPos,
       *aFrameFound = closestFromEnd;
     }
   }
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsTableRowGroupFrame::GetNextSiblingOnLine(nsIFrame*& aFrame,
-                                           int32_t aLineNumber) const {
-  NS_ENSURE_ARG_POINTER(aFrame);
-  aFrame = aFrame->GetNextSibling();
   return NS_OK;
 }
 
@@ -1941,8 +1933,9 @@ void nsTableRowGroupFrame::InvalidateFrame(uint32_t aDisplayItemKey,
                                            bool aRebuildDisplayItems) {
   nsIFrame::InvalidateFrame(aDisplayItemKey, aRebuildDisplayItems);
   if (GetTableFrame()->IsBorderCollapse()) {
+    const bool rebuild = StaticPrefs::layout_display_list_retain_sc();
     GetParent()->InvalidateFrameWithRect(InkOverflowRect() + GetPosition(),
-                                         aDisplayItemKey, false);
+                                         aDisplayItemKey, rebuild);
   }
 }
 
@@ -1955,5 +1948,5 @@ void nsTableRowGroupFrame::InvalidateFrameWithRect(const nsRect& aRect,
   // we get an inactive layer created and this is computed
   // within FrameLayerBuilder
   GetParent()->InvalidateFrameWithRect(aRect + GetPosition(), aDisplayItemKey,
-                                       false);
+                                       aRebuildDisplayItems);
 }

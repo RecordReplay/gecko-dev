@@ -24,6 +24,7 @@ use crate::selector_parser::PseudoElement;
 use crate::shared_lock::{Locked, SharedRwLock};
 use crate::style_resolver::StyleResolverForElement;
 use crate::stylesheets::keyframes_rule::{KeyframesAnimation, KeyframesStep, KeyframesStepValue};
+use crate::stylesheets::layer_rule::LayerOrder;
 use crate::values::animated::{Animate, Procedure};
 use crate::values::computed::{Time, TimingFunction};
 use crate::values::generics::box_::AnimationIterationCount;
@@ -290,6 +291,7 @@ impl IntermediateComputedKeyframe {
         let rule_node = base_style.rules().clone();
         let new_node = context.stylist.rule_tree().update_rule_at_level(
             CascadeLevel::Animations,
+            LayerOrder::root(),
             Some(locked_block.borrow_arc()),
             &rule_node,
             &context.guards,
@@ -453,8 +455,8 @@ pub struct Animation {
 impl Animation {
     /// Whether or not this animation is cancelled by changes from a new style.
     fn is_cancelled_in_new_style(&self, new_style: &Arc<ComputedValues>) -> bool {
-        let index = new_style
-            .get_box()
+        let new_ui = new_style.get_ui();
+        let index = new_ui
             .animation_name_iter()
             .position(|animation_name| Some(&self.name) == animation_name.as_atom());
         let index = match index {
@@ -462,7 +464,7 @@ impl Animation {
             None => return true,
         };
 
-        new_style.get_box().animation_duration_mod(index).seconds() == 0.
+        new_ui.animation_duration_mod(index).seconds() == 0.
     }
 
     /// Given the current time, advances this animation to the next iteration,
@@ -1071,10 +1073,10 @@ impl ElementAnimationSet {
         old_style: &ComputedValues,
         new_style: &Arc<ComputedValues>,
     ) {
-        let box_style = new_style.get_box();
-        let timing_function = box_style.transition_timing_function_mod(index);
-        let duration = box_style.transition_duration_mod(index);
-        let delay = box_style.transition_delay_mod(index).seconds() as f64;
+        let style = new_style.get_ui();
+        let timing_function = style.transition_timing_function_mod(index);
+        let duration = style.transition_duration_mod(index);
+        let delay = style.transition_delay_mod(index).seconds() as f64;
         let now = context.current_time_for_animations;
 
         // Only start a new transition if the style actually changes between
@@ -1342,15 +1344,15 @@ pub fn maybe_start_animations<E>(
 ) where
     E: TElement,
 {
-    let box_style = new_style.get_box();
-    for (i, name) in box_style.animation_name_iter().enumerate() {
+    let style = new_style.get_ui();
+    for (i, name) in style.animation_name_iter().enumerate() {
         let name = match name.as_atom() {
             Some(atom) => atom,
             None => continue,
         };
 
         debug!("maybe_start_animations: name={}", name);
-        let duration = box_style.animation_duration_mod(i).seconds() as f64;
+        let duration = style.animation_duration_mod(i).seconds() as f64;
         if duration == 0. {
             continue;
         }
@@ -1373,14 +1375,14 @@ pub fn maybe_start_animations<E>(
         // NB: This delay may be negative, meaning that the animation may be created
         // in a state where we have advanced one or more iterations or even that the
         // animation begins in a finished state.
-        let delay = box_style.animation_delay_mod(i).seconds();
+        let delay = style.animation_delay_mod(i).seconds();
 
-        let iteration_state = match box_style.animation_iteration_count_mod(i) {
+        let iteration_state = match style.animation_iteration_count_mod(i) {
             AnimationIterationCount::Infinite => KeyframesIterationState::Infinite(0.0),
             AnimationIterationCount::Number(n) => KeyframesIterationState::Finite(0.0, n.into()),
         };
 
-        let animation_direction = box_style.animation_direction_mod(i);
+        let animation_direction = style.animation_direction_mod(i);
 
         let initial_direction = match animation_direction {
             AnimationDirection::Normal | AnimationDirection::Alternate => {
@@ -1394,7 +1396,7 @@ pub fn maybe_start_animations<E>(
         let now = context.current_time_for_animations;
         let started_at = now + delay as f64;
         let mut starting_progress = (now - started_at) / duration;
-        let state = match box_style.animation_play_state_mod(i) {
+        let state = match style.animation_play_state_mod(i) {
             AnimationPlayState::Paused => AnimationState::Paused(starting_progress),
             AnimationPlayState::Running => AnimationState::Pending,
         };
@@ -1404,7 +1406,7 @@ pub fn maybe_start_animations<E>(
             &keyframe_animation,
             context,
             new_style,
-            new_style.get_box().animation_timing_function_mod(i),
+            style.animation_timing_function_mod(i),
             resolver,
         );
 
@@ -1414,7 +1416,7 @@ pub fn maybe_start_animations<E>(
             computed_steps,
             started_at,
             duration,
-            fill_mode: box_style.animation_fill_mode_mod(i),
+            fill_mode: style.animation_fill_mode_mod(i),
             delay: delay as f64,
             iteration_state,
             state,

@@ -9,6 +9,7 @@
 #include "gfxConfig.h"
 #include "nsDebugImpl.h"
 #include "nsThreadManager.h"
+#include "nsPrintfCString.h"
 
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/gfx/gfxVars.h"
@@ -116,7 +117,7 @@ void VRParent::ActorDestroy(ActorDestroyReason aWhy) {
 #ifndef NS_FREE_PERMANENT_DATA
   // No point in going through XPCOM shutdown because we don't keep persistent
   // state.
-  ProcessChild::QuickExit();
+  ipc::ProcessChild::QuickExit();
 #endif
 
 #if defined(XP_WIN)

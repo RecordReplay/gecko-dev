@@ -18,8 +18,7 @@
 #include "mozilla/NotNull.h"
 #include "mozilla/HashTable.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ServiceWorkerManager;
 
@@ -42,7 +41,8 @@ class ServiceWorkerManager;
  * shutdown will be forcefully unblocked.
  */
 class ServiceWorkerShutdownBlocker final : public nsIAsyncShutdownBlocker,
-                                           public nsITimerCallback {
+                                           public nsITimerCallback,
+                                           public nsINamed {
  public:
   using Progress = ServiceWorkerShutdownState::Progress;
   static const uint32_t kInvalidShutdownStateId = 0;
@@ -50,6 +50,7 @@ class ServiceWorkerShutdownBlocker final : public nsIAsyncShutdownBlocker,
   NS_DECL_ISUPPORTS
   NS_DECL_NSIASYNCSHUTDOWNBLOCKER
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   /**
    * Returns the registered shutdown blocker if registration succeeded and
@@ -151,7 +152,6 @@ class ServiceWorkerShutdownBlocker final : public nsIAsyncShutdownBlocker,
       mServiceWorkerManager;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_serviceworkershutdownblocker_h__

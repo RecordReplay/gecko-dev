@@ -1161,6 +1161,7 @@ PeerConnectionWrapper.prototype = {
   },
 
   async getUserMedia(constraints) {
+    SpecialPowers.wrap(document).notifyUserGestureActivation();
     var stream = await getUserMedia(constraints);
     if (constraints.audio) {
       stream.getAudioTracks().forEach(track => {
@@ -1884,46 +1885,6 @@ PeerConnectionWrapper.prototype = {
     ]);
   },
 
-  async waitForSyncedRtcp() {
-    // Ensures that RTCP is present
-    let ensureSyncedRtcp = async () => {
-      let report = await this._pc.getStats();
-      for (const v of report.values()) {
-        if (v.type.endsWith("bound-rtp") && !(v.remoteId || v.localId)) {
-          info(`${v.id} is missing remoteId or localId: ${JSON.stringify(v)}`);
-          return null;
-        }
-        if (v.type == "remote-inbound-rtp" && v.roundTripTime === undefined) {
-          info(`${v.id} is missing roundTripTime: ${JSON.stringify(v)}`);
-          return null;
-        }
-      }
-      return report;
-    };
-    let attempts = 0;
-    // Time-units are MS
-    const waitPeriod = 100;
-    const maxTime = 20000;
-    for (let totalTime = maxTime; totalTime > 0; totalTime -= waitPeriod) {
-      try {
-        let syncedStats = await ensureSyncedRtcp();
-        if (syncedStats) {
-          return syncedStats;
-        }
-      } catch (e) {
-        info(e);
-        info(e.stack);
-        throw e;
-      }
-      attempts += 1;
-      info(`waitForSyncedRtcp: no sync on attempt ${attempts}, retrying.`);
-      await wait(waitPeriod);
-    }
-    throw Error(
-      "Waiting for synced RTCP timed out after at least " + maxTime + "ms"
-    );
-  },
-
   /**
    * Check that correct audio (typically a flat tone) is flowing to this
    * PeerConnection for each transceiver that should be receiving. Uses
@@ -2040,16 +2001,14 @@ PeerConnectionWrapper.prototype = {
   /**
    * Check that stats are present by checking for known stats.
    */
-  getStats(selector) {
-    return this._pc.getStats(selector).then(stats => {
-      let dict = {};
-      for (const [k, v] of stats.entries()) {
-        dict[k] = v;
-      }
-      info(this + ": Got stats: " + JSON.stringify(dict));
-      this._last_stats = stats;
-      return stats;
-    });
+  async getStats(selector) {
+    const stats = await this._pc.getStats(selector);
+    const dict = {};
+    for (const [k, v] of stats.entries()) {
+      dict[k] = v;
+    }
+    info(`${this}: Got stats: ${JSON.stringify(dict)}`);
+    return stats;
   },
 
   /**
@@ -2115,7 +2074,16 @@ PeerConnectionWrapper.prototype = {
               ok(rem.localId == res.id, "Remote backlink match");
               if (res.type == "outbound-rtp") {
                 ok(rem.type == "remote-inbound-rtp", "Rtcp is inbound");
-                ok(rem.packetsLost !== undefined, "Rtcp packetsLost");
+                if (rem.packetsLost) {
+                  ok(
+                    rem.packetsLost >= 0,
+                    "Rtcp packetsLost " + rem.packetsLost + " >= 0"
+                  );
+                  ok(
+                    rem.packetsLost < 1000,
+                    "Rtcp packetsLost " + rem.packetsLost + " < 1000"
+                  );
+                }
                 if (!this.disableRtpCountChecking) {
                   // no guarantee which one is newer!
                   // Note: this must change when we add a timestamp field to remote RTCP reports
@@ -2133,7 +2101,10 @@ PeerConnectionWrapper.prototype = {
                     );
                   }
                 }
-                ok(rem.jitter !== undefined, "Rtcp jitter");
+                if (rem.jitter) {
+                  ok(rem.jitter >= 0, "Rtcp jitter " + rem.jitter + " >= 0");
+                  ok(rem.jitter < 5, "Rtcp jitter " + rem.jitter + " < 5 sec");
+                }
                 if (rem.roundTripTime) {
                   ok(
                     rem.roundTripTime >= 0,
@@ -2243,6 +2214,10 @@ PeerConnectionWrapper.prototype = {
     var candidateType = lCand.candidateType;
     if (lCand.relayProtocol === "tcp" && candidateType === "relay") {
       candidateType = "relay-tcp";
+    }
+
+    if (lCand.relayProtocol === "tls" && candidateType === "relay") {
+      candidateType = "relay-tls";
     }
 
     if (expectedLocalCandidateType === "srflx" && candidateType === "prflx") {
@@ -2494,33 +2469,14 @@ var setupIceServerConfig = useIceServer => {
 };
 
 async function runNetworkTest(testFunction, fixtureOptions = {}) {
-  let { AppConstants } = SpecialPowers.Cu.import(
-    "resource://gre/modules/AppConstants.jsm",
-    {}
+  let { AppConstants } = SpecialPowers.ChromeUtils.import(
+    "resource://gre/modules/AppConstants.jsm"
   );
-  let isNightly = AppConstants.NIGHTLY_BUILD;
-  let isAndroid = AppConstants.platform == "android";
 
   await scriptsReady;
   await runTestWhenReady(async options => {
     await startNetworkAndTest();
     await setupIceServerConfig(fixtureOptions.useIceServer);
-
-    // currently we set android hardware encoder default enabled in nightly.
-    // But before QA approves the quality, we want to ensure the legacy
-    // encoder is working fine.
-    if (isNightly && isAndroid) {
-      let value = Math.random() >= 0.5;
-      await SpecialPowers.pushPrefEnv({
-        set: [
-          ["media.navigator.hardware.vp8_encode.acceleration_enabled", value],
-          [
-            "media.navigator.hardware.vp8_encode.acceleration_remote_enabled",
-            value,
-          ],
-        ],
-      });
-    }
     await testFunction(options);
     await networkTestFinished();
   });

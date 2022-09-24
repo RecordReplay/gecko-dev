@@ -5,7 +5,7 @@
 
 // Check evaluating and expanding getters in the console.
 const TEST_URI =
-  "data:text/html;charset=utf8," +
+  "data:text/html;charset=utf8,<!DOCTYPE html>" +
   "<h1>Object Inspector on deeply nested proxies</h1>";
 
 add_task(async function() {
@@ -19,7 +19,7 @@ add_task(async function() {
     content.wrappedJSObject.console.log("oi-test", proxy);
   });
 
-  const node = await waitFor(() => findMessage(hud, "oi-test"));
+  const node = await waitFor(() => findConsoleAPIMessage(hud, "oi-test"));
   const oi = node.querySelector(".tree");
   const [proxyNode] = getObjectInspectorNodes(oi);
 

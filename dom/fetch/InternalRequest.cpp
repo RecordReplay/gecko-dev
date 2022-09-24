@@ -52,6 +52,7 @@ SafeRefPtr<InternalRequest> InternalRequest::GetRequestConstructorCopy(
   copy->mContentPolicyTypeOverridden = mContentPolicyTypeOverridden;
 
   copy->mPreferredAlternativeDataType = mPreferredAlternativeDataType;
+  copy->mSkipWasmCaching = mSkipWasmCaching;
   return copy;
 }
 
@@ -134,6 +135,7 @@ InternalRequest::InternalRequest(const InternalRequest& aOther,
       mMozErrors(aOther.mMozErrors),
       mFragment(aOther.mFragment),
       mSkipServiceWorker(aOther.mSkipServiceWorker),
+      mSkipWasmCaching(aOther.mSkipWasmCaching),
       mSynchronous(aOther.mSynchronous),
       mUnsafeRequest(aOther.mUnsafeRequest),
       mUseURLCredentials(aOther.mUseURLCredentials),
@@ -169,9 +171,7 @@ InternalRequest::InternalRequest(const IPCInternalRequest& aIPCRequest)
   // (constructed on the child side).
   if (body) {
     MOZ_ASSERT(body->type() == BodyStreamVariant::TParentToChildStream);
-    mBodyStream = static_cast<RemoteLazyInputStreamChild*>(
-                      body->get_ParentToChildStream().actorChild())
-                      ->CreateStream();
+    mBodyStream = body->get_ParentToChildStream().stream();
   }
 }
 
@@ -276,6 +276,8 @@ RequestDestination InternalRequest::MapContentPolicyTypeToRequestDestination(
       return RequestDestination::Audioworklet;
     case nsIContentPolicy::TYPE_INTERNAL_PAINTWORKLET:
       return RequestDestination::Paintworklet;
+    case nsIContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA:
+      return RequestDestination::_empty;
     case nsIContentPolicy::TYPE_INVALID:
       break;
       // Do not add default: so that compilers can catch the missing case.

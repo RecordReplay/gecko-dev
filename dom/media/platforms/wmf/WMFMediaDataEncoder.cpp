@@ -27,6 +27,10 @@ static const GUID CodecToSubtype(MediaDataEncoder::CodecType aCodec) {
   switch (aCodec) {
     case MediaDataEncoder::CodecType::H264:
       return MFVideoFormat_H264;
+    case MediaDataEncoder::CodecType::VP8:
+      return MFVideoFormat_VP80;
+    case MediaDataEncoder::CodecType::VP9:
+      return MFVideoFormat_VP90;
     default:
       MOZ_ASSERT(false, "Unsupported codec");
       return GUID_NULL;
@@ -36,12 +40,11 @@ static const GUID CodecToSubtype(MediaDataEncoder::CodecType aCodec) {
 bool CanCreateWMFEncoder(MediaDataEncoder::CodecType aCodec) {
   bool canCreate = false;
   mscom::EnsureMTA([&]() {
-    if (FAILED(wmf::MFStartup())) {
+    if (!wmf::MediaFoundationInitializer::HasInitialized()) {
       return;
     }
     RefPtr<MFTEncoder> enc(new MFTEncoder());
     canCreate = SUCCEEDED(enc->Create(CodecToSubtype(aCodec)));
-    wmf::MFShutdown();
   });
   return canCreate;
 }
@@ -66,7 +69,7 @@ RefPtr<MediaDataEncoder::InitPromise> WMFMediaDataEncoder<T>::ProcessInit() {
   MOZ_ASSERT(!mEncoder,
              "Should not initialize encoder again without shutting down");
 
-  if (FAILED(wmf::MFStartup())) {
+  if (!wmf::MediaFoundationInitializer::HasInitialized()) {
     return InitPromise::CreateAndReject(
         MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
                     RESULT_DETAIL("Can't create the MFT encoder.")),
@@ -78,8 +81,7 @@ RefPtr<MediaDataEncoder::InitPromise> WMFMediaDataEncoder<T>::ProcessInit() {
   mscom::EnsureMTA([&]() { hr = InitMFTEncoder(encoder); });
 
   if (FAILED(hr)) {
-    wmf::MFShutdown();
-    WMF_ENC_LOGE("init MFTEncoder: error = 0x%X", hr);
+    WMF_ENC_LOGE("init MFTEncoder: error = 0x%lX", hr);
     return InitPromise::CreateAndReject(
         MediaResult(NS_ERROR_DOM_MEDIA_FATAL_ERR,
                     RESULT_DETAIL("Can't create the MFT encoder.")),
@@ -87,6 +89,7 @@ RefPtr<MediaDataEncoder::InitPromise> WMFMediaDataEncoder<T>::ProcessInit() {
   }
 
   mEncoder = std::move(encoder);
+  FillConfigData();
   return InitPromise::CreateAndResolve(TrackInfo::TrackType::kVideoTrack,
                                        __func__);
 }
@@ -117,13 +120,6 @@ static already_AddRefed<MediaByteBuffer> ParseH264Parameters(
   return avcc.forget();
 }
 
-static already_AddRefed<MediaByteBuffer> ExtractCodecConfigIfPresent(
-    RefPtr<MFTEncoder>& aEncoder, const bool aAsAnnexB) {
-  nsTArray<UINT8> header;
-  NS_ENSURE_TRUE(SUCCEEDED(aEncoder->GetMPEGSequenceHeader(header)), nullptr);
-  return header.Length() > 0 ? ParseH264Parameters(header, aAsAnnexB) : nullptr;
-}
-
 template <typename T>
 HRESULT WMFMediaDataEncoder<T>::InitMFTEncoder(RefPtr<MFTEncoder>& aEncoder) {
   HRESULT hr = aEncoder->Create(CodecToSubtype(mConfig.mCodecType));
@@ -135,10 +131,18 @@ HRESULT WMFMediaDataEncoder<T>::InitMFTEncoder(RefPtr<MFTEncoder>& aEncoder) {
   hr = aEncoder->SetModes(mConfig.mBitsPerSec);
   NS_ENSURE_TRUE(SUCCEEDED(hr), hr);
 
-  mConfigData =
-      ExtractCodecConfigIfPresent(aEncoder, mConfig.mUsage == Usage::Realtime);
-
   return S_OK;
+}
+
+template <>
+void WMFMediaDataEncoder<MediaDataEncoder::H264Config>::FillConfigData() {
+  nsTArray<UINT8> header;
+  NS_ENSURE_TRUE_VOID(SUCCEEDED(mEncoder->GetMPEGSequenceHeader(header)));
+
+  mConfigData =
+      header.Length() > 0
+          ? ParseH264Parameters(header, mConfig.mUsage == Usage::Realtime)
+          : nullptr;
 }
 
 static uint32_t GetProfile(
@@ -186,9 +190,14 @@ already_AddRefed<IMFMediaType> CreateInputType(Config& aConfig) {
              : nullptr;
 }
 
-static HRESULT SetCodecSpecific(
-    IMFMediaType* aOutputType,
-    const MediaDataEncoder::H264Specific& aSpecific) {
+template <typename T>
+HRESULT SetCodecSpecific(IMFMediaType* aOutputType, const T& aSpecific) {
+  return S_OK;
+}
+
+template <>
+HRESULT SetCodecSpecific(IMFMediaType* aOutputType,
+                         const MediaDataEncoder::H264Specific& aSpecific) {
   return aOutputType->SetUINT32(MF_MT_MPEG2_PROFILE,
                                 GetProfile(aSpecific.mProfileLevel));
 }
@@ -198,7 +207,8 @@ already_AddRefed<IMFMediaType> CreateOutputType(Config& aConfig) {
   RefPtr<IMFMediaType> type;
   if (FAILED(wmf::MFCreateMediaType(getter_AddRefs(type))) ||
       FAILED(type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video)) ||
-      FAILED(type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264)) ||
+      FAILED(
+          type->SetGUID(MF_MT_SUBTYPE, CodecToSubtype(aConfig.mCodecType))) ||
       FAILED(type->SetUINT32(MF_MT_AVG_BITRATE, aConfig.mBitsPerSec)) ||
       FAILED(type->SetUINT32(MF_MT_INTERLACE_MODE,
                              MFVideoInterlace_Progressive)) ||
@@ -247,8 +257,7 @@ RefPtr<MediaDataEncoder::EncodePromise> WMFMediaDataEncoder<T>::ProcessEncode(
   nsTArray<RefPtr<IMFSample>> outputs;
   HRESULT hr = mEncoder->TakeOutput(outputs);
   if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
-    mConfigData = ExtractCodecConfigIfPresent(
-        mEncoder, mConfig.mUsage == Usage::Realtime);
+    FillConfigData();
   } else if (FAILED(hr)) {
     WMF_ENC_LOGE("failed to process output");
     return EncodePromise::CreateAndReject(
@@ -268,8 +277,10 @@ already_AddRefed<IMFSample> WMFMediaDataEncoder<T>::ConvertToNV12InputSample(
   const PlanarYCbCrImage* image = aData->mImage->AsPlanarYCbCrImage();
   MOZ_ASSERT(image);
   const PlanarYCbCrData* yuv = image->GetData();
-  size_t yLength = yuv->mYStride * yuv->mYSize.height;
-  size_t length = yLength + (yuv->mCbCrStride * yuv->mCbCrSize.height * 2);
+  auto ySize = yuv->YDataSize();
+  auto cbcrSize = yuv->CbCrDataSize();
+  size_t yLength = yuv->mYStride * ySize.height;
+  size_t length = yLength + (yuv->mCbCrStride * cbcrSize.height * 2);
 
   RefPtr<IMFSample> input;
   HRESULT hr = mEncoder->CreateInputSample(&input, length);
@@ -285,12 +296,11 @@ already_AddRefed<IMFSample> WMFMediaDataEncoder<T>::ConvertToNV12InputSample(
   LockBuffer lockBuffer(buffer);
   NS_ENSURE_TRUE(SUCCEEDED(lockBuffer.Result()), nullptr);
 
-  bool ok =
-      libyuv::I420ToNV12(yuv->mYChannel, yuv->mYStride, yuv->mCbChannel,
-                         yuv->mCbCrStride, yuv->mCrChannel, yuv->mCbCrStride,
-                         lockBuffer.Data(), yuv->mYStride,
-                         lockBuffer.Data() + yLength, yuv->mCbCrStride * 2,
-                         yuv->mYSize.width, yuv->mYSize.height) == 0;
+  bool ok = libyuv::I420ToNV12(
+                yuv->mYChannel, yuv->mYStride, yuv->mCbChannel,
+                yuv->mCbCrStride, yuv->mCrChannel, yuv->mCbCrStride,
+                lockBuffer.Data(), yuv->mYStride, lockBuffer.Data() + yLength,
+                yuv->mCbCrStride * 2, ySize.width, ySize.height) == 0;
   NS_ENSURE_TRUE(ok, nullptr);
 
   hr = input->SetSampleTime(UsecsToHNs(aData->mTime.ToMicroseconds()));
@@ -426,7 +436,6 @@ RefPtr<ShutdownPromise> WMFMediaDataEncoder<T>::Shutdown() {
                        if (self->mEncoder) {
                          self->mEncoder->Destroy();
                          self->mEncoder = nullptr;
-                         wmf::MFShutdown();
                        }
                        return ShutdownPromise::CreateAndResolve(true, __func__);
                      });
@@ -446,11 +455,9 @@ RefPtr<GenericPromise> WMFMediaDataEncoder<T>::SetBitrate(
       });
 }
 
-template <>
-nsCString
-WMFMediaDataEncoder<MediaDataEncoder::H264Config>::GetDescriptionName() const {
-  MOZ_ASSERT(mConfig.mCodecType == CodecType::H264);
-  return MFTEncoder::GetFriendlyName(MFVideoFormat_H264);
+template <typename T>
+nsCString WMFMediaDataEncoder<T>::GetDescriptionName() const {
+  return MFTEncoder::GetFriendlyName(CodecToSubtype(mConfig.mCodecType));
 }
 
 }  // namespace mozilla

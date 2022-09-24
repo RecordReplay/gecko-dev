@@ -9,6 +9,7 @@
  */
 
 enum RTCStatsType {
+  "codec",
   "inbound-rtp",
   "outbound-rtp",
   "remote-inbound-rtp",
@@ -34,6 +35,22 @@ dictionary RTCRtpStreamStats : RTCStats {
   DOMString mediaType;
   DOMString kind;
   DOMString transportId;
+  DOMString codecId;
+};
+
+dictionary RTCCodecStats : RTCStats {
+  required unsigned long payloadType;
+  RTCCodecType  codecType;
+  required DOMString     transportId;
+  required DOMString     mimeType;
+  unsigned long clockRate;
+  unsigned long channels;
+  DOMString     sdpFmtpLine;
+};
+
+enum RTCCodecType {
+  "encode",
+  "decode",
 };
 
 dictionary RTCReceivedRtpStreamStats: RTCRtpStreamStats {
@@ -47,19 +64,18 @@ dictionary RTCReceivedRtpStreamStats: RTCRtpStreamStats {
 dictionary RTCInboundRtpStreamStats : RTCReceivedRtpStreamStats {
   DOMString remoteId;
   unsigned long framesDecoded;
+  unsigned long frameWidth;
+  unsigned long frameHeight;
   unsigned long long bytesReceived;
   unsigned long nackCount;
   unsigned long firCount;
   unsigned long pliCount;
-  double bitrateMean; // deprecated, to be removed in Bug 1367562
-  double bitrateStdDev; // deprecated, to be removed in Bug 1367562
-  double framerateMean; // deprecated, to be removed in Bug 1367562
-  double framerateStdDev; // deprecated, to be removed in Bug 1367562
+  double framesPerSecond;
+  unsigned long framesReceived;
 };
 
 dictionary RTCRemoteInboundRtpStreamStats : RTCReceivedRtpStreamStats {
   DOMString localId;
-  long long bytesReceived; // Deprecated, to be removed in Bug 1529405
   double roundTripTime;
 };
 
@@ -75,12 +91,15 @@ dictionary RTCOutboundRtpStreamStats : RTCSentRtpStreamStats {
   unsigned long nackCount;
   unsigned long firCount;
   unsigned long pliCount;
-  double bitrateMean; // deprecated, to be removed in Bug 1367562
-  double bitrateStdDev; // deprecated, to be removed in Bug 1367562
-  double framerateMean; // deprecated, to be removed in Bug 1367562
-  double framerateStdDev; // deprecated, to be removed in Bug 1367562
-  unsigned long droppedFrames; // non-spec alias for framesDropped
-                               // to be deprecated in Bug 1225720
+  unsigned long long headerBytesSent;
+  unsigned long long retransmittedPacketsSent;
+  unsigned long long retransmittedBytesSent;
+  unsigned long long totalEncodedBytesTarget;
+  unsigned long frameWidth;
+  unsigned long frameHeight;
+  unsigned long framesSent;
+  unsigned long hugeFramesSent;
+  double totalEncodeTime;
 };
 
 dictionary RTCRemoteOutboundRtpStreamStats : RTCSentRtpStreamStats {
@@ -210,9 +229,12 @@ dictionary RTCStatsCollection {
   sequence<RTCIceCandidatePairStats>        iceCandidatePairStats = [];
   sequence<RTCIceCandidateStats>            iceCandidateStats = [];
   sequence<RTCIceCandidateStats>            trickledIceCandidateStats = [];
+  sequence<RTCDataChannelStats>             dataChannelStats = [];
+  sequence<RTCCodecStats>                   codecStats = [];
+
+  // For internal use only
   sequence<DOMString>                       rawLocalCandidates = [];
   sequence<DOMString>                       rawRemoteCandidates = [];
-  sequence<RTCDataChannelStats>             dataChannelStats = [];
   sequence<RTCVideoFrameHistoryInternal>    videoFrameHistories = [];
   sequence<RTCBandwidthEstimationInternal>  bandwidthEstimations = [];
 };

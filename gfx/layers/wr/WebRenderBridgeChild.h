@@ -98,10 +98,9 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
     return mActiveResourceTracker.get();
   }
 
-  void AddPipelineIdForAsyncCompositable(const wr::PipelineId& aPipelineId,
-                                         const CompositableHandle& aHandlee);
   void AddPipelineIdForCompositable(const wr::PipelineId& aPipelineId,
-                                    const CompositableHandle& aHandlee);
+                                    const CompositableHandle& aHandle,
+                                    CompositableHandleOwner aOwner);
   void RemovePipelineIdForCompositable(const wr::PipelineId& aPipelineId);
 
   /// Release TextureClient that is bounded to ImageKey.
@@ -144,6 +143,7 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
   }
 
   void PushGlyphs(wr::DisplayListBuilder& aBuilder,
+                  wr::IpcResourceUpdateQueue& aResources,
                   Range<const wr::GlyphInstance> aGlyphs,
                   gfx::ScaledFont* aFont, const wr::ColorF& aColor,
                   const StackingContextHelper& aSc,
@@ -152,11 +152,9 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
                   const wr::GlyphOptions* aGlyphOptions = nullptr);
 
   Maybe<wr::FontInstanceKey> GetFontKeyForScaledFont(
-      gfx::ScaledFont* aScaledFont,
-      wr::IpcResourceUpdateQueue* aResources = nullptr);
+      gfx::ScaledFont* aScaledFont, wr::IpcResourceUpdateQueue& aResources);
   Maybe<wr::FontKey> GetFontKeyForUnscaledFont(
-      gfx::UnscaledFont* aUnscaledFont,
-      wr::IpcResourceUpdateQueue* aResources = nullptr);
+      gfx::UnscaledFont* aUnscaledFont, wr::IpcResourceUpdateQueue& aResources);
   void RemoveExpiredFontKeys(wr::IpcResourceUpdateQueue& aResources);
 
   void BeginClearCachedResources();
@@ -195,12 +193,6 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
   // CompositableForwarder
   void Connect(CompositableClient* aCompositable,
                ImageContainer* aImageContainer = nullptr) override;
-  void UseTiledLayerBuffer(
-      CompositableClient* aCompositable,
-      const SurfaceDescriptorTiles& aTiledDescriptor) override;
-  void UpdateTextureRegion(CompositableClient* aCompositable,
-                           const ThebesBufferData& aThebesBufferData,
-                           const nsIntRegion& aUpdatedRegion) override;
   void ReleaseCompositable(const CompositableHandle& aHandle) override;
   bool DestroyInTransaction(PTextureChild* aTexture) override;
   bool DestroyInTransaction(const CompositableHandle& aHandle);
@@ -208,9 +200,6 @@ class WebRenderBridgeChild final : public PWebRenderBridgeChild,
                                      TextureClient* aTexture) override;
   void UseTextures(CompositableClient* aCompositable,
                    const nsTArray<TimedTextureClient>& aTextures) override;
-  void UseComponentAlphaTextures(CompositableClient* aCompositable,
-                                 TextureClient* aClientOnBlack,
-                                 TextureClient* aClientOnWhite) override;
   void UpdateFwdTransactionId() override;
   uint64_t GetFwdTransactionId() override;
   bool InForwarderThread() override;

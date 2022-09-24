@@ -13,10 +13,7 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "uikit":
     gl_provider = "EAGL"
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
-    if CONFIG["MOZ_EGL_XRENDER_COMPOSITE"]:
-        gl_provider = "EGL"
-    else:
-        gl_provider = "GLX"
+    gl_provider = "Linux"
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "android":
     gl_provider = "EGL"
 
@@ -55,6 +52,7 @@ EXPORTS += [
 
 # Win32 is a special snowflake, for ANGLE
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
+    REQUIRES_UNIFIED_BUILD = True
     EXPORTS += [
         "GLContextWGL.h",
         "SharedSurfaceANGLE.h",  # Needs <windows.h> for `HANDLE`.
@@ -106,18 +104,17 @@ elif gl_provider == "EAGL":
         "GLContextEAGL.h",
     ]
 
-elif gl_provider == "GLX":
+elif gl_provider == "Linux":
     # GLContextProviderGLX.cpp needs to be kept out of UNIFIED_SOURCES
     # as it includes X11 headers which cause conflicts.
     SOURCES += [
         "GLContextProviderGLX.cpp",
-        "GLContextProviderX11.cpp",
-        "SharedSurfaceGLX.cpp",
+        "GLContextProviderLinux.cpp",
     ]
-    EXPORTS += ["GLContextGLX.h", "GLXLibrary.h", "SharedSurfaceGLX.h"]
+    EXPORTS += ["GLContextGLX.h", "GLXLibrary.h"]
 
 if CONFIG["MOZ_WAYLAND"]:
-    SOURCES += ["GLContextProviderWayland.cpp", "SharedSurfaceDMABUF.cpp"]
+    SOURCES += ["SharedSurfaceDMABUF.cpp"]
 
 UNIFIED_SOURCES += [
     "AndroidSurfaceTexture.cpp",
@@ -150,10 +147,9 @@ FINAL_LIBRARY = "xul"
 if CONFIG["MOZ_D3DCOMPILER_VISTA_DLL"]:
     DEFINES["MOZ_D3DCOMPILER_VISTA_DLL"] = CONFIG["MOZ_D3DCOMPILER_VISTA_DLL"]
 
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-CXXFLAGS += CONFIG["TK_CFLAGS"]
-CFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-CFLAGS += CONFIG["TK_CFLAGS"]
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+    CFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
 
 CXXFLAGS += ["-Werror=switch"]
 
@@ -162,6 +158,6 @@ if CONFIG["MOZ_WAYLAND"]:
     CFLAGS += CONFIG["MOZ_WAYLAND_CFLAGS"]
 
 LOCAL_INCLUDES += CONFIG["SKIA_INCLUDES"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
+LOCAL_INCLUDES += [
+    "/gfx/cairo/cairo/src",
+]

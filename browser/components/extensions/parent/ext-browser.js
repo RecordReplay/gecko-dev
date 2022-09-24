@@ -44,34 +44,6 @@ function isPrivateTab(nativeTab) {
   return PrivateBrowsingUtils.isBrowserPrivate(nativeTab.linkedBrowser);
 }
 
-// This function is pretty tightly tied to Extension.jsm.
-// Its job is to fill in the |tab| property of the sender.
-const getSender = (extension, target, sender) => {
-  let tabId;
-  if ("tabId" in sender) {
-    // The message came from a privileged extension page running in a tab. In
-    // that case, it should include a tabId property (which is filled in by the
-    // page-open listener below).
-    tabId = sender.tabId;
-    delete sender.tabId;
-  } else if (
-    ExtensionCommon.instanceOf(target, "XULFrameElement") ||
-    ExtensionCommon.instanceOf(target, "HTMLIFrameElement")
-  ) {
-    tabId = tabTracker.getBrowserData(target).tabId;
-  }
-
-  if (tabId) {
-    let tab = extension.tabManager.get(tabId, null);
-    if (tab) {
-      sender.tab = tab.convert();
-    }
-  }
-};
-
-// Used by Extension.jsm
-global.tabGetSender = getSender;
-
 /* eslint-disable mozilla/balanced-listeners */
 extensions.on("uninstalling", (msg, extension) => {
   if (extension.uninstallURL) {
@@ -393,6 +365,10 @@ class TabTracker extends TabTrackerBase {
     if (!nativeTab.parentNode) {
       throw new Error("Cannot attach ID to a destroyed tab.");
     }
+    if (nativeTab.ownerGlobal.closed) {
+      throw new Error("Cannot attach ID to a tab in a closed window.");
+    }
+
     this._tabs.set(nativeTab, id);
     if (nativeTab.linkedBrowser) {
       this._browsers.set(nativeTab.linkedBrowser, id);
@@ -524,14 +500,6 @@ class TabTracker extends TabTrackerBase {
           // This tab is being created to adopt a tab from a different window.
           // Handle the adoption.
           this.adopt(nativeTab, adoptedTab);
-          if (adoptedTab.linkedPanel) {
-            adoptedTab.linkedBrowser.messageManager.sendAsyncMessage(
-              "Extension:SetFrameData",
-              {
-                windowId: windowTracker.getId(nativeTab.ownerGlobal),
-              }
-            );
-          }
         } else {
           // Save the size of the current tab, since the newly-created tab will
           // likely be active by the time the promise below resolves and the
@@ -787,7 +755,7 @@ class Tab extends TabBase {
   }
 
   get attention() {
-    return this.nativeTab.getAttribute("attention") === "true";
+    return this.nativeTab.hasAttribute("attention");
   }
 
   get audible() {
@@ -871,10 +839,6 @@ class Tab extends TabBase {
     return selected || multiselected;
   }
 
-  get selected() {
-    return this.nativeTab.selected;
-  }
-
   get status() {
     if (this.nativeTab.getAttribute("busy") === "true") {
       return "loading";
@@ -938,20 +902,28 @@ class Tab extends TabBase {
         : tabData.lastAccessed,
     };
 
-    // tabData is a representation of a tab, as stored in the session data,
-    // and given that is not a real nativeTab, we only need to check if the extension
-    // has the "tabs" permission (because tabData represents a closed tab, and so we
-    // already know that it can't be the activeTab).
-    if (extension.hasPermission("tabs")) {
-      let entries = tabData.state ? tabData.state.entries : tabData.entries;
-      let lastTabIndex = tabData.state ? tabData.state.index : tabData.index;
+    let entries = tabData.state ? tabData.state.entries : tabData.entries;
+    let lastTabIndex = tabData.state ? tabData.state.index : tabData.index;
+
+    // Tab may have empty history.
+    if (entries.length) {
       // We need to take lastTabIndex - 1 because the index in the tab data is
       // 1-based rather than 0-based.
       let entry = entries[lastTabIndex - 1];
-      result.url = entry.url;
-      result.title = entry.title;
-      if (tabData.image) {
-        result.favIconUrl = tabData.image;
+
+      // tabData is a representation of a tab, as stored in the session data,
+      // and given that is not a real nativeTab, we only need to check if the extension
+      // has the "tabs" or host permission (because tabData represents a closed tab,
+      // and so we already know that it can't be the activeTab).
+      if (
+        extension.hasPermission("tabs") ||
+        extension.allowedOrigins.matches(entry.url)
+      ) {
+        result.url = entry.url;
+        result.title = entry.title;
+        if (tabData.image) {
+          result.favIconUrl = tabData.image;
+        }
       }
     }
 

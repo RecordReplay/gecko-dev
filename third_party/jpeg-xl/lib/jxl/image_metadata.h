@@ -4,6 +4,7 @@
 // license that can be found in the LICENSE file.
 
 // Main codestream header bundles, the metadata that applies to all frames.
+// Enums must align with the C API definitions in codestream_header.h.
 
 #ifndef LIB_JXL_IMAGE_METADATA_H_
 #define LIB_JXL_IMAGE_METADATA_H_
@@ -13,6 +14,7 @@
 
 #include <vector>
 
+#include "jxl/codestream_header.h"
 #include "lib/jxl/color_encoding_internal.h"
 #include "lib/jxl/fields.h"
 #include "lib/jxl/headers.h"
@@ -26,37 +28,39 @@ namespace jxl {
 // apply after decoding to display the image with the correct orientation.
 enum class Orientation : uint32_t {
   // Values 1..8 match the EXIF definitions.
-  kIdentity = 1,
-  kFlipHorizontal,
-  kRotate180,
-  kFlipVertical,
-  kTranspose,
-  kRotate90,
-  kAntiTranspose,
-  kRotate270,
+  kIdentity = JXL_ORIENT_IDENTITY,
+  kFlipHorizontal = JXL_ORIENT_FLIP_HORIZONTAL,
+  kRotate180 = JXL_ORIENT_ROTATE_180,
+  kFlipVertical = JXL_ORIENT_FLIP_VERTICAL,
+  kTranspose = JXL_ORIENT_TRANSPOSE,
+  kRotate90 = JXL_ORIENT_ROTATE_90_CW,
+  kAntiTranspose = JXL_ORIENT_ANTI_TRANSPOSE,
+  kRotate270 = JXL_ORIENT_ROTATE_90_CCW,
 };
 // Don't need an EnumBits because Orientation is not read via Enum().
 
 enum class ExtraChannel : uint32_t {
   // First two enumerators (most common) are cheaper to encode
-  kAlpha,
-  kDepth,
+  kAlpha = JXL_CHANNEL_ALPHA,
+  kDepth = JXL_CHANNEL_DEPTH,
 
-  kSpotColor,
-  kSelectionMask,
-  kBlack,  // for CMYK
-  kCFA,    // Bayer channel
-  kThermal,
-  kReserved0,
-  kReserved1,
-  kReserved2,
-  kReserved3,
-  kReserved4,
-  kReserved5,
-  kReserved6,
-  kReserved7,
-  kUnknown,  // disambiguated via name string, raise warning if unsupported
-  kOptional  // like kUnknown but can silently be ignored
+  kSpotColor = JXL_CHANNEL_SPOT_COLOR,
+  kSelectionMask = JXL_CHANNEL_SELECTION_MASK,
+  kBlack = JXL_CHANNEL_BLACK,  // for CMYK
+  kCFA = JXL_CHANNEL_CFA,      // Bayer channel
+  kThermal = JXL_CHANNEL_THERMAL,
+  kReserved0 = JXL_CHANNEL_RESERVED0,
+  kReserved1 = JXL_CHANNEL_RESERVED1,
+  kReserved2 = JXL_CHANNEL_RESERVED2,
+  kReserved3 = JXL_CHANNEL_RESERVED3,
+  kReserved4 = JXL_CHANNEL_RESERVED4,
+  kReserved5 = JXL_CHANNEL_RESERVED5,
+  kReserved6 = JXL_CHANNEL_RESERVED6,
+  kReserved7 = JXL_CHANNEL_RESERVED7,
+  // disambiguated via name string, raise warning if unsupported
+  kUnknown = JXL_CHANNEL_UNKNOWN,
+  // like kUnknown but can silently be ignored
+  kOptional = JXL_CHANNEL_OPTIONAL
 };
 static inline const char* EnumName(ExtraChannel /*unused*/) {
   return "ExtraChannel";
@@ -65,13 +69,13 @@ static inline constexpr uint64_t EnumBits(ExtraChannel /*unused*/) {
   using EC = ExtraChannel;
   return MakeBit(EC::kAlpha) | MakeBit(EC::kDepth) | MakeBit(EC::kSpotColor) |
          MakeBit(EC::kSelectionMask) | MakeBit(EC::kBlack) | MakeBit(EC::kCFA) |
-         MakeBit(EC::kUnknown) | MakeBit(EC::kOptional);
+         MakeBit(EC::kThermal) | MakeBit(EC::kUnknown) | MakeBit(EC::kOptional);
 }
 
 // Used in ImageMetadata and ExtraChannelInfo.
 struct BitDepth : public Fields {
   BitDepth();
-  const char* Name() const override { return "BitDepth"; }
+  JXL_FIELDS_NAME(BitDepth)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -99,7 +103,7 @@ struct BitDepth : public Fields {
 // Describes one extra channel.
 struct ExtraChannelInfo : public Fields {
   ExtraChannelInfo();
-  const char* Name() const override { return "ExtraChannelInfo"; }
+  JXL_FIELDS_NAME(ExtraChannelInfo)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -119,7 +123,7 @@ struct ExtraChannelInfo : public Fields {
 
 struct OpsinInverseMatrix : public Fields {
   OpsinInverseMatrix();
-  const char* Name() const override { return "OpsinInverseMatrix"; }
+  JXL_FIELDS_NAME(OpsinInverseMatrix)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -133,7 +137,7 @@ struct OpsinInverseMatrix : public Fields {
 // Information useful for mapping HDR images to lower dynamic range displays.
 struct ToneMapping : public Fields {
   ToneMapping();
-  const char* Name() const override { return "ToneMapping"; }
+  JXL_FIELDS_NAME(ToneMapping)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -163,7 +167,7 @@ struct ToneMapping : public Fields {
 // upsampling.
 struct CustomTransformData : public Fields {
   CustomTransformData();
-  const char* Name() const override { return "CustomTransformData"; }
+  JXL_FIELDS_NAME(CustomTransformData)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -185,7 +189,7 @@ struct CustomTransformData : public Fields {
 // re-create an equivalent image without user input.
 struct ImageMetadata : public Fields {
   ImageMetadata();
-  const char* Name() const override { return "ImageMetadata"; }
+  JXL_FIELDS_NAME(ImageMetadata)
 
   Status VisitFields(Visitor* JXL_RESTRICT visitor) override;
 
@@ -218,6 +222,12 @@ struct ImageMetadata : public Fields {
     bit_depth.bits_per_sample = bits;
     bit_depth.exponent_bits_per_sample = 0;
     bit_depth.floating_point_sample = false;
+    // RCT / Squeeze may add one bit each, and this is about int16_t,
+    // so uint13 should still be OK but limiting it to 12 seems safer.
+    // TODO(jon): figure out a better way to set this header field.
+    // (in particular, if modular mode is not used it doesn't matter,
+    // and if transforms are restricted, up to 15-bit could be done)
+    if (bits > 12) modular_16_bit_buffer_sufficient = false;
   }
   // Sets the original bit depth fields to indicate single precision floating
   // point.
@@ -226,12 +236,14 @@ struct ImageMetadata : public Fields {
     bit_depth.bits_per_sample = 32;
     bit_depth.exponent_bits_per_sample = 8;
     bit_depth.floating_point_sample = true;
+    modular_16_bit_buffer_sufficient = false;
   }
 
   void SetFloat16Samples() {
     bit_depth.bits_per_sample = 16;
     bit_depth.exponent_bits_per_sample = 5;
     bit_depth.floating_point_sample = true;
+    modular_16_bit_buffer_sufficient = false;
   }
 
   void SetIntensityTarget(float intensity_target) {
@@ -332,8 +344,6 @@ struct ImageMetadata : public Fields {
   uint32_t num_extra_channels;
   std::vector<ExtraChannelInfo> extra_channel_info;
 
-  CustomTransformData transform_data;  // often default
-
   // Only present if m.have_preview.
   PreviewHeader preview_size;
   // Only present if m.have_animation.
@@ -369,6 +379,34 @@ struct CodecMetadata {
 
   size_t xsize() const { return size.xsize(); }
   size_t ysize() const { return size.ysize(); }
+  size_t oriented_xsize(bool keep_orientation) const {
+    if (static_cast<uint32_t>(m.GetOrientation()) > 4 && !keep_orientation) {
+      return ysize();
+    } else {
+      return xsize();
+    }
+  }
+  size_t oriented_preview_xsize(bool keep_orientation) const {
+    if (static_cast<uint32_t>(m.GetOrientation()) > 4 && !keep_orientation) {
+      return m.preview_size.ysize();
+    } else {
+      return m.preview_size.xsize();
+    }
+  }
+  size_t oriented_ysize(bool keep_orientation) const {
+    if (static_cast<uint32_t>(m.GetOrientation()) > 4 && !keep_orientation) {
+      return xsize();
+    } else {
+      return ysize();
+    }
+  }
+  size_t oriented_preview_ysize(bool keep_orientation) const {
+    if (static_cast<uint32_t>(m.GetOrientation()) > 4 && !keep_orientation) {
+      return m.preview_size.xsize();
+    } else {
+      return m.preview_size.ysize();
+    }
+  }
 };
 
 }  // namespace jxl

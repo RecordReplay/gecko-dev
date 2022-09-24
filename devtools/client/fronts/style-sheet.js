@@ -9,7 +9,6 @@ const {
   registerFront,
 } = require("devtools/shared/protocol");
 const { styleSheetSpec } = require("devtools/shared/specs/style-sheet");
-const promise = require("promise");
 
 loader.lazyRequireGetter(
   this,
@@ -43,6 +42,7 @@ class StyleSheetFront extends FrontClassWithSpec(styleSheetSpec) {
     this.href = form.href;
     this.nodeHref = form.nodeHref;
     this.disabled = form.disabled;
+    this.constructed = form.constructed;
     this.title = form.title;
     this.system = form.system;
     this.styleSheetIndex = form.styleSheetIndex;
@@ -78,7 +78,7 @@ class StyleSheetFront extends FrontClassWithSpec(styleSheetSpec) {
     const prefIndent = getIndentationFromPrefs();
     if (prefIndent) {
       const { indentUnit, indentWithTabs } = prefIndent;
-      return promise.resolve(indentWithTabs ? "\t" : " ".repeat(indentUnit));
+      return Promise.resolve(indentWithTabs ? "\t" : " ".repeat(indentUnit));
     }
 
     return async function() {

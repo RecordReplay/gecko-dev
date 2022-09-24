@@ -28,6 +28,7 @@
 #include "nsContentUtils.h"
 #include "nsError.h"
 #include "nsIAsyncShutdown.h"
+#include "nsIDUtils.h"
 #include "nsIException.h"  // for nsIStackFrame
 #include "nsIMemoryReporter.h"
 #include "nsIPrincipal.h"
@@ -86,7 +87,7 @@ struct DataInfo {
 
 // The mutex is locked whenever gDataTable is changed, or if gDataTable
 // is accessed off-main-thread.
-static StaticMutex sMutex;
+static StaticMutex sMutex MOZ_UNANNOTATED;
 
 // All changes to gDataTable must happen on the main thread, while locking
 // sMutex. Reading from gDataTable on the main thread may happen without
@@ -169,8 +170,10 @@ void BroadcastBlobURLUnregistration(const nsCString& aURI,
   }
 
   dom::ContentChild* cc = dom::ContentChild::GetSingleton();
-  Unused << NS_WARN_IF(!cc->SendUnstoreAndBroadcastBlobURLUnregistration(
-      aURI, IPC::Principal(aPrincipal)));
+  if (cc) {
+    Unused << NS_WARN_IF(!cc->SendUnstoreAndBroadcastBlobURLUnregistration(
+        aURI, IPC::Principal(aPrincipal)));
+  }
 }
 
 class BlobURLsReporter final : public nsIMemoryReporter {
@@ -311,7 +314,7 @@ class BlobURLsReporter final : public nsIMemoryReporter {
     // GetCurrentJSStack() hand out the JSContext it found.
     JSContext* cx = frame ? nsContentUtils::GetCurrentJSContext() : nullptr;
 
-    for (uint32_t i = 0; frame; ++i) {
+    while (frame) {
       nsString fileNameUTF16;
       frame->GetFilename(cx, fileNameUTF16);
 
@@ -465,7 +468,7 @@ class ReleasingTimerHolder final : public Runnable,
   explicit ReleasingTimerHolder(const nsACString& aURI)
       : Runnable("ReleasingTimerHolder"), mURI(aURI) {}
 
-  ~ReleasingTimerHolder() = default;
+  ~ReleasingTimerHolder() override = default;
 
   void RevokeURI() {
     // Remove the shutting down blocker
@@ -712,9 +715,6 @@ nsresult BlobURLProtocolHandler::GenerateURIString(nsIPrincipal* aPrincipal,
   rv = uuidgen->GenerateUUIDInPlace(&id);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  char chars[NSID_LENGTH];
-  id.ToProvidedString(chars);
-
   aUri.AssignLiteral(BLOBURI_SCHEME);
   aUri.Append(':');
 
@@ -729,7 +729,7 @@ nsresult BlobURLProtocolHandler::GenerateURIString(nsIPrincipal* aPrincipal,
     aUri.Append('/');
   }
 
-  aUri += Substring(chars + 1, chars + NSID_LENGTH - 2);
+  aUri += NSID_TrimBracketsASCII(id);
 
   return NS_OK;
 }
@@ -868,7 +868,7 @@ BlobURLProtocolHandler::GetFlagsForURI(nsIURI* aURI, uint32_t* aResult) {
 
   return NS_MutateURI(new BlobURL::Mutator())
       .SetSpec(aSpec)
-      .Apply(NS_MutatorMethod(&nsIBlobURLMutator::SetRevoked, revoked))
+      .Apply(&nsIBlobURLMutator::SetRevoked, revoked)
       .Finalize(aResult);
 }
 
@@ -927,6 +927,12 @@ bool BlobURLProtocolHandler::GetBlobURLPrincipal(nsIURI* aURI,
 
   principal.forget(aPrincipal);
   return true;
+}
+
+bool BlobURLProtocolHandler::IsBlobURLBroadcastPrincipal(
+    nsIPrincipal* aPrincipal) {
+  return aPrincipal->IsSystemPrincipal() ||
+         aPrincipal->GetIsAddonOrExpandedAddonPrincipal();
 }
 
 }  // namespace dom

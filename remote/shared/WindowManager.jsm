@@ -12,19 +12,14 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   Services: "resource://gre/modules/Services.jsm",
+
   AppInfo: "chrome://remote/content/marionette/appinfo.js",
-  browser: "chrome://remote/content/marionette/browser.js",
   error: "chrome://remote/content/shared/webdriver/Errors.jsm",
-  waitForEvent: "chrome://remote/content/marionette/sync.js",
+  TabManager: "chrome://remote/content/shared/TabManager.jsm",
+  TimedPromise: "chrome://remote/content/marionette/sync.js",
+  EventPromise: "chrome://remote/content/shared/Sync.jsm",
   waitForObserverTopic: "chrome://remote/content/marionette/sync.js",
 });
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "uuidGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
-);
 
 /**
  * Provides helpers to interact with Window objects.
@@ -33,30 +28,8 @@ XPCOMUtils.defineLazyServiceGetter(
  */
 class WindowManager {
   constructor() {
-    // Maps browser's permanentKey to uuid: WeakMap.<Object, string>
-    this._windowHandles = new WeakMap();
     // Maps ChromeWindow to uuid: WeakMap.<Object, string>
     this._chromeWindowHandles = new WeakMap();
-  }
-
-  get windowHandles() {
-    const windowHandles = [];
-
-    for (const win of this.windows) {
-      const tabBrowser = browser.getTabBrowser(win);
-
-      // Only return handles for browser windows
-      if (tabBrowser && tabBrowser.tabs) {
-        for (const tab of tabBrowser.tabs) {
-          const winId = this.getIdForBrowser(browser.getBrowserForTab(tab));
-          if (winId !== null) {
-            windowHandles.push(winId);
-          }
-        }
-      }
-    }
-
-    return windowHandles;
   }
 
   get chromeWindowHandles() {
@@ -93,11 +66,11 @@ class WindowManager {
 
       // Otherwise check if the chrome window has a tab browser, and that it
       // contains a tab with the wanted window handle.
-      const tabBrowser = browser.getTabBrowser(win);
+      const tabBrowser = TabManager.getTabBrowser(win);
       if (tabBrowser && tabBrowser.tabs) {
         for (let i = 0; i < tabBrowser.tabs.length; ++i) {
-          let contentBrowser = browser.getBrowserForTab(tabBrowser.tabs[i]);
-          let contentWindowId = this.getIdForBrowser(contentBrowser);
+          let contentBrowser = TabManager.getBrowserForTab(tabBrowser.tabs[i]);
+          let contentWindowId = TabManager.getIdForBrowser(contentBrowser);
 
           if (contentWindowId == handle) {
             return this.getWindowProperties(win, { tabIndex: i });
@@ -135,38 +108,16 @@ class WindowManager {
    * @return {WindowProperties} A window properties object.
    */
   getWindowProperties(win, options = {}) {
-    if (!(win instanceof Window)) {
+    if (!Window.isInstance(win)) {
       throw new TypeError("Invalid argument, expected a Window object");
     }
 
     return {
       win,
       id: this.getIdForWindow(win),
-      hasTabBrowser: !!browser.getTabBrowser(win),
+      hasTabBrowser: !!TabManager.getTabBrowser(win),
       tabIndex: options.tabIndex,
     };
-  }
-
-  /**
-   * Retrieves an id for the given xul browser element. The id is a dynamically
-   * generated uuid associated with the permanentKey property of the given
-   * browser element.
-   *
-   * @param {xul:browser} browserElement
-   *     The <xul:browser> for which we want to retrieve the id.
-   * @return {String} The unique id for this browser.
-   */
-  getIdForBrowser(browserElement) {
-    if (browserElement === null) {
-      return null;
-    }
-
-    const key = browserElement.permanentKey;
-    if (!this._windowHandles.has(key)) {
-      const uuid = uuidGen.generateUUID().toString();
-      this._windowHandles.set(key, uuid.substring(1, uuid.length - 1));
-    }
-    return this._windowHandles.get(key);
   }
 
   /**
@@ -179,7 +130,7 @@ class WindowManager {
    */
   getIdForWindow(win) {
     if (!this._chromeWindowHandles.has(win)) {
-      const uuid = uuidGen.generateUUID().toString();
+      const uuid = Services.uuid.generateUUID().toString();
       this._chromeWindowHandles.set(win, uuid.substring(1, uuid.length - 1));
     }
     return this._chromeWindowHandles.get(win);
@@ -213,8 +164,8 @@ class WindowManager {
    */
   async focusWindow(win) {
     if (Services.focus.activeWindow != win) {
-      let activated = waitForEvent(win, "activate");
-      let focused = waitForEvent(win, "focus", { capture: true });
+      let activated = new EventPromise(win, "activate");
+      let focused = new EventPromise(win, "focus", { capture: true });
 
       win.focus();
 
@@ -225,25 +176,40 @@ class WindowManager {
   /**
    * Open a new browser window.
    *
-   * @param {window} openerWindow
-   *     The window from which the new window should be opened.
-   * @param {Boolean} [focus=false]
-   *     If true, the opened window will receive the focus.
-   * @param {Boolean} [isPrivate=false]
-   *     If true, the opened window will be a private window.
+   * @param {Object=} options
+   * @param {Boolean=} options.focus
+   *     If true, the opened window will receive the focus. Defaults to false.
+   * @param {Boolean=} options.isPrivate
+   *     If true, the opened window will be a private window. Defaults to false.
+   * @param {ChromeWindow=} options.openerWindow
+   *     Use this window as the opener of the new window. Defaults to the
+   *     topmost window.
    * @return {Promise}
    *     A promise resolving to the newly created chrome window.
    */
-  async openBrowserWindow(openerWindow, focus = false, isPrivate = false) {
+  async openBrowserWindow(options = {}) {
+    let { focus = false, isPrivate = false, openerWindow = null } = options;
+
     switch (AppInfo.name) {
       case "Firefox":
+        if (openerWindow === null) {
+          // If no opener was provided, fallback to the topmost window.
+          openerWindow = Services.wm.getMostRecentBrowserWindow();
+        }
+
+        if (!openerWindow) {
+          throw new error.UnsupportedOperationError(
+            `openWindow() could not find a valid opener window`
+          );
+        }
+
         // Open new browser window, and wait until it is fully loaded.
         // Also wait for the window to be focused and activated to prevent a
         // race condition when promptly focusing to the original window again.
         const win = openerWindow.OpenBrowserWindow({ private: isPrivate });
 
-        const activated = waitForEvent(win, "activate");
-        const focused = waitForEvent(win, "focus", { capture: true });
+        const activated = new EventPromise(win, "activate");
+        const focused = new EventPromise(win, "focus", { capture: true });
         const startup = waitForObserverTopic(
           "browser-delayed-startup-finished",
           {
@@ -251,7 +217,11 @@ class WindowManager {
           }
         );
 
+        // TODO: Both for WebDriver BiDi and classic, opening a new window
+        // should not run the focus steps. When focus is false we should avoid
+        // focusing the new window completely. See Bug 1766329
         win.focus();
+
         await Promise.all([activated, focused, startup]);
 
         // The new window shouldn't get focused. As such set the
@@ -267,6 +237,42 @@ class WindowManager {
           `openWindow() not supported in ${AppInfo.name}`
         );
     }
+  }
+
+  /**
+   * Wait until the initial application window has been opened and loaded.
+   *
+   * @return {Promise<WindowProxy>}
+   *     A promise that resolved to the application window.
+   */
+  waitForInitialApplicationWindowLoaded() {
+    return new TimedPromise(
+      async resolve => {
+        const windowReadyTopic = AppInfo.isThunderbird
+          ? "mail-delayed-startup-finished"
+          : "browser-delayed-startup-finished";
+
+        // This call includes a fallback to "mail3:pane" as well.
+        const win = Services.wm.getMostRecentBrowserWindow();
+
+        const windowLoaded = waitForObserverTopic(windowReadyTopic, {
+          checkFn: subject => (win !== null ? subject == win : true),
+        });
+
+        // The current window has already been finished loading.
+        if (win && win.document.readyState == "complete") {
+          resolve(win);
+          return;
+        }
+
+        // Wait for the next browser/mail window to open and finished loading.
+        const { subject } = await windowLoaded;
+        resolve(subject);
+      },
+      {
+        errorMessage: "No applicable application window found",
+      }
+    );
   }
 }
 

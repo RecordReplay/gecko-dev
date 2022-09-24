@@ -17,7 +17,6 @@ class ErrorResult;
 
 namespace dom {
 struct GPUComputePassDescriptor;
-class HTMLCanvasElement;
 template <typename T>
 class Sequence;
 struct GPUCommandBufferDescriptor;
@@ -28,7 +27,7 @@ struct GPUImageCopyTexture;
 struct GPUImageBitmapCopyView;
 struct GPUImageDataLayout;
 struct GPURenderPassDescriptor;
-typedef RangeEnforcedUnsignedLongSequenceOrGPUExtent3DDict GPUExtent3D;
+using GPUExtent3D = RangeEnforcedUnsignedLongSequenceOrGPUExtent3DDict;
 }  // namespace dom
 namespace webgpu {
 namespace ffi {
@@ -41,6 +40,7 @@ struct WGPUExtent3d;
 
 class BindGroup;
 class Buffer;
+class CanvasContext;
 class CommandBuffer;
 class ComputePassEncoder;
 class Device;
@@ -69,9 +69,11 @@ class CommandEncoder final : public ObjectBase, public ChildOf<Device> {
   void Cleanup();
 
   RefPtr<WebGPUChild> mBridge;
-  nsTArray<WeakPtr<dom::HTMLCanvasElement>> mTargetCanvases;
+  nsTArray<WeakPtr<CanvasContext>> mTargetContexts;
 
  public:
+  const auto& GetDevice() const { return mParent; };
+
   void EndComputePass(ffi::WGPUComputePass& aPass, ErrorResult& aRv);
   void EndRenderPass(ffi::WGPURenderPass& aPass, ErrorResult& aRv);
 
@@ -88,6 +90,10 @@ class CommandEncoder final : public ObjectBase, public ChildOf<Device> {
   void CopyTextureToTexture(const dom::GPUImageCopyTexture& aSource,
                             const dom::GPUImageCopyTexture& aDestination,
                             const dom::GPUExtent3D& aCopySize);
+
+  void PushDebugGroup(const nsAString& aString);
+  void PopDebugGroup();
+  void InsertDebugMarker(const nsAString& aString);
 
   already_AddRefed<ComputePassEncoder> BeginComputePass(
       const dom::GPUComputePassDescriptor& aDesc);

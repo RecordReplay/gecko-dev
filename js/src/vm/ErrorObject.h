@@ -117,8 +117,8 @@ class ErrorObject : public NativeObject {
   inline uint64_t timeWarpTarget() const;
 
   JSString* getMessage() const {
-    const HeapSlot& slot = getReservedSlotRef(MESSAGE_SLOT);
-    return slot.isString() ? slot.toString() : nullptr;
+    Value val = getReservedSlot(MESSAGE_SLOT);
+    return val.isString() ? val.toString() : nullptr;
   }
 
   mozilla::Maybe<Value> getCause() const {

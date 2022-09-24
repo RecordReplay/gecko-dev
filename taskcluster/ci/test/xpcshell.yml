@@ -4,12 +4,10 @@
 ---
 job-defaults:
     suite: xpcshell
-    variants: ['fission']
     target:
         by-test-platform:
-            android-em-7.*: geckoview-androidTest.apk
+            android-em-7.*: geckoview-test_runner.apk
             default: null
-    python-3: true
     mozharness:
         script:
             by-test-platform:
@@ -19,7 +17,7 @@ job-defaults:
             by-test-platform:
                 android-em-7.*:
                     - android/android_common.py
-                    - android/androidx86_7_0.py
+                    - android/android-x86_64.py
                 linux.*:
                     - unittests/linux_unittest.py
                     - remove_executables.py
@@ -29,6 +27,7 @@ job-defaults:
                     - unittests/win_unittest.py
         requires-signed-builds:
             by-test-platform:
+                macosx1100.*: true
                 windows10-64-2004-asan-qr/opt: false    # No XPCShell on ASAN yet
                 windows10-32-mingwclang-qr/opt: false
                 windows10-32-mingwclang-qr/debug: false
@@ -40,19 +39,41 @@ job-defaults:
 xpcshell:
     description: "xpcshell test run"
     treeherder-symbol: X(X)
+    variants:
+        - fission
+        - socketprocess_networking+no-fission
+        - socketprocess_networking+fission
+        - no-fission
+    run-without-variant: false
     run-on-projects:
         by-variant:
-            fission: []
-            default:
+            fission:
                 by-test-platform:
+                    android.*: []
                     .*-tsan-qr/opt: ['trunk']
-                    android-em-7.0-x86_64/debug-isolated-process: []
-                    windows10-64-2004-asan-qr/opt: []  # No XPCShell on ASAN yet
                     default: built-projects
+            socketprocess_networking+no-fission:
+                by-test-platform:
+                    linux1804-64(-qr)?/debug: ['autoland', 'mozilla-central']
+                    default: []
+            socketprocess_networking+fission:
+                by-test-platform:
+                    macosx.*-64(-shippable|-devedition|-asan)?(-qr)?/.*: ['autoland', 'mozilla-central']
+                    linux1804-64(-qr)?/debug: ['autoland', 'mozilla-central']
+                    windows.*(-shippable|-devedition|-asan|.*-qr)?/.*: ['autoland', 'mozilla-central']
+                    windows10-64-2004-asan-qr/opt: []  # No XPCShell on ASAN yet
+                    default: []
+            no-fission:
+                by-test-platform:
+                    android-em-7.0-x86_64-qr/debug-isolated-process: []
+                    android.*: built-projects
+                    linux1804-64-qr/debug: ['trunk']
+                    linux1804-64(-shippable|-asan)?-qr/opt: ['trunk']
+                    default: []
     chunks:
         by-test-platform:
             .*-ccov.*/.*: 6
-            windows10-64-ccov-qr/opt: 6
+            windows10-64-2004-ccov-qr/opt: 6
             android-em-7.*: 2
             macosx.*-64(-shippable|-devedition|-asan)?(-qr)?/.*: 2
             linux1804-64(-qr)?/debug: 6
@@ -61,20 +82,16 @@ xpcshell:
             default: 5
     max-run-time:
         by-test-platform:
-            windows.*(-shippable)/opt: 5400
             .*64-ccov(-qr)?/.*: 7200
+            .*64-2004-ccov(-qr)?/.*: 7200  # Windows 10 x64 2004 CCov specific, the line above does not catch this case.
             .*-tsan-qr/opt: 7200
-            default: 2700
+            default: 5400
     allow-software-gl-layers: false
     tier:
-        by-variant:
-            fission: 2
-            default:
-                by-test-platform:
-                    windows10-64-2004-asan.*: 3
-                    macosx1100.*: 2
-                    android-em-7.0-x86_64/debug-isolated-process: 3
-                    default: default
+        by-test-platform:
+            windows10-64-2004-asan.*: 3
+            android-em-7.0-x86_64-qr/debug-isolated-process: 3
+            default: default
     mozharness:
         extra-options:
             by-test-platform:
@@ -104,6 +121,8 @@ xpcshell:
                     - win32-minidump-stackwalk
                     - win32-fix-stacks
                 android-em-7.*:
+                    - android-system-image-x86_64-linux
+                    - android-avd-x86_64-linux
                     - android-emulator-linux
                     - linux64-node
                     - linux64-minidump-stackwalk
@@ -113,7 +132,6 @@ xpcshell-failures:
     treeherder-symbol: X-f(X)
     run-on-projects:
         by-variant:
-            fission: []
             default: ["mozilla-central"]
     chunks: 2
     max-run-time: 2700

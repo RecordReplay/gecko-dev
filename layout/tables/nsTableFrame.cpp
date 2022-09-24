@@ -161,9 +161,7 @@ ComputedStyle* nsTableFrame::GetParentComputedStyle(
 
 nsTableFrame::nsTableFrame(ComputedStyle* aStyle, nsPresContext* aPresContext,
                            ClassID aID)
-    : nsContainerFrame(aStyle, aPresContext, aID),
-      mCellMap(nullptr),
-      mTableLayoutStrategy(nullptr) {
+    : nsContainerFrame(aStyle, aPresContext, aID) {
   memset(&mBits, 0, sizeof(mBits));
 }
 
@@ -189,11 +187,11 @@ void nsTableFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
   if (!aPrevInFlow) {
     // If we're the first-in-flow, we manage the cell map & layout strategy that
     // get used by our continuation chain:
-    mCellMap = new nsTableCellMap(*this, borderCollapse);
+    mCellMap = MakeUnique<nsTableCellMap>(*this, borderCollapse);
     if (IsAutoLayout()) {
-      mTableLayoutStrategy = new BasicTableLayoutStrategy(this);
+      mTableLayoutStrategy = MakeUnique<BasicTableLayoutStrategy>(this);
     } else {
-      mTableLayoutStrategy = new FixedTableLayoutStrategy(this);
+      mTableLayoutStrategy = MakeUnique<FixedTableLayoutStrategy>(this);
     }
   } else {
     // Set my isize, because all frames in a table flow are the same isize and
@@ -203,10 +201,12 @@ void nsTableFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
   }
 }
 
-nsTableFrame::~nsTableFrame() {
-  delete mCellMap;
-  delete mTableLayoutStrategy;
-}
+// Define here (Rather than in the header), even if it's trival, to avoid
+// UniquePtr members causing compile errors when their destructors are
+// implicitly inserted into this destructor. Destruction requires
+// the full definition of types that these UniquePtrs are managing, and
+// the header only has forward declarations of them.
+nsTableFrame::~nsTableFrame() = default;
 
 void nsTableFrame::DestroyFrom(nsIFrame* aDestructRoot,
                                PostDestroyData& aPostDestroyData) {
@@ -648,7 +648,7 @@ void nsTableFrame::RemoveCol(nsTableColGroupFrame* aColGroupFrame,
  * Only the first-in-flow has a legit cell map.
  */
 nsTableCellMap* nsTableFrame::GetCellMap() const {
-  return static_cast<nsTableFrame*>(FirstInFlow())->mCellMap;
+  return static_cast<nsTableFrame*>(FirstInFlow())->mCellMap.get();
 }
 
 nsTableColGroupFrame* nsTableFrame::CreateSyntheticColGroupFrame() {
@@ -1128,121 +1128,12 @@ void nsTableFrame::GetChildLists(nsTArray<ChildList>* aLists) const {
   mColGroups.AppendIfNonempty(aLists, kColGroupList);
 }
 
-nsRect nsDisplayTableItem::GetBounds(nsDisplayListBuilder* aBuilder,
-                                     bool* aSnap) const {
-  *aSnap = false;
-  return mFrame->InkOverflowRectRelativeToSelf() + ToReferenceFrame();
-}
-
-void nsDisplayTableItem::UpdateForFrameBackground(nsIFrame* aFrame) {
-  ComputedStyle* bgSC;
-  if (!nsCSSRendering::FindBackground(aFrame, &bgSC)) return;
-  if (!bgSC->StyleBackground()->HasFixedBackground(aFrame)) return;
-
-  mPartHasFixedBackground = true;
-}
-
-nsDisplayItemGeometry* nsDisplayTableItem::AllocateGeometry(
-    nsDisplayListBuilder* aBuilder) {
-  return new nsDisplayTableItemGeometry(
-      this, aBuilder, mFrame->GetOffsetTo(mFrame->PresShell()->GetRootFrame()));
-}
-
-void nsDisplayTableItem::ComputeInvalidationRegion(
-    nsDisplayListBuilder* aBuilder, const nsDisplayItemGeometry* aGeometry,
-    nsRegion* aInvalidRegion) const {
-  auto geometry = static_cast<const nsDisplayTableItemGeometry*>(aGeometry);
-
-  bool invalidateForAttachmentFixed = false;
-  if (mDrawsBackground && mPartHasFixedBackground) {
-    nsPoint frameOffsetToViewport =
-        mFrame->GetOffsetTo(mFrame->PresShell()->GetRootFrame());
-    invalidateForAttachmentFixed =
-        frameOffsetToViewport != geometry->mFrameOffsetToViewport;
-  }
-
-  if (invalidateForAttachmentFixed ||
-      (aBuilder->ShouldSyncDecodeImages() &&
-       geometry->ShouldInvalidateToSyncDecodeImages())) {
-    bool snap;
-    aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
-  }
-
-  nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
-}
-
-nsDisplayTableBackgroundSet::nsDisplayTableBackgroundSet(
-    nsDisplayListBuilder* aBuilder, nsIFrame* aTable)
-    : mBuilder(aBuilder) {
-  mPrevTableBackgroundSet = mBuilder->SetTableBackgroundSet(this);
-  mozilla::DebugOnly<const nsIFrame*> reference =
-      mBuilder->FindReferenceFrameFor(aTable, &mToReferenceFrame);
-  MOZ_ASSERT(nsLayoutUtils::FindNearestCommonAncestorFrame(reference, aTable));
-  mDirtyRect = mBuilder->GetDirtyRect();
-  mCombinedTableClipChain =
-      mBuilder->ClipState().GetCurrentCombinedClipChain(aBuilder);
-  mTableASR = mBuilder->CurrentActiveScrolledRoot();
-}
-
-// A display item that draws all collapsed borders for a table.
-// At some point, we may want to find a nicer partitioning for dividing
-// border-collapse segments into their own display items.
-class nsDisplayTableBorderCollapse final : public nsDisplayTableItem {
- public:
-  nsDisplayTableBorderCollapse(nsDisplayListBuilder* aBuilder,
-                               nsTableFrame* aFrame)
-      : nsDisplayTableItem(aBuilder, aFrame) {
-    MOZ_COUNT_CTOR(nsDisplayTableBorderCollapse);
-  }
-  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTableBorderCollapse)
-
-  void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
-  bool CreateWebRenderCommands(
-      wr::DisplayListBuilder& aBuilder, wr::IpcResourceUpdateQueue& aResources,
-      const StackingContextHelper& aSc,
-      layers::RenderRootStateManager* aManager,
-      nsDisplayListBuilder* aDisplayListBuilder) override;
-  NS_DISPLAY_DECL_NAME("TableBorderCollapse", TYPE_TABLE_BORDER_COLLAPSE)
-};
-
-void nsDisplayTableBorderCollapse::Paint(nsDisplayListBuilder* aBuilder,
-                                         gfxContext* aCtx) {
-  nsPoint pt = ToReferenceFrame();
-  DrawTarget* drawTarget = aCtx->GetDrawTarget();
-
-  gfxPoint devPixelOffset = nsLayoutUtils::PointToGfxPoint(
-      pt, mFrame->PresContext()->AppUnitsPerDevPixel());
-
-  // XXX we should probably get rid of this translation at some stage
-  // But that would mean modifying PaintBCBorders, ugh
-  AutoRestoreTransform autoRestoreTransform(drawTarget);
-  drawTarget->SetTransform(
-      drawTarget->GetTransform().PreTranslate(ToPoint(devPixelOffset)));
-
-  static_cast<nsTableFrame*>(mFrame)->PaintBCBorders(*drawTarget,
-                                                     GetPaintRect() - pt);
-}
-
-bool nsDisplayTableBorderCollapse::CreateWebRenderCommands(
-    wr::DisplayListBuilder& aBuilder, wr::IpcResourceUpdateQueue& aResources,
-    const StackingContextHelper& aSc,
-    mozilla::layers::RenderRootStateManager* aManager,
-    nsDisplayListBuilder* aDisplayListBuilder) {
-  static_cast<nsTableFrame*>(mFrame)->CreateWebRenderCommandsForBCBorders(
-      aBuilder, aSc, GetPaintRect(), ToReferenceFrame());
-  return true;
-}
-
 static inline bool FrameHasBorder(nsIFrame* f) {
   if (!f->StyleVisibility()->IsVisible()) {
     return false;
   }
 
-  if (f->StyleBorder()->HasBorder()) {
-    return true;
-  }
-
-  return false;
+  return f->StyleBorder()->HasBorder();
 }
 
 void nsTableFrame::CalcHasBCBorders() {
@@ -1300,6 +1191,10 @@ void nsTableFrame::CalcHasBCBorders() {
   }
 
   SetHasBCBorders(false);
+}
+
+namespace mozilla {
+class nsDisplayTableBorderCollapse;
 }
 
 // table paint code is concerned primarily with borders and bg color
@@ -2227,16 +2122,10 @@ void nsTableFrame::DidSetComputedStyle(ComputedStyle* aOldComputedStyle) {
 
   bool isAuto = IsAutoLayout();
   if (isAuto != (LayoutStrategy()->GetType() == nsITableLayoutStrategy::Auto)) {
-    nsITableLayoutStrategy* temp;
     if (isAuto)
-      temp = new BasicTableLayoutStrategy(this);
+      mTableLayoutStrategy = MakeUnique<BasicTableLayoutStrategy>(this);
     else
-      temp = new FixedTableLayoutStrategy(this);
-
-    if (temp) {
-      delete mTableLayoutStrategy;
-      mTableLayoutStrategy = temp;
-    }
+      mTableLayoutStrategy = MakeUnique<FixedTableLayoutStrategy>(this);
   }
 }
 
@@ -2394,7 +2283,7 @@ void nsTableFrame::HomogenousInsertFrames(ChildListID aListID,
       }
       nsCOMPtr<nsIContent> container = content->GetParent();
       if (MOZ_LIKELY(container)) {  // XXX need this null-check, see bug 411823.
-        int32_t newIndex = container->ComputeIndexOf(content);
+        const Maybe<uint32_t> newIndex = container->ComputeIndexOf(content);
         nsIFrame* kidFrame;
         nsTableColGroupFrame* lastColGroup = nullptr;
         if (isColGroup) {
@@ -2404,7 +2293,7 @@ void nsTableFrame::HomogenousInsertFrames(ChildListID aListID,
           kidFrame = mFrames.FirstChild();
         }
         // Important: need to start at a value smaller than all valid indices
-        int32_t lastIndex = -1;
+        Maybe<uint32_t> lastIndex;
         while (kidFrame) {
           if (isColGroup) {
             if (kidFrame == lastColGroup) {
@@ -2418,8 +2307,13 @@ void nsTableFrame::HomogenousInsertFrames(ChildListID aListID,
                  (parentContent == (content = pseudoFrame->GetContent()))) {
             pseudoFrame = pseudoFrame->PrincipalChildList().FirstChild();
           }
-          int32_t index = container->ComputeIndexOf(content);
-          if (index > lastIndex && index < newIndex) {
+          const Maybe<uint32_t> index = container->ComputeIndexOf(content);
+          // XXX Keep the odd traditional behavior in some indices are nothing
+          //     cases for now.
+          if ((index.isSome() &&
+               (lastIndex.isNothing() || *index > *lastIndex)) &&
+              (newIndex.isSome() &&
+               (index.isNothing() || *index < *newIndex))) {
             lastIndex = index;
             aPrevFrame = kidFrame;
           }
@@ -4895,8 +4789,6 @@ void BCCornerInfo::Update(mozilla::LogicalSide aSide, BCCellBorder aBorder) {
 struct BCCorners {
   BCCorners(int32_t aNumCorners, int32_t aStartIndex);
 
-  ~BCCorners() { delete[] corners; }
-
   BCCornerInfo& operator[](int32_t i) const {
     NS_ASSERTION((i >= startIndex) && (i <= endIndex), "program error");
     return corners[clamped(i, startIndex, endIndex) - startIndex];
@@ -4904,20 +4796,18 @@ struct BCCorners {
 
   int32_t startIndex;
   int32_t endIndex;
-  BCCornerInfo* corners;
+  UniquePtr<BCCornerInfo[]> corners;
 };
 
 BCCorners::BCCorners(int32_t aNumCorners, int32_t aStartIndex) {
   NS_ASSERTION((aNumCorners > 0) && (aStartIndex >= 0), "program error");
   startIndex = aStartIndex;
   endIndex = aStartIndex + aNumCorners - 1;
-  corners = new BCCornerInfo[aNumCorners];
+  corners = MakeUnique<BCCornerInfo[]>(aNumCorners);
 }
 
 struct BCCellBorders {
   BCCellBorders(int32_t aNumBorders, int32_t aStartIndex);
-
-  ~BCCellBorders() { delete[] borders; }
 
   BCCellBorder& operator[](int32_t i) const {
     NS_ASSERTION((i >= startIndex) && (i <= endIndex), "program error");
@@ -4926,14 +4816,14 @@ struct BCCellBorders {
 
   int32_t startIndex;
   int32_t endIndex;
-  BCCellBorder* borders;
+  UniquePtr<BCCellBorder[]> borders;
 };
 
 BCCellBorders::BCCellBorders(int32_t aNumBorders, int32_t aStartIndex) {
   NS_ASSERTION((aNumBorders > 0) && (aStartIndex >= 0), "program error");
   startIndex = aStartIndex;
   endIndex = aStartIndex + aNumBorders - 1;
-  borders = new BCCellBorder[aNumBorders];
+  borders = MakeUnique<BCCellBorder[]>(aNumBorders);
 }
 
 // this function sets the new border properties and returns true if the border
@@ -5043,8 +4933,8 @@ void nsTableFrame::ExpandBCDamageArea(TableArea& aArea) const {
         }
       }
       // check for spanners on the left and right
-      int32_t iterStartY = -1;
-      int32_t iterEndY = -1;
+      int32_t iterStartY;
+      int32_t iterEndY;
       if ((dStartY >= rgStartY) && (dStartY <= rgEndY)) {
         // the damage area starts in the row group
         iterStartY = dStartY;
@@ -5057,22 +4947,25 @@ void nsTableFrame::ExpandBCDamageArea(TableArea& aArea) const {
         // the damage area contains the row group
         iterStartY = rgStartY;
         iterEndY = rgEndY;
+      } else {
+        // the damage area does not overlap the row group
+        continue;
       }
-      if ((iterStartY >= 0) && (iterEndY >= 0)) {
-        for (int32_t y = iterStartY; y <= iterEndY; y++) {
-          if (uint32_t(y - rgStartY) >= cellMap->mRows.Length()) ABORT0();
-          const nsCellMap::CellDataArray& row = cellMap->mRows[y - rgStartY];
-          CellData* cellData = row.SafeElementAt(dStartX);
+      NS_ASSERTION(iterStartY >= 0 && iterEndY >= 0,
+                   "table index values are expected to be nonnegative");
+      for (int32_t y = iterStartY; y <= iterEndY; y++) {
+        if (uint32_t(y - rgStartY) >= cellMap->mRows.Length()) ABORT0();
+        const nsCellMap::CellDataArray& row = cellMap->mRows[y - rgStartY];
+        CellData* cellData = row.SafeElementAt(dStartX);
+        if (cellData && (cellData->IsColSpan())) {
+          haveSpanner = true;
+          break;
+        }
+        if (dEndX < (numCols - 1)) {
+          cellData = row.SafeElementAt(dEndX + 1);
           if (cellData && (cellData->IsColSpan())) {
             haveSpanner = true;
             break;
-          }
-          if (dEndX < (numCols - 1)) {
-            cellData = row.SafeElementAt(dEndX + 1);
-            if (cellData && (cellData->IsColSpan())) {
-              haveSpanner = true;
-              break;
-            }
           }
         }
       }
@@ -6075,11 +5968,6 @@ struct BCPaintBorderAction {
 class BCPaintBorderIterator {
  public:
   explicit BCPaintBorderIterator(nsTableFrame* aTable);
-  ~BCPaintBorderIterator() {
-    if (mBlockDirInfo) {
-      delete[] mBlockDirInfo;
-    }
-  }
   void Reset();
 
   /**
@@ -6175,24 +6063,25 @@ class BCPaintBorderIterator {
            mRowIndex != mDamageArea.StartRow();
   }
 
-  nscoord mInitialOffsetI;       // offsetI of the first border with
-                                 // respect to the table
-  nscoord mInitialOffsetB;       // offsetB of the first border with
-                                 // respect to the table
-  nscoord mNextOffsetB;          // offsetB of the next segment
-  BCBlockDirSeg* mBlockDirInfo;  // this array is used differently when
-                                 // inline-dir and block-dir borders are drawn
-                                 // When inline-dir border are drawn we cache
-                                 // the column widths and the width of the
-                                 // block-dir borders that arrive from bStart
-                                 // When we draw block-dir borders we store
-                                 // lengths and width for block-dir borders
-                                 // before they are drawn while we  move over
-                                 // the columns in the damage area
-                                 // It has one more elements than columns are
-                                 // in the table.
-  BCInlineDirSeg mInlineSeg;     // the inline-dir segment while we
-                                 // move over the colums
+  nscoord mInitialOffsetI;  // offsetI of the first border with
+                            // respect to the table
+  nscoord mInitialOffsetB;  // offsetB of the first border with
+                            // respect to the table
+  nscoord mNextOffsetB;     // offsetB of the next segment
+  // this array is used differently when
+  // inline-dir and block-dir borders are drawn
+  // When inline-dir border are drawn we cache
+  // the column widths and the width of the
+  // block-dir borders that arrive from bStart
+  // When we draw block-dir borders we store
+  // lengths and width for block-dir borders
+  // before they are drawn while we  move over
+  // the columns in the damage area
+  // It has one more elements than columns are
+  // in the table.
+  UniquePtr<BCBlockDirSeg[]> mBlockDirInfo;
+  BCInlineDirSeg mInlineSeg;        // the inline-dir segment while we
+                                    // move over the colums
   BCPixelSize mPrevInlineSegBSize;  // the bSize of the previous
                                     // inline-dir border
 
@@ -6232,7 +6121,6 @@ BCPaintBorderIterator::BCPaintBorderIterator(nsTableFrame* aTable)
       mInitialOffsetI(0),
       mNextOffsetB(0),
       mPrevInlineSegBSize(0) {
-  mBlockDirInfo = nullptr;
   LogicalMargin childAreaOffset = mTable->GetChildAreaOffset(mTableWM, nullptr);
   // y position of first row in damage area
   mInitialOffsetB =
@@ -6347,7 +6235,7 @@ bool BCPaintBorderIterator::SetDamageArea(const nsRect& aDirtyRect) {
                 1 + endRowIndex - startRowIndex);
 
   Reset();
-  mBlockDirInfo = new BCBlockDirSeg[mDamageArea.ColCount() + 1];
+  mBlockDirInfo = MakeUnique<BCBlockDirSeg[]>(mDamageArea.ColCount() + 1);
   return true;
 }
 
@@ -6965,7 +6853,8 @@ static void CreateWRCommandsForBeveledBorder(
                        aBorderParams.mAppUnitsPerDevPixel,
                        aBorderParams.mBackfaceIsVisible, false);
 
-    aBuilder.PushRect(r, r, aBorderParams.mBackfaceIsVisible, color);
+    aBuilder.PushRect(r, r, aBorderParams.mBackfaceIsVisible, false, false,
+                      color);
   }
 }
 
@@ -7401,7 +7290,8 @@ void BCPaintBorderIterator::AccumulateOrDoActionBlockDirSegment(
  */
 void BCPaintBorderIterator::ResetVerInfo() {
   if (mBlockDirInfo) {
-    memset(mBlockDirInfo, 0, mDamageArea.ColCount() * sizeof(BCBlockDirSeg));
+    memset(mBlockDirInfo.get(), 0,
+           mDamageArea.ColCount() * sizeof(BCBlockDirSeg));
     // XXX reinitialize properly
     for (auto xIndex : IntegerRange(mDamageArea.ColCount())) {
       mBlockDirInfo[xIndex].mColWidth = -1;
@@ -7569,3 +7459,116 @@ void nsTableFrame::UpdateStyleOfOwnedAnonBoxesForTableWrapper(
   MOZ_ASSERT(!aWrapperFrame->HasAnyStateBits(NS_FRAME_OWNS_ANON_BOXES),
              "Wrapper frame doesn't have any anon boxes of its own!");
 }
+
+namespace mozilla {
+
+nsRect nsDisplayTableItem::GetBounds(nsDisplayListBuilder* aBuilder,
+                                     bool* aSnap) const {
+  *aSnap = false;
+  return mFrame->InkOverflowRectRelativeToSelf() + ToReferenceFrame();
+}
+
+void nsDisplayTableItem::UpdateForFrameBackground(nsIFrame* aFrame) {
+  ComputedStyle* bgSC;
+  if (!nsCSSRendering::FindBackground(aFrame, &bgSC)) return;
+  if (!bgSC->StyleBackground()->HasFixedBackground(aFrame)) return;
+
+  mPartHasFixedBackground = true;
+}
+
+nsDisplayItemGeometry* nsDisplayTableItem::AllocateGeometry(
+    nsDisplayListBuilder* aBuilder) {
+  return new nsDisplayTableItemGeometry(
+      this, aBuilder, mFrame->GetOffsetTo(mFrame->PresShell()->GetRootFrame()));
+}
+
+void nsDisplayTableItem::ComputeInvalidationRegion(
+    nsDisplayListBuilder* aBuilder, const nsDisplayItemGeometry* aGeometry,
+    nsRegion* aInvalidRegion) const {
+  auto geometry = static_cast<const nsDisplayTableItemGeometry*>(aGeometry);
+
+  bool invalidateForAttachmentFixed = false;
+  if (mDrawsBackground && mPartHasFixedBackground) {
+    nsPoint frameOffsetToViewport =
+        mFrame->GetOffsetTo(mFrame->PresShell()->GetRootFrame());
+    invalidateForAttachmentFixed =
+        frameOffsetToViewport != geometry->mFrameOffsetToViewport;
+  }
+
+  if (invalidateForAttachmentFixed ||
+      (aBuilder->ShouldSyncDecodeImages() &&
+       geometry->ShouldInvalidateToSyncDecodeImages())) {
+    bool snap;
+    aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
+  }
+
+  nsDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry, aInvalidRegion);
+}
+
+nsDisplayTableBackgroundSet::nsDisplayTableBackgroundSet(
+    nsDisplayListBuilder* aBuilder, nsIFrame* aTable)
+    : mBuilder(aBuilder),
+      mColGroupBackgrounds(aBuilder),
+      mColBackgrounds(aBuilder) {
+  mPrevTableBackgroundSet = mBuilder->SetTableBackgroundSet(this);
+  mozilla::DebugOnly<const nsIFrame*> reference =
+      mBuilder->FindReferenceFrameFor(aTable, &mToReferenceFrame);
+  MOZ_ASSERT(nsLayoutUtils::FindNearestCommonAncestorFrame(reference, aTable));
+  mDirtyRect = mBuilder->GetDirtyRect();
+  mCombinedTableClipChain =
+      mBuilder->ClipState().GetCurrentCombinedClipChain(aBuilder);
+  mTableASR = mBuilder->CurrentActiveScrolledRoot();
+}
+
+// A display item that draws all collapsed borders for a table.
+// At some point, we may want to find a nicer partitioning for dividing
+// border-collapse segments into their own display items.
+class nsDisplayTableBorderCollapse final : public nsDisplayTableItem {
+ public:
+  nsDisplayTableBorderCollapse(nsDisplayListBuilder* aBuilder,
+                               nsTableFrame* aFrame)
+      : nsDisplayTableItem(aBuilder, aFrame) {
+    MOZ_COUNT_CTOR(nsDisplayTableBorderCollapse);
+  }
+  MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayTableBorderCollapse)
+
+  void Paint(nsDisplayListBuilder* aBuilder, gfxContext* aCtx) override;
+  bool CreateWebRenderCommands(
+      wr::DisplayListBuilder& aBuilder, wr::IpcResourceUpdateQueue& aResources,
+      const StackingContextHelper& aSc,
+      layers::RenderRootStateManager* aManager,
+      nsDisplayListBuilder* aDisplayListBuilder) override;
+  NS_DISPLAY_DECL_NAME("TableBorderCollapse", TYPE_TABLE_BORDER_COLLAPSE)
+};
+
+void nsDisplayTableBorderCollapse::Paint(nsDisplayListBuilder* aBuilder,
+                                         gfxContext* aCtx) {
+  nsPoint pt = ToReferenceFrame();
+  DrawTarget* drawTarget = aCtx->GetDrawTarget();
+
+  gfxPoint devPixelOffset = nsLayoutUtils::PointToGfxPoint(
+      pt, mFrame->PresContext()->AppUnitsPerDevPixel());
+
+  // XXX we should probably get rid of this translation at some stage
+  // But that would mean modifying PaintBCBorders, ugh
+  AutoRestoreTransform autoRestoreTransform(drawTarget);
+  drawTarget->SetTransform(
+      drawTarget->GetTransform().PreTranslate(ToPoint(devPixelOffset)));
+
+  static_cast<nsTableFrame*>(mFrame)->PaintBCBorders(
+      *drawTarget, GetPaintRect(aBuilder, aCtx) - pt);
+}
+
+bool nsDisplayTableBorderCollapse::CreateWebRenderCommands(
+    wr::DisplayListBuilder& aBuilder, wr::IpcResourceUpdateQueue& aResources,
+    const StackingContextHelper& aSc,
+    mozilla::layers::RenderRootStateManager* aManager,
+    nsDisplayListBuilder* aDisplayListBuilder) {
+  bool dummy;
+  static_cast<nsTableFrame*>(mFrame)->CreateWebRenderCommandsForBCBorders(
+      aBuilder, aSc, GetBounds(aDisplayListBuilder, &dummy),
+      ToReferenceFrame());
+  return true;
+}
+
+}  // namespace mozilla

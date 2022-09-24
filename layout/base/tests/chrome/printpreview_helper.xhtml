@@ -61,8 +61,7 @@ function printpreview(options = {}) {
     }
   }
   var settings = Cc["@mozilla.org/gfx/printsettings-service;1"]
-                       .getService(Ci.nsIPrintSettingsService).newPrintSettings;
-  settings.showPrintProgress = false;
+                       .getService(Ci.nsIPrintSettingsService).createNewPrintSettings();
   settings.printBGColors = true;
   settings.headerStrLeft = "";
   settings.headerStrRight = "";
@@ -467,6 +466,15 @@ async function compareFiles(src1, src2, options = {}) {
     iframeElement.addEventListener("load", resolve, { capture: true, once: true });
     iframeElement.setAttribute("src", new URL(src1, BASE).href);
   });
+  let mediaElements = iframeElement.contentDocument.querySelectorAll(
+    "audio, video"
+  );
+  for (let mediaElement of mediaElements) {
+    let { widget } = SpecialPowers.wrap(iframeElement.contentWindow)
+      .windowGlobalChild.getActor("UAWidgets")
+      .widgets.get(mediaElement);
+    await widget.impl.Utils.l10n.translateRoots();
+  }
 
   if (messagePromise) {
     info("awaiting for message to arrive");
@@ -481,6 +489,15 @@ async function compareFiles(src1, src2, options = {}) {
     iframeElement.addEventListener("load", resolve, { capture: true, once: true });
     iframeElement.setAttribute("src", new URL(src2, BASE).href);
   });
+  mediaElements = iframeElement.contentDocument.querySelectorAll(
+    "audio, video"
+  );
+  for (let mediaElement of mediaElements) {
+    let { widget } = SpecialPowers.wrap(iframeElement.contentWindow)
+      .windowGlobalChild.getActor("UAWidgets")
+      .widgets.get(mediaElement);
+    await widget.impl.Utils.l10n.translateRoots();
+  }
 
   await printpreview(options.ref || options);
   drawPrintPreviewWindow(ctx2);
@@ -620,8 +637,7 @@ async function runTest22() {
   // Similar to above runtTest20 but more specific for the logic to choose
   // the current page in the new print preview UI so this test works only
   // in the new print preview.
-  if (SpecialPowers.getBoolPref("print.tab_modal.enabled")) {
-    frameElts[0].contentDocument.body.innerHTML =
+  frameElts[0].contentDocument.body.innerHTML =
       '<style>div { page-break-after: always; max-height: 2in; }</style>' +
       '<div>1</div>' +
       '<div>2</div>' +
@@ -634,39 +650,38 @@ async function runTest22() {
       '<div>9</div>' +
       '<div>10</div>';
 
-    await printpreview({ settings: { paperHeight: 3 } });
+  await printpreview({ settings: { paperHeight: 3 } });
 
-    const initialCurrentPageNumber = gWbp.printPreviewCurrentPageNumber;
+  const initialCurrentPageNumber = gWbp.printPreviewCurrentPageNumber;
 
-    // NOTE: In the cases the page hight is less than the half height of the
-    // print preview scroll port height, the initial current page number will
-    // not be 1.
-    ok(initialCurrentPageNumber >= 1,
-       "The initial current page number should be equal to or greater than 1");
+  // NOTE: In the cases the page hight is less than the half height of the
+  // print preview scroll port height, the initial current page number will
+  // not be 1.
+  ok(initialCurrentPageNumber >= 1,
+     "The initial current page number should be equal to or greater than 1");
 
-    const totalPageNumber = gWbp.printPreviewNumPages;
-    for (let n = initialCurrentPageNumber;
-         n <= totalPageNumber - initialCurrentPageNumber;
-         n++) {
-      // Scroll to the given page number and check the current page number.
-      gWbp.printPreviewScrollToPage(
-        Ci.nsIWebBrowserPrint.PRINTPREVIEW_GOTO_PAGENUM, n);
-      is(gWbp.printPreviewCurrentPageNumber, n,
-         `The current page number should be ${n}`);
-    }
-
-    // Scroll to the end of the scroll region.
-    gWbp.printPreviewScrollToPage(Ci.nsIWebBrowserPrint.PRINTPREVIEW_END, 0);
-
-    // Same as the initial current page number case, the last page might not
-    // be the current page if the page height is less than the half of the scroll
-    // port.
-    is(gWbp.printPreviewCurrentPageNumber,
-       totalPageNumber + 1 - initialCurrentPageNumber,
-       `The current page number should be ${totalPageNumber + 1 - initialCurrentPageNumber}`);
-
-    exitprintpreview();
+  const totalPageNumber = gWbp.printPreviewNumPages;
+  for (let n = initialCurrentPageNumber;
+       n <= totalPageNumber - initialCurrentPageNumber;
+       n++) {
+    // Scroll to the given page number and check the current page number.
+    gWbp.printPreviewScrollToPage(
+      Ci.nsIWebBrowserPrint.PRINTPREVIEW_GOTO_PAGENUM, n);
+    is(gWbp.printPreviewCurrentPageNumber, n,
+       `The current page number should be ${n}`);
   }
+
+  // Scroll to the end of the scroll region.
+  gWbp.printPreviewScrollToPage(Ci.nsIWebBrowserPrint.PRINTPREVIEW_END, 0);
+
+  // Same as the initial current page number case, the last page might not
+  // be the current page if the page height is less than the half of the scroll
+  // port.
+  is(gWbp.printPreviewCurrentPageNumber,
+     totalPageNumber + 1 - initialCurrentPageNumber,
+     `The current page number should be ${totalPageNumber + 1 - initialCurrentPageNumber}`);
+
+  exitprintpreview();
 
   requestAnimationFrame(() => setTimeout(runTest23));
 }
@@ -1274,8 +1289,7 @@ async function runTest45() {
 
 // Test that small elements don't get clipped from the bottom of the page when
 // using a < 1.0 scaling factor.
-// TODO: enable this when bug 1725486 is fixed.
-async function runTest46_DISABLED() {
+async function runTest46() {
   var fuzz = { maxDifferent: 0, maxDifference: 0 };
   let test = "bug1722890.html";
   let ref = "bug1722890_ref.html";
@@ -1284,40 +1298,71 @@ async function runTest46_DISABLED() {
     maxDifference: fuzz.maxDifference,
     test: {
       settings: {
-        scaling: 0.5
+        scaling: 0.5,
+        shrinkToFit: false
       }
     },
     ref: {
       settings: {
-        scaling: 1.0
+        scaling: 1.0,
+        shrinkToFit: false
       }
     }
   });
-  finish();
+  requestAnimationFrame(() => setTimeout(runTest47));
 }
 
-// Tests whether or not scaling from print preview tests actually works.
-// Scaling currently doesn't work, and this test will begin to fail if scaling
-// gets fixed. In that case, we can enable runTest46_DISABLED instead of this
-// test.
-// See bug 1725486 for this issue.
-async function runTest46() {
-  // We can't load the exact same thing twice, as that won't fire the second
-  // load event and the test will just timeout.
-  let src = '<div style="background: blue; width: 50px; height: 50px;"></div>';
-  let test = "data:text/html,<!-- test -->" + src;
-  let ref = "data:text/html,<!-- ref -->" + src;
+// Test for header/footer text clipping when printing with scaling factor.
+async function runTest47() {
+  // This test compares a rendered page to the headers/footers that print code
+  // generates. On Windows, workaround bug 1680838. On OS X, the headers/
+  // footers are sometimes slightly offset. See bug 1714217.
+  // It's not too big a deal to have a higher fuzz factor, since when
+  // bug 1730091 occurs most of the headers/footers are not rendered at all,
+  // and these fuzz factors will still catch that.
+  if (navigator.platform.includes("Win")) {
+    var fuzz = { maxDifferent: 200, maxDifference: 255 }; // Bug 1680838
+  }
+  else if (navigator.platform.includes("Mac")) {
+    var fuzz = { maxDifferent: 180, maxDifference: 255 }; // Bug 1714217
+  }
+  else {
+    var fuzz = { maxDifferent: 6, maxDifference: 16 };
+  }
+
+  let test = "data:text/html,<!-- runTest47 -->";
+  let ref = "printpreview_bug1730091_ref.html";
   await compareFiles(test, ref, {
+    maxDifferent: fuzz.maxDifferent,
+    maxDifference: fuzz.maxDifference,
     test: {
       settings: {
-        scaling: 0.5
-      }
+        scaling: 1.3,
+        shrinkToFit: false,
+        paperWidth: 5,
+        paperHeight: 5,
+        paperSizeUnit: Ci.nsIPrintSettings.kPaperSizeInches,
+        unwriteableMarginLeft: 0,
+        unwriteableMarginRight: 0,
+        unwriteableMarginTop: 0,
+        unwriteableMarginBottom: 0,
+        headerStrLeft: "||||",
+        headerStrRight: "||||",
+        footerStrLeft: "||||",
+        footerStrRight: "||||",
+      },
     },
     ref: {
       settings: {
-        scaling: 1.0
-      }
-    }
+        paperWidth: 5,
+        paperHeight: 5,
+        paperSizeUnit: Ci.nsIPrintSettings.kPaperSizeInches,
+        unwriteableMarginLeft: 0,
+        unwriteableMarginRight: 0,
+        unwriteableMarginTop: 0,
+        unwriteableMarginBottom: 0,
+      },
+    },
   });
   finish();
 }

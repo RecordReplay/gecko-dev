@@ -71,15 +71,17 @@ function openContextMenu(aMessage, aBrowser, aActor) {
   // We don't have access to the original event here, as that happened in
   // another process. Therefore we synthesize a new MouseEvent to propagate the
   // inputSource to the subsequently triggered popupshowing event.
-  var newEvent = document.createEvent("MouseEvent");
+  let newEvent = document.createEvent("MouseEvent");
+  let screenX = context.screenXDevPx / window.devicePixelRatio;
+  let screenY = context.screenYDevPx / window.devicePixelRatio;
   newEvent.initNSMouseEvent(
     "contextmenu",
     true,
     true,
     null,
     0,
-    context.screenX,
-    context.screenY,
+    screenX,
+    screenY,
     0,
     0,
     false,
@@ -133,11 +135,13 @@ class nsContextMenu {
         onEditable: this.onEditable,
         onSpellcheckable: this.onSpellcheckable,
         onPassword: this.onPassword,
-        srcUrl: this.mediaURL,
+        passwordRevealed: this.passwordRevealed,
+        srcUrl: this.originalMediaURL,
         frameUrl: this.contentData ? this.contentData.docLocation : undefined,
         pageUrl: this.browser ? this.browser.currentURI.spec : undefined,
         linkText: this.linkTextStr,
         linkUrl: this.linkURL,
+        linkURI: this.linkURI,
         selectionText: this.isTextSelected
           ? this.selectionInfo.fullText
           : undefined,
@@ -188,6 +192,7 @@ class nsContextMenu {
     this.imageDescURL = context.imageDescURL;
     this.imageInfo = context.imageInfo;
     this.mediaURL = context.mediaURL || context.bgImageURL;
+    this.originalMediaURL = context.originalMediaURL || this.mediaURL;
     this.webExtBrowserType = context.webExtBrowserType;
 
     this.canSpellCheck = context.canSpellCheck;
@@ -219,9 +224,11 @@ class nsContextMenu {
     this.onLink = context.onLink;
     this.onLoadedImage = context.onLoadedImage;
     this.onMailtoLink = context.onMailtoLink;
+    this.onTelLink = context.onTelLink;
     this.onMozExtLink = context.onMozExtLink;
     this.onNumeric = context.onNumeric;
     this.onPassword = context.onPassword;
+    this.passwordRevealed = context.passwordRevealed;
     this.onSaveableLink = context.onSaveableLink;
     this.onSpellcheckable = context.onSpellcheckable;
     this.onTextInput = context.onTextInput;
@@ -284,6 +291,10 @@ class nsContextMenu {
       );
     }
 
+    if (this.contentData.spellInfo) {
+      this.spellSuggestions = this.contentData.spellInfo.spellSuggestions;
+    }
+
     if (context.shouldInitInlineSpellCheckerUIWithChildren) {
       InlineSpellCheckerUI.initFromRemote(
         this.contentData.spellInfo,
@@ -324,6 +335,7 @@ class nsContextMenu {
     this.initViewItems();
     this.initImageItems();
     this.initMiscItems();
+    this.initPocketItems();
     this.initSpellingItems();
     this.initSaveItems();
     this.initSyncItems();
@@ -334,6 +346,7 @@ class nsContextMenu {
     this.initPasswordManagerItems();
     this.initViewSourceItems();
     this.initScreenshotItem();
+    this.initPasswordControlItems();
 
     this.showHideSeparators(aXulMenu);
     if (!aXulMenu.showHideSeparators) {
@@ -372,9 +385,7 @@ class nsContextMenu {
       this.selectionInfo.linkURL
     ) {
       this.linkURL = this.selectionInfo.linkURL;
-      try {
-        this.linkURI = makeURI(this.linkURL);
-      } catch (ex) {}
+      this.linkURI = this.getLinkURI();
 
       this.linkTextStr = this.selectionInfo.linkText;
       this.onPlainTextLink = true;
@@ -390,11 +401,13 @@ class nsContextMenu {
       var label = ContextualIdentityService.getUserContextLabel(
         this.contentData.userContextId
       );
-      item.setAttribute(
-        "label",
-        gBrowserBundle.formatStringFromName("userContextOpenLink.label", [
-          label,
-        ])
+
+      document.l10n.setAttributes(
+        item,
+        "main-context-menu-open-link-in-container-tab",
+        {
+          containerName: label,
+        }
       );
     }
 
@@ -701,7 +714,10 @@ class nsContextMenu {
 
     this.showItem(
       "context-bookmarklink",
-      (this.onLink && !this.onMailtoLink && !this.onMozExtLink) ||
+      (this.onLink &&
+        !this.onMailtoLink &&
+        !this.onTelLink &&
+        !this.onMozExtLink) ||
         this.onPlainTextLink
     );
     this.showItem("context-keywordfield", this.shouldShowAddKeyword());
@@ -713,6 +729,18 @@ class nsContextMenu {
       let frameOsPid = this.actor.manager.browsingContext.currentWindowGlobal
         .osPid;
       this.setItemAttr("context-frameOsPid", "label", "PID: " + frameOsPid);
+
+      // We need to check if "Take Screenshot" should be displayed in the "This Frame"
+      // context menu
+      let shouldShowTakeScreenshotFrame = this.shouldShowTakeScreenshot();
+      this.showItem(
+        "context-take-frame-screenshot",
+        shouldShowTakeScreenshotFrame
+      );
+      this.showItem(
+        "context-sep-frame-screenshot",
+        shouldShowTakeScreenshotFrame
+      );
     }
 
     this.showAndFormatSearchContextItem();
@@ -745,6 +773,51 @@ class nsContextMenu {
     );
   }
 
+  initPocketItems() {
+    const pocketEnabled = Services.prefs.getBoolPref(
+      "extensions.pocket.enabled"
+    );
+    let showSaveCurrentPageToPocket = false;
+    let showSaveLinkToPocket = false;
+
+    // We can skip all this is Pocket is not enabled.
+    if (pocketEnabled) {
+      let targetURL, targetURI;
+      // If the context menu is opened over a link, we target the link,
+      // if not, we target the page.
+      if (this.onLink) {
+        targetURL = this.linkURL;
+        // linkURI may be null if the URL is invalid.
+        targetURI = this.linkURI;
+      } else {
+        targetURL = this.browser?.currentURI?.spec;
+        targetURI = Services.io.newURI(targetURL);
+      }
+
+      const canPocket =
+        targetURI?.schemeIs("http") ||
+        targetURI?.schemeIs("https") ||
+        (targetURI?.schemeIs("about") && ReaderMode?.getOriginalUrl(targetURL));
+
+      // If the target is valid, decide which menu item to enable.
+      if (canPocket) {
+        showSaveLinkToPocket = this.onLink;
+        showSaveCurrentPageToPocket = !(
+          this.onTextInput ||
+          this.onLink ||
+          this.isContentSelected ||
+          this.onImage ||
+          this.onCanvas ||
+          this.onVideo ||
+          this.onAudio
+        );
+      }
+    }
+
+    this.showItem("context-pocket", showSaveCurrentPageToPocket);
+    this.showItem("context-savelinktopocket", showSaveLinkToPocket);
+  }
+
   initSpellingItems() {
     var canSpell =
       InlineSpellCheckerUI.canSpellCheck &&
@@ -769,7 +842,7 @@ class nsContextMenu {
       var numsug = InlineSpellCheckerUI.addSuggestionsToMenu(
         suggestionsSeparator.parentNode,
         suggestionsSeparator,
-        5
+        this.spellSuggestions
       );
       this.showItem("spell-no-suggestions", numsug == 0);
     } else {
@@ -825,14 +898,25 @@ class nsContextMenu {
     // Copy email link depends on whether we're on an email link.
     this.showItem("context-copyemail", this.onMailtoLink);
 
+    // Copy phone link depends on whether we're on a phone link.
+    this.showItem("context-copyphone", this.onTelLink);
+
     // Copy link location depends on whether we're on a non-mailto link.
-    this.showItem("context-copylink", this.onLink && !this.onMailtoLink);
+    this.showItem(
+      "context-copylink",
+      this.onLink && !this.onMailtoLink && !this.onTelLink
+    );
+
     let copyLinkSeparator = document.getElementById("context-sep-copylink");
     // Show "Copy Link" and "Copy" with no divider, and "copy link" and "Send link to Device" with no divider between.
     // Other cases will show a divider.
     copyLinkSeparator.toggleAttribute(
       "ensureHidden",
-      this.onLink && !this.onMailtoLink && !this.onImage && this.syncItemsShown
+      this.onLink &&
+        !this.onMailtoLink &&
+        !this.onTelLink &&
+        !this.onImage &&
+        this.syncItemsShown
     );
 
     this.showItem("context-copyvideourl", this.onVideo);
@@ -969,7 +1053,7 @@ class nsContextMenu {
       }
       showManage = true;
 
-      // Disable the fill option if the user hasn't unlocked with their master password
+      // Disable the fill option if the user hasn't unlocked with their primary password
       // or if the password field or target field are disabled.
       // XXX: Bug 1529025 to maybe respect signon.rememberSignons.
       let loginFillInfo = this.contentData?.loginFillInfo;
@@ -1125,7 +1209,7 @@ class nsContextMenu {
     }
   }
 
-  initScreenshotItem() {
+  shouldShowTakeScreenshot() {
     // About pages other than about:reader are not currently supported by
     // screenshots (see Bug 1620992)
     let uri = this.contentData?.documentURIObject;
@@ -1140,11 +1224,33 @@ class nsContextMenu {
       !this.onVideo &&
       !this.onAudio &&
       !this.onEditable &&
-      !this.onPassword &&
-      !this.inFrame;
+      !this.onPassword;
+
+    return shouldShow;
+  }
+
+  initScreenshotItem() {
+    let shouldShow = this.shouldShowTakeScreenshot() && !this.inFrame;
 
     this.showItem("context-sep-screenshots", shouldShow);
     this.showItem("context-take-screenshot", shouldShow);
+  }
+
+  initPasswordControlItems() {
+    let shouldShow = this.onPassword && REVEAL_PASSWORD_ENABLED;
+    if (shouldShow) {
+      let revealPassword = document.getElementById("context-reveal-password");
+      if (this.passwordRevealed) {
+        revealPassword.setAttribute("checked", "true");
+      } else {
+        revealPassword.removeAttribute("checked");
+      }
+    }
+    this.showItem("context-reveal-password", shouldShow);
+  }
+
+  toggleRevealPassword() {
+    this.actor.toggleRevealPassword(this.targetIdentifier);
   }
 
   openPasswordManager() {
@@ -1291,8 +1397,14 @@ class nsContextMenu {
   }
 
   takeScreenshot() {
-    if (!SCREENSHOT_BROWSER_COMPONENT) {
-      Services.obs.notifyObservers(null, "menuitem-screenshot-extension", true);
+    if (SCREENSHOT_BROWSER_COMPONENT) {
+      Services.obs.notifyObservers(window, "menuitem-screenshot", true);
+    } else {
+      Services.obs.notifyObservers(
+        null,
+        "menuitem-screenshot-extension",
+        "contextMenu"
+      );
     }
   }
 
@@ -1454,6 +1566,7 @@ class nsContextMenu {
       // FIXME can we switch this to a blob URL?
       internalSave(
         dataURL,
+        null, // originalURL
         null, // document
         name,
         null, // content disposition
@@ -1642,6 +1755,7 @@ class nsContextMenu {
           // it can without waiting.
           saveURL(
             linkURL,
+            null,
             linkText,
             dialogTitle,
             bypassCache,
@@ -1792,6 +1906,7 @@ class nsContextMenu {
       this._canvasToBlobURL(this.targetIdentifier).then(function(blobURL) {
         internalSave(
           blobURL,
+          null, // originalURL
           null, // document
           "canvas.png",
           null, // content disposition
@@ -1812,6 +1927,7 @@ class nsContextMenu {
       urlSecurityCheck(this.mediaURL, this.principal);
       internalSave(
         this.mediaURL,
+        null, // originalURL
         null, // document
         null, // file name; we'll take it from the URL
         this.contentData.contentDisposition,
@@ -1887,6 +2003,26 @@ class nsContextMenu {
       Ci.nsIClipboardHelper
     );
     clipboard.copyString(addresses);
+  }
+
+  // Extract phone and put it on clipboard
+  copyPhone() {
+    // Copies the phone number only. We won't be doing any complex parsing
+    var url = this.linkURL;
+    var phone = url.substr(4);
+
+    // Let's try to unescape it using a character set
+    // in case the phone number is not ASCII.
+    try {
+      phone = Services.textToSubURI.unEscapeURIForUI(phone);
+    } catch (ex) {
+      // Do nothing.
+    }
+
+    var clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(
+      Ci.nsIClipboardHelper
+    );
+    clipboard.copyString(phone);
   }
 
   copyLink() {
@@ -2090,7 +2226,7 @@ class nsContextMenu {
     var clipboard = Cc["@mozilla.org/widget/clipboardhelper;1"].getService(
       Ci.nsIClipboardHelper
     );
-    clipboard.copyString(this.mediaURL);
+    clipboard.copyString(this.originalMediaURL);
   }
 
   drmLearnMore(aEvent) {
@@ -2104,13 +2240,6 @@ class nsContextMenu {
       dest = "tab";
     }
     openTrustedLinkIn(drmInfoURL, dest);
-  }
-
-  get imageURL() {
-    if (this.onImage) {
-      return this.mediaURL;
-    }
-    return "";
   }
 
   // Formats the 'Search <engine> for "<selection or link text>"' context menu.
@@ -2233,5 +2362,12 @@ XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "SCREENSHOT_BROWSER_COMPONENT",
   "screenshots.browser.component.enabled",
+  false
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "REVEAL_PASSWORD_ENABLED",
+  "layout.forms.reveal-password-context-menu.enabled",
   false
 );

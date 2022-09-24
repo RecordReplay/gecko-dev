@@ -30,8 +30,7 @@ class AutoSetInstantiatingToFalse;
 class nsIPrincipal;
 class nsFrameLoader;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 struct BindContext;
 template <typename T>
 class Sequence;
@@ -41,8 +40,7 @@ template <typename T>
 struct Nullable;
 class WindowProxyHolder;
 class XULFrameElement;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 class nsObjectLoadingContent : public nsImageLoadingContent,
                                public nsIStreamListener,
@@ -135,6 +133,8 @@ class nsObjectLoadingContent : public nsImageLoadingContent,
   // The return value is whether DoResolve might end up resolving the given
   // id.  If in doubt, return true.
   static bool MayResolve(jsid aId);
+
+  static bool IsSuccessfulRequest(nsIRequest*, nsresult* aStatus);
 
   // Helper for WebIDL enumeration
   void GetOwnPropertyNames(JSContext* aCx,

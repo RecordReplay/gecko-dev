@@ -7,13 +7,13 @@
 with Files("**"):
     BUG_COMPONENT = ("Core", "Networking: DNS")
 
-DIRS += ["mdns", "tests"]
+DIRS += ["tests"]
 
 XPIDL_SOURCES += [
+    "nsIDNSAdditionalInfo.idl",
     "nsIDNSByTypeRecord.idl",
     "nsIDNSListener.idl",
     "nsIDNSRecord.idl",
-    "nsIDNSResolverInfo.idl",
     "nsIDNSService.idl",
     "nsIEffectiveTLDService.idl",
     "nsIIDNService.idl",
@@ -38,6 +38,7 @@ EXPORTS.mozilla.net += [
     "DNS.h",
     "DNSByTypeRecord.h",
     "DNSListenerProxy.h",
+    "DNSPacket.h",
     "DNSRequestBase.h",
     "DNSRequestChild.h",
     "DNSRequestParent.h",
@@ -59,11 +60,12 @@ SOURCES += [
 UNIFIED_SOURCES += [
     "ChildDNSService.cpp",
     "DNS.cpp",
+    "DNSAdditionalInfo.cpp",
     "DNSListenerProxy.cpp",
     "DNSPacket.cpp",
     "DNSRequestChild.cpp",
     "DNSRequestParent.cpp",
-    "DNSResolverInfo.cpp",
+    "DNSServiceBase.cpp",
     "DNSUtils.cpp",
     "HostRecordQueue.cpp",
     "HTTPSSVC.cpp",
@@ -103,10 +105,8 @@ GeneratedFile(
 # need to include etld_data.inc
 LOCAL_INCLUDES += [
     "/netwerk/base",
+    "/netwerk/ipc",
     "/netwerk/protocol/http",
 ]
 
 USE_LIBS += ["icu"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]

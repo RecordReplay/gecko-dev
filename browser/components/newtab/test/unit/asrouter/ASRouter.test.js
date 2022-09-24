@@ -49,7 +49,6 @@ describe("ASRouter", () => {
   let getStringPrefStub;
   let fakeAttributionCode;
   let fakeTargetingContext;
-  let FakeBookmarkPanelHub;
   let FakeToolbarBadgeHub;
   let FakeToolbarPanelHub;
   let FakeMomentsPageHub;
@@ -145,7 +144,6 @@ describe("ASRouter", () => {
         ],
         providerCohorts: {
           onboarding: "",
-          "cfr-fxa": "",
           cfr: "",
           "message-groups": "",
           "messaging-experiments": "",
@@ -203,11 +201,6 @@ describe("ASRouter", () => {
       writeAttributionFile: () => Promise.resolve(),
       getCachedAttributionData: sinon.stub(),
     };
-    FakeBookmarkPanelHub = {
-      init: sandbox.stub(),
-      uninit: sandbox.stub(),
-      forceShowMessage: sandbox.stub(),
-    };
     FakeToolbarPanelHub = {
       init: sandbox.stub(),
       uninit: sandbox.stub(),
@@ -228,6 +221,18 @@ describe("ASRouter", () => {
       combineContexts: sandbox.stub(),
       evalWithDefault: sandbox.stub().resolves(),
     };
+    let fakeNimbusFeatures = [
+      "cfr",
+      "moments-page",
+      "infobar",
+      "spotlight",
+    ].reduce((features, featureId) => {
+      features[featureId] = {
+        getAllVariables: sandbox.stub().returns(null),
+        recordExposureEvent: sandbox.stub(),
+      };
+      return features;
+    }, {});
     globals.set({
       // Testing framework doesn't know how to `defineLazyModuleGetter` so we're
       // importing these modules into the global scope ourselves.
@@ -243,7 +248,6 @@ describe("ASRouter", () => {
       SnippetsTestMessageProvider,
       PanelTestProvider,
       MacAttribution: { applicationPath: "" },
-      BookmarkPanelHub: FakeBookmarkPanelHub,
       ToolbarBadgeHub: FakeToolbarBadgeHub,
       ToolbarPanelHub: FakeToolbarPanelHub,
       MomentsPageHub: FakeMomentsPageHub,
@@ -263,30 +267,23 @@ describe("ASRouter", () => {
           return Promise.resolve("/path/to/download");
         }
       },
+      NimbusFeatures: fakeNimbusFeatures,
       ExperimentAPI: {
+        getExperimentMetaData: sandbox.stub().returns({
+          slug: "experiment-slug",
+          active: true,
+          branch: { slug: "experiment-branch-slug" },
+        }),
         getExperiment: sandbox.stub().returns({
           branch: {
             slug: "unit-slug",
             feature: {
               featureId: "foo",
-              enabled: true,
               value: { id: "test-message" },
             },
           },
         }),
-        recordExposureEvent: sandbox.stub(),
-        getAllBranches: sandbox.stub().resolves([
-          {
-            branch: {
-              slug: "unit-slug",
-              feature: {
-                featureId: "bar",
-                enabled: true,
-                value: { id: "test-message" },
-              },
-            },
-          },
-        ]),
+        getAllBranches: sandbox.stub().resolves([]),
         ready: sandbox.stub().resolves(),
       },
       SpecialMessageActions: {
@@ -302,7 +299,9 @@ describe("ASRouter", () => {
         }
       },
       RemoteL10n: {
-        isLocaleSupported: () => true,
+        // This is just a subset of supported locales that happen to be used in
+        // the test.
+        isLocaleSupported: locale => ["en-US", "ja-JP-mac"].includes(locale),
       },
     });
     await createRouterAndInit();
@@ -353,7 +352,6 @@ describe("ASRouter", () => {
 
       assert.calledOnce(FakeToolbarBadgeHub.init);
       assert.calledOnce(FakeToolbarPanelHub.init);
-      assert.calledOnce(FakeBookmarkPanelHub.init);
       assert.calledOnce(FakeMomentsPageHub.init);
 
       assert.calledWithExactly(
@@ -386,13 +384,6 @@ describe("ASRouter", () => {
           blockMessageById: Router.blockMessageById,
           sendTelemetry: Router.sendTelemetry,
         }
-      );
-
-      assert.calledWithExactly(
-        FakeBookmarkPanelHub.init,
-        Router.handleMessageRequest,
-        Router.addImpression,
-        Router.sendTelemetry
       );
     });
     it("should set state.messageImpressions to the messageImpressions object in persistent storage", async () => {
@@ -512,9 +503,9 @@ describe("ASRouter", () => {
       sandbox.spy(global.Services.obs, "addObserver");
       await createRouterAndInit();
 
-      assert.calledOnce(global.Services.obs.addObserver);
-      assert.equal(
-        global.Services.obs.addObserver.args[0][1],
+      assert.calledWithExactly(
+        global.Services.obs.addObserver,
+        Router._onLocaleChanged,
         "intl:app-locales-changed"
       );
     });
@@ -715,7 +706,6 @@ describe("ASRouter", () => {
 
       assert.calledOnce(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -726,7 +716,6 @@ describe("ASRouter", () => {
       assert.calledOnce(FakeMomentsPageHub.executeAction);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
     });
@@ -735,7 +724,6 @@ describe("ASRouter", () => {
 
       assert.calledOnce(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -750,24 +738,8 @@ describe("ASRouter", () => {
 
       assert.calledOnce(CFRPageActions.addRecommendation);
       assert.notCalled(CFRPageActions.forceRecommendation);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeMomentsPageHub.executeAction);
-    });
-    it("should route fxa_bookmark_panel message to the right hub force = true", () => {
-      Router.routeCFRMessage(
-        { template: "fxa_bookmark_panel" },
-        browser,
-        {},
-        true
-      );
-
-      assert.calledOnce(FakeBookmarkPanelHub.forceShowMessage);
-      assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
-      assert.notCalled(CFRPageActions.addRecommendation);
-      assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
     it("should route cfr_doorhanger message to the right hub force = false", () => {
@@ -780,7 +752,6 @@ describe("ASRouter", () => {
 
       assert.calledOnce(CFRPageActions.addRecommendation);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -791,7 +762,6 @@ describe("ASRouter", () => {
       assert.calledOnce(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
@@ -808,7 +778,6 @@ describe("ASRouter", () => {
       // Host should be null
       assert.isNull(args[1]);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeMomentsPageHub.executeAction);
@@ -824,7 +793,6 @@ describe("ASRouter", () => {
       assert.calledOnce(CFRPageActions.forceRecommendation);
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.addRecommendation);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
@@ -834,7 +802,6 @@ describe("ASRouter", () => {
       assert.notCalled(FakeToolbarPanelHub.forceShowMessage);
       assert.notCalled(CFRPageActions.forceRecommendation);
       assert.notCalled(CFRPageActions.addRecommendation);
-      assert.notCalled(FakeBookmarkPanelHub.forceShowMessage);
       assert.notCalled(FakeToolbarBadgeHub.registerBadgeNotificationListener);
       assert.notCalled(FakeMomentsPageHub.executeAction);
     });
@@ -1009,7 +976,7 @@ describe("ASRouter", () => {
         .stub(MessageLoaderUtils, "_getRemoteSettingsMessages")
         .resolves([{ id: "message_1" }]);
       const spy = sandbox.spy();
-      global.Downloader.prototype.download = spy;
+      global.Downloader.prototype.downloadToDisk = spy;
       const provider = {
         id: "cfr",
         enabled: true,
@@ -1450,9 +1417,9 @@ describe("ASRouter", () => {
       sandbox.spy(global.Services.obs, "removeObserver");
       Router.uninit();
 
-      assert.calledOnce(global.Services.obs.removeObserver);
-      assert.equal(
-        global.Services.obs.removeObserver.args[0][1],
+      assert.calledWithExactly(
+        global.Services.obs.removeObserver,
+        Router._onLocaleChanged,
         "intl:app-locales-changed"
       );
     });
@@ -1743,12 +1710,6 @@ describe("ASRouter", () => {
 
       assert.calledOnce(CFRPageActions.forceRecommendation);
     });
-    it("should call BookmarkPanelHub.forceShowMessage the provider is cfr-fxa", async () => {
-      const testMessage = { id: "foo", template: "fxa_bookmark_panel" };
-      await Router.setState({ messages: [testMessage] });
-      Router.routeCFRMessage(testMessage, {}, null, true);
-      assert.calledOnce(FakeBookmarkPanelHub.forceShowMessage);
-    });
     it("should call CFRPageActions.addRecommendation if the template is cfr_action and force is false", async () => {
       sandbox.stub(CFRPageActions, "addRecommendation");
       const testMessage = { id: "foo", template: "cfr_doorhanger" };
@@ -1770,6 +1731,55 @@ describe("ASRouter", () => {
       });
 
       assert.deepEqual(msg, expected);
+    });
+  });
+
+  describe("#reachEvent", () => {
+    let experimentAPIStub;
+    let messageGroups = ["cfr", "moments-page", "infobar", "spotlight"];
+    beforeEach(() => {
+      let getExperimentMetaDataStub = sandbox.stub();
+      let getAllBranchesStub = sandbox.stub();
+      messageGroups.forEach(feature => {
+        global.NimbusFeatures[feature].getAllVariables.returns({
+          id: `message-${feature}`,
+        });
+        getExperimentMetaDataStub.withArgs({ featureId: feature }).returns({
+          slug: `slug-${feature}`,
+          branch: {
+            slug: `branch-${feature}`,
+          },
+        });
+        getAllBranchesStub.withArgs(`slug-${feature}`).resolves([
+          {
+            slug: `other-branch-${feature}`,
+            [feature]: { value: { trigger: "unit-test" } },
+          },
+        ]);
+      });
+      experimentAPIStub = {
+        getExperimentMetaData: getExperimentMetaDataStub,
+        getAllBranches: getAllBranchesStub,
+      };
+      globals.set("ExperimentAPI", experimentAPIStub);
+    });
+    afterEach(() => {
+      sandbox.restore();
+    });
+    it("should tag `forReachEvent` for all the expected message types", async () => {
+      // This should match the `providers.messaging-experiments`
+      let response = await MessageLoaderUtils.loadMessagesForProvider({
+        type: "remote-experiments",
+        messageGroups,
+      });
+
+      // 1 message for reach 1 for expose
+      assert.property(response, "messages");
+      assert.lengthOf(response.messages, messageGroups.length * 2);
+      assert.lengthOf(
+        response.messages.filter(m => m.forReachEvent),
+        messageGroups.length
+      );
     });
   });
 
@@ -1907,36 +1917,40 @@ describe("ASRouter", () => {
       });
       assert.notCalled(Services.telemetry.recordEvent);
     });
-    it("should record the Exposure event if found any", async () => {
-      let messages = [
-        {
-          id: "foo1",
-          forExposureEvent: {
-            sent: false,
-            experimentSlug: "foo",
-            branchSlug: "bar",
-          },
-          experimentSlug: "exp01",
-          branchSlug: "branch01",
-          template: "simple_template",
-          trigger: { id: "foo" },
-          content: { title: "Foo1", body: "Foo123-1" },
-        },
-      ];
-      sandbox.stub(Router, "handleMessageRequest").resolves(messages);
-      sandbox.spy(Services.telemetry, "recordEvent");
+    it("should record the Exposure event for each valid feature", async () => {
+      ["cfr_doorhanger", "update_action", "infobar", "spotlight"].forEach(
+        async template => {
+          let featureMap = {
+            cfr_doorhanger: "cfr",
+            spotlight: "spotlight",
+            infobar: "infobar",
+            update_action: "moments-page",
+          };
+          assert.notCalled(
+            global.NimbusFeatures[featureMap[template]].recordExposureEvent
+          );
 
-      await Router.sendTriggerMessage({
-        tabId: 0,
-        browser: {},
-        id: "foo",
-      });
+          let messages = [
+            {
+              id: "foo1",
+              template,
+              trigger: { id: "foo" },
+              content: { title: "Foo1", body: "Foo123-1" },
+            },
+          ];
+          sandbox.stub(Router, "handleMessageRequest").resolves(messages);
 
-      assert.calledOnce(global.ExperimentAPI.recordExposureEvent);
-      assert.calledWithExactly(global.ExperimentAPI.recordExposureEvent, {
-        featureId: "cfr",
-        ...messages[0].forExposureEvent,
-      });
+          await Router.sendTriggerMessage({
+            tabId: 0,
+            browser: {},
+            id: "foo",
+          });
+
+          assert.calledOnce(
+            global.NimbusFeatures[featureMap[template]].recordExposureEvent
+          );
+        }
+      );
     });
   });
 
@@ -2607,20 +2621,21 @@ describe("ASRouter", () => {
     it("should fetch messages from the ExperimentAPI", async () => {
       const args = {
         type: "remote-experiments",
-        messageGroups: ["asrouter"],
+        messageGroups: ["spotlight"],
       };
 
       await MessageLoaderUtils.loadMessagesForProvider(args);
 
-      assert.calledOnce(global.ExperimentAPI.getExperiment);
-      assert.calledWithExactly(global.ExperimentAPI.getExperiment, {
-        featureId: "asrouter",
+      assert.calledOnce(global.NimbusFeatures.spotlight.getAllVariables);
+      assert.calledOnce(global.ExperimentAPI.getExperimentMetaData);
+      assert.calledWithExactly(global.ExperimentAPI.getExperimentMetaData, {
+        featureId: "spotlight",
       });
     });
     it("should handle the case of no experiments in the ExperimentAPI", async () => {
       const args = {
         type: "remote-experiments",
-        messageGroups: ["asrouter"],
+        messageGroups: ["infobar"],
       };
 
       global.ExperimentAPI.getExperiment.returns(null);
@@ -2632,20 +2647,34 @@ describe("ASRouter", () => {
     it("should normally load ExperimentAPI messages", async () => {
       const args = {
         type: "remote-experiments",
-        messageGroups: ["asrouter"],
+        messageGroups: ["infobar"],
       };
       const enrollment = {
         branch: {
           slug: "branch01",
-          feature: {
-            featureId: "asrouter",
-            enabled: true,
+          infobar: {
+            featureId: "infobar",
             value: { id: "id01", trigger: { id: "openURL" } },
           },
         },
       };
 
-      global.ExperimentAPI.getExperiment.returns(enrollment);
+      global.NimbusFeatures.infobar.getAllVariables.returns(
+        enrollment.branch.infobar.value
+      );
+      global.ExperimentAPI.getExperimentMetaData.returns({
+        branch: { slug: enrollment.branch.slug },
+      });
+      global.ExperimentAPI.getAllBranches.returns([
+        enrollment.branch,
+        {
+          slug: "control",
+          infobar: {
+            featureId: "infobar",
+            value: null,
+          },
+        },
+      ]);
 
       const result = await MessageLoaderUtils.loadMessagesForProvider(args);
 
@@ -2654,20 +2683,10 @@ describe("ASRouter", () => {
     it("should skip disabled features and not load the messages", async () => {
       const args = {
         type: "remote-experiments",
-        messageGroups: ["asrouter"],
-      };
-      const enrollment = {
-        branch: {
-          slug: "branch01",
-          feature: {
-            featureId: "asrouter",
-            enabled: false,
-            value: { id: "id01", trigger: { id: "openURL" } },
-          },
-        },
+        messageGroups: ["cfr"],
       };
 
-      global.ExperimentAPI.getExperiment.returns(enrollment);
+      global.NimbusFeatures.cfr.getAllVariables.returns(null);
 
       const result = await MessageLoaderUtils.loadMessagesForProvider(args);
 
@@ -2682,31 +2701,35 @@ describe("ASRouter", () => {
         slug: "exp01",
         branch: {
           slug: "branch01",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: true,
             value: { id: "id01", trigger: { id: "openURL" } },
           },
         },
       };
 
-      global.ExperimentAPI.getExperiment.returns(enrollment);
+      global.NimbusFeatures.cfr.getAllVariables.returns(
+        enrollment.branch.cfr.value
+      );
+      global.ExperimentAPI.getExperimentMetaData.returns({
+        slug: enrollment.slug,
+        active: true,
+        branch: { slug: enrollment.branch.slug },
+      });
       global.ExperimentAPI.getAllBranches.resolves([
         enrollment.branch,
         {
           slug: "branch02",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: true,
             value: { id: "id02", trigger: { id: "openURL" } },
           },
         },
         {
           // This branch should not be loaded as it doesn't have the trigger
           slug: "branch03",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: true,
             value: { id: "id03" },
           },
         },
@@ -2733,31 +2756,37 @@ describe("ASRouter", () => {
         slug: "exp01",
         branch: {
           slug: "branch01",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: false,
-            value: { id: "id01", trigger: { id: "openURL" } },
+            value: {},
           },
         },
       };
 
-      global.ExperimentAPI.getExperiment.returns(enrollment);
+      // Nedds to match the `messageGroups` value to return an enrollment
+      // for that feature
+      global.NimbusFeatures.cfr.getAllVariables.returns(
+        enrollment.branch.cfr.value
+      );
+      global.ExperimentAPI.getExperimentMetaData.returns({
+        slug: enrollment.slug,
+        active: true,
+        branch: { slug: enrollment.branch.slug },
+      });
       global.ExperimentAPI.getAllBranches.resolves([
         enrollment.branch,
         {
           slug: "branch02",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: true,
             value: { id: "id02", trigger: { id: "openURL" } },
           },
         },
         {
           // This branch should not be loaded as it doesn't have the trigger
           slug: "branch03",
-          feature: {
+          cfr: {
             featureId: "cfr",
-            enabled: true,
             value: { id: "id03" },
           },
         },
@@ -2774,25 +2803,6 @@ describe("ASRouter", () => {
         group: "cfr",
       });
     });
-    it("should fetch json from url", async () => {
-      let result = await MessageLoaderUtils.loadMessagesForProvider({
-        location: "http://fake.com/endpoint",
-        type: "json",
-      });
-
-      assert.property(result, "messages");
-      assert.lengthOf(result.messages, FAKE_REMOTE_MESSAGES.length);
-    });
-    it("should catch errors", async () => {
-      fetchStub.throws();
-      let result = await MessageLoaderUtils.loadMessagesForProvider({
-        location: "http://fake.com/endpoint",
-        type: "json",
-      });
-
-      assert.property(result, "messages");
-      assert.lengthOf(result.messages, 0);
-    });
   });
   describe("#_remoteSettingsLoader", () => {
     let provider;
@@ -2806,13 +2816,29 @@ describe("ASRouter", () => {
         .stub(MessageLoaderUtils, "_getRemoteSettingsMessages")
         .resolves([{ id: "message_1" }]);
       spy = sandbox.spy();
-      global.Downloader.prototype.download = spy;
+      global.Downloader.prototype.downloadToDisk = spy;
+    });
+    it("should be called with the expected dir path", async () => {
+      const dlSpy = sandbox.spy(global, "Downloader");
+
+      sandbox
+        .stub(global.Services.locale, "appLocaleAsBCP47")
+        .get(() => "en-US");
+
+      await MessageLoaderUtils._remoteSettingsLoader(provider, {});
+
+      assert.calledWith(
+        dlSpy,
+        "main",
+        "ms-language-packs",
+        "browser",
+        "newtab"
+      );
     });
     it("should allow fetch for known locales", async () => {
       sandbox
         .stub(global.Services.locale, "appLocaleAsBCP47")
         .get(() => "en-US");
-      sandbox.stub(global.RemoteL10n, "isLocaleSupported").returns(true);
 
       await MessageLoaderUtils._remoteSettingsLoader(provider, {});
 
@@ -2820,7 +2846,6 @@ describe("ASRouter", () => {
     });
     it("should fallback to 'en-US' for locale 'und' ", async () => {
       sandbox.stub(global.Services.locale, "appLocaleAsBCP47").get(() => "und");
-      sandbox.stub(global.RemoteL10n, "isLocaleSupported").returns(false);
       const getRecordSpy = sandbox.spy(
         global.KintoHttpClient.prototype,
         "getRecord"
@@ -2831,15 +2856,70 @@ describe("ASRouter", () => {
       assert.ok(getRecordSpy.args[0][0].includes("en-US"));
       assert.calledOnce(spy);
     });
+    it("should fallback to 'ja-JP-mac' for locale 'ja-JP-macos'", async () => {
+      sandbox
+        .stub(global.Services.locale, "appLocaleAsBCP47")
+        .get(() => "ja-JP-macos");
+      const getRecordSpy = sandbox.spy(
+        global.KintoHttpClient.prototype,
+        "getRecord"
+      );
+
+      await MessageLoaderUtils._remoteSettingsLoader(provider, {});
+
+      assert.ok(getRecordSpy.args[0][0].includes("ja-JP-mac"));
+      assert.calledOnce(spy);
+    });
     it("should not allow fetch for unsupported locales", async () => {
       sandbox
         .stub(global.Services.locale, "appLocaleAsBCP47")
         .get(() => "unkown");
-      sandbox.stub(global.RemoteL10n, "isLocaleSupported").returns(false);
 
       await MessageLoaderUtils._remoteSettingsLoader(provider, {});
 
       assert.notCalled(spy);
+    });
+  });
+  describe("#resetMessageState", () => {
+    it("should reset all message impressions", async () => {
+      await Router.setState({
+        messages: [{ id: "1" }, { id: "2" }],
+      });
+      await Router.setState({
+        messageImpressions: { "1": [0, 1, 2], "2": [0, 1, 2] },
+      }); // Add impressions for test messages
+      let impressions = Object.values(Router.state.messageImpressions);
+      assert.equal(impressions.filter(i => i.length).length, 2); // Both messages have impressions
+
+      Router.resetMessageState();
+      impressions = Object.values(Router.state.messageImpressions);
+
+      assert.isEmpty(impressions.filter(i => i.length)); // Both messages now have zero impressions
+      assert.calledWithExactly(Router._storage.set, "messageImpressions", {
+        "1": [],
+        "2": [],
+      });
+    });
+  });
+  describe("#resetGroupsState", () => {
+    it("should reset all group impressions", async () => {
+      await Router.setState({
+        groups: [{ id: "1" }, { id: "2" }],
+      });
+      await Router.setState({
+        groupImpressions: { "1": [0, 1, 2], "2": [0, 1, 2] },
+      }); // Add impressions for test groups
+      let impressions = Object.values(Router.state.groupImpressions);
+      assert.equal(impressions.filter(i => i.length).length, 2); // Both groups have impressions
+
+      Router.resetGroupsState();
+      impressions = Object.values(Router.state.groupImpressions);
+
+      assert.isEmpty(impressions.filter(i => i.length)); // Both groups now have zero impressions
+      assert.calledWithExactly(Router._storage.set, "groupImpressions", {
+        "1": [],
+        "2": [],
+      });
     });
   });
 });

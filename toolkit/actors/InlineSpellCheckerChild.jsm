@@ -17,12 +17,12 @@ ChromeUtils.defineModuleGetter(
 class InlineSpellCheckerChild extends JSWindowActorChild {
   receiveMessage(msg) {
     switch (msg.name) {
-      case "InlineSpellChecker:selectDictionary":
-        InlineSpellCheckerContent.selectDictionary(msg.data.localeCode);
+      case "InlineSpellChecker:selectDictionaries":
+        InlineSpellCheckerContent.selectDictionaries(msg.data.localeCodes);
         break;
 
       case "InlineSpellChecker:replaceMisspelling":
-        InlineSpellCheckerContent.replaceMisspelling(msg.data.index);
+        InlineSpellCheckerContent.replaceMisspelling(msg.data.suggestion);
         break;
 
       case "InlineSpellChecker:toggleEnabled":

@@ -15,6 +15,7 @@
 #include "mozilla/Preferences.h"
 #include "nsUnicodeProperties.h"
 #include "gfxFontConstants.h"
+#include "gfxHarfBuzzShaper.h"
 #include "gfxTextRun.h"
 
 #include "cairo-win32.h"
@@ -51,10 +52,9 @@ gfxGDIFont::~gfxGDIFont() {
   delete mMetrics;
 }
 
-UniquePtr<gfxFont> gfxGDIFont::CopyWithAntialiasOption(
-    AntialiasOption anAAOption) {
+gfxFont* gfxGDIFont::CopyWithAntialiasOption(AntialiasOption anAAOption) const {
   auto entry = static_cast<GDIFontEntry*>(mFontEntry.get());
-  return MakeUnique<gfxGDIFont>(entry, &mStyle, anAAOption);
+  return new gfxGDIFont(entry, &mStyle, anAAOption);
 }
 
 bool gfxGDIFont::ShapeText(DrawTarget* aDrawTarget, const char16_t* aText,
@@ -71,20 +71,28 @@ bool gfxGDIFont::ShapeText(DrawTarget* aDrawTarget, const char16_t* aText,
                             aLanguage, aVertical, aRounding, aShapedText);
 }
 
-const gfxFont::Metrics& gfxGDIFont::GetHorizontalMetrics() { return *mMetrics; }
-
-already_AddRefed<ScaledFont> gfxGDIFont::GetScaledFont(DrawTarget* aTarget) {
-  if (!mAzureScaledFont) {
-    LOGFONT lf;
-    GetObject(GetHFONT(), sizeof(LOGFONT), &lf);
-
-    mAzureScaledFont = Factory::CreateScaledFontForGDIFont(
-        &lf, GetUnscaledFont(), GetAdjustedSize());
-    InitializeScaledFont();
+already_AddRefed<ScaledFont> gfxGDIFont::GetScaledFont(
+    const TextRunDrawParams& aRunParams) {
+  if (ScaledFont* scaledFont = mAzureScaledFont) {
+    return do_AddRef(scaledFont);
   }
 
-  RefPtr<ScaledFont> scaledFont(mAzureScaledFont);
-  return scaledFont.forget();
+  LOGFONT lf;
+  GetObject(GetHFONT(), sizeof(LOGFONT), &lf);
+
+  RefPtr<ScaledFont> newScaledFont = Factory::CreateScaledFontForGDIFont(
+      &lf, GetUnscaledFont(), GetAdjustedSize());
+  if (!newScaledFont) {
+    return nullptr;
+  }
+
+  InitializeScaledFont(newScaledFont);
+
+  if (mAzureScaledFont.compareExchange(nullptr, newScaledFont.get())) {
+    Unused << newScaledFont.forget();
+  }
+  ScaledFont* scaledFont = mAzureScaledFont;
+  return do_AddRef(scaledFont);
 }
 
 gfxFont::RunMetrics gfxGDIFont::Measure(const gfxTextRun* aTextRun,
@@ -154,7 +162,7 @@ void gfxGDIFont::Initialize() {
             case FontSizeAdjust::Tag::IcHeight: {
               bool vertical = FontSizeAdjust::Tag(mStyle.sizeAdjustBasis) ==
                               FontSizeAdjust::Tag::IcHeight;
-              gfxFloat advance = GetCharAdvance(0x6C34, vertical);
+              gfxFloat advance = GetCharAdvance(kWaterIdeograph, vertical);
               aspect = advance > 0.0 ? advance / mMetrics->emHeight : 1.0;
               break;
             }
@@ -162,7 +170,7 @@ void gfxGDIFont::Initialize() {
           if (aspect > 0.0) {
             // If we created a shaper above (to measure glyphs), discard it so
             // we get a new one for the adjusted scaling.
-            mHarfBuzzShaper = nullptr;
+            delete mHarfBuzzShaper.exchange(nullptr);
             mAdjustedSize = mStyle.GetAdjustedSize(aspect);
           }
         }
@@ -350,14 +358,32 @@ void gfxGDIFont::Initialize() {
       mMetrics->zeroWidth = -1.0;  // indicates not found
     }
 
+    wchar_t ch = kWaterIdeograph;
+    ret = GetGlyphIndicesW(dc.GetDC(), &ch, 1, &glyph,
+                           GGI_MARK_NONEXISTING_GLYPHS);
+    if (ret != GDI_ERROR && glyph != 0xFFFF) {
+      GetTextExtentPoint32W(dc.GetDC(), &ch, 1, &size);
+      mMetrics->ideographicWidth = ROUND(size.cx);
+    } else {
+      mMetrics->ideographicWidth = -1.0;
+    }
+
     SanitizeMetrics(mMetrics, GetFontEntry()->mIsBadUnderlineFont);
   } else {
     mFUnitsConvFactor = 0.0;  // zero-sized font: all values scale to zero
   }
 
-  if (IsSyntheticBold()) {
-    mMetrics->aveCharWidth += GetSyntheticBoldOffset();
-    mMetrics->maxAdvance += GetSyntheticBoldOffset();
+  if (ApplySyntheticBold()) {
+    auto delta = GetSyntheticBoldOffset();
+    mMetrics->spaceWidth += delta;
+    mMetrics->aveCharWidth += delta;
+    mMetrics->maxAdvance += delta;
+    if (mMetrics->zeroWidth > 0) {
+      mMetrics->zeroWidth += delta;
+    }
+    if (mMetrics->ideographicWidth > 0) {
+      mMetrics->ideographicWidth += delta;
+    }
   }
 
 #if 0
@@ -421,7 +447,7 @@ uint32_t gfxGDIFont::GetGlyph(uint32_t aUnicode, uint32_t aVarSelector) {
 
   wchar_t ch = aUnicode;
   WORD glyph;
-  DWORD ret = ScriptGetCMap(nullptr, &mScriptCache, &ch, 1, 0, &glyph);
+  HRESULT ret = ScriptGetCMap(nullptr, &mScriptCache, &ch, 1, 0, &glyph);
   if (ret != S_OK) {
     AutoDC dc;
     AutoSelectFont fs(dc.GetDC(), GetHFONT());
@@ -432,8 +458,8 @@ uint32_t gfxGDIFont::GetGlyph(uint32_t aUnicode, uint32_t aVarSelector) {
     if (ret != S_OK) {
       // If ScriptGetCMap still failed, fall back to GetGlyphIndicesW
       // (see bug 1105807).
-      ret = GetGlyphIndicesW(dc.GetDC(), &ch, 1, &glyph,
-                             GGI_MARK_NONEXISTING_GLYPHS);
+      DWORD ret = GetGlyphIndicesW(dc.GetDC(), &ch, 1, &glyph,
+                                   GGI_MARK_NONEXISTING_GLYPHS);
       if (ret == GDI_ERROR || glyph == 0xFFFF) {
         glyph = 0;
       }
@@ -469,17 +495,12 @@ int32_t gfxGDIFont::GetGlyphWidth(uint16_t aGID) {
   });
 }
 
-bool gfxGDIFont::GetGlyphBounds(uint16_t aGID, gfxRect* aBounds, bool aTight) {
-  // For https://github.com/RecordReplay/backend/issues/3659
-  recordreplay::RecordReplayAssert("gfxGDIFont::GetGlyphBounds %u", aGID);
-
+bool gfxGDIFont::GetGlyphBounds(uint16_t aGID, gfxRect* aBounds,
+                                bool aTight) const {
   DCForMetrics dc;
   AutoSelectFont fs(dc, GetHFONT());
 
   if (mIsBitmap) {
-    // For https://github.com/RecordReplay/backend/issues/3659
-    recordreplay::RecordReplayAssert("gfxGDIFont::GetGlyphWidth #1 %u", aGID);
-
     int devWidth;
     if (!GetCharWidthI(dc, aGID, 1, nullptr, &devWidth)) {
       return false;

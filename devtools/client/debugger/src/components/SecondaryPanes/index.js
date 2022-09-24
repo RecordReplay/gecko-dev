@@ -2,7 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
+const SplitBox = require("devtools/client/shared/components/splitter/SplitBox");
+
 import React, { Component } from "react";
+import PropTypes from "prop-types";
 import classnames from "classnames";
 import { isGeneratedId } from "devtools-source-map";
 import { connect } from "../../utils/connect";
@@ -10,10 +13,7 @@ import { connect } from "../../utils/connect";
 import actions from "../../actions";
 import {
   getTopFrame,
-  getBreakpointsList,
-  getBreakpointsDisabled,
   getExpressions,
-  getIsWaitingOnBreak,
   getPauseCommand,
   isMapScopesEnabled,
   getSelectedFrame,
@@ -23,7 +23,7 @@ import {
   getCurrentThread,
   getThreadContext,
   getPauseReason,
-  getSourceFromId,
+  getLocationSource,
   getSkipPausing,
   shouldLogEventBreakpoints,
 } from "../../selectors";
@@ -33,7 +33,6 @@ import { prefs, features } from "../../utils/prefs";
 
 import Breakpoints from "./Breakpoints";
 import Expressions from "./Expressions";
-import SplitBox from "devtools-splitter";
 import Frames from "./Frames";
 import Threads from "./Threads";
 import Accordion from "../shared/Accordion";
@@ -61,7 +60,7 @@ function debugBtn(onClick, type, className, tooltip) {
 }
 
 const mdnLink =
-  "https://developer.mozilla.org/docs/Tools/Debugger/Using_the_Debugger_map_scopes_feature?utm_source=devtools&utm_medium=debugger-map-scopes";
+  "https://firefox-source-docs.mozilla.org/devtools-user/debugger/using_the_debugger_map_scopes_feature/";
 
 class SecondaryPanes extends Component {
   constructor(props) {
@@ -73,6 +72,29 @@ class SecondaryPanes extends Component {
     };
   }
 
+  static get propTypes() {
+    return {
+      cx: PropTypes.object.isRequired,
+      evaluateExpressions: PropTypes.func.isRequired,
+      expressions: PropTypes.array.isRequired,
+      hasFrames: PropTypes.bool.isRequired,
+      horizontal: PropTypes.bool.isRequired,
+      logEventBreakpoints: PropTypes.bool.isRequired,
+      mapScopesEnabled: PropTypes.bool.isRequired,
+      pauseOnExceptions: PropTypes.func.isRequired,
+      pauseReason: PropTypes.string.isRequired,
+      renderWhyPauseDelay: PropTypes.number.isRequired,
+      selectedFrame: PropTypes.object,
+      shouldPauseOnCaughtExceptions: PropTypes.bool.isRequired,
+      shouldPauseOnExceptions: PropTypes.bool.isRequired,
+      skipPausing: PropTypes.bool.isRequired,
+      source: PropTypes.object,
+      toggleEventLogging: PropTypes.func.isRequired,
+      toggleMapScopes: PropTypes.func.isRequired,
+      workers: PropTypes.array.isRequired,
+    };
+  }
+
   onExpressionAdded = () => {
     this.setState({ showExpressionsInput: false });
   };
@@ -80,47 +102,6 @@ class SecondaryPanes extends Component {
   onXHRAdded = () => {
     this.setState({ showXHRInput: false });
   };
-
-  renderBreakpointsToggle() {
-    const {
-      cx,
-      toggleAllBreakpoints,
-      breakpoints,
-      breakpointsDisabled,
-    } = this.props;
-    const isIndeterminate =
-      !breakpointsDisabled && breakpoints.some(x => x.disabled);
-
-    if (features.skipPausing || breakpoints.length === 0) {
-      return null;
-    }
-
-    const inputProps = {
-      type: "checkbox",
-      "aria-label": breakpointsDisabled
-        ? L10N.getStr("breakpoints.enable")
-        : L10N.getStr("breakpoints.disable"),
-      className: "breakpoints-toggle",
-      disabled: false,
-      key: "breakpoints-toggle",
-      onChange: e => {
-        e.stopPropagation();
-        toggleAllBreakpoints(cx, !breakpointsDisabled);
-      },
-      onClick: e => e.stopPropagation(),
-      checked: !breakpointsDisabled && !isIndeterminate,
-      ref: input => {
-        if (input) {
-          input.indeterminate = isIndeterminate;
-        }
-      },
-      title: breakpointsDisabled
-        ? L10N.getStr("breakpoints.enable")
-        : L10N.getStr("breakpoints.disable"),
-    };
-
-    return <input {...inputProps} />;
-  }
 
   watchExpressionHeaderButtons() {
     const { expressions } = this.props;
@@ -323,7 +304,6 @@ class SecondaryPanes extends Component {
     return {
       header: L10N.getStr("breakpoints.header"),
       className: "breakpoints-pane",
-      buttons: [this.renderBreakpointsToggle()],
       component: (
         <Breakpoints
           shouldPauseOnExceptions={shouldPauseOnExceptions}
@@ -502,9 +482,6 @@ const mapStateToProps = state => {
     cx: getThreadContext(state),
     expressions: getExpressions(state),
     hasFrames: !!getTopFrame(state, thread),
-    breakpoints: getBreakpointsList(state),
-    breakpointsDisabled: getBreakpointsDisabled(state),
-    isWaitingOnBreak: getIsWaitingOnBreak(state, thread),
     renderWhyPauseDelay: getRenderWhyPauseDelay(state, thread),
     selectedFrame,
     mapScopesEnabled: isMapScopesEnabled(state),
@@ -513,14 +490,12 @@ const mapStateToProps = state => {
     workers: getThreads(state),
     skipPausing: getSkipPausing(state),
     logEventBreakpoints: shouldLogEventBreakpoints(state),
-    source:
-      selectedFrame && getSourceFromId(state, selectedFrame.location.sourceId),
+    source: selectedFrame && getLocationSource(state, selectedFrame.location),
     pauseReason: pauseReason?.type ?? "",
   };
 };
 
 export default connect(mapStateToProps, {
-  toggleAllBreakpoints: actions.toggleAllBreakpoints,
   evaluateExpressions: actions.evaluateExpressions,
   pauseOnExceptions: actions.pauseOnExceptions,
   toggleMapScopes: actions.toggleMapScopes,

@@ -76,9 +76,6 @@ struct ZoneGCStats {
   /* Number of zones collected in this GC. */
   int collectedZoneCount = 0;
 
-  /* Number of zones that could have been collected in this GC. */
-  int collectableZoneCount = 0;
-
   /* Total number of zones in the Runtime at the start of this GC. */
   int zoneCount = 0;
 
@@ -94,9 +91,7 @@ struct ZoneGCStats {
   /* Total number of compartments swept by this GC. */
   int sweptCompartmentCount = 0;
 
-  bool isFullCollection() const {
-    return collectedZoneCount == collectableZoneCount;
-  }
+  bool isFullCollection() const { return collectedZoneCount == zoneCount; }
 
   ZoneGCStats() = default;
 };
@@ -116,8 +111,7 @@ struct Trigger {
   _(Compact, "cmpct", PhaseKind::COMPACT)                           \
   _(EndCallback, "endCB", PhaseKind::GC_END)                        \
   _(MinorGC, "minor", PhaseKind::MINOR_GC)                          \
-  _(EvictNursery, "evict", PhaseKind::EVICT_NURSERY)                \
-  _(Barriers, "brrier", PhaseKind::BARRIER)
+  _(EvictNursery, "evict", PhaseKind::EVICT_NURSERY)
 
 const char* ExplainAbortReason(GCAbortReason reason);
 
@@ -150,6 +144,8 @@ struct Statistics {
   using PhaseKindTimes =
       EnumeratedArray<PhaseKind, PhaseKind::LIMIT, TimeDuration>;
 
+  using PhaseTimeStamps = EnumeratedArray<Phase, Phase::LIMIT, TimeStamp>;
+
   [[nodiscard]] static bool initialize();
 
   explicit Statistics(gc::GCRuntime* gc);
@@ -178,7 +174,8 @@ struct Statistics {
   void resumePhases();
 
   void beginSlice(const ZoneGCStats& zoneStats, JS::GCOptions options,
-                  const SliceBudget& budget, JS::GCReason reason);
+                  const SliceBudget& budget, JS::GCReason reason,
+                  bool budgetWasIncreased);
   void endSlice();
 
   [[nodiscard]] bool startTimingMutator();
@@ -196,7 +193,6 @@ struct Statistics {
   }
 
   void measureInitialHeapSize();
-  void adoptHeapSizeDuringIncrementalGC(Zone* mergedZone);
 
   void nonincremental(GCAbortReason reason) {
     MOZ_ASSERT(reason != GCAbortReason::None);
@@ -277,6 +273,7 @@ struct Statistics {
     size_t startFaults = 0;
     size_t endFaults = 0;
     PhaseTimes phaseTimes;
+    PhaseKindTimes totalParallelTimes;
     PhaseKindTimes maxParallelTimes;
 
     TimeDuration duration() const { return end - start; }
@@ -292,6 +289,10 @@ struct Statistics {
   TimeStamp end() const { return slices_.back().end; }
 
   TimeStamp creationTime() const { return creationTime_; }
+
+  // File to write profiling information to, either stderr or file specified
+  // with JS_GC_PROFILE_FILE.
+  FILE* profileFile() const { return gcProfileFile; }
 
   // Occasionally print header lines for profiling information.
   void maybePrintProfileHeaders();
@@ -330,6 +331,9 @@ struct Statistics {
   /* File used for JS_GC_DEBUG output. */
   FILE* gcDebugFile;
 
+  /* File used for JS_GC_PROFILE output. */
+  FILE* gcProfileFile;
+
   ZoneGCStats zoneStats;
 
   JS::GCOptions gcOptions;
@@ -339,11 +343,11 @@ struct Statistics {
   SliceDataVector slices_;
 
   /* Most recent time when the given phase started. */
-  EnumeratedArray<Phase, Phase::LIMIT, TimeStamp> phaseStartTimes;
+  PhaseTimeStamps phaseStartTimes;
 
 #ifdef DEBUG
   /* Most recent time when the given phase ended. */
-  EnumeratedArray<Phase, Phase::LIMIT, TimeStamp> phaseEndTimes;
+  PhaseTimeStamps phaseEndTimes;
 #endif
 
   TimeStamp creationTime_;
@@ -354,6 +358,9 @@ struct Statistics {
 
   /* Total time in a given phase for this GC. */
   PhaseTimes phaseTimes;
+
+  /* Total parallel time for a given phase kind for this GC. */
+  PhaseKindTimes parallelTimes;
 
   /* Number of events of this type for this GC. */
   EnumeratedArray<Count, COUNT_LIMIT,
@@ -424,6 +431,7 @@ struct Statistics {
 
   enum class ProfileKey {
     Total,
+    Background,
 #define DEFINE_TIME_KEY(name, text, phase) name,
     FOR_EACH_GC_PROFILE_TIME(DEFINE_TIME_KEY)
 #undef DEFINE_TIME_KEY
@@ -476,15 +484,15 @@ struct Statistics {
   double computeMMU(TimeDuration resolution) const;
 
   void printSliceProfile();
-  static void printProfileTimes(const ProfileDurations& times);
+  void printProfileTimes(const ProfileDurations& times);
 };
 
 struct MOZ_RAII AutoGCSlice {
   AutoGCSlice(Statistics& stats, const ZoneGCStats& zoneStats,
               JS::GCOptions options, const SliceBudget& budget,
-              JS::GCReason reason)
+              JS::GCReason reason, bool budgetWasIncreased)
       : stats(stats) {
-    stats.beginSlice(zoneStats, options, budget, reason);
+    stats.beginSlice(zoneStats, options, budget, reason, budgetWasIncreased);
   }
   ~AutoGCSlice() { stats.endSlice(); }
 

@@ -23,7 +23,7 @@ const TEST_IMAGE =
   "test/test-image.png";
 
 add_task(async function() {
-  // Needed for the execute() function below
+  // Needed for the execute() call in `testMessages`.
   await pushPref("security.allow_parent_unrestricted_js_loads", true);
   await pushPref("devtools.browserconsole.contentMessages", true);
   const tab = await addTab(TEST_URI);
@@ -48,11 +48,34 @@ async function testMessages() {
   const opened = waitForBrowserConsole();
   let hud = BrowserConsoleManager.getBrowserConsole();
   ok(!hud, "browser console is not open");
+
+  // The test harness does override the global's console property to replace it with
+  // a Console.jsm instance (https://searchfox.org/mozilla-central/rev/618f9970972adc5a21194d39d690ec0865f26024/testing/mochitest/api.js#75-80)
+  // So here we reset the console property with the native console (which is luckily
+  // stored in `nativeConsole`).
+  const overriddenConsole = globalThis.console;
+  globalThis.console = globalThis.nativeConsole;
+
   info("wait for the browser console to open with ctrl-shift-j");
   EventUtils.synthesizeKey("j", { accelKey: true, shiftKey: true }, window);
 
   hud = await opened;
   ok(hud, "browser console opened");
+
+  info("Check that we don't display the non-native console API warning");
+  // Wait a bit to let room for the message to be displayed
+  await wait(1000);
+  is(
+    await findMessageVirtualizedByType({
+      hud,
+      text: "The Web Console logging API",
+      typeSelector: ".warn",
+    }),
+    undefined,
+    "The message about disabled console API is not displayed"
+  );
+  // Set the overidden console back.
+  globalThis.console = overriddenConsole;
 
   await clearOutput(hud);
 
@@ -154,7 +177,8 @@ async function testMessages() {
     0,
     0,
     Ci.nsIScriptError.warningFlag,
-    "Test",
+    // platform-specific category to test case for Bug 1770160
+    "chrome javascript",
     gBrowser.selectedBrowser.innerWindowID
   );
   Services.console.logMessage(scriptErrorMessage);
@@ -174,34 +198,60 @@ async function testMessages() {
   // Wait enough so any duplicated message would have the time to be rendered
   await wait(1000);
 
-  await checkUniqueMessageExists(hud, "message from chrome window");
   await checkUniqueMessageExists(
     hud,
-    "error thrown from test-cu-reporterror.js via Cu.reportError()"
+    "message from chrome window",
+    ".console-api"
   );
-  await checkUniqueMessageExists(hud, "error from nuked globals");
   await checkUniqueMessageExists(
     hud,
-    "privileged content process error message"
+    "error thrown from test-cu-reporterror.js via Cu.reportError()",
+    ".error"
   );
-  await checkUniqueMessageExists(hud, "message from content window");
-  await checkUniqueMessageExists(hud, "error from content window");
+  await checkUniqueMessageExists(hud, "error from nuked globals", ".error");
+  await checkUniqueMessageExists(
+    hud,
+    "privileged content process error message",
+    ".error"
+  );
+  await checkUniqueMessageExists(
+    hud,
+    "message from content window",
+    ".console-api"
+  );
+  await checkUniqueMessageExists(hud, "error from content window", ".error");
   await checkUniqueMessageExists(
     hud,
     `"Parent Process Location: chrome://browser/content/browser.xhtml"`,
     ".result"
   );
-  await checkUniqueMessageExists(hud, "framescript-message");
-  await checkUniqueMessageExists(hud, "Error from Services.console.logMessage");
-  await checkUniqueMessageExists(hud, "foobarException");
-  await checkUniqueMessageExists(hud, "test-console.html", ".message.network");
-  await checkUniqueMessageExists(hud, "404.html");
-  await checkUniqueMessageExists(hud, "test-image.png");
-  await checkUniqueMessageExists(hud, "Log.jsm content process messsage");
-  await checkUniqueMessageExists(hud, "message in content worker");
-  await checkUniqueMessageExists(hud, "error in content worker");
-  await checkUniqueMessageExists(hud, "message in parent worker");
-  await checkUniqueMessageExists(hud, "error in parent worker");
+  await checkUniqueMessageExists(hud, "framescript-message", ".console-api");
+  await checkUniqueMessageExists(
+    hud,
+    "Error from Services.console.logMessage",
+    ".warn"
+  );
+  await checkUniqueMessageExists(hud, "foobarException", ".error");
+  await checkUniqueMessageExists(hud, "test-console.html", ".network");
+  await checkUniqueMessageExists(hud, "404.html", ".network");
+  await checkUniqueMessageExists(hud, "test-image.png", ".network");
+  await checkUniqueMessageExists(
+    hud,
+    "Log.jsm content process messsage",
+    ".console-api"
+  );
+  await checkUniqueMessageExists(
+    hud,
+    "message in content worker",
+    ".console-api"
+  );
+  await checkUniqueMessageExists(hud, "error in content worker", ".error");
+  await checkUniqueMessageExists(
+    hud,
+    "message in parent worker",
+    ".console-api"
+  );
+  await checkUniqueMessageExists(hud, "error in parent worker", ".error");
   await checkUniqueMessageExists(
     hud,
     "Expected color but found ‘rainbow’",

@@ -31,20 +31,6 @@ XPCOMUtils.defineLazyGetter(this, "gWidgetsBundle", function() {
   return Services.strings.createBundle(kUrl);
 });
 
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "gELS",
-  "@mozilla.org/eventlistenerservice;1",
-  "nsIEventListenerService"
-);
-
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "gBookmarksToolbar2h2020",
-  "browser.toolbars.bookmarks.2h2020",
-  false
-);
-
 const kDefaultThemeID = "firefox-alpenglow@mozilla.org";
 
 const kSpecialWidgetPfx = "customizableui-special-";
@@ -52,7 +38,7 @@ const kSpecialWidgetPfx = "customizableui-special-";
 const kPrefCustomizationState = "browser.uiCustomization.state";
 const kPrefCustomizationAutoAdd = "browser.uiCustomization.autoAdd";
 const kPrefCustomizationDebug = "browser.uiCustomization.debug";
-const kPrefDrawInTitlebar = "browser.tabs.drawInTitlebar";
+const kPrefDrawInTitlebar = "browser.tabs.inTitlebar";
 const kPrefUIDensity = "browser.uidensity";
 const kPrefAutoTouchMode = "browser.touchmode.auto";
 const kPrefAutoHideDownloadsButton = "browser.download.autohideButton";
@@ -206,13 +192,12 @@ XPCOMUtils.defineLazyPreferenceGetter(
 );
 
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let scope = {};
-  ChromeUtils.import("resource://gre/modules/Console.jsm", scope);
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
   let consoleOptions = {
     maxLogLevel: gDebuggingEnabled ? "all" : "log",
     prefix: "CustomizableUI",
   };
-  return new scope.ConsoleAPI(consoleOptions);
+  return new ConsoleAPI(consoleOptions);
 });
 
 var CustomizableUIInternal = {
@@ -290,11 +275,16 @@ var CustomizableUIInternal = {
       CustomizableUI.AREA_TABSTRIP,
       {
         type: CustomizableUI.TYPE_TOOLBAR,
-        defaultPlacements: [
-          "tabbrowser-tabs",
-          "new-tab-button",
-          "alltabs-button",
-        ],
+        defaultPlacements: Services.prefs.getBoolPref(
+          "browser.tabs.firefox-view"
+        )
+          ? [
+              "firefox-view-button",
+              "tabbrowser-tabs",
+              "new-tab-button",
+              "alltabs-button",
+            ]
+          : ["tabbrowser-tabs", "new-tab-button", "alltabs-button"],
         defaultCollapsed: null,
       },
       true
@@ -304,7 +294,7 @@ var CustomizableUIInternal = {
       {
         type: CustomizableUI.TYPE_TOOLBAR,
         defaultPlacements: ["personal-bookmarks"],
-        defaultCollapsed: gBookmarksToolbar2h2020 ? "newtab" : true,
+        defaultCollapsed: "newtab",
       },
       true
     );
@@ -982,7 +972,7 @@ var CustomizableUIInternal = {
         gDirtyAreaCache.add(area);
       }
 
-      if (areaProperties.has("overflowable")) {
+      if (areaProperties.get("overflowable")) {
         aToolbar.overflowable = new OverflowableToolbar(aToolbar);
       }
 
@@ -1191,8 +1181,8 @@ var CustomizableUIInternal = {
   },
 
   addPanelCloseListeners(aPanel) {
-    gELS.addSystemEventListener(aPanel, "click", this, false);
-    gELS.addSystemEventListener(aPanel, "keypress", this, false);
+    Services.els.addSystemEventListener(aPanel, "click", this, false);
+    Services.els.addSystemEventListener(aPanel, "keypress", this, false);
     let win = aPanel.ownerGlobal;
     if (!gPanelsForWindow.has(win)) {
       gPanelsForWindow.set(win, new Set());
@@ -1201,8 +1191,8 @@ var CustomizableUIInternal = {
   },
 
   removePanelCloseListeners(aPanel) {
-    gELS.removeSystemEventListener(aPanel, "click", this, false);
-    gELS.removeSystemEventListener(aPanel, "keypress", this, false);
+    Services.els.removeSystemEventListener(aPanel, "click", this, false);
+    Services.els.removeSystemEventListener(aPanel, "keypress", this, false);
     let win = aPanel.ownerGlobal;
     let panels = gPanelsForWindow.get(win);
     if (panels) {
@@ -1455,7 +1445,7 @@ var CustomizableUIInternal = {
             this.getCustomizationTarget(node),
             CustomizableUI.REASON_WINDOW_CLOSED
           );
-          if (areaProperties.has("overflowable")) {
+          if (areaProperties.get("overflowable")) {
             node.overflowable.uninit();
             node.overflowable = null;
           }
@@ -1800,7 +1790,7 @@ var CustomizableUIInternal = {
       if (aWidget.onBuild) {
         node = aWidget.onBuild(aDocument);
       }
-      if (!node || !(node instanceof aDocument.defaultView.XULElement)) {
+      if (!node || !aDocument.defaultView.XULElement.isInstance(node)) {
         log.error(
           "Custom widget with id " +
             aWidget.id +
@@ -1808,8 +1798,11 @@ var CustomizableUIInternal = {
         );
       }
     } else {
-      if (aWidget.onBeforeCreated) {
-        aWidget.onBeforeCreated(aDocument);
+      if (
+        aWidget.onBeforeCreated &&
+        aWidget.onBeforeCreated(aDocument) === false
+      ) {
+        return null;
       }
 
       let button = aDocument.createXULElement("toolbarbutton");
@@ -1849,6 +1842,12 @@ var CustomizableUIInternal = {
       if (aWidget.locationSpecific) {
         node.setAttribute("locationspecific", aWidget.locationSpecific);
       }
+      if (aWidget.keepBroadcastAttributesWhenCustomizing) {
+        node.setAttribute(
+          "keepbroadcastattributeswhencustomizing",
+          aWidget.keepBroadcastAttributesWhenCustomizing
+        );
+      }
 
       let shortcut;
       if (aWidget.shortcutId) {
@@ -1868,12 +1867,27 @@ var CustomizableUIInternal = {
 
       if (aWidget.l10nId) {
         node.setAttribute("data-l10n-id", aWidget.l10nId);
+        if (button != node) {
+          // This is probably a "button-and-view" widget, such as the Profiler
+          // button. In that case, "node" is the "toolbaritem" container, and
+          // "button" the main button (see above).
+          // In this case, the values on the "node" is used in the Customize
+          // view, as well as the tooltips over both buttons; the values on the
+          // "button" are used in the overflow menu.
+          button.setAttribute("data-l10n-id", aWidget.l10nId);
+        }
+
         if (shortcut) {
           node.setAttribute("data-l10n-args", JSON.stringify({ shortcut }));
+          if (button != node) {
+            // This is probably a "button-and-view" widget.
+            button.setAttribute("data-l10n-args", JSON.stringify({ shortcut }));
+          }
         }
       } else {
         node.setAttribute("label", this.getLocalizedProperty(aWidget, "label"));
         if (button != node) {
+          // This is probably a "button-and-view" widget.
           button.setAttribute("label", node.getAttribute("label"));
         }
 
@@ -1885,6 +1899,7 @@ var CustomizableUIInternal = {
         if (tooltip) {
           node.setAttribute("tooltiptext", tooltip);
           if (button != node) {
+            // This is probably a "button-and-view" widget.
             button.setAttribute("tooltiptext", tooltip);
           }
         }
@@ -2130,108 +2145,65 @@ var CustomizableUIInternal = {
    * If people put things in the panel which need more than single-click interaction,
    * we don't want to close it. Right now we check for text inputs and menu buttons.
    * We also check for being outside of any toolbaritem/toolbarbutton, ie on a blank
-   * part of the menu.
+   * part of the menu, or on another menu (like a context menu inside the panel).
    */
   _isOnInteractiveElement(aEvent) {
-    function getMenuPopupForDescendant(aNode) {
-      let lastPopup = null;
-      while (
-        aNode &&
-        aNode.parentNode &&
-        aNode.parentNode.localName.startsWith("menu")
-      ) {
-        lastPopup = aNode.localName == "menupopup" ? aNode : lastPopup;
-        aNode = aNode.parentNode;
-      }
-      return lastPopup;
-    }
-
-    let target = aEvent.originalTarget;
     let panel = this._getPanelForNode(aEvent.currentTarget);
     // This can happen in e.g. customize mode. If there's no panel,
     // there's clearly nothing for us to close; pretend we're interactive.
     if (!panel) {
       return true;
     }
-    // We keep track of:
-    // whether we're in an input container (text field)
-    let inInput = false;
-    // whether we're in a popup/context menu
-    let inMenu = false;
-    // whether we're in a toolbarbutton/toolbaritem
-    let inItem = false;
-    // whether the current menuitem has a valid closemenu attribute
-    let menuitemCloseMenu = "auto";
 
-    // While keeping track of that, we go from the original target back up,
-    // to the panel if we have to. We bail as soon as we find an input,
-    // a toolbarbutton/item, or the panel:
-    while (true && target) {
-      // Skip out of iframes etc:
+    function getNextTarget(target) {
       if (target.nodeType == target.DOCUMENT_NODE) {
         if (!target.defaultView) {
           // Err, we're done.
-          break;
+          return null;
         }
         // Find containing browser or iframe element in the parent doc.
-        target = target.defaultView.docShell.chromeEventHandler;
-        if (!target) {
-          break;
-        }
+        return target.defaultView.docShell.chromeEventHandler;
       }
-      let tagName = target.localName;
-      inInput = tagName == "input" || tagName == "searchbar";
-      inItem = tagName == "toolbaritem" || tagName == "toolbarbutton";
-      let isMenuItem = tagName == "menuitem";
-      inMenu = inMenu || isMenuItem;
+      // Skip any parent shadow roots
+      return target.parentNode?.host?.parentNode || target.parentNode;
+    }
 
-      if (isMenuItem && target.hasAttribute("closemenu")) {
-        let closemenuVal = target.getAttribute("closemenu");
-        menuitemCloseMenu =
-          closemenuVal == "single" || closemenuVal == "none"
-            ? closemenuVal
-            : "auto";
+    // While keeping track of that, we go from the original target back up,
+    // to the panel if we have to. We bail as soon as we find an input,
+    // a toolbarbutton/item, or a menuItem.
+    for (
+      let target = aEvent.originalTarget;
+      target && target != panel;
+      target = getNextTarget(target)
+    ) {
+      if (target.nodeType == target.DOCUMENT_NODE) {
+        // Skip out of iframes etc:
+        continue;
       }
+
       // Break out of the loop immediately for disabled items, as we need to
       // keep the menu open in that case.
       if (target.getAttribute("disabled") == "true") {
         return true;
       }
 
-      // This isn't in the loop condition because we want to break before
-      // changing |target| if any of these conditions are true
-      if (inInput || inItem || target == panel) {
-        break;
+      let tagName = target.localName;
+      if (tagName == "input" || tagName == "searchbar") {
+        return true;
       }
-      // We need specific code for popups: the item on which they were invoked
-      // isn't necessarily in their parentNode chain:
-      if (isMenuItem) {
-        let topmostMenuPopup = getMenuPopupForDescendant(target);
-        target =
-          (topmostMenuPopup && topmostMenuPopup.triggerNode) ||
-          target.parentNode;
-      } else {
-        // Skip any parent shadow roots
-        target = target.parentNode?.host?.parentNode || target.parentNode;
+      if (tagName == "toolbaritem" || tagName == "toolbarbutton") {
+        // If we are in a type="menu" toolbarbutton, we'll now interact with
+        // the menu.
+        return target.getAttribute("type") == "menu";
+      }
+      if (tagName == "menuitem") {
+        // If we're in a nested menu we don't need to close this panel.
+        return true;
       }
     }
 
-    // If the user clicked a menu item...
-    if (inMenu) {
-      // We care if we're in an input also,
-      // or if the user specified closemenu!="auto":
-      if (inInput || menuitemCloseMenu != "auto") {
-        return true;
-      }
-      // Otherwise, we're probably fine to close the panel
-      return false;
-    }
-    // If we're not in a menu, and we *are* in a type="menu" toolbarbutton,
-    // we'll now interact with the menu
-    if (inItem && target.getAttribute("type") == "menu") {
-      return true;
-    }
-    return inInput || !inItem;
+    // We don't know what we interacted with, assume interactive.
+    return true;
   },
 
   hidePanelForNode(aNode) {
@@ -2242,24 +2214,25 @@ var CustomizableUIInternal = {
   },
 
   maybeAutoHidePanel(aEvent) {
-    if (aEvent.type == "keypress") {
-      if (aEvent.keyCode != aEvent.DOM_VK_RETURN) {
-        return;
-      }
-      // If the user hit enter/return, we don't check preventDefault - it makes sense
-      // that this was prevented, but we probably still want to close the panel.
-      // If consumers don't want this to happen, they should specify the closemenu
-      // attribute.
-    } else if (aEvent.type != "command") {
-      // mouse events:
-      if (aEvent.defaultPrevented || aEvent.button != 0) {
-        return;
-      }
-      let isInteractive = this._isOnInteractiveElement(aEvent);
-      log.debug("maybeAutoHidePanel: interactive ? " + isInteractive);
-      if (isInteractive) {
-        return;
-      }
+    let eventType = aEvent.type;
+    if (eventType == "keypress" && aEvent.keyCode != aEvent.DOM_VK_RETURN) {
+      return;
+    }
+
+    // If the user hit enter/return, we don't check preventDefault - it makes sense
+    // that this was prevented, but we probably still want to close the panel.
+    // If consumers don't want this to happen, they should specify the closemenu
+    // attribute.
+    if (
+      eventType != "command" &&
+      eventType != "keypress" &&
+      (aEvent.defaultPrevented || aEvent.button != 0)
+    ) {
+      return;
+    }
+
+    if (eventType != "command" && this._isOnInteractiveElement(aEvent)) {
+      return;
     }
 
     // We can't use event.target because we might have passed an anonymous
@@ -2905,6 +2878,7 @@ var CustomizableUIInternal = {
       l10nId: null,
       showInPrivateBrowsing: true,
       _introducedInVersion: -1,
+      keepBroadcastAttributesWhenCustomizing: false,
     };
 
     if (typeof aData.id != "string" || !/^[a-z0-9-_]{1,}$/i.test(aData.id)) {
@@ -2946,6 +2920,7 @@ var CustomizableUIInternal = {
       "tabSpecific",
       "locationSpecific",
       "localized",
+      "keepBroadcastAttributesWhenCustomizing",
     ];
     for (let prop of kOptBoolProps) {
       if (typeof aData[prop] == "boolean") {
@@ -3160,12 +3135,8 @@ var CustomizableUIInternal = {
 
   _resetUIState() {
     try {
-      // kPrefDrawInTitlebar may not be defined on Linux/Gtk+ which throws an exception
-      // and leads to whole test failure. Let's set a fallback default value to avoid that,
-      // both titlebar states are tested anyway and it's not important which state is tested first.
-      gUIStateBeforeReset.drawInTitlebar = Services.prefs.getBoolPref(
-        kPrefDrawInTitlebar,
-        false
+      gUIStateBeforeReset.drawInTitlebar = Services.prefs.getIntPref(
+        kPrefDrawInTitlebar
       );
       gUIStateBeforeReset.uiCustomizationState = Services.prefs.getCharPref(
         kPrefCustomizationState
@@ -3255,7 +3226,7 @@ var CustomizableUIInternal = {
     this._clearPreviousUIState();
 
     Services.prefs.setCharPref(kPrefCustomizationState, uiCustomizationState);
-    Services.prefs.setBoolPref(kPrefDrawInTitlebar, drawInTitlebar);
+    Services.prefs.setIntPref(kPrefDrawInTitlebar, drawInTitlebar);
     Services.prefs.setIntPref(kPrefUIDensity, uiDensity);
     Services.prefs.setBoolPref(kPrefAutoTouchMode, autoTouchMode);
     Services.prefs.setBoolPref(
@@ -3453,10 +3424,7 @@ var CustomizableUIInternal = {
           let collapsed = null;
           let defaultCollapsed = props.get("defaultCollapsed");
           let nondefaultState = false;
-          if (
-            areaId == CustomizableUI.AREA_BOOKMARKS &&
-            gBookmarksToolbar2h2020
-          ) {
+          if (areaId == CustomizableUI.AREA_BOOKMARKS) {
             collapsed = Services.prefs.getCharPref(
               "browser.toolbars.bookmarks.visibility"
             );
@@ -3957,7 +3925,8 @@ var CustomizableUI = {
    *                  constructed, passing the document in which that will happen.
    *                  This is useful especially for 'view' type widgets that need
    *                  to construct their views on the fly (e.g. from bootstrapped
-   *                  add-ons)
+   *                  add-ons). If the function returns `false`, the widget will
+   *                  not be created.
    * - onCreated(aNode): Attached to all widgets; a function that will be invoked
    *                  whenever the widget has a DOM node constructed, passing the
    *                  constructed node as an argument.
@@ -4671,6 +4640,47 @@ var CustomizableUI = {
   getCustomizationTarget(aElement) {
     return CustomizableUIInternal.getCustomizationTarget(aElement);
   },
+
+  getTestOnlyInternalProp(aProp) {
+    if (!Cu.isInAutomation) {
+      return null;
+    }
+    switch (aProp) {
+      case "CustomizableUIInternal":
+        return CustomizableUIInternal;
+      case "gAreas":
+        return gAreas;
+      case "gFuturePlacements":
+        return gFuturePlacements;
+      case "gPalette":
+        return gPalette;
+      case "gPlacements":
+        return gPlacements;
+      case "gSavedState":
+        return gSavedState;
+      case "gSeenWidgets":
+        return gSeenWidgets;
+      case "kVersion":
+        return kVersion;
+    }
+    return null;
+  },
+  setTestOnlyInternalProp(aProp, aValue) {
+    if (!Cu.isInAutomation) {
+      return;
+    }
+    switch (aProp) {
+      case "gSavedState":
+        gSavedState = aValue;
+        break;
+      case "kVersion":
+        kVersion = aValue;
+        break;
+      case "gDirty":
+        gDirty = aValue;
+        break;
+    }
+  },
 };
 Object.freeze(CustomizableUI);
 Object.freeze(CustomizableUI.windows);
@@ -5093,7 +5103,7 @@ OverflowableToolbar.prototype = {
       let mainViewId = multiview.getAttribute("mainViewId");
       let mainView = doc.getElementById(mainViewId);
       let contextMenu = doc.getElementById(mainView.getAttribute("context"));
-      gELS.addSystemEventListener(contextMenu, "command", this, true);
+      Services.els.addSystemEventListener(contextMenu, "command", this, true);
       let anchor = this._chevron.icon;
 
       let popupshown = false;
@@ -5173,7 +5183,12 @@ OverflowableToolbar.prototype = {
     let contextMenuId = this._panel.getAttribute("context");
     if (contextMenuId) {
       let contextMenu = doc.getElementById(contextMenuId);
-      gELS.removeSystemEventListener(contextMenu, "command", this, true);
+      Services.els.removeSystemEventListener(
+        contextMenu,
+        "command",
+        this,
+        true
+      );
     }
   },
 

@@ -36,7 +36,6 @@
 #include "nsPrinterListCUPS.h"
 #include "nsPrintSettingsServiceX.h"
 #include "nsPrintDialogX.h"
-#include "nsPrintSession.h"
 #include "nsToolkitCompsCID.h"
 
 #include "mozilla/widget/ScreenManager.h"
@@ -66,7 +65,6 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsDeviceContextSpecX)
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsPrinterListCUPS)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintSettingsServiceX, Init)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintDialogServiceX, Init)
-NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(nsPrintSession, Init)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(nsUserIdleServiceX, nsUserIdleServiceX::GetInstance)
 NS_GENERIC_FACTORY_SINGLETON_CONSTRUCTOR(ScreenManager, ScreenManager::GetAddRefedSingleton)
 NS_GENERIC_FACTORY_CONSTRUCTOR_INIT(OSXNotificationCenter, Init)
@@ -79,6 +77,9 @@ NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacFinderProgress)
 
 #include "nsMacSharingService.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacSharingService)
+
+#include "nsMacUserActivityUpdater.h"
+NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacUserActivityUpdater)
 
 #include "nsMacWebAppUtils.h"
 NS_GENERIC_FACTORY_CONSTRUCTOR(nsMacWebAppUtils)
@@ -103,7 +104,6 @@ NS_DEFINE_NAMED_CID(NS_DRAGSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_SCREENMANAGER_CID);
 NS_DEFINE_NAMED_CID(NS_DEVICE_CONTEXT_SPEC_CID);
 NS_DEFINE_NAMED_CID(NS_PRINTER_LIST_CID);
-NS_DEFINE_NAMED_CID(NS_PRINTSESSION_CID);
 NS_DEFINE_NAMED_CID(NS_PRINTSETTINGSSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_PRINTDIALOGSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_IDLE_SERVICE_CID);
@@ -111,6 +111,7 @@ NS_DEFINE_NAMED_CID(NS_SYSTEMALERTSSERVICE_CID);
 NS_DEFINE_NAMED_CID(NS_MACDOCKSUPPORT_CID);
 NS_DEFINE_NAMED_CID(NS_MACFINDERPROGRESS_CID);
 NS_DEFINE_NAMED_CID(NS_MACSHARINGSERVICE_CID);
+NS_DEFINE_NAMED_CID(NS_MACUSERACTIVITYUPDATER_CID);
 NS_DEFINE_NAMED_CID(NS_MACWEBAPPUTILS_CID);
 NS_DEFINE_NAMED_CID(NS_STANDALONENATIVEMENU_CID);
 NS_DEFINE_NAMED_CID(NS_SYSTEMSTATUSBAR_CID);
@@ -121,7 +122,7 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
     {&kNS_COLORPICKER_CID, false, NULL, nsColorPickerConstructor,
      mozilla::Module::MAIN_PROCESS_ONLY},
     {&kNS_APPSHELL_CID, false, NULL, nsAppShellConstructor,
-     mozilla::Module::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS},
+     mozilla::Module::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS},
     {&kNS_SOUND_CID, false, NULL, nsSoundConstructor, mozilla::Module::MAIN_PROCESS_ONLY},
     {&kNS_TRANSFERABLE_CID, false, NULL, nsTransferableConstructor},
     {&kNS_HTMLFORMATCONVERTER_CID, false, NULL, nsHTMLFormatConverterConstructor},
@@ -130,17 +131,19 @@ static const mozilla::Module::CIDEntry kWidgetCIDs[] = {
      mozilla::Module::MAIN_PROCESS_ONLY},
     {&kNS_SCREENMANAGER_CID, false, NULL, ScreenManagerConstructor,
      mozilla::Module::MAIN_PROCESS_ONLY},
-    {&kNS_DEVICE_CONTEXT_SPEC_CID, false, NULL, nsDeviceContextSpecXConstructor},
+    {&kNS_DEVICE_CONTEXT_SPEC_CID, false, NULL, nsDeviceContextSpecXConstructor,
+     mozilla::Module::MAIN_PROCESS_ONLY},
     {&kNS_PRINTER_LIST_CID, false, NULL, nsPrinterListCUPSConstructor,
      mozilla::Module::MAIN_PROCESS_ONLY},
-    {&kNS_PRINTSESSION_CID, false, NULL, nsPrintSessionConstructor},
     {&kNS_PRINTSETTINGSSERVICE_CID, false, NULL, nsPrintSettingsServiceXConstructor},
-    {&kNS_PRINTDIALOGSERVICE_CID, false, NULL, nsPrintDialogServiceXConstructor},
+    {&kNS_PRINTDIALOGSERVICE_CID, false, NULL, nsPrintDialogServiceXConstructor,
+     mozilla::Module::MAIN_PROCESS_ONLY},
     {&kNS_IDLE_SERVICE_CID, false, NULL, nsUserIdleServiceXConstructor},
     {&kNS_SYSTEMALERTSSERVICE_CID, false, NULL, OSXNotificationCenterConstructor},
     {&kNS_MACDOCKSUPPORT_CID, false, NULL, nsMacDockSupportConstructor},
     {&kNS_MACFINDERPROGRESS_CID, false, NULL, nsMacFinderProgressConstructor},
     {&kNS_MACSHARINGSERVICE_CID, false, NULL, nsMacSharingServiceConstructor},
+    {&kNS_MACUSERACTIVITYUPDATER_CID, false, NULL, nsMacUserActivityUpdaterConstructor},
     {&kNS_MACWEBAPPUTILS_CID, false, NULL, nsMacWebAppUtilsConstructor},
     {&kNS_STANDALONENATIVEMENU_CID, false, NULL, nsStandaloneNativeMenuConstructor},
     {&kNS_SYSTEMSTATUSBAR_CID, false, NULL, nsSystemStatusBarCocoaConstructor},
@@ -151,7 +154,7 @@ static const mozilla::Module::ContractIDEntry kWidgetContracts[] = {
     {"@mozilla.org/filepicker;1", &kNS_FILEPICKER_CID, mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/colorpicker;1", &kNS_COLORPICKER_CID, mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/widget/appshell/mac;1", &kNS_APPSHELL_CID,
-     mozilla::Module::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS},
+     mozilla::Module::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS},
     {"@mozilla.org/sound;1", &kNS_SOUND_CID, mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/widget/transferable;1", &kNS_TRANSFERABLE_CID},
     {"@mozilla.org/widget/htmlformatconverter;1", &kNS_HTMLFORMATCONVERTER_CID},
@@ -159,16 +162,18 @@ static const mozilla::Module::ContractIDEntry kWidgetContracts[] = {
     {"@mozilla.org/widget/dragservice;1", &kNS_DRAGSERVICE_CID, mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/gfx/screenmanager;1", &kNS_SCREENMANAGER_CID,
      mozilla::Module::MAIN_PROCESS_ONLY},
-    {"@mozilla.org/gfx/devicecontextspec;1", &kNS_DEVICE_CONTEXT_SPEC_CID},
+    {"@mozilla.org/gfx/devicecontextspec;1", &kNS_DEVICE_CONTEXT_SPEC_CID,
+     mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/gfx/printerlist;1", &kNS_PRINTER_LIST_CID, mozilla::Module::MAIN_PROCESS_ONLY},
-    {"@mozilla.org/gfx/printsession;1", &kNS_PRINTSESSION_CID},
     {"@mozilla.org/gfx/printsettings-service;1", &kNS_PRINTSETTINGSSERVICE_CID},
-    {NS_PRINTDIALOGSERVICE_CONTRACTID, &kNS_PRINTDIALOGSERVICE_CID},
+    {NS_PRINTDIALOGSERVICE_CONTRACTID, &kNS_PRINTDIALOGSERVICE_CID,
+     mozilla::Module::MAIN_PROCESS_ONLY},
     {"@mozilla.org/widget/useridleservice;1", &kNS_IDLE_SERVICE_CID},
     {"@mozilla.org/system-alerts-service;1", &kNS_SYSTEMALERTSSERVICE_CID},
     {"@mozilla.org/widget/macdocksupport;1", &kNS_MACDOCKSUPPORT_CID},
     {"@mozilla.org/widget/macfinderprogress;1", &kNS_MACFINDERPROGRESS_CID},
     {"@mozilla.org/widget/macsharingservice;1", &kNS_MACSHARINGSERVICE_CID},
+    {"@mozilla.org/widget/macuseractivityupdater;1", &kNS_MACUSERACTIVITYUPDATER_CID},
     {"@mozilla.org/widget/mac-web-app-utils;1", &kNS_MACWEBAPPUTILS_CID},
     {"@mozilla.org/widget/standalonenativemenu;1", &kNS_STANDALONENATIVEMENU_CID},
     {"@mozilla.org/widget/systemstatusbar;1", &kNS_SYSTEMSTATUSBAR_CID},
@@ -193,4 +198,4 @@ extern const mozilla::Module kWidgetModule = {
     NULL,
     nsAppShellInit,
     nsWidgetCocoaModuleDtor,
-    mozilla::Module::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS};
+    mozilla::Module::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS};

@@ -21,12 +21,10 @@ enum class ShutdownPhase {
   XPCOMWillShutdown,
   XPCOMShutdown,
   XPCOMShutdownThreads,
-  XPCOMShutdownLoaders,
   XPCOMShutdownFinal,
   CCPostLastCycleCollection,
-  ShutdownPhase_Length,          // never pass this value
-  First = AppShutdownConfirmed,  // for iteration
-  Last = XPCOMShutdownFinal
+  ShutdownPhase_Length,         // never pass this value
+  First = AppShutdownConfirmed  // for iteration
 };
 
 }  // namespace mozilla

@@ -16,6 +16,7 @@
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Event.h"
 #include "nsIFrame.h"
+#include "nsIScrollableFrame.h"
 #include "nsLayoutUtils.h"
 #include "nsPoint.h"
 #include "nsView.h"
@@ -32,6 +33,7 @@ NS_IMPL_ISUPPORTS(ZoomConstraintsClient, nsIDOMEventListener, nsIObserver)
 #define DOM_META_CHANGED u"DOMMetaChanged"_ns
 #define FULLSCREEN_CHANGED u"fullscreenchange"_ns
 #define BEFORE_FIRST_PAINT "before-first-paint"_ns
+#define COMPOSITOR_REINITIALIZED "compositor-reinitialized"_ns
 #define NS_PREF_CHANGED "nsPref:changed"_ns
 
 using namespace mozilla;
@@ -80,6 +82,7 @@ void ZoomConstraintsClient::Destroy() {
       mozilla::services::GetObserverService();
   if (observerService) {
     observerService->RemoveObserver(this, BEFORE_FIRST_PAINT.Data());
+    observerService->RemoveObserver(this, COMPOSITOR_REINITIALIZED.Data());
   }
 
   Preferences::RemoveObserver(this, "browser.ui.zoom.force-user-scalable");
@@ -119,6 +122,7 @@ void ZoomConstraintsClient::Init(PresShell* aPresShell, Document* aDocument) {
       mozilla::services::GetObserverService();
   if (observerService) {
     observerService->AddObserver(this, BEFORE_FIRST_PAINT.Data(), false);
+    observerService->AddObserver(this, COMPOSITOR_REINITIALIZED.Data(), false);
   }
 
   Preferences::AddStrongObserver(this, "browser.ui.zoom.force-user-scalable");
@@ -149,6 +153,9 @@ ZoomConstraintsClient::Observe(nsISupports* aSubject, const char* aTopic,
   if (SameCOMIdentity(aSubject, ToSupports(mDocument)) &&
       BEFORE_FIRST_PAINT.EqualsASCII(aTopic)) {
     ZCC_LOG("Got a before-first-paint event in %p\n", this);
+    RefreshZoomConstraints();
+  } else if (COMPOSITOR_REINITIALIZED.EqualsASCII(aTopic)) {
+    ZCC_LOG("Got a compositor-reinitialized notification in %p\n", this);
     RefreshZoomConstraints();
   } else if (NS_PREF_CHANGED.EqualsASCII(aTopic)) {
     ZCC_LOG("Got a pref-change event in %p\n", this);

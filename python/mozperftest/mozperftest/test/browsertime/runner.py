@@ -82,7 +82,7 @@ class BrowsertimeRunner(NodeRunner):
             "default": False,
             "help": "Use the window recorder",
         },
-        "viewport-size": {"type": str, "default": "1366x695", "help": "Viewport size"},
+        "viewport-size": {"type": str, "default": "1280x1024", "help": "Viewport size"},
     }
 
     def __init__(self, env, mach_cmd):
@@ -300,11 +300,6 @@ class BrowsertimeRunner(NodeRunner):
 
         args_list = [
             "--android",
-            # Work around a `selenium-webdriver` issue where Browsertime
-            # fails to find a Firefox binary even though we're going to
-            # actually do things on an Android device.
-            "--firefox.binaryPath",
-            self.node_path,
             "--firefox.android.package",
             app_name,
         ]
@@ -313,6 +308,22 @@ class BrowsertimeRunner(NodeRunner):
             args_list += ["--firefox.android.activity", activity]
 
         return args_list
+
+    def _line_handler(self, line):
+        line_matcher = re.compile(r"(\[\d{4}-\d{2}-\d{2}.*\])\s+([a-zA-Z]+):\s+(.*)")
+        match = line_matcher.match(line)
+        if not match:
+            return
+
+        date, level, msg = match.groups()
+        msg = msg.replace("{", "{{").replace("}", "}}")
+        level = level.lower()
+        if "error" in level:
+            self.error("Mozperftest failed to run: {}".format(msg), msg)
+        elif "warning" in level:
+            self.warning(msg)
+        else:
+            self.info(msg)
 
     def run(self, metadata):
         self._test_script = metadata.script
@@ -397,9 +408,9 @@ class BrowsertimeRunner(NodeRunner):
 
         if visualmetrics and self.get_arg("xvfb"):
             with xvfb():
-                exit_code = self.node(command)
+                exit_code = self.node(command, self._line_handler)
         else:
-            exit_code = self.node(command)
+            exit_code = self.node(command, self._line_handler)
 
         if exit_code != 0:
             raise NodeException(exit_code)

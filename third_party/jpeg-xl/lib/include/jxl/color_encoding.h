@@ -4,7 +4,9 @@
  * license that can be found in the LICENSE file.
  */
 
-/** @file color_encoding.h
+/** @addtogroup libjxl_common
+ * @{
+ * @file color_encoding.h
  * @brief Color Encoding definitions used by JPEG XL.
  * All CIE units are for the standard 1931 2 degree observer.
  */
@@ -34,12 +36,19 @@ typedef enum {
   JXL_COLOR_SPACE_UNKNOWN,
 } JxlColorSpace;
 
-/** Built-in whitepoints for color encoding. Numeric values match CICP (Rec.
- * ITU-T H.273 | ISO/IEC 23091-2:2019(E)). */
+/** Built-in whitepoints for color encoding. When decoding, the numerical xy
+ * whitepoint value can be read from the JxlColorEncoding white_point field
+ * regardless of the enum value. When encoding, enum values except
+ * JXL_WHITE_POINT_CUSTOM override the numerical fields. Some enum values match
+ * a subset of CICP (Rec. ITU-T H.273 | ISO/IEC 23091-2:2019(E)), however the
+ * white point and RGB primaries are separate enums here.
+ */
 typedef enum {
   /** CIE Standard Illuminant D65: 0.3127, 0.3290 */
   JXL_WHITE_POINT_D65 = 1,
-  /** Custom white point stored in JxlColorEncoding white_point. */
+  /** White point must be read from the JxlColorEncoding white_point field, or
+   * as ICC profile. This enum value is not an exact match of the corresponding
+   * CICP value. */
   JXL_WHITE_POINT_CUSTOM = 2,
   /** CIE Standard Illuminant E (equal-energy): 1/3, 1/3 */
   JXL_WHITE_POINT_E = 10,
@@ -47,14 +56,21 @@ typedef enum {
   JXL_WHITE_POINT_DCI = 11,
 } JxlWhitePoint;
 
-/** Built-in primaries for color encoding. Numeric values match CICP (Rec. ITU-T
- * H.273 | ISO/IEC 23091-2:2019(E)). */
+/** Built-in primaries for color encoding. When decoding, the primaries can be
+ * read from the JxlColorEncoding primaries_red_xy, primaries_green_xy and
+ * primaries_blue_xy fields regardless of the enum value. When encoding, the
+ * enum values except JXL_PRIMARIES_CUSTOM override the numerical fields. Some
+ * enum values match a subset of CICP (Rec. ITU-T H.273 | ISO/IEC
+ * 23091-2:2019(E)), however the white point and RGB primaries are separate
+ * enums here.
+ */
 typedef enum {
   /** The CIE xy values of the red, green and blue primaries are: 0.639998686,
      0.330010138; 0.300003784, 0.600003357; 0.150002046, 0.059997204 */
   JXL_PRIMARIES_SRGB = 1,
-  /** Custom white point stored in JxlColorEncoding primaries_red_xy,
-     primaries_green_xy and primaries_blue_xy. */
+  /** Primaries must be read from the JxlColorEncoding primaries_red_xy,
+   * primaries_green_xy and primaries_blue_xy fields, or as ICC profile. This
+   * enum value is not an exact match of the corresponding CICP value. */
   JXL_PRIMARIES_CUSTOM = 2,
   /** As specified in Rec. ITU-R BT.2100-1 */
   JXL_PRIMARIES_2100 = 9,
@@ -62,8 +78,9 @@ typedef enum {
   JXL_PRIMARIES_P3 = 11,
 } JxlPrimaries;
 
-/** Built-in transfer functions for color encoding. Numeric values match CICP
- * (Rec. ITU-T H.273 | ISO/IEC 23091-2:2019(E)) unless specified otherwise. */
+/** Built-in transfer functions for color encoding. Enum values match a subset
+ * of CICP (Rec. ITU-T H.273 | ISO/IEC 23091-2:2019(E)) unless specified
+ * otherwise. */
 typedef enum {
   /** As specified in SMPTE RP 431-2 */
   JXL_TRANSFER_FUNCTION_709 = 1,
@@ -127,7 +144,7 @@ typedef struct {
   /** Numerical blue primary values in CIE xy space. */
   double primaries_blue_xy[2];
 
-  /** Transfer function is have_gamma is 0 */
+  /** Transfer function if have_gamma is 0 */
   JxlTransferFunction transfer_function;
 
   /** Gamma value used when transfer_function is JXL_TRANSFER_FUNCTION_GAMMA
@@ -138,27 +155,10 @@ typedef struct {
   JxlRenderingIntent rendering_intent;
 } JxlColorEncoding;
 
-/** Color transform used for the XYB encoding. This affects how the internal
- * XYB color format is converted, and is not needed unless XYB color is used.
- */
-typedef struct {
-  /** Inverse opsin matrix.
-   */
-  float opsin_inv_matrix[3][3];
-
-  /** Opsin bias for opsin matrix. This affects how the internal XYB color
-   * format is converted, and is not needed unless XYB color is used.
-   */
-  float opsin_biases[3];
-
-  /** Quantization bias for opsin matrix. This affects how the internal XYB
-   * color format is converted, and is not needed unless XYB color is used.
-   */
-  float quant_biases[3];
-} JxlInverseOpsinMatrix;
-
 #if defined(__cplusplus) || defined(c_plusplus)
 }
 #endif
 
 #endif /* JXL_COLOR_ENCODING_H_ */
+
+/** @}*/

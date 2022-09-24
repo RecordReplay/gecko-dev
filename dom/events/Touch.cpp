@@ -103,7 +103,7 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(Touch)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(Touch)
 
 EventTarget* Touch::GetTarget() const {
-  nsCOMPtr<nsIContent> content = do_QueryInterface(mTarget);
+  nsIContent* content = nsIContent::FromEventTargetOrNull(mTarget);
   if (content && content->ChromeOnlyAccess() &&
       !nsContentUtils::LegacyIsCallerNativeCode() &&
       !nsContentUtils::CanAccessNativeAnon()) {
@@ -169,7 +169,8 @@ void Touch::InitializePoints(nsPresContext* aPresContext, WidgetEvent* aEvent) {
       Event::GetClientCoords(aPresContext, aEvent, mRefPoint, mClientPoint);
   mPagePoint =
       Event::GetPageCoords(aPresContext, aEvent, mRefPoint, mClientPoint);
-  mScreenPoint = Event::GetScreenCoords(aPresContext, aEvent, mRefPoint);
+  mScreenPoint =
+      Event::GetScreenCoords(aPresContext, aEvent, mRefPoint).extract();
   mPointsInitialized = true;
 }
 

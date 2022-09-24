@@ -48,13 +48,13 @@ class nsGeoPosition final : public nsIDOMGeoPosition {
 
   nsGeoPosition(double aLat, double aLong, double aAlt, double aHError,
                 double aVError, double aHeading, double aSpeed,
-                DOMTimeStamp aTimestamp);
+                EpochTimeStamp aTimestamp);
 
-  nsGeoPosition(nsIDOMGeoPositionCoords* aCoords, DOMTimeStamp aTimestamp);
+  nsGeoPosition(nsIDOMGeoPositionCoords* aCoords, EpochTimeStamp aTimestamp);
 
  private:
   ~nsGeoPosition();
-  DOMTimeStamp mTimestamp;
+  EpochTimeStamp mTimestamp;
   RefPtr<nsIDOMGeoPositionCoords> mCoords;
 };
 
@@ -62,8 +62,7 @@ class nsGeoPosition final : public nsIDOMGeoPosition {
 // WebIDL wrappers for the classes above
 ////////////////////////////////////////////////////
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class GeolocationCoordinates;
 
@@ -72,7 +71,7 @@ class GeolocationPosition final : public nsISupports, public nsWrapperCache {
 
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(GeolocationPosition)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(GeolocationPosition)
 
  public:
   GeolocationPosition(nsISupports* aParent, nsIDOMGeoPosition* aGeoPosition);
@@ -94,7 +93,6 @@ class GeolocationPosition final : public nsISupports, public nsWrapperCache {
   nsCOMPtr<nsIDOMGeoPosition> mGeoPosition;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_GeolocationPosition_h */

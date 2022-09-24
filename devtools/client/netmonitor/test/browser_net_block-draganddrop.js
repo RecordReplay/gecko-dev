@@ -8,16 +8,10 @@
  */
 
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
-  });
-
   class DataTransfer {
     constructor() {
       this.BLOCKING_URL =
-        "http://example.com/browser/devtools/client/netmonitor/test/html_simple-test-page.html";
+        "https://example.com/browser/devtools/client/netmonitor/test/html_simple-test-page.html";
       this.getDataTrigger = false;
       this.setDataTrigger = false;
       this.data = "";
@@ -47,7 +41,7 @@ add_task(async function() {
 
   const dataTransfer = new DataTransfer();
 
-  const { tab, monitor } = await initNetMonitor(SIMPLE_URL, {
+  const { tab, monitor } = await initNetMonitor(HTTPS_SIMPLE_URL, {
     requestCount: 1,
   });
   info("Starting test... ");
@@ -64,7 +58,7 @@ add_task(async function() {
 
   // Reload to have one request in the list
   let waitForEvents = waitForNetworkEvents(monitor, 1);
-  await navigateTo(SIMPLE_URL);
+  await navigateTo(HTTPS_SIMPLE_URL);
   await waitForEvents;
 
   // Capture normal request

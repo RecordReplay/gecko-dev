@@ -7,12 +7,12 @@
 #ifndef mozilla_dom_cache_QuotaClientImpl_h
 #define mozilla_dom_cache_QuotaClientImpl_h
 
+#include "mozilla/dom/QMResult.h"
 #include "mozilla/dom/cache/QuotaClient.h"
 #include "mozilla/dom/cache/FileUtils.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 
-namespace mozilla {
-namespace dom {
-namespace cache {
+namespace mozilla::dom::cache {
 
 class CacheQuotaClient final : public quota::Client {
   static CacheQuotaClient* sInstance;
@@ -76,26 +76,26 @@ class CacheQuotaClient final : public quota::Client {
 
     if (aIncreaseSize == aDecreaseSize && !temporaryPaddingFileExist) {
       // Early return here, since most cache actions won't modify padding size.
-      QM_TRY(aCommitHook());
+      QM_TRY(MOZ_TO_RESULT(aCommitHook()));
 
       return NS_OK;
     }
 
     // Don't delete the temporary padding file in case of an error to force the
     // next action recalculate the padding size.
-    QM_TRY(UpdateDirectoryPaddingFile(aBaseDir, aConn, aIncreaseSize,
-                                      aDecreaseSize,
-                                      temporaryPaddingFileExist));
+    QM_TRY(MOZ_TO_RESULT(
+        UpdateDirectoryPaddingFile(aBaseDir, aConn, aIncreaseSize,
+                                   aDecreaseSize, temporaryPaddingFileExist)));
 
     // Don't delete the temporary padding file in case of an error to force the
     // next action recalculate the padding size.
-    QM_TRY(aCommitHook());
+    QM_TRY(MOZ_TO_RESULT(aCommitHook()));
 
-    QM_WARNONLY_TRY(ToResult(DirectoryPaddingFinalizeWrite(aBaseDir)),
+    QM_WARNONLY_TRY(MOZ_TO_RESULT(DirectoryPaddingFinalizeWrite(aBaseDir)),
                     ([&aBaseDir](const nsresult) {
                       // Force restore file next time.
-                      QM_WARNONLY_TRY(DirectoryPaddingDeleteFile(
-                          aBaseDir, DirPaddingFile::FILE));
+                      QM_WARNONLY_TRY(QM_TO_RESULT(DirectoryPaddingDeleteFile(
+                          aBaseDir, DirPaddingFile::FILE)));
 
                       // Ensure that we are able to force the padding file to
                       // be restored.
@@ -114,8 +114,8 @@ class CacheQuotaClient final : public quota::Client {
   nsresult RestorePaddingFileInternal(nsIFile* aBaseDir,
                                       mozIStorageConnection* aConn);
 
-  nsresult WipePaddingFileInternal(const QuotaInfo& aQuotaInfo,
-                                   nsIFile* aBaseDir);
+  nsresult WipePaddingFileInternal(
+      const CacheDirectoryMetadata& aDirectoryMetadata, nsIFile* aBaseDir);
 
  private:
   ~CacheQuotaClient();
@@ -129,8 +129,6 @@ class CacheQuotaClient final : public quota::Client {
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CacheQuotaClient, override)
 };
 
-}  // namespace cache
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::cache
 
 #endif  // mozilla_dom_cache_QuotaClientImpl_h

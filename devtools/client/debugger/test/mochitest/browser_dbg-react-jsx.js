@@ -4,6 +4,9 @@
 
 // Test that dynamically generated <script> elements which contain source maps
 // will be shown in the debugger.
+
+"use strict";
+
 add_task(async function() {
   const dbg = await initDebugger("doc-react-jsx.html");
 
@@ -13,5 +16,5 @@ add_task(async function() {
   await addBreakpoint(dbg, "main.js", 3);
   invokeInTab("foo");
   await waitForPaused(dbg);
-  assertPausedLocation(dbg, "main.js", 3);
+  assertPausedAtSourceAndLine(dbg, findSource(dbg, "main.js").id, 3);
 });

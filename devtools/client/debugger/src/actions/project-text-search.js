@@ -18,10 +18,10 @@ import {
 import { isThirdParty } from "../utils/source";
 import { loadSourceText } from "./sources/loadSourceText";
 import {
-  statusType,
   getTextSearchOperation,
   getTextSearchStatus,
-} from "../reducers/project-text-search";
+} from "../selectors/project-text-search";
+import { statusType } from "../reducers/project-text-search";
 
 export function addSearchQuery(cx, query) {
   return { type: "ADD_QUERY", cx, query };
@@ -79,9 +79,15 @@ export function searchSources(cx, query) {
     await dispatch(clearSearchResults(cx));
     await dispatch(addSearchQuery(cx, query));
     dispatch(updateSearchStatus(cx, statusType.fetching));
-    const validSources = getSourceList(getState()).filter(
+    let validSources = getSourceList(getState()).filter(
       source => !hasPrettySource(getState(), source.id) && !isThirdParty(source)
     );
+    // Sort original entries first so that search results are more useful.
+    // See bug 1642778.
+    validSources = [
+      ...validSources.filter(x => x.isOriginal),
+      ...validSources.filter(x => !x.isOriginal),
+    ];
     for (const source of validSources) {
       if (cancelled) {
         return;

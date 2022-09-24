@@ -6,23 +6,26 @@
 
 #![deny(clippy::pedantic)]
 
-use super::{Connection, ConnectionError, ConnectionId, Output, State, LOCAL_IDLE_TIMEOUT};
+use super::{Connection, ConnectionError, ConnectionId, Output, State};
 use crate::addr_valid::{AddressValidation, ValidateAddress};
 use crate::cc::{CWND_INITIAL_PKTS, CWND_MIN};
 use crate::cid::ConnectionIdRef;
 use crate::events::ConnectionEvent;
 use crate::path::PATH_MTU_V6;
 use crate::recovery::ACK_ONLY_SIZE_LIMIT;
-use crate::stats::MAX_PTO_COUNTS;
-use crate::{ConnectionIdDecoder, ConnectionIdGenerator, ConnectionParameters, Error, StreamType};
+use crate::stats::{FrameStats, Stats, MAX_PTO_COUNTS};
+use crate::{
+    ConnectionIdDecoder, ConnectionIdGenerator, ConnectionParameters, Error, StreamId, StreamType,
+};
 
 use std::cell::RefCell;
+use std::cmp::min;
 use std::convert::TryFrom;
 use std::mem;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use neqo_common::{event::Provider, qdebug, qtrace, Datagram, Decoder};
+use neqo_common::{event::Provider, qdebug, qtrace, Datagram, Decoder, Role};
 use neqo_crypto::{random, AllowZeroRtt, AuthenticationStatus, ResumptionToken};
 use test_fixture::{self, addr, fixture_init, now};
 
@@ -30,6 +33,7 @@ use test_fixture::{self, addr, fixture_init, now};
 mod ackrate;
 mod cc;
 mod close;
+mod datagram;
 mod fuzzing;
 mod handshake;
 mod idle;
@@ -188,12 +192,18 @@ fn connect_with_rtt(
     now: Instant,
     rtt: Duration,
 ) -> Instant {
+    fn check_rtt(stats: &Stats, rtt: Duration) {
+        assert_eq!(stats.rtt, rtt);
+        // Confirmation takes 2 round trips,
+        // so rttvar is reduced by 1/4 (from rtt/2).
+        assert_eq!(stats.rttvar, rtt * 3 / 8);
+    }
     let now = handshake(client, server, now, rtt);
     assert_eq!(*client.state(), State::Confirmed);
     assert_eq!(*server.state(), State::Confirmed);
 
-    assert_eq!(client.paths.rtt(), rtt);
-    assert_eq!(server.paths.rtt(), rtt);
+    check_rtt(&client.stats(), rtt);
+    check_rtt(&server.stats(), rtt);
     now
 }
 
@@ -254,15 +264,13 @@ fn force_idle(
     // Delivering s1 should not have the client change its mind about the ACK.
     let ack = client.process(Some(s1), now).dgram();
     assert!(ack.is_some());
-    assert_eq!(
-        client.process_output(now),
-        Output::Callback(LOCAL_IDLE_TIMEOUT)
+    let idle_timeout = min(
+        client.conn_params.get_idle_timeout(),
+        server.conn_params.get_idle_timeout(),
     );
+    assert_eq!(client.process_output(now), Output::Callback(idle_timeout));
     now += rtt / 2;
-    assert_eq!(
-        server.process(ack, now),
-        Output::Callback(LOCAL_IDLE_TIMEOUT)
-    );
+    assert_eq!(server.process(ack, now), Output::Callback(idle_timeout));
     now
 }
 
@@ -281,7 +289,7 @@ fn connect_force_idle(client: &mut Connection, server: &mut Connection) {
     connect_rtt_idle(client, server, Duration::new(0, 0));
 }
 
-fn fill_stream(c: &mut Connection, stream: u64) {
+fn fill_stream(c: &mut Connection, stream: StreamId) {
     const BLOCK_SIZE: usize = 4_096;
     loop {
         let bytes_sent = c.stream_send(stream, &[0x42; BLOCK_SIZE]).unwrap();
@@ -298,7 +306,7 @@ fn fill_stream(c: &mut Connection, stream: u64) {
 /// from the return value whether a timeout is an ACK delay, PTO, or
 /// pacing, this looks at the congestion window to tell when to stop.
 /// Returns a list of datagrams and the new time.
-fn fill_cwnd(c: &mut Connection, stream: u64, mut now: Instant) -> (Vec<Datagram>, Instant) {
+fn fill_cwnd(c: &mut Connection, stream: StreamId, mut now: Instant) -> (Vec<Datagram>, Instant) {
     // Train wreck function to get the remaining congestion window on the primary path.
     fn cwnd(c: &Connection) -> usize {
         c.paths.primary().borrow().sender().cwnd_avail()
@@ -337,7 +345,7 @@ fn fill_cwnd(c: &mut Connection, stream: u64, mut now: Instant) -> (Vec<Datagram
 fn increase_cwnd(
     sender: &mut Connection,
     receiver: &mut Connection,
-    stream: u64,
+    stream: StreamId,
     mut now: Instant,
 ) -> Instant {
     fill_stream(sender, stream);
@@ -371,7 +379,7 @@ fn increase_cwnd(
 /// The caller is responsible for ensuring that `dest` has received
 /// enough data that it wants to generate an ACK.  This panics if
 /// no ACK frame is generated.
-fn ack_bytes<D>(dest: &mut Connection, stream: u64, in_dgrams: D, now: Instant) -> Datagram
+fn ack_bytes<D>(dest: &mut Connection, stream: StreamId, in_dgrams: D, now: Instant) -> Datagram
 where
     D: IntoIterator<Item = Datagram>,
     D::IntoIter: ExactSizeIterator,
@@ -406,7 +414,7 @@ fn cwnd_avail(c: &Connection) -> usize {
 fn induce_persistent_congestion(
     client: &mut Connection,
     server: &mut Connection,
-    stream: u64,
+    stream: StreamId,
     mut now: Instant,
 ) -> Instant {
     // Note: wait some arbitrary time that should be longer than pto
@@ -521,4 +529,34 @@ fn get_tokens(client: &mut Connection) -> Vec<ResumptionToken> {
             }
         })
         .collect()
+}
+
+fn assert_default_stats(stats: &Stats) {
+    assert_eq!(stats.packets_rx, 0);
+    assert_eq!(stats.packets_tx, 0);
+    let dflt_frames = FrameStats::default();
+    assert_eq!(stats.frame_rx, dflt_frames);
+    assert_eq!(stats.frame_tx, dflt_frames);
+}
+
+#[test]
+fn create_client() {
+    let client = default_client();
+    assert_eq!(client.role(), Role::Client);
+    assert!(matches!(client.state(), State::Init));
+    let stats = client.stats();
+    assert_default_stats(&stats);
+    assert_eq!(stats.rtt, crate::rtt::INITIAL_RTT);
+    assert_eq!(stats.rttvar, crate::rtt::INITIAL_RTT / 2);
+}
+
+#[test]
+fn create_server() {
+    let server = default_server();
+    assert_eq!(server.role(), Role::Server);
+    assert!(matches!(server.state(), State::Init));
+    let stats = server.stats();
+    assert_default_stats(&stats);
+    // Server won't have a default path, so no RTT.
+    assert_eq!(stats.rtt, Duration::from_secs(0));
 }

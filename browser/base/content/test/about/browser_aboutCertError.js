@@ -168,6 +168,10 @@ add_task(async function checkAdvancedDetails() {
         shortDescText.textContent.includes("expired.example.com"),
         "Should list hostname in error message."
       );
+      Assert.ok(
+        doc.getElementById("certificateErrorDebugInformation").hidden,
+        "Debug info is initially hidden"
+      );
 
       let exceptionButton = doc.getElementById("exceptionDialogButton");
       Assert.ok(
@@ -200,6 +204,11 @@ add_task(async function checkAdvancedDetails() {
       errorCode.click();
       let div = doc.getElementById("certificateErrorDebugInformation");
       let text = doc.getElementById("certificateErrorText");
+
+      Assert.ok(
+        content.getComputedStyle(div).display !== "none",
+        "Debug information is visible"
+      );
 
       let serhelper = Cc[
         "@mozilla.org/network/serialization-helper;1"
@@ -342,40 +351,6 @@ add_task(async function checkUnknownIssuerLearnMoreLink() {
       return learnMoreLink.href;
     });
     ok(href.endsWith("security-error"), "security-error in the Learn More URL");
-
-    BrowserTestUtils.removeTab(gBrowser.selectedTab);
-  }
-});
-
-add_task(async function checkCautionClass() {
-  info("Checking that are potentially more dangerous get a 'caution' class");
-  for (let useFrame of [false, true]) {
-    let tab = await openErrorPage(UNKNOWN_ISSUER, useFrame);
-    let browser = tab.linkedBrowser;
-
-    let bc = browser.browsingContext;
-    if (useFrame) {
-      bc = bc.children[0];
-    }
-
-    await SpecialPowers.spawn(bc, [useFrame], async function(subFrame) {
-      Assert.equal(
-        content.document.body.classList.contains("caution"),
-        !subFrame,
-        `Cert error body has ${subFrame ? "no" : ""} caution class`
-      );
-    });
-
-    BrowserTestUtils.removeTab(gBrowser.selectedTab);
-
-    tab = await openErrorPage(BAD_STS_CERT, useFrame);
-    bc = tab.linkedBrowser.browsingContext;
-    await SpecialPowers.spawn(bc, [], async function() {
-      Assert.ok(
-        !content.document.body.classList.contains("caution"),
-        "Cert error body has no caution class"
-      );
-    });
 
     BrowserTestUtils.removeTab(gBrowser.selectedTab);
   }

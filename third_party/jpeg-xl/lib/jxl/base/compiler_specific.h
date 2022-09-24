@@ -55,6 +55,8 @@
 #define JXL_NORETURN __declspec(noreturn)
 #elif JXL_COMPILER_GCC || JXL_COMPILER_CLANG
 #define JXL_NORETURN __attribute__((noreturn))
+#else
+#define JXL_NORETURN
 #endif
 
 #if JXL_COMPILER_MSVC
@@ -80,17 +82,6 @@
 #else
 #define JXL_LIKELY(expr) __builtin_expect(!!(expr), 1)
 #define JXL_UNLIKELY(expr) __builtin_expect(!!(expr), 0)
-#endif
-
-#if JXL_COMPILER_MSVC
-#include <intrin.h>
-
-#pragma intrinsic(_ReadWriteBarrier)
-#define JXL_COMPILER_FENCE _ReadWriteBarrier()
-#elif JXL_COMPILER_GCC || JXL_COMPILER_CLANG
-#define JXL_COMPILER_FENCE asm volatile("" : : : "memory")
-#else
-#define JXL_COMPILER_FENCE
 #endif
 
 // Returns a void* pointer which the compiler then assumes is N-byte aligned.
@@ -127,6 +118,16 @@
 #define JXL_MUST_USE_RESULT __attribute__((warn_unused_result))
 #else
 #define JXL_MUST_USE_RESULT
+#endif
+
+// Disable certain -fsanitize flags for functions that are expected to include
+// things like unsigned integer overflow. For example use in the function
+// declaration JXL_NO_SANITIZE("unsigned-integer-overflow") to silence unsigned
+// integer overflow ubsan messages.
+#if JXL_COMPILER_CLANG && JXL_HAVE_ATTRIBUTE(no_sanitize)
+#define JXL_NO_SANITIZE(X) __attribute__((no_sanitize(X)))
+#else
+#define JXL_NO_SANITIZE(X)
 #endif
 
 #if JXL_HAVE_ATTRIBUTE(__format__)

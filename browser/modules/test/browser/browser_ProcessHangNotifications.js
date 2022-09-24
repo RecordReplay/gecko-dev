@@ -1,7 +1,7 @@
 /* globals ProcessHangMonitor */
 
 const { WebExtensionPolicy } = Cu.getGlobalForObject(
-  ChromeUtils.import("resource://gre/modules/Services.jsm", {})
+  ChromeUtils.import("resource://gre/modules/Services.jsm")
 );
 
 const { UpdateUtils } = ChromeUtils.import(
@@ -10,7 +10,7 @@ const { UpdateUtils } = ChromeUtils.import(
 
 function promiseNotificationShown(aWindow, aName) {
   return new Promise(resolve => {
-    let notificationBox = aWindow.gHighPriorityNotificationBox;
+    let notificationBox = aWindow.gNotificationBox;
     notificationBox.stack.addEventListener(
       "AlertActive",
       function() {
@@ -106,12 +106,10 @@ TestHangReport.prototype = {
 // on dev edition we add a button for js debugging of hung scripts.
 let buttonCount = AppConstants.MOZ_DEV_EDITION ? 2 : 1;
 
-add_task(async function setup() {
+add_setup(async function() {
   // Create a fake WebExtensionPolicy that we can use for
   // the add-on hang notification.
-  const uuidGen = Cc["@mozilla.org/uuid-generator;1"].getService(
-    Ci.nsIUUIDGenerator
-  );
+  const uuidGen = Services.uuid;
   const uuid = uuidGen.generateUUID().number.slice(1, -1);
   let policy = new WebExtensionPolicy({
     name: "Scapegoat",

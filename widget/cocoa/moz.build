@@ -27,10 +27,7 @@ EXPORTS += [
     "nsChangeObserver.h",
     "nsCocoaFeatures.h",
     "nsCocoaUtils.h",
-]
-
-EXPORTS.mozilla.widget += [
-    "NativeMenuSupport.h",
+    "SDKDeclarations.h",
 ]
 
 UNIFIED_SOURCES += [
@@ -55,6 +52,7 @@ UNIFIED_SOURCES += [
     "nsMacDockSupport.mm",
     "nsMacFinderProgress.mm",
     "nsMacSharingService.mm",
+    "nsMacUserActivityUpdater.mm",
     "nsMacWebAppUtils.mm",
     "nsMenuBarX.mm",
     "nsMenuGroupOwnerX.mm",
@@ -62,7 +60,6 @@ UNIFIED_SOURCES += [
     "nsMenuItemX.mm",
     "nsMenuUtilsX.mm",
     "nsMenuX.mm",
-    "nsNativeBasicThemeCocoa.cpp",
     "nsPrintDialogX.mm",
     "nsPrintSettingsServiceX.mm",
     "nsPrintSettingsX.mm",
@@ -79,7 +76,6 @@ UNIFIED_SOURCES += [
     "nsWindowMap.mm",
     "OSXNotificationCenter.mm",
     "ScreenHelperCocoa.mm",
-    "SwipeTracker.mm",
     "TextInputHandler.mm",
     "VibrancyManager.mm",
     "ViewRegion.mm",
@@ -111,6 +107,7 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
 LOCAL_INCLUDES += [
+    "/dom/events",
     "/dom/media/platforms/apple",
     "/layout/base",
     "/layout/forms",
@@ -176,10 +173,10 @@ RESOURCE_FILES.__setattr__(
     ],
 )
 
-CXXFLAGS += CONFIG["TK_CFLAGS"]
-
 OS_LIBS += [
     "-framework IOSurface",
 ]
 
 SPHINX_TREES["/widget/cocoa"] = "docs"
+
+REQUIRES_UNIFIED_BUILD = True

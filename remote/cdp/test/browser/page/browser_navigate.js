@@ -3,9 +3,6 @@
 
 "use strict";
 
-const pageEmptyURL =
-  "http://example.com/browser/remote/cdp/test/browser/page/doc_empty.html";
-
 add_task(async function testBasicNavigation({ client }) {
   const { Page, Network } = client;
   await Page.enable();
@@ -13,7 +10,7 @@ add_task(async function testBasicNavigation({ client }) {
   const loadEventFired = Page.loadEventFired();
   const requestEvent = Network.requestWillBeSent();
   const { frameId, loaderId, errorText } = await Page.navigate({
-    url: pageEmptyURL,
+    url: PAGE_URL,
   });
   const { loaderId: requestLoaderId } = await requestEvent;
 
@@ -29,11 +26,7 @@ add_task(async function testBasicNavigation({ client }) {
   const currentFrame = await getTopFrame(client);
   is(frameId, currentFrame.id, "Page.navigate returns expected frameId");
 
-  is(
-    gBrowser.selectedBrowser.currentURI.spec,
-    pageEmptyURL,
-    "Expected URL loaded"
-  );
+  is(gBrowser.selectedBrowser.currentURI.spec, PAGE_URL, "Expected URL loaded");
 });
 
 add_task(async function testTwoNavigations({ client }) {
@@ -43,15 +36,11 @@ add_task(async function testTwoNavigations({ client }) {
   let requestEvent = Network.requestWillBeSent();
   let loadEventFired = Page.loadEventFired();
   const { frameId, loaderId, errorText } = await Page.navigate({
-    url: pageEmptyURL,
+    url: PAGE_URL,
   });
   const { loaderId: requestLoaderId } = await requestEvent;
   await loadEventFired;
-  is(
-    gBrowser.selectedBrowser.currentURI.spec,
-    pageEmptyURL,
-    "Expected URL loaded"
-  );
+  is(gBrowser.selectedBrowser.currentURI.spec, PAGE_URL, "Expected URL loaded");
 
   loadEventFired = Page.loadEventFired();
   requestEvent = Network.requestWillBeSent();
@@ -60,7 +49,7 @@ add_task(async function testTwoNavigations({ client }) {
     loaderId: loaderId2,
     errorText: errorText2,
   } = await Page.navigate({
-    url: pageEmptyURL,
+    url: PAGE_URL,
   });
   const { loaderId: requestLoaderId2 } = await requestEvent;
   ok(!!loaderId, "Page.navigate returns loaderId");
@@ -81,18 +70,14 @@ add_task(async function testTwoNavigations({ client }) {
   is(frameId, frameId2, "Page.navigate return same frameId");
 
   await loadEventFired;
-  is(
-    gBrowser.selectedBrowser.currentURI.spec,
-    pageEmptyURL,
-    "Expected URL loaded"
-  );
+  is(gBrowser.selectedBrowser.currentURI.spec, PAGE_URL, "Expected URL loaded");
 });
 
 add_task(async function testRedirect({ client }) {
   const { Page, Network } = client;
   const sjsURL =
-    "http://example.com/browser/remote/cdp/test/browser/page/sjs_redirect.sjs";
-  const redirectURL = `${sjsURL}?${pageEmptyURL}`;
+    "https://example.com/browser/remote/cdp/test/browser/page/sjs_redirect.sjs";
+  const redirectURL = `${sjsURL}?${PAGE_URL}`;
   await Page.enable();
   await Network.enable();
   const requestEvent = Network.requestWillBeSent();
@@ -112,17 +97,13 @@ add_task(async function testRedirect({ client }) {
   ok(!!frameId, "Page.navigate returns frameId");
 
   await loadEventFired;
-  is(
-    gBrowser.selectedBrowser.currentURI.spec,
-    pageEmptyURL,
-    "Expected URL loaded"
-  );
+  is(gBrowser.selectedBrowser.currentURI.spec, PAGE_URL, "Expected URL loaded");
 });
 
 add_task(async function testUnknownHost({ client }) {
   const { Page } = client;
   const { frameId, loaderId, errorText } = await Page.navigate({
-    url: "http://example-does-not-exist.com",
+    url: "https://example-does-not-exist.com",
   });
   ok(!!frameId, "Page.navigate returns frameId");
   ok(!!loaderId, "Page.navigate returns loaderId");
@@ -164,7 +145,7 @@ add_task(async function testUnknownCertificate({ client }) {
 add_task(async function testNotFound({ client }) {
   const { Page } = client;
   const { frameId, loaderId, errorText } = await Page.navigate({
-    url: "http://example.com/browser/remote/doesnotexist.html",
+    url: "https://example.com/browser/remote/doesnotexist.html",
   });
   ok(!!frameId, "Page.navigate returns frameId");
   ok(!!loaderId, "Page.navigate returns loaderId");
@@ -203,17 +184,31 @@ add_task(async function testDataURL({ client }) {
   const url = toDataURL("first");
   await Page.enable();
   const loadEventFired = Page.loadEventFired();
+  const frameNavigatedFired = Page.frameNavigated();
   const { frameId, loaderId, errorText } = await Page.navigate({ url });
   is(errorText, undefined, "No errorText on a successful navigation");
-  todo(!!loaderId, "Page.navigate returns loaderId");
+  ok(!!loaderId, "Page.navigate returns loaderId");
 
   await loadEventFired;
+  const { frame } = await frameNavigatedFired;
+  is(frame.loaderId, loaderId, "Page.navigate returns expected loaderId");
   const currentFrame = await getTopFrame(client);
   is(frameId, currentFrame.id, "Page.navigate returns expected frameId");
   is(gBrowser.selectedBrowser.currentURI.spec, url, "Expected URL loaded");
 });
 
 add_task(async function testFileURL({ client }) {
+  const { AppConstants } = ChromeUtils.import(
+    "resource://gre/modules/AppConstants.jsm"
+  );
+
+  if (AppConstants.DEBUG) {
+    // Bug 1634695 Navigating to a file URL forces the TabSession to destroy
+    // abruptly and content domains are not properly destroyed, which creates
+    // window leaks and fails the test in DEBUG mode.
+    return;
+  }
+
   const { Page } = client;
   const dir = getChromeDir(getResolvedURI(gTestPath));
   dir.append("doc_empty.html");
@@ -227,7 +222,7 @@ add_task(async function testFileURL({ client }) {
 
   const { /* frameId, */ loaderId, errorText } = await Page.navigate({ url });
   is(errorText, undefined, "No errorText on a successful navigation");
-  todo(!!loaderId, "Page.navigate returns loaderId");
+  ok(!!loaderId, "Page.navigate returns loaderId");
 
   // Bug 1634693 Page.loadEventFired isn't emitted after file: navigation
   await loaded;
@@ -242,13 +237,16 @@ add_task(async function testAbout({ client }) {
   const { Page } = client;
   await Page.enable();
   let loadEventFired = Page.loadEventFired();
+  let frameNavigatedFired = Page.frameNavigated();
   const { frameId, loaderId, errorText } = await Page.navigate({
     url: "about:blank",
   });
-  todo(!!loaderId, "Page.navigate returns loaderId");
+  ok(!!loaderId, "Page.navigate returns loaderId");
   is(errorText, undefined, "No errorText on a successful navigation");
 
   await loadEventFired;
+  const { frame } = await frameNavigatedFired;
+  is(frame.loaderId, loaderId, "Page.navigate returns expected loaderId");
   const currentFrame = await getTopFrame(client);
   is(frameId, currentFrame.id, "Page.navigate returns expected frameId");
   is(
@@ -256,6 +254,57 @@ add_task(async function testAbout({ client }) {
     "about:blank",
     "Expected URL loaded"
   );
+});
+
+add_task(async function testSameDocumentNavigation({ client }) {
+  const { Page } = client;
+  const { frameId, loaderId } = await Page.navigate({
+    url: PAGE_URL,
+  });
+  ok(!!loaderId, "Page.navigate returns loaderId");
+
+  await Page.enable();
+  const navigatedWithinDocument = Page.navigatedWithinDocument();
+
+  info("Check that Page.navigate can navigate to an anchor");
+  const sameDocumentURL = `${PAGE_URL}#hash`;
+  const {
+    frameId: sameDocumentFrameId,
+    loaderId: sameDocumentLoaderId,
+  } = await Page.navigate({ url: sameDocumentURL });
+  ok(
+    !sameDocumentLoaderId,
+    "Page.navigate does not return a loaderId for same document navigation"
+  );
+  is(
+    sameDocumentFrameId,
+    frameId,
+    "Page.navigate returned the expected frame id"
+  );
+
+  const { frameId: navigatedFrameId, url } = await navigatedWithinDocument;
+  is(
+    frameId,
+    navigatedFrameId,
+    "navigatedWithinDocument returns the expected frameId"
+  );
+  is(url, sameDocumentURL, "navigatedWithinDocument returns the expected url");
+  is(
+    gBrowser.selectedBrowser.currentURI.spec,
+    sameDocumentURL,
+    "Expected URL loaded"
+  );
+
+  info("Check that navigating to the same hash URL does not timeout");
+  const {
+    frameId: sameHashFrameId,
+    loaderId: sameHashLoaderId,
+  } = await Page.navigate({ url: sameDocumentURL });
+  ok(
+    !sameHashLoaderId,
+    "Page.navigate does not return a loaderId for same document navigation"
+  );
+  is(sameHashFrameId, frameId, "Page.navigate returned the expected frame id");
 });
 
 async function getTopFrame(client) {

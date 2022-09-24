@@ -36,10 +36,12 @@ def setup_sample_logger(logger, structured_logger, top_dir):
     import perfdocs.verifier as vf
     import perfdocs.gatherer as gt
     import perfdocs.generator as gn
+    import perfdocs.utils as utils
 
     gt.logger = logger
     vf.logger = logger
     gn.logger = logger
+    utils.logger = logger
 
 
 @mock.patch("perfdocs.logger.PerfDocLogger")
@@ -116,12 +118,23 @@ def test_perfdocs_generator_needed_update(logger, structured_logger, perfdocs_sa
         generator.generate_perfdocs()
 
     expected = (
-        "PerfDocs are outdated, run ./mach lint -l perfdocs --fix` to update them."
+        "PerfDocs are outdated, run ./mach lint -l perfdocs --fix .` to update them."
     )
     args, _ = logger.warning.call_args
 
     assert logger.warning.call_count == 1
     assert args[0] == expected
+
+    # Check to ensure a diff was produced
+    assert logger.log.call_count == 6
+
+    logs = [v[0][0] for v in logger.log.call_args_list]
+    for failure_log in (
+        "Some files are missing or are funny.",
+        "Missing in existing docs: index.rst",
+        "Missing in existing docs: mozperftest.rst",
+    ):
+        assert failure_log in logs
 
 
 @mock.patch("perfdocs.logger.PerfDocLogger")

@@ -20,15 +20,20 @@
 #include "mozilla/Assertions.h"
 #include "mozilla/RefPtr.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_IMPL_ISUPPORTS(ServiceWorkerShutdownBlocker, nsIAsyncShutdownBlocker,
-                  nsITimerCallback)
+                  nsITimerCallback, nsINamed)
 
 NS_IMETHODIMP ServiceWorkerShutdownBlocker::GetName(nsAString& aNameOut) {
   aNameOut = nsLiteralString(
       u"ServiceWorkerShutdownBlocker: shutting down Service Workers");
+  return NS_OK;
+}
+
+// nsINamed implementation
+NS_IMETHODIMP ServiceWorkerShutdownBlocker::GetName(nsACString& aNameOut) {
+  aNameOut.AssignLiteral("ServiceWorkerShutdownBlocker");
   return NS_OK;
 }
 
@@ -283,5 +288,4 @@ void ServiceWorkerShutdownBlocker::MaybeInitUnblockShutdownTimer() {
   mTimer->InitWithCallback(this, delay.count(), nsITimer::TYPE_ONE_SHOT);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

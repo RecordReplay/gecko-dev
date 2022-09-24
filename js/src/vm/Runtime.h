@@ -22,37 +22,45 @@
 
 #include <algorithm>
 
-#include "jsapi.h"
-
 #include "builtin/AtomicsObject.h"
 #ifdef JS_HAS_INTL_API
 #  include "builtin/intl/SharedIntlData.h"
 #endif
-#include "frontend/NameCollections.h"
+#include "frontend/ScriptIndex.h"
 #include "gc/GCRuntime.h"
 #include "gc/Tracer.h"
 #include "js/AllocationRecording.h"
 #include "js/BuildId.h"  // JS::BuildIdOp
+#include "js/CompilationAndEvaluation.h"
+#include "js/Context.h"
 #include "js/Debug.h"
 #include "js/experimental/CTypes.h"      // JS::CTypesActivityCallback
+#include "js/experimental/JSStencil.h"   // mozilla::RefPtrTraits<JS::Stencil>
 #include "js/experimental/SourceHook.h"  // js::SourceHook
 #include "js/friend/StackLimits.h"       // js::ReportOverRecursed
 #include "js/friend/UsageStatistics.h"   // JSAccumulateTelemetryDataCallback
 #include "js/GCVector.h"
 #include "js/HashTable.h"
 #include "js/Initialization.h"
+#include "js/MemoryCallbacks.h"
 #include "js/Modules.h"  // JS::Module{DynamicImport,Metadata,Resolve}Hook
 #ifdef DEBUG
 #  include "js/Proxy.h"  // For AutoEnterPolicy
 #endif
+#include "js/ScriptPrivate.h"
+#include "js/Stack.h"
 #include "js/Stream.h"  // JS::AbortSignalIsAborted
+#include "js/StreamConsumer.h"
 #include "js/Symbol.h"
 #include "js/UniquePtr.h"
 #include "js/Utility.h"
 #include "js/Vector.h"
+#include "js/WaitCallbacks.h"
 #include "js/Warnings.h"  // JS::WarningReporter
+#include "js/WrapperCallbacks.h"
+#include "js/Zone.h"
 #include "threading/Thread.h"
-#include "vm/Caches.h"
+#include "vm/Caches.h"  // js::RuntimeCaches
 #include "vm/CodeCoverage.h"
 #include "vm/CommonPropertyNames.h"
 #include "vm/GeckoProfiler.h"
@@ -65,9 +73,10 @@
 #include "vm/SharedStencil.h"  // js::SharedImmutableScriptDataTable
 #include "vm/Stack.h"
 #include "vm/SymbolType.h"
-#include "wasm/WasmTypes.h"
+#include "wasm/WasmTypeDecls.h"
 
 struct JSClass;
+struct JSErrorInterceptor;
 
 namespace js {
 
@@ -91,12 +100,9 @@ class Simulator;
 namespace js {
 
 extern MOZ_COLD void ReportOutOfMemory(JSContext* cx);
-
-/* Different signature because the return type has [[nodiscard]]_TYPE. */
-extern MOZ_COLD mozilla::GenericErrorResult<OOM> ReportOutOfMemoryResult(
-    JSContext* cx);
-
 extern MOZ_COLD void ReportAllocationOverflow(JSContext* maybecx);
+extern MOZ_COLD void ReportOversizedAllocation(JSContext* cx,
+                                               const unsigned errorNumber);
 
 class Activation;
 class ActivationIterator;
@@ -115,6 +121,9 @@ class Simulator;
 }  // namespace jit
 
 namespace frontend {
+struct CompilationGCOutput;
+struct CompilationInput;
+struct CompilationStencil;
 class WellKnownParserAtoms;
 }  // namespace frontend
 
@@ -310,8 +319,6 @@ struct JSRuntime {
   /* Call this to accumulate use counter data. */
   js::MainThreadData<JSSetUseCounterCallback> useCounterCallback;
 
-  js::MainThreadData<JSSourceElementCallback> sourceElementCallback;
-
  public:
   // Accumulates data for Firefox telemetry. |id| is the ID of a JS_TELEMETRY_*
   // histogram. |key| provides an additional key to identify the histogram.
@@ -322,9 +329,6 @@ struct JSRuntime {
 
   void setTelemetryCallback(JSRuntime* rt,
                             JSAccumulateTelemetryDataCallback callback);
-
-  void setSourceElementCallback(JSRuntime* rt,
-                                JSSourceElementCallback callback);
 
   // Sets the use counter for a specific feature, measuring the presence or
   // absence of usage of a feature on a specific web page and document which
@@ -392,6 +396,32 @@ struct JSRuntime {
   js::UnprotectedData<js::SelfHostedLazyScript> selfHostedLazyScript;
 
  private:
+  // The self-hosted JS code is compiled as a Stencil which is then attached to
+  // the Runtime. This is used to instantiate functions into realms on demand.
+  js::WriteOnceData<js::frontend::CompilationInput*> selfHostStencilInput_;
+  js::WriteOnceData<js::frontend::CompilationStencil*> selfHostStencil_;
+
+ public:
+  // The self-hosted stencil is immutable once attached to the runtime, so
+  // worker runtimes directly use the stencil on the parent runtime.
+  js::frontend::CompilationInput& selfHostStencilInput() {
+    MOZ_ASSERT(hasSelfHostStencil());
+    return *selfHostStencilInput_.ref();
+  }
+  js::frontend::CompilationStencil& selfHostStencil() {
+    MOZ_ASSERT(hasSelfHostStencil());
+    return *selfHostStencil_.ref();
+  }
+  bool hasSelfHostStencil() const { return bool(selfHostStencil_.ref()); }
+
+  // A mapping from the name of self-hosted function to a ScriptIndex range of
+  // the function and inner-functions within the self-hosted stencil.
+  js::MainThreadData<
+      JS::GCHashMap<js::PreBarriered<JSAtom*>, js::frontend::ScriptIndexRange,
+                    js::DefaultHasher<JSAtom*>, js::SystemAllocPolicy>>
+      selfHostScriptMap;
+
+ private:
   /* Gecko profiling metadata */
   js::UnprotectedData<js::GeckoProfilerRuntime> geckoProfiler_;
 
@@ -399,9 +429,9 @@ struct JSRuntime {
   js::GeckoProfilerRuntime& geckoProfiler() { return geckoProfiler_.ref(); }
 
   // Heap GC roots for PersistentRooted pointers.
-  js::MainThreadData<mozilla::EnumeratedArray<
-      JS::RootKind, JS::RootKind::Limit,
-      mozilla::LinkedList<JS::PersistentRooted<JS::detail::RootListEntry*>>>>
+  js::MainThreadData<
+      mozilla::EnumeratedArray<JS::RootKind, JS::RootKind::Limit,
+                               mozilla::LinkedList<js::PersistentRootedBase>>>
       heapRoots;
 
   void tracePersistentRoots(JSTracer* trc);
@@ -430,30 +460,6 @@ struct JSRuntime {
  public:
   const JSClass* maybeWindowProxyClass() const { return windowProxyClass_; }
   void setWindowProxyClass(const JSClass* clasp) { windowProxyClass_ = clasp; }
-
- private:
-  js::WriteOnceData<const JSClass*> abortSignalClass_;
-  js::WriteOnceData<JS::AbortSignalIsAborted> abortSignalIsAborted_;
-
- public:
-  void initPipeToHandling(const JSClass* abortSignalClass,
-                          JS::AbortSignalIsAborted isAborted) {
-    MOZ_ASSERT(abortSignalClass != nullptr,
-               "doesn't make sense for an embedder to provide a null class "
-               "when specifying pipeTo handling");
-    MOZ_ASSERT(isAborted != nullptr, "must pass a valid function pointer");
-
-    abortSignalClass_ = abortSignalClass;
-    abortSignalIsAborted_ = isAborted;
-  }
-
-  const JSClass* maybeAbortSignalClass() const { return abortSignalClass_; }
-
-  bool abortSignalIsAborted(JSObject* obj) {
-    MOZ_ASSERT(abortSignalIsAborted_ != nullptr,
-               "must call initPipeToHandling first");
-    return abortSignalIsAborted_(obj);
-  }
 
  private:
   // List of non-ephemeron weak containers to sweep during
@@ -529,7 +535,7 @@ struct JSRuntime {
    * Locking this only occurs if there is actually a thread other than the
    * main thread which could access this.
    */
-  js::Mutex scriptDataLock;
+  js::Mutex scriptDataLock MOZ_UNANNOTATED;
 #ifdef DEBUG
   bool activeThreadHasScriptDataAccess;
 #endif
@@ -539,18 +545,10 @@ struct JSRuntime {
   // protect access to the bytecode table;
   mozilla::Atomic<size_t, mozilla::SequentiallyConsistent> numParseTasks;
 
-  // Number of zones which may be operated on by helper threads.
-  mozilla::Atomic<size_t, mozilla::SequentiallyConsistent>
-      numActiveHelperThreadZones;
-
   friend class js::AutoLockScriptData;
 
  public:
-  void setUsedByHelperThread(JS::Zone* zone);
-  void clearUsedByHelperThread(JS::Zone* zone);
-
   bool hasParseTasks() const { return numParseTasks > 0; }
-  bool hasHelperThreadZones() const { return numActiveHelperThreadZones > 0; }
 
   void addParseTaskRef() { numParseTasks++; }
   void decParseTaskRef() { numParseTasks--; }
@@ -564,11 +562,6 @@ struct JSRuntime {
     }
 
     scriptDataLock.assertOwnedByCurrentThread();
-  }
-
-  bool currentThreadHasAtomsTableAccess() const {
-    return js::CurrentThreadCanAccessRuntime(this) &&
-           atoms_->mainThreadHasAllLocks();
   }
 #endif
 
@@ -628,17 +621,9 @@ struct JSRuntime {
  private:
   js::UnprotectedData<js::jit::JitRuntime*> jitRuntime_;
 
-  /*
-   * Self-hosting state cloned on demand into other compartments. Shared with
-   * the parent runtime if there is one.
-   */
-  js::WriteOnceData<js::NativeObject*> selfHostingGlobal_;
-
-  static js::GlobalObject* createSelfHostingGlobal(JSContext* cx);
-
  public:
-  void getUnclonedSelfHostedValue(js::PropertyName* name, JS::Value* vp);
-  JSFunction* getUnclonedSelfHostedFunction(js::PropertyName* name);
+  mozilla::Maybe<js::frontend::ScriptIndexRange> getSelfHostedScriptIndexRange(
+      js::PropertyName* name);
 
   [[nodiscard]] bool createJitRuntime(JSContext* cx);
   js::jit::JitRuntime* jitRuntime() const { return jitRuntime_.ref(); }
@@ -663,38 +648,31 @@ struct JSRuntime {
   // Self-hosting support
   //-------------------------------------------------------------------------
 
-  bool hasInitializedSelfHosting() const { return selfHostingGlobal_; }
+  bool hasInitializedSelfHosting() const { return hasSelfHostStencil(); }
 
-  bool initSelfHosting(JSContext* cx, JS::SelfHostedCache xdrCache = nullptr,
-                       JS::SelfHostedWriter xdrWriter = nullptr);
+  bool initSelfHostingStencil(JSContext* cx, JS::SelfHostedCache xdrCache,
+                              JS::SelfHostedWriter xdrWriter);
+  bool initSelfHostingFromStencil(JSContext* cx);
   void finishSelfHosting();
-  void traceSelfHostingGlobal(JSTracer* trc);
-  bool isSelfHostingGlobal(JSObject* global) {
-    return global == selfHostingGlobal_;
-  }
-  js::GeneratorKind getSelfHostedFunctionGeneratorKind(JSAtom* name);
-  bool createLazySelfHostedFunctionClone(JSContext* cx,
-                                         js::HandlePropertyName selfHostedName,
-                                         js::HandleAtom name, unsigned nargs,
-                                         js::NewObjectKind newKind,
-                                         js::MutableHandleFunction fun);
-  bool cloneSelfHostedFunctionScript(JSContext* cx,
-                                     js::Handle<js::PropertyName*> name,
-                                     js::Handle<JSFunction*> targetFun);
-  bool cloneSelfHostedValue(JSContext* cx, js::Handle<js::PropertyName*> name,
-                            js::MutableHandleValue vp);
-  void assertSelfHostedFunctionHasCanonicalName(JSContext* cx,
-                                                js::HandlePropertyName name);
-#if DEBUG
-  bool isSelfHostingZone(const JS::Zone* zone) const {
-    return selfHostingGlobal_ && selfHostingGlobal_->zone() == zone;
-  }
-#endif
+  void traceSelfHostingStencil(JSTracer* trc);
+  js::GeneratorKind getSelfHostedFunctionGeneratorKind(js::PropertyName* name);
+  bool delazifySelfHostedFunction(JSContext* cx,
+                                  js::Handle<js::PropertyName*> name,
+                                  js::Handle<JSFunction*> targetFun);
+  bool getSelfHostedValue(JSContext* cx, js::Handle<js::PropertyName*> name,
+                          js::MutableHandleValue vp);
+  void assertSelfHostedFunctionHasCanonicalName(js::HandlePropertyName name);
+
+ private:
+  void setSelfHostingStencil(
+      JS::MutableHandle<js::UniquePtr<js::frontend::CompilationInput>> input,
+      RefPtr<js::frontend::CompilationStencil>&& stencil);
 
   //-------------------------------------------------------------------------
   // Locale information
   //-------------------------------------------------------------------------
 
+ public:
   /*
    * Set the default locale for the ECMAScript Internationalization API
    * (Intl.Collator, Intl.NumberFormat, Intl.DateTimeFormat).
@@ -724,14 +702,8 @@ struct JSRuntime {
 
   js::WriteOnceData<js::PropertyName*> emptyString;
 
- private:
-  js::MainThreadOrGCTaskData<JSFreeOp*> defaultFreeOp_;
-
  public:
-  JSFreeOp* defaultFreeOp() {
-    MOZ_ASSERT(defaultFreeOp_);
-    return defaultFreeOp_;
-  }
+  JS::GCContext* gcContext() { return &gc.mainThreadContext.ref(); }
 
 #if !JS_HAS_INTL_API
   /* Number localization, used by jsnum.cpp. */
@@ -783,7 +755,6 @@ struct JSRuntime {
   // can only be done from the main thread.
   js::MainThreadOrGCTaskData<js::SymbolRegistry> symbolRegistry_;
 
-  js::WriteOnceData<js::AtomSet*> permanentAtomsDuringInit_;
   js::WriteOnceData<js::FrozenAtomSet*> permanentAtoms_;
 
  public:
@@ -791,9 +762,7 @@ struct JSRuntime {
   bool initializeParserAtoms(JSContext* cx);
   void finishAtoms();
   void finishParserAtoms();
-  bool atomsAreFinished() const {
-    return !atoms_ && !permanentAtomsDuringInit_;
-  }
+  bool atomsAreFinished() const { return !atoms_; }
 
   js::AtomsTable* atomsForSweeping() {
     MOZ_ASSERT(JS::RuntimeHeapIsCollecting());
@@ -805,10 +774,12 @@ struct JSRuntime {
     return *atoms_;
   }
 
-  const JS::Zone* atomsZone(const js::AutoAccessAtomsZone& access) const {
+  const JS::Zone* atomsZone() const {
+    MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(this));
     return gc.atomsZone;
   }
-  JS::Zone* atomsZone(const js::AutoAccessAtomsZone& access) {
+  JS::Zone* atomsZone() {
+    MOZ_ASSERT(js::CurrentThreadCanAccessRuntime(this));
     return gc.atomsZone;
   }
   JS::Zone* unsafeAtomsZone() { return gc.atomsZone; }
@@ -843,16 +814,6 @@ struct JSRuntime {
 
   // The permanent atoms table is populated during initialization.
   bool permanentAtomsPopulated() const { return permanentAtoms_; }
-
-  // For internal use, return the permanent atoms table while it is being
-  // populated.
-  js::AtomSet* permanentAtomsDuringInit() const {
-    MOZ_ASSERT(!permanentAtoms_);
-    return permanentAtomsDuringInit_.ref();
-  }
-
-  bool initMainAtomsTables(JSContext* cx);
-  void tracePermanentAtoms(JSTracer* trc);
 
   // Cached well-known symbols (ES6 rev 24 6.1.5.1). Like permanent atoms,
   // these are shared with the parentRuntime, if any.
@@ -948,11 +909,6 @@ struct JSRuntime {
   mozilla::Atomic<bool, mozilla::SequentiallyConsistent>
       parallelParsingEnabled_;
 
-#ifdef DEBUG
-  mozilla::Atomic<uint32_t> offThreadParsesRunning_;
-  mozilla::Atomic<bool> offThreadParsingBlocked_;
-#endif
-
   js::MainThreadData<bool> autoWritableJitCodeActive_;
 
  public:
@@ -969,36 +925,13 @@ struct JSRuntime {
   }
   bool canUseParallelParsing() const { return parallelParsingEnabled_; }
 
-#ifdef DEBUG
-
-  void incOffThreadParsesRunning() {
-    MOZ_ASSERT(!isOffThreadParsingBlocked());
-    offThreadParsesRunning_++;
-  }
-
-  void decOffThreadParsesRunning() {
-    MOZ_ASSERT(isOffThreadParseRunning());
-    offThreadParsesRunning_--;
-  }
-
-  bool isOffThreadParseRunning() const { return offThreadParsesRunning_; }
-
-  bool isOffThreadParsingBlocked() const { return offThreadParsingBlocked_; }
-  void setOffThreadParsingBlocked(bool blocked) {
-    MOZ_ASSERT(offThreadParsingBlocked_ != blocked);
-    MOZ_ASSERT(!isOffThreadParseRunning());
-    offThreadParsingBlocked_ = blocked;
-  }
-
-#endif
-
   void toggleAutoWritableJitCodeActive(bool b) {
     MOZ_ASSERT(autoWritableJitCodeActive_ != b,
                "AutoWritableJitCode should not be nested.");
     autoWritableJitCodeActive_ = b;
   }
 
-  /* See comment for JS::SetOutOfMemoryCallback in jsapi.h. */
+  /* See comment for JS::SetOutOfMemoryCallback in js/MemoryCallbacks.h. */
   js::MainThreadData<JS::OutOfMemoryCallback> oomCallback;
   js::MainThreadData<void*> oomCallbackData;
 
@@ -1033,7 +966,7 @@ struct JSRuntime {
   }
 
  private:
-  js::MainThreadData<js::RuntimeCaches> caches_;
+  js::MainThreadOrParseData<js::RuntimeCaches> caches_;
 
  public:
   js::RuntimeCaches& caches() { return caches_.ref(); }
@@ -1054,6 +987,11 @@ struct JSRuntime {
   // HostImportModuleDynamically. This is also used to enable/disable dynamic
   // module import and can accessed by off-thread parsing.
   mozilla::Atomic<JS::ModuleDynamicImportHook> moduleDynamicImportHook;
+
+  // A hook that implements the abstract operation
+  // HostGetSupportedImportAssertions.
+  // https://tc39.es/proposal-import-assertions/#sec-hostgetsupportedimportassertions
+  mozilla::Atomic<JS::SupportedAssertionsHook> supportedAssertionsHook;
 
   // Hooks called when script private references are created and destroyed.
   js::MainThreadData<JS::ScriptPrivateReferenceHook> scriptPrivateAddRefHook;
@@ -1137,7 +1075,7 @@ static MOZ_ALWAYS_INLINE void MakeRangeGCSafe(Value* beg, Value* end) {
 }
 
 static MOZ_ALWAYS_INLINE void MakeRangeGCSafe(jsid* beg, jsid* end) {
-  std::fill(beg, end, INT_TO_JSID(0));
+  std::fill(beg, end, PropertyKey::Int(0));
 }
 
 static MOZ_ALWAYS_INLINE void MakeRangeGCSafe(jsid* vec, size_t len) {

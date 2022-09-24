@@ -3,7 +3,8 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html;charset=utf-8,<p>Test self-XSS protection</p>";
+const TEST_URI =
+  "data:text/html;charset=utf-8,<!DOCTYPE html><p>Test self-XSS protection</p>";
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
@@ -27,7 +28,7 @@ add_task(async function() {
 
   // Input some commands to check if usage counting is working
   for (let i = 0; i <= 3; i++) {
-    await executeAndWaitForMessage(hud, i.toString(), i, ".result");
+    await executeAndWaitForResultMessage(hud, i.toString(), i);
   }
 
   is(WebConsoleUtils.usageCount, 4, "Usage count incremented");

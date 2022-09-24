@@ -13,7 +13,6 @@
 #include "IDBObjectStore.h"
 #include "IDBRequest.h"
 #include "IDBTransaction.h"
-#include "IDBFactory.h"
 #include "IndexedDatabaseInlines.h"
 #include "IndexedDatabaseManager.h"
 #include "IndexedDBCommon.h"
@@ -34,6 +33,7 @@
 #include "mozilla/dom/indexedDB/PBackgroundIDBSharedTypes.h"
 #include "mozilla/dom/IPCBlobUtils.h"
 #include "mozilla/dom/quota/QuotaManager.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundUtils.h"
 #include "mozilla/ipc/FileDescriptor.h"
@@ -204,10 +204,10 @@ RefPtr<IDBDatabase> IDBDatabase::Create(IDBOpenDBRequest* aRequest,
           obsSvc->AddObserver(observer, kWindowObserverTopic, false));
 
       // These topics are not crucial.
-      QM_WARNONLY_TRY(
-          obsSvc->AddObserver(observer, kCycleCollectionObserverTopic, false));
-      QM_WARNONLY_TRY(
-          obsSvc->AddObserver(observer, kMemoryPressureObserverTopic, false));
+      QM_WARNONLY_TRY(QM_TO_RESULT(
+          obsSvc->AddObserver(observer, kCycleCollectionObserverTopic, false)));
+      QM_WARNONLY_TRY(QM_TO_RESULT(
+          obsSvc->AddObserver(observer, kMemoryPressureObserverTopic, false)));
 
       db->mObserver = std::move(observer);
     }
@@ -368,7 +368,7 @@ RefPtr<IDBObjectStore> IDBDatabase::CreateObjectStore(
     return nullptr;
   }
 
-  QM_NOTEONLY_TRY_UNWRAP(const auto maybeKeyPath,
+  QM_INFOONLY_TRY_UNWRAP(const auto maybeKeyPath,
                          KeyPath::Parse(aOptionalParameters.mKeyPath));
   if (!maybeKeyPath) {
     aRv.Throw(NS_ERROR_DOM_SYNTAX_ERR);
@@ -622,8 +622,6 @@ RefPtr<IDBTransaction> IDBDatabase::Transaction(
 
   MOZ_ALWAYS_TRUE(mBackgroundActor->SendPBackgroundIDBTransactionConstructor(
       actor, sortedStoreNames, mode));
-  MOZ_ASSERT(actor->GetActorEventTarget(),
-             "The event target shall be inherited from it manager actor.");
 
   transaction->SetBackgroundActor(actor);
 
@@ -680,9 +678,6 @@ RefPtr<IDBRequest> IDBDatabase::CreateMutableFile(
       IDB_LOG_STRINGIFY(this), NS_ConvertUTF16toUTF8(aName).get());
 
   mBackgroundActor->SendPBackgroundIDBDatabaseRequestConstructor(actor, params);
-
-  MOZ_ASSERT(actor->GetActorEventTarget(),
-             "The event target shall be inherited from its manager actor.");
 
   return request;
 }
@@ -813,8 +808,6 @@ PBackgroundIDBDatabaseFileChild* IDBDatabase::GetOrCreateFileActorForBlob(
       return nullptr;
     }
 
-    MOZ_ASSERT(actor->GetActorEventTarget(),
-               "The event target shall be inherited from its manager actor.");
     mFileActors.InsertOrUpdate(weakRef, actor);
   }
 

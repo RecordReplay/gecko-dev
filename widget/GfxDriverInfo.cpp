@@ -313,6 +313,33 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x0155);
       APPEND_DEVICE(0x0157);
       break;
+    case DeviceFamily::IntelSkylake:
+      APPEND_DEVICE(0x1902);
+      APPEND_DEVICE(0x1906);
+      APPEND_DEVICE(0x190a);
+      APPEND_DEVICE(0x190B);
+      APPEND_DEVICE(0x190e);
+      APPEND_DEVICE(0x1912);
+      APPEND_DEVICE(0x1913);
+      APPEND_DEVICE(0x1915);
+      APPEND_DEVICE(0x1916);
+      APPEND_DEVICE(0x1917);
+      APPEND_DEVICE(0x191a);
+      APPEND_DEVICE(0x191b);
+      APPEND_DEVICE(0x191d);
+      APPEND_DEVICE(0x191e);
+      APPEND_DEVICE(0x1921);
+      APPEND_DEVICE(0x1923);
+      APPEND_DEVICE(0x1926);
+      APPEND_DEVICE(0x1927);
+      APPEND_DEVICE(0x192a);
+      APPEND_DEVICE(0x192b);
+      APPEND_DEVICE(0x192d);
+      APPEND_DEVICE(0x1932);
+      APPEND_DEVICE(0x193a);
+      APPEND_DEVICE(0x193b);
+      APPEND_DEVICE(0x193d);
+      break;
     case DeviceFamily::IntelHD520:
       APPEND_DEVICE(0x1916);
       break;
@@ -366,6 +393,12 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x6778);
       APPEND_DEVICE(0x6779);
       APPEND_DEVICE(0x677b);
+      break;
+    case DeviceFamily::RadeonBlockNoVideoCopy:
+      // Stoney
+      APPEND_DEVICE(0x98e4);
+      // Carrizo
+      APPEND_RANGE(0x9870, 0x9877);
       break;
     case DeviceFamily::Geforce7300GT:
       APPEND_DEVICE(0x0393);
@@ -472,11 +505,64 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       // RS880
       APPEND_RANGE(0x9710, 0x9715);
       break;
+    case DeviceFamily::NvidiaWebRenderBlocked:
+      APPEND_RANGE(0x0190, 0x019e);  // early tesla
+      APPEND_RANGE(0x0500, 0x05df);  // C67-C68
+      break;
     case DeviceFamily::NvidiaRolloutWebRender:
       APPEND_RANGE(0x0400, 0x04ff);
       APPEND_RANGE(0x05e0, 0x05ff);
       APPEND_RANGE(0x0600, INT32_MAX);
       APPEND_RANGE(0x06c0, INT32_MAX);
+      break;
+    case DeviceFamily::IntelWebRenderBlocked:
+      // powervr
+      // sgx535
+      APPEND_DEVICE(0x2e5b);
+      APPEND_DEVICE(0x8108);
+      APPEND_DEVICE(0x8109);
+      APPEND_DEVICE(0x4102);
+      // sgx545
+      APPEND_DEVICE(0x0be0);
+      APPEND_DEVICE(0x0be1);
+      APPEND_DEVICE(0x0be3);
+      APPEND_RANGE(0x08c7, 0x08cf);
+
+      // gen4
+      APPEND_DEVICE(0x2972);
+      APPEND_DEVICE(0x2973);
+      APPEND_DEVICE(0x2992);
+      APPEND_DEVICE(0x2993);
+      APPEND_DEVICE(0x29a2);
+      APPEND_DEVICE(0x29a3);
+
+      APPEND_DEVICE(0x2982);
+      APPEND_DEVICE(0x2983);
+
+      APPEND_DEVICE(0x2a02);
+      APPEND_DEVICE(0x2a03);
+      APPEND_DEVICE(0x2a12);
+      APPEND_DEVICE(0x2a13);
+
+      // gen4.5
+      APPEND_DEVICE(0x2e02);
+      APPEND_DEVICE(0x2e42); /* IntelB43_1 */
+      APPEND_DEVICE(0x2e43); /* IntelB43_2 */
+      APPEND_DEVICE(0x2e92); /* IntelB43_3 */
+      APPEND_DEVICE(0x2e93); /* IntelB43_4 */
+      APPEND_DEVICE(0x2e12); /* IntelQ45_1 */
+      APPEND_DEVICE(0x2e13); /* IntelQ45_2 */
+      APPEND_DEVICE(0x2e32); /* IntelG41_1 */
+      APPEND_DEVICE(0x2e33); /* IntelG41_2 */
+      APPEND_DEVICE(0x2e22); /* IntelG45_1 */
+
+      APPEND_DEVICE(0x2e23); /* IntelG45_2 */
+      APPEND_DEVICE(0x2a42); /* IntelGMA4500MHD_1 */
+      APPEND_DEVICE(0x2a43); /* IntelGMA4500MHD_2 */
+
+      // gen5 (ironlake)
+      APPEND_DEVICE(0x0042);
+      APPEND_DEVICE(0x0046);
       break;
     case DeviceFamily::IntelRolloutWebRender:
       // Disable WebRender on these devices for now
@@ -740,6 +826,12 @@ const GfxDeviceFamily* GfxDriverInfo::GetDeviceFamily(DeviceFamily id) {
       APPEND_DEVICE(0x15d8);
       // Renoir
       APPEND_DEVICE(0x1636);
+      // Cezanne
+      APPEND_DEVICE(0x1638);
+      // Lucienne
+      APPEND_DEVICE(0x164c);
+      // Yellow Carp
+      APPEND_DEVICE(0x1681);
 
       // Evergreen
       APPEND_RANGE(0x6840, 0x684b);
@@ -810,6 +902,7 @@ const nsAString& GfxDriverInfo::GetDesktopEnvironment(DesktopEnvironment id) {
     DECLARE_DESKTOP_ENVIRONMENT_ID(LXDE, "lxde");
     DECLARE_DESKTOP_ENVIRONMENT_ID(Openbox, "openbox");
     DECLARE_DESKTOP_ENVIRONMENT_ID(i3, "i3");
+    DECLARE_DESKTOP_ENVIRONMENT_ID(Sway, "sway");
     DECLARE_DESKTOP_ENVIRONMENT_ID(Mate, "mate");
     DECLARE_DESKTOP_ENVIRONMENT_ID(Unity, "unity");
     DECLARE_DESKTOP_ENVIRONMENT_ID(Pantheon, "pantheon");
@@ -884,10 +977,12 @@ const nsAString& GfxDriverInfo::GetDeviceVendor(DeviceFamily id) {
     case DeviceFamily::IntelHaswell:
     case DeviceFamily::IntelSandyBridge:
     case DeviceFamily::IntelGen7Baytrail:
+    case DeviceFamily::IntelSkylake:
     case DeviceFamily::IntelHD520:
     case DeviceFamily::IntelMobileHDGraphics:
     case DeviceFamily::IntelRolloutWebRender:
     case DeviceFamily::IntelModernRolloutWebRender:
+    case DeviceFamily::IntelWebRenderBlocked:
     case DeviceFamily::Bug1116812:
     case DeviceFamily::Bug1155608:
     case DeviceFamily::Bug1207665:
@@ -896,6 +991,7 @@ const nsAString& GfxDriverInfo::GetDeviceVendor(DeviceFamily id) {
     case DeviceFamily::NvidiaAll:
     case DeviceFamily::NvidiaBlockD3D9Layers:
     case DeviceFamily::NvidiaRolloutWebRender:
+    case DeviceFamily::NvidiaWebRenderBlocked:
     case DeviceFamily::Geforce7300GT:
     case DeviceFamily::Nvidia310M:
     case DeviceFamily::Nvidia8800GTS:
@@ -903,6 +999,7 @@ const nsAString& GfxDriverInfo::GetDeviceVendor(DeviceFamily id) {
       vendor = DeviceVendor::NVIDIA;
       break;
     case DeviceFamily::AtiAll:
+    case DeviceFamily::RadeonBlockNoVideoCopy:
     case DeviceFamily::RadeonCaicos:
     case DeviceFamily::RadeonX1000:
     case DeviceFamily::Bug1447141:
@@ -995,6 +1092,7 @@ const nsAString& GfxDriverInfo::GetDriverVendor(DriverVendor id) {
     DECLARE_DRIVER_VENDOR_ID(MesaLLVMPipe, "mesa/llvmpipe");
     DECLARE_DRIVER_VENDOR_ID(MesaSoftPipe, "mesa/softpipe");
     DECLARE_DRIVER_VENDOR_ID(MesaSWRast, "mesa/swrast");
+    DECLARE_DRIVER_VENDOR_ID(MesaSWUnknown, "mesa/software-unknown");
     DECLARE_DRIVER_VENDOR_ID(MesaUnknown, "mesa/unknown");
     DECLARE_DRIVER_VENDOR_ID(MesaR600, "mesa/r600");
     DECLARE_DRIVER_VENDOR_ID(MesaNouveau, "mesa/nouveau");

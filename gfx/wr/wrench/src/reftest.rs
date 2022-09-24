@@ -3,8 +3,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 use crate::{WindowWrapper, NotifierEvent};
-use base64;
-use semver;
 use image::load as load_piston_image;
 use image::png::PNGEncoder;
 use image::{ColorType, ImageFormat};
@@ -107,6 +105,7 @@ pub struct Reftest {
     disable_dual_source_blending: bool,
     allow_mipmaps: bool,
     force_subpixel_aa_where_possible: Option<bool>,
+    max_surface_override: Option<usize>,
 }
 
 impl Reftest {
@@ -207,12 +206,10 @@ impl Reftest {
 
                 if is_failing {
                     println!(
-                        "{} | {} | {}: {}, {}: {} | {}",
-                        "REFTEST TEST-UNEXPECTED-FAIL",
+                        "REFTEST TEST-UNEXPECTED-FAIL | {} | \
+                         image comparison, max difference: {}, number of differing pixels: {} | {}",
                         self,
-                        "image comparison, max difference",
                         max_difference,
-                        "number of differing pixels",
                         count_different,
                         fail_text,
                     );
@@ -342,7 +339,7 @@ impl ReftestManifest {
     fn new(manifest: &Path, environment: &ReftestEnvironment, options: &ReftestOptions) -> ReftestManifest {
         let dir = manifest.parent().unwrap();
         let f =
-            File::open(manifest).expect(&format!("couldn't open manifest: {}", manifest.display()));
+            File::open(manifest).unwrap_or_else(|_| panic!("couldn't open manifest: {}", manifest.display()));
         let file = BufReader::new(&f);
 
         let mut reftests = Vec::new();
@@ -366,6 +363,7 @@ impl ReftestManifest {
             let mut disable_dual_source_blending = false;
             let mut allow_mipmaps = false;
             let mut force_subpixel_aa_where_possible = None;
+            let mut max_surface_override = None;
 
             let mut parse_command = |token: &str| -> bool {
                 match token {
@@ -384,12 +382,12 @@ impl ReftestManifest {
                         }
                         let num_range = args.len() / 2;
                         for range in 0..num_range {
-                            let mut max = args[range * 2 + 0];
+                            let mut max = args[range * 2    ];
                             let mut num = args[range * 2 + 1];
                             if max.starts_with("<=") { // trim_start_matches would allow <=<=123
                                 max = &max[2..];
                             }
-                            if num.starts_with("*") {
+                            if num.starts_with('*') {
                                 num = &num[1..];
                             }
                             let max_difference  = max.parse().unwrap();
@@ -423,6 +421,10 @@ impl ReftestManifest {
                         let (_, args, _) = parse_function(function);
                         extra_checks.push(ExtraCheck::ColorTargets(args[0].parse().unwrap()));
                     }
+                    function if function.starts_with("max_surface_size(") => {
+                        let (_, args, _) = parse_function(function);
+                        max_surface_override = Some(args[0].parse().unwrap());
+                    }
                     options if options.starts_with("options(") => {
                         let (_, args, _) = parse_function(options);
                         if args.iter().any(|arg| arg == &OPTION_DISABLE_SUBPX) {
@@ -440,7 +442,7 @@ impl ReftestManifest {
                     }
                     _ => return false,
                 }
-                return true;
+                true
             };
 
             let mut paths = vec![];
@@ -488,13 +490,11 @@ impl ReftestManifest {
             }
 
             // Don't try to add tests for include lines.
-            let op = match op {
-                Some(op) => op,
-                None => {
-                    assert!(paths.is_empty(), "paths = {:?}", paths);
-                    continue;
-                }
-            };
+            if op.is_none() {
+                assert!(paths.is_empty(), "paths = {:?}", paths);
+                continue;
+            }
+            let op = op.unwrap();
 
             // The reference is the last path provided. If multiple paths are
             // passed for the test, they render sequentially before being
@@ -547,10 +547,11 @@ impl ReftestManifest {
                 disable_dual_source_blending,
                 allow_mipmaps,
                 force_subpixel_aa_where_possible,
+                max_surface_override,
             });
         }
 
-        ReftestManifest { reftests: reftests }
+        ReftestManifest { reftests }
     }
 
     fn find(&self, prefix: &Path) -> Vec<&Reftest> {
@@ -587,14 +588,11 @@ impl ReftestEnvironment {
         if self.platform == condition || self.mode == condition {
             return true;
         }
-        match (&self.version, &semver::VersionReq::parse(condition)) {
-            (Some(v), Ok(r)) => {
-                if r.matches(v) {
-                    return true;
-                }
-            },
-            _ => (),
-        };
+        if let (Some(v), Ok(r)) = (&self.version, &semver::VersionReq::parse(condition)) {
+            if r.matches(v) {
+                return true;
+            }
+        }
         let envkey = format!("WRENCH_REFTEST_CONDITION_{}", condition.to_uppercase());
         env::var(envkey).is_ok()
     }
@@ -638,7 +636,7 @@ impl ReftestEnvironment {
                 version_string.push_str(".0");
             }
             Some(semver::Version::parse(&version_string)
-                 .expect(&format!("Failed to parse macOS version {}", version_string)))
+                 .unwrap_or_else(|_| panic!("Failed to parse macOS version {}", version_string)))
         } else {
             None
         }
@@ -742,15 +740,8 @@ impl<'a> ReftestHarness<'a> {
                 DebugCommand::ClearCaches(ClearCache::all())
             );
 
-        let quality_settings = match t.force_subpixel_aa_where_possible {
-            Some(force_subpixel_aa_where_possible) => {
-                QualitySettings {
-                    force_subpixel_aa_where_possible,
-                }
-            }
-            None => {
-                QualitySettings::default()
-            }
+        let quality_settings = QualitySettings {
+            force_subpixel_aa_where_possible: t.force_subpixel_aa_where_possible.unwrap_or_default(),
         };
 
         self.wrench.set_quality_settings(quality_settings);
@@ -760,6 +751,13 @@ impl<'a> ReftestHarness<'a> {
                 .api
                 .send_debug_cmd(
                     DebugCommand::EnableDualSourceBlending(false)
+                );
+        }
+        if let Some(max_surface_override) = t.max_surface_override {
+            self.wrench
+                .api
+                .send_debug_cmd(
+                    DebugCommand::SetMaximumSurfaceSize(Some(max_surface_override))
                 );
         }
 
@@ -786,7 +784,7 @@ impl<'a> ReftestHarness<'a> {
                 // For equality tests, render each test image and store result
                 for filename in t.test.iter() {
                     let output = self.render_yaml(
-                        &filename,
+                        filename,
                         test_size,
                         t.font_render_mode,
                         t.allow_mipmaps,
@@ -829,24 +827,21 @@ impl<'a> ReftestHarness<'a> {
             }
         }
 
-        let reference = match reference_image {
-            Some(image) => {
-                let save_all_png = false; // flip to true to update all the tests!
-                if save_all_png {
-                    let img = images.last().unwrap();
-                    save_flipped(&t.reference, img.data.clone(), img.size);
-                }
-                image
+        let reference = if let Some(image) = reference_image {
+            let save_all_png = false; // flip to true to update all the tests!
+            if save_all_png {
+                let img = images.last().unwrap();
+                save_flipped(&t.reference, img.data.clone(), img.size);
             }
-            None => {
-                let output = self.render_yaml(
-                    &t.reference,
-                    test_size,
-                    t.font_render_mode,
-                    t.allow_mipmaps,
-                );
-                output.image
-            }
+            image
+        } else {
+            let output = self.render_yaml(
+                &t.reference,
+                test_size,
+                t.font_render_mode,
+                t.allow_mipmaps,
+            );
+            output.image
         };
 
         if t.disable_dual_source_blending {
@@ -854,6 +849,13 @@ impl<'a> ReftestHarness<'a> {
                 .api
                 .send_debug_cmd(
                     DebugCommand::EnableDualSourceBlending(true)
+                );
+        }
+        if let Some(_) = t.max_surface_override {
+            self.wrench
+                .api
+                .send_debug_cmd(
+                    DebugCommand::SetMaximumSurfaceSize(None)
                 );
         }
 

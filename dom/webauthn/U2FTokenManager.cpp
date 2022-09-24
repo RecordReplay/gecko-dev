@@ -38,8 +38,7 @@
   "security.webauth.webauthn_testing_allow_direct_attestation"
 #define PREF_WEBAUTHN_ANDROID_FIDO2_ENABLED \
   "security.webauth.webauthn_enable_android_fido2"
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /***********************************************************************
  * Statics
@@ -141,7 +140,7 @@ class U2FPrefManager final : public nsIObserver {
         Preferences::GetBool(PREF_WEBAUTHN_ALLOW_DIRECT_ATTESTATION);
   }
 
-  Mutex mPrefMutex;
+  Mutex mPrefMutex MOZ_UNANNOTATED;
   bool mSoftTokenEnabled;
   int mSoftTokenCounter;
   bool mUsbTokenEnabled;
@@ -321,7 +320,7 @@ void U2FTokenManager::Register(
   mLastTransactionId = aTransactionId;
 
   // Determine whether direct attestation was requested.
-  bool directAttestationRequested = false;
+  bool noneAttestationRequested = true;
 
 // On Android, let's always reject direct attestations until we have a
 // mechanism to solicit user consent, from Bug 1550164
@@ -332,17 +331,16 @@ void U2FTokenManager::Register(
     AttestationConveyancePreference attestation =
         extra.attestationConveyancePreference();
 
-    directAttestationRequested =
-        attestation == AttestationConveyancePreference::Direct;
+    noneAttestationRequested =
+        attestation == AttestationConveyancePreference::None;
   }
 #endif  // not MOZ_WIDGET_ANDROID
 
   // Start a register request immediately if direct attestation
   // wasn't requested or the test pref is set.
-  if (!directAttestationRequested ||
+  if (noneAttestationRequested ||
       U2FPrefManager::Get()->GetAllowDirectAttestationForTesting()) {
-    // Force "none" attestation when "direct" attestation wasn't requested.
-    DoRegister(aTransactionInfo, !directAttestationRequested);
+    DoRegister(aTransactionInfo, noneAttestationRequested);
     return;
   }
 
@@ -547,5 +545,4 @@ void U2FTokenManager::RunCancel(uint64_t aTransactionId) {
   AbortTransaction(aTransactionId, NS_ERROR_DOM_ABORT_ERR);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

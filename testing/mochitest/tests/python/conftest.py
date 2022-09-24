@@ -12,10 +12,22 @@ import pytest
 
 import mozinfo
 from manifestparser import TestManifest, expression
-from moztest.selftest.fixtures import binary, setup_test_harness  # noqa
+from moztest.selftest.fixtures import binary_fixture, setup_test_harness  # noqa
 
 here = os.path.abspath(os.path.dirname(__file__))
 setup_args = [os.path.join(here, "files"), "mochitest", "testing/mochitest"]
+
+
+@pytest.fixture
+def create_manifest(tmpdir, build_obj):
+    def inner(string, name="manifest.ini"):
+        manifest = tmpdir.join(name)
+        manifest.write(string, ensure=True)
+        # pylint --py3k: W1612
+        path = six.text_type(manifest)
+        return TestManifest(manifests=(path,), strict=False, rootdir=tmpdir.strpath)
+
+    return inner
 
 
 @pytest.fixture(scope="function")
@@ -102,11 +114,14 @@ def runtests(setup_test_harness, binary, parser, request):
     def inner(*tests, **opts):
         assert len(tests) > 0
 
-        manifest = TestManifest()
-        # pylint --py3k: W1636
-        manifest.tests.extend(list(map(normalize, tests)))
-        options["manifestFile"] = manifest
-        options.update(opts)
+        # Inject a TestManifest in the runtests option if one
+        # has not been already included by the caller.
+        if not isinstance(options["manifestFile"], TestManifest):
+            manifest = TestManifest()
+            options["manifestFile"] = manifest
+            # pylint --py3k: W1636
+            manifest.tests.extend(list(map(normalize, tests)))
+            options.update(opts)
 
         result = runtests.run_test_harness(parser, Namespace(**options))
         out = json.loads("[" + ",".join(buf.getvalue().splitlines()) + "]")
@@ -137,7 +152,7 @@ def skip_using_mozinfo(request, setup_test_harness):
     runtests = pytest.importorskip("runtests")
     runtests.update_mozinfo()
 
-    skip_mozinfo = request.node.get_marker("skip_mozinfo")
+    skip_mozinfo = request.node.get_closest_marker("skip_mozinfo")
     if skip_mozinfo:
         value = skip_mozinfo.args[0]
         if expression.parse(value, **mozinfo.info):

@@ -62,7 +62,6 @@ InlineSpellChecker.prototype = {
     this.mOverMisspelling = false;
     this.mMisspelling = "";
     this.mMenu = null;
-    this.mSpellSuggestions = [];
     this.mSuggestionItems = [];
     this.mDictionaryMenu = null;
     this.mDictionaryItems = [];
@@ -144,7 +143,40 @@ InlineSpellChecker.prototype = {
 
   // this prepends up to "maxNumber" suggestions at the given menu position
   // for the word under the cursor. Returns the number of suggestions inserted.
-  addSuggestionsToMenu(menu, insertBefore, maxNumber) {
+  addSuggestionsToMenuOnParent(menu, insertBefore, maxNumber) {
+    if (this.mRemote) {
+      // This is used on parent process only.
+      // If you want to add suggestions to context menu, get suggestions then
+      // use addSuggestionsToMenu instead.
+      return 0;
+    }
+    if (!this.mInlineSpellChecker || !this.mOverMisspelling) {
+      return 0;
+    }
+
+    let spellchecker = this.mInlineSpellChecker.spellChecker;
+    let spellSuggestions = [];
+
+    try {
+      if (!spellchecker.CheckCurrentWord(this.mMisspelling)) {
+        return 0;
+      }
+
+      for (let i = 0; i < maxNumber; i++) {
+        let suggestion = spellchecker.GetSuggestedWord();
+        if (!suggestion.length) {
+          // no more data
+          break;
+        }
+        spellSuggestions.push(suggestion);
+      }
+    } catch (e) {
+      return 0;
+    }
+    return this._addSuggestionsToMenu(menu, insertBefore, spellSuggestions);
+  },
+
+  addSuggestionsToMenu(menu, insertBefore, spellSuggestions) {
     if (
       !this.mRemote &&
       (!this.mInlineSpellChecker || !this.mOverMisspelling)
@@ -152,41 +184,31 @@ InlineSpellChecker.prototype = {
       return 0;
     } // nothing to do
 
-    var spellchecker = this.mRemote || this.mInlineSpellChecker.spellChecker;
-    try {
-      if (!this.mRemote && !spellchecker.CheckCurrentWord(this.mMisspelling)) {
-        return 0;
-      } // word seems not misspelled after all (?)
-    } catch (e) {
+    if (!spellSuggestions?.length) {
       return 0;
     }
 
-    this.mMenu = menu;
-    this.mSpellSuggestions = [];
-    this.mSuggestionItems = [];
-    for (var i = 0; i < maxNumber; i++) {
-      var suggestion = spellchecker.GetSuggestedWord();
-      if (!suggestion.length) {
-        break;
-      }
-      this.mSpellSuggestions.push(suggestion);
+    return this._addSuggestionsToMenu(menu, insertBefore, spellSuggestions);
+  },
 
+  _addSuggestionsToMenu(menu, insertBefore, spellSuggestions) {
+    this.mMenu = menu;
+    this.mSuggestionItems = [];
+
+    for (let suggestion of spellSuggestions) {
       var item = menu.ownerDocument.createXULElement("menuitem");
       this.mSuggestionItems.push(item);
       item.setAttribute("label", suggestion);
       item.setAttribute("value", suggestion);
-      // this function thing is necessary to generate a callback with the
-      // correct binding of "val" (the index in this loop).
-      var callback = function(me, val) {
-        return function(evt) {
-          me.replaceMisspelling(val);
-        };
-      };
-      item.addEventListener("command", callback(this, i), true);
+      item.addEventListener(
+        "command",
+        this.replaceMisspelling.bind(this, suggestion),
+        true
+      );
       item.setAttribute("class", "spell-suggestion");
       menu.insertBefore(item, insertBefore);
     }
-    return this.mSpellSuggestions.length;
+    return spellSuggestions.length;
   },
 
   // undoes the work of addSuggestionsToMenu for the same menu
@@ -220,19 +242,42 @@ InlineSpellChecker.prototype = {
     }
 
     var list;
-    var curlang = "";
+    var curlangs = new Set();
     if (this.mRemote) {
       list = this.mRemote.dictionaryList;
-      curlang = this.mRemote.currentDictionary;
+      curlangs = new Set(this.mRemote.currentDictionaries);
     } else if (this.mInlineSpellChecker) {
       var spellchecker = this.mInlineSpellChecker.spellChecker;
       list = spellchecker.GetDictionaryList();
       try {
-        curlang = spellchecker.GetCurrentDictionary();
+        curlangs = new Set(spellchecker.getCurrentDictionaries());
       } catch (e) {}
     }
 
     var sortedList = this.sortDictionaryList(list);
+
+    menu.addEventListener(
+      "command",
+      async evt => {
+        let localeCodes = new Set(curlangs);
+        let localeCode = evt.target.dataset.localeCode;
+        if (localeCodes.has(localeCode)) {
+          localeCodes.delete(localeCode);
+        } else {
+          localeCodes.add(localeCode);
+        }
+        let dictionaries = Array.from(localeCodes);
+        await this.selectDictionaries(dictionaries);
+        // Notify change of dictionary, especially for Thunderbird,
+        // which is otherwise not notified any more.
+        var view = menu.ownerGlobal;
+        var spellcheckChangeEvent = new view.CustomEvent("spellcheck-changed", {
+          detail: { dictionaries },
+        });
+        menu.ownerDocument.dispatchEvent(spellcheckChangeEvent);
+      },
+      true
+    );
 
     for (var i = 0; i < sortedList.length; i++) {
       var item = menu.ownerDocument.createXULElement("menuitem");
@@ -244,29 +289,12 @@ InlineSpellChecker.prototype = {
       //      inject regionNames/languageNames FTL and localize using
       //      `l10n-id` here.
       item.setAttribute("label", sortedList[i].displayName);
-      item.setAttribute("type", "radio");
+      item.setAttribute("type", "checkbox");
+      item.setAttribute("selection-type", "multiple");
       this.mDictionaryItems.push(item);
-      if (curlang == sortedList[i].localeCode) {
+      item.dataset.localeCode = sortedList[i].localeCode;
+      if (curlangs.has(sortedList[i].localeCode)) {
         item.setAttribute("checked", "true");
-      } else {
-        var callback = function(me, localeCode) {
-          return function(evt) {
-            me.selectDictionary(localeCode);
-            // Notify change of dictionary, especially for Thunderbird,
-            // which is otherwise not notified any more.
-            var view = menu.ownerGlobal;
-            var spellcheckChangeEvent = new view.CustomEvent(
-              "spellcheck-changed",
-              { detail: { dictionary: localeCode } }
-            );
-            menu.ownerDocument.dispatchEvent(spellcheckChangeEvent);
-          };
-        };
-        item.addEventListener(
-          "command",
-          callback(this, sortedList[i].localeCode),
-          true
-        );
       }
       if (insertBefore) {
         menu.insertBefore(item, insertBefore);
@@ -287,35 +315,32 @@ InlineSpellChecker.prototype = {
   },
 
   // callback for selecting a dictionary
-  selectDictionary(localeCode) {
+  async selectDictionaries(localeCodes) {
     if (this.mRemote) {
-      this.mRemote.selectDictionary(localeCode);
+      this.mRemote.selectDictionaries(localeCodes);
       return;
     }
     if (!this.mInlineSpellChecker) {
       return;
     }
     var spellchecker = this.mInlineSpellChecker.spellChecker;
-    spellchecker.SetCurrentDictionary(localeCode);
+    await spellchecker.setCurrentDictionaries(localeCodes);
     this.mInlineSpellChecker.spellCheckRange(null); // causes recheck
   },
 
   // callback for selecting a suggested replacement
-  replaceMisspelling(index) {
+  replaceMisspelling(suggestion) {
     if (this.mRemote) {
-      this.mRemote.replaceMisspelling(index);
+      this.mRemote.replaceMisspelling(suggestion);
       return;
     }
     if (!this.mInlineSpellChecker || !this.mOverMisspelling) {
       return;
     }
-    if (index < 0 || index >= this.mSpellSuggestions.length) {
-      return;
-    }
     this.mInlineSpellChecker.replaceWord(
       this.mWordNode,
       this.mWordOffset,
-      this.mSpellSuggestions[index]
+      suggestion
     );
   },
 
@@ -400,7 +425,7 @@ var SpellCheckHelper = {
   SPELLCHECKABLE: 0x100,
 
   isTargetAKeywordField(aNode, window) {
-    if (!(aNode instanceof window.HTMLInputElement)) {
+    if (!window.HTMLInputElement.isInstance(aNode)) {
       return false;
     }
 
@@ -435,7 +460,7 @@ var SpellCheckHelper = {
 
   isEditable(element, window) {
     var flags = 0;
-    if (element instanceof window.HTMLInputElement) {
+    if (window.HTMLInputElement.isInstance(element)) {
       flags |= this.INPUT;
       if (element.mozIsTextField(false) || element.type == "number") {
         flags |= this.TEXTINPUT;
@@ -461,7 +486,7 @@ var SpellCheckHelper = {
           flags |= this.PASSWORD;
         }
       }
-    } else if (element instanceof window.HTMLTextAreaElement) {
+    } else if (window.HTMLTextAreaElement.isInstance(element)) {
       flags |= this.TEXTINPUT | this.TEXTAREA;
       if (!element.readOnly) {
         flags |= this.SPELLCHECKABLE | this.EDITABLE;
@@ -514,37 +539,23 @@ RemoteSpellChecker.prototype = {
   get enableRealTimeSpell() {
     return this._spellInfo.enableRealTimeSpell;
   },
-
-  GetSuggestedWord() {
-    if (!this._suggestionGenerator) {
-      this._suggestionGenerator = (function*(spellInfo) {
-        for (let i of spellInfo.spellSuggestions) {
-          yield i;
-        }
-      })(this._spellInfo);
-    }
-
-    let next = this._suggestionGenerator.next();
-    if (next.done) {
-      this._suggestionGenerator = null;
-      return "";
-    }
-    return next.value;
+  get suggestions() {
+    return this._spellInfo.spellSuggestions;
   },
 
-  get currentDictionary() {
-    return this._spellInfo.currentDictionary;
+  get currentDictionaries() {
+    return this._spellInfo.currentDictionaries;
   },
   get dictionaryList() {
     return this._spellInfo.dictionaryList.slice();
   },
 
-  selectDictionary(localeCode) {
-    this._actor.selectDictionary({ localeCode });
+  selectDictionaries(localeCodes) {
+    this._actor.selectDictionaries({ localeCodes });
   },
 
-  replaceMisspelling(index) {
-    this._actor.replaceMisspelling({ index });
+  replaceMisspelling(suggestion) {
+    this._actor.replaceMisspelling({ suggestion });
   },
 
   toggleEnabled() {

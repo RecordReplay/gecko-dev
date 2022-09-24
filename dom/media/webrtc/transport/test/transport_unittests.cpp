@@ -451,7 +451,7 @@ class TransportTestPeer : public sigslot::has_slots<> {
         disabled_cipersuites_(),
         test_utils_(utils) {
     NrIceCtx::InitializeGlobals(NrIceCtx::GlobalConfig());
-    ice_ctx_ = NrIceCtx::Create(name, NrIceCtx::Config());
+    ice_ctx_ = NrIceCtx::Create(name);
     std::vector<NrIceStunServer> stun_servers;
     UniquePtr<NrIceStunServer> server(NrIceStunServer::Create(
         std::string((char*)"stun.services.mozilla.com"), 3478));
@@ -1383,7 +1383,7 @@ class TransportSrtpParameterTest
     : public TransportTest,
       public ::testing::WithParamInterface<uint16_t> {};
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     SrtpParamInit, TransportSrtpParameterTest,
     ::testing::ValuesIn(TransportLayerDtls::GetDefaultSrtpCiphers()));
 

@@ -31,14 +31,14 @@ async function translateElements(container, items) {
 }
 
 async function renderInfo({
-  infoEnabled,
+  infoEnabled = false,
   infoTitle,
   infoTitleEnabled,
   infoBody,
   infoLinkText,
   infoLinkUrl,
   infoIcon,
-}) {
+} = {}) {
   const container = document.querySelector(".info");
   if (infoEnabled === false) {
     container.remove();
@@ -68,6 +68,7 @@ async function renderInfo({
     infoLinkUrl ||
       RPMGetFormatURLPref("app.support.baseURL") + "private-browsing-myths"
   );
+  linkEl.setAttribute("target", "_blank");
 
   linkEl.addEventListener("click", () => {
     window.PrivateBrowsingRecordClick("info_link");
@@ -75,7 +76,9 @@ async function renderInfo({
 }
 
 async function renderPromo({
-  promoEnabled,
+  messageId = null,
+  promoEnabled = false,
+  promoType = "VPN",
   promoTitle,
   promoTitleEnabled,
   promoLinkText,
@@ -85,19 +88,15 @@ async function renderPromo({
   promoHeader,
   promoImageLarge,
   promoImageSmall,
-}) {
+  promoButton = null,
+} = {}) {
+  const shouldShow = await RPMSendQuery("ShouldShowPromo", { type: promoType });
   const container = document.querySelector(".promo");
-  if (promoEnabled === false) {
-    container.remove();
-    return;
-  }
 
-  // Check the current geo and remove if we're in the wrong one.
-  RPMSendQuery("ShouldShowVPNPromo", {}).then(shouldShow => {
-    if (!shouldShow) {
-      container.remove();
-    }
-  });
+  if (!promoEnabled || !shouldShow) {
+    container.remove();
+    return false;
+  }
 
   const titleEl = document.getElementById("private-browsing-vpn-text");
   let linkEl = document.getElementById("private-browsing-vpn-link");
@@ -105,24 +104,51 @@ async function renderPromo({
   const infoContainerEl = document.querySelector(".info");
   const promoImageLargeEl = document.querySelector(".promo-image-large img");
   const promoImageSmallEl = document.querySelector(".promo-image-small img");
-
-  // Setup the private browsing VPN link.
-  const vpnPromoUrl =
-    promoLinkUrl || RPMGetFormatURLPref("browser.privatebrowsing.vpnpromourl");
+  const dismissBtn = document.querySelector("#dismiss-btn");
 
   if (promoLinkType === "button") {
     linkEl.classList.add("button");
   }
 
-  if (vpnPromoUrl) {
-    linkEl.setAttribute("href", vpnPromoUrl);
+  if (promoLinkUrl) {
+    linkEl.setAttribute("href", promoLinkUrl);
+    linkEl.setAttribute("target", "_blank");
     linkEl.addEventListener("click", () => {
       window.PrivateBrowsingRecordClick("promo_link");
+    });
+  } else if (promoButton?.action) {
+    linkEl.addEventListener("click", async event => {
+      event.preventDefault();
+      // Record promo click telemetry and set metrics as allow for spotlight
+      // modal opened on promo click if user is enrolled in an experiment
+      let isExperiment = window.PrivateBrowsingRecordClick("promo_link");
+      const promoButtonData = promoButton?.action?.data;
+      if (
+        promoButton?.action?.type === "SHOW_SPOTLIGHT" &&
+        promoButtonData?.content
+      ) {
+        promoButtonData.content.metrics = isExperiment ? "allow" : "block";
+      }
+
+      await RPMSendQuery("SpecialMessageActionDispatch", promoButton.action);
     });
   } else {
     // If the link is undefined, remove the promo completely
     container.remove();
-    return;
+    return false;
+  }
+
+  const onDismissBtnClick = () => {
+    window.ASRouterMessage({
+      type: "BLOCK_MESSAGE_BY_ID",
+      data: { id: messageId },
+    });
+    window.PrivateBrowsingRecordClick("dismiss_button");
+    container.remove();
+  };
+
+  if (dismissBtn && messageId) {
+    dismissBtn.addEventListener("click", onDismissBtnClick, { once: true });
   }
 
   if (promoSectionStyle) {
@@ -131,16 +157,12 @@ async function renderPromo({
     switch (promoSectionStyle) {
       case "below-search":
         container.remove();
-        infoContainerEl.insertAdjacentElement("beforebegin", container);
+        infoContainerEl?.insertAdjacentElement("beforebegin", container);
         break;
       case "top":
         container.remove();
         document.body.insertAdjacentElement("afterbegin", container);
     }
-  }
-
-  if (promoHeader) {
-    promoHeaderEl.innerText = promoHeader;
   }
 
   if (promoImageLarge) {
@@ -159,29 +181,102 @@ async function renderPromo({
     titleEl.remove();
   }
 
+  if (!promoHeader) {
+    promoHeaderEl.remove();
+  }
+
   await translateElements(container, [
     [titleEl, promoTitle],
     [linkEl, promoLinkText],
+    [promoHeaderEl, promoHeader],
   ]);
+
+  // Only make promo section visible after adding content
+  // and translations to prevent layout shifting in page
+  container.classList.add("promo-visible");
+  return true;
+}
+
+/**
+ * For every PB newtab loaded, a second is pre-rendered in the background.
+ * We need to guard against invalid impressions by checking visibility state.
+ * If visible, record. Otherwise, listen for visibility change and record later.
+ */
+function recordOnceVisible(message) {
+  const recordImpression = () => {
+    if (document.visibilityState === "visible") {
+      window.ASRouterMessage({
+        type: "IMPRESSION",
+        data: message,
+      });
+      // Similar telemetry, but for Nimbus experiments
+      window.PrivateBrowsingExposureTelemetry();
+      document.removeEventListener("visibilitychange", recordImpression);
+    }
+  };
+
+  if (document.visibilityState === "visible") {
+    window.ASRouterMessage({
+      type: "IMPRESSION",
+      data: message,
+    });
+    // Similar telemetry, but for Nimbus experiments
+    window.PrivateBrowsingExposureTelemetry();
+  } else {
+    document.addEventListener("visibilitychange", recordImpression);
+  }
+}
+
+// The PB newtab may be pre-rendered. Once the tab is visible, check to make sure the message wasn't blocked after the initial render. If it was, remove the promo.
+async function handlePromoOnPreload(message) {
+  async function removePromoIfBlocked() {
+    if (document.visibilityState === "visible") {
+      let blocked = await RPMSendQuery("IsPromoBlocked", message);
+      if (blocked) {
+        const container = document.querySelector(".promo");
+        container.remove();
+      }
+    }
+    document.removeEventListener("visibilitychange", removePromoIfBlocked);
+  }
+  // Only add the listener to pre-rendered tabs that aren't visible
+  if (document.visibilityState !== "visible") {
+    document.addEventListener("visibilitychange", removePromoIfBlocked);
+  }
 }
 
 async function setupFeatureConfig() {
-  // Setup experiment data
-  let config = {};
+  let config = null;
+  let message = null;
+
   try {
     config = window.PrivateBrowsingFeatureConfig();
   } catch (e) {}
 
-  await renderInfo(config);
-  await renderPromo(config);
+  if (!Object.keys(config).length) {
+    let hideDefault = window.PrivateBrowsingShouldHideDefault();
+    try {
+      let response = await window.ASRouterMessage({
+        type: "PBNEWTAB_MESSAGE_REQUEST",
+        data: { hideDefault: !!hideDefault },
+      });
+      message = response?.message;
+      config = message?.content;
+      config.messageId = message?.id;
+    } catch (e) {}
+  }
 
+  await renderInfo(config);
+  let hasRendered = await renderPromo(config);
+  if (hasRendered && message) {
+    recordOnceVisible(message);
+    await handlePromoOnPreload(message);
+  }
   // For tests
   document.documentElement.setAttribute("PrivateBrowsingRenderComplete", true);
 }
 
 document.addEventListener("DOMContentLoaded", function() {
-  setupFeatureConfig();
-
   if (!RPMIsWindowPrivate()) {
     document.documentElement.classList.remove("private");
     document.documentElement.classList.add("normal");
@@ -192,6 +287,10 @@ document.addEventListener("DOMContentLoaded", function() {
       });
     return;
   }
+
+  // We don't do this setup until now, because we don't want to record any impressions until we're
+  // sure we're actually running a private window, not just about:privatebrowsing in a normal window.
+  setupFeatureConfig();
 
   // Set up the private search banner.
   const privateSearchBanner = document.getElementById("search-banner");
@@ -240,30 +339,38 @@ document.addEventListener("DOMContentLoaded", function() {
 
   // Setup the search hand-off box.
   let btn = document.getElementById("search-handoff-button");
-  RPMSendQuery("ShouldShowSearch", {}).then(engineName => {
-    let input = document.querySelector(".fake-textbox");
-    if (engineName) {
-      document.l10n.setAttributes(btn, "about-private-browsing-handoff", {
-        engine: engineName,
-      });
-      document.l10n.setAttributes(
-        input,
-        "about-private-browsing-handoff-text",
-        {
+  RPMSendQuery("ShouldShowSearch", {}).then(
+    ([engineName, shouldHandOffToSearchMode]) => {
+      let input = document.querySelector(".fake-textbox");
+      if (shouldHandOffToSearchMode) {
+        document.l10n.setAttributes(btn, "about-private-browsing-search-btn");
+        document.l10n.setAttributes(
+          input,
+          "about-private-browsing-search-placeholder"
+        );
+      } else if (engineName) {
+        document.l10n.setAttributes(btn, "about-private-browsing-handoff", {
           engine: engineName,
-        }
-      );
-    } else {
-      document.l10n.setAttributes(
-        btn,
-        "about-private-browsing-handoff-no-engine"
-      );
-      document.l10n.setAttributes(
-        input,
-        "about-private-browsing-handoff-text-no-engine"
-      );
+        });
+        document.l10n.setAttributes(
+          input,
+          "about-private-browsing-handoff-text",
+          {
+            engine: engineName,
+          }
+        );
+      } else {
+        document.l10n.setAttributes(
+          btn,
+          "about-private-browsing-handoff-no-engine"
+        );
+        document.l10n.setAttributes(
+          input,
+          "about-private-browsing-handoff-text-no-engine"
+        );
+      }
     }
-  });
+  );
 
   let editable = document.getElementById("fake-editable");
   let DISABLE_SEARCH_TOPIC = "DisableSearch";

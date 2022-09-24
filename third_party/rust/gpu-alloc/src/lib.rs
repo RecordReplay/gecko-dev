@@ -6,7 +6,7 @@
 //!
 //! # Usage
 //!
-//! Start with fetching `DeviceProperties` from `gfx-alloc-<backend>` crate for the backend of choice.\
+//! Start with fetching `DeviceProperties` from `gpu-alloc-<backend>` crate for the backend of choice.\
 //! Then create `GpuAllocator` instance and use it for all device memory allocations.\
 //! `GpuAllocator` will take care for all necessary bookkeeping like memory object count limit,
 //! heap budget and memory mapping.
@@ -15,7 +15,7 @@
 //!
 //! Backend supporting crates should not depend on this crate.\
 //! Instead they should depend on `gpu-alloc-types` which is much more stable,
-//! allowing to upgrade `gpu-alloc` version without `gfx-alloc-<backend>` upgrade.
+//! allowing to upgrade `gpu-alloc` version without `gpu-alloc-<backend>` upgrade.
 //!
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -58,15 +58,11 @@ mod block;
 mod buddy;
 mod config;
 mod error;
+mod freelist;
 mod heap;
-mod linear;
 mod slab;
 mod usage;
 mod util;
-
-// experimental sub-allocator for large transient allocations.
-#[cfg(feature = "freelist")]
-mod freelist;
 
 pub use {
     self::{allocator::*, block::MemoryBlock, config::*, error::*, usage::*},

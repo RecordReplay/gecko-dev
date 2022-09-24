@@ -11,11 +11,11 @@
 
 #include "mozilla/dom/MouseEvent.h"
 #include "mozilla/dom/PointerEventBinding.h"
+#include "mozilla/Maybe.h"
 
 class nsPresContext;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 struct PointerEventInit;
 
@@ -61,13 +61,15 @@ class PointerEvent : public MouseEvent {
 
   nsTArray<RefPtr<PointerEvent>> mCoalescedEvents;
   nsTArray<RefPtr<PointerEvent>> mPredictedEvents;
+
+  // This is used to store the pointerType assigned from constructor.
+  Maybe<nsString> mPointerType;
 };
 
 void ConvertPointerTypeToString(uint16_t aPointerTypeSrc,
                                 nsAString& aPointerTypeDest);
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 already_AddRefed<mozilla::dom::PointerEvent> NS_NewDOMPointerEvent(
     mozilla::dom::EventTarget* aOwner, nsPresContext* aPresContext,

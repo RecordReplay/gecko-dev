@@ -6,9 +6,10 @@
 
 const EXPORTED_SYMBOLS = ["StyleSheetEditor"];
 
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { require, loader } = ChromeUtils.import(
+  "resource://devtools/shared/loader/Loader.jsm"
+);
 const Editor = require("devtools/client/shared/sourceeditor/editor");
-const promise = require("promise");
 const {
   shortSource,
   prettifyCSS,
@@ -16,9 +17,21 @@ const {
 const { throttle } = require("devtools/shared/throttle");
 const Services = require("Services");
 const EventEmitter = require("devtools/shared/event-emitter");
-const { FileUtils } = require("resource://gre/modules/FileUtils.jsm");
-const { NetUtil } = require("resource://gre/modules/NetUtil.jsm");
-const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm");
+
+loader.lazyRequireGetter(
+  this,
+  "FileUtils",
+  "resource://gre/modules/FileUtils.jsm",
+  true
+);
+loader.lazyRequireGetter(
+  this,
+  "NetUtil",
+  "resource://gre/modules/NetUtil.jsm",
+  true
+);
+loader.lazyRequireGetter(this, "OS", "resource://gre/modules/osfile.jsm", true);
+
 const {
   getString,
   showFilePicker,
@@ -26,6 +39,7 @@ const {
 
 const LOAD_ERROR = "error-load";
 const SAVE_ERROR = "error-save";
+const SELECTOR_HIGHLIGHTER_TYPE = "SelectorHighlighter";
 
 // max update frequency in ms (avoid potential typing lag and/or flicker)
 // @see StyleEditor.updateStylesheet
@@ -66,22 +80,11 @@ const STYLE_SHEET_UPDATE_CAUSED_BY_STYLE_EDITOR = "styleeditor";
  *         The STYLESHEET resource which is received from resource command.
  * @param {DOMWindow}  win
  *        panel window for style editor
- * @param {Walker} walker
- *        Optional walker used for selectors autocompletion
- * @param {CustomHighlighterFront} highlighter
- *        Optional highlighter front for the SelectorHighligher used to
- *        highlight selectors
  * @param {Number} styleSheetFriendlyIndex
  *        Optional Integer representing the index of the current stylesheet
  *        among all stylesheets of its type (inline or user-created)
  */
-function StyleSheetEditor(
-  resource,
-  win,
-  walker,
-  highlighter,
-  styleSheetFriendlyIndex
-) {
+function StyleSheetEditor(resource, win, styleSheetFriendlyIndex) {
   EventEmitter.decorate(this);
 
   this._resource = resource;
@@ -89,16 +92,8 @@ function StyleSheetEditor(
   this.sourceEditor = null;
   this._window = win;
   this._isNew = this.styleSheet.isNew;
-  this.walker = walker;
-  this.highlighter = highlighter;
   this.styleSheetFriendlyIndex = styleSheetFriendlyIndex;
 
-  // True when we've called update() on the style sheet.
-  // @backward-compat { version 86 } Starting 86, onStyleApplied will be able to know
-  // if the style was applied because of a change in the StyleEditor (via the `event.cause`
-  // property inside the resource update). `this._isUpdating` can be dropped when 86
-  // reaches release.
-  this._isUpdating = false;
   // True when we've just set the editor text based on a style-applied
   // event from the StyleSheetActor.
   this._justSetText = false;
@@ -203,13 +198,15 @@ StyleSheetEditor.prototype = {
     }
 
     if (!this.styleSheet.href) {
+      // TODO(bug 176993): Probably a different index + string for
+      // constructable stylesheets, they can't be meaningfully edited right now
+      // because we don't have their original text.
       const index = this.styleSheetFriendlyIndex + 1 || 0;
       return getString("inlineStyleSheet", index);
     }
 
     if (!this._friendlyName) {
-      const sheetURI = this.styleSheet.href;
-      this._friendlyName = shortSource({ href: sheetURI });
+      this._friendlyName = shortSource(this.styleSheet);
       try {
         this._friendlyName = decodeURI(this._friendlyName);
       } catch (ex) {
@@ -347,6 +344,9 @@ StyleSheetEditor.prototype = {
    * @param {Number} column
    */
   setCursor(line, column) {
+    line = line || 0;
+    column = column || 0;
+
     const position = this.translateCursorPosition(line, column);
     this.sourceEditor.setCursor({ line: position.line, ch: position.column });
   },
@@ -399,13 +399,8 @@ StyleSheetEditor.prototype = {
     const updateIsFromSyleSheetEditor =
       update?.event?.cause === STYLE_SHEET_UPDATE_CAUSED_BY_STYLE_EDITOR;
 
-    // @backward-compat { version 86 } this._isUpdating can be removed.
-    // See property declaration for more information.
-    if (this._isUpdating || updateIsFromSyleSheetEditor) {
-      // We just applied an edit in the editor, so we can drop this
-      // notification.
-      // @backward-compat { version 86 } this._isUpdating can be removed.
-      this._isUpdating = false;
+    if (updateIsFromSyleSheetEditor) {
+      // We just applied an edit in the editor, so we can drop this notification.
       this.emit("style-applied");
       return;
     }
@@ -456,9 +451,9 @@ StyleSheetEditor.prototype = {
    * @return {Promise}
    *         Promise that will resolve when the style editor is loaded.
    */
-  load: function(inputElement, cssProperties) {
+  load: async function(inputElement, cssProperties) {
     if (this._isDestroyed) {
-      return promise.reject(
+      throw new Error(
         "Won't load source editor as the style sheet has " +
           "already been removed from Style Editor."
       );
@@ -466,6 +461,7 @@ StyleSheetEditor.prototype = {
 
     this._inputElement = inputElement;
 
+    const walker = await this.getWalker();
     const config = {
       value: this._state.text,
       lineNumbers: true,
@@ -475,49 +471,45 @@ StyleSheetEditor.prototype = {
       extraKeys: this._getKeyBindings(),
       contextMenu: "sourceEditorContextMenu",
       autocomplete: Services.prefs.getBoolPref(AUTOCOMPLETION_PREF),
-      autocompleteOpts: { walker: this.walker, cssProperties },
+      autocompleteOpts: { walker, cssProperties },
       cssProperties,
     };
     const sourceEditor = (this._sourceEditor = new Editor(config));
 
     sourceEditor.on("dirty-change", this.onPropertyChange);
 
-    return sourceEditor.appendTo(inputElement).then(() => {
-      sourceEditor.on("saveRequested", this.saveToFile);
+    await sourceEditor.appendTo(inputElement);
 
-      if (!this.styleSheet.isOriginalSource) {
-        sourceEditor.on("change", this.updateStyleSheet);
-      }
+    sourceEditor.on("saveRequested", this.saveToFile);
 
-      this.sourceEditor = sourceEditor;
+    if (!this.styleSheet.isOriginalSource) {
+      sourceEditor.on("change", this.updateStyleSheet);
+    }
 
-      if (this._focusOnSourceEditorReady) {
-        this._focusOnSourceEditorReady = false;
-        sourceEditor.focus();
-      }
+    this.sourceEditor = sourceEditor;
 
-      sourceEditor.setSelection(
-        this._state.selection.start,
-        this._state.selection.end
+    if (this._focusOnSourceEditorReady) {
+      this._focusOnSourceEditorReady = false;
+      sourceEditor.focus();
+    }
+
+    sourceEditor.setSelection(
+      this._state.selection.start,
+      this._state.selection.end
+    );
+
+    const highlighter = await this.getHighlighter();
+    if (highlighter && walker && sourceEditor.container?.contentWindow) {
+      sourceEditor.container.contentWindow.addEventListener(
+        "mousemove",
+        this._onMouseMove
       );
+    }
 
-      if (
-        this.highlighter &&
-        this.walker &&
-        sourceEditor.container &&
-        sourceEditor.container.contentWindow
-      ) {
-        sourceEditor.container.contentWindow.addEventListener(
-          "mousemove",
-          this._onMouseMove
-        );
-      }
+    // Add the commands controller for the source-editor.
+    sourceEditor.insertCommandsController();
 
-      // Add the commands controller for the source-editor.
-      sourceEditor.insertCommandsController();
-
-      this.emit("source-editor-load");
-    });
+    this.emit("source-editor-load");
   },
 
   /**
@@ -553,14 +545,22 @@ StyleSheetEditor.prototype = {
 
   /**
    * Event handler for when the editor is shown.
+   *
+   * @param {Object} options
+   * @param {String} options.reason: Indicates why the editor is shown
    */
-  onShow: function() {
+  onShow: function(options = {}) {
     if (this.sourceEditor) {
       // CodeMirror needs refresh to restore scroll position after hiding and
       // showing the editor.
       this.sourceEditor.refresh();
     }
-    this.focus();
+
+    // We don't want to focus the editor if it was shown because of the list being filtered,
+    // as the user might still be typing in the filter input.
+    if (options.reason !== "filter-auto") {
+      this.focus();
+    }
   },
 
   /**
@@ -610,9 +610,6 @@ StyleSheetEditor.prototype = {
       this._state.text = this.sourceEditor.getText();
     }
 
-    // @backward-compat { version 86 } See property declaration for more information.
-    this._isUpdating = true;
-
     try {
       const styleSheetsFront = await this._getStyleSheetsFront();
       await styleSheetsFront.update(
@@ -635,7 +632,11 @@ StyleSheetEditor.prototype = {
    * and reseting the delay everytime.
    */
   _onMouseMove: function(e) {
-    this.highlighter.hide();
+    // As we only want to hide an existing highlighter, we can use this.highlighter directly
+    // (and not this.getHighlighter).
+    if (this.highlighter) {
+      this.highlighter.hide();
+    }
 
     if (this.mouseMoveTimeout) {
       this._window.clearTimeout(this.mouseMoveTimeout);
@@ -661,8 +662,12 @@ StyleSheetEditor.prototype = {
       return;
     }
 
-    const node = await this.walker.getStyleSheetOwnerNode(this.resourceId);
-    await this.highlighter.show(node, {
+    const onGetHighlighter = this.getHighlighter();
+    const walker = await this.getWalker();
+    const node = await walker.getStyleSheetOwnerNode(this.resourceId);
+
+    const highlighter = await onGetHighlighter;
+    await highlighter.show(node, {
       selector: info.selector,
       hideInfoBar: true,
       showOnly: "border",
@@ -670,6 +675,50 @@ StyleSheetEditor.prototype = {
     });
 
     this.emit("node-highlighted");
+  },
+
+  /**
+   * Returns the walker front associated with this._resource target.
+   *
+   * @returns {Promise<WalkerFront>}
+   */
+  async getWalker() {
+    if (this.walker) {
+      return this.walker;
+    }
+
+    const { targetFront } = this._resource;
+    const inspectorFront = await targetFront.getFront("inspector");
+    this.walker = inspectorFront.walker;
+    return this.walker;
+  },
+
+  /**
+   * Returns or creates the selector highlighter associated with this._resource target.
+   *
+   * @returns {CustomHighlighterFront|null}
+   */
+  async getHighlighter() {
+    if (this.highlighter) {
+      return this.highlighter;
+    }
+
+    const walker = await this.getWalker();
+    try {
+      this.highlighter = await walker.parentFront.getHighlighterByType(
+        SELECTOR_HIGHLIGHTER_TYPE
+      );
+      return this.highlighter;
+    } catch (e) {
+      // The selectorHighlighter can't always be instantiated, for example
+      // it doesn't work with XUL windows (until bug 1094959 gets fixed);
+      // or the selectorHighlighter doesn't exist on the backend.
+      console.warn(
+        "The selectorHighlighter couldn't be instantiated, " +
+          "elements matching hovered selectors will not be highlighted"
+      );
+    }
+    return null;
   },
 
   /**
@@ -823,9 +872,6 @@ StyleSheetEditor.prototype = {
 
       // Ensure we don't re-fetch the text from the original source
       // actor when we're notified that the style sheet changed.
-      // @backward-compat { version 86 } See property declaration for more information.
-      this._isUpdating = true;
-
       const styleSheetsFront = await this._getStyleSheetsFront();
 
       await styleSheetsFront.update(
@@ -844,20 +890,27 @@ StyleSheetEditor.prototype = {
    * @return {array} key binding objects for the source editor
    */
   _getKeyBindings: function() {
-    const bindings = {};
-    const keybind = Editor.accel(getString("saveStyleSheet.commandkey"));
+    const saveStyleSheetKeybind = Editor.accel(
+      getString("saveStyleSheet.commandkey")
+    );
+    const focusFilterInputKeybind = Editor.accel(
+      getString("focusFilterInput.commandkey")
+    );
 
-    bindings[keybind] = () => {
-      this.saveToFile(this.savedFile);
+    return {
+      Esc: false,
+      [saveStyleSheetKeybind]: () => {
+        this.saveToFile(this.savedFile);
+      },
+      ["Shift-" + saveStyleSheetKeybind]: () => {
+        this.saveToFile();
+      },
+      // We can't simply ignore this (with `false`, or returning `CodeMirror.Pass`), as the
+      // event isn't received by the event listener in StyleSheetUI.
+      [focusFilterInputKeybind]: () => {
+        this.emit("filter-input-keyboard-shortcut");
+      },
     };
-
-    bindings["Shift-" + keybind] = () => {
-      this.saveToFile();
-    };
-
-    bindings.Esc = false;
-
-    return bindings;
   },
 
   _getStyleSheetsFront() {
@@ -872,12 +925,7 @@ StyleSheetEditor.prototype = {
       this._sourceEditor.off("dirty-change", this.onPropertyChange);
       this._sourceEditor.off("saveRequested", this.saveToFile);
       this._sourceEditor.off("change", this.updateStyleSheet);
-      if (
-        this.highlighter &&
-        this.walker &&
-        this._sourceEditor.container &&
-        this._sourceEditor.container.contentWindow
-      ) {
+      if (this._sourceEditor.container?.contentWindow) {
         this._sourceEditor.container.contentWindow.removeEventListener(
           "mousemove",
           this._onMouseMove

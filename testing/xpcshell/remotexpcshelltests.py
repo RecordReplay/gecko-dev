@@ -57,18 +57,47 @@ class RemoteProcessMonitor(object):
     def kill(self):
         self.device.pkill(self.process_name, sig=9, attempts=1)
 
-    def launch_service(self, extra_args, env, selectedProcess):
+    def launch_service(self, extra_args, env, selectedProcess, test_name=None):
         if not self.device.process_exist(self.package):
             # Make sure the main app is running, this should help making the
             # tests get foreground priority scheduling.
             self.device.launch_activity(
                 self.package,
-                intent="org.mozilla.geckoview.test.XPCSHELL_TEST_MAIN",
+                intent="org.mozilla.geckoview.test_runner.XPCSHELL_TEST_MAIN",
                 activity_name="TestRunnerActivity",
                 e10s=True,
             )
+            # Newer Androids require that background services originate from
+            # active apps, so wait here until the test runner is the top
+            # activity.
+            retries = 20
+            top = self.device.get_top_activity(timeout=60)
+            while top != self.package and retries > 0:
+                self.log.info(
+                    "%s | Checking that %s is the top activity."
+                    % (test_name, self.package)
+                )
+                top = self.device.get_top_activity(timeout=60)
+                time.sleep(1)
+                retries -= 1
 
         self.process_name = self.package + (":xpcshell%d" % selectedProcess)
+
+        retries = 20
+        while retries > 0 and self.device.process_exist(self.process_name):
+            self.log.info(
+                "%s | %s | Killing left-over process %s"
+                % (test_name, self.pid, self.process_name)
+            )
+            self.kill()
+            time.sleep(1)
+            retries -= 1
+
+        if self.device.process_exist(self.process_name):
+            raise Exception(
+                "%s | %s | Could not kill left-over process" % (test_name, self.pid)
+            )
+
         self.device.launch_service(
             self.package,
             activity_name=("XpcshellTestRunnerService$i%d" % selectedProcess),
@@ -80,7 +109,7 @@ class RemoteProcessMonitor(object):
         )
         return self.pid
 
-    def wait(self, timeout, interval=0.1):
+    def wait(self, timeout, interval=0.1, test_name=None):
         timer = 0
         status = True
 
@@ -91,7 +120,8 @@ class RemoteProcessMonitor(object):
             time.sleep(interval)
         if not self.device.is_file(self.remoteLogFile):
             self.log.warning(
-                "Failed wait for remote log: %s missing?" % self.remoteLogFile
+                "%s | Failed wait for remote log: %s missing?"
+                % (test_name, self.remoteLogFile)
             )
 
         while self.device.process_exist(self.process_name):
@@ -100,7 +130,10 @@ class RemoteProcessMonitor(object):
             interval *= 1.5
             if timeout and timer > timeout:
                 status = False
-                self.log.info("Timing out...")
+                self.log.info(
+                    "remotexpcshelltests.py | %s | %s | Timing out"
+                    % (test_name, str(self.pid))
+                )
                 self.kill()
                 break
         return status
@@ -140,10 +173,12 @@ class RemoteXPCShellTestThread(xpcshell.XPCShellTestThread):
         self.device.mkdir(path, parents=True, timeout=timeout)
 
     def updateTestPrefsFile(self):
+        # The base method will either be no-op (and return the existing
+        # remote path), or return a path to a new local file.
         testPrefsFile = xpcshell.XPCShellTestThread.updateTestPrefsFile(self)
         if testPrefsFile == self.rootPrefsFile:
             # The pref file is the shared one, which has been already pushed on the
-            # devide, and so there is nothing more to do here.
+            # device, and so there is nothing more to do here.
             return self.rootPrefsFile
 
         # Push the per-test prefs file in the remote temp dir.
@@ -275,9 +310,11 @@ class RemoteXPCShellTestThread(xpcshell.XPCShellTestThread):
     def killTimeout(self, proc):
         self.kill(proc)
 
-    def launchProcess(self, cmd, stdout, stderr, env, cwd, timeout=None):
+    def launchProcess(
+        self, cmd, stdout, stderr, env, cwd, timeout=None, test_name=None
+    ):
         rpm = RemoteProcessMonitor(
-            "org.mozilla.geckoview.test",
+            "org.mozilla.geckoview.test_runner",
             self.device,
             self.log,
             self.remoteLogFile,
@@ -285,17 +322,29 @@ class RemoteXPCShellTestThread(xpcshell.XPCShellTestThread):
 
         startTime = datetime.datetime.now()
 
-        pid = rpm.launch_service(cmd[1:], self.env, self.selectedProcess)
+        try:
+            pid = rpm.launch_service(
+                cmd[1:], self.env, self.selectedProcess, test_name=test_name
+            )
+        except Exception as e:
+            self.log.info(
+                "remotexpcshelltests.py | Failed to start process: %s" % str(e)
+            )
+            self.shellReturnCode = 1
+            return ""
 
-        self.log.info("remotexpcshelltests.py | Launched Test App PID=%s" % str(pid))
+        self.log.info(
+            "remotexpcshelltests.py | %s | %s | Launched Test App"
+            % (test_name, str(pid))
+        )
 
-        if rpm.wait(timeout):
+        if rpm.wait(timeout, test_name=test_name):
             self.shellReturnCode = 0
         else:
             self.shellReturnCode = 1
         self.log.info(
-            "remotexpcshelltests.py | Application ran for: %s"
-            % str(datetime.datetime.now() - startTime)
+            "remotexpcshelltests.py | %s | %s | Application ran for: %s"
+            % (test_name, str(pid), str(datetime.datetime.now() - startTime))
         )
 
         try:
@@ -304,8 +353,10 @@ class RemoteXPCShellTestThread(xpcshell.XPCShellTestThread):
             raise
         except Exception as e:
             self.log.info(
-                "remotexpcshelltests.py | Could not read log file: %s" % str(e)
+                "remotexpcshelltests.py | %s | %s | Could not read log file: %s"
+                % (test_name, str(pid), str(e))
             )
+            self.shellReturnCode = 1
             return ""
 
     def checkForCrashes(self, dump_directory, symbols_path, test_name=None):
@@ -398,7 +449,7 @@ class XPCShellRemote(xpcshell.XPCShellTests, object):
         self.initDir(self.profileDir)
 
         # Make sure we get a fresh start
-        self.device.stop_application("org.mozilla.geckoview.test")
+        self.device.stop_application("org.mozilla.geckoview.test_runner")
 
         for i in range(options["threadCount"]):
             RemoteProcessMonitor.processStatus += [False]
@@ -427,6 +478,14 @@ class XPCShellRemote(xpcshell.XPCShellTests, object):
             self.setupModules()
         self.initDir(self.remoteMinidumpRootDir)
         self.initDir(self.remoteLogFolder)
+
+        eprefs = options.get("extraPrefs") or []
+        if options.get("disableFission"):
+            eprefs.append("fission.autostart=false")
+        else:
+            # should be by default, just in case
+            eprefs.append("fission.autostart=true")
+        options["extraPrefs"] = eprefs
 
         # data that needs to be passed to the RemoteXPCShellTestThread
         self.mobileArgs = {
@@ -498,7 +557,9 @@ class XPCShellRemote(xpcshell.XPCShellTests, object):
         remotePrefsFile = posixpath.join(self.remoteTestRoot, "user.js")
         self.device.push(self.prefsFile, remotePrefsFile)
         self.device.chmod(remotePrefsFile)
-        os.remove(self.prefsFile)
+        # os.remove(self.prefsFile) is not called despite having pushed the
+        # file to the device, because the local file is relied upon by the
+        # updateTestPrefsFile method
         self.prefsFile = remotePrefsFile
         return prefs
 
@@ -511,6 +572,7 @@ class XPCShellRemote(xpcshell.XPCShellTests, object):
         self.env["HOME"] = self.profileDir
         self.env["XPCSHELL_TEST_TEMP_DIR"] = self.remoteTmpDir
         self.env["MOZ_ANDROID_DATA_DIR"] = self.remoteBinDir
+        self.env["MOZ_IN_AUTOMATION"] = "1"
 
         # Guard against intermittent failures to retrieve abi property;
         # without an abi, xpcshell cannot find greprefs.js and crashes.

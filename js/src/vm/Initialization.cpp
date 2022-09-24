@@ -9,6 +9,9 @@
 #include "js/Initialization.h"
 
 #include "mozilla/Assertions.h"
+#if JS_HAS_INTL_API
+#  include "mozilla/intl/ICU4CLibrary.h"
+#endif
 #include "mozilla/TextUtils.h"
 
 #include "jstypes.h"
@@ -17,18 +20,13 @@
 #include "builtin/TestingFunctions.h"
 #include "ds/MemoryProtectionExceptionHandler.h"
 #include "gc/Statistics.h"
+#include "jit/Assembler.h"
 #include "jit/AtomicOperations.h"
-#include "jit/ExecutableAllocator.h"
 #include "jit/Ion.h"
 #include "jit/JitCommon.h"
+#include "jit/JitOptions.h"
+#include "jit/ProcessExecutableMemory.h"
 #include "js/Utility.h"
-
-#if JS_HAS_INTL_API
-#  include "unicode/putil.h"
-#  include "unicode/uclean.h"
-#  include "unicode/utypes.h"
-#endif  // JS_HAS_INTL_API
-
 #include "threading/ProtectedData.h"  // js::AutoNoteSingleThreadedRegion
 #include "util/Poison.h"
 #include "vm/ArrayBufferObject.h"
@@ -117,6 +115,7 @@ static void SetupCanonicalNaN() {
   } while (0)
 
 extern "C" void install_rust_panic_hook();
+extern "C" void install_rust_oom_hook();
 
 void (*js::ExecutionProgressHook)(unsigned, const char*, unsigned, unsigned);
 bool js::gRecordDataBuffers;
@@ -148,8 +147,10 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
 
   libraryInitState = InitState::Initializing;
 
-#ifndef NO_RUST_PANIC_HOOK
+#ifdef JS_STANDALONE
+  // The rust hooks are initialized by Gecko on non-standalone builds.
   install_rust_panic_hook();
+  install_rust_oom_hook();
 #endif
 
   PRMJ_NowInit();
@@ -192,8 +193,6 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
 
   js::coverage::InitLCov();
 
-  RETURN_IF_FAIL(js::jit::InitProcessExecutableMemory());
-
   RETURN_IF_FAIL(js::MemoryProtectionExceptionHandler::install());
 
   RETURN_IF_FAIL(js::jit::InitializeJit());
@@ -204,20 +203,9 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
   RETURN_IF_FAIL(js::vtune::Initialize());
 #endif
 
-  RETURN_IF_FAIL(js::jit::AtomicOperations::Initialize());
-
 #if JS_HAS_INTL_API
-#  if !MOZ_SYSTEM_ICU
-  // Explicitly set the data directory to its default value, but only when we're
-  // sure that we use our in-tree ICU copy. See bug 1527879 and ICU bug
-  // report <https://unicode-org.atlassian.net/browse/ICU-20491>.
-  u_setDataDirectory("");
-#  endif
-
-  UErrorCode err = U_ZERO_ERROR;
-  u_init(&err);
-  if (U_FAILURE(err)) {
-    return "u_init() failed";
+  if (mozilla::intl::ICU4CLibrary::Initialize().isErr()) {
+    return "ICU4CLibrary::Initialize() failed";
   }
 #endif  // JS_HAS_INTL_API
 
@@ -272,6 +260,11 @@ JS_PUBLIC_API const char* JS::detail::InitWithFailureDiagnostic(
   }
 #endif
 
+#ifndef JS_CODEGEN_NONE
+  // This is forced by InitializeJit.
+  MOZ_ASSERT(js::jit::CPUFlagsHaveBeenComputed());
+#endif
+
   libraryInitState = InitState::Running;
   return nullptr;
 }
@@ -287,26 +280,26 @@ JS_PUBLIC_API bool JS::InitSelfHostedCode(JSContext* cx, SelfHostedCache cache,
 
   JSRuntime* rt = cx->runtime();
 
-  if (!rt->initializeAtoms(cx)) {
-    return false;
-  }
-
   if (!rt->initializeParserAtoms(cx)) {
     return false;
   }
 
-#ifndef JS_CODEGEN_NONE
-  if (!rt->createJitRuntime(cx)) {
-    return false;
-  }
-#endif
-
-  if (!rt->initSelfHosting(cx, cache, writer)) {
+  if (!rt->initSelfHostingStencil(cx, cache, writer)) {
     return false;
   }
 
-  if (!rt->parentRuntime && !rt->initMainAtomsTables(cx)) {
+  if (!rt->initializeAtoms(cx)) {
     return false;
+  }
+
+  if (!rt->initSelfHostingFromStencil(cx)) {
+    return false;
+  }
+
+  if (js::jit::HasJitBackend()) {
+    if (!rt->createJitRuntime(cx)) {
+      return false;
+    }
   }
 
   return true;
@@ -334,8 +327,6 @@ JS_PUBLIC_API void JS_ShutDown(void) {
   js::jit::SimulatorProcess::destroy();
 #endif
 
-  js::jit::AtomicOperations::ShutDown();
-
 #ifdef JS_TRACE_LOGGING
   js::DestroyTraceLoggerThreadState();
   js::DestroyTraceLoggerGraphState();
@@ -357,7 +348,7 @@ JS_PUBLIC_API void JS_ShutDown(void) {
   PRMJ_NowShutdown();
 
 #if JS_HAS_INTL_API
-  u_cleanup();
+  mozilla::intl::ICU4CLibrary::Cleanup();
 #endif  // JS_HAS_INTL_API
 
 #ifdef MOZ_VTUNE
@@ -366,10 +357,9 @@ JS_PUBLIC_API void JS_ShutDown(void) {
 
   js::FinishDateTimeState();
 
-  if (!JSRuntime::hasLiveRuntimes()) {
-    js::jit::ReleaseProcessExecutableMemory();
-    MOZ_ASSERT(!js::LiveMappedBufferCount());
-  }
+  js::jit::ShutdownJit();
+
+  MOZ_ASSERT_IF(!JSRuntime::hasLiveRuntimes(), !js::LiveMappedBufferCount());
 
   js::ShutDownMallocAllocator();
 
@@ -384,11 +374,29 @@ JS_PUBLIC_API bool JS_SetICUMemoryFunctions(JS_ICUAllocFn allocFn,
              "operation (including JS_Init)");
 
 #if JS_HAS_INTL_API
-  UErrorCode status = U_ZERO_ERROR;
-  u_setMemoryFunctions(/* context = */ nullptr, allocFn, reallocFn, freeFn,
-                       &status);
-  return U_SUCCESS(status);
+  return mozilla::intl::ICU4CLibrary::SetMemoryFunctions(
+             {allocFn, reallocFn, freeFn})
+      .isOk();
 #else
   return true;
 #endif
+}
+
+#if defined(ENABLE_WASM_SIMD) && \
+    (defined(JS_CODEGEN_X64) || defined(JS_CODEGEN_X86))
+void JS::SetAVXEnabled(bool enabled) {
+  if (enabled) {
+    js::jit::CPUInfo::SetAVXEnabled();
+  } else {
+    js::jit::CPUInfo::SetAVXDisabled();
+  }
+}
+#endif
+
+JS_PUBLIC_API void JS::DisableJitBackend() {
+  MOZ_ASSERT(libraryInitState == InitState::Uninitialized,
+             "DisableJitBackend must be called before JS_Init");
+  MOZ_ASSERT(!JSRuntime::hasLiveRuntimes(),
+             "DisableJitBackend must be called before creating a JSContext");
+  js::jit::JitOptions.disableJitBackend = true;
 }

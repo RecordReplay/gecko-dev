@@ -64,6 +64,9 @@
 // variable is intentionally named something scary to help prevent someone
 // from thinking it is a useful performance optimization they should enable.
 #define PREF_DISABLE_DURABILITY "places.database.disableDurability"
+
+#define PREF_PREVIEWS_ENABLED "places.previews.enabled"
+
 #define ENV_ALLOW_CORRUPTION \
   "ALLOW_PLACES_DATABASE_TO_LOSE_DATA_AND_BECOME_CORRUPT"
 
@@ -546,7 +549,9 @@ nsresult Database::EnsureConnection() {
     // Open the database file.  If it does not exist a new one will be created.
     // Use an unshared connection, it will consume more memory but avoid shared
     // cache contentions across threads.
-    rv = storage->OpenUnsharedDatabase(databaseFile, getter_AddRefs(mMainConn));
+    rv = storage->OpenUnsharedDatabase(databaseFile,
+                                       mozIStorageService::CONNECTION_DEFAULT,
+                                       getter_AddRefs(mMainConn));
     if (NS_SUCCEEDED(rv) && !databaseExisted) {
       mDatabaseStatus = nsINavHistoryService::DATABASE_STATUS_CREATE;
     } else if (rv == NS_ERROR_FILE_CORRUPTED) {
@@ -666,7 +671,9 @@ nsresult Database::EnsureFaviconsDatabaseAttached(
 
   // Open the database file, this will also create it.
   nsCOMPtr<mozIStorageConnection> conn;
-  rv = aStorage->OpenUnsharedDatabase(databaseFile, getter_AddRefs(conn));
+  rv = aStorage->OpenUnsharedDatabase(databaseFile,
+                                      mozIStorageService::CONNECTION_DEFAULT,
+                                      getter_AddRefs(conn));
   NS_ENSURE_SUCCESS(rv, rv);
 
   {
@@ -767,8 +774,7 @@ nsresult Database::BackupAndReplaceDatabaseFile(
     rv = corruptFile->Append(corruptFilename);
     NS_ENSURE_SUCCESS(rv, rv);
     rv = corruptFile->Remove(false);
-    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_TARGET_DOES_NOT_EXIST &&
-        rv != NS_ERROR_FILE_NOT_FOUND) {
+    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND) {
       return rv;
     }
 
@@ -816,8 +822,7 @@ nsresult Database::BackupAndReplaceDatabaseFile(
     // Remove the broken database.
     stage = stage_removing;
     rv = databaseFile->Remove(false);
-    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_TARGET_DOES_NOT_EXIST &&
-        rv != NS_ERROR_FILE_NOT_FOUND) {
+    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND) {
       return rv;
     }
 
@@ -839,8 +844,9 @@ nsresult Database::BackupAndReplaceDatabaseFile(
       // Use an unshared connection, it will consume more memory but avoid
       // shared cache contentions across threads.
       stage = stage_reopening;
-      rv = aStorage->OpenUnsharedDatabase(databaseFile,
-                                          getter_AddRefs(mMainConn));
+      rv = aStorage->OpenUnsharedDatabase(
+          databaseFile, mozIStorageService::CONNECTION_DEFAULT,
+          getter_AddRefs(mMainConn));
       NS_ENSURE_SUCCESS(rv, rv);
     }
 
@@ -874,8 +880,7 @@ nsresult Database::TryToCloneTablesFromCorruptDatabase(
   NS_ENSURE_SUCCESS(rv, rv);
   // Ensure there's no previous recover file.
   rv = recoverFile->Remove(false);
-  if (NS_FAILED(rv) && rv != NS_ERROR_FILE_TARGET_DOES_NOT_EXIST &&
-      rv != NS_ERROR_FILE_NOT_FOUND) {
+  if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND) {
     return rv;
   }
 
@@ -887,7 +892,9 @@ nsresult Database::TryToCloneTablesFromCorruptDatabase(
     Unused << recoverFile->Remove(false);
   });
 
-  rv = aStorage->OpenUnsharedDatabase(recoverFile, getter_AddRefs(conn));
+  rv = aStorage->OpenUnsharedDatabase(recoverFile,
+                                      mozIStorageService::CONNECTION_DEFAULT,
+                                      getter_AddRefs(conn));
   NS_ENSURE_SUCCESS(rv, rv);
   rv = AttachDatabase(conn, NS_ConvertUTF16toUTF8(path), "corrupt"_ns);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -1044,8 +1051,7 @@ nsresult Database::SetupDatabaseConnection(
     rv = iconsFile->Append(DATABASE_FAVICONS_FILENAME);
     NS_ENSURE_SUCCESS(rv, rv);
     rv = iconsFile->Remove(false);
-    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_TARGET_DOES_NOT_EXIST &&
-        rv != NS_ERROR_FILE_NOT_FOUND) {
+    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND) {
       return rv;
     }
     rv = EnsureFaviconsDatabaseAttached(aStorage);
@@ -1196,6 +1202,72 @@ nsresult Database::InitSchema(bool* aDatabaseMigrated) {
 
       // Firefox 91 uses schema version 57
 
+      if (currentSchemaVersion < 58) {
+        rv = MigrateV58Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 92 uses schema version 58
+
+      if (currentSchemaVersion < 59) {
+        rv = MigrateV59Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 94 uses schema version 59
+
+      if (currentSchemaVersion < 60) {
+        rv = MigrateV60Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 96 uses schema version 60
+
+      if (currentSchemaVersion < 61) {
+        rv = MigrateV61Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      if (currentSchemaVersion < 62) {
+        rv = MigrateV62Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 97 uses schema version 62
+
+      if (currentSchemaVersion < 63) {
+        rv = MigrateV63Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 98 uses schema version 63
+
+      if (currentSchemaVersion < 64) {
+        rv = MigrateV64Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 99 uses schema version 64
+
+      if (currentSchemaVersion < 65) {
+        rv = MigrateV65Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      if (currentSchemaVersion < 66) {
+        rv = MigrateV66Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 100 uses schema version 66
+
+      if (currentSchemaVersion < 67) {
+        rv = MigrateV67Up();
+        NS_ENSURE_SUCCESS(rv, rv);
+      }
+
+      // Firefox 103 uses schema version 67
+
       // Schema Upgrades must add migration code here.
       // >>> IMPORTANT! <<<
       // NEVER MIX UP SYNC AND ASYNC EXECUTION IN MIGRATORS, YOU MAY LOCK THE
@@ -1291,9 +1363,47 @@ nsresult Database::InitSchema(bool* aDatabaseMigrated) {
     rv = mMainConn->ExecuteSimpleSQL(
         CREATE_IDX_MOZ_PLACES_METADATA_PLACECREATED);
     NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_METADATA_REFERRER);
+    NS_ENSURE_SUCCESS(rv, rv);
 
     // moz_places_metadata_search_queries
     rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SEARCH_QUERIES);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_places_metadata_snapshots
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SNAPSHOTS);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_IDX_MOZ_PLACES_METADATA_SNAPSHOTS_PINNNED);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_places_metadata_snapshots_extra
+    rv =
+        mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SNAPSHOTS_EXTRA);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_IDX_MOZ_PLACES_METADATA_SNAPSHOTS_EXTRA_TYPE);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_places_metadata_snapshots_groups
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_MOZ_PLACES_METADATA_SNAPSHOTS_GROUPS);
+    NS_ENSURE_SUCCESS(rv, rv);
+    // moz_places_metadata_groups_to_snapshots
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_MOZ_PLACES_METADATA_GROUPS_TO_SNAPSHOTS);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_session_metadata
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_SESSION_METADATA);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_session_to_places
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_SESSION_TO_PLACES);
+    NS_ENSURE_SUCCESS(rv, rv);
+
+    // moz_previews_tombstones
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PREVIEWS_TOMBSTONES);
     NS_ENSURE_SUCCESS(rv, rv);
 
     // The bookmarks roots get initialized in CheckRoots().
@@ -1538,6 +1648,8 @@ nsresult Database::InitFunctions() {
   NS_ENSURE_SUCCESS(rv, rv);
   rv = InvalidateDaysOfHistoryFunction::create(mMainConn);
   NS_ENSURE_SUCCESS(rv, rv);
+  rv = MD5HexFunction::create(mMainConn);
+  NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
 }
@@ -1564,8 +1676,16 @@ nsresult Database::InitTempEntities() {
   rv = mMainConn->ExecuteSimpleSQL(
       CREATE_UPDATEORIGINSDELETE_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
-  rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERDELETE_TRIGGER);
-  NS_ENSURE_SUCCESS(rv, rv);
+
+  if (Preferences::GetBool(PREF_PREVIEWS_ENABLED, false)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_PLACES_AFTERDELETE_WPREVIEWS_TRIGGER);
+    NS_ENSURE_SUCCESS(rv, rv);
+  } else {
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_AFTERDELETE_TRIGGER);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
   rv = mMainConn->ExecuteSimpleSQL(CREATE_UPDATEORIGINSUPDATE_TEMP);
   NS_ENSURE_SUCCESS(rv, rv);
   rv = mMainConn->ExecuteSimpleSQL(
@@ -1600,8 +1720,9 @@ nsresult Database::InitTempEntities() {
       mMainConn->ExecuteSimpleSQL(CREATE_BOOKMARKS_DELETED_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  rv = mMainConn->ExecuteSimpleSQL(
-      CREATE_PLACES_METADATA_DELETED_AFTERDELETE_TRIGGER);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_METADATA_AFTERINSERT_TRIGGER);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_PLACES_METADATA_AFTERDELETE_TRIGGER);
   NS_ENSURE_SUCCESS(rv, rv);
 
   return NS_OK;
@@ -2234,6 +2355,194 @@ nsresult Database::MigrateV57Up() {
   return NS_OK;
 }
 
+nsresult Database::MigrateV58Up() {
+  // Add metadata snapshots tables if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT id FROM moz_places_metadata_snapshots"_ns, getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SNAPSHOTS);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv =
+        mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PLACES_METADATA_SNAPSHOTS_EXTRA);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_MOZ_PLACES_METADATA_SNAPSHOTS_GROUPS);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        CREATE_MOZ_PLACES_METADATA_GROUPS_TO_SNAPSHOTS);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
+nsresult Database::MigrateV59Up() {
+  // Add metadata snapshots tables if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT id FROM moz_session_metadata"_ns, getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_SESSION_METADATA);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_SESSION_TO_PLACES);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
+nsresult Database::MigrateV60Up() {
+  // Add the site_name column to moz_places.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT site_name FROM moz_places"_ns, getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places ADD COLUMN site_name TEXT"_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
+nsresult Database::MigrateV61Up() {
+  // Add previews tombstones table if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT hash FROM moz_previews_tombstones"_ns, getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(CREATE_MOZ_PREVIEWS_TOMBSTONES);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
+nsresult Database::MigrateV62Up() {
+  // Add builder columns if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT builder FROM moz_places_metadata_snapshots_groups"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots_groups "
+        "ADD COLUMN builder TEXT NOT NULL "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots_groups "
+        "ADD COLUMN builder_data TEXT "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  // Add indexes if necessary.
+  rv = mMainConn->ExecuteSimpleSQL(CREATE_IDX_MOZ_PLACES_METADATA_REFERRER);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(
+      CREATE_IDX_MOZ_PLACES_METADATA_SNAPSHOTS_PINNNED);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(
+      CREATE_IDX_MOZ_PLACES_METADATA_SNAPSHOTS_EXTRA_TYPE);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
+nsresult Database::MigrateV63Up() {
+  // Add title column to snapshots if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT title FROM moz_places_metadata_snapshots"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots "
+        "ADD COLUMN title TEXT "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+
+nsresult Database::MigrateV64Up() {
+  // Add hidden column to snapshot groups if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT hidden FROM moz_places_metadata_snapshots_groups"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots_groups "
+        "ADD COLUMN hidden INTEGER DEFAULT 0 NOT NULL "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+
+nsresult Database::MigrateV65Up() {
+  // Add hidden column to snapshot groups to snapshots table if necessary.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT hidden FROM moz_places_metadata_groups_to_snapshots"_ns,
+      getter_AddRefs(stmt));
+  if (NS_FAILED(rv)) {
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_groups_to_snapshots "
+        "ADD COLUMN hidden INTEGER DEFAULT 0 NOT NULL "_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  return NS_OK;
+}
+
+nsresult Database::MigrateV66Up() {
+  // Let the title column in snapshots groups be NULL.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->CreateStatement(
+      "SELECT 1 "
+      "FROM sqlite_master "
+      "WHERE name = 'moz_places_metadata_snapshots_groups' AND "
+      "INSTR(sql, 'title TEXT NOT NULL') > 0"_ns,
+      getter_AddRefs(stmt));
+  NS_ENSURE_SUCCESS(rv, rv);
+  bool hasMore = false;
+  if (NS_SUCCEEDED(stmt->ExecuteStep(&hasMore)) && hasMore) {
+    // Migrate non-empty titles to the builder_data object, drop the column
+    // and recreate a nullable one.
+    rv = mMainConn->ExecuteSimpleSQL(
+        "UPDATE moz_places_metadata_snapshots_groups "
+        "SET builder_data = json_set(IFNULL(builder_data, json_object()), "
+        "'$.title', title) "
+        "WHERE title <> '' AND builder_data->>'title' IS NULL"_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots_groups DROP COLUMN title"_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = mMainConn->ExecuteSimpleSQL(
+        "ALTER TABLE moz_places_metadata_snapshots_groups "
+        "ADD COLUMN title TEXT"_ns);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+  return NS_OK;
+}
+
+nsresult Database::MigrateV67Up() {
+  // Align all input field in moz_inputhistory to lowercase. If there are
+  // multiple records that expresses the same input, use maximum use_count from
+  // them to carry on the experience of the past.
+  nsCOMPtr<mozIStorageStatement> stmt;
+  nsresult rv = mMainConn->ExecuteSimpleSQL(
+      "INSERT INTO moz_inputhistory "
+      "SELECT place_id, LOWER(input), use_count FROM moz_inputhistory "
+      "  WHERE LOWER(input) <> input "
+      "ON CONFLICT DO "
+      "  UPDATE SET use_count = MAX(use_count, EXCLUDED.use_count)"_ns);
+  NS_ENSURE_SUCCESS(rv, rv);
+  rv = mMainConn->ExecuteSimpleSQL(
+      "DELETE FROM moz_inputhistory WHERE LOWER(input) <> input"_ns);
+  NS_ENSURE_SUCCESS(rv, rv);
+
+  return NS_OK;
+}
+
 nsresult Database::ConvertOldStyleQuery(nsCString& aURL) {
   AutoTArray<QueryKeyValuePair, 8> tokens;
   nsresult rv = TokenizeQueryString(aURL, &tokens);
@@ -2528,10 +2837,11 @@ Database::Observe(nsISupports* aSubject, const char* aTopic,
 
     // Spin the events loop until the clients are done.
     // Note, this is just for tests, specifically test_clearHistory_shutdown.js
-    SpinEventLoopUntil([&]() {
-      return mClientsShutdown->State() ==
-             PlacesShutdownBlocker::States::RECEIVED_DONE;
-    });
+    SpinEventLoopUntil("places:Database::Observe(SIMULATE_PLACES_SHUTDOWN)"_ns,
+                       [&]() {
+                         return mClientsShutdown->State() ==
+                                PlacesShutdownBlocker::States::RECEIVED_DONE;
+                       });
 
     {
       nsCOMPtr<nsIAsyncShutdownClient> shutdownPhase =

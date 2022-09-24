@@ -8,7 +8,6 @@
 #define frontend_ParseNode_h
 
 #include "mozilla/Assertions.h"
-#include "mozilla/Span.h"  // mozilla::Span
 
 #include <iterator>
 #include <stddef.h>
@@ -21,11 +20,10 @@
 #include "frontend/ParserAtom.h"          // TaggedParserAtomIndex
 #include "frontend/Stencil.h"             // BigIntStencil
 #include "frontend/Token.h"
-#include "js/RootingAPI.h"
-#include "vm/BytecodeUtil.h"
+#include "js/TypeDecls.h"
+#include "vm/Opcodes.h"
 #include "vm/Scope.h"
 #include "vm/ScopeKind.h"
-#include "vm/StringType.h"
 
 // [SMDOC] ParseNode tree lifetime information
 //
@@ -45,10 +43,6 @@
 
 struct JSContext;
 
-namespace JS {
-class BigInt;
-}
-
 namespace js {
 
 class GenericPrinter;
@@ -59,7 +53,6 @@ namespace frontend {
 
 class ParserBase;
 class ParseContext;
-class ParserAtomsTable;
 struct ExtensibleCompilationStencil;
 class ParserSharedBase;
 class FullParseHandler;
@@ -112,6 +105,8 @@ class FunctionBox;
   F(NullExpr, NullLiteral)                                       \
   F(RawUndefinedExpr, RawUndefinedLiteral)                       \
   F(ThisExpr, UnaryNode)                                         \
+  IF_RECORD_TUPLE(F(RecordExpr, ListNode))                       \
+  IF_RECORD_TUPLE(F(TupleExpr, ListNode))                        \
   F(Function, FunctionNode)                                      \
   F(Module, ModuleNode)                                          \
   F(IfStmt, TernaryNode)                                         \
@@ -147,6 +142,9 @@ class FunctionBox;
   F(ImportSpecList, ListNode)                                    \
   F(ImportSpec, BinaryNode)                                      \
   F(ImportNamespaceSpec, UnaryNode)                              \
+  F(ImportAssertionList, ListNode)                               \
+  F(ImportAssertion, BinaryNode)                                 \
+  F(ImportModuleRequest, BinaryNode)                             \
   F(ExportStmt, UnaryNode)                                       \
   F(ExportFromStmt, BinaryNode)                                  \
   F(ExportDefaultStmt, BinaryNode)                               \
@@ -168,13 +166,14 @@ class FunctionBox;
   F(ClassField, ClassField)                                      \
   F(ClassMemberList, ListNode)                                   \
   F(ClassNames, ClassNames)                                      \
-  F(NewTargetExpr, BinaryNode)                                   \
+  F(NewTargetExpr, NewTargetNode)                                \
   F(PosHolder, NullaryNode)                                      \
   F(SuperBase, UnaryNode)                                        \
   F(SuperCallExpr, BinaryNode)                                   \
   F(SetThis, BinaryNode)                                         \
   F(ImportMetaExpr, BinaryNode)                                  \
   F(CallImportExpr, BinaryNode)                                  \
+  F(CallImportSpec, BinaryNode)                                  \
   F(InitExpr, BinaryNode)                                        \
                                                                  \
   /* Unary operators. */                                         \
@@ -620,6 +619,7 @@ inline bool IsTypeofKind(ParseNodeKind kind) {
   MACRO(PrivateMemberAccess, PrivateMemberAccessType, asPrivateMemberAccess) \
   MACRO(OptionalPrivateMemberAccess, OptionalPrivateMemberAccessType,        \
         asOptionalPrivateMemberAccess)                                       \
+  MACRO(NewTargetNode, NewTargetNodeType, asNewTargetNode)                   \
   MACRO(SwitchStatement, SwitchStatementType, asSwitchStatement)             \
                                                                              \
   MACRO(FunctionNode, FunctionNodeType, asFunction)                          \
@@ -1274,13 +1274,17 @@ class ListNode : public ParseNode {
 
   void setHasNonConstInitializer() {
     MOZ_ASSERT(isKind(ParseNodeKind::ArrayExpr) ||
-               isKind(ParseNodeKind::ObjectExpr));
+               isKind(ParseNodeKind::ObjectExpr) ||
+               IF_RECORD_TUPLE(isKind(ParseNodeKind::TupleExpr), false) ||
+               IF_RECORD_TUPLE(isKind(ParseNodeKind::RecordExpr), false));
     xflags |= hasNonConstInitializerBit;
   }
 
   void unsetHasNonConstInitializer() {
     MOZ_ASSERT(isKind(ParseNodeKind::ArrayExpr) ||
-               isKind(ParseNodeKind::ObjectExpr));
+               isKind(ParseNodeKind::ObjectExpr) ||
+               IF_RECORD_TUPLE(isKind(ParseNodeKind::TupleExpr), false) ||
+               IF_RECORD_TUPLE(isKind(ParseNodeKind::RecordExpr), false));
     xflags &= ~hasNonConstInitializerBit;
   }
 
@@ -2117,6 +2121,24 @@ class OptionalPrivateMemberAccess : public PrivateMemberAccessBase {
   static bool test(const ParseNode& node) {
     return node.isKind(ParseNodeKind::OptionalPrivateMemberExpr);
   }
+};
+
+class NewTargetNode : public TernaryNode {
+ public:
+  NewTargetNode(NullaryNode* newHolder, NullaryNode* targetHolder,
+                NameNode* newTargetName)
+      : TernaryNode(ParseNodeKind::NewTargetExpr, newHolder, targetHolder,
+                    newTargetName) {}
+
+  static bool test(const ParseNode& node) {
+    bool match = node.isKind(ParseNodeKind::NewTargetExpr);
+    MOZ_ASSERT_IF(match, node.is<TernaryNode>());
+    return match;
+  }
+
+  auto* newHolder() const { return &kid1()->as<NullaryNode>(); }
+  auto* targetHolder() const { return &kid2()->as<NullaryNode>(); }
+  auto* newTargetName() const { return &kid3()->as<NameNode>(); }
 };
 
 /*

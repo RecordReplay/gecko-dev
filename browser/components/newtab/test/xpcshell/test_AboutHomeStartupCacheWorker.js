@@ -55,7 +55,7 @@ const NEWTAB_RENDER_URL =
  * a dynamic layout, and then have that layout point to a local feed rather
  * than one from the Pocket CDN.
  */
-add_task(async function setup() {
+add_setup(async function() {
   do_get_profile();
   // The SearchService is also needed in order to construct the initial state,
   // which means that the AddonManager needs to be available.
@@ -141,6 +141,14 @@ add_task(async function setup() {
  * and script makes sense.
  */
 add_task(async function test_cache_worker() {
+  Services.prefs.setBoolPref(
+    "security.allow_parent_unrestricted_js_loads",
+    true
+  );
+  registerCleanupFunction(() => {
+    Services.prefs.clearUserPref("security.allow_parent_unrestricted_js_loads");
+  });
+
   let state = AboutNewTab.activityStream.store.getState();
 
   let cacheWorker = new BasePromiseWorker(CACHE_WORKER_URL);

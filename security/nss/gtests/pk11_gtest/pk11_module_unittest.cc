@@ -43,10 +43,10 @@ TEST_F(Pkcs11ModuleTest, LoadUnload) {
 TEST_F(Pkcs11ModuleTest, ListSlots) {
   ScopedPK11SlotList slots(
       PK11_GetAllTokens(CKM_INVALID_MECHANISM, PR_FALSE, PR_FALSE, nullptr));
-  EXPECT_NE(nullptr, slots);
+  ASSERT_NE(nullptr, slots);
 
   PK11SlotListElement* element = PK11_GetFirstSafe(slots.get());
-  EXPECT_NE(nullptr, element);
+  ASSERT_NE(nullptr, element);
 
   // These tokens are always present.
   const std::vector<std::string> kSlotsWithToken = {
@@ -72,13 +72,54 @@ TEST_F(Pkcs11ModuleTest, PublicCertificatesToken) {
   const std::string kPublicCertificatesToken = "Test PKCS11 Public Certs Token";
 
   ScopedPK11SlotInfo slot1(PK11_FindSlotByName(kRegularToken.c_str()));
-  EXPECT_NE(nullptr, slot1);
+  ASSERT_NE(nullptr, slot1);
   EXPECT_FALSE(PK11_IsFriendly(slot1.get()));
 
   ScopedPK11SlotInfo slot2(
       PK11_FindSlotByName(kPublicCertificatesToken.c_str()));
-  EXPECT_NE(nullptr, slot2);
+  ASSERT_NE(nullptr, slot2);
   EXPECT_TRUE(PK11_IsFriendly(slot2.get()));
 }
+
+#if defined(_WIN32)
+#include <windows.h>
+
+class Pkcs11NonAsciiTest : public ::testing::Test {
+  WCHAR nonAsciiModuleName[MAX_PATH];
+
+ public:
+  Pkcs11NonAsciiTest() {}
+
+  void SetUp() override {
+    WCHAR originalModuleName[MAX_PATH];
+    LPWSTR filePart;
+    DWORD count = SearchPathW(NULL, L"pkcs11testmodule.dll", NULL, MAX_PATH,
+                              nonAsciiModuleName, &filePart);
+    ASSERT_TRUE(count);
+    wcscpy(originalModuleName, nonAsciiModuleName);
+    wcscpy(filePart, L"pkcs11testmodule\u2665.dll");
+    BOOL result = CopyFileW(originalModuleName, nonAsciiModuleName, TRUE);
+    ASSERT_TRUE(result);
+    ASSERT_EQ(SECSuccess,
+              SECMOD_AddNewModule("Pkcs11NonAsciiTest", DLL_PREFIX
+                                  "pkcs11testmodule\xE2\x99\xA5." DLL_SUFFIX,
+                                  0, 0))
+        << PORT_ErrorToName(PORT_GetError());
+  }
+
+  void TearDown() override {
+    int type;
+    ASSERT_EQ(SECSuccess, SECMOD_DeleteModule("Pkcs11NonAsciiTest", &type));
+    ASSERT_EQ(SECMOD_EXTERNAL, type);
+    BOOL result = DeleteFileW(nonAsciiModuleName);
+    ASSERT_TRUE(result);
+  }
+};
+
+TEST_F(Pkcs11NonAsciiTest, LoadUnload) {
+  ScopedSECMODModule module(SECMOD_FindModule("Pkcs11NonAsciiTest"));
+  EXPECT_NE(nullptr, module);
+}
+#endif  // defined(_WIN32)
 
 }  // namespace nss_test

@@ -50,6 +50,11 @@ class DatabaseFileManager final
                                 const nsACString& aOrigin,
                                 uint32_t aTelemetryId);
 
+  template <typename KnownDirEntryOp, typename UnknownDirEntryOp>
+  static Result<Ok, nsresult> TraverseFiles(
+      nsIFile& aDirectory, KnownDirEntryOp&& aKnownDirEntryOp,
+      UnknownDirEntryOp&& aUnknownDirEntryOp);
+
   static Result<quota::FileUsageType, nsresult> GetUsage(nsIFile* aDirectory);
 
   DatabaseFileManager(PersistenceType aPersistenceType,
@@ -82,7 +87,8 @@ class DatabaseFileManager final
 
   // XXX When getting rid of FileHelper, this method should be removed/made
   // private.
-  [[nodiscard]] nsresult SyncDeleteFile(nsIFile& aFile, nsIFile& aJournalFile);
+  [[nodiscard]] nsresult SyncDeleteFile(nsIFile& aFile,
+                                        nsIFile& aJournalFile) const;
 
   [[nodiscard]] nsresult AsyncDeleteFile(int64_t aFileId);
 

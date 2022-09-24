@@ -27,8 +27,9 @@
 #include "js/CharacterEncoding.h"
 #include "js/experimental/TypedData.h"  // JS_GetArrayBufferViewType, JS_GetArrayBufferViewData, JS_GetTypedArrayLength, JS_IsTypedArrayObject
 #include "js/MemoryFunctions.h"
-#include "js/Object.h"  // JS::GetClass
-#include "js/String.h"  // JS::StringHasLatin1Chars
+#include "js/Object.h"              // JS::GetClass
+#include "js/PropertyAndElement.h"  // JS_DefineElement, JS_GetElement
+#include "js/String.h"              // JS::StringHasLatin1Chars
 
 #include "mozilla/dom/BindingUtils.h"
 #include "mozilla/dom/DOMException.h"
@@ -53,11 +54,8 @@ using namespace JS;
 
 // static
 bool XPCConvert::GetISupportsFromJSObject(JSObject* obj, nsISupports** iface) {
-  const JSClass* jsclass = JS::GetClass(obj);
-  MOZ_ASSERT(jsclass, "obj has no class");
-  if (jsclass && (jsclass->flags & JSCLASS_HAS_PRIVATE) &&
-      (jsclass->flags & JSCLASS_PRIVATE_IS_NSISUPPORTS)) {
-    *iface = (nsISupports*)xpc_GetJSPrivate(obj);
+  if (JS::GetClass(obj)->slot0IsISupports()) {
+    *iface = JS::GetObjectISupports<nsISupports>(obj);
     return true;
   }
   *iface = UnwrapDOMObjectToISupports(obj);
@@ -1302,9 +1300,10 @@ nsresult XPCConvert::JSValToXPCException(JSContext* cx, MutableHandleValue s,
       nsCOMPtr<nsIComponentManager> cm;
       if (NS_FAILED(NS_GetComponentManager(getter_AddRefs(cm))) || !cm ||
           NS_FAILED(cm->CreateInstanceByContractID(
-              NS_SUPPORTS_DOUBLE_CONTRACTID, nullptr,
-              NS_GET_IID(nsISupportsDouble), getter_AddRefs(data))))
+              NS_SUPPORTS_DOUBLE_CONTRACTID, NS_GET_IID(nsISupportsDouble),
+              getter_AddRefs(data)))) {
         return NS_ERROR_FAILURE;
+      }
       data->SetData(number);
       rv = ConstructException(NS_ERROR_XPC_JS_THREW_NUMBER, nullptr, ifaceName,
                               methodName, data, exceptn, cx, s.address());

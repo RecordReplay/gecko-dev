@@ -5,21 +5,40 @@
 from __future__ import print_function, absolute_import
 
 import sys
+
+from pathlib import Path
+from typing import Union
 from unittest.mock import Mock
+
+from mach.site import MozSiteMetadata, SitePackagesSource
 
 
 class NoopTelemetry(object):
     def __init__(self, failed_glean_import):
         self._failed_glean_import = failed_glean_import
 
-    def metrics(self, metrics_path):
+    def metrics(self, metrics_path: Union[str, Path]):
         return Mock()
 
     def submit(self, is_bootstrap):
         if self._failed_glean_import and not is_bootstrap:
+            active_site = MozSiteMetadata.from_runtime()
+            if active_site.mach_site_packages_source == SitePackagesSource.SYSTEM:
+                hint = (
+                    "Mach is looking for glean in the system packages. This can be "
+                    "resolved by installing it there, or by allowing Mach to run "
+                    "without using the system Python packages."
+                )
+            elif active_site.mach_site_packages_source == SitePackagesSource.NONE:
+                hint = (
+                    "This is because Mach is currently configured without a source "
+                    "for native Python packages."
+                )
+            else:
+                hint = "You may need to run |mach bootstrap|."
+
             print(
-                "Glean could not be found, so telemetry will not be reported. "
-                "You may need to run |mach bootstrap|.",
+                f"Glean could not be found, so telemetry will not be reported. {hint}",
                 file=sys.stderr,
             )
 
@@ -43,7 +62,7 @@ class GleanTelemetry(object):
     ):
         self._metrics_cache = {}
 
-    def metrics(self, metrics_path):
+    def metrics(self, metrics_path: Union[str, Path]):
         if metrics_path not in self._metrics_cache:
             from glean import load_metrics
 

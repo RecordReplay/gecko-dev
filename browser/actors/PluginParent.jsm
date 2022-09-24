@@ -92,7 +92,7 @@ const PluginManager = {
     }
 
     let { pluginDumpID } = report;
-    CrashSubmit.submit(pluginDumpID, {
+    CrashSubmit.submit(pluginDumpID, CrashSubmit.SUBMITTED_FROM_CRASH_TAB, {
       recordSubmission: true,
       extraExtraKeyVals: keyVals,
     });
@@ -189,10 +189,12 @@ class PluginParent extends JSWindowActorParent {
       [report.pluginName]
     );
     notification = notificationBox.appendNotification(
-      messageString,
       "plugin-crashed",
-      iconURL,
-      priority,
+      {
+        label: messageString,
+        image: iconURL,
+        priority,
+      },
       buttons
     );
 

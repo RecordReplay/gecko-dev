@@ -88,6 +88,7 @@ class nsSocketTransportService final : public nsPISocketTransportService,
                                        public nsIThreadObserver,
                                        public nsIRunnable,
                                        public nsIObserver,
+                                       public nsINamed,
                                        public nsIDirectTaskDispatcher {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
@@ -98,6 +99,7 @@ class nsSocketTransportService final : public nsPISocketTransportService,
   NS_DECL_NSITHREADOBSERVER
   NS_DECL_NSIRUNNABLE
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSINAMED
   NS_DECL_NSIDIRECTTASKDISPATCHER
 
   static const uint32_t SOCKET_LIMIT_MIN = 50U;
@@ -123,8 +125,6 @@ class nsSocketTransportService final : public nsPISocketTransportService,
 
   bool IsTelemetryEnabledAndNotSleepPhase();
   PRIntervalTime MaxTimeForPrClosePref() { return mMaxTimeForPrClosePref; }
-
-  void SetNotTrustedMitmDetected() { mNotTrustedMitmDetected = true; }
 
   // According the preference value of `network.socket.forcePort` this method
   // possibly remaps the port number passed as the arg.
@@ -160,7 +160,7 @@ class nsSocketTransportService final : public nsPISocketTransportService,
   Atomic<bool> mInitialized{false};
   // indicates whether we are currently in the process of shutting down
   Atomic<bool> mShuttingDown{false};
-  Mutex mLock{"nsSocketTransportService::mLock", /* aOrdered */ true};
+  Mutex mLock MOZ_UNANNOTATED{"nsSocketTransportService::mLock", /* aOrdered */ true};
   // Variables in the next section protected by mLock
 
   // mThread and mDirectTaskDispatcher are only ever modified on the main
@@ -321,6 +321,7 @@ class nsSocketTransportService final : public nsPISocketTransportService,
 #endif
   bool mProbedMaxCount{false};
 
+  // Report socket status to about:networking
   void AnalyzeConnection(nsTArray<SocketInfo>* data, SocketContext* context,
                          bool aActive);
 
@@ -340,8 +341,6 @@ class nsSocketTransportService final : public nsPISocketTransportService,
 #endif
 
   void TryRepairPollableEvent();
-
-  bool mNotTrustedMitmDetected{false};
 
   CopyableTArray<nsCOMPtr<nsISTSShutdownObserver>> mShutdownObservers;
 };

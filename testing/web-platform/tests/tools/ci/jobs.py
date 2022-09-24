@@ -1,3 +1,5 @@
+# mypy: allow-untyped-defs
+
 import argparse
 import os
 import re
@@ -30,14 +32,12 @@ job_path_map = {
     "resources_unittest": ["resources/", "tools/"],
     "tools_unittest": ["tools/"],
     "wptrunner_unittest": ["tools/"],
-    "build_css": ["css/"],
     "update_built": ["update-built-tests\\.sh",
                      "conformance-checkers/",
                      "css/css-ui/",
                      "html/",
                      "infrastructure/",
-                     "mimesniff/",
-                     "WebIDL"],
+                     "mimesniff/"],
     "wpt_integration": ["tools/"],
     "wptrunner_infrastructure": ["infrastructure/",
                                  "tools/",
@@ -55,7 +55,7 @@ def _path_norm(path):
     return path
 
 
-class Ruleset(object):
+class Ruleset:
     def __init__(self, rules):
         self.include = []
         self.exclude = []

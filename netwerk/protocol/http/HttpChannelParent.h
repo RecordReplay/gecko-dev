@@ -19,7 +19,6 @@
 #include "nsIRedirectResultListener.h"
 #include "nsHttpChannel.h"
 #include "mozilla/dom/ipc/IdType.h"
-#include "nsIDeprecationWarner.h"
 #include "nsIMultiPartChannel.h"
 
 class nsICacheEntry;
@@ -51,7 +50,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
                                 public PHttpChannelParent,
                                 public nsIParentRedirectingChannel,
                                 public nsIProgressEventSink,
-                                public nsIDeprecationWarner,
                                 public HttpChannelSecurityWarningReporter,
                                 public nsIAsyncVerifyRedirectReadyCallback,
                                 public nsIChannelEventSink,
@@ -67,7 +65,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   NS_DECL_NSIPARENTREDIRECTINGCHANNEL
   NS_DECL_NSIPROGRESSEVENTSINK
   NS_DECL_NSIINTERFACEREQUESTOR
-  NS_DECL_NSIDEPRECATIONWARNER
   NS_DECL_NSIASYNCVERIFYREDIRECTREADYCALLBACK
   NS_DECL_NSICHANNELEVENTSINK
   NS_DECL_NSIREDIRECTRESULTLISTENER
@@ -141,14 +138,14 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const Maybe<URIParams>& topWindowUri, const uint32_t& loadFlags,
       const RequestHeaderTuples& requestHeaders, const nsCString& requestMethod,
       const Maybe<IPCStream>& uploadStream, const bool& uploadStreamHasHeaders,
-      const int16_t& priority, const uint32_t& classOfService,
+      const int16_t& priority, const ClassOfService& classOfService,
       const uint8_t& redirectionLimit, const bool& allowSTS,
       const uint32_t& thirdPartyFlags, const bool& doResumeAt,
       const uint64_t& startPos, const nsCString& entityID,
       const bool& allowSpdy, const bool& allowHttp3, const bool& allowAltSvc,
-      const bool& beConservative, const uint32_t& tlsFlags,
-      const Maybe<LoadInfoArgs>& aLoadInfoArgs, const uint32_t& aCacheKey,
-      const uint64_t& aRequestContextID,
+      const bool& beConservative, const bool& bypassProxy,
+      const uint32_t& tlsFlags, const Maybe<LoadInfoArgs>& aLoadInfoArgs,
+      const uint32_t& aCacheKey, const uint64_t& aRequestContextID,
       const Maybe<CorsPreflightArgs>& aCorsPreflightArgs,
       const uint32_t& aInitialRwin, const bool& aBlockAuthPrompt,
       const bool& aAllowStaleCacheContent,
@@ -171,11 +168,12 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
   virtual mozilla::ipc::IPCResult RecvSetPriority(
       const int16_t& priority) override;
   virtual mozilla::ipc::IPCResult RecvSetClassOfService(
-      const uint32_t& cos) override;
+      const ClassOfService& cos) override;
   virtual mozilla::ipc::IPCResult RecvSuspend() override;
   virtual mozilla::ipc::IPCResult RecvResume() override;
   virtual mozilla::ipc::IPCResult RecvCancel(
-      const nsresult& status, const uint32_t& requestBlockingReason) override;
+      const nsresult& status, const uint32_t& requestBlockingReason,
+      const mozilla::Maybe<nsCString>& logString) override;
   virtual mozilla::ipc::IPCResult RecvRedirect2Verify(
       const nsresult& result, const RequestHeaderTuples& changedHeaders,
       const uint32_t& aSourceRequestBlockingReason,
@@ -191,8 +189,6 @@ class HttpChannelParent final : public nsIInterfaceRequestor,
       const OriginAttributes& originAttributes) override;
   virtual mozilla::ipc::IPCResult RecvBytesRead(const int32_t& aCount) override;
   virtual mozilla::ipc::IPCResult RecvOpenOriginalCacheInputStream() override;
-  virtual mozilla::ipc::IPCResult RecvOpenAltDataCacheInputStream(
-      const nsCString& aType) override;
   virtual void ActorDestroy(ActorDestroyReason why) override;
 
   friend class ParentChannelListener;

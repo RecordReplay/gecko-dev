@@ -6,30 +6,19 @@
 
 #include "jit/BaselineIC.h"
 
-#include "mozilla/Casting.h"
 #include "mozilla/DebugOnly.h"
-#include "mozilla/IntegerPrintfMacros.h"
 #include "mozilla/Sprintf.h"
-#include "mozilla/TemplateLib.h"
 
-#include "jsfriendapi.h"
-#include "jslibmath.h"
 #include "jstypes.h"
 
 #include "builtin/Eval.h"
-#include "gc/Policy.h"
 #include "jit/BaselineCacheIRCompiler.h"
-#include "jit/BaselineDebugModeOSR.h"
-#include "jit/BaselineJIT.h"
+#include "jit/CacheIRGenerator.h"
 #include "jit/CacheIRHealth.h"
-#include "jit/InlinableNatives.h"
 #include "jit/JitFrames.h"
-#include "jit/JitRealm.h"
 #include "jit/JitRuntime.h"
 #include "jit/JitSpewer.h"
-#include "jit/JitZone.h"
 #include "jit/Linker.h"
-#include "jit/Lowering.h"
 #ifdef JS_ION_PERF
 #  include "jit/PerfSpewer.h"
 #endif
@@ -38,7 +27,6 @@
 #include "jit/VMFunctions.h"
 #include "js/Conversions.h"
 #include "js/friend/ErrorMessages.h"  // JSMSG_*
-#include "js/GCVector.h"
 #include "vm/BytecodeIterator.h"
 #include "vm/BytecodeLocation.h"
 #include "vm/BytecodeUtil.h"
@@ -46,16 +34,11 @@
 #include "vm/JSFunction.h"
 #include "vm/JSScript.h"
 #include "vm/Opcodes.h"
-#include "vm/SelfHosting.h"
-#include "vm/TypedArrayObject.h"
 #ifdef MOZ_VTUNE
 #  include "vtune/VTuneWrapper.h"
 #endif
 
-#include "builtin/Boolean-inl.h"
-
 #include "jit/MacroAssembler-inl.h"
-#include "jit/shared/Lowering-shared-inl.h"
 #include "jit/SharedICHelpers-inl.h"
 #include "jit/VMFunctionList-inl.h"
 #include "vm/BytecodeIterator-inl.h"
@@ -63,7 +46,6 @@
 #include "vm/EnvironmentObject-inl.h"
 #include "vm/Interpreter-inl.h"
 #include "vm/JSScript-inl.h"
-#include "vm/StringObject-inl.h"
 
 using mozilla::DebugOnly;
 
@@ -128,6 +110,7 @@ class MOZ_RAII FallbackICCodeCompiler final {
 
 AllocatableGeneralRegisterSet BaselineICAvailableGeneralRegs(size_t numInputs) {
   AllocatableGeneralRegisterSet regs(GeneralRegisterSet::All());
+  MOZ_ASSERT(!regs.has(FramePointer));
 #if defined(JS_CODEGEN_ARM)
   MOZ_ASSERT(!regs.has(BaselineStackReg));
   MOZ_ASSERT(!regs.has(ICTailCallReg));
@@ -143,12 +126,7 @@ AllocatableGeneralRegisterSet BaselineICAvailableGeneralRegs(size_t numInputs) {
 #else
   MOZ_ASSERT(!regs.has(BaselineStackReg));
 #endif
-  regs.take(BaselineFrameReg);
   regs.take(ICStubReg);
-#ifdef JS_CODEGEN_X64
-  regs.take(ExtractTemp0);
-  regs.take(ExtractTemp1);
-#endif
 
   switch (numInputs) {
     case 0:
@@ -167,11 +145,16 @@ AllocatableGeneralRegisterSet BaselineICAvailableGeneralRegs(size_t numInputs) {
   return regs;
 }
 
+static jsbytecode* StubOffsetToPc(const ICFallbackStub* stub,
+                                  const JSScript* script) {
+  return script->offsetToPC(stub->pcOffset());
+}
+
 #ifdef JS_JITSPEW
 void FallbackICSpew(JSContext* cx, ICFallbackStub* stub, const char* fmt, ...) {
   if (JitSpewEnabled(JitSpew_BaselineICFallback)) {
     RootedScript script(cx, GetTopJitJSScript(cx));
-    jsbytecode* pc = stub->pc(script);
+    jsbytecode* pc = StubOffsetToPc(stub, script);
 
     char fmtbuf[100];
     va_list args;
@@ -308,8 +291,6 @@ class MOZ_STATIC_CLASS OpToFallbackKindTable {
     setKind(JSOp::Call, BaselineICFallbackKind::Call);
     setKind(JSOp::CallIgnoresRv, BaselineICFallbackKind::Call);
     setKind(JSOp::CallIter, BaselineICFallbackKind::Call);
-    setKind(JSOp::FunCall, BaselineICFallbackKind::Call);
-    setKind(JSOp::FunApply, BaselineICFallbackKind::Call);
     setKind(JSOp::Eval, BaselineICFallbackKind::Call);
     setKind(JSOp::StrictEval, BaselineICFallbackKind::Call);
 
@@ -448,15 +429,15 @@ static void TryAttachStub(const char* name, JSContext* cx, BaselineFrame* frame,
   if (stub->state().canAttachStub()) {
     RootedScript script(cx, frame->script());
     ICScript* icScript = frame->icScript();
-    jsbytecode* pc = stub->pc(script);
+    jsbytecode* pc = StubOffsetToPc(stub, script);
     bool attached = false;
     IRGenerator gen(cx, script, pc, stub->state(), std::forward<Args>(args)...);
     switch (gen.tryAttachStub()) {
       case AttachDecision::Attach: {
-        ICStub* newStub =
-            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
-                                      script, icScript, stub, &attached);
-        if (newStub) {
+        ICAttachResult result = AttachBaselineCacheIRStub(
+            cx, gen.writerRef(), gen.cacheKind(), script, icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          attached = true;
           JitSpew(JitSpew_BaselineIC, "  Attached %s CacheIR stub", name);
         }
       } break;
@@ -598,10 +579,10 @@ void FallbackICCodeCompiler::leaveStubFrame(MacroAssembler& masm,
 void FallbackICCodeCompiler::pushStubPayload(MacroAssembler& masm,
                                              Register scratch) {
   if (inStubFrame_) {
-    masm.loadPtr(Address(BaselineFrameReg, 0), scratch);
+    masm.loadPtr(Address(FramePointer, 0), scratch);
     masm.pushBaselineFramePtr(scratch, scratch);
   } else {
-    masm.pushBaselineFramePtr(BaselineFrameReg, scratch);
+    masm.pushBaselineFramePtr(FramePointer, scratch);
   }
 }
 
@@ -657,7 +638,7 @@ bool DoGetElemFallback(JSContext* cx, BaselineFrame* frame,
   FallbackICSpew(cx, stub, "GetElem");
 
 #ifdef DEBUG
-  jsbytecode* pc = stub->pc(frame->script());
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
   MOZ_ASSERT(JSOp(*pc) == JSOp::GetElem);
 #endif
 
@@ -678,19 +659,26 @@ bool DoGetElemSuperFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(frame->script());
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
 
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "GetElemSuper(%s)", CodeName(op));
 
   MOZ_ASSERT(op == JSOp::GetElemSuper);
 
+  // |lhs| is [[HomeObject]].[[Prototype]] which must be an Object or null.
+  MOZ_ASSERT(lhs.isObjectOrNull());
+
+  int lhsIndex = -1;
+  RootedObject lhsObj(
+      cx, ToObjectFromStackForPropertyAccess(cx, lhs, lhsIndex, rhs));
+  if (!lhsObj) {
+    return false;
+  }
+
   TryAttachStub<GetPropIRGenerator>("GetElemSuper", cx, frame, stub,
                                     CacheKind::GetElemSuper, lhs, rhs);
 
-  // |lhs| is [[HomeObject]].[[Prototype]] which must be Object
-  RootedObject lhsObj(cx, &lhs.toObject());
   return GetObjectElementOperation(cx, op, lhsObj, receiver, rhs, res);
 }
 
@@ -715,7 +703,7 @@ bool FallbackICCodeCompiler::emitGetElem(bool hasReceiver) {
     masm.pushValue(R1);  // Index
     masm.pushValue(Address(masm.getStackPointer(), sizeof(Value) * 5));  // Obj
     masm.push(ICStubReg);
-    masm.pushBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+    masm.pushBaselineFramePtr(FramePointer, R0.scratchReg());
 
     using Fn =
         bool (*)(JSContext*, BaselineFrame*, ICFallbackStub*, HandleValue,
@@ -732,7 +720,7 @@ bool FallbackICCodeCompiler::emitGetElem(bool hasReceiver) {
     masm.pushValue(R1);
     masm.pushValue(R0);
     masm.push(ICStubReg);
-    masm.pushBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+    masm.pushBaselineFramePtr(FramePointer, R0.scratchReg());
 
     using Fn = bool (*)(JSContext*, BaselineFrame*, ICFallbackStub*,
                         HandleValue, HandleValue, MutableHandleValue);
@@ -777,7 +765,7 @@ bool DoSetElemFallback(JSContext* cx, BaselineFrame* frame,
 
   RootedScript script(cx, frame->script());
   RootedScript outerScript(cx, script);
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "SetElem(%s)", CodeName(JSOp(*pc)));
 
@@ -794,25 +782,22 @@ bool DoSetElemFallback(JSContext* cx, BaselineFrame* frame,
 
   RootedShape oldShape(cx, obj->shape());
 
-  // We cannot attach a stub if the operation executed after the stub
-  // is attached may throw.
-  bool mayThrow = false;
-
   DeferType deferType = DeferType::None;
   bool attached = false;
 
   MaybeTransition(cx, frame, stub);
 
-  if (stub->state().canAttachStub() && !mayThrow) {
+  if (stub->state().canAttachStub()) {
     ICScript* icScript = frame->icScript();
     SetPropIRGenerator gen(cx, script, pc, CacheKind::SetElem, stub->state(),
                            objv, index, rhs);
     switch (gen.tryAttachStub()) {
       case AttachDecision::Attach: {
-        ICStub* newStub = AttachBaselineCacheIRStub(
-            cx, gen.writerRef(), gen.cacheKind(), frame->script(), icScript,
-            stub, &attached);
-        if (newStub) {
+        ICAttachResult result =
+            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
+                                      frame->script(), icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          attached = true;
           JitSpew(JitSpew_BaselineIC, "  Attached SetElem CacheIR stub");
         }
       } break;
@@ -845,12 +830,6 @@ bool DoSetElemFallback(JSContext* cx, BaselineFrame* frame,
     }
   }
 
-  // Don't try to attach stubs that wish to be hidden. We don't know how to
-  // have different enumerability in the stubs for the moment.
-  if (op == JSOp::InitHiddenElem) {
-    return true;
-  }
-
   // Overwrite the object on the stack (pushed for the decompiler) with the rhs.
   MOZ_ASSERT(stack[2] == objv);
   stack[2] = rhs;
@@ -875,10 +854,11 @@ bool DoSetElemFallback(JSContext* cx, BaselineFrame* frame,
     switch (decision) {
       case AttachDecision::Attach: {
         ICScript* icScript = frame->icScript();
-        ICStub* newStub = AttachBaselineCacheIRStub(
-            cx, gen.writerRef(), gen.cacheKind(), frame->script(), icScript,
-            stub, &attached);
-        if (newStub) {
+        ICAttachResult result =
+            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
+                                      frame->script(), icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          attached = true;
           JitSpew(JitSpew_BaselineIC, "  Attached SetElem CacheIR stub");
         }
       } break;
@@ -1032,8 +1012,7 @@ bool DoCheckPrivateFieldFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
 
   FallbackICSpew(cx, stub, "CheckPrivateField");
 
@@ -1081,7 +1060,7 @@ bool DoGetNameFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   mozilla::DebugOnly<JSOp> op = JSOp(*pc);
   FallbackICSpew(cx, stub, "GetName(%s)", CodeName(JSOp(*pc)));
 
@@ -1128,7 +1107,7 @@ bool DoBindNameFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  jsbytecode* pc = stub->pc(frame->script());
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
   mozilla::DebugOnly<JSOp> op = JSOp(*pc);
   FallbackICSpew(cx, stub, "BindName(%s)", CodeName(JSOp(*pc)));
 
@@ -1172,7 +1151,7 @@ bool DoGetIntrinsicFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   mozilla::DebugOnly<JSOp> op = JSOp(*pc);
   FallbackICSpew(cx, stub, "GetIntrinsic(%s)", CodeName(JSOp(*pc)));
 
@@ -1209,7 +1188,7 @@ bool DoGetPropFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "GetProp(%s)", CodeName(op));
 
@@ -1242,7 +1221,7 @@ bool DoGetPropSuperFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   FallbackICSpew(cx, stub, "GetPropSuper(%s)", CodeName(JSOp(*pc)));
 
   MOZ_ASSERT(JSOp(*pc) == JSOp::GetPropSuper);
@@ -1250,11 +1229,19 @@ bool DoGetPropSuperFallback(JSContext* cx, BaselineFrame* frame,
   RootedPropertyName name(cx, script->getName(pc));
   RootedValue idVal(cx, StringValue(name));
 
+  // |val| is [[HomeObject]].[[Prototype]] which must be an Object or null.
+  MOZ_ASSERT(val.isObjectOrNull());
+
+  int valIndex = -1;
+  RootedObject valObj(
+      cx, ToObjectFromStackForPropertyAccess(cx, val, valIndex, name));
+  if (!valObj) {
+    return false;
+  }
+
   TryAttachStub<GetPropIRGenerator>("GetPropSuper", cx, frame, stub,
                                     CacheKind::GetPropSuper, val, idVal);
 
-  // |val| is [[HomeObject]].[[Prototype]] which must be Object
-  RootedObject valObj(cx, &val.toObject());
   if (!GetProperty(cx, valObj, receiver, name, res)) {
     return false;
   }
@@ -1273,7 +1260,7 @@ bool FallbackICCodeCompiler::emitGetProp(bool hasReceiver) {
     masm.pushValue(R0);
     masm.pushValue(R1);
     masm.push(ICStubReg);
-    masm.pushBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+    masm.pushBaselineFramePtr(FramePointer, R0.scratchReg());
 
     using Fn = bool (*)(JSContext*, BaselineFrame*, ICFallbackStub*,
                         HandleValue, MutableHandleValue, MutableHandleValue);
@@ -1287,7 +1274,7 @@ bool FallbackICCodeCompiler::emitGetProp(bool hasReceiver) {
     // Push arguments.
     masm.pushValue(R0);
     masm.push(ICStubReg);
-    masm.pushBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+    masm.pushBaselineFramePtr(FramePointer, R0.scratchReg());
 
     using Fn = bool (*)(JSContext*, BaselineFrame*, ICFallbackStub*,
                         MutableHandleValue, MutableHandleValue);
@@ -1335,7 +1322,7 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "SetProp(%s)", CodeName(op));
 
@@ -1367,10 +1354,11 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
     switch (gen.tryAttachStub()) {
       case AttachDecision::Attach: {
         ICScript* icScript = frame->icScript();
-        ICStub* newStub = AttachBaselineCacheIRStub(
-            cx, gen.writerRef(), gen.cacheKind(), frame->script(), icScript,
-            stub, &attached);
-        if (newStub) {
+        ICAttachResult result =
+            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
+                                      frame->script(), icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          attached = true;
           JitSpew(JitSpew_BaselineIC, "  Attached SetProp CacheIR stub");
         }
       } break;
@@ -1388,7 +1376,7 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
 
   if (op == JSOp::InitProp || op == JSOp::InitLockedProp ||
       op == JSOp::InitHiddenProp) {
-    if (!InitPropertyOperation(cx, op, obj, name, rhs)) {
+    if (!InitPropertyOperation(cx, pc, obj, name, rhs)) {
       return false;
     }
   } else if (op == JSOp::SetName || op == JSOp::StrictSetName ||
@@ -1397,7 +1385,6 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
       return false;
     }
   } else if (op == JSOp::InitGLexical) {
-    RootedValue v(cx, rhs);
     ExtensibleLexicalEnvironmentObject* lexicalEnv;
     if (script->hasNonSyntacticScope()) {
       lexicalEnv = &NearestEnclosingExtensibleLexicalEnvironment(
@@ -1405,7 +1392,7 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
     } else {
       lexicalEnv = &cx->global()->lexicalEnvironment();
     }
-    InitGlobalLexicalOperation(cx, lexicalEnv, script, pc, v);
+    InitGlobalLexicalOperation(cx, lexicalEnv, script, pc, rhs);
   } else {
     MOZ_ASSERT(op == JSOp::SetProp || op == JSOp::StrictSetProp);
 
@@ -1441,10 +1428,11 @@ bool DoSetPropFallback(JSContext* cx, BaselineFrame* frame,
     switch (decision) {
       case AttachDecision::Attach: {
         ICScript* icScript = frame->icScript();
-        ICStub* newStub = AttachBaselineCacheIRStub(
-            cx, gen.writerRef(), gen.cacheKind(), frame->script(), icScript,
-            stub, &attached);
-        if (newStub) {
+        ICAttachResult result =
+            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
+                                      frame->script(), icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          attached = true;
           JitSpew(JitSpew_BaselineIC, "  Attached SetElem CacheIR stub");
         }
       } break;
@@ -1517,7 +1505,7 @@ bool DoCallFallback(JSContext* cx, BaselineFrame* frame, ICFallbackStub* stub,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "Call(%s)", CodeName(op));
 
@@ -1551,10 +1539,10 @@ bool DoCallFallback(JSContext* cx, BaselineFrame* frame, ICFallbackStub* stub,
         break;
       case AttachDecision::Attach: {
         ICScript* icScript = frame->icScript();
-        ICStub* newStub =
-            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
-                                      script, icScript, stub, &handled);
-        if (newStub) {
+        ICAttachResult result = AttachBaselineCacheIRStub(
+            cx, gen.writerRef(), gen.cacheKind(), script, icScript, stub);
+        if (result == ICAttachResult::Attached) {
+          handled = true;
           JitSpew(JitSpew_BaselineIC, "  Attached Call CacheIR stub");
         }
       } break;
@@ -1581,8 +1569,7 @@ bool DoCallFallback(JSContext* cx, BaselineFrame* frame, ICFallbackStub* stub,
     }
   } else {
     MOZ_ASSERT(op == JSOp::Call || op == JSOp::CallIgnoresRv ||
-               op == JSOp::CallIter || op == JSOp::FunCall ||
-               op == JSOp::FunApply || op == JSOp::Eval ||
+               op == JSOp::CallIter || op == JSOp::Eval ||
                op == JSOp::StrictEval);
     if (op == JSOp::CallIter && callee.isPrimitive()) {
       MOZ_ASSERT(argc == 0, "thisv must be on top of the stack");
@@ -1607,7 +1594,7 @@ bool DoSpreadCallFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
   JSOp op = JSOp(*pc);
   bool constructing = (op == JSOp::SpreadNew || op == JSOp::SpreadSuperCall);
   FallbackICSpew(cx, stub, "SpreadCall(%s)", CodeName(op));
@@ -1640,11 +1627,11 @@ bool DoSpreadCallFallback(JSContext* cx, BaselineFrame* frame,
         break;
       case AttachDecision::Attach: {
         ICScript* icScript = frame->icScript();
-        ICStub* newStub =
-            AttachBaselineCacheIRStub(cx, gen.writerRef(), gen.cacheKind(),
-                                      script, icScript, stub, &handled);
+        ICAttachResult result = AttachBaselineCacheIRStub(
+            cx, gen.writerRef(), gen.cacheKind(), script, icScript, stub);
 
-        if (newStub) {
+        if (result == ICAttachResult::Attached) {
+          handled = true;
           JitSpew(JitSpew_BaselineIC, "  Attached Spread Call CacheIR stub");
         }
       } break;
@@ -1718,30 +1705,30 @@ bool FallbackICCodeCompiler::emitCall(bool isSpread, bool isConstructing) {
     // Push a stub frame so that we can perform a non-tail call.
     enterStubFrame(masm, R1.scratchReg());
 
-    // Use BaselineFrameReg instead of BaselineStackReg, because
-    // BaselineFrameReg and BaselineStackReg hold the same value just after
+    // Use FramePointer instead of BaselineStackReg, because
+    // FramePointer and BaselineStackReg hold the same value just after
     // calling enterStubFrame.
 
     // newTarget
     uint32_t valueOffset = 0;
     if (isConstructing) {
-      masm.pushValue(Address(BaselineFrameReg, STUB_FRAME_SIZE));
+      masm.pushValue(Address(FramePointer, STUB_FRAME_SIZE));
       valueOffset++;
     }
 
     // array
-    masm.pushValue(Address(BaselineFrameReg,
-                           valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
+    masm.pushValue(
+        Address(FramePointer, valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
     valueOffset++;
 
     // this
-    masm.pushValue(Address(BaselineFrameReg,
-                           valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
+    masm.pushValue(
+        Address(FramePointer, valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
     valueOffset++;
 
     // callee
-    masm.pushValue(Address(BaselineFrameReg,
-                           valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
+    masm.pushValue(
+        Address(FramePointer, valueOffset * sizeof(Value) + STUB_FRAME_SIZE));
     valueOffset++;
 
     masm.push(masm.getStackPointer());
@@ -1891,13 +1878,7 @@ bool DoOptimizeSpreadCallFallback(JSContext* cx, BaselineFrame* frame,
   TryAttachStub<OptimizeSpreadCallIRGenerator>("OptimizeSpreadCall", cx, frame,
                                                stub, value);
 
-  bool optimized;
-  if (!OptimizeSpreadCall(cx, value, &optimized)) {
-    return false;
-  }
-
-  res.setBoolean(optimized);
-  return true;
+  return OptimizeSpreadCall(cx, value, res);
 }
 
 bool FallbackICCodeCompiler::emit_OptimizeSpreadCall() {
@@ -1930,7 +1911,7 @@ bool DoInstanceOfFallback(JSContext* cx, BaselineFrame* frame,
 
   RootedObject obj(cx, &rhs.toObject());
   bool cond = false;
-  if (!HasInstance(cx, obj, lhs, &cond)) {
+  if (!InstanceofOperator(cx, obj, lhs, &cond)) {
     return false;
   }
 
@@ -2065,8 +2046,7 @@ bool DoUnaryArithFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
   JSOp op = JSOp(*pc);
   FallbackICSpew(cx, stub, "UnaryArith(%s)", CodeName(op));
 
@@ -2150,8 +2130,7 @@ bool DoBinaryArithFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
   JSOp op = JSOp(*pc);
   FallbackICSpew(
       cx, stub, "CacheIRBinaryArith(%s,%d,%d)", CodeName(op),
@@ -2271,8 +2250,7 @@ bool DoCompareFallback(JSContext* cx, BaselineFrame* frame,
   stub->incrementEnteredCount();
   MaybeNotifyWarp(frame->outerScript(), stub);
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
   JSOp op = JSOp(*pc);
 
   FallbackICSpew(cx, stub, "Compare(%s)", CodeName(op));
@@ -2369,8 +2347,7 @@ bool DoNewArrayFallback(JSContext* cx, BaselineFrame* frame,
   MaybeNotifyWarp(frame->outerScript(), stub);
   FallbackICSpew(cx, stub, "NewArray");
 
-  RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, frame->script());
 
   uint32_t length = GET_UINT32(pc);
   MOZ_ASSERT(length <= INT32_MAX,
@@ -2393,7 +2370,7 @@ bool FallbackICCodeCompiler::emit_NewArray() {
   EmitRestoreTailCallReg(masm);
 
   masm.push(ICStubReg);  // stub.
-  masm.pushBaselineFramePtr(BaselineFrameReg, R0.scratchReg());
+  masm.pushBaselineFramePtr(FramePointer, R0.scratchReg());
 
   using Fn =
       bool (*)(JSContext*, BaselineFrame*, ICFallbackStub*, MutableHandleValue);
@@ -2410,7 +2387,7 @@ bool DoNewObjectFallback(JSContext* cx, BaselineFrame* frame,
   FallbackICSpew(cx, stub, "NewObject");
 
   RootedScript script(cx, frame->script());
-  jsbytecode* pc = stub->pc(script);
+  jsbytecode* pc = StubOffsetToPc(stub, script);
 
   RootedObject obj(cx, NewObjectOperation(cx, script, pc));
   if (!obj) {
@@ -2437,6 +2414,7 @@ bool FallbackICCodeCompiler::emit_NewObject() {
 
 bool JitRuntime::generateBaselineICFallbackCode(JSContext* cx) {
   StackMacroAssembler masm;
+  AutoCreatedBy acb(masm, "JitRuntime::generateBaselineICFallbackCode");
 
   BaselineICFallbackCode& fallbackCode = baselineICFallbackCode_.ref();
   FallbackICCodeCompiler compiler(cx, fallbackCode, masm);
@@ -2445,6 +2423,7 @@ bool JitRuntime::generateBaselineICFallbackCode(JSContext* cx) {
 
 #define EMIT_CODE(kind)                                            \
   {                                                                \
+    AutoCreatedBy acb(masm, "kind=" #kind);                        \
     uint32_t offset = startTrampolineCode(masm);                   \
     InitMacroAssemblerForICStub(masm);                             \
     if (!compiler.emit_##kind()) {                                 \

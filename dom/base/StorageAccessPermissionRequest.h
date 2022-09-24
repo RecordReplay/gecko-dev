@@ -14,8 +14,7 @@
 
 class nsPIDOMWindowInner;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class StorageAccessPermissionRequest final
     : public ContentPermissionRequestBase {
@@ -28,14 +27,18 @@ class StorageAccessPermissionRequest final
   NS_IMETHOD Cancel(void) override;
   NS_IMETHOD Allow(JS::HandleValue choices) override;
 
-  typedef std::function<void()> AllowCallback;
-  typedef std::function<void()> CancelCallback;
+  using AllowCallback = std::function<void()>;
+  using CancelCallback = std::function<void()>;
 
   static already_AddRefed<StorageAccessPermissionRequest> Create(
       nsPIDOMWindowInner* aWindow, AllowCallback&& aAllowCallback,
       CancelCallback&& aCancelCallback);
 
-  typedef MozPromise<bool, bool, true> AutoGrantDelayPromise;
+  static already_AddRefed<StorageAccessPermissionRequest> Create(
+      nsPIDOMWindowInner* aWindow, nsIPrincipal* aPrincipal,
+      AllowCallback&& aAllowCallback, CancelCallback&& aCancelCallback);
+
+  using AutoGrantDelayPromise = MozPromise<bool, bool, true>;
   RefPtr<AutoGrantDelayPromise> MaybeDelayAutomaticGrants();
 
  private:
@@ -53,7 +56,6 @@ class StorageAccessPermissionRequest final
   bool mCallbackCalled;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // StorageAccessPermissionRequest_h_

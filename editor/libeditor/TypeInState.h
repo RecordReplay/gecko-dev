@@ -7,6 +7,7 @@
 #define mozilla_TypeInState_h
 
 #include "mozilla/EditorDOMPoint.h"
+#include "mozilla/EditorForwards.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/UniquePtr.h"
 #include "nsCOMPtr.h"
@@ -26,7 +27,6 @@ class nsAtom;
 class nsINode;
 
 namespace mozilla {
-class HTMLEditor;
 namespace dom {
 class MouseEvent;
 class Selection;
@@ -75,7 +75,7 @@ class StyleCache final {
 };
 
 class MOZ_STACK_CLASS AutoStyleCacheArray final
-    : public AutoTArray<StyleCache, 19> {
+    : public AutoTArray<StyleCache, 21> {
  public:
   index_type IndexOf(const nsStaticAtom* aTag,
                      const nsStaticAtom* aAttribute) const {
@@ -97,7 +97,7 @@ class TypeInState final {
   TypeInState();
   void Reset();
 
-  nsresult UpdateSelState(dom::Selection& aSelection);
+  nsresult UpdateSelState(const HTMLEditor& aHTMLEditor);
 
   /**
    * PreHandleMouseEvent() is called when `HTMLEditorEventListener` receives

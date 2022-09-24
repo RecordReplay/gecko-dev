@@ -11,27 +11,38 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "jstypes.h"
 
-#include "frontend/AbstractScopePtr.h"    // ScopeIndex
 #include "frontend/FunctionSyntaxKind.h"  // FunctionSyntaxKind
-#include "frontend/ParseNode.h"
-#include "frontend/ParserAtom.h"       // TaggedParserAtomIndex
-#include "frontend/ScriptIndex.h"      // ScriptIndex
-#include "js/WasmModule.h"             // JS::WasmModule
-#include "vm/FunctionFlags.h"          // js::FunctionFlags
+#include "frontend/ParserAtom.h"          // TaggedParserAtomIndex
+#include "frontend/ScopeIndex.h"          // ScopeIndex
+#include "frontend/ScriptIndex.h"         // ScriptIndex
+#include "vm/FunctionFlags.h"             // js::FunctionFlags
 #include "vm/GeneratorAndAsyncKind.h"  // js::GeneratorKind, js::FunctionAsyncKind
-#include "vm/JSFunction.h"
-#include "vm/JSScript.h"
 #include "vm/Scope.h"
+#include "vm/ScopeKind.h"
 #include "vm/SharedStencil.h"
+#include "vm/StencilEnums.h"
+
+struct JS_PUBLIC_API JSContext;
+
+namespace JS {
+class ReadOnlyCompileOptions;
+struct WasmModule;
+}  // namespace JS
 
 namespace js {
 namespace frontend {
 
 struct CompilationState;
+class FunctionBox;
+class FunctionNode;
 class ParseContext;
 class ScriptStencil;
+class ScriptStencilExtra;
 struct ScopeContext;
 
 enum class StatementKind : uint8_t {
@@ -442,20 +453,18 @@ class FunctionBox : public SuspendableContext {
     extraVarScopeBindings_ = bindings;
   }
 
-  void initFromLazyFunction(JSFunction* fun, ScopeContext& scopeContext,
-                            FunctionFlags flags, FunctionSyntaxKind kind);
-  void initFromLazyFunctionToSkip(JSFunction* fun);
-  void initStandalone(ScopeContext& scopeContext, FunctionFlags flags,
-                      FunctionSyntaxKind kind);
+  void initFromLazyFunction(const ScriptStencilExtra& extra,
+                            ScopeContext& scopeContext,
+                            FunctionSyntaxKind kind);
+  void initFromScriptStencilExtra(const ScriptStencilExtra& extra);
+  void initStandalone(ScopeContext& scopeContext, FunctionSyntaxKind kind);
 
  private:
-  void initFromLazyFunctionShared(JSFunction* fun);
-  void initStandaloneOrLazy(ScopeContext& scopeContext, FunctionFlags flags,
+  void initStandaloneOrLazy(ScopeContext& scopeContext,
                             FunctionSyntaxKind kind);
 
  public:
   void initWithEnclosingParseContext(ParseContext* enclosing,
-                                     FunctionFlags flags,
                                      FunctionSyntaxKind kind);
 
   void setEnclosingScopeForInnerLazyFunction(ScopeIndex scopeIndex);
@@ -480,6 +489,8 @@ class FunctionBox : public SuspendableContext {
   IMMUTABLE_FLAG_GETTER_SETTER(isGenerator, IsGenerator)
   IMMUTABLE_FLAG_GETTER_SETTER(funHasExtensibleScope, FunHasExtensibleScope)
   IMMUTABLE_FLAG_GETTER_SETTER(functionHasThisBinding, FunctionHasThisBinding)
+  IMMUTABLE_FLAG_GETTER_SETTER(functionHasNewTargetBinding,
+                               FunctionHasNewTargetBinding)
   // NeedsHomeObject: custom logic below.
   // IsDerivedClassConstructor: custom logic below.
   // IsFieldInitializer: custom logic below.
@@ -578,6 +589,7 @@ class FunctionBox : public SuspendableContext {
   void setNeedsHomeObject() {
     MOZ_ASSERT(flags_.allowSuperProperty());
     setFlag(ImmutableFlags::NeedsHomeObject);
+    flags_.setIsExtended();
   }
 
   bool isDerivedClassConstructor() const {

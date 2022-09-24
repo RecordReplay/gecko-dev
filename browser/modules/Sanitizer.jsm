@@ -99,23 +99,34 @@ var Sanitizer = {
   shouldSanitizeNewTabContainer: false,
 
   /**
-   * Shows a sanitization dialog to the user.
+   * Shows a sanitization dialog to the user. Returns after the dialog box has
+   * closed.
    *
-   * @param [optional] parentWindow the window to use as
-   *                   parent for the created dialog.
+   * @param parentWindow the browser window to use as parent for the created
+   *        dialog.
+   * @throws if parentWindow is undefined or doesn't have a gDialogBox.
    */
   showUI(parentWindow) {
-    let win =
-      AppConstants.platform == "macosx"
-        ? null // make this an app-modal window on Mac
-        : parentWindow;
-    Services.ww.openWindow(
-      win,
-      "chrome://browser/content/sanitize.xhtml",
-      "Sanitize",
-      "chrome,titlebar,dialog,centerscreen,modal",
-      null
-    );
+    // Treat the hidden window as not being a parent window:
+    if (
+      parentWindow?.document.documentURI ==
+      "chrome://browser/content/hiddenWindowMac.xhtml"
+    ) {
+      parentWindow = null;
+    }
+    if (parentWindow?.gDialogBox) {
+      parentWindow.gDialogBox.open("chrome://browser/content/sanitize.xhtml", {
+        inBrowserWindow: true,
+      });
+    } else {
+      Services.ww.openWindow(
+        parentWindow,
+        "chrome://browser/content/sanitize.xhtml",
+        "Sanitize",
+        "chrome,titlebar,dialog,centerscreen,modal",
+        { needNativeUI: true }
+      );
+    }
   },
 
   /**
@@ -353,21 +364,41 @@ var Sanitizer = {
     },
 
     cookies: {
-      async clear(range) {
+      async clear(range, { progress, principalsForShutdownClearing }) {
         let refObj = {};
         TelemetryStopwatch.start("FX_SANITIZE_COOKIES_2", refObj);
-        await clearData(
-          range,
-          Ci.nsIClearDataService.CLEAR_COOKIES |
-            Ci.nsIClearDataService.CLEAR_MEDIA_DEVICES
-        );
+        // This is true if called by sanitizeOnShutdown.
+        // On shutdown we clear by principal to be able to honor the users exceptions
+        if (progress && principalsForShutdownClearing) {
+          await maybeSanitizeSessionPrincipals(
+            progress,
+            principalsForShutdownClearing,
+            Ci.nsIClearDataService.CLEAR_COOKIES
+          );
+        } else {
+          // Not on shutdown
+          await clearData(range, Ci.nsIClearDataService.CLEAR_COOKIES);
+        }
+        await clearData(range, Ci.nsIClearDataService.CLEAR_MEDIA_DEVICES);
         TelemetryStopwatch.finish("FX_SANITIZE_COOKIES_2", refObj);
       },
     },
 
     offlineApps: {
-      async clear(range) {
-        await clearData(range, Ci.nsIClearDataService.CLEAR_DOM_STORAGES);
+      async clear(range, { progress, principalsForShutdownClearing }) {
+        // This is true if called by sanitizeOnShutdown.
+        // On shutdown we clear by principal to be able to honor the users exceptions
+        if (progress && principalsForShutdownClearing) {
+          // Cleaning per principal to be able to consider the users exceptions
+          await maybeSanitizeSessionPrincipals(
+            progress,
+            principalsForShutdownClearing,
+            Ci.nsIClearDataService.CLEAR_DOM_STORAGES
+          );
+        } else {
+          // Not on shutdown
+          await clearData(range, Ci.nsIClearDataService.CLEAR_DOM_STORAGES);
+        }
       },
     },
 
@@ -502,7 +533,7 @@ var Sanitizer = {
           Ci.nsIClearDataService.CLEAR_PERMISSIONS |
             Ci.nsIClearDataService.CLEAR_CONTENT_PREFERENCES |
             Ci.nsIClearDataService.CLEAR_DOM_PUSH_NOTIFICATIONS |
-            Ci.nsIClearDataService.CLEAR_SECURITY_SETTINGS |
+            Ci.nsIClearDataService.CLEAR_CLIENT_AUTH_REMEMBER_SERVICE |
             Ci.nsIClearDataService.CLEAR_CERT_EXCEPTIONS
         );
         TelemetryStopwatch.finish("FX_SANITIZE_SITESETTINGS", refObj);
@@ -714,6 +745,13 @@ async function sanitizeInternal(items, aItemsToClear, progress, options = {}) {
     console.error("Error sanitizing " + name, ex);
   };
 
+  // When clearing on shutdown we clear by principal for certain cleaning categories, to consider the users exceptions
+  if (progress.isShutdown) {
+    let principalsCollector = new PrincipalsCollector();
+    let principals = await principalsCollector.getAllPrincipals(progress);
+    options.principalsForShutdownClearing = principals;
+    options.progress = progress;
+  }
   // Array of objects in form { name, promise }.
   // `name` is the item's name and `promise` may be a promise, if the
   // sanitization is asynchronous, or the function return value, otherwise.
@@ -847,7 +885,14 @@ async function sanitizeOnShutdown(progress) {
     progress.advancement = "session-only";
 
     let principals = await principalsCollector.getAllPrincipals(progress);
-    await maybeSanitizeSessionPrincipals(progress, principals);
+    await maybeSanitizeSessionPrincipals(
+      progress,
+      principals,
+      Ci.nsIClearDataService.CLEAR_ALL_CACHES |
+        Ci.nsIClearDataService.CLEAR_COOKIES |
+        Ci.nsIClearDataService.CLEAR_DOM_STORAGES |
+        Ci.nsIClearDataService.CLEAR_EME
+    );
 
     progress.advancement = "done";
     return;
@@ -882,7 +927,14 @@ async function sanitizeOnShutdown(progress) {
       principals,
       permission.principal.host
     );
-    await maybeSanitizeSessionPrincipals(progress, selectedPrincipals);
+    await maybeSanitizeSessionPrincipals(
+      progress,
+      selectedPrincipals,
+      Ci.nsIClearDataService.CLEAR_ALL_CACHES |
+        Ci.nsIClearDataService.CLEAR_COOKIES |
+        Ci.nsIClearDataService.CLEAR_DOM_STORAGES |
+        Ci.nsIClearDataService.CLEAR_EME
+    );
   }
   progress.sanitizationPrefs.session_permission_exceptions = exceptions;
   progress.advancement = "done";
@@ -895,20 +947,32 @@ function extractMatchingPrincipals(principals, matchHost) {
   });
 }
 
-// This method receives a list of principals and it checks if some of them or
-// some of their sub-domain need to be sanitize.
-async function maybeSanitizeSessionPrincipals(progress, principals) {
+/**  This method receives a list of principals and it checks if some of them or
+ * some of their sub-domain need to be sanitize.
+ * @param {Object} progress - Object to keep track of the sanitization progress, prefs and mode
+ * @param {nsIPrincipal[]} principals - The principals generated by the PrincipalsCollector
+ * @param {int} flags - The cleaning categories that need to be cleaned for the principals.
+ * @returns {Promise} - Resolves once the clearing of the principals to be cleared is done
+ */
+async function maybeSanitizeSessionPrincipals(progress, principals, flags) {
   log("Sanitizing " + principals.length + " principals");
 
   let promises = [];
+  let permissions = new Map();
+  Services.perms.getAllWithTypePrefix("cookie").forEach(perm => {
+    permissions.set(perm.principal.origin, perm);
+  });
 
   principals.forEach(principal => {
     progress.step = "checking-principal";
-    let cookieAllowed = cookiesAllowedForDomainOrSubDomain(principal);
+    let cookieAllowed = cookiesAllowedForDomainOrSubDomain(
+      principal,
+      permissions
+    );
     progress.step = "principal-checked:" + cookieAllowed;
 
     if (!cookieAllowed) {
-      promises.push(sanitizeSessionPrincipal(progress, principal));
+      promises.push(sanitizeSessionPrincipal(progress, principal, flags));
     }
   });
 
@@ -917,12 +981,51 @@ async function maybeSanitizeSessionPrincipals(progress, principals) {
   progress.step = "promises resolved";
 }
 
-function cookiesAllowedForDomainOrSubDomain(principal) {
-  log("Checking principal: " + principal.asciispec);
+function cookiesAllowedForDomainOrSubDomain(principal, permissions) {
+  log("Checking principal: " + principal.asciiSpec);
 
   // If we have the 'cookie' permission for this principal, let's return
   // immediately.
+  let cookiePermission = checkIfCookiePermissionIsSet(principal);
+  if (cookiePermission != null) {
+    return cookiePermission;
+  }
+
+  for (let perm of permissions.values()) {
+    if (perm.type != "cookie") {
+      permissions.delete(perm.principal.origin);
+      continue;
+    }
+    // We consider just permissions set for http, https and file URLs.
+    if (!isSupportedPrincipal(perm.principal)) {
+      permissions.delete(perm.principal.origin);
+      continue;
+    }
+
+    // We don't care about scheme, port, and anything else.
+    if (Services.eTLD.hasRootDomain(perm.principal.host, principal.host)) {
+      log("Cookie check on principal: " + perm.principal.asciiSpec);
+      let rootDomainCookiePermission = checkIfCookiePermissionIsSet(
+        perm.principal
+      );
+      if (rootDomainCookiePermission != null) {
+        return rootDomainCookiePermission;
+      }
+    }
+  }
+
+  log("Cookie not allowed.");
+  return false;
+}
+
+/**
+ * Checks if a cookie permission is set for a given principal
+ * @returns {boolean} - true: cookie permission "ACCESS_ALLOW", false: cookie permission "ACCESS_DENY"/"ACCESS_SESSION"
+ * @returns {null} - No cookie permission is set for this principal
+ */
+function checkIfCookiePermissionIsSet(principal) {
   let p = Services.perms.testPermissionFromPrincipal(principal, "cookie");
+
   if (p == Ci.nsICookiePermission.ACCESS_ALLOW) {
     log("Cookie allowed!");
     return true;
@@ -935,47 +1038,23 @@ function cookiesAllowedForDomainOrSubDomain(principal) {
     log("Cookie denied or session!");
     return false;
   }
-
   // This is an old profile with unsupported permission values
   if (p != Ci.nsICookiePermission.ACCESS_DEFAULT) {
     log("Not supported cookie permission: " + p);
     return false;
   }
-
-  for (let perm of Services.perms.all) {
-    if (perm.type != "cookie") {
-      continue;
-    }
-
-    // We consider just permissions set for http, https and file URLs.
-    if (!isSupportedPrincipal(perm.principal)) {
-      continue;
-    }
-
-    // We don't care about scheme, port, and anything else.
-    if (Services.eTLD.hasRootDomain(perm.principal.host, principal.host)) {
-      log("Recursive cookie check on principal: " + perm.principal.asciiSpec);
-      return cookiesAllowedForDomainOrSubDomain(perm.principal);
-    }
-  }
-
-  log("Cookie not allowed.");
-  return false;
+  return null;
 }
 
-async function sanitizeSessionPrincipal(progress, principal) {
-  log("Sanitizing principal: " + principal.asciispec);
+async function sanitizeSessionPrincipal(progress, principal, flags) {
+  log("Sanitizing principal: " + principal.asciiSpec);
 
   await new Promise(resolve => {
     progress.sanitizePrincipal = "started";
     Services.clearData.deleteDataFromPrincipal(
       principal,
       true /* user request */,
-      Ci.nsIClearDataService.CLEAR_ALL_CACHES |
-        Ci.nsIClearDataService.CLEAR_COOKIES |
-        Ci.nsIClearDataService.CLEAR_DOM_STORAGES |
-        Ci.nsIClearDataService.CLEAR_SECURITY_SETTINGS |
-        Ci.nsIClearDataService.CLEAR_EME,
+      flags,
       resolve
     );
   });

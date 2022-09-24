@@ -29,6 +29,7 @@
 #include "nsStyleStruct.h"
 #include "gfx2DGlue.h"
 #include "gfxGradientCache.h"
+#include "mozilla/image/WebRenderImageProvider.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/RenderRootStateManager.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
@@ -2073,6 +2074,10 @@ void nsCSSBorderRenderer::DrawDottedSideSlow(mozilla::Side aSide) {
   // Extend dirty rect to avoid clipping pixel for anti-aliasing.
   const Float AA_MARGIN = 2.0f;
 
+  // The following algorithm assumes the border's rect and the dirty rect
+  // intersect.
+  MOZ_ASSERT(mDirtyRect.Intersects(mOuterRect));
+
   if (aSide == eSideTop) {
     // Tweak |from| and |to| to fit into |mDirtyRect + radius margin|,
     // to render only paths that may overlap mDirtyRect.
@@ -2970,6 +2975,10 @@ void nsCSSBorderRenderer::DrawSolidBorder() {
 }
 
 void nsCSSBorderRenderer::DrawBorders() {
+  if (MOZ_UNLIKELY(!mDirtyRect.Intersects(mOuterRect))) {
+    return;
+  }
+
   if (mAllBordersSameStyle && (mBorderStyles[0] == StyleBorderStyle::None ||
                                mBorderStyles[0] == StyleBorderStyle::Hidden ||
                                mBorderColors[0] == NS_RGBA(0, 0, 0, 0))) {
@@ -3088,6 +3097,10 @@ void nsCSSBorderRenderer::DrawBorders() {
       return;
     }
     mOuterRect = ToRect(outerRect);
+
+    if (MOZ_UNLIKELY(!mDirtyRect.Intersects(mOuterRect))) {
+      return;
+    }
 
     gfxRect innerRect = ThebesRect(mInnerRect);
     gfxUtils::ConditionRect(innerRect);
@@ -3628,24 +3641,20 @@ ImgDrawResult nsCSSBorderImageRenderer::CreateWebRenderCommands(
               img, aForFrame, imageRect, imageRect, aSc, flags, svgContext,
               region);
 
-      RefPtr<layers::ImageContainer> container;
-      drawResult = img->GetImageContainerAtSize(
-          aManager->LayerManager(), decodeSize, svgContext, region, flags,
-          getter_AddRefs(container));
-      if (!container) {
-        break;
-      }
+      RefPtr<WebRenderImageProvider> provider;
+      drawResult = img->GetImageProvider(aManager->LayerManager(), decodeSize,
+                                         svgContext, region, flags,
+                                         getter_AddRefs(provider));
 
-      mozilla::wr::ImageRendering rendering = wr::ToImageRendering(
-          nsLayoutUtils::GetSamplingFilterForFrame(aItem->Frame()));
-      gfx::IntSize size;
-      Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageKey(
-          aItem, container, aBuilder, aResources, rendering, aSc, size,
-          Nothing());
+      Maybe<wr::ImageKey> key =
+          aManager->CommandBuilder().CreateImageProviderKey(
+              aItem, provider, drawResult, aResources);
       if (key.isNothing()) {
         break;
       }
 
+      auto rendering =
+          wr::ToImageRendering(aItem->Frame()->UsedImageRendering());
       if (mFill) {
         float epsilon = 0.0001;
         bool noVerticalBorders = widths[0] <= epsilon && widths[2] < epsilon;
@@ -3656,8 +3665,8 @@ ImgDrawResult nsCSSBorderImageRenderer::CreateWebRenderCommands(
         // but there are reftests that are sensible to the test going through a
         // blob while the reference doesn't.
         if (noVerticalBorders && noHorizontalBorders) {
-          aBuilder.PushImage(dest, clip, !aItem->BackfaceIsHidden(), rendering,
-                             key.value());
+          aBuilder.PushImage(dest, clip, !aItem->BackfaceIsHidden(), false,
+                             rendering, key.value());
           break;
         }
 
@@ -3674,6 +3683,7 @@ ImgDrawResult nsCSSBorderImageRenderer::CreateWebRenderCommands(
       wr::WrBorderImage params{
           wr::ToBorderWidths(widths[0], widths[1], widths[2], widths[3]),
           key.value(),
+          rendering,
           mImageSize.width / appUnitsPerDevPixel,
           mImageSize.height / appUnitsPerDevPixel,
           mFill,

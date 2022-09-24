@@ -12,7 +12,6 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   Services: "resource://gre/modules/Services.jsm",
   UrlbarTokenizer: "resource:///modules/UrlbarTokenizer.jsm",
@@ -93,7 +92,7 @@ var gBuiltInInputs = {
   },
   Reload: {
     title: "reload",
-    image: "chrome://browser/skin/reload.svg",
+    image: "chrome://global/skin/icons/reload.svg",
     type: kInputTypes.BUTTON,
     callback: () => execCommand("Browser:Reload"),
   },
@@ -571,7 +570,7 @@ class TouchBarInput {
     this._title = title;
   }
   get image() {
-    return this._image ? PlacesUtils.toURI(this._image) : null;
+    return this._image ? Services.io.newURI(this._image) : null;
   }
   set image(image) {
     this._image = image;

@@ -44,165 +44,183 @@
         </hbox>
       </vbox>
     </hbox>
-    <hbox id="fpiIncompatibilityWarning" align="start" hidden="true">
-      <image class="info-icon fpi-warning-icon"></image>
+    <hbox id="fpiIncompatibilityWarning" class="info-box-container" hidden="true">
+      <vbox class="info-icon-container">
+        <image class="info-icon"></image>
+      </vbox>
       <vbox flex="1">
         <description>
-          <html:span class="tail-with-learn-more" data-l10n-id="content-blocking-fpi-incompatibility-warning"/>
+          <html:span data-l10n-id="content-blocking-fpi-incompatibility-warning"/>
         </description>
       </vbox>
     </hbox>
     <vbox id="contentBlockingCategories">
-        <radiogroup id="contentBlockingCategoryRadio"
-                    preference="browser.contentblocking.category"
-                    aria-labelledby="trackingProtectionMenuDesc">
-          <vbox id="contentBlockingOptionStandard" class="content-blocking-category">
-            <hbox>
-              <radio id="standardRadio"
-                     value="standard"
-                     data-l10n-id="enhanced-tracking-protection-setting-standard"
-                     flex="1"/>
-              <button id="standardArrow"
-                      is="highlightable-button"
-                      class="arrowhead default-content-blocking-ui"
-                      data-l10n-id="content-blocking-expand-section"
-                      aria-expanded="false"/>
-            </hbox>
-            <vbox class="indent default-content-blocking-ui">
-              <description data-l10n-id="content-blocking-etp-standard-desc"></description>
-              <vbox class="content-blocking-extra-information">
-                <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
-                <vbox class="indent">
-                  <hbox class="extra-information-label social-media-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
-                  </hbox>
-                  <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies-plus-isolate"/>
-                  </hbox>
-                  <hbox class="extra-information-label pb-trackers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label trackers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-third-party-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label cryptominers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
-                  </hbox>
-                  <hbox class="extra-information-label fingerprinters-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
-                  </hbox>
-                </vbox>
-                <html:div class="content-blocking-warning reload-tabs" hidden="true">
-                  <html:div class="content-blocking-reload-desc-container">
-                    <image class="content-blocking-info-image"/>
-                    <html:span data-l10n-id="content-blocking-reload-description"
-                               class="content-blocking-reload-description" />
+      <radiogroup id="contentBlockingCategoryRadio"
+                  preference="browser.contentblocking.category"
+                  aria-labelledby="trackingProtectionMenuDesc">
+        <vbox id="contentBlockingOptionStandard" class="content-blocking-category info-box-container">
+          <hbox>
+            <radio id="standardRadio"
+                   value="standard"
+                   data-l10n-id="enhanced-tracking-protection-setting-standard"
+                   flex="1"/>
+            <button id="standardArrow"
+                    is="highlightable-button"
+                    class="arrowhead"
+                    data-l10n-id="content-blocking-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <description data-l10n-id="content-blocking-etp-standard-desc"></description>
+            <vbox class="content-blocking-extra-information">
+              <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
+              <vbox class="indent">
+                <hbox class="extra-information-label social-media-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
+                </hbox>
+                <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies-plus-isolate"/>
+                </hbox>
+                <hbox class="extra-information-label pb-trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-third-party-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label cryptominers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
+                </hbox>
+                <hbox class="extra-information-label fingerprinters-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
+                </hbox>
+              </vbox>
+              <vbox id="etpStandardTCPRolloutBox" class="content-blocking-warning info-box-container">
+                <hbox>
+                  <checkbox id="etpStandardTCPRollout"
+                            class="content-blocking-warning-title"
+                            data-l10n-id="content-blocking-etp-standard-tcp-rollout-checkbox"
+                            preference="privacy.restrict3rdpartystorage.rollout.enabledByDefault"
+                            flex="1" />
+
+                </hbox>
+                <description class="indent">
+                  <html:span class="tail-with-learn-more" data-l10n-id="content-blocking-etp-standard-tcp-rollout-description"></html:span>
+                  <label id="tcp-rollout-learn-more-link" class="learnMore" data-l10n-id="content-blocking-etp-standard-tcp-rollout-learn-more" is="text-link"/>
+                </description>
+              </vbox>
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
+                <html:div class="content-blocking-reload-desc-container">
+                  <html:div class="info-icon-container">
+                    <image class="info-icon"/>
                   </html:div>
-                  <button class="accessory-button reload-tabs-button primary"
-                          is="highlightable-button"
-                          data-l10n-id="content-blocking-reload-tabs-button"/>
+                  <html:span data-l10n-id="content-blocking-reload-description"
+                             class="content-blocking-reload-description" />
                 </html:div>
+                <button class="accessory-button reload-tabs-button primary"
+                        is="highlightable-button"
+                        data-l10n-id="content-blocking-reload-tabs-button"/>
+              </html:div>
+            </vbox>
+          </vbox>
+        </vbox>
+        <vbox id="contentBlockingOptionStrict" class="content-blocking-category info-box-container">
+          <hbox>
+            <radio id="strictRadio"
+                   value="strict"
+                   data-l10n-id="enhanced-tracking-protection-setting-strict"
+                   flex="1"/>
+            <button id="strictArrow"
+                    is="highlightable-button"
+                    class="arrowhead"
+                    data-l10n-id="content-blocking-expand-section"
+                    aria-expanded="false"/>
+          </hbox>
+          <vbox class="indent">
+            <label data-l10n-id="content-blocking-etp-strict-desc"></label>
+            <vbox class="content-blocking-extra-information">
+              <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
+              <vbox class="indent">
+                <hbox class="extra-information-label social-media-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows"/>
+                </hbox>
+                <hbox class="extra-information-label pb-trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
+                </hbox>
+                <hbox class="extra-information-label trackers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
+                </hbox>
+                <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-third-party-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label all-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
+                </hbox>
+                <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies-plus-isolate"/>
+                </hbox>
+                <hbox class="extra-information-label cryptominers-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
+                </hbox>
+                <hbox class="extra-information-label fingerprinters-option" hidden="true">
+                  <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
+                </hbox>
+              </vbox>
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
+                <html:div class="content-blocking-reload-desc-container">
+                  <html:div class="info-icon-container">
+                    <image class="info-icon"/>
+                  </html:div>
+                  <html:span data-l10n-id="content-blocking-reload-description"
+                             class="content-blocking-reload-description" />
+                </html:div>
+                <button class="accessory-button reload-tabs-button primary"
+                        is="highlightable-button"
+                        data-l10n-id="content-blocking-reload-tabs-button"/>
+              </html:div>
+              <vbox class="content-blocking-warning info-box-container">
+                <hbox>
+                  <image class="content-blocking-warning-image"/>
+                  <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
+                </hbox>
+                <description class="indent">
+                  <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
+                  <label id="" class="learnMore contentBlockWarningLink" data-l10n-id="content-blocking-warning-learn-how" is="text-link"/>
+                </description>
               </vbox>
             </vbox>
           </vbox>
-          <vbox id="contentBlockingOptionStrict" class="content-blocking-category">
-            <hbox>
-              <radio id="strictRadio"
-                     value="strict"
-                     data-l10n-id="enhanced-tracking-protection-setting-strict"
-                     flex="1"/>
-              <button id="strictArrow"
-                      is="highlightable-button"
-                      class="arrowhead"
-                      data-l10n-id="content-blocking-expand-section"
-                      aria-expanded="false"/>
-            </hbox>
-            <vbox class="indent">
-              <label data-l10n-id="content-blocking-etp-strict-desc"></label>
-              <vbox class="content-blocking-extra-information">
-                <label class="content-blocking-extra-blocking-desc" data-l10n-id="content-blocking-etp-blocking-desc"/>
-                <vbox class="indent">
-                  <hbox class="extra-information-label social-media-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-social-media-trackers"/>
-                  </hbox>
-                  <hbox class="extra-information-label third-party-tracking-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-third-party-cookies-private-windows-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-cross-site-cookies-private-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label cross-site-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-cookies-in-all-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label pb-trackers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-private-windows"/>
-                  </hbox>
-                  <hbox class="extra-information-label trackers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-windows-tracking-content"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-third-party-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-third-party-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label all-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-all-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label unvisited-cookies-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-unvisited-cookies"/>
-                  </hbox>
-                  <hbox class="extra-information-label third-party-tracking-cookies-plus-isolate-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cross-site-tracking-cookies-plus-isolate"/>
-                  </hbox>
-                  <hbox class="extra-information-label cryptominers-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-cryptominers"/>
-                  </hbox>
-                  <hbox class="extra-information-label fingerprinters-option" hidden="true">
-                    <label class="content-blocking-label" data-l10n-id="content-blocking-fingerprinters"/>
-                  </hbox>
-                </vbox>
-                <html:div class="content-blocking-warning reload-tabs" hidden="true">
-                  <html:div class="content-blocking-reload-desc-container">
-                    <image class="content-blocking-info-image"/>
-                    <html:span data-l10n-id="content-blocking-reload-description"
-                               class="content-blocking-reload-description" />
-                  </html:div>
-                  <button class="accessory-button reload-tabs-button primary"
-                          is="highlightable-button"
-                          data-l10n-id="content-blocking-reload-tabs-button"/>
-                </html:div>
-                <vbox class="content-blocking-warning">
-                  <vbox class="indent">
-                    <hbox>
-                      <image class="content-blocking-warning-image"/>
-                      <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
-                    </hbox>
-                    <description class="indent">
-                      <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description"></html:span>
-                      <label id="" class="learnMore contentBlockWarningLink" data-l10n-id="content-blocking-warning-learn-how" is="text-link"/>
-                    </description>
-                  </vbox>
-                </vbox>
-              </vbox>
-            </vbox>
-          </vbox>
-        <vbox id="contentBlockingOptionCustom" class="tracking-protection-ui content-blocking-category">
+        </vbox>
+        <vbox id="contentBlockingOptionCustom" class="content-blocking-category info-box-container">
           <hbox>
             <radio id="customRadio"
                    value="custom"
@@ -231,7 +249,7 @@
                                 preference="network.cookie.cookieBehavior">
                         <menupopup>
                           <menuitem id="blockCookiesSocialMedia" data-l10n-id="sitedata-option-block-cross-site-trackers" value="trackers"/>
-                          <menuitem id="isolateCookiesSocialMedia" data-l10n-id="sitedata-option-block-cross-site-and-social-media-trackers-plus-isolate" value="trackers-plus-isolate"/>
+                          <menuitem id="isolateCookiesSocialMedia" data-l10n-id="sitedata-option-block-cross-site-cookies" value="trackers-plus-isolate"/>
                           <menuitem data-l10n-id="sitedata-option-block-unvisited" value="unvisited"/>
                           <menuitem data-l10n-id="sitedata-option-block-all-third-party" value="all-third-parties"/>
                           <menuitem data-l10n-id="sitedata-option-block-all" value="always"/>
@@ -281,9 +299,11 @@
                             data-l10n-id="content-blocking-fingerprinters-label"
                             aria-describedby="contentBlockingCustomDesc"/>
                 </hbox>
-              <html:div class="content-blocking-warning reload-tabs" hidden="true">
+              <html:div class="content-blocking-warning info-box-container reload-tabs" hidden="true">
                 <html:div class="content-blocking-reload-desc-container">
-                  <image class="content-blocking-info-image"/>
+                  <html:div class="info-icon-container">
+                    <image class="info-icon"/>
+                  </html:div>
                   <html:span data-l10n-id="content-blocking-reload-description"
                              class="content-blocking-reload-description" />
                 </html:div>
@@ -291,17 +311,15 @@
                         is="highlightable-button"
                         data-l10n-id="content-blocking-reload-tabs-button"/>
               </html:div>
-              <vbox class="content-blocking-warning">
-                <vbox class="indent">
-                  <hbox>
-                    <image class="content-blocking-warning-image"/>
-                    <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
-                  </hbox>
-                  <description class="indent">
-                    <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description"></html:span>
-                    <label id="" class="learnMore contentBlockWarningLink" data-l10n-id="content-blocking-warning-learn-how" is="text-link"/>
-                  </description>
-                </vbox>
+              <vbox class="content-blocking-warning info-box-container">
+                <hbox>
+                  <image class="content-blocking-warning-image"/>
+                  <label class="content-blocking-warning-title" data-l10n-id="content-blocking-warning-title"/>
+                </hbox>
+                <description class="indent">
+                  <html:span class="tail-with-learn-more content-blocking-warning-description" data-l10n-id="content-blocking-and-isolating-etp-warning-description-2"></html:span>
+                  <label id="" class="learnMore contentBlockWarningLink" data-l10n-id="content-blocking-warning-learn-how" is="text-link"/>
+                </description>
               </vbox>
             </vbox>
           </vbox>
@@ -331,7 +349,10 @@
         <label id="siteDataLearnMoreLink"
           class="learnMore" is="text-link" data-l10n-id="sitedata-learn-more"/>
       </description>
-      <hbox flex="1" id="deleteOnCloseNote" class="info-panel">
+      <hbox flex="1" id="deleteOnCloseNote" class="info-box-container smaller-font-size">
+        <hbox class="info-icon-container">
+          <image class="info-icon"></image>
+        </hbox>
         <description flex="1" data-l10n-id="sitedata-delete-on-close-private-browsing" />
       </hbox>
       <hbox id="keepRow"
@@ -603,7 +624,7 @@
                   item-cache.label,
                   item-form-search-history.label,
                   data-section-label,
-                  item-site-preferences.label,
+                  item-site-settings.label,
                   item-offline-apps.label
                 "/>
       </hbox>
@@ -616,7 +637,7 @@
           data-category="panePrivacy"
           hidden="true"
           data-subcategory="locationBar">
-  <label><html:h2 data-l10n-id="addressbar-header"/></label>
+  <label><html:h2 id="locationBarGroupHeader" data-l10n-id="addressbar-header"/></label>
   <label id="locationBarSuggestionLabel" data-l10n-id="addressbar-suggest"/>
   <checkbox id="historySuggestion" data-l10n-id="addressbar-locbar-history-option"
             preference="browser.urlbar.suggest.history"/>
@@ -625,9 +646,92 @@
   <checkbox id="openpageSuggestion" data-l10n-id="addressbar-locbar-openpage-option"
             preference="browser.urlbar.suggest.openpage"/>
   <checkbox id="topSitesSuggestion"
+            data-l10n-id="addressbar-locbar-shortcuts-option"
             preference="browser.urlbar.suggest.topsites"/>
   <checkbox id="enginesSuggestion" data-l10n-id="addressbar-locbar-engines-option"
             preference="browser.urlbar.suggest.engines"/>
+  <hbox id="firefoxSuggestBestMatchContainer" align="center" hidden="true">
+    <checkbox id="firefoxSuggestBestMatch"
+              class="tail-with-learn-more"
+              data-l10n-id="addressbar-firefox-suggest-best-match-option"
+              preference="browser.urlbar.suggest.bestmatch"/>
+    <label id="firefoxSuggestBestMatchLearnMore"
+           class="learnMore"
+           is="text-link"
+           data-l10n-id="addressbar-best-match-learn-more"/>
+  </hbox>
+  <vbox id="firefoxSuggestContainer" hidden="true">
+    <!-- This form[autocomplete="off"] is necessary to prevent the inputs from
+         participating in session restore. autocomplete="off" is ignored on the
+         inputs themselves. -->
+    <html:form id="firefoxSuggestForm" autocomplete="off" hidden="true"/>
+    <vbox class="firefoxSuggestOptionBox">
+      <hbox align="center">
+        <label id="firefoxSuggestNonsponsoredLabel"
+               flex="1"
+               data-l10n-id="addressbar-firefox-suggest-nonsponsored"/>
+        <html:input id="firefoxSuggestNonsponsoredToggle"
+                    type="checkbox"
+                    class="toggle-button firefoxSuggestToggle"
+                    preference="browser.urlbar.suggest.quicksuggest.nonsponsored"
+                    form="firefoxSuggestForm"
+                    aria-labelledby="firefoxSuggestNonsponsoredLabel"
+                    aria-describedby="firefoxSuggestNonsponsoredDescription"/>
+      </hbox>
+      <description id="firefoxSuggestNonsponsoredDescription"
+                   class="tip-caption firefoxSuggestOptionDescription"
+                   data-l10n-id="addressbar-firefox-suggest-nonsponsored-description"/>
+    </vbox>
+    <vbox class="firefoxSuggestOptionBox">
+      <hbox align="center">
+        <label id="firefoxSuggestSponsoredLabel"
+               flex="1"
+               data-l10n-id="addressbar-firefox-suggest-sponsored"/>
+        <html:input id="firefoxSuggestSponsoredToggle"
+                    type="checkbox"
+                    class="toggle-button firefoxSuggestToggle"
+                    preference="browser.urlbar.suggest.quicksuggest.sponsored"
+                    form="firefoxSuggestForm"
+                    aria-labelledby="firefoxSuggestSponsoredLabel"
+                    aria-describedby="firefoxSuggestSponsoredDescription"/>
+      </hbox>
+      <description id="firefoxSuggestSponsoredDescription"
+                   class="tip-caption firefoxSuggestOptionDescription"
+                   data-l10n-id="addressbar-firefox-suggest-sponsored-description"/>
+    </vbox>
+    <vbox class="firefoxSuggestOptionBox">
+      <hbox align="center">
+        <label id="firefoxSuggestDataCollectionLabel"
+               flex="1"
+               data-l10n-id="addressbar-firefox-suggest-data-collection"/>
+        <html:input id="firefoxSuggestDataCollectionToggle"
+                    type="checkbox"
+                    class="toggle-button firefoxSuggestToggle"
+                    preference="browser.urlbar.quicksuggest.dataCollection.enabled"
+                    form="firefoxSuggestForm"
+                    aria-labelledby="firefoxSuggestDataCollectionLabel"
+                    aria-describedby="firefoxSuggestDataCollectionDescription"/>
+      </hbox>
+      <description class="tip-caption firefoxSuggestOptionDescription">
+        <html:span id="firefoxSuggestDataCollectionDescription"
+                   class="tail-with-learn-more"
+                   data-l10n-id="addressbar-firefox-suggest-data-collection-description"/>
+      <label id="firefoxSuggestDataCollectionLearnMore"
+             class="learnMore firefoxSuggestLearnMore" is="text-link"
+             data-l10n-id="addressbar-locbar-firefox-suggest-learn-more"/>
+      </description>
+    </vbox>
+    <hbox id="firefoxSuggestInfoBox" class="info-box-container" align="start"
+          hidden="true">
+      <image class="info-icon"/>
+      <description class="tip-caption" flex="1">
+        <html:span id="firefoxSuggestInfoText" class="tail-with-learn-more"/>
+        <label id="firefoxSuggestInfoBoxLearnMore"
+               class="learnMore firefoxSuggestLearnMore" is="text-link"
+               data-l10n-id="addressbar-locbar-firefox-suggest-learn-more"/>
+      </description>
+    </hbox>
+  </vbox>
   <label id="openSearchEnginePreferences" is="text-link"
          data-l10n-id="addressbar-suggestions-settings"/>
 </groupbox>
@@ -792,7 +896,8 @@
       <button id="popupPolicyButton"
               is="highlightable-button"
               class="accessory-button"
-              data-l10n-id="permissions-block-popups-exceptions"
+              data-l10n-id="permissions-block-popups-exceptions-button"
+              data-l10n-attrs="searchkeywords"
               search-l10n-ids="
                 permissions-address,
                 permissions-exceptions-popup-window.title,
@@ -826,7 +931,6 @@
 </groupbox>
 
 <!-- Firefox Data Collection and Use -->
-#ifdef MOZ_DATA_REPORTING
 <hbox id="dataCollectionCategory"
       class="subcategory"
       hidden="true"
@@ -843,18 +947,18 @@
            class="learnMore" is="text-link"
            data-l10n-id="collection-privacy-notice"/>
   </description>
+#ifdef MOZ_DATA_REPORTING
   <description>
-    <hbox id="telemetry-container" align="stretch" flex="1" hidden="true">
-      <hbox align="top">
-        <image class="info-icon-telemetry" flex="1"></image>
+    <hbox id="telemetry-container" class="info-box-container smaller-font-size" hidden="true">
+      <hbox class="info-icon-container">
+        <image class="info-icon"></image>
       </hbox>
-      <hbox align="center" id="dataDescriptionBox" flex="1">
-        <html:span id="telemetryDisabledDescription" class="tail-with-learn-more" data-l10n-id="collection-health-report-telemetry-disabled"/>
-      </hbox>
-      <hbox>
-          <button id="telemetryDataDeletionLearnMore"
-                 class="learnMore" is="text-link"
-                 data-l10n-id="collection-health-report-telemetry-disabled-link"/>
+      <hbox align="center" flex="1">
+        <html:span id="telemetryDisabledDescription" class="tail-with-learn-more"
+                   data-l10n-id="collection-health-report-telemetry-disabled"/>
+        <label id="telemetryDataDeletionLearnMore"
+               class="learnMore text-link" is="text-link"
+               data-l10n-id="collection-health-report-telemetry-disabled-link"/>
       </hbox>
     </hbox>
   </description>
@@ -909,8 +1013,23 @@
     </hbox>
 #endif
   </vbox>
-</groupbox>
 #endif
+  <vbox id="privacySegmentationSection" data-subcategory="privacy-segmentation" hidden="true">
+    <hbox align="center">
+      <!-- TODO: Bug 1752172, provisional copy  -->
+      <checkbox id="privacySegmentationCheck"
+                preference="browser.privacySegmentation.enabled"
+                class="tail-with-learn-more"
+                label="Always ask before enabling new features that use my data"
+                accesskey="A">
+      </checkbox>
+      <!-- TODO: Bug 1752172, provisional copy  -->
+      <label id="privacy-segmentation-learn-more-link"
+             class="learnMore"
+             is="text-link">Learn more</label>
+    </hbox>
+  </vbox>
+</groupbox>
 
 <hbox id="securityCategory"
       class="subcategory"

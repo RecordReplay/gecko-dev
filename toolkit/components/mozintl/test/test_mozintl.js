@@ -9,22 +9,22 @@ function run_test() {
   test_constructors();
   test_rtf_formatBestUnit();
   test_datetimeformat();
+  test_getLanguageDirection();
 
   ok(true);
 }
 
 function test_methods_presence() {
   equal(Services.intl.getCalendarInfo instanceof Function, true);
-  equal(Services.intl.getDisplayNames instanceof Function, true);
-  equal(Services.intl.getLocaleInfo instanceof Function, true);
+  equal(Services.intl.getDisplayNamesDeprecated instanceof Function, true);
   equal(Services.intl.getLocaleDisplayNames instanceof Function, true);
 }
 
 function test_methods_calling() {
   Services.intl.getCalendarInfo("pl");
-  Services.intl.getDisplayNames("ar");
-  Services.intl.getLocaleInfo("de");
+  Services.intl.getDisplayNamesDeprecated("ar", { type: "language" });
   new Services.intl.DateTimeFormat("fr");
+  new Services.intl.DisplayNames("fr", { type: "language" });
   new Services.intl.ListFormat("fr");
   new Services.intl.Locale("fr");
   new Services.intl.RelativeTimeFormat("fr");
@@ -166,4 +166,17 @@ function test_datetimeformat() {
   equal(formatted, "2020年12月8日");
 
   Services.prefs.clearUserPref("intl.date_time.pattern_override.date_long");
+}
+
+function test_getLanguageDirection() {
+  equal(Services.intl.getScriptDirection("ar"), "rtl");
+  equal(Services.intl.getScriptDirection("ar-EG"), "rtl");
+  equal(Services.intl.getScriptDirection("ckb"), "rtl");
+  equal(Services.intl.getScriptDirection("fa"), "rtl");
+  equal(Services.intl.getScriptDirection("he"), "rtl");
+  equal(Services.intl.getScriptDirection("ur"), "rtl");
+
+  equal(Services.intl.getScriptDirection("en"), "ltr");
+  equal(Services.intl.getScriptDirection("en-US"), "ltr");
+  equal(Services.intl.getScriptDirection("fr"), "ltr");
 }

@@ -15,9 +15,6 @@ UNIFIED_SOURCES = [
     "Parser.cpp",
 ]
 
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
-
 # THE MOCK_METHOD2 macro from gtest triggers this clang warning and it's hard
 # to work around, so we just ignore it.
 if CONFIG["CC_TYPE"] == "clang":
@@ -26,3 +23,5 @@ if CONFIG["CC_TYPE"] == "clang":
     CXXFLAGS += ["-Wno-null-dereference"]
 
 FINAL_LIBRARY = "xul-gtest"
+
+REQUIRES_UNIFIED_BUILD = True

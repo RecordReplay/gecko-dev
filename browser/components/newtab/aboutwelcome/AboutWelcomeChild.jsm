@@ -143,10 +143,6 @@ class AboutWelcomeChild extends JSWindowActorChild {
       defineAs: "AWGetRegion",
     });
 
-    Cu.exportFunction(this.AWIsDefaultBrowser.bind(this), window, {
-      defineAs: "AWIsDefaultBrowser",
-    });
-
     Cu.exportFunction(this.AWSelectTheme.bind(this), window, {
       defineAs: "AWSelectTheme",
     });
@@ -162,6 +158,30 @@ class AboutWelcomeChild extends JSWindowActorChild {
     Cu.exportFunction(this.AWWaitForMigrationClose.bind(this), window, {
       defineAs: "AWWaitForMigrationClose",
     });
+
+    Cu.exportFunction(this.AWFinish.bind(this), window, {
+      defineAs: "AWFinish",
+    });
+
+    Cu.exportFunction(this.AWEnsureLangPackInstalled.bind(this), window, {
+      defineAs: "AWEnsureLangPackInstalled",
+    });
+
+    Cu.exportFunction(
+      this.AWNegotiateLangPackForLanguageMismatch.bind(this),
+      window,
+      {
+        defineAs: "AWNegotiateLangPackForLanguageMismatch",
+      }
+    );
+
+    Cu.exportFunction(this.AWSetRequestedLocales.bind(this), window, {
+      defineAs: "AWSetRequestedLocales",
+    });
+
+    Cu.exportFunction(this.AWSendToDeviceEmailsSupported.bind(this), window, {
+      defineAs: "AWSendToDeviceEmailsSupported",
+    });
   }
 
   /**
@@ -170,6 +190,20 @@ class AboutWelcomeChild extends JSWindowActorChild {
   wrapPromise(promise) {
     return new this.contentWindow.Promise((resolve, reject) =>
       promise.then(resolve, reject)
+    );
+  }
+
+  /**
+   * Clones the result of the query into the content window.
+   */
+  sendQueryAndCloneForContent(...sendQueryArgs) {
+    return this.wrapPromise(
+      (async () => {
+        return Cu.cloneInto(
+          await this.sendQuery(...sendQueryArgs),
+          this.contentWindow
+        );
+      })()
     );
   }
 
@@ -203,10 +237,15 @@ class AboutWelcomeChild extends JSWindowActorChild {
         "no"} experiment`
     );
 
-    let featureConfig = NimbusFeatures.aboutwelcome.getValue();
+    let featureConfig = NimbusFeatures.aboutwelcome.getAllVariables();
     featureConfig.needDefault = await this.sendQuery("AWPage:NEED_DEFAULT");
     featureConfig.needPin = await this.sendQuery("AWPage:DOES_APP_NEED_PIN");
-    let defaults = AboutWelcomeDefaults.getDefaults(featureConfig);
+    if (featureConfig.languageMismatchEnabled) {
+      featureConfig.appAndSystemLocaleInfo = await this.sendQuery(
+        "AWPage:GET_APP_AND_SYSTEM_LOCALE_INFO"
+      );
+    }
+    let defaults = AboutWelcomeDefaults.getDefaults();
     // FeatureConfig (from prefs or experiments) has higher precendence
     // to defaults. But the `screens` property isn't defined we shouldn't
     // override the default with `null`
@@ -242,10 +281,6 @@ class AboutWelcomeChild extends JSWindowActorChild {
     return this.wrapPromise(getSelectedTheme(this));
   }
 
-  AWIsDefaultBrowser() {
-    return this.wrapPromise(this.sendQuery("AWPage:IS_DEFAULT_BROWSER"));
-  }
-
   /**
    * Send Event Telemetry
    * @param {object} eventData
@@ -255,7 +290,6 @@ class AboutWelcomeChild extends JSWindowActorChild {
       ...eventData,
       event_context: {
         ...eventData.event_context,
-        page: "about:welcome",
       },
     });
   }
@@ -275,6 +309,37 @@ class AboutWelcomeChild extends JSWindowActorChild {
 
   AWGetRegion() {
     return this.wrapPromise(this.sendQuery("AWPage:GET_REGION"));
+  }
+
+  AWFinish() {
+    this.contentWindow.location.href = "about:home";
+  }
+
+  AWEnsureLangPackInstalled(langPack) {
+    return this.sendQueryAndCloneForContent(
+      "AWPage:ENSURE_LANG_PACK_INSTALLED",
+      langPack
+    );
+  }
+
+  AWSetRequestedLocales(requestSystemLocales) {
+    return this.sendQueryAndCloneForContent(
+      "AWPage:SET_REQUESTED_LOCALES",
+      requestSystemLocales
+    );
+  }
+
+  AWNegotiateLangPackForLanguageMismatch(appAndSystemLocaleInfo) {
+    return this.sendQueryAndCloneForContent(
+      "AWPage:NEGOTIATE_LANGPACK",
+      appAndSystemLocaleInfo
+    );
+  }
+
+  AWSendToDeviceEmailsSupported() {
+    return this.wrapPromise(
+      this.sendQuery("AWPage:SEND_TO_DEVICE_EMAILS_SUPPORTED")
+    );
   }
 
   /**

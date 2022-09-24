@@ -6,6 +6,8 @@
 
 #include "MediaData.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/StaticPrefs_media.h"
+#include "Tracing.h"
 
 // Use abort() instead of exception in SoundTouch.
 #define ST_NO_EXCEPTION_HANDLING 1
@@ -238,6 +240,8 @@ void AudioDecoderInputTrack::SetVolumeImpl(float aVolume) {
     Message(AudioDecoderInputTrack* aTrack, float aVolume)
         : ControlMessage(aTrack), mTrack(aTrack), mVolume(aVolume) {}
     void Run() override {
+      TRACE_COMMENT("AudioDecoderInputTrack::SetVolume ControlMessage", "%f",
+                    mVolume);
       LOG_M("Apply volume=%f", mTrack.get(), mVolume);
       mTrack->mVolume = mVolume;
     }
@@ -268,6 +272,8 @@ void AudioDecoderInputTrack::SetPlaybackRateImpl(float aPlaybackRate) {
           mTrack(aTrack),
           mPlaybackRate(aPlaybackRate) {}
     void Run() override {
+      TRACE_COMMENT("AudioDecoderInputTrack::SetPlaybackRate ControlMessage",
+                    "%f", mPlaybackRate);
       LOG_M("Apply playback rate=%f", mTrack.get(), mPlaybackRate);
       mTrack->mPlaybackRate = mPlaybackRate;
       mTrack->SetTempoAndRateForTimeStretcher();
@@ -299,6 +305,8 @@ void AudioDecoderInputTrack::SetPreservesPitchImpl(bool aPreservesPitch) {
           mTrack(aTrack),
           mPreservesPitch(aPreservesPitch) {}
     void Run() override {
+      TRACE_COMMENT("AudioDecoderInputTrack::SetPreservesPitch", "%s",
+                    mPreservesPitch ? "true" : "false")
       LOG_M("Apply preserves pitch=%d", mTrack.get(), mPreservesPitch);
       mTrack->mPreservesPitch = mPreservesPitch;
       mTrack->SetTempoAndRateForTimeStretcher();
@@ -631,9 +639,15 @@ void AudioDecoderInputTrack::EnsureTimeStretcher() {
     // We are going to use a smaller 10ms sequence size to improve speech
     // clarity, giving more resolution at high tempo and less reverb at low
     // tempo. Maintain 15ms seekwindow and 8ms overlap for smoothness.
-    mTimeStretcher->setSetting(SETTING_SEQUENCE_MS, 10);
-    mTimeStretcher->setSetting(SETTING_SEEKWINDOW_MS, 15);
-    mTimeStretcher->setSetting(SETTING_OVERLAP_MS, 8);
+    mTimeStretcher->setSetting(
+        SETTING_SEQUENCE_MS,
+        StaticPrefs::media_audio_playbackrate_soundtouch_sequence_ms());
+    mTimeStretcher->setSetting(
+        SETTING_SEEKWINDOW_MS,
+        StaticPrefs::media_audio_playbackrate_soundtouch_seekwindow_ms());
+    mTimeStretcher->setSetting(
+        SETTING_OVERLAP_MS,
+        StaticPrefs::media_audio_playbackrate_soundtouch_overlap_ms());
     SetTempoAndRateForTimeStretcher();
     LOG("Create TimeStretcher (channel=%d, playbackRate=%f, preservePitch=%d)",
         GetChannelCountForTimeStretcher(), mPlaybackRate, mPreservesPitch);

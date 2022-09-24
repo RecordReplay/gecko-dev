@@ -11,7 +11,7 @@
 #include "PlatformEncoderModule.h"
 #include "WebrtcGmpVideoCodec.h"
 #include "common_video/include/bitrate_adjuster.h"
-#include "webrtc/modules/video_coding/include/video_codec_interface.h"
+#include "modules/video_coding/include/video_codec_interface.h"
 
 namespace mozilla {
 
@@ -22,25 +22,29 @@ class TaskQueue;
 
 class WebrtcMediaDataEncoder : public RefCountedWebrtcVideoEncoder {
  public:
-  WebrtcMediaDataEncoder();
+  static bool CanCreate(const webrtc::VideoCodecType aCodecType);
 
-  uint64_t PluginID() const override { return 0; }
+  explicit WebrtcMediaDataEncoder(const webrtc::SdpVideoFormat& aFormat);
 
   int32_t InitEncode(const webrtc::VideoCodec* aCodecSettings,
-                     int32_t aNumberOfCores, size_t aMaxPayloadSize) override;
+                     const webrtc::VideoEncoder::Settings& aSettings) override;
 
   int32_t RegisterEncodeCompleteCallback(
       webrtc::EncodedImageCallback* aCallback) override;
 
   int32_t Shutdown() override;
 
-  int32_t Encode(const webrtc::VideoFrame& aFrame,
-                 const webrtc::CodecSpecificInfo* aCodecSpecificInfo,
-                 const std::vector<webrtc::FrameType>* aFrameTypes) override;
+  int32_t Encode(
+      const webrtc::VideoFrame& aFrame,
+      const std::vector<webrtc::VideoFrameType>* aFrameTypes) override;
 
-  int32_t SetChannelParameters(uint32_t aPacketLoss, int64_t aRtt) override;
+  int32_t SetRates(
+      const webrtc::VideoEncoder::RateControlParameters& aParameters) override;
 
-  int32_t SetRates(uint32_t aNewBitrateKbps, uint32_t aFrameRate) override;
+  WebrtcVideoEncoder::EncoderInfo GetEncoderInfo() const override;
+  MediaEventSource<uint64_t>* InitPluginEvent() override { return nullptr; }
+
+  MediaEventSource<uint64_t>* ReleasePluginEvent() override { return nullptr; }
 
  private:
   virtual ~WebrtcMediaDataEncoder() = default;
@@ -54,12 +58,13 @@ class WebrtcMediaDataEncoder : public RefCountedWebrtcVideoEncoder {
   const RefPtr<PEMFactory> mFactory;
   RefPtr<MediaDataEncoder> mEncoder;
 
-  Mutex mCallbackMutex;  // Protects mCallback and mError.
+  Mutex mCallbackMutex MOZ_UNANNOTATED;  // Protects mCallback and mError.
   webrtc::EncodedImageCallback* mCallback = nullptr;
   MediaResult mError = NS_OK;
 
   VideoInfo mInfo;
-  webrtc::H264PacketizationMode mMode;
+  webrtc::SdpVideoFormat::Parameters mFormatParams;
+  webrtc::CodecSpecificInfo mCodecSpecific;
   webrtc::BitrateAdjuster mBitrateAdjuster;
   uint32_t mMaxFrameRate;
   uint32_t mMinBitrateBps;

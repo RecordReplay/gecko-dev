@@ -6,22 +6,32 @@
 const { Ci } = require("chrome");
 const Services = require("Services");
 
+loader.lazyRequireGetter(this, "ChromeUtils");
 loader.lazyRequireGetter(
   this,
-  "isWindowIncluded",
+  "isRemoteBrowserElement",
   "devtools/shared/layout/utils",
   true
 );
 loader.lazyRequireGetter(
   this,
-  "isRemoteFrame",
-  "devtools/shared/layout/utils",
+  "HighlighterEnvironment",
+  "devtools/server/actors/highlighters",
+  true
+);
+loader.lazyRequireGetter(
+  this,
+  "RemoteNodePickerNotice",
+  "devtools/server/actors/highlighters/remote-node-picker-notice.js",
   true
 );
 
 const IS_OSX = Services.appinfo.OS === "Darwin";
 
 class NodePicker {
+  #eventListenersAbortController;
+  #remoteNodePickerNoticeHighlighter;
+
   constructor(walker, targetActor) {
     this._walker = walker;
     this._targetActor = targetActor;
@@ -34,14 +44,88 @@ class NodePicker {
     this._onKey = this._onKey.bind(this);
     this._onPick = this._onPick.bind(this);
     this._onSuppressedEvent = this._onSuppressedEvent.bind(this);
+    this._preventContentEvent = this._preventContentEvent.bind(this);
+  }
+
+  get remoteNodePickerNoticeHighlighter() {
+    if (!this.#remoteNodePickerNoticeHighlighter) {
+      const env = new HighlighterEnvironment();
+      env.initFromTargetActor(this._targetActor);
+      this.#remoteNodePickerNoticeHighlighter = new RemoteNodePickerNotice(env);
+    }
+
+    return this.#remoteNodePickerNoticeHighlighter;
   }
 
   _findAndAttachElement(event) {
     // originalTarget allows access to the "real" element before any retargeting
     // is applied, such as in the case of XBL anonymous elements.  See also
     // https://developer.mozilla.org/docs/XBL/XBL_1.0_Reference/Anonymous_Content#Event_Flow_and_Targeting
-    const node = event.originalTarget || event.target;
+    let node = event.originalTarget || event.target;
+
+    // When holding the Shift key, search for the element at the mouse position (as opposed
+    // to the event target). This would make it possible to pick nodes for which we won't
+    // get events for  (e.g. elements with `pointer-events: none`).
+    if (event.shiftKey) {
+      node = this._findNodeAtMouseEventPosition(event) || node;
+    }
+
+    // The node picker should only surface elements valid for the current walker
+    // configuration. UserAgent shadow DOM should only be visible if
+    // showAllAnonymousContent is set to true. Otherwise, fallback to the host.
+    const shadowRoot = node.containingShadowRoot;
+    if (shadowRoot?.isUAWidget() && !this._walker.showAllAnonymousContent) {
+      node = shadowRoot.host;
+    }
+
     return this._walker.attachElement(node);
+  }
+
+  /**
+   * Return the topmost visible element located at the event mouse position. This is
+   * different from retrieving the event target as it allows to retrieve elements for which
+   * we wouldn't have mouse event triggered (e.g. elements with `pointer-events: none`)
+   *
+   * @param {MouseEvent} event
+   * @returns HTMLElement
+   */
+  _findNodeAtMouseEventPosition(event) {
+    const winUtils = this._targetActor.window.windowUtils;
+    const rectSize = 1;
+    const elements = winUtils.nodesFromRect(
+      // aX
+      event.clientX,
+      // aY
+      event.clientY,
+      // aTopSize
+      rectSize,
+      // aRightSize
+      rectSize,
+      // aBottomSize
+      rectSize,
+      // aLeftSize
+      rectSize,
+      // aIgnoreRootScrollFrame
+      true,
+      // aFlushLayout
+      false,
+      // aOnlyVisible
+      true,
+      // aTransparencyThreshold
+      1
+    );
+
+    // ⚠️ When a highlighter was added to the page (which is the case at this point),
+    // the first element is the html node, and might be the last one as well (See Bug 1744941).
+    // Until we figure this out, let's pick the second returned item when hit this.
+    if (
+      elements.length > 1 &&
+      ChromeUtils.getClassName(elements[0]) == "HTMLHtmlElement"
+    ) {
+      return elements[1];
+    }
+
+    return elements[0];
   }
 
   /**
@@ -54,10 +138,27 @@ class NodePicker {
    * @return {Boolean}
    */
   _isEventAllowed({ view }) {
-    const { window } = this._targetActor;
+    // Allow "non multiprocess" browser toolbox to inspect documents loaded in the parent
+    // process (e.g. about:robots)
+    if (this._targetActor.window instanceof Ci.nsIDOMChromeWindow) {
+      return true;
+    }
 
+    return this._targetActor.windows.includes(view);
+  }
+
+  /**
+   * Returns true if the passed event original target is in the RemoteNodePickerNotice.
+   *
+   * @param {Event} event
+   * @returns {Boolean}
+   */
+  _isEventInRemoteNodePickerNotice(event) {
     return (
-      window instanceof Ci.nsIDOMChromeWindow || isWindowIncluded(window, view)
+      this.#remoteNodePickerNoticeHighlighter &&
+      event.originalTarget?.closest?.(
+        `#${this.#remoteNodePickerNoticeHighlighter.rootElementId}`
+      )
     );
   }
 
@@ -74,7 +175,7 @@ class NodePicker {
   _onPick(event) {
     // If the picked node is a remote frame, then we need to let the event through
     // since there's a highlighter actor in that sub-frame also picking.
-    if (isRemoteFrame(event.target)) {
+    if (isRemoteBrowserElement(event.target)) {
       return;
     }
 
@@ -83,9 +184,18 @@ class NodePicker {
       return;
     }
 
-    // If Shift is pressed, this is only a preview click.
+    // If the click was done inside the node picker notice highlighter (e.g. clicking the
+    // close button), directly call its `onClick` method, as it doesn't have event listeners
+    // itself, to avoid managing events (+ suppressedEventListeners) for the same target
+    // from different places.
+    if (this._isEventInRemoteNodePickerNotice(event)) {
+      this.#remoteNodePickerNoticeHighlighter.onClick(event);
+      return;
+    }
+
+    // If Ctrl (Or Cmd on OSX) is pressed, this is only a preview click.
     // Send the event to the client, but don't stop picking.
-    if (event.shiftKey) {
+    if ((IS_OSX && event.metaKey) || (!IS_OSX && event.ctrlKey)) {
       this._walker.emit(
         "picker-node-previewed",
         this._findAndAttachElement(event)
@@ -93,8 +203,8 @@ class NodePicker {
       return;
     }
 
-    this._stopPickerListeners();
-    this._isPicking = false;
+    this._stopPicking();
+
     if (!this._currentNode) {
       this._currentNode = this._findAndAttachElement(event);
     }
@@ -105,13 +215,23 @@ class NodePicker {
   _onHovered(event) {
     // If the hovered node is a remote frame, then we need to let the event through
     // since there's a highlighter actor in that sub-frame also picking.
-    if (isRemoteFrame(event.target)) {
+    if (isRemoteBrowserElement(event.target)) {
       return;
     }
 
     this._preventContentEvent(event);
     if (!this._isEventAllowed(event)) {
       return;
+    }
+
+    // Always call remoteNodePickerNotice handleHoveredElement so the hover state can be updated
+    // (it doesn't have its own event listeners to avoid managing events and suppressed
+    // events for the same target from different places).
+    if (this.#remoteNodePickerNoticeHighlighter) {
+      this.#remoteNodePickerNoticeHighlighter.handleHoveredElement(event);
+      if (this._isEventInRemoteNodePickerNotice(event)) {
+        return;
+      }
     }
 
     this._currentNode = this._findAndAttachElement(event);
@@ -215,7 +335,7 @@ class NodePicker {
   // through. That is because otherwise the pickers started in nested remote frames will
   // never have a chance of picking their own elements.
   _preventContentEvent(event) {
-    if (isRemoteFrame(event.target)) {
+    if (isRemoteBrowserElement(event.target)) {
       return;
     }
     event.stopPropagation();
@@ -233,42 +353,50 @@ class NodePicker {
    * @param callback The function to call with suppressed events, or null.
    */
   _setSuppressedEventListener(callback) {
-    const { document } = this._targetActor.window;
+    if (!this._targetActor?.window?.document) {
+      return;
+    }
 
     // Pass the callback to setSuppressedEventListener as an EventListener.
-    document.setSuppressedEventListener(
+    this._targetActor.window.document.setSuppressedEventListener(
       callback ? { handleEvent: callback } : null
     );
   }
 
   _startPickerListeners() {
     const target = this._targetActor.chromeEventHandler;
-    target.addEventListener("mousemove", this._onHovered, true);
-    target.addEventListener("click", this._onPick, true);
-    target.addEventListener("mousedown", this._preventContentEvent, true);
-    target.addEventListener("mouseup", this._preventContentEvent, true);
-    target.addEventListener("dblclick", this._preventContentEvent, true);
-    target.addEventListener("keydown", this._onKey, true);
-    target.addEventListener("keyup", this._preventContentEvent, true);
+    this.#eventListenersAbortController = new AbortController();
+    const config = {
+      capture: true,
+      signal: this.#eventListenersAbortController.signal,
+    };
+    target.addEventListener("mousemove", this._onHovered, config);
+    target.addEventListener("click", this._onPick, config);
+    target.addEventListener("mousedown", this._preventContentEvent, config);
+    target.addEventListener("mouseup", this._preventContentEvent, config);
+    target.addEventListener("dblclick", this._preventContentEvent, config);
+    target.addEventListener("keydown", this._onKey, config);
+    target.addEventListener("keyup", this._preventContentEvent, config);
 
     this._setSuppressedEventListener(this._onSuppressedEvent);
   }
 
   _stopPickerListeners() {
-    const target = this._targetActor.chromeEventHandler;
-    if (!target) {
-      return;
-    }
-
-    target.removeEventListener("mousemove", this._onHovered, true);
-    target.removeEventListener("click", this._onPick, true);
-    target.removeEventListener("mousedown", this._preventContentEvent, true);
-    target.removeEventListener("mouseup", this._preventContentEvent, true);
-    target.removeEventListener("dblclick", this._preventContentEvent, true);
-    target.removeEventListener("keydown", this._onKey, true);
-    target.removeEventListener("keyup", this._preventContentEvent, true);
-
     this._setSuppressedEventListener(null);
+
+    if (this.#eventListenersAbortController) {
+      this.#eventListenersAbortController.abort();
+      this.#eventListenersAbortController = null;
+    }
+  }
+
+  _stopPicking() {
+    this._stopPickerListeners();
+    this._isPicking = false;
+    this._hoveredNode = null;
+    if (this.#remoteNodePickerNoticeHighlighter) {
+      this.#remoteNodePickerNoticeHighlighter.hide();
+    }
   }
 
   cancelPick() {
@@ -277,13 +405,11 @@ class NodePicker {
     }
 
     if (this._isPicking) {
-      this._stopPickerListeners();
-      this._isPicking = false;
-      this._hoveredNode = null;
+      this._stopPicking();
     }
   }
 
-  pick(doFocus = false) {
+  pick(doFocus = false, isLocalTab = true) {
     if (this._targetActor.threadActor) {
       this._targetActor.threadActor.hideOverlay();
     }
@@ -298,6 +424,14 @@ class NodePicker {
     if (doFocus) {
       this._targetActor.window.focus();
     }
+
+    if (!isLocalTab) {
+      this.remoteNodePickerNoticeHighlighter.show();
+    }
+  }
+
+  resetHoveredNodeReference() {
+    this._hoveredNode = null;
   }
 
   destroy() {
@@ -305,6 +439,7 @@ class NodePicker {
 
     this._targetActor = null;
     this._walker = null;
+    this.#remoteNodePickerNoticeHighlighter = null;
   }
 }
 

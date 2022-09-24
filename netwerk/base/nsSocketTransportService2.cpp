@@ -5,7 +5,6 @@
 
 #include "nsSocketTransportService2.h"
 
-#include "GeckoProfiler.h"
 #include "IOActivityMonitor.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/ChaosMode.h"
@@ -13,6 +12,8 @@
 #include "mozilla/Likely.h"
 #include "mozilla/PodOperations.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/ProfilerMarkers.h"
+#include "mozilla/ProfilerThreadSleep.h"
 #include "mozilla/PublicSSL.h"
 #include "mozilla/ReverseIterator.h"
 #include "mozilla/Services.h"
@@ -302,6 +303,18 @@ NS_IMETHODIMP
 nsSocketTransportService::DelayedDispatch(already_AddRefed<nsIRunnable>,
                                           uint32_t) {
   return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+nsSocketTransportService::RegisterShutdownTask(nsITargetShutdownTask* task) {
+  nsCOMPtr<nsIThread> thread = GetThreadSafely();
+  return thread ? thread->RegisterShutdownTask(task) : NS_ERROR_UNEXPECTED;
+}
+
+NS_IMETHODIMP
+nsSocketTransportService::UnregisterShutdownTask(nsITargetShutdownTask* task) {
+  nsCOMPtr<nsIThread> thread = GetThreadSafely();
+  return thread ? thread->UnregisterShutdownTask(task) : NS_ERROR_UNEXPECTED;
 }
 
 NS_IMETHODIMP
@@ -686,16 +699,38 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
   SOCKET_LOG(("    timeout = %i milliseconds\n",
               PR_IntervalToMilliseconds(pollTimeout)));
 
-  int32_t rv = [&]() {
+  int32_t rv;
+  {
+#ifdef MOZ_GECKO_PROFILER
+    TimeStamp startTime = TimeStamp::Now();
     if (pollTimeout != PR_INTERVAL_NO_WAIT) {
-      // There will be an actual non-zero wait, let the profiler record
-      // idle time and mark thread as sleeping around the polling call.
-      AUTO_PROFILER_LABEL("nsSocketTransportService::Poll", IDLE);
-      AUTO_PROFILER_THREAD_SLEEP;
-      return PR_Poll(pollList, pollCount, pollTimeout);
+      // There will be an actual non-zero wait, let the profiler know about it
+      // by marking thread as sleeping around the polling call.
+      profiler_thread_sleep();
     }
-    return PR_Poll(pollList, pollCount, pollTimeout);
-  }();
+#endif
+
+    rv = PR_Poll(pollList, pollCount, pollTimeout);
+
+#ifdef MOZ_GECKO_PROFILER
+    if (pollTimeout != PR_INTERVAL_NO_WAIT) {
+      profiler_thread_wake();
+    }
+    if (profiler_thread_is_being_profiled_for_markers()) {
+      PROFILER_MARKER_TEXT(
+          "SocketTransportService::Poll", NETWORK,
+          MarkerTiming::IntervalUntilNowFrom(startTime),
+          pollTimeout == PR_INTERVAL_NO_TIMEOUT
+              ? nsPrintfCString("Poll count: %u, Poll timeout: NO_TIMEOUT",
+                                pollCount)
+          : pollTimeout == PR_INTERVAL_NO_WAIT
+              ? nsPrintfCString("Poll count: %u, Poll timeout: NO_WAIT",
+                                pollCount)
+              : nsPrintfCString("Poll count: %u, Poll timeout: %ums", pollCount,
+                                PR_IntervalToMilliseconds(pollTimeout)));
+    }
+#endif
+  }
 
   if (Telemetry::CanRecordPrereleaseData() && !pollStart.IsNull()) {
     *pollDuration = TimeStamp::NowLoRes() - pollStart;
@@ -719,7 +754,7 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
 NS_IMPL_ISUPPORTS(nsSocketTransportService, nsISocketTransportService,
                   nsIRoutedSocketTransportService, nsIEventTarget,
                   nsISerialEventTarget, nsIThreadObserver, nsIRunnable,
-                  nsPISocketTransportService, nsIObserver,
+                  nsPISocketTransportService, nsIObserver, nsINamed,
                   nsIDirectTaskDispatcher)
 
 static const char* gCallbackPrefs[] = {
@@ -1557,6 +1592,12 @@ void nsSocketTransportService::NotifyKeepaliveEnabledPrefChange(
 }
 
 NS_IMETHODIMP
+nsSocketTransportService::GetName(nsACString& aName) {
+  aName.AssignLiteral("nsSocketTransportService");
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 nsSocketTransportService::Observe(nsISupports* subject, const char* topic,
                                   const char16_t* data) {
   SOCKET_LOG(("nsSocketTransportService::Observe topic=%s", topic));
@@ -1604,7 +1645,6 @@ nsSocketTransportService::Observe(nsISupports* subject, const char* topic,
     ShutdownThread();
   } else if (!strcmp(topic, NS_NETWORK_LINK_TOPIC)) {
     mLastNetworkLinkChangeTime = PR_IntervalNow();
-    mNotTrustedMitmDetected = false;
   }
 
   return NS_OK;
@@ -1764,31 +1804,54 @@ void nsSocketTransportService::AnalyzeConnection(nsTArray<SocketInfo>* data,
 
   NS_ENSURE_TRUE_VOID(idLayer);
 
-  bool tcp = PR_GetDescType(idLayer) == PR_DESC_SOCKET_TCP;
-
-  PRNetAddr peer_addr;
-  PodZero(&peer_addr);
-  PRStatus rv = PR_GetPeerName(aFD, &peer_addr);
-  if (rv != PR_SUCCESS) {
-    return;
-  }
-
+  PRDescType type = PR_GetDescType(idLayer);
   char host[64] = {0};
-  rv = PR_NetAddrToString(&peer_addr, host, sizeof(host));
-  if (rv != PR_SUCCESS) {
-    return;
+  uint16_t port;
+  const char* type_desc;
+
+  if (type == PR_DESC_SOCKET_TCP) {
+    type_desc = "TCP";
+    PRNetAddr peer_addr;
+    PodZero(&peer_addr);
+
+    PRStatus rv = PR_GetPeerName(aFD, &peer_addr);
+    if (rv != PR_SUCCESS) {
+      return;
+    }
+
+    rv = PR_NetAddrToString(&peer_addr, host, sizeof(host));
+    if (rv != PR_SUCCESS) {
+      return;
+    }
+
+    if (peer_addr.raw.family == PR_AF_INET) {
+      port = peer_addr.inet.port;
+    } else {
+      port = peer_addr.ipv6.port;
+    }
+    port = PR_ntohs(port);
+  } else {
+    if (type == PR_DESC_SOCKET_UDP) {
+      type_desc = "UDP";
+    } else {
+      type_desc = "other";
+    }
+    NetAddr addr;
+    if (context->mHandler->GetRemoteAddr(&addr) != NS_OK) {
+      return;
+    }
+    if (!addr.ToStringBuffer(host, sizeof(host))) {
+      return;
+    }
+    if (addr.GetPort(&port) != NS_OK) {
+      return;
+    }
   }
 
-  uint16_t port;
-  if (peer_addr.raw.family == PR_AF_INET) {
-    port = peer_addr.inet.port;
-  } else {
-    port = peer_addr.ipv6.port;
-  }
-  port = PR_ntohs(port);
   uint64_t sent = context->mHandler->ByteCountSent();
   uint64_t received = context->mHandler->ByteCountReceived();
-  SocketInfo info = {nsCString(host), sent, received, port, aActive, tcp};
+  SocketInfo info = {nsCString(host),     sent, received, port, aActive,
+                     nsCString(type_desc)};
 
   data->AppendElement(info);
 }

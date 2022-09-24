@@ -23,8 +23,7 @@
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 SVGElement::NumberInfo SVGGeometryElement::sNumberInfo = {nsGkAtoms::pathLength,
                                                           0, false};
@@ -96,9 +95,8 @@ already_AddRefed<Path> SVGGeometryElement::GetOrBuildPath(
   // and it's not a capturing drawtarget. A capturing DT might start using the
   // the Path object on a different thread (OMTP), and we might have a data race
   // if we keep a handle to it.
-  bool cacheable = (aDrawTarget->GetBackendType() ==
-                    gfxPlatform::GetPlatform()->GetDefaultContentBackend()) &&
-                   !aDrawTarget->IsCaptureDT();
+  bool cacheable = aDrawTarget->GetBackendType() ==
+                   gfxPlatform::GetPlatform()->GetDefaultContentBackend();
 
   if (cacheable && mCachedPath && mCachedPath->GetFillRule() == aFillRule &&
       aDrawTarget->GetBackendType() == mCachedPath->GetBackendType()) {
@@ -179,27 +177,31 @@ static Point GetPointFrom(const DOMPointInit& aPoint) {
 }
 
 bool SVGGeometryElement::IsPointInFill(const DOMPointInit& aPoint) {
-  auto point = GetPointFrom(aPoint);
+  // d is a presentation attribute, so make sure style is up to date:
+  FlushStyleIfNeeded();
 
   RefPtr<Path> path = GetOrBuildPathForHitTest();
   if (!path) {
     return false;
   }
 
+  auto point = GetPointFrom(aPoint);
   return path->ContainsPoint(point, {});
 }
 
 bool SVGGeometryElement::IsPointInStroke(const DOMPointInit& aPoint) {
-  auto point = GetPointFrom(aPoint);
+  // stroke-* attributes and the d attribute are presentation attributes, so we
+  // flush the layout before building the path.
+  if (nsCOMPtr<Document> doc = GetComposedDoc()) {
+    doc->FlushPendingNotifications(FlushType::Layout);
+  }
 
   RefPtr<Path> path = GetOrBuildPathForHitTest();
   if (!path) {
     return false;
   }
-  if (nsCOMPtr<Document> doc = GetComposedDoc()) {
-    doc->FlushPendingNotifications(FlushType::Layout);
-  }
 
+  auto point = GetPointFrom(aPoint);
   bool res = false;
   SVGGeometryProperty::DoForComputedStyle(this, [&](const ComputedStyle* s) {
     // Per spec, we should take vector-effect into account.
@@ -225,13 +227,16 @@ bool SVGGeometryElement::IsPointInStroke(const DOMPointInit& aPoint) {
   return res;
 }
 
-float SVGGeometryElement::GetTotalLength() {
-  RefPtr<Path> flat = GetOrBuildPathForMeasuring();
-  return flat ? flat->ComputeLength() : 0.f;
+float SVGGeometryElement::GetTotalLengthForBinding() {
+  // d is a presentation attribute, so make sure style is up to date:
+  FlushStyleIfNeeded();
+  return GetTotalLength();
 }
 
 already_AddRefed<DOMSVGPoint> SVGGeometryElement::GetPointAtLength(
     float distance, ErrorResult& rv) {
+  // d is a presentation attribute, so make sure style is up to date:
+  FlushStyleIfNeeded();
   RefPtr<Path> path = GetOrBuildPathForMeasuring();
   if (!path) {
     rv.ThrowInvalidStateError("No path available for measuring");
@@ -275,5 +280,26 @@ already_AddRefed<DOMSVGAnimatedNumber> SVGGeometryElement::PathLength() {
   return mPathLength.ToDOMAnimatedNumber(this);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+float SVGGeometryElement::GetTotalLength() {
+  RefPtr<Path> flat = GetOrBuildPathForMeasuring();
+  return flat ? flat->ComputeLength() : 0.f;
+}
+
+void SVGGeometryElement::FlushStyleIfNeeded() {
+  // Note: we still can set d property on other elements which don't have d
+  // attribute, but we don't look at the d property on them, so here we only
+  // care about the element with d attribute, i.e. SVG path element.
+  if (GetPathDataAttrName() != nsGkAtoms::d ||
+      !StaticPrefs::layout_css_d_property_enabled()) {
+    return;
+  }
+
+  RefPtr<Document> doc = GetComposedDoc();
+  if (!doc) {
+    return;
+  }
+
+  doc->FlushPendingNotifications(FlushType::Style);
+}
+
+}  // namespace mozilla::dom

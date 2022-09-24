@@ -119,3 +119,19 @@ On the newtab/homepage it reports the `source` as `newtab`.
 let source = "newtab" | undefined;
 let willShowDefaultPrompt = boolean;
 ```
+
+### `captivePortalLogin`
+
+Happens when the user successfully goes through a captive portal authentication flow.
+
+### `preferenceObserver`
+
+Watch for changes on any number of preferences. Runs when a pref is added, removed or modified.
+
+```js
+// Register a message with the following trigger
+{
+  id: "preferenceObserver",
+  params: ["pref name"]
+}
+```

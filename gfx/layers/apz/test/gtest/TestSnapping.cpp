@@ -11,17 +11,16 @@
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_mousewheel.h"
 
-class APZCSnappingTesterLayersOnly : public APZCTreeManagerTester {
+class APZCSnappingTesterMock : public APZCTreeManagerTester {
  public:
-  APZCSnappingTesterLayersOnly() { mLayersOnly = true; }
+  APZCSnappingTesterMock() { CreateMockHitTester(); }
 };
 
-TEST_F(APZCSnappingTesterLayersOnly, Bug1265510) {
-  const char* layerTreeSyntax = "c(t)";
-  nsIntRegion layerVisibleRegion[] = {nsIntRegion(IntRect(0, 0, 100, 100)),
-                                      nsIntRegion(IntRect(0, 100, 100, 100))};
-  root =
-      CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
+TEST_F(APZCSnappingTesterMock, Bug1265510) {
+  const char* treeShape = "x(x)";
+  LayerIntRegion layerVisibleRegion[] = {LayerIntRect(0, 0, 100, 100),
+                                         LayerIntRect(0, 100, 100, 100)};
+  CreateScrollData(treeShape, layerVisibleRegion);
   SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
                             CSSRect(0, 0, 100, 200));
   SetScrollableFrameMetrics(layers[1], ScrollableLayerGuid::START_SCROLL_ID + 1,
@@ -30,15 +29,22 @@ TEST_F(APZCSnappingTesterLayersOnly, Bug1265510) {
 
   ScrollSnapInfo snap;
   snap.mScrollSnapStrictnessY = StyleScrollSnapStrictness::Mandatory;
-  snap.mSnapPositionY.AppendElement(0 * AppUnitsPerCSSPixel());
-  snap.mSnapPositionY.AppendElement(100 * AppUnitsPerCSSPixel());
+  snap.mSnapportSize = CSSSize::ToAppUnits(
+      layerVisibleRegion[0].GetBounds().Size() * LayerToCSSScale(1.0));
 
-  ScrollMetadata metadata = root->GetScrollMetadata(0);
-  metadata.SetSnapInfo(ScrollSnapInfo(snap));
-  root->SetScrollMetadata(metadata);
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(0 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 0, 10, 10))));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(100 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 100, 10, 10))));
+
+  ModifyFrameMetrics(root, [&](ScrollMetadata& aSm, FrameMetrics&) {
+    aSm.SetSnapInfo(ScrollSnapInfo(snap));
+  });
 
   UniquePtr<ScopedLayerTreeRegistration> registration =
-      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, root, mcc);
+      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
   UpdateHitTestingTree();
 
   TestAsyncPanZoomController* outer = ApzcOf(layers[0]);
@@ -48,6 +54,7 @@ TEST_F(APZCSnappingTesterLayersOnly, Bug1265510) {
   // (6 lines of 10px each). APZC will actually scroll to y=100 because of the
   // mandatory snap coordinate there.
   TimeStamp now = mcc->Time();
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
   SmoothWheel(manager, ScreenIntPoint(50, 80), ScreenPoint(0, 6), now);
   // Advance in 5ms increments until we've scrolled by 70px. At this point, the
   // closest snap point is y=100, and the inner frame should be under the mouse
@@ -64,6 +71,7 @@ TEST_F(APZCSnappingTesterLayersOnly, Bug1265510) {
   TimeStamp newTransactionTime =
       now + TimeDuration::FromMilliseconds(
                 StaticPrefs::mousewheel_transaction_timeout() + 100);
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID + 1);
   SmoothWheel(manager, ScreenIntPoint(50, 80), ScreenPoint(0, 6),
               newTransactionTime);
   inner->AdvanceAnimationsUntilEnd();
@@ -86,33 +94,38 @@ TEST_F(APZCSnappingTesterLayersOnly, Bug1265510) {
           .y);
 }
 
-TEST_F(APZCSnappingTesterLayersOnly, Snap_After_Pinch) {
-  const char* layerTreeSyntax = "c";
-  nsIntRegion layerVisibleRegion[] = {
-      nsIntRegion(IntRect(0, 0, 100, 100)),
+TEST_F(APZCSnappingTesterMock, Snap_After_Pinch) {
+  const char* treeShape = "x";
+  LayerIntRegion layerVisibleRegion[] = {
+      LayerIntRect(0, 0, 100, 100),
   };
-  root =
-      CreateLayerTree(layerTreeSyntax, layerVisibleRegion, nullptr, lm, layers);
+  CreateScrollData(treeShape, layerVisibleRegion);
   SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
                             CSSRect(0, 0, 100, 200));
 
   // Set up some basic scroll snapping
   ScrollSnapInfo snap;
   snap.mScrollSnapStrictnessY = StyleScrollSnapStrictness::Mandatory;
+  snap.mSnapportSize = CSSSize::ToAppUnits(
+      layerVisibleRegion[0].GetBounds().Size() * LayerToCSSScale(1.0));
 
-  snap.mSnapPositionY.AppendElement(0 * AppUnitsPerCSSPixel());
-  snap.mSnapPositionY.AppendElement(100 * AppUnitsPerCSSPixel());
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(0 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 0, 10, 10))));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(100 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 100, 10, 10))));
 
   // Save the scroll snap info on the root APZC.
   // Also mark the root APZC as "root content", since APZC only allows
   // zooming on the root content APZC.
-  ScrollMetadata metadata = root->GetScrollMetadata(0);
-  metadata.SetSnapInfo(ScrollSnapInfo(snap));
-  metadata.GetMetrics().SetIsRootContent(true);
-  root->SetScrollMetadata(metadata);
+  ModifyFrameMetrics(root, [&](ScrollMetadata& aSm, FrameMetrics& aMetrics) {
+    aSm.SetSnapInfo(ScrollSnapInfo(snap));
+    aMetrics.SetIsRootContent(true);
+  });
 
   UniquePtr<ScopedLayerTreeRegistration> registration =
-      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, root, mcc);
+      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
   UpdateHitTestingTree();
 
   RefPtr<TestAsyncPanZoomController> apzc = ApzcOf(root);
@@ -126,3 +139,159 @@ TEST_F(APZCSnappingTesterLayersOnly, Snap_After_Pinch) {
 
   apzc->AssertStateIsSmoothMsdScroll();
 }
+
+// Currently fails on Android because on the platform we have a different
+// VelocityTracker.
+#ifndef MOZ_WIDGET_ANDROID
+TEST_F(APZCSnappingTesterMock, SnapOnPanEndWithZeroVelocity) {
+  // Use pref values for desktop everywhere.
+  SCOPED_GFX_PREF_FLOAT("apz.fling_friction", 0.002);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_stopped_threshold", 0.01);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_x1", 0.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_x2", 1.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_y1", 0.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_y2", 1.0);
+  SCOPED_GFX_PREF_INT("apz.velocity_relevance_time_ms", 100);
+
+  const char* treeShape = "x";
+  LayerIntRegion layerVisibleRegion[] = {
+      LayerIntRect(0, 0, 100, 100),
+  };
+  CreateScrollData(treeShape, layerVisibleRegion);
+  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
+                            CSSRect(0, 0, 100, 400));
+
+  // Set up two snap points, 30 and 100.
+  ScrollSnapInfo snap;
+  snap.mScrollSnapStrictnessY = StyleScrollSnapStrictness::Mandatory;
+  snap.mSnapportSize = CSSSize::ToAppUnits(
+      layerVisibleRegion[0].GetBounds().Size() * LayerToCSSScale(1.0));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(30 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 30, 10, 10))));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(100 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 100, 10, 10))));
+
+  // Save the scroll snap info on the root APZC.
+  ModifyFrameMetrics(root, [&](ScrollMetadata& aSm, FrameMetrics& aMetrics) {
+    aSm.SetSnapInfo(ScrollSnapInfo(snap));
+  });
+
+  UniquePtr<ScopedLayerTreeRegistration> registration =
+      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
+  UpdateHitTestingTree();
+
+  RefPtr<TestAsyncPanZoomController> apzc = ApzcOf(root);
+
+  // Send a series of pan gestures to scroll to position at 50.
+  const ScreenIntPoint position = ScreenIntPoint(50, 30);
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_START, manager, position,
+             ScreenPoint(0, 10), mcc->Time());
+  mcc->AdvanceByMillis(5);
+  apzc->AdvanceAnimations(mcc->GetSampleTime());
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_PAN, manager, position,
+             ScreenPoint(0, 40), mcc->Time());
+  mcc->AdvanceByMillis(5);
+  apzc->AdvanceAnimations(mcc->GetSampleTime());
+
+  // Make sure the velocity just before sending a pan-end is zero.
+  EXPECT_EQ(apzc->GetVelocityVector().y, 0);
+
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_END, manager, position,
+             ScreenPoint(0, 0), mcc->Time());
+
+  // Now a smooth animation has been triggered for snapping to 30.
+  apzc->AssertStateIsSmoothMsdScroll();
+
+  apzc->AdvanceAnimationsUntilEnd();
+  // The snapped position should be 30 rather than 100 because it's the nearest
+  // snap point.
+  EXPECT_EQ(
+      apzc->GetCurrentAsyncScrollOffset(AsyncPanZoomController::eForHitTesting)
+          .y,
+      30);
+}
+
+// Smililar to above SnapOnPanEndWithZeroVelocity but with positive velocity so
+// that the snap position would be the one in the scrolling direction.
+TEST_F(APZCSnappingTesterMock, SnapOnPanEndWithPositiveVelocity) {
+  // Use pref values for desktop everywhere.
+  SCOPED_GFX_PREF_FLOAT("apz.fling_friction", 0.002);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_stopped_threshold", 0.01);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_x1", 0.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_x2", 1.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_y1", 0.0);
+  SCOPED_GFX_PREF_FLOAT("apz.fling_curve_function_y2", 1.0);
+  SCOPED_GFX_PREF_INT("apz.velocity_relevance_time_ms", 100);
+
+  const char* treeShape = "x";
+  LayerIntRegion layerVisibleRegion[] = {
+      LayerIntRect(0, 0, 100, 100),
+  };
+  CreateScrollData(treeShape, layerVisibleRegion);
+  SetScrollableFrameMetrics(root, ScrollableLayerGuid::START_SCROLL_ID,
+                            CSSRect(0, 0, 100, 400));
+
+  // Set up two snap points, 30 and 100.
+  ScrollSnapInfo snap;
+  snap.mScrollSnapStrictnessY = StyleScrollSnapStrictness::Mandatory;
+  snap.mSnapportSize = CSSSize::ToAppUnits(
+      layerVisibleRegion[0].GetBounds().Size() * LayerToCSSScale(1.0));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(30 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 30, 10, 10))));
+  snap.mSnapTargets.AppendElement(
+      ScrollSnapInfo::SnapTarget(Nothing(), Some(100 * AppUnitsPerCSSPixel()),
+                                 CSSRect::ToAppUnits(CSSRect(0, 100, 10, 10))));
+
+  // Save the scroll snap info on the root APZC.
+  ModifyFrameMetrics(root, [&](ScrollMetadata& aSm, FrameMetrics& aMetrics) {
+    aSm.SetSnapInfo(ScrollSnapInfo(snap));
+  });
+
+  UniquePtr<ScopedLayerTreeRegistration> registration =
+      MakeUnique<ScopedLayerTreeRegistration>(LayersId{0}, mcc);
+  UpdateHitTestingTree();
+
+  RefPtr<TestAsyncPanZoomController> apzc = ApzcOf(root);
+
+  // Send a series of pan gestures that a pan-end event happens at 65
+  const ScreenIntPoint position = ScreenIntPoint(50, 30);
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_START, manager, position,
+             ScreenPoint(0, 10), mcc->Time());
+  mcc->AdvanceByMillis(5);
+  apzc->AdvanceAnimations(mcc->GetSampleTime());
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_PAN, manager, position,
+             ScreenPoint(0, 35), mcc->Time());
+  mcc->AdvanceByMillis(5);
+  apzc->AdvanceAnimations(mcc->GetSampleTime());
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_PAN, manager, position,
+             ScreenPoint(0, 20), mcc->Time());
+  mcc->AdvanceByMillis(5);
+  apzc->AdvanceAnimations(mcc->GetSampleTime());
+
+  // There should be positive velocity in this case.
+  EXPECT_GT(apzc->GetVelocityVector().y, 0);
+
+  QueueMockHitResult(ScrollableLayerGuid::START_SCROLL_ID);
+  PanGesture(PanGestureInput::PANGESTURE_END, manager, position,
+             ScreenPoint(0, 0), mcc->Time());
+  mcc->AdvanceByMillis(5);
+
+  // A smooth animation has been triggered by the pan-end event above.
+  apzc->AssertStateIsSmoothMsdScroll();
+
+  apzc->AdvanceAnimationsUntilEnd();
+  EXPECT_EQ(
+      apzc->GetCurrentAsyncScrollOffset(AsyncPanZoomController::eForHitTesting)
+          .y,
+      100);
+}
+#endif

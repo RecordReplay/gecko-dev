@@ -10,9 +10,9 @@ https://bugzilla.mozilla.org/show_bug.cgi?id=372685
 
   <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"></script>
 
-<menuitem id="a" style="display: -moz-stack;">
+<menuitem id="a" style="display: -moz-box;">
 <box id="b" style="display: -moz-popup; ">
-<box id="c" style="position: fixed;"></box>
+<box id="c" style="position: fixed; display: block;"></box>
 </box>
 </menuitem>
 

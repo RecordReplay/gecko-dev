@@ -26,6 +26,7 @@ window.webglTestHarness = {
   },
 
   notifyFinished(testPath) {
+    console.error('webglTestHarness.notifyFinished');
     if (parent) {
       parent.SimpleTest.finish();
     } else {
@@ -54,7 +55,7 @@ if (parent) {
       parent.SimpleTest.requestLongerTimeout(timeoutLengthMultiplier);
     }
   } catch (e) {
-    console.log('Warning: No SpecialPowers.');
+    console.error('Warning: No SpecialPowers.');
   }
 };
 
@@ -67,6 +68,8 @@ function runTest() {
 }
 
 SpecialPowers.pushPrefEnv({"set": [
+  ['dom.workers.requestAnimationFrame', true],
+  ['gfx.offscreencanvas.enabled', true],
   ['webgl.force-enabled', true],
   ['webgl.enable-draft-extensions', true],
 ]}, runTest);

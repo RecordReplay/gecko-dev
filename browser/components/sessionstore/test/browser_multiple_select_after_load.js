@@ -22,18 +22,22 @@ add_task(async function() {
 
   // Change the "multiple" attribute of the <select> element and select some
   // options.
-  await SpecialPowers.spawn(tab.linkedBrowser, [VALUES], values => {
-    content.document.querySelector("select").multiple = true;
-    for (let v of values) {
-      content.document.querySelector(`option[value="${v}"]`).selected = true;
-    }
-  });
+  await setPropertyOfFormField(tab.linkedBrowser, "select", "multiple", true);
+
+  for (let v of VALUES) {
+    await setPropertyOfFormField(
+      tab.linkedBrowser,
+      `option[value="${v}"]`,
+      "selected",
+      true
+    );
+  }
 
   // Remove the tab.
   await promiseRemoveTabAndSessionState(tab);
 
   // Verify state of the closed tab.
-  let tabData = JSON.parse(ss.getClosedTabData(window));
+  let tabData = ss.getClosedTabData(window);
   Assert.deepEqual(
     tabData[0].state.formdata.id.select,
     VALUES,

@@ -37,6 +37,7 @@ if CONFIG["OS_ARCH"] == "WINNT":
 
     OS_LIBS += [
         "mfuuid",
+        "uuid",
     ]
 
     DEFINES["ENABLE_WMF"] = True
@@ -74,3 +75,5 @@ elif CONFIG["CC_TYPE"] == "clang-cl":
         "-FI",
         "stdio.h",  # for sprintf() prototype
     ]
+
+REQUIRES_UNIFIED_BUILD = True

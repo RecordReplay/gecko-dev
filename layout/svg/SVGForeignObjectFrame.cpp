@@ -154,7 +154,7 @@ void SVGForeignObjectFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   if (!static_cast<const SVGElement*>(GetContent())->HasValidDimensions()) {
     return;
   }
-  nsDisplayList newList;
+  nsDisplayList newList(aBuilder);
   nsDisplayListSet set(&newList, &newList, &newList, &newList, &newList,
                        &newList);
   DisplayOutline(aBuilder, set);
@@ -275,9 +275,9 @@ void SVGForeignObjectFrame::PaintSVG(gfxContext& aContext,
   if (aImgParams.imageFlags & imgIContainer::FLAG_HIGH_QUALITY_SCALING) {
     flags |= PaintFrameFlags::UseHighQualityScaling;
   }
-  Unused << nsLayoutUtils::PaintFrame(
-      &aContext, kid, nsRegion(kidDirtyRect), NS_RGBA(0, 0, 0, 0),
-      nsDisplayListBuilderMode::Painting, flags);
+  nsLayoutUtils::PaintFrame(&aContext, kid, nsRegion(kidDirtyRect),
+                            NS_RGBA(0, 0, 0, 0),
+                            nsDisplayListBuilderMode::Painting, flags);
 
   aContext.Restore();
 }

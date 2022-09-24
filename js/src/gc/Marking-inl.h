@@ -31,7 +31,17 @@ struct TaggedPtr {};
 
 template <>
 struct TaggedPtr<JS::Value> {
-  static JS::Value wrap(JSObject* obj) { return JS::ObjectOrNullValue(obj); }
+  static JS::Value wrap(JSObject* obj) {
+    if (!obj) {
+      return JS::NullValue();
+    }
+#ifdef ENABLE_RECORD_TUPLE
+    if (MaybeForwardedIsExtendedPrimitive(*obj)) {
+      return JS::ExtendedPrimitiveValue(*obj);
+    }
+#endif
+    return JS::ObjectValue(*obj);
+  }
   static JS::Value wrap(JSString* str) { return JS::StringValue(str); }
   static JS::Value wrap(JS::Symbol* sym) { return JS::SymbolValue(sym); }
   static JS::Value wrap(JS::BigInt* bi) { return JS::BigIntValue(bi); }
@@ -46,11 +56,9 @@ struct TaggedPtr<JS::Value> {
 
 template <>
 struct TaggedPtr<jsid> {
-  static jsid wrap(JSString* str) {
-    return JS::PropertyKey::fromNonIntAtom(str);
-  }
-  static jsid wrap(JS::Symbol* sym) { return SYMBOL_TO_JSID(sym); }
-  static jsid empty() { return JSID_VOID; }
+  static jsid wrap(JSString* str) { return JS::PropertyKey::NonIntAtom(str); }
+  static jsid wrap(JS::Symbol* sym) { return PropertyKey::Symbol(sym); }
+  static jsid empty() { return JS::PropertyKey::Void(); }
 };
 
 template <>
@@ -65,8 +73,10 @@ struct MightBeForwarded {
   static_assert(!std::is_same_v<Cell, T> && !std::is_same_v<TenuredCell, T>);
 
 #define CAN_FORWARD_KIND_OR(_1, _2, Type, _3, _4, _5, canCompact) \
-  (std::is_base_of_v<Type, T> && canCompact) ||
+  std::is_base_of_v<Type, T> ? canCompact:
 
+  // FOR_EACH_ALLOCKIND doesn't cover every possible type: make sure
+  // to default to `true` for unknown types.
   static constexpr bool value = FOR_EACH_ALLOCKIND(CAN_FORWARD_KIND_OR) true;
 #undef CAN_FORWARD_KIND_OR
 };
@@ -103,7 +113,7 @@ inline const JSClass* MaybeForwardedObjectClass(const JSObject* obj) {
 }
 
 template <typename T>
-inline bool MaybeForwardedObjectIs(JSObject* obj) {
+inline bool MaybeForwardedObjectIs(const JSObject* obj) {
   MOZ_ASSERT(!obj->isForwarded());
   return MaybeForwardedObjectClass(obj) == &T::class_;
 }

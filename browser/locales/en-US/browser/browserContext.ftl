@@ -173,6 +173,10 @@ main-context-menu-copy-email =
     .label = Copy Email Address
     .accesskey = l
 
+main-context-menu-copy-phone =
+    .label = Copy Phone Number
+    .accesskey = o
+
 main-context-menu-copy-link-simple =
     .label = Copy Link
     .accesskey = L
@@ -443,3 +447,13 @@ main-context-menu-inspect-a11y-properties =
 main-context-menu-eme-learn-more =
     .label = Learn more about DRM…
     .accesskey = D
+
+# Variables
+#   $containerName (String): The name of the current container
+main-context-menu-open-link-in-container-tab =
+    .label = Open Link in New { $containerName } Tab
+    .accesskey = T
+
+main-context-menu-reveal-password =
+    .label = Reveal Password
+    .accesskey = v

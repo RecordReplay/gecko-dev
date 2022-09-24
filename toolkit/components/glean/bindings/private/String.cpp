@@ -6,6 +6,9 @@
 
 #include "mozilla/glean/bindings/String.h"
 
+#include "Common.h"
+#include "jsapi.h"
+#include "js/String.h"
 #include "nsString.h"
 #include "mozilla/Components.h"
 #include "mozilla/ResultVariant.h"
@@ -22,17 +25,11 @@ void StringMetric::Set(const nsACString& aValue) const {
   if (scalarId) {
     Telemetry::ScalarSet(scalarId.extract(), NS_ConvertUTF8toUTF16(aValue));
   }
-#ifndef MOZ_GLEAN_ANDROID
   fog_string_set(mId, &aValue);
-#endif
 }
 
 Result<Maybe<nsCString>, nsCString> StringMetric::TestGetValue(
     const nsACString& aPingName) const {
-#ifdef MOZ_GLEAN_ANDROID
-  Unused << mId;
-  return Maybe<nsCString>();
-#else
   nsCString err;
   if (fog_string_test_get_error(mId, &aPingName, &err)) {
     return Err(err);
@@ -43,7 +40,6 @@ Result<Maybe<nsCString>, nsCString> StringMetric::TestGetValue(
   nsCString ret;
   fog_string_test_get_value(mId, &aPingName, &ret);
   return Some(ret);
-#endif
 }
 
 }  // namespace impl

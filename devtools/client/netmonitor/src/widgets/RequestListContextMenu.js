@@ -248,6 +248,8 @@ class RequestListContextMenu {
       connector,
       cloneRequest,
       openDetailsPanelTab,
+      openHTTPCustomRequestTab,
+      closeHTTPCustomRequestTab,
       sendCustomRequest,
       openStatistics,
       openRequestInTab,
@@ -305,11 +307,15 @@ class RequestListContextMenu {
       visible: copySubMenu.slice(10, 14).some(subMenu => subMenu.visible),
     });
 
+    const newEditAndResendPref = Services.prefs.getBoolPref(
+      "devtools.netmonitor.features.newEditAndResend"
+    );
+
     menu.push({
       id: "request-list-context-resend-only",
       label: L10N.getStr("netmonitor.context.resend.label"),
       accesskey: L10N.getStr("netmonitor.context.resend.accesskey"),
-      visible: !!(clickedRequest && !isCustom),
+      visible: !!(clickedRequest && !newEditAndResendPref && !isCustom),
       click: () => {
         cloneRequest(id);
         sendCustomRequest();
@@ -318,13 +324,22 @@ class RequestListContextMenu {
 
     menu.push({
       id: "request-list-context-resend",
-      label: L10N.getStr("netmonitor.context.editAndResend"),
-      accesskey: L10N.getStr("netmonitor.context.editAndResend.accesskey"),
+      label: newEditAndResendPref
+        ? L10N.getStr("netmonitor.context.resend.label")
+        : L10N.getStr("netmonitor.context.editAndResend"),
+      accesskey: newEditAndResendPref
+        ? L10N.getStr("netmonitor.context.resend.accesskey")
+        : L10N.getStr("netmonitor.context.editAndResend.accesskey"),
       visible: !!(clickedRequest && !isCustom),
       click: () => {
         this.fetchRequestHeaders(id).then(() => {
-          cloneRequest(id);
-          openDetailsPanelTab();
+          if (!newEditAndResendPref) {
+            cloneRequest(id);
+            openDetailsPanelTab();
+          } else {
+            closeHTTPCustomRequestTab();
+            openHTTPCustomRequestTab();
+          }
         });
       },
     });

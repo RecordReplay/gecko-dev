@@ -24,6 +24,11 @@ interface FuzzingFunctions {
   static void garbageCollectCompacting();
 
   /**
+   * Trigger a forced crash.
+   */
+  static void crash(optional DOMString reason = "");
+
+  /**
    * Synchronously perform a cycle collection.
    */
   static void cycleCollect();
@@ -39,6 +44,11 @@ interface FuzzingFunctions {
    */
   [Throws]
   static void enableAccessibility();
+
+  /**
+   * Send IPC fuzzing ready event to parent.
+   */
+  static void signalIPCReady();
 
   /**
    * synthesizeKeyboardEvents() synthesizes a set of "keydown",

@@ -12,13 +12,6 @@ AddonTestUtils.createAppInfo(
 
 add_task(async function setup() {
   await AddonTestUtils.promiseStartupManager();
-  // Ensure that the profile-after-change message has been notified,
-  // so that ServiceWokerRegistrar is going to be initialized.
-  Services.obs.notifyObservers(
-    null,
-    "profile-after-change",
-    "force-serviceworkerrestart-init"
-  );
 });
 
 add_task(async function test_method_return_runtime_port() {
@@ -121,6 +114,15 @@ add_task(async function test_method_return_runtime_port() {
             });
             return;
         }
+      } else if (
+        request.requestType == "getProperty" &&
+        request.apiObjectType == "Port" &&
+        request.apiName == "sender"
+      ) {
+        return {
+          type: Ci.mozIExtensionAPIRequestResult.RETURN_VALUE,
+          value: { id: "fake-sender-id-prop" },
+        };
       }
 
       throw new Error(`Unexpected request: ${request}`);
@@ -156,9 +158,19 @@ add_task(async function test_port_as_event_listener_eventListener_param() {
                 "function",
                 "port.disconnect method"
               );
-              port.onMessage.addListener(msg => {
+              port.onMessage.addListener((msg, portArg) => {
                 if (msg === "test-done") {
                   testLog("Got a port.onMessage event");
+                  testAsserts.equal(
+                    portArg?.name,
+                    "a-port-name-2",
+                    "Got port as last argument"
+                  );
+                  testAsserts.equal(
+                    portArg === port,
+                    true,
+                    "Got the same port instance as expected"
+                  );
                   resolve();
                 } else {
                   reject(
@@ -183,9 +195,10 @@ add_task(async function test_port_as_event_listener_eventListener_param() {
           request.requestType == "addListener" &&
           request.apiName == "onTestEvent"
         ) {
-          request.eventListener.callListener([], {
+          request.eventListener.callListener(["arg0", "arg1"], {
             apiObjectType: Ci.mozIExtensionListenerCallOptions.RUNTIME_PORT,
             apiObjectDescriptor: { portId: "port-id-2", name: "a-port-name-2" },
+            apiObjectPrepended: true,
           });
           return;
         } else if (
@@ -193,7 +206,10 @@ add_task(async function test_port_as_event_listener_eventListener_param() {
           request.apiObjectType == "Port" &&
           request.apiObjectId == "port-id-2"
         ) {
-          request.eventListener.callListener(["test-done"]);
+          request.eventListener.callListener(["test-done"], {
+            apiObjectType: Ci.mozIExtensionListenerCallOptions.RUNTIME_PORT,
+            apiObjectDescriptor: { portId: "port-id-2", name: "a-port-name-2" },
+          });
           return;
         }
 

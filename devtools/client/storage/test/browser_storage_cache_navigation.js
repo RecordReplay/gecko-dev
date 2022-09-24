@@ -6,24 +6,13 @@
 
 "use strict";
 
-// test without target switching
 add_task(async function() {
-  await testNavigation();
-});
-
-// test with target switching enabled
-add_task(async function() {
-  enableTargetSwitching();
-  await testNavigation();
-});
-
-async function testNavigation() {
   const URL1 = buildURLWithContent(
     "example.com",
     `<h1>example.com</h1>` +
       `<script>
         caches.open("lorem").then(cache => {
-          cache.add("${URL_ROOT_COM}storage-blank.html");
+          cache.add("${URL_ROOT_COM_SSL}storage-blank.html");
         });
         function clear() {
           caches.delete("lorem");
@@ -35,7 +24,7 @@ async function testNavigation() {
     `<h1>example.net</h1>` +
       `<script>
         caches.open("foo").then(cache => {
-          cache.add("${URL_ROOT_NET}storage-blank.html");
+          cache.add("${URL_ROOT_NET_SSL}storage-blank.html");
         });
         function clear() {
           caches.delete("foo");
@@ -49,10 +38,10 @@ async function testNavigation() {
 
   // Check first domain
   // check that host appears in the storage tree
-  checkTree(doc, ["Cache", "http://example.com", "lorem"]);
+  checkTree(doc, ["Cache", "https://example.com", "lorem"]);
   // check the table for values
-  await selectTreeItem(["Cache", "http://example.com", "lorem"]);
-  checkCacheData(URL_ROOT_COM + "storage-blank.html", "OK");
+  await selectTreeItem(["Cache", "https://example.com", "lorem"]);
+  checkCacheData(URL_ROOT_COM_SSL + "storage-blank.html", "OK");
 
   // clear up the cache before navigating
   info("Cleaning up cache…");
@@ -63,13 +52,30 @@ async function testNavigation() {
 
   // Check second domain
   await navigateTo(URL2);
+
+  // Select the Cache view in order to force updating it
+  await selectTreeItem(["Cache", "https://example.net"]);
+
   // wait for storage tree refresh, and check host
   info("Waiting for storage tree to update…");
-  await waitUntil(() => isInTree(doc, ["Cache", "http://example.net", "foo"]));
+  await waitUntil(() => isInTree(doc, ["Cache", "https://example.net", "foo"]));
+
+  ok(
+    !isInTree(doc, ["Cache", "https://example.com"]),
+    "example.com item is not in the tree anymore"
+  );
+
   // check the table for values
-  await selectTreeItem(["Cache", "http://example.net", "foo"]);
-  checkCacheData(URL_ROOT_NET + "storage-blank.html", "OK");
-}
+  await selectTreeItem(["Cache", "https://example.net", "foo"]);
+  checkCacheData(URL_ROOT_NET_SSL + "storage-blank.html", "OK");
+
+  info("Check that the Cache node still has the expected label");
+  is(
+    getTreeNodeLabel(doc, ["Cache"]),
+    "Cache Storage",
+    "Cache item is properly displayed"
+  );
+});
 
 function checkCacheData(url, status) {
   is(

@@ -4,9 +4,6 @@
 
 "use strict";
 
-const { ComponentUtils } = ChromeUtils.import(
-  "resource://gre/modules/ComponentUtils.jsm"
-);
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
@@ -17,12 +14,11 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 });
 
 const COLLECTION_NAME = "query-stripping";
+const SHARED_DATA_KEY = "URLQueryStripping";
 
 const PREF_STRIP_LIST_NAME = "privacy.query_stripping.strip_list";
 const PREF_ALLOW_LIST_NAME = "privacy.query_stripping.allow_list";
-
-const CONTENT_PROCESS_SCRIPT =
-  "resource://gre/modules/URLQueryStrippingListProcessScript.js";
+const PREF_TESTING_ENABLED = "privacy.query_stripping.testing";
 
 class URLQueryStrippingListService {
   constructor() {
@@ -30,24 +26,18 @@ class URLQueryStrippingListService {
     this.QueryInterface = ChromeUtils.generateQI([
       "nsIURLQueryStrippingListService",
     ]);
-    this._xpcom_factory = ComponentUtils.generateSingletonFactory(
-      URLQueryStrippingListService
-    );
     this.observers = new Set();
-    this.prefStripList = [];
-    this.prefAllowList = [];
-    this.remoteStripList = [];
-    this.remoteAllowList = [];
+    this.prefStripList = new Set();
+    this.prefAllowList = new Set();
+    this.remoteStripList = new Set();
+    this.remoteAllowList = new Set();
     this.isParentProcess =
       Services.appinfo.processType === Services.appinfo.PROCESS_TYPE_DEFAULT;
-
-    this._initPromise = this._init();
   }
 
   async _init() {
     // We can only access the remote settings in the parent process. For content
-    // processes, we will broadcast the lists once the lists get updated in the
-    // parent.
+    // processes, we will use sharedData to sync the list to content processes.
     if (this.isParentProcess) {
       let rs = RemoteSettings(COLLECTION_NAME);
 
@@ -64,25 +54,15 @@ class URLQueryStrippingListService {
         entries = await rs.get();
       } catch (e) {}
       this._onRemoteSettingsUpdate(entries || []);
-
-      Services.ppmm.addMessageListener("query-stripping:request-rs", this);
-
-      // We need the services to be initialized early, at least before the
-      // stripping happens. To achieve that, we will register the process script
-      // which will be executed every time a content process been created. The
-      // process script will try to get the service to init it so that the lists
-      // will be ready when we do the stripping.
-      //
-      // Note that we need to do this for Fission because 'profile-after-change'
-      // won't be triggered in content processes.
-      Services.ppmm.loadProcessScript(CONTENT_PROCESS_SCRIPT, true);
     } else {
       // Register the message listener for the remote settings update from the
-      // parent process. We also send a message to the parent to get remote
-      // settings data.
-      Services.cpmm.addMessageListener("query-stripping:rs-updated", this);
-      Services.cpmm.addMessageListener("query-stripping:clear-lists", this);
-      Services.cpmm.sendAsyncMessage("query-stripping:request-rs");
+      // sharedData.
+      Services.cpmm.sharedData.addEventListener("change", this);
+
+      // Get the remote settings data from the shared data.
+      let data = this._getListFromSharedData();
+
+      this._onRemoteSettingsUpdate(data);
     }
 
     // Get the list from pref.
@@ -99,46 +79,40 @@ class URLQueryStrippingListService {
     Services.prefs.addObserver(PREF_ALLOW_LIST_NAME, this);
 
     Services.obs.addObserver(this, "xpcom-shutdown");
-
-    this.initialized = true;
   }
 
   async _shutdown() {
     Services.obs.removeObserver(this, "xpcom-shutdown");
     Services.prefs.removeObserver(PREF_STRIP_LIST_NAME, this);
     Services.prefs.removeObserver(PREF_ALLOW_LIST_NAME, this);
-
-    if (this.isParentProcess) {
-      Services.ppmm.removeMessageListener("query-stripping:request-rs", this);
-      Services.ppmm.removeDelayedProcessScript(CONTENT_PROCESS_SCRIPT);
-    } else {
-      Services.cpmm.removeMessageListener("query-stripping:rs-updated", this);
-      Services.cpmm.removeMessageListener("query-stripping:clear-lists", this);
-    }
   }
 
   _onRemoteSettingsUpdate(entries) {
-    this.remoteStripList = [];
-    this.remoteAllowList = [];
+    this.remoteStripList.clear();
+    this.remoteAllowList.clear();
 
     for (let entry of entries) {
       for (let item of entry.stripList) {
-        this.remoteStripList.push(item);
+        this.remoteStripList.add(item);
       }
 
       for (let item of entry.allowList) {
-        this.remoteAllowList.push(item);
+        this.remoteAllowList.add(item);
       }
     }
 
     // Because only the parent process will get the remote settings update, so
-    // we will broadcast the update to every content processes so that the
-    // content processes will have the lists from remote settings.
+    // we will sync the list to the shared data so that content processes can
+    // get the list.
     if (this.isParentProcess) {
-      Services.ppmm.broadcastAsyncMessage(
-        "query-stripping:rs-updated",
-        entries
-      );
+      Services.ppmm.sharedData.set(SHARED_DATA_KEY, {
+        stripList: this.remoteStripList,
+        allowList: this.remoteAllowList,
+      });
+
+      if (Services.prefs.getBoolPref(PREF_TESTING_ENABLED, false)) {
+        Services.ppmm.sharedData.flush();
+      }
     }
 
     this._notifyObservers();
@@ -147,11 +121,11 @@ class URLQueryStrippingListService {
   _onPrefUpdate(pref, value) {
     switch (pref) {
       case PREF_STRIP_LIST_NAME:
-        this.prefStripList = value ? value.split(" ") : [];
+        this.prefStripList = new Set(value ? value.split(" ") : []);
         break;
 
       case PREF_ALLOW_LIST_NAME:
-        this.prefAllowList = value ? value.split(",") : [];
+        this.prefAllowList = new Set(value ? value.split(",") : []);
         break;
 
       default:
@@ -166,11 +140,27 @@ class URLQueryStrippingListService {
     await this._initPromise;
   }
 
+  _getListFromSharedData() {
+    let data = Services.cpmm.sharedData.get(SHARED_DATA_KEY);
+
+    return data ? [data] : [];
+  }
+
   _notifyObservers(observer) {
-    let stripEntries = this.prefStripList.concat(this.remoteStripList);
-    let allowEntries = this.prefAllowList.concat(this.remoteAllowList);
-    let stripEntriesAsString = stripEntries.join(" ").toLowerCase();
-    let allowEntriesAsString = allowEntries.join(",").toLowerCase();
+    let stripEntries = new Set([
+      ...this.prefStripList,
+      ...this.remoteStripList,
+    ]);
+    let allowEntries = new Set([
+      ...this.prefAllowList,
+      ...this.remoteAllowList,
+    ]);
+    let stripEntriesAsString = Array.from(stripEntries)
+      .join(" ")
+      .toLowerCase();
+    let allowEntriesAsString = Array.from(allowEntries)
+      .join(",")
+      .toLowerCase();
 
     let observers = observer ? [observer] : this.observers;
 
@@ -180,6 +170,15 @@ class URLQueryStrippingListService {
         allowEntriesAsString
       );
     }
+  }
+
+  init() {
+    if (this.initialized) {
+      return;
+    }
+
+    this.initialized = true;
+    this._initPromise = this._init();
   }
 
   registerAndRunObserver(observer) {
@@ -201,14 +200,17 @@ class URLQueryStrippingListService {
   }
 
   clearLists() {
-    this.remoteStripList = [];
-    this.remoteAllowList = [];
-    this.prefStripList = [];
-    this.prefAllowList = [];
-
-    if (this.isParentProcess) {
-      Services.ppmm.broadcastAsyncMessage("query-stripping:clear-lists");
+    if (!this.isParentProcess) {
+      return;
     }
+
+    // Clear the lists of remote settings.
+    this._onRemoteSettingsUpdate([]);
+
+    // Clear the user pref for the strip list. The pref change observer will
+    // handle the rest of the work.
+    Services.prefs.clearUserPref(PREF_STRIP_LIST_NAME);
+    Services.prefs.clearUserPref(PREF_ALLOW_LIST_NAME);
   }
 
   observe(subject, topic, data) {
@@ -225,16 +227,18 @@ class URLQueryStrippingListService {
     }
   }
 
-  receiveMessage({ target, name, data }) {
-    if (name == "query-stripping:rs-updated") {
-      this._onRemoteSettingsUpdate(data);
-    } else if (name == "query-stripping:request-rs") {
-      target.sendAsyncMessage("query-stripping:rs-updated", [
-        { stripList: this.remoteStripList, allowList: this.remoteAllowList },
-      ]);
-    } else if (name == "query-stripping:clear-lists") {
-      this.clearLists();
+  handleEvent(event) {
+    if (event.type != "change") {
+      return;
     }
+
+    if (!event.changedKeys.includes(SHARED_DATA_KEY)) {
+      return;
+    }
+
+    let data = this._getListFromSharedData();
+    this._onRemoteSettingsUpdate(data);
+    this._notifyObservers();
   }
 }
 

@@ -130,9 +130,14 @@ exports.isAgentStylesheet = function(sheet) {
  * @param {CSSStyleSheet} sheet the DOM object for the style sheet.
  */
 exports.shortSource = function(sheet) {
-  // Use a string like "inline" if there is no source href
-  if (!sheet || !sheet.href) {
+  if (!sheet) {
     return exports.l10n("rule.sourceInline");
+  }
+
+  if (!sheet.href) {
+    return exports.l10n(
+      sheet.constructed ? "rule.sourceConstructed" : "rule.sourceInline"
+    );
   }
 
   // If the sheet is a data URL, return a trimmed version of it.
@@ -485,20 +490,20 @@ exports.prettifyCSS = prettifyCSS;
  *
  * @returns {Object}
  *            - {DOMNode} node The non-anonymous node
- *            - {string} pseudo One of ':marker', ':before', ':after', or null.
+ *            - {string} pseudo One of '::marker', '::before', '::after', or null.
  */
 function getBindingElementAndPseudo(node) {
   let bindingElement = node;
   let pseudo = null;
   if (node.nodeName == "_moz_generated_content_marker") {
     bindingElement = node.parentNode;
-    pseudo = ":marker";
+    pseudo = "::marker";
   } else if (node.nodeName == "_moz_generated_content_before") {
     bindingElement = node.parentNode;
-    pseudo = ":before";
+    pseudo = "::before";
   } else if (node.nodeName == "_moz_generated_content_after") {
     bindingElement = node.parentNode;
-    pseudo = ":after";
+    pseudo = "::after";
   }
   return {
     bindingElement: bindingElement,
@@ -647,51 +652,6 @@ const findCssSelector = function(ele) {
   return selector;
 };
 exports.findCssSelector = findCssSelector;
-
-/**
- * If the element is in a frame or under a shadowRoot, return the corresponding
- * element.
- */
-function getSelectorParent(node) {
-  const shadowRoot = node.containingShadowRoot;
-  if (shadowRoot) {
-    // The element is in a shadowRoot, return the host component.
-    return shadowRoot.host;
-  }
-
-  // Otherwise return the parent frameElement.
-  return node.ownerGlobal.frameElement;
-}
-
-/**
- * Retrieve the array of CSS selectors corresponding to the provided node.
- *
- * The selectors are ordered starting with the root document and ending with the deepest
- * nested frame. Additional items are used if the node is inside a frame or a shadow root,
- * each representing the CSS selector for finding the frame or root element in its parent
- * document.
- *
- * This format is expected by DevTools in order to handle the Inspect Node context menu
- * item.
- *
- * @param  {node}
- *         The node for which the CSS selectors should be computed
- * @return {Array}
- *         An array of CSS selectors to find the target node. Several selectors can be
- *         needed if the element is nested in frames and not directly in the root
- *         document. The selectors are ordered starting with the root document and
- *         ending with the deepest nested frame or shadow root.
- */
-const findAllCssSelectors = function(node) {
-  const selectors = [];
-  while (node) {
-    selectors.unshift(findCssSelector(node));
-    node = getSelectorParent(node);
-  }
-
-  return selectors;
-};
-exports.findAllCssSelectors = findAllCssSelectors;
 
 /**
  * Get the full CSS path for a given element.

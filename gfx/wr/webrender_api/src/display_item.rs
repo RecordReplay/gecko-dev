@@ -7,7 +7,7 @@ use peek_poke::PeekPoke;
 use std::ops::Not;
 // local imports
 use crate::font;
-use crate::{PipelineId, PropertyBinding};
+use crate::{APZScrollGeneration, HasScrollLinkedEffect, PipelineId, PropertyBinding};
 use crate::color::ColorF;
 use crate::image::{ColorDepth, ImageKey};
 use crate::units::*;
@@ -42,16 +42,18 @@ bitflags! {
         const IS_BACKFACE_VISIBLE = 1 << 0;
         /// If set, this primitive represents a scroll bar container
         const IS_SCROLLBAR_CONTAINER = 1 << 1;
-        /// If set, this primitive represents a scroll bar thumb
-        const IS_SCROLLBAR_THUMB = 1 << 2;
         /// This is used as a performance hint - this primitive may be promoted to a native
         /// compositor surface under certain (implementation specific) conditions. This
         /// is typically used for large videos, and canvas elements.
-        const PREFER_COMPOSITOR_SURFACE = 1 << 3;
+        const PREFER_COMPOSITOR_SURFACE = 1 << 2;
         /// If set, this primitive can be passed directly to the compositor via its
         /// ExternalImageId, and the compositor will use the native image directly.
         /// Used as a further extension on top of PREFER_COMPOSITOR_SURFACE.
-        const SUPPORTS_EXTERNAL_COMPOSITOR_SURFACE = 1 << 4;
+        const SUPPORTS_EXTERNAL_COMPOSITOR_SURFACE = 1 << 3;
+        /// This flags disables snapping and forces anti-aliasing even if the primitive is axis-aligned.
+        const ANTIALISED = 1 << 4;
+        /// If true, this primitive is used as a background for checkerboarding
+        const CHECKERBOARD_BACKGROUND = 1 << 5;
     }
 }
 
@@ -115,6 +117,35 @@ impl SpaceAndClipInfo {
     }
 }
 
+/// Defines a caller provided key that is unique for a given spatial node, and is stable across
+/// display lists. WR uses this to determine which spatial nodes are added / removed for a new
+/// display list. The content itself is arbitrary and opaque to WR, the only thing that matters
+/// is that it's unique and stable between display lists.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke, Default, Eq, Hash)]
+pub struct SpatialTreeItemKey {
+    key0: u64,
+    key1: u64,
+}
+
+impl SpatialTreeItemKey {
+    pub fn new(key0: u64, key1: u64) -> Self {
+        SpatialTreeItemKey {
+            key0,
+            key1,
+        }
+    }
+}
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
+pub enum SpatialTreeItem {
+    ScrollFrame(ScrollFrameDescriptor),
+    ReferenceFrame(ReferenceFrameDescriptor),
+    StickyFrame(StickyFrameDescriptor),
+    Invalid,
+}
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub enum DisplayItem {
@@ -142,8 +173,6 @@ pub enum DisplayItem {
     ClipChain(ClipChainItem),
 
     // Spaces and Frames that content can be scoped under.
-    ScrollFrame(ScrollFrameDisplayItem),
-    StickyFrame(StickyFrameDisplayItem),
     Iframe(IframeDisplayItem),
     PushReferenceFrame(ReferenceFrameDisplayListItem),
     PushStackingContext(PushStackingContextDisplayItem),
@@ -192,8 +221,6 @@ pub enum DebugDisplayItem {
     RectClip(RectClipDisplayItem),
     ClipChain(ClipChainItem, Vec<ClipId>),
 
-    ScrollFrame(ScrollFrameDisplayItem),
-    StickyFrame(StickyFrameDisplayItem),
     Iframe(IframeDisplayItem),
     PushReferenceFrame(ReferenceFrameDisplayListItem),
     PushStackingContext(PushStackingContextDisplayItem),
@@ -260,7 +287,7 @@ impl StickyOffsetBounds {
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
-pub struct StickyFrameDisplayItem {
+pub struct StickyFrameDescriptor {
     pub id: SpatialId,
     pub parent_spatial_id: SpatialId,
     pub bounds: LayoutRect,
@@ -288,33 +315,33 @@ pub struct StickyFrameDisplayItem {
     /// `previously_applied_offset.y`. A negative y component corresponds to the upward offset
     /// applied due to bottom-stickiness. The x-axis works analogously.
     pub previously_applied_offset: LayoutVector2D,
-}
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
-pub enum ScrollSensitivity {
-    ScriptAndInputEvents,
-    Script,
+    /// A unique (per-pipeline) key for this spatial that is stable across display lists.
+    pub key: SpatialTreeItemKey,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
-pub struct ScrollFrameDisplayItem {
-    /// The id of the clip this scroll frame creates
-    pub clip_id: ClipId,
+pub struct ScrollFrameDescriptor {
     /// The id of the space this scroll frame creates
     pub scroll_frame_id: SpatialId,
     /// The size of the contents this contains (so the backend knows how far it can scroll).
     // FIXME: this can *probably* just be a size? Origin seems to just get thrown out.
     pub content_rect: LayoutRect,
-    pub clip_rect: LayoutRect,
-    pub parent_space_and_clip: SpaceAndClipInfo,
+    pub frame_rect: LayoutRect,
+    pub parent_space: SpatialId,
     pub external_id: ExternalScrollId,
-    pub scroll_sensitivity: ScrollSensitivity,
     /// The amount this scrollframe has already been scrolled by, in the caller.
     /// This means that all the display items that are inside the scrollframe
     /// will have their coordinates shifted by this amount, and this offset
     /// should be added to those display item coordinates in order to get a
     /// normalized value that is consistent across display lists.
     pub external_scroll_offset: LayoutVector2D,
+    /// The generation of the external_scroll_offset.
+    pub scroll_offset_generation: APZScrollGeneration,
+    /// Whether this scrollframe document has any scroll-linked effect or not.
+    pub has_scroll_linked_effect: HasScrollLinkedEffect,
+    /// A unique (per-pipeline) key for this spatial that is stable across display lists.
+    pub key: SpatialTreeItemKey,
 }
 
 /// A solid or an animating color to draw (may not actually be a rectangle due to complex clips)
@@ -464,7 +491,7 @@ pub enum RepeatMode {
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub enum NinePatchBorderSource {
-    Image(ImageKey),
+    Image(ImageKey, ImageRendering),
     Gradient(Gradient),
     RadialGradient(RadialGradient),
     ConicGradient(ConicGradient),
@@ -734,6 +761,10 @@ pub struct BackdropFilterDisplayItem {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
 pub struct ReferenceFrameDisplayListItem {
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
+pub struct ReferenceFrameDescriptor {
     pub origin: LayoutPoint,
     pub parent_spatial_id: SpatialId,
     pub reference_frame: ReferenceFrame,
@@ -749,6 +780,10 @@ pub enum ReferenceFrameKind {
         /// Marks that the transform should be snapped. Used for transforms which animate in
         /// response to scrolling, eg for zooming or dynamic toolbar fixed-positioning.
         should_snap: bool,
+        /// Marks the transform being a part of the CSS stacking context that also has
+        /// a perspective. In this case, backface visibility takes this perspective into
+        /// account.
+        paired_with_perspective: bool,
     },
     /// A perspective transform, that optionally scrolls relative to a specific scroll node
     Perspective {
@@ -800,6 +835,11 @@ pub enum ReferenceTransformBinding {
     /// Computed reference frame which dynamically calculates the transform
     /// based on the given parameters. The reference is the content size of
     /// the parent iframe, which is affected by snapping.
+    ///
+    /// This is used when a transform depends on the layout size of an
+    /// element, otherwise the difference between the unsnapped size
+    /// used in the transform, and the snapped size calculated during scene
+    /// building can cause seaming.
     Computed {
         scale_from: Option<LayoutSize>,
         vertical_flip: bool,
@@ -823,6 +863,8 @@ pub struct ReferenceFrame {
     /// matrix.
     pub transform: ReferenceTransformBinding,
     pub id: SpatialId,
+    /// A unique (per-pipeline) key for this spatial that is stable across display lists.
+    pub key: SpatialTreeItemKey,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, PeekPoke)]
@@ -900,12 +942,13 @@ bitflags! {
     #[repr(C)]
     #[derive(Deserialize, MallocSizeOf, Serialize, PeekPoke)]
     pub struct StackingContextFlags: u8 {
-        /// If true, this stacking context represents a backdrop root, per the CSS
-        /// filter-effects specification (see https://drafts.fxtf.org/filter-effects-2/#BackdropRoot).
-        const IS_BACKDROP_ROOT = 1 << 0;
         /// If true, this stacking context is a blend container than contains
         /// mix-blend-mode children (and should thus be isolated).
-        const IS_BLEND_CONTAINER = 1 << 1;
+        const IS_BLEND_CONTAINER = 1 << 0;
+        /// If true, this stacking context is a wrapper around a backdrop-filter (e.g. for
+        /// a clip-mask). This is needed to allow the correct selection of a backdrop root
+        /// since a clip-mask stacking context creates a parent surface.
+        const WRAPS_BACKDROP_FILTER = 1 << 1;
     }
 }
 
@@ -934,6 +977,7 @@ pub enum MixBlendMode {
     Saturation = 13,
     Color = 14,
     Luminosity = 15,
+    PlusLighter = 16,
 }
 
 #[repr(C)]
@@ -1393,6 +1437,7 @@ impl YuvColorSpace {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, PeekPoke)]
 pub enum YuvData {
     NV12(ImageKey, ImageKey), // (Y channel, CbCr interleaved channel)
+    P010(ImageKey, ImageKey), // (Y channel, CbCr interleaved channel)
     PlanarYCbCr(ImageKey, ImageKey, ImageKey), // (Y channel, Cb channel, Cr Channel)
     InterleavedYCbCr(ImageKey), // (YCbCr interleaved channel)
 }
@@ -1401,6 +1446,7 @@ impl YuvData {
     pub fn get_format(&self) -> YuvFormat {
         match *self {
             YuvData::NV12(..) => YuvFormat::NV12,
+            YuvData::P010(..) => YuvFormat::P010,
             YuvData::PlanarYCbCr(..) => YuvFormat::PlanarYCbCr,
             YuvData::InterleavedYCbCr(..) => YuvFormat::InterleavedYCbCr,
         }
@@ -1410,14 +1456,15 @@ impl YuvData {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, MallocSizeOf, PartialEq, Serialize, PeekPoke)]
 pub enum YuvFormat {
     NV12 = 0,
-    PlanarYCbCr = 1,
-    InterleavedYCbCr = 2,
+    P010 = 1,
+    PlanarYCbCr = 2,
+    InterleavedYCbCr = 3,
 }
 
 impl YuvFormat {
     pub fn get_plane_num(self) -> usize {
         match self {
-            YuvFormat::NV12 => 2,
+            YuvFormat::NV12 | YuvFormat::P010 => 2,
             YuvFormat::PlanarYCbCr => 3,
             YuvFormat::InterleavedYCbCr => 1,
         }
@@ -1555,7 +1602,7 @@ impl ComplexClipRegion {
     }
 }
 
-pub const POLYGON_CLIP_VERTEX_MAX: usize = 16;
+pub const POLYGON_CLIP_VERTEX_MAX: usize = 32;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Deserialize, MallocSizeOf, PartialEq, Serialize, Eq, Hash, PeekPoke)]
@@ -1652,14 +1699,6 @@ impl SpatialId {
     pub fn pipeline_id(&self) -> PipelineId {
         self.1
     }
-
-    pub fn is_root_reference_frame(&self) -> bool {
-        self.0 == ROOT_REFERENCE_FRAME_SPATIAL_ID
-    }
-
-    pub fn is_root_scroll_node(&self) -> bool {
-        self.0 == ROOT_SCROLL_NODE_SPATIAL_ID
-    }
 }
 
 /// An external identifier that uniquely identifies a scroll frame independent of its ClipId, which
@@ -1712,11 +1751,9 @@ impl DisplayItem {
             DisplayItem::SetPoints => "set_points",
             DisplayItem::RadialGradient(..) => "radial_gradient",
             DisplayItem::Rectangle(..) => "rectangle",
-            DisplayItem::ScrollFrame(..) => "scroll_frame",
             DisplayItem::SetGradientStops => "set_gradient_stops",
             DisplayItem::ReuseItems(..) => "reuse_item",
             DisplayItem::RetainedItems(..) => "retained_items",
-            DisplayItem::StickyFrame(..) => "sticky_frame",
             DisplayItem::Text(..) => "text",
             DisplayItem::YuvImage(..) => "yuv_image",
             DisplayItem::BackdropFilter(..) => "backdrop_filter",
@@ -1738,11 +1775,10 @@ macro_rules! impl_default_for_enums {
 
 impl_default_for_enums! {
     DisplayItem => PopStackingContext,
-    ScrollSensitivity => ScriptAndInputEvents,
     LineOrientation => Vertical,
     LineStyle => Solid,
     RepeatMode => Stretch,
-    NinePatchBorderSource => Image(ImageKey::default()),
+    NinePatchBorderSource => Image(ImageKey::default(), ImageRendering::Auto),
     BorderDetails => Normal(NormalBorder::default()),
     BorderRadiusKind => Uniform,
     BorderStyle => None,
@@ -1756,6 +1792,7 @@ impl_default_for_enums! {
     ReferenceFrameKind => Transform {
         is_2d_scale_translation: false,
         should_snap: false,
+        paired_with_perspective: false,
     },
     Rotation => Degree0,
     TransformStyle => Flat,

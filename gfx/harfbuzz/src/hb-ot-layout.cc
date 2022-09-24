@@ -131,7 +131,9 @@ hb_ot_layout_kern (const hb_ot_shape_plan_t *plan,
 
   AAT::hb_aat_apply_context_t c (plan, font, buffer, blob);
 
+  if (!buffer->message (font, "start table kern")) return;
   kern.apply (&c);
+  (void) buffer->message (font, "end table kern");
 }
 #endif
 
@@ -144,7 +146,7 @@ bool
 OT::GDEF::is_blocklisted (hb_blob_t *blob,
 			  hb_face_t *face) const
 {
-#ifdef HB_NO_OT_LAYOUT_BLACKLIST
+#ifdef HB_NO_OT_LAYOUT_BLOCKLIST
   return false;
 #endif
   /* The ugly business of blocklisting individual fonts' tables happen here!
@@ -359,6 +361,13 @@ hb_ot_layout_get_attach_points (hb_face_t      *face,
  * Fetches a list of the caret positions defined for a ligature glyph in the GDEF
  * table of the font. The list returned will begin at the offset provided.
  *
+ * Note that a ligature that is formed from n characters will have n-1
+ * caret positions. The first character is not represented in the array,
+ * since its caret position is the glyph position.
+ *
+ * The positions returned by this function are 'unshaped', and will have to
+ * be fixed up for kerning that may be applied to the ligature glyph.
+ *
  * Return value: Total number of ligature caret positions for @glyph.
  *
  **/
@@ -383,7 +392,7 @@ bool
 OT::GSUB::is_blocklisted (hb_blob_t *blob HB_UNUSED,
 			  hb_face_t *face) const
 {
-#ifdef HB_NO_OT_LAYOUT_BLACKLIST
+#ifdef HB_NO_OT_LAYOUT_BLOCKLIST
   return false;
 #endif
   return false;
@@ -393,7 +402,7 @@ bool
 OT::GPOS::is_blocklisted (hb_blob_t *blob HB_UNUSED,
 			  hb_face_t *face HB_UNUSED) const
 {
-#ifdef HB_NO_OT_LAYOUT_BLACKLIST
+#ifdef HB_NO_OT_LAYOUT_BLOCKLIST
   return false;
 #endif
   return false;
@@ -611,7 +620,7 @@ hb_ot_layout_table_get_feature_tags (hb_face_t    *face,
  * hb_ot_layout_table_find_feature:
  * @face: #hb_face_t to work upon
  * @table_tag: #HB_OT_TAG_GSUB or #HB_OT_TAG_GPOS
- * @feature_tag: The #hb_tag_t og the requested feature tag
+ * @feature_tag: The #hb_tag_t of the requested feature tag
  * @feature_index: (out): The index of the requested feature
  *
  * Fetches the index for a given feature tag in the specified face's GSUB table
@@ -686,8 +695,8 @@ hb_ot_layout_script_get_language_tags (hb_face_t    *face,
  *
  * Return value: %true if the language tag is found, %false otherwise
  *
- * Since: ??
- * Deprecated: ??
+ * Since: 0.6.0
+ * Deprecated: 2.0.0
  **/
 hb_bool_t
 hb_ot_layout_script_find_language (hb_face_t    *face,
@@ -715,10 +724,14 @@ hb_ot_layout_script_find_language (hb_face_t    *face,
  * @language_tags: The array of language tags
  * @language_index: (out): The index of the requested language
  *
- * Fetches the index of a given language tag in the specified face's GSUB table
- * or GPOS table, underneath the specified script index.
+ * Fetches the index of the first language tag fom @language_tags that is present
+ * in the specified face's GSUB or GPOS table, underneath the specified script
+ * index.
  *
- * Return value: %true if the language tag is found, %false otherwise
+ * If none of the given language tags is found, %false is returned and
+ * @language_index is set to the default language index.
+ *
+ * Return value: %true if one of the given language tags is found, %false otherwise
  *
  * Since: 2.0.0
  **/
@@ -744,7 +757,8 @@ hb_ot_layout_script_select_language (hb_face_t      *face,
   if (s.find_lang_sys_index (HB_OT_TAG_DEFAULT_LANGUAGE, language_index))
     return false;
 
-  if (language_index) *language_index = HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX;
+  if (language_index)
+    *language_index = HB_OT_LAYOUT_DEFAULT_LANGUAGE_INDEX;
   return false;
 }
 
@@ -991,10 +1005,37 @@ struct hb_collect_features_context_t
 {
   hb_collect_features_context_t (hb_face_t *face,
 				 hb_tag_t   table_tag,
-				 hb_set_t  *feature_indexes_)
+				 hb_set_t  *feature_indices_,
+				 const hb_tag_t *features)
+
     : g (get_gsubgpos_table (face, table_tag)),
-      feature_indexes (feature_indexes_),
-      script_count (0),langsys_count (0), feature_index_count (0) {}
+      feature_indices (feature_indices_),
+      has_feature_filter (false),
+      script_count (0),langsys_count (0), feature_index_count (0)
+  {
+    compute_feature_filter (features);
+  }
+
+  void compute_feature_filter (const hb_tag_t *features)
+  {
+    if (features == nullptr)
+    {
+      has_feature_filter = false;
+      return;
+    }
+
+    has_feature_filter = true;
+    hb_set_t features_set;
+    for (; *features; features++)
+      features_set.add (*features);
+
+    for (unsigned i = 0; i < g.get_feature_count (); i++)
+    {
+      hb_tag_t tag = g.get_feature_tag (i);
+      if (features_set.has (tag))
+	feature_indices_filter.add(i);
+    }
+  }
 
   bool visited (const OT::Script &s)
   {
@@ -1043,7 +1084,9 @@ struct hb_collect_features_context_t
 
   public:
   const OT::GSUBGPOS &g;
-  hb_set_t           *feature_indexes;
+  hb_set_t *feature_indices;
+  hb_set_t  feature_indices_filter;
+  bool has_feature_filter;
 
   private:
   hb_set_t visited_script;
@@ -1055,37 +1098,31 @@ struct hb_collect_features_context_t
 
 static void
 langsys_collect_features (hb_collect_features_context_t *c,
-			  const OT::LangSys  &l,
-			  const hb_tag_t     *features)
+			  const OT::LangSys  &l)
 {
   if (c->visited (l)) return;
 
-  if (!features)
+  if (!c->has_feature_filter)
   {
     /* All features. */
     if (l.has_required_feature () && !c->visited_feature_indices (1))
-      c->feature_indexes->add (l.get_required_feature_index ());
+      c->feature_indices->add (l.get_required_feature_index ());
 
+    // TODO(garretrieger): filter out indices >= feature count?
     if (!c->visited_feature_indices (l.featureIndex.len))
-      l.add_feature_indexes_to (c->feature_indexes);
+      l.add_feature_indexes_to (c->feature_indices);
   }
   else
   {
-    /* Ugh. Any faster way? */
-    for (; *features; features++)
+    if (c->feature_indices_filter.is_empty()) return;
+    unsigned int num_features = l.get_feature_count ();
+    for (unsigned int i = 0; i < num_features; i++)
     {
-      hb_tag_t feature_tag = *features;
-      unsigned int num_features = l.get_feature_count ();
-      for (unsigned int i = 0; i < num_features; i++)
-      {
-	unsigned int feature_index = l.get_feature_index (i);
+      unsigned int feature_index = l.get_feature_index (i);
+      if (!c->feature_indices_filter.has (feature_index)) continue;
 
-	if (feature_tag == c->g.get_feature_tag (feature_index))
-	{
-	  c->feature_indexes->add (feature_index);
-	  break;
-	}
-      }
+      c->feature_indices->add (feature_index);
+      c->feature_indices_filter.del (feature_index);
     }
   }
 }
@@ -1093,8 +1130,7 @@ langsys_collect_features (hb_collect_features_context_t *c,
 static void
 script_collect_features (hb_collect_features_context_t *c,
 			 const OT::Script   &s,
-			 const hb_tag_t *languages,
-			 const hb_tag_t *features)
+			 const hb_tag_t *languages)
 {
   if (c->visited (s)) return;
 
@@ -1103,14 +1139,13 @@ script_collect_features (hb_collect_features_context_t *c,
     /* All languages. */
     if (s.has_default_lang_sys ())
       langsys_collect_features (c,
-				s.get_default_lang_sys (),
-				features);
+				s.get_default_lang_sys ());
+
 
     unsigned int count = s.get_lang_sys_count ();
     for (unsigned int language_index = 0; language_index < count; language_index++)
       langsys_collect_features (c,
-				s.get_lang_sys (language_index),
-				features);
+				s.get_lang_sys (language_index));
   }
   else
   {
@@ -1119,8 +1154,8 @@ script_collect_features (hb_collect_features_context_t *c,
       unsigned int language_index;
       if (s.find_lang_sys_index (*languages, &language_index))
 	langsys_collect_features (c,
-				  s.get_lang_sys (language_index),
-				  features);
+				  s.get_lang_sys (language_index));
+
     }
   }
 }
@@ -1151,7 +1186,7 @@ hb_ot_layout_collect_features (hb_face_t      *face,
 			       const hb_tag_t *features,
 			       hb_set_t       *feature_indexes /* OUT */)
 {
-  hb_collect_features_context_t c (face, table_tag, feature_indexes);
+  hb_collect_features_context_t c (face, table_tag, feature_indexes, features);
   if (!scripts)
   {
     /* All scripts. */
@@ -1159,8 +1194,7 @@ hb_ot_layout_collect_features (hb_face_t      *face,
     for (unsigned int script_index = 0; script_index < count; script_index++)
       script_collect_features (&c,
 			       c.g.get_script (script_index),
-			       languages,
-			       features);
+			       languages);
   }
   else
   {
@@ -1170,8 +1204,7 @@ hb_ot_layout_collect_features (hb_face_t      *face,
       if (c.g.find_script_index (*scripts, &script_index))
 	script_collect_features (&c,
 				 c.g.get_script (script_index),
-				 languages,
-				 features);
+				 languages);
     }
   }
 }
@@ -1358,7 +1391,8 @@ hb_ot_layout_has_substitution (hb_face_t *face)
  * @lookup_index: The index of the lookup to query
  * @glyphs: The sequence of glyphs to query for substitution
  * @glyphs_length: The length of the glyph sequence
- * @zero_context: #hb_bool_t indicating whether substitutions should be context-free
+ * @zero_context: #hb_bool_t indicating whether pre-/post-context are disallowed
+ * in substitutions
  *
  * Tests whether a specified lookup in the specified face would
  * trigger a substitution on the given glyph sequence.
@@ -1464,10 +1498,9 @@ hb_ot_layout_lookup_substitute_closure (hb_face_t    *face,
 					unsigned int  lookup_index,
 					hb_set_t     *glyphs /* OUT */)
 {
-  hb_set_t cur_intersected_glyphs;
   hb_map_t done_lookups_glyph_count;
-  hb_hashmap_t<unsigned, hb_set_t *, (unsigned)-1, nullptr> done_lookups_glyph_set;
-  OT::hb_closure_context_t c (face, glyphs, &cur_intersected_glyphs, &done_lookups_glyph_count, &done_lookups_glyph_set);
+  hb_hashmap_t<unsigned, hb_set_t *> done_lookups_glyph_set;
+  OT::hb_closure_context_t c (face, glyphs, &done_lookups_glyph_count, &done_lookups_glyph_set);
 
   const OT::SubstLookup& l = face->table.GSUB->table->get_lookup (lookup_index);
 
@@ -1493,16 +1526,16 @@ hb_ot_layout_lookups_substitute_closure (hb_face_t      *face,
 					 const hb_set_t *lookups,
 					 hb_set_t       *glyphs /* OUT */)
 {
-  hb_set_t cur_intersected_glyphs;
   hb_map_t done_lookups_glyph_count;
-  hb_hashmap_t<unsigned, hb_set_t *, (unsigned)-1, nullptr> done_lookups_glyph_set;
-  OT::hb_closure_context_t c (face, glyphs, &cur_intersected_glyphs, &done_lookups_glyph_count, &done_lookups_glyph_set);
+  hb_hashmap_t<unsigned, hb_set_t *> done_lookups_glyph_set;
+  OT::hb_closure_context_t c (face, glyphs, &done_lookups_glyph_count, &done_lookups_glyph_set);
   const OT::GSUB& gsub = *face->table.GSUB->table;
 
   unsigned int iteration_count = 0;
   unsigned int glyphs_length;
   do
   {
+    c.reset_lookup_visit_count ();
     glyphs_length = glyphs->get_population ();
     if (lookups)
     {
@@ -1855,27 +1888,20 @@ apply_string (OT::hb_ot_apply_context_t *c,
   if (likely (!lookup.is_reverse ()))
   {
     /* in/out forward substitution/positioning */
-    if (Proxy::table_index == 0u)
+    if (!Proxy::inplace)
       buffer->clear_output ();
-    buffer->idx = 0;
 
-    bool ret;
-    ret = apply_forward (c, accel);
-    if (ret)
-    {
-      if (!Proxy::inplace)
-	buffer->swap_buffers ();
-      else
-	assert (!buffer->has_separate_output ());
-    }
+    buffer->idx = 0;
+    apply_forward (c, accel);
+
+    if (!Proxy::inplace)
+      buffer->sync ();
   }
   else
   {
     /* in-place backward substitution/positioning */
-    if (Proxy::table_index == 0u)
-      buffer->remove_output ();
+    assert (!buffer->have_output);
     buffer->idx = buffer->len - 1;
-
     apply_backward (c, accel);
   }
 }
@@ -1891,7 +1917,8 @@ inline void hb_ot_map_t::apply (const Proxy &proxy,
   OT::hb_ot_apply_context_t c (table_index, font, buffer);
   c.set_recurse_func (Proxy::Lookup::apply_recurse_func);
 
-  for (unsigned int stage_index = 0; stage_index < stages[table_index].length; stage_index++) {
+  for (unsigned int stage_index = 0; stage_index < stages[table_index].length; stage_index++)
+  {
     const stage_map_t *stage = &stages[table_index][stage_index];
     for (; i < stage->last_lookup; i++)
     {
@@ -1901,11 +1928,8 @@ inline void hb_ot_map_t::apply (const Proxy &proxy,
       c.set_lookup_mask (lookups[table_index][i].mask);
       c.set_auto_zwj (lookups[table_index][i].auto_zwj);
       c.set_auto_zwnj (lookups[table_index][i].auto_zwnj);
-      if (lookups[table_index][i].random)
-      {
-	c.set_random (true);
-	buffer->unsafe_to_break_all ();
-      }
+      c.set_random (lookups[table_index][i].random);
+
       apply_string<Proxy> (&c,
 			   proxy.table.get_lookup (lookup_index),
 			   proxy.accels[lookup_index]);
@@ -1913,10 +1937,7 @@ inline void hb_ot_map_t::apply (const Proxy &proxy,
     }
 
     if (stage->pause_func)
-    {
-      buffer->clear_output ();
       stage->pause_func (plan, font, buffer);
-    }
   }
 }
 
@@ -1946,13 +1967,84 @@ hb_ot_layout_substitute_lookup (OT::hb_ot_apply_context_t *c,
 
 #ifndef HB_NO_BASE
 /**
+ * hb_ot_layout_get_horizontal_baseline_tag_for_script:
+ * @script: a script tag.
+ *
+ * Fetches the dominant horizontal baseline tag used by @script.
+ *
+ * Return value: dominant baseline tag for the @script.
+ *
+ * Since: 4.0.0
+ **/
+hb_ot_layout_baseline_tag_t
+hb_ot_layout_get_horizontal_baseline_tag_for_script (hb_script_t script)
+{
+  /* Keep in sync with hb_ot_layout_get_baseline_with_fallback */
+  switch ((int) script)
+  {
+    /* Unicode-1.1 additions */
+    case HB_SCRIPT_BENGALI:
+    case HB_SCRIPT_DEVANAGARI:
+    case HB_SCRIPT_GUJARATI:
+    case HB_SCRIPT_GURMUKHI:
+    /* Unicode-2.0 additions */
+    case HB_SCRIPT_TIBETAN:
+    /* Unicode-4.0 additions */
+    case HB_SCRIPT_LIMBU:
+    /* Unicode-4.1 additions */
+    case HB_SCRIPT_SYLOTI_NAGRI:
+    /* Unicode-5.0 additions */
+    case HB_SCRIPT_PHAGS_PA:
+    /* Unicode-5.2 additions */
+    case HB_SCRIPT_MEETEI_MAYEK:
+    /* Unicode-6.1 additions */
+    case HB_SCRIPT_SHARADA:
+    case HB_SCRIPT_TAKRI:
+    /* Unicode-7.0 additions */
+    case HB_SCRIPT_MODI:
+    case HB_SCRIPT_SIDDHAM:
+    case HB_SCRIPT_TIRHUTA:
+    /* Unicode-9.0 additions */
+    case HB_SCRIPT_MARCHEN:
+    case HB_SCRIPT_NEWA:
+    /* Unicode-10.0 additions */
+    case HB_SCRIPT_SOYOMBO:
+    case HB_SCRIPT_ZANABAZAR_SQUARE:
+    /* Unicode-11.0 additions */
+    case HB_SCRIPT_DOGRA:
+    case HB_SCRIPT_GUNJALA_GONDI:
+    /* Unicode-12.0 additions */
+    case HB_SCRIPT_NANDINAGARI:
+      return HB_OT_LAYOUT_BASELINE_TAG_HANGING;
+
+    /* Unicode-1.1 additions */
+    case HB_SCRIPT_HANGUL:
+    case HB_SCRIPT_HAN:
+    case HB_SCRIPT_HIRAGANA:
+    case HB_SCRIPT_KATAKANA:
+    /* Unicode-3.0 additions */
+    case HB_SCRIPT_BOPOMOFO:
+    /* Unicode-9.0 additions */
+    case HB_SCRIPT_TANGUT:
+    /* Unicode-10.0 additions */
+    case HB_SCRIPT_NUSHU:
+    /* Unicode-13.0 additions */
+    case HB_SCRIPT_KHITAN_SMALL_SCRIPT:
+      return HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_BOTTOM_OR_LEFT;
+
+    default:
+      return HB_OT_LAYOUT_BASELINE_TAG_ROMAN;
+  }
+}
+
+/**
  * hb_ot_layout_get_baseline:
  * @font: a font
  * @baseline_tag: a baseline tag
  * @direction: text direction.
  * @script_tag:  script tag.
  * @language_tag: language tag, currently unused.
- * @coord: (out): baseline value if found.
+ * @coord: (out) (nullable): baseline value if found.
  *
  * Fetches a baseline value from the face.
  *
@@ -1968,13 +2060,231 @@ hb_ot_layout_get_baseline (hb_font_t                   *font,
 			   hb_tag_t                     language_tag,
 			   hb_position_t               *coord        /* OUT.  May be NULL. */)
 {
-  bool result = font->face->table.BASE->get_baseline (font, baseline_tag, direction, script_tag, language_tag, coord);
-
-  if (result && coord)
-    *coord = HB_DIRECTION_IS_HORIZONTAL (direction) ? font->em_scale_y (*coord) : font->em_scale_x (*coord);
-
-  return result;
+  return font->face->table.BASE->get_baseline (font, baseline_tag, direction, script_tag, language_tag, coord);
 }
+
+/**
+ * hb_ot_layout_get_baseline_with_fallback:
+ * @font: a font
+ * @baseline_tag: a baseline tag
+ * @direction: text direction.
+ * @script_tag:  script tag.
+ * @language_tag: language tag, currently unused.
+ * @coord: (out): baseline value if found.
+ *
+ * Fetches a baseline value from the face, and synthesizes
+ * it if the font does not have it.
+ *
+ * Since: 4.0.0
+ **/
+void
+hb_ot_layout_get_baseline_with_fallback (hb_font_t                   *font,
+					 hb_ot_layout_baseline_tag_t  baseline_tag,
+					 hb_direction_t               direction,
+					 hb_tag_t                     script_tag,
+					 hb_tag_t                     language_tag,
+					 hb_position_t               *coord /* OUT */)
+{
+  if (hb_ot_layout_get_baseline (font,
+				 baseline_tag,
+				 direction,
+				 script_tag,
+				 language_tag,
+				 coord))
+    return;
+
+  /* Synthesize missing baselines.
+   * See https://www.w3.org/TR/css-inline-3/#baseline-synthesis-fonts
+   */
+  switch (baseline_tag)
+  {
+  case HB_OT_LAYOUT_BASELINE_TAG_ROMAN:
+    *coord = 0; // FIXME origin ?
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_MATH:
+    {
+      hb_codepoint_t glyph;
+      hb_glyph_extents_t extents;
+      if (HB_DIRECTION_IS_HORIZONTAL (direction) &&
+	  (hb_font_get_nominal_glyph (font, 0x2212u, &glyph) ||
+	   hb_font_get_nominal_glyph (font, '-', &glyph)) &&
+	  hb_font_get_glyph_extents (font, glyph, &extents))
+      {
+	*coord = extents.y_bearing + extents.height / 2;
+      }
+      else
+      {
+	hb_position_t x_height = font->y_scale / 2;
+#ifndef HB_NO_METRICS
+	hb_ot_metrics_get_position_with_fallback (font, HB_OT_METRICS_TAG_X_HEIGHT, &x_height);
+#endif
+	*coord = x_height / 2;
+      }
+    }
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_TOP_OR_RIGHT:
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_BOTTOM_OR_LEFT:
+    {
+      hb_position_t embox_top, embox_bottom;
+
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_TOP_OR_RIGHT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &embox_top);
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_BOTTOM_OR_LEFT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &embox_bottom);
+
+      if (baseline_tag == HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_TOP_OR_RIGHT)
+	*coord = embox_top + (embox_bottom - embox_top) / 10;
+      else
+	*coord = embox_bottom + (embox_top - embox_bottom) / 10;
+    }
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_TOP_OR_RIGHT:
+    if (hb_ot_layout_get_baseline (font,
+				   HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_BOTTOM_OR_LEFT,
+				   direction,
+				   script_tag,
+				   language_tag,
+				   coord))
+      *coord += HB_DIRECTION_IS_HORIZONTAL (direction) ? font->y_scale : font->x_scale;
+    else
+    {
+      hb_font_extents_t font_extents;
+      hb_font_get_extents_for_direction (font, direction, &font_extents);
+      *coord = font_extents.ascender;
+    }
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_BOTTOM_OR_LEFT:
+    if (hb_ot_layout_get_baseline (font,
+				   HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_TOP_OR_RIGHT,
+				   direction,
+				   script_tag,
+				   language_tag,
+				   coord))
+      *coord -= HB_DIRECTION_IS_HORIZONTAL (direction) ? font->y_scale : font->x_scale;
+    else
+    {
+      hb_font_extents_t font_extents;
+      hb_font_get_extents_for_direction (font, direction, &font_extents);
+      *coord = font_extents.descender;
+    }
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_HANGING:
+    if (HB_DIRECTION_IS_HORIZONTAL (direction))
+    {
+      hb_codepoint_t ch;
+      hb_codepoint_t glyph;
+      hb_glyph_extents_t extents;
+
+      /* Keep in sync with hb_ot_layout_get_horizontal_baseline_for_script */
+      switch ((int) script_tag)
+      {
+      /* Unicode-1.1 additions */
+      case HB_SCRIPT_BENGALI:          ch = 0x0995u; break;
+      case HB_SCRIPT_DEVANAGARI:       ch = 0x0915u; break;
+      case HB_SCRIPT_GUJARATI:         ch = 0x0a95u; break;
+      case HB_SCRIPT_GURMUKHI:         ch = 0x0a15u; break;
+      /* Unicode-2.0 additions */
+      case HB_SCRIPT_TIBETAN:          ch = 0x0f40u; break;
+      /* Unicode-4.0 additions */
+      case HB_SCRIPT_LIMBU:            ch = 0x1901u; break;
+      /* Unicode-4.1 additions */
+      case HB_SCRIPT_SYLOTI_NAGRI:     ch = 0xa807u; break;
+      /* Unicode-5.0 additions */
+      case HB_SCRIPT_PHAGS_PA:         ch = 0xa840u; break;
+      /* Unicode-5.2 additions */
+      case HB_SCRIPT_MEETEI_MAYEK:     ch = 0xabc0u; break;
+      /* Unicode-6.1 additions */
+      case HB_SCRIPT_SHARADA:          ch = 0x11191u; break;
+      case HB_SCRIPT_TAKRI:            ch = 0x1168cu; break;
+      /* Unicode-7.0 additions */
+      case HB_SCRIPT_MODI:             ch = 0x1160eu;break;
+      case HB_SCRIPT_SIDDHAM:          ch = 0x11590u; break;
+      case HB_SCRIPT_TIRHUTA:          ch = 0x1148fu; break;
+      /* Unicode-9.0 additions */
+      case HB_SCRIPT_MARCHEN:          ch = 0x11c72u; break;
+      case HB_SCRIPT_NEWA:             ch = 0x1140eu; break;
+      /* Unicode-10.0 additions */
+      case HB_SCRIPT_SOYOMBO:          ch = 0x11a5cu; break;
+      case HB_SCRIPT_ZANABAZAR_SQUARE: ch = 0x11a0bu; break;
+      /* Unicode-11.0 additions */
+      case HB_SCRIPT_DOGRA:            ch = 0x1180au; break;
+      case HB_SCRIPT_GUNJALA_GONDI:    ch = 0x11d6cu; break;
+      /* Unicode-12.0 additions */
+      case HB_SCRIPT_NANDINAGARI:      ch = 0x119b0u; break;
+      default:                         ch = 0;        break;
+      }
+
+      if (ch &&
+	  hb_font_get_nominal_glyph (font, ch, &glyph) &&
+	  hb_font_get_glyph_extents (font, glyph, &extents))
+	*coord = extents.y_bearing;
+      else
+	*coord = font->y_scale * 6 / 10; // FIXME makes assumptions about origin
+    }
+    else
+      *coord = font->x_scale * 6 / 10; // FIXME makes assumptions about origin
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_CENTRAL:
+    {
+      hb_position_t top, bottom;
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_TOP_OR_RIGHT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &top);
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_EMBOX_BOTTOM_OR_LEFT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &bottom);
+      *coord = (top + bottom) / 2;
+
+    }
+    break;
+
+  case HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_CENTRAL:
+    {
+      hb_position_t top, bottom;
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_TOP_OR_RIGHT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &top);
+      hb_ot_layout_get_baseline_with_fallback (font,
+					       HB_OT_LAYOUT_BASELINE_TAG_IDEO_FACE_BOTTOM_OR_LEFT,
+					       direction,
+					       script_tag,
+					       language_tag,
+					       &bottom);
+      *coord = (top + bottom) / 2;
+
+    }
+    break;
+
+  case _HB_OT_LAYOUT_BASELINE_TAG_MAX_VALUE:
+  default:
+    *coord = 0;
+    break;
+  }
+}
+
 #endif
 
 
@@ -1992,14 +2302,14 @@ struct hb_get_glyph_alternates_dispatch_t :
   private:
   template <typename T, typename ...Ts> auto
   _dispatch (const T &obj, hb_priority<1>, Ts&&... ds) HB_AUTO_RETURN
-  ( obj.get_glyph_alternates (hb_forward<Ts> (ds)...) )
+  ( obj.get_glyph_alternates (std::forward<Ts> (ds)...) )
   template <typename T, typename ...Ts> auto
   _dispatch (const T &obj, hb_priority<0>, Ts&&... ds) HB_AUTO_RETURN
   ( default_return_value () )
   public:
   template <typename T, typename ...Ts> auto
   dispatch (const T &obj, Ts&&... ds) HB_AUTO_RETURN
-  ( _dispatch (obj, hb_prioritize, hb_forward<Ts> (ds)...) )
+  ( _dispatch (obj, hb_prioritize, std::forward<Ts> (ds)...) )
 };
 
 /**

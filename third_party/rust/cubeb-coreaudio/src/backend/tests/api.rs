@@ -2,8 +2,8 @@ use super::utils::{
     test_audiounit_get_buffer_frame_size, test_audiounit_scope_is_enabled, test_create_audiounit,
     test_device_channels_in_scope, test_device_in_scope, test_get_all_devices,
     test_get_default_audiounit, test_get_default_device, test_get_default_raw_stream,
-    test_get_default_source_name, test_get_devices_in_scope, test_get_raw_context,
-    ComponentSubType, PropertyScope, Scope,
+    test_get_devices_in_scope, test_get_raw_context, test_get_source_name, ComponentSubType,
+    DeviceFilter, PropertyScope, Scope,
 };
 use super::*;
 
@@ -153,9 +153,7 @@ fn test_create_device_info_from_unknown_input_device() {
         assert_eq!(default_device.id, default_device_id);
         assert_eq!(
             default_device.flags,
-            device_flags::DEV_INPUT
-                | device_flags::DEV_SELECTED_DEFAULT
-                | device_flags::DEV_SYSTEM_DEFAULT
+            device_flags::DEV_INPUT | device_flags::DEV_SELECTED_DEFAULT
         );
     } else {
         println!("No input device to perform test.");
@@ -169,9 +167,7 @@ fn test_create_device_info_from_unknown_output_device() {
         assert_eq!(default_device.id, default_device_id);
         assert_eq!(
             default_device.flags,
-            device_flags::DEV_OUTPUT
-                | device_flags::DEV_SELECTED_DEFAULT
-                | device_flags::DEV_SYSTEM_DEFAULT
+            device_flags::DEV_OUTPUT | device_flags::DEV_SELECTED_DEFAULT
         );
     } else {
         println!("No output device to perform test.");
@@ -190,7 +186,7 @@ fn test_set_device_info_to_system_output_device() {
     let _device = create_device_info(kAudioObjectSystemObject, DeviceType::OUTPUT);
 }
 
-// FIXIT: Is it ok to set input device to a nonexistent device ?
+// FIXME: Is it ok to set input device to a nonexistent device ?
 #[ignore]
 #[test]
 #[should_panic]
@@ -199,7 +195,7 @@ fn test_set_device_info_to_nonexistent_input_device() {
     let _device = create_device_info(nonexistent_id, DeviceType::INPUT);
 }
 
-// FIXIT: Is it ok to set output device to a nonexistent device ?
+// FIXME: Is it ok to set output device to a nonexistent device ?
 #[ignore]
 #[test]
 #[should_panic]
@@ -325,14 +321,14 @@ fn test_remove_listener_unknown_device() {
 fn test_get_default_device_id() {
     if test_get_default_device(Scope::Input).is_some() {
         assert_ne!(
-            audiounit_get_default_device_id(DeviceType::INPUT),
+            get_default_device_id(DeviceType::INPUT).unwrap(),
             kAudioObjectUnknown,
         );
     }
 
     if test_get_default_device(Scope::Output).is_some() {
         assert_ne!(
-            audiounit_get_default_device_id(DeviceType::OUTPUT),
+            get_default_device_id(DeviceType::OUTPUT).unwrap(),
             kAudioObjectUnknown,
         );
     }
@@ -341,19 +337,13 @@ fn test_get_default_device_id() {
 #[test]
 #[should_panic]
 fn test_get_default_device_id_with_unknown_type() {
-    assert_eq!(
-        audiounit_get_default_device_id(DeviceType::UNKNOWN),
-        kAudioObjectUnknown,
-    );
+    assert!(get_default_device_id(DeviceType::UNKNOWN).is_err());
 }
 
 #[test]
 #[should_panic]
 fn test_get_default_device_id_with_inout_type() {
-    assert_eq!(
-        audiounit_get_default_device_id(DeviceType::INPUT | DeviceType::OUTPUT),
-        kAudioObjectUnknown,
-    );
+    assert!(get_default_device_id(DeviceType::INPUT | DeviceType::OUTPUT).is_err());
 }
 
 // convert_channel_layout
@@ -786,28 +776,16 @@ fn test_create_stream_description() {
     }
 }
 
-// create_default_audiounit
+// create_blank_audiounit
 // ------------------------------------
 #[test]
-fn test_create_default_audiounit() {
-    let flags_list = [
-        device_flags::DEV_UNKNOWN,
-        device_flags::DEV_INPUT,
-        device_flags::DEV_OUTPUT,
-        device_flags::DEV_INPUT | device_flags::DEV_OUTPUT,
-        device_flags::DEV_INPUT | device_flags::DEV_SYSTEM_DEFAULT,
-        device_flags::DEV_OUTPUT | device_flags::DEV_SYSTEM_DEFAULT,
-        device_flags::DEV_INPUT | device_flags::DEV_OUTPUT | device_flags::DEV_SYSTEM_DEFAULT,
-    ];
-
-    for flags in flags_list.iter() {
-        let unit = create_default_audiounit(*flags).unwrap();
-        assert!(!unit.is_null());
-        // Destroy the AudioUnits
-        unsafe {
-            AudioUnitUninitialize(unit);
-            AudioComponentInstanceDispose(unit);
-        }
+fn test_create_blank_audiounit() {
+    let unit = create_blank_audiounit().unwrap();
+    assert!(!unit.is_null());
+    // Destroy the AudioUnit
+    unsafe {
+        AudioUnitUninitialize(unit);
+        AudioComponentInstanceDispose(unit);
     }
 }
 
@@ -861,12 +839,7 @@ fn test_enable_audiounit_scope_with_null_unit() {
 // ------------------------------------
 #[test]
 fn test_for_create_audiounit() {
-    let flags_list = [
-        device_flags::DEV_INPUT,
-        device_flags::DEV_OUTPUT,
-        device_flags::DEV_INPUT | device_flags::DEV_SYSTEM_DEFAULT,
-        device_flags::DEV_OUTPUT | device_flags::DEV_SYSTEM_DEFAULT,
-    ];
+    let flags_list = [device_flags::DEV_INPUT, device_flags::DEV_OUTPUT];
 
     let default_input = test_get_default_device(Scope::Input);
     let default_output = test_get_default_device(Scope::Output);
@@ -877,32 +850,12 @@ fn test_for_create_audiounit() {
 
         // Check the output scope is enabled.
         if device.flags.contains(device_flags::DEV_OUTPUT) && default_output.is_some() {
-            let device_id = default_output.clone().unwrap();
-            device.id = device_id;
+            device.id = default_output.clone().unwrap();
             let unit = create_audiounit(&device).unwrap();
             assert!(!unit.is_null());
             assert!(test_audiounit_scope_is_enabled(unit, Scope::Output));
 
-            // For default output device, the input scope is enabled
-            // if it's also a input device. Otherwise, it's disabled.
-            if device
-                .flags
-                .contains(device_flags::DEV_INPUT | device_flags::DEV_SYSTEM_DEFAULT)
-            {
-                assert_eq!(
-                    test_device_in_scope(device_id, Scope::Input),
-                    test_audiounit_scope_is_enabled(unit, Scope::Input)
-                );
-
-                // Destroy the audioUnit.
-                unsafe {
-                    AudioUnitUninitialize(unit);
-                    AudioComponentInstanceDispose(unit);
-                }
-                continue;
-            }
-
-            // Destroy the audioUnit.
+            // Destroy the AudioUnit.
             unsafe {
                 AudioUnitUninitialize(unit);
                 AudioComponentInstanceDispose(unit);
@@ -916,7 +869,7 @@ fn test_for_create_audiounit() {
             let unit = create_audiounit(&device).unwrap();
             assert!(!unit.is_null());
             assert!(test_audiounit_scope_is_enabled(unit, Scope::Input));
-            // Destroy the audioUnit.
+            // Destroy the AudioUnit.
             unsafe {
                 AudioUnitUninitialize(unit);
                 AudioComponentInstanceDispose(unit);
@@ -1023,38 +976,26 @@ fn test_convert_uint32_into_string() {
     assert_eq!(data_string, CString::new("RUST").unwrap());
 }
 
-// get_default_datasource_string
+// get_device_source_string
 // ------------------------------------
 #[test]
-fn test_get_default_device_name() {
-    test_get_default_device_name_in_scope(Scope::Input);
-    test_get_default_device_name_in_scope(Scope::Output);
+fn test_get_device_source_string() {
+    test_get_source_name_in_scope(Scope::Input);
+    test_get_source_name_in_scope(Scope::Output);
 
-    fn test_get_default_device_name_in_scope(scope: Scope) {
-        if let Some(name) = test_get_default_source_name(scope.clone()) {
-            let source = audiounit_get_default_datasource_string(scope.into())
-                .unwrap()
-                .into_string()
-                .unwrap();
-            assert_eq!(name, source);
+    fn test_get_source_name_in_scope(scope: Scope) {
+        if let Some(dev) = test_get_default_device(scope.clone()) {
+            if let Some(name) = test_get_source_name(dev, scope.clone()) {
+                let source = get_device_source_string(dev, scope.into())
+                    .unwrap()
+                    .into_string()
+                    .unwrap();
+                assert_eq!(name, source);
+            } else {
+                println!("No source name for default {:?} device ", scope);
+            }
         } else {
-            println!("No source name for {:?}", scope);
-        }
-    }
-}
-
-// is_device_a_type_of
-// ------------------------------------
-#[test]
-fn test_is_device_a_type_of() {
-    test_is_device_in_scope(Scope::Input);
-    test_is_device_in_scope(Scope::Output);
-
-    fn test_is_device_in_scope(scope: Scope) {
-        if let Some(device) = test_get_default_device(scope.clone()) {
-            assert!(is_device_a_type_of(device, scope.into()));
-        } else {
-            println!("No device for {:?}.", scope);
+            println!("No default {:?} device", scope);
         }
     }
 }
@@ -1109,10 +1050,7 @@ fn test_get_channel_count_of_output_for_a_input_only_deivce() {
 #[test]
 #[should_panic]
 fn test_get_channel_count_of_unknown_device() {
-    assert_eq!(
-        get_channel_count(kAudioObjectUnknown, DeviceType::OUTPUT).unwrap_err(),
-        Error::error()
-    );
+    assert!(get_channel_count(kAudioObjectUnknown, DeviceType::OUTPUT).is_err());
 }
 
 #[test]
@@ -1123,9 +1061,8 @@ fn test_get_channel_count_of_inout_type() {
     fn test_channel_count(scope: Scope) {
         if let Some(device) = test_get_default_device(scope.clone()) {
             assert_eq!(
-                // Get a kAudioHardwareUnknownPropertyError in get_channel_count actually.
                 get_channel_count(device, DeviceType::INPUT | DeviceType::OUTPUT).unwrap_err(),
-                Error::error()
+                kAudioHardwareUnknownPropertyError as OSStatus
             );
         } else {
             println!("No device for {:?}.", scope);
@@ -1141,10 +1078,7 @@ fn test_get_channel_count_of_unknwon_type() {
 
     fn test_channel_count(scope: Scope) {
         if let Some(device) = test_get_default_device(scope.clone()) {
-            assert_eq!(
-                get_channel_count(device, DeviceType::UNKNOWN).unwrap_err(),
-                Error::error()
-            );
+            assert!(get_channel_count(device, DeviceType::UNKNOWN).is_err());
         } else {
             panic!("Panic by default: No device for {:?}.", scope);
         }
@@ -1238,50 +1172,55 @@ fn test_get_device_group_id() {
 fn test_get_same_group_id_for_builtin_device_pairs() {
     use std::collections::HashMap;
 
+    // These device sources have custom group id. See `get_custom_group_id`.
     const IMIC: u32 = 0x696D_6963; // "imic"
     const ISPK: u32 = 0x6973_706B; // "ispk"
     const EMIC: u32 = 0x656D_6963; // "emic"
     const HDPN: u32 = 0x6864_706E; // "hdpn"
     let pairs = [(IMIC, ISPK), (EMIC, HDPN)];
 
-    // TODO: group_ids will have collision if one input device and one output device
-    //       has same source value.
-    let mut group_ids = HashMap::<u32, String>::new();
+    let mut input_group_ids = HashMap::<u32, String>::new();
     let input_devices = test_get_devices_in_scope(Scope::Input);
     for device in input_devices.iter() {
         match get_device_source(*device, DeviceType::INPUT) {
             Ok(source) => match get_device_group_id(*device, DeviceType::INPUT) {
-                Ok(id) => assert!(group_ids
+                Ok(id) => assert!(input_group_ids
                     .insert(source, id.into_string().unwrap())
                     .is_none()),
-                Err(e) => assert!(group_ids.insert(source, format!("Error {}", e)).is_none()),
+                Err(e) => assert!(input_group_ids
+                    .insert(source, format!("Error {}", e))
+                    .is_none()),
             },
             _ => {} // do nothing when failing to get source.
         }
     }
+
+    let mut output_group_ids = HashMap::<u32, String>::new();
     let output_devices = test_get_devices_in_scope(Scope::Output);
     for device in output_devices.iter() {
         match get_device_source(*device, DeviceType::OUTPUT) {
             Ok(source) => match get_device_group_id(*device, DeviceType::OUTPUT) {
-                Ok(id) => assert!(group_ids
+                Ok(id) => assert!(output_group_ids
                     .insert(source, id.into_string().unwrap())
                     .is_none()),
-                Err(e) => assert!(group_ids.insert(source, format!("Error {}", e)).is_none()),
+                Err(e) => assert!(output_group_ids
+                    .insert(source, format!("Error {}", e))
+                    .is_none()),
             },
             _ => {} // do nothing when failing to get source.
         }
     }
 
-    for (dev1, dev2) in pairs.iter() {
-        let id1 = group_ids.get(dev1);
-        let id2 = group_ids.get(dev2);
+    for (input, output) in pairs.iter() {
+        let input_group_id = input_group_ids.get(input);
+        let output_group_id = output_group_ids.get(output);
 
-        if id1.is_some() && id2.is_some() {
-            assert_eq!(id1, id2);
+        if input_group_id.is_some() && output_group_id.is_some() {
+            assert_eq!(input_group_id, output_group_id);
         }
 
-        group_ids.remove(dev1);
-        group_ids.remove(dev2);
+        input_group_ids.remove(input);
+        output_group_ids.remove(output);
     }
 }
 
@@ -1403,7 +1342,7 @@ fn test_create_cubeb_device_info() {
         // TODO: Hit a kAudioHardwareUnknownPropertyError for AirPods
         // assert!(!info.vendor_name.is_null());
 
-        // FIXIT: The device is defined to input-only or output-only, but some device is in-out!
+        // FIXME: The device is defined to input-only or output-only, but some device is in-out!
         assert_eq!(info.device_type, DeviceType::from(scope.clone()).bits());
         assert_eq!(info.state, ffi::CUBEB_DEVICE_STATE_ENABLED);
         // TODO: The preference is set when the device is default input/output device if the device
@@ -1518,7 +1457,7 @@ fn test_get_devices_of_type() {
     let input_devices = audiounit_get_devices_of_type(DeviceType::INPUT);
     let output_devices = audiounit_get_devices_of_type(DeviceType::OUTPUT);
 
-    let mut expected_all = test_get_all_devices();
+    let mut expected_all = test_get_all_devices(DeviceFilter::ExcludeCubebAggregate);
     expected_all.sort();
     assert_eq!(all_devices, expected_all);
     for device in all_devices.iter() {

@@ -20,9 +20,8 @@ XPCOMUtils.defineLazyGetter(this, "Management", () => {
   return Management;
 });
 
-ChromeUtils.import(
-  "resource://testing-common/CustomizableUITestUtils.jsm",
-  this
+let { CustomizableUITestUtils } = ChromeUtils.import(
+  "resource://testing-common/CustomizableUITestUtils.jsm"
 );
 let gCUITestUtils = new CustomizableUITestUtils(window);
 
@@ -186,13 +185,7 @@ function triggerPageOptionsAction(win, action) {
 }
 
 function isDefaultIcon(icon) {
-  // These are basically the same icon, but code within webextensions
-  // generates references to the former and generic add-ons manager code
-  // generates referces to the latter.
-  return (
-    icon == "chrome://browser/content/extension.svg" ||
-    icon == "chrome://mozapps/skin/extensions/extensionGeneric.svg"
-  );
+  return icon == "chrome://mozapps/skin/extensions/extensionGeneric.svg";
 }
 
 /**
@@ -527,7 +520,7 @@ async function interactiveUpdateTest(autoUpdate, checkFn) {
 
   // Navigate away from the starting page to force about:addons to load
   // in a new tab during the tests below.
-  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, "about:robots");
+  BrowserTestUtils.loadURI(gBrowser.selectedBrowser, "about:mozilla");
   await BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser);
 
   // Install version 1.0 of the test extension
@@ -655,7 +648,7 @@ async function interactiveUpdateTest(autoUpdate, checkFn) {
 // Individual tests can store a cleanup function in the testCleanup global
 // to ensure it gets called before the final check is performed.
 let testCleanup;
-add_task(async function() {
+add_setup(async function head_setup() {
   let addons = await AddonManager.getAllAddons();
   let existingAddons = new Set(addons.map(a => a.id));
 

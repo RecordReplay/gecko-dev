@@ -292,8 +292,9 @@ nsresult nsFileChannel::MakeFileInputStream(nsIFile* file,
   bool isDir;
   nsresult rv = file->IsDirectory(&isDir);
   if (NS_FAILED(rv)) {
-    // canonicalize error message
-    if (rv == NS_ERROR_FILE_TARGET_DOES_NOT_EXIST) rv = NS_ERROR_FILE_NOT_FOUND;
+    if (rv == NS_ERROR_FILE_NOT_FOUND) {
+      CheckForBrokenChromeURL(mLoadInfo, OriginalURI());
+    }
 
     if (async && (NS_ERROR_FILE_NOT_FOUND == rv)) {
       // We don't return "Not Found" errors here. Since we could not find
@@ -424,7 +425,7 @@ nsresult nsFileChannel::ListenerBlockingPromise(BlockingPromise** aPromise) {
     return FixupContentLength(true);
   }
 
-  RefPtr<TaskQueue> taskQueue = new TaskQueue(sts.forget());
+  RefPtr<TaskQueue> taskQueue = TaskQueue::Create(sts.forget(), "FileChannel");
   RefPtr<nsFileChannel> self = this;
   RefPtr<BlockingPromise> promise =
       mozilla::InvokeAsync(taskQueue, __func__, [self{std::move(self)}]() {
@@ -451,8 +452,7 @@ nsresult nsFileChannel::FixupContentLength(bool async) {
   int64_t size;
   rv = file->GetFileSize(&size);
   if (NS_FAILED(rv)) {
-    if (async && (NS_ERROR_FILE_NOT_FOUND == rv ||
-                  NS_ERROR_FILE_TARGET_DOES_NOT_EXIST == rv)) {
+    if (async && NS_ERROR_FILE_NOT_FOUND == rv) {
       size = 0;
     } else {
       return rv;
@@ -509,6 +509,6 @@ nsFileChannel::SetUploadStream(nsIInputStream* stream,
 
 NS_IMETHODIMP
 nsFileChannel::GetUploadStream(nsIInputStream** result) {
-  NS_IF_ADDREF(*result = mUploadStream);
+  *result = do_AddRef(mUploadStream).take();
   return NS_OK;
 }

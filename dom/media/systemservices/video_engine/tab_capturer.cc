@@ -10,7 +10,6 @@
 
 #include "modules/desktop_capture/desktop_capture_options.h"
 #include "modules/desktop_capture/desktop_capturer.h"
-#include "modules/desktop_capture/desktop_device_info.h"
 
 #include "tab_capturer.h"
 
@@ -22,7 +21,6 @@
 #include "mozilla/Logging.h"
 #include "rtc_base/checks.h"
 #include "rtc_base/logging.h"
-#include "rtc_base/scoped_ref_ptr.h"
 #include "nsThreadUtils.h"
 #include "nsIBrowserWindowTracker.h"
 #include "nsIDocShellTreeOwner.h"
@@ -36,6 +34,7 @@
 #include "mozilla/gfx/2D.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_media.h"
+#include "desktop_device_info.h"
 
 #include "MediaUtils.h"
 
@@ -111,7 +110,8 @@ class TabCapturedHandler final : public dom::PromiseNativeHandler {
     aPromise->AppendNativeHandler(handler);
   }
 
-  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     MOZ_ASSERT(NS_IsMainThread());
     MonitorAutoLock monitor(mEngine->mMonitor);
     if (NS_WARN_IF(!aValue.isObject())) {
@@ -132,7 +132,8 @@ class TabCapturedHandler final : public dom::PromiseNativeHandler {
     monitor.Notify();
   }
 
-  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     MOZ_ASSERT(NS_IsMainThread());
     MonitorAutoLock monitor(mEngine->mMonitor);
     mEngine->mCapturing = false;
@@ -178,7 +179,7 @@ void TabCapturer::CaptureFrameNow() {
     // XXX This would be more efficient if it returned a MozPromise, and
     // even more if we used CrossProcessPaint directly and returned a surface.
     RefPtr<dom::Promise> promise =
-        wgp->DrawSnapshot(nullptr, 1.0, "white"_ns, IgnoreErrors());
+        wgp->DrawSnapshot(nullptr, 1.0, "white"_ns, false, IgnoreErrors());
     if (!promise) {
       return;
     }

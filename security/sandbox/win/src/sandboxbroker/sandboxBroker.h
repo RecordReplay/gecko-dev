@@ -16,6 +16,8 @@
 #include "nsXULAppAPI.h"
 #include "nsISupportsImpl.h"
 
+#include "mozilla/ipc/UtilityProcessSandboxing.h"
+
 namespace sandbox {
 class BrokerServices;
 class TargetPolicy;
@@ -45,6 +47,8 @@ class AbstractSandboxBroker {
       int32_t aSandboxLevel, const nsCOMPtr<nsIFile>& aProfileDir) = 0;
   virtual bool SetSecurityLevelForRDDProcess() = 0;
   virtual bool SetSecurityLevelForSocketProcess() = 0;
+  virtual bool SetSecurityLevelForUtilityProcess(
+      mozilla::ipc::SandboxingKind aSandbox) = 0;
 
   enum SandboxLevel { LockDown, Restricted };
   virtual bool SetSecurityLevelForGMPlugin(SandboxLevel aLevel,
@@ -60,6 +64,11 @@ class AbstractSandboxBroker {
    * to communicate this address to the child.
    */
   virtual void AddHandleToShare(HANDLE aHandle) = 0;
+
+  /**
+   * @return true if policy has win32k locked down, otherwise false
+   */
+  virtual bool IsWin32kLockedDown() = 0;
 
  protected:
   virtual ~AbstractSandboxBroker() {}
@@ -96,6 +105,8 @@ class SandboxBroker : public AbstractSandboxBroker {
   bool SetSecurityLevelForSocketProcess() override;
   bool SetSecurityLevelForGMPlugin(SandboxLevel aLevel,
                                    bool aIsRemoteLaunch = false) override;
+  bool SetSecurityLevelForUtilityProcess(
+      mozilla::ipc::SandboxingKind aSandbox) override;
 
   // File system permissions
   bool AllowReadFile(wchar_t const* file) override;
@@ -113,6 +124,8 @@ class SandboxBroker : public AbstractSandboxBroker {
    * to communicate this address to the child.
    */
   void AddHandleToShare(HANDLE aHandle) override;
+
+  bool IsWin32kLockedDown() final;
 
   // Set up dummy interceptions via the broker, so we can log calls.
   void ApplyLoggingPolicy();

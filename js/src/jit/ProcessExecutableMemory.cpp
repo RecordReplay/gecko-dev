@@ -19,16 +19,13 @@
 #include "jsmath.h"
 
 #include "gc/Memory.h"
-#ifdef JS_CODEGEN_ARM64
-#  include "jit/arm64/vixl/Cpu-vixl.h"
-#endif
-#include "jit/AtomicOperations.h"
 #include "jit/FlushICache.h"  // js::jit::FlushICache
+#include "jit/JitOptions.h"
 #include "threading/LockGuard.h"
 #include "threading/Mutex.h"
 #include "util/Memory.h"
 #include "util/Poison.h"
-#include "util/Windows.h"
+#include "util/WindowsWrapper.h"
 #include "vm/MutexIDs.h"
 
 #ifdef XP_WIN
@@ -336,6 +333,9 @@ static void* ReserveProcessExecutableMemory(size_t bytes) {
   MOZ_CRASH("NYI for WASI.");
   return nullptr;
 }
+static void DeallocateProcessExecutableMemory(void* addr, size_t bytes) {
+  MOZ_CRASH("NYI for WASI.");
+}
 [[nodiscard]] static bool CommitPages(void* addr, size_t bytes,
                                       ProtectionSetting protection) {
   MOZ_CRASH("NYI for WASI.");
@@ -526,7 +526,7 @@ class ProcessExecutableMemory {
   uint8_t* base_;
 
   // The fields below should only be accessed while we hold the lock.
-  Mutex lock_;
+  Mutex lock_ MOZ_UNANNOTATED;
 
   // pagesAllocated_ is an Atomic so that bytesAllocated does not have to
   // take the lock.
@@ -551,6 +551,7 @@ class ProcessExecutableMemory {
     pages_.init();
 
     MOZ_RELEASE_ASSERT(!initialized());
+    MOZ_RELEASE_ASSERT(HasJitBackend());
     MOZ_RELEASE_ASSERT(gc::SystemPageSize() <= ExecutableCodePageSize);
 
     void* p = ReserveProcessExecutableMemory(MaxCodeBytesPerProcess);
@@ -576,9 +577,6 @@ class ProcessExecutableMemory {
   }
 
   void release() {
-#if defined(__wasi__)
-    MOZ_ASSERT(!initialized());
-#else
     MOZ_ASSERT(initialized());
     MOZ_ASSERT(pages_.empty());
     MOZ_ASSERT(pagesAllocated_ == 0);
@@ -586,7 +584,6 @@ class ProcessExecutableMemory {
     base_ = nullptr;
     rng_.reset();
     MOZ_ASSERT(!initialized());
-#endif
   }
 
   void assertValidAddress(void* p, size_t bytes) const {
@@ -609,6 +606,7 @@ void* ProcessExecutableMemory::allocate(size_t bytes,
                                         ProtectionSetting protection,
                                         MemCheckKind checkKind) {
   MOZ_ASSERT(initialized());
+  MOZ_ASSERT(HasJitBackend());
   MOZ_ASSERT(bytes > 0);
   MOZ_ASSERT((bytes % ExecutableCodePageSize) == 0);
 
@@ -729,15 +727,7 @@ void js::jit::DeallocateExecutableMemory(void* addr, size_t bytes) {
   execMemory.deallocate(addr, bytes, /* decommit = */ true);
 }
 
-bool js::jit::InitProcessExecutableMemory() {
-#ifdef JS_CODEGEN_ARM64
-  // Initialize instruction cache flushing.
-  vixl::CPU::SetUp();
-#elif defined(__wasi__)
-  return true;
-#endif
-  return execMemory.init();
-}
+bool js::jit::InitProcessExecutableMemory() { return execMemory.init(); }
 
 void js::jit::ReleaseProcessExecutableMemory() { execMemory.release(); }
 
@@ -764,11 +754,9 @@ bool js::jit::ReprotectRegion(void* start, size_t size,
                               ProtectionSetting protection,
                               MustFlushICache flushICache) {
   // Flush ICache when making code executable, before we modify |size|.
-  if (flushICache == MustFlushICache::LocalThreadOnly ||
-      flushICache == MustFlushICache::AllThreads) {
+  if (flushICache == MustFlushICache::Yes) {
     MOZ_ASSERT(protection == ProtectionSetting::Executable);
-    bool codeIsThreadLocal = flushICache == MustFlushICache::LocalThreadOnly;
-    jit::FlushICache(start, size, codeIsThreadLocal);
+    jit::FlushICache(start, size);
   }
 
   // Calculate the start of the page containing this region,

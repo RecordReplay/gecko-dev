@@ -16,6 +16,7 @@
 #include "mozilla/dom/DocumentTimeline.h"
 #include "mozilla/dom/KeyframeEffect.h"
 #include "mozilla/dom/MutationObservers.h"
+#include "mozilla/dom/ScrollTimeline.h"
 
 #include "nsPresContext.h"
 #include "nsPresContextInlines.h"
@@ -28,26 +29,16 @@
 #include <algorithm>  // std::stable_sort
 #include <math.h>
 
-namespace mozilla {
-namespace dom {
-struct ComputedEffectTiming;
-struct EffectTiming;
-struct OptionalEffectTiming;
-}  // namespace dom
-}  // namespace mozilla
-
 using namespace mozilla;
 using namespace mozilla::css;
 using mozilla::dom::Animation;
 using mozilla::dom::AnimationEffect;
 using mozilla::dom::AnimationPlayState;
-using mozilla::dom::ComputedEffectTiming;
 using mozilla::dom::CSSAnimation;
-using mozilla::dom::EffectTiming;
 using mozilla::dom::Element;
 using mozilla::dom::KeyframeEffect;
 using mozilla::dom::MutationObservers;
-using mozilla::dom::OptionalEffectTiming;
+using mozilla::dom::ScrollTimeline;
 
 ////////////////////////// nsAnimationManager ////////////////////////////
 
@@ -140,7 +131,7 @@ static void UpdateOldAnimationPropertiesWithNew(
     CSSAnimation& aOld, TimingParams&& aNewTiming,
     nsTArray<Keyframe>&& aNewKeyframes, bool aNewIsStylePaused,
     CSSAnimationProperties aOverriddenProperties,
-    ServoCSSAnimationBuilder& aBuilder) {
+    ServoCSSAnimationBuilder& aBuilder, dom::AnimationTimeline* aTimeline) {
   bool animationChanged = false;
 
   // Update the old from the new so we can keep the original object
@@ -176,6 +167,22 @@ static void UpdateOldAnimationPropertiesWithNew(
     }
   }
 
+  // Replace the timeline if
+  // 1. The old timeline is null and the new one is non-null.
+  // 2. The old timeline is non-null and the new one is null.
+  // 3. Both timelines are scroll-timeline but they have different members
+  //    (i.e. different owner documents, sources, or directions).
+  // FIXME: I believe we can do better if both are scroll-timelines, e.g. just
+  // replace the different members, instead of the entire timeline.
+  // We will do that in Bug 1738135.
+  dom::AnimationTimeline* oldTimeline = aOld.GetTimeline();
+  if (!oldTimeline != !aTimeline ||
+      (oldTimeline && aTimeline &&
+       oldTimeline->AsScrollTimeline() != aTimeline->AsScrollTimeline())) {
+    aOld.SetTimelineNoUpdate(aTimeline);
+    animationChanged = true;
+  }
+
   // Handle changes in play state. If the animation is idle, however,
   // changes to animation-play-state should *not* restart it.
   if (aOld.PlayState() != AnimationPlayState::Idle &&
@@ -198,33 +205,69 @@ static void UpdateOldAnimationPropertiesWithNew(
   }
 }
 
+static already_AddRefed<dom::AnimationTimeline> GetTimeline(
+    const StyleAnimationTimeline& aStyleTimeline, nsPresContext* aPresContext,
+    const NonOwningAnimationTarget& aTarget) {
+  switch (aStyleTimeline.tag) {
+    case StyleAnimationTimeline::Tag::Timeline: {
+      nsAtom* name = aStyleTimeline.AsTimeline().AsAtom();
+      if (name == nsGkAtoms::_empty) {
+        // That's how we represent `none`.
+        return nullptr;
+      }
+      const auto* rule =
+          aPresContext->StyleSet()->ScrollTimelineRuleForName(name);
+      if (!rule) {
+        // Unknown timeline, so treat is as no timeline. Keep nullptr.
+        return nullptr;
+      }
+      // We do intentionally use the pres context's document for the owner of
+      // ScrollTimeline since it's consistent with what we do for
+      // KeyframeEffect instance.
+      return ScrollTimeline::FromRule(*rule, aPresContext->Document(), aTarget);
+    }
+    case StyleAnimationTimeline::Tag::Scroll: {
+      const auto& scroll = aStyleTimeline.AsScroll();
+      return ScrollTimeline::FromAnonymousScroll(aPresContext->Document(),
+                                                 aTarget, scroll._0, scroll._1);
+      break;
+    }
+    case StyleAnimationTimeline::Tag::Auto:
+      return do_AddRef(aTarget.mElement->OwnerDoc()->Timeline());
+  }
+  MOZ_ASSERT_UNREACHABLE("Unknown animation-timeline value?");
+  return nullptr;
+}
+
 // Returns a new animation set up with given StyleAnimation.
 // Or returns an existing animation matching StyleAnimation's name updated
 // with the new StyleAnimation.
 static already_AddRefed<CSSAnimation> BuildAnimation(
     nsPresContext* aPresContext, const NonOwningAnimationTarget& aTarget,
-    const nsStyleDisplay& aStyleDisplay, uint32_t animIdx,
+    const nsStyleUIReset& aStyle, uint32_t animIdx,
     ServoCSSAnimationBuilder& aBuilder,
     nsAnimationManager::CSSAnimationCollection* aCollection) {
   MOZ_ASSERT(aPresContext);
 
-  nsAtom* animationName = aStyleDisplay.GetAnimationName(animIdx);
+  nsAtom* animationName = aStyle.GetAnimationName(animIdx);
   nsTArray<Keyframe> keyframes;
-  if (!aBuilder.BuildKeyframes(
-          *aTarget.mElement, aPresContext, animationName,
-          aStyleDisplay.GetAnimationTimingFunction(animIdx), keyframes)) {
+  if (!aBuilder.BuildKeyframes(*aTarget.mElement, aPresContext, animationName,
+                               aStyle.GetAnimationTimingFunction(animIdx),
+                               keyframes)) {
     return nullptr;
   }
 
   TimingParams timing = TimingParamsFromCSSParams(
-      aStyleDisplay.GetAnimationDuration(animIdx),
-      aStyleDisplay.GetAnimationDelay(animIdx),
-      aStyleDisplay.GetAnimationIterationCount(animIdx),
-      aStyleDisplay.GetAnimationDirection(animIdx),
-      aStyleDisplay.GetAnimationFillMode(animIdx));
+      aStyle.GetAnimationDuration(animIdx), aStyle.GetAnimationDelay(animIdx),
+      aStyle.GetAnimationIterationCount(animIdx),
+      aStyle.GetAnimationDirection(animIdx),
+      aStyle.GetAnimationFillMode(animIdx));
 
-  bool isStylePaused = aStyleDisplay.GetAnimationPlayState(animIdx) ==
-                       StyleAnimationPlayState::Paused;
+  bool isStylePaused =
+      aStyle.GetAnimationPlayState(animIdx) == StyleAnimationPlayState::Paused;
+
+  RefPtr<dom::AnimationTimeline> timeline =
+      GetTimeline(aStyle.GetTimeline(animIdx), aPresContext, aTarget);
 
   // Find the matching animation with animation name in the old list
   // of animations and remove the matched animation from the list.
@@ -242,7 +285,7 @@ static already_AddRefed<CSSAnimation> BuildAnimation(
     // In order to honor what the spec said, we'd copy more data over.
     UpdateOldAnimationPropertiesWithNew(
         *oldAnim, std::move(timing), std::move(keyframes), isStylePaused,
-        oldAnim->GetOverriddenProperties(), aBuilder);
+        oldAnim->GetOverriddenProperties(), aBuilder, timeline);
     return oldAnim.forget();
   }
 
@@ -259,7 +302,7 @@ static already_AddRefed<CSSAnimation> BuildAnimation(
   animation->SetOwningElement(
       OwningElementRef(*aTarget.mElement, aTarget.mPseudoType));
 
-  animation->SetTimelineNoUpdate(aTarget.mElement->OwnerDoc()->Timeline());
+  animation->SetTimelineNoUpdate(timeline);
   animation->SetEffectNoUpdate(effect);
 
   if (isStylePaused) {
@@ -275,13 +318,13 @@ static already_AddRefed<CSSAnimation> BuildAnimation(
 
 static nsAnimationManager::OwningCSSAnimationPtrArray BuildAnimations(
     nsPresContext* aPresContext, const NonOwningAnimationTarget& aTarget,
-    const nsStyleDisplay& aStyleDisplay, ServoCSSAnimationBuilder& aBuilder,
+    const nsStyleUIReset& aStyle, ServoCSSAnimationBuilder& aBuilder,
     nsAnimationManager::CSSAnimationCollection* aCollection,
     nsTHashSet<RefPtr<nsAtom>>& aReferencedAnimations) {
   nsAnimationManager::OwningCSSAnimationPtrArray result;
 
-  for (size_t animIdx = aStyleDisplay.mAnimationNameCount; animIdx-- != 0;) {
-    nsAtom* name = aStyleDisplay.GetAnimationName(animIdx);
+  for (size_t animIdx = aStyle.mAnimationNameCount; animIdx-- != 0;) {
+    nsAtom* name = aStyle.GetAnimationName(animIdx);
     // CSS Animations whose animation-name does not match a @keyframes rule do
     // not generate animation events. This includes when the animation-name is
     // "none" which is represented by an empty name in the StyleAnimation.
@@ -292,8 +335,8 @@ static nsAnimationManager::OwningCSSAnimationPtrArray BuildAnimations(
     }
 
     aReferencedAnimations.Insert(name);
-    RefPtr<CSSAnimation> dest = BuildAnimation(
-        aPresContext, aTarget, aStyleDisplay, animIdx, aBuilder, aCollection);
+    RefPtr<CSSAnimation> dest = BuildAnimation(aPresContext, aTarget, aStyle,
+                                               animIdx, aBuilder, aCollection);
     if (!dest) {
       continue;
     }
@@ -313,10 +356,8 @@ void nsAnimationManager::UpdateAnimations(dom::Element* aElement,
              "Should not update animations that are not attached to the "
              "document tree");
 
-  const nsStyleDisplay* disp =
-      aComputedStyle ? aComputedStyle->StyleDisplay() : nullptr;
-
-  if (!disp || disp->mDisplay == StyleDisplay::None) {
+  if (!aComputedStyle ||
+      aComputedStyle->StyleDisplay()->mDisplay == StyleDisplay::None) {
     // If we are in a display:none subtree we will have no computed values.
     // However, if we are on the root of display:none subtree, the computed
     // values might not have been cleared yet.
@@ -330,12 +371,12 @@ void nsAnimationManager::UpdateAnimations(dom::Element* aElement,
   NonOwningAnimationTarget target(aElement, aPseudoType);
   ServoCSSAnimationBuilder builder(aComputedStyle);
 
-  DoUpdateAnimations(target, *disp, builder);
+  DoUpdateAnimations(target, *aComputedStyle->StyleUIReset(), builder);
 }
 
 void nsAnimationManager::DoUpdateAnimations(
-    const NonOwningAnimationTarget& aTarget,
-    const nsStyleDisplay& aStyleDisplay, ServoCSSAnimationBuilder& aBuilder) {
+    const NonOwningAnimationTarget& aTarget, const nsStyleUIReset& aStyle,
+    ServoCSSAnimationBuilder& aBuilder) {
   // Everything that causes our animation data to change triggers a
   // style change, which in turn triggers a non-animation restyle.
   // Likewise, when we initially construct frames, we're not in a
@@ -344,8 +385,8 @@ void nsAnimationManager::DoUpdateAnimations(
   CSSAnimationCollection* collection =
       CSSAnimationCollection::GetAnimationCollection(aTarget.mElement,
                                                      aTarget.mPseudoType);
-  if (!collection && aStyleDisplay.mAnimationNameCount == 1 &&
-      aStyleDisplay.mAnimations[0].GetName() == nsGkAtoms::_empty) {
+  if (!collection && aStyle.mAnimationNameCount == 1 &&
+      aStyle.mAnimations[0].GetName() == nsGkAtoms::_empty) {
     return;
   }
 
@@ -354,8 +395,8 @@ void nsAnimationManager::DoUpdateAnimations(
   // Build the updated animations list, extracting matching animations from
   // the existing collection as we go.
   OwningCSSAnimationPtrArray newAnimations =
-      BuildAnimations(mPresContext, aTarget, aStyleDisplay, aBuilder,
-                      collection, mMaybeReferencedAnimations);
+      BuildAnimations(mPresContext, aTarget, aStyle, aBuilder, collection,
+                      mMaybeReferencedAnimations);
 
   if (newAnimations.IsEmpty()) {
     if (collection) {

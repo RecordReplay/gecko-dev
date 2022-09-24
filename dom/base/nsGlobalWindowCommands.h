@@ -9,11 +9,9 @@
 
 #include "nscore.h"
 
-namespace mozilla {
-namespace layers {
+namespace mozilla::layers {
 struct KeyboardScrollAction;
-}  // namespace layers
-}  // namespace mozilla
+}  // namespace mozilla::layers
 
 class nsControllerCommandTable;
 
@@ -25,7 +23,7 @@ class nsWindowCommandRegistration {
 
 class nsGlobalWindowCommands {
  public:
-  typedef mozilla::layers::KeyboardScrollAction KeyboardScrollAction;
+  using KeyboardScrollAction = mozilla::layers::KeyboardScrollAction;
 
   /**
    * Search through nsGlobalWindowCommands to find the keyboard scrolling action

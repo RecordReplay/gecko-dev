@@ -38,13 +38,15 @@ class ExtensionServiceWorkerInfo : public mozIExtensionServiceWorkerInfo {
   NS_DECL_MOZIEXTENSIONSERVICEWORKERINFO
   NS_DECL_ISUPPORTS
 
-  explicit ExtensionServiceWorkerInfo(const dom::ClientInfo& aClientInfo)
-      : mClientInfo(aClientInfo) {}
+  explicit ExtensionServiceWorkerInfo(const dom::ClientInfo& aClientInfo,
+                                      const uint64_t aDescriptorId)
+      : mClientInfo(aClientInfo), mDescriptorId(aDescriptorId) {}
 
  private:
   virtual ~ExtensionServiceWorkerInfo() = default;
 
   dom::ClientInfo mClientInfo;
+  uint64_t mDescriptorId;
 };
 
 // A class that represents a WebExtensions API request (a method call,
@@ -62,7 +64,8 @@ class ExtensionAPIRequest : public mozIExtensionAPIRequest {
       const mozIExtensionAPIRequest::RequestType aRequestType,
       const ExtensionAPIRequestTarget& aRequestTarget);
 
-  void Init(Maybe<dom::ClientInfo>& aSWClientInfo, JS::HandleValue aRequestArgs,
+  void Init(Maybe<dom::ClientInfo>& aSWClientInfo,
+            const uint64_t aSWDescriptorId, JS::HandleValue aRequestArgs,
             JS::HandleValue aCallerStack);
 
   static bool ShouldHaveResult(const APIRequestType& aRequestType) {
@@ -93,6 +96,7 @@ class ExtensionAPIRequest : public mozIExtensionAPIRequest {
   virtual ~ExtensionAPIRequest() {
     mSWClientInfo = Nothing();
     mArgs.setUndefined();
+    mNormalizedArgs.setUndefined();
     mStack.setUndefined();
     mEventListener = nullptr;
     mozilla::DropJSObjects(this);
@@ -102,7 +106,9 @@ class ExtensionAPIRequest : public mozIExtensionAPIRequest {
   ExtensionAPIRequestTarget mRequestTarget;
   JS::Heap<JS::Value> mStack;
   JS::Heap<JS::Value> mArgs;
+  JS::Heap<JS::Value> mNormalizedArgs;
   Maybe<dom::ClientInfo> mSWClientInfo;
+  uint64_t mSWDescriptorId;
   RefPtr<ExtensionServiceWorkerInfo> mSWInfo;
 
   // Only set for addListener/removeListener API requests.

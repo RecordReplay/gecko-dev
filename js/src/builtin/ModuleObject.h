@@ -33,9 +33,7 @@
 #include "vm/NativeObject.h"   // NativeObject
 #include "vm/PromiseObject.h"  // js::PromiseObject
 #include "vm/ProxyObject.h"    // ProxyObject
-#include "vm/Xdr.h"            // XDRMode, XDRResult, XDRState
 
-class JSFreeOp;
 class JSScript;
 class JSTracer;
 
@@ -56,12 +54,12 @@ using HandleModuleEnvironmentObject = Handle<ModuleEnvironmentObject*>;
 
 class ModuleRequestObject : public NativeObject {
  public:
-  enum { SpecifierSlot = 0, SlotCount };
+  enum { SpecifierSlot = 0, AssertionSlot, SlotCount };
 
   static const JSClass class_;
   static bool isInstance(HandleValue value);
-  [[nodiscard]] static ModuleRequestObject* create(JSContext* cx,
-                                                   HandleAtom specifier);
+  [[nodiscard]] static ModuleRequestObject* create(
+      JSContext* cx, HandleAtom specifier, HandleArrayObject maybeAssertions);
 
   JSAtom* specifier() const;
 };
@@ -95,10 +93,6 @@ using HandleImportEntryObject = Handle<ImportEntryObject*>;
 using RootedImportEntryVector = Rooted<GCVector<ImportEntryObject*>>;
 using MutableHandleImportEntryObject = MutableHandle<ImportEntryObject*>;
 
-template <XDRMode mode>
-XDRResult XDRImportEntryObject(XDRState<mode>* xdr,
-                               MutableHandleImportEntryObject impObj);
-
 class ExportEntryObject : public NativeObject {
  public:
   enum {
@@ -126,9 +120,6 @@ class ExportEntryObject : public NativeObject {
   uint32_t columnNumber() const;
 };
 
-template <XDRMode mode>
-XDRResult XDRExportEntries(XDRState<mode>* xdr, MutableHandleArrayObject vec);
-
 using RootedExportEntryObject = Rooted<ExportEntryObject*>;
 using HandleExportEntryObject = Handle<ExportEntryObject*>;
 
@@ -155,15 +146,6 @@ using MutableHandleRequestedModuleObject =
 
 using RootedModuleRequestObject = Rooted<ModuleRequestObject*>;
 using MutableHandleModuleRequestObject = MutableHandle<ModuleRequestObject*>;
-
-template <XDRMode mode>
-XDRResult XDRRequestedModuleObject(XDRState<mode>* xdr,
-                                   MutableHandleRequestedModuleObject reqObj);
-
-template <XDRMode mode>
-XDRResult XDRModuleRequestObject(
-    XDRState<mode>* xdr, MutableHandleModuleRequestObject moduleRequestObj,
-    bool allowNullSpecifier);
 
 class IndirectBindingMap {
  public:
@@ -260,7 +242,7 @@ class ModuleNamespaceObject : public ProxyObject {
              HandleValue receiver, ObjectOpResult& result) const override;
 
     void trace(JSTracer* trc, JSObject* proxy) const override;
-    void finalize(JSFreeOp* fop, JSObject* proxy) const override;
+    void finalize(JS::GCContext* gcx, JSObject* proxy) const override;
 
     static const char family;
   };
@@ -347,11 +329,9 @@ class ModuleObject : public NativeObject {
 #ifdef DEBUG
   static bool AssertFrozen(JSContext* cx, HandleModuleObject self);
 #endif
-  void fixEnvironmentsAfterRealmMerge();
 
   JSScript* maybeScript() const;
   JSScript* script() const;
-  Scope* enclosingScope() const;
   ModuleEnvironmentObject& initialEnvironment() const;
   ModuleEnvironmentObject* environment() const;
   ModuleNamespaceObject* namespace_();
@@ -372,7 +352,6 @@ class ModuleObject : public NativeObject {
   static PromiseObject* createTopLevelCapability(JSContext* cx,
                                                  HandleModuleObject module);
   bool isAsync() const;
-  void setAsync(bool isAsync);
   bool isAsyncEvaluating() const;
   void setAsyncEvaluatingFalse();
   void setEvaluationError(HandleValue newValue);
@@ -385,6 +364,8 @@ class ModuleObject : public NativeObject {
   uint32_t getAsyncEvaluatingPostOrder() const;
   void setCycleRoot(ModuleObject* cycleRoot);
   ModuleObject* getCycleRoot() const;
+
+  static void onTopLevelEvaluationFinished(ModuleObject* module);
 
   static bool appendAsyncParentModule(JSContext* cx, HandleModuleObject self,
                                       HandleModuleObject parent);
@@ -435,7 +416,7 @@ class ModuleObject : public NativeObject {
   static const JSClassOps classOps_;
 
   static void trace(JSTracer* trc, JSObject* obj);
-  static void finalize(JSFreeOp* fop, JSObject* obj);
+  static void finalize(JS::GCContext* gcx, JSObject* obj);
 
   bool hasImportBindings() const;
 };
@@ -461,9 +442,10 @@ bool AsyncModuleExecutionRejectedHandler(JSContext* cx, unsigned argc,
                                          Value* vp);
 
 JSObject* StartDynamicModuleImport(JSContext* cx, HandleScript script,
-                                   HandleValue specifier);
+                                   HandleValue specifier, HandleValue options);
 
-bool OnModuleEvaluationFailure(JSContext* cx, HandleObject evaluationPromise);
+bool OnModuleEvaluationFailure(JSContext* cx, HandleObject evaluationPromise,
+                               JS::ModuleErrorBehaviour errorBehaviour);
 
 bool FinishDynamicModuleImport(JSContext* cx, HandleObject evaluationPromise,
                                HandleValue referencingPrivate,
@@ -477,9 +459,6 @@ bool FinishDynamicModuleImport_NoTLA(JSContext* cx,
                                      HandleValue referencingPrivate,
                                      HandleObject moduleRequest,
                                      HandleObject promise);
-
-template <XDRMode mode>
-XDRResult XDRModuleObject(XDRState<mode>* xdr, MutableHandleModuleObject modp);
 
 }  // namespace js
 

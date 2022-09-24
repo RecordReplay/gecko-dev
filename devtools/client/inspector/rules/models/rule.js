@@ -4,7 +4,6 @@
 
 "use strict";
 
-const promise = require("promise");
 const {
   style: { ELEMENT_STYLE },
 } = require("devtools/shared/constants");
@@ -66,8 +65,6 @@ class Rule {
     this.inherited = options.inherited || null;
     this.keyframes = options.keyframes || null;
 
-    this.mediaText =
-      this.domRule && this.domRule.mediaText ? this.domRule.mediaText : "";
     this.cssProperties = this.elementStyle.ruleView.cssProperties;
     this.inspector = this.elementStyle.ruleView.inspector;
     this.store = this.elementStyle.ruleView.store;
@@ -116,32 +113,8 @@ class Rule {
     };
   }
 
-  get sourceLink() {
-    return {
-      label: this._getSourceText(true),
-      title: this._getSourceText(),
-    };
-  }
-
   get sourceMapURLService() {
     return this.inspector.toolbox.sourceMapURLService;
-  }
-
-  /**
-   * Returns the original source location which includes the original URL, line and
-   * column numbers.
-   */
-  get generatedLocation() {
-    if (!this._generatedLocation) {
-      this._generatedLocation = {
-        sheet: this.sheet,
-        url: this.sheet ? this.sheet.href || this.sheet.nodeHref : null,
-        line: this.ruleLine,
-        column: this.ruleColumn,
-      };
-    }
-
-    return this._generatedLocation;
   }
 
   get title() {
@@ -150,7 +123,7 @@ class Rule {
       title += ":" + this.ruleLine;
     }
 
-    return title + (this.mediaText ? " @media " + this.mediaText : "");
+    return title;
   }
 
   get inheritedSource() {
@@ -243,8 +216,11 @@ class Rule {
    */
   async getCompatibilityIssues() {
     if (!this.compatibilityIssues) {
-      const targetBrowsers = getTargetBrowsers();
-      const compatibility = await this.inspector.inspectorFront.getCompatibilityFront();
+      const [targetBrowsers, compatibility] = await Promise.all([
+        getTargetBrowsers(),
+        this.inspector.inspectorFront.getCompatibilityFront(),
+      ]);
+
       this.compatibilityIssues = await compatibility.getCSSDeclarationBlockIssues(
         this.domRule.declarations,
         targetBrowsers
@@ -267,37 +243,6 @@ class Rule {
   }
 
   /**
-   * Returns a formatted source text of the stylesheet URL with its source line
-   * and @media text.
-   *
-   * @param  {boolean} shortenURL True to get a shorter version of the URL.
-   */
-  _getSourceText(shortenURL) {
-    if (this.isSystem) {
-      return `${STYLE_INSPECTOR_L10N.getStr("rule.userAgentStyles")} ${
-        this.title
-      }`;
-    }
-
-    const currentLocation = this.generatedLocation;
-
-    let sourceText = currentLocation.url;
-    if (shortenURL) {
-      sourceText = CssLogic.shortSource({ href: sourceText });
-    }
-
-    if (currentLocation.line > 0) {
-      sourceText += ":" + currentLocation.line;
-    }
-
-    if (this.mediaText) {
-      sourceText += " @media " + this.mediaText;
-    }
-
-    return sourceText;
-  }
-
-  /**
    * Returns an unique selector for the CSS rule.
    */
   async getUniqueSelector() {
@@ -312,7 +257,7 @@ class Rule {
       selector = await this.inherited.getUniqueSelector();
     } else {
       // This is an inline style from the current node.
-      selector = this.inspector.selectionCssSelector;
+      selector = await this.inspector.selection.nodeFront.getUniqueSelector();
     }
 
     return selector;
@@ -474,8 +419,7 @@ class Rule {
   applyProperties(modifier) {
     // If there is already a pending modification, we have to wait
     // until it settles before applying the next modification.
-    const resultPromise = promise
-      .resolve(this._applyingModifications)
+    const resultPromise = Promise.resolve(this._applyingModifications)
       .then(() => {
         const modifications = this.domRule.startModifyingProperties(
           this.cssProperties

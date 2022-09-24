@@ -7,8 +7,6 @@ from __future__ import absolute_import, unicode_literals
 import os
 import sys
 
-from recommonmark.transform import AutoStructify
-
 # Set up Python environment to load build system packages.
 OUR_DIR = os.path.dirname(__file__)
 topsrcdir = os.path.normpath(os.path.join(OUR_DIR, ".."))
@@ -27,6 +25,7 @@ EXTRA_PATHS = (
     "testing/mozbase/mozprocess",
     "third_party/python/jsmin",
     "third_party/python/which",
+    "docs/_addons",
 )
 
 sys.path[:0] = [os.path.join(topsrcdir, p) for p in EXTRA_PATHS]
@@ -34,6 +33,7 @@ sys.path[:0] = [os.path.join(topsrcdir, p) for p in EXTRA_PATHS]
 sys.path.insert(0, OUR_DIR)
 
 extensions = [
+    "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.doctest",
@@ -43,10 +43,10 @@ extensions = [
     "mozbuild.sphinx",
     "sphinx_js",
     "sphinxcontrib.mermaid",
-    "recommonmark",
     "sphinx_copybutton",
     "sphinx_markdown_tables",
     "sphinx_panels",
+    "bzlink",
 ]
 
 # JSDoc must run successfully for dirs specified, so running
@@ -54,7 +54,9 @@ extensions = [
 js_source_path = [
     "../browser/components/extensions",
     "../browser/components/uitour",
+    "../browser/components/urlbar",
     "../remote/marionette",
+    "../toolkit/actors",
     "../toolkit/components/extensions",
     "../toolkit/components/extensions/parent",
     "../toolkit/components/featuregates",
@@ -70,6 +72,13 @@ templates_path = ["_templates"]
 source_suffix = [".rst", ".md"]
 master_doc = "index"
 project = "Firefox Source Docs"
+# Override the search box to use Google instead of
+# sphinx search
+html_sidebars = {
+    "**": [
+        "searchbox.html",
+    ]
+}
 html_logo = os.path.join(
     topsrcdir, "browser/branding/nightly/content/firefox-wordmark.svg"
 )
@@ -99,7 +108,7 @@ else:
 
 
 html_static_path = ["_static"]
-htmlhelp_basename = "MozillaTreeDocs"
+htmlhelp_basename = "FirefoxTreeDocs"
 
 moz_project_name = "main"
 
@@ -114,22 +123,11 @@ autosectionlabel_maxdepth = 1
 
 
 def install_sphinx_panels(app, pagename, templatename, context, doctree):
-    if "raptor" in pagename:
+    if "perfdocs" in pagename:
         app.add_js_file("sphinx_panels.js")
         app.add_css_file("sphinx_panels.css")
 
 
 def setup(app):
-    app.add_config_value(
-        "recommonmark_config",
-        {
-            # Crashes with sphinx
-            "enable_inline_math": False,
-            # We use it for testing/web-platform/tests
-            "enable_eval_rst": True,
-        },
-        True,
-    )
-    app.add_stylesheet("custom_theme.css")
-    app.add_transform(AutoStructify)
+    app.add_css_file("custom_theme.css")
     app.connect("html-page-context", install_sphinx_panels)

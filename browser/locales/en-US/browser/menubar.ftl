@@ -41,15 +41,6 @@ menu-quit =
 menu-quit-mac =
     .label = Quit { -brand-shorter-name }
 
-# This menu-quit-button string is only used on Linux.
-menu-quit-button =
-    .label = { menu-quit.label }
-
-# This menu-quit-button-win string is only used on Windows.
-menu-quit-button-win =
-    .label = { menu-quit.label }
-    .tooltip = Exit { -brand-shorter-name }
-
 menu-about =
     .label = About { -brand-shorter-name }
     .accesskey = A
@@ -79,8 +70,14 @@ menu-file-open-location =
 menu-file-open-file =
     .label = Open File…
     .accesskey = O
-menu-file-close =
-    .label = Close
+# Variables:
+#  $tabCount (Number): the number of tabs that are affected by the action.
+menu-file-close-tab =
+    .label =
+        { $tabCount ->
+            [1] Close Tab
+           *[other] Close { $tabCount } Tabs
+        }
     .accesskey = C
 menu-file-close-window =
     .label = Close Window
@@ -91,12 +88,12 @@ menu-file-save-page =
 menu-file-email-link =
     .label = Email Link…
     .accesskey = E
+menu-file-share-url =
+    .label = Share
+    .accesskey = h
 menu-file-print-setup =
     .label = Page Setup…
     .accesskey = u
-menu-file-print-preview =
-    .label = Print Preview
-    .accesskey = v
 menu-file-print =
     .label = Print…
     .accesskey = P
@@ -308,8 +305,8 @@ menu-help-more-troubleshooting-info =
     .accesskey = T
 menu-help-report-site-issue =
     .label = Report Site Issue…
-menu-help-feedback-page =
-    .label = Submit Feedback…
+menu-help-share-ideas =
+    .label = Share Ideas and Feedback…
     .accesskey = S
 menu-help-enter-troubleshoot-mode2 =
     .label = Troubleshoot Mode…

@@ -28,10 +28,12 @@ class SandboxTestingParent : public PSandboxTestingParent {
   void ActorDestroy(ActorDestroyReason aWhy) override;
 
   mozilla::ipc::IPCResult RecvReportTestResults(const nsCString& testName,
-                                                bool shouldSucceed,
-                                                bool didSucceed,
+                                                bool passed,
                                                 const nsCString& resultMessage);
   mozilla::ipc::IPCResult RecvTestCompleted();
+
+  mozilla::ipc::IPCResult RecvGetSpecialDirectory(
+      const nsCString& aSpecialDirName, nsString* aDirPath);
 
  private:
   explicit SandboxTestingParent(SandboxTestingThread* aThread,
@@ -41,7 +43,7 @@ class SandboxTestingParent : public PSandboxTestingParent {
   void Bind(Endpoint<PSandboxTestingParent>&& aEnd);
 
   UniquePtr<SandboxTestingThread> mThread;
-  Monitor mMonitor;
+  Monitor mMonitor MOZ_UNANNOTATED;
   bool mShutdownDone;
 };
 

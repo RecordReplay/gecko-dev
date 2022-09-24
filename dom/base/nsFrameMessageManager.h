@@ -11,7 +11,7 @@
 #include <string.h>
 #include <utility>
 #include "ErrorList.h"
-#include "js/RootingAPI.h"
+#include "js/experimental/JSStencil.h"
 #include "js/TypeDecls.h"
 #include "js/Value.h"
 #include "mozilla/AlreadyAddRefed.h"
@@ -99,10 +99,10 @@ struct nsMessageListenerInfo {
 
 class nsFrameMessageManager : public nsIMessageSender {
   friend class mozilla::dom::MessageManagerReporter;
-  typedef mozilla::dom::ipc::StructuredCloneData StructuredCloneData;
+  using StructuredCloneData = mozilla::dom::ipc::StructuredCloneData;
 
  protected:
-  typedef mozilla::dom::ipc::MessageManagerFlags MessageManagerFlags;
+  using MessageManagerFlags = mozilla::dom::ipc::MessageManagerFlags;
 
   nsFrameMessageManager(mozilla::dom::ipc::MessageManagerCallback* aCallback,
                         MessageManagerFlags aFlags);
@@ -204,7 +204,7 @@ class nsFrameMessageManager : public nsIMessageSender {
                                   const JS::Value& aTransfer,
                                   StructuredCloneData& aData);
 
-  void SetInitialProcessData(JS::HandleValue aInitialData);
+  void SetInitialProcessData(JS::Handle<JS::Value> aInitialData);
 
   void LoadPendingScripts();
 
@@ -287,7 +287,7 @@ class nsFrameMessageManager : public nsIMessageSender {
 */
 class nsSameProcessAsyncMessageBase {
  public:
-  typedef mozilla::dom::ipc::StructuredCloneData StructuredCloneData;
+  using StructuredCloneData = mozilla::dom::ipc::StructuredCloneData;
 
   nsSameProcessAsyncMessageBase();
   nsresult Init(const nsAString& aMessage, StructuredCloneData& aData);
@@ -308,14 +308,14 @@ class nsSameProcessAsyncMessageBase {
 class nsScriptCacheCleaner;
 
 struct nsMessageManagerScriptHolder {
-  nsMessageManagerScriptHolder(JSContext* aCx, JSScript* aScript)
-      : mScript(aCx, aScript) {
+  explicit nsMessageManagerScriptHolder(JS::Stencil* aStencil)
+      : mStencil(aStencil) {
     MOZ_COUNT_CTOR(nsMessageManagerScriptHolder);
   }
 
   MOZ_COUNTED_DTOR(nsMessageManagerScriptHolder)
 
-  JS::PersistentRooted<JSScript*> mScript;
+  RefPtr<JS::Stencil> mStencil;
 };
 
 class nsMessageManagerScriptExecutor {
@@ -335,10 +335,9 @@ class nsMessageManagerScriptExecutor {
   void DidCreateScriptLoader();
   void LoadScriptInternal(JS::Handle<JSObject*> aMessageManager,
                           const nsAString& aURL, bool aRunInUniqueScope);
-  void TryCacheLoadAndCompileScript(const nsAString& aURL,
-                                    bool aRunInUniqueScope, bool aShouldCache,
-                                    JS::Handle<JSObject*> aMessageManager,
-                                    JS::MutableHandle<JSScript*> aScriptp);
+  already_AddRefed<JS::Stencil> TryCacheLoadAndCompileScript(
+      const nsAString& aURL, bool aRunInUniqueScope,
+      JS::Handle<JSObject*> aMessageManager);
   bool Init();
   void Trace(const TraceCallbacks& aCallbacks, void* aClosure);
   void Unlink();
@@ -363,16 +362,13 @@ class nsScriptCacheCleaner final : public nsIObserver {
     nsCOMPtr<nsIObserverService> obsSvc =
         mozilla::services::GetObserverService();
     if (obsSvc) {
-      obsSvc->AddObserver(this, "message-manager-flush-caches", false);
       obsSvc->AddObserver(this, "xpcom-shutdown", false);
     }
   }
 
   NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic,
                      const char16_t* aData) override {
-    if (strcmp("message-manager-flush-caches", aTopic) == 0) {
-      nsMessageManagerScriptExecutor::PurgeCache();
-    } else if (strcmp("xpcom-shutdown", aTopic) == 0) {
+    if (strcmp("xpcom-shutdown", aTopic) == 0) {
       nsMessageManagerScriptExecutor::Shutdown();
     }
     return NS_OK;

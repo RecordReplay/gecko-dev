@@ -5,13 +5,13 @@
 function assertExpectedPrintPage(helper) {
   is(
     helper.sourceURI,
-    PrintHelper.defaultTestPageUrl,
+    PrintHelper.defaultTestPageUrlHTTPS,
     "The URL of the browser is the one we expect"
   );
 }
 
 add_task(async function testModalPrintDialog() {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     helper.assertDialogClosed();
 
     await helper.startPrint();
@@ -31,7 +31,7 @@ add_task(async function testModalPrintDialog() {
 });
 
 add_task(async function testPrintMultiple() {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     helper.assertDialogClosed();
 
     // First print as usual.
@@ -57,7 +57,7 @@ add_task(async function testPrintMultiple() {
 });
 
 add_task(async function testCancelButton() {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     helper.assertDialogClosed();
     await helper.startPrint();
     helper.assertDialogOpen();
@@ -73,7 +73,7 @@ add_task(async function testCancelButton() {
 });
 
 add_task(async function testTabOrder() {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     helper.assertDialogClosed();
     await helper.startPrint();
     helper.assertDialogOpen();
@@ -162,7 +162,7 @@ add_task(async function testTabOrder() {
 });
 
 async function testPrintWithEnter(testFn, filename) {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     await helper.startPrint();
 
     let file = helper.mockFilePicker(filename);
@@ -206,12 +206,9 @@ add_task(async function testEnterPrintsFromOrientation() {
 
 add_task(async function testPrintOnNewWindowDoesntClose() {
   info("Test that printing doesn't close a window with a single tab");
-  await SpecialPowers.pushPrefEnv({
-    set: [["print.tab_modal.enabled", true]],
-  });
   let win = await BrowserTestUtils.openNewBrowserWindow();
 
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     await helper.startPrint();
     let file = helper.mockFilePicker("print_new_window_close.pdf");
     await helper.assertPrintToFile(file, () => {
@@ -224,7 +221,7 @@ add_task(async function testPrintOnNewWindowDoesntClose() {
 });
 
 add_task(async function testPrintProgressIndicator() {
-  await PrintHelper.withTestPage(async helper => {
+  await PrintHelper.withTestPageHTTPS(async helper => {
     await helper.startPrint();
 
     helper.setupMockPrint();
@@ -245,4 +242,40 @@ add_task(async function testPrintProgressIndicator() {
       await helper.resolvePrint();
     });
   });
+});
+
+add_task(async function testPageSizePortrait() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["layout.css.page-size.enabled", true]],
+  });
+  await PrintHelper.withTestPageHTTPS(async helper => {
+    await helper.startPrint();
+
+    let orientation = helper.get("orientation");
+    ok(orientation.hidden, "Orientation selector is hidden");
+
+    is(
+      helper.settings.orientation,
+      Ci.nsIPrintSettings.kPortraitOrientation,
+      "Orientation set to portrait"
+    );
+  }, "file_portrait.html");
+});
+
+add_task(async function testPageSizeLandscape() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["layout.css.page-size.enabled", true]],
+  });
+  await PrintHelper.withTestPageHTTPS(async helper => {
+    await helper.startPrint();
+
+    let orientation = helper.get("orientation");
+    ok(orientation.hidden, "Orientation selector is hidden");
+
+    is(
+      helper.settings.orientation,
+      Ci.nsIPrintSettings.kLandscapeOrientation,
+      "Orientation set to landscape"
+    );
+  }, "file_landscape.html");
 });

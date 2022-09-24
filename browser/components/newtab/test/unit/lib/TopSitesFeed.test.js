@@ -28,7 +28,6 @@ const SEARCH_SHORTCUTS_HAVE_PINNED_PREF =
   "improvesearch.topSiteSearchShortcuts.havePinned";
 const SHOWN_ON_NEWTAB_PREF = "feeds.topsites";
 const SHOW_SPONSORED_PREF = "showSponsoredTopSites";
-const CONTILE_ENABLED_PREF = "browser.topsites.contile.enabled";
 const TOP_SITES_BLOCKED_SPONSORS_PREF = "browser.topsites.blockedSponsors";
 const REMOTE_SETTING_DEFAULTS_PREF = "browser.topsites.useRemoteSetting";
 
@@ -55,6 +54,7 @@ describe("Top Sites Feed", () => {
   let shortURLStub;
   let fakePageThumbs;
   let fetchStub;
+  let fakeNimbusFeatures;
 
   beforeEach(() => {
     globals = new GlobalOverrider();
@@ -92,7 +92,9 @@ describe("Top Sites Feed", () => {
       maybeCacheScreenshot: sandbox.spy(Screenshots.maybeCacheScreenshot),
       _shouldGetScreenshots: sinon.stub().returns(true),
     };
-    filterAdultStub = sinon.stub().returns([]);
+    filterAdultStub = {
+      filter: sinon.stub().returnsArg(0),
+    };
     shortURLStub = sinon
       .stub()
       .callsFake(site =>
@@ -103,8 +105,17 @@ describe("Top Sites Feed", () => {
       addExpirationFilter: sinon.stub(),
       removeExpirationFilter: sinon.stub(),
     };
+    fakeNimbusFeatures = {
+      newtab: {
+        getVariable: sinon.stub(),
+        onUpdate: sinon.stub(),
+        off: sinon.stub(),
+      },
+    };
     globals.set("PageThumbs", fakePageThumbs);
     globals.set("NewTabUtils", fakeNewTabUtils);
+    globals.set("gFilterAdultEnabled", false);
+    globals.set("NimbusFeatures", fakeNimbusFeatures);
     sandbox.spy(global.XPCOMUtils, "defineLazyGetter");
     FakePrefs.prototype.prefs["default.sites"] = "https://foo.com/";
     ({ TopSitesFeed, DEFAULT_TOP_SITES } = injector({
@@ -115,7 +126,7 @@ describe("Top Sites Feed", () => {
         TOP_SITES_DEFAULT_ROWS,
         TOP_SITES_MAX_SITES_PER_ROW,
       },
-      "lib/FilterAdult.jsm": { filterAdult: filterAdultStub },
+      "lib/FilterAdult.jsm": { FilterAdult: filterAdultStub },
       "lib/Screenshots.jsm": { Screenshots: fakeScreenshot },
       "lib/TippyTopProvider.jsm": { TippyTopProvider: FakeTippyTopProvider },
       "lib/ShortURL.jsm": { shortURL: shortURLStub },
@@ -138,7 +149,7 @@ describe("Top Sites Feed", () => {
         return this.state;
       },
       state: {
-        Prefs: { values: { filterAdult: false, topSitesRows: 2 } },
+        Prefs: { values: { topSitesRows: 2 } },
         TopSites: { rows: Array(12).fill("site") },
       },
       dbStorage: { getDbTable: sandbox.stub().returns(storage) },
@@ -160,13 +171,15 @@ describe("Top Sites Feed", () => {
   }
 
   describe("#constructor", () => {
-    it("should defineLazyGetter for _currentSearchHostname", () => {
-      assert.calledOnce(global.XPCOMUtils.defineLazyGetter);
-      assert.calledWith(
-        global.XPCOMUtils.defineLazyGetter,
-        feed,
-        "_currentSearchHostname",
-        sinon.match.func
+    it("should defineLazyGetter for log and _currentSearchHostname", () => {
+      assert.calledTwice(global.XPCOMUtils.defineLazyGetter);
+
+      let spyCall = global.XPCOMUtils.defineLazyGetter.getCall(0);
+      assert.ok(spyCall.calledWith(sinon.match.any, "log", sinon.match.func));
+
+      spyCall = global.XPCOMUtils.defineLazyGetter.getCall(1);
+      assert.ok(
+        spyCall.calledWith(feed, "_currentSearchHostname", sinon.match.func)
       );
     });
   });
@@ -258,19 +271,14 @@ describe("Top Sites Feed", () => {
 
         assert.propertyVal(result[0], "typedBonus", true);
       });
-      it("should not filter out adult sites when pref is false", async () => {
-        await feed.getLinksWithDefaults();
-
-        assert.notCalled(filterAdultStub);
-      });
-      it("should filter out non-pinned adult sites when pref is true", async () => {
-        feed.store.state.Prefs.values.filterAdult = true;
+      it("should filter out non-pinned adult sites", async () => {
+        filterAdultStub.filter = sinon.stub().returns([]);
         fakeNewTabUtils.pinnedLinks.links = [{ url: "https://foo.com/" }];
 
         const result = await feed.getLinksWithDefaults();
 
         // The stub filters out everything
-        assert.calledOnce(filterAdultStub);
+        assert.calledOnce(filterAdultStub.filter);
         assert.equal(result.length, 1);
         assert.equal(result[0].url, fakeNewTabUtils.pinnedLinks.links[0].url);
       });
@@ -613,6 +621,11 @@ describe("Top Sites Feed", () => {
 
       assert.calledOnce(feed.store.dbStorage.getDbTable);
       assert.calledWithExactly(feed.store.dbStorage.getDbTable, "sectionPrefs");
+    });
+    it("should call onUpdate to set up Nimbus update listener", async () => {
+      await feed.init();
+
+      assert.calledOnce(fakeNimbusFeatures.newtab.onUpdate);
     });
   });
   describe("#refresh", () => {
@@ -1089,6 +1102,28 @@ describe("Top Sites Feed", () => {
         data: { addedShortcuts },
       });
       assert.calledOnce(feed.updatePinnedSearchShortcuts);
+    });
+    it("should refresh from Contile on SHOW_SPONSORED_PREF if Contile is enabled", () => {
+      sandbox.spy(feed._contile, "refresh");
+      const prefChangeAction = {
+        type: at.PREF_CHANGED,
+        data: { name: SHOW_SPONSORED_PREF },
+      };
+      fakeNimbusFeatures.newtab.getVariable.returns(true);
+      feed.onAction(prefChangeAction);
+
+      assert.calledOnce(feed._contile.refresh);
+    });
+    it("should not refresh from Contile on SHOW_SPONSORED_PREF if Contile is disabled", () => {
+      sandbox.spy(feed._contile, "refresh");
+      const prefChangeAction = {
+        type: at.PREF_CHANGED,
+        data: { name: SHOW_SPONSORED_PREF },
+      };
+      fakeNimbusFeatures.newtab.getVariable.returns(false);
+      feed.onAction(prefChangeAction);
+
+      assert.notCalled(feed._contile.refresh);
     });
   });
   describe("#add", () => {
@@ -2025,13 +2060,10 @@ describe("Top Sites Feed", () => {
       fetchStub = sandbox.stub();
       globals.set("fetch", fetchStub);
       sandbox
-        .stub(global.Services.prefs, "getBoolPref")
-        .withArgs(CONTILE_ENABLED_PREF)
-        .returns(true);
-      sandbox
         .stub(global.Services.prefs, "getStringPref")
         .withArgs(TOP_SITES_BLOCKED_SPONSORS_PREF)
         .returns(`["foo","bar"]`);
+      fakeNimbusFeatures.newtab.getVariable.returns(true);
     });
     afterEach(() => {
       sandbox.restore();
@@ -2066,6 +2098,16 @@ describe("Top Sites Feed", () => {
 
       assert.ok(fetched);
       assert.equal(feed._contile.sites.length, 2);
+    });
+
+    it("should not fetch from Contile if it's not enabled", async () => {
+      fakeNimbusFeatures.newtab.getVariable.reset();
+      fakeNimbusFeatures.newtab.getVariable.returns(false);
+      const fetched = await feed._contile._fetchSites();
+
+      assert.notCalled(fetchStub);
+      assert.ok(!fetched);
+      assert.equal(feed._contile.sites.length, 0);
     });
 
     it("should filter the blocked sponsors", async () => {
@@ -2136,6 +2178,22 @@ describe("Top Sites Feed", () => {
       assert.ok(!feed._contile.sites.length);
     });
 
+    it("should handle empty payload properly from Contile", async () => {
+      fetchStub.resolves({
+        ok: true,
+        status: 200,
+        json: () =>
+          Promise.resolve({
+            tiles: [],
+          }),
+      });
+
+      const fetched = await feed._contile._fetchSites();
+
+      assert.ok(fetched);
+      assert.ok(!feed._contile.sites.length);
+    });
+
     it("should handle no content properly from Contile", async () => {
       fetchStub.resolves({ ok: true, status: 204 });
 
@@ -2174,10 +2232,7 @@ describe("Top Sites Feed", () => {
         { url: "https://bar.com", title: "bar", sponsored_position: 2 },
         { url: "https://test.com", title: "test", sponsored_position: 3 },
       ]);
-      global.Services.prefs.getStringPref
-        .withArgs(CONTILE_ENABLED_PREF)
-        .returns(false);
-
+      fakeNimbusFeatures.newtab.getVariable.returns(false);
       await feed._readDefaults();
 
       assert.equal(DEFAULT_TOP_SITES.length, 1);
@@ -2190,9 +2245,7 @@ describe("Top Sites Feed", () => {
         { url: "https://bar.com", title: "bar", sponsored_position: 2 },
         { url: "https://test.com", title: "test", sponsored_position: 3 },
       ]);
-      global.Services.prefs.getBoolPref
-        .withArgs(CONTILE_ENABLED_PREF)
-        .returns(true);
+      fakeNimbusFeatures.newtab.getVariable.returns(true);
 
       await feed._readDefaults();
 
@@ -2214,9 +2267,7 @@ describe("Top Sites Feed", () => {
     });
 
     it("should take the image from Contile if it's a hi-res one", async () => {
-      global.Services.prefs.getBoolPref
-        .withArgs(CONTILE_ENABLED_PREF)
-        .returns(true);
+      fakeNimbusFeatures.newtab.getVariable.returns(true);
       sandbox.stub(feed, "_getRemoteConfig").resolves([]);
 
       sandbox.stub(feed._contile, "sites").get(() => [
@@ -2251,6 +2302,23 @@ describe("Top Sites Feed", () => {
       // Should not be taken as it's not hi-res
       assert.isUndefined(site2.favicon);
       assert.isUndefined(site2.faviconSize);
+    });
+  });
+
+  describe("#_nimbusChangeListener", () => {
+    it("should refresh on Nimbus feature updates reasons", () => {
+      sandbox.spy(feed._contile, "refresh");
+      feed._nimbusChangeListener(null, "experiment-updated");
+
+      assert.calledOnce(feed._contile.refresh);
+    });
+
+    it("should not refresh on Nimbus feature loaded reasons", () => {
+      sandbox.spy(feed._contile, "refresh");
+      feed._nimbusChangeListener(null, "feature-experiment-loaded");
+      feed._nimbusChangeListener(null, "feature-rollout-loaded");
+
+      assert.notCalled(feed._contile.refresh);
     });
   });
 });

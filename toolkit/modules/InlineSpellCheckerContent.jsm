@@ -15,7 +15,7 @@ var InlineSpellCheckerContent = {
   _spellChecker: null,
   _actor: null,
 
-  initContextMenu(event, editFlags, actor) {
+  async initContextMenu(event, editFlags, actor) {
     this._actor = actor;
     this._actor.registerDestructionObserver(this);
 
@@ -62,6 +62,7 @@ var InlineSpellCheckerContent = {
 
     let realSpellChecker = spellChecker.mInlineSpellChecker.spellChecker;
     let dictionaryList = realSpellChecker.GetDictionaryList();
+    let spellSuggestions = await this._generateSpellSuggestions();
 
     return {
       canSpellCheck: spellChecker.canSpellCheck,
@@ -69,8 +70,8 @@ var InlineSpellCheckerContent = {
       enableRealTimeSpell: spellChecker.enabled,
       overMisspelling: spellChecker.overMisspelling,
       misspelling: spellChecker.mMisspelling,
-      spellSuggestions: this._generateSpellSuggestions(),
-      currentDictionary: spellChecker.mInlineSpellChecker.spellChecker.GetCurrentDictionary(),
+      spellSuggestions,
+      currentDictionaries: spellChecker.mInlineSpellChecker.spellChecker.getCurrentDictionaries(),
       dictionaryList,
     };
   },
@@ -87,33 +88,27 @@ var InlineSpellCheckerContent = {
     this.uninitContextMenu();
   },
 
-  _generateSpellSuggestions() {
+  async _generateSpellSuggestions() {
     let spellChecker = this._spellChecker.mInlineSpellChecker.spellChecker;
+    let suggestions = null;
     try {
-      spellChecker.CheckCurrentWord(this._spellChecker.mMisspelling);
+      suggestions = await spellChecker.suggest(
+        this._spellChecker.mMisspelling,
+        5
+      );
     } catch (e) {
       return [];
     }
 
-    let suggestions = new Array(5);
-    for (let i = 0; i < 5; ++i) {
-      suggestions[i] = spellChecker.GetSuggestedWord();
-      if (suggestions[i].length === 0) {
-        suggestions.length = i;
-        break;
-      }
-    }
-
-    this._spellChecker.mSpellSuggestions = suggestions;
     return suggestions;
   },
 
-  selectDictionary(localeCode) {
-    this._spellChecker.selectDictionary(localeCode);
+  selectDictionaries(localeCodes) {
+    this._spellChecker.selectDictionaries(localeCodes);
   },
 
-  replaceMisspelling(index) {
-    this._spellChecker.replaceMisspelling(index);
+  replaceMisspelling(suggestion) {
+    this._spellChecker.replaceMisspelling(suggestion);
   },
 
   toggleEnabled() {

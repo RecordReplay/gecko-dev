@@ -87,12 +87,13 @@ interface WindowGlobalParent : WindowContext {
   // navigation before proceeding. If the user needs to be prompted, however,
   // the promise will not resolve until the user has responded, regardless of
   // the timeout.
-  [Throws]
+  [NewObject]
   Promise<boolean> permitUnload(optional PermitUnloadAction action = "prompt",
                                 optional unsigned long timeout = 0);
 
   // Information about the currently loaded document.
   readonly attribute Principal documentPrincipal;
+  readonly attribute Principal documentStoragePrincipal;
   readonly attribute Principal? contentBlockingAllowListPrincipal;
   readonly attribute URI? documentURI;
   readonly attribute DOMString documentTitle;
@@ -130,15 +131,20 @@ interface WindowGlobalParent : WindowContext {
    * @param scale The scale to render the window at. Use devicePixelRatio
    * to have comparable rendering to the OS.
    * @param backgroundColor The background color to use.
+   * @param resetScrollPosition If true, temporarily resets the scroll position
+   * of the root scroll frame to 0, such that position:fixed elements are drawn
+   * at their initial position. This parameter only takes effect when passing a
+   * non-null rect.
    *
    * This API can only be used in the parent process, as content processes
    * cannot access the rendering of out of process iframes. This API works
    * with remote and local frames.
    */
-  [Throws]
+  [NewObject]
   Promise<ImageBitmap> drawSnapshot(DOMRect? rect,
                                     double scale,
-                                    UTF8String backgroundColor);
+                                    UTF8String backgroundColor,
+                                    optional boolean resetScrollPosition = false);
 
   /**
    * Fetches the securityInfo object for this window. This function will
@@ -149,8 +155,13 @@ interface WindowGlobalParent : WindowContext {
    * This returns a Promise which resolves to an nsITransportSecurity
    * object with certificate data or undefined if no security info is available.
    */
-  [Throws]
+  [NewObject]
   Promise<nsITransportSecurityInfo> getSecurityInfo();
+
+  // True if any of the windows in the subtree rooted at this window
+  // has active peer connections.  If this is called for a non-top-level
+  // context, it always returns false.
+  boolean hasActivePeerConnections();
 };
 
 [Exposed=Window, ChromeOnly]

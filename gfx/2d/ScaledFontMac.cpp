@@ -7,12 +7,10 @@
 #include "ScaledFontMac.h"
 #include "UnscaledFontMac.h"
 #include "mozilla/webrender/WebRenderTypes.h"
-#ifdef USE_SKIA
-#  include "PathSkia.h"
-#  include "skia/include/core/SkPaint.h"
-#  include "skia/include/core/SkPath.h"
-#  include "skia/include/ports/SkTypeface_mac.h"
-#endif
+#include "PathSkia.h"
+#include "skia/include/core/SkPaint.h"
+#include "skia/include/core/SkPath.h"
+#include "skia/include/ports/SkTypeface_mac.h"
 #include <vector>
 #include <dlfcn.h>
 #ifdef MOZ_WIDGET_UIKIT
@@ -31,9 +29,7 @@ CGPathRef CGFontGetGlyphPath(CGFontRef fontRef,
 };
 #endif
 
-#ifdef USE_CAIRO_SCALED_FONT
-#  include "cairo-quartz.h"
-#endif
+#include "cairo-quartz.h"
 
 namespace mozilla {
 namespace gfx {
@@ -129,12 +125,14 @@ ScaledFontMac::ScaledFontMac(CGFontRef aFont,
                              const RefPtr<UnscaledFont>& aUnscaledFont,
                              Float aSize, bool aOwnsFont,
                              const DeviceColor& aFontSmoothingBackgroundColor,
-                             bool aUseFontSmoothing, bool aApplySyntheticBold)
+                             bool aUseFontSmoothing, bool aApplySyntheticBold,
+                             bool aHasColorGlyphs)
     : ScaledFontBase(aUnscaledFont, aSize),
       mFont(aFont),
       mFontSmoothingBackgroundColor(aFontSmoothingBackgroundColor),
       mUseFontSmoothing(aUseFontSmoothing),
-      mApplySyntheticBold(aApplySyntheticBold) {
+      mApplySyntheticBold(aApplySyntheticBold),
+      mHasColorGlyphs(aHasColorGlyphs) {
   if (!aOwnsFont) {
     // XXX: should we be taking a reference
     CGFontRetain(aFont);
@@ -148,12 +146,14 @@ ScaledFontMac::ScaledFontMac(CGFontRef aFont,
 ScaledFontMac::ScaledFontMac(CTFontRef aFont,
                              const RefPtr<UnscaledFont>& aUnscaledFont,
                              const DeviceColor& aFontSmoothingBackgroundColor,
-                             bool aUseFontSmoothing, bool aApplySyntheticBold)
+                             bool aUseFontSmoothing, bool aApplySyntheticBold,
+                             bool aHasColorGlyphs)
     : ScaledFontBase(aUnscaledFont, CTFontGetSize(aFont)),
       mCTFont(aFont),
       mFontSmoothingBackgroundColor(aFontSmoothingBackgroundColor),
       mUseFontSmoothing(aUseFontSmoothing),
-      mApplySyntheticBold(aApplySyntheticBold) {
+      mApplySyntheticBold(aApplySyntheticBold),
+      mHasColorGlyphs(aHasColorGlyphs) {
   mFont = CTFontCopyGraphicsFont(aFont, nullptr);
 
   CFRetain(mCTFont);
@@ -164,7 +164,6 @@ ScaledFontMac::~ScaledFontMac() {
   CGFontRelease(mFont);
 }
 
-#ifdef USE_SKIA
 SkTypeface* ScaledFontMac::CreateSkTypeface() {
   return SkCreateTypefaceFromCTFont(mCTFont);
 }
@@ -191,7 +190,6 @@ void ScaledFontMac::SetupSkFontDrawOptions(SkFont& aFont) {
     aFont.setHinting(SkFontHinting::kNone);
   }
 }
-#endif
 
 // private API here are the public options on OS X
 // CTFontCreatePathForGlyph
@@ -467,6 +465,9 @@ bool ScaledFontMac::GetWRFontInstanceOptions(
   if (mApplySyntheticBold) {
     options.flags |= wr::FontInstanceFlags::SYNTHETIC_BOLD;
   }
+  if (mHasColorGlyphs) {
+    options.flags |= wr::FontInstanceFlags::EMBEDDED_BITMAPS;
+  }
   options.bg_color = wr::ToColorU(mFontSmoothingBackgroundColor);
   options.synthetic_italics =
       wr::DegreesToSyntheticItalics(GetSyntheticObliqueAngle());
@@ -477,13 +478,18 @@ bool ScaledFontMac::GetWRFontInstanceOptions(
 ScaledFontMac::InstanceData::InstanceData(
     const wr::FontInstanceOptions* aOptions,
     const wr::FontInstancePlatformOptions* aPlatformOptions)
-    : mUseFontSmoothing(true), mApplySyntheticBold(false) {
+    : mUseFontSmoothing(true),
+      mApplySyntheticBold(false),
+      mHasColorGlyphs(false) {
   if (aOptions) {
     if (!(aOptions->flags & wr::FontInstanceFlags::FONT_SMOOTHING)) {
       mUseFontSmoothing = false;
     }
     if (aOptions->flags & wr::FontInstanceFlags::SYNTHETIC_BOLD) {
       mApplySyntheticBold = true;
+    }
+    if (aOptions->flags & wr::FontInstanceFlags::EMBEDDED_BITMAPS) {
+      mHasColorGlyphs = true;
     }
     if (aOptions->bg_color.a != 0) {
       mFontSmoothingBackgroundColor =
@@ -531,11 +537,6 @@ static CFDictionaryRef CreateVariationDictionaryOrNull(
     // We sanity-check the axis info found in the CTFont, and bail out
     // (returning null) if it doesn't have the expected types.
     CFTypeRef axisInfo = CFArrayGetValueAtIndex(aCTAxesCache, i);
-
-    // https://github.com/RecordReplay/backend/issues/4555
-    recordreplay::RecordReplayAssert("CreateVariationDictionaryOrNull #6 %p %d %p",
-                                     aCTAxesCache, (int)i, axisInfo);
-
     if (CFDictionaryGetTypeID() != CFGetTypeID(axisInfo)) {
       return nullptr;
     }
@@ -749,7 +750,8 @@ already_AddRefed<ScaledFont> UnscaledFontMac::CreateScaledFont(
     }
     scaledFont = new ScaledFontMac(
         font, this, instanceData.mFontSmoothingBackgroundColor,
-        instanceData.mUseFontSmoothing, instanceData.mApplySyntheticBold);
+        instanceData.mUseFontSmoothing, instanceData.mApplySyntheticBold,
+        instanceData.mHasColorGlyphs);
   } else {
     CGFontRef fontRef = mFont;
     if (aNumVariations > 0) {
@@ -763,7 +765,8 @@ already_AddRefed<ScaledFont> UnscaledFontMac::CreateScaledFont(
     scaledFont = new ScaledFontMac(fontRef, this, aGlyphSize, fontRef != mFont,
                                    instanceData.mFontSmoothingBackgroundColor,
                                    instanceData.mUseFontSmoothing,
-                                   instanceData.mApplySyntheticBold);
+                                   instanceData.mApplySyntheticBold,
+                                   instanceData.mHasColorGlyphs);
   }
   return scaledFont.forget();
 }
@@ -777,13 +780,11 @@ already_AddRefed<ScaledFont> UnscaledFontMac::CreateScaledFontFromWRFont(
                           sizeof(instanceData), aVariations, aNumVariations);
 }
 
-#ifdef USE_CAIRO_SCALED_FONT
 cairo_font_face_t* ScaledFontMac::CreateCairoFontFace(
     cairo_font_options_t* aFontOptions) {
   MOZ_ASSERT(mFont);
   return cairo_quartz_font_face_create_for_cgfont(mFont);
 }
-#endif
 
 already_AddRefed<UnscaledFont> UnscaledFontMac::CreateFromFontDescriptor(
     const uint8_t* aData, uint32_t aDataLength, uint32_t aIndex) {

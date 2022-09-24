@@ -7,18 +7,26 @@
 #include "unicode/udatpg.h"
 #include "mozilla/EnumSet.h"
 #include "mozilla/Result.h"
-#include "mozilla/ResultVariant.h"
 #include "mozilla/Span.h"
 #include "mozilla/UniquePtr.h"
 #include "mozilla/intl/ICU4CGlue.h"
+#include "mozilla/intl/ICUError.h"
 
 namespace mozilla::intl {
 
+class DisplayNames;
+
+/**
+ * The DateTimePatternGenerator is the machinery used to work with DateTime
+ * pattern manipulation. It is expensive to create one, and so generally it is
+ * created once and then cached. It may be needed to be passed in as an argument
+ * for different mozilla::intl APIs.
+ */
 class DateTimePatternGenerator final {
  public:
   explicit DateTimePatternGenerator(UDateTimePatternGenerator* aGenerator)
       : mGenerator(aGenerator) {
-    MOZ_ASSERT(mGenerator);
+    MOZ_ASSERT(aGenerator);
   };
 
   // Transfer ownership of the UDateTimePatternGenerator in the move
@@ -35,9 +43,7 @@ class DateTimePatternGenerator final {
 
   ~DateTimePatternGenerator();
 
-  enum class Error { InternalError };
-
-  static Result<UniquePtr<DateTimePatternGenerator>, Error> TryCreate(
+  static Result<UniquePtr<DateTimePatternGenerator>, ICUError> TryCreate(
       const char* aLocale);
 
   enum class PatternMatchOption {
@@ -72,7 +78,7 @@ class DateTimePatternGenerator final {
     return FillBufferWithICUCall(
         aBuffer, [&](UChar* target, int32_t length, UErrorCode* status) {
           return udatpg_getBestPatternWithOptions(
-              mGenerator, aSkeleton.data(),
+              mGenerator.GetMut(), aSkeleton.data(),
               static_cast<int32_t>(aSkeleton.Length()),
               toUDateTimePatternMatchOptions(options), target, length, status);
         });
@@ -95,16 +101,38 @@ class DateTimePatternGenerator final {
   }
 
   /**
-   * TODO(Bug 1686965) - Temporarily get the underlying ICU object while
-   * migrating to the unified API. This should be removed when completing the
-   * migration.
+   * Get a pattern of the form "{1} {0}" to combine separate date and time
+   * patterns into a single pattern. The "{0}" part is the placeholder for the
+   * time pattern and "{1}" is the placeholder for the date pattern.
+   *
+   * See dateTimeFormat from
+   * https://unicode.org/reports/tr35/tr35-dates.html#dateTimeFormat
+   *
+   * Note:
+   * In CLDR, it's called Date-Time Combined Format
+   * https://cldr.unicode.org/translation/date-time/datetime-patterns#h.x7ca7qwzh4m
+   *
+   * The naming 'placeholder pattern' is from ICU4X.
+   * https://unicode-org.github.io/icu4x-docs/doc/icu_pattern/index.html
    */
-  UDateTimePatternGenerator* UnsafeGetUDateTimePatternGenerator() const {
-    return mGenerator;
+  Span<const char16_t> GetPlaceholderPattern() const {
+    int32_t length;
+    const char16_t* combined =
+        udatpg_getDateTimeFormat(mGenerator.GetConst(), &length);
+    return Span{combined, static_cast<size_t>(length)};
   }
 
  private:
-  UDateTimePatternGenerator* mGenerator = nullptr;
+  // Allow other mozilla::intl components to access the underlying
+  // UDateTimePatternGenerator.
+  friend class DisplayNames;
+
+  UDateTimePatternGenerator* GetUDateTimePatternGenerator() {
+    return mGenerator.GetMut();
+  }
+
+  ICUPointer<UDateTimePatternGenerator> mGenerator =
+      ICUPointer<UDateTimePatternGenerator>(nullptr);
 
   static UDateTimePatternMatchOptions toUDateTimePatternMatchOptions(
       EnumSet<PatternMatchOption> options) {

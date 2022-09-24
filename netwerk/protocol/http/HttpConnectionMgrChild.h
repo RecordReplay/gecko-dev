@@ -9,8 +9,7 @@
 #include "mozilla/net/PHttpConnectionMgrChild.h"
 #include "mozilla/RefPtr.h"
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 class nsHttpConnectionMgr;
 
@@ -33,13 +32,15 @@ class HttpConnectionMgrChild final : public PHttpConnectionMgrChild {
   mozilla::ipc::IPCResult RecvRescheduleTransaction(
       PHttpTransactionChild* aTrans, const int32_t& aPriority);
   mozilla::ipc::IPCResult RecvUpdateClassOfServiceOnTransaction(
-      PHttpTransactionChild* aTrans, const uint32_t& aClassOfService);
+      PHttpTransactionChild* aTrans, const ClassOfService& aClassOfService);
   mozilla::ipc::IPCResult RecvCancelTransaction(PHttpTransactionChild* aTrans,
                                                 const nsresult& aReason);
   mozilla::ipc::IPCResult RecvSpeculativeConnect(
       const HttpConnectionInfoCloneArgs& aConnInfo,
       Maybe<SpeculativeConnectionOverriderArgs> aOverriderArgs, uint32_t aCaps,
       Maybe<PAltSvcTransactionChild*> aTrans, const bool& aFetchHTTPSRR);
+  mozilla::ipc::IPCResult RecvStartWebSocketConnection(
+      PHttpTransactionChild* aTransWithStickyConn, uint32_t aListenerId);
 
  private:
   virtual ~HttpConnectionMgrChild();
@@ -47,7 +48,6 @@ class HttpConnectionMgrChild final : public PHttpConnectionMgrChild {
   RefPtr<nsHttpConnectionMgr> mConnMgr;
 };
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 #endif  // HttpConnectionMgrChild_h__

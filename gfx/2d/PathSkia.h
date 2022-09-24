@@ -77,6 +77,10 @@ class PathSkia : public Path {
   Rect GetStrokedBounds(const StrokeOptions& aStrokeOptions,
                         const Matrix& aTransform = Matrix()) const override;
 
+  Rect GetFastBounds(
+      const Matrix& aTransform = Matrix(),
+      const StrokeOptions* aStrokeOptions = nullptr) const override;
+
   void StreamToSink(PathSink* aSink) const override;
 
   FillRule GetFillRule() const override { return mFillRule; }

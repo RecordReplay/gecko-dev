@@ -21,19 +21,6 @@
 #include "vm/JSObject.h"
 #include "vm/SharedArrayObject.h"
 
-#define JS_FOR_EACH_TYPED_ARRAY(MACRO) \
-  MACRO(int8_t, Int8)                  \
-  MACRO(uint8_t, Uint8)                \
-  MACRO(int16_t, Int16)                \
-  MACRO(uint16_t, Uint16)              \
-  MACRO(int32_t, Int32)                \
-  MACRO(uint32_t, Uint32)              \
-  MACRO(float, Float32)                \
-  MACRO(double, Float64)               \
-  MACRO(uint8_clamped, Uint8Clamped)   \
-  MACRO(int64_t, BigInt64)             \
-  MACRO(uint64_t, BigUint64)
-
 namespace js {
 
 /*
@@ -47,6 +34,8 @@ namespace js {
 class TypedArrayObject : public ArrayBufferViewObject {
  public:
   static_assert(js::detail::TypedArrayLengthSlot == LENGTH_SLOT,
+                "bad inlined constant in TypedData.h");
+  static_assert(js::detail::TypedArrayDataSlot == DATA_SLOT,
                 "bad inlined constant in TypedData.h");
 
   static bool sameBuffer(Handle<TypedArrayObject*> a,
@@ -78,7 +67,7 @@ class TypedArrayObject : public ArrayBufferViewObject {
     return &protoClasses[type];
   }
 
-  static constexpr size_t FIXED_DATA_START = DATA_SLOT + 1;
+  static constexpr size_t FIXED_DATA_START = RESERVED_SLOTS;
 
   // For typed arrays which can store their data inline, the array buffer
   // object is created lazily.
@@ -111,7 +100,7 @@ class TypedArrayObject : public ArrayBufferViewObject {
   bool hasInlineElements() const;
   void setInlineElements();
   uint8_t* elementsRaw() const {
-    return *(uint8_t**)((((char*)this) + ArrayBufferViewObject::dataOffset()));
+    return maybePtrFromReservedSlot<uint8_t>(DATA_SLOT);
   }
   uint8_t* elements() const {
     assertZeroLengthArrayData();
@@ -153,7 +142,7 @@ class TypedArrayObject : public ArrayBufferViewObject {
 
   static bool isOriginalByteLengthGetter(Native native);
 
-  static void finalize(JSFreeOp* fop, JSObject* obj);
+  static void finalize(JS::GCContext* gcx, JSObject* obj);
   static size_t objectMoved(JSObject* obj, JSObject* old);
 
   /* Initialization bits */
@@ -241,14 +230,14 @@ inline bool CanStartTypedArrayIndex(CharT ch) {
 
 [[nodiscard]] inline bool ToTypedArrayIndex(JSContext* cx, jsid id,
                                             mozilla::Maybe<uint64_t>* indexp) {
-  if (JSID_IS_INT(id)) {
-    int32_t i = JSID_TO_INT(id);
+  if (id.isInt()) {
+    int32_t i = id.toInt();
     MOZ_ASSERT(i >= 0);
     indexp->emplace(i);
     return true;
   }
 
-  if (MOZ_UNLIKELY(!JSID_IS_STRING(id))) {
+  if (MOZ_UNLIKELY(!id.isString())) {
     MOZ_ASSERT(indexp->isNothing());
     return true;
   }

@@ -9,7 +9,8 @@
 #include "mozilla/dom/ConsoleBinding.h"
 #include "ConsoleCommon.h"
 
-#include "js/Array.h"  // JS::GetArrayLength, JS::NewArrayObject
+#include "js/Array.h"               // JS::GetArrayLength, JS::NewArrayObject
+#include "js/PropertyAndElement.h"  // JS_DefineElement, JS_DefineProperty, JS_GetElement
 #include "mozilla/dom/BlobBinding.h"
 #include "mozilla/dom/BlobImpl.h"
 #include "mozilla/dom/Document.h"
@@ -21,12 +22,12 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredCloneHolder.h"
 #include "mozilla/dom/ToJSValue.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/dom/WorkletGlobalScope.h"
 #include "mozilla/dom/WorkletImpl.h"
 #include "mozilla/dom/WorkletThread.h"
+#include "mozilla/dom/RootedDictionary.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/JSObjectHolder.h"
@@ -792,7 +793,7 @@ class ConsoleProfileWorkerRunnable final : public ConsoleWorkerRunnable {
   nsString mAction;
 };
 
-NS_IMPL_CYCLE_COLLECTION_MULTI_ZONE_JSHOLDER_CLASS(Console)
+NS_IMPL_CYCLE_COLLECTION_CLASS(Console)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Console)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mGlobal)
@@ -1118,23 +1119,9 @@ void Console::ProfileMethod(const GlobalObject& aGlobal, MethodName aName,
   console->ProfileMethodInternal(cx, aName, aAction, aData);
 }
 
-bool Console::IsEnabled(JSContext* aCx) const {
-  // Console is always enabled if it is a custom Chrome-Only instance.
-  if (mChromeInstance) {
-    return true;
-  }
-
-  // Make all Console API no-op if DevTools aren't enabled.
-  return StaticPrefs::devtools_enabled();
-}
-
 void Console::ProfileMethodInternal(JSContext* aCx, MethodName aMethodName,
                                     const nsAString& aAction,
                                     const Sequence<JS::Value>& aData) {
-  if (!IsEnabled(aCx)) {
-    return;
-  }
-
   if (!ShouldProceed(aMethodName)) {
     return;
   }
@@ -1287,10 +1274,6 @@ void Console::Method(const GlobalObject& aGlobal, MethodName aMethodName,
 void Console::MethodInternal(JSContext* aCx, MethodName aMethodName,
                              const nsAString& aMethodString,
                              const Sequence<JS::Value>& aData) {
-  if (!IsEnabled(aCx)) {
-    return;
-  }
-
   if (!ShouldProceed(aMethodName)) {
     return;
   }
@@ -1549,15 +1532,13 @@ void MainThreadConsoleData::ProcessCallData(
     return;
   }
 
-  nsAutoString innerID, outerID;
+  nsAutoString innerID;
 
   MOZ_ASSERT(aData->mIDType != ConsoleCallData::eUnknown);
   if (aData->mIDType == ConsoleCallData::eString) {
-    outerID = aData->mOuterIDString;
     innerID = aData->mInnerIDString;
   } else {
     MOZ_ASSERT(aData->mIDType == ConsoleCallData::eNumber);
-    outerID.AppendInt(aData->mOuterIDNumber);
     innerID.AppendInt(aData->mInnerIDNumber);
   }
 
@@ -1566,7 +1547,7 @@ void MainThreadConsoleData::ProcessCallData(
     NS_WARNING_ASSERTION(NS_SUCCEEDED(rv), "ClearEvents failed");
   }
 
-  if (NS_FAILED(mStorage->RecordEvent(innerID, outerID, eventValue))) {
+  if (NS_FAILED(mStorage->RecordEvent(innerID, eventValue))) {
     NS_WARNING("Failed to record a console event.");
   }
 }
@@ -2894,8 +2875,6 @@ uint32_t Console::WebIDLLogLevelToInteger(ConsoleLogLevel aLevel) const {
           "ConsoleLogLevel is out of sync with the Console implementation!");
       return 0;
   }
-
-  return 0;
 }
 
 uint32_t Console::InternalLogLevelToInteger(MethodName aName) const {
@@ -2950,8 +2929,6 @@ uint32_t Console::InternalLogLevelToInteger(MethodName aName) const {
       MOZ_CRASH("MethodName is out of sync with the Console implementation!");
       return 0;
   }
-
-  return 0;
 }
 
 bool Console::ArgumentData::Initialize(JSContext* aCx,

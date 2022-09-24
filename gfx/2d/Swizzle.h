@@ -8,8 +8,13 @@
 #define MOZILLA_GFX_SWIZZLE_H_
 
 #include "Point.h"
+#include "Rect.h"
 
 namespace mozilla {
+namespace image {
+struct Orientation;
+}
+
 namespace gfx {
 
 /**
@@ -42,6 +47,27 @@ GFX2D_API bool SwizzleData(const uint8_t* aSrc, int32_t aSrcStride,
                            const IntSize& aSize);
 
 /**
+ * Flips rows of source and swizzles it to destination. Source and destination
+ * may be the same to swizzle in-place; this will fail if it cannot allocate a
+ * temporary buffer.
+ */
+GFX2D_API bool SwizzleYFlipData(const uint8_t* aSrc, int32_t aSrcStride,
+                                SurfaceFormat aSrcFormat, uint8_t* aDst,
+                                int32_t aDstStride, SurfaceFormat aDstFormat,
+                                const IntSize& aSize);
+
+/**
+ * Flips rows of source and premultiplies/swizzles it to destination. Source and
+ * destination may be the same to premultiply/swizzle in-place; this will fail
+ * if it cannot allocate a temporary buffer.
+ */
+GFX2D_API bool PremultiplyYFlipData(const uint8_t* aSrc, int32_t aSrcStride,
+                                    SurfaceFormat aSrcFormat, uint8_t* aDst,
+                                    int32_t aDstStride,
+                                    SurfaceFormat aDstFormat,
+                                    const IntSize& aSize);
+
+/**
  * Swizzles source and writes it to destination. Source and destination may be
  * the same to swizzle in-place.
  */
@@ -65,6 +91,20 @@ GFX2D_API SwizzleRowFn UnpremultiplyRow(SurfaceFormat aSrcFormat,
  */
 GFX2D_API SwizzleRowFn SwizzleRow(SurfaceFormat aSrcFormat,
                                   SurfaceFormat aDstFormat);
+
+/**
+ * Reorients source and writes it to destination. Returns the dirty rect of
+ * what was changed in aDst.
+ */
+typedef IntRect (*ReorientRowFn)(const uint8_t* aSrc, int32_t aSrcRow,
+                                 uint8_t* aDst, const IntSize& aDstSize,
+                                 int32_t aDstStride);
+
+/**
+ * Get a function pointer to perform reorientation by row.
+ */
+GFX2D_API ReorientRowFn
+ReorientRow(const struct image::Orientation& aOrientation);
 
 }  // namespace gfx
 }  // namespace mozilla

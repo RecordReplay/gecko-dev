@@ -15,19 +15,19 @@
 #include <string.h>
 #include <type_traits>
 
-#include "jsapi.h"
 #include "jsnum.h"
 
 #include "builtin/Array.h"
 #include "jit/AtomicOperations.h"
 #include "jit/InlinableNatives.h"
+#include "js/CallAndConstruct.h"  // JS::Construct
 #include "js/Conversions.h"
 #include "js/experimental/TypedData.h"  // JS_NewDataView
 #include "js/friend/ErrorMessages.h"    // js::GetErrorMessage, JSMSG_*
 #include "js/PropertySpec.h"
 #include "js/Wrapper.h"
 #include "util/DifferentialTesting.h"
-#include "util/Windows.h"
+#include "util/WindowsWrapper.h"
 #include "vm/ArrayBufferObject.h"
 #include "vm/GlobalObject.h"
 #include "vm/Interpreter.h"
@@ -945,7 +945,6 @@ static const JSClassOps DataViewObjectClassOps = {
     nullptr,                       // mayResolve
     nullptr,                       // finalize
     nullptr,                       // call
-    nullptr,                       // hasInstance
     nullptr,                       // construct
     ArrayBufferViewObject::trace,  // trace
 };
@@ -961,10 +960,11 @@ const ClassSpec DataViewObject::classSpec_ = {
 
 const JSClass DataViewObject::class_ = {
     "DataView",
-    JSCLASS_HAS_PRIVATE |
-        JSCLASS_HAS_RESERVED_SLOTS(DataViewObject::RESERVED_SLOTS) |
+    JSCLASS_HAS_RESERVED_SLOTS(DataViewObject::RESERVED_SLOTS) |
         JSCLASS_HAS_CACHED_PROTO(JSProto_DataView),
     &DataViewObjectClassOps, &DataViewObject::classSpec_};
+
+const JSClass* const JS::DataView::ClassPtr = &DataViewObject::class_;
 
 const JSClass DataViewObject::protoClass_ = {
     "DataView.prototype", JSCLASS_HAS_CACHED_PROTO(JSProto_DataView),

@@ -7,6 +7,7 @@
 #include "ScrollAnchorContainer.h"
 
 #include "mozilla/dom/Text.h"
+#include "mozilla/ScopeExit.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -20,9 +21,9 @@
 
 using namespace mozilla::dom;
 
+#ifdef DEBUG
 static mozilla::LazyLogModule sAnchorLog("scrollanchor");
 
-#ifdef DEBUG
 #  define ANCHOR_LOG(fmt, ...)                       \
     MOZ_LOG(sAnchorLog, LogLevel::Debug,             \
             ("ANCHOR(%p, %s, root: %d): " fmt, this, \
@@ -45,6 +46,7 @@ ScrollAnchorContainer::ScrollAnchorContainer(ScrollFrameHelper* aScrollFrame)
       mAnchorNode(nullptr),
       mLastAnchorOffset(0),
       mDisabled(false),
+      mAnchorMightBeSubOptimal(false),
       mAnchorNodeIsDirty(true),
       mApplyingAnchorAdjustment(false),
       mSuppressAnchorAdjustment(false) {}
@@ -263,6 +265,8 @@ void ScrollAnchorContainer::SelectAnchor() {
     ANCHOR_LOG("Skipping selection, doesn't maintain a scroll anchor.\n");
     mAnchorNode = nullptr;
   }
+  mAnchorMightBeSubOptimal =
+      mAnchorNode && mAnchorNode->HasAnyStateBits(NS_FRAME_HAS_DIRTY_CHILDREN);
 
   // Update the anchor flags if needed
   if (oldAnchor != mAnchorNode) {
@@ -400,6 +404,7 @@ void ScrollAnchorContainer::InvalidateAnchor(ScheduleSelection aSchedule) {
     FindFor(Frame())->InvalidateAnchor();
   }
   mAnchorNode = nullptr;
+  mAnchorMightBeSubOptimal = false;
   mAnchorNodeIsDirty = true;
   mLastAnchorOffset = 0;
 
@@ -418,7 +423,7 @@ void ScrollAnchorContainer::ApplyAdjustments() {
   if (!mAnchorNode || mAnchorNodeIsDirty || mDisabled ||
       mScrollFrame->HasPendingScrollRestoration() ||
       mScrollFrame->IsProcessingScrollEvent() ||
-      mScrollFrame->IsScrollAnimating() ||
+      !mScrollFrame->ScrollAnimationState().isEmpty() ||
       mScrollFrame->GetScrollPosition() == nsPoint()) {
     ANCHOR_LOG(
         "Ignoring post-reflow (anchor=%p, dirty=%d, disabled=%d, "
@@ -428,7 +433,7 @@ void ScrollAnchorContainer::ApplyAdjustments() {
         mAnchorNode, mAnchorNodeIsDirty, mDisabled,
         mScrollFrame->HasPendingScrollRestoration(),
         mScrollFrame->IsProcessingScrollEvent(),
-        mScrollFrame->IsScrollAnimating(),
+        !mScrollFrame->ScrollAnimationState().isEmpty(),
         mScrollFrame->GetScrollPosition() == nsPoint(),
         mSuppressAnchorAdjustment, this);
     if (mSuppressAnchorAdjustment) {
@@ -444,6 +449,16 @@ void ScrollAnchorContainer::ApplyAdjustments() {
   WritingMode writingMode = Frame()->GetWritingMode();
 
   ANCHOR_LOG("Anchor has moved from %d to %d.\n", mLastAnchorOffset, current);
+
+  auto maybeInvalidate = MakeScopeExit([&] {
+    if (mAnchorMightBeSubOptimal &&
+        StaticPrefs::layout_css_scroll_anchoring_reselect_if_suboptimal()) {
+      ANCHOR_LOG(
+          "Anchor might be suboptimal, invalidating to try finding a better "
+          "one\n");
+      InvalidateAnchor();
+    }
+  });
 
   if (logicalAdjustment == 0) {
     ANCHOR_LOG("Ignoring zero delta anchor adjustment for %p.\n", this);

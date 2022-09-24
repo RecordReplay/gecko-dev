@@ -10,13 +10,10 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Maybe.h"
 
-#include <stdint.h>
+#include <stddef.h>
 
-#include "frontend/ElemOpEmitter.h"      // ElemOpEmitter
 #include "frontend/NameAnalysisTypes.h"  // NameLocation
 #include "frontend/ParserAtom.h"         // TaggedParserAtomIndex
-#include "js/TypeDecls.h"
-#include "vm/SharedStencil.h"  // GCThingIndex
 
 namespace js {
 namespace frontend {
@@ -104,9 +101,6 @@ class MOZ_STACK_CLASS PrivateOpEmitter {
 
   // Name of the private member, e.g. "#field".
   TaggedParserAtomIndex name_;
-
-  // The index for the property name's atom.
-  GCThingIndex atomIndex_;
 
   // Location of the slot containing the private name symbol; or, for a
   // non-static private method, the slot containing the method.

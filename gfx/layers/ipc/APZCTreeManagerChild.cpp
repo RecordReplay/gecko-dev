@@ -12,6 +12,9 @@
 #include "mozilla/layers/APZInputBridgeChild.h"     // for APZInputBridgeChild
 #include "mozilla/layers/GeckoContentController.h"  // for GeckoContentController
 #include "mozilla/layers/RemoteCompositorSession.h"  // for RemoteCompositorSession
+#ifdef MOZ_WIDGET_ANDROID
+#  include "mozilla/jni/Utils.h"  // for DispatchToGeckoPriorityQueue
+#endif
 
 namespace mozilla {
 namespace layers {
@@ -46,55 +49,68 @@ void APZCTreeManagerChild::Destroy() {
 }
 
 void APZCTreeManagerChild::SetKeyboardMap(const KeyboardMap& aKeyboardMap) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendSetKeyboardMap(aKeyboardMap);
 }
 
 void APZCTreeManagerChild::ZoomToRect(const ScrollableLayerGuid& aGuid,
                                       const ZoomTarget& aZoomTarget,
                                       const uint32_t aFlags) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendZoomToRect(aGuid, aZoomTarget, aFlags);
 }
 
 void APZCTreeManagerChild::ContentReceivedInputBlock(uint64_t aInputBlockId,
                                                      bool aPreventDefault) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendContentReceivedInputBlock(aInputBlockId, aPreventDefault);
 }
 
 void APZCTreeManagerChild::SetTargetAPZC(
     uint64_t aInputBlockId, const nsTArray<ScrollableLayerGuid>& aTargets) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendSetTargetAPZC(aInputBlockId, aTargets);
 }
 
 void APZCTreeManagerChild::UpdateZoomConstraints(
     const ScrollableLayerGuid& aGuid,
     const Maybe<ZoomConstraints>& aConstraints) {
+  MOZ_ASSERT(NS_IsMainThread());
   if (mIPCOpen) {
     SendUpdateZoomConstraints(aGuid, aConstraints);
   }
 }
 
-void APZCTreeManagerChild::SetDPI(float aDpiValue) { SendSetDPI(aDpiValue); }
+void APZCTreeManagerChild::SetDPI(float aDpiValue) {
+  MOZ_ASSERT(NS_IsMainThread());
+  SendSetDPI(aDpiValue);
+}
 
 void APZCTreeManagerChild::SetAllowedTouchBehavior(
     uint64_t aInputBlockId, const nsTArray<TouchBehaviorFlags>& aValues) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendSetAllowedTouchBehavior(aInputBlockId, aValues);
 }
 
 void APZCTreeManagerChild::StartScrollbarDrag(
     const ScrollableLayerGuid& aGuid, const AsyncDragMetrics& aDragMetrics) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendStartScrollbarDrag(aGuid, aDragMetrics);
 }
 
 bool APZCTreeManagerChild::StartAutoscroll(const ScrollableLayerGuid& aGuid,
                                            const ScreenPoint& aAnchorLocation) {
+  MOZ_ASSERT(NS_IsMainThread());
   return SendStartAutoscroll(aGuid, aAnchorLocation);
 }
 
 void APZCTreeManagerChild::StopAutoscroll(const ScrollableLayerGuid& aGuid) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendStopAutoscroll(aGuid);
 }
 
 void APZCTreeManagerChild::SetLongTapEnabled(bool aTapGestureEnabled) {
+  MOZ_ASSERT(NS_IsMainThread());
   SendSetLongTapEnabled(aTapGestureEnabled);
 }
 
@@ -103,12 +119,6 @@ APZInputBridge* APZCTreeManagerChild::InputBridge() {
   MOZ_ASSERT(mInputBridge);
 
   return mInputBridge.get();
-}
-
-void APZCTreeManagerChild::AddInputBlockCallback(
-    uint64_t aInputBlockId, InputBlockCallback&& aCallback) {
-  MOZ_RELEASE_ASSERT(false,
-                     "Remoting of input block callbacks is not implemented");
 }
 
 void APZCTreeManagerChild::AddIPDLReference() {
@@ -142,7 +152,21 @@ mozilla::ipc::IPCResult APZCTreeManagerChild::RecvHandleTap(
   dom::BrowserParent* tab =
       dom::BrowserParent::GetBrowserParentFromLayersId(aGuid.mLayersId);
   if (tab) {
+#ifdef MOZ_WIDGET_ANDROID
+    // On Android, touch events are dispatched from the UI thread to the main
+    // thread using the Android priority queue. It is possible that this tap has
+    // made it to the GPU process and back before they have been processed. We
+    // must therefore dispatch this message to the same queue, otherwise the tab
+    // may receive the tap event before the touch events that synthesized it.
+    mozilla::jni::DispatchToGeckoPriorityQueue(
+        NewRunnableMethod<TapType, LayoutDevicePoint, Modifiers,
+                          ScrollableLayerGuid, uint64_t>(
+            "dom::BrowserParent::SendHandleTap", tab,
+            &dom::BrowserParent::SendHandleTap, aType, aPoint, aModifiers,
+            aGuid, aInputBlockId));
+#else
     tab->SendHandleTap(aType, aPoint, aModifiers, aGuid, aInputBlockId);
+#endif
   }
   return IPC_OK();
 }

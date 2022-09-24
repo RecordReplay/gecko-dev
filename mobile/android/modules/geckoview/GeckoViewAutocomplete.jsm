@@ -258,8 +258,8 @@ class CreditCard {
       version: aObj.version,
       name: aObj["cc-name"],
       number: aObj["cc-number"],
-      expMonth: aObj["cc-exp-month"],
-      expYear: aObj["cc-exp-year"],
+      expMonth: aObj["cc-exp-month"]?.toString(),
+      expYear: aObj["cc-exp-year"]?.toString(),
       type: aObj["cc-type"],
       guid: aObj.guid,
       timeCreated: aObj.timeCreated,
@@ -314,15 +314,16 @@ const GeckoViewAutocomplete = {
    * LoginStorage GeckoView delegate.
    *
    * @param aDomain
-   *        The domain string to fetch login entries for.
+   *        The domain string to fetch login entries for. If null, all logins
+   *        will be fetched.
    * @return {Promise}
    *         Resolves with an array of login objects or null.
    *         Rejected if no delegate is attached.
    *         Login object string properties:
    *         { guid, origin, formActionOrigin, httpRealm, username, password }
    */
-  fetchLogins(aDomain) {
-    debug`fetchLogins for ${aDomain}`;
+  fetchLogins(aDomain = null) {
+    debug`fetchLogins for ${aDomain ?? "All domains"}`;
 
     return EventDispatcher.instance.sendRequestForResult({
       type: "GeckoView:Autocomplete:Fetch:Login",
@@ -375,7 +376,7 @@ const GeckoViewAutocomplete = {
    * @param aCreditCard The {CreditCard} to be saved.
    */
   onCreditCardSave(aCreditCard) {
-    debug`onLoginSave ${aCreditCard}`;
+    debug`onCreditCardSave ${aCreditCard}`;
 
     EventDispatcher.instance.sendRequest({
       type: "GeckoView:Autocomplete:Save:CreditCard",
@@ -390,7 +391,7 @@ const GeckoViewAutocomplete = {
    * @param aAddress The {Address} to be saved.
    */
   onAddressSave(aAddress) {
-    debug`onLoginSave ${aAddress}`;
+    debug`onAddressSave ${aAddress}`;
 
     EventDispatcher.instance.sendRequest({
       type: "GeckoView:Autocomplete:Save:Address",

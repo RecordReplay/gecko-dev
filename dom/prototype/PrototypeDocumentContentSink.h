@@ -21,6 +21,8 @@
 #include "nsIScriptContext.h"
 #include "nsICSSLoaderObserver.h"
 #include "mozilla/Logging.h"
+#include "js/experimental/JSStencil.h"
+#include "mozilla/RefPtr.h"
 
 class nsIURI;
 class nsIChannel;
@@ -32,14 +34,12 @@ class nsXULPrototypeElement;
 class nsXULPrototypePI;
 class nsXULPrototypeScript;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Element;
 class ScriptLoader;
 class Document;
 class XMLStylesheetProcessingInstruction;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 nsresult NS_NewPrototypeDocumentContentSink(nsIContentSink** aResult,
                                             mozilla::dom::Document* aDoc,
@@ -47,8 +47,7 @@ nsresult NS_NewPrototypeDocumentContentSink(nsIContentSink** aResult,
                                             nsISupports* aContainer,
                                             nsIChannel* aChannel);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class PrototypeDocumentContentSink final : public nsIStreamLoaderObserver,
                                            public nsIContentSink,
@@ -69,10 +68,8 @@ class PrototypeDocumentContentSink final : public nsIStreamLoaderObserver,
 
   // nsIContentSink
   NS_IMETHOD WillParse(void) override { return NS_OK; };
-  NS_IMETHOD WillBuildModel(nsDTDMode aDTDMode) override { return NS_OK; };
-  NS_IMETHOD DidBuildModel(bool aTerminated) override { return NS_OK; };
   NS_IMETHOD WillInterrupt(void) override { return NS_OK; };
-  NS_IMETHOD WillResume(void) override { return NS_OK; };
+  void WillResume() override{};
   NS_IMETHOD SetParser(nsParserBase* aParser) override;
   virtual void InitialTranslationCompleted() override;
   virtual void FlushPendingNotifications(FlushType aType) override{};
@@ -86,7 +83,7 @@ class PrototypeDocumentContentSink final : public nsIStreamLoaderObserver,
                               nsresult aStatus) override;
 
   // nsIOffThreadScriptReceiver
-  NS_IMETHOD OnScriptCompileComplete(JSScript* aScript,
+  NS_IMETHOD OnScriptCompileComplete(JS::Stencil* aStencil,
                                      nsresult aStatus) override;
 
   nsresult OnPrototypeLoadDone(nsXULPrototypeDocument* aPrototype);
@@ -260,7 +257,6 @@ class PrototypeDocumentContentSink final : public nsIStreamLoaderObserver,
   void CloseElement(Element* aElement, bool aHadChildren);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_PrototypeDocumentContentSink_h__

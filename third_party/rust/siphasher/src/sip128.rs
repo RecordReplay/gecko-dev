@@ -15,6 +15,7 @@ use core::hash;
 use core::marker::PhantomData;
 use core::mem;
 use core::ptr;
+use core::u64;
 
 /// A 128-bit (2x64) hash output
 #[derive(Debug, Clone, Copy, Default)]
@@ -123,7 +124,7 @@ macro_rules! load_int_le {
         debug_assert!($i + mem::size_of::<$int_ty>() <= $buf.len());
         let mut data = 0 as $int_ty;
         ptr::copy_nonoverlapping(
-            $buf.get_unchecked($i),
+            $buf.as_ptr().add($i),
             &mut data as *mut _ as *mut u8,
             mem::size_of::<$int_ty>(),
         );
@@ -175,9 +176,28 @@ impl SipHasher {
         SipHasher(SipHasher24::new_with_keys(key0, key1))
     }
 
+    /// Creates a `SipHasher` from a 16 byte key.
+    pub fn new_with_key(key: &[u8; 16]) -> SipHasher {
+        let mut b0 = [0u8; 8];
+        let mut b1 = [0u8; 8];
+        b0.copy_from_slice(&key[0..8]);
+        b1.copy_from_slice(&key[8..16]);
+        let key0 = u64::from_le_bytes(b0);
+        let key1 = u64::from_le_bytes(b1);
+        Self::new_with_keys(key0, key1)
+    }
+
     /// Get the keys used by this hasher
     pub fn keys(&self) -> (u64, u64) {
         (self.0.hasher.k0, self.0.hasher.k1)
+    }
+
+    /// Get the key used by this hasher as a 16 byte vector
+    pub fn key(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&self.0.hasher.k0.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.0.hasher.k1.to_le_bytes());
+        bytes
     }
 }
 
@@ -204,9 +224,28 @@ impl SipHasher13 {
         }
     }
 
+    /// Creates a `SipHasher13` from a 16 byte key.
+    pub fn new_with_key(key: &[u8; 16]) -> SipHasher13 {
+        let mut b0 = [0u8; 8];
+        let mut b1 = [0u8; 8];
+        b0.copy_from_slice(&key[0..8]);
+        b1.copy_from_slice(&key[8..16]);
+        let key0 = u64::from_le_bytes(b0);
+        let key1 = u64::from_le_bytes(b1);
+        Self::new_with_keys(key0, key1)
+    }
+
     /// Get the keys used by this hasher
     pub fn keys(&self) -> (u64, u64) {
         (self.hasher.k0, self.hasher.k1)
+    }
+
+    /// Get the key used by this hasher as a 16 byte vector
+    pub fn key(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&self.hasher.k0.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.hasher.k1.to_le_bytes());
+        bytes
     }
 }
 
@@ -233,9 +272,28 @@ impl SipHasher24 {
         }
     }
 
+    /// Creates a `SipHasher24` from a 16 byte key.
+    pub fn new_with_key(key: &[u8; 16]) -> SipHasher24 {
+        let mut b0 = [0u8; 8];
+        let mut b1 = [0u8; 8];
+        b0.copy_from_slice(&key[0..8]);
+        b1.copy_from_slice(&key[8..16]);
+        let key0 = u64::from_le_bytes(b0);
+        let key1 = u64::from_le_bytes(b1);
+        Self::new_with_keys(key0, key1)
+    }
+
     /// Get the keys used by this hasher
     pub fn keys(&self) -> (u64, u64) {
         (self.hasher.k0, self.hasher.k1)
+    }
+
+    /// Get the key used by this hasher as a 16 byte vector
+    pub fn key(&self) -> [u8; 16] {
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&self.hasher.k0.to_le_bytes());
+        bytes[8..16].copy_from_slice(&self.hasher.k1.to_le_bytes());
+        bytes
     }
 }
 
@@ -349,6 +407,31 @@ impl hash::Hasher for SipHasher {
     fn finish(&self) -> u64 {
         self.0.finish()
     }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.0.write_usize(i);
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.0.write_u8(i);
+    }
+
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.0.write_u16(i);
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.0.write_u32(i);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.0.write_u64(i);
+    }
 }
 
 impl hash::Hasher for SipHasher13 {
@@ -361,6 +444,31 @@ impl hash::Hasher for SipHasher13 {
     fn finish(&self) -> u64 {
         self.hasher.finish()
     }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.hasher.write_usize(i);
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.hasher.write_u8(i);
+    }
+
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.hasher.write_u16(i);
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.hasher.write_u32(i);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.hasher.write_u64(i);
+    }
 }
 
 impl hash::Hasher for SipHasher24 {
@@ -372,6 +480,31 @@ impl hash::Hasher for SipHasher24 {
     #[inline]
     fn finish(&self) -> u64 {
         self.hasher.finish()
+    }
+
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.hasher.write_usize(i);
+    }
+
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.hasher.write_u8(i);
+    }
+
+    #[inline]
+    fn write_u16(&mut self, i: u16) {
+        self.hasher.write_u16(i);
+    }
+
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.hasher.write_u32(i);
+    }
+
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.hasher.write_u64(i);
     }
 }
 
@@ -514,8 +647,8 @@ impl Hash128 {
         let h1 = self.h1.to_le();
         let h2 = self.h2.to_le();
         unsafe {
-            ptr::copy_nonoverlapping(&h1 as *const _ as *const u8, bytes.get_unchecked_mut(0), 8);
-            ptr::copy_nonoverlapping(&h2 as *const _ as *const u8, bytes.get_unchecked_mut(8), 8);
+            ptr::copy_nonoverlapping(&h1 as *const _ as *const u8, bytes.as_mut_ptr(), 8);
+            ptr::copy_nonoverlapping(&h2 as *const _ as *const u8, bytes.as_mut_ptr().add(8), 8);
         }
         bytes
     }

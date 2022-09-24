@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFEDiffuseLightingElement.h"
 #include "mozilla/dom/SVGFEDiffuseLightingElementBinding.h"
 #include "mozilla/SVGFilterInstance.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEDiffuseLighting)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEDiffuseLightingElement::WrapNode(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -76,5 +77,13 @@ bool SVGFEDiffuseLightingElement::AttributeAffectsRendering(
           aAttribute == nsGkAtoms::diffuseConstant);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+nsresult SVGFEDiffuseLightingElement::BindToTree(BindContext& aCtx,
+                                                 nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feDiffuseLighting);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
+}  // namespace mozilla::dom

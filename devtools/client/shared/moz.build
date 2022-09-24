@@ -7,7 +7,7 @@
 BROWSER_CHROME_MANIFESTS += ["test/browser.ini"]
 XPCSHELL_TESTS_MANIFESTS += ["test/xpcshell/xpcshell.ini"]
 TEST_HARNESS_FILES.xpcshell.devtools.client.shared.test += [
-    "test/shared-redux-head.js",
+    "test/shared-head.js",
 ]
 
 DIRS += [
@@ -24,11 +24,8 @@ DIRS += [
 DevToolsModules(
     "async-store-helper.js",
     "autocomplete-popup.js",
-    "browser-loader-mocks.js",
-    "browser-loader.js",
     "css-angle.js",
     "curl.js",
-    "demangle.js",
     "devices.js",
     "enum.js",
     "events.js",
@@ -39,14 +36,13 @@ DevToolsModules(
     "keycodes.js",
     "link.js",
     "node-attribute-parser.js",
-    "options-view.js",
     "output-parser.js",
     "prefs.js",
     "react-utils.js",
     "screenshot.js",
     "scroll.js",
     "source-utils.js",
-    "SplitView.jsm",
+    "string-utils.js",
     "stylesheet-utils.js",
     "suggestion-picker.js",
     "telemetry.js",
@@ -57,6 +53,7 @@ DevToolsModules(
     "view-source.js",
     "WeakMapMap.js",
     "webgl-utils.js",
+    "worker-utils.js",
     "workers-listener.js",
     "zoom-keys.js",
 )

@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#![deny(broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![deny(missing_docs)]
 
 //! Glean is a modern approach for recording and sending Telemetry data.
@@ -39,10 +39,10 @@
 //! prototype_ping.submit(None);
 //! ```
 
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub use configuration::Configuration;
 use configuration::DEFAULT_GLEAN_ENDPOINT;
@@ -52,7 +52,7 @@ pub use glean_core::{
     metrics::{Datetime, DistributionData, MemoryUnit, RecordedEvent, TimeUnit, TimerId},
     traits, CommonMetricData, Error, ErrorType, Glean, HistogramType, Lifetime, Result,
 };
-use private::RecordedExperimentData;
+pub use private::RecordedExperimentData;
 
 mod configuration;
 mod core_metrics;
@@ -100,6 +100,12 @@ static PRE_INIT_PING_REGISTRATION: OnceCell<Mutex<Vec<private::PingType>>> = Onc
 ///
 /// Requires a Mutex, because in tests we can actual reset this.
 static STATE: OnceCell<Mutex<RustBindingsState>> = OnceCell::new();
+
+/// Global singleton of the handles of the glean.init threads.
+/// For joining. For tests.
+/// (Why a Vec? There might be more than one concurrent call to initialize.)
+static INIT_HANDLES: Lazy<Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(Vec::new())));
 
 /// Get a reference to the global state object.
 ///
@@ -173,16 +179,9 @@ fn launch_with_glean_mut(callback: impl FnOnce(&mut Glean) + Send + 'static) {
 /// * `client_info` - the [`ClientInfoMetrics`] values used to set Glean
 ///   core metrics.
 pub fn initialize(cfg: Configuration, client_info: ClientInfoMetrics) {
-    initialize_internal(cfg, client_info);
-}
-
-fn initialize_internal(
-    cfg: Configuration,
-    client_info: ClientInfoMetrics,
-) -> Option<std::thread::JoinHandle<()>> {
     if was_initialize_called() {
         log::error!("Glean should not be initialized multiple times");
-        return None;
+        return;
     }
 
     let init_handle = std::thread::Builder::new()
@@ -296,7 +295,7 @@ fn initialize_internal(
                 // The next times we start, we would have them around already.
                 let is_first_run = glean.is_first_run();
                 if is_first_run {
-                    initialize_core_metrics(&glean, &state.client_info, state.channel.clone());
+                    initialize_core_metrics(glean, &state.client_info, state.channel.clone());
                 }
 
                 // Deal with any pending events so we can start recording new ones
@@ -333,7 +332,7 @@ fn initialize_internal(
                 // Any new value will be sent in newly generated pings after startup.
                 if !is_first_run {
                     glean.clear_application_lifetime_metrics();
-                    initialize_core_metrics(&glean, &state.client_info, state.channel.clone());
+                    initialize_core_metrics(glean, &state.client_info, state.channel.clone());
                 }
             });
 
@@ -342,7 +341,7 @@ fn initialize_internal(
                 Ok(task_count) if task_count > 0 => {
                     with_glean(|glean| {
                         glean_metrics::error::preinit_tasks_overflow
-                            .add_sync(&glean, task_count as i32);
+                            .add_sync(glean, task_count as i32);
                     });
                 }
                 Ok(_) => {}
@@ -351,16 +350,24 @@ fn initialize_internal(
         })
         .expect("Failed to spawn Glean's init thread");
 
+    // For test purposes, store the glean init thread's JoinHandle.
+    INIT_HANDLES.lock().unwrap().push(init_handle);
+
     // Mark the initialization as called: this needs to happen outside of the
     // dispatched block!
     INITIALIZE_CALLED.store(true, Ordering::SeqCst);
-    Some(init_handle)
 }
 
-/// Shuts down Glean.
-///
-/// This currently only attempts to shut down the
-/// internal dispatcher.
+/// TEST ONLY FUNCTION
+/// Waits on all the glean.init threads' join handles.
+pub fn join_init() {
+    let mut handles = INIT_HANDLES.lock().unwrap();
+    for handle in handles.drain(..) {
+        handle.join().unwrap();
+    }
+}
+
+/// Shuts down Glean in an orderly fashion.
 pub fn shutdown() {
     if global_glean().is_none() {
         log::warn!("Shutdown called before Glean is initialized");
@@ -379,6 +386,13 @@ pub fn shutdown() {
     if let Err(e) = dispatcher::shutdown() {
         log::error!("Can't shutdown dispatcher thread: {:?}", e);
     }
+
+    // Be sure to call this _after_ draining the dispatcher
+    crate::with_glean(|glean| {
+        if let Err(e) = glean.persist_ping_lifetime_data() {
+            log::error!("Can't persist ping lifetime data: {:?}", e);
+        }
+    });
 }
 
 /// Unblock the global dispatcher to start processing queued tasks.
@@ -420,7 +434,7 @@ fn block_on_dispatcher() {
         was_initialize_called(),
         "initialize was never called. Can't block on the dispatcher queue."
     );
-    dispatcher::block_on_queue()
+    dispatcher::block_on_queue().unwrap();
 }
 
 /// Checks if [`initialize`] was ever called.
@@ -445,8 +459,6 @@ fn initialize_core_metrics(
     }
     core_metrics::internal_metrics::os_version.set_sync(glean, system::get_os_version());
     core_metrics::internal_metrics::architecture.set_sync(glean, system::ARCH.to_string());
-    core_metrics::internal_metrics::device_manufacturer.set_sync(glean, "unknown".to_string());
-    core_metrics::internal_metrics::device_model.set_sync(glean, "unknown".to_string());
 }
 
 /// Sets whether upload is enabled or not.
@@ -477,7 +489,7 @@ pub fn set_upload_enabled(enabled: bool) {
             glean.start_metrics_ping_scheduler();
             // If uploading is being re-enabled, we have to restore the
             // application-lifetime metrics.
-            initialize_core_metrics(&glean, &state.client_info, state.channel.clone());
+            initialize_core_metrics(glean, &state.client_info, state.channel.clone());
         }
 
         if old_enabled && !enabled {
@@ -564,7 +576,7 @@ pub(crate) fn submit_ping_by_name_sync(ping: &str, reason: Option<&str>) {
             return false;
         }
 
-        glean.submit_ping_by_name(&ping, reason.as_deref())
+        glean.submit_ping_by_name(ping, reason)
     });
 
     if submitted_ping {
@@ -644,8 +656,7 @@ pub fn handle_client_inactive() {
 
 /// TEST ONLY FUNCTION.
 /// Checks if an experiment is currently active.
-#[allow(dead_code)]
-pub(crate) fn test_is_experiment_active(experiment_id: String) -> bool {
+pub fn test_is_experiment_active(experiment_id: String) -> bool {
     block_on_dispatcher();
     with_glean(|glean| glean.test_is_experiment_active(experiment_id.to_owned()))
 }
@@ -653,8 +664,7 @@ pub(crate) fn test_is_experiment_active(experiment_id: String) -> bool {
 /// TEST ONLY FUNCTION.
 /// Returns the [`RecordedExperimentData`] for the given `experiment_id` or panics if
 /// the id isn't found.
-#[allow(dead_code)]
-pub(crate) fn test_get_experiment_data(experiment_id: String) -> RecordedExperimentData {
+pub fn test_get_experiment_data(experiment_id: String) -> RecordedExperimentData {
     block_on_dispatcher();
     with_glean(|glean| {
         let json_data = glean
@@ -668,6 +678,9 @@ pub(crate) fn test_get_experiment_data(experiment_id: String) -> RecordedExperim
 pub(crate) fn destroy_glean(clear_stores: bool) {
     // Destroy the existing glean instance from glean-core.
     if was_initialize_called() {
+        // Just because initialize was called doesn't mean it's done.
+        join_init();
+
         // Reset the dispatcher first (it might still run tasks against the database)
         dispatcher::reset_dispatcher();
 
@@ -709,9 +722,8 @@ pub(crate) fn destroy_glean(clear_stores: bool) {
 pub fn test_reset_glean(cfg: Configuration, client_info: ClientInfoMetrics, clear_stores: bool) {
     destroy_glean(clear_stores);
 
-    if let Some(handle) = initialize_internal(cfg, client_info) {
-        handle.join().unwrap();
-    }
+    initialize(cfg, client_info);
+    join_init();
 }
 
 /// Sets a debug view tag.
@@ -784,6 +796,14 @@ pub fn set_source_tags(tags: Vec<String>) {
 /// Returns a timestamp corresponding to "now" with millisecond precision.
 pub fn get_timestamp_ms() -> u64 {
     glean_core::get_timestamp_ms()
+}
+
+/// Dispatches a request to the database to persist ping-lifetime data to disk.
+pub fn persist_ping_lifetime_data() {
+    crate::launch_with_glean(|glean| {
+        // This is async, we can't get the Error back to the caller.
+        let _ = glean.persist_ping_lifetime_data();
+    });
 }
 
 #[cfg(test)]

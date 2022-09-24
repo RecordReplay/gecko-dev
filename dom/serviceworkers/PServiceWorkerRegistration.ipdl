@@ -12,7 +12,8 @@ include "ipc/ErrorIPCUtils.h";
 namespace mozilla {
 namespace dom {
 
-refcounted protocol PServiceWorkerRegistration
+[ChildImpl=virtual, ParentImpl=virtual]
+protocol PServiceWorkerRegistration
 {
   manager PBackground;
 

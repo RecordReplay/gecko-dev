@@ -26,7 +26,7 @@ class ProcessMessagesRunnable : public mozilla::Runnable {
   explicit ProcessMessagesRunnable(const nsAString& aPortID)
       : Runnable("ProcessMessagesRunnable"), mPortID(aPortID) {}
   ~ProcessMessagesRunnable() = default;
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     // If service is no longer running, just exist without processing.
     if (!MIDIPlatformService::IsRunning()) {
       return NS_OK;
@@ -86,6 +86,7 @@ TestMIDIPlatformService::TestMIDIPlatformService()
                                   u"Always Closed MIDI Device Output Port"_ns,
                                   u"Test Manufacturer"_ns, u"1.0.0"_ns,
                                   static_cast<uint32_t>(MIDIPortType::Output)),
+      mDoRefresh(false),
       mIsInitialized(false) {
   AssertIsOnBackgroundThread();
 }
@@ -107,10 +108,18 @@ void TestMIDIPlatformService::Init() {
   MIDIPlatformService::Get()->AddPortInfo(mControlInputPort);
   MIDIPlatformService::Get()->AddPortInfo(mControlOutputPort);
   MIDIPlatformService::Get()->AddPortInfo(mAlwaysClosedTestOutputPort);
+  MIDIPlatformService::Get()->AddPortInfo(mStateTestOutputPort);
   nsCOMPtr<nsIRunnable> r(new SendPortListRunnable());
 
   // Start the IO Thread.
   NS_DispatchToCurrentThread(r);
+}
+
+void TestMIDIPlatformService::Refresh() {
+  if (mDoRefresh) {
+    AddPortInfo(mStateTestInputPort);
+    mDoRefresh = false;
+  }
 }
 
 void TestMIDIPlatformService::Open(MIDIPortParent* aPort) {
@@ -123,8 +132,8 @@ void TestMIDIPlatformService::Open(MIDIPortParent* aPort) {
   }
   // Connection events are just simulated on the background thread, no need to
   // push to IO thread.
-  nsCOMPtr<nsIRunnable> r(new SetStatusRunnable(aPort->MIDIPortInterface::Id(),
-                                                aPort->DeviceState(), s));
+  nsCOMPtr<nsIRunnable> r(
+      new SetStatusRunnable(aPort, aPort->DeviceState(), s));
   NS_DispatchToCurrentThread(r);
 }
 
@@ -134,8 +143,7 @@ void TestMIDIPlatformService::ScheduleClose(MIDIPortParent* aPort) {
     // Connection events are just simulated on the background thread, no need to
     // push to IO thread.
     nsCOMPtr<nsIRunnable> r(new SetStatusRunnable(
-        aPort->MIDIPortInterface::Id(), aPort->DeviceState(),
-        MIDIPortConnectionState::Closed));
+        aPort, aPort->DeviceState(), MIDIPortConnectionState::Closed));
     NS_DispatchToCurrentThread(r);
   }
 }
@@ -202,6 +210,11 @@ void TestMIDIPlatformService::ProcessMessages(const nsAString& aPortId) {
               mBackgroundThread->Dispatch(r, NS_DISPATCH_NORMAL);
               break;
             }
+            // Causes the next refresh to add new ports to the list
+            case 0x04: {
+              mDoRefresh = true;
+              break;
+            }
             default:
               NS_WARNING("Unknown Test MIDI message received!");
           }
@@ -220,11 +233,11 @@ void TestMIDIPlatformService::ProcessMessages(const nsAString& aPortId) {
             // messages.
             case 0x01: {
               nsTArray<uint8_t> msgs;
-              const uint8_t msg[] = {0xF0, 0x01, 0xF8, 0x02, 0x03,
-                                     0x04, 0xF9, 0x05, 0xF7};
+              const uint8_t msg[] = {0xF0, 0x01, 0xFA, 0x02, 0x03,
+                                     0x04, 0xF8, 0x05, 0xF7};
               // Can't use AppendElements on an array here, so just do range
               // based loading.
-              for (auto& s : msg) {
+              for (const auto& s : msg) {
                 msgs.AppendElement(s);
               }
               nsTArray<MIDIMessage> newMsgs;

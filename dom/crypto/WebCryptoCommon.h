@@ -27,6 +27,7 @@
 #include "secitem.h"
 #include "secoid.h"
 #include "secoidt.h"
+#include "ScopedNSSTypes.h"
 
 struct JSStructuredCloneReader;
 struct JSStructuredCloneWriter;
@@ -109,9 +110,11 @@ struct JSStructuredCloneWriter;
 #define JWK_ALG_PS256 "PS256"
 #define JWK_ALG_PS384 "PS384"
 #define JWK_ALG_PS512 "PS512"
+// The JSON Web Algorithms spec (RFC 7518) uses the hash to identify these, not
+// the curve.
 #define JWK_ALG_ECDSA_P_256 "ES256"
 #define JWK_ALG_ECDSA_P_384 "ES384"
-#define JWK_ALG_ECDSA_P_521 "ES521"
+#define JWK_ALG_ECDSA_P_521 "ES512"
 
 // JWK usages
 #define JWK_USE_ENC "enc"
@@ -126,8 +129,7 @@ const SECItem SEC_OID_DATA_EC_DH = {
     siBuffer, (unsigned char*)id_ecDH,
     static_cast<unsigned int>(mozilla::ArrayLength(id_ecDH))};
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 inline bool ReadBuffer(JSStructuredCloneReader* aReader,
                        CryptoBuffer& aBuffer) {
@@ -271,7 +273,7 @@ inline bool CheckEncodedECParameters(const SECItem* aEcParams) {
   return true;
 }
 
-inline SECItem* CreateECParamsForCurve(const nsString& aNamedCurve,
+inline SECItem* CreateECParamsForCurve(const nsAString& aNamedCurve,
                                        PLArenaPool* aArena) {
   MOZ_ASSERT(aArena);
   SECOidTag curveOIDTag;
@@ -311,7 +313,11 @@ inline SECItem* CreateECParamsForCurve(const nsString& aNamedCurve,
   return params;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+// Implemented in CryptoKey.cpp
+UniqueSECKEYPublicKey CreateECPublicKey(const SECItem* aKeyData,
+                                        const nsAString& aNamedCurve,
+                                        bool aVerifyValid = true);
+
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_WebCryptoCommon_h

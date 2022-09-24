@@ -104,12 +104,7 @@ bool FramingChecker::CheckOneFrameOptionsPolicy(nsIHttpChannel* aHttpChannel,
     }
 
     if (checkSameOrigin) {
-      bool isPrivateWin = false;
-      bool isSameOrigin = false;
-      if (principal) {
-        isPrivateWin = principal->OriginAttributesRef().mPrivateBrowsingId > 0;
-        principal->IsSameOrigin(uri, isPrivateWin, &isSameOrigin);
-      }
+      bool isSameOrigin = principal && principal->IsSameOrigin(uri);
       // one of the ancestors is not same origin as this document
       if (!isSameOrigin) {
         ReportError("XFrameOptionsDeny", aHttpChannel, uri, aPolicy);
@@ -185,12 +180,6 @@ bool FramingChecker::CheckFrameOptions(nsIChannel* aChannel,
     return true;
   }
 
-  // xfo checks are ignored in case CSP frame-ancestors is present,
-  // if so, there is nothing to do here.
-  if (ShouldIgnoreFrameOptions(aChannel, aCsp)) {
-    return true;
-  }
-
   nsCOMPtr<nsIHttpChannel> httpChannel;
   nsresult rv = nsContentSecurityUtils::GetHttpChannelFromPotentialMultiPart(
       aChannel, getter_AddRefs(httpChannel));
@@ -223,6 +212,12 @@ bool FramingChecker::CheckFrameOptions(nsIChannel* aChannel,
 
   // if no header value, there's nothing to do.
   if (xfoHeaderValue.IsEmpty()) {
+    return true;
+  }
+
+  // xfo checks are ignored in case CSP frame-ancestors is present,
+  // if so, there is nothing to do here.
+  if (ShouldIgnoreFrameOptions(aChannel, aCsp)) {
     return true;
   }
 

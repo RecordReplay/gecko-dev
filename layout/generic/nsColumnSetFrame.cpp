@@ -14,6 +14,8 @@
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/ToString.h"
 #include "nsCSSRendering.h"
+#include "nsDisplayList.h"
+#include "nsLayoutUtils.h"
 
 using namespace mozilla;
 using namespace mozilla::layout;
@@ -31,13 +33,13 @@ class nsDisplayColumnRule : public nsPaintedDisplayItem {
   }
   MOZ_COUNTED_DTOR_OVERRIDE(nsDisplayColumnRule)
 
-  /**
-   * Returns the frame's ink overflow rect instead of the frame's bounds.
-   */
   nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) const override {
     *aSnap = false;
-    return static_cast<nsColumnSetFrame*>(mFrame)->CalculateColumnRuleBounds(
-        ToReferenceFrame());
+    // We just return the frame's ink-overflow rect, which is guaranteed to
+    // contain all the column-rule areas.  It's not worth calculating the exact
+    // union of those areas since it would only lead to performance improvements
+    // during painting in rare edge cases.
+    return mFrame->InkOverflowRect() + ToReferenceFrame();
   }
 
   bool CreateWebRenderCommands(
@@ -57,7 +59,7 @@ class nsDisplayColumnRule : public nsPaintedDisplayItem {
 void nsDisplayColumnRule::Paint(nsDisplayListBuilder* aBuilder,
                                 gfxContext* aCtx) {
   static_cast<nsColumnSetFrame*>(mFrame)->CreateBorderRenderers(
-      mBorderRenderers, aCtx, GetPaintRect(), ToReferenceFrame());
+      mBorderRenderers, aCtx, GetPaintRect(aBuilder, aCtx), ToReferenceFrame());
 
   for (auto iter = mBorderRenderers.begin(); iter != mBorderRenderers.end();
        iter++) {
@@ -74,8 +76,10 @@ bool nsDisplayColumnRule::CreateWebRenderCommands(
   RefPtr<gfxContext> screenRefCtx = gfxContext::CreateOrNull(
       gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget().get());
 
+  bool dummy;
   static_cast<nsColumnSetFrame*>(mFrame)->CreateBorderRenderers(
-      mBorderRenderers, screenRefCtx, GetPaintRect(), ToReferenceFrame());
+      mBorderRenderers, screenRefCtx, GetBounds(aDisplayListBuilder, &dummy),
+      ToReferenceFrame());
 
   if (mBorderRenderers.IsEmpty()) {
     return true;
@@ -162,17 +166,6 @@ void nsColumnSetFrame::ForEachColumnRule(
     child = nextSibling;
     nextSibling = nextSibling->GetNextSibling();
   }
-}
-
-nsRect nsColumnSetFrame::CalculateColumnRuleBounds(
-    const nsPoint& aOffset) const {
-  nsRect combined;
-  ForEachColumnRule(
-      [&combined](const nsRect& aLineRect) {
-        combined = combined.Union(aLineRect);
-      },
-      aOffset);
-  return combined;
 }
 
 void nsColumnSetFrame::CreateBorderRenderers(
@@ -657,6 +650,7 @@ nsColumnSetFrame::ColumnBalanceData nsColumnSetFrame::ReflowChildren(
       kidReflowInput.mFlags.mIsTopOfPage = true;
       kidReflowInput.mFlags.mTableIsSplittable = false;
       kidReflowInput.mFlags.mIsColumnBalancing = aConfig.mIsBalancing;
+      kidReflowInput.mBreakType = ReflowInput::BreakType::Column;
 
       // We need to reflow any float placeholders, even if our column block-size
       // hasn't changed.
@@ -895,7 +889,7 @@ nsColumnSetFrame::ColumnBalanceData nsColumnSetFrame::ReflowChildren(
 
     // If a) our parent ColumnSetWrapper has constrained block-size
     // (nsBlockFrame::ReflowBlockFrame() applies the block-size constraint
-    // when creating BlockReflowInput for ColumnSetFrame); and b) we are the
+    // when creating a ReflowInput for ColumnSetFrame child); and b) we are the
     // sole ColumnSet or the last ColumnSet continuation split by column-spans
     // in a ColumnSetWrapper, extend our block-size to consume the available
     // block-size so that the column-rules are drawn to the content block-end
@@ -996,7 +990,7 @@ void nsColumnSetFrame::FindBestBalanceBSize(const ReflowInput& aReflowInput,
   // default line-height 1140/2 = 570 app units as the minimum value. Otherwise
   // we might take more than necessary iterations before finding a feasible
   // block-size.
-  nscoord extraBlockSize = std::max(570, aReflowInput.CalcLineHeight() / 2);
+  nscoord extraBlockSize = std::max(570, aReflowInput.GetLineHeight() / 2);
 
   // We use divide-by-N to estimate the optimal column block-size only if the
   // last column's available block-size is unbounded.

@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-function IteratorIdentity() {
+ function IteratorIdentity() {
   return this;
 }
 
@@ -36,6 +36,40 @@ function IteratorClose(iteratorRecord, value) {
   }
   // Step 5b & 9.
   return value;
+}
+
+/**
+ * ES2022 draft rev c5f683e61d5dce703650f1c90d2309c46f8c157a
+ *
+ * GetIterator ( obj [ , hint [ , method ] ] )
+ * https://tc39.es/ecma262/#sec-getiterator
+ *
+ * Optimized for single argument
+ */
+function GetIteratorSync(obj) {
+  // Steps 1 & 2 skipped as we know we want the sync iterator method
+  var method = GetMethod(obj, GetBuiltinSymbol("iterator"))
+
+  // Step 3. Let iterator be ? Call(method, obj).
+  var iterator = callContentFunction(method, obj);
+
+  // Step 4. If Type(iterator) is not Object, throw a TypeError exception.
+  if (!IsObject(iterator)) {
+    ThrowTypeError(JSMSG_NOT_ITERABLE, obj === null ? "null" : typeof obj);
+  }
+
+  // Step 5. Let nextMethod be ? GetV(iterator, "next").
+  var nextMethod = iterator.next;
+
+  // Step 6. Let iteratorRecord be the Record { [[Iterator]]: iterator, [[NextMethod]]: nextMethod, [[Done]]: false }.
+  var iteratorRecord = {
+    iterator,
+    nextMethod,
+    done: false
+  };
+
+  // Step 7. Return iteratorRecord.
+  return iteratorRecord;
 }
 
 /* Iterator Helpers proposal 1.1.1 */
@@ -151,8 +185,8 @@ function IteratorFrom(O) {
 /* Iterator Helpers proposal 2.1.3.3.1.1.1 */
 function WrapForValidIteratorNext(value) {
   // Step 1-2.
-  let O;
-  if (!IsObject(this) || (O = GuardToWrapForValidIterator(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToWrapForValidIterator(O)) === null) {
     if (arguments.length === 0) {
       return callFunction(CallWrapForValidIteratorMethodIfWrapped, this,
                           "WrapForValidIteratorNext");
@@ -177,8 +211,8 @@ function WrapForValidIteratorNext(value) {
 /* Iterator Helpers proposal 2.1.3.3.1.1.2 */
 function WrapForValidIteratorReturn(value) {
   // Step 1-2.
-  let O;
-  if (!IsObject(this) || (O = GuardToWrapForValidIterator(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToWrapForValidIterator(O)) === null) {
     return callFunction(CallWrapForValidIteratorMethodIfWrapped, this,
                         value, "WrapForValidIteratorReturn");
   }
@@ -204,8 +238,8 @@ function WrapForValidIteratorReturn(value) {
 /* Iterator Helpers proposal 2.1.3.3.1.1.3 */
 function WrapForValidIteratorThrow(value) {
   // Step 1-2.
-  let O;
-  if (!IsObject(this) || (O = GuardToWrapForValidIterator(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToWrapForValidIterator(O)) === null) {
     return callFunction(CallWrapForValidIteratorMethodIfWrapped, this,
                         value, "WrapForValidIteratorThrow");
   }
@@ -224,8 +258,8 @@ function WrapForValidIteratorThrow(value) {
 
 /* Iterator Helper object prototype methods. */
 function IteratorHelperNext(value) {
-  let O;
-  if (!IsObject(this) || (O = GuardToIteratorHelper(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToIteratorHelper(O)) === null) {
     return callFunction(CallIteratorHelperMethodIfWrapped, this,
                         value, "IteratorHelperNext");
   }
@@ -234,8 +268,8 @@ function IteratorHelperNext(value) {
 }
 
 function IteratorHelperReturn(value) {
-  let O;
-  if (!IsObject(this) || (O = GuardToIteratorHelper(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToIteratorHelper(O)) === null) {
     return callFunction(CallIteratorHelperMethodIfWrapped, this,
                         value, "IteratorHelperReturn");
   }
@@ -244,8 +278,8 @@ function IteratorHelperReturn(value) {
 }
 
 function IteratorHelperThrow(value) {
-  let O;
-  if (!IsObject(this) || (O = GuardToIteratorHelper(this)) === null) {
+  let O = this;
+  if (!IsObject(O) || (O = GuardToIteratorHelper(O)) === null) {
     return callFunction(CallIteratorHelperMethodIfWrapped, this,
                         value, "IteratorHelperThrow");
   }

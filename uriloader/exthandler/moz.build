@@ -80,8 +80,6 @@ else:
     SOURCES += [
         osdir + "/nsOSHelperAppService.cpp",
     ]
-    if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-        CXXFLAGS += ["-Wno-error=shadow"]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     UNIFIED_SOURCES += [
@@ -114,6 +112,10 @@ EXTRA_JS_MODULES += [
     "WebHandlerApp.jsm",
 ]
 
+EXTRA_JS_MODULES.handlers += [
+    "HandlerList.jsm",
+]
+
 XPCOM_MANIFESTS += [
     "components.conf",
 ]
@@ -136,9 +138,10 @@ LOCAL_INCLUDES += [
 ]
 
 if CONFIG["MOZ_ENABLE_DBUS"]:
-    CXXFLAGS += CONFIG["TK_CFLAGS"]
     CXXFLAGS += CONFIG["MOZ_DBUS_CFLAGS"]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
-    CXXFLAGS += CONFIG["TK_CFLAGS"]
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
     CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
+
+REQUIRES_UNIFIED_BUILD = True

@@ -48,10 +48,9 @@ class nsPIDOMWindowInner;
 class nsPIDOMWindowOuter;
 class nsPIWindowRoot;
 
-typedef uint32_t SuspendTypes;
+using SuspendTypes = uint32_t;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class AudioContext;
 class BrowsingContext;
 class BrowsingContextGroup;
@@ -62,6 +61,7 @@ class DocGroup;
 class Document;
 class Element;
 class Location;
+class MediaDevices;
 class MediaKeys;
 class Navigator;
 class Performance;
@@ -74,8 +74,7 @@ class WindowContext;
 class WindowGlobalChild;
 class CustomElementRegistry;
 enum class CallerType : uint32_t;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 enum UIStateChangeType {
   UIStateChangeType_NoChange,
@@ -113,7 +112,7 @@ enum class FullscreenReason {
 
 class nsPIDOMWindowInner : public mozIDOMWindow {
  protected:
-  typedef mozilla::dom::Document Document;
+  using Document = mozilla::dom::Document;
   friend nsGlobalWindowInner;
   friend nsGlobalWindowOuter;
 
@@ -133,6 +132,9 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   static nsPIDOMWindowInner* From(mozIDOMWindow* aFrom) {
     return static_cast<nsPIDOMWindowInner*>(aFrom);
   }
+
+  NS_IMPL_FROMEVENTTARGET_HELPER_WITH_GETTER(nsPIDOMWindowInner,
+                                             GetAsWindowInner())
 
   // Returns true if this object is the currently-active inner window for its
   // BrowsingContext.
@@ -213,7 +215,7 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
    * Call this to check whether some node (this window, its document,
    * or content in that document) has a mouseenter/leave event listener.
    */
-  bool HasMouseEnterLeaveEventListeners() {
+  bool HasMouseEnterLeaveEventListeners() const {
     return mMayHaveMouseEnterLeaveEventListener;
   }
 
@@ -229,7 +231,7 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
    * Call this to check whether some node (this window, its document,
    * or content in that document) has a Pointerenter/leave event listener.
    */
-  bool HasPointerEnterLeaveEventListeners() {
+  bool HasPointerEnterLeaveEventListeners() const {
     return mMayHavePointerEnterLeaveEventListener;
   }
 
@@ -470,8 +472,24 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
    * Call this to check whether some node (this window, its document,
    * or content in that document) has a selectionchange event listener.
    */
-  bool HasSelectionChangeEventListeners() {
+  bool HasSelectionChangeEventListeners() const {
     return mMayHaveSelectionChangeEventListener;
+  }
+
+  /**
+   * Call this to indicate that some node (this window, its document,
+   * or content in that document) has a select event listener of form controls.
+   */
+  void SetHasFormSelectEventListeners() {
+    mMayHaveFormSelectEventListener = true;
+  }
+
+  /**
+   * Call this to check whether some node (this window, its document,
+   * or content in that document) has a select event listener of form controls.
+   */
+  bool HasFormSelectEventListeners() const {
+    return mMayHaveFormSelectEventListener;
   }
 
   /*
@@ -577,6 +595,7 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   uint32_t GetMarkedCCGeneration() { return mMarkedCCGeneration; }
 
   mozilla::dom::Navigator* Navigator();
+  mozilla::dom::MediaDevices* GetExtantMediaDevices() const;
   virtual mozilla::dom::Location* Location() = 0;
 
   virtual nsresult GetControllers(nsIControllers** aControllers) = 0;
@@ -602,6 +621,13 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   void SaveStorageAccessPermissionGranted();
 
   bool HasStorageAccessPermissionGranted();
+
+  uint32_t UpdateLockCount(bool aIncrement) {
+    MOZ_ASSERT_IF(!aIncrement, mLockCount > 0);
+    mLockCount += aIncrement ? 1 : -1;
+    return mLockCount;
+  };
+  bool HasActiveLocks() { return mLockCount > 0; }
 
  protected:
   void CreatePerformanceObjectIfNeeded();
@@ -640,15 +666,12 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
 
   uint32_t mActivePeerConnections = 0;
 
-  // This is the count for active peer connections for all the windows in the
-  // subtree rooted at this window (only set on the top window).
-  uint32_t mTotalActivePeerConnections = 0;
-
   bool mIsDocumentLoaded;
   bool mIsHandlingResizeEvent;
   bool mMayHavePaintEventListener;
   bool mMayHaveTouchEventListener;
   bool mMayHaveSelectionChangeEventListener;
+  bool mMayHaveFormSelectEventListener;
   bool mMayHaveMouseEnterLeaveEventListener;
   bool mMayHavePointerEnterLeaveEventListener;
   // Only used for telemetry probes.  This may be wrong if some nodes have
@@ -721,23 +744,31 @@ class nsPIDOMWindowInner : public mozIDOMWindow {
   RefPtr<mozilla::dom::WindowGlobalChild> mWindowGlobalChild;
 
   bool mWasSuspendedByGroup;
+
+  /**
+   * Count of the number of active LockRequest objects, including ones from
+   * workers.
+   */
+  uint32_t mLockCount = 0;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsPIDOMWindowInner, NS_PIDOMWINDOWINNER_IID)
 
 class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
  protected:
-  typedef mozilla::dom::Document Document;
+  using Document = mozilla::dom::Document;
 
   explicit nsPIDOMWindowOuter(uint64_t aWindowID);
 
   ~nsPIDOMWindowOuter();
 
-  void RefreshMediaElementsSuspend(SuspendTypes aSuspend);
-  void MaybeNotifyMediaResumedFromBlock(SuspendTypes aSuspend);
+  void NotifyResumingDelayedMedia();
 
  public:
   NS_DECLARE_STATIC_IID_ACCESSOR(NS_PIDOMWINDOWOUTER_IID)
+
+  NS_IMPL_FROMEVENTTARGET_HELPER_WITH_GETTER(nsPIDOMWindowOuter,
+                                             GetAsWindowOuter())
 
   static nsPIDOMWindowOuter* From(mozIDOMWindowProxy* aFrom) {
     return static_cast<nsPIDOMWindowOuter*>(aFrom);
@@ -779,16 +810,13 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
   bool IsBackground() { return mIsBackground; }
 
   // Audio API
-  SuspendTypes GetMediaSuspend() const;
-  void SetMediaSuspend(SuspendTypes aSuspend);
-
   bool GetAudioMuted() const;
 
-  void MaybeActiveMediaComponents();
+  // No longer to delay media from starting for this window.
+  void ActivateMediaComponents();
+  bool ShouldDelayMediaFromStart() const;
 
   void RefreshMediaElementsVolume();
-
-  float GetDevicePixelRatio(mozilla::dom::CallerType aCallerType);
 
   virtual nsPIDOMWindowOuter* GetPrivateRoot() = 0;
 
@@ -909,6 +937,13 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
    * in its parent, etc.).
    */
   virtual void EnsureSizeAndPositionUpToDate() = 0;
+
+  /**
+   * Suppresses/unsuppresses user initiated event handling in window's document
+   * and all in-process descendant documents.
+   */
+  virtual void SuppressEventHandling() = 0;
+  virtual void UnsuppressEventHandling() = 0;
 
   /**
    * Callback for notifying a window about a modal dialog being
@@ -1124,23 +1159,12 @@ class nsPIDOMWindowOuter : public mozIDOMWindowProxy {
 
   uint32_t mModalStateDepth;
 
+  uint32_t mSuppressEventHandlingDepth;
+
   // Tracks whether our docshell is active.  If it is, mIsBackground
   // is false.  Too bad we have so many different concepts of
   // "active".
   bool mIsBackground;
-
-  /**
-   * The suspended types can be "disposable" or "permanent". This varable only
-   * stores the value about permanent suspend.
-   * - disposable
-   * To pause all playing media in that window, but doesn't affect the media
-   * which starts after that.
-   *
-   * - permanent
-   * To pause all media in that window, and also affect the media which starts
-   * after that.
-   */
-  SuspendTypes mMediaSuspend;
 
   // current desktop mode flag.
   bool mDesktopModeViewport;

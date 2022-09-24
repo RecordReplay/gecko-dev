@@ -60,7 +60,7 @@
 //!
 //! [JSON]: https://github.com/serde-rs/json
 //! [Bincode]: https://github.com/servo/bincode
-//! [CBOR]: https://github.com/pyfisch/cbor
+//! [CBOR]: https://github.com/enarx/ciborium
 //! [YAML]: https://github.com/dtolnay/serde-yaml
 //! [MessagePack]: https://github.com/3Hren/msgpack-rust
 //! [TOML]: https://github.com/alexcrichton/toml-rs
@@ -73,7 +73,7 @@
 //! [URL]: https://docs.rs/serde_qs
 //! [Envy]: https://github.com/softprops/envy
 //! [Envy Store]: https://github.com/softprops/envy-store
-//! [Cargo]: http://doc.crates.io/manifest.html
+//! [Cargo]: https://doc.rust-lang.org/cargo/reference/manifest.html
 //! [AWS Parameter Store]: https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-paramstore.html
 //! [S-expressions]: https://github.com/rotty/lexpr-rs
 //! [D-Bus]: https://docs.rs/zvariant
@@ -84,7 +84,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 
 // Serde types in rustdoc of other crates get linked to here.
-#![doc(html_root_url = "https://docs.rs/serde/1.0.126")]
+#![doc(html_root_url = "https://docs.rs/serde/1.0.136")]
 // Support using Serde without the standard library!
 #![cfg_attr(not(feature = "std"), no_std)]
 // Unstable functionality only if the user asks for it. For tracking and
@@ -94,13 +94,14 @@
 #![cfg_attr(feature = "unstable", feature(never_type))]
 #![allow(unknown_lints, bare_trait_objects, deprecated)]
 #![cfg_attr(feature = "cargo-clippy", allow(renamed_and_removed_lints))]
-#![cfg_attr(feature = "cargo-clippy", deny(clippy, clippy_pedantic))]
 // Ignored clippy and clippy_pedantic lints
 #![cfg_attr(
     feature = "cargo-clippy",
     allow(
         // clippy bug: https://github.com/rust-lang/rust-clippy/issues/5704
         unnested_or_patterns,
+        // clippy bug: https://github.com/rust-lang/rust-clippy/issues/7768
+        semicolon_if_nothing_returned,
         // not available in our oldest supported compiler
         checked_conversions,
         empty_enum,
@@ -157,7 +158,7 @@ mod lib {
         pub use std::*;
     }
 
-    pub use self::core::{cmp, iter, mem, num, slice, str};
+    pub use self::core::{cmp, iter, mem, num, ptr, slice, str};
     pub use self::core::{f32, f64};
     pub use self::core::{i16, i32, i64, i8, isize};
     pub use self::core::{u16, u32, u64, u8, usize};
@@ -226,27 +227,27 @@ mod lib {
     #[cfg(feature = "std")]
     pub use std::time::{SystemTime, UNIX_EPOCH};
 
-    #[cfg(all(feature = "std", collections_bound))]
+    #[cfg(all(feature = "std", not(no_collections_bound), no_ops_bound))]
     pub use std::collections::Bound;
 
-    #[cfg(core_reverse)]
+    #[cfg(not(no_core_reverse))]
     pub use self::core::cmp::Reverse;
 
-    #[cfg(ops_bound)]
+    #[cfg(not(no_ops_bound))]
     pub use self::core::ops::Bound;
 
-    #[cfg(range_inclusive)]
+    #[cfg(not(no_range_inclusive))]
     pub use self::core::ops::RangeInclusive;
 
-    #[cfg(all(feature = "std", std_atomic))]
+    #[cfg(all(feature = "std", not(no_std_atomic)))]
     pub use std::sync::atomic::{
         AtomicBool, AtomicI16, AtomicI32, AtomicI8, AtomicIsize, AtomicU16, AtomicU32, AtomicU8,
         AtomicUsize, Ordering,
     };
-    #[cfg(all(feature = "std", std_atomic64))]
+    #[cfg(all(feature = "std", not(no_std_atomic64)))]
     pub use std::sync::atomic::{AtomicI64, AtomicU64};
 
-    #[cfg(any(core_duration, feature = "std"))]
+    #[cfg(any(feature = "std", not(no_core_duration)))]
     pub use self::core::time::Duration;
 }
 
@@ -294,3 +295,8 @@ extern crate serde_derive;
 #[cfg(feature = "serde_derive")]
 #[doc(hidden)]
 pub use serde_derive::*;
+
+#[cfg(all(not(no_serde_derive), any(feature = "std", feature = "alloc")))]
+mod actually_private {
+    pub struct T;
+}

@@ -29,6 +29,7 @@ class nsUDPSocket final : public nsASocketHandler, public nsIUDPSocket {
   virtual void OnSocketReady(PRFileDesc* fd, int16_t outFlags) override;
   virtual void OnSocketDetached(PRFileDesc* fd) override;
   virtual void IsLocal(bool* aIsLocal) override;
+  virtual nsresult GetRemoteAddr(NetAddr* addr) override;
 
   uint64_t ByteCountSent() override { return mByteWriteCount; }
   uint64_t ByteCountReceived() override { return mByteReadCount; }
@@ -58,7 +59,7 @@ class nsUDPSocket final : public nsASocketHandler, public nsIUDPSocket {
 
   // lock protects access to mListener;
   // so mListener is not cleared while being used/locked.
-  Mutex mLock{"nsUDPSocket.mLock"};
+  Mutex mLock MOZ_UNANNOTATED{"nsUDPSocket.mLock"};
   PRFileDesc* mFD{nullptr};
   NetAddr mAddr;
   OriginAttributes mOriginAttributes;

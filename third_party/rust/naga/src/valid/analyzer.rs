@@ -7,9 +7,10 @@ Figures out the following properties:
 !*/
 
 use super::{CallError, ExpressionError, FunctionError, ModuleInfo, ShaderStages, ValidationFlags};
+use crate::span::{AddSpan as _, WithSpan};
 use crate::{
     arena::{Arena, Handle},
-    proc::{ResolveContext, TypeResolution},
+    proc::{ResolveContext, ResolveError, TypeResolution},
 };
 use std::ops;
 
@@ -49,7 +50,7 @@ pub struct Uniformity {
 }
 
 impl Uniformity {
-    fn new() -> Self {
+    const fn new() -> Self {
         Uniformity {
             non_uniform_result: None,
             requirements: UniformityRequirements::empty(),
@@ -93,7 +94,7 @@ impl ops::BitOr for FunctionUniformity {
 }
 
 impl FunctionUniformity {
-    fn new() -> Self {
+    const fn new() -> Self {
         FunctionUniformity {
             result: Uniformity::new(),
             exit: ExitFlags::empty(),
@@ -101,7 +102,7 @@ impl FunctionUniformity {
     }
 
     /// Returns a disruptor based on the stored exit flags, if any.
-    fn exit_disruptor(&self) -> Option<UniformityDisruptor> {
+    const fn exit_disruptor(&self) -> Option<UniformityDisruptor> {
         if self.exit.contains(ExitFlags::MAY_RETURN) {
             Some(UniformityDisruptor::Return)
         } else if self.exit.contains(ExitFlags::MAY_KILL) {
@@ -145,7 +146,7 @@ pub struct ExpressionInfo {
 }
 
 impl ExpressionInfo {
-    fn new() -> Self {
+    const fn new() -> Self {
         ExpressionInfo {
             uniformity: Uniformity::new(),
             ref_count: 0,
@@ -159,11 +160,46 @@ impl ExpressionInfo {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+enum GlobalOrArgument {
+    Global(Handle<crate::GlobalVariable>),
+    Argument(u32),
+}
+
+impl GlobalOrArgument {
+    fn from_expression(
+        expression_arena: &Arena<crate::Expression>,
+        expression: Handle<crate::Expression>,
+    ) -> Result<GlobalOrArgument, ExpressionError> {
+        Ok(match expression_arena[expression] {
+            crate::Expression::GlobalVariable(var) => GlobalOrArgument::Global(var),
+            crate::Expression::FunctionArgument(i) => GlobalOrArgument::Argument(i),
+            crate::Expression::Access { base, .. }
+            | crate::Expression::AccessIndex { base, .. } => match expression_arena[base] {
+                crate::Expression::GlobalVariable(var) => GlobalOrArgument::Global(var),
+                _ => return Err(ExpressionError::ExpectedGlobalOrArgument),
+            },
+            _ => return Err(ExpressionError::ExpectedGlobalOrArgument),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serialize", derive(serde::Serialize))]
+#[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
+struct Sampling {
+    image: GlobalOrArgument,
+    sampler: GlobalOrArgument,
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "serialize", derive(serde::Serialize))]
 #[cfg_attr(feature = "deserialize", derive(serde::Deserialize))]
 pub struct FunctionInfo {
     /// Validation flags.
+    #[allow(dead_code)]
     flags: ValidationFlags,
     /// Set of shader stages where calling this function is valid.
     pub available_stages: ShaderStages,
@@ -171,23 +207,59 @@ pub struct FunctionInfo {
     pub uniformity: Uniformity,
     /// Function may kill the invocation.
     pub may_kill: bool,
-    /// Set of image-sampler pais used with sampling.
+
+    /// All pairs of (texture, sampler) globals that may be used together in
+    /// sampling operations by this function and its callees. This includes
+    /// pairings that arise when this function passes textures and samplers as
+    /// arguments to its callees.
+    ///
+    /// This table does not include uses of textures and samplers passed as
+    /// arguments to this function itself, since we do not know which globals
+    /// those will be. However, this table *is* exhaustive when computed for an
+    /// entry point function: entry points never receive textures or samplers as
+    /// arguments, so all an entry point's sampling can be reported in terms of
+    /// globals.
+    ///
+    /// The GLSL back end uses this table to construct reflection info that
+    /// clients need to construct texture-combined sampler values.
     pub sampling_set: crate::FastHashSet<SamplingKey>,
-    /// Vector of global variable usages.
+
+    /// How this function and its callees use this module's globals.
     ///
-    /// Each item corresponds to a global variable in the module.
+    /// This is indexed by `Handle<GlobalVariable>` indices. However,
+    /// `FunctionInfo` implements `std::ops::Index<Handle<GlobalVariable>>`,
+    /// so you can simply index this struct with a global handle to retrieve
+    /// its usage information.
     global_uses: Box<[GlobalUse]>,
-    /// Vector of expression infos.
+
+    /// Information about each expression in this function's body.
     ///
-    /// Each item corresponds to an expression in the function.
+    /// This is indexed by `Handle<Expression>` indices. However, `FunctionInfo`
+    /// implements `std::ops::Index<Handle<Expression>>`, so you can simply
+    /// index this struct with an expression handle to retrieve its
+    /// `ExpressionInfo`.
     expressions: Box<[ExpressionInfo]>,
+
+    /// All (texture, sampler) pairs that may be used together in sampling
+    /// operations by this function and its callees, whether they are accessed
+    /// as globals or passed as arguments.
+    ///
+    /// Participants are represented by [`GlobalVariable`] handles whenever
+    /// possible, and otherwise by indices of this function's arguments.
+    ///
+    /// When analyzing a function call, we combine this data about the callee
+    /// with the actual arguments being passed to produce the callers' own
+    /// `sampling_set` and `sampling` tables.
+    ///
+    /// [`GlobalVariable`]: crate::GlobalVariable
+    sampling: crate::FastHashSet<Sampling>,
 }
 
 impl FunctionInfo {
-    pub fn global_variable_count(&self) -> usize {
+    pub const fn global_variable_count(&self) -> usize {
         self.global_uses.len()
     }
-    pub fn expression_count(&self) -> usize {
+    pub const fn expression_count(&self) -> usize {
         self.expressions.len()
     }
     pub fn dominates_global_use(&self, other: &Self) -> bool {
@@ -236,7 +308,10 @@ impl FunctionInfo {
         handle: Handle<crate::Expression>,
         global_use: GlobalUse,
     ) -> NonUniformResult {
-        let info = &mut self.expressions[handle.index()];
+        //Note: if the expression doesn't exist, this function
+        // will return `None`, but the later validation of
+        // expressions should detect this and error properly.
+        let info = self.expressions.get_mut(handle.index())?;
         info.ref_count += 1;
         // mark the used global as read
         if let Some(global) = info.assignable_global {
@@ -260,7 +335,8 @@ impl FunctionInfo {
         handle: Handle<crate::Expression>,
         assignable_global: &mut Option<Handle<crate::GlobalVariable>>,
     ) -> NonUniformResult {
-        let info = &mut self.expressions[handle.index()];
+        //Note: similarly to `add_ref_impl`, this ignores invalid expressions.
+        let info = self.expressions.get_mut(handle.index())?;
         info.ref_count += 1;
         // propagate the assignable global up the chain, till it either hits
         // a value-type expression, or the assignment statement.
@@ -273,21 +349,70 @@ impl FunctionInfo {
     }
 
     /// Inherit information from a called function.
-    fn process_call(&mut self, info: &Self) -> FunctionUniformity {
-        for key in info.sampling_set.iter() {
-            self.sampling_set.insert(key.clone());
+    fn process_call(
+        &mut self,
+        callee: &Self,
+        arguments: &[Handle<crate::Expression>],
+        expression_arena: &Arena<crate::Expression>,
+    ) -> Result<FunctionUniformity, WithSpan<FunctionError>> {
+        self.sampling_set
+            .extend(callee.sampling_set.iter().cloned());
+        for sampling in callee.sampling.iter() {
+            // If the callee was passed the texture or sampler as an argument,
+            // we may now be able to determine which globals those referred to.
+            let image_storage = match sampling.image {
+                GlobalOrArgument::Global(var) => GlobalOrArgument::Global(var),
+                GlobalOrArgument::Argument(i) => {
+                    let handle = arguments[i as usize];
+                    GlobalOrArgument::from_expression(expression_arena, handle).map_err(
+                        |error| {
+                            FunctionError::Expression { handle, error }
+                                .with_span_handle(handle, expression_arena)
+                        },
+                    )?
+                }
+            };
+
+            let sampler_storage = match sampling.sampler {
+                GlobalOrArgument::Global(var) => GlobalOrArgument::Global(var),
+                GlobalOrArgument::Argument(i) => {
+                    let handle = arguments[i as usize];
+                    GlobalOrArgument::from_expression(expression_arena, handle).map_err(
+                        |error| {
+                            FunctionError::Expression { handle, error }
+                                .with_span_handle(handle, expression_arena)
+                        },
+                    )?
+                }
+            };
+
+            // If we've managed to pin both the image and sampler down to
+            // specific globals, record that in our `sampling_set`. Otherwise,
+            // record as much as we do know in our own `sampling` table, for our
+            // callers to sort out.
+            match (image_storage, sampler_storage) {
+                (GlobalOrArgument::Global(image), GlobalOrArgument::Global(sampler)) => {
+                    self.sampling_set.insert(SamplingKey { image, sampler });
+                }
+                (image, sampler) => {
+                    self.sampling.insert(Sampling { image, sampler });
+                }
+            }
         }
-        for (mine, other) in self.global_uses.iter_mut().zip(info.global_uses.iter()) {
+
+        // Inherit global use from our callees.
+        for (mine, other) in self.global_uses.iter_mut().zip(callee.global_uses.iter()) {
             *mine |= *other;
         }
-        FunctionUniformity {
-            result: info.uniformity.clone(),
-            exit: if info.may_kill {
+
+        Ok(FunctionUniformity {
+            result: callee.uniformity.clone(),
+            exit: if callee.may_kill {
                 ExitFlags::MAY_KILL
             } else {
                 ExitFlags::empty()
             },
-        }
+        })
     }
 
     /// Computes the expression info and stores it in `self.expressions`.
@@ -299,19 +424,74 @@ impl FunctionInfo {
         expression: &crate::Expression,
         expression_arena: &Arena<crate::Expression>,
         other_functions: &[FunctionInfo],
-        type_arena: &Arena<crate::Type>,
         resolve_context: &ResolveContext,
+        capabilities: super::Capabilities,
     ) -> Result<(), ExpressionError> {
         use crate::{Expression as E, SampleLevel as Sl};
 
         let mut assignable_global = None;
         let uniformity = match *expression {
-            E::Access { base, index } => Uniformity {
-                non_uniform_result: self
-                    .add_assignable_ref(base, &mut assignable_global)
-                    .or(self.add_ref(index)),
-                requirements: UniformityRequirements::empty(),
-            },
+            E::Access { base, index } => {
+                let base_ty = self[base].ty.inner_with(resolve_context.types);
+
+                // build up the caps needed if this is indexed non-uniformly
+                let mut needed_caps = super::Capabilities::empty();
+                let is_binding_array = match *base_ty {
+                    crate::TypeInner::BindingArray {
+                        base: array_element_ty_handle,
+                        ..
+                    } => {
+                        // these are nasty aliases, but these idents are too long and break rustfmt
+                        let ub_st = super::Capabilities::UNIFORM_BUFFER_AND_STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING;
+                        let st_sb = super::Capabilities::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING;
+                        let sampler = super::Capabilities::SAMPLER_NON_UNIFORM_INDEXING;
+
+                        // We're a binding array, so lets use the type of _what_ we are array of to determine if we can non-uniformly index it.
+                        let array_element_ty =
+                            &resolve_context.types[array_element_ty_handle].inner;
+
+                        needed_caps |= match *array_element_ty {
+                            // If we're an image, use the appropriate limit.
+                            crate::TypeInner::Image { class, .. } => match class {
+                                crate::ImageClass::Storage { .. } => ub_st,
+                                _ => st_sb,
+                            },
+                            crate::TypeInner::Sampler { .. } => sampler,
+                            // If we're anything but an image, assume we're a buffer and use the address space.
+                            _ => {
+                                if let E::GlobalVariable(global_handle) = expression_arena[base] {
+                                    let global = &resolve_context.global_vars[global_handle];
+                                    match global.space {
+                                        crate::AddressSpace::Uniform => ub_st,
+                                        crate::AddressSpace::Storage { .. } => st_sb,
+                                        _ => unreachable!(),
+                                    }
+                                } else {
+                                    unreachable!()
+                                }
+                            }
+                        };
+
+                        true
+                    }
+                    _ => false,
+                };
+
+                if self[index].uniformity.non_uniform_result.is_some()
+                    && !capabilities.contains(needed_caps)
+                    && is_binding_array
+                {
+                    return Err(ExpressionError::MissingCapabilities(needed_caps));
+                }
+
+                let _ = ();
+                Uniformity {
+                    non_uniform_result: self
+                        .add_assignable_ref(base, &mut assignable_global)
+                        .or(self.add_ref(index)),
+                    requirements: UniformityRequirements::empty(),
+                }
+            }
             E::AccessIndex { base, .. } => Uniformity {
                 non_uniform_result: self.add_assignable_ref(base, &mut assignable_global),
                 requirements: UniformityRequirements::empty(),
@@ -344,7 +524,8 @@ impl FunctionInfo {
                         crate::BuiltIn::FrontFacing
                         // per-work-group built-ins are uniform
                         | crate::BuiltIn::WorkGroupId
-                        | crate::BuiltIn::WorkGroupSize => true,
+                        | crate::BuiltIn::WorkGroupSize
+                        | crate::BuiltIn::NumWorkGroups => true,
                         _ => false,
                     },
                     // only flat inputs are uniform
@@ -359,22 +540,21 @@ impl FunctionInfo {
                     requirements: UniformityRequirements::empty(),
                 }
             }
-            // depends on the storage class
+            // depends on the address space
             E::GlobalVariable(gh) => {
-                use crate::StorageClass as Sc;
+                use crate::AddressSpace as As;
                 assignable_global = Some(gh);
                 let var = &resolve_context.global_vars[gh];
-                let uniform = match var.class {
+                let uniform = match var.space {
                     // local data is non-uniform
-                    Sc::Function | Sc::Private => false,
+                    As::Function | As::Private => false,
                     // workgroup memory is exclusively accessed by the group
-                    Sc::WorkGroup => true,
+                    As::WorkGroup => true,
                     // uniform data
-                    Sc::Uniform | Sc::PushConstant => true,
+                    As::Uniform | As::PushConstant => true,
                     // storage data is only uniform when read-only
-                    Sc::Handle | Sc::Storage => {
-                        !var.storage_access.contains(crate::StorageAccess::STORE)
-                    }
+                    As::Storage { access } => !access.contains(crate::StorageAccess::STORE),
+                    As::Handle => false,
                 };
                 Uniformity {
                     non_uniform_result: if uniform { None } else { Some(handle) },
@@ -392,22 +572,28 @@ impl FunctionInfo {
             E::ImageSample {
                 image,
                 sampler,
+                gather: _,
                 coordinate,
                 array_index,
                 offset: _,
                 level,
                 depth_ref,
             } => {
-                self.sampling_set.insert(SamplingKey {
-                    image: match expression_arena[image] {
-                        crate::Expression::GlobalVariable(var) => var,
-                        _ => return Err(ExpressionError::ExpectedGlobalVariable),
-                    },
-                    sampler: match expression_arena[sampler] {
-                        crate::Expression::GlobalVariable(var) => var,
-                        _ => return Err(ExpressionError::ExpectedGlobalVariable),
-                    },
-                });
+                let image_storage = GlobalOrArgument::from_expression(expression_arena, image)?;
+                let sampler_storage = GlobalOrArgument::from_expression(expression_arena, sampler)?;
+
+                match (image_storage, sampler_storage) {
+                    (GlobalOrArgument::Global(image), GlobalOrArgument::Global(sampler)) => {
+                        self.sampling_set.insert(SamplingKey { image, sampler });
+                    }
+                    _ => {
+                        self.sampling.insert(Sampling {
+                            image: image_storage,
+                            sampler: sampler_storage,
+                        });
+                    }
+                }
+
                 // "nur" == "Non-Uniform Result"
                 let array_nur = array_index.and_then(|h| self.add_ref(h));
                 let level_nur = match level {
@@ -435,16 +621,19 @@ impl FunctionInfo {
                 image,
                 coordinate,
                 array_index,
-                index,
+                sample,
+                level,
             } => {
                 let array_nur = array_index.and_then(|h| self.add_ref(h));
-                let index_nur = index.and_then(|h| self.add_ref(h));
+                let sample_nur = sample.and_then(|h| self.add_ref(h));
+                let level_nur = level.and_then(|h| self.add_ref(h));
                 Uniformity {
                     non_uniform_result: self
                         .add_ref(image)
                         .or(self.add_ref(coordinate))
                         .or(array_nur)
-                        .or(index_nur),
+                        .or(sample_nur)
+                        .or(level_nur),
                     requirements: UniformityRequirements::empty(),
                 }
             }
@@ -501,20 +690,29 @@ impl FunctionInfo {
                 non_uniform_result: self.add_ref(expr),
                 requirements: UniformityRequirements::empty(),
             },
-            E::Call(function) => {
-                let fun = other_functions
+            E::CallResult(function) => {
+                let info = other_functions
                     .get(function.index())
                     .ok_or(ExpressionError::CallToUndeclaredFunction(function))?;
-                self.process_call(fun).result
+
+                info.uniformity.clone()
             }
+            E::AtomicResult { .. } => Uniformity {
+                non_uniform_result: Some(handle),
+                requirements: UniformityRequirements::empty(),
+            },
             E::ArrayLength(expr) => Uniformity {
                 non_uniform_result: self.add_ref_impl(expr, GlobalUse::QUERY),
                 requirements: UniformityRequirements::empty(),
             },
         };
 
-        let ty =
-            resolve_context.resolve(expression, type_arena, |h| &self.expressions[h.index()].ty)?;
+        let ty = resolve_context.resolve(expression, |h| {
+            self.expressions
+                .get(h.index())
+                .map(|ei| &ei.ty)
+                .ok_or(ResolveError::ExpressionForwardDependency(h))
+        })?;
         self.expressions[handle.index()] = ExpressionInfo {
             uniformity,
             ref_count: 0,
@@ -536,26 +734,32 @@ impl FunctionInfo {
     #[allow(clippy::or_fun_call)]
     fn process_block(
         &mut self,
-        statements: &[crate::Statement],
+        statements: &crate::Block,
         other_functions: &[FunctionInfo],
         mut disruptor: Option<UniformityDisruptor>,
-    ) -> Result<FunctionUniformity, FunctionError> {
+        expression_arena: &Arena<crate::Expression>,
+    ) -> Result<FunctionUniformity, WithSpan<FunctionError>> {
         use crate::Statement as S;
 
         let mut combined_uniformity = FunctionUniformity::new();
-        for statement in statements {
+        for (statement, &span) in statements.span_iter() {
             let uniformity = match *statement {
                 S::Emit(ref range) => {
                     let mut requirements = UniformityRequirements::empty();
                     for expr in range.clone() {
-                        let req = self.expressions[expr.index()].uniformity.requirements;
+                        let req = match self.expressions.get(expr.index()) {
+                            Some(expr) => expr.uniformity.requirements,
+                            None => UniformityRequirements::empty(),
+                        };
+                        #[cfg(feature = "validate")]
                         if self
                             .flags
                             .contains(super::ValidationFlags::CONTROL_FLOW_UNIFORMITY)
                             && !req.is_empty()
                         {
                             if let Some(cause) = disruptor {
-                                return Err(FunctionError::NonUniformControlFlow(req, expr, cause));
+                                return Err(FunctionError::NonUniformControlFlow(req, expr, cause)
+                                    .with_span_handle(expr, expression_arena));
                             }
                         }
                         requirements |= req;
@@ -571,7 +775,11 @@ impl FunctionInfo {
                 S::Break | S::Continue => FunctionUniformity::new(),
                 S::Kill => FunctionUniformity {
                     result: Uniformity::new(),
-                    exit: ExitFlags::MAY_KILL,
+                    exit: if disruptor.is_some() {
+                        ExitFlags::MAY_KILL
+                    } else {
+                        ExitFlags::empty()
+                    },
                 },
                 S::Barrier(_) => FunctionUniformity {
                     result: Uniformity {
@@ -580,7 +788,9 @@ impl FunctionInfo {
                     },
                     exit: ExitFlags::empty(),
                 },
-                S::Block(ref b) => self.process_block(b, other_functions, disruptor)?,
+                S::Block(ref b) => {
+                    self.process_block(b, other_functions, disruptor, expression_arena)?
+                }
                 S::If {
                     condition,
                     ref accept,
@@ -589,16 +799,23 @@ impl FunctionInfo {
                     let condition_nur = self.add_ref(condition);
                     let branch_disruptor =
                         disruptor.or(condition_nur.map(UniformityDisruptor::Expression));
-                    let accept_uniformity =
-                        self.process_block(accept, other_functions, branch_disruptor)?;
-                    let reject_uniformity =
-                        self.process_block(reject, other_functions, branch_disruptor)?;
+                    let accept_uniformity = self.process_block(
+                        accept,
+                        other_functions,
+                        branch_disruptor,
+                        expression_arena,
+                    )?;
+                    let reject_uniformity = self.process_block(
+                        reject,
+                        other_functions,
+                        branch_disruptor,
+                        expression_arena,
+                    )?;
                     accept_uniformity | reject_uniformity
                 }
                 S::Switch {
                     selector,
                     ref cases,
-                    ref default,
                 } => {
                     let selector_nur = self.add_ref(selector);
                     let branch_disruptor =
@@ -606,8 +823,12 @@ impl FunctionInfo {
                     let mut uniformity = FunctionUniformity::new();
                     let mut case_disruptor = branch_disruptor;
                     for case in cases.iter() {
-                        let case_uniformity =
-                            self.process_block(&case.body, other_functions, case_disruptor)?;
+                        let case_uniformity = self.process_block(
+                            &case.body,
+                            other_functions,
+                            case_disruptor,
+                            expression_arena,
+                        )?;
                         case_disruptor = if case.fall_through {
                             case_disruptor.or(case_uniformity.exit_disruptor())
                         } else {
@@ -615,19 +836,21 @@ impl FunctionInfo {
                         };
                         uniformity = uniformity | case_uniformity;
                     }
-                    // using the disruptor inherited from the last fall-through chain
-                    let default_exit =
-                        self.process_block(default, other_functions, case_disruptor)?;
-                    uniformity | default_exit
+                    uniformity
                 }
                 S::Loop {
                     ref body,
                     ref continuing,
                 } => {
-                    let body_uniformity = self.process_block(body, other_functions, disruptor)?;
+                    let body_uniformity =
+                        self.process_block(body, other_functions, disruptor, expression_arena)?;
                     let continuing_disruptor = disruptor.or(body_uniformity.exit_disruptor());
-                    let continuing_uniformity =
-                        self.process_block(continuing, other_functions, continuing_disruptor)?;
+                    let continuing_uniformity = self.process_block(
+                        continuing,
+                        other_functions,
+                        continuing_disruptor,
+                        expression_arena,
+                    )?;
                     body_uniformity | continuing_uniformity
                 }
                 S::Return { value } => FunctionUniformity {
@@ -635,8 +858,11 @@ impl FunctionInfo {
                         non_uniform_result: value.and_then(|expr| self.add_ref(expr)),
                         requirements: UniformityRequirements::empty(),
                     },
-                    //TODO: if we are in the uniform control flow, should this still be an exit flag?
-                    exit: ExitFlags::MAY_RETURN,
+                    exit: if disruptor.is_some() {
+                        ExitFlags::MAY_RETURN
+                    } else {
+                        ExitFlags::empty()
+                    },
                 },
                 // Here and below, the used expressions are already emitted,
                 // and their results do not affect the function return value,
@@ -672,10 +898,24 @@ impl FunctionInfo {
                         FunctionError::InvalidCall {
                             function,
                             error: CallError::ForwardDeclaredFunction,
-                        },
+                        }
+                        .with_span_static(span, "forward call"),
                     )?;
                     //Note: the result is validated by the Validator, not here
-                    self.process_call(info)
+                    self.process_call(info, arguments, expression_arena)?
+                }
+                S::Atomic {
+                    pointer,
+                    ref fun,
+                    value,
+                    result: _,
+                } => {
+                    let _ = self.add_ref_impl(pointer, GlobalUse::WRITE);
+                    let _ = self.add_ref(value);
+                    if let crate::AtomicFunction::Exchange { compare: Some(cmp) } = *fun {
+                        let _ = self.add_ref(cmp);
+                    }
+                    FunctionUniformity::new()
                 }
             };
 
@@ -694,7 +934,8 @@ impl ModuleInfo {
         fun: &crate::Function,
         module: &crate::Module,
         flags: ValidationFlags,
-    ) -> Result<FunctionInfo, FunctionError> {
+        capabilities: super::Capabilities,
+    ) -> Result<FunctionInfo, WithSpan<FunctionError>> {
         let mut info = FunctionInfo {
             flags,
             available_stages: ShaderStages::all(),
@@ -703,9 +944,11 @@ impl ModuleInfo {
             sampling_set: crate::FastHashSet::default(),
             global_uses: vec![GlobalUse::empty(); module.global_variables.len()].into_boxed_slice(),
             expressions: vec![ExpressionInfo::new(); fun.expressions.len()].into_boxed_slice(),
+            sampling: crate::FastHashSet::default(),
         };
         let resolve_context = ResolveContext {
             constants: &module.constants,
+            types: &module.types,
             global_vars: &module.global_variables,
             local_vars: &fun.local_variables,
             functions: &module.functions,
@@ -718,14 +961,15 @@ impl ModuleInfo {
                 expr,
                 &fun.expressions,
                 &self.functions,
-                &module.types,
                 &resolve_context,
+                capabilities,
             ) {
-                return Err(FunctionError::Expression { handle, error });
+                return Err(FunctionError::Expression { handle, error }
+                    .with_span_handle(handle, &fun.expressions));
             }
         }
 
-        let uniformity = info.process_block(&fun.body, &self.functions, None)?;
+        let uniformity = info.process_block(&fun.body, &self.functions, None, &fun.expressions)?;
         info.uniformity = uniformity.result;
         info.may_kill = uniformity.exit.contains(ExitFlags::MAY_KILL);
 
@@ -738,65 +982,84 @@ impl ModuleInfo {
 }
 
 #[test]
+#[cfg(feature = "validate")]
 fn uniform_control_flow() {
     use crate::{Expression as E, Statement as S};
 
     let mut constant_arena = Arena::new();
-    let constant = constant_arena.append(crate::Constant {
-        name: None,
-        specialization: None,
-        inner: crate::ConstantInner::Scalar {
-            width: 4,
-            value: crate::ScalarValue::Uint(0),
+    let constant = constant_arena.append(
+        crate::Constant {
+            name: None,
+            specialization: None,
+            inner: crate::ConstantInner::Scalar {
+                width: 4,
+                value: crate::ScalarValue::Uint(0),
+            },
         },
-    });
-    let mut type_arena = Arena::new();
-    let ty = type_arena.append(crate::Type {
-        name: None,
-        inner: crate::TypeInner::Vector {
-            size: crate::VectorSize::Bi,
-            kind: crate::ScalarKind::Float,
-            width: 4,
+        Default::default(),
+    );
+    let mut type_arena = crate::UniqueArena::new();
+    let ty = type_arena.insert(
+        crate::Type {
+            name: None,
+            inner: crate::TypeInner::Vector {
+                size: crate::VectorSize::Bi,
+                kind: crate::ScalarKind::Float,
+                width: 4,
+            },
         },
-    });
+        Default::default(),
+    );
     let mut global_var_arena = Arena::new();
-    let non_uniform_global = global_var_arena.append(crate::GlobalVariable {
-        name: None,
-        init: None,
-        ty,
-        class: crate::StorageClass::Handle,
-        binding: None,
-        storage_access: crate::StorageAccess::STORE,
-    });
-    let uniform_global = global_var_arena.append(crate::GlobalVariable {
-        name: None,
-        init: None,
-        ty,
-        binding: None,
-        class: crate::StorageClass::Uniform,
-        storage_access: crate::StorageAccess::empty(),
-    });
+    let non_uniform_global = global_var_arena.append(
+        crate::GlobalVariable {
+            name: None,
+            init: None,
+            ty,
+            space: crate::AddressSpace::Handle,
+            binding: None,
+        },
+        Default::default(),
+    );
+    let uniform_global = global_var_arena.append(
+        crate::GlobalVariable {
+            name: None,
+            init: None,
+            ty,
+            binding: None,
+            space: crate::AddressSpace::Uniform,
+        },
+        Default::default(),
+    );
 
     let mut expressions = Arena::new();
     // checks the uniform control flow
-    let constant_expr = expressions.append(E::Constant(constant));
+    let constant_expr = expressions.append(E::Constant(constant), Default::default());
     // checks the non-uniform control flow
-    let derivative_expr = expressions.append(E::Derivative {
-        axis: crate::DerivativeAxis::X,
-        expr: constant_expr,
-    });
+    let derivative_expr = expressions.append(
+        E::Derivative {
+            axis: crate::DerivativeAxis::X,
+            expr: constant_expr,
+        },
+        Default::default(),
+    );
     let emit_range_constant_derivative = expressions.range_from(0);
-    let non_uniform_global_expr = expressions.append(E::GlobalVariable(non_uniform_global));
-    let uniform_global_expr = expressions.append(E::GlobalVariable(uniform_global));
+    let non_uniform_global_expr =
+        expressions.append(E::GlobalVariable(non_uniform_global), Default::default());
+    let uniform_global_expr =
+        expressions.append(E::GlobalVariable(uniform_global), Default::default());
     let emit_range_globals = expressions.range_from(2);
 
     // checks the QUERY flag
-    let query_expr = expressions.append(E::ArrayLength(uniform_global_expr));
+    let query_expr = expressions.append(E::ArrayLength(uniform_global_expr), Default::default());
     // checks the transitive WRITE flag
-    let access_expr = expressions.append(E::AccessIndex {
-        base: non_uniform_global_expr,
-        index: 1,
-    });
+    let access_expr = expressions.append(
+        E::AccessIndex {
+            base: non_uniform_global_expr,
+            index: 1,
+        },
+        Default::default(),
+    );
     let emit_range_query_access_globals = expressions.range_from(2);
 
     let mut info = FunctionInfo {
@@ -807,9 +1070,11 @@ fn uniform_control_flow() {
         sampling_set: crate::FastHashSet::default(),
         global_uses: vec![GlobalUse::empty(); global_var_arena.len()].into_boxed_slice(),
         expressions: vec![ExpressionInfo::new(); expressions.len()].into_boxed_slice(),
+        sampling: crate::FastHashSet::default(),
     };
     let resolve_context = ResolveContext {
         constants: &constant_arena,
+        types: &type_arena,
         global_vars: &global_var_arena,
         local_vars: &Arena::new(),
         functions: &Arena::new(),
@@ -821,8 +1086,8 @@ fn uniform_control_flow() {
             expression,
             &expressions,
             &[],
-            &type_arena,
             &resolve_context,
+            super::Capabilities::empty(),
         )
         .unwrap();
     }
@@ -836,17 +1101,23 @@ fn uniform_control_flow() {
     let stmt_emit1 = S::Emit(emit_range_globals.clone());
     let stmt_if_uniform = S::If {
         condition: uniform_global_expr,
-        accept: Vec::new(),
+        accept: crate::Block::new(),
         reject: vec![
             S::Emit(emit_range_constant_derivative.clone()),
             S::Store {
                 pointer: constant_expr,
                 value: derivative_expr,
             },
-        ],
+        ]
+        .into(),
     };
     assert_eq!(
-        info.process_block(&[stmt_emit1, stmt_if_uniform], &[], None),
+        info.process_block(
+            &vec![stmt_emit1, stmt_if_uniform].into(),
+            &[],
+            None,
+            &expressions
+        ),
         Ok(FunctionUniformity {
             result: Uniformity {
                 non_uniform_result: None,
@@ -862,21 +1133,28 @@ fn uniform_control_flow() {
     let stmt_if_non_uniform = S::If {
         condition: non_uniform_global_expr,
         accept: vec![
-            S::Emit(emit_range_constant_derivative.clone()),
+            S::Emit(emit_range_constant_derivative),
             S::Store {
                 pointer: constant_expr,
                 value: derivative_expr,
             },
-        ],
-        reject: Vec::new(),
+        ]
+        .into(),
+        reject: crate::Block::new(),
     };
     assert_eq!(
-        info.process_block(&[stmt_emit2, stmt_if_non_uniform], &[], None),
+        info.process_block(
+            &vec![stmt_emit2, stmt_if_non_uniform].into(),
+            &[],
+            None,
+            &expressions
+        ),
         Err(FunctionError::NonUniformControlFlow(
             UniformityRequirements::DERIVATIVE,
             derivative_expr,
             UniformityDisruptor::Expression(non_uniform_global_expr)
-        )),
+        )
+        .with_span()),
     );
     assert_eq!(info[derivative_expr].ref_count, 1);
     assert_eq!(info[non_uniform_global], GlobalUse::READ);
@@ -887,9 +1165,10 @@ fn uniform_control_flow() {
     };
     assert_eq!(
         info.process_block(
-            &[stmt_emit3, stmt_return_non_uniform],
+            &vec![stmt_emit3, stmt_return_non_uniform].into(),
             &[],
-            Some(UniformityDisruptor::Return)
+            Some(UniformityDisruptor::Return),
+            &expressions
         ),
         Ok(FunctionUniformity {
             result: Uniformity {
@@ -913,9 +1192,10 @@ fn uniform_control_flow() {
     let stmt_kill = S::Kill;
     assert_eq!(
         info.process_block(
-            &[stmt_emit4, stmt_assign, stmt_kill, stmt_return_pointer],
+            &vec![stmt_emit4, stmt_assign, stmt_kill, stmt_return_pointer].into(),
             &[],
-            Some(UniformityDisruptor::Discard)
+            Some(UniformityDisruptor::Discard),
+            &expressions
         ),
         Ok(FunctionUniformity {
             result: Uniformity {

@@ -32,9 +32,17 @@ interface nsITextToSubURI : nsISupports
    * </ul>
    *
    * @param aURIFragment the URI (or URI fragment) to unescape
+   * @param aDontEscape whether to escape IDN blocklisted characters
    * @return Unescaped aURIFragment  converted to unicode
    */
-  AString unEscapeURIForUI(in AUTF8String aURIFragment);
+  AString unEscapeURIForUI(in AUTF8String aURIFragment,
+                           [optional] in boolean aDontEscape);
+%{C++
+  nsresult UnEscapeURIForUI(const nsACString& aURIFragment,
+                            nsAString& _retval) {
+    return UnEscapeURIForUI(aURIFragment, false, _retval);
+  }
+%}
 
   /**
    * Unescapes only non ASCII characters in the given URI fragment
@@ -47,5 +55,6 @@ interface nsITextToSubURI : nsISupports
    * @throws NS_ERROR_UCONV_NOCONV when there is no decoder for aCharset
    *         or NS_ERROR_UDEC_ILLEGALINPUT in case of conversion failure
    */
+  [binaryname(UnEscapeNonAsciiURIJS)]
   AString unEscapeNonAsciiURI(in ACString aCharset, in AUTF8String aURIFragment);
 };

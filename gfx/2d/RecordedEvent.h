@@ -17,6 +17,7 @@
 #include "mozilla/gfx/Point.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/ipc/ByteBuf.h"
+#include "nsRefPtrHashtable.h"
 
 namespace mozilla {
 namespace gfx {
@@ -30,7 +31,7 @@ const uint32_t kMagicInt = 0xc001feed;
 const uint16_t kMajorRevision = 10;
 // A change in minor revision means additions of new events. New streams will
 // not play in older players.
-const uint16_t kMinorRevision = 2;
+const uint16_t kMinorRevision = 3;
 
 struct ReferencePtr {
   ReferencePtr() : mLongPtr(0) {}
@@ -101,6 +102,8 @@ class Translator {
   virtual already_AddRefed<SourceSurface> LookupExternalSurface(uint64_t aKey) {
     return nullptr;
   }
+  void DrawDependentSurface(ReferencePtr aDrawTarget, uint64_t aKey,
+                            const Rect& aRect);
   virtual void AddDrawTarget(ReferencePtr aRefPtr, DrawTarget* aDT) = 0;
   virtual void RemoveDrawTarget(ReferencePtr aRefPtr) = 0;
   virtual void AddPath(ReferencePtr aRefPtr, Path* aPath) = 0;
@@ -137,7 +140,17 @@ class Translator {
                                                         const IntSize& aSize,
                                                         SurfaceFormat aFormat);
   virtual DrawTarget* GetReferenceDrawTarget() = 0;
+  virtual Matrix GetReferenceDrawTargetTransform() { return Matrix(); }
   virtual void* GetFontContext() { return nullptr; }
+
+  void SetDependentSurfaces(
+      nsRefPtrHashtable<nsUint64HashKey, RecordedDependentSurface>*
+          aDependentSurfaces) {
+    mDependentSurfaces = aDependentSurfaces;
+  }
+
+  nsRefPtrHashtable<nsUint64HashKey, RecordedDependentSurface>*
+      mDependentSurfaces = nullptr;
 };
 
 struct ColorPatternStorage {
@@ -392,6 +405,7 @@ class RecordedEvent {
     DETACHALLSNAPSHOTS,
     OPTIMIZESOURCESURFACE,
     LINK,
+    DESTINATION,
     LAST,
   };
 
@@ -452,7 +466,6 @@ class RecordedEvent {
 
  protected:
   friend class DrawEventRecorderPrivate;
-  friend class DrawEventRecorderFile;
   friend class DrawEventRecorderMemory;
   static void RecordUnscaledFont(UnscaledFont* aUnscaledFont,
                                  std::ostream* aOutput);

@@ -8,14 +8,11 @@ var manifests = [do_get_file("data/test_data_protocol_registration.manifest")];
 registerManifests(manifests);
 
 function run_test() {
-  const uuidGenerator = Cc["@mozilla.org/uuid-generator;1"].getService(
-    Ci.nsIUUIDGenerator
-  );
+  const uuidGenerator = Services.uuid;
 
-  let newAppInfo = ChromeUtils.import(
-    "resource://testing-common/AppInfo.jsm",
-    {}
-  ).newAppInfo;
+  let { newAppInfo } = ChromeUtils.import(
+    "resource://testing-common/AppInfo.jsm"
+  );
   let XULAppInfo = newAppInfo({
     name: "XPCShell",
     ID: "{39885e5f-f6b4-4e2a-87e5-6259ecf79011}",
@@ -28,10 +25,7 @@ function run_test() {
     CID: uuidGenerator.generateUUID(),
     scheme: "XULAppInfo",
     contractID: XULAPPINFO_CONTRACTID,
-    createInstance(outer, iid) {
-      if (outer != null) {
-        throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-      }
+    createInstance(iid) {
       return XULAppInfo.QueryInterface(iid);
     },
   };

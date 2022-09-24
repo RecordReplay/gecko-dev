@@ -8,13 +8,9 @@
  */
 
 add_task(async function() {
-  // Disable bfcache for Fission for now.
-  // If Fission is disabled, the pref is no-op.
-  await SpecialPowers.pushPrefEnv({
-    set: [["fission.bfcacheInParent", false]],
+  const { monitor } = await initNetMonitor(HTTPS_SIMPLE_URL, {
+    requestCount: 1,
   });
-
-  const { monitor } = await initNetMonitor(SIMPLE_URL, { requestCount: 1 });
 
   info("Starting test... ");
 
@@ -22,7 +18,7 @@ add_task(async function() {
   const { Chart } = windowRequire("devtools/client/shared/widgets/Chart");
 
   const wait = waitForNetworkEvents(monitor, 1);
-  await navigateTo(SIMPLE_URL);
+  await navigateTo(HTTPS_SIMPLE_URL);
   await wait;
 
   const pie = Chart.Pie(document, {

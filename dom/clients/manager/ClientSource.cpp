@@ -20,13 +20,13 @@
 #include "mozilla/dom/MessageEvent.h"
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/Navigator.h"
-#include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerScope.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/ServiceWorker.h"
 #include "mozilla/dom/ServiceWorkerContainer.h"
 #include "mozilla/dom/ServiceWorkerManager.h"
 #include "mozilla/SchedulerGroup.h"
+#include "mozilla/StaticPrefs_privacy.h"
 #include "mozilla/StorageAccess.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsContentUtils.h"
@@ -271,11 +271,19 @@ nsresult ClientSource::WindowExecutionReady(nsPIDOMWindowInner* aInnerWindow) {
   // the SW until the window is closed.  Any about:blank or blob URL should
   // continue to inherit the SW as well.  We need to avoid triggering the
   // assertion in this corner case.
+#ifdef DEBUG
   if (mController.isSome()) {
-    MOZ_ASSERT(spec.LowerCaseEqualsLiteral("about:blank") ||
-               StringBeginsWith(spec, "blob:"_ns) ||
-               StorageAllowedForWindow(aInnerWindow) == StorageAccess::eAllow);
+    auto storageAccess = StorageAllowedForWindow(aInnerWindow);
+    bool isAboutBlankURL = spec.LowerCaseEqualsLiteral("about:blank");
+    bool isBlobURL = StringBeginsWith(spec, "blob:"_ns);
+    bool isStorageAllowed = storageAccess == StorageAccess::eAllow;
+    bool isPartitionEnabled =
+        StoragePartitioningEnabled(storageAccess, doc->CookieJarSettings());
+    MOZ_ASSERT(isAboutBlankURL || isBlobURL || isStorageAllowed ||
+               (StaticPrefs::privacy_partition_serviceWorkers() &&
+                isPartitionEnabled));
   }
+#endif
 
   nsPIDOMWindowOuter* outer = aInnerWindow->GetOuterWindow();
   NS_ENSURE_TRUE(outer, NS_ERROR_UNEXPECTED);
@@ -390,16 +398,27 @@ void ClientSource::SetController(
   // Note, explicitly avoid checking storage policy for clients that inherit
   // service workers from their parent.  This basically means blob: URLs
   // and about:blank windows.
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
   if (GetInnerWindow()) {
-    MOZ_DIAGNOSTIC_ASSERT(Info().URL().LowerCaseEqualsLiteral("about:blank") ||
-                          StringBeginsWith(Info().URL(), "blob:"_ns) ||
-                          StorageAllowedForWindow(GetInnerWindow()) ==
-                              StorageAccess::eAllow);
+    auto storageAccess = StorageAllowedForWindow(GetInnerWindow());
+    bool IsAboutBlankURL = Info().URL().LowerCaseEqualsLiteral("about:blank");
+    bool IsBlobURL = StringBeginsWith(Info().URL(), "blob:"_ns);
+    bool IsStorageAllowed = storageAccess == StorageAccess::eAllow;
+    bool IsPartitionEnabled =
+        GetInnerWindow()->GetExtantDoc()
+            ? StoragePartitioningEnabled(
+                  storageAccess,
+                  GetInnerWindow()->GetExtantDoc()->CookieJarSettings())
+            : false;
+    MOZ_DIAGNOSTIC_ASSERT(IsAboutBlankURL || IsBlobURL || IsStorageAllowed ||
+                          (StaticPrefs::privacy_partition_serviceWorkers() &&
+                           IsPartitionEnabled));
   } else if (GetWorkerPrivate()) {
     MOZ_DIAGNOSTIC_ASSERT(
         GetWorkerPrivate()->StorageAccess() > StorageAccess::ePrivateBrowsing ||
         StringBeginsWith(GetWorkerPrivate()->ScriptURL(), u"blob:"_ns));
   }
+#endif
 
   if (mController.isSome() && mController.ref() == aServiceWorker) {
     return;
@@ -444,10 +463,19 @@ RefPtr<ClientOpPromise> ClientSource::Control(
   bool controlAllowed = true;
   if (GetInnerWindow()) {
     // Local URL windows and windows with access to storage can be controlled.
+    auto storageAccess = StorageAllowedForWindow(GetInnerWindow());
+    bool isAboutBlankURL = Info().URL().LowerCaseEqualsLiteral("about:blank");
+    bool isBlobURL = StringBeginsWith(Info().URL(), "blob:"_ns);
+    bool isStorageAllowed = storageAccess == StorageAccess::eAllow;
+    bool isPartitionEnabled =
+        GetInnerWindow()->GetExtantDoc()
+            ? StoragePartitioningEnabled(
+                  storageAccess,
+                  GetInnerWindow()->GetExtantDoc()->CookieJarSettings())
+            : false;
     controlAllowed =
-        Info().URL().LowerCaseEqualsLiteral("about:blank") ||
-        StringBeginsWith(Info().URL(), "blob:"_ns) ||
-        StorageAllowedForWindow(GetInnerWindow()) == StorageAccess::eAllow;
+        isAboutBlankURL || isBlobURL || isStorageAllowed ||
+        (StaticPrefs::privacy_partition_serviceWorkers() && isPartitionEnabled);
   } else if (GetWorkerPrivate()) {
     // Local URL workers and workers with access to storage cna be controlled.
     controlAllowed =
@@ -500,8 +528,7 @@ RefPtr<ClientOpPromise> ClientSource::Focus(const ClientFocusArgs& aArgs) {
     rv.ThrowNotSupportedError("Not a Window client");
     return ClientOpPromise::CreateAndReject(rv, __func__);
   }
-  nsPIDOMWindowOuter* outer = nullptr;
-
+  nsCOMPtr<nsPIDOMWindowOuter> outer;
   nsPIDOMWindowInner* inner = GetInnerWindow();
   if (inner) {
     outer = inner->GetOuterWindow();
@@ -645,6 +672,22 @@ void ClientSource::NoteCalledRegisterForServiceWorkerScope(
 bool ClientSource::CalledRegisterForServiceWorkerScope(
     const nsACString& aScope) {
   return mRegisteringScopeList.Contains(aScope);
+}
+
+nsIPrincipal* ClientSource::GetPrincipal() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  // We only create the principal if necessary because creating a principal is
+  // expensive.
+  if (!mPrincipal) {
+    auto principalOrErr = Info().GetPrincipal();
+    nsCOMPtr<nsIPrincipal> prin =
+        principalOrErr.isOk() ? principalOrErr.unwrap() : nullptr;
+
+    mPrincipal.emplace(prin);
+  }
+
+  return mPrincipal.ref();
 }
 
 }  // namespace mozilla::dom

@@ -67,7 +67,6 @@ void DXGID3D9TextureData::FillInfo(TextureData::Info& aInfo) const {
   aInfo.format = mFormat;
   aInfo.supportsMoz2D = false;
   aInfo.canExposeMappedData = false;
-  aInfo.hasIntermediateBuffer = false;
   aInfo.hasSynchronization = false;
 }
 
@@ -81,12 +80,14 @@ already_AddRefed<IDirect3DSurface9> DXGID3D9TextureData::GetD3D9Surface()
 }
 
 bool DXGID3D9TextureData::Serialize(SurfaceDescriptor& aOutDescriptor) {
-  SurfaceDescriptorD3D10 desc((WindowsHandle)(mHandle), mFormat, GetSize(),
-                              gfx::YUVColorSpace::Identity,
-                              gfx::ColorRange::FULL);
+  SurfaceDescriptorD3D10 desc(
+      (WindowsHandle)(mHandle), /* gpuProcessTextureId */ Nothing(),
+      /* arrayIndex */ 0, mFormat, GetSize(), gfx::YUVColorSpace::Identity,
+      gfx::ColorRange::FULL);
   // In reality, with D3D9 we will only ever deal with RGBA textures.
-  bool isYUV = mFormat == SurfaceFormat::NV12 ||
-               mFormat == SurfaceFormat::P010 || mFormat == SurfaceFormat::P016;
+  bool isYUV = mFormat == gfx::SurfaceFormat::NV12 ||
+               mFormat == gfx::SurfaceFormat::P010 ||
+               mFormat == gfx::SurfaceFormat::P016;
   if (isYUV) {
     gfxCriticalError() << "Unexpected YUV format for DXGID3D9TextureData: "
                        << mFormat;

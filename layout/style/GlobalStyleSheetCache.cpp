@@ -7,6 +7,7 @@
 #include "GlobalStyleSheetCache.h"
 
 #include "nsAppDirectoryServiceDefs.h"
+#include "nsExceptionHandler.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_layout.h"
@@ -14,6 +15,7 @@
 #include "mozilla/StyleSheetInlines.h"
 #include "mozilla/Telemetry.h"
 #include "mozilla/css/Loader.h"
+#include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/dom/SRIMetadata.h"
 #include "mozilla/ipc/SharedMemory.h"
 #include "MainThreadUtils.h"
@@ -589,27 +591,17 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
       "@namespace svg url(http://www.w3.org/2000/svg);\n");
 
   // Rules for link styling.
-  nscolor linkColor = aPrefs.mLinkColor;
-  nscolor activeColor = aPrefs.mActiveLinkColor;
-  nscolor visitedColor = aPrefs.mVisitedLinkColor;
-
-  sheetText.AppendPrintf(
-      "*|*:link { color: #%02x%02x%02x; }\n"
-      "*|*:any-link:active { color: #%02x%02x%02x; }\n"
-      "*|*:visited { color: #%02x%02x%02x; }\n",
-      NS_GET_R_G_B(linkColor), NS_GET_R_G_B(activeColor),
-      NS_GET_R_G_B(visitedColor));
-
-  bool underlineLinks = aPrefs.mUnderlineLinks;
+  const bool underlineLinks = StaticPrefs::browser_underline_anchors();
   sheetText.AppendPrintf("*|*:any-link%s { text-decoration: %s; }\n",
                          underlineLinks ? ":not(svg|a)" : "",
                          underlineLinks ? "underline" : "none");
 
   // Rules for focus styling.
 
-  bool focusRingOnAnything = aPrefs.mFocusRingOnAnything;
-  uint8_t focusRingWidth = aPrefs.mFocusRingWidth;
-  uint8_t focusRingStyle = aPrefs.mFocusRingStyle;
+  const bool focusRingOnAnything =
+      StaticPrefs::browser_display_focus_ring_on_anything();
+  uint8_t focusRingWidth = StaticPrefs::browser_display_focus_ring_width();
+  uint8_t focusRingStyle = StaticPrefs::browser_display_focus_ring_style();
 
   if ((focusRingWidth != 1 && focusRingWidth <= 4) || focusRingOnAnything) {
     if (focusRingWidth != 1) {
@@ -637,9 +629,10 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
         focusRingStyle == 0 ? "solid -moz-mac-focusring" : "dotted WindowText");
   }
 
-  if (aPrefs.mUseFocusColors) {
-    nscolor focusText = aPrefs.mFocusTextColor;
-    nscolor focusBG = aPrefs.mFocusBackgroundColor;
+  if (StaticPrefs::browser_display_use_focus_colors()) {
+    const auto& colors = aPrefs.mLightColors;
+    nscolor focusText = colors.mFocusText;
+    nscolor focusBG = colors.mFocusBackground;
     sheetText.AppendPrintf(
         "*:focus, *:focus > font { color: #%02x%02x%02x !important; "
         "background-color: #%02x%02x%02x !important; }\n",
@@ -658,8 +651,27 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
 #undef NS_GET_R_G_B
 }
 
+bool GlobalStyleSheetCache::AffectedByPref(const nsACString& aPref) {
+  const char* prefs[] = {
+      StaticPrefs::GetPrefName_browser_display_show_focus_rings(),
+      StaticPrefs::GetPrefName_browser_display_focus_ring_style(),
+      StaticPrefs::GetPrefName_browser_display_focus_ring_width(),
+      StaticPrefs::GetPrefName_browser_display_focus_ring_on_anything(),
+      StaticPrefs::GetPrefName_browser_display_use_focus_colors(),
+      StaticPrefs::GetPrefName_browser_underline_anchors(),
+  };
+
+  for (const char* pref : prefs) {
+    if (aPref.Equals(pref)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /* static */ void GlobalStyleSheetCache::SetSharedMemory(
-    const base::SharedMemoryHandle& aHandle, uintptr_t aAddress) {
+    base::SharedMemoryHandle aHandle, uintptr_t aAddress) {
   MOZ_ASSERT(!XRE_IsParentProcess());
   MOZ_ASSERT(!gStyleCache, "Too late, GlobalStyleSheetCache already created!");
   MOZ_ASSERT(!sSharedMemory, "Shouldn't call this more than once");
@@ -672,7 +684,7 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
   }
 
   auto shm = MakeUnique<base::SharedMemory>();
-  if (!shm->SetHandle(aHandle, /* read_only */ true)) {
+  if (!shm->SetHandle(std::move(aHandle), /* read_only */ true)) {
     return;
   }
 
@@ -681,10 +693,12 @@ void GlobalStyleSheetCache::BuildPreferenceSheet(
   }
 }
 
-bool GlobalStyleSheetCache::ShareToProcess(base::ProcessId aProcessId,
-                                           base::SharedMemoryHandle* aHandle) {
+base::SharedMemoryHandle GlobalStyleSheetCache::CloneHandle() {
   MOZ_ASSERT(XRE_IsParentProcess());
-  return sSharedMemory && sSharedMemory->ShareToProcess(aProcessId, aHandle);
+  if (sSharedMemory) {
+    return sSharedMemory->CloneHandle();
+  }
+  return nullptr;
 }
 
 StaticRefPtr<GlobalStyleSheetCache> GlobalStyleSheetCache::gStyleCache;

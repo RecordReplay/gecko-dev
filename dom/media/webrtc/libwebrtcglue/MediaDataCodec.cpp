@@ -14,13 +14,16 @@ namespace mozilla {
 
 /* static */
 WebrtcVideoEncoder* MediaDataCodec::CreateEncoder(
-    webrtc::VideoCodecType aCodecType) {
-#if defined(MOZ_APPLEMEDIA) || defined(MOZ_WIDGET_ANDROID) || defined(MOZ_WMF)
-  if (aCodecType == webrtc::VideoCodecType::kVideoCodecH264) {
-    return new WebrtcVideoEncoderProxy(new WebrtcMediaDataEncoder());
+    const webrtc::SdpVideoFormat& aFormat) {
+  if (!StaticPrefs::media_webrtc_platformencoder()) {
+    return nullptr;
   }
-#endif
-  return nullptr;
+  if (!WebrtcMediaDataEncoder::CanCreate(
+          webrtc::PayloadStringToCodecType(aFormat.name))) {
+    return nullptr;
+  }
+
+  return new WebrtcVideoEncoderProxy(new WebrtcMediaDataEncoder(aFormat));
 }
 
 /* static */

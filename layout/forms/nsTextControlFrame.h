@@ -36,7 +36,7 @@ class nsTextControlFrame : public nsContainerFrame,
  public:
   NS_DECL_FRAMEARENA_HELPERS(nsTextControlFrame)
 
-  NS_DECLARE_FRAME_PROPERTY_DELETABLE(ContentScrollPos, nsPoint)
+  NS_DECLARE_FRAME_PROPERTY_SMALL_VALUE(ContentScrollPos, nsPoint)
 
  protected:
   nsTextControlFrame(ComputedStyle*, nsPresContext*, nsIFrame::ClassID);
@@ -223,6 +223,8 @@ class nsTextControlFrame : public nsContainerFrame,
 
   Element* GetPlaceholderNode() const { return mPlaceholderDiv; }
 
+  Element* GetRevealButton() const { return mRevealButton; }
+
   // called by the focus listener
   nsresult MaybeBeginSecureKeyboardInput();
   void MaybeEndSecureKeyboardInput();
@@ -351,6 +353,9 @@ class nsTextControlFrame : public nsContainerFrame,
   RefPtr<Element> mRootNode;
   RefPtr<Element> mPlaceholderDiv;
   RefPtr<Element> mPreviewDiv;
+  // The Reveal Password button.  Only used for type=password, nullptr
+  // otherwise.
+  RefPtr<Element> mRevealButton;
   RefPtr<nsAnonDivObserver> mMutationObserver;
   // Cache of the |.value| of <input> or <textarea> element without hard-wrap.
   // If its IsVoid() returns true, it doesn't cache |.value|.

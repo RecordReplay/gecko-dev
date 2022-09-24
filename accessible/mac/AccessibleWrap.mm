@@ -145,6 +145,11 @@ nsresult AccessibleWrap::HandleAccEvent(AccEvent* aEvent) {
   nsresult rv = LocalAccessible::HandleAccEvent(aEvent);
   NS_ENSURE_SUCCESS(rv, rv);
 
+  if (IsDefunct()) {
+    // The accessible can become defunct after their events are handled.
+    return NS_OK;
+  }
+
   uint32_t eventType = aEvent->GetEventType();
 
   if (eventType == nsIAccessibleEvent::EVENT_SHOW) {
@@ -221,7 +226,9 @@ nsresult AccessibleWrap::HandleAccEvent(AccEvent* aEvent) {
       int32_t caretOffset = event->GetCaretOffset();
       MOXTextMarkerDelegate* delegate =
           [MOXTextMarkerDelegate getOrCreateForDoc:aEvent->Document()];
-      [delegate setCaretOffset:eventTarget at:caretOffset];
+      [delegate setCaretOffset:eventTarget
+                            at:caretOffset
+               moveGranularity:event->GetGranularity()];
       if (event->IsSelectionCollapsed()) {
         // If the selection is collapsed, invalidate our text selection cache.
         [delegate setSelectionFrom:eventTarget
@@ -252,6 +259,7 @@ nsresult AccessibleWrap::HandleAccEvent(AccEvent* aEvent) {
       break;
     }
 
+    case nsIAccessibleEvent::EVENT_ALERT:
     case nsIAccessibleEvent::EVENT_FOCUS:
     case nsIAccessibleEvent::EVENT_TEXT_VALUE_CHANGE:
     case nsIAccessibleEvent::EVENT_DOCUMENT_LOAD_COMPLETE:
@@ -306,6 +314,7 @@ Class a11y::GetTypeFromRole(roles::Role aRole) {
 
     case roles::CHECKBUTTON:
     case roles::TOGGLE_BUTTON:
+    case roles::SWITCH:
       return [mozCheckboxAccessible class];
 
     case roles::RADIOBUTTON:
@@ -383,9 +392,6 @@ Class a11y::GetTypeFromRole(roles::Role aRole) {
     case roles::MATHML_OVER:
     case roles::MATHML_UNDER_OVER:
       return [MOXMathUnderOverAccessible class];
-
-    case roles::SUMMARY:
-      return [MOXSummaryAccessible class];
 
     case roles::OUTLINE:
     case roles::TREE_TABLE:

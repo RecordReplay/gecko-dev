@@ -18,9 +18,7 @@ class nsFrameLoader;
 class nsILoadContext;
 class nsIContent;
 
-namespace mozilla {
-
-namespace dom {
+namespace mozilla::dom {
 
 class BrowserHost;
 class BrowserBridgeHost;
@@ -41,7 +39,7 @@ class OwnerShowInfo;
  */
 class RemoteBrowser : public nsISupports {
  public:
-  typedef mozilla::layers::LayersId LayersId;
+  using LayersId = mozilla::layers::LayersId;
 
   static RemoteBrowser* GetFrom(nsFrameLoader* aFrameLoader);
   static RemoteBrowser* GetFrom(nsIContent* aContent);
@@ -55,6 +53,7 @@ class RemoteBrowser : public nsISupports {
   virtual LayersId GetLayersId() const = 0;
   virtual BrowsingContext* GetBrowsingContext() const = 0;
   virtual nsILoadContext* GetLoadContext() const = 0;
+  virtual bool CanRecv() const = 0;
 
   virtual void LoadURL(nsDocShellLoadState* aLoadState) = 0;
   virtual void ResumeLoad(uint64_t aPendingSwitchId) = 0;
@@ -68,7 +67,6 @@ class RemoteBrowser : public nsISupports {
   virtual void UpdateEffects(EffectsInfo aInfo) = 0;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_ipc_RemoteBrowser_h

@@ -15,8 +15,7 @@
 
 class nsIPrincipal;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class UniqueMessagePortId;
 class RemoteWorkerData;
@@ -97,6 +96,8 @@ class SharedWorkerManager final : public RemoteWorkerObserver {
 
   void ErrorReceived(const ErrorValue& aValue) override;
 
+  void LockNotified(bool aCreated) final;
+
   void Terminated() override;
 
   // Called on PBackground thread methods
@@ -142,6 +143,7 @@ class SharedWorkerManager final : public RemoteWorkerObserver {
   const bool mIsSecureContext;
   bool mSuspended;
   bool mFrozen;
+  uint32_t mLockCount = 0;
 
   // Raw pointers because SharedWorkerParent unregisters itself in
   // ActorDestroy().
@@ -154,7 +156,6 @@ class SharedWorkerManager final : public RemoteWorkerObserver {
   nsTArray<CheckedUnsafePtr<SharedWorkerManagerHolder>> mHolders;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_SharedWorkerManager_h

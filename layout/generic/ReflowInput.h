@@ -411,6 +411,13 @@ struct ReflowInput : public SizeComputationInput {
   const nsStylePadding* mStylePadding = nullptr;
   const nsStyleText* mStyleText = nullptr;
 
+  enum class BreakType : uint8_t {
+    Auto,
+    Column,
+    Page,
+  };
+  BreakType mBreakType = BreakType::Auto;
+
   // a frame (e.g. nsTableCellFrame) which may need to generate a special
   // reflow for percent bsize calculations
   nsIPercentBSizeObserver* mPercentBSizeObserver = nullptr;
@@ -693,25 +700,31 @@ struct ReflowInput : public SizeComputationInput {
                 mozilla::Nothing());
 
   /**
-   * Calculate the used line-height property. The return value will be >= 0.
+   * Get the used line-height property. The return value will be >= 0.
    */
-  nscoord CalcLineHeight() const;
+  nscoord GetLineHeight() const;
 
   /**
-   * Same as CalcLineHeight() above, but doesn't need a reflow input.
+   * Set the used line-height. aLineHeight must be >= 0.
+   */
+  void SetLineHeight(nscoord aLineHeight);
+
+  /**
+   * Calculate the used line-height property without a reflow input instance.
+   * The return value will be >= 0.
    *
    * @param aBlockBSize The computed block size of the content rect of the block
-   *                     that the line should fill.
-   *                     Only used with line-height:-moz-block-height.
-   *                     NS_UNCONSTRAINEDSIZE results in a normal line-height
-   * for line-height:-moz-block-height.
+   *                    that the line should fill. Only used with
+   *                    line-height:-moz-block-height. NS_UNCONSTRAINEDSIZE
+   *                    results in a normal line-height for
+   *                    line-height:-moz-block-height.
    * @param aFontSizeInflation The result of the appropriate
    *                           nsLayoutUtils::FontSizeInflationFor call,
    *                           or 1.0 if during intrinsic size
    *                           calculation.
    */
   static nscoord CalcLineHeight(nsIContent* aContent,
-                                ComputedStyle* aComputedStyle,
+                                const ComputedStyle* aComputedStyle,
                                 nsPresContext* aPresContext,
                                 nscoord aBlockBSize, float aFontSizeInflation);
 
@@ -829,6 +842,15 @@ struct ReflowInput : public SizeComputationInput {
     return mDiscoveredClearance && *mDiscoveredClearance;
   }
 
+  // Returns true if we should apply automatic minimum on the block axis.
+  //
+  // The automatic minimum size in the ratio-dependent axis of a box with a
+  // preferred aspect ratio that is neither a replaced element nor a scroll
+  // container is its min-content size clamped from above by its maximum size.
+  //
+  // https://drafts.csswg.org/css-sizing-4/#aspect-ratio-minimum
+  bool ShouldApplyAutomaticMinimumOnBlockAxis() const;
+
   // Compute the offsets for a relative position element
   //
   // @param aWM the writing mode of aCBSize and the returned offsets.
@@ -836,7 +858,16 @@ struct ReflowInput : public SizeComputationInput {
       mozilla::WritingMode aWM, nsIFrame* aFrame,
       const mozilla::LogicalSize& aCBSize);
 
-  // If a relatively positioned element, adjust the position appropriately.
+  // If aFrame is a relatively or sticky positioned element, adjust aPosition
+  // appropriately.
+  //
+  // @param aComputedOffsets aFrame's relative offset, either from the cached
+  //        nsIFrame::ComputedOffsetProperty() or ComputedPhysicalOffsets().
+  //        Note: This parameter is used only when aFrame is relatively
+  //        positioned, not sticky positioned.
+  // @param aPosition [in/out] Pass aFrame's normal position (pre-relative
+  //        positioning), and this method will update it to indicate aFrame's
+  //        actual position.
   static void ApplyRelativePositioning(nsIFrame* aFrame,
                                        const nsMargin& aComputedOffsets,
                                        nsPoint* aPosition);
@@ -1007,6 +1038,9 @@ struct ReflowInput : public SizeComputationInput {
   // Computed value for 'max-inline-size'/'max-block-size'.
   mozilla::LogicalSize mComputedMaxSize{mWritingMode, NS_UNCONSTRAINEDSIZE,
                                         NS_UNCONSTRAINEDSIZE};
+
+  // Cache the used line-height property.
+  mutable nscoord mLineHeight = NS_UNCONSTRAINEDSIZE;
 };
 
 }  // namespace mozilla

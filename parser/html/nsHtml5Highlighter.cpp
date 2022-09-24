@@ -3,6 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "nsHtml5Highlighter.h"
+#include "ErrorList.h"
 #include "nsDebug.h"
 #include "nsHtml5AttributeName.h"
 #include "nsHtml5Tokenizer.h"
@@ -66,6 +67,30 @@ nsHtml5Highlighter::~nsHtml5Highlighter() {
   NS_ASSERTION(NS_IsMainThread(), "Wrong thread!");
 }
 
+void nsHtml5Highlighter::SetOpSink(nsAHtml5TreeOpSink* aOpSink) {
+  mOpSink = aOpSink;
+}
+
+void nsHtml5Highlighter::Rewind() {
+  mState = 0;
+  mCStart = INT32_MAX;
+  mPos = 0;
+  mLineNumber = 1;
+  mInlinesOpen = 0;
+  mInCharacters = false;
+  mBuffer = nullptr;
+  mOpQueue.Clear();
+  mCurrentRun = nullptr;
+  mAmpersand = nullptr;
+  mSlash = nullptr;
+  // Pop until we have three elements on the stack:
+  // html, body, and pre.
+  while (mStack.Length() > 3) {
+    Pop();
+  }
+  mSeenBase = false;
+}
+
 void nsHtml5Highlighter::Start(const nsAutoString& aTitle) {
   // Doctype
   opAppendDoctypeToDocument operation(nsGkAtoms::html, u""_ns, u""_ns);
@@ -114,9 +139,15 @@ void nsHtml5Highlighter::Start(const nsAutoString& aTitle) {
   preAttrs->addAttribute(nsHtml5AttributeName::ATTR_ID, preId, -1);
   Push(nsGkAtoms::pre, preAttrs, NS_NewHTMLPreElement);
 
-  StartCharacters();
+  // Don't call StartCharacters here in order to be able to put it in
+  // a speculation.
 
   mOpQueue.AppendElement()->Init(mozilla::AsVariant(opStartLayout()));
+}
+
+void nsHtml5Highlighter::UpdateCharsetSource(nsCharsetSource aCharsetSource) {
+  opUpdateCharsetSource operation(aCharsetSource);
+  mOpQueue.AppendElement()->Init(mozilla::AsVariant(operation));
 }
 
 int32_t nsHtml5Highlighter::Transition(int32_t aState, bool aReconsume,
@@ -289,6 +320,7 @@ int32_t nsHtml5Highlighter::Transition(int32_t aState, bool aReconsume,
     case nsHtml5Tokenizer::COMMENT_START_DASH:
     case nsHtml5Tokenizer::BOGUS_COMMENT:
     case nsHtml5Tokenizer::BOGUS_COMMENT_HYPHEN:
+    case nsHtml5Tokenizer::COMMENT_LESSTHAN_BANG_DASH_DASH:
       if (aState == nsHtml5Tokenizer::DATA) {
         AddClass(sComment);
         FinishTag();
@@ -431,7 +463,7 @@ int32_t nsHtml5Highlighter::Transition(int32_t aState, bool aReconsume,
   return aState;
 }
 
-void nsHtml5Highlighter::End() {
+[[nodiscard]] bool nsHtml5Highlighter::End() {
   switch (mState) {
     case nsHtml5Tokenizer::COMMENT_END:
     case nsHtml5Tokenizer::COMMENT_END_BANG:
@@ -470,7 +502,7 @@ void nsHtml5Highlighter::End() {
   nsHtml5TreeOperation* treeOp = mOpQueue.AppendElement();
   NS_ASSERTION(treeOp, "Tree op allocation failed.");
   treeOp->Init(mozilla::AsVariant(opStreamEnded()));
-  FlushOps();
+  return FlushOps().isOk();
 }
 
 void nsHtml5Highlighter::SetBuffer(nsHtml5UTF16Buffer* aBuffer) {
@@ -587,10 +619,19 @@ void nsHtml5Highlighter::FlushCurrent() {
   FlushChars();
 }
 
-bool nsHtml5Highlighter::FlushOps() {
+bool nsHtml5Highlighter::ShouldFlushOps() {
+  // Arbitrary threshold that doesn't have an exact justification.
+  // The general idea is to flush much, much sooner than reaching
+  // the maximum size of `nsTArray`.
+  return mOpQueue.Length() > 100000;
+}
+
+mozilla::Result<bool, nsresult> nsHtml5Highlighter::FlushOps() {
   bool hasOps = !mOpQueue.IsEmpty();
   if (hasOps) {
-    mOpSink->MoveOpsFrom(mOpQueue);
+    if (!mOpSink->MoveOpsFrom(mOpQueue)) {
+      return Err(NS_ERROR_OUT_OF_MEMORY);
+    }
   }
   return hasOps;
 }

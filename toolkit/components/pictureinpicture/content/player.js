@@ -81,6 +81,7 @@ let Player = {
     "dblclick",
     "keydown",
     "mouseup",
+    "mousemove",
     "MozDOMFullscreen:Entered",
     "MozDOMFullscreen:Exited",
     "resize",
@@ -115,6 +116,12 @@ let Player = {
   oldMouseUpWindowY: window.screenY,
 
   /**
+   * Used to determine if hovering the mouse cursor over the pip window or not.
+   * Gets updated whenever a new hover state is detected.
+   */
+  isCurrentHover: false,
+
+  /**
    * Initializes the player browser, and sets up the initial state.
    *
    * @param {Number} id
@@ -133,6 +140,9 @@ let Player = {
     browser.remove();
 
     browser.setAttribute("nodefaultsrc", "true");
+
+    let playPauseBtn = document.getElementById("playpause");
+    playPauseBtn.focus({ preventFocusRing: true });
 
     // Set the specific remoteType and browsingContextGroupID to use for the
     // initial about:blank load. The combination of these two properties will
@@ -158,6 +168,13 @@ let Player = {
       addEventListener(eventType, this);
     }
 
+    this.controls.addEventListener("mouseleave", () => {
+      this.onMouseLeave();
+    });
+    this.controls.addEventListener("mouseenter", () => {
+      this.onMouseEnter();
+    });
+
     // If the content process hosting the video crashes, let's
     // just close the window for now.
     browser.addEventListener("oop-browser-crashed", this);
@@ -170,8 +187,6 @@ let Player = {
       audioButton.previousElementSibling.hidden = false;
     }
 
-    Services.telemetry.setEventRecordingEnabled("pictureinpicture", true);
-
     this.resizeDebouncer = new DeferredTask(() => {
       this.recordEvent("resize", {
         width: window.outerWidth.toString(),
@@ -181,13 +196,6 @@ let Player = {
 
     this.lastScreenX = window.screenX;
     this.lastScreenY = window.screenY;
-
-    this.recordEvent("create", {
-      width: window.outerWidth.toString(),
-      height: window.outerHeight.toString(),
-      screenX: window.screenX.toString(),
-      screenY: window.screenY.toString(),
-    });
 
     this.computeAndSetMinimumSize(window.outerWidth, window.outerHeight);
 
@@ -207,8 +215,11 @@ let Player = {
   handleEvent(event) {
     switch (event.type) {
       case "click": {
-        this.onClick(event);
-        this.controls.removeAttribute("keying");
+        // Don't run onClick if middle or right click is pressed respectively
+        if (event.button !== 1 && event.button !== 2) {
+          this.onClick(event);
+          this.controls.removeAttribute("keying");
+        }
         break;
       }
 
@@ -225,15 +236,20 @@ let Player = {
       case "keydown": {
         if (event.keyCode == KeyEvent.DOM_VK_TAB) {
           this.controls.setAttribute("keying", true);
-        } else if (
-          event.keyCode == KeyEvent.DOM_VK_ESCAPE &&
-          this.controls.hasAttribute("keying")
-        ) {
-          this.controls.removeAttribute("keying");
-
-          // We preventDefault to avoid exiting fullscreen if we happen
-          // to be in it.
+          this.actor.sendAsyncMessage("PictureInPicture:ShowVideoControls", {
+            isFullscreen: this.isFullscreen,
+            isVideoControlsShowing: true,
+            playerBottomControlsDOMRect: this.controlsBottom.getBoundingClientRect(),
+          });
+        } else if (event.keyCode == KeyEvent.DOM_VK_ESCAPE) {
           event.preventDefault();
+          if (this.isFullscreen) {
+            // We handle the ESC key, in fullscreen modus as intent to leave only the fullscreen mode
+            document.exitFullscreen();
+          } else {
+            // We handle the ESC key, as an intent to leave the picture-in-picture modus
+            this.onClose();
+          }
         } else if (
           Services.prefs.getBoolPref(KEYBOARD_CONTROLS_ENABLED_PREF, false) &&
           (event.keyCode != KeyEvent.DOM_VK_SPACE || !event.target.id)
@@ -249,6 +265,11 @@ let Player = {
 
       case "mouseup": {
         this.onMouseUp(event);
+        break;
+      }
+
+      case "mousemove": {
+        this.onMouseMove();
         break;
       }
 
@@ -271,6 +292,21 @@ let Player = {
             Services.obs.notifyObservers(window, "fullscreen-painted");
           }
         });
+        if (this.isFullscreen) {
+          this.actor.sendAsyncMessage("PictureInPicture:EnterFullscreen", {
+            isFullscreen: true,
+            isVideoControlsShowing: null,
+            playerBottomControlsDOMRect: null,
+          });
+        } else {
+          this.actor.sendAsyncMessage("PictureInPicture:ExitFullscreen", {
+            isFullscreen: this.isFullscreen,
+            isVideoControlsShowing:
+              !!this.controls.getAttribute("showing") ||
+              !!this.controls.getAttribute("keying"),
+            playerBottomControlsDOMRect: this.controlsBottom.getBoundingClientRect(),
+          });
+        }
         break;
       }
 
@@ -293,17 +329,12 @@ let Player = {
 
   closePipWindow(closeData) {
     const { reason } = closeData;
-
-    if (PictureInPicture.isMultiPipEnabled) {
-      PictureInPicture.closeSinglePipWindow({ reason, actorRef: this.actor });
-    } else {
-      PictureInPicture.closeAllPipWindows({ reason });
-    }
+    PictureInPicture.closeSinglePipWindow({ reason, actorRef: this.actor });
   },
 
   onDblClick(event) {
     if (event.target.id == "controls") {
-      if (document.fullscreenElement == document.body) {
+      if (this.isFullscreen) {
         document.exitFullscreen();
       } else {
         document.body.requestFullscreen();
@@ -324,10 +355,7 @@ let Player = {
       }
 
       case "close": {
-        this.actor.sendAsyncMessage("PictureInPicture:Pause", {
-          reason: "pip-closed",
-        });
-        this.closePipWindow({ reason: "close-button" });
+        this.onClose();
         break;
       }
 
@@ -348,6 +376,13 @@ let Player = {
         break;
       }
     }
+  },
+
+  onClose() {
+    this.actor.sendAsyncMessage("PictureInPicture:Pause", {
+      reason: "pip-closed",
+    });
+    this.closePipWindow({ reason: "close-button" });
   },
 
   onKeyDown(event) {
@@ -456,15 +491,6 @@ let Player = {
    *  Event context details
    */
   onMouseUp(event) {
-    if (
-      window.screenX != this.lastScreenX ||
-      window.screenY != this.lastScreenY
-    ) {
-      this.recordEvent("move", {
-        screenX: window.screenX.toString(),
-        screenY: window.screenY.toString(),
-      });
-    }
     this.lastScreenX = window.screenX;
     this.lastScreenY = window.screenY;
 
@@ -547,6 +573,42 @@ let Player = {
   },
 
   /**
+   * Event handler for mousemove the PiP Window
+   */
+  onMouseMove() {
+    if (this.isFullscreen) {
+      this.revealControls(false);
+    }
+  },
+
+  onMouseEnter() {
+    if (!this.isFullscreen) {
+      this.isCurrentHover = true;
+      this.actor.sendAsyncMessage("PictureInPicture:ShowVideoControls", {
+        isFullscreen: this.isFullscreen,
+        isVideoControlsShowing: true,
+        playerBottomControlsDOMRect: this.controlsBottom.getBoundingClientRect(),
+      });
+    }
+  },
+
+  onMouseLeave() {
+    if (!this.isFullscreen) {
+      this.isCurrentHover = false;
+      if (
+        !this.controls.getAttribute("showing") &&
+        !this.controls.getAttribute("keying")
+      ) {
+        this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
+          isFullscreen: this.isFullscreen,
+          isVideoControlsShowing: false,
+          playerBottomControlsDOMRect: null,
+        });
+      }
+    }
+  },
+
+  /**
    * Event handler for resizing the PiP Window
    *
    * @param {Event} event
@@ -570,6 +632,11 @@ let Player = {
   get controls() {
     delete this.controls;
     return (this.controls = document.getElementById("controls"));
+  },
+
+  get controlsBottom() {
+    delete this.controlsBottom;
+    return (this.controlsBottom = document.getElementById("controls-bottom"));
   },
 
   _isPlaying: false,
@@ -615,6 +682,15 @@ let Player = {
   },
 
   /**
+   * GET isFullscreen returns true if the video is running in fullscreen mode
+   *
+   * @returns {boolean}
+   */
+  get isFullscreen() {
+    return document.fullscreenElement == document.body;
+  },
+
+  /**
    * Used for recording telemetry in Picture-in-Picture.
    *
    * @param {string} type
@@ -646,9 +722,32 @@ let Player = {
     this.showingTimeout = null;
 
     this.controls.setAttribute("showing", true);
+
+    if (!this.isFullscreen) {
+      // revealControls() is called everytime we hover over fullscreen pip window.
+      // Only communicate with pipchild when not in fullscreen mode for performance reasons.
+      this.actor.sendAsyncMessage("PictureInPicture:ShowVideoControls", {
+        isFullscreen: false,
+        isVideoControlsShowing: true,
+        playerBottomControlsDOMRect: this.controlsBottom.getBoundingClientRect(),
+      });
+    }
+
     if (!revealIndefinitely) {
       this.showingTimeout = setTimeout(() => {
         this.controls.removeAttribute("showing");
+
+        if (
+          !this.isFullscreen &&
+          !this.isCurrentHover &&
+          !this.controls.getAttribute("keying")
+        ) {
+          this.actor.sendAsyncMessage("PictureInPicture:HideVideoControls", {
+            isFullscreen: false,
+            isVideoControlsShowing: false,
+            playerBottomControlsDOMRect: null,
+          });
+        }
       }, CONTROLS_FADE_TIMEOUT_MS);
     }
   },

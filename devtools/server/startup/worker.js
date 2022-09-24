@@ -45,7 +45,7 @@ this.rpc = function(method, ...params) {
   });
 }.bind(this);
 
-loadSubScript("resource://devtools/shared/worker/loader.js");
+loadSubScript("resource://devtools/shared/loader/worker-loader.js");
 
 const { WorkerTargetActor } = worker.require(
   "devtools/server/actors/targets/worker"
@@ -75,7 +75,8 @@ this.addEventListener("message", async function(event) {
       const workerTargetActor = new WorkerTargetActor(
         connection,
         global,
-        packet.workerDebuggerData
+        packet.workerDebuggerData,
+        packet.options.sessionContext
       );
       // Make the worker manage itself so it is put in a Pool and assigned an actorID.
       workerTargetActor.manage(workerTargetActor);
@@ -86,7 +87,6 @@ this.addEventListener("message", async function(event) {
           postMessage(JSON.stringify({ type: "worker-thread-attached" }));
         }
       );
-      workerTargetActor.attach();
 
       // Step 5: Send a response packet to the parent to notify
       // it that a connection has been established.
@@ -104,32 +104,32 @@ this.addEventListener("message", async function(event) {
       );
 
       // We might receive data to watch.
-      if (packet.options?.watchedData) {
+      if (packet.options.sessionData) {
         const promises = [];
         for (const [type, entries] of Object.entries(
-          packet.options.watchedData
+          packet.options.sessionData
         )) {
-          promises.push(workerTargetActor.addWatcherDataEntry(type, entries));
+          promises.push(workerTargetActor.addSessionDataEntry(type, entries));
         }
         await Promise.all(promises);
       }
 
       break;
 
-    case "add-watcher-data-entry":
+    case "add-session-data-entry":
       await connections
         .get(packet.forwardingPrefix)
-        .workerTargetActor.addWatcherDataEntry(
+        .workerTargetActor.addSessionDataEntry(
           packet.dataEntryType,
           packet.entries
         );
-      postMessage(JSON.stringify({ type: "watcher-data-entry-added" }));
+      postMessage(JSON.stringify({ type: "session-data-entry-added" }));
       break;
 
-    case "remove-watcher-data-entry":
+    case "remove-session-data-entry":
       await connections
         .get(packet.forwardingPrefix)
-        .workerTargetActor.removeWatcherDataEntry(
+        .workerTargetActor.removeSessionDataEntry(
           packet.dataEntryType,
           packet.entries
         );

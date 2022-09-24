@@ -88,6 +88,16 @@ LabellingEventTarget::DelayedDispatch(already_AddRefed<nsIRunnable>, uint32_t) {
 }
 
 NS_IMETHODIMP
+LabellingEventTarget::RegisterShutdownTask(nsITargetShutdownTask*) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
+LabellingEventTarget::UnregisterShutdownTask(nsITargetShutdownTask*) {
+  return NS_ERROR_NOT_IMPLEMENTED;
+}
+
+NS_IMETHODIMP
 LabellingEventTarget::IsOnCurrentThread(bool* aIsOnCurrentThread) {
   *aIsOnCurrentThread = NS_IsMainThread();
   return NS_OK;
@@ -203,7 +213,7 @@ DocGroup::DocGroup(BrowsingContextGroup* aBrowsingContextGroup,
                    const nsACString& aKey)
     : mKey(aKey),
       mBrowsingContextGroup(aBrowsingContextGroup),
-      mAgentClusterId(nsContentUtils::GenerateUUID()) {
+      mAgentClusterId(nsID::GenerateUUID()) {
   // This method does not add itself to
   // mBrowsingContextGroup->mDocGroups as the caller does it for us.
   MOZ_ASSERT(NS_IsMainThread());
@@ -359,7 +369,8 @@ void DocGroup::SignalSlotChange(HTMLSlotElement& aSlot) {
 }
 
 bool DocGroup::TryToLoadIframesInBackground() {
-  return StaticPrefs::dom_separate_event_queue_for_post_message_enabled() &&
+  return !FissionAutostart() &&
+         StaticPrefs::dom_separate_event_queue_for_post_message_enabled() &&
          StaticPrefs::dom_cross_origin_iframes_loaded_in_background();
 }
 

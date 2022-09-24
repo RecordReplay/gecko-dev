@@ -10,30 +10,30 @@
 #import "MOXAccessibleProtocol.h"
 #import "GeckoTextMarker.h"
 
-#include "AccessibleOrProxy.h"
-
 @interface MOXTextMarkerDelegate : NSObject <MOXTextMarkerSupport> {
-  mozilla::a11y::AccessibleOrProxy mGeckoDocAccessible;
-  id mSelection;
-  id mCaret;
-  id mPrevCaret;
+  mozilla::a11y::Accessible* mGeckoDocAccessible;
+  AXTextMarkerRangeRef mSelection;
+  AXTextMarkerRef mCaret;
+  AXTextMarkerRef mPrevCaret;
+  int32_t mCaretMoveGranularity;
 }
 
-+ (id)getOrCreateForDoc:(mozilla::a11y::AccessibleOrProxy)aDoc;
++ (id)getOrCreateForDoc:(mozilla::a11y::Accessible*)aDoc;
 
-+ (void)destroyForDoc:(mozilla::a11y::AccessibleOrProxy)aDoc;
++ (void)destroyForDoc:(mozilla::a11y::Accessible*)aDoc;
 
-- (id)initWithDoc:(mozilla::a11y::AccessibleOrProxy)aDoc;
+- (id)initWithDoc:(mozilla::a11y::Accessible*)aDoc;
 
 - (void)dealloc;
 
-- (void)setSelectionFrom:(mozilla::a11y::AccessibleOrProxy)startContainer
+- (void)setSelectionFrom:(mozilla::a11y::Accessible*)startContainer
                       at:(int32_t)startOffset
-                      to:(mozilla::a11y::AccessibleOrProxy)endContainer
+                      to:(mozilla::a11y::Accessible*)endContainer
                       at:(int32_t)endOffset;
 
-- (void)setCaretOffset:(mozilla::a11y::AccessibleOrProxy)container
-                    at:(int32_t)offset;
+- (void)setCaretOffset:(mozilla::a11y::Accessible*)container
+                    at:(int32_t)offset
+       moveGranularity:(int32_t)granularity;
 
 - (NSDictionary*)selectionChangeInfo;
 
@@ -42,74 +42,85 @@
 - (mozilla::a11y::GeckoTextMarkerRange)selection;
 
 // override
-- (id)moxStartTextMarker;
+- (AXTextMarkerRef)moxStartTextMarker;
 
 // override
-- (id)moxEndTextMarker;
+- (AXTextMarkerRef)moxEndTextMarker;
 
 // override
-- (id)moxSelectedTextMarkerRange;
+- (AXTextMarkerRangeRef)moxSelectedTextMarkerRange;
 
 // override
-- (NSNumber*)moxLengthForTextMarkerRange:(id)textMarkerRange;
+- (NSNumber*)moxLengthForTextMarkerRange:(AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (NSString*)moxStringForTextMarkerRange:(id)textMarkerRange;
+- (NSString*)moxStringForTextMarkerRange:(AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (id)moxTextMarkerRangeForUnorderedTextMarkers:(NSArray*)textMarkers;
+- (AXTextMarkerRangeRef)moxTextMarkerRangeForUnorderedTextMarkers:
+    (NSArray*)textMarkers;
 
 // override
-- (id)moxStartTextMarkerForTextMarkerRange:(id)textMarkerRange;
+- (AXTextMarkerRef)moxStartTextMarkerForTextMarkerRange:
+    (AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (id)moxEndTextMarkerForTextMarkerRange:(id)textMarkerRange;
+- (AXTextMarkerRef)moxEndTextMarkerForTextMarkerRange:
+    (AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (id)moxLeftWordTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxLeftWordTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxRightWordTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxRightWordTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxLineTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxLineTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxLeftLineTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxLeftLineTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxRightLineTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxRightLineTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxParagraphTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxParagraphTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxStyleTextMarkerRangeForTextMarker:(id)textMarker;
+- (AXTextMarkerRangeRef)moxStyleTextMarkerRangeForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxNextTextMarkerForTextMarker:(id)textMarker;
+- (AXTextMarkerRef)moxNextTextMarkerForTextMarker:(AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxPreviousTextMarkerForTextMarker:(id)textMarker;
+- (AXTextMarkerRef)moxPreviousTextMarkerForTextMarker:
+    (AXTextMarkerRef)textMarker;
 
 // override
 - (NSAttributedString*)moxAttributedStringForTextMarkerRange:
-    (id)textMarkerRange;
+    (AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (NSValue*)moxBoundsForTextMarkerRange:(id)textMarkerRange;
+- (NSValue*)moxBoundsForTextMarkerRange:(AXTextMarkerRangeRef)textMarkerRange;
 
 // override
-- (id)moxUIElementForTextMarker:(id)textMarker;
+- (id)moxUIElementForTextMarker:(AXTextMarkerRef)textMarker;
 
 // override
-- (id)moxTextMarkerRangeForUIElement:(id)element;
+- (AXTextMarkerRangeRef)moxTextMarkerRangeForUIElement:(id)element;
 
 // override
-- (NSString*)moxMozDebugDescriptionForTextMarker:(id)textMarker;
+- (NSString*)moxMozDebugDescriptionForTextMarker:(AXTextMarkerRef)textMarker;
 
 // override
-- (void)moxSetSelectedTextMarkerRange:(id)textMarkerRange;
+- (void)moxSetSelectedTextMarkerRange:(AXTextMarkerRangeRef)textMarkerRange;
 
 @end
 

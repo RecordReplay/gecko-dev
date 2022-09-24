@@ -72,6 +72,17 @@ class FrecencyComparator {
 
 }  // namespace
 
+CacheIndexRecordWrapper::~CacheIndexRecordWrapper() {
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  CacheIndex::sLock.AssertCurrentThreadOwns();
+  RefPtr<CacheIndex> index = CacheIndex::gInstance;
+  if (index) {
+    bool found = index->mFrecencyArray.RecordExistedUnlocked(this);
+    MOZ_DIAGNOSTIC_ASSERT(!found);
+  }
+#endif
+}
+
 /**
  * This helper class is responsible for keeping CacheIndex::mIndexStats and
  * CacheIndex::mFrecencyArray up to date.
@@ -243,9 +254,7 @@ NS_INTERFACE_MAP_BEGIN(CacheIndex)
   NS_INTERFACE_MAP_ENTRY(nsIRunnable)
 NS_INTERFACE_MAP_END
 
-CacheIndex::CacheIndex()
-
-{
+CacheIndex::CacheIndex() {
   sLock.AssertCurrentThreadOwns();
   LOG(("CacheIndex::CacheIndex [this=%p]", this));
   MOZ_ASSERT(!gInstance, "multiple CacheIndex instances!");
@@ -2683,6 +2692,7 @@ void CacheIndex::BuildIndex(const StaticMutexAutoLock& aProofOfLock) {
   if (!mDirEnumerator) {
     {
       // Do not do IO under the lock.
+      sLock.AssertCurrentThreadOwns();
       StaticMutexAutoUnlock unlock(sLock);
       rv = SetupDirectoryEnumerator();
     }
@@ -2710,6 +2720,7 @@ void CacheIndex::BuildIndex(const StaticMutexAutoLock& aProofOfLock) {
     nsCOMPtr<nsIFile> file;
     {
       // Do not do IO under the lock.
+      sLock.AssertCurrentThreadOwns();
       StaticMutexAutoUnlock unlock(sLock);
       rv = mDirEnumerator->GetNextFile(getter_AddRefs(file));
 
@@ -2917,6 +2928,7 @@ void CacheIndex::UpdateIndex(const StaticMutexAutoLock& aProofOfLock) {
   LOG(("CacheIndex::UpdateIndex()"));
 
   MOZ_ASSERT(mPendingUpdates.Count() == 0);
+  sLock.AssertCurrentThreadOwns();
 
   nsresult rv;
 
@@ -3374,6 +3386,11 @@ void CacheIndex::FrecencyArray::SortIfNeeded(
   }
 }
 
+bool CacheIndex::FrecencyArray::RecordExistedUnlocked(
+    CacheIndexRecordWrapper* aRecord) {
+  return mRecs.Contains(aRecord);
+}
+
 void CacheIndex::AddRecordToIterators(CacheIndexRecordWrapper* aRecord,
                                       const StaticMutexAutoLock& aProofOfLock) {
   for (uint32_t i = 0; i < mIterators.Length(); ++i) {
@@ -3746,7 +3763,7 @@ size_t CacheIndex::SizeOfExcludingThisInternal(
 
 // static
 size_t CacheIndex::SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) {
-  sLock.AssertCurrentThreadOwns();
+  StaticMutexAutoLock lock(sLock);
 
   if (!gInstance) return 0;
 
@@ -3757,7 +3774,8 @@ size_t CacheIndex::SizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) {
 size_t CacheIndex::SizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf) {
   StaticMutexAutoLock lock(sLock);
 
-  return mallocSizeOf(gInstance) + SizeOfExcludingThis(mallocSizeOf);
+  return mallocSizeOf(gInstance) +
+         (gInstance ? gInstance->SizeOfExcludingThisInternal(mallocSizeOf) : 0);
 }
 
 // static

@@ -7,13 +7,16 @@
 #include "VRProcessParent.h"
 #include "VRGPUChild.h"
 #include "VRProcessManager.h"
+#include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/MemoryReportRequest.h"
 #include "mozilla/gfx/GPUProcessManager.h"
 #include "mozilla/gfx/GPUChild.h"
 #include "mozilla/ipc/Endpoint.h"
+#include "mozilla/ipc/ProcessChild.h"
 #include "mozilla/ipc/ProcessUtils.h"
 #include "mozilla/ipc/ProtocolTypes.h"
 #include "mozilla/ipc/ProtocolUtils.h"  // for IToplevelProtocol
+#include "mozilla/Preferences.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/TimeStamp.h"  // for TimeStamp
 #include "mozilla/Unused.h"
@@ -21,7 +24,6 @@
 #include "VRThread.h"
 
 #include "nsAppRunner.h"  // for IToplevelProtocol
-#include "mozilla/ipc/ProtocolUtils.h"
 
 using std::string;
 using std::vector;
@@ -41,9 +43,7 @@ VRProcessParent::VRProcessParent(Listener* aListener)
   MOZ_COUNT_CTOR(VRProcessParent);
 }
 
-VRProcessParent::~VRProcessParent() {
-  MOZ_COUNT_DTOR(VRProcessParent);
-}
+VRProcessParent::~VRProcessParent() { MOZ_COUNT_DTOR(VRProcessParent); }
 
 bool VRProcessParent::Launch() {
   MOZ_ASSERT(mLaunchPhase == LaunchPhase::Unlaunched);
@@ -53,12 +53,11 @@ bool VRProcessParent::Launch() {
   mLaunchPhase = LaunchPhase::Waiting;
 
   std::vector<std::string> extraArgs;
-  nsCString parentBuildID(mozilla::PlatformBuildID());
-  extraArgs.push_back("-parentBuildID");
-  extraArgs.push_back(parentBuildID.get());
+  ProcessChild::AddPlatformBuildID(extraArgs);
 
   mPrefSerializer = MakeUnique<ipc::SharedPreferenceSerializer>();
-  if (!mPrefSerializer->SerializeToSharedMemory()) {
+  if (!mPrefSerializer->SerializeToSharedMemory(GeckoProcessType_VR,
+                                                /* remoteType */ ""_ns)) {
     return false;
   }
   mPrefSerializer->AddSharedPrefCmdLineArgs(*this, extraArgs);
@@ -189,7 +188,7 @@ bool VRProcessParent::InitAfterConnect(bool aSucceeded) {
 
 void VRProcessParent::KillHard(const char* aReason) {
   ProcessHandle handle = GetChildProcessHandle();
-  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER, false)) {
+  if (!base::KillProcess(handle, base::PROCESS_END_KILLED_BY_USER)) {
     NS_WARNING("failed to kill subprocess!");
   }
 
@@ -200,7 +199,7 @@ void VRProcessParent::OnChannelError() {
   MOZ_ASSERT(false, "VR process channel error.");
 }
 
-void VRProcessParent::OnChannelConnected(int32_t peer_pid) {
+void VRProcessParent::OnChannelConnected(base::ProcessId peer_pid) {
   MOZ_ASSERT(!NS_IsMainThread());
 
   GeckoChildProcessHost::OnChannelConnected(peer_pid);

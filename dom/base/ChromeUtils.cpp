@@ -7,14 +7,18 @@
 #include "ChromeUtils.h"
 
 #include "js/CharacterEncoding.h"
-#include "js/Object.h"  // JS::GetClass
+#include "js/Object.h"              // JS::GetClass
+#include "js/PropertyAndElement.h"  // JS_DefineProperty, JS_DefinePropertyById, JS_Enumerate, JS_GetProperty, JS_GetPropertyById, JS_SetProperty, JS_SetPropertyById
+#include "js/PropertyDescriptor.h"  // JS::PropertyDescriptor, JS_GetOwnPropertyDescriptorById
 #include "js/SavedFrameAPI.h"
 #include "jsfriendapi.h"
 #include "WrapperFactory.h"
 
 #include "mozilla/Base64.h"
 #include "mozilla/CycleCollectedJSRuntime.h"
+#include "mozilla/ErrorNames.h"
 #include "mozilla/EventStateManager.h"
+#include "mozilla/FormAutofillNative.h"
 #include "mozilla/IntentionalCrash.h"
 #include "mozilla/PerformanceMetricsCollector.h"
 #include "mozilla/PerfStats.h"
@@ -22,6 +26,7 @@
 #include "mozilla/ProcInfo.h"
 #include "mozilla/ResultExtensions.h"
 #include "mozilla/ScopeExit.h"
+#include "mozilla/ScrollingMetrics.h"
 #include "mozilla/SharedStyleSheetCache.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/dom/ContentParent.h"
@@ -38,8 +43,11 @@
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/WindowBinding.h"  // For IdleRequestCallback/Options
 #include "mozilla/dom/WindowGlobalParent.h"
-#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerScope.h"
 #include "mozilla/ipc/GeckoChildProcessHost.h"
+#include "mozilla/ipc/UtilityProcessSandboxing.h"
+#include "mozilla/ipc/UtilityProcessManager.h"
+#include "mozilla/ipc/UtilityProcessHost.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
 #include "IOActivityMonitor.h"
 #include "nsThreadUtils.h"
@@ -47,6 +55,7 @@
 #include "mozilla/ProfilerLabels.h"
 #include "mozilla/ProfilerMarkers.h"
 #include "nsIException.h"
+#include "VsyncSource.h"
 
 namespace mozilla::dom {
 
@@ -190,7 +199,10 @@ void ChromeUtils::AddProfilerMarker(
     GlobalObject& aGlobal, const nsACString& aName,
     const ProfilerMarkerOptionsOrDouble& aOptions,
     const Optional<nsACString>& aText) {
-#ifdef MOZ_GECKO_PROFILER
+  if (!profiler_thread_is_being_profiled_for_markers()) {
+    return;
+  }
+
   MarkerOptions options;
 
   MarkerCategory category = ::geckoprofiler::category::JS;
@@ -205,18 +217,35 @@ void ChromeUtils::AddProfilerMarker(
     innerWindowId = opt.mInnerWindowId;
 
     if (opt.mCaptureStack) {
+      // If we will be capturing a stack, change the category of the
+      // ChromeUtils.addProfilerMarker label automatically added by the webidl
+      // binding from DOM to PROFILER so that this function doesn't appear in
+      // the marker stack.
+      JSContext* cx = aGlobal.Context();
+      ProfilingStack* stack = js::GetContextProfilingStackIfEnabled(cx);
+      if (MOZ_LIKELY(stack)) {
+        uint32_t sp = stack->stackPointer;
+        if (MOZ_LIKELY(sp > 0)) {
+          js::ProfilingStackFrame& frame = stack->frames[sp - 1];
+          if (frame.isLabelFrame() && "ChromeUtils"_ns.Equals(frame.label()) &&
+              "addProfilerMarker"_ns.Equals(frame.dynamicString())) {
+            frame.setLabelCategory(JS::ProfilingCategoryPair::PROFILER);
+          }
+        }
+      }
+
       options.Set(MarkerStack::Capture());
     }
-#  define BEGIN_CATEGORY(name, labelAsString, color) \
-    if (opt.mCategory.Equals(labelAsString)) {       \
-      category = ::geckoprofiler::category::name;    \
-    } else
-#  define SUBCATEGORY(supercategory, name, labelAsString)
-#  define END_CATEGORY
+#define BEGIN_CATEGORY(name, labelAsString, color) \
+  if (opt.mCategory.Equals(labelAsString)) {       \
+    category = ::geckoprofiler::category::name;    \
+  } else
+#define SUBCATEGORY(supercategory, name, labelAsString)
+#define END_CATEGORY
     MOZ_PROFILING_CATEGORY_LIST(BEGIN_CATEGORY, SUBCATEGORY, END_CATEGORY)
-#  undef BEGIN_CATEGORY
-#  undef SUBCATEGORY
-#  undef END_CATEGORY
+#undef BEGIN_CATEGORY
+#undef SUBCATEGORY
+#undef END_CATEGORY
     {
       category = ::geckoprofiler::category::OTHER;
     }
@@ -265,7 +294,12 @@ void ChromeUtils::AddProfilerMarker(
       profiler_add_marker(aName, category, std::move(options));
     }
   }
-#endif  // MOZ_GECKO_PROFILER
+}
+
+/* static */
+void ChromeUtils::GetXPCOMErrorName(GlobalObject& aGlobal, uint32_t aErrorCode,
+                                    nsACString& aRetval) {
+  GetErrorName((nsresult)aErrorCode, aRetval);
 }
 
 /* static */
@@ -496,26 +530,21 @@ void ChromeUtils::IdleDispatch(const GlobalObject& aGlobal,
 
 /* static */
 void ChromeUtils::Import(const GlobalObject& aGlobal,
-                         const nsAString& aResourceURI,
+                         const nsACString& aResourceURI,
                          const Optional<JS::Handle<JSObject*>>& aTargetObj,
                          JS::MutableHandle<JSObject*> aRetval,
                          ErrorResult& aRv) {
   RefPtr<mozJSComponentLoader> moduleloader = mozJSComponentLoader::Get();
   MOZ_ASSERT(moduleloader);
 
-  NS_ConvertUTF16toUTF8 registryLocation(aResourceURI);
-
   AUTO_PROFILER_LABEL_DYNAMIC_NSCSTRING_NONSENSITIVE("ChromeUtils::Import",
-                                                     OTHER, registryLocation);
+                                                     OTHER, aResourceURI);
 
   JSContext* cx = aGlobal.Context();
 
-  bool ignoreExports = aTargetObj.WasPassed() && !aTargetObj.Value();
-
   JS::RootedObject global(cx);
   JS::RootedObject exports(cx);
-  nsresult rv = moduleloader->Import(cx, registryLocation, &global, &exports,
-                                     ignoreExports);
+  nsresult rv = moduleloader->Import(cx, aResourceURI, &global, &exports);
   if (NS_FAILED(rv)) {
     aRv.Throw(rv);
     return;
@@ -525,20 +554,6 @@ void ChromeUtils::Import(const GlobalObject& aGlobal,
   // exception on the JSContext.  Check for that case.
   if (JS_IsExceptionPending(cx)) {
     aRv.NoteJSContextException(cx);
-    return;
-  }
-
-  if (ignoreExports) {
-    // Since we're ignoring exported symbols, return the module global rather
-    // than an exports object.
-    //
-    // Note: This behavior is deprecated, since it is incompatible with ES6
-    // module semantics, which don't include any such global object.
-    if (!JS_WrapObject(cx, &global)) {
-      aRv.Throw(NS_ERROR_FAILURE);
-      return;
-    }
-    aRetval.set(global);
     return;
   }
 
@@ -765,6 +780,26 @@ void ChromeUtils::GetBaseDomainFromPartitionKey(dom::GlobalObject& aGlobal,
   aBaseDomain = pkBaseDomain;
 }
 
+/* static */
+void ChromeUtils::GetPartitionKeyFromURL(dom::GlobalObject& aGlobal,
+                                         const nsAString& aURL,
+                                         nsAString& aPartitionKey,
+                                         ErrorResult& aRv) {
+  nsCOMPtr<nsIURI> uri;
+  nsresult rv = NS_NewURI(getter_AddRefs(uri), aURL);
+
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    aPartitionKey.Truncate();
+    aRv.Throw(rv);
+    return;
+  }
+
+  mozilla::OriginAttributes attrs;
+  attrs.SetPartitionKey(uri);
+
+  aPartitionKey = attrs.mPartitionKey;
+}
+
 #ifdef NIGHTLY_BUILD
 /* static */
 void ChromeUtils::GetRecentJSDevError(GlobalObject& aGlobal,
@@ -815,6 +850,8 @@ static WebIDLProcType ProcTypeToWebIDL(mozilla::ProcType aType) {
       "In order for this static cast to be okay, "
       "WebIDLProcType must match ProcType exactly");
 
+  // These must match the similar ones in E10SUtils.jsm, RemoteTypes.h,
+  // ProcInfo.h and ChromeUtils.webidl
   switch (aType) {
     PROCTYPE_TO_WEBIDL_CASE(Web, Web);
     PROCTYPE_TO_WEBIDL_CASE(WebIsolated, WebIsolated);
@@ -823,18 +860,23 @@ static WebIDLProcType ProcTypeToWebIDL(mozilla::ProcType aType) {
     PROCTYPE_TO_WEBIDL_CASE(PrivilegedAbout, Privilegedabout);
     PROCTYPE_TO_WEBIDL_CASE(PrivilegedMozilla, Privilegedmozilla);
     PROCTYPE_TO_WEBIDL_CASE(WebCOOPCOEP, WithCoopCoep);
-    PROCTYPE_TO_WEBIDL_CASE(WebLargeAllocation, WebLargeAllocation);
-    PROCTYPE_TO_WEBIDL_CASE(Browser, Browser);
-    PROCTYPE_TO_WEBIDL_CASE(IPDLUnitTest, IpdlUnitTest);
-    PROCTYPE_TO_WEBIDL_CASE(GMPlugin, GmpPlugin);
-    PROCTYPE_TO_WEBIDL_CASE(GPU, Gpu);
-    PROCTYPE_TO_WEBIDL_CASE(VR, Vr);
-    PROCTYPE_TO_WEBIDL_CASE(RDD, Rdd);
-    PROCTYPE_TO_WEBIDL_CASE(Socket, Socket);
-    PROCTYPE_TO_WEBIDL_CASE(RemoteSandboxBroker, RemoteSandboxBroker);
-#ifdef MOZ_ENABLE_FORKSERVER
-    PROCTYPE_TO_WEBIDL_CASE(ForkServer, ForkServer);
-#endif
+    PROCTYPE_TO_WEBIDL_CASE(WebServiceWorker, WebServiceWorker);
+
+#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+                           process_bin_type, procinfo_typename,               \
+                           webidl_typename, allcaps_name)                     \
+  PROCTYPE_TO_WEBIDL_CASE(procinfo_typename, webidl_typename);
+#define SKIP_PROCESS_TYPE_CONTENT
+#ifndef MOZ_ENABLE_FORKSERVER
+#  define SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#include "mozilla/GeckoProcessTypes.h"
+#undef SKIP_PROCESS_TYPE_CONTENT
+#ifndef MOZ_ENABLE_FORKSERVER
+#  undef SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#undef GECKO_PROCESS_TYPE
+
     PROCTYPE_TO_WEBIDL_CASE(Preallocated, Preallocated);
     PROCTYPE_TO_WEBIDL_CASE(Unknown, Unknown);
   }
@@ -844,6 +886,30 @@ static WebIDLProcType ProcTypeToWebIDL(mozilla::ProcType aType) {
 }
 
 #undef PROCTYPE_TO_WEBIDL_CASE
+
+#define UTILITYACTORNAME_TO_WEBIDL_CASE(_utilityActorName, _webidl) \
+  case mozilla::UtilityActorName::_utilityActorName:                \
+    return WebIDLUtilityActorName::_webidl
+
+static WebIDLUtilityActorName UtilityActorNameToWebIDL(
+    mozilla::UtilityActorName aType) {
+  // Max is the value of the last enum, not the length, so add one.
+  static_assert(WebIDLUtilityActorNameValues::Count ==
+                    static_cast<size_t>(UtilityActorName::AudioDecoder) + 1,
+                "In order for this static cast to be okay, "
+                "UtilityActorName must match UtilityActorName exactly");
+
+  // These must match the similar ones in ProcInfo.h and ChromeUtils.webidl
+  switch (aType) {
+    UTILITYACTORNAME_TO_WEBIDL_CASE(Unknown, Unknown);
+    UTILITYACTORNAME_TO_WEBIDL_CASE(AudioDecoder, AudioDecoder);
+  }
+
+  MOZ_ASSERT(false, "Unhandled case in WebIDLUtilityActorName");
+  return WebIDLUtilityActorName::Unknown;
+}
+
+#undef UTILITYACTORNAME_TO_WEBIDL_CASE
 
 /* static */
 already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
@@ -886,7 +952,8 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
       /* aPid = */ base::GetCurrentProcId(),
       /* aProcessType = */ ProcType::Browser,
       /* aOrigin = */ ""_ns,
-      /* aWindowInfo = */ nsTArray<WindowInfo>());
+      /* aWindowInfo = */ nsTArray<WindowInfo>(),
+      /* aUtilityInfo = */ nsTArray<UtilityInfo>());
 
   // First handle non-ContentParent processes.
   mozilla::ipc::GeckoChildProcessHost::GetAll(
@@ -905,36 +972,42 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
             // These processes are handled separately.
             return;
           }
-          case GeckoProcessType::GeckoProcessType_Default:
-            type = mozilla::ProcType::Browser;
-            break;
-          case GeckoProcessType::GeckoProcessType_GMPlugin:
-            type = mozilla::ProcType::GMPlugin;
-            break;
-          case GeckoProcessType::GeckoProcessType_GPU:
-            type = mozilla::ProcType::GPU;
-            break;
-          case GeckoProcessType::GeckoProcessType_VR:
-            type = mozilla::ProcType::VR;
-            break;
-          case GeckoProcessType::GeckoProcessType_RDD:
-            type = mozilla::ProcType::RDD;
-            break;
-          case GeckoProcessType::GeckoProcessType_Socket:
-            type = mozilla::ProcType::Socket;
-            break;
-          case GeckoProcessType::GeckoProcessType_RemoteSandboxBroker:
-            type = mozilla::ProcType::RemoteSandboxBroker;
-            break;
-#ifdef MOZ_ENABLE_FORKSERVER
-          case GeckoProcessType::GeckoProcessType_ForkServer:
-            type = mozilla::ProcType::ForkServer;
-            break;
-#endif
+
+#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+                           process_bin_type, procinfo_typename,               \
+                           webidl_typename, allcaps_name)                     \
+  case GeckoProcessType::GeckoProcessType_##enum_name: {                      \
+    type = mozilla::ProcType::procinfo_typename;                              \
+    break;                                                                    \
+  }
+#define SKIP_PROCESS_TYPE_CONTENT
+#ifndef MOZ_ENABLE_FORKSERVER
+#  define SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#include "mozilla/GeckoProcessTypes.h"
+#ifndef MOZ_ENABLE_FORKSERVER
+#  undef SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#undef SKIP_PROCESS_TYPE_CONTENT
+#undef GECKO_PROCESS_TYPE
           default:
             // Leave the default Unknown value in |type|.
             break;
         }
+
+        // Attach utility actor information to the process.
+        nsTArray<UtilityInfo> utilityActors;
+        if (aGeckoProcess->GetProcessType() ==
+            GeckoProcessType::GeckoProcessType_Utility) {
+          RefPtr<mozilla::ipc::UtilityProcessManager> upm =
+              mozilla::ipc::UtilityProcessManager::GetSingleton();
+          if (!utilityActors.AppendElements(upm->GetActors(aGeckoProcess),
+                                            fallible)) {
+            NS_WARNING("Error adding actors");
+            return;
+          }
+        }
+
         requests.EmplaceBack(
             /* aPid = */ childPid,
             /* aProcessType = */ type,
@@ -942,6 +1015,7 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
             /* aWindowInfo = */ nsTArray<WindowInfo>(),  // Without a
                                                          // ContentProcess, no
                                                          // DOM windows.
+            /* aUtilityInfo = */ std::move(utilityActors),
             /* aChild = */ 0  // Without a ContentProcess, no ChildId.
 #ifdef XP_MACOSX
             ,
@@ -981,6 +1055,8 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
       // `DEFAULT_REMOTE_TYPE` is a prefix of
       // `FISSION_WEB_REMOTE_TYPE`.
       type = mozilla::ProcType::WebIsolated;
+    } else if (StringBeginsWith(remoteType, SERVICEWORKER_REMOTE_TYPE)) {
+      type = mozilla::ProcType::WebServiceWorker;
     } else if (StringBeginsWith(remoteType,
                                 WITH_COOP_COEP_REMOTE_TYPE_PREFIX)) {
       type = mozilla::ProcType::WebCOOPCOEP;
@@ -992,8 +1068,6 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
       type = mozilla::ProcType::PrivilegedAbout;
     } else if (remoteType == PRIVILEGEDMOZILLA_REMOTE_TYPE) {
       type = mozilla::ProcType::PrivilegedMozilla;
-    } else if (remoteType == LARGE_ALLOCATION_REMOTE_TYPE) {
-      type = mozilla::ProcType::WebLargeAllocation;
     } else if (remoteType == PREALLOC_REMOTE_TYPE) {
       type = mozilla::ProcType::Preallocated;
     } else if (StringBeginsWith(remoteType, DEFAULT_REMOTE_TYPE)) {
@@ -1043,6 +1117,7 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
         /* aProcessType = */ type,
         /* aOrigin = */ origin,
         /* aWindowInfo = */ std::move(windows),
+        /* aUtilityInfo = */ nsTArray<UtilityInfo>(),
         /* aChild = */ contentParent->ChildID()
 #ifdef XP_MACOSX
             ,
@@ -1110,6 +1185,20 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
                   dest->mIsProcessRoot = source.isProcessRoot;
                   dest->mIsInProcess = source.isInProcess;
                 }
+
+                if (sysProcInfo.type == ProcType::Utility) {
+                  for (const auto& source : sysProcInfo.utilityActors) {
+                    auto* dest =
+                        childInfo->mUtilityActors.AppendElement(fallible);
+                    if (!dest) {
+                      domPromise->MaybeReject(NS_ERROR_OUT_OF_MEMORY);
+                      return;
+                    }
+
+                    dest->mActorName =
+                        UtilityActorNameToWebIDL(source.actorName);
+                  }
+                }
               }
             }
 
@@ -1124,6 +1213,11 @@ already_AddRefed<Promise> ChromeUtils::RequestProcInfo(GlobalObject& aGlobal,
 
   // sending back the promise instance
   return domPromise.forget();
+}
+
+/* static */
+bool ChromeUtils::VsyncEnabled(GlobalObject& aGlobal) {
+  return mozilla::gfx::VsyncSource::GetFastestVsyncRate().isSome();
 }
 
 /* static */
@@ -1261,7 +1355,7 @@ void ChromeUtils::CreateError(const GlobalObject& aGlobal,
 
     JS::Rooted<JS::Value> err(cx);
     if (!JS::CreateError(cx, JSEXN_ERR, stack, fileName, line, column, nullptr,
-                         message, &err)) {
+                         message, JS::NothingHandleValue, &err)) {
       return;
     }
 
@@ -1442,4 +1536,38 @@ void ChromeUtils::ConsumeInteractionData(
   EventStateManager::ConsumeInteractionData(aInteractions);
 }
 
+already_AddRefed<Promise> ChromeUtils::CollectScrollingData(
+    GlobalObject& aGlobal, ErrorResult& aRv) {
+  // Creating a JS promise
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
+  MOZ_ASSERT(global);
+
+  RefPtr<Promise> promise = Promise::Create(global, aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  RefPtr<ScrollingMetrics::ScrollingMetricsPromise> extPromise =
+      ScrollingMetrics::CollectScrollingMetrics();
+
+  extPromise->Then(
+      GetCurrentSerialEventTarget(), __func__,
+      [promise](const Tuple<uint32_t, uint32_t>& aResult) {
+        InteractionData out = {};
+        out.mInteractionTimeInMilliseconds = Get<0>(aResult);
+        out.mScrollingDistanceInPixels = Get<1>(aResult);
+        promise->MaybeResolve(out);
+      },
+      [promise](bool aValue) { promise->MaybeReject(NS_ERROR_FAILURE); });
+
+  return promise.forget();
+}
+
+/* static */
+void ChromeUtils::GetFormAutofillConfidences(
+    GlobalObject& aGlobal, const Sequence<OwningNonNull<Element>>& aElements,
+    nsTArray<FormAutofillConfidences>& aResults, ErrorResult& aRv) {
+  FormAutofillNative::GetFormAutofillConfidences(aGlobal, aElements, aResults,
+                                                 aRv);
+}
 }  // namespace mozilla::dom

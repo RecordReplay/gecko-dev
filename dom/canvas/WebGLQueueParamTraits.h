@@ -1,3 +1,4 @@
+
 /* -*- Mode: C++; tab-width: 4; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,9 +14,7 @@
 #include "WebGLContext.h"
 #include "WebGLTypes.h"
 
-namespace mozilla {
-
-namespace webgl {
+namespace mozilla::webgl {
 template <typename T>
 struct QueueParamTraits;
 
@@ -30,9 +29,6 @@ template <>
 struct IsTriviallySerializable<WebGLContextOptions> : std::true_type {};
 
 template <>
-struct IsTriviallySerializable<WebGLPixelStore> : std::true_type {};
-
-template <>
 struct IsTriviallySerializable<WebGLTexImageData> : std::true_type {};
 
 template <>
@@ -45,9 +41,12 @@ struct IsTriviallySerializable<webgl::GetUniformData> : std::true_type {};
 
 template <>
 struct IsTriviallySerializable<mozilla::webgl::PackingInfo> : std::true_type {};
-
 template <>
-struct IsTriviallySerializable<ICRData> : std::true_type {};
+struct IsTriviallySerializable<mozilla::webgl::PixelPackingState>
+    : std::true_type {};
+template <>
+struct IsTriviallySerializable<mozilla::webgl::PixelUnpackStateWebgl>
+    : std::true_type {};
 
 template <>
 struct IsTriviallySerializable<gfx::IntSize> : std::true_type {};
@@ -67,15 +66,19 @@ struct IsTriviallySerializable<webgl::VertAttribPointerDesc> : std::true_type {
 };
 template <>
 struct IsTriviallySerializable<webgl::ReadPixelsDesc> : std::true_type {};
+// template <>
+// struct IsTriviallySerializable<layers::SurfaceDescriptor> : std::true_type
+// {};
+//  SurfaceDescriptorBuffer is *not* trivial.
 template <>
-struct IsTriviallySerializable<layers::SurfaceDescriptor> : std::true_type {};
+struct IsTriviallySerializable<webgl::SwapChainOptions> : std::true_type {};
 
 template <typename T>
 struct QueueParamTraits<RawBuffer<T>> {
   using ParamType = RawBuffer<T>;
 
   template <typename U>
-  static QueueStatus Write(ProducerView<U>& view, const ParamType& in) {
+  static bool Write(ProducerView<U>& view, const ParamType& in) {
     const auto& elemCount = in.size();
     auto status = view.WriteParam(elemCount);
     if (!status) return status;
@@ -92,13 +95,13 @@ struct QueueParamTraits<RawBuffer<T>> {
   }
 
   template <typename U>
-  static QueueStatus Read(ConsumerView<U>& view, ParamType* const out) {
+  static bool Read(ConsumerView<U>& view, ParamType* const out) {
     size_t elemCount = 0;
     auto status = view.ReadParam(&elemCount);
     if (!status) return status;
     if (!elemCount) {
       *out = {};
-      return QueueStatus::kSuccess;
+      return true;
     }
 
     uint8_t hasData = 0;
@@ -107,13 +110,13 @@ struct QueueParamTraits<RawBuffer<T>> {
     if (!hasData) {
       auto temp = RawBuffer<T>{elemCount};
       *out = std::move(temp);
-      return QueueStatus::kSuccess;
+      return true;
     }
 
     auto data = view.template ReadRange<T>(elemCount);
-    if (!data) return QueueStatus::kTooSmall;
+    if (!data) return false;
     *out = std::move(RawBuffer<T>{*data});
-    return QueueStatus::kSuccess;
+    return true;
   }
 };
 
@@ -128,7 +131,7 @@ struct QueueParamTraits<Result<V, E>> {
   using T = Result<V, E>;
 
   template <typename U>
-  static QueueStatus Write(ProducerView<U>& aProducerView, const T& aArg) {
+  static bool Write(ProducerView<U>& aProducerView, const T& aArg) {
     const auto ok = aArg.isOk();
     auto status = aProducerView.WriteParam(ok);
     if (!status) return status;
@@ -141,7 +144,7 @@ struct QueueParamTraits<Result<V, E>> {
   }
 
   template <typename U>
-  static QueueStatus Read(ConsumerView<U>& aConsumerView, T* aArg) {
+  static bool Read(ConsumerView<U>& aConsumerView, T* aArg) {
     bool ok;
     auto status = aConsumerView.ReadParam(&ok);
     if (!status) return status;
@@ -163,7 +166,7 @@ struct QueueParamTraits<std::string> {
   using T = std::string;
 
   template <typename U>
-  static QueueStatus Write(ProducerView<U>& aProducerView, const T& aArg) {
+  static bool Write(ProducerView<U>& aProducerView, const T& aArg) {
     const auto size = aArg.size();
     auto status = aProducerView.WriteParam(size);
     if (!status) return status;
@@ -172,13 +175,13 @@ struct QueueParamTraits<std::string> {
   }
 
   template <typename U>
-  static QueueStatus Read(ConsumerView<U>& aConsumerView, T* aArg) {
+  static bool Read(ConsumerView<U>& aConsumerView, T* aArg) {
     size_t size;
     auto status = aConsumerView.ReadParam(&size);
     if (!status) return status;
 
     const auto view = aConsumerView.template ReadRange<char>(size);
-    if (!view) return QueueStatus::kFatalError;
+    if (!view) return false;
     aArg->assign(view->begin().get(), size);
     return status;
   }
@@ -189,7 +192,7 @@ struct QueueParamTraits<std::vector<U>> {
   using T = std::vector<U>;
 
   template <typename V>
-  static QueueStatus Write(ProducerView<V>& aProducerView, const T& aArg) {
+  static bool Write(ProducerView<V>& aProducerView, const T& aArg) {
     auto status = aProducerView.WriteParam(aArg.size());
     if (!status) return status;
 
@@ -201,7 +204,7 @@ struct QueueParamTraits<std::vector<U>> {
   }
 
   template <typename V>
-  static QueueStatus Read(ConsumerView<V>& aConsumerView, T* aArg) {
+  static bool Read(ConsumerView<V>& aConsumerView, T* aArg) {
     size_t size;
     auto status = aConsumerView.ReadParam(&size);
     if (!status) return status;
@@ -226,7 +229,7 @@ struct QueueParamTraits<CompileResult> {
   using T = CompileResult;
 
   template <typename U>
-  static QueueStatus Write(ProducerView<U>& aProducerView, const T& aArg) {
+  static bool Write(ProducerView<U>& aProducerView, const T& aArg) {
     aProducerView.WriteParam(aArg.pending);
     aProducerView.WriteParam(aArg.log);
     aProducerView.WriteParam(aArg.translatedSource);
@@ -234,7 +237,7 @@ struct QueueParamTraits<CompileResult> {
   }
 
   template <typename U>
-  static QueueStatus Read(ConsumerView<U>& aConsumerView, T* aArg) {
+  static bool Read(ConsumerView<U>& aConsumerView, T* aArg) {
     aConsumerView.ReadParam(&aArg->pending);
     aConsumerView.ReadParam(&aArg->log);
     aConsumerView.ReadParam(&aArg->translatedSource);
@@ -259,7 +262,6 @@ struct QueueParamTraits<gfxAlphaType>
     : public ContiguousEnumSerializerInclusive<
           gfxAlphaType, gfxAlphaType::Opaque, gfxAlphaType::NonPremult> {};
 
-}  // namespace webgl
-}  // namespace mozilla
+}  // namespace mozilla::webgl
 
 #endif  // WEBGLQUEUEPARAMTRAITS_H_

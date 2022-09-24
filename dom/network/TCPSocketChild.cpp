@@ -90,10 +90,6 @@ void TCPSocketChild::SendOpen(nsITCPSocketCallback* aSocket, bool aUseSSL,
                               bool aUseArrayBuffers) {
   mSocket = aSocket;
 
-  if (mIPCEventTarget) {
-    gNeckoChild->SetEventTargetForActor(this, mIPCEventTarget);
-  }
-
   AddIPDLReference();
   gNeckoChild->SendPTCPSocketConstructor(this, mHost, mPort);
   PTCPSocketChild::SendOpen(mHost, mPort, aUseSSL, aUseArrayBuffers);
@@ -171,7 +167,7 @@ void TCPSocketChild::SetSocket(TCPSocket* aSocket) { mSocket = aSocket; }
 
 void TCPSocketChild::GetHost(nsAString& aHost) { aHost = mHost; }
 
-void TCPSocketChild::GetPort(uint16_t* aPort) { *aPort = mPort; }
+void TCPSocketChild::GetPort(uint16_t* aPort) const { *aPort = mPort; }
 
 mozilla::ipc::IPCResult TCPSocketChild::RecvRequestDelete() {
   mozilla::Unused << Send__delete__(this);

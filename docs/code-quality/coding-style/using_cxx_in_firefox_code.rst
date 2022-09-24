@@ -38,7 +38,7 @@ list of acceptable features is given below:
    :widths: 25 25 25 25
    :header-rows: 3
 
-   * - 
+   * -
      - GCC
      - Clang
      -
@@ -377,7 +377,7 @@ Data structures
    * - ``nsClassHashtable``
      - ``nsClassHashtable.h``
      -
-     - Adaptation of nsTHashtable, see `XPCOM hashtable guide <https://developer.mozilla.org/docs/Mozilla/Tech/XPCOM/Guide/Hashtables>`__
+     - Adaptation of nsTHashtable, see :ref:`XPCOM Hashtable Guide`
    * - ``nsCOMArray``
      - ``nsCOMArray.h``
      -
@@ -385,7 +385,7 @@ Data structures
    * - ``nsDataHashtable``
      - ``nsClassHashtable.h``
      - ``std::unordered_map``
-     - Adaptation of ``nsTHashtable``, see `XPCOM hashtable guide <https://developer.mozilla.org/docs/Mozilla/Tech/XPCOM/Guide/Hashtables>`__
+     - Adaptation of ``nsTHashtable``, see :ref:`XPCOM Hashtable Guide`
    * - ``nsDeque``
      - ``nsDeque.h``
      - ``std::deque<void *>``
@@ -401,7 +401,7 @@ Data structures
    * - ``nsInterfaceHashtable``
      - ``nsInterfaceHashtable.h``
      - ``std::unordered_map``
-     - Adaptation of ``nsTHashtable``, see `XPCOM hashtable guide <https://developer.mozilla.org/docs/Mozilla/Tech/XPCOM/Guide/Hashtables>`__
+     - Adaptation of ``nsTHashtable``, see :ref:`XPCOM Hashtable Guide`
    * - ``mozilla::LinkedList``
      - ``mozilla/LinkedList.h``
      - ``std::list``
@@ -409,7 +409,7 @@ Data structures
    * - ``nsRef PtrHashtable``
      - ``nsRefPtrHashtable.h``
      - ``std::unordered_map``
-     - Adaptation of ``nsTHashtable``, see `XPCOM hashtable guide <https://developer.mozilla.org/docs/Mozilla/Tech/XPCOM/Guide/Hashtables>`__
+     - Adaptation of ``nsTHashtable``, see :ref:`XPCOM Hashtable Guide`
    * - ``mozilla::SegmentedVector``
      - ``mozilla/SegmentedVector.h``
      - ``std::deque`` w/o O(1) pop_front
@@ -425,7 +425,7 @@ Data structures
    * - ``nsTHashtable``
      - ``nsTHashtable.h``
      - ``std::unordered_{map,set}``
-     - See `XPCOM hashtable guide <https://developer.mozilla.org/docs/Mozilla/Tech/XPCOM/Guide/Hashtables>`__,  you probably want a subclass
+     - See :ref:`XPCOM Hashtable Guide`,  you probably want a subclass
    * - ``nsTObserverArray``
      - ``nsTObserverArray.h``
      -
@@ -606,11 +606,11 @@ Miscellaneous
      - xpcom/ds/TimeStamp.h
      - ``std::chrono::time_point``
      -
-   * - 
+   * -
      - mozilla/TypeTraits.h
      - ``<type_traits>``
      -
-   * - 
+   * -
      - mozilla/PodOperations.h
      -
      - C++ versions of ``memset``, ``memcpy``, etc.
@@ -622,7 +622,7 @@ Miscellaneous
      - mozilla/Compression.h
      -
      -
-   * - 
+   * -
      - mozilla/Endian.h
      -
      -
@@ -630,11 +630,11 @@ Miscellaneous
      - mozilla/FloatingPoint.h
      -
      -
-   * - 
+   * -
      - mozilla/HashFunctions.h
      - ``std::hash``
      -
-   * - 
+   * -
      - mozilla/Move.h
      - ``std::move``, ``std::swap``, ``std::forward``
      -

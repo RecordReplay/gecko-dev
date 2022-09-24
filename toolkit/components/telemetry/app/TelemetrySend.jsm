@@ -17,14 +17,12 @@ var EXPORTED_SYMBOLS = [
   "SendScheduler",
   "TelemetrySendImpl",
   "PING_SUBMIT_TIMEOUT_MS",
+  "sendStandalonePing",
   "gzipCompressString",
 ];
 
 const { AppConstants } = ChromeUtils.import(
   "resource://gre/modules/AppConstants.jsm"
-);
-const { XPCOMUtils } = ChromeUtils.import(
-  "resource://gre/modules/XPCOMUtils.jsm"
 );
 const { ClientID } = ChromeUtils.import("resource://gre/modules/ClientID.jsm");
 const { Log } = ChromeUtils.import("resource://gre/modules/Log.jsm");
@@ -53,12 +51,6 @@ ChromeUtils.defineModuleGetter(
   "resource://gre/modules/TelemetryReportingPolicy.jsm"
 );
 ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "Telemetry",
-  "@mozilla.org/base/telemetry;1",
-  "nsITelemetry"
-);
 ChromeUtils.defineModuleGetter(
   this,
   "TelemetryHealthPing",
@@ -202,6 +194,42 @@ function gzipCompressString(string) {
   converter.onDataAvailable(null, stringStream, 0, string.length);
   converter.onStopRequest(null, null, null);
   return observer.buffer;
+}
+
+const STANDALONE_PING_TIMEOUT = 30 * 1000; // 30 seconds
+
+function sendStandalonePing(endpoint, payload, extraHeaders = {}) {
+  return new Promise((resolve, reject) => {
+    let request = new ServiceRequest({ mozAnon: true });
+    request.mozBackgroundRequest = true;
+    request.timeout = STANDALONE_PING_TIMEOUT;
+
+    request.open("POST", endpoint, true);
+    request.overrideMimeType("text/plain");
+    request.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+    request.setRequestHeader("Content-Encoding", "gzip");
+    request.setRequestHeader("Date", new Date().toUTCString());
+    for (let header in extraHeaders) {
+      request.setRequestHeader(header, extraHeaders[header]);
+    }
+
+    request.onload = event => {
+      if (request.status !== 200) {
+        reject(event);
+      } else {
+        resolve(event);
+      }
+    };
+    request.onerror = reject;
+    request.onabort = reject;
+    request.ontimeout = reject;
+
+    let payloadStream = Cc[
+      "@mozilla.org/io/string-input-stream;1"
+    ].createInstance(Ci.nsIStringInputStream);
+    payloadStream.data = gzipCompressString(payload);
+    request.sendInputStream(payloadStream);
+  });
 }
 
 var TelemetrySend = {
@@ -853,7 +881,9 @@ var TelemetrySendImpl = {
       const ageInDays = Utils.millisecondsToDays(
         Math.abs(now.getTime() - pingInfo.lastModificationDate)
       );
-      Telemetry.getHistogramById("TELEMETRY_PENDING_PINGS_AGE").add(ageInDays);
+      Services.telemetry
+        .getHistogramById("TELEMETRY_PENDING_PINGS_AGE")
+        .add(ageInDays);
     }
   },
 
@@ -920,11 +950,13 @@ var TelemetrySendImpl = {
       "TELEMETRY_SEND_FAILURE_TYPE",
     ];
 
-    histograms.forEach(h => Telemetry.getHistogramById(h).clear());
+    histograms.forEach(h => Services.telemetry.getHistogramById(h).clear());
 
     const keyedHistograms = ["TELEMETRY_SEND_FAILURE_TYPE_PER_PING"];
 
-    keyedHistograms.forEach(h => Telemetry.getKeyedHistogramById(h).clear());
+    keyedHistograms.forEach(h =>
+      Services.telemetry.getKeyedHistogramById(h).clear()
+    );
 
     return SendScheduler.reset();
   },
@@ -1208,8 +1240,8 @@ var TelemetrySendImpl = {
     );
 
     let sendId = success ? "TELEMETRY_SEND_SUCCESS" : "TELEMETRY_SEND_FAILURE";
-    let hsend = Telemetry.getHistogramById(sendId);
-    let hsuccess = Telemetry.getHistogramById("TELEMETRY_SUCCESS");
+    let hsend = Services.telemetry.getHistogramById(sendId);
+    let hsuccess = Services.telemetry.getHistogramById("TELEMETRY_SUCCESS");
 
     hsend.add(Utils.monotonicNow() - startTime);
     hsuccess.add(success);
@@ -1276,6 +1308,73 @@ var TelemetrySendImpl = {
     return "/submit/telemetry/" + slug;
   },
 
+  _doPingRequest(ping, id, url, options, errorHandler, onloadHandler) {
+    // Don't send cookies with these requests.
+    let request = new ServiceRequest({ mozAnon: true });
+    request.mozBackgroundRequest = true;
+    request.timeout = Policy.pingSubmissionTimeout();
+
+    request.open("POST", url, options);
+    request.overrideMimeType("text/plain");
+    request.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
+    request.setRequestHeader("Date", Policy.now().toUTCString());
+    request.setRequestHeader("Content-Encoding", "gzip");
+    request.onerror = errorHandler;
+    request.ontimeout = errorHandler;
+    request.onabort = errorHandler;
+    request.onload = onloadHandler;
+    this._pendingPingRequests.set(id, request);
+
+    let startTime = Utils.monotonicNow();
+
+    // If that's a legacy ping format, just send its payload.
+    let networkPayload = isV4PingFormat(ping) ? ping : ping.payload;
+    let converter = Cc[
+      "@mozilla.org/intl/scriptableunicodeconverter"
+    ].createInstance(Ci.nsIScriptableUnicodeConverter);
+    converter.charset = "UTF-8";
+    let utf8Payload = converter.ConvertFromUnicode(
+      JSON.stringify(networkPayload)
+    );
+    utf8Payload += converter.Finish();
+    Services.telemetry
+      .getHistogramById("TELEMETRY_STRINGIFY")
+      .add(Utils.monotonicNow() - startTime);
+
+    let payloadStream = Cc[
+      "@mozilla.org/io/string-input-stream;1"
+    ].createInstance(Ci.nsIStringInputStream);
+    startTime = Utils.monotonicNow();
+    payloadStream.data = Policy.gzipCompressString(utf8Payload);
+
+    // Check the size and drop pings which are too big.
+    const compressedPingSizeBytes = payloadStream.data.length;
+    if (compressedPingSizeBytes > TelemetryStorage.MAXIMUM_PING_SIZE) {
+      this._log.error(
+        "_doPing - submitted ping exceeds the size limit, size: " +
+          compressedPingSizeBytes
+      );
+      Services.telemetry
+        .getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_SEND")
+        .add();
+      Services.telemetry
+        .getHistogramById("TELEMETRY_DISCARDED_SEND_PINGS_SIZE_MB")
+        .add(Math.floor(compressedPingSizeBytes / 1024 / 1024));
+      // We don't need to call |request.abort()| as it was not sent yet.
+      this._pendingPingRequests.delete(id);
+
+      TelemetryHealthPing.recordDiscardedPing(ping.type);
+      return { promise: TelemetryStorage.removePendingPing(id) };
+    }
+
+    Services.telemetry
+      .getHistogramById("TELEMETRY_COMPRESS")
+      .add(Utils.monotonicNow() - startTime);
+    request.sendInputStream(payloadStream);
+
+    return { payloadStream };
+  },
+
   _doPing(ping, id, isPersisted) {
     if (!this.sendingEnabled(ping)) {
       // We can't send the pings to the server, so don't try to.
@@ -1286,10 +1385,12 @@ var TelemetrySendImpl = {
     if (this._tooLateToSend) {
       // Too late to send now. Reject so we pend the ping to send it next time.
       this._log.trace("_doPing - Too late to send ping " + ping.id);
-      Telemetry.getHistogramById("TELEMETRY_SEND_FAILURE_TYPE").add("eTooLate");
-      Telemetry.getKeyedHistogramById(
-        "TELEMETRY_SEND_FAILURE_TYPE_PER_PING"
-      ).add(ping.type, "eTooLate");
+      Services.telemetry
+        .getHistogramById("TELEMETRY_SEND_FAILURE_TYPE")
+        .add("eTooLate");
+      Services.telemetry
+        .getKeyedHistogramById("TELEMETRY_SEND_FAILURE_TYPE_PER_PING")
+        .add(ping.type, "eTooLate");
       return Promise.reject();
     }
 
@@ -1303,18 +1404,6 @@ var TelemetrySendImpl = {
     );
 
     const url = this._buildSubmissionURL(ping);
-
-    // Don't send cookies with these requests.
-    let request = new ServiceRequest({ mozAnon: true });
-    request.mozBackgroundRequest = true;
-    request.timeout = Policy.pingSubmissionTimeout();
-
-    request.open("POST", url, true);
-    request.overrideMimeType("text/plain");
-    request.setRequestHeader("Content-Type", "application/json; charset=UTF-8");
-    request.setRequestHeader("Date", Policy.now().toUTCString());
-
-    this._pendingPingRequests.set(id, request);
 
     const monotonicStartTime = Utils.monotonicNow();
     let deferred = PromiseUtils.defer();
@@ -1345,7 +1434,39 @@ var TelemetrySendImpl = {
       );
     };
 
-    let errorhandler = event => {
+    let retryRequest = request => {
+      if (
+        this._shutdown ||
+        ServiceRequest.isOffline ||
+        Services.startup.shuttingDown ||
+        !request.bypassProxyEnabled ||
+        this._tooLateToSend ||
+        request.bypassProxy ||
+        !request.isProxied
+      ) {
+        return false;
+      }
+      ServiceRequest.logProxySource(request.channel, "telemetry.send");
+      // If the request failed, and it's using a proxy, automatically
+      // attempt without proxy.
+      let { payloadStream } = this._doPingRequest(
+        ping,
+        id,
+        url,
+        { bypassProxy: true },
+        errorHandler,
+        onloadHandler
+      );
+      this.payloadStream = payloadStream;
+      return true;
+    };
+
+    let errorHandler = event => {
+      let request = event.target;
+      if (retryRequest(request)) {
+        return;
+      }
+
       let failure = event.type;
       if (failure === "error") {
         failure = XHR_ERROR_TYPE[request.errorCode];
@@ -1353,38 +1474,21 @@ var TelemetrySendImpl = {
 
       TelemetryHealthPing.recordSendFailure(failure);
 
-      if (this.fallbackHttp) {
-        // only one attempt
-        this.fallbackHttp = false;
-
-        request.channel.securityInfo
-          .QueryInterface(Ci.nsITransportSecurityInfo)
-          .QueryInterface(Ci.nsISerializable);
-        if (request.channel.securityInfo.errorCodeString.startsWith("SEC_")) {
-          // re-open the request with the HTTP version of the URL
-          let fallbackUrl = new URL(url);
-          fallbackUrl.protocol = "http:";
-          // TODO encrypt payload
-          request.open("POST", fallbackUrl, true);
-          request.sendInputStream(this.payloadStream);
-        }
-      }
-
-      Telemetry.getHistogramById("TELEMETRY_SEND_FAILURE_TYPE").add(failure);
-      Telemetry.getKeyedHistogramById(
-        "TELEMETRY_SEND_FAILURE_TYPE_PER_PING"
-      ).add(ping.type, failure);
+      Services.telemetry
+        .getHistogramById("TELEMETRY_SEND_FAILURE_TYPE")
+        .add(failure);
+      Services.telemetry
+        .getKeyedHistogramById("TELEMETRY_SEND_FAILURE_TYPE_PER_PING")
+        .add(ping.type, failure);
 
       this._log.error(
         "_doPing - error making request to " + url + ": " + failure
       );
       onRequestFinished(false, event);
     };
-    request.onerror = errorhandler;
-    request.ontimeout = errorhandler;
-    request.onabort = errorhandler;
 
-    request.onload = event => {
+    let onloadHandler = event => {
+      let request = event.target;
       let status = request.status;
       let statusClass = status - (status % 100);
       let success = false;
@@ -1402,9 +1506,9 @@ var TelemetrySendImpl = {
             status +
             " - ping request broken?"
         );
-        Telemetry.getHistogramById(
-          "TELEMETRY_PING_EVICTED_FOR_SERVER_ERRORS"
-        ).add();
+        Services.telemetry
+          .getHistogramById("TELEMETRY_PING_EVICTED_FOR_SERVER_ERRORS")
+          .add();
         // TODO: we should handle this better, but for now we should avoid resubmitting
         // broken requests by pretending success.
         success = true;
@@ -1428,55 +1532,24 @@ var TelemetrySendImpl = {
             event.type
         );
       }
+      if (!success && retryRequest(request)) {
+        return;
+      }
 
       onRequestFinished(success, event);
     };
 
-    // If that's a legacy ping format, just send its payload.
-    let networkPayload = isV4PingFormat(ping) ? ping : ping.payload;
-    request.setRequestHeader("Content-Encoding", "gzip");
-    let converter = Cc[
-      "@mozilla.org/intl/scriptableunicodeconverter"
-    ].createInstance(Ci.nsIScriptableUnicodeConverter);
-    converter.charset = "UTF-8";
-    let startTime = Utils.monotonicNow();
-    let utf8Payload = converter.ConvertFromUnicode(
-      JSON.stringify(networkPayload)
+    let { payloadStream, promise } = this._doPingRequest(
+      ping,
+      id,
+      url,
+      {},
+      errorHandler,
+      onloadHandler
     );
-    utf8Payload += converter.Finish();
-    Telemetry.getHistogramById("TELEMETRY_STRINGIFY").add(
-      Utils.monotonicNow() - startTime
-    );
-
-    let payloadStream = Cc[
-      "@mozilla.org/io/string-input-stream;1"
-    ].createInstance(Ci.nsIStringInputStream);
-    startTime = Utils.monotonicNow();
-    payloadStream.data = Policy.gzipCompressString(utf8Payload);
-
-    // Check the size and drop pings which are too big.
-    const compressedPingSizeBytes = payloadStream.data.length;
-    if (compressedPingSizeBytes > TelemetryStorage.MAXIMUM_PING_SIZE) {
-      this._log.error(
-        "_doPing - submitted ping exceeds the size limit, size: " +
-          compressedPingSizeBytes
-      );
-      Telemetry.getHistogramById("TELEMETRY_PING_SIZE_EXCEEDED_SEND").add();
-      Telemetry.getHistogramById("TELEMETRY_DISCARDED_SEND_PINGS_SIZE_MB").add(
-        Math.floor(compressedPingSizeBytes / 1024 / 1024)
-      );
-      // We don't need to call |request.abort()| as it was not sent yet.
-      this._pendingPingRequests.delete(id);
-
-      TelemetryHealthPing.recordDiscardedPing(ping.type);
-      return TelemetryStorage.removePendingPing(id);
+    if (promise) {
+      return promise;
     }
-
-    Telemetry.getHistogramById("TELEMETRY_COMPRESS").add(
-      Utils.monotonicNow() - startTime
-    );
-    request.sendInputStream(payloadStream);
-
     this.payloadStream = payloadStream;
 
     return deferred.promise;
@@ -1508,7 +1581,7 @@ var TelemetrySendImpl = {
   sendingEnabled(ping = null) {
     // We only send pings from official builds, but allow overriding this for tests.
     if (
-      !Telemetry.isOfficialTelemetry &&
+      !Services.telemetry.isOfficialTelemetry &&
       !this._testMode &&
       !this._overrideOfficialCheck
     ) {
@@ -1597,6 +1670,15 @@ var TelemetrySendImpl = {
   runPingSender(pings, observer) {
     if (AppConstants.platform === "android") {
       throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
+    }
+
+    let suppressPingsender = Services.prefs.getBoolPref(
+      "toolkit.telemetry.testing.suppressPingsender",
+      false
+    );
+    if (suppressPingsender) {
+      this._log.trace("Silently skipping pingsender call in automation");
+      return;
     }
 
     const exeName =

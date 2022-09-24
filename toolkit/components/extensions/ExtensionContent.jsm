@@ -17,7 +17,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   ExtensionProcessScript: "resource://gre/modules/ExtensionProcessScript.jsm",
   ExtensionTelemetry: "resource://gre/modules/ExtensionTelemetry.jsm",
   LanguageDetector: "resource:///modules/translation/LanguageDetector.jsm",
-  MessageChannel: "resource://gre/modules/MessageChannel.jsm",
   Schemas: "resource://gre/modules/Schemas.jsm",
   WebNavigationFrames: "resource://gre/modules/WebNavigationFrames.jsm",
 });
@@ -739,7 +738,7 @@ class UserScript extends Script {
       sandboxPrototype: contentWindow,
       sameZoneAs: contentWindow,
       wantXrays: true,
-      wantGlobalProperties: ["XMLHttpRequest", "fetch"],
+      wantGlobalProperties: ["XMLHttpRequest", "fetch", "WebSocket"],
       originAttributes: contentPrincipal.originAttributes,
       metadata: {
         "inner-window-id": context.innerWindowID,
@@ -823,6 +822,16 @@ class ContentScriptContextChild extends BaseContext {
         addonId: extensionPrincipal.addonId,
       };
 
+      let isMV2 = extension.manifestVersion == 2;
+      let wantGlobalProperties;
+      if (isMV2) {
+        // In MV2, fetch/XHR support cross-origin requests.
+        // WebSocket was also included to avoid CSP effects (bug 1676024).
+        wantGlobalProperties = ["XMLHttpRequest", "fetch", "WebSocket"];
+      } else {
+        // In MV3, fetch/XHR have the same capabilities as the web page.
+        wantGlobalProperties = [];
+      }
       this.sandbox = Cu.Sandbox(principal, {
         metadata,
         sandboxName: `Content Script ${extension.policy.debugName}`,
@@ -831,7 +840,7 @@ class ContentScriptContextChild extends BaseContext {
         wantXrays: true,
         isWebExtensionContentScript: true,
         wantExportHelpers: true,
-        wantGlobalProperties: ["XMLHttpRequest", "fetch"],
+        wantGlobalProperties,
         originAttributes: attrs,
       });
 
@@ -841,23 +850,32 @@ class ContentScriptContextChild extends BaseContext {
       this.cloneScopePromise = this.sandbox.Promise;
       this.cloneScopeError = this.sandbox.Error;
 
-      // Preserve a copy of the original window's XMLHttpRequest and fetch
-      // in a content object (fetch is manually binded to the window
-      // to prevent it from raising a TypeError because content object is not
-      // a real window).
-      Cu.evalInSandbox(
-        `
-        this.content = {
-          XMLHttpRequest: window.XMLHttpRequest,
-          fetch: window.fetch.bind(window),
-        };
+      if (isMV2) {
+        // Preserve a copy of the original window's XMLHttpRequest and fetch
+        // in a content object (fetch is manually binded to the window
+        // to prevent it from raising a TypeError because content object is not
+        // a real window).
+        Cu.evalInSandbox(
+          `
+          this.content = {
+            XMLHttpRequest: window.XMLHttpRequest,
+            fetch: window.fetch.bind(window),
+            WebSocket: window.WebSocket,
+          };
 
-        window.JSON = JSON;
-        window.XMLHttpRequest = XMLHttpRequest;
-        window.fetch = fetch;
-      `,
-        this.sandbox
-      );
+          window.JSON = JSON;
+          window.XMLHttpRequest = XMLHttpRequest;
+          window.fetch = fetch;
+          window.WebSocket = WebSocket;
+        `,
+          this.sandbox
+        );
+      } else {
+        // The sandbox's JSON API can deal with values from the sandbox and the
+        // contentWindow, but window.JSON cannot (and it could potentially be
+        // spoofed by the web page). jQuery.parseJSON relies on window.JSON.
+        Cu.evalInSandbox("window.JSON = JSON;", this.sandbox);
+      }
     }
 
     Object.defineProperty(this, "principal", {
@@ -953,7 +971,7 @@ class ContentScriptContextChild extends BaseContext {
 }
 
 defineLazyGetter(ContentScriptContextChild.prototype, "messenger", function() {
-  return new Messenger(this, { frameId: this.frameId, url: this.url });
+  return new Messenger(this);
 });
 
 defineLazyGetter(
@@ -1002,8 +1020,6 @@ DocumentManager = {
   observers: {
     "inner-window-destroyed"(subject, topic, data) {
       let windowId = subject.QueryInterface(Ci.nsISupportsPRUint64).data;
-
-      MessageChannel.abortResponses({ innerWindowID: windowId });
 
       // Close any existent content-script context for the destroyed window.
       if (this.contexts.has(windowId)) {
@@ -1108,50 +1124,48 @@ var ExtensionContent = {
     return context;
   },
 
-  handleDetectLanguage(global, target) {
-    let doc = target.content.document;
+  // For test use only.
+  getContextByExtensionId(extensionId, window) {
+    return DocumentManager.getContext(extensionId, window);
+  },
 
-    return promiseDocumentReady(doc).then(() => {
-      let elem = doc.documentElement;
+  async handleDetectLanguage({ windows }) {
+    let wgc = WindowGlobalChild.getByInnerWindowId(windows[0]);
+    let doc = wgc.browsingContext.window.document;
+    await promiseDocumentReady(doc);
 
-      let language =
-        elem.getAttribute("xml:lang") ||
-        elem.getAttribute("lang") ||
+    // The CLD2 library can analyze HTML, but that uses more memory, and
+    // emscripten can't shrink its heap, so we use plain text instead.
+    let encoder = Cu.createDocumentEncoder("text/plain");
+    encoder.init(doc, "text/plain", Ci.nsIDocumentEncoder.SkipInvisibleContent);
+
+    let result = await LanguageDetector.detectLanguage({
+      language:
+        doc.documentElement.getAttribute("xml:lang") ||
+        doc.documentElement.getAttribute("lang") ||
         doc.contentLanguage ||
-        null;
-
-      // We only want the last element of the TLD here.
-      // Only country codes have any effect on the results, but other
-      // values cause no harm.
-      let tld = doc.location.hostname.match(/[a-z]*$/)[0];
-
-      // The CLD2 library used by the language detector is capable of
-      // analyzing raw HTML. Unfortunately, that takes much more memory,
-      // and since it's hosted by emscripten, and therefore can't shrink
-      // its heap after it's grown, it has a performance cost.
-      // So we send plain text instead.
-      let encoder = Cu.createDocumentEncoder("text/plain");
-      encoder.init(
-        doc,
-        "text/plain",
-        Ci.nsIDocumentEncoder.SkipInvisibleContent
-      );
-      let text = encoder.encodeToStringWithMaxLength(60 * 1024);
-
-      let encoding = doc.characterSet;
-
-      return LanguageDetector.detectLanguage({
-        language,
-        tld,
-        text,
-        encoding,
-      }).then(result => (result.language === "un" ? "und" : result.language));
+        null,
+      tld: doc.location.hostname.match(/[a-z]*$/)[0],
+      text: encoder.encodeToStringWithMaxLength(60 * 1024),
+      encoding: doc.characterSet,
     });
+    return result.language === "un" ? "und" : result.language;
   },
 
   // Used to executeScript, insertCSS and removeCSS.
   async handleActorExecute({ options, windows }) {
     let policy = WebExtensionPolicy.getByID(options.extensionId);
+    // `WebExtensionContentScript` uses `MozDocumentMatcher::Matches` to ensure
+    // that a script can be run in a document. That requires either `frameId`
+    // or `allFrames` to be set. When `frameIds` (plural) is used, we force
+    // `allFrames` to be `true` in order to match any frame. This is OK because
+    // `executeInWin()` below looks up the window for the given `frameIds`
+    // immediately before `script.injectInto()`. Due to this, we won't run
+    // scripts in windows with non-matching `frameId`, despite `allFrames`
+    // being set to `true`.
+    if (options.frameIds) {
+      options.allFrames = true;
+    }
     let matcher = new WebExtensionContentScript(policy, options);
 
     Object.assign(matcher, {
@@ -1169,12 +1183,35 @@ var ExtensionContent = {
     const executeInWin = innerId => {
       let wg = WindowGlobalChild.getByInnerWindowId(innerId);
       if (wg?.isCurrentGlobal && script.matchesWindowGlobal(wg)) {
-        return script.injectInto(wg.browsingContext.window);
+        let bc = wg.browsingContext;
+
+        return {
+          frameId: bc.parent ? bc.id : 0,
+          promise: script.injectInto(bc.window),
+        };
       }
     };
 
-    let all = Promise.all(windows.map(executeInWin).filter(p => p));
-    let result = await all.catch(e => Promise.reject({ message: e.message }));
+    let promisesWithFrameIds = windows.map(executeInWin).filter(obj => obj);
+
+    let result = await Promise.all(
+      promisesWithFrameIds.map(async ({ frameId, promise }) => {
+        if (!options.returnResultsWithFrameIds) {
+          return promise;
+        }
+
+        try {
+          const result = await promise;
+
+          return { frameId, result };
+        } catch ({ message }) {
+          // Errors cannot be cloned, so return an object with a message
+          // property.
+          // TODO bug 1740608: also support non-Error rejections.
+          return { frameId, error: { message } };
+        }
+      })
+    ).catch(e => Promise.reject({ message: e.message }));
 
     try {
       // Check if the result can be structured-cloned before sending back.
@@ -1183,30 +1220,6 @@ var ExtensionContent = {
       let path = options.jsPaths.slice(-1)[0] ?? "<anonymous code>";
       let message = `Script '${path}' result is non-structured-clonable data`;
       return Promise.reject({ message, fileName: path });
-    }
-  },
-
-  async receiveMessage(global, name, target) {
-    if (name === "Extension:DetectLanguage") {
-      return this.handleDetectLanguage(global, target);
-    }
-  },
-
-  // Helpers
-
-  *enumerateWindows(docShell) {
-    let docShells = docShell.getAllDocShellsInSubtree(
-      docShell.typeContent,
-      docShell.ENUMERATE_FORWARDS
-    );
-
-    for (let docShell of docShells) {
-      try {
-        yield docShell.domWindow;
-      } catch (e) {
-        // This can fail if the docShell is being destroyed, so just
-        // ignore the error.
-      }
     }
   },
 };
@@ -1220,6 +1233,8 @@ class ExtensionContentChild extends JSProcessActorChild {
       return;
     }
     switch (name) {
+      case "DetectLanguage":
+        return ExtensionContent.handleDetectLanguage(data);
       case "Execute":
         return ExtensionContent.handleActorExecute(data);
     }

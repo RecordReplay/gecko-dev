@@ -34,15 +34,13 @@ class XULButtonAccessible : public AccessibleWrap {
   virtual uint64_t NativeState() const override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount() const override;
+  virtual bool HasPrimaryAction() const override;
   virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
-  virtual bool DoAction(uint8_t aIndex) const override;
 
   // Widgets
   virtual bool IsWidget() const override;
   virtual bool IsActiveWidget() const override;
   virtual bool AreItemsOperable() const override;
-  virtual LocalAccessible* ContainerWidget() const override;
 
   virtual bool IsAcceptableChild(nsIContent* aEl) const override;
 
@@ -66,7 +64,7 @@ class XULDropmarkerAccessible : public LeafAccessible {
   virtual uint64_t NativeState() const override;
 
   // ActionAccessible
-  virtual uint8_t ActionCount() const override;
+  virtual bool HasPrimaryAction() const override;
   virtual void ActionNameAt(uint8_t aIndex, nsAString& aName) override;
   virtual bool DoAction(uint8_t aIndex) const override;
 
@@ -142,15 +140,16 @@ class XULToolbarButtonAccessible : public XULButtonAccessible {
  public:
   XULToolbarButtonAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
-  // LocalAccessible
-  virtual void GetPositionAndSizeInternal(int32_t* aPosInSet,
-                                          int32_t* aSetSize) override;
-
   // nsXULToolbarButtonAccessible
   static bool IsSeparator(LocalAccessible* aAccessible);
 
   // Widgets
   virtual bool IsAcceptableChild(nsIContent* aEl) const override;
+
+ protected:
+  // LocalAccessible
+  virtual void GetPositionAndSetSize(int32_t* aPosInSet,
+                                     int32_t* aSetSize) override;
 };
 
 /**

@@ -12,6 +12,7 @@
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/ContentChild.h"
 #include "nsReadableUtils.h"
+#include "mozilla/HalIPCUtils.h"
 
 namespace mozilla {
 namespace dom {
@@ -61,7 +62,8 @@ void FormatFieldValue(nsACString& aStr, const T& aValue) {
 // a synced context transaction is going to perform.
 template <typename Context>
 nsAutoCString FormatTransaction(
-    IndexSet aModified, const typename Context::FieldValues& aOldValues,
+    typename Transaction<Context>::IndexSet aModified,
+    const typename Context::FieldValues& aOldValues,
     const typename Context::FieldValues& aNewValues) {
   nsAutoCString result;
   Context::FieldValues::EachIndex([&](auto idx) {
@@ -78,7 +80,8 @@ nsAutoCString FormatTransaction(
 }
 
 template <typename Context>
-nsCString FormatValidationError(IndexSet aFailedFields, const char* prefix) {
+nsCString FormatValidationError(
+    typename Transaction<Context>::IndexSet aFailedFields, const char* prefix) {
   MOZ_ASSERT(!aFailedFields.isEmpty());
   return nsDependentCString{prefix} +
          StringJoin(", "_ns, aFailedFields,
@@ -245,8 +248,8 @@ inline CanSetResult AsCanSetResult(bool aValue) {
 }
 
 template <typename Context>
-IndexSet Transaction<Context>::Validate(Context* aOwner,
-                                        ContentParent* aSource) {
+typename Transaction<Context>::IndexSet Transaction<Context>::Validate(
+    Context* aOwner, ContentParent* aSource) {
   IndexSet failedFields;
   Transaction<Context> revertTxn;
 
@@ -273,12 +276,13 @@ IndexSet Transaction<Context>::Validate(Context* aOwner,
   if (!revertTxn.mModified.isEmpty()) {
     // NOTE: Logging with modified IndexSet from revert transaction, and values
     // from this transaction, so we log the failed values we're going to revert.
-    MOZ_LOG(Context::GetSyncLog(), LogLevel::Debug,
-            ("Transaction::PartialRevert(#%" PRIx64 ", pid %d): %s",
-             aOwner->Id(), aSource ? aSource->OtherPid() : -1,
-             FormatTransaction<Context>(revertTxn.mModified, mValues,
-                                        revertTxn.mValues)
-                 .get()));
+    MOZ_LOG(
+        Context::GetSyncLog(), LogLevel::Debug,
+        ("Transaction::PartialRevert(#%" PRIx64 ", pid %" PRIPID "): %s",
+         aOwner->Id(), aSource ? aSource->OtherPid() : base::kInvalidProcessId,
+         FormatTransaction<Context>(revertTxn.mModified, mValues,
+                                    revertTxn.mValues)
+             .get()));
 
     mModified -= revertTxn.mModified;
 
@@ -291,26 +295,27 @@ IndexSet Transaction<Context>::Validate(Context* aOwner,
 }
 
 template <typename Context>
-void Transaction<Context>::Write(IPC::Message* aMsg,
+void Transaction<Context>::Write(IPC::MessageWriter* aWriter,
                                  mozilla::ipc::IProtocol* aActor) const {
   // Record which field indices will be included, and then write those fields
   // out.
-  uint64_t modified = mModified.serialize();
-  WriteIPDLParam(aMsg, aActor, modified);
+  typename IndexSet::serializedType modified = mModified.serialize();
+  WriteIPDLParam(aWriter, aActor, modified);
   EachIndex([&](auto idx) {
     if (mModified.contains(idx)) {
-      WriteIPDLParam(aMsg, aActor, mValues.Get(idx));
+      WriteIPDLParam(aWriter, aActor, mValues.Get(idx));
     }
   });
 }
 
 template <typename Context>
-bool Transaction<Context>::Read(const IPC::Message* aMsg, PickleIterator* aIter,
+bool Transaction<Context>::Read(IPC::MessageReader* aReader,
                                 mozilla::ipc::IProtocol* aActor) {
   // Read in which field indices were sent by the remote, followed by the fields
   // identified by those indices.
-  uint64_t modified = 0;
-  if (!ReadIPDLParam(aMsg, aIter, aActor, &modified)) {
+  typename IndexSet::serializedType modified =
+      typename IndexSet::serializedType{};
+  if (!ReadIPDLParam(aReader, aActor, &modified)) {
     return false;
   }
   mModified.deserialize(modified);
@@ -318,30 +323,29 @@ bool Transaction<Context>::Read(const IPC::Message* aMsg, PickleIterator* aIter,
   bool ok = true;
   EachIndex([&](auto idx) {
     if (ok && mModified.contains(idx)) {
-      ok = ReadIPDLParam(aMsg, aIter, aActor, &mValues.Get(idx));
+      ok = ReadIPDLParam(aReader, aActor, &mValues.Get(idx));
     }
   });
   return ok;
 }
 
 template <typename Base, size_t Count>
-void FieldValues<Base, Count>::Write(IPC::Message* aMsg,
+void FieldValues<Base, Count>::Write(IPC::MessageWriter* aWriter,
                                      mozilla::ipc::IProtocol* aActor) const {
   // XXX The this-> qualification is necessary to work around a bug in older gcc
   // versions causing an ICE.
-  EachIndex([&](auto idx) { WriteIPDLParam(aMsg, aActor, this->Get(idx)); });
+  EachIndex([&](auto idx) { WriteIPDLParam(aWriter, aActor, this->Get(idx)); });
 }
 
 template <typename Base, size_t Count>
-bool FieldValues<Base, Count>::Read(const IPC::Message* aMsg,
-                                    PickleIterator* aIter,
+bool FieldValues<Base, Count>::Read(IPC::MessageReader* aReader,
                                     mozilla::ipc::IProtocol* aActor) {
   bool ok = true;
   EachIndex([&](auto idx) {
     if (ok) {
       // XXX The this-> qualification is necessary to work around a bug in older
       // gcc versions causing an ICE.
-      ok = ReadIPDLParam(aMsg, aIter, aActor, &this->Get(idx));
+      ok = ReadIPDLParam(aReader, aActor, &this->Get(idx));
     }
   });
   return ok;

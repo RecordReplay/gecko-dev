@@ -14,8 +14,7 @@
 
 #include "gfxVR.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 struct XRSessionCreationOptions;
 
@@ -73,16 +72,16 @@ class XRRequestSessionPermissionRequest final
   NS_IMETHOD Cancel(void) override;
   NS_IMETHOD Allow(JS::HandleValue choices) override;
 
-  typedef std::function<void()> AllowCallback;
-  typedef std::function<void()> AllowAnySiteCallback;
-  typedef std::function<void()> CancelCallback;
+  using AllowCallback = std::function<void()>;
+  using AllowAnySiteCallback = std::function<void()>;
+  using CancelCallback = std::function<void()>;
 
   static already_AddRefed<XRRequestSessionPermissionRequest> Create(
       nsPIDOMWindowInner* aWindow, AllowCallback&& aAllowCallback,
       AllowAnySiteCallback&& aAllowAnySiteCallback,
       CancelCallback&& aCancelCallback);
 
-  typedef MozPromise<bool, bool, true> AutoGrantDelayPromise;
+  using AutoGrantDelayPromise = MozPromise<bool, bool, true>;
   RefPtr<AutoGrantDelayPromise> MaybeDelayAutomaticGrants();
 
  private:
@@ -170,7 +169,6 @@ class XRSystem final : public DOMEventTargetHelper,
       mRequestSessionRequestsWaitingForEnumeration;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_XRsystem_h_

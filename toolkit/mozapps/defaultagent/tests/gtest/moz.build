@@ -14,6 +14,7 @@ UNIFIED_SOURCES += [
     "../../common.cpp",
     "../../EventLog.cpp",
     "../../Registry.cpp",
+    "../../UtfConvert.cpp",
     "CacheTest.cpp",
     "SetDefaultBrowserTest.cpp",
 ]
@@ -42,3 +43,5 @@ for var in ("MOZ_APP_BASENAME", "MOZ_APP_DISPLAYNAME", "MOZ_APP_VENDOR"):
 DisableStlWrapping()
 
 FINAL_LIBRARY = "xul-gtest"
+
+REQUIRES_UNIFIED_BUILD = True

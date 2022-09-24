@@ -40,6 +40,7 @@
 #include "mozilla/dom/MemoryReportTypes.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/gfx/GPUProcessManager.h"
+#include "mozilla/ipc/UtilityProcessManager.h"
 #include "mozilla/ipc/FileDescriptorUtils.h"
 
 #ifdef XP_WIN
@@ -54,6 +55,7 @@
 #endif
 
 using namespace mozilla;
+using namespace mozilla::ipc;
 using namespace dom;
 
 #if defined(MOZ_MEMORY)
@@ -440,6 +442,10 @@ static bool InSharedRegion(mach_vm_address_t aAddr, cpu_type_t aType) {
     case CPU_TYPE_ARM:
       base = SHARED_REGION_BASE_ARM;
       size = SHARED_REGION_SIZE_ARM;
+      break;
+    case CPU_TYPE_ARM64:
+      base = SHARED_REGION_BASE_ARM64;
+      size = SHARED_REGION_SIZE_ARM64;
       break;
     case CPU_TYPE_I386:
       base = SHARED_REGION_BASE_I386;
@@ -1206,8 +1212,10 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
                             nsISupports* aData, bool aAnonymize) override {
     jemalloc_stats_t stats;
-    jemalloc_bin_stats_t bin_stats[JEMALLOC_MAX_STATS_BINS];
-    jemalloc_stats(&stats, bin_stats);
+    const size_t num_bins = jemalloc_stats_num_bins();
+    nsTArray<jemalloc_bin_stats_t> bin_stats(num_bins);
+    bin_stats.SetLength(num_bins);
+    jemalloc_stats(&stats, bin_stats.Elements());
 
     // clang-format off
     MOZ_COLLECT_REPORT(
@@ -1225,9 +1233,7 @@ class JemallocHeapReporter final : public nsIMemoryReporter {
     // because KIND_HEAP memory means "counted in heap-allocated", which
     // this is not.
     for (auto& bin : bin_stats) {
-      if (!bin.size) {
-        continue;
-      }
+      MOZ_ASSERT(bin.size);
       nsPrintfCString path("explicit/heap-overhead/bin-unused/bin-%zu",
           bin.size);
       aHandleReport->Callback(EmptyCString(), path, KIND_NONHEAP, UNITS_BYTES,
@@ -1675,8 +1681,11 @@ NS_IMETHODIMP
 nsMemoryReporterManager::CollectReports(nsIHandleReportCallback* aHandleReport,
                                         nsISupports* aData, bool aAnonymize) {
   size_t n = MallocSizeOf(this);
-  n += mStrongReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
-  n += mWeakReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
+  {
+    mozilla::MutexAutoLock autoLock(mMutex);
+    n += mStrongReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
+    n += mWeakReporters->ShallowSizeOfIncludingThis(MallocSizeOf);
+  }
 
   MOZ_COLLECT_REPORT("explicit/memory-reporter-manager", KIND_HEAP, UNITS_BYTES,
                      n, "Memory used by the memory reporter infrastructure.");
@@ -1748,6 +1757,7 @@ nsMemoryReporterManager::GetReportsExtended(
   return rv;
 }
 
+// MainThread only
 nsresult nsMemoryReporterManager::StartGettingReports() {
   PendingProcessesState* s = mPendingProcessesState;
   nsresult rv;
@@ -1801,10 +1811,21 @@ nsresult nsMemoryReporterManager::StartGettingReports() {
     }
   }
 
-  if (!mIsRegistrationBlocked && net::gIOService) {
+  if (!IsRegistrationBlocked() && net::gIOService) {
     if (RefPtr<MemoryReportingProcess> proc =
             net::gIOService->GetSocketProcessMemoryReporter()) {
       s->mChildrenPending.AppendElement(proc.forget());
+    }
+  }
+
+  if (RefPtr<UtilityProcessManager> utility =
+          UtilityProcessManager::GetIfExists()) {
+    for (RefPtr<UtilityProcessParent>& parent :
+         utility->GetAllProcessesProcessParent()) {
+      if (RefPtr<MemoryReportingProcess> proc =
+              utility->GetProcessMemoryReporter(parent)) {
+        s->mChildrenPending.AppendElement(proc.forget());
+      }
     }
   }
 
@@ -1899,6 +1920,7 @@ nsMemoryReporterManager::GetReportsForThisProcessExtended(
   return NS_OK;
 }
 
+// MainThread only
 NS_IMETHODIMP
 nsMemoryReporterManager::EndReport() {
   if (--mPendingReportersState->mReportsPending == 0) {

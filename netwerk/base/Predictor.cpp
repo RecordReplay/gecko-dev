@@ -436,15 +436,10 @@ void Predictor::Shutdown() {
   mInitialized = false;
 }
 
-nsresult Predictor::Create(nsISupports* aOuter, const nsIID& aIID,
-                           void** aResult) {
+nsresult Predictor::Create(const nsIID& aIID, void** aResult) {
   MOZ_ASSERT(NS_IsMainThread());
 
   nsresult rv;
-
-  if (aOuter != nullptr) {
-    return NS_ERROR_NO_AGGREGATION;
-  }
 
   RefPtr<Predictor> svc = new Predictor();
   if (IsNeckoChild()) {
@@ -1886,11 +1881,18 @@ Predictor::Resetter::OnCacheEntryVisitCompleted() {
     NS_ENSURE_SUCCESS(rv, rv);
 
     urisToVisit[i]->GetAsciiSpec(u);
-    cacheDiskStorage->AsyncOpenURI(urisToVisit[i], ""_ns,
-                                   nsICacheStorage::OPEN_READONLY |
-                                       nsICacheStorage::OPEN_SECRETLY |
-                                       nsICacheStorage::CHECK_MULTITHREADED,
-                                   this);
+    rv = cacheDiskStorage->AsyncOpenURI(
+        urisToVisit[i], ""_ns,
+        nsICacheStorage::OPEN_READONLY | nsICacheStorage::OPEN_SECRETLY |
+            nsICacheStorage::CHECK_MULTITHREADED,
+        this);
+    if (NS_FAILED(rv)) {
+      mEntriesToVisit--;
+      if (!mEntriesToVisit) {
+        Complete();
+        return NS_OK;
+      }
+    }
   }
 
   return NS_OK;
@@ -2179,6 +2181,8 @@ Predictor::PrefetchListener::OnStopRequest(nsIRequest* aRequest,
                    static_cast<uint32_t>(rv)));
   } else {
     rv = cachingChannel->ForceCacheEntryValidFor(0);
+    Telemetry::AccumulateCategorical(
+        Telemetry::LABELS_PREDICTOR_PREFETCH_USE_STATUS::Not200);
     PREDICTOR_LOG(("    removing any forced validity rv=%" PRIX32,
                    static_cast<uint32_t>(rv)));
   }

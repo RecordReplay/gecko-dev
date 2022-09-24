@@ -5,8 +5,9 @@
 
 #include "gtest/gtest.h"
 #include "mozilla/Preferences.h"
+#include "mozilla/intl/Locale.h"
 #include "mozilla/intl/LocaleService.h"
-#include "mozilla/intl/MozLocale.h"
+#include "mozilla/intl/Collator.h"
 
 using namespace mozilla::intl;
 
@@ -137,7 +138,8 @@ TEST(Intl_Locale_LocaleService, GetDefaultLocale)
   LocaleService::GetInstance()->GetDefaultLocale(locStr);
 
   ASSERT_FALSE(locStr.IsEmpty());
-  ASSERT_TRUE(Locale(locStr).IsWellFormed());
+  Locale loc;
+  ASSERT_TRUE(LocaleParser::TryParse(locStr, loc).isOk());
 }
 
 TEST(Intl_Locale_LocaleService, IsAppLocaleRTL)
@@ -145,4 +147,27 @@ TEST(Intl_Locale_LocaleService, IsAppLocaleRTL)
   mozilla::Preferences::SetCString("intl.l10n.pseudo", "bidi");
   ASSERT_TRUE(LocaleService::GetInstance()->IsAppLocaleRTL());
   mozilla::Preferences::ClearUser("intl.l10n.pseudo");
+}
+
+TEST(Intl_Locale_LocaleService, TryCreateComponent)
+{
+  {
+    // Create a Collator with the app locale.
+    auto result = LocaleService::GetInstance()->TryCreateComponent<Collator>();
+    ASSERT_TRUE(result.isOk());
+  }
+  {
+    // Create a Collator with the "en" locale.
+    auto result =
+        LocaleService::GetInstance()->TryCreateComponentWithLocale<Collator>(
+            "en");
+    ASSERT_TRUE(result.isOk());
+  }
+  {
+    // Fallback to the app locale when an invalid one is used.
+    auto result =
+        LocaleService::GetInstance()->TryCreateComponentWithLocale<Collator>(
+            "$invalidName");
+    ASSERT_TRUE(result.isOk());
+  }
 }

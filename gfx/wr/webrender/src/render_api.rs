@@ -13,18 +13,19 @@ use std::u32;
 use time::precise_time_ns;
 //use crate::api::peek_poke::PeekPoke;
 use crate::api::channel::{Sender, single_msg_channel, unbounded_channel};
-use crate::api::{ColorF, BuiltDisplayList, IdNamespace, ExternalScrollId};
-use crate::api::{SharedFontInstanceMap, FontKey, FontInstanceKey, NativeFontHandle};
+use crate::api::{ColorF, BuiltDisplayList, IdNamespace, ExternalScrollId, Parameter, BoolParameter};
+use crate::api::{FontKey, FontInstanceKey, NativeFontHandle};
 use crate::api::{BlobImageData, BlobImageKey, ImageData, ImageDescriptor, ImageKey, Epoch, QualitySettings};
 use crate::api::{BlobImageParams, BlobImageRequest, BlobImageResult, AsyncBlobImageRasterizer, BlobImageHandler};
 use crate::api::{DocumentId, PipelineId, PropertyBindingId, PropertyBindingKey, ExternalEvent};
 use crate::api::{HitTestResult, HitTesterRequest, ApiHitTester, PropertyValue, DynamicProperties};
-use crate::api::{ScrollClamping, TileSize, NotificationRequest, DebugFlags, ScrollNodeState};
+use crate::api::{SampledScrollOffset, TileSize, NotificationRequest, DebugFlags};
 use crate::api::{GlyphDimensionRequest, GlyphIndexRequest, GlyphIndex, GlyphDimensions};
-use crate::api::{FontInstanceOptions, FontInstancePlatformOptions, FontVariation};
+use crate::api::{FontInstanceOptions, FontInstancePlatformOptions, FontVariation, RenderReasons};
 use crate::api::DEFAULT_TILE_SIZE;
 use crate::api::units::*;
 use crate::api_resources::ApiResources;
+use crate::glyph_rasterizer::SharedFontResources;
 use crate::scene_builder_thread::{SceneBuilderRequest, SceneBuilderResult};
 use crate::intern::InterningMemoryReport;
 use crate::profiler::{self, TransactionProfile};
@@ -174,6 +175,9 @@ pub struct Transaction {
     pub invalidate_rendered_frame: bool,
 
     low_priority: bool,
+
+    ///
+    pub render_reasons: RenderReasons,
 }
 
 impl Transaction {
@@ -188,6 +192,7 @@ impl Transaction {
             generate_frame: GenerateFrame::No,
             invalidate_rendered_frame: false,
             low_priority: false,
+            render_reasons: RenderReasons::empty(),
         }
     }
 
@@ -269,16 +274,12 @@ impl Transaction {
     /// * `viewport_size`: The size of the viewport for this frame.
     /// * `pipeline_id`: The ID of the pipeline that is supplying this display list.
     /// * `display_list`: The root Display list used in this frame.
-    /// * `preserve_frame_state`: If a previous frame exists which matches this pipeline
-    ///                           id, this setting determines if frame state (such as scrolling
-    ///                           position) should be preserved for this new display list.
     pub fn set_display_list(
         &mut self,
         epoch: Epoch,
         background: Option<ColorF>,
         viewport_size: LayoutSize,
         (pipeline_id, mut display_list): (PipelineId, BuiltDisplayList),
-        preserve_frame_state: bool,
     ) {
         display_list.set_send_time_ns(precise_time_ns());
         self.scene_ops.push(
@@ -288,7 +289,6 @@ impl Transaction {
                 pipeline_id,
                 background,
                 viewport_size,
-                preserve_frame_state,
             }
         );
     }
@@ -326,24 +326,15 @@ impl Transaction {
         );
     }
 
-    /// Scrolls the node identified by the given external scroll id to the
-    /// given scroll position, relative to the pre-scrolled offset for the
-    /// scrolling layer. That is, providing an origin of (0,0) will reset
-    /// any WR-side scrolling and just render the display items at the
-    /// pre-scrolled offsets as provided in the display list. Larger `origin`
-    /// values will cause the layer to be scrolled further towards the end of
-    /// the scroll range.
-    /// If the ScrollClamping argument is set to clamp, the scroll position
-    /// is clamped to what WebRender understands to be the bounds of the
-    /// scroll range, based on the sizes of the scrollable content and the
-    /// scroll port.
-    pub fn scroll_node_with_id(
+    /// Set multiple scroll offsets with generations to the node identified by
+    /// the given external scroll id, the scroll offsets are relative to the
+    /// pre-scrolled offset for the scrolling layer.
+    pub fn set_scroll_offsets(
         &mut self,
-        origin: LayoutPoint,
         id: ExternalScrollId,
-        clamp: ScrollClamping,
+        sampled_scroll_offsets: Vec<SampledScrollOffset>,
     ) {
-        self.frame_ops.push(FrameMsg::ScrollNodeWithId(origin, id, clamp));
+        self.frame_ops.push(FrameMsg::SetScrollOffsets(id, sampled_scroll_offsets));
     }
 
     /// Set the current quality / performance settings for this document.
@@ -363,8 +354,9 @@ impl Transaction {
     /// as to when happened.
     ///
     /// [notifier]: trait.RenderNotifier.html#tymethod.new_frame_ready
-    pub fn generate_frame(&mut self, id: u64) {
+    pub fn generate_frame(&mut self, id: u64, reasons: RenderReasons) {
         self.generate_frame = GenerateFrame::Yes{ id };
+        self.render_reasons |= reasons;
     }
 
     /// Invalidate rendered frame. It ensure that frame will be rendered during
@@ -373,14 +365,21 @@ impl Transaction {
     /// But there are cases that needs to force rendering.
     ///  - Content of image is updated by reusing same ExternalImageId.
     ///  - Platform requests it if pixels become stale (like wakeup from standby).
-    pub fn invalidate_rendered_frame(&mut self) {
+    pub fn invalidate_rendered_frame(&mut self, reasons: RenderReasons) {
         self.invalidate_rendered_frame = true;
+        self.render_reasons |= reasons
     }
 
-    /// Supply a list of animated property bindings that should be used to resolve
+    /// Reset the list of animated property bindings that should be used to resolve
     /// bindings in the current display list.
-    pub fn update_dynamic_properties(&mut self, properties: DynamicProperties) {
-        self.frame_ops.push(FrameMsg::UpdateDynamicProperties(properties));
+    pub fn reset_dynamic_properties(&mut self) {
+        self.frame_ops.push(FrameMsg::ResetDynamicProperties);
+    }
+
+    /// Add to the list of animated property bindings that should be used to resolve
+    /// bindings in the current display list.
+    pub fn append_dynamic_properties(&mut self, properties: DynamicProperties) {
+        self.frame_ops.push(FrameMsg::AppendDynamicProperties(properties));
     }
 
     /// Add to the list of animated property bindings that should be used to
@@ -411,6 +410,7 @@ impl Transaction {
             blob_requests: Vec::new(),
             rasterized_blobs: Vec::new(),
             profile: TransactionProfile::new(),
+            render_reasons: self.render_reasons,
         })
     }
 
@@ -596,6 +596,8 @@ pub struct TransactionMsg {
     pub rasterized_blobs: Vec<(BlobImageRequest, BlobImageResult)>,
     /// Collect various data along the rendering pipeline to display it in the embedded profiler.
     pub profile: TransactionProfile,
+    /// Keep track of who asks rendering to happen.
+    pub render_reasons: RenderReasons,
 }
 
 impl fmt::Debug for TransactionMsg {
@@ -770,8 +772,6 @@ pub enum SceneMsg {
         background: Option<ColorF>,
         ///
         viewport_size: LayoutSize,
-        ///
-        preserve_frame_state: bool,
     },
     ///
     SetDocumentView {
@@ -790,15 +790,15 @@ pub enum FrameMsg {
     ///
     UpdateEpoch(PipelineId, Epoch),
     ///
-    HitTest(Option<PipelineId>, WorldPoint, Sender<HitTestResult>),
+    HitTest(WorldPoint, Sender<HitTestResult>),
     ///
     RequestHitTester(Sender<Arc<dyn ApiHitTester>>),
     ///
-    ScrollNodeWithId(LayoutPoint, ExternalScrollId, ScrollClamping),
+    SetScrollOffsets(ExternalScrollId, Vec<SampledScrollOffset>),
     ///
-    GetScrollNodeState(Sender<Vec<ScrollNodeState>>),
+    ResetDynamicProperties,
     ///
-    UpdateDynamicProperties(DynamicProperties),
+    AppendDynamicProperties(DynamicProperties),
     ///
     AppendDynamicTransformProperties(Vec<PropertyValue<LayoutTransform>>),
     ///
@@ -824,9 +824,9 @@ impl fmt::Debug for FrameMsg {
             FrameMsg::UpdateEpoch(..) => "FrameMsg::UpdateEpoch",
             FrameMsg::HitTest(..) => "FrameMsg::HitTest",
             FrameMsg::RequestHitTester(..) => "FrameMsg::RequestHitTester",
-            FrameMsg::ScrollNodeWithId(..) => "FrameMsg::ScrollNodeWithId",
-            FrameMsg::GetScrollNodeState(..) => "FrameMsg::GetScrollNodeState",
-            FrameMsg::UpdateDynamicProperties(..) => "FrameMsg::UpdateDynamicProperties",
+            FrameMsg::SetScrollOffsets(..) => "FrameMsg::SetScrollOffsets",
+            FrameMsg::ResetDynamicProperties => "FrameMsg::ResetDynamicProperties",
+            FrameMsg::AppendDynamicProperties(..) => "FrameMsg::AppendDynamicProperties",
             FrameMsg::AppendDynamicTransformProperties(..) => "FrameMsg::AppendDynamicTransformProperties",
             FrameMsg::SetIsTransformAsyncZooming(..) => "FrameMsg::SetIsTransformAsyncZooming",
         })
@@ -895,8 +895,6 @@ pub enum DebugCommand {
     ClearCaches(ClearCache),
     /// Enable/disable native compositor usage
     EnableNativeCompositor(bool),
-    /// Enable/disable parallel job execution with rayon.
-    EnableMultithreading(bool),
     /// Sets the maximum amount of existing batches to visit before creating a new one.
     SetBatchingLookback(u32),
     /// Invalidate GPU cache, forcing the update from the CPU mirror.
@@ -906,6 +904,8 @@ pub enum DebugCommand {
     SimulateLongSceneBuild(u32),
     /// Set an override tile size to use for picture caches
     SetPictureTileSize(Option<DeviceIntSize>),
+    /// Set an override for max off-screen surface size
+    SetMaximumSurfaceSize(Option<usize>),
 }
 
 /// Message sent by the `RenderApi` to the render backend thread.
@@ -952,7 +952,7 @@ pub struct RenderApiSender {
     scene_sender: Sender<SceneBuilderRequest>,
     low_priority_scene_sender: Sender<SceneBuilderRequest>,
     blob_image_handler: Option<Box<dyn BlobImageHandler>>,
-    shared_font_instances: SharedFontInstanceMap,
+    fonts: SharedFontResources,
 }
 
 impl RenderApiSender {
@@ -962,14 +962,14 @@ impl RenderApiSender {
         scene_sender: Sender<SceneBuilderRequest>,
         low_priority_scene_sender: Sender<SceneBuilderRequest>,
         blob_image_handler: Option<Box<dyn BlobImageHandler>>,
-        shared_font_instances: SharedFontInstanceMap,
+        fonts: SharedFontResources,
     ) -> Self {
         RenderApiSender {
             api_sender,
             scene_sender,
             low_priority_scene_sender,
             blob_image_handler,
-            shared_font_instances,
+            fonts,
         }
     }
 
@@ -987,7 +987,7 @@ impl RenderApiSender {
             next_id: Cell::new(ResourceId(0)),
             resources: ApiResources::new(
                 self.blob_image_handler.as_ref().map(|handler| handler.create_similar()),
-                self.shared_font_instances.clone(),
+                self.fonts.clone(),
             ),
         }
     }
@@ -1008,7 +1008,7 @@ impl RenderApiSender {
             next_id: Cell::new(ResourceId(0)),
             resources: ApiResources::new(
                 self.blob_image_handler.as_ref().map(|handler| handler.create_similar()),
-                self.shared_font_instances.clone(),
+                self.fonts.clone(),
             ),
         }
     }
@@ -1037,7 +1037,7 @@ impl RenderApi {
             self.scene_sender.clone(),
             self.low_priority_scene_sender.clone(),
             self.resources.blob_image_handler.as_ref().map(|handler| handler.create_similar()),
-            self.resources.get_shared_font_instances(),
+            self.resources.get_fonts(),
         )
     }
 
@@ -1222,6 +1222,7 @@ impl RenderApi {
             blob_requests: Vec::new(),
             rasterized_blobs: Vec::new(),
             profile: TransactionProfile::new(),
+            render_reasons: RenderReasons::empty(),
         })
     }
 
@@ -1253,9 +1254,11 @@ impl RenderApi {
                 &mut self.scene_sender
             };
 
-            sender.send(SceneBuilderRequest::Transactions(vec![transaction])).unwrap();
+            sender.send(SceneBuilderRequest::Transactions(vec![transaction]))
+                .expect("send by scene sender failed");
         } else {
-            self.api_sender.send(ApiMsg::UpdateDocuments(vec![transaction])).unwrap();
+            self.api_sender.send(ApiMsg::UpdateDocuments(vec![transaction]))
+                .expect("send by api sender failed");
         }
     }
 
@@ -1266,14 +1269,13 @@ impl RenderApi {
     /// front to back.
     pub fn hit_test(&self,
         document_id: DocumentId,
-        pipeline_id: Option<PipelineId>,
         point: WorldPoint,
     ) -> HitTestResult {
         let (tx, rx) = single_msg_channel();
 
         self.send_frame_msg(
             document_id,
-            FrameMsg::HitTest(pipeline_id, point, tx)
+            FrameMsg::HitTest(point, tx)
         );
         rx.recv().unwrap()
     }
@@ -1287,13 +1289,6 @@ impl RenderApi {
         );
 
         HitTesterRequest { rx }
-    }
-
-    ///
-    pub fn get_scroll_node_state(&self, document_id: DocumentId) -> Vec<ScrollNodeState> {
-        let (tx, rx) = single_msg_channel();
-        self.send_frame_msg(document_id, FrameMsg::GetScrollNodeState(tx));
-        rx.recv().unwrap()
     }
 
     // Some internal scheduling magic that leaked into the API.
@@ -1348,13 +1343,20 @@ impl RenderApi {
     }
 
     /// Update the state of builtin debugging facilities.
-    pub fn send_debug_cmd(&mut self, cmd: DebugCommand) {
-        if let DebugCommand::EnableMultithreading(enable) = cmd {
-            // TODO(nical) we should enable it for all RenderApis.
-            self.resources.enable_multithreading(enable);
-        }
+    pub fn send_debug_cmd(&self, cmd: DebugCommand) {
         let msg = ApiMsg::DebugCommand(cmd);
         self.send_message(msg);
+    }
+
+    /// Update a instance-global parameter.
+    pub fn set_parameter(&mut self, parameter: Parameter) {
+        if let Parameter::Bool(BoolParameter::Multithreading, enabled) = parameter {
+            self.resources.enable_multithreading(enabled);
+        }
+
+        let _ = self.low_priority_scene_sender.send(
+            SceneBuilderRequest::SetParameter(parameter)
+        );
     }
 }
 
@@ -1369,7 +1371,7 @@ impl Drop for RenderApi {
 fn window_size_sanity_check(size: DeviceIntSize) {
     // Anything bigger than this will crash later when attempting to create
     // a render task.
-    use crate::render_task::MAX_RENDER_TASK_SIZE;
+    use crate::api::MAX_RENDER_TASK_SIZE;
     if size.width > MAX_RENDER_TASK_SIZE || size.height > MAX_RENDER_TASK_SIZE {
         panic!("Attempting to create a {}x{} window/document", size.width, size.height);
     }

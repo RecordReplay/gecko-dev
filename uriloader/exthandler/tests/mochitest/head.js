@@ -72,7 +72,7 @@ function createMockedObjects(createHandlerApp) {
     targetFileIsExecutable: false,
     saveToDisk() {},
     cancel() {},
-    launchWithApplication() {},
+    setDownloadToLaunch() {},
     setWebProgressListener() {},
     saveDestinationAvailable() {},
     contentLength: 42,
@@ -97,6 +97,15 @@ function createMockedObjects(createHandlerApp) {
   });
 
   return mockedLauncher;
+}
+
+function createTemporarySaveDirectory() {
+  var saveDir = Services.dirsvc.get("TmpD", Ci.nsIFile);
+  saveDir.append("testsavedir");
+  if (!saveDir.exists()) {
+    saveDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+  }
+  return saveDir;
 }
 
 async function openHelperAppDialog(launcher) {
@@ -199,10 +208,13 @@ async function waitForProtocolAppChooserDialog(browser, state) {
   );
 }
 
-async function promiseDownloadFinished(list) {
+async function promiseDownloadFinished(list, stopFromOpening) {
   return new Promise(resolve => {
     list.addView({
       onDownloadChanged(download) {
+        if (stopFromOpening) {
+          download.launchWhenSucceeded = false;
+        }
         info("Download changed!");
         if (download.succeeded || download.error) {
           info("Download succeeded or errored");
@@ -267,14 +279,15 @@ function setupMailHandler() {
 let gDownloadDir;
 
 async function setDownloadDir() {
-  let tmpDir = await PathUtils.getTempDir();
-  tmpDir = PathUtils.join(
-    tmpDir,
+  let tmpDir = PathUtils.join(
+    PathUtils.tempDir,
     "testsavedir" + Math.floor(Math.random() * 2 ** 32)
   );
   // Create this dir if it doesn't exist (ignores existing dirs)
   await IOUtils.makeDirectory(tmpDir);
   registerCleanupFunction(async function() {
+    Services.prefs.clearUserPref("browser.download.folderList");
+    Services.prefs.clearUserPref("browser.download.dir");
     try {
       await IOUtils.remove(tmpDir, { recursive: true });
     } catch (e) {
@@ -286,7 +299,235 @@ async function setDownloadDir() {
   return tmpDir;
 }
 
-add_task(async function test_common_initialize() {
+add_setup(async function test_common_initialize() {
   gDownloadDir = await setDownloadDir();
   Services.prefs.setCharPref("browser.download.loglevel", "Debug");
+  registerCleanupFunction(function() {
+    Services.prefs.clearUserPref("browser.download.loglevel");
+  });
 });
+
+async function removeAllDownloads() {
+  let publicList = await Downloads.getList(Downloads.PUBLIC);
+  let downloads = await publicList.getAll();
+  for (let download of downloads) {
+    await publicList.remove(download);
+    if (await IOUtils.exists(download.target.path)) {
+      await download.finalize(true);
+    }
+  }
+}
+
+// Helpers for external protocol sandbox tests.
+const EXT_PROTO_URI_MAILTO = "mailto:test@example.com";
+
+/**
+ * Creates and iframe and navigate to an external protocol from the iframe.
+ * @param {MozBrowser} browser - Browser to spawn iframe in.
+ * @param {string} sandboxAttr - Sandbox attribute value for the iframe.
+ * @param {'trustedClick'|'untrustedClick'|'trustedLocationAPI'|'untrustedLocationAPI'|'frameSrc'|'frameSrcRedirect'} triggerMethod
+ *  - How to trigger the navigation to the external protocol.
+ */
+async function navigateExternalProtoFromIframe(
+  browser,
+  sandboxAttr,
+  useCSPSandbox = false,
+  triggerMethod = "trustedClick"
+) {
+  if (
+    ![
+      "trustedClick",
+      "untrustedClick",
+      "trustedLocationAPI",
+      "untrustedLocationAPI",
+      "frameSrc",
+      "frameSrcRedirect",
+    ].includes(triggerMethod)
+  ) {
+    throw new Error("Invalid trigger method " + triggerMethod);
+  }
+
+  // Construct the url to use as iframe src.
+  let testPath = getRootDirectory(gTestPath).replace(
+    "chrome://mochitests/content",
+    "https://example.com"
+  );
+  let frameSrc = testPath + "/protocol_custom_sandbox_helper.sjs";
+
+  // Load the external protocol directly via the frame src field.
+  if (triggerMethod == "frameSrc") {
+    frameSrc = EXT_PROTO_URI_MAILTO;
+  } else if (triggerMethod == "frameSrcRedirect") {
+    let url = new URL(frameSrc);
+    url.searchParams.set("redirectCustomProtocol", "true");
+    frameSrc = url.href;
+  }
+
+  // If enabled set the sandbox attributes via CSP header instead. To do
+  // this we need to pass the sandbox flags to the test server via query
+  // params.
+  if (useCSPSandbox) {
+    let url = new URL(frameSrc);
+    url.searchParams.set("cspSandbox", sandboxAttr);
+    frameSrc = url.href;
+
+    // If we use CSP sandbox attributes we shouldn't set any via iframe attribute.
+    sandboxAttr = null;
+  }
+
+  // Create a sandboxed iframe and navigate to the external protocol.
+  await SpecialPowers.spawn(
+    browser,
+    [sandboxAttr, frameSrc, EXT_PROTO_URI_MAILTO, triggerMethod],
+    async (sandbox, src, extProtoURI, trigger) => {
+      let frame = content.document.createElement("iframe");
+
+      if (sandbox != null) {
+        frame.sandbox = sandbox;
+      }
+
+      frame.src = src;
+
+      let useFrameSrc = trigger == "frameSrc" || trigger == "frameSrcRedirect";
+
+      // Create frame load promise.
+      let frameLoadPromise;
+      // We won't get a load event if we directly put the external protocol in
+      // the frame src.
+      if (!useFrameSrc) {
+        frameLoadPromise = ContentTaskUtils.waitForEvent(frame, "load", false);
+      }
+
+      content.document.body.appendChild(frame);
+      await frameLoadPromise;
+
+      if (!useFrameSrc) {
+        // Trigger the external protocol navigation in the iframe. We test
+        // navigation by clicking links and navigation via the history API.
+        await SpecialPowers.spawn(
+          frame,
+          [extProtoURI, trigger],
+          async (uri, trigger2) => {
+            let link = content.document.createElement("a");
+            link.innerText = "CLICK ME";
+            link.id = "extProtoLink";
+            content.document.body.appendChild(link);
+
+            if (trigger2 == "trustedClick" || trigger2 == "untrustedClick") {
+              link.href = uri;
+            } else if (
+              trigger2 == "trustedLocationAPI" ||
+              trigger2 == "untrustedLocationAPI"
+            ) {
+              link.setAttribute("onclick", `location.href = '${uri}'`);
+            }
+
+            if (
+              trigger2 == "untrustedClick" ||
+              trigger2 == "untrustedLocationAPI"
+            ) {
+              link.click();
+            } else if (
+              trigger2 == "trustedClick" ||
+              trigger2 == "trustedLocationAPI"
+            ) {
+              await ContentTaskUtils.waitForCondition(
+                () => link,
+                "wait for link to be present"
+              );
+              await EventUtils.synthesizeMouseAtCenter(link, {}, content);
+            }
+          }
+        );
+      }
+    }
+  );
+}
+
+/**
+ * Wait for the sandbox error message which is shown in the web console when an
+ * external protocol navigation from a sandboxed context is blocked.
+ * @returns {Promise} - Promise which resolves once message has been logged.
+ */
+function waitForExtProtocolSandboxError() {
+  return new Promise(resolve => {
+    Services.console.registerListener(function onMessage(msg) {
+      let { message, logLevel } = msg;
+      if (logLevel != Ci.nsIConsoleMessage.error) {
+        return;
+      }
+      if (
+        !message.includes(
+          `Blocked navigation to custom protocol “${EXT_PROTO_URI_MAILTO}” from a sandboxed context.`
+        )
+      ) {
+        return;
+      }
+      Services.console.unregisterListener(onMessage);
+      resolve();
+    });
+  });
+}
+
+/**
+ * Run the external protocol sandbox test using iframes.
+ * @param {Object} options
+ * @param {boolean} options.blocked - Whether the navigation should be blocked.
+ * @param {string} options.sandbox -   See {@link navigateExternalProtoFromIframe}.
+ * @param {string} options.useCSPSandbox -  See {@link navigateExternalProtoFromIframe}.
+ * @param {string} options.triggerMethod - See {@link navigateExternalProtoFromIframe}.
+ * @returns {Promise} - Promise which resolves once the test has finished.
+ */
+function runExtProtocolSandboxTest(options) {
+  let { blocked, sandbox, useCSPSandbox = false, triggerMethod } = options;
+
+  let testPath = getRootDirectory(gTestPath).replace(
+    "chrome://mochitests/content",
+    "https://example.com"
+  );
+
+  info("runSandboxTest options: " + JSON.stringify(options));
+  return BrowserTestUtils.withNewTab(
+    testPath + "/protocol_custom_sandbox_helper.sjs",
+    async browser => {
+      if (blocked) {
+        let errorPromise = waitForExtProtocolSandboxError();
+        await navigateExternalProtoFromIframe(
+          browser,
+          sandbox,
+          useCSPSandbox,
+          triggerMethod
+        );
+        await errorPromise;
+
+        ok(
+          errorPromise,
+          "Should not show the dialog for iframe with sandbox " + sandbox
+        );
+      } else {
+        let dialogWindowOpenPromise = waitForProtocolAppChooserDialog(
+          browser,
+          true
+        );
+        await navigateExternalProtoFromIframe(
+          browser,
+          sandbox,
+          useCSPSandbox,
+          triggerMethod
+        );
+        let dialog = await dialogWindowOpenPromise;
+
+        ok(dialog, "Should show the dialog for sandbox " + sandbox);
+
+        // Close dialog before closing the tab to avoid intermittent failures.
+        let dialogWindowClosePromise = waitForProtocolAppChooserDialog(
+          browser,
+          false
+        );
+
+        dialog.close();
+        await dialogWindowClosePromise;
+      }
+    }
+  );
+}

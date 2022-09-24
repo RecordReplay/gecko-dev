@@ -16,6 +16,7 @@
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/NativeLayer.h"
 #include "mozilla/widget/ThemeChangeKind.h"
+#include "mozilla/widget/WindowOcclusionState.h"
 #include "nsRect.h"
 #include "nsIWidget.h"
 #include "nsWidgetsCID.h"
@@ -30,19 +31,16 @@
 
 #include <algorithm>
 
-#if defined(XP_WIN)
-// Scroll capture constants
-const uint32_t kScrollCaptureFillColor = 0xFFa0a0a0;  // gray
-const mozilla::gfx::SurfaceFormat kScrollCaptureFormat =
-    mozilla::gfx::SurfaceFormat::X8R8G8B8_UINT32;
-#endif
-
 class nsIContent;
 class gfxContext;
 
 namespace mozilla {
 class CompositorVsyncDispatcher;
 class LiveResizeListener;
+class FallbackRenderer;
+class SwipeTracker;
+struct SwipeEventQueue;
+class WidgetWheelEvent;
 
 #ifdef ACCESSIBILITY
 namespace a11y {
@@ -56,7 +54,6 @@ class SourceSurface;
 }  // namespace gfx
 
 namespace layers {
-class BasicLayerManager;
 class CompositorBridgeChild;
 class CompositorBridgeParent;
 class IAPZCTreeManager;
@@ -65,6 +62,7 @@ class APZEventState;
 struct APZEventResult;
 class CompositorSession;
 class ImageContainer;
+class WebRenderLayerManager;
 struct ScrollableLayerGuid;
 class RemoteCompositorSession;
 }  // namespace layers
@@ -142,7 +140,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   typedef base::Thread Thread;
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::SourceSurface SourceSurface;
-  typedef mozilla::layers::BasicLayerManager BasicLayerManager;
   typedef mozilla::layers::BufferMode BufferMode;
   typedef mozilla::layers::CompositorBridgeChild CompositorBridgeChild;
   typedef mozilla::layers::CompositorBridgeParent CompositorBridgeParent;
@@ -150,8 +147,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   typedef mozilla::layers::GeckoContentController GeckoContentController;
   typedef mozilla::layers::ScrollableLayerGuid ScrollableLayerGuid;
   typedef mozilla::layers::APZEventState APZEventState;
-  typedef mozilla::layers::SetAllowedTouchBehaviorCallback
-      SetAllowedTouchBehaviorCallback;
   typedef mozilla::CSSIntRect CSSIntRect;
   typedef mozilla::CSSRect CSSRect;
   typedef mozilla::ScreenRotation ScreenRotation;
@@ -164,13 +159,15 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
  public:
   nsBaseWidget();
 
-  NS_DECL_ISUPPORTS
+  explicit nsBaseWidget(nsBorderStyle aBorderStyle);
+
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   // nsIWidget interface
   void CaptureMouse(bool aCapture) override {}
   void CaptureRollupEvents(nsIRollupListener* aListener,
                            bool aDoCapture) override {}
-  nsIWidgetListener* GetWidgetListener() override;
+  nsIWidgetListener* GetWidgetListener() const override;
   void SetWidgetListener(nsIWidgetListener* alistener) override;
   void Destroy() override;
   void SetParent(nsIWidget* aNewParent) override{};
@@ -185,8 +182,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   void PlaceBehind(nsTopLevelWidgetZPlacement aPlacement, nsIWidget* aWidget,
                    bool aActivate) override {}
 
-  void SetSizeMode(nsSizeMode aMode) override;
-  nsSizeMode SizeMode() override { return mSizeMode; }
   void GetWorkspaceID(nsAString& workspaceID) override;
   void MoveToWorkspace(const nsAString& workspaceID) override;
   bool IsTiled() const override { return mIsTiled; }
@@ -200,7 +195,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   }
   void SetTransparencyMode(nsTransparencyMode aMode) override;
   nsTransparencyMode GetTransparencyMode() override;
-  void GetWindowClipRegion(nsTArray<LayoutDeviceIntRect>* aRects) override;
   void SetWindowShadowStyle(mozilla::StyleWindowShadow aStyle) override {}
   void SetShowsToolbarButton(bool aShow) override {}
   void SetSupportsNativeFullscreen(bool aSupportsNativeFullscreen) override {}
@@ -214,14 +208,10 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
                                    nsIRunnable* aCallback) override;
   void CleanupFullscreenTransition() override {}
   already_AddRefed<nsIScreen> GetWidgetScreen() override;
-  nsresult MakeFullScreen(bool aFullScreen,
-                          nsIScreen* aScreen = nullptr) override;
-  void InfallibleMakeFullScreen(bool aFullScreen, nsIScreen* aScreen = nullptr);
+  nsresult MakeFullScreen(bool aFullScreen) override;
+  void InfallibleMakeFullScreen(bool aFullScreen);
 
-  LayerManager* GetLayerManager(
-      PLayerTransactionChild* aShadowManager = nullptr,
-      LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
-      LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
+  WindowRenderer* GetWindowRenderer() override;
 
   // A remote compositor session tied to this window has been lost and IPC
   // messages will no longer work. The widget must clean up any lingering
@@ -229,7 +219,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   //
   // A reference to the session object is held until this function has
   // returned.
-  void NotifyCompositorSessionLost(
+  virtual void NotifyCompositorSessionLost(
       mozilla::layers::CompositorSession* aSession);
 
   already_AddRefed<mozilla::CompositorVsyncDispatcher>
@@ -244,8 +234,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   void SetModal(bool aModal) override {}
   uint32_t GetMaxTouchPoints() const override;
   void SetWindowClass(const nsAString& xulWinType) override {}
-  nsresult SetWindowClipRegion(const nsTArray<LayoutDeviceIntRect>& aRects,
-                               bool aIntersectWithExisting) override;
   // Return whether this widget interprets parameters to Move and Resize APIs
   // as "desktop pixels" rather than "device pixels", and therefore
   // applies its GetDefaultScale() value to them before using them as mBounds
@@ -276,6 +264,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   LayoutDeviceIntPoint GetClientOffset() override;
   void EnableDragDrop(bool aEnable) override{};
   nsresult AsyncEnableDragDrop(bool aEnable) override;
+  void SetResizeMargin(mozilla::LayoutDeviceIntCoord aResizeMargin) override;
   [[nodiscard]] nsresult GetAttention(int32_t aCycleCount) override {
     return NS_OK;
   }
@@ -310,7 +299,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
       const LayoutDeviceIntRect& aRect, nsWidgetInitData* aInitData = nullptr,
       bool aForceUseIWidgetParent = false) override;
   void AttachViewToTopLevel(bool aUseAttachedEvents) override;
-  nsIWidgetListener* GetAttachedWidgetListener() override;
+  nsIWidgetListener* GetAttachedWidgetListener() const override;
   void SetAttachedWidgetListener(nsIWidgetListener* aListener) override;
   nsIWidgetListener* GetPreviouslyAttachedWidgetListener() override;
   void SetPreviouslyAttachedWidgetListener(nsIWidgetListener*) override;
@@ -326,6 +315,8 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
       mozilla::WidgetInputEvent* aEvent) override;
   void DispatchEventToAPZOnly(mozilla::WidgetInputEvent* aEvent) override;
 
+  bool DispatchWindowEvent(mozilla::WidgetGUIEvent& event) override;
+
   void SetConfirmedTargetAPZC(
       uint64_t aInputBlockId,
       const nsTArray<ScrollableLayerGuid>& aTargets) const override;
@@ -336,13 +327,34 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
 
   bool AsyncPanZoomEnabled() const override;
 
+  void SwipeFinished() override;
+  void ReportSwipeStarted(uint64_t aInputBlockId, bool aStartSwipe) override;
+  void TrackScrollEventAsSwipe(const mozilla::PanGestureInput& aSwipeStartEvent,
+                               uint32_t aAllowedDirections);
+  struct SwipeInfo {
+    bool wantsSwipe;
+    uint32_t allowedDirections;
+  };
+  SwipeInfo SendMayStartSwipe(const mozilla::PanGestureInput& aSwipeStartEvent);
+  enum class CanTriggerSwipe : bool {
+    No = false,
+    Yes = true,
+  };
+  // Returns a WidgetWheelEvent which needs to be handled by APZ regardless of
+  // whether |aPanInput| event was used for SwipeTracker or not.
+  mozilla::WidgetWheelEvent MayStartSwipeForAPZ(
+      const mozilla::PanGestureInput& aPanInput,
+      const mozilla::layers::APZEventResult& aApzResult,
+      CanTriggerSwipe aCanTriggerSwipe);
+
+  // Returns true if |aPanInput| event was used for SwipeTracker, false
+  // otherwise.
+  bool MayStartSwipeForNonAPZ(const mozilla::PanGestureInput& aPanInput,
+                              CanTriggerSwipe aCanTriggerSwipe);
+
   void NotifyWindowDestroyed();
   void NotifySizeMoveDone();
   void NotifyWindowMoved(int32_t aX, int32_t aY);
-
-  // Register plugin windows for remote updates from the compositor
-  void RegisterPluginWindowForRemoteUpdates() override;
-  void UnregisterPluginWindowForRemoteUpdates() override;
 
   void SetNativeData(uint32_t aDataType, uintptr_t aVal) override {}
 
@@ -386,6 +398,8 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
 
   void StopAsyncAutoscroll(const ScrollableLayerGuid& aGuid) override;
 
+  mozilla::layers::LayersId GetRootLayerTreeId() override;
+
   /**
    * Use this when GetLayerManager() returns a BasicLayerManager
    * (nsBaseWidget::GetLayerManager() does). This sets up the widget's
@@ -399,13 +413,12 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   class AutoLayerManagerSetup {
    public:
     AutoLayerManagerSetup(nsBaseWidget* aWidget, gfxContext* aTarget,
-                          BufferMode aDoubleBuffering,
-                          ScreenRotation aRotation = mozilla::ROTATION_0);
+                          BufferMode aDoubleBuffering);
     ~AutoLayerManagerSetup();
 
    private:
     nsBaseWidget* mWidget;
-    RefPtr<BasicLayerManager> mLayerManager;
+    mozilla::FallbackRenderer* mRenderer = nullptr;
   };
   friend class AutoLayerManagerSetup;
 
@@ -416,10 +429,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   void Shutdown();
 
   void QuitIME();
-
-#if defined(XP_WIN)
-  uint64_t CreateScrollCaptureContainer() override;
-#endif
 
   // These functions should be called at the start and end of a "live" widget
   // resize (i.e. when the window contents are repainting during the resize,
@@ -437,6 +446,8 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
 #endif
 
   virtual void LocalesChanged() {}
+
+  virtual void NotifyOcclusionState(mozilla::widget::OcclusionState aState) {}
 
  protected:
   // These are methods for CompositorWidgetWrapper, and should only be
@@ -483,11 +494,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
       mozilla::WidgetInputEvent* aEvent,
       const mozilla::layers::APZEventResult& aApzResult);
 
-  const LayoutDeviceIntRegion RegionFromArray(
-      const nsTArray<LayoutDeviceIntRect>& aRects);
-  void ArrayFromRegion(const LayoutDeviceIntRegion& aRegion,
-                       nsTArray<LayoutDeviceIntRect>& aRects);
-
   nsresult SynthesizeNativeKeyEvent(int32_t aNativeKeyboardLayout,
                                     int32_t aNativeKeyCode,
                                     uint32_t aModifierFlags,
@@ -532,7 +538,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
     return NS_ERROR_UNEXPECTED;
   }
 
-  nsresult SynthesizeNativeTouchPadPinch(TouchpadPinchPhase aEventPhase,
+  nsresult SynthesizeNativeTouchPadPinch(TouchpadGesturePhase aEventPhase,
                                          float aScale,
                                          LayoutDeviceIntPoint aPoint,
                                          int32_t aModifierFlags) override {
@@ -546,6 +552,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
                                     LayoutDeviceIntPoint aPoint,
                                     double aPressure, uint32_t aRotation,
                                     int32_t aTiltX, int32_t aTiltY,
+                                    int32_t aButton,
                                     nsIObserver* aObserver) override {
     MOZ_RELEASE_ASSERT(
         false, "This method is not implemented on the current platform");
@@ -559,6 +566,16 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
     return NS_ERROR_UNEXPECTED;
   }
 
+  nsresult SynthesizeNativeTouchpadPan(TouchpadGesturePhase aEventPhase,
+                                       LayoutDeviceIntPoint aPoint,
+                                       double aDeltaX, double aDeltaY,
+                                       int32_t aModifierFlags,
+                                       nsIObserver* aObserver) override {
+    MOZ_RELEASE_ASSERT(
+        false, "This method is not implemented on the current platform");
+    return NS_ERROR_UNEXPECTED;
+  }
+
   /**
    * GetPseudoIMEContext() returns pseudo IME context when TextEventDispatcher
    * has non-native input transaction.  Otherwise, returns nullptr.
@@ -566,30 +583,15 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   void* GetPseudoIMEContext();
 
  protected:
-  // Utility to check if an array of clip rects is equal to our
-  // internally stored clip rect array mClipRects.
-  bool IsWindowClipRegionEqual(const nsTArray<LayoutDeviceIntRect>& aRects);
-
-  // Stores the clip rectangles in aRects into mClipRects.
-  void StoreWindowClipRegion(const nsTArray<LayoutDeviceIntRect>& aRects);
-
   virtual already_AddRefed<nsIWidget> AllocateChildPopupWidget() {
     return nsIWidget::CreateChildWindow();
   }
 
-  LayerManager* CreateBasicLayerManager();
+  WindowRenderer* CreateFallbackRenderer();
 
   nsPopupType PopupType() const { return mPopupType; }
 
   bool HasRemoteContent() const { return mHasRemoteContent; }
-
-  void NotifyRollupGeometryChange() {
-    // XULPopupManager isn't interested in this notification, so only
-    // send it if gRollupListener is set.
-    if (gRollupListener) {
-      gRollupListener->NotifyGeometryChange();
-    }
-  }
 
   /**
    * Apply the current size constraints to the given size.
@@ -607,6 +609,8 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   CompositorBridgeChild* GetRemoteRenderer() override;
 
   void ClearCachedWebrenderResources() override;
+
+  bool SetNeedFastSnaphot() override;
 
   /**
    * Notify the widget that this window is being used with OMTC.
@@ -658,26 +662,9 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   void DispatchPanGestureInput(mozilla::PanGestureInput& aInput);
   void DispatchPinchGestureInput(mozilla::PinchGestureInput& aInput);
 
-#if defined(XP_WIN)
-  void UpdateScrollCapture() override;
-
-  /**
-   * To be overridden by derived classes to return a snapshot that can be used
-   * during scrolling. Returning null means we won't update the container.
-   * @return an already AddRefed SourceSurface containing the snapshot
-   */
-  virtual already_AddRefed<SourceSurface> CreateScrollSnapshot() {
-    return nullptr;
-  };
-
-  /**
-   * Used by derived classes to create a fallback scroll image.
-   * @param aSnapshotDrawTarget DrawTarget to fill with fallback image.
-   */
-  void DefaultFillScrollCapture(DrawTarget* aSnapshotDrawTarget);
-
-  RefPtr<ImageContainer> mScrollCaptureContainer;
-#endif
+  static bool ConvertStatus(nsEventStatus aStatus) {
+    return aStatus == nsEventStatus_eConsumeNoDefault;
+  }
 
  protected:
   // Returns whether compositing should use an external surface size.
@@ -703,7 +690,7 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   nsIWidgetListener* mWidgetListener;
   nsIWidgetListener* mAttachedWidgetListener;
   nsIWidgetListener* mPreviouslyAttachedWidgetListener;
-  RefPtr<LayerManager> mLayerManager;
+  RefPtr<WindowRenderer> mWindowRenderer;
   RefPtr<CompositorSession> mCompositorSession;
   RefPtr<CompositorBridgeChild> mCompositorBridgeChild;
 
@@ -713,18 +700,15 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   RefPtr<IAPZCTreeManager> mAPZC;
   RefPtr<GeckoContentController> mRootContentController;
   RefPtr<APZEventState> mAPZEventState;
-  SetAllowedTouchBehaviorCallback mSetAllowedTouchBehaviorCallback;
   RefPtr<WidgetShutdownObserver> mShutdownObserver;
   RefPtr<LocalesChangedObserver> mLocalesChangedObserver;
   RefPtr<TextEventDispatcher> mTextEventDispatcher;
+  RefPtr<mozilla::SwipeTracker> mSwipeTracker;
+  mozilla::UniquePtr<mozilla::SwipeEventQueue> mSwipeEventQueue;
   Cursor mCursor;
   nsBorderStyle mBorderStyle;
   LayoutDeviceIntRect mBounds;
   LayoutDeviceIntRect* mOriginalBounds;
-  // When this pointer is null, the widget is not clipped
-  mozilla::UniquePtr<LayoutDeviceIntRect[]> mClipRects;
-  uint32_t mClipRectCount;
-  nsSizeMode mSizeMode;
   bool mIsTiled;
   nsPopupLevel mPopupLevel;
   nsPopupType mPopupType;
@@ -737,6 +721,15 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
   bool mIMEHasFocus;
   bool mIMEHasQuit;
   bool mIsFullyOccluded;
+  bool mNeedFastSnaphot;
+  // This flag is only used when APZ is off. It indicates that the current pan
+  // gesture was processed as a swipe. Sometimes the swipe animation can finish
+  // before momentum events of the pan gesture have stopped firing, so this
+  // flag tells us that we shouldn't allow the remaining events to cause
+  // scrolling. It is reset to false once a new gesture starts (as indicated by
+  // a PANGESTURE_(MAY)START event).
+  bool mCurrentPanGestureBelongsToSwipe;
+
   static nsIRollupListener* gRollupListener;
 
   struct InitialZoomConstraints {
@@ -763,7 +756,6 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
  protected:
   static nsAutoString debug_GuiEventToString(
       mozilla::WidgetGUIEvent* aGuiEvent);
-  static bool debug_WantPaintFlashing();
 
   static void debug_DumpInvalidate(FILE* aFileOut, nsIWidget* aWidget,
                                    const LayoutDeviceIntRect* aRect,
@@ -781,8 +773,9 @@ class nsBaseWidget : public nsIWidget, public nsSupportsWeakReference {
 #endif
 
  private:
-  already_AddRefed<LayerManager> CreateCompositorSession(
-      int aWidth, int aHeight, mozilla::layers::CompositorOptions* aOptionsOut);
+  already_AddRefed<mozilla::layers::WebRenderLayerManager>
+  CreateCompositorSession(int aWidth, int aHeight,
+                          mozilla::layers::CompositorOptions* aOptionsOut);
 };
 
 #endif  // nsBaseWidget_h__

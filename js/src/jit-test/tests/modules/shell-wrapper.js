@@ -1,4 +1,5 @@
-// Test shell ModuleObject wrapper's accessors and methods.
+// |jit-test| module
+// Test shell ModuleObject wrapper's accessors and methods
 
 load(libdir + "asserts.js");
 
@@ -64,7 +65,7 @@ f();
 `));
 d.declarationInstantiation();
 try {
-  d.evaluation();
+  await d.evaluation();
 } catch (e) {
 }
 assertEq(d.evaluationError instanceof ReferenceError, true);
@@ -203,20 +204,29 @@ p.evaluation();
 testMethod(p, "declarationInstantiation");
 testMethod(p, "evaluation");
 
-const q = decodeModule(codeModule(parseModule(``)));
+const xdr = compileToStencilXDR(``, {module: true});
+const q = instantiateModuleStencilXDR(xdr);
 q.declarationInstantiation();
 q.evaluation();
 testMethod(q, "declarationInstantiation");
 testMethod(q, "evaluation");
 
 if (helperThreadCount() > 0) {
-  offThreadCompileModule(``);
-  let r = finishOffThreadModule();
+  offThreadCompileModuleToStencil(``);
+  let stencil = finishOffThreadCompileModuleToStencil();
+  let r = instantiateModuleStencil(stencil);
   r.declarationInstantiation();
   r.evaluation();
   testMethod(r, "declarationInstantiation");
   testMethod(r, "evaluation");
 }
+
+const stencil = compileToStencil(``, {module: true});
+const t = instantiateModuleStencil(stencil);
+t.declarationInstantiation();
+t.evaluation();
+testMethod(t, "declarationInstantiation");
+testMethod(t, "evaluation");
 
 // ==== gatherAsyncParentCompletions method shouldn't be exposed ====
 const s = parseModule(``);

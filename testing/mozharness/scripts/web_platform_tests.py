@@ -55,6 +55,15 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
                 },
             ],
             [
+                ["--disable-fission"],
+                {
+                    "action": "store_true",
+                    "dest": "disable_fission",
+                    "default": False,
+                    "help": "Run without fission enabled",
+                },
+            ],
+            [
                 ["--total-chunks"],
                 {
                     "action": "store",
@@ -78,15 +87,6 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
                     "default": False,
                     "help": "Permits a software GL implementation (such as LLVMPipe) "
                     "to use the GL compositor.",
-                },
-            ],
-            [
-                ["--enable-webrender"],
-                {
-                    "action": "store_true",
-                    "dest": "enable_webrender",
-                    "default": False,
-                    "help": "Enable the WebRender compositor in Gecko.",
                 },
             ],
             [
@@ -173,7 +173,6 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
             config_options=self.config_options,
             all_actions=[
                 "clobber",
-                "setup-avds",
                 "download-and-extract",
                 "download-and-process-manifest",
                 "create-virtualenv",
@@ -233,18 +232,13 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
         if self.is_android:
             dirs["abs_xre_dir"] = os.path.join(abs_dirs["abs_work_dir"], "hostutils")
         if self.is_emulator:
-            dirs["abs_avds_dir"] = os.path.join(abs_dirs["abs_work_dir"], ".android")
-            fetches_dir = os.environ.get("MOZ_FETCHES_DIR")
-            if fetches_dir:
-                dirs["abs_sdk_dir"] = os.path.join(fetches_dir, "android-sdk-linux")
-            else:
-                dirs["abs_sdk_dir"] = os.path.join(
-                    abs_dirs["abs_work_dir"], "android-sdk-linux"
-                )
-            if self.config["enable_webrender"]:
-                # AndroidMixin uses this when launching the emulator. We only want
-                # GLES3 if we're running WebRender
-                self.use_gles3 = True
+            work_dir = os.environ.get("MOZ_FETCHES_DIR") or abs_dirs["abs_work_dir"]
+            dirs["abs_sdk_dir"] = os.path.join(work_dir, "android-sdk-linux")
+            dirs["abs_avds_dir"] = os.path.join(work_dir, "android-device")
+            dirs["abs_bundletool_path"] = os.path.join(work_dir, "bundletool.jar")
+            # AndroidMixin uses this when launching the emulator. We only want
+            # GLES3 if we're running WebRender (default)
+            self.use_gles3 = True
 
         abs_dirs.update(dirs)
         self.abs_dirs = abs_dirs
@@ -306,7 +300,6 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
             "--log-wptreport=%s"
             % os.path.join(dirs["abs_blob_upload_dir"], "wptreport.json"),
             "--log-errorsummary=%s" % error_summary_file,
-            "--binary=%s" % self.binary_path,
             "--symbols-path=%s" % self.symbols_path,
             "--stackwalk-binary=%s" % self.query_minidump_stackwalk(),
             "--stackfix-dir=%s" % os.path.join(dirs["abs_test_install_dir"], "bin"),
@@ -327,10 +320,9 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
             self.is_android
             or mozinfo.info["tsan"]
             or "wdspec" in test_types
-            or "fission.autostart=true" in c["extra_prefs"]
-            or
+            or not c["disable_fission"]
             # Bug 1392106 - skia error 0x80070005: Access is denied.
-            is_windows_7
+            or is_windows_7
             and mozinfo.info["debug"]
         ):
             processes = 1
@@ -343,6 +335,8 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
                 "--device-serial=%s" % self.device_serial,
                 "--package-name=%s" % self.query_package_name(),
             ]
+        else:
+            cmd.append("--binary=%s" % self.binary_path)
 
         if is_windows_7:
             # On Windows 7 --install-fonts fails, so fall back to a Firefox-specific codepath
@@ -356,11 +350,11 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
         if c["extra_prefs"]:
             cmd.extend(["--setpref={}".format(p) for p in c["extra_prefs"]])
 
+        if c["disable_fission"]:
+            cmd.append("--disable-fission")
+
         if not c["e10s"]:
             cmd.append("--disable-e10s")
-
-        if c["enable_webrender"]:
-            cmd.append("--enable-webrender")
 
         if c["skip_timeout"]:
             cmd.append("--skip-timeout")
@@ -510,7 +504,7 @@ class WebPlatformTest(TestingMixin, MercurialScript, CodeCoverageMixin, AndroidM
 
     def install(self):
         if self.is_android:
-            self.install_apk(self.installer_path)
+            self.install_android_app(self.installer_path)
         else:
             super(WebPlatformTest, self).install()
 

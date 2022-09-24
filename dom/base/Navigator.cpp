@@ -32,7 +32,9 @@
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/StaticPrefs_media.h"
 #include "mozilla/StaticPrefs_network.h"
+#include "mozilla/StaticPrefs_pdfjs.h"
 #include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/StorageAccess.h"
 #include "mozilla/Telemetry.h"
 #include "BatteryManager.h"
 #include "mozilla/dom/CredentialsContainer.h"
@@ -43,6 +45,7 @@
 #include "mozilla/dom/MediaSession.h"
 #include "mozilla/dom/WakeLock.h"
 #include "mozilla/dom/power/PowerManagerService.h"
+#include "mozilla/dom/LockManager.h"
 #include "mozilla/dom/MIDIAccessManager.h"
 #include "mozilla/dom/MIDIOptionsBinding.h"
 #include "mozilla/dom/Permissions.h"
@@ -99,10 +102,6 @@
 #include "mozilla/dom/WorkerPrivate.h"
 #include "mozilla/dom/WorkerRunnable.h"
 
-#if defined(XP_LINUX)
-#  include "mozilla/Hal.h"
-#endif
-
 #if defined(XP_WIN)
 #  include "mozilla/WindowsVersion.h"
 #endif
@@ -132,7 +131,7 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(Navigator)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(Navigator)
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(Navigator)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(Navigator)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Navigator)
   tmp->Invalidate();
@@ -142,7 +141,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(Navigator)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
-  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMimeTypes)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPlugins)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mPermissions)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mGeolocation)
@@ -157,6 +155,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaSession)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mAddonManager)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWebGpu)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mLocks)
 
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMediaKeySystemAccessManager)
@@ -167,17 +166,11 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(Navigator)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mXRSystem)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(Navigator)
-
 void Navigator::Invalidate() {
   // Don't clear mWindow here so we know we've got a non-null mWindow
   // until we're unlinked.
 
-  mMimeTypes = nullptr;
-
-  if (mPlugins) {
-    mPlugins = nullptr;
-  }
+  mPlugins = nullptr;
 
   mPermissions = nullptr;
 
@@ -237,6 +230,14 @@ void Navigator::Invalidate() {
   mAddonManager = nullptr;
 
   mWebGpu = nullptr;
+
+  if (mLocks) {
+    // Unloading a page does not immediately destruct the lock manager actor,
+    // but we want to abort the lock requests as soon as possible. Explicitly
+    // call Shutdown() to do that.
+    mLocks->Shutdown();
+    mLocks = nullptr;
+  }
 
   mSharePromise = nullptr;
 }
@@ -465,15 +466,12 @@ void Navigator::GetProductSub(nsAString& aProductSub) {
 }
 
 nsMimeTypeArray* Navigator::GetMimeTypes(ErrorResult& aRv) {
-  if (!mMimeTypes) {
-    if (!mWindow) {
-      aRv.Throw(NS_ERROR_UNEXPECTED);
-      return nullptr;
-    }
-    mMimeTypes = new nsMimeTypeArray(mWindow);
+  auto* plugins = GetPlugins(aRv);
+  if (!plugins) {
+    return nullptr;
   }
 
-  return mMimeTypes;
+  return plugins->MimeTypeArray();
 }
 
 nsPluginArray* Navigator::GetPlugins(ErrorResult& aRv) {
@@ -482,10 +480,17 @@ nsPluginArray* Navigator::GetPlugins(ErrorResult& aRv) {
       aRv.Throw(NS_ERROR_UNEXPECTED);
       return nullptr;
     }
-    mPlugins = new nsPluginArray(mWindow);
+    mPlugins = MakeRefPtr<nsPluginArray>(mWindow);
   }
 
   return mPlugins;
+}
+
+bool Navigator::PdfViewerEnabled() {
+  // We ignore pdfjs.disabled when resisting fingerprinting.
+  // See bug 1756280 for an explanation.
+  return !StaticPrefs::pdfjs_disabled() ||
+         nsContentUtils::ShouldResistFingerprinting(GetDocShell());
 }
 
 Permissions* Navigator::GetPermissions(ErrorResult& aRv) {
@@ -540,6 +545,13 @@ bool Navigator::CookieEnabled() {
     // Not a content, so technically can't set cookies, but let's
     // just return the default value.
     return cookieEnabled;
+  }
+
+  // We should return true if the cookie is partitioned because the cookie is
+  // still available in this case.
+  if (!granted &&
+      StoragePartitioningEnabled(rejectedReason, doc->CookieJarSettings())) {
+    granted = true;
   }
 
   ContentBlockingNotifier::OnDecision(
@@ -623,6 +635,11 @@ void Navigator::GetDoNotTrack(nsAString& aResult) {
   }
 }
 
+bool Navigator::GlobalPrivacyControl() {
+  return StaticPrefs::privacy_globalprivacycontrol_enabled() &&
+         StaticPrefs::privacy_globalprivacycontrol_functionality_enabled();
+}
+
 uint64_t Navigator::HardwareConcurrency() {
   workerinternals::RuntimeService* rts =
       workerinternals::RuntimeService::GetOrCreateService();
@@ -630,13 +647,8 @@ uint64_t Navigator::HardwareConcurrency() {
     return 1;
   }
 
-  return rts->ClampedHardwareConcurrency();
-}
-
-void Navigator::RefreshMIMEArray() {
-  if (mMimeTypes) {
-    mMimeTypes->Refresh();
-  }
+  return rts->ClampedHardwareConcurrency(
+      nsContentUtils::ShouldResistFingerprinting(mWindow->GetExtantDoc()));
 }
 
 namespace {
@@ -865,9 +877,33 @@ uint32_t Navigator::MaxTouchPoints(CallerType aCallerType) {
 // https://html.spec.whatwg.org/multipage/system-state.html#custom-handlers
 // If you change this list, please also update the copy in E10SUtils.jsm.
 static const char* const kSafeSchemes[] = {
-    "bitcoin", "geo", "im",   "irc",  "ircs",        "magnet", "mailto",
-    "matrix",  "mms", "news", "nntp", "openpgp4fpr", "sip",    "sms",
-    "smsto",   "ssh", "tel",  "urn",  "webcal",      "wtai",   "xmpp"};
+    // clang-format off
+    "bitcoin",
+    "ftp",
+    "ftps",
+    "geo",
+    "im",
+    "irc",
+    "ircs",
+    "magnet",
+    "mailto",
+    "matrix",
+    "mms",
+    "news",
+    "nntp",
+    "openpgp4fpr",
+    "sftp",
+    "sip",
+    "sms",
+    "smsto",
+    "ssh",
+    "tel",
+    "urn",
+    "webcal",
+    "wtai",
+    "xmpp",
+    // clang-format on
+};
 
 void Navigator::CheckProtocolHandlerAllowed(const nsAString& aScheme,
                                             nsIURI* aHandlerURI,
@@ -1360,9 +1396,14 @@ Promise* Navigator::GetBattery(ErrorResult& aRv) {
 //    Navigator::Share() - Web Share API
 //*****************************************************************************
 
-Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
-  if (NS_WARN_IF(!mWindow || !mWindow->GetDocShell() ||
-                 !mWindow->GetExtantDoc())) {
+already_AddRefed<Promise> Navigator::Share(const ShareData& aData,
+                                           ErrorResult& aRv) {
+  if (!mWindow || !mWindow->IsFullyActive()) {
+    aRv.ThrowInvalidStateError("The document is not fully active.");
+    return nullptr;
+  }
+
+  if (NS_WARN_IF(!mWindow->GetDocShell() || !mWindow->GetExtantDoc())) {
     aRv.Throw(NS_ERROR_UNEXPECTED);
     return nullptr;
   }
@@ -1370,7 +1411,7 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
   if (!FeaturePolicyUtils::IsFeatureAllowed(mWindow->GetExtantDoc(),
                                             u"web-share"_ns)) {
     aRv.ThrowNotAllowedError(
-        "Document's Permission Policy does not allow calling "
+        "Document's Permissions Policy does not allow calling "
         "share() from this context.");
     return nullptr;
   }
@@ -1382,7 +1423,7 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
   }
 
   // null checked above
-  auto* doc = mWindow->GetExtantDoc();
+  Document* doc = mWindow->GetExtantDoc();
 
   if (StaticPrefs::dom_webshare_requireinteraction() &&
       !doc->ConsumeTransientUserGestureActivation()) {
@@ -1392,40 +1433,20 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
     return nullptr;
   }
 
-  // If none of data's members title, text, or url are present, reject p with
-  // TypeError, and abort these steps.
-  bool someMemberPassed = aData.mTitle.WasPassed() || aData.mText.WasPassed() ||
-                          aData.mUrl.WasPassed();
-  if (!someMemberPassed) {
-    aRv.ThrowTypeError(
-        "Must have a title, text, or url in the ShareData dictionary");
+  ValidateShareData(aData, aRv);
+
+  if (aRv.Failed()) {
     return nullptr;
   }
+
+  // TODO: Process file member, which we don't currently support.
 
   // If data's url member is present, try to resolve it...
   nsCOMPtr<nsIURI> url;
   if (aData.mUrl.WasPassed()) {
     auto result = doc->ResolveWithBaseURI(aData.mUrl.Value());
-    if (NS_WARN_IF(result.isErr())) {
-      aRv.ThrowTypeError<MSG_INVALID_URL>(
-          NS_ConvertUTF16toUTF8(aData.mUrl.Value()));
-      return nullptr;
-    }
     url = result.unwrap();
-    // Check that we only share loadable URLs (e.g., http/https).
-    // we also exclude blobs, as it doesn't make sense to share those outside
-    // the context of the browser.
-    const uint32_t flags =
-        nsIScriptSecurityManager::DISALLOW_INHERIT_PRINCIPAL |
-        nsIScriptSecurityManager::DISALLOW_SCRIPT;
-    if (NS_FAILED(
-            nsContentUtils::GetSecurityManager()->CheckLoadURIWithPrincipal(
-                doc->NodePrincipal(), url, flags, doc->InnerWindowID())) ||
-        url->SchemeIs("blob")) {
-      aRv.ThrowTypeError<MSG_INVALID_URL_SCHEME>("Share",
-                                                 url->GetSpecOrDefault());
-      return nullptr;
-    }
+    MOZ_ASSERT(url);
   }
 
   // Process the title member...
@@ -1474,7 +1495,71 @@ Promise* Navigator::Share(const ShareData& aData, ErrorResult& aRv) {
         }
         self->mSharePromise = nullptr;
       });
-  return mSharePromise;
+  return do_AddRef(mSharePromise);
+}
+
+//*****************************************************************************
+//    Navigator::CanShare() - Web Share API
+//*****************************************************************************
+bool Navigator::CanShare(const ShareData& aData) {
+  if (!mWindow || !mWindow->IsFullyActive()) {
+    return false;
+  }
+
+  if (!FeaturePolicyUtils::IsFeatureAllowed(mWindow->GetExtantDoc(),
+                                            u"web-share"_ns)) {
+    return false;
+  }
+
+  IgnoredErrorResult rv;
+  ValidateShareData(aData, rv);
+  return !rv.Failed();
+}
+
+void Navigator::ValidateShareData(const ShareData& aData, ErrorResult& aRv) {
+  // TODO: remove this check when we support files share.
+  if (aData.mFiles.WasPassed() && !aData.mFiles.Value().IsEmpty()) {
+    aRv.ThrowTypeError("Passing files is currently not supported.");
+    return;
+  }
+
+  bool titleTextOrUrlPassed = aData.mTitle.WasPassed() ||
+                              aData.mText.WasPassed() || aData.mUrl.WasPassed();
+
+  // At least one member must be present.
+  if (!titleTextOrUrlPassed) {
+    aRv.ThrowTypeError(
+        "Must have a title, text, or url member in the ShareData dictionary");
+    return;
+  }
+
+  // If data's url member is present, try to resolve it...
+  nsCOMPtr<nsIURI> url;
+  if (aData.mUrl.WasPassed()) {
+    Document* doc = mWindow->GetExtantDoc();
+    Result<OwningNonNull<nsIURI>, nsresult> result =
+        doc->ResolveWithBaseURI(aData.mUrl.Value());
+    if (NS_WARN_IF(result.isErr())) {
+      aRv.ThrowTypeError<MSG_INVALID_URL>(
+          NS_ConvertUTF16toUTF8(aData.mUrl.Value()));
+      return;
+    }
+    url = result.unwrap();
+    // Check that we only share loadable URLs (e.g., http/https).
+    // we also exclude blobs, as it doesn't make sense to share those outside
+    // the context of the browser.
+    const uint32_t flags =
+        nsIScriptSecurityManager::DISALLOW_INHERIT_PRINCIPAL |
+        nsIScriptSecurityManager::DISALLOW_SCRIPT;
+    if (NS_FAILED(
+            nsContentUtils::GetSecurityManager()->CheckLoadURIWithPrincipal(
+                doc->NodePrincipal(), url, flags, doc->InnerWindowID())) ||
+        url->SchemeIs("blob")) {
+      aRv.ThrowTypeError<MSG_INVALID_URL_SCHEME>("Share",
+                                                 url->GetSpecOrDefault());
+      return;
+    }
+  }
 }
 
 already_AddRefed<LegacyMozTCPSocket> Navigator::MozTCPSocket() {
@@ -1484,8 +1569,7 @@ already_AddRefed<LegacyMozTCPSocket> Navigator::MozTCPSocket() {
 
 void Navigator::GetGamepads(nsTArray<RefPtr<Gamepad>>& aGamepads,
                             ErrorResult& aRv) {
-  if (!mWindow || !mWindow->GetExtantDoc()) {
-    aRv.Throw(NS_ERROR_UNEXPECTED);
+  if (!mWindow || !mWindow->IsFullyActive()) {
     return;
   }
   NS_ENSURE_TRUE_VOID(mWindow->GetDocShell());
@@ -1722,7 +1806,9 @@ network::Connection* Navigator::GetConnection(ErrorResult& aRv) {
       aRv.Throw(NS_ERROR_UNEXPECTED);
       return nullptr;
     }
-    mConnection = network::Connection::CreateForWindow(mWindow);
+    nsCOMPtr<Document> doc = mWindow->GetExtantDoc();
+    mConnection = network::Connection::CreateForWindow(
+        mWindow, nsContentUtils::ShouldResistFingerprinting(doc));
   }
 
   return mConnection;
@@ -2039,9 +2125,7 @@ already_AddRefed<Promise> Navigator::RequestMediaKeySystemAccess(
   }
 
   RefPtr<DetailedPromise> promise = DetailedPromise::Create(
-      mWindow->AsGlobal(), aRv, "navigator.requestMediaKeySystemAccess"_ns,
-      Telemetry::VIDEO_EME_REQUEST_SUCCESS_LATENCY_MS,
-      Telemetry::VIDEO_EME_REQUEST_FAILURE_LATENCY_MS);
+      mWindow->AsGlobal(), aRv, "navigator.requestMediaKeySystemAccess"_ns);
   if (aRv.Failed()) {
     return nullptr;
   }
@@ -2111,6 +2195,13 @@ webgpu::Instance* Navigator::Gpu() {
   return mWebGpu;
 }
 
+dom::LockManager* Navigator::Locks() {
+  if (!mLocks) {
+    mLocks = new dom::LockManager(GetWindow()->AsGlobal());
+  }
+  return mLocks;
+}
+
 /* static */
 bool Navigator::Webdriver() {
 #ifdef ENABLE_WEBDRIVER
@@ -2125,9 +2216,9 @@ bool Navigator::Webdriver() {
 
   nsCOMPtr<nsIRemoteAgent> agent = do_GetService(NS_REMOTEAGENT_CONTRACTID);
   if (agent) {
-    bool remoteAgentListening = false;
-    agent->GetListening(&remoteAgentListening);
-    if (remoteAgentListening) {
+    bool remoteAgentRunning = false;
+    agent->GetRunning(&remoteAgentRunning);
+    if (remoteAgentRunning) {
       return true;
     }
   }

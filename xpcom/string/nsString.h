@@ -17,11 +17,6 @@
 #include "nsDependentSubstring.h"
 #include "nsReadableUtils.h"
 
-// enable support for the obsolete string API if not explicitly disabled
-#ifndef MOZ_STRING_WITH_OBSOLETE_API
-#  define MOZ_STRING_WITH_OBSOLETE_API 1
-#endif
-
 #include "nsTString.h"
 
 static_assert(sizeof(char16_t) == 2, "size of char16_t must be 2");
@@ -104,6 +99,10 @@ class NS_ConvertUTF16toUTF8 : public nsAutoCString {
     AppendUTF16toUTF8(aString, *this);
   }
 
+  explicit NS_ConvertUTF16toUTF8(mozilla::Span<const char16_t> aString) {
+    AppendUTF16toUTF8(aString, *this);
+  }
+
  private:
   // NOT TO BE IMPLEMENTED
   NS_ConvertUTF16toUTF8(char) = delete;
@@ -120,6 +119,10 @@ class NS_ConvertUTF8toUTF16 : public nsAutoString {
   }
 
   explicit NS_ConvertUTF8toUTF16(const nsACString& aCString) {
+    AppendUTF8toUTF16(aCString, *this);
+  }
+
+  explicit NS_ConvertUTF8toUTF16(mozilla::Span<const char> aCString) {
     AppendUTF8toUTF16(aCString, *this);
   }
 

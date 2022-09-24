@@ -55,6 +55,7 @@ let gFindTypes = [
   "findhighlightallchange",
   "findcasesensitivitychange",
   "findbarclose",
+  "finddiacriticmatchingchange",
 ];
 
 class PdfjsParent extends JSWindowActorParent {
@@ -98,6 +99,7 @@ class PdfjsParent extends JSWindowActorParent {
     const data = aMsg.data;
     this.browser.ownerGlobal.saveURL(
       data.blobUrl /* aURL */,
+      data.originalUrl /* aOriginalURL */,
       data.filename /* aFileName */,
       null /* aFilePickerTitleKey */,
       true /* aShouldBypassCache */,
@@ -211,6 +213,7 @@ class PdfjsParent extends JSWindowActorParent {
         entireWord: aEvent.detail.entireWord,
         highlightAll: aEvent.detail.highlightAll,
         findPrevious: aEvent.detail.findPrevious,
+        matchDiacritics: aEvent.detail.matchDiacritics,
       };
     }
 
@@ -329,19 +332,20 @@ class PdfjsParent extends JSWindowActorParent {
       },
     ];
     notificationBox.appendNotification(
-      data.message,
       "pdfjs-fallback",
-      null,
-      notificationBox.PRIORITY_INFO_MEDIUM,
-      buttons,
-      function eventsCallback(eventType) {
-        // Currently there is only one event "removed" but if there are any other
-        // added in the future we still only care about removed at the moment.
-        if (eventType !== "removed") {
-          return;
-        }
-        sendMessage(false);
-      }
+      {
+        label: data.message,
+        priority: notificationBox.PRIORITY_INFO_MEDIUM,
+        eventCallback: eventType => {
+          // Currently there is only one event "removed" but if there are any other
+          // added in the future we still only care about removed at the moment.
+          if (eventType !== "removed") {
+            return;
+          }
+          sendMessage(false);
+        },
+      },
+      buttons
     );
   }
 }

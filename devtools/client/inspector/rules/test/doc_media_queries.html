@@ -24,11 +24,19 @@
       }
     }
   </style>
+  <script>
+    "use strict";
+    if (window.location.search == "?constructed") {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(`div { z-index: 0 }`);
+      document.adoptedStyleSheets.push(sheet);
+    }
+  </script>
 </head>
 <body>
 <div></div>
 <iframe
-  src='http://example.org/document-builder.sjs?html=<style>html { background: cyan;} @media (prefers-color-scheme: dark) {html {background: darkred;}}'>
+  src='https://example.org/document-builder.sjs?html=<style>html { background: cyan;} @media (prefers-color-scheme: dark) {html {background: darkred;}}'>
 </iframe>
 </body>
 </html>

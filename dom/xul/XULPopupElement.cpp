@@ -12,13 +12,13 @@
 #include "nsView.h"
 #include "mozilla/AppUnits.h"
 #include "mozilla/dom/DOMRect.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/Event.h"
 #include "mozilla/dom/XULPopupElement.h"
 #include "mozilla/dom/XULPopupElementBinding.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 nsXULElement* NS_NewXULPopupElement(
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo) {
@@ -58,7 +58,7 @@ void XULPopupElement::OpenPopup(Element* aAnchorElement,
     if (!aAnchorElement && position.IsEmpty() && GetPrimaryFrame()) {
       nsMenuFrame* menu = do_QueryFrame(GetPrimaryFrame()->GetParent());
       if (menu) {
-        pm->ShowMenu(menu->GetContent(), false, false);
+        pm->ShowMenu(menu->GetContent(), false);
         return;
       }
     }
@@ -236,27 +236,17 @@ nsINode* XULPopupElement::GetTriggerNode() const {
   return nsMenuPopupFrame::GetTriggerContent(menuPopupFrame);
 }
 
-bool XULPopupElement::IsAnchored() const {
-  nsMenuPopupFrame* menuPopupFrame = do_QueryFrame(GetPrimaryFrame());
-  if (!menuPopupFrame) {
-    return false;
-  }
-
-  return menuPopupFrame->IsAnchored();
-}
-
 // FIXME(emilio): should probably be renamed to GetAnchorElement?
 Element* XULPopupElement::GetAnchorNode() const {
   nsMenuPopupFrame* menuPopupFrame = do_QueryFrame(GetPrimaryFrame());
   if (!menuPopupFrame) {
     return nullptr;
   }
-
   return Element::FromNodeOrNull(menuPopupFrame->GetAnchor());
 }
 
 already_AddRefed<DOMRect> XULPopupElement::GetOuterScreenRect() {
-  RefPtr<DOMRect> rect = new DOMRect(ToSupports(this));
+  RefPtr<DOMRect> rect = new DOMRect(ToSupports(OwnerDoc()));
 
   // Return an empty rectangle if the popup is not open.
   nsMenuPopupFrame* menuPopupFrame =
@@ -271,8 +261,7 @@ already_AddRefed<DOMRect> XULPopupElement::GetOuterScreenRect() {
     // For native menus we can't query the true size. Use the anchor rect
     // instead, which at least has the position at which we were intending to
     // open the menu.
-    screenRect = Some(CSSRect(
-        CSSIntRect::FromUnknownRect(menuPopupFrame->GetScreenAnchorRect())));
+    screenRect = Some(CSSRect(menuPopupFrame->GetScreenAnchorRect()));
   } else {
     // For non-native menus, query the bounds from the widget.
     if (nsView* view = menuPopupFrame->GetView()) {
@@ -299,5 +288,4 @@ void XULPopupElement::SetConstraintRect(dom::DOMRectReadOnly& aRect) {
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

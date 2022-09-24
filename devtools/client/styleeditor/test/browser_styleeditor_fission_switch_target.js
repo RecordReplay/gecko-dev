@@ -14,16 +14,20 @@ add_task(async function() {
 
   info("Open a page that runs in the parent process");
   const { ui } = await openStyleEditorForURL(PARENT_PROCESS_URI);
-  await waitUntil(() => ui.editors.length === 3);
+  await waitUntil(() => ui.editors.length === 4);
   ok(true, `Three style sheets for ${PARENT_PROCESS_URI}`);
 
   info("Navigate to a page that runs in the child process");
-  const onEditorReady = ui.editors[0].getSourceEditor();
   await navigateToAndWaitForStyleSheets(CONTENT_PROCESS_URI, ui, 2);
   // We also have to wait for the toolbox to complete the target switching
   // in order to avoid pending requests during test teardown.
-  ok(true, `Two sheets present for ${CONTENT_PROCESS_URI}`);
+  ok(
+    ui.editors.every(
+      editor => editor._resource.nodeHref == CONTENT_PROCESS_URI
+    ),
+    `Two sheets present for ${CONTENT_PROCESS_URI}`
+  );
 
   info("Wait until the editor is ready");
-  await onEditorReady;
+  await waitFor(() => ui.selectedEditor?.sourceEditor);
 });

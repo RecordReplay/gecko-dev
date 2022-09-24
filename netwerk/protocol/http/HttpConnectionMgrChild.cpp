@@ -11,13 +11,13 @@
 #include "HttpTransactionChild.h"
 #include "AltSvcTransactionChild.h"
 #include "EventTokenBucket.h"
+#include "mozilla/net/WebSocketConnectionChild.h"
 #include "nsHttpConnectionInfo.h"
 #include "nsHttpConnectionMgr.h"
 #include "nsHttpHandler.h"
 #include "nsISpeculativeConnect.h"
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 HttpConnectionMgrChild::HttpConnectionMgrChild()
     : mConnMgr(gHttpHandler->ConnMgr()) {
@@ -88,7 +88,7 @@ mozilla::ipc::IPCResult HttpConnectionMgrChild::RecvRescheduleTransaction(
 
 mozilla::ipc::IPCResult
 HttpConnectionMgrChild::RecvUpdateClassOfServiceOnTransaction(
-    PHttpTransactionChild* aTrans, const uint32_t& aClassOfService) {
+    PHttpTransactionChild* aTrans, const ClassOfService& aClassOfService) {
   mConnMgr->UpdateClassOfServiceOnTransaction(ToRealHttpTransaction(aTrans),
                                               aClassOfService);
   return IPC_OK();
@@ -178,5 +178,15 @@ mozilla::ipc::IPCResult HttpConnectionMgrChild::RecvSpeculativeConnect(
   return IPC_OK();
 }
 
-}  // namespace net
-}  // namespace mozilla
+mozilla::ipc::IPCResult HttpConnectionMgrChild::RecvStartWebSocketConnection(
+    PHttpTransactionChild* aTransWithStickyConn, uint32_t aListenerId) {
+  RefPtr<WebSocketConnectionChild> child = new WebSocketConnectionChild();
+  child->Init(aListenerId);
+  nsCOMPtr<nsIHttpUpgradeListener> listener =
+      static_cast<nsIHttpUpgradeListener*>(child.get());
+  Unused << mConnMgr->CompleteUpgrade(
+      ToRealHttpTransaction(aTransWithStickyConn), listener);
+  return IPC_OK();
+}
+
+}  // namespace mozilla::net

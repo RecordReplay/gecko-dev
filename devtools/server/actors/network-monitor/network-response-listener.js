@@ -4,7 +4,7 @@
 
 "use strict";
 
-const { Cc, Ci, Cr, Cu, components: Components } = require("chrome");
+const { Cc, Ci, Cr, components: Components } = require("chrome");
 const ChromeUtils = require("ChromeUtils");
 const Services = require("Services");
 
@@ -20,11 +20,6 @@ loader.lazyRequireGetter(
   true
 );
 loader.lazyImporter(this, "NetUtil", "resource://gre/modules/NetUtil.jsm");
-loader.lazyGetter(
-  this,
-  "WebExtensionPolicy",
-  () => Cu.getGlobalForObject(Cu).WebExtensionPolicy
-);
 
 // Network logging
 
@@ -45,8 +40,11 @@ loader.lazyGetter(
  * @param object httpActivity
  *        HttpActivity object associated with this request. See NetworkObserver
  *        for more information.
+ * @param Map decodedCertificateCache
+ *        A Map of certificate fingerprints to decoded certificates, to avoid
+ *        repeatedly decoding previously-seen certificates.
  */
-function NetworkResponseListener(owner, httpActivity) {
+function NetworkResponseListener(owner, httpActivity, decodedCertificateCache) {
   this.owner = owner;
   this.receivedData = "";
   this.httpActivity = httpActivity;
@@ -58,6 +56,7 @@ function NetworkResponseListener(owner, httpActivity) {
   const channel = this.httpActivity.channel;
   this._wrappedNotificationCallbacks = channel.notificationCallbacks;
   channel.notificationCallbacks = this;
+  this._decodedCertificateCache = decodedCertificateCache;
 }
 
 exports.NetworkResponseListener = NetworkResponseListener;
@@ -116,6 +115,12 @@ NetworkResponseListener.prototype = {
    * so that we can forward getInterface requests to that object.
    */
   _wrappedNotificationCallbacks: null,
+
+  /**
+   * A Map of certificate fingerprints to decoded certificates, to avoid repeatedly
+   * decoding previously-seen certificates.
+   */
+  _decodedCertificateCache: null,
 
   /**
    * The response listener owner.
@@ -330,7 +335,9 @@ NetworkResponseListener.prototype = {
     }
     const info = await NetworkHelper.parseSecurityInfo(
       secinfo,
-      this.httpActivity
+      this.request.loadInfo.originAttributes,
+      this.httpActivity,
+      this._decodedCertificateCache
     );
     let isRacing = false;
     try {

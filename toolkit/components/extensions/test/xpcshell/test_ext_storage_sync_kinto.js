@@ -13,17 +13,16 @@ const { CommonUtils } = ChromeUtils.import(
   "resource://services-common/utils.js"
 );
 const {
-  cleanUpForContext,
-  CollectionKeyEncryptionRemoteTransformer,
-  CryptoCollection,
   ExtensionStorageSync,
-  idToKey,
-  keyToId,
-  KeyRingEncryptionRemoteTransformer,
-} = ChromeUtils.import(
-  "resource://gre/modules/ExtensionStorageSyncKinto.jsm",
-  null
-);
+  KintoStorageTestUtils: {
+    cleanUpForContext,
+    CollectionKeyEncryptionRemoteTransformer,
+    CryptoCollection,
+    idToKey,
+    keyToId,
+    KeyRingEncryptionRemoteTransformer,
+  },
+} = ChromeUtils.import("resource://gre/modules/ExtensionStorageSyncKinto.jsm");
 const { BulkKeyBundle } = ChromeUtils.import(
   "resource://services-sync/keys.js"
 );
@@ -649,9 +648,7 @@ const loggedInUser = {
 };
 
 function uuid() {
-  const uuidgen = Cc["@mozilla.org/uuid-generator;1"].getService(
-    Ci.nsIUUIDGenerator
-  );
+  const uuidgen = Services.uuid;
   return uuidgen.generateUUID().toString();
 }
 
@@ -660,10 +657,9 @@ add_task(async function test_setup() {
 });
 
 add_task(async function test_single_initialization() {
-  // Grab access to this via the backstage pass to check if we're calling openConnection too often.
+  // Check if we're calling openConnection too often.
   const { FirefoxAdapter } = ChromeUtils.import(
-    "resource://gre/modules/ExtensionStorageSyncKinto.jsm",
-    null
+    "resource://services-common/kinto-storage-adapter.js"
   );
   const origOpenConnection = FirefoxAdapter.openConnection;
   let callCount = 0;
@@ -2286,5 +2282,11 @@ add_task(test_storage_sync_requires_real_id);
 add_task(function test_storage_sync_with_bytes_in_use() {
   return runWithPrefs([[STORAGE_SYNC_PREF, true]], () =>
     test_background_storage_area_with_bytes_in_use("sync", false)
+  );
+});
+
+add_task(function test_storage_onChanged_event_page() {
+  return runWithPrefs([[STORAGE_SYNC_PREF, true]], () =>
+    test_storage_change_event_page("sync")
   );
 });

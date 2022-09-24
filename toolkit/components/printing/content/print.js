@@ -181,7 +181,9 @@ var PrintEventHandler = {
     this.printFrameOnly = args.getProperty("printFrameOnly");
     this.printSelectionOnly = args.getProperty("printSelectionOnly");
     this.isArticle = args.getProperty("isArticle");
-    this.hasSelection = await this.checkForSelection(sourceBrowsingContext);
+    this.hasSelection = await PrintUtils.checkForSelection(
+      sourceBrowsingContext
+    );
 
     let sourcePrincipal =
       sourceBrowsingContext.currentWindowGlobal.documentPrincipal;
@@ -295,20 +297,24 @@ var PrintEventHandler = {
         this.settings.printerName == PrintUtils.SAVE_TO_PDF_PRINTER
           ? PrintUtils.getPrintSettings(this.viewSettings.defaultSystemPrinter)
           : this.settings.clone();
-      settings.showPrintProgress = false;
       // We set the title so that if the user chooses save-to-PDF from the
       // system dialog the title will be used to generate the prepopulated
       // filename in the file picker.
       settings.title = this.activeTitle;
-      const PRINTPROMPTSVC = Cc[
-        "@mozilla.org/embedcomp/printingprompt-service;1"
-      ].getService(Ci.nsIPrintingPromptService);
+      const PRINTDIALOGSVC = Cc[
+        "@mozilla.org/widget/printdialog-service;1"
+      ].getService(Ci.nsIPrintDialogService);
       try {
         Services.telemetry.scalarAdd(
           "printing.dialog_opened_via_preview_tm",
           1
         );
-        await this._showPrintDialog(PRINTPROMPTSVC, window, settings);
+        await this._showPrintDialog(
+          PRINTDIALOGSVC,
+          window,
+          this.hasSelection,
+          settings
+        );
       } catch (e) {
         if (e.result == Cr.NS_ERROR_ABORT) {
           Services.telemetry.scalarAdd(
@@ -356,19 +362,6 @@ var PrintEventHandler = {
     await initialPreviewDone;
   },
 
-  async checkForSelection(browsingContext) {
-    try {
-      let sourceActor = browsingContext.currentWindowGlobal.getActor(
-        "PrintingSelection"
-      );
-      // Need the await for the try to trigger...
-      return await sourceActor.sendQuery("PrintingSelection:HasSelection", {});
-    } catch (e) {
-      Cu.reportError(e);
-    }
-    return false;
-  },
-
   async print(systemDialogSettings) {
     // Disable the form when a print is in progress
     this.printForm.disable();
@@ -411,7 +404,6 @@ var PrintEventHandler = {
 
     try {
       // We'll provide our own progress indicator.
-      this.settings.showPrintProgress = false;
       let l10nId =
         settings.printerName == PrintUtils.SAVE_TO_PDF_PRINTER
           ? "printui-print-progress-indicator-saving"
@@ -700,31 +692,51 @@ var PrintEventHandler = {
             ? paperWidthInInches
             : paperHeightInInches;
 
-        if (
-          parseFloat(this.viewSettings.customMargins.marginTop) +
-            parseFloat(this.viewSettings.customMargins.marginBottom) >
+        function verticalMarginsInvalid(margins) {
+          return (
+            parseFloat(margins.marginTop) + parseFloat(margins.marginBottom) >
             height -
               paperWrapper.unwriteableMarginTop -
-              paperWrapper.unwriteableMarginBottom ||
+              paperWrapper.unwriteableMarginBottom
+          );
+        }
+
+        function horizontalMarginsInvalid(margins) {
+          return (
+            parseFloat(margins.marginRight) + parseFloat(margins.marginLeft) >
+            width -
+              paperWrapper.unwriteableMarginRight -
+              paperWrapper.unwriteableMarginLeft
+          );
+        }
+
+        if (
+          verticalMarginsInvalid(this.viewSettings.customMargins) ||
           this.viewSettings.customMargins.marginTop < 0 ||
           this.viewSettings.customMargins.marginBottom < 0
         ) {
           let { marginTop, marginBottom } = this.viewSettings.defaultMargins;
+          if (verticalMarginsInvalid(this.viewSettings.defaultMargins)) {
+            let marginsNone = this.getMarginPresets("none");
+            marginTop = marginsNone.marginTop;
+            marginBottom = marginsNone.marginBottom;
+          }
           changedSettings.marginTop = changedSettings.customMarginTop = marginTop;
           changedSettings.marginBottom = changedSettings.customMarginBottom = marginBottom;
           delete this._userChangedSettings.customMargins;
         }
 
         if (
-          parseFloat(this.viewSettings.customMargins.marginRight) +
-            parseFloat(this.viewSettings.customMargins.marginLeft) >
-            width -
-              paperWrapper.unwriteableMarginRight -
-              paperWrapper.unwriteableMarginLeft ||
+          horizontalMarginsInvalid(this.viewSettings.customMargins) ||
           this.viewSettings.customMargins.marginLeft < 0 ||
           this.viewSettings.customMargins.marginRight < 0
         ) {
           let { marginLeft, marginRight } = this.viewSettings.defaultMargins;
+          if (horizontalMarginsInvalid(this.viewSettings.defaultMargins)) {
+            let marginsNone = this.getMarginPresets("none");
+            marginLeft = marginsNone.marginLeft;
+            marginRight = marginsNone.marginRight;
+          }
           changedSettings.marginLeft = changedSettings.customMarginLeft = marginLeft;
           changedSettings.marginRight = changedSettings.customMarginRight = marginRight;
           delete this._userChangedSettings.customMargins;
@@ -799,9 +811,6 @@ var PrintEventHandler = {
   async _updatePrintPreview() {
     let { settings } = this;
 
-    // We never want the progress dialog to show
-    settings.showPrintProgress = false;
-
     const isFirstCall = !this.printInitiationTime;
     if (isFirstCall) {
       let params = new URLSearchParams(location.search);
@@ -815,7 +824,7 @@ var PrintEventHandler = {
         .add(elapsed);
     }
 
-    let totalPageCount, sheetCount, isEmpty;
+    let totalPageCount, sheetCount, isEmpty, orientation;
     try {
       // This resolves with a PrintPreviewSuccessInfo dictionary.
       let { sourceVersion } = this.viewSettings;
@@ -825,6 +834,7 @@ var PrintEventHandler = {
         totalPageCount,
         sheetCount,
         isEmpty,
+        orientation,
       } = await this.printPreviewEl.printPreview(settings, {
         sourceVersion,
         sourceURI,
@@ -835,6 +845,18 @@ var PrintEventHandler = {
       throw e;
     }
 
+    // If there is a set orientation, update the settings to use it. In this
+    // case, the document will already have used this orientation to create
+    // the print preview.
+    if (orientation != "unspecified") {
+      const kIPrintSettings = Ci.nsIPrintSettings;
+      settings.orientation =
+        orientation == "landscape"
+          ? kIPrintSettings.kLandscapeOrientation
+          : kIPrintSettings.kPortraitOrientation;
+      document.dispatchEvent(new CustomEvent("hide-orientation"));
+    }
+
     this.previewIsEmpty = isEmpty;
     // If the preview is empty, we know our range is greater than the number of pages.
     // We have to send a pageRange update to display a non-empty page.
@@ -842,9 +864,6 @@ var PrintEventHandler = {
       this.viewSettings.pageRanges = [];
       this.updatePrintPreview();
     }
-
-    // Update the settings print options on whether there is a selection.
-    settings.isPrintSelectionRBEnabled = this.hasSelection;
 
     document.dispatchEvent(
       new CustomEvent("page-count", {
@@ -1006,8 +1025,17 @@ var PrintEventHandler = {
    * testing purposes. The showPrintDialog() call blocks until the dialog is
    * closed, so we mark it as async to allow us to reject from the test.
    */
-  async _showPrintDialog(aPrintingPromptService, aWindow, aSettings) {
-    return aPrintingPromptService.showPrintDialog(aWindow, aSettings);
+  async _showPrintDialog(
+    aPrintDialogService,
+    aWindow,
+    aHaveSelection,
+    aSettings
+  ) {
+    return aPrintDialogService.showPrintDialog(
+      aWindow,
+      aHaveSelection,
+      aSettings
+    );
   },
 };
 
@@ -1164,20 +1192,23 @@ var PrintSettingsViewProxy = {
       printerInfo.defaultSettings = basePrinterInfo.defaultSettings;
     } else if (printerName == PrintUtils.SAVE_TO_PDF_PRINTER) {
       // The Mozilla PDF pseudo-printer has no actual nsIPrinter implementation
-      printerInfo.defaultSettings = PSSVC.newPrintSettings;
+      printerInfo.defaultSettings = PSSVC.createNewPrintSettings();
       printerInfo.defaultSettings.printerName = printerName;
       printerInfo.defaultSettings.toFileName = "";
       printerInfo.defaultSettings.outputFormat =
         Ci.nsIPrintSettings.kOutputFormatPDF;
-      printerInfo.defaultSettings.printToFile = true;
+      printerInfo.defaultSettings.outputDestination =
+        Ci.nsIPrintSettings.kOutputDestinationFile;
       printerInfo.paperList = this.fallbackPaperList;
     }
     printerInfo.settings = printerInfo.defaultSettings.clone();
     // Apply any previously persisted user values
     // Don't apply kInitSavePrintToFile though, that should only be true for
     // the PDF printer.
-    printerInfo.settings.printToFile =
-      printerName == PrintUtils.SAVE_TO_PDF_PRINTER;
+    printerInfo.settings.outputDestination =
+      printerName == PrintUtils.SAVE_TO_PDF_PRINTER
+        ? Ci.nsIPrintSettings.kOutputDestinationFile
+        : Ci.nsIPrintSettings.kOutputDestinationPrinter;
     let flags =
       printerInfo.settings.kInitSaveAll ^
       printerInfo.settings.kInitSavePrintToFile;
@@ -1381,6 +1412,7 @@ var PrintSettingsViewProxy = {
         for (let [settingName, presetValue] of Object.entries(marginPresets)) {
           target[settingName] = presetValue;
         }
+        target.honorPageRuleMargins = value == "default";
         break;
 
       case "paperId": {
@@ -1562,12 +1594,7 @@ class PrintUIForm extends PrintUIControlMixin(HTMLFormElement) {
   }
 
   removeNonPdfSettings() {
-    let selectors = [
-      "#margins",
-      "#headers-footers",
-      "#backgrounds",
-      "#source-version-selection",
-    ];
+    let selectors = ["#backgrounds", "#source-version-selection"];
     for (let selector of selectors) {
       this.querySelector(selector).remove();
     }
@@ -1894,6 +1921,11 @@ customElements.define("paper-size-select", PaperSizePicker, {
 });
 
 class OrientationInput extends PrintUIControlMixin(HTMLElement) {
+  initialize() {
+    super.initialize();
+    document.addEventListener("hide-orientation", this);
+  }
+
   get templateId() {
     return "orientation-template";
   }
@@ -1905,6 +1937,10 @@ class OrientationInput extends PrintUIControlMixin(HTMLElement) {
   }
 
   handleEvent(e) {
+    if (e.type == "hide-orientation") {
+      document.getElementById("orientation").hidden = true;
+      return;
+    }
     this.dispatchSettingsChange({
       orientation: e.target.value,
     });
@@ -2026,6 +2062,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
     this._rangeInput = this.querySelector("#custom-range");
     this._rangeInput.title = "";
     this._rangePicker = this.querySelector("#range-picker");
+    this._rangePickerEvenOption = this._rangePicker.namedItem("even");
     this._rangeError = this.querySelector("#error-invalid-range");
     this._startRangeOverflowError = this.querySelector(
       "#error-invalid-start-range-overflow"
@@ -2043,15 +2080,26 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
   }
 
   updatePageRange() {
-    let isAll = this._rangePicker.value == "all";
-    if (isAll) {
+    let isCustom = this._rangePicker.value == "custom";
+    if (isCustom) {
+      this.validateRangeInput();
+    } else {
       this._pagesSet.clear();
+
+      if (this._rangePicker.value == "odd") {
+        for (let i = 1; i <= this._numPages; i += 2) {
+          this._pagesSet.add(i);
+        }
+      } else if (this._rangePicker.value == "even") {
+        for (let i = 2; i <= this._numPages; i += 2) {
+          this._pagesSet.add(i);
+        }
+      }
+
       if (!this._rangeInput.checkValidity()) {
         this._rangeInput.setCustomValidity("");
         this._rangeInput.value = "";
       }
-    } else {
-      this.validateRangeInput();
     }
 
     this.dispatchEvent(new Event("revalidate", { bubbles: true }));
@@ -2066,7 +2114,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
     // If it's valid, update the page range and hide the error messages.
     // Otherwise, set the appropriate error message
-    if (this._rangeInput.validity.valid || isAll) {
+    if (this._rangeInput.validity.valid || !isCustom) {
       window.clearTimeout(this.showErrorTimeoutId);
       this._startRangeOverflowError.hidden = this._rangeError.hidden = true;
     } else {
@@ -2076,7 +2124,10 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
   dispatchPageRange(shouldCancel = true) {
     window.clearTimeout(this.showErrorTimeoutId);
-    if (this._rangeInput.validity.valid || this._rangePicker.value == "all") {
+    if (
+      this._rangeInput.validity.valid ||
+      this._rangePicker.value != "custom"
+    ) {
       this.dispatchSettingsChange({
         pageRanges: this.formatPageRange(),
       });
@@ -2101,7 +2152,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
   formatPageRange() {
     if (
       this._pagesSet.size == 0 ||
-      this._rangeInput.value == "" ||
+      (this._rangePicker.value == "custom" && this._rangeInput.value == "") ||
       this._rangePicker.value == "all"
     ) {
       // Show all pages.
@@ -2222,7 +2273,8 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
   }
 
   validateRangeInput() {
-    let value = this._rangePicker.value == "all" ? "" : this._rangeInput.value;
+    let value =
+      this._rangePicker.value == "custom" ? this._rangeInput.value : "";
     this._validateRangeInput(value, this._numPages);
   }
 
@@ -2249,6 +2301,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
 
       this._numPages = totalPages;
       this._rangeInput.disabled = false;
+      this._rangePickerEvenOption.disabled = this._numPages < 2;
 
       let prevPages = Array.from(this._pagesSet);
       this.updatePageRange();
@@ -2268,7 +2321,7 @@ class PageRangeInput extends PrintUIControlMixin(HTMLElement) {
     }
 
     if (e.target == this._rangePicker) {
-      this._rangeInput.hidden = e.target.value == "all";
+      this._rangeInput.hidden = e.target.value != "custom";
       this.updatePageRange();
       this.dispatchPageRange();
       if (!this._rangeInput.hidden) {
@@ -2321,18 +2374,39 @@ class MarginsPicker extends PrintUIControlMixin(HTMLElement) {
   updateMaxValues() {
     let maxWidth = this.toCurrentUnitValue(this._maxWidth);
     let maxHeight = this.toCurrentUnitValue(this._maxHeight);
-    this._customTopMargin.max = maxHeight - this._customBottomMargin.value;
-    this._customBottomMargin.max = maxHeight - this._customTopMargin.value;
-    this._customLeftMargin.max = maxWidth - this._customRightMargin.value;
-    this._customRightMargin.max = maxWidth - this._customLeftMargin.value;
+    this._customTopMargin.max = this.formatMaxAttr(
+      maxHeight - this._customBottomMargin.value
+    );
+    this._customBottomMargin.max = this.formatMaxAttr(
+      maxHeight - this._customTopMargin.value
+    );
+    this._customLeftMargin.max = this.formatMaxAttr(
+      maxWidth - this._customRightMargin.value
+    );
+    this._customRightMargin.max = this.formatMaxAttr(
+      maxWidth - this._customLeftMargin.value
+    );
+  }
+
+  truncateTwoDecimals(val) {
+    if (val.split(".")[1].length > 2) {
+      let dotIndex = val.indexOf(".");
+      return val.slice(0, dotIndex + 3);
+    }
+    return val;
+  }
+
+  formatMaxAttr(val) {
+    const strVal = val.toString();
+    if (strVal.includes(".")) {
+      return this.truncateTwoDecimals(strVal);
+    }
+    return val;
   }
 
   formatMargin(target) {
     if (target.value.includes(".")) {
-      if (target.value.split(".")[1].length > 2) {
-        let dotIndex = target.value.indexOf(".");
-        target.value = target.value.slice(0, dotIndex + 3);
-      }
+      target.value = this.truncateTwoDecimals(target.value);
     }
   }
 
@@ -2404,7 +2478,6 @@ class MarginsPicker extends PrintUIControlMixin(HTMLElement) {
         settings.unwriteableMarginLeft -
         settings.unwriteableMarginRight;
 
-      this._defaultPresets = settings.defaultMargins;
       // The values in custom fields should be initialized to custom margin values
       // and must be overriden if they are no longer valid.
       this.setAllMarginValues(settings);
@@ -2555,7 +2628,7 @@ class PageCount extends PrintUIControlMixin(HTMLElement) {
   update(settings) {
     this.numCopies = settings.numCopies;
     this.duplex = settings.duplex;
-    this.printToFile = settings.printToFile;
+    this.outputDestination = settings.outputDestination;
     this.render();
   }
 
@@ -2568,7 +2641,10 @@ class PageCount extends PrintUIControlMixin(HTMLElement) {
 
     // When printing to a printer (not to a file) update
     // the sheet count to account for duplex printing.
-    if (!this.printToFile && this.duplex != Ci.nsIPrintSettings.kDuplexNone) {
+    if (
+      this.outputDestination == Ci.nsIPrintSettings.kOutputDestinationPrinter &&
+      this.duplex != Ci.nsIPrintSettings.kDuplexNone
+    ) {
       sheetCount = Math.ceil(sheetCount / 2);
     }
 

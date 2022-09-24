@@ -41,29 +41,6 @@ const responsiveSpec = generateActorSpec({
       },
     },
 
-    setMetaViewportOverride: {
-      request: {
-        flag: Arg(0, "number"),
-      },
-      response: {
-        valueChanged: RetVal("boolean"),
-      },
-    },
-
-    getMetaViewportOverride: {
-      request: {},
-      response: {
-        flag: RetVal("number"),
-      },
-    },
-
-    clearMetaViewportOverride: {
-      request: {},
-      response: {
-        valueChanged: RetVal("boolean"),
-      },
-    },
-
     setElementPickerState: {
       request: {
         state: Arg(0, "boolean"),
@@ -74,13 +51,6 @@ const responsiveSpec = generateActorSpec({
 
     dispatchOrientationChangeEvent: {
       request: {},
-      response: {},
-    },
-
-    setFloatingScrollbars: {
-      request: {
-        state: Arg(0, "boolean"),
-      },
       response: {},
     },
   },

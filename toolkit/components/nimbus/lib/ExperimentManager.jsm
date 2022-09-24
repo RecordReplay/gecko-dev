@@ -35,6 +35,19 @@ const TELEMETRY_DEFAULT_EXPERIMENT_TYPE = "nimbus";
 
 const STUDIES_OPT_OUT_PREF = "app.shield.optoutstudies.enabled";
 
+function featuresCompat(branch) {
+  if (!branch || (!branch.feature && !branch.features)) {
+    return [];
+  }
+  let { features } = branch;
+  // In <=v1.5.0 of the Nimbus API, experiments had single feature
+  if (!features) {
+    features = [branch.feature];
+  }
+
+  return features;
+}
+
 /**
  * A module for processes Experiment recipes, choosing and storing enrollment state,
  * and sending experiment-related Telemetry.
@@ -67,6 +80,12 @@ class _ExperimentManager {
         return this.store.getAllActive().map(exp => exp.slug);
       },
     });
+    Object.defineProperty(context, "activeRollouts", {
+      get: async () => {
+        await this.store.ready();
+        return this.store.getAllRollouts().map(rollout => rollout.slug);
+      },
+    });
     return context;
   }
 
@@ -76,10 +95,16 @@ class _ExperimentManager {
   async onStartup() {
     await this.store.init();
     const restoredExperiments = this.store.getAllActive();
+    const restoredRollouts = this.store.getAllRollouts();
 
     for (const experiment of restoredExperiments) {
       this.setExperimentActive(experiment);
     }
+    for (const rollout of restoredRollouts) {
+      this.setExperimentActive(rollout);
+    }
+
+    this.observe();
   }
 
   /**
@@ -110,30 +135,68 @@ class _ExperimentManager {
     }
   }
 
-  /**
-   * Runs when the all recipes been processed during an update, including at first run.
-   * @param {string} sourceToCheck
-   */
-  onFinalize(sourceToCheck) {
-    if (!sourceToCheck) {
-      throw new Error("When calling onFinalize, you must specify a source.");
-    }
-    const activeExperiments = this.store.getAllActive();
-
-    for (const experiment of activeExperiments) {
-      const { slug, source } = experiment;
+  _checkUnseenEnrollments(
+    enrollments,
+    sourceToCheck,
+    recipeMismatches,
+    invalidRecipes,
+    invalidBranches
+  ) {
+    for (const enrollment of enrollments) {
+      const { slug, source } = enrollment;
       if (sourceToCheck !== source) {
         continue;
       }
       if (!this.sessions.get(source)?.has(slug)) {
         log.debug(`Stopping study for recipe ${slug}`);
         try {
-          this.unenroll(slug, "recipe-not-seen");
+          let reason;
+          if (recipeMismatches.includes(slug)) {
+            reason = "targeting-mismatch";
+          } else if (invalidRecipes.includes(slug)) {
+            reason = "invalid-recipe";
+          } else if (invalidBranches.includes(slug)) {
+            reason = "invalid-branch";
+          } else {
+            reason = "recipe-not-seen";
+          }
+          this.unenroll(slug, reason);
         } catch (err) {
           Cu.reportError(err);
         }
       }
     }
+  }
+
+  /**
+   * Removes stored enrollments that were not seen after syncing with Remote Settings
+   * Runs when the all recipes been processed during an update, including at first run.
+   * @param {string} sourceToCheck
+   * @param {object} options Extra context used in telemetry reporting
+   */
+  onFinalize(
+    sourceToCheck,
+    { recipeMismatches = [], invalidRecipes = [], invalidBranches = [] } = {}
+  ) {
+    if (!sourceToCheck) {
+      throw new Error("When calling onFinalize, you must specify a source.");
+    }
+    const activeExperiments = this.store.getAllActive();
+    const activeRollouts = this.store.getAllRollouts();
+    this._checkUnseenEnrollments(
+      activeExperiments,
+      sourceToCheck,
+      recipeMismatches,
+      invalidRecipes,
+      invalidBranches
+    );
+    this._checkUnseenEnrollments(
+      activeRollouts,
+      sourceToCheck,
+      recipeMismatches,
+      invalidRecipes,
+      invalidBranches
+    );
 
     this.sessions.delete(sourceToCheck);
   }
@@ -183,20 +246,22 @@ class _ExperimentManager {
       throw new Error(`An experiment with the slug "${slug}" already exists.`);
     }
 
+    let storeLookupByFeature = recipe.isRollout
+      ? this.store.getRolloutForFeature.bind(this.store)
+      : this.store.hasExperimentForFeature.bind(this.store);
     const branch = await this.chooseBranch(slug, branches);
+    const features = featuresCompat(branch);
+    for (let feature of features) {
+      if (storeLookupByFeature(feature?.featureId)) {
+        log.debug(
+          `Skipping enrollment for "${slug}" because there is an existing ${
+            recipe.isRollout ? "rollout" : "experiment"
+          } for this feature.`
+        );
+        this.sendFailureTelemetry("enrollFailed", slug, "feature-conflict");
 
-    if (
-      this.store.hasExperimentForFeature(
-        // Extract out only the feature names from the branch
-        branch.feature?.featureId
-      )
-    ) {
-      log.debug(
-        `Skipping enrollment for "${slug}" because there is an existing experiment for its feature.`
-      );
-      this.sendFailureTelemetry("enrollFailed", slug, "feature-conflict");
-
-      return null;
+        return null;
+      }
     }
 
     return this._enroll(recipe, branch, source);
@@ -208,6 +273,8 @@ class _ExperimentManager {
       experimentType = TELEMETRY_DEFAULT_EXPERIMENT_TYPE,
       userFacingName,
       userFacingDescription,
+      featureIds,
+      isRollout,
     },
     branch,
     source,
@@ -224,7 +291,12 @@ class _ExperimentManager {
       userFacingName,
       userFacingDescription,
       lastSeen: new Date().toJSON(),
+      featureIds,
     };
+
+    if (typeof isRollout !== "undefined") {
+      experiment.isRollout = isRollout;
+    }
 
     // Tag this as a forced enrollment. This prevents all unenrolling unless
     // manually triggered from about:studies
@@ -232,11 +304,21 @@ class _ExperimentManager {
       experiment.force = true;
     }
 
-    this.store.addExperiment(experiment);
-    this.setExperimentActive(experiment);
+    if (isRollout) {
+      experiment.experimentType = "rollout";
+      this.store.addEnrollment(experiment);
+      this.setExperimentActive(experiment);
+    } else {
+      this.store.addEnrollment(experiment);
+      this.setExperimentActive(experiment);
+    }
     this.sendEnrollmentTelemetry(experiment);
 
-    log.debug(`New experiment started: ${slug}, ${branch.slug}`);
+    log.debug(
+      `New ${isRollout ? "rollout" : "experiment"} started: ${slug}, ${
+        branch.slug
+      }`
+    );
 
     return experiment;
   }
@@ -248,20 +330,29 @@ class _ExperimentManager {
      * If the experiment has the same slug after unenrollment adding it to the
      * store will overwrite the initial experiment.
      */
-    let experiment = this.store.getExperimentForFeature(
-      branch.feature?.featureId
-    );
-    if (experiment) {
-      log.debug(
-        `Existing experiment found for the same feature ${branch?.feature.featureId}, unenrolling.`
-      );
+    const features = featuresCompat(branch);
+    for (let feature of features) {
+      let experiment = this.store.getExperimentForFeature(feature?.featureId);
+      let rollout = this.store.getRolloutForFeature(feature?.featureId);
+      if (experiment) {
+        log.debug(
+          `Existing experiment found for the same feature ${feature.featureId}, unenrolling.`
+        );
 
-      this.unenroll(experiment.slug, source);
+        this.unenroll(experiment.slug, source);
+      }
+      if (rollout) {
+        log.debug(
+          `Existing experiment found for the same feature ${feature.featureId}, unenrolling.`
+        );
+
+        this.unenroll(rollout.slug, source);
+      }
     }
 
     recipe.userFacingName = `${recipe.userFacingName} - Forced enrollment`;
 
-    return this._enroll(
+    const experiment = this._enroll(
       {
         ...recipe,
         slug: `optin-${recipe.slug}`,
@@ -270,6 +361,10 @@ class _ExperimentManager {
       source,
       { force: true }
     );
+
+    Services.obs.notifyObservers(null, "nimbus:force-enroll");
+
+    return experiment;
   }
 
   /**
@@ -279,23 +374,25 @@ class _ExperimentManager {
    */
   updateEnrollment(recipe) {
     /** @type Enrollment */
-    const experiment = this.store.get(recipe.slug);
+    const enrollment = this.store.get(recipe.slug);
 
     // Don't update experiments that were already unenrolled.
-    if (experiment.active === false) {
+    if (enrollment.active === false) {
       log.debug(`Enrollment ${recipe.slug} has expired, aborting.`);
-      return;
+      return false;
     }
 
     // Stay in the same branch, don't re-sample every time.
     const branch = recipe.branches.find(
-      branch => branch.slug === experiment.branch.slug
+      branch => branch.slug === enrollment.branch.slug
     );
 
     if (!branch) {
       // Our branch has been removed. Unenroll.
       this.unenroll(recipe.slug, "branch-removed");
     }
+
+    return true;
   }
 
   /**
@@ -305,30 +402,32 @@ class _ExperimentManager {
    * @param {string} reason
    */
   unenroll(slug, reason = "unknown") {
-    const experiment = this.store.get(slug);
-    if (!experiment) {
+    const enrollment = this.store.get(slug);
+    if (!enrollment) {
       this.sendFailureTelemetry("unenrollFailed", slug, "does-not-exist");
       throw new Error(`Could not find an experiment with the slug "${slug}"`);
     }
 
-    if (!experiment.active) {
+    if (!enrollment.active) {
       this.sendFailureTelemetry("unenrollFailed", slug, "already-unenrolled");
       throw new Error(
         `Cannot stop experiment "${slug}" because it is already expired`
       );
     }
 
+    TelemetryEnvironment.setExperimentInactive(slug);
+    // We also need to set the experiment inactive in the Glean Experiment API
+    Services.fog.setExperimentInactive(slug);
     this.store.updateExperiment(slug, { active: false });
 
-    TelemetryEnvironment.setExperimentInactive(slug);
     TelemetryEvents.sendEvent("unenroll", TELEMETRY_EVENT_OBJECT, slug, {
       reason,
-      branch: experiment.branch.slug,
+      branch: enrollment.branch.slug,
       enrollmentId:
-        experiment.enrollmentId || TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
+        enrollment.enrollmentId || TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
     });
 
-    log.debug(`Experiment unenrolled: ${slug}`);
+    log.debug(`Recipe unenrolled: ${slug}`);
   }
 
   /**
@@ -339,6 +438,9 @@ class _ExperimentManager {
       return;
     }
     for (const { slug } of this.store.getAllActive()) {
+      this.unenroll(slug, "studies-opt-out");
+    }
+    for (const { slug } of this.store.getAllRollouts()) {
       this.unenroll(slug, "studies-opt-out");
     }
   }
@@ -383,39 +485,12 @@ class _ExperimentManager {
           experiment.enrollmentId || TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
       }
     );
-  }
-
-  /**
-   * Returns identifier for Telemetry experiment environment
-   *
-   * @param {string} featureId e.g. "aboutwelcome"
-   * @returns {string} the identifier, e.g. "default-aboutwelcome"
-   */
-  getRemoteDefaultTelemetryIdentifierForFeature(featureId) {
-    return `default-${featureId}`;
-  }
-
-  /**
-   * Sets Telemetry when activating a remote default.
-   *
-   * @param {featureId} string The feature identifier e.g. "aboutwelcome"
-   * @param {configId} string The identifier of the active configuration
-   */
-  setRemoteDefaultActive(featureId, configId) {
-    TelemetryEnvironment.setExperimentActive(
-      this.getRemoteDefaultTelemetryIdentifierForFeature(featureId),
-      configId,
-      {
-        type: `${TELEMETRY_EXPERIMENT_ACTIVE_PREFIX}default`,
-        enrollmentId: TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
-      }
-    );
-  }
-
-  setRemoteDefaultInactive(featureId) {
-    TelemetryEnvironment.setExperimentInactive(
-      this.getRemoteDefaultTelemetryIdentifierForFeature(featureId)
-    );
+    // Report the experiment to the Glean Experiment API
+    Services.fog.setExperimentActive(experiment.slug, experiment.branch.slug, {
+      type: `${TELEMETRY_EXPERIMENT_ACTIVE_PREFIX}${experiment.experimentType}`,
+      enrollmentId:
+        experiment.enrollmentId || TelemetryEvents.NO_ENROLLMENT_ID_MARKER,
+    });
   }
 
   /**

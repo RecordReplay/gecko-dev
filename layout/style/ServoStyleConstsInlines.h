@@ -41,6 +41,8 @@ template struct StyleStrong<RawServoAnimationValue>;
 template struct StyleStrong<RawServoDeclarationBlock>;
 template struct StyleStrong<RawServoStyleSheetContents>;
 template struct StyleStrong<RawServoKeyframe>;
+template struct StyleStrong<RawServoLayerBlockRule>;
+template struct StyleStrong<RawServoLayerStatementRule>;
 template struct StyleStrong<RawServoMediaList>;
 template struct StyleStrong<RawServoStyleRule>;
 template struct StyleStrong<RawServoImportRule>;
@@ -53,6 +55,8 @@ template struct StyleStrong<RawServoSupportsRule>;
 template struct StyleStrong<RawServoFontFeatureValuesRule>;
 template struct StyleStrong<RawServoFontFaceRule>;
 template struct StyleStrong<RawServoCounterStyleRule>;
+template struct StyleStrong<RawServoScrollTimelineRule>;
+template struct StyleStrong<RawServoContainerRule>;
 
 template <typename T>
 inline void StyleOwnedSlice<T>::Clear() {
@@ -760,13 +764,17 @@ nscoord LengthPercentage::Resolve(T aPercentageGetter, U aRounder) const {
   return AsCalc().node.Resolve(basis, aRounder);
 }
 
+// Note: the static_cast<> wrappers below are needed to disambiguate between
+// the versions of NSToCoordTruncClamped that take float vs. double as the arg.
 nscoord LengthPercentage::Resolve(nscoord aPercentageBasis) const {
-  return Resolve([=] { return aPercentageBasis; }, NSToCoordFloorClamped);
+  return Resolve([=] { return aPercentageBasis; },
+                 static_cast<nscoord (*)(float)>(NSToCoordTruncClamped));
 }
 
 template <typename T>
 nscoord LengthPercentage::Resolve(T aPercentageGetter) const {
-  return Resolve(aPercentageGetter, NSToCoordFloorClamped);
+  return Resolve(aPercentageGetter,
+                 static_cast<nscoord (*)(float)>(NSToCoordTruncClamped));
 }
 
 template <typename T>
@@ -1044,18 +1052,6 @@ inline AspectRatio StyleAspectRatio::ToLayoutRatio() const {
   return HasRatio() ? ratio.AsRatio().ToLayoutRatio(auto_ ? UseBoxSizing::No
                                                           : UseBoxSizing::Yes)
                     : AspectRatio();
-}
-
-inline bool StyleFontFamilyList::ContainsFallback() const {
-  if (fallback == StyleGenericFontFamily::None) {
-    return false;
-  }
-  for (const auto& family : list.AsSpan()) {
-    if (family.IsGeneric() && family.AsGeneric() == fallback) {
-      return true;
-    }
-  }
-  return false;
 }
 
 }  // namespace mozilla

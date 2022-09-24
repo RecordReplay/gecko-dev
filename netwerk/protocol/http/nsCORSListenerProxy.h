@@ -59,6 +59,7 @@ class nsCORSListenerProxy final : public nsIStreamListener,
 
   static void Shutdown();
   static void ClearCache();
+  static void ClearPrivateBrowsingCache();
 
   [[nodiscard]] nsresult Init(nsIChannel* aChannel,
                               DataURIHandling aAllowDataURI);
@@ -122,7 +123,7 @@ class nsCORSListenerProxy final : public nsIStreamListener,
   // only locking mOuterListener, because it can be used on different threads.
   // We guarantee that OnStartRequest, OnDataAvailable and OnStopReques will be
   // called in order, but to make tsan happy we will lock mOuterListener.
-  mutable mozilla::Mutex mMutex;
+  mutable mozilla::Mutex mMutex MOZ_UNANNOTATED;
 };
 
 #endif

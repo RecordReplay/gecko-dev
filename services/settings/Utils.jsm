@@ -8,11 +8,14 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
-ChromeUtils.defineModuleGetter(
-  this,
-  "AppConstants",
-  "resource://gre/modules/AppConstants.jsm"
+const { ServiceRequest } = ChromeUtils.import(
+  "resource://gre/modules/ServiceRequest.jsm"
 );
+
+XPCOMUtils.defineLazyModuleGetters(this, {
+  SharedUtils: "resource://services-settings/SharedUtils.jsm",
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+});
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
@@ -33,8 +36,7 @@ XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 // See LOG_LEVELS in Console.jsm. Common examples: "all", "debug", "info", "warn", "error".
 XPCOMUtils.defineLazyGetter(this, "log", () => {
   const { ConsoleAPI } = ChromeUtils.import(
-    "resource://gre/modules/Console.jsm",
-    {}
+    "resource://gre/modules/Console.jsm"
   );
   return new ConsoleAPI({
     maxLogLevel: "warn",
@@ -43,10 +45,54 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
   });
 });
 
+XPCOMUtils.defineLazyGetter(this, "isRunningTests", () => {
+  const env = Cc["@mozilla.org/process/environment;1"].getService(
+    Ci.nsIEnvironment
+  );
+  if (env.get("MOZ_DISABLE_NONLOCAL_CONNECTIONS") === "1") {
+    // Allow to override the server URL if non-local connections are disabled,
+    // usually true when running tests.
+    return true;
+  }
+  return false;
+});
+
+// Overriding the server URL is normally disabled on Beta and Release channels,
+// except under some conditions.
+XPCOMUtils.defineLazyGetter(this, "allowServerURLOverride", () => {
+  if (!AppConstants.RELEASE_OR_BETA) {
+    // Always allow to override the server URL on Nightly/DevEdition.
+    return true;
+  }
+
+  if (isRunningTests) {
+    return true;
+  }
+
+  const env = Cc["@mozilla.org/process/environment;1"].getService(
+    Ci.nsIEnvironment
+  );
+
+  if (env.get("MOZ_REMOTE_SETTINGS_DEVTOOLS") === "1") {
+    // Allow to override the server URL when using remote settings devtools.
+    return true;
+  }
+
+  return false;
+});
+
 XPCOMUtils.defineLazyPreferenceGetter(
   this,
   "gServerURL",
-  "services.settings.server"
+  "services.settings.server",
+  AppConstants.REMOTE_SETTINGS_SERVER_URL
+);
+
+XPCOMUtils.defineLazyPreferenceGetter(
+  this,
+  "gPreviewEnabled",
+  "services.settings.preview_enabled",
+  false
 );
 
 function _isUndefined(value) {
@@ -55,17 +101,9 @@ function _isUndefined(value) {
 
 var Utils = {
   get SERVER_URL() {
-    const env = Cc["@mozilla.org/process/environment;1"].getService(
-      Ci.nsIEnvironment
-    );
-    const isXpcshell = env.exists("XPCSHELL_TEST_PROFILE_DIR");
-    const isNotThunderbird = AppConstants.MOZ_APP_NAME != "thunderbird";
-    return AppConstants.RELEASE_OR_BETA &&
-      !Cu.isInAutomation &&
-      !isXpcshell &&
-      isNotThunderbird
-      ? "https://firefox.settings.services.mozilla.com/v1"
-      : gServerURL;
+    return allowServerURLOverride
+      ? gServerURL
+      : AppConstants.REMOTE_SETTINGS_SERVER_URL;
   },
 
   CHANGES_PATH: "/buckets/monitor/collections/changes/changeset",
@@ -74,6 +112,76 @@ var Utils = {
    * Logger instance.
    */
   log,
+
+  get CERT_CHAIN_ROOT_IDENTIFIER() {
+    if (this.SERVER_URL == AppConstants.REMOTE_SETTINGS_SERVER_URL) {
+      return Ci.nsIContentSignatureVerifier.ContentSignatureProdRoot;
+    }
+    if (this.SERVER_URL.includes("stage.")) {
+      return Ci.nsIContentSignatureVerifier.ContentSignatureStageRoot;
+    }
+    if (this.SERVER_URL.includes("dev.")) {
+      return Ci.nsIContentSignatureVerifier.ContentSignatureDevRoot;
+    }
+    let env = Cc["@mozilla.org/process/environment;1"].getService(
+      Ci.nsIEnvironment
+    );
+    if (env.exists("XPCSHELL_TEST_PROFILE_DIR")) {
+      return Ci.nsIX509CertDB.AppXPCShellRoot;
+    }
+    return Ci.nsIContentSignatureVerifier.ContentSignatureLocalRoot;
+  },
+
+  get LOAD_DUMPS() {
+    // Load dumps only if pulling data from the production server, or in tests.
+    return (
+      this.SERVER_URL == AppConstants.REMOTE_SETTINGS_SERVER_URL ||
+      isRunningTests
+    );
+  },
+
+  get PREVIEW_MODE() {
+    // We want to offer the ability to set preview mode via a preference
+    // for consumers who want to pull from the preview bucket on startup.
+    if (_isUndefined(this._previewModeEnabled) && allowServerURLOverride) {
+      return gPreviewEnabled;
+    }
+    return !!this._previewModeEnabled;
+  },
+
+  /**
+   * Internal method to enable pulling data from preview buckets.
+   * @param enabled
+   */
+  enablePreviewMode(enabled) {
+    const bool2str = v =>
+      // eslint-disable-next-line no-nested-ternary
+      _isUndefined(v) ? "unset" : v ? "enabled" : "disabled";
+    this.log.debug(
+      `Preview mode: ${bool2str(this._previewModeEnabled)} -> ${bool2str(
+        enabled
+      )}`
+    );
+    this._previewModeEnabled = enabled;
+  },
+
+  /**
+   * Returns the actual bucket name to be used. When preview mode is enabled,
+   * this adds the *preview* suffix.
+   *
+   * See also `SharedUtils.loadJSONDump()` which strips the preview suffix to identify
+   * the packaged JSON file.
+   *
+   * @param bucketName the client bucket
+   * @returns the final client bucket depending whether preview mode is enabled.
+   */
+  actualBucketName(bucketName) {
+    let actual = bucketName.replace("-preview", "");
+    if (this.PREVIEW_MODE) {
+      actual += "-preview";
+    }
+    return actual;
+  },
 
   /**
    * Check if network is down.
@@ -97,6 +205,80 @@ var Utils = {
   },
 
   /**
+   * A wrapper around `ServiceRequest` that behaves like `fetch()`.
+   *
+   * Use this in order to leverage the `beConservative` flag, for
+   * example to avoid using HTTP3 to fetch critical data.
+   *
+   * @param input a resource
+   * @param init request options
+   * @returns a Response object
+   */
+  async fetch(input, init = {}) {
+    return new Promise(function(resolve, reject) {
+      const request = new ServiceRequest();
+      function fallbackOrReject(err) {
+        if (
+          // At most one recursive Utils.fetch call (bypassProxy=false to true).
+          bypassProxy ||
+          Services.startup.shuttingDown ||
+          Utils.isOffline ||
+          !request.isProxied ||
+          !request.bypassProxyEnabled
+        ) {
+          reject(err);
+          return;
+        }
+        ServiceRequest.logProxySource(request.channel, "remote-settings");
+        resolve(Utils.fetch(input, { ...init, bypassProxy: true }));
+      }
+
+      request.onerror = () =>
+        fallbackOrReject(new TypeError("NetworkError: Network request failed"));
+      request.ontimeout = () =>
+        fallbackOrReject(new TypeError("Timeout: Network request failed"));
+      request.onabort = () =>
+        fallbackOrReject(new DOMException("Aborted", "AbortError"));
+      request.onload = () => {
+        // Parse raw response headers into `Headers` object.
+        const headers = new Headers();
+        const rawHeaders = request.getAllResponseHeaders();
+        rawHeaders
+          .trim()
+          .split(/[\r\n]+/)
+          .forEach(line => {
+            const parts = line.split(": ");
+            const header = parts.shift();
+            const value = parts.join(": ");
+            headers.set(header, value);
+          });
+
+        const responseAttributes = {
+          status: request.status,
+          statusText: request.statusText,
+          url: request.responseURL,
+          headers,
+        };
+        resolve(new Response(request.response, responseAttributes));
+      };
+
+      const { method = "GET", headers = {}, bypassProxy = false } = init;
+
+      request.open(method, input, { bypassProxy });
+      // By default, XMLHttpRequest converts the response based on the
+      // Content-Type header, or UTF-8 otherwise. This may mangle binary
+      // responses. Avoid that by requesting the raw bytes.
+      request.responseType = "arraybuffer";
+
+      for (const [name, value] of Object.entries(headers)) {
+        request.setRequestHeader(name, value);
+      }
+
+      request.send();
+    });
+  },
+
+  /**
    * Check if local data exist for the specified client.
    *
    * @param {RemoteSettingsClient} client
@@ -104,7 +286,6 @@ var Utils = {
    */
   async hasLocalData(client) {
     const timestamp = await client.db.getLastModified();
-    // Note: timestamp will be 0 if empty JSON dump is loaded.
     return timestamp !== null;
   },
 
@@ -118,7 +299,10 @@ var Utils = {
   async hasLocalDump(bucket, collection) {
     try {
       await fetch(
-        `resource://app/defaults/settings/${bucket}/${collection}.json`
+        `resource://app/defaults/settings/${bucket}/${collection}.json`,
+        {
+          method: "HEAD",
+        }
       );
       return true;
     } catch (e) {
@@ -154,17 +338,12 @@ var Utils = {
     const identifier = `${bucket}/${collection}`;
     let lastModified = this._dumpStats[identifier];
     if (lastModified === undefined) {
-      try {
-        let res = await fetch(
-          `resource://app/defaults/settings/${bucket}/${collection}.json`
-        );
-        let records = (await res.json()).data;
-        // Records in dumps are sorted by last_modified, newest first.
-        // https://searchfox.org/mozilla-central/rev/5b3444ad300e244b5af4214212e22bd9e4b7088a/taskcluster/docker/periodic-updates/scripts/periodic_file_updates.sh#304
-        lastModified = records[0]?.last_modified || 0;
-      } catch (e) {
-        lastModified = -1;
-      }
+      const { timestamp: dumpTimestamp } = await SharedUtils.loadJSONDump(
+        bucket,
+        collection
+      );
+      // Client recognize -1 as missing dump.
+      lastModified = dumpTimestamp ?? -1;
       this._dumpStats[identifier] = lastModified;
     }
     return lastModified;
@@ -213,7 +392,7 @@ var Utils = {
           .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
           .join("&");
     }
-    const response = await fetch(url);
+    const response = await Utils.fetch(url);
 
     if (response.status >= 500) {
       throw new Error(`Server error ${response.status} ${response.statusText}`);
@@ -258,8 +437,7 @@ var Utils = {
     serverTimeMillis += cacheAgeSeconds * 1000;
 
     // Age of data (time between publication and now).
-    let lastModifiedMillis = Date.parse(response.headers.get("Last-Modified"));
-    const ageSeconds = (serverTimeMillis - lastModifiedMillis) / 1000;
+    const ageSeconds = (serverTimeMillis - timestamp) / 1000;
 
     // Check if the server asked the clients to back off.
     let backoffSeconds;

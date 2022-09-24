@@ -5,6 +5,7 @@
 
 # Ubuntu bionic ships with cmake 3.10.
 cmake_minimum_required(VERSION 3.10)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # Honor VISIBILITY_INLINES_HIDDEN on all types of targets.
 if(POLICY CMP0063)
@@ -20,7 +21,7 @@ if(POLICY CMP0083)
   cmake_policy(SET CMP0083 NEW)
 endif()
 
-project(JPEGXL LANGUAGES C CXX)
+project(LIBJXL LANGUAGES C CXX)
 
 include(CheckCXXSourceCompiles)
 check_cxx_source_compiles(
@@ -37,6 +38,8 @@ message(STATUS "CMAKE_SYSTEM_PROCESSOR is ${CMAKE_SYSTEM_PROCESSOR}")
 include(CheckCXXCompilerFlag)
 check_cxx_compiler_flag("-fsanitize=fuzzer-no-link" CXX_FUZZERS_SUPPORTED)
 check_cxx_compiler_flag("-Xclang -mconstructor-aliases" CXX_CONSTRUCTOR_ALIASES_SUPPORTED)
+check_cxx_compiler_flag("-fmacro-prefix-map=OLD=NEW" CXX_MACRO_PREFIX_MAP)
+check_cxx_compiler_flag("-fno-rtti" CXX_NO_RTTI_SUPPORTED)
 
 # Enabled PIE binaries by default if supported.
 include(CheckPIESupported OPTIONAL RESULT_VARIABLE CHECK_PIE_SUPPORTED)
@@ -71,32 +74,59 @@ endif()
 
 set(WARNINGS_AS_ERRORS_DEFAULT false)
 
+if((SANITIZER STREQUAL "msan") OR JPEGXL_EMSCRIPTEN)
+  set(BUNDLE_LIBPNG_DEFAULT YES)
+  set(BUNDLE_GFLAGS_DEFAULT YES)
+else()
+  set(BUNDLE_LIBPNG_DEFAULT NO)
+  set(BUNDLE_GFLAGS_DEFAULT NO)
+endif()
+
+# Standard cmake naming for building shared libraries.
+option(BUILD_SHARED_LIBS "Build shared libraries instead of static ones" ON)
+
 set(JPEGXL_ENABLE_FUZZERS ${ENABLE_FUZZERS_DEFAULT} CACHE BOOL
     "Build JPEGXL fuzzer targets.")
 set(JPEGXL_ENABLE_DEVTOOLS false CACHE BOOL
     "Build JPEGXL developer tools.")
+set(JPEGXL_ENABLE_TOOLS true CACHE BOOL
+    "Build JPEGXL user tools: cjxl and djxl.")
+set(JPEGXL_ENABLE_DOXYGEN true CACHE BOOL
+    "Generate C API documentation using Doxygen.")
 set(JPEGXL_ENABLE_MANPAGES true CACHE BOOL
     "Build and install man pages for the command-line tools.")
 set(JPEGXL_ENABLE_BENCHMARK true CACHE BOOL
     "Build JPEGXL benchmark tools.")
 set(JPEGXL_ENABLE_EXAMPLES true CACHE BOOL
     "Build JPEGXL library usage examples.")
+set(JPEGXL_BUNDLE_GFLAGS ${BUNDLE_GFLAGS_DEFAULT} CACHE BOOL
+    "Build gflags from source and link it statically.")
+set(JPEGXL_BUNDLE_LIBPNG ${BUNDLE_LIBPNG_DEFAULT} CACHE BOOL
+    "Build libpng from source and link it statically.")
+set(JPEGXL_ENABLE_JNI true CACHE BOOL
+    "Build JPEGXL JNI Java wrapper, if Java dependencies are installed.")
 set(JPEGXL_ENABLE_SJPEG true CACHE BOOL
     "Build JPEGXL with support for encoding with sjpeg.")
 set(JPEGXL_ENABLE_OPENEXR true CACHE BOOL
     "Build JPEGXL with support for OpenEXR if available.")
 set(JPEGXL_ENABLE_SKCMS true CACHE BOOL
     "Build with skcms instead of lcms2.")
+set(JPEGXL_BUNDLE_SKCMS true CACHE BOOL
+    "When building with skcms, bundle it into libjxl.a.")
 set(JPEGXL_ENABLE_VIEWERS false CACHE BOOL
     "Build JPEGXL viewer tools for evaluation.")
 set(JPEGXL_ENABLE_TCMALLOC ${ENABLE_TCMALLOC_DEFAULT} CACHE BOOL
     "Build JPEGXL using gperftools (tcmalloc) allocator.")
 set(JPEGXL_ENABLE_PLUGINS false CACHE BOOL
-    "Build third-party plugings to support JPEG XL in other applications.")
+    "Build third-party plugins to support JPEG XL in other applications.")
 set(JPEGXL_ENABLE_COVERAGE false CACHE BOOL
     "Enable code coverage tracking for libjxl. This also enables debug and disables optimizations.")
 set(JPEGXL_ENABLE_PROFILER false CACHE BOOL
     "Builds in support for profiling (printed by tools if extra flags given")
+set(JPEGXL_ENABLE_TRANSCODE_JPEG true CACHE BOOL
+    "Builds in support for decoding transcoded JXL files back to JPEG,\
+ disabling it makes the decoder reject JXL_DEC_JPEG_RECONSTRUCTION events,\
+ (default enabled)")
 set(JPEGXL_STATIC false CACHE BOOL
     "Build tools as static binaries.")
 set(JPEGXL_WARNINGS_AS_ERRORS ${WARNINGS_AS_ERRORS_DEFAULT} CACHE BOOL
@@ -108,10 +138,12 @@ set(JPEGXL_FORCE_NEON false CACHE BOOL
 
 
 # Force system dependencies.
-set(JPEGXL_FORCE_SYSTEM_GTEST false CACHE BOOL
-    "Force using system installed googletest (gtest/gmock) instead of third_party/googletest source.")
 set(JPEGXL_FORCE_SYSTEM_BROTLI false CACHE BOOL
     "Force using system installed brotli instead of third_party/brotli source.")
+set(JPEGXL_FORCE_SYSTEM_GTEST false CACHE BOOL
+    "Force using system installed googletest (gtest/gmock) instead of third_party/googletest source.")
+set(JPEGXL_FORCE_SYSTEM_LCMS2 false CACHE BOOL
+    "Force using system installed lcms2 instead of third_party/lcms source.")
 set(JPEGXL_FORCE_SYSTEM_HWY false CACHE BOOL
     "Force using system installed highway (libhwy-dev) instead of third_party/highway source.")
 
@@ -144,10 +176,31 @@ message(STATUS
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(JPEGXL_STATIC)
-  set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
   set(BUILD_SHARED_LIBS 0)
-  set(CMAKE_EXE_LINKER_FLAGS
-      "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+  # Clang developers say that in case to use "static" we have to build stdlib
+  # ourselves; for real use case we don't care about stdlib, as it is "granted",
+  # so just linking all other libraries is fine.
+  if (NOT MSVC AND NOT APPLE)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+    set(CMAKE_EXE_LINKER_FLAGS
+        "${CMAKE_EXE_LINKER_FLAGS} -static -static-libgcc -static-libstdc++")
+  endif()
+endif()  # JPEGXL_STATIC
+
+# Threads
+set(THREADS_PREFER_PTHREAD_FLAG YES)
+find_package(Threads REQUIRED)
+
+# These settings are important to drive check_cxx_source_compiles
+# See CMP0067 (min cmake version is 3.10 anyway)
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_CXX_STANDARD_REQUIRED YES)
+
+# Atomics
+find_package(Atomics REQUIRED)
+
+if(JPEGXL_STATIC)
   if (MINGW)
     # In MINGW libstdc++ uses pthreads directly. When building statically a
     # program (regardless of whether the source code uses pthread or not) the
@@ -163,10 +216,31 @@ if(JPEGXL_STATIC)
     # will be discarded anyway.
     # This adds these flags as dependencies for *all* targets. Adding this to
     # CMAKE_EXE_LINKER_FLAGS instead would cause them to be included before any
-    # object files and therefore discarded.
+    # object files and therefore discarded. This should be set in the
+    # INTERFACE_LINK_LIBRARIES of Threads::Threads but some third_part targets
+    # don't depend on it.
     link_libraries(-Wl,-Bstatic -lstdc++ -lpthread -Wl,-Bdynamic)
-  endif()  # MINGW
+  elseif(CMAKE_USE_PTHREADS_INIT)
+    # "whole-archive" is not supported on OSX.
+    if (NOT APPLE)
+      # Set pthreads as a whole-archive, otherwise weak symbols in the static
+      # libraries will discard pthreads symbols leading to segmentation fault at
+      # runtime.
+      message(STATUS "Using -lpthread as --whole-archive")
+      set_target_properties(Threads::Threads PROPERTIES
+        INTERFACE_LINK_LIBRARIES
+            "-Wl,--whole-archive;-lpthread;-Wl,--no-whole-archive")
+    endif()
+  endif()
 endif()  # JPEGXL_STATIC
+
+if ("${CXX_MACRO_PREFIX_MAP}")
+  add_compile_options(-fmacro-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=.)
+endif()
+
+if (CXX_NO_RTTI_SUPPORTED)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti")
+endif()
 
 if (MSVC)
 # TODO(janwas): add flags
@@ -184,12 +258,6 @@ add_definitions(
 if(MSVC)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 endif()
-
-if("${JPEGXL_ENABLE_FUZZERS}" OR "${JPEGXL_ENABLE_COVERAGE}")
-  add_definitions(
-    -DJXL_ENABLE_FUZZERS
-  )
-endif()  # JPEGXL_ENABLE_FUZZERS
 
 # In CMake before 3.12 it is problematic to pass repeated flags like -Xclang.
 # For this reason we place them in CMAKE_CXX_FLAGS instead.
@@ -239,22 +307,19 @@ endif ()  # !MSVC
 
 include(GNUInstallDirs)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_STANDARD_REQUIRED YES)
-
 add_subdirectory(third_party)
-
-set(THREADS_PREFER_PTHREAD_FLAG YES)
-find_package(Threads REQUIRED)
 
 # Copy the JXL license file to the output build directory.
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
                ${PROJECT_BINARY_DIR}/LICENSE.jpeg-xl COPYONLY)
 
-# Enable tests regardless of where are they defined.
+# Enable tests regardless of where they are defined.
 enable_testing()
 include(CTest)
+# Specify default location of `testdata`:
+if(NOT DEFINED JPEGXL_TEST_DATA_PATH)
+  set(JPEGXL_TEST_DATA_PATH "${PROJECT_SOURCE_DIR}/third_party/testdata")
+endif()
 
 # Libraries.
 add_subdirectory(lib)
@@ -270,33 +335,82 @@ endif()
 endif() # BUILD_TESTING
 
 # Documentation generated by Doxygen
+if(JPEGXL_ENABLE_DOXYGEN)
 find_package(Doxygen)
 if(DOXYGEN_FOUND)
 set(DOXYGEN_GENERATE_HTML "YES")
-set(DOXYGEN_GENERATE_XML "NO")
-set(DOXYGEN_STRIP_FROM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/include")
+set(DOXYGEN_GENERATE_XML "YES")
+set(DOXYGEN_STRIP_FROM_PATH "${CMAKE_CURRENT_SOURCE_DIR}/lib/include")
 set(DOXYGEN_USE_MDFILE_AS_MAINPAGE "README.md")
+if(JPEGXL_WARNINGS_AS_ERRORS)
 set(DOXYGEN_WARN_AS_ERROR "YES")
+endif()
+set(DOXYGEN_QUIET "YES")
 doxygen_add_docs(doc
-  "${CMAKE_CURRENT_SOURCE_DIR}/lib/include/jxl"
+  "${CMAKE_CURRENT_SOURCE_DIR}/lib/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/doc/api.txt"
   WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
   COMMENT "Generating C API documentation")
+
+# Add sphinx doc build step for readthedocs.io (requires doxygen too).
+find_program(SPHINX_BUILD_PROGRAM sphinx-build)
+if(SPHINX_BUILD_PROGRAM)
+  add_custom_command(
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/rtd/nonexistent"
+    COMMENT "Generating readthedocs.io output on ${CMAKE_CURRENT_BINARY_DIR}/rtd"
+    COMMAND ${SPHINX_BUILD_PROGRAM} -q -W -b html -j auto
+      ${CMAKE_SOURCE_DIR}/doc/sphinx
+      ${CMAKE_CURRENT_BINARY_DIR}/rtd
+    DEPENDS doc
+  )
+  # This command runs the documentation generation every time since the output
+  # target file doesn't exist.
+  add_custom_target(rtd-html
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/rtd/nonexistent
+  )
+else() # SPHINX_BUILD_PROGRAM\
+  message(WARNING "sphinx-build not found, skipping rtd documentation")
+endif() # SPHINX_BUILD_PROGRAM
+
 else()
 # Create a "doc" target for compatibility since "doc" is not otherwise added to
 # the build when doxygen is not installed.
 add_custom_target(doc false
   COMMENT "Error: Can't generate doc since Doxygen not installed.")
 endif() # DOXYGEN_FOUND
+endif() # JPEGXL_ENABLE_DOXYGEN
 
 if(JPEGXL_ENABLE_MANPAGES)
-find_package(Python COMPONENTS Interpreter)
-if(Python_Interpreter_FOUND)
-  find_program(ASCIIDOC a2x)
-endif()
-if(NOT Python_Interpreter_FOUND OR "${ASCIIDOC}" STREQUAL "ASCIIDOC-NOTFOUND")
-  message(WARNING "asciidoc was not found, the man pages will not be installed.")
+find_program(ASCIIDOC a2x)
+if(NOT "${ASCIIDOC}" STREQUAL "ASCIIDOC-NOTFOUND")
+file(STRINGS "${ASCIIDOC}" ASCIIDOC_SHEBANG LIMIT_COUNT 1)
+if(ASCIIDOC_SHEBANG MATCHES "/sh")
+  set(ASCIIDOC_PY_FOUND ON)
+  # Run the program directly and set ASCIIDOC as empty.
+  set(ASCIIDOC_PY "${ASCIIDOC}")
+  set(ASCIIDOC "")
+elseif(ASCIIDOC_SHEBANG MATCHES "python2")
+  find_package(Python2 COMPONENTS Interpreter)
+  set(ASCIIDOC_PY_FOUND "${Python2_Interpreter_FOUND}")
+  set(ASCIIDOC_PY Python2::Interpreter)
+elseif(ASCIIDOC_SHEBANG MATCHES "python3")
+  find_package(Python3 COMPONENTS Interpreter)
+  set(ASCIIDOC_PY_FOUND "${Python3_Interpreter_FOUND}")
+  set(ASCIIDOC_PY Python3::Interpreter)
 else()
+  find_package(Python COMPONENTS Interpreter QUIET)
+  if(NOT Python_Interpreter_FOUND)
+    find_program(ASCIIDOC_PY python)
+    if(NOT ASCIIDOC_PY STREQUAL "ASCIIDOC_PY-NOTFOUND")
+      set(ASCIIDOC_PY_FOUND ON)
+    endif()
+  else()
+    set(ASCIIDOC_PY_FOUND "${Python_Interpreter_FOUND}")
+    set(ASCIIDOC_PY Python::Interpreter)
+  endif()
+endif()
+
+if (ASCIIDOC_PY_FOUND)
   set(MANPAGE_FILES "")
   set(MANPAGES "")
   foreach(PAGE IN ITEMS cjxl djxl)
@@ -305,8 +419,8 @@ else()
     # does not recognize it.
     add_custom_command(
       OUTPUT "${PAGE}.1"
-      COMMAND Python::Interpreter
-      ARGS "${ASCIIDOC}"
+      COMMAND "${ASCIIDOC_PY}"
+      ARGS ${ASCIIDOC}
         --format manpage --destination-dir="${CMAKE_CURRENT_BINARY_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/doc/man/${PAGE}.txt"
       MAIN_DEPENDENCY "${CMAKE_CURRENT_SOURCE_DIR}/doc/man/${PAGE}.txt")
@@ -314,13 +428,16 @@ else()
     list(APPEND MANPAGES "${PAGE}.1")
   endforeach()
   add_custom_target(manpages ALL DEPENDS ${MANPAGES})
-  install(FILES ${MANPAGE_FILES} DESTINATION share/man/man1)
-endif()
-endif()
+  install(FILES ${MANPAGE_FILES} DESTINATION ${CMAKE_INSTALL_MANDIR}/man1)
+endif()  # ASCIIDOC_PY_FOUND
+else()
+  message(WARNING "asciidoc was not found, the man pages will not be installed.")
+endif()  # ASCIIDOC != "ASCIIDOC-NOTFOUND"
+endif()  # JPEGXL_ENABLE_MANPAGES
 
 # Example usage code.
 if (${JPEGXL_ENABLE_EXAMPLES})
-add_subdirectory(examples)
+include(examples/examples.cmake)
 endif ()
 
 # Plugins for third-party software

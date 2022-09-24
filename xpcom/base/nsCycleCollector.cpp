@@ -1075,12 +1075,7 @@ enum ccPhase {
   CleanupPhase
 };
 
-enum ccType {
-  SliceCC,   /* If a CC is in progress, continue it.
-                Otherwise, start a new one. */
-  ManualCC,  /* Explicitly triggered. */
-  ShutdownCC /* Shutdown CC, used for finding leaks. */
-};
+enum ccIsManual { CCIsNotManual = false, CCIsManual = true };
 
 ////////////////////////////////////////////////////////////////////////
 // Top level structure for the cycle collector.
@@ -1161,9 +1156,9 @@ class nsCycleCollector : public nsIMemoryReporter {
   void RemoveObjectFromGraph(void* aPtr);
 
   void PrepareForGarbageCollection();
-  void FinishAnyCurrentCollection();
+  void FinishAnyCurrentCollection(CCReason aReason);
 
-  bool Collect(ccType aCCType, SliceBudget& aBudget,
+  bool Collect(CCReason aReason, ccIsManual aIsManual, SliceBudget& aBudget,
                nsICycleCollectorListener* aManualListener,
                bool aPreferShorterSlices = false);
   MOZ_CAN_RUN_SCRIPT
@@ -1184,12 +1179,12 @@ class nsCycleCollector : public nsIMemoryReporter {
   MOZ_CAN_RUN_SCRIPT
   void ShutdownCollect();
 
-  void FixGrayBits(bool aForceGC, TimeLog& aTimeLog);
+  void FixGrayBits(bool aIsShutdown, TimeLog& aTimeLog);
   bool IsIncrementalGCInProgress();
   void FinishAnyIncrementalGCInProgress();
-  bool ShouldMergeZones(ccType aCCType);
+  bool ShouldMergeZones(ccIsManual aIsManual);
 
-  void BeginCollection(ccType aCCType,
+  void BeginCollection(CCReason aReason, ccIsManual aIsManual,
                        nsICycleCollectorListener* aManualListener);
   void MarkRoots(SliceBudget& aBudget);
   void ScanRoots(bool aFullySynchGraphBuild);
@@ -1803,7 +1798,7 @@ already_AddRefed<nsICycleCollectorListener> nsCycleCollector_createLogger() {
 }
 
 static bool GCThingIsGrayCCThing(JS::GCCellPtr thing) {
-  return JS::IsCCTraceKind(thing.kind()) && JS::GCThingIsMarkedGray(thing);
+  return JS::IsCCTraceKind(thing.kind()) && JS::GCThingIsMarkedGrayInCC(thing);
 }
 
 static bool ValueIsGrayCCThing(const JS::Value& value) {
@@ -1892,15 +1887,13 @@ class CCGraphBuilder final : public nsCycleCollectionTraversalCallback,
                    uint64_t aCompartmentAddress) override;
 
   NS_IMETHOD_(void) NoteXPCOMChild(nsISupports* aChild) override;
-  NS_IMETHOD_(void) NoteJSChild(const JS::GCCellPtr& aThing) override;
+  NS_IMETHOD_(void) NoteJSChild(JS::GCCellPtr aThing) override;
   NS_IMETHOD_(void)
   NoteNativeChild(void* aChild,
                   nsCycleCollectionParticipant* aParticipant) override;
   NS_IMETHOD_(void) NoteNextEdgeName(const char* aName) override;
 
  private:
-  void NoteJSChild(JS::GCCellPtr aChild);
-
   NS_IMETHOD_(void)
   NoteRoot(void* aRoot, nsCycleCollectionParticipant* aParticipant) {
     MOZ_ASSERT(aRoot);
@@ -2183,7 +2176,7 @@ CCGraphBuilder::NoteNativeChild(void* aChild,
 }
 
 NS_IMETHODIMP_(void)
-CCGraphBuilder::NoteJSChild(const JS::GCCellPtr& aChild) {
+CCGraphBuilder::NoteJSChild(JS::GCCellPtr aChild) {
   if (!aChild) {
     return;
   }
@@ -2264,7 +2257,7 @@ class ChildFinder : public nsCycleCollectionTraversalCallback {
   NS_IMETHOD_(void) NoteXPCOMChild(nsISupports* aChild) override;
   NS_IMETHOD_(void)
   NoteNativeChild(void* aChild, nsCycleCollectionParticipant* aHelper) override;
-  NS_IMETHOD_(void) NoteJSChild(const JS::GCCellPtr& aThing) override;
+  NS_IMETHOD_(void) NoteJSChild(JS::GCCellPtr aThing) override;
 
   NS_IMETHOD_(void)
   DescribeRefCountedNode(nsrefcnt aRefcount, const char* aObjname) override {}
@@ -2303,7 +2296,7 @@ ChildFinder::NoteNativeChild(void* aChild,
 }
 
 NS_IMETHODIMP_(void)
-ChildFinder::NoteJSChild(const JS::GCCellPtr& aChild) {
+ChildFinder::NoteJSChild(JS::GCCellPtr aChild) {
   if (aChild && JS::GCThingIsMarkedGray(aChild)) {
     mMayHaveChild = true;
   }
@@ -2357,7 +2350,7 @@ class JSPurpleBuffer {
   SegmentedVector<JSObject*, kSegmentSize, InfallibleAllocPolicy> mObjects;
 };
 
-NS_IMPL_CYCLE_COLLECTION_MULTI_ZONE_JSHOLDER_CLASS(JSPurpleBuffer)
+NS_IMPL_CYCLE_COLLECTION_CLASS(JSPurpleBuffer)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(JSPurpleBuffer)
   tmp->Destroy();
@@ -3241,20 +3234,22 @@ void nsCycleCollector::CheckThreadSafety() {
 #endif
 }
 
-// The cycle collector uses the mark bitmap to discover what JS objects
-// were reachable only from XPConnect roots that might participate in
-// cycles. We ask the JS context whether we need to force a GC before
-// this CC. It returns true on startup (before the mark bits have been set),
-// and also when UnmarkGray has run out of stack.  We also force GCs on shut
-// down to collect cycles involving both DOM and JS.
-void nsCycleCollector::FixGrayBits(bool aForceGC, TimeLog& aTimeLog) {
+// The cycle collector uses the mark bitmap to discover what JS objects are
+// reachable only from XPConnect roots that might participate in cycles. We ask
+// the JS runtime whether we need to force a GC before this CC. It should only
+// be true when UnmarkGray has run out of stack. We also force GCs on shutdown
+// to collect cycles involving both DOM and JS, and in WantAllTraces CCs to
+// prevent hijinks from ForgetSkippable and compartmental GCs.
+void nsCycleCollector::FixGrayBits(bool aIsShutdown, TimeLog& aTimeLog) {
   CheckThreadSafety();
 
   if (!mCCJSRuntime) {
     return;
   }
 
-  if (!aForceGC) {
+  // If we're not forcing a GC anyways due to shutdown or an all traces CC,
+  // check to see if we still need to do one to fix the gray bits.
+  if (!(aIsShutdown || (mLogger && mLogger->IsAllTraces()))) {
     mCCJSRuntime->FixWeakMappingGrayBits();
     aTimeLog.Checkpoint("FixWeakMappingGrayBits");
 
@@ -3264,13 +3259,19 @@ void nsCycleCollector::FixGrayBits(bool aForceGC, TimeLog& aTimeLog) {
     if (!needGC) {
       return;
     }
-    mResults.mForcedGC = true;
   }
+
+  mResults.mForcedGC = true;
 
   uint32_t count = 0;
   do {
-    mCCJSRuntime->GarbageCollect(aForceGC ? JS::GCReason::SHUTDOWN_CC
-                                          : JS::GCReason::CC_FORCED);
+    if (aIsShutdown) {
+      mCCJSRuntime->GarbageCollect(JS::GCOptions::Shutdown,
+                                   JS::GCReason::SHUTDOWN_CC);
+    } else {
+      mCCJSRuntime->GarbageCollect(JS::GCOptions::Normal,
+                                   JS::GCReason::CC_FORCED);
+    }
 
     mCCJSRuntime->FixWeakMappingGrayBits();
 
@@ -3347,7 +3348,8 @@ void nsCycleCollector::ShutdownCollect() {
   uint32_t i;
   bool collectedAny = true;
   for (i = 0; i < DEFAULT_SHUTDOWN_COLLECTIONS && collectedAny; ++i) {
-    collectedAny = Collect(ShutdownCC, unlimitedBudget, nullptr);
+    collectedAny = Collect(CCReason::SHUTDOWN, ccIsManual::CCIsManual,
+                           unlimitedBudget, nullptr);
     // Run any remaining tasks that may have been enqueued via RunInStableState
     // or DispatchToMicroTask. These can hold alive CCed objects, and we want to
     // clear them out before we run the CC again or finish shutting down.
@@ -3364,9 +3366,12 @@ static void PrintPhase(const char* aPhase) {
 #endif
 }
 
-bool nsCycleCollector::Collect(ccType aCCType, SliceBudget& aBudget,
+bool nsCycleCollector::Collect(CCReason aReason, ccIsManual aIsManual,
+                               SliceBudget& aBudget,
                                nsICycleCollectorListener* aManualListener,
                                bool aPreferShorterSlices) {
+  AUTO_PROFILER_LABEL_RELEVANT_FOR_JS("Incremental CC", GCCC);
+
   CheckThreadSafety();
 
   // This can legitimately happen in a few cases. See bug 383651.
@@ -3393,7 +3398,7 @@ bool nsCycleCollector::Collect(ccType aCCType, SliceBudget& aBudget,
     timeLog.Checkpoint("Collect::FreeSnowWhite");
   }
 
-  if (aCCType != SliceCC) {
+  if (aIsManual == ccIsManual::CCIsManual) {
     mResults.mAnyManual = true;
   }
 
@@ -3404,7 +3409,7 @@ bool nsCycleCollector::Collect(ccType aCCType, SliceBudget& aBudget,
     switch (mIncrementalPhase) {
       case IdlePhase:
         PrintPhase("BeginCollection");
-        BeginCollection(aCCType, aManualListener);
+        BeginCollection(aReason, aIsManual, aManualListener);
         break;
       case GraphBuildingPhase:
         PrintPhase("MarkRoots");
@@ -3451,17 +3456,17 @@ bool nsCycleCollector::Collect(ccType aCCType, SliceBudget& aBudget,
   // Collect() does something.
   mActivelyCollecting = false;
 
-  if (aCCType != SliceCC && !startedIdle) {
+  if (aIsManual && !startedIdle) {
     // We were in the middle of an incremental CC (using its own listener).
     // Somebody has forced a CC, so after having finished out the current CC,
     // run the CC again using the new listener.
     MOZ_ASSERT(IsIdle());
-    if (Collect(aCCType, aBudget, aManualListener)) {
+    if (Collect(aReason, ccIsManual::CCIsManual, aBudget, aManualListener)) {
       collectedAny = true;
     }
   }
 
-  MOZ_ASSERT_IF(aCCType != SliceCC, IsIdle());
+  MOZ_ASSERT_IF(aIsManual == CCIsManual, IsIdle());
 
   return collectedAny;
 }
@@ -3480,18 +3485,18 @@ void nsCycleCollector::PrepareForGarbageCollection() {
     return;
   }
 
-  FinishAnyCurrentCollection();
+  FinishAnyCurrentCollection(CCReason::GC_WAITING);
 }
 
-void nsCycleCollector::FinishAnyCurrentCollection() {
+void nsCycleCollector::FinishAnyCurrentCollection(CCReason aReason) {
   if (IsIdle()) {
     return;
   }
 
   SliceBudget unlimitedBudget = SliceBudget::unlimited();
   PrintPhase("FinishAnyCurrentCollection");
-  // Use SliceCC because we only want to finish the CC in progress.
-  Collect(SliceCC, unlimitedBudget, nullptr);
+  // Use CCIsNotManual because we only want to finish the CC in progress.
+  Collect(aReason, ccIsManual::CCIsNotManual, unlimitedBudget, nullptr);
 
   // It is only okay for Collect() to have failed to finish the
   // current CC if we're reentering the CC at some point past
@@ -3507,7 +3512,7 @@ void nsCycleCollector::FinishAnyCurrentCollection() {
 static const uint32_t kMinConsecutiveUnmerged = 3;
 static const uint32_t kMaxConsecutiveMerged = 3;
 
-bool nsCycleCollector::ShouldMergeZones(ccType aCCType) {
+bool nsCycleCollector::ShouldMergeZones(ccIsManual aIsManual) {
   if (!mCCJSRuntime) {
     return false;
   }
@@ -3526,7 +3531,7 @@ bool nsCycleCollector::ShouldMergeZones(ccType aCCType) {
     return false;
   }
 
-  if (aCCType == SliceCC && mCCJSRuntime->UsefulToMergeZones()) {
+  if (aIsManual == CCIsNotManual && mCCJSRuntime->UsefulToMergeZones()) {
     mMergedInARow++;
     return true;
   } else {
@@ -3536,7 +3541,8 @@ bool nsCycleCollector::ShouldMergeZones(ccType aCCType) {
 }
 
 void nsCycleCollector::BeginCollection(
-    ccType aCCType, nsICycleCollectorListener* aManualListener) {
+    CCReason aReason, ccIsManual aIsManual,
+    nsICycleCollectorListener* aManualListener) {
   TimeLog timeLog;
   MOZ_ASSERT(IsIdle());
   MOZ_RELEASE_ASSERT(!mScanInProgress);
@@ -3544,11 +3550,11 @@ void nsCycleCollector::BeginCollection(
   mCollectionStart = TimeStamp::Now();
 
   if (mCCJSRuntime) {
-    mCCJSRuntime->BeginCycleCollectionCallback();
+    mCCJSRuntime->BeginCycleCollectionCallback(aReason);
     timeLog.Checkpoint("BeginCycleCollectionCallback()");
   }
 
-  bool isShutdown = (aCCType == ShutdownCC);
+  bool isShutdown = (aReason == CCReason::SHUTDOWN);
 
   // Set up the listener for this CC.
   MOZ_ASSERT_IF(isShutdown, !aManualListener);
@@ -3566,16 +3572,12 @@ void nsCycleCollector::BeginCollection(
     }
   }
 
-  // On a WantAllTraces CC, force a synchronous global GC to prevent
-  // hijinks from ForgetSkippable and compartmental GCs.
-  bool forceGC = isShutdown || (mLogger && mLogger->IsAllTraces());
-
   // BeginCycleCollectionCallback() might have started an IGC, and we need
   // to finish it before we run FixGrayBits.
   FinishAnyIncrementalGCInProgress();
   timeLog.Checkpoint("Pre-FixGrayBits finish IGC");
 
-  FixGrayBits(forceGC, timeLog);
+  FixGrayBits(isShutdown, timeLog);
   if (mCCJSRuntime) {
     mCCJSRuntime->CheckGrayBits();
   }
@@ -3597,8 +3599,9 @@ void nsCycleCollector::BeginCollection(
   JS::AutoEnterCycleCollection autocc(mCCJSRuntime->Runtime());
   mGraph.Init();
   mResults.Init();
-  mResults.mAnyManual = (aCCType != SliceCC);
-  bool mergeZones = ShouldMergeZones(aCCType);
+  mResults.mSuspectedAtCCStart = SuspectedCount();
+  mResults.mAnyManual = aIsManual;
+  bool mergeZones = ShouldMergeZones(aIsManual);
   mResults.mMergedZones = mergeZones;
 
   MOZ_ASSERT(!mBuilder, "Forgot to clear mBuilder");
@@ -3854,8 +3857,6 @@ void nsCycleCollector_forgetSkippable(js::SliceBudget& aBudget,
   MOZ_ASSERT(data);
   MOZ_ASSERT(data->mCollector);
 
-  AUTO_PROFILER_LABEL("nsCycleCollector_forgetSkippable", GCCC);
-
   TimeLog timeLog;
   data->mCollector->ForgetSkippable(aBudget, aRemoveChildlessNodes,
                                     aAsyncSnowWhiteFreeing);
@@ -3897,7 +3898,8 @@ already_AddRefed<nsICycleCollectorLogSink> nsCycleCollector_createLogSink() {
   return sink.forget();
 }
 
-bool nsCycleCollector_collect(nsICycleCollectorListener* aManualListener) {
+bool nsCycleCollector_collect(CCReason aReason,
+                              nsICycleCollectorListener* aManualListener) {
   CollectorData* data = sCollectorData.get();
 
   // We should have started the cycle collector by now.
@@ -3907,10 +3909,11 @@ bool nsCycleCollector_collect(nsICycleCollectorListener* aManualListener) {
   AUTO_PROFILER_LABEL("nsCycleCollector_collect", GCCC);
 
   SliceBudget unlimitedBudget = SliceBudget::unlimited();
-  return data->mCollector->Collect(ManualCC, unlimitedBudget, aManualListener);
+  return data->mCollector->Collect(aReason, ccIsManual::CCIsManual,
+                                   unlimitedBudget, aManualListener);
 }
 
-void nsCycleCollector_collectSlice(SliceBudget& budget,
+void nsCycleCollector_collectSlice(SliceBudget& budget, CCReason aReason,
                                    bool aPreferShorterSlices) {
   CollectorData* data = sCollectorData.get();
 
@@ -3920,7 +3923,8 @@ void nsCycleCollector_collectSlice(SliceBudget& budget,
 
   AUTO_PROFILER_LABEL("nsCycleCollector_collectSlice", GCCC);
 
-  data->mCollector->Collect(SliceCC, budget, nullptr, aPreferShorterSlices);
+  data->mCollector->Collect(aReason, ccIsManual::CCIsNotManual, budget, nullptr,
+                            aPreferShorterSlices);
 }
 
 void nsCycleCollector_prepareForGarbageCollection() {
@@ -3944,7 +3948,7 @@ void nsCycleCollector_finishAnyCurrentCollection() {
     return;
   }
 
-  data->mCollector->FinishAnyCurrentCollection();
+  data->mCollector->FinishAnyCurrentCollection(CCReason::API);
 }
 
 void nsCycleCollector_shutdown(bool aDoCollect) {

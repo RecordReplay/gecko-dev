@@ -197,13 +197,16 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
     }
   }
 
-  _appendMessageLabel(messageAttr, appendTo = null) {
+  _createNoSyncedTabsElement(messageAttr, appendTo = null) {
     if (!appendTo) {
       appendTo = this.tabsList;
     }
-    let message = this.tabsList.getAttribute(messageAttr);
+
     let messageLabel = document.createXULElement("label");
-    messageLabel.textContent = message;
+    document.l10n.setAttributes(
+      messageLabel,
+      this.tabsList.getAttribute(messageAttr)
+    );
     appendTo.appendChild(messageLabel);
     return messageLabel;
   }
@@ -229,18 +232,20 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
     container.appendChild(clientItem);
 
     if (!client.tabs.length) {
-      let label = this._appendMessageLabel("notabsforclientlabel", container);
+      let label = this._createNoSyncedTabsElement(
+        "notabsforclientlabel",
+        container
+      );
       label.setAttribute("class", "PanelUI-remotetabs-notabsforclient-label");
     } else {
       // If this page will display all tabs, show no additional buttons.
-      // If the next page will display all the remaining tabs, show a "Show All" button
-      // Otherwise, show a "Shore More" button
+      // Otherwise, show a "Show More" button
       let hasNextPage = client.tabs.length > maxTabs;
       let nextPageIsLastPage =
         hasNextPage &&
         maxTabs + SyncedTabsPanelList.sRemoteTabsPerPage >= client.tabs.length;
       if (nextPageIsLastPage) {
-        // When the user clicks "Show All", try to have at least sRemoteTabsNextPageMinTabs more tabs
+        // When the user clicks "Show More", try to have at least sRemoteTabsNextPageMinTabs more tabs
         // to display in order to avoid user frustration
         maxTabs = Math.min(
           client.tabs.length - SyncedTabsPanelList.sRemoteTabsNextPageMinTabs,
@@ -250,8 +255,8 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
       if (hasNextPage) {
         client.tabs = client.tabs.slice(0, maxTabs);
       }
-      for (let tab of client.tabs) {
-        let tabEnt = this._createSyncedTabElement(tab);
+      for (let [index, tab] of client.tabs.entries()) {
+        let tabEnt = this._createSyncedTabElement(tab, index);
         container.appendChild(tabEnt);
       }
       if (hasNextPage) {
@@ -261,7 +266,7 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
     }
   }
 
-  _createSyncedTabElement(tabInfo) {
+  _createSyncedTabElement(tabInfo, index) {
     let item = document.createXULElement("toolbarbutton");
     let tooltipText = (tabInfo.title ? tabInfo.title + "\n" : "") + tabInfo.url;
     item.setAttribute("itemtype", "tab");
@@ -271,11 +276,22 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
       "label",
       tabInfo.title != "" ? tabInfo.title : tabInfo.url
     );
-    item.setAttribute("image", tabInfo.icon);
+    if (tabInfo.icon) {
+      item.setAttribute("image", tabInfo.icon);
+    }
     item.setAttribute("tooltiptext", tooltipText);
     // We need to use "click" instead of "command" here so openUILink
     // respects different buttons (eg, to open in a new tab).
     item.addEventListener("click", e => {
+      // We want to differentiate between when the fxa panel is within the app menu/hamburger bar
+      let object = "fxa_avatar_menu";
+      const appMenuPanel = document.getElementById("appMenu-popup");
+      if (appMenuPanel.contains(e.currentTarget)) {
+        object = "fxa_app_menu";
+      }
+      SyncedTabs.recordSyncedTabsTelemetry(object, "click", {
+        tab_pos: index.toString(),
+      });
       document.defaultView.openUILink(tabInfo.url, e, {
         triggeringPrincipal: Services.scriptSecurityManager.createNullPrincipal(
           {}
@@ -292,8 +308,6 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
   }
 
   _createShowMoreSyncedTabsElement(clientId) {
-    let labelAttr = "showMoreLabel";
-    let tooltipAttr = "showMoreTooltipText";
     let showCount = Infinity;
 
     let showMoreItem = document.createXULElement("toolbarbutton");
@@ -303,12 +317,8 @@ this.SyncedTabsPanelList = class SyncedTabsPanelList {
       "subviewbutton-nav",
       "subviewbutton-nav-down"
     );
-    let label = gSync.fluentStrings.formatValueSync(
-      this.tabsList.getAttribute(labelAttr)
-    );
-    showMoreItem.setAttribute("label", label);
-    let tooltipText = this.tabsList.getAttribute(tooltipAttr);
-    showMoreItem.setAttribute("tooltiptext", tooltipText);
+    document.l10n.setAttributes(showMoreItem, "appmenu-remote-tabs-showmore");
+
     showMoreItem.addEventListener("click", e => {
       e.preventDefault();
       e.stopPropagation();
@@ -402,20 +412,11 @@ var gSync = {
   },
 
   getSendTabTargets() {
-    // If sync is not enabled, then there's no point looking for sync clients.
-    // If sync is simply not ready or hasn't yet synced the clients engine, we
-    // just assume the fxa device doesn't have a sync record - in practice,
-    // that just means we don't attempt to fall back to the "old" sendtab should
-    // "new" sendtab fail.
-    // We should just kill "old" sendtab now all our mobile browsers support
-    // "new".
-    let getClientRecord = () => undefined;
-    if (UIState.get().syncEnabled && Weave.Service.clientsEngine) {
-      getClientRecord = id =>
-        Weave.Service.clientsEngine.getClientByFxaDeviceId(id);
-    }
-    let targets = [];
-    if (!fxAccounts.device.recentDeviceList) {
+    const targets = [];
+    if (
+      UIState.get().status != UIState.STATUS_SIGNED_IN ||
+      !fxAccounts.device.recentDeviceList
+    ) {
       return targets;
     }
     for (let d of fxAccounts.device.recentDeviceList) {
@@ -423,15 +424,11 @@ var gSync = {
         continue;
       }
 
-      let clientRecord = getClientRecord(d.id);
-      if (clientRecord || fxAccounts.commands.sendTab.isDeviceCompatible(d)) {
-        targets.push({
-          clientRecord,
-          ...d,
-        });
+      if (fxAccounts.commands.sendTab.isDeviceCompatible(d)) {
+        targets.push(d);
       }
     }
-    return targets.sort((a, b) => a.name.localeCompare(b.name));
+    return targets.sort((a, b) => b.lastAccessTime - a.lastAccessTime);
   },
 
   _definePrefGetters() {
@@ -746,7 +743,8 @@ var gSync = {
           }
         });
         return item;
-      }
+      },
+      true
     );
 
     bodyNode.removeAttribute("state");
@@ -868,7 +866,9 @@ var gSync = {
       "fxa-manage-account-button"
     );
 
-    let headerTitle = menuHeaderTitleEl.getAttribute("defaultLabel");
+    let headerTitle = this.fluentStrings.formatValueSync(
+      "appmenuitem-fxa-sign-in"
+    );
     let headerDescription = this.fluentStrings.formatValueSync(
       "fxa-menu-turn-on-sync-default"
     );
@@ -936,6 +936,7 @@ var gSync = {
     // We remove the data-l10n-id attribute here to prevent the node's value
     // attribute from being overwritten by Fluent when the panel is moved
     // around in the DOM.
+    menuHeaderTitleEl.removeAttribute("data-l10n-id");
     menuHeaderDescriptionEl.removeAttribute("data-l10n-id");
   },
 
@@ -995,10 +996,6 @@ var gSync = {
       document,
       "appMenu-fxa-label2"
     );
-    const appMenuAvatar = PanelMultiView.getViewNode(
-      document,
-      "appMenu-fxa-avatar"
-    );
     const appMenuHeaderText = PanelMultiView.getViewNode(
       document,
       "appMenu-fxa-text"
@@ -1021,7 +1018,6 @@ var gSync = {
     appMenuLabel.setAttribute("label", defaultLabel);
     appMenuLabel.removeAttribute("aria-labelledby");
     appMenuStatus.removeAttribute("fxastatus");
-    appMenuAvatar.style.removeProperty("list-style-image");
 
     if (status == UIState.STATUS_NOT_CONFIGURED) {
       appMenuHeaderText.hidden = false;
@@ -1229,17 +1225,14 @@ var gSync = {
   // Returns true if we managed to send the tab to any targets, false otherwise.
   async sendTabToDevice(url, targets, title) {
     const fxaCommandsDevices = [];
-    const oldSendTabClients = [];
     for (const target of targets) {
       if (fxAccounts.commands.sendTab.isDeviceCompatible(target)) {
         fxaCommandsDevices.push(target);
-      } else if (target.clientRecord) {
-        oldSendTabClients.push(target.clientRecord);
       } else {
         this.log.error(`Target ${target.id} unsuitable for send tab.`);
       }
     }
-    // If a master-password is enabled then it must be unlocked so FxA can get
+    // If a primary-password is enabled then it must be unlocked so FxA can get
     // the encryption keys from the login manager. (If we end up using the "sync"
     // fallback that would end up prompting by itself, but the FxA command route
     // will not) - so force that here.
@@ -1279,19 +1272,6 @@ var gSync = {
         numFailed++;
       }
     }
-    for (let client of oldSendTabClients) {
-      try {
-        this.log.info(`Sending a tab to ${client.id} using Sync.`);
-        await Weave.Service.clientsEngine.sendURIToClientForDisplay(
-          url,
-          client.id,
-          title
-        );
-      } catch (e) {
-        numFailed++;
-        this.log.error("Could not send tab to device.", e);
-      }
-    }
     return numFailed < targets.length; // Good enough.
   },
 
@@ -1300,7 +1280,8 @@ var gSync = {
     url,
     title,
     multiselected,
-    createDeviceNodeFn
+    createDeviceNodeFn,
+    isFxaMenu = false
   ) {
     if (!createDeviceNodeFn) {
       createDeviceNodeFn = (targetId, name, targetType, lastModified) => {
@@ -1334,7 +1315,8 @@ var gSync = {
           createDeviceNodeFn,
           url,
           title,
-          multiselected
+          multiselected,
+          isFxaMenu
         );
       } else {
         this._appendSendTabSingleDevice(fragment, createDeviceNodeFn);
@@ -1364,7 +1346,8 @@ var gSync = {
     createDeviceNodeFn,
     url,
     title,
-    multiselected
+    multiselected,
+    isFxaMenu = false
   ) {
     let tabsToSend = multiselected
       ? gBrowser.selectedTabs.map(t => {
@@ -1390,6 +1373,8 @@ var gSync = {
           let anchorNode =
             (fxastatus &&
               fxastatus != "not_configured" &&
+              document.getElementById("fxa-toolbar-menu-button")?.parentNode
+                ?.id != "widget-overflow-list" &&
               document.getElementById("fxa-toolbar-menu-button")) ||
             document.getElementById("PanelUI-menu-button");
           ConfirmationHint.show(anchorNode, "sendToDevice");
@@ -1447,15 +1432,15 @@ var gSync = {
       const separator = createDeviceNodeFn();
       separator.classList.add("sync-menuitem");
       fragment.appendChild(separator);
-      const allDevicesLabel = this.fxaStrings.GetStringFromName(
-        "sendToAllDevices.menuitem"
-      );
+      const allDevicesLabel = isFxaMenu
+        ? this.fluentStrings.formatValueSync("account-send-to-all-devices")
+        : this.fxaStrings.GetStringFromName("sendToAllDevices.menuitem");
       addTargetDevice("", allDevicesLabel, "");
 
       // "Manage devices" menu item
-      const manageDevicesLabel = this.fxaStrings.GetStringFromName(
-        "manageDevices.menuitem"
-      );
+      const manageDevicesLabel = isFxaMenu
+        ? this.fluentStrings.formatValueSync("account-manage-devices")
+        : this.fxaStrings.GetStringFromName("manageDevices.menuitem");
       // We piggyback on the createDeviceNodeFn implementation,
       // it's a big disgusting.
       const targetDevice = createDeviceNodeFn(
@@ -1569,12 +1554,9 @@ var gSync = {
       let tabCount = aTargetTab.multiselected
         ? gBrowser.multiSelectedTabsCount
         : 1;
-      sendTabsToDevice.label = PluralForm.get(
-        tabCount,
-        gNavigatorBundle.getString("sendTabsToDevice.label")
-      ).replace("#1", tabCount.toLocaleString());
-      sendTabsToDevice.accessKey = gNavigatorBundle.getString(
-        "sendTabsToDevice.accesskey"
+      sendTabsToDevice.setAttribute(
+        "data-l10n-args",
+        JSON.stringify({ tabCount })
       );
       sendTabsToDevice.hidden = false;
     }

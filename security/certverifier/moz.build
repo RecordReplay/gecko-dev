@@ -8,13 +8,11 @@ with Files("**"):
     BUG_COMPONENT = ("Core", "Security: PSM")
 
 EXPORTS += [
-    "BRNameMatchingPolicy.h",
     "CertVerifier.h",
     "OCSPCache.h",
 ]
 
 UNIFIED_SOURCES += [
-    "BRNameMatchingPolicy.cpp",
     "CertVerifier.cpp",
     "NSSCertDBTrustDomain.cpp",
     "OCSPCache.cpp",
@@ -61,3 +59,5 @@ FINAL_LIBRARY = "xul"
 
 if CONFIG["CC_TYPE"] == "clang-cl":
     AllowCompilerWarnings()  # workaround for bug 1090497
+
+REQUIRES_UNIFIED_BUILD = True

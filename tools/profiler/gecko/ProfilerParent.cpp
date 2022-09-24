@@ -10,6 +10,9 @@
 #  include "nsProfiler.h"
 #endif
 
+#include "GeckoProfiler.h"
+#include "ProfilerControl.h"
+#include "mozilla/BaseAndGeckoProfilerDetail.h"
 #include "mozilla/BaseProfilerDetail.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/DataMutex.h"
@@ -35,8 +38,7 @@ Endpoint<PProfilerChild> ProfilerParent::CreateForProcess(
   Endpoint<PProfilerChild> child;
 #ifdef MOZ_GECKO_PROFILER
   Endpoint<PProfilerParent> parent;
-  nsresult rv = PProfiler::CreateEndpoints(base::GetCurrentProcId(), aOtherPid,
-                                           &parent, &child);
+  nsresult rv = PProfiler::CreateEndpoints(&parent, &child);
 
   if (NS_FAILED(rv)) {
     MOZ_CRASH("Failed to create top level actor for PProfiler!");
@@ -159,6 +161,9 @@ class ProfilerParentTracker final {
 
   static void ProfilerStarted(uint32_t aEntries);
   static void ProfilerWillStopIfStarted();
+
+  // Number of non-destroyed tracked ProfilerParents.
+  static size_t ProfilerParentCount();
 
   template <typename FuncType>
   static void Enumerate(FuncType&& aIterFunc);
@@ -496,6 +501,20 @@ void ProfilerParentTracker::ProfilerWillStopIfStarted() {
   tracker->mMaybeController = Nothing{};
 }
 
+/* static */
+size_t ProfilerParentTracker::ProfilerParentCount() {
+  size_t count = 0;
+  ProfilerParentTracker* tracker = GetInstance();
+  if (tracker) {
+    for (ProfilerParent* profilerParent : tracker->mProfilerParents) {
+      if (!profilerParent->mDestroyed) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
 template <typename FuncType>
 /* static */
 void ProfilerParentTracker::Enumerate(FuncType&& aIterFunc) {
@@ -608,15 +627,22 @@ void ProfilerParent::Init() {
     ipcParams.features() = features;
     ipcParams.activeTabID() = activeTabID;
 
-    for (uint32_t i = 0; i < filters.length(); ++i) {
-      ipcParams.filters().AppendElement(filters[i]);
-    }
+    // If the filters exclude our pid, make sure it's stopped, otherwise
+    // continue with starting it.
+    if (!profiler::detail::FiltersExcludePid(
+            filters, ProfilerProcessId::FromNumber(mChildPid))) {
+      ipcParams.filters().SetCapacity(filters.length());
+      for (const char* filter : filters) {
+        ipcParams.filters().AppendElement(filter);
+      }
 
-    Unused << SendEnsureStarted(ipcParams);
-    RequestChunkManagerUpdate();
-  } else {
-    Unused << SendStop();
+      Unused << SendEnsureStarted(ipcParams);
+      RequestChunkManagerUpdate();
+      return;
+    }
   }
+
+  Unused << SendStop();
 }
 
 ProfilerParent::~ProfilerParent() {
@@ -627,17 +653,30 @@ ProfilerParent::~ProfilerParent() {
 }
 
 /* static */
-nsTArray<RefPtr<ProfilerParent::SingleProcessProfilePromise>>
+nsTArray<ProfilerParent::SingleProcessProfilePromiseAndChildPid>
 ProfilerParent::GatherProfiles() {
+  nsTArray<SingleProcessProfilePromiseAndChildPid> results;
   if (!NS_IsMainThread()) {
-    return nsTArray<RefPtr<ProfilerParent::SingleProcessProfilePromise>>();
+    return results;
   }
 
-  nsTArray<RefPtr<SingleProcessProfilePromise>> results;
+  results.SetCapacity(ProfilerParentTracker::ProfilerParentCount());
   ProfilerParentTracker::Enumerate([&](ProfilerParent* profilerParent) {
-    results.AppendElement(profilerParent->SendGatherProfile());
+    results.AppendElement(SingleProcessProfilePromiseAndChildPid{
+        profilerParent->SendGatherProfile(), profilerParent->mChildPid});
   });
   return results;
+}
+
+/* static */
+RefPtr<ProfilerParent::SingleProcessProgressPromise>
+ProfilerParent::RequestGatherProfileProgress(base::ProcessId aChildPid) {
+  RefPtr<SingleProcessProgressPromise> promise;
+  ProfilerParentTracker::ForChild(
+      aChildPid, [&promise](ProfilerParent* profilerParent) {
+        promise = profilerParent->SendGetGatherProfileProgress();
+      });
+  return promise;
 }
 
 // Magic value for ProfileBufferChunkManagerUpdate::unreleasedBytes meaning
@@ -703,10 +742,72 @@ void ProfilerParent::RequestChunkManagerUpdate() {
       });
 }
 
-/* static */
-void ProfilerParent::ProfilerStarted(nsIProfilerStartParams* aParams) {
+// Ref-counted class that resolves a promise on destruction.
+// Usage:
+// RefPtr<GenericPromise> f() {
+//   return PromiseResolverOnDestruction::RunTask(
+//     [](RefPtr<PromiseResolverOnDestruction> aPromiseResolver){
+//       // Give *copies* of aPromiseResolver to asynchronous sub-tasks, the
+//       // last remaining RefPtr destruction will resolve the promise.
+//     });
+// }
+class PromiseResolverOnDestruction {
+ public:
+  NS_INLINE_DECL_REFCOUNTING(PromiseResolverOnDestruction)
+
+  template <typename TaskFunction>
+  static RefPtr<GenericPromise> RunTask(TaskFunction&& aTaskFunction) {
+    RefPtr<PromiseResolverOnDestruction> promiseResolver =
+        new PromiseResolverOnDestruction();
+    RefPtr<GenericPromise> promise =
+        promiseResolver->mPromiseHolder.Ensure(__func__);
+    std::forward<TaskFunction>(aTaskFunction)(std::move(promiseResolver));
+    return promise;
+  }
+
+ private:
+  PromiseResolverOnDestruction() = default;
+
+  ~PromiseResolverOnDestruction() {
+    mPromiseHolder.ResolveIfExists(/* unused */ true, __func__);
+  }
+
+  MozPromiseHolder<GenericPromise> mPromiseHolder;
+};
+
+// Given a ProfilerParentSendFunction: (ProfilerParent*) -> some MozPromise,
+// run the function on all live ProfilerParents and return a GenericPromise, and
+// when their promise gets resolve, resolve our Generic promise.
+template <typename ProfilerParentSendFunction>
+static RefPtr<GenericPromise> SendAndConvertPromise(
+    ProfilerParentSendFunction&& aProfilerParentSendFunction) {
   if (!NS_IsMainThread()) {
-    return;
+    return GenericPromise::CreateAndResolve(/* unused */ true, __func__);
+  }
+
+  return PromiseResolverOnDestruction::RunTask(
+      [&](RefPtr<PromiseResolverOnDestruction> aPromiseResolver) {
+        ProfilerParentTracker::Enumerate([&](ProfilerParent* profilerParent) {
+          std::forward<ProfilerParentSendFunction>(aProfilerParentSendFunction)(
+              profilerParent)
+              ->Then(GetMainThreadSerialEventTarget(), __func__,
+                     [aPromiseResolver](
+                         typename std::remove_reference_t<
+                             decltype(*std::forward<ProfilerParentSendFunction>(
+                                 aProfilerParentSendFunction)(
+                                 profilerParent))>::ResolveOrRejectValue&&) {
+                       // Whatever the resolution/rejection is, do nothing.
+                       // The lambda aPromiseResolver ref-count will decrease.
+                     });
+        });
+      });
+}
+
+/* static */
+RefPtr<GenericPromise> ProfilerParent::ProfilerStarted(
+    nsIProfilerStartParams* aParams) {
+  if (!NS_IsMainThread()) {
+    return GenericPromise::CreateAndResolve(/* unused */ true, __func__);
   }
 
   ProfilerInitParams ipcParams;
@@ -722,12 +823,24 @@ void ProfilerParent::ProfilerStarted(nsIProfilerStartParams* aParams) {
   aParams->GetInterval(&ipcParams.interval());
   aParams->GetFeatures(&ipcParams.features());
   ipcParams.filters() = aParams->GetFilters().Clone();
+  // We need filters as a Span<const char*> to test pids in the lambda below.
+  auto filtersCStrings = nsTArray<const char*>{aParams->GetFilters().Length()};
+  for (const auto& filter : aParams->GetFilters()) {
+    filtersCStrings.AppendElement(filter.Data());
+  }
   aParams->GetActiveTabID(&ipcParams.activeTabID());
 
-  ProfilerParentTracker::ProfilerStarted(ipcParams.entries());
-  ProfilerParentTracker::Enumerate([&](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendStart(ipcParams);
+  return SendAndConvertPromise([&](ProfilerParent* profilerParent) {
+    if (profiler::detail::FiltersExcludePid(
+            filtersCStrings,
+            ProfilerProcessId::FromNumber(profilerParent->mChildPid))) {
+      // This pid is excluded, don't start the profiler at all.
+      return PProfilerParent::StartPromise::CreateAndResolve(/* unused */ true,
+                                                             __func__);
+    }
+    auto promise = profilerParent->SendStart(ipcParams);
     profilerParent->RequestChunkManagerUpdate();
+    return promise;
   });
 }
 
@@ -741,57 +854,37 @@ void ProfilerParent::ProfilerWillStopIfStarted() {
 }
 
 /* static */
-void ProfilerParent::ProfilerStopped() {
-  if (!NS_IsMainThread()) {
-    return;
-  }
-
-  ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendStop();
+RefPtr<GenericPromise> ProfilerParent::ProfilerStopped() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendStop();
   });
 }
 
 /* static */
-void ProfilerParent::ProfilerPaused() {
-  if (!NS_IsMainThread()) {
-    return;
-  }
-
-  ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendPause();
+RefPtr<GenericPromise> ProfilerParent::ProfilerPaused() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendPause();
   });
 }
 
 /* static */
-void ProfilerParent::ProfilerResumed() {
-  if (!NS_IsMainThread()) {
-    return;
-  }
-
-  ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendResume();
+RefPtr<GenericPromise> ProfilerParent::ProfilerResumed() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendResume();
   });
 }
 
 /* static */
-void ProfilerParent::ProfilerPausedSampling() {
-  if (!NS_IsMainThread()) {
-    return;
-  }
-
-  ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendPauseSampling();
+RefPtr<GenericPromise> ProfilerParent::ProfilerPausedSampling() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendPauseSampling();
   });
 }
 
 /* static */
-void ProfilerParent::ProfilerResumedSampling() {
-  if (!NS_IsMainThread()) {
-    return;
-  }
-
-  ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
-    Unused << profilerParent->SendResumeSampling();
+RefPtr<GenericPromise> ProfilerParent::ProfilerResumedSampling() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendResumeSampling();
   });
 }
 
@@ -803,6 +896,13 @@ void ProfilerParent::ClearAllPages() {
 
   ProfilerParentTracker::Enumerate([](ProfilerParent* profilerParent) {
     Unused << profilerParent->SendClearAllPages();
+  });
+}
+
+/* static */
+RefPtr<GenericPromise> ProfilerParent::WaitOnePeriodicSampling() {
+  return SendAndConvertPromise([](ProfilerParent* profilerParent) {
+    return profilerParent->SendWaitOnePeriodicSampling();
   });
 }
 

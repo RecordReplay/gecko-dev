@@ -13,14 +13,13 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
-  OS: "resource://gre/modules/osfile.jsm",
 
   AppInfo: "chrome://remote/content/marionette/appinfo.js",
-  assert: "chrome://remote/content/marionette/assert.js",
+  assert: "chrome://remote/content/shared/webdriver/Assert.jsm",
   capture: "chrome://remote/content/marionette/capture.js",
   Log: "chrome://remote/content/shared/Log.jsm",
   navigate: "chrome://remote/content/marionette/navigate.js",
-  print: "chrome://remote/content/marionette/print.js",
+  print: "chrome://remote/content/shared/PDF.jsm",
   windowManager: "chrome://remote/content/shared/WindowManager.jsm",
 });
 
@@ -213,9 +212,14 @@ reftest.Runner = class {
     }
     // Make sure the browser element is exactly the right size, no matter
     // what size our window is
-    const windowStyle = `padding: 0px; margin: 0px; border:none;
-min-width: ${width}px; min-height: ${height}px;
-max-width: ${width}px; max-height: ${height}px`;
+    const windowStyle = `
+      padding: 0px;
+      margin: 0px;
+      border:none;
+      min-width: ${width}px; min-height: ${height}px;
+      max-width: ${width}px; max-height: ${height}px;
+      color-scheme: env(-moz-content-preferred-color-scheme);
+    `;
     browser.setAttribute("style", windowStyle);
 
     if (!AppInfo.isAndroid) {
@@ -785,14 +789,12 @@ browserRect.height: ${browserRect.height}`);
 
     const filePath = await print.printToFile(win.gBrowser, settings);
 
-    const fp = await OS.File.open(filePath, { read: true });
     try {
-      const pdf = await this.loadPdf(url, fp);
+      const pdf = await this.loadPdf(url, filePath);
       let pages = this.getPages(pageRanges, url, pdf.numPages);
       return [this.renderPages(pdf, pages), pages.size];
     } finally {
-      fp.close();
-      await OS.File.remove(filePath);
+      await IOUtils.remove(filePath);
     }
   }
 
@@ -810,8 +812,8 @@ browserRect.height: ${browserRect.height}`);
       "resource://pdf.js/build/pdf.worker.js";
   }
 
-  async loadPdf(url, fp) {
-    const data = await fp.read();
+  async loadPdf(url, filePath) {
+    const data = await IOUtils.read(filePath);
     return this.parentWindow.pdfjsLib.getDocument({ data }).promise;
   }
 

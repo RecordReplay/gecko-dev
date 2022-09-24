@@ -17,19 +17,6 @@
 
 namespace mozilla::dom {
 
-NS_IMPL_ADDREF(MemoryBlobImpl::DataOwnerAdapter)
-NS_IMPL_RELEASE(MemoryBlobImpl::DataOwnerAdapter)
-
-NS_INTERFACE_MAP_BEGIN(MemoryBlobImpl::DataOwnerAdapter)
-  NS_INTERFACE_MAP_ENTRY(nsIInputStream)
-  NS_INTERFACE_MAP_ENTRY(nsISeekableStream)
-  NS_INTERFACE_MAP_ENTRY(nsITellableStream)
-  NS_INTERFACE_MAP_ENTRY(nsICloneableInputStream)
-  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIIPCSerializableInputStream,
-                                     mSerializableInputStream)
-  NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIInputStream)
-NS_INTERFACE_MAP_END
-
 // static
 already_AddRefed<MemoryBlobImpl> MemoryBlobImpl::CreateWithCustomLastModified(
     void* aMemoryBuffer, uint64_t aLength, const nsAString& aName,
@@ -51,24 +38,12 @@ already_AddRefed<MemoryBlobImpl> MemoryBlobImpl::CreateWithLastModifiedNow(
 }
 
 nsresult MemoryBlobImpl::DataOwnerAdapter::Create(DataOwner* aDataOwner,
-                                                  uint32_t aStart,
-                                                  uint32_t aLength,
+                                                  size_t aStart, size_t aLength,
                                                   nsIInputStream** _retval) {
-  nsresult rv;
   MOZ_ASSERT(aDataOwner, "Uh ...");
-
-  nsCOMPtr<nsIInputStream> stream;
-
-  rv = NS_NewByteInputStream(
-      getter_AddRefs(stream),
-      Span(static_cast<const char*>(aDataOwner->mData) + aStart, aLength),
-      NS_ASSIGNMENT_DEPEND);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  NS_ADDREF(*_retval = new MemoryBlobImpl::DataOwnerAdapter(aDataOwner, stream,
-                                                            aLength));
-
-  return NS_OK;
+  Span data{static_cast<const char*>(aDataOwner->mData) + aStart, aLength};
+  RefPtr adapter = new MemoryBlobImpl::DataOwnerAdapter(aDataOwner, data);
+  return NS_NewByteInputStream(_retval, adapter);
 }
 
 void MemoryBlobImpl::DataOwnerAdapter::Serialize(
@@ -119,14 +94,14 @@ bool MemoryBlobImpl::DataOwnerAdapter::Deserialize(
 
 already_AddRefed<BlobImpl> MemoryBlobImpl::CreateSlice(
     uint64_t aStart, uint64_t aLength, const nsAString& aContentType,
-    ErrorResult& aRv) {
+    ErrorResult& aRv) const {
   RefPtr<BlobImpl> impl =
       new MemoryBlobImpl(this, aStart, aLength, aContentType);
   return impl.forget();
 }
 
 void MemoryBlobImpl::CreateInputStream(nsIInputStream** aStream,
-                                       ErrorResult& aRv) {
+                                       ErrorResult& aRv) const {
   if (mLength >= INT32_MAX) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
@@ -155,7 +130,7 @@ class MemoryBlobImplDataOwnerMemoryReporter final : public nsIMemoryReporter {
 
   NS_IMETHOD CollectReports(nsIHandleReportCallback* aHandleReport,
                             nsISupports* aData, bool aAnonymize) override {
-    typedef MemoryBlobImpl::DataOwner DataOwner;
+    using DataOwner = MemoryBlobImpl::DataOwner;
 
     StaticMutexAutoLock lock(DataOwner::sDataOwnerMutex);
 

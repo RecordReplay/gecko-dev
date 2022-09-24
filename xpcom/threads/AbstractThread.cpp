@@ -10,6 +10,7 @@
 #include "mozilla/DelayedRunnable.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/MozPromise.h"  // We initialize the MozPromise logging in this file.
+#include "mozilla/ProfilerRunnable.h"
 #include "mozilla/StateWatching.h"  // We initialize the StateWatching logging in this file.
 #include "mozilla/StaticPtr.h"
 #include "mozilla/TaskDispatcher.h"
@@ -21,6 +22,8 @@
 #include "nsServiceManagerUtils.h"
 #include "nsThreadManager.h"
 #include "nsThreadUtils.h"
+#include <memory>
+
 namespace mozilla {
 
 LazyLogModule gMozPromiseLog("MozPromise");
@@ -31,14 +34,12 @@ MOZ_THREAD_LOCAL(AbstractThread*) AbstractThread::sCurrentThreadTLS;
 
 class XPCOMThreadWrapper final : public AbstractThread,
                                  public nsIThreadObserver,
-                                 public nsIDirectTaskDispatcher,
-                                 public nsIDelayedRunnableObserver {
+                                 public nsIDirectTaskDispatcher {
  public:
   XPCOMThreadWrapper(nsIThreadInternal* aThread, bool aRequireTailDispatch,
                      bool aOnThread)
       : AbstractThread(aRequireTailDispatch),
         mThread(aThread),
-        mDelayedRunnableObserver(do_QueryInterface(mThread)),
         mDirectTaskDispatcher(do_QueryInterface(aThread)),
         mOnThread(aOnThread) {
     MOZ_DIAGNOSTIC_ASSERT(mThread && mDirectTaskDispatcher);
@@ -53,7 +54,7 @@ class XPCOMThreadWrapper final : public AbstractThread,
     }
   }
 
-  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_THREADSAFE_ISUPPORTS
 
   nsresult Dispatch(already_AddRefed<nsIRunnable> aRunnable,
                     DispatchReason aReason = NormalDispatch) override {
@@ -94,6 +95,14 @@ class XPCOMThreadWrapper final : public AbstractThread,
   // Prevent a GCC warning about the other overload of Dispatch being hidden.
   using AbstractThread::Dispatch;
 
+  NS_IMETHOD RegisterShutdownTask(nsITargetShutdownTask* aTask) override {
+    return mThread->RegisterShutdownTask(aTask);
+  }
+
+  NS_IMETHOD UnregisterShutdownTask(nsITargetShutdownTask* aTask) override {
+    return mThread->UnregisterShutdownTask(aTask);
+  }
+
   bool IsCurrentThreadIn() const override {
     return mThread->IsOnCurrentThread();
   }
@@ -101,13 +110,14 @@ class XPCOMThreadWrapper final : public AbstractThread,
   TaskDispatcher& TailDispatcher() override {
     MOZ_ASSERT(IsCurrentThreadIn());
     MOZ_ASSERT(IsTailDispatcherAvailable());
-    if (!mTailDispatcher.isSome()) {
-      mTailDispatcher.emplace(mDirectTaskDispatcher,
-                              /* aIsTailDispatcher = */ true);
+    if (!mTailDispatcher) {
+      mTailDispatcher =
+          std::make_unique<AutoTaskDispatcher>(mDirectTaskDispatcher,
+                                               /* aIsTailDispatcher = */ true);
       mThread->AddObserver(this);
     }
 
-    return mTailDispatcher.ref();
+    return *mTailDispatcher;
   }
 
   bool IsTailDispatcherAvailable() override {
@@ -118,7 +128,7 @@ class XPCOMThreadWrapper final : public AbstractThread,
     return inEventLoop;
   }
 
-  bool MightHaveTailTasks() override { return mTailDispatcher.isSome(); }
+  bool MightHaveTailTasks() override { return !!mTailDispatcher; }
 
   nsIEventTarget* AsEventTarget() override { return mThread; }
 
@@ -160,24 +170,10 @@ class XPCOMThreadWrapper final : public AbstractThread,
     return mDirectTaskDispatcher->HaveDirectTasks(aResult);
   }
 
-  //-----------------------------------------------------------------------------
-  // nsIDelayedRunnableObserver
-  //-----------------------------------------------------------------------------
-  void OnDelayedRunnableCreated(DelayedRunnable* aRunnable) override {
-    mDelayedRunnableObserver->OnDelayedRunnableCreated(aRunnable);
-  }
-  void OnDelayedRunnableScheduled(DelayedRunnable* aRunnable) override {
-    mDelayedRunnableObserver->OnDelayedRunnableScheduled(aRunnable);
-  }
-  void OnDelayedRunnableRan(DelayedRunnable* aRunnable) override {
-    mDelayedRunnableObserver->OnDelayedRunnableRan(aRunnable);
-  }
-
  private:
   const RefPtr<nsIThreadInternal> mThread;
-  const nsCOMPtr<nsIDelayedRunnableObserver> mDelayedRunnableObserver;
   const nsCOMPtr<nsIDirectTaskDispatcher> mDirectTaskDispatcher;
-  Maybe<AutoTaskDispatcher> mTailDispatcher;
+  std::unique_ptr<AutoTaskDispatcher> mTailDispatcher;
   const bool mOnThread;
 
   ~XPCOMThreadWrapper() {
@@ -189,8 +185,8 @@ class XPCOMThreadWrapper final : public AbstractThread,
   }
 
   void MaybeFireTailDispatcher() {
-    if (mTailDispatcher.isSome()) {
-      mTailDispatcher.ref().DrainDirectTasks();
+    if (mTailDispatcher) {
+      mTailDispatcher->DrainDirectTasks();
       mThread->RemoveObserver(this);
       mTailDispatcher.reset();
     }
@@ -208,6 +204,7 @@ class XPCOMThreadWrapper final : public AbstractThread,
       MOZ_ASSERT(mThread == AbstractThread::GetCurrent());
       MOZ_ASSERT(mThread->IsCurrentThreadIn());
       SerialEventTargetGuard guard(mThread);
+      AUTO_PROFILE_FOLLOWING_RUNNABLE(mRunnable);
       return mRunnable->Run();
     }
 
@@ -232,17 +229,8 @@ class XPCOMThreadWrapper final : public AbstractThread,
   };
 };
 
-NS_INTERFACE_MAP_BEGIN(XPCOMThreadWrapper)
-  NS_INTERFACE_MAP_ENTRY(nsIThreadObserver)
-  NS_INTERFACE_MAP_ENTRY(nsIDirectTaskDispatcher)
-  NS_INTERFACE_MAP_ENTRY_CONDITIONAL(nsIDelayedRunnableObserver,
-                                     mDelayedRunnableObserver)
-NS_INTERFACE_MAP_END_INHERITING(AbstractThread)
-
-NS_IMPL_ADDREF_INHERITED(XPCOMThreadWrapper, AbstractThread)
-NS_IMPL_RELEASE_INHERITED(XPCOMThreadWrapper, AbstractThread)
-
-NS_IMPL_ISUPPORTS(AbstractThread, nsIEventTarget, nsISerialEventTarget)
+NS_IMPL_ISUPPORTS(XPCOMThreadWrapper, nsIThreadObserver,
+                  nsIDirectTaskDispatcher, nsISerialEventTarget, nsIEventTarget)
 
 NS_IMETHODIMP_(bool)
 AbstractThread::IsOnCurrentThreadInfallible() { return IsCurrentThreadIn(); }
@@ -368,38 +356,4 @@ void AbstractThread::DispatchDirectTask(
   }
 }
 
-/* static */
-already_AddRefed<AbstractThread> AbstractThread::CreateXPCOMThreadWrapper(
-    nsIThread* aThread, bool aRequireTailDispatch, bool aOnThread) {
-  nsCOMPtr<nsIThreadInternal> internalThread = do_QueryInterface(aThread);
-  MOZ_ASSERT(internalThread, "Need an nsThread for AbstractThread");
-  RefPtr<XPCOMThreadWrapper> wrapper =
-      new XPCOMThreadWrapper(internalThread, aRequireTailDispatch, aOnThread);
-
-  bool onCurrentThread = false;
-  Unused << aThread->IsOnCurrentThread(&onCurrentThread);
-
-  if (onCurrentThread) {
-    if (!aOnThread) {
-      MOZ_ASSERT(!sCurrentThreadTLS.get(),
-                 "There can only be a single XPCOMThreadWrapper available on a "
-                 "thread");
-      sCurrentThreadTLS.set(wrapper);
-    }
-    return wrapper.forget();
-  }
-
-  // Set the thread-local sCurrentThreadTLS to point to the wrapper on the
-  // target thread. This ensures that sCurrentThreadTLS is as expected by
-  // AbstractThread::GetCurrent() on the target thread.
-  nsCOMPtr<nsIRunnable> r = NS_NewRunnableFunction(
-      "AbstractThread::CreateXPCOMThreadWrapper", [wrapper]() {
-        MOZ_ASSERT(!sCurrentThreadTLS.get(),
-                   "There can only be a single XPCOMThreadWrapper available on "
-                   "a thread");
-        sCurrentThreadTLS.set(wrapper);
-      });
-  aThread->Dispatch(r.forget(), NS_DISPATCH_NORMAL);
-  return wrapper.forget();
-}
 }  // namespace mozilla

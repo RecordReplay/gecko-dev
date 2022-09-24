@@ -61,7 +61,7 @@ class History final : public BaseHistory,
   NS_IMETHOD SetURITitle(nsIURI*, const nsAString&) final;
 
   // BaseHistory
-  void StartPendingVisitedQueries(const PendingVisitedQueries&) final;
+  void StartPendingVisitedQueries(PendingVisitedQueries&&) final;
 
   History();
 
@@ -177,12 +177,12 @@ class History final : public BaseHistory,
   bool mShuttingDown;
   // This mutex guards mShuttingDown and should be acquired on the helper
   // thread.
-  Mutex mShuttingDownMutex;
+  Mutex mShuttingDownMutex MOZ_UNANNOTATED;
   // Code running in the helper thread can acquire this mutex to block shutdown
   // from proceeding until done, otherwise it may be impossible to get
   // statements to execute and an insert operation could be interrupted in the
   // middle.
-  Mutex mBlockShutdownMutex;
+  Mutex mBlockShutdownMutex MOZ_UNANNOTATED;
 
   // Allow private access from the helper thread to acquire mutexes.
   friend class InsertVisitedURIs;

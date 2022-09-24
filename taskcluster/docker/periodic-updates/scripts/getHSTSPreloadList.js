@@ -18,7 +18,7 @@ const { FileUtils } = ChromeUtils.import(
 );
 
 const SOURCE =
-  "https://chromium.googlesource.com/chromium/src/net/+/master/http/transport_security_state_static.json?format=TEXT";
+  "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/net/http/transport_security_state_static.json?format=TEXT";
 const TOOL_SOURCE =
   "https://hg.mozilla.org/mozilla-central/file/default/taskcluster/docker/periodic-updates/scripts/getHSTSPreloadList.js";
 const OUTPUT = "nsSTSPreloadList.inc";
@@ -123,7 +123,6 @@ function processStsHeader(host, header, status, securityInfo) {
         uri,
         header,
         secInfo,
-        0,
         Ci.nsISiteSecurityService.SOURCE_PRELOAD_LIST,
         {},
         maxAge,
@@ -430,6 +429,10 @@ function filterForcedInclusions(inHosts, outNotForced, outForced) {
       host.forceInclude = true;
       host.error = ERROR_NONE;
       outForced.push(host);
+    } else if (host.name == "asus.com") {
+      dump(
+        "INFO: Excluding asus.com from HSTS preload list (https://bugzilla.mozilla.org/show_bug.cgi?id=1788684)"
+      );
     } else {
       outNotForced.push(host);
     }
@@ -443,7 +446,9 @@ function output(statuses) {
       "resource://gre/modules/FileUtils.jsm"
     );
 
-    let file = FileUtils.getFile("CurWorkD", [OUTPUT]);
+    let file = new FileUtils.File(
+      PathUtils.join(Services.dirsvc.get("CurWorkD", Ci.nsIFile).path, OUTPUT)
+    );
     let fos = FileUtils.openSafeFileOutputStream(file);
     writeTo(HEADER, fos);
     writeTo(getExpirationTimeString(), fos);
@@ -460,6 +465,7 @@ function output(statuses) {
     dump("finished writing output file\n");
   } catch (e) {
     dump("ERROR: problem writing output to '" + OUTPUT + "': " + e + "\n");
+    throw e;
   }
 }
 

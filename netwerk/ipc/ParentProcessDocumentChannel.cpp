@@ -7,6 +7,7 @@
 
 #include "ParentProcessDocumentChannel.h"
 
+#include "mozilla/extensions/StreamFilterParent.h"
 #include "mozilla/net/ParentChannelWrapper.h"
 #include "mozilla/net/UrlClassifierCommon.h"
 #include "mozilla/StaticPrefs_extensions.h"
@@ -15,6 +16,8 @@
 #include "nsIObserverService.h"
 #include "nsIClassifiedChannel.h"
 #include "nsIXULRuntime.h"
+#include "nsHttpHandler.h"
+#include "nsDocShellLoadState.h"
 
 extern mozilla::LazyLogModule gDocumentChannelLog;
 #define LOG(fmt) MOZ_LOG(gDocumentChannelLog, mozilla::LogLevel::Verbose, fmt)
@@ -171,15 +174,15 @@ NS_IMETHODIMP ParentProcessDocumentChannel::AsyncOpen(
   RefPtr<DocumentLoadListener::OpenPromise> promise;
   if (isDocumentLoad) {
     promise = mDocumentLoadListener->OpenDocument(
-        mLoadState, mCacheKey, Some(mChannelId), mAsyncOpenTime, mTiming,
+        mLoadState, mCacheKey, Some(mChannelId), TimeStamp::Now(), mTiming,
         std::move(initialClientInfo), Some(mUriModified), Some(mIsXFOError),
-        0 /* ProcessId */, &rv);
+        nullptr /* ContentParent */, &rv);
   } else {
     promise = mDocumentLoadListener->OpenObject(
-        mLoadState, mCacheKey, Some(mChannelId), mAsyncOpenTime, mTiming,
+        mLoadState, mCacheKey, Some(mChannelId), TimeStamp::Now(), mTiming,
         std::move(initialClientInfo), InnerWindowIDForExtantDoc(docShell),
         mLoadFlags, mLoadInfo->InternalContentPolicyType(),
-        UserActivation::IsHandlingUserInput(), 0 /* ProcessId */,
+        dom::UserActivation::IsHandlingUserInput(), nullptr /* ContentParent */,
         nullptr /* ObjectUpgradeHandler */, &rv);
   }
 
@@ -235,7 +238,7 @@ NS_IMETHODIMP ParentProcessDocumentChannel::AsyncOpen(
         // and notify them of the failure. If this is a process switch, then we
         // can just ignore it silently, and trust that the switch will shut down
         // our docshell and cancel us when it's ready.
-        if (!aRejectValue.mSwitchedProcess) {
+        if (!aRejectValue.mContinueNavigating) {
           self->DisconnectChildListeners(aRejectValue.mStatus,
                                          aRejectValue.mLoadGroupStatus);
         }

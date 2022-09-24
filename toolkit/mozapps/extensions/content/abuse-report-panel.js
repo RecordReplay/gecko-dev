@@ -11,6 +11,12 @@ ChromeUtils.defineModuleGetter(
   "resource://gre/modules/Services.jsm"
 );
 
+ChromeUtils.defineModuleGetter(
+  this,
+  "AbuseReporter",
+  "resource://gre/modules/AbuseReporter.jsm"
+);
+
 const IS_DIALOG_WINDOW = window.arguments && window.arguments.length;
 
 let openWebLink = IS_DIALOG_WINDOW
@@ -23,7 +29,9 @@ let openWebLink = IS_DIALOG_WINDOW
 
 const showOnAnyType = () => false;
 const hideOnAnyType = () => true;
-const hideOnThemeType = addonType => addonType === "theme";
+const hideOnAddonTypes = hideForTypes => {
+  return addonType => hideForTypes.includes(addonType);
+};
 
 // The reasons string used as a key in this Map is expected to stay in sync
 // with the reasons string used in the "abuseReports.ftl" locale file and
@@ -31,37 +39,37 @@ const hideOnThemeType = addonType => addonType === "theme";
 const ABUSE_REASONS = (window.ABUSE_REPORT_REASONS = {
   damage: {
     isExampleHidden: showOnAnyType,
-    isReasonHidden: hideOnThemeType,
+    isReasonHidden: hideOnAddonTypes(["theme"]),
   },
   spam: {
     isExampleHidden: showOnAnyType,
-    isReasonHidden: showOnAnyType,
+    isReasonHidden: hideOnAddonTypes(["sitepermission"]),
   },
   settings: {
     hasSuggestions: true,
     isExampleHidden: hideOnAnyType,
-    isReasonHidden: hideOnThemeType,
+    isReasonHidden: hideOnAddonTypes(["theme", "sitepermission"]),
   },
   deceptive: {
     isExampleHidden: showOnAnyType,
-    isReasonHidden: showOnAnyType,
+    isReasonHidden: hideOnAddonTypes(["sitepermission"]),
   },
   broken: {
     hasAddonTypeL10nId: true,
     hasAddonTypeSuggestionTemplate: true,
     hasSuggestions: true,
-    isExampleHidden: hideOnThemeType,
+    isExampleHidden: hideOnAddonTypes(["theme"]),
     isReasonHidden: showOnAnyType,
     requiresSupportURL: true,
   },
   policy: {
     hasSuggestions: true,
     isExampleHidden: hideOnAnyType,
-    isReasonHidden: showOnAnyType,
+    isReasonHidden: hideOnAddonTypes(["sitepermission"]),
   },
   unwanted: {
     isExampleHidden: showOnAnyType,
-    isReasonHidden: hideOnThemeType,
+    isReasonHidden: hideOnAddonTypes(["theme"]),
   },
   other: {
     isExampleHidden: hideOnAnyType,
@@ -79,6 +87,8 @@ const REASON_L10N_STRING_MAPPING = {
   "abuse-report-deceptive-reason": "abuse-report-deceptive-reason-v2",
   "abuse-report-broken-reason-extension":
     "abuse-report-broken-reason-extension-v2",
+  "abuse-report-broken-reason-sitepermission":
+    "abuse-report-broken-reason-sitepermission-v2",
   "abuse-report-broken-reason-theme": "abuse-report-broken-reason-theme-v2",
   "abuse-report-policy-reason": "abuse-report-policy-reason-v2",
   "abuse-report-unwanted-reason": "abuse-report-unwanted-reason-v2",
@@ -548,7 +558,7 @@ class AbuseReport extends HTMLElement {
       Services.focus.moveFocus(
         chromeWin,
         null,
-        Services.MOVEFOCUS_BACKWARD,
+        Services.focus.MOVEFOCUS_BACKWARD,
         Services.focus.FLAG_BYKEY
       );
     }
@@ -582,6 +592,7 @@ class AbuseReport extends HTMLElement {
 
     const {
       addonId,
+      addonType,
       _addonAuthorContainer,
       _addonIconElement,
       _addonNameElement,
@@ -595,7 +606,12 @@ class AbuseReport extends HTMLElement {
     this.switchToListMode();
 
     // Cancel the abuse report if the addon is not an extension or theme.
-    if (!["extension", "theme"].includes(this.addonType)) {
+    if (!AbuseReporter.isSupportedAddonType(addonType)) {
+      Cu.reportError(
+        new Error(
+          `Closing abuse report panel on unexpected addon type: ${addonType}`
+        )
+      );
       this.cancel();
       return;
     }
@@ -717,46 +733,57 @@ class AbuseReport extends HTMLElement {
   }
 
   get addon() {
-    return this._report && this._report.addon;
+    return this._report?.addon;
   }
 
   get addonId() {
-    return this.addon && this.addon.id;
+    return this.addon?.id;
   }
 
   get addonName() {
-    return this.addon && this.addon.name;
+    return this.addon?.name;
   }
 
   get addonType() {
-    return this.addon && this.addon.type;
+    return this.addon?.type;
   }
 
   get addonCreator() {
-    return this.addon && this.addon.creator;
+    return this.addon?.creator;
   }
 
   get homepageURL() {
-    const { addon } = this;
-    return (addon && addon.homepageURL) || this.authorURL || "";
+    return this.addon?.homepageURL || this.authorURL || "";
   }
 
   get authorName() {
     // The author name may be missing on some of the test extensions
     // (or for temporarily installed add-ons).
-    return (this.addonCreator && this.addonCreator.name) || "";
+    return this.addonCreator?.name || "";
   }
 
   get authorURL() {
-    return (this.addonCreator && this.addonCreator.url) || "";
+    return this.addonCreator?.url || "";
   }
 
   get iconURL() {
-    return this.addon && this.addon.iconURL;
+    if (this.addonType === "sitepermission") {
+      return "chrome://mozapps/skin/extensions/category-sitepermission.svg";
+    }
+    return (
+      this.addon?.iconURL ||
+      // Some extensions (e.g. static theme addons) may not have an icon,
+      // and so we fallback to use the generic extension icon.
+      "chrome://mozapps/skin/extensions/extensionGeneric.svg"
+    );
   }
 
   get supportURL() {
-    return (this.addon && this.addon.supportURL) || this.homepageURL || "";
+    let url = this.addon?.supportURL || this.homepageURL || "";
+    if (!url && this.addonType === "sitepermission" && this.addon?.siteOrigin) {
+      return this.addon.siteOrigin;
+    }
+    return url;
   }
 
   get message() {

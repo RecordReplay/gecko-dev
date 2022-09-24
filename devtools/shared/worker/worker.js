@@ -23,10 +23,9 @@
   } else {
     // Cu.import
     const { require } = ChromeUtils.import(
-      "resource://devtools/shared/Loader.jsm"
+      "resource://devtools/shared/loader/Loader.jsm"
     );
     this.isWorker = false;
-    this.Promise = require("resource://gre/modules/Promise.jsm").Promise;
     this.console = console;
     factory.call(
       this,
@@ -53,8 +52,6 @@
    * Creates a wrapper around a ChromeWorker, providing easy
    * communication to offload demanding tasks. The corresponding URL
    * must implement the interface provided by `devtools/shared/worker/helper`.
-   *
-   * @see `./devtools/client/shared/widgets/GraphsWorker.js`
    *
    * @param {string} url
    *        The URL of the worker.

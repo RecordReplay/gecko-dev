@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "TextControlState.h"
+#include "mozilla/Attributes.h"
 #include "mozilla/TextInputListener.h"
 
 #include "nsCOMPtr.h"
@@ -33,6 +34,7 @@
 #include "nsIScrollableFrame.h"
 #include "mozilla/AutoRestore.h"
 #include "mozilla/InputEventOptions.h"
+#include "mozilla/NativeKeyBindingsType.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/dom/Event.h"
@@ -41,6 +43,7 @@
 #include "mozilla/dom/HTMLTextAreaElement.h"
 #include "mozilla/dom/Text.h"
 #include "mozilla/StaticPrefs_dom.h"
+#include "mozilla/StaticPrefs_ui.h"
 #include "nsFrameSelection.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/Telemetry.h"
@@ -62,15 +65,15 @@ using ValueSetterOptions = TextControlState::ValueSetterOptions;
 NS_IMPL_CYCLE_COLLECTION_CLASS(TextControlElement)
 
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INHERITED(
-    TextControlElement, nsGenericHTMLFormElementWithState)
+    TextControlElement, nsGenericHTMLFormControlElementWithState)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN_INHERITED(
-    TextControlElement, nsGenericHTMLFormElementWithState)
+    TextControlElement, nsGenericHTMLFormControlElementWithState)
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED_0(
-    TextControlElement, nsGenericHTMLFormElementWithState)
+    TextControlElement, nsGenericHTMLFormControlElementWithState)
 
 /*static*/
 bool TextControlElement::GetWrapPropertyEnum(
@@ -110,6 +113,22 @@ TextControlElement::GetTextControlElementFromEditingHost(nsIContent* aHost) {
   RefPtr<TextControlElement> parent =
       TextControlElement::FromNodeOrNull(aHost->GetParent());
   return parent.forget();
+}
+
+TextControlElement::FocusTristate TextControlElement::FocusState() {
+  // We can't be focused if we aren't in a (composed) document
+  Document* doc = GetComposedDoc();
+  if (!doc) {
+    return FocusTristate::eUnfocusable;
+  }
+
+  // first see if we are disabled or not. If disabled then do nothing.
+  if (IsDisabled()) {
+    return FocusTristate::eUnfocusable;
+  }
+
+  return IsInActiveTab(doc) ? FocusTristate::eActiveWindow
+                            : FocusTristate::eInactiveWindow;
 }
 
 using ValueChangeKind = TextControlElement::ValueChangeKind;
@@ -843,9 +862,13 @@ void TextInputListener::OnSelectionChange(Selection& aSelection,
   // Mozilla: If we have non-empty selection we will fire a new event for each
   //          keypress (or mouseup) if the selection changed. Mozilla will also
   //          create the event each time select all is called, even if
-  //          everything was previously selected, becase technically select all
+  //          everything was previously selected, because technically select all
   //          will first collapse and then extend. Mozilla will never create an
   //          event if the selection collapses to nothing.
+  // FYI: If you want to skip dispatching eFormSelect event and if there are no
+  //      event listeners, you can refer
+  //      nsPIDOMWindow::HasFormSelectEventListeners(), but be careful about
+  //      some C++ event handlers, e.g., HTMLTextAreaElement::PostHandleEvent().
   bool collapsed = aSelection.IsCollapsed();
   if (!collapsed && (aReason & (nsISelectionListener::MOUSEUP_REASON |
                                 nsISelectionListener::KEYPRESS_REASON |
@@ -947,58 +970,79 @@ TextInputListener::HandleEvent(Event* aEvent) {
     }
   }
 
-  KeyEventHandler* keyHandlers = ShortcutKeys::GetHandlers(
-      mTxtCtrlElement->IsTextArea() ? HandlerType::eTextArea
-                                    : HandlerType::eInput);
+  auto ExecuteOurShortcutKeys = [&](TextControlElement& aTextControlElement)
+                                    MOZ_CAN_RUN_SCRIPT_FOR_DEFINITION -> bool {
+    KeyEventHandler* keyHandlers = ShortcutKeys::GetHandlers(
+        aTextControlElement.IsTextArea() ? HandlerType::eTextArea
+                                         : HandlerType::eInput);
 
-  RefPtr<nsAtom> eventTypeAtom =
-      ShortcutKeys::ConvertEventToDOMEventType(widgetKeyEvent);
-  for (KeyEventHandler* handler = keyHandlers; handler;
-       handler = handler->GetNextHandler()) {
-    if (!handler->EventTypeEquals(eventTypeAtom)) {
-      continue;
+    RefPtr<nsAtom> eventTypeAtom =
+        ShortcutKeys::ConvertEventToDOMEventType(widgetKeyEvent);
+    for (KeyEventHandler* handler = keyHandlers; handler;
+         handler = handler->GetNextHandler()) {
+      if (!handler->EventTypeEquals(eventTypeAtom)) {
+        continue;
+      }
+
+      if (!handler->KeyEventMatched(keyEvent, 0, IgnoreModifierState())) {
+        continue;
+      }
+
+      // XXX Do we execute only one handler even if the handler neither stops
+      //     propagation nor prevents default of the event?
+      nsresult rv = handler->ExecuteHandler(&aTextControlElement, aEvent);
+      if (NS_SUCCEEDED(rv)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  auto ExecuteNativeKeyBindings =
+      [&](TextControlElement& aTextControlElement)
+          MOZ_CAN_RUN_SCRIPT_FOR_DEFINITION -> bool {
+    if (widgetKeyEvent->mMessage != eKeyPress) {
+      return false;
     }
 
-    if (!handler->KeyEventMatched(keyEvent, 0, IgnoreModifierState())) {
-      continue;
+    NativeKeyBindingsType nativeKeyBindingsType =
+        aTextControlElement.IsTextArea()
+            ? NativeKeyBindingsType::MultiLineEditor
+            : NativeKeyBindingsType::SingleLineEditor;
+
+    nsIWidget* widget = widgetKeyEvent->mWidget;
+    // If the event is created by chrome script, the widget is nullptr.
+    if (MOZ_UNLIKELY(!widget)) {
+      widget = mFrame->GetNearestWidget();
+      if (MOZ_UNLIKELY(NS_WARN_IF(!widget))) {
+        return false;
+      }
     }
 
-    // XXX Do we execute only one handler even if the handler neither stops
-    //     propagation nor prevents default of the event?
-    RefPtr<TextControlElement> textControlElement(mTxtCtrlElement);
-    nsresult rv = handler->ExecuteHandler(textControlElement, aEvent);
-    if (NS_SUCCEEDED(rv)) {
-      return rv;
+    // WidgetKeyboardEvent::ExecuteEditCommands() requires non-nullptr mWidget.
+    // If the event is created by chrome script, it is nullptr but we need to
+    // execute native key bindings.  Therefore, we need to set widget to
+    // WidgetEvent::mWidget temporarily.
+    AutoRestore<nsCOMPtr<nsIWidget>> saveWidget(widgetKeyEvent->mWidget);
+    widgetKeyEvent->mWidget = widget;
+    if (widgetKeyEvent->ExecuteEditCommands(nativeKeyBindingsType,
+                                            DoCommandCallback, mFrame)) {
+      aEvent->PreventDefault();
+      return true;
     }
-  }
+    return false;
+  };
 
-  if (widgetKeyEvent->mMessage != eKeyPress) {
-    return NS_OK;
-  }
-
-  nsIWidget::NativeKeyBindingsType nativeKeyBindingsType =
-      mTxtCtrlElement->IsTextArea()
-          ? nsIWidget::NativeKeyBindingsForMultiLineEditor
-          : nsIWidget::NativeKeyBindingsForSingleLineEditor;
-
-  nsIWidget* widget = widgetKeyEvent->mWidget;
-  // If the event is created by chrome script, the widget is nullptr.
-  if (!widget) {
-    widget = mFrame->GetNearestWidget();
-    if (NS_WARN_IF(!widget)) {
-      return NS_OK;
+  OwningNonNull<TextControlElement> textControlElement(*mTxtCtrlElement);
+  if (StaticPrefs::
+          ui_key_textcontrol_prefer_native_key_bindings_over_builtin_shortcut_key_definitions()) {
+    if (!ExecuteNativeKeyBindings(textControlElement)) {
+      ExecuteOurShortcutKeys(textControlElement);
     }
-  }
-
-  // WidgetKeyboardEvent::ExecuteEditCommands() requires non-nullptr mWidget.
-  // If the event is created by chrome script, it is nullptr but we need to
-  // execute native key bindings.  Therefore, we need to set widget to
-  // WidgetEvent::mWidget temporarily.
-  AutoRestore<nsCOMPtr<nsIWidget>> saveWidget(widgetKeyEvent->mWidget);
-  widgetKeyEvent->mWidget = widget;
-  if (widgetKeyEvent->ExecuteEditCommands(nativeKeyBindingsType,
-                                          DoCommandCallback, mFrame)) {
-    aEvent->PreventDefault();
+  } else {
+    if (!ExecuteOurShortcutKeys(textControlElement)) {
+      ExecuteNativeKeyBindings(textControlElement);
+    }
   }
   return NS_OK;
 }
@@ -2104,9 +2148,9 @@ void TextControlState::SetSelectionRange(
   // XXX(krosylight): Shouldn't it fire before select event?
   // Currently Gecko and Blink both fire selectionchange after select.
   if (IsSelectionCached() &&
-      StaticPrefs::dom_select_events_textcontrols_enabled()) {
+      StaticPrefs::dom_select_events_textcontrols_selectionchange_enabled()) {
     asyncDispatcher = new AsyncEventDispatcher(
-        mTextCtrlElement, eSelectionChange, CanBubble::eNo);
+        mTextCtrlElement, eSelectionChange, CanBubble::eYes);
     asyncDispatcher->PostDOMEvent();
   }
 }
@@ -2290,7 +2334,8 @@ void TextControlState::SetRangeText(const nsAString& aReplacement,
   Selection* selection =
       mSelCon ? mSelCon->GetSelection(SelectionType::eNormal) : nullptr;
   SelectionBatcher selectionBatcher(
-      selection, nsISelectionListener::JS_REASON);  // no-op if nullptr
+      selection, __FUNCTION__,
+      nsISelectionListener::JS_REASON);  // no-op if nullptr
 
   MOZ_ASSERT(aStart <= aEnd);
   value.Replace(aStart, aEnd - aStart, aReplacement);
@@ -2743,7 +2788,7 @@ bool TextControlState::SetValueWithTextEditor(
   // FYI: It's safe to use raw pointer for selection here because
   //      SelectionBatcher will grab it with RefPtr.
   Selection* selection = mSelCon->GetSelection(SelectionType::eNormal);
-  SelectionBatcher selectionBatcher(selection);
+  SelectionBatcher selectionBatcher(selection, __FUNCTION__);
 
   // get the flags, remove readonly, disabled and max-length,
   // set the value, restore flags

@@ -18,6 +18,18 @@ from logger.logger import RaptorLogger
 
 LOG = RaptorLogger(component="perftest-output")
 
+VISUAL_METRICS = [
+    "SpeedIndex",
+    "ContentfulSpeedIndex",
+    "PerceptualSpeedIndex",
+    "FirstVisualChange",
+    "LastVisualChange",
+    "VisualReadiness",
+    "VisualComplete85",
+    "VisualComplete95",
+    "VisualComplete99",
+]
+
 
 @six.add_metaclass(ABCMeta)
 class PerftestOutput(object):
@@ -191,11 +203,29 @@ class PerftestOutput(object):
         if self.summarized_results == {}:
             success = False
             LOG.error(
-                "no summarized raptor results found for %s" % ", ".join(test_names)
+                "no summarized raptor results found for any of %s"
+                % ", ".join(test_names)
             )
         else:
             for suite in self.summarized_results["suites"]:
+                gecko_profiling_enabled = "gecko-profile" in suite.get(
+                    "extraOptions", []
+                )
+                if gecko_profiling_enabled:
+                    LOG.info("gecko profiling enabled")
+                    suite["shouldAlert"] = False
+
+                # as we do navigation, tname could end in .<alias>
+                # test_names doesn't have tname, so either add it to test_names,
+                # or strip it
                 tname = suite["name"]
+                parts = tname.split(".")
+                try:
+                    tname = ".".join(parts[:-1])
+                except Exception as e:
+                    LOG.info("no alias found on test, ignoring: %s" % e)
+                    pass
+
                 # Since test names might have been modified, check if
                 # part of the test name exists in the test_names list entries
                 found = False
@@ -205,7 +235,7 @@ class PerftestOutput(object):
                         break
                 if not found:
                     success = False
-                    LOG.error("no summarized raptor results found for %s" % tname)
+                    LOG.error("no summarized raptor results found for %s" % (tname))
 
             with open(results_path, "w") as f:
                 for result in self.summarized_results:
@@ -222,15 +252,9 @@ class PerftestOutput(object):
         if self.summarized_results == {}:
             return success, 0
 
-        # when gecko_profiling, we don't want results ingested by Perfherder
-        extra_opts = self.summarized_results["suites"][0].get("extraOptions", [])
         test_type = self.summarized_results["suites"][0].get("type", "")
-
         output_perf_data = True
         not_posting = "- not posting regular test results for perfherder"
-        if "gecko-profile" in extra_opts:
-            LOG.info("gecko profiling enabled %s" % not_posting)
-            output_perf_data = False
         if test_type == "scenario":
             # if a resource-usage flag was supplied the perfherder data
             # will still be output from output_supporting_data
@@ -1049,6 +1073,40 @@ class PerftestOutput(object):
 
         return subtests, vals
 
+    def parseMatrixReactBenchOutput(self, test):
+        # https://github.com/jandem/matrix-react-bench
+
+        _subtests = {}
+        data = test["measurements"]["matrix-react-bench"]
+        for page_cycle in data:
+            # Each cycle is formatted like `[[iterations, val], [iterations, val2], ...]`
+            for iteration, val in page_cycle:
+                sub = f"{iteration}-iterations"
+                _subtests.setdefault(
+                    sub,
+                    {
+                        "unit": test["subtest_unit"],
+                        "alertThreshold": float(test["alert_threshold"]),
+                        "lowerIsBetter": test["subtest_lower_is_better"],
+                        "name": sub,
+                        "replicates": [],
+                    },
+                )
+
+                # The values produced are far too large for perfherder
+                _subtests[sub]["replicates"].append(val)
+
+        vals = []
+        subtests = []
+        names = list(_subtests)
+        names.sort(reverse=True)
+        for name in names:
+            _subtests[name]["value"] = filters.mean(_subtests[name]["replicates"])
+            subtests.append(_subtests[name])
+            vals.append([_subtests[name]["value"], name])
+
+        return subtests, vals
+
 
 class RaptorOutput(PerftestOutput):
     """class for raptor output"""
@@ -1149,6 +1207,14 @@ class RaptorOutput(PerftestOutput):
                                 % measurement_name
                             )
                             new_subtest["shouldAlert"] = True
+                        else:
+                            # Explicitly set `shouldAlert` to False so that the measurement
+                            # is not alerted on. Otherwise Perfherder defaults to alerting
+                            LOG.info(
+                                "turning off subtest alerting for measurement type: %s"
+                                % measurement_name
+                            )
+                            new_subtest["shouldAlert"] = False
 
                     new_subtest["value"] = filters.median(filtered_values)
 
@@ -1428,6 +1494,8 @@ class BrowsertimeOutput(PerftestOutput):
         def _process(subtest):
             if test["type"] == "power":
                 subtest["value"] = filters.mean(subtest["replicates"])
+            elif subtest["name"] in VISUAL_METRICS:
+                subtest["value"] = filters.median(subtest["replicates"])
             else:
                 subtest["value"] = filters.median(
                     filters.ignore_first(subtest["replicates"], 1)
@@ -1501,7 +1569,9 @@ class BrowsertimeOutput(PerftestOutput):
                     "name": test["name"],
                     "type": test["type"],
                     "extraOptions": extra_options,
-                    "tags": test.get("tags", extra_options),
+                    # There may be unique options in tags now, but we don't want to remove the
+                    # previous behaviour which includes the extra options in the tags.
+                    "tags": test.get("tags", []) + extra_options,
                     "lowerIsBetter": test["lower_is_better"],
                     "unit": test["unit"],
                     "alertThreshold": float(test["alert_threshold"]),
@@ -1536,6 +1606,14 @@ class BrowsertimeOutput(PerftestOutput):
                                 subtest["shouldAlert"] = True
                                 if self.app in ("chrome", "chrome-m", "chromium"):
                                     subtest["shouldAlert"] = False
+                            else:
+                                # Explicitly set `shouldAlert` to False so that the measurement
+                                # is not alerted on. Otherwise Perfherder defaults to alerting.
+                                LOG.info(
+                                    "turning off subtest alerting for measurement type: %s"
+                                    % measurement_name
+                                )
+                                subtest["shouldAlert"] = False
                         subtest["replicates"] = []
                         suite["subtests"][measurement_name] = subtest
                     else:
@@ -1568,6 +1646,8 @@ class BrowsertimeOutput(PerftestOutput):
                     subtests, vals = self.parseAssortedDomOutput(test)
                 if "jetstream2" in test["measurements"]:
                     subtests, vals = self.parseJetstreamTwoOutput(test)
+                if "matrix-react-bench" in test["name"]:
+                    subtests, vals = self.parseMatrixReactBenchOutput(test)
 
                 if subtests is None:
                     raise Exception("No benchmark metrics found in browsertime results")

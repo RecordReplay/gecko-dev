@@ -1223,6 +1223,9 @@ he{
         "Pacific:Johnston"{
             ec{"ג׳ונסטון"}
         }
+        "Pacific:Kanton"{
+            ec{"קנטון"}
+        }
         "Pacific:Kiritimati"{
             ec{"קיריטימאטי"}
         }
@@ -1928,6 +1931,9 @@ he{
             ld{"שעון יקטרינבורג (קיץ)"}
             lg{"שעון יקטרינבורג"}
             ls{"שעון יקטרינבורג (חורף)"}
+        }
+        "meta:Yukon"{
+            ls{"שעון יוקון"}
         }
         fallbackFormat{"{1} ({0})"}
         gmtFormat{"GMT{0}‎"}

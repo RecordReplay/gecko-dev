@@ -16,7 +16,6 @@
 
 #include "modules/desktop_capture/desktop_capture_options.h"
 #include "modules/desktop_capture/desktop_capturer.h"
-#include "rtc_base/constructormagic.h"
 #include "nsThreadUtils.h"
 #include "mozilla/dom/ImageBitmap.h"
 #include "mozilla/Monitor.h"
@@ -62,7 +61,7 @@ class TabCapturer {
   // Used to protect mCallback, since TabCapturer's lifetime might be
   // longer than mCallback's on stop/shutdown, and we may be waiting on a
   // tab to finish capturing on MainThread.
-  Monitor mMonitor;
+  Monitor mMonitor MOZ_UNANNOTATED;
   webrtc::DesktopCapturer::Callback* mCallback = nullptr;
 
   uint64_t mBrowserId = 0;

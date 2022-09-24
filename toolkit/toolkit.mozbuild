@@ -15,10 +15,6 @@ PYTHON_UNITTEST_MANIFESTS += [
     '/testing/talos/talos/unittests/python.ini'
 ]
 
-CONFIGURE_SUBST_FILES += [
-    '/tools/update-packaging/Makefile',
-]
-
 DIRS += [
     '/tools',
     '/xpcom/xpidl',
@@ -42,15 +38,8 @@ DIRS += [
 if CONFIG['MOZ_SANDBOX']:
     DIRS += ['/security/sandbox']
 
-if CONFIG["MOZ_USING_WASM_SANDBOXING"]:
+if CONFIG["MOZ_USING_WASM_SANDBOXING"] and CONFIG["COMPILE_ENVIRONMENT"]:
     DIRS += ["/security/rlbox"]
-
-DIRS += [
-    # Depends on NSS and NSPR
-    '/security/certverifier',
-    # Depends on certverifier
-    '/security/apps',
-]
 
 # the signing related bits of libmar depend on nss
 if CONFIG['MOZ_UPDATER']:
@@ -78,6 +67,7 @@ if CONFIG['MOZ_UPDATER'] and CONFIG['OS_TARGET'] != 'Android':
 DIRS += [
     '/ipc',
     '/hal',
+    '/js/loader',
     '/js/xpconnect',
     '/modules/libjar',
     '/storage',
@@ -136,12 +126,8 @@ DIRS += [
     '/tools/performance',
     '/tools/power',
     '/tools/profiler',
-]
-
-if CONFIG['MOZ_SPELLCHECK']:
-    DIRS += ['/extensions/spellcheck']
-
-DIRS += [
+    '/extensions/spellcheck',
+    '/security/certverifier',
     '/security/manager',
     '/toolkit',
 ]
@@ -202,3 +188,7 @@ if CONFIG['ENABLE_TESTS']:
 
 if CONFIG['FUZZING']:
     DIRS += ['/tools/fuzzing']
+
+if CONFIG['MOZ_WAYLAND']:
+    DIRS += ['/media/mozva']
+

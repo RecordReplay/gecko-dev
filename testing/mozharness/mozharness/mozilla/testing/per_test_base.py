@@ -216,6 +216,11 @@ class SingleTestMixin(object):
                 #   <full-suite> is a unique id for the suite, matching desktop mozharness configs
                 (
                     "mochitest-browser-chrome",
+                    "a11y",
+                    None,
+                ): "mochitest-browser-a11y",
+                (
+                    "mochitest-browser-chrome",
                     "devtools",
                     None,
                 ): "mochitest-devtools-chrome",
@@ -323,6 +328,8 @@ class SingleTestMixin(object):
         mozinfo.find_and_update_from_json(dirs["abs_test_install_dir"])
         e10s = self.config.get("e10s", False)
         mozinfo.update({"e10s": e10s})
+        is_fission = "fission.autostart=true" in self.config.get("extra_prefs", [])
+        mozinfo.update({"fission": is_fission})
         headless = self.config.get("headless", False)
         mozinfo.update({"headless": headless})
         if mozinfo.info["buildapp"] == "mobile/android":

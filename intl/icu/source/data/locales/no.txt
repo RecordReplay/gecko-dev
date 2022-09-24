@@ -522,8 +522,8 @@ no{
                 range{"{0}–{1}"}
             }
             patterns{
-                accountingFormat{"¤ #,##0.00"}
-                currencyFormat{"¤ #,##0.00"}
+                accountingFormat{"¤ #,##0.00;(¤ #,##0.00)"}
+                currencyFormat{"¤ #,##0.00;¤ -#,##0.00"}
                 decimalFormat{"#,##0.###"}
                 percentFormat{"#,##0 %"}
                 scientificFormat{"#E0"}
@@ -751,7 +751,12 @@ no{
             }
         }
         minimalPairs{
+            case{
+                genitive{"På {0} avstand"}
+                nominative{"Intervall på {0}"}
+            }
             gender{
+                feminine{"Det tar ei hel {0} å …"}
                 masculine{"Min {0} den har tre kanter"}
                 neuter{"Mitt {0} det har tre kanter"}
             }
@@ -1303,6 +1308,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -1436,6 +1451,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
                 "{1} {0}",
+            }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "rMMMMEEEEd",
+                "rMMMMd",
+                "rMMMd",
+                "rMd",
             }
             availableFormats{
                 E{"ccc"}
@@ -2448,6 +2473,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -2680,6 +2715,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
                 "{1} {0}",
+            }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "rMMMMEEEEd",
+                "rMMMMd",
+                "rMMMd",
+                "rMd",
             }
             availableFormats{
                 E{"ccc"}
@@ -3672,6 +3717,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -3918,6 +3973,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 Bh{"h B"}
                 Bhm{"h:mm B"}
@@ -3934,6 +3999,7 @@ no{
                 GyMMM{"MMM y G"}
                 GyMMMEd{"E d. MMM y G"}
                 GyMMMd{"d. MMM y G"}
+                GyMd{"dd.MM.y GGGGG"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -3966,9 +4032,12 @@ no{
             intervalFormats{
                 Bh{
                     B{"h B–h B"}
+                    h{"h–h B"}
                 }
                 Bhm{
                     B{"h:mm B–h:mm B"}
+                    h{"h:mm–h:mm B"}
+                    m{"h:mm–h:mm B"}
                 }
                 Gy{
                     G{"y G–y G"}
@@ -4131,6 +4200,16 @@ no{
                 "{1}, {0}",
                 "{1}, {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "yMMMMEEEEd",
+                "yMMMMd",
+                "yMMMd",
+                "yMMdd",
+            }
             appendItems{
                 Timezone{"{0} {1}"}
             }
@@ -4150,6 +4229,7 @@ no{
                 GyMMM{"MMM y G"}
                 GyMMMEd{"E d. MMM y G"}
                 GyMMMd{"d. MMM y G"}
+                GyMd{"dd.MM.y GGGGG"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -4160,8 +4240,8 @@ no{
                 MMM{"LLL"}
                 MMMEd{"E d. MMM"}
                 MMMMW{
-                    one{"W. 'uke' 'i' MMMM"}
-                    other{"W. 'uke' 'i' MMMM"}
+                    one{"'den' W. 'uken' 'i' MMMM"}
+                    other{"'den' W. 'uken' 'i' MMMM"}
                 }
                 MMMMd{"d. MMMM"}
                 MMMd{"d. MMM"}
@@ -4357,9 +4437,12 @@ no{
             intervalFormats{
                 Bh{
                     B{"h B–h B"}
+                    h{"h–h B"}
                 }
                 Bhm{
                     B{"h:mm B–h:mm B"}
+                    h{"h:mm–h:mm B"}
+                    m{"h:mm–h:mm B"}
                 }
                 Gy{
                     G{"y G–y G"}
@@ -4642,6 +4725,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -4878,6 +4971,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -5102,6 +5205,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -5325,6 +5438,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
                 "{1} {0}",
+            }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
             }
             availableFormats{
                 E{"ccc"}
@@ -6168,6 +6291,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -6392,6 +6525,16 @@ no{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 E{"ccc"}
                 Ed{"E d."}
@@ -6554,7 +6697,7 @@ no{
         heart{"hjerte"}
         historic_scripts{"historiske skriftsystemer"}
         ideographic_desc_characters{"ideografiske beskrivende tegn"}
-        japanese_kana{"japansk kana"}
+        japanese_kana{"japanske kana"}
         kanbun{"kanbun"}
         kanji{"kanji"}
         keycap{"taster"}
@@ -6977,8 +7120,8 @@ no{
                     other{"+{0} kv."}
                 }
                 past{
-                    one{"–{0} kv."}
-                    other{"–{0} kv."}
+                    one{"-{0} kv."}
+                    other{"-{0} kv."}
                 }
             }
         }
@@ -7418,8 +7561,8 @@ no{
                     other{"+{0} år"}
                 }
                 past{
-                    one{"–{0} år"}
-                    other{"–{0} år"}
+                    one{"-{0} år"}
+                    other{"-{0} år"}
                 }
             }
         }

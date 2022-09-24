@@ -8,13 +8,16 @@
 #include "mozilla/dom/CSSFontFeatureValuesRuleBinding.h"
 #include "mozilla/ServoBindings.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 size_t CSSFontFeatureValuesRule::SizeOfIncludingThis(
     MallocSizeOf aMallocSizeOf) const {
   // TODO Implement this!
   return aMallocSizeOf(this);
+}
+
+StyleCssRuleType CSSFontFeatureValuesRule::Type() const {
+  return StyleCssRuleType::FontFeatureValues;
 }
 
 #ifdef DEBUG
@@ -27,6 +30,11 @@ void CSSFontFeatureValuesRule::List(FILE* out, int32_t aIndent) const {
   fprintf_stderr(out, "%s\n", str.get());
 }
 #endif
+
+void CSSFontFeatureValuesRule::SetRawAfterClone(
+    RefPtr<RawServoFontFeatureValuesRule> aRaw) {
+  mRawRule = std::move(aRaw);
+}
 
 /* CSSRule implementation */
 
@@ -73,5 +81,4 @@ JSObject* CSSFontFeatureValuesRule::WrapObject(
   return CSSFontFeatureValuesRule_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

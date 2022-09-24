@@ -1,7 +1,32 @@
-Flags
-=====
+# Flags
 
-#### <code>&#x2D;&#x2D;android-storage <var>ANDROID_STORAGE</var></code>
+## <code>--allow-hosts <var>ALLOW_HOSTS</var>...</code>
+
+Values of the `Host` header to allow for incoming requests.
+
+By default the value of <var>HOST</var> is allowed. If `--allow-hosts`
+is provided, exactly the given values will be permitted. For example
+`--allow-host geckodriver.test webdriver.local` will allow requests
+with `Host` set to `geckodriver.test` or `webdriver.local`.
+
+Requests with `Host` set to an IP address are always allowed.
+
+## <code>--allow-origins <var>ALLOW_ORIGINS</var>...</code>
+
+Values of the `Origin` header to allow for incoming requests.
+
+`Origin` is set by web browsers for all `POST` requests, and most
+other cross-origin requests. By default any request with an `Origin`
+header is rejected to protect against malicious websites trying to
+access geckodriver running on the local machine.
+
+If `--allow-origins` is provided, web services running on the given
+origin will be able to make requests to geckodriver. For example
+`--allow-origins https://webdriver.test:8080` will allow a web-based
+service on the origin with scheme `https`, hostname `webdriver.test`,
+and port `8080` to access the geckodriver instance.
+
+## <code>&#x2D;&#x2D;android-storage <var>ANDROID_STORAGE</var></code>
 
 **Deprecation warning**: This argument is deprecated and planned to be removed
 with the 0.31.0 release of geckodriver. As such it shouldn't be used with version
@@ -51,7 +76,7 @@ By default `auto` is used.
 </table>
 
 
-#### <code>-b <var>BINARY</var></code> / <code>&#x2D;&#x2D;binary <var>BINARY</var></code>
+## <code>-b <var>BINARY</var></code> / <code>&#x2D;&#x2D;binary <var>BINARY</var></code>
 
 Path to the Firefox binary to use.  By default geckodriver tries to
 find and use the system installation of Firefox, but that behaviour
@@ -78,7 +103,7 @@ scanning the Windows registry.
 [whereis(1)]: http://www.manpagez.com/man/1/whereis/
 
 
-#### <code>&#x2D;&#x2D;connect-existing</code>
+## <code>&#x2D;&#x2D;connect-existing</code>
 
 Connect geckodriver to an existing Firefox instance.  This means
 geckodriver will abstain from the default of starting a new Firefox
@@ -94,24 +119,56 @@ using `--connect-existing` it is likely you will also have to use
 [`&#x2D;&#x2D;marionette-port`]: #marionette-port
 
 
-#### <code>&#x2D;&#x2D;host <var>HOST</var></code>
+## <code>&#x2D;&#x2D;host <var>HOST</var></code>
 
 Host to use for the WebDriver server.  Defaults to 127.0.0.1.
 
+## <code>&#x2D;&#x2D;jsdebugger</code>
 
-#### <code>&#x2D;&#x2D;log <var>LEVEL</var></code>
+Attach [browser toolbox] debugger when Firefox starts.  This is
+useful for debugging [Marionette] internals.
+
+To be prompted at the start of the test run or between tests,
+you can set the `marionette.debugging.clicktostart` preference to
+`true`.
+
+For reference, below is the list of preferences that enables the
+chrome debugger. These are all set implicitly when the
+argument is passed to geckodriver.
+
+* `devtools.browsertoolbox.panel` -> `jsdebugger`
+
+    Selects the Debugger panel by default.
+
+* `devtools.chrome.enabled` → true
+
+    Enables debugging of chrome code.
+
+* `devtools.debugger.prompt-connection` → false
+
+    Controls the remote connection prompt.  Note that this will
+    automatically expose your Firefox instance to localhost.
+
+* `devtools.debugger.remote-enabled` → true
+
+    Allows a remote debugger to connect, which is necessary for
+    debugging chrome code.
+
+[browser toolbox]: https://developer.mozilla.org/en-US/docs/Tools/Browser_Toolbox
+
+## <code>&#x2D;&#x2D;log <var>LEVEL</var></code>
 
 Set the Gecko and geckodriver log level.  Possible values are `fatal`,
 `error`, `warn`, `info`, `config`, `debug`, and `trace`.
 
 
-#### <code>&#x2D;&#x2D;marionette-host <var>HOST</var></code>
+## <code>&#x2D;&#x2D;marionette-host <var>HOST</var></code>
 
 Selects the host for geckodriver’s connection to the [Marionette]
 remote protocol. Defaults to 127.0.0.1.
 
 
-#### <code>&#x2D;&#x2D;marionette-port <var>PORT</var></code>
+## <code>&#x2D;&#x2D;marionette-port <var>PORT</var></code>
 
 Selects the port for geckodriver’s connection to the [Marionette]
 remote protocol.
@@ -126,7 +183,7 @@ under geckodriver’s control, it will simply connect to <var>PORT</var>.
 [`--connect-existing`]: #connect-existing
 
 
-#### <code>-p <var>PORT</var></code> / <code>&#x2D;&#x2D;port <var>PORT</var></code>
+## <code>-p <var>PORT</var></code> / <code>&#x2D;&#x2D;port <var>PORT</var></code>
 
 Port to use for the WebDriver server.  Defaults to 4444.
 
@@ -134,43 +191,30 @@ A helpful trick is that it is possible to bind to 0 to get the
 system to atomically assign a free port.
 
 
-#### <code>&#x2D;&#x2D;jsdebugger</code>
+## <code>&#x2D;&#x2D;profile-root <var>PROFILE_ROOT</var></code>
 
-Attach [browser toolbox] debugger when Firefox starts.  This is
-useful for debugging [Marionette] internals.
+Path to the directory to use when creating temporary profiles. By
+default this is the system temporary directory. Both geckodriver and
+Firefox must have read-write access to this path.
 
-To be prompted at the start of the test run or between tests,
-you can set the `marionette.debugging.clicktostart` preference to
-`true`.
-
-For reference, below is the list of preferences that enables the
-chrome debugger. These are all set implicitly when the
-argument is passed to geckodriver.
-
-  * `devtools.browsertoolbox.panel` -> `jsdebugger`
-
-    Selects the Debugger panel by default.
-
-  * `devtools.chrome.enabled` → true
-
-    Enables debugging of chrome code.
-
-  * `devtools.debugger.prompt-connection` → false
-
-    Controls the remote connection prompt.  Note that this will
-    automatically expose your Firefox instance to localhost.
-
-  * `devtools.debugger.remote-enabled` → true
-
-    Allows a remote debugger to connect, which is necessary for
-    debugging chrome code.
+This setting can be useful when Firefox is sandboxed from the host
+filesystem such that it doesn't share the same system temporary
+directory as geckodriver (e.g. when running Firefox inside a container
+or packaged as a snap).
 
 
-[browser toolbox]: https://developer.mozilla.org/en-US/docs/Tools/Browser_Toolbox
-
-
-#### <code>-v<var>[v]</var></code>
+## <code>-v<var>[v]</var></code>
 
 Increases the logging verbosity by to debug level when passing
 a single `-v`, or to trace level if `-vv` is passed.  This is
 analogous to passing `--log debug` and `--log trace`, respectively.
+
+[Marionette]: /testing/marionette/index.rst
+
+
+## <code>&#x2D;&#x2D;websocket-port<var>PORT</var></code>
+
+Port to use to connect to WebDriver BiDi. Defaults to 9222.
+
+A helpful trick is that it is possible to bind to 0 to get the
+system to atomically assign a free port.

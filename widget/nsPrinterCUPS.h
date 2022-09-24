@@ -48,6 +48,10 @@ class nsPrinterCUPS final : public nsPrinterBase {
   static void ForEachExtraMonochromeSetting(
       mozilla::FunctionRef<void(const nsACString&, const nsACString&)>);
 
+  inline const char* FindCUPSOption(const char* name) const {
+    return mShim.cupsGetOption(name, mPrinter->num_options, mPrinter->options);
+  }
+
  private:
   struct CUPSPrinterInfo {
     cups_dinfo_t* mPrinterInfo = nullptr;
@@ -135,6 +139,7 @@ class nsPrinterCUPS final : public nsPrinterBase {
       macro_("BRMonoColor", "Mono")               /* Brother */                \
       macro_("BRPrintQuality", "Black")           /* Brother */                \
       macro_("CNIJGrayScale", "1")                /* Canon */                  \
+      macro_("CNGrayscale", "True")               /* Canon */                  \
       macro_("INK", "MONO")                       /* Epson */                  \
       macro_("HPColorMode", "GrayscalePrint")     /* HP */                     \
       macro_("ColorMode", "Mono")                 /* Samsung */                \

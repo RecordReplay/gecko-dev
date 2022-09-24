@@ -22,8 +22,7 @@
 
 class nsIInterceptedChannel;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Blob;
 class Client;
@@ -139,6 +138,7 @@ class FetchEvent final : public ExtendableEvent {
   nsMainThreadPtrHandle<ServiceWorkerRegistrationInfo> mRegistration;
   RefPtr<Request> mRequest;
   RefPtr<Promise> mHandled;
+  RefPtr<Promise> mPreloadResponse;
   nsCString mScriptSpec;
   nsCString mPreventDefaultScriptSpec;
   nsString mClientId;
@@ -187,6 +187,8 @@ class FetchEvent final : public ExtendableEvent {
 
   Promise* Handled() const { return mHandled; }
 
+  Promise* PreloadResponse() const { return mPreloadResponse; }
+
   void RespondWith(JSContext* aCx, Promise& aArg, ErrorResult& aRv);
 
   // Pull in the Event version of PreventDefault so we don't get
@@ -200,7 +202,7 @@ class FetchEvent final : public ExtendableEvent {
 class PushMessageData final : public nsISupports, public nsWrapperCache {
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(PushMessageData)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(PushMessageData)
 
   virtual JSObject* WrapObject(JSContext* aCx,
                                JS::Handle<JSObject*> aGivenProto) override;
@@ -302,7 +304,6 @@ class ExtendableMessageEvent final : public ExtendableEvent {
   void GetPorts(nsTArray<RefPtr<MessagePort>>& aPorts);
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_serviceworkerevents_h__ */

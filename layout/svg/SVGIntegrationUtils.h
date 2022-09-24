@@ -17,8 +17,6 @@
 
 class gfxContext;
 class gfxDrawable;
-class nsDisplayList;
-class nsDisplayListBuilder;
 class nsIFrame;
 struct nsPoint;
 struct nsRect;
@@ -33,14 +31,12 @@ struct WrFiltersHolder {
 };
 
 namespace mozilla {
+class nsDisplayList;
+class nsDisplayListBuilder;
 
 namespace gfx {
 class DrawTarget;
 }  // namespace gfx
-
-namespace layers {
-class LayerManager;
-}  // namespace layers
 
 /**
  * Integration of SVG effects (clipPath clipping, masking and filters) into
@@ -151,20 +147,18 @@ class SVGIntegrationUtils final {
   struct MOZ_STACK_CLASS PaintFramesParams {
     gfxContext& ctx;
     nsIFrame* frame;
-    const nsRect& dirtyRect;
-    const nsRect& borderArea;
+    nsRect dirtyRect;
+    nsRect borderArea;
     nsDisplayListBuilder* builder;
-    layers::LayerManager* layerManager;
     bool handleOpacity;  // If true, PaintMaskAndClipPath/ PaintFilter should
                          // apply css opacity.
-    Maybe<gfx::Rect> maskRect;
+    Maybe<LayoutDeviceRect> maskRect;
     imgDrawingParams& imgParams;
 
     explicit PaintFramesParams(gfxContext& aCtx, nsIFrame* aFrame,
                                const nsRect& aDirtyRect,
                                const nsRect& aBorderArea,
                                nsDisplayListBuilder* aBuilder,
-                               layers::LayerManager* aLayerManager,
                                bool aHandleOpacity,
                                imgDrawingParams& aImgParams)
         : ctx(aCtx),
@@ -172,15 +166,9 @@ class SVGIntegrationUtils final {
           dirtyRect(aDirtyRect),
           borderArea(aBorderArea),
           builder(aBuilder),
-          layerManager(aLayerManager),
           handleOpacity(aHandleOpacity),
           imgParams(aImgParams) {}
   };
-
-  /**
-   * Paint non-SVG frame with mask, clipPath and opacity effect.
-   */
-  static void PaintMaskAndClipPath(const PaintFramesParams& aParams);
 
   // This should use FunctionRef instead of std::function because we don't need
   // to take ownership of the function. See bug 1490781.
@@ -197,11 +185,6 @@ class SVGIntegrationUtils final {
    */
   static bool PaintMask(const PaintFramesParams& aParams,
                         bool& aOutIsMaskComplete);
-
-  /**
-   * Return true if all the mask resource of aFrame are ready.
-   */
-  static bool IsMaskResourceReady(nsIFrame* aFrame);
 
   /**
    * Paint the frame contents.
@@ -223,6 +206,7 @@ class SVGIntegrationUtils final {
    * Paint non-SVG frame with filter and opacity effect.
    */
   static void PaintFilter(const PaintFramesParams& aParams,
+                          Span<const StyleFilter> aFilters,
                           const SVGFilterPaintCallback& aCallback);
 
   /**
@@ -239,7 +223,8 @@ class SVGIntegrationUtils final {
   static bool BuildWebRenderFilters(nsIFrame* aFilteredFrame,
                                     Span<const StyleFilter> aFilters,
                                     WrFiltersHolder& aWrFilters,
-                                    Maybe<nsRect>& aPostFilterClip);
+                                    Maybe<nsRect>& aPostFilterClip,
+                                    bool& aInitialized);
 
   /**
    * Check if the filters present on |aFrame| are supported by WebRender.

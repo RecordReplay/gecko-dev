@@ -27,7 +27,6 @@ namespace net {
 
 class TRRService;
 class TRRServiceChannel;
-extern TRRService* gTRRService;
 
 class TRR : public Runnable,
             public nsITimerCallback,
@@ -55,7 +54,8 @@ class TRR : public Runnable,
   explicit TRR(AHostResolver* aResolver, bool aPB);
   // to verify a domain
   explicit TRR(AHostResolver* aResolver, nsACString& aHost, enum TrrType aType,
-               const nsACString& aOriginSuffix, bool aPB);
+               const nsACString& aOriginSuffix, bool aPB,
+               bool aUseFreshConnection);
 
   NS_IMETHOD Run() override;
   void Cancel(nsresult aStatus);
@@ -95,7 +95,7 @@ class TRR : public Runnable,
   // FailData() must be called to signal that the asynch TRR resolve is
   // completed. For failed name resolves ("no such host"), the 'error' it
   // passses on in its argument must be NS_ERROR_UNKNOWN_HOST. Other errors
-  // (if host was blacklisted, there as a bad content-type received, etc)
+  // (if host was blocklisted, there as a bad content-type received, etc)
   // other error codes must be used. This distinction is important for the
   // subsequent logic to separate the error reasons.
   nsresult FailData(nsresult error);
@@ -145,6 +145,9 @@ class TRR : public Runnable,
 
   // keep a copy of the originSuffix for the cases where mRec == nullptr */
   const nsCString mOriginSuffix;
+
+  // If true, we set LOAD_FRESH_CONNECTION on our channel's load flags.
+  bool mUseFreshConnection = false;
 };
 
 }  // namespace net

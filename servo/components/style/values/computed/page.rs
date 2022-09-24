@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-//! Computed @page at-rule properties
+//! Computed @page at-rule properties and named-page style properties
 
 use crate::values::computed::length::NonNegativeLength;
 use crate::values::computed::{Context, ToComputedValue};
@@ -11,8 +11,9 @@ use crate::values::generics::size::Size2D;
 
 use crate::values::specified::page as specified;
 pub use generics::page::GenericPageSize;
-pub use generics::page::Orientation;
+pub use generics::page::PageOrientation;
 pub use generics::page::PaperSize;
+pub use specified::PageName;
 
 /// Computed value of the @page size descriptor
 ///
@@ -25,7 +26,7 @@ pub enum PageSize {
     /// Specified size, paper size, or paper size and orientation.
     Size(Size2D<NonNegativeLength>),
     /// `landscape` or `portrait` value, no specified size.
-    Orientation(Orientation),
+    Orientation(PageOrientation),
     /// `auto` value
     Auto,
 }
@@ -36,16 +37,14 @@ impl ToComputedValue for specified::PageSize {
     fn to_computed_value(&self, ctx: &Context) -> Self::ComputedValue {
         match &*self {
             Self::Size(s) => PageSize::Size(s.to_computed_value(ctx)),
-            Self::PaperSizeAndOrientation(p, Orientation::Landscape) => PageSize::Size(Size2D {
+            Self::PaperSize(p, PageOrientation::Landscape) => PageSize::Size(Size2D {
                 width: p.long_edge().to_computed_value(ctx),
                 height: p.short_edge().to_computed_value(ctx),
             }),
-            Self::PaperSizeAndOrientation(p, Orientation::Portrait) | Self::PaperSize(p) => {
-                PageSize::Size(Size2D {
-                    width: p.short_edge().to_computed_value(ctx),
-                    height: p.long_edge().to_computed_value(ctx),
-                })
-            },
+            Self::PaperSize(p, PageOrientation::Portrait) => PageSize::Size(Size2D {
+                width: p.short_edge().to_computed_value(ctx),
+                height: p.long_edge().to_computed_value(ctx),
+            }),
             Self::Orientation(o) => PageSize::Orientation(*o),
             Self::Auto => PageSize::Auto,
         }

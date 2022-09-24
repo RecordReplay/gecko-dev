@@ -15,6 +15,7 @@
 #include "nsPresContext.h"
 #include "nsDisplayList.h"
 #include "gfxContext.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/MathMLElement.h"
 #include <algorithm>
 #include "gfxMathTable.h"
@@ -602,6 +603,8 @@ nsresult nsMathMLmfracFrame::PlaceInternal(DrawTarget* aDrawTarget,
   return NS_OK;
 }
 
+namespace mozilla {
+
 class nsDisplayMathMLSlash : public nsPaintedDisplayItem {
  public:
   nsDisplayMathMLSlash(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
@@ -650,6 +653,8 @@ void nsDisplayMathMLSlash::Paint(nsDisplayListBuilder* aBuilder,
   RefPtr<Path> path = builder->Finish();
   aDrawTarget.Fill(path, color);
 }
+
+}  // namespace mozilla
 
 void nsMathMLmfracFrame::DisplaySlash(nsDisplayListBuilder* aBuilder,
                                       const nsRect& aRect, nscoord aThickness,

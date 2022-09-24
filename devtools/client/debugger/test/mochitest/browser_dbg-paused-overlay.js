@@ -4,12 +4,10 @@
 
 // Tests the paused overlay
 
+"use strict";
+
 add_task(async function() {
   const dbg = await initDebugger("doc-scripts.html");
-  const {
-    selectors: { getSelectedSource },
-    getState,
-  } = dbg;
 
   // Sanity check
   const highlighterTestFront = await getHighlighterTestFront(dbg.toolbox);
@@ -25,12 +23,10 @@ add_task(async function() {
   await waitForPaused(dbg);
 
   info("Check that the paused overlay is displayed");
-  await waitFor(
-    async () => await highlighterTestFront.isPausedDebuggerOverlayVisible()
-  );
+  await waitFor(() => highlighterTestFront.isPausedDebuggerOverlayVisible());
   ok(true, "Paused debugger overlay is visible");
 
-  let pauseLine = getVisibleSelectedFrameLine(dbg);
+  const pauseLine = getVisibleSelectedFrameLine(dbg);
   is(pauseLine, 2, "We're paused at the expected location");
 
   info("Test clicking the step over button");
@@ -43,18 +39,33 @@ add_task(async function() {
   isPausedOverlayVisible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
   is(isPausedOverlayVisible, true, "The pause overlay is still visible");
 
-  info("Test clicking the resume button");
+  info("Test clicking the highlighter resume button");
   await highlighterTestFront.clickPausedDebuggerOverlayButton(
     "paused-dbg-resume-button"
   );
 
-  await waitFor(() => !isPaused(dbg), "Wait for the debugger to resume");
+  await waitForResumed(dbg);
   ok("The debugger isn't paused after clicking on the resume button");
 
   await waitFor(async () => {
     const visible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
     return !visible;
   });
-
   ok(true, "The overlay is now hidden");
+
+  info(
+    "Check that the highlighter is removed when clicking on the debugger resume button"
+  );
+  invokeInTab("doEval");
+  await waitFor(() => highlighterTestFront.isPausedDebuggerOverlayVisible());
+  ok(true, "Paused debugger overlay is visible again");
+
+  info("Click debugger UI resume button");
+  const resumeButton = await waitFor(() => findElement(dbg, "resume"));
+  resumeButton.click();
+  await waitFor(async () => {
+    const visible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
+    return !visible;
+  });
+  ok(true, "The overlay is hidden after clicking on the resume button");
 });

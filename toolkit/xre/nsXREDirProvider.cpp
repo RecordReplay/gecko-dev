@@ -78,7 +78,7 @@
 
 #if defined(MOZ_SANDBOX)
 #  include "mozilla/SandboxSettings.h"
-#  include "nsIUUIDGenerator.h"
+#  include "nsID.h"
 #  include "mozilla/Unused.h"
 #  if defined(XP_WIN)
 #    include "sandboxBroker.h"
@@ -113,7 +113,7 @@ nsCOMPtr<nsIFile> gDataDirProfile = nullptr;
 
 // These are required to allow nsXREDirProvider to be usable in xpcshell tests.
 // where gAppData is null.
-#if defined(XP_MACOSX) || defined(XP_WIN) || defined(XP_UNIX)
+#if defined(XP_MACOSX) || defined(XP_UNIX)
 static const char* GetAppName() {
   if (gAppData) {
     return gAppData->name;
@@ -122,12 +122,14 @@ static const char* GetAppName() {
 }
 #endif
 
+#ifdef XP_MACOSX
 static const char* GetAppVendor() {
   if (gAppData) {
     return gAppData->vendor;
   }
   return nullptr;
 }
+#endif
 
 nsXREDirProvider::nsXREDirProvider() : mProfileNotified(false) {
   gDirServiceProvider = this;
@@ -155,25 +157,11 @@ nsresult nsXREDirProvider::Initialize(
   mAppProvider = aAppProvider;
   mXULAppDir = aXULAppDir;
   mGREDir = aGREDir;
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-  // The GRE directory can be used in sandbox rules, so we need to make sure
-  // it doesn't contain any junction points or symlinks or the sandbox will
-  // reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(mGREDir)) {
-    NS_WARNING("Failed to resolve GRE Dir.");
-  }
-  // If the mXULAppDir is different it lives below the mGREDir. To avoid
-  // confusion resolve that as well even though we don't need it for sandbox
-  // rules. Some tests rely on this for example.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
-          mXULAppDir)) {
-    NS_WARNING("Failed to resolve XUL App Dir.");
-  }
-#endif
-  mGREDir->Clone(getter_AddRefs(mGREBinDir));
-#ifdef XP_MACOSX
-  mGREBinDir->SetNativeLeafName("MacOS"_ns);
-#endif
+  nsCOMPtr<nsIFile> binaryPath;
+  nsresult rv = XRE_GetBinaryPath(getter_AddRefs(binaryPath));
+  if (NS_FAILED(rv)) return rv;
+  rv = binaryPath->GetParent(getter_AddRefs(mGREBinDir));
+  if (NS_FAILED(rv)) return rv;
 
   if (!mProfileDir) {
     nsCOMPtr<nsIDirectoryServiceProvider> app(mAppProvider);
@@ -228,15 +216,6 @@ nsresult nsXREDirProvider::SetProfile(nsIFile* aDir, nsIFile* aLocalDir) {
 
   mProfileDir = aDir;
   mProfileLocalDir = aLocalDir;
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-  // The profile directory can be used in sandbox rules, so we need to make sure
-  // it doesn't contain any junction points or symlinks or the sandbox will
-  // reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
-          mProfileDir)) {
-    NS_WARNING("Failed to resolve Profile Dir.");
-  }
-#endif
   return NS_OK;
 }
 
@@ -366,19 +345,14 @@ nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
 
   if (!strcmp(aProperty, NS_GRE_DIR)) {
 #if defined(MOZ_WIDGET_ANDROID)
-    // On Android, libraries and other internal files are inside the APK, a zip
-    // file, so this folder doesn't really make sense.
+    // On Android, internal files are inside the APK, a zip file, so this
+    // folder doesn't really make sense.
     return NS_ERROR_FAILURE;
 #else
     return mGREDir->Clone(aFile);
 #endif
   } else if (!strcmp(aProperty, NS_GRE_BIN_DIR)) {
-#if defined(MOZ_WIDGET_ANDROID)
-    // Same as NS_GRE_DIR
-    return NS_ERROR_FAILURE;
-#else
     return mGREBinDir->Clone(aFile);
-#endif
   } else if (!strcmp(aProperty, NS_OS_CURRENT_PROCESS_DIR) ||
              !strcmp(aProperty, NS_APP_INSTALL_CLEANUP_DIR)) {
     return GetAppDir()->Clone(aFile);
@@ -485,8 +459,6 @@ nsXREDirProvider::GetFile(const char* aProperty, bool* aPersistent,
 #else
     return NS_ERROR_FAILURE;
 #endif
-  } else if (!strcmp(aProperty, XRE_USER_SYS_EXTENSION_DEV_DIR)) {
-    return GetSysUserExtensionsDevDirectory(aFile);
   } else if (!strcmp(aProperty, XRE_USER_RUNTIME_DIR)) {
 #if defined(XP_UNIX)
     nsPrintfCString path("/run/user/%d/%s/", getuid(), GetAppName());
@@ -656,16 +628,6 @@ nsresult nsXREDirProvider::LoadContentProcessTempDir() {
     }
   }
 
-#  if defined(XP_WIN)
-  // The content temp dir can be used in sandbox rules, so we need to make sure
-  // it doesn't contain any junction points or symlinks or the sandbox will
-  // reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
-          mContentTempDir)) {
-    NS_WARNING("Failed to resolve Content Temp Dir.");
-  }
-#  endif
-
   return NS_OK;
 }
 
@@ -725,15 +687,10 @@ static already_AddRefed<nsIFile> CreateProcessSandboxTempDir(
   nsresult rv;
   nsAutoString tempDirSuffix;
   mozilla::Preferences::GetString(pref, tempDirSuffix);
-  if (tempDirSuffix.IsEmpty()) {
-    nsCOMPtr<nsIUUIDGenerator> uuidgen =
-        do_GetService("@mozilla.org/uuid-generator;1", &rv);
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return nullptr;
-    }
 
+  if (tempDirSuffix.IsEmpty()) {
     nsID uuid;
-    rv = uuidgen->GenerateUUIDInPlace(&uuid);
+    rv = nsID::GenerateUUIDInPlace(uuid);
     if (NS_WARN_IF(NS_FAILED(rv))) {
       return nullptr;
     }
@@ -792,11 +749,8 @@ static already_AddRefed<nsIFile> CreateProcessSandboxTempDir(
 static nsresult DeleteDirIfExists(nsIFile* dir) {
   if (dir) {
     // Don't return an error if the directory doesn't exist.
-    // Windows Remove() returns NS_ERROR_FILE_NOT_FOUND while
-    // OS X returns NS_ERROR_FILE_TARGET_DOES_NOT_EXIST.
     nsresult rv = dir->Remove(/* aRecursive */ true);
-    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND &&
-        rv != NS_ERROR_FILE_TARGET_DOES_NOT_EXIST) {
+    if (NS_FAILED(rv) && rv != NS_ERROR_FILE_NOT_FOUND) {
       return rv;
     }
   }
@@ -1116,14 +1070,8 @@ static nsresult GetRegWindowsAppDataFolder(bool aLocal, nsAString& _retval) {
 #endif
 
 static nsresult HashInstallPath(nsAString& aInstallPath, nsAString& aPathHash) {
-  const char* vendor = GetAppVendor();
-  if (vendor && vendor[0] == '\0') {
-    vendor = nullptr;
-  }
-
   mozilla::UniquePtr<NS_tchar[]> hash;
-  bool success =
-      ::GetInstallHash(PromiseFlatString(aInstallPath).get(), vendor, hash);
+  bool success = ::GetInstallHash(PromiseFlatString(aInstallPath).get(), hash);
   if (!success) {
     return NS_ERROR_FAILURE;
   }
@@ -1142,40 +1090,58 @@ static nsresult HashInstallPath(nsAString& aInstallPath, nsAString& aPathHash) {
  * Gets a hash of the installation directory.
  */
 nsresult nsXREDirProvider::GetInstallHash(nsAString& aPathHash) {
-  nsCOMPtr<nsIFile> installDir;
-  nsCOMPtr<nsIFile> appFile;
-  bool per = false;
-  nsresult rv = GetFile(XRE_EXECUTABLE_FILE, &per, getter_AddRefs(appFile));
-  NS_ENSURE_SUCCESS(rv, rv);
-  rv = appFile->GetParent(getter_AddRefs(installDir));
-  NS_ENSURE_SUCCESS(rv, rv);
+  nsAutoString stringToHash;
 
-  // It is possible that the path we have is on a case insensitive
-  // filesystem in which case the path may vary depending on how the
-  // application is called. We want to normalize the case somehow.
 #ifdef XP_WIN
-  // Windows provides a way to get the correct case.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
-          installDir)) {
-    NS_WARNING("Failed to resolve install directory.");
-  }
-#elif defined(MOZ_WIDGET_COCOA)
-  // On OSX roundtripping through an FSRef fixes the case.
-  FSRef ref;
-  nsCOMPtr<nsILocalFileMac> macFile = do_QueryInterface(installDir);
-  rv = macFile->GetFSRef(&ref);
-  NS_ENSURE_SUCCESS(rv, rv);
-  rv = NS_NewLocalFileWithFSRef(&ref, true, getter_AddRefs(macFile));
-  NS_ENSURE_SUCCESS(rv, rv);
-  installDir = static_cast<nsIFile*>(macFile);
+  if (mozilla::widget::WinUtils::HasPackageIdentity()) {
+    // For packages, the install path includes the version number, so it isn't
+    // a stable or consistent identifier for the installation. The package
+    // family name is though, so use that instead of the path.
+    stringToHash = mozilla::widget::WinUtils::GetPackageFamilyName();
+  } else
 #endif
-  // On linux XRE_EXECUTABLE_FILE already seems to be set to the correct path.
+  {
+    nsCOMPtr<nsIFile> installDir;
+    nsCOMPtr<nsIFile> appFile;
+    bool per = false;
+    nsresult rv = GetFile(XRE_EXECUTABLE_FILE, &per, getter_AddRefs(appFile));
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = appFile->GetParent(getter_AddRefs(installDir));
+    NS_ENSURE_SUCCESS(rv, rv);
 
-  nsAutoString installPath;
-  rv = installDir->GetPath(installPath);
-  NS_ENSURE_SUCCESS(rv, rv);
+    // It is possible that the path we have is on a case insensitive
+    // filesystem in which case the path may vary depending on how the
+    // application is called. We want to normalize the case somehow.
+#ifdef XP_WIN
+    // Windows provides a way to get the correct case.
+    if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(
+            installDir)) {
+      NS_WARNING("Failed to resolve install directory.");
+    }
+#elif defined(MOZ_WIDGET_COCOA)
+    // On OSX roundtripping through an FSRef fixes the case.
+    FSRef ref;
+    nsCOMPtr<nsILocalFileMac> macFile = do_QueryInterface(installDir);
+    rv = macFile->GetFSRef(&ref);
+    NS_ENSURE_SUCCESS(rv, rv);
+    rv = NS_NewLocalFileWithFSRef(&ref, true, getter_AddRefs(macFile));
+    NS_ENSURE_SUCCESS(rv, rv);
+    installDir = static_cast<nsIFile*>(macFile);
+#endif
+    // On linux XRE_EXECUTABLE_FILE already seems to be set to the correct path.
 
-  return HashInstallPath(installPath, aPathHash);
+    rv = installDir->GetPath(stringToHash);
+    NS_ENSURE_SUCCESS(rv, rv);
+  }
+
+  // If we somehow failed to get an actual value, hashing an empty string could
+  // potentially cause some serious problems given all the things this hash is
+  // used for. So we don't allow that.
+  if (stringToHash.IsEmpty()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  return HashInstallPath(stringToHash, aPathHash);
 }
 
 /**
@@ -1284,19 +1250,10 @@ nsresult nsXREDirProvider::GetUpdateRootDir(nsIFile** aResult,
   mozilla::UniquePtr<wchar_t[]> updatePath;
   HRESULT hrv;
   if (aGetOldLocation) {
-    const char* vendor = GetAppVendor();
-    if (vendor && vendor[0] == '\0') {
-      vendor = nullptr;
-    }
-    const char* appName = GetAppName();
-    if (appName && appName[0] == '\0') {
-      appName = nullptr;
-    }
-    hrv = GetUserUpdateDirectory(PromiseFlatString(installPath).get(), vendor,
-                                 appName, updatePath);
+    hrv =
+        GetOldUpdateDirectory(PromiseFlatString(installPath).get(), updatePath);
   } else {
     hrv = GetCommonUpdateDirectory(PromiseFlatString(installPath).get(),
-                                   SetPermissionsOf::BaseDirIfNotExists,
                                    updatePath);
   }
   if (FAILED(hrv)) {
@@ -1470,37 +1427,6 @@ nsresult nsXREDirProvider::GetSysUserExtensionsDirectory(nsIFile** aFile) {
   rv = EnsureDirectoryExists(localDir);
   NS_ENSURE_SUCCESS(rv, rv);
 
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-  // This is used in sandbox rules, so we need to make sure it doesn't contain
-  // any junction points or symlinks or the sandbox will reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(localDir)) {
-    NS_WARNING("Failed to resolve sys user extensions directory.");
-  }
-#endif
-
-  localDir.forget(aFile);
-  return NS_OK;
-}
-
-nsresult nsXREDirProvider::GetSysUserExtensionsDevDirectory(nsIFile** aFile) {
-  nsCOMPtr<nsIFile> localDir;
-  nsresult rv = GetUserDataDirectoryHome(getter_AddRefs(localDir), false);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = AppendSysUserExtensionsDevPath(localDir);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  rv = EnsureDirectoryExists(localDir);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-#if defined(XP_WIN) && defined(MOZ_SANDBOX)
-  // This is used in sandbox rules, so we need to make sure it doesn't contain
-  // any junction points or symlinks or the sandbox will reject those rules.
-  if (!mozilla::widget::WinUtils::ResolveJunctionPointsAndSymLinks(localDir)) {
-    NS_WARNING("Failed to resolve sys user extensions dev directory.");
-  }
-#endif
-
   localDir.forget(aFile);
   return NS_OK;
 }
@@ -1590,37 +1516,6 @@ nsresult nsXREDirProvider::AppendSysUserExtensionPath(nsIFile* aFile) {
 
 #else
 #  error "Don't know how to get XRE user extension path on your platform"
-#endif
-  return NS_OK;
-}
-
-nsresult nsXREDirProvider::AppendSysUserExtensionsDevPath(nsIFile* aFile) {
-  MOZ_ASSERT(aFile);
-
-  nsresult rv;
-
-#if defined(XP_MACOSX) || defined(XP_WIN)
-
-  static const char* const sXR = "Mozilla";
-  rv = aFile->AppendNative(nsDependentCString(sXR));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  static const char* const sExtensions = "SystemExtensionsDev";
-  rv = aFile->AppendNative(nsDependentCString(sExtensions));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-#elif defined(XP_UNIX)
-
-  static const char* const sXR = ".mozilla";
-  rv = aFile->AppendNative(nsDependentCString(sXR));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  static const char* const sExtensions = "systemextensionsdev";
-  rv = aFile->AppendNative(nsDependentCString(sExtensions));
-  NS_ENSURE_SUCCESS(rv, rv);
-
-#else
-#  error "Don't know how to get XRE system extension dev path on your platform"
 #endif
   return NS_OK;
 }

@@ -19,12 +19,11 @@
 
 "use strict";
 
-var EXPORTED_SYMBOLS = ["OS"];
+// Scheduler is exported for test-only usage.
+var EXPORTED_SYMBOLS = ["OS", "Scheduler"];
 
-var SharedAll = {};
-ChromeUtils.import(
-  "resource://gre/modules/osfile/osfile_shared_allthreads.jsm",
-  SharedAll
+var SharedAll = ChromeUtils.import(
+  "resource://gre/modules/osfile/osfile_shared_allthreads.jsm"
 );
 const { clearInterval, setInterval } = ChromeUtils.import(
   "resource://gre/modules/Timer.jsm"
@@ -35,16 +34,14 @@ var LOG = SharedAll.LOG.bind(SharedAll, "Controller");
 var isTypedArray = SharedAll.isTypedArray;
 
 // The constructor for file errors.
-var SysAll = {};
+var SysAll;
 if (SharedAll.Constants.Win) {
-  ChromeUtils.import(
-    "resource://gre/modules/osfile/osfile_win_allthreads.jsm",
-    SysAll
+  SysAll = ChromeUtils.import(
+    "resource://gre/modules/osfile/osfile_win_allthreads.jsm"
   );
 } else if (SharedAll.Constants.libc) {
-  ChromeUtils.import(
-    "resource://gre/modules/osfile/osfile_unix_allthreads.jsm",
-    SysAll
+  SysAll = ChromeUtils.import(
+    "resource://gre/modules/osfile/osfile_unix_allthreads.jsm"
   );
 } else {
   throw new Error("I am neither under Windows nor under a Posix system");
@@ -52,8 +49,7 @@ if (SharedAll.Constants.Win) {
 var OSError = SysAll.Error;
 var Type = SysAll.Type;
 
-var Path = {};
-ChromeUtils.import("resource://gre/modules/osfile/ospath.jsm", Path);
+var Path = ChromeUtils.import("resource://gre/modules/osfile/ospath.jsm");
 
 // The library of promises.
 ChromeUtils.defineModuleGetter(
@@ -71,8 +67,7 @@ const { AsyncShutdown } = ChromeUtils.import(
   "resource://gre/modules/AsyncShutdown.jsm"
 );
 var Native = ChromeUtils.import(
-  "resource://gre/modules/osfile/osfile_native.jsm",
-  null
+  "resource://gre/modules/osfile/osfile_native.jsm"
 );
 
 // It's possible for osfile.jsm to get imported before the profile is
@@ -166,10 +161,7 @@ function summarizeObject(obj) {
   return obj;
 }
 
-// In order to expose Scheduler to the unfiltered Cu.import return value variant
-// on B2G we need to save it to `this`.  This does not make it public;
-// EXPORTED_SYMBOLS still controls that in all cases.
-var Scheduler = (this.Scheduler = {
+var Scheduler = {
   /**
    * |true| once we have sent at least one message to the worker.
    * This field is unaffected by resetting the worker.
@@ -555,7 +547,7 @@ var Scheduler = (this.Scheduler = {
       worker.workerTimeStamps.loaded - worker.launchTimeStamp
     );
   },
-});
+};
 
 const PREF_OSFILE_LOG = "toolkit.osfile.log";
 const PREF_OSFILE_LOG_REDIRECT = "toolkit.osfile.log.redirect";
@@ -1120,73 +1112,6 @@ File.remove = function remove(path, options) {
   return Scheduler.post("remove", [Type.path.toMsg(path), options], path);
 };
 
-// Extended attribute functions are MacOS only at this point.
-if (SharedAll.Constants.Sys.Name == "Darwin") {
-  /**
-   * Get an extended attribute (xattr) from a file.
-   *
-   * @param {string} path The name of the file.
-   * @param {string} name The name of the extended attribute.
-   *
-   * @returns {promise}
-   * @resolves {Uint8Array} An array containing the value of the attribute.
-   * @rejects {OS.File.Error} In case of an I/O error or invalid options.
-   */
-  File.macGetXAttr = function macGetXAttr(path, name) {
-    let promise = Scheduler.post(
-      "macGetXAttr",
-      [Type.path.toMsg(path), Type.cstring.toMsg(name)],
-      [path, name]
-    );
-    return promise.then(data => {
-      return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
-    });
-  };
-
-  /**
-   * Remove an extended attribute (xattr) from a file.
-   *
-   * @param {string} path The name of the file.
-   * @param {string} name The name of the extended attribute.
-   *
-   * @returns {promise}
-   * @resolves {null}
-   * @rejects {OS.File.Error} In case of an I/O error.
-   */
-  File.macRemoveXAttr = function macRemoveXAttr(path, name) {
-    return Scheduler.post(
-      "macRemoveXAttr",
-      [Type.path.toMsg(path), Type.cstring.toMsg(name)],
-      [path, name]
-    );
-  };
-
-  /**
-   * Set an extended attribute (xattr) on a file.
-   *
-   * @param {string} path The name of the file.
-   * @param {string} name The name of the extended attribute.
-   * @param {Uint8Array} value A byte array containing the value to set the
-   * xattr to.
-   *
-   * @returns {promise}
-   * @resolves {null}
-   * @rejects {OS.File.Error} In case of an I/O error.
-   */
-  File.macSetXAttr = function macSetXAttr(path, name, value, number) {
-    return Scheduler.post(
-      "macSetXAttr",
-      [
-        Type.path.toMsg(path),
-        Type.cstring.toMsg(name),
-        Type.void_t.in_ptr.toMsg(value),
-        value.length,
-      ],
-      [path, name, value]
-    );
-  };
-}
-
 /**
  * Create a directory and, optionally, its parent directories.
  *
@@ -1374,29 +1299,10 @@ File.Info = function Info(value) {
   // Note that we can't just do this[k] = value[k] because our
   // prototype defines getters for all of these fields.
   for (let k in value) {
-    if (k != "creationDate") {
-      Object.defineProperty(this, k, { value: value[k] });
-    }
+    Object.defineProperty(this, k, { value: value[k] });
   }
-  Object.defineProperty(this, "_deprecatedCreationDate", {
-    value: value.creationDate,
-  });
 };
 File.Info.prototype = SysAll.AbstractInfo.prototype;
-
-// Deprecated
-Object.defineProperty(File.Info.prototype, "creationDate", {
-  get: function creationDate() {
-    let { Deprecated } = ChromeUtils.import(
-      "resource://gre/modules/Deprecated.jsm"
-    );
-    Deprecated.warning(
-      "Field 'creationDate' is deprecated.",
-      "https://developer.mozilla.org/en-US/docs/JavaScript_OS.File/OS.File.Info#Cross-platform_Attributes"
-    );
-    return this._deprecatedCreationDate;
-  },
-});
 
 File.Info.fromMsg = function fromMsg(value) {
   return new File.Info(value);

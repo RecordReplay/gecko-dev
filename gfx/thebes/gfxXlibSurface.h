@@ -8,7 +8,6 @@
 
 #include "gfxASurface.h"
 
-#include <X11/extensions/Xrender.h>
 #include <X11/Xlib.h>
 #include "X11UndefineNone.h"
 
@@ -36,11 +35,6 @@ class gfxXlibSurface final : public gfxASurface {
                  Drawable drawable, Visual* visual,
                  const mozilla::gfx::IntSize& size);
 
-  // construct a wrapper around the specified drawable with dpy/format,
-  // and known width/height.
-  gfxXlibSurface(::Screen* screen, Drawable drawable, XRenderPictFormat* format,
-                 const mozilla::gfx::IntSize& size);
-
   explicit gfxXlibSurface(cairo_surface_t* csurf);
 
   // create a new Pixmap and wrapper surface.
@@ -57,14 +51,9 @@ class gfxXlibSurface final : public gfxASurface {
   static cairo_surface_t* CreateCairoSurface(
       ::Screen* screen, Visual* visual, const mozilla::gfx::IntSize& size,
       Drawable relatedDrawable = X11None);
-  static already_AddRefed<gfxXlibSurface> Create(
-      ::Screen* screen, XRenderPictFormat* format,
-      const mozilla::gfx::IntSize& size, Drawable relatedDrawable = X11None);
 
   virtual ~gfxXlibSurface();
 
-  already_AddRefed<gfxASurface> CreateSimilarSurface(
-      gfxContentType aType, const mozilla::gfx::IntSize& aSize) override;
   void Finish() override;
 
   const mozilla::gfx::IntSize GetSize() const override;
@@ -72,12 +61,9 @@ class gfxXlibSurface final : public gfxASurface {
   Display* XDisplay() { return *mDisplay; }
   ::Screen* XScreen();
   Drawable XDrawable() { return mDrawable; }
-  XRenderPictFormat* XRenderFormat();
 
   static int DepthOfVisual(const ::Screen* screen, const Visual* visual);
   static Visual* FindVisual(::Screen* screen, gfxImageFormat format);
-  static XRenderPictFormat* FindRenderFormat(Display* dpy,
-                                             gfxImageFormat format);
   static bool GetColormapAndVisual(cairo_surface_t* aXlibSurface,
                                    Colormap* colormap, Visual** visual);
 
@@ -92,11 +78,6 @@ class gfxXlibSurface final : public gfxASurface {
 
   // Find a visual and colormap pair suitable for rendering to this surface.
   bool GetColormapAndVisual(Colormap* colormap, Visual** visual);
-
-  GLXPixmap GetGLXPixmap();
-  // Binds a GLXPixmap backed by this context's surface.
-  // Primarily for use in sharing surfaces.
-  void BindGLXPixmap(GLXPixmap aPixmap);
 
   // Return true if cairo will take its slow path when this surface is used
   // in a pattern with EXTEND_PAD.  As a workaround for XRender's RepeatPad
@@ -118,8 +99,6 @@ class gfxXlibSurface final : public gfxASurface {
   Drawable mDrawable;
 
   const mozilla::gfx::IntSize DoSizeQuery();
-
-  GLXPixmap mGLXPixmap;
 };
 
 #endif /* GFX_XLIBSURFACE_H */

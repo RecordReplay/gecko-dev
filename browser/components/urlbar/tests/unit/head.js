@@ -32,6 +32,14 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 });
 const { sinon } = ChromeUtils.import("resource://testing-common/Sinon.jsm");
 
+XPCOMUtils.defineLazyGetter(this, "QuickSuggestTestUtils", () => {
+  const { QuickSuggestTestUtils: module } = ChromeUtils.import(
+    "resource://testing-common/QuickSuggestTestUtils.jsm"
+  );
+  module.init(this);
+  return module;
+});
+
 SearchTestUtils.init(this);
 AddonTestUtils.init(this, false);
 AddonTestUtils.createAppInfo(
@@ -44,7 +52,7 @@ AddonTestUtils.createAppInfo(
 const SUGGESTIONS_ENGINE_NAME = "Suggestions";
 const TAIL_SUGGESTIONS_ENGINE_NAME = "Tail Suggestions";
 
-add_task(async function initXPCShellDependencies() {
+add_setup(async function initXPCShellDependencies() {
   await UrlbarTestUtils.initXPCShellDependencies();
 });
 
@@ -921,6 +929,11 @@ async function check_results({
       expected.heuristic,
       `result.heuristic at result index ${i}`
     );
+    Assert.equal(
+      actual.isBestMatch,
+      expected.isBestMatch,
+      `result.isBestMatch at result index ${i}`
+    );
     if (expected.providerName) {
       Assert.equal(
         actual.providerName,
@@ -928,11 +941,14 @@ async function check_results({
         `result.providerName at result index ${i}`
       );
     }
-    Assert.deepEqual(
-      getPayload(actual),
-      getPayload(expected),
-      `result.payload at result index ${i}`
-    );
+
+    if (expected.payload) {
+      Assert.deepEqual(
+        getPayload(actual),
+        getPayload(expected),
+        `result.payload at result index ${i}`
+      );
+    }
   }
 }
 

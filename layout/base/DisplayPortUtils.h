@@ -16,24 +16,15 @@
 
 class nsIContent;
 class nsIFrame;
-class nsDisplayListBuilder;
 class nsPresContext;
 
 namespace mozilla {
 
+class nsDisplayListBuilder;
 class PresShell;
 
 // For GetDisplayPort
 enum class DisplayportRelativeTo { ScrollPort, ScrollFrame };
-
-enum class MaxSizeExceededBehaviour {
-  // Ask GetDisplayPort to assert if the calculated displayport exceeds
-  // the maximum allowed size.
-  Assert,
-  // Ask GetDisplayPort to pretend like there's no displayport at all, if
-  // the calculated displayport exceeds the maximum allowed size.
-  Drop,
-};
 
 // Is the displayport being applied to scrolled content or fixed content?
 enum class ContentGeometryType { Scrolled, Fixed };
@@ -41,20 +32,12 @@ enum class ContentGeometryType { Scrolled, Fixed };
 struct DisplayPortOptions {
   // The default options.
   DisplayportRelativeTo mRelativeTo = DisplayportRelativeTo::ScrollPort;
-  MaxSizeExceededBehaviour mMaxSizeExceededBehaviour =
-      MaxSizeExceededBehaviour::Assert;
   ContentGeometryType mGeometryType = ContentGeometryType::Scrolled;
 
   // Fluent interface for changing the defaults.
   DisplayPortOptions With(DisplayportRelativeTo aRelativeTo) const {
     DisplayPortOptions result = *this;
     result.mRelativeTo = aRelativeTo;
-    return result;
-  }
-  DisplayPortOptions With(
-      MaxSizeExceededBehaviour aMaxSizeExceededBehaviour) const {
-    DisplayPortOptions result = *this;
-    result.mMaxSizeExceededBehaviour = aMaxSizeExceededBehaviour;
     return result;
   }
   DisplayPortOptions With(ContentGeometryType aGeometryType) const {
@@ -198,20 +181,13 @@ class DisplayPortUtils {
   static bool IsMissingDisplayPortBaseRect(nsIContent* aContent);
 
   /**
-   * Go through the IPC Channel and update displayport margins for content
-   * elements based on UpdateFrame messages. The messages are left in the
-   * queue and will be fully processed when dequeued. The aim is to paint
-   * the most up-to-date displayport without waiting for these message to
-   * go through the message queue.
-   */
-  static void UpdateDisplayPortMarginsFromPendingMessages();
-
-  /**
    * @return the display port for the given element which should be used for
    * visibility testing purposes, relative to the scroll frame.
    *
-   * If low-precision buffers are enabled, this is the critical display port;
-   * otherwise, it's the same display port returned by GetDisplayPort().
+   * This is the display port computed with a multipler of 1 which is the normal
+   * display port unless low-precision buffers are enabled. If low-precision
+   * buffers are enabled then GetDisplayPort() uses a multiplier to expand the
+   * displayport, so this will differ from GetDisplayPort.
    */
   static bool GetDisplayPortForVisibilityTesting(nsIContent* aContent,
                                                  nsRect* aResult);
@@ -258,26 +234,6 @@ class DisplayPortUtils {
   static void SetDisplayPortBase(nsIContent* aContent, const nsRect& aBase);
   static void SetDisplayPortBaseIfNotSet(nsIContent* aContent,
                                          const nsRect& aBase);
-
-  /**
-   * Get the critical display port for the given element.
-   */
-  static bool GetCriticalDisplayPort(
-      nsIContent* aContent, nsRect* aResult,
-      const DisplayPortOptions& aOptions = DisplayPortOptions());
-
-  /**
-   * Check whether the given element has a critical display port.
-   */
-  static bool HasCriticalDisplayPort(nsIContent* aContent);
-
-  /**
-   * If low-precision painting is turned on, delegates to
-   * GetCriticalDisplayPort. Otherwise, delegates to GetDisplayPort.
-   */
-  static bool GetHighResolutionDisplayPort(
-      nsIContent* aContent, nsRect* aResult,
-      const DisplayPortOptions& aOptions = DisplayPortOptions());
 
   /**
    * Remove the displayport for the given element.

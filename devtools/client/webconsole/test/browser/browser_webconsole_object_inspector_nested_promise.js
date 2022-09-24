@@ -5,7 +5,7 @@
 
 // Check evaluating and expanding promises in the console.
 const TEST_URI =
-  "data:text/html;charset=utf8," +
+  "data:text/html;charset=utf8,<!DOCTYPE html>" +
   "<h1>Object Inspector on deeply nested promises</h1>";
 
 add_task(async function testExpandNestedPromise() {
@@ -13,25 +13,27 @@ add_task(async function testExpandNestedPromise() {
 
   await SpecialPowers.spawn(gBrowser.selectedBrowser, [], function() {
     let nestedPromise = Promise.resolve({});
-    for (let i = 0; i < 5; ++i) {
+    for (let i = 5; i > 0; --i) {
+      nestedPromise[i] = i;
       Object.setPrototypeOf(nestedPromise, null);
       nestedPromise = Promise.resolve(nestedPromise);
     }
+    nestedPromise[0] = 0;
     content.wrappedJSObject.console.log("oi-test", nestedPromise);
   });
 
-  const node = await waitFor(() => findMessage(hud, "oi-test"));
+  const node = await waitFor(() => findConsoleAPIMessage(hud, "oi-test"));
   const oi = node.querySelector(".tree");
   const [promiseNode] = getObjectInspectorNodes(oi);
 
   expandObjectInspectorNode(promiseNode);
   await waitFor(() => getObjectInspectorNodes(oi).length > 1);
-  checkChildren(promiseNode, [`<state>`, `<value>`]);
+  checkChildren(promiseNode, [`0`, `<state>`, `<value>`, `<prototype>`]);
 
   const valueNode = findObjectInspectorNode(oi, "<value>");
   expandObjectInspectorNode(valueNode);
   await waitFor(() => getObjectInspectorChildrenNodes(valueNode).length > 0);
-  checkChildren(valueNode, [`<state>`, `<value>`]);
+  checkChildren(valueNode, [`1`, `<state>`, `<value>`]);
 });
 
 add_task(async function testExpandCyclicPromise() {
@@ -43,30 +45,32 @@ add_task(async function testExpandCyclicPromise() {
       resolve = r;
     });
     Object.setPrototypeOf(cyclicPromise, null);
+    cyclicPromise.foo = "foo";
     const otherPromise = Promise.reject(cyclicPromise);
     otherPromise.catch(() => {});
     Object.setPrototypeOf(otherPromise, null);
+    otherPromise.bar = "bar";
     resolve(otherPromise);
     content.wrappedJSObject.console.log("oi-test", cyclicPromise);
   });
 
-  const node = await waitFor(() => findMessage(hud, "oi-test"));
+  const node = await waitFor(() => findConsoleAPIMessage(hud, "oi-test"));
   const oi = node.querySelector(".tree");
   const [promiseNode] = getObjectInspectorNodes(oi);
 
   expandObjectInspectorNode(promiseNode);
   await waitFor(() => getObjectInspectorNodes(oi).length > 1);
-  checkChildren(promiseNode, [`<state>`, `<value>`]);
+  checkChildren(promiseNode, [`foo`, `<state>`, `<value>`]);
 
   const valueNode = findObjectInspectorNode(oi, "<value>");
   expandObjectInspectorNode(valueNode);
   await waitFor(() => getObjectInspectorChildrenNodes(valueNode).length > 0);
-  checkChildren(valueNode, [`<state>`, `<reason>`]);
+  checkChildren(valueNode, [`bar`, `<state>`, `<reason>`]);
 
   const reasonNode = findObjectInspectorNode(oi, "<reason>");
   expandObjectInspectorNode(reasonNode);
   await waitFor(() => getObjectInspectorChildrenNodes(reasonNode).length > 0);
-  checkChildren(reasonNode, [`<state>`, `<value>`]);
+  checkChildren(reasonNode, [`foo`, `<state>`, `<value>`]);
 });
 
 function checkChildren(node, expectedChildren) {
@@ -77,9 +81,10 @@ function checkChildren(node, expectedChildren) {
     "There is the expected number of children"
   );
   children.forEach((child, index) => {
-    ok(
-      child.textContent.includes(expectedChildren[index]),
-      `Expected "${expectedChildren[index]}" child`
+    is(
+      child.querySelector(".object-label").textContent,
+      expectedChildren[index],
+      `Found correct child at index ${index}`
     );
   });
 }

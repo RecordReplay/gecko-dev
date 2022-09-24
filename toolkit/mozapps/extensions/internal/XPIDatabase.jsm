@@ -20,12 +20,17 @@ const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+XPCOMUtils.defineLazyServiceGetters(this, {
+  ThirdPartyUtil: ["@mozilla.org/thirdpartyutil;1", "mozIThirdPartyUtil"],
+});
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   AddonManager: "resource://gre/modules/AddonManager.jsm",
   AddonManagerPrivate: "resource://gre/modules/AddonManager.jsm",
   AddonRepository: "resource://gre/modules/addons/AddonRepository.jsm",
   AddonSettings: "resource://gre/modules/addons/AddonSettings.jsm",
   DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  ExtensionData: "resource://gre/modules/Extension.jsm",
   ExtensionUtils: "resource://gre/modules/ExtensionUtils.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   PermissionsUtils: "resource://gre/modules/PermissionsUtils.jsm",
@@ -96,7 +101,6 @@ const PENDING_INSTALL_METADATA = [
   "userDisabled",
   "softDisabled",
   "embedderDisabled",
-  "existingAddonID",
   "sourceURI",
   "releaseNotesURI",
   "installDate",
@@ -113,6 +117,8 @@ const PROP_JSON_FIELDS = [
   "type",
   "loader",
   "updateURL",
+  "installOrigins",
+  "manifestVersion",
   "optionsURL",
   "optionsType",
   "optionsBrowserStyle",
@@ -144,6 +150,8 @@ const PROP_JSON_FIELDS = [
   "incognito",
   "userPermissions",
   "optionalPermissions",
+  "sitePermissions",
+  "siteOrigin",
   "icons",
   "iconURL",
   "blocklistState",
@@ -156,15 +164,17 @@ const PROP_JSON_FIELDS = [
   "rootURI",
 ];
 
-const SIGNED_TYPES = new Set(["extension", "locale", "theme"]);
+const SIGNED_TYPES = new Set([
+  "extension",
+  "locale",
+  "theme",
+  "sitepermission",
+]);
 
 // Time to wait before async save of XPI JSON database, in milliseconds
 const ASYNC_SAVE_DELAY_MS = 20;
 
-const LOCALE_BUNDLES = [
-  "chrome://global/locale/global-extension-fields.properties",
-  "chrome://global/locale/app-extension-fields.properties",
-].map(url => Services.strings.createBundle(url));
+const l10n = new Localization(["browser/appExtensionFields.ftl"], true);
 
 /**
  * Schedules an idle task, and returns a promise which resolves to an
@@ -333,6 +343,77 @@ class AddonInternal {
     return XPIInternal.maybeResolveURI(Services.io.newURI(this.rootURI));
   }
 
+  /**
+   * Validate a list of origins are contained in the installOrigins array (defined in manifest.json).
+   *
+   * SitePermission addons are a special case, where the triggering install site may be a subdomain
+   * of a valid xpi origin.
+   *
+   * @param {Object}  origins             Object containing URIs related to install.
+   * @params {nsIURI} origins.installFrom The nsIURI of the website that has triggered the install flow.
+   * @params {nsIURI} origins.source      The nsIURI where the xpi is hosted.
+   * @returns {boolean}
+   */
+  validInstallOrigins({ installFrom, source }) {
+    if (
+      !Services.prefs.getBoolPref("extensions.install_origins.enabled", true)
+    ) {
+      return true;
+    }
+
+    let { installOrigins, manifestVersion } = this;
+    if (!installOrigins) {
+      // Install origins are mandatory in MV3 and optional
+      // in MV2.  Old addons need to keep installing per the
+      // old install flow.
+      return manifestVersion < 3;
+    }
+    // An empty install_origins prevents any install from 3rd party websites.
+    if (!installOrigins.length) {
+      return false;
+    }
+
+    if (this.type == "sitepermission") {
+      // NOTE: This may move into a check for all addons later.
+      for (let origin of installOrigins) {
+        let host = new URL(origin).host;
+        // install_origin cannot be on a known etld (e.g. github.io).
+        if (Services.eTLD.getKnownPublicSuffixFromHost(host) == host) {
+          logger.warn(
+            `Addon ${this.id} Installation not allowed from the install_origin ${host} that is an eTLD`
+          );
+          return false;
+        }
+      }
+
+      if (!installOrigins.includes(new URL(source.spec).origin)) {
+        logger.warn(
+          `Addon ${this.id} Installation not allowed, "${source.spec}" is not included in the Addon install_origins`
+        );
+        return false;
+      }
+
+      if (ThirdPartyUtil.isThirdPartyURI(source, installFrom)) {
+        logger.warn(
+          `Addon ${this.id} Installation not allowed, installFrom "${installFrom.spec}" is third party to the Addon install_origins`
+        );
+        return false;
+      }
+
+      return true;
+    }
+
+    for (const [name, uri] of Object.entries({ installFrom, source })) {
+      if (!installOrigins.includes(new URL(uri.spec).origin)) {
+        logger.warn(
+          `Addon ${this.id} Installation not allowed, ${name} "${uri.spec}" is not included in the Addon install_origins`
+        );
+        return false;
+      }
+    }
+    return true;
+  }
+
   addedToDatabase() {
     this._key = `${this.location.name}:${this.id}`;
     this.inDatabase = true;
@@ -437,17 +518,22 @@ class AddonInternal {
     return this.isCompatibleWith();
   }
 
-  // This matches Extension.isPrivileged with the exception of temporarily installed extensions.
   get isPrivileged() {
-    return (
-      this.signedState === AddonManager.SIGNEDSTATE_PRIVILEGED ||
-      this.signedState === AddonManager.SIGNEDSTATE_SYSTEM ||
-      this.location.isBuiltin
-    );
+    return ExtensionData.getIsPrivileged({
+      signedState: this.signedState,
+      builtIn: this.location.isBuiltin,
+      temporarilyInstalled: this.location.isTemporary,
+    });
   }
 
   get hidden() {
-    return this.location.hidden || (this._hidden && this.isPrivileged) || false;
+    return (
+      this.location.hidden ||
+      // The hidden flag is intended to only be used for features that are part
+      // of the application. Temporary add-ons should not be hidden.
+      (this._hidden && this.isPrivileged && !this.location.isTemporary) ||
+      false
+    );
   }
 
   set hidden(val) {
@@ -747,7 +833,7 @@ class AddonInternal {
     // when the extension has opted out or it gets the permission automatically
     // on every extension startup (as system, privileged and builtin addons).
     if (
-      this.type === "extension" &&
+      (this.type === "extension" || this.type == "sitepermission") &&
       this.incognito !== "not_allowed" &&
       this.signedState !== AddonManager.SIGNEDSTATE_PRIVILEGED &&
       this.signedState !== AddonManager.SIGNEDSTATE_SYSTEM &&
@@ -784,6 +870,9 @@ class AddonInternal {
 /**
  * The AddonWrapper wraps an Addon to provide the data visible to consumers of
  * the public API.
+ *
+ * NOTE: Do not add any new logic here.  Add it to AddonInternal and expose
+ * through defineAddonWrapperProperty after this class definition.
  *
  * @param {AddonInternal} aAddon
  *        The add-on object to wrap.
@@ -1325,15 +1414,6 @@ function chooseValue(aAddon, aObj, aProp) {
     return [repositoryAddon[aProp], true];
   }
 
-  let id = `extension.${aAddon.id}.${aProp}`;
-  for (let bundle of LOCALE_BUNDLES) {
-    try {
-      return [bundle.GetStringFromName(id), false];
-    } catch (e) {
-      // Ignore missing overrides.
-    }
-  }
-
   return [objValue, false];
 }
 
@@ -1360,8 +1440,13 @@ function defineAddonWrapperProperty(name, getter) {
   "foreignInstall",
   "strictCompatibility",
   "updateURL",
+  "installOrigins",
+  "manifestVersion",
+  "validInstallOrigins",
   "dependencies",
   "signedState",
+  "sitePermissions",
+  "siteOrigin",
   "isCorrectlySigned",
 ].forEach(function(aProp) {
   defineAddonWrapperProperty(aProp, function() {
@@ -1431,9 +1516,65 @@ defineAddonWrapperProperty("signedDate", function() {
   });
 });
 
+// Add to this Map if you need to change an addon's Fluent ID. Keep it in sync
+// with the list in browser_verify_l10n_strings.js
+const updatedAddonFluentIds = new Map([
+  ["extension-default-theme-name", "extension-default-theme-name-auto"],
+]);
+
 ["name", "description", "creator", "homepageURL"].forEach(function(aProp) {
   defineAddonWrapperProperty(aProp, function() {
     let addon = addonFor(this);
+
+    let formattedMessage;
+    // We want to make sure that all built-in themes that are localizable can
+    // actually localized, particularly those for thunderbird and desktop.
+    if (
+      (aProp === "name" || aProp === "description") &&
+      addon.location.name === KEY_APP_BUILTINS &&
+      addon.type === "theme"
+    ) {
+      // Built-in themes are localized with Fluent instead of the WebExtension API.
+      let addonIdPrefix = addon.id.replace("@mozilla.org", "");
+      const colorwaySuffix = "colorway";
+      if (addonIdPrefix.endsWith(colorwaySuffix)) {
+        if (aProp == "description") {
+          // Colorway themes do not have a description.
+          return null;
+        }
+        // Colorway themes combine an unlocalized color name with a localized
+        // variant name. Their ids have the format
+        // {colorName}-{variantName}-colorway@mozilla.org. The variant name may
+        // be omitted ({colorName}-colorway@mozilla.org), in which case the
+        // unlocalized name from the theme's manifest will be used.
+        let [colorName, variantName] = addonIdPrefix.split("-", 2);
+        if (variantName == colorwaySuffix) {
+          // This theme doesn't have a localized variant name.
+          return addon.defaultLocale.name;
+        }
+        // We're not using toLocaleUpperCase because these color names are
+        // always in English.
+        colorName = colorName[0].toUpperCase() + colorName.slice(1);
+        let defaultFluentId = `extension-colorways-${variantName}-name`;
+        let fluentId =
+          updatedAddonFluentIds.get(defaultFluentId) || defaultFluentId;
+        [formattedMessage] = l10n.formatMessagesSync([
+          {
+            id: fluentId,
+            args: {
+              "colorway-name": colorName,
+            },
+          },
+        ]);
+      } else {
+        let defaultFluentId = `extension-${addonIdPrefix}-${aProp}`;
+        let fluentId =
+          updatedAddonFluentIds.get(defaultFluentId) || defaultFluentId;
+        [formattedMessage] = l10n.formatMessagesSync([{ id: fluentId }]);
+      }
+
+      return formattedMessage.value;
+    }
 
     let [result, usedRepository] = chooseValue(
       addon,
@@ -1566,7 +1707,7 @@ this.XPIDatabase = {
       logger.warn("Failed to save XPI database", error);
       this._saveError = error;
 
-      if (!(error instanceof DOMException) || error.name !== "AbortError") {
+      if (!DOMException.isInstance(error) || error.name !== "AbortError") {
         throw error;
       }
     }
@@ -1776,7 +1917,7 @@ this.XPIDatabase = {
         await this.maybeIdleDispatch();
         await this.parseDB(json, true);
       } catch (error) {
-        if (error instanceof DOMException && error.name === "NotFoundError") {
+        if (DOMException.isInstance(error) && error.name === "NotFoundError") {
           if (Services.prefs.getIntPref(PREF_DB_SCHEMA, 0)) {
             this._recordStartupError("dbMissing");
           }

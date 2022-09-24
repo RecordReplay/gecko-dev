@@ -16,9 +16,12 @@
 #include "nsTArray.h"
 #include "nsIWidget.h"
 #include "mozilla/CheckedInt.h"
+#include "mozilla/ContentData.h"
 #include "mozilla/EventForwards.h"
+#include "mozilla/Maybe.h"
 #include "mozilla/TextEventDispatcherListener.h"
-#include "WritingModes.h"
+#include "mozilla/WritingModes.h"
+#include "mozilla/widget/IMEData.h"
 
 class nsWindow;
 
@@ -171,6 +174,12 @@ class IMContextWrapper final : public TextEventDispatcherListener {
 
  protected:
   ~IMContextWrapper();
+
+  /**
+   * SetInputPurposeAndInputHints() sets input-purpose and input-hints of
+   * current IM context to the values computed with mInputContext.
+   */
+  void SetInputPurposeAndInputHints();
 
   // Owner of an instance of this class. This should be top level window.
   // The owner window must release the contexts when it's destroyed because
@@ -381,47 +390,39 @@ class IMContextWrapper final : public TextEventDispatcherListener {
   // IM which user selected.
   IMContextID mIMContextID;
 
-  struct Selection final {
-    nsString mString;
-    uint32_t mOffset;
-    WritingMode mWritingMode;
+  // If mContentSelection is Nothing, it means that
+  // EnsureToCacheContentSelection failed to get selection or just not caching
+  // the selection.
+  Maybe<ContentSelection> mContentSelection;
 
-    Selection() : mOffset(UINT32_MAX) {}
+  /**
+   * Return true if mContentSelection is set to some.  Otherwise, false.
+   */
+  bool EnsureToCacheContentSelection(nsAString* aSelectedString = nullptr);
 
-    void Clear() {
-      mString.Truncate();
-      mOffset = UINT32_MAX;
-      mWritingMode = WritingMode();
+  enum class IMEFocusState : uint8_t {
+    // IME has focus
+    Focused,
+    // IME was blurred
+    Blurred,
+    // IME was blurred without a focus change
+    BlurredWithoutFocusChange,
+  };
+  friend std::ostream& operator<<(std::ostream& aStream, IMEFocusState aState) {
+    switch (aState) {
+      case IMEFocusState::Focused:
+        return aStream << "IMEFocusState::Focused";
+      case IMEFocusState::Blurred:
+        return aStream << "IMEFocusState::Blurred";
+      case IMEFocusState::BlurredWithoutFocusChange:
+        return aStream << "IMEFocusState::BlurredWithoutFocusChange";
+      default:
+        MOZ_ASSERT_UNREACHABLE("Invalid value");
+        return aStream << "<illegal value>";
     }
-    void CollapseTo(uint32_t aOffset, const WritingMode& aWritingMode) {
-      mWritingMode = aWritingMode;
-      mOffset = aOffset;
-      mString.Truncate();
-    }
+  }
+  IMEFocusState mIMEFocusState = IMEFocusState::Blurred;
 
-    void Assign(const IMENotification& aIMENotification);
-    void Assign(const WidgetQueryContentEvent& aSelectedTextEvent);
-
-    bool IsValid() const { return mOffset != UINT32_MAX; }
-    bool Collapsed() const { return mString.IsEmpty(); }
-    uint32_t Length() const { return mString.Length(); }
-    uint32_t EndOffset() const {
-      if (NS_WARN_IF(!IsValid())) {
-        return UINT32_MAX;
-      }
-      CheckedInt<uint32_t> endOffset =
-          CheckedInt<uint32_t>(mOffset) + mString.Length();
-      if (NS_WARN_IF(!endOffset.isValid())) {
-        return UINT32_MAX;
-      }
-      return endOffset.value();
-    }
-  } mSelection;
-  bool EnsureToCacheSelection(nsAString* aSelectedString = nullptr);
-
-  // mIsIMFocused is set to TRUE when we call gtk_im_context_focus_in(). And
-  // it's set to FALSE when we call gtk_im_context_focus_out().
-  bool mIsIMFocused;
   // mFallbackToKeyEvent is set to false when this class starts to handle
   // a native key event (at that time, mProcessingKeyEvent is set to the
   // native event).  If active IME just commits composition with a character
@@ -477,6 +478,9 @@ class IMContextWrapper final : public TextEventDispatcherListener {
   // mIsKeySnooped is set to true if IM uses key snooper to listen key events.
   // In such case, we won't receive key events if IME consumes the event.
   bool mIsKeySnooped;
+  // mSetInputPurposeAndInputHints is set if `SetInputContext` wants `Focus`
+  // to set input-purpose and input-hints.
+  bool mSetInputPurposeAndInputHints;
 
   // sLastFocusedContext is a pointer to the last focused instance of this
   // class.  When a instance is destroyed and sLastFocusedContext refers it,
@@ -534,11 +538,7 @@ class IMContextWrapper final : public TextEventDispatcherListener {
   // If the owner window and IM context have been destroyed, returns TRUE.
   bool IsDestroyed() { return !mOwnerWindow; }
 
-  // Sets focus to the instance of this class.
-  void Focus();
-
-  // Steals focus from the instance of this class.
-  void Blur();
+  void NotifyIMEOfFocusChange(IMEFocusState aIMEFocusState);
 
   // Initializes the instance.
   void Init();

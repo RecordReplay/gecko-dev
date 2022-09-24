@@ -12,17 +12,19 @@ namespace layers {
 SmoothMsdScrollAnimation::SmoothMsdScrollAnimation(
     AsyncPanZoomController& aApzc, const CSSPoint& aInitialPosition,
     const CSSPoint& aInitialVelocity, const CSSPoint& aDestination,
-    double aSpringConstant, double aDampingRatio)
+    double aSpringConstant, double aDampingRatio,
+    ScrollTriggeredByScript aTriggeredByScript)
     : mApzc(aApzc),
       mXAxisModel(aInitialPosition.x, aDestination.x, aInitialVelocity.x,
                   aSpringConstant, aDampingRatio),
       mYAxisModel(aInitialPosition.y, aDestination.y, aInitialVelocity.y,
-                  aSpringConstant, aDampingRatio) {}
+                  aSpringConstant, aDampingRatio),
+      mTriggeredByScript(aTriggeredByScript) {}
 
 bool SmoothMsdScrollAnimation::DoSample(FrameMetrics& aFrameMetrics,
                                         const TimeDuration& aDelta) {
-  CSSToParentLayerScale2D zoom = aFrameMetrics.GetZoom();
-  if (zoom == CSSToParentLayerScale2D(0, 0)) {
+  CSSToParentLayerScale zoom(aFrameMetrics.GetZoom());
+  if (zoom == CSSToParentLayerScale(0)) {
     return false;
   }
   CSSPoint oneParentLayerPixel =
@@ -77,7 +79,7 @@ bool SmoothMsdScrollAnimation::DoSample(FrameMetrics& aFrameMetrics,
   // layout.css.scroll-behavior.damping-ratio preference is set to less than 1
   // (underdamped) or if a smooth scroll inherits velocity from a fling
   // gesture.
-  if (!IsZero(overscroll)) {
+  if (!IsZero(overscroll / zoom)) {
     // Hand off a fling with the remaining momentum to the next APZC in the
     // overscroll handoff chain.
 
@@ -113,9 +115,12 @@ bool SmoothMsdScrollAnimation::DoSample(FrameMetrics& aFrameMetrics,
   return true;
 }
 
-void SmoothMsdScrollAnimation::SetDestination(const CSSPoint& aNewDestination) {
+void SmoothMsdScrollAnimation::SetDestination(
+    const CSSPoint& aNewDestination,
+    ScrollTriggeredByScript aTriggeredByScript) {
   mXAxisModel.SetDestination(aNewDestination.x);
   mYAxisModel.SetDestination(aNewDestination.y);
+  mTriggeredByScript = aTriggeredByScript;
 }
 
 CSSPoint SmoothMsdScrollAnimation::GetDestination() const {

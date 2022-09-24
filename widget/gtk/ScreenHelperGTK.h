@@ -15,15 +15,30 @@
 #  include "X11UndefineNone.h"
 #endif
 
+class nsWindow;
+
 namespace mozilla {
 namespace widget {
 
-class ScreenHelperGTK final : public ScreenManager::Helper {
+class ScreenGetter {
  public:
-  ScreenHelperGTK();
-  ~ScreenHelperGTK() override;
+  ScreenGetter() = default;
+  virtual ~ScreenGetter(){};
 
-  static gint GetGTKMonitorScaleFactor(gint aMonitorNum = 0);
+  virtual void Init(){};
+
+  virtual void RefreshScreens(){};
+  virtual RefPtr<nsIScreen> GetScreenForWindow(nsWindow* aWindow) {
+    return nullptr;
+  }
+};
+
+class ScreenGetterGtk : public ScreenGetter {
+ public:
+  ScreenGetterGtk();
+  ~ScreenGetterGtk();
+
+  void Init();
 
 #ifdef MOZ_X11
   Atom NetWorkareaAtom() { return mNetWorkareaAtom; }
@@ -37,6 +52,49 @@ class ScreenHelperGTK final : public ScreenManager::Helper {
 #ifdef MOZ_X11
   Atom mNetWorkareaAtom;
 #endif
+};
+
+class ScreenGetterWayland;
+struct MonitorConfig;
+
+#ifdef MOZ_WAYLAND
+class ScreenGetterWayland : public ScreenGetter {
+ public:
+  ScreenGetterWayland();
+  ~ScreenGetterWayland();
+
+  void Init();
+
+  MonitorConfig* AddMonitorConfig(int aId);
+  bool RemoveMonitorConfig(int aId);
+  already_AddRefed<Screen> MakeScreenWayland(gint aMonitor);
+
+  RefPtr<nsIScreen> GetScreenForWindow(nsWindow* aWindow);
+
+  // For internal use from signal callback functions
+  void RefreshScreens();
+
+ private:
+  int GetMonitorForWindow(nsWindow* aWindow);
+  bool MonitorUsesNonIntegerScale(int aMonitor);
+
+ private:
+  void* mRegistry = nullptr;
+  // We use UniquePtr<> here to ensure that MonitorConfig is heap-allocated
+  // so it's not invalidated by any change to mMonitors that could happen in the
+  // meantime.
+  AutoTArray<UniquePtr<MonitorConfig>, 4> mMonitors;
+  AutoTArray<RefPtr<Screen>, 4> mScreenList;
+};
+#endif
+
+class ScreenHelperGTK final : public ScreenManager::Helper {
+ public:
+  ScreenHelperGTK();
+  ~ScreenHelperGTK();
+
+  static gint GetGTKMonitorScaleFactor(gint aMonitorNum = 0);
+  static RefPtr<nsIScreen> GetScreenForWindow(nsWindow* aWindow);
 };
 
 }  // namespace widget

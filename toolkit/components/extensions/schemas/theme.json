@@ -238,6 +238,10 @@
                 "$ref": "ThemeColor",
                 "optional": true
               },
+              "ntp_card_background": {
+                "$ref": "ThemeColor",
+                "optional": true
+              },
               "ntp_text": {
                 "$ref": "ThemeColor",
                 "optional": true
@@ -299,6 +303,16 @@
                 },
                 "maxItems": 15,
                 "optional": true
+              },
+              "color_scheme": {
+                "optional": true,
+                "type": "string",
+                "enum": ["auto", "light", "dark", "system"]
+              },
+              "content_color_scheme": {
+                "optional": true,
+                "type": "string",
+                "enum": ["auto", "light", "dark", "system"]
               }
             },
             "additionalProperties": { "type": "string" }

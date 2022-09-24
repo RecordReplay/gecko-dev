@@ -581,8 +581,12 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
 
     const result = this.getAppliedProps(node, entries, options);
     for (const rule of result.rules) {
-      // See the comment in |form| to understand this.
-      await rule.getAuthoredCssText();
+      try {
+        // See the comment in |StyleRuleActor.form| to understand this.
+        // This can throw if the authored rule text is not found (so e.g., with
+        // CSSOM or constructable stylesheets).
+        await rule.getAuthoredCssText();
+      } catch (ex) {}
     }
 
     // Reference to instances of StyleRuleActor for CSS rules matching the node.
@@ -725,34 +729,34 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
   // eslint-disable-next-line complexity
   _pseudoIsRelevant(node, pseudo) {
     switch (pseudo) {
-      case ":after":
-      case ":before":
-      case ":first-letter":
-      case ":first-line":
-      case ":selection":
+      case "::after":
+      case "::before":
+      case "::first-letter":
+      case "::first-line":
+      case "::selection":
         return true;
-      case ":marker":
+      case "::marker":
         return this._nodeIsListItem(node);
-      case ":backdrop":
+      case "::backdrop":
         return node.matches(":fullscreen");
-      case ":cue":
+      case "::cue":
         return node.nodeName == "VIDEO";
-      case ":file-selector-button":
+      case "::file-selector-button":
         return node.nodeName == "INPUT" && node.type == "file";
-      case ":placeholder":
-      case ":-moz-placeholder":
+      case "::placeholder":
+      case "::-moz-placeholder":
         return this._nodeIsTextfieldLike(node);
-      case ":-moz-focus-inner":
+      case "::-moz-focus-inner":
         return this._nodeIsButtonLike(node);
-      case ":-moz-meter-bar":
+      case "::-moz-meter-bar":
         return node.nodeName == "METER";
-      case ":-moz-progress-bar":
+      case "::-moz-progress-bar":
         return node.nodeName == "PROGRESS";
-      case ":-moz-color-swatch":
+      case "::-moz-color-swatch":
         return node.nodeName == "INPUT" && node.type == "color";
-      case ":-moz-range-progress":
-      case ":-moz-range-thumb":
-      case ":-moz-range-track":
+      case "::-moz-range-progress":
+      case "::-moz-range-thumb":
+      case "::-moz-range-track":
         return node.nodeName == "INPUT" && node.type == "range";
       default:
         throw Error("Unhandled pseudo-element " + pseudo);
@@ -1102,6 +1106,11 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
       kinds.add(kind);
 
       for (const styleActor of [...this.refMap.values()]) {
+        // Ignore StyleRuleActor that don't have a parent stylesheet.
+        // i.e. actor whose type is ELEMENT_STYLE.
+        if (!styleActor._parentSheet) {
+          continue;
+        }
         const resourceId = this.styleSheetsManager.getStyleSheetResourceId(
           styleActor._parentSheet
         );
@@ -1125,7 +1134,10 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
    * @returns DOMElement of the style tag
    */
   getStyleElement: function(document) {
-    if (!this.styleElements.has(document)) {
+    if (
+      !this.styleElements.has(document) ||
+      !this.styleElements.get(document).isConnected
+    ) {
       const style = document.createElementNS(XHTML_NS, "style");
       style.setAttribute("type", "text/css");
       style.setDevtoolsAsTriggeringPrincipal();
@@ -1161,7 +1173,10 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
     let sheet = null;
     if (this.hasStyleSheetWatcherSupport) {
       const doc = node.rawNode.ownerDocument;
-      if (this.styleElements.has(doc)) {
+      if (
+        this.styleElements.has(doc) &&
+        this.styleElements.get(doc).ownerNode?.isConnected
+      ) {
         sheet = this.styleElements.get(doc);
       } else {
         sheet = await this.styleSheetsManager.addStyleSheet(doc);
@@ -1195,7 +1210,7 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
       const resourceId = this.styleSheetsManager.getStyleSheetResourceId(sheet);
       let authoredText = await this.styleSheetsManager.getText(resourceId);
       authoredText += "\n" + selector + " {\n" + "}";
-      await this.styleSheetsManager.update(resourceId, authoredText, false);
+      await this.styleSheetsManager.setStyleSheetText(resourceId, authoredText);
     } else {
       // If inserting the rule succeeded, go ahead and edit the source
       // text if requested.
@@ -1267,7 +1282,8 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
       result,
       lcSearch,
       attributeType,
-      targetDocument
+      targetDocument,
+      node.rawNode
     );
     this._collectAttributesFromDocumentStyleSheets(
       result,
@@ -1287,12 +1303,14 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
    * @param {String} search: A string to filter attribute value on.
    * @param {String} attributeType: The type of attribute we want to retrieve the values.
    * @param {Document} targetDocument: The document the search occurs in.
+   * @param {Node} currentNode: The current element rawNode
    */
   _collectAttributesFromDocumentDOM(
     result,
     search,
     attributeType,
-    targetDocument
+    targetDocument,
+    nodeRawNode
   ) {
     // In order to retrieve attributes from DOM elements in the document, we're going to
     // do a query on the root node using attributes selector, to directly get the elements
@@ -1307,6 +1325,9 @@ var PageStyleActor = protocol.ActorClassWithSpec(pageStyleSpec, {
     const matchingElements = targetDocument.querySelectorAll(selector);
 
     for (const element of matchingElements) {
+      if (element === nodeRawNode) {
+        return;
+      }
       // For class attribute, we need to add the elements of the classList that match
       // the filter string.
       if (attributeType === "class") {

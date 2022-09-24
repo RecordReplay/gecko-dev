@@ -23,7 +23,6 @@
   locale/@AB_CD@/global/editMenuOverlay.dtd             (%chrome/global/editMenuOverlay.dtd)
 #endif
   locale/@AB_CD@/global/extensions.properties           (%chrome/global/extensions.properties)
-  locale/@AB_CD@/global/global-extension-fields.properties (%chrome/global/global-extension-fields.properties)
   locale/@AB_CD@/global/fallbackMenubar.properties      (%chrome/global/fallbackMenubar.properties)
   locale/@AB_CD@/global/filepicker.properties           (%chrome/global/filepicker.properties)
 #ifndef MOZ_FENNEC
@@ -44,8 +43,6 @@
   locale/@AB_CD@/global/resetProfile.properties         (%chrome/global/resetProfile.properties)
   locale/@AB_CD@/global/dialog.properties               (%chrome/global/dialog.properties)
   locale/@AB_CD@/global/tree.dtd                        (%chrome/global/tree.dtd)
-  locale/@AB_CD@/global/textcontext.dtd                 (%chrome/global/textcontext.dtd)
-  locale/@AB_CD@/global/videocontrols.dtd               (%chrome/global/videocontrols.dtd)
   locale/@AB_CD@/global/viewSource.properties           (%chrome/global/viewSource.properties)
   locale/@AB_CD@/global/wizard.properties               (%chrome/global/wizard.properties)
 % locale global-platform @AB_CD@ %locale/@AB_CD@/global-platform/unix/ os=LikeUnix os=Android
@@ -59,11 +56,7 @@
   locale/@AB_CD@/global-platform/win/intl.properties          (%chrome/global-platform/win/intl.properties)
 % locale mozapps @AB_CD@ %locale/@AB_CD@/mozapps/
   locale/@AB_CD@/mozapps/downloads/unknownContentType.properties  (%chrome/mozapps/downloads/unknownContentType.properties)
-  locale/@AB_CD@/mozapps/downloads/unknownContentType.dtd         (%chrome/mozapps/downloads/unknownContentType.dtd)
   locale/@AB_CD@/mozapps/downloads/downloads.properties           (%chrome/mozapps/downloads/downloads.properties)
-#ifndef MOZ_FENNEC
-  locale/@AB_CD@/mozapps/extensions/extensions.properties         (%chrome/mozapps/extensions/extensions.properties)
-#endif
   locale/@AB_CD@/mozapps/profile/profileSelection.properties      (%chrome/mozapps/profile/profileSelection.properties)
 #ifndef MOZ_FENNEC
   locale/@AB_CD@/mozapps/update/updates.properties                (%chrome/mozapps/update/updates.properties)

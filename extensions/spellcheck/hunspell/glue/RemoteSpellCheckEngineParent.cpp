@@ -23,6 +23,16 @@ mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvSetDictionary(
   return IPC_OK();
 }
 
+mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvSetDictionaries(
+    const nsTArray<nsCString>& aDictionaries,
+    SetDictionariesResolver&& aResolve) {
+  mSpellChecker->SetCurrentDictionaries(aDictionaries)
+      ->Then(
+          GetMainThreadSerialEventTarget(), __func__,
+          [aResolve]() { aResolve(true); }, [aResolve]() { aResolve(false); });
+  return IPC_OK();
+}
+
 mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvSetDictionaryFromList(
     nsTArray<nsCString>&& aList, SetDictionaryFromListResolver&& aResolve) {
   for (auto& dictionary : aList) {
@@ -53,14 +63,20 @@ mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvCheckAsync(
   return IPC_OK();
 }
 
-mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvCheckAndSuggest(
-    const nsString& aWord, bool* aIsMisspelled,
-    nsTArray<nsString>* aSuggestions) {
-  nsresult rv = mSpellChecker->CheckWord(aWord, aIsMisspelled, aSuggestions);
-  if (NS_FAILED(rv)) {
-    aSuggestions->Clear();
-    *aIsMisspelled = false;
-  }
+mozilla::ipc::IPCResult RemoteSpellcheckEngineParent::RecvSuggest(
+    const nsString& aWord, uint32_t aCount, SuggestResolver&& aResolve) {
+  nsTArray<nsString> suggestions;
+  mSpellChecker->Suggest(aWord, aCount)
+      ->Then(
+          GetMainThreadSerialEventTarget(), __func__,
+          [aResolve](CopyableTArray<nsString> aSuggestions) {
+            aResolve(std::move(aSuggestions));
+          },
+          [aResolve](nsresult aError) {
+            // No suggestions due to error
+            nsTArray<nsString> suggestions;
+            aResolve(std::move(suggestions));
+          });
   return IPC_OK();
 }
 

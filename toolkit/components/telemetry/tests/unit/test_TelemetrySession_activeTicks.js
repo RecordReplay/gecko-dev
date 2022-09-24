@@ -44,6 +44,8 @@ add_task(async function test_setup() {
   do_get_profile();
   // Make sure we don't generate unexpected pings due to pref changes.
   await setEmptyPrefWatchlist();
+  // Ensure FOG's init
+  Services.fog.initializeFOG();
 });
 
 add_task(async function test_record_activeTicks() {
@@ -65,6 +67,7 @@ add_task(async function test_record_activeTicks() {
         "TelemetrySession must record the expected number of active ticks (in scalars)."
       );
     }
+    Assert.equal(Glean.browserEngagement.activeTicks.testGetValue(), expected);
   };
 
   for (let i = 0; i < 3; i++) {

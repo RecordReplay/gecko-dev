@@ -95,6 +95,7 @@ Editor.modes = {
   css: { name: "css" },
   fs: { name: "x-shader/x-fragment" },
   haxe: { name: "haxe" },
+  http: { name: "http" },
   html: { name: "htmlmixed" },
   js: { name: "javascript" },
   text: { name: "text" },
@@ -136,6 +137,9 @@ function Editor(config) {
     tabSize: tabSize,
     contextMenu: null,
     matchBrackets: true,
+    highlightSelectionMatches: {
+      wordsOnly: true,
+    },
     extraKeys: {},
     indentWithTabs: useTabs,
     inputStyle: "accessibleTextArea",
@@ -177,6 +181,11 @@ function Editor(config) {
   // - it also inserts a character which feels weird
   this.config.extraKeys["Alt-B"] = false;
   this.config.extraKeys["Alt-F"] = false;
+
+  // Disable Ctrl/Cmd + U as it's used for "View Source". It's okay to disable Ctrl+U as
+  // the underlying command, `undoSelection`, isn't standard in input fields and isn't
+  // widely known.
+  this.config.extraKeys[Editor.accel("U")] = false;
 
   // Overwrite default config with user-provided, if needed.
   Object.keys(config).forEach(k => {

@@ -20,46 +20,73 @@ namespace ipc {
 class GeckoChildProcessHost;
 }
 
+/**
+ * Return the number of milliseconds of CPU time used since process start.
+ *
+ * @return NS_OK on success.
+ */
+nsresult GetCpuTimeSinceProcessStartInMs(uint64_t* aResult);
+
+/**
+ * Return the number of milliseconds of GPU time used since process start.
+ *
+ * @return NS_OK on success.
+ */
+nsresult GetGpuTimeSinceProcessStartInMs(uint64_t* aResult);
+
 // Process types. When updating this enum, please make sure to update
 // WebIDLProcType, ChromeUtils::RequestProcInfo and ProcTypeToWebIDL to
 // mirror the changes.
 enum class ProcType {
-  // These must match the ones in ContentParent.h, and E10SUtils.jsm
+  // These must match the ones in RemoteType.h, and E10SUtils.jsm
   Web,
   WebIsolated,
   File,
   Extension,
   PrivilegedAbout,
   PrivilegedMozilla,
-  WebLargeAllocation,
   WebCOOPCOEP,
-  // the rest matches GeckoProcessTypes.h
-  Browser,  // Default is named Browser here
-  IPDLUnitTest,
-  GMPlugin,
-  GPU,
-  VR,
-  RDD,
-  Socket,
-  RemoteSandboxBroker,
-#ifdef MOZ_ENABLE_FORKSERVER
-  ForkServer,
-#endif
+  WebServiceWorker,
+// the rest matches GeckoProcessTypes.h
+#define GECKO_PROCESS_TYPE(enum_value, enum_name, string_name, proc_typename, \
+                           process_bin_type, procinfo_typename,               \
+                           webidl_typename, allcaps_name)                     \
+  procinfo_typename,
+#define SKIP_PROCESS_TYPE_CONTENT
+#ifndef MOZ_ENABLE_FORKSERVER
+#  define SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#include "mozilla/GeckoProcessTypes.h"
+#undef SKIP_PROCESS_TYPE_CONTENT
+#ifndef MOZ_ENABLE_FORKSERVER
+#  undef SKIP_PROCESS_TYPE_FORKSERVER
+#endif  // MOZ_ENABLE_FORKSERVER
+#undef GECKO_PROCESS_TYPE
   Preallocated,
   // Unknown type of process
   Unknown,
   Max = Unknown,
 };
 
+enum class UtilityActorName {
+  Unknown,
+  AudioDecoder,
+};
+
+/* Get the CPU frequency to use to convert cycle time values to actual time.
+ * @returns the TSC (Time Stamp Counter) frequency in MHz, or 0 if converting
+ * cycle time values should not be attempted. */
+int GetCycleTimeFrequencyMHz();
+
 struct ThreadInfo {
   // Thread Id.
   base::ProcessId tid = 0;
   // Thread name, if any.
   nsString name;
-  // User time in ns.
-  uint64_t cpuUser = 0;
-  // System time in ns.
-  uint64_t cpuKernel = 0;
+  // CPU time in ns.
+  uint64_t cpuTime = 0;
+  // CPU time in cycles if available.
+  uint64_t cpuCycleCount = 0;
 };
 
 // Info on a DOM window.
@@ -94,6 +121,13 @@ struct WindowInfo {
   const bool isInProcess;
 };
 
+// Info on a Utility process actor
+struct UtilityInfo {
+  explicit UtilityInfo() : actorName(UtilityActorName::Unknown) {}
+  explicit UtilityInfo(UtilityActorName aActorName) : actorName(aActorName) {}
+  const UtilityActorName actorName;
+};
+
 struct ProcInfo {
   // Process Id
   base::ProcessId pid = 0;
@@ -103,20 +137,17 @@ struct ProcInfo {
   ProcType type;
   // Origin, if any
   nsCString origin;
-  // Process filename (without the path name).
-  nsString filename;
-  // RSS in bytes.
-  int64_t residentSetSize = 0;
-  // Unshared resident size in bytes.
-  int64_t residentUniqueSize = 0;
-  // User time in ns.
-  uint64_t cpuUser = 0;
-  // System time in ns.
-  uint64_t cpuKernel = 0;
+  // Memory size in bytes.
+  uint64_t memory = 0;
+  // CPU time in ns.
+  uint64_t cpuTime = 0;
+  uint64_t cpuCycleCount = 0;
   // Threads owned by this process.
   CopyableTArray<ThreadInfo> threads;
   // DOM windows represented by this process.
   CopyableTArray<WindowInfo> windows;
+  // Utility process actors, empty for non Utility process
+  CopyableTArray<UtilityInfo> utilityActors;
 };
 
 typedef MozPromise<mozilla::HashMap<base::ProcessId, ProcInfo>, nsresult, true>
@@ -135,7 +166,7 @@ typedef MozPromise<mozilla::HashMap<base::ProcessId, ProcInfo>, nsresult, true>
 struct ProcInfoRequest {
   ProcInfoRequest(base::ProcessId aPid, ProcType aProcessType,
                   const nsACString& aOrigin, nsTArray<WindowInfo>&& aWindowInfo,
-                  uint32_t aChildId = 0
+                  nsTArray<UtilityInfo>&& aUtilityInfo, uint32_t aChildId = 0
 #ifdef XP_MACOSX
                   ,
                   mach_port_t aChildTask = 0
@@ -145,6 +176,7 @@ struct ProcInfoRequest {
         processType(aProcessType),
         origin(aOrigin),
         windowInfo(std::move(aWindowInfo)),
+        utilityInfo(std::move(aUtilityInfo)),
         childId(aChildId)
 #ifdef XP_MACOSX
         ,
@@ -156,6 +188,7 @@ struct ProcInfoRequest {
   const ProcType processType;
   const nsCString origin;
   const nsTArray<WindowInfo> windowInfo;
+  const nsTArray<UtilityInfo> utilityInfo;
   // If the process is a child, its child id, otherwise `0`.
   const int32_t childId;
 #ifdef XP_MACOSX
@@ -204,6 +237,12 @@ struct ProcInfoRequest {
 RefPtr<ProcInfoPromise> GetProcInfo(nsTArray<ProcInfoRequest>&& aRequests);
 
 /**
+ * Synchronous version of GetProcInfo.
+ */
+ProcInfoPromise::ResolveOrRejectValue GetProcInfoSync(
+    nsTArray<ProcInfoRequest>&& aRequests);
+
+/**
  * Utility function: copy data from a `ProcInfo` and into either a
  * `ParentProcInfoDictionary` or a `ChildProcInfoDictionary`.
  */
@@ -211,11 +250,9 @@ template <typename T>
 nsresult CopySysProcInfoToDOM(const ProcInfo& source, T* dest) {
   // Copy system info.
   dest->mPid = source.pid;
-  dest->mFilename.Assign(source.filename);
-  dest->mResidentSetSize = source.residentSetSize;
-  dest->mResidentUniqueSize = source.residentUniqueSize;
-  dest->mCpuUser = source.cpuUser;
-  dest->mCpuKernel = source.cpuKernel;
+  dest->mMemory = source.memory;
+  dest->mCpuTime = source.cpuTime;
+  dest->mCpuCycleCount = source.cpuCycleCount;
 
   // Copy thread info.
   mozilla::dom::Sequence<mozilla::dom::ThreadInfoDictionary> threads;
@@ -225,8 +262,8 @@ nsresult CopySysProcInfoToDOM(const ProcInfo& source, T* dest) {
     if (NS_WARN_IF(!thread)) {
       return NS_ERROR_OUT_OF_MEMORY;
     }
-    thread->mCpuUser = entry.cpuUser;
-    thread->mCpuKernel = entry.cpuKernel;
+    thread->mCpuTime = entry.cpuTime;
+    thread->mCpuCycleCount = entry.cpuCycleCount;
     thread->mTid = entry.tid;
     thread->mName.Assign(entry.name);
   }

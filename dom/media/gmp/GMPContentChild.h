@@ -13,8 +13,7 @@
 #  include "mozilla/SandboxTestingChild.h"
 #endif
 
-namespace mozilla {
-namespace gmp {
+namespace mozilla::gmp {
 
 class GMPChild;
 
@@ -29,18 +28,18 @@ class GMPContentChild : public PGMPContentChild, public GMPSharedMem {
   MessageLoop* GMPMessageLoop();
 
   mozilla::ipc::IPCResult RecvPGMPVideoDecoderConstructor(
-      PGMPVideoDecoderChild* aActor, const uint32_t& aDecryptorId) override;
+      PGMPVideoDecoderChild* aActor) override;
   mozilla::ipc::IPCResult RecvPGMPVideoEncoderConstructor(
       PGMPVideoEncoderChild* aActor) override;
   mozilla::ipc::IPCResult RecvPChromiumCDMConstructor(
-      PChromiumCDMChild* aActor) override;
+      PChromiumCDMChild* aActor, const nsCString& aKeySystem) override;
 
-  already_AddRefed<PGMPVideoDecoderChild> AllocPGMPVideoDecoderChild(
-      const uint32_t& aDecryptorId);
+  already_AddRefed<PGMPVideoDecoderChild> AllocPGMPVideoDecoderChild();
 
   already_AddRefed<PGMPVideoEncoderChild> AllocPGMPVideoEncoderChild();
 
-  already_AddRefed<PChromiumCDMChild> AllocPChromiumCDMChild();
+  already_AddRefed<PChromiumCDMChild> AllocPChromiumCDMChild(
+      const nsCString& aKeySystem);
 
 #if defined(MOZ_SANDBOX) && defined(MOZ_DEBUG) && defined(ENABLE_TESTS)
   mozilla::ipc::IPCResult RecvInitSandboxTesting(
@@ -62,7 +61,6 @@ class GMPContentChild : public PGMPContentChild, public GMPSharedMem {
   ~GMPContentChild() = default;
 };
 
-}  // namespace gmp
-}  // namespace mozilla
+}  // namespace mozilla::gmp
 
 #endif  // GMPContentChild_h_

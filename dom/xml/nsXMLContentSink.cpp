@@ -52,6 +52,7 @@
 #include "mozilla/dom/txMozillaXSLTProcessor.h"
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/LoadInfo.h"
+#include "mozilla/UseCounter.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -378,7 +379,7 @@ nsresult nsXMLContentSink::OnTransformDone(Document* aSourceDocument,
     // documentElement?
     nsIContent* rootElement = mDocument->GetRootElement();
     if (rootElement) {
-      NS_ASSERTION(mDocument->ComputeIndexOf(rootElement) != -1,
+      NS_ASSERTION(mDocument->ComputeIndexOf(rootElement).isSome(),
                    "rootElement not in doc?");
       mDocument->BeginUpdate();
       MutationObservers::NotifyContentInserted(mDocument, rootElement);
@@ -389,7 +390,7 @@ nsresult nsXMLContentSink::OnTransformDone(Document* aSourceDocument,
     StartLayout(false);
 
     ScrollToRef();
-   }
+  }
 
   originalDocument->EndLoad();
   if (blockingOnload) {
@@ -430,8 +431,7 @@ nsXMLContentSink::StyleSheetLoaded(StyleSheet* aSheet, bool aWasDeferred,
 NS_IMETHODIMP
 nsXMLContentSink::WillInterrupt(void) { return WillInterruptImpl(); }
 
-NS_IMETHODIMP
-nsXMLContentSink::WillResume(void) { return WillResumeImpl(); }
+void nsXMLContentSink::WillResume() { WillResumeImpl(); }
 
 NS_IMETHODIMP
 nsXMLContentSink::SetParser(nsParserBase* aParser) {
@@ -504,7 +504,7 @@ nsresult nsXMLContentSink::CreateElement(
     if (!mPrettyPrintHasFactoredElements && !mPrettyPrintHasSpecialRoot &&
         mPrettyPrintXML) {
       mPrettyPrintHasFactoredElements =
-          nsContentUtils::NameSpaceManager()->HasElementCreator(
+          nsNameSpaceManager::GetInstance()->HasElementCreator(
               aNodeInfo->NamespaceID());
     }
 
@@ -575,11 +575,16 @@ nsresult nsXMLContentSink::CloseElement(nsIContent* aContent) {
     // Now tell the script that it's ready to go. This may execute the script
     // or return true, or neither if the script doesn't need executing.
     bool block = sele->AttemptToExecute();
+    if (mParser) {
+      if (block) {
+        GetParser()->BlockParser();
+      }
 
-    // If the parser got blocked, make sure to return the appropriate rv.
-    // I'm not sure if this is actually needed or not.
-    if (mParser && !mParser->IsParserEnabled()) {
-      block = true;
+      // If the parser got blocked, make sure to return the appropriate rv.
+      // I'm not sure if this is actually needed or not.
+      if (!mParser->IsParserEnabled()) {
+        block = true;
+      }
     }
 
     return block ? NS_ERROR_HTMLPARSER_BLOCK : NS_OK;
@@ -634,6 +639,7 @@ nsresult nsXMLContentSink::AddContentAsLeaf(nsIContent* aContent) {
 // the XSL stylesheet located at the given URI.
 nsresult nsXMLContentSink::LoadXSLStyleSheet(nsIURI* aUrl) {
   nsCOMPtr<nsIDocumentTransformer> processor = new txMozillaXSLTProcessor();
+  mDocument->SetUseCounter(eUseCounter_custom_XSLStylesheet);
 
   processor->SetTransformObserver(this);
 

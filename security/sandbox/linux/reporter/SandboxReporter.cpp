@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <time.h>  // for clockid_t
 
+#include "GeckoProfiler.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/StaticMutex.h"
@@ -80,7 +81,7 @@ SandboxReporter::~SandboxReporter() {
 
 /* static */
 SandboxReporter* SandboxReporter::Singleton() {
-  static StaticMutex sMutex;
+  static StaticMutex sMutex MOZ_UNANNOTATED;
   StaticMutexAutoLock lock(sMutex);
 
   if (sSingleton == nullptr) {
@@ -142,6 +143,9 @@ static void SubmitToTelemetry(const SandboxReport& aReport) {
       break;
     case SandboxReport::ProcType::SOCKET_PROCESS:
       key.AppendLiteral("socket");
+      break;
+    case SandboxReport::ProcType::UTILITY:
+      key.AppendLiteral("utility");
       break;
     default:
       MOZ_ASSERT(false);
@@ -237,6 +241,9 @@ void SandboxReporter::ThreadMain(void) {
   // Create a nsThread wrapper for the current platform thread, and register it
   // with the thread manager.
   (void)NS_GetCurrentThread();
+
+  PlatformThread::SetName("SandboxReporter");
+  AUTO_PROFILER_REGISTER_THREAD("SandboxReporter");
 
   for (;;) {
     SandboxReport rep;

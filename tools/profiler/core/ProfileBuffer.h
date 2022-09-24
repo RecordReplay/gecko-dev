@@ -14,6 +14,7 @@
 #include "mozilla/ProfileBufferChunkManagerSingle.h"
 #include "mozilla/ProfileChunkedBuffer.h"
 
+class ProcessStreamingContext;
 class RunningTimes;
 
 // Class storing most profiling data in a ProfileChunkedBuffer.
@@ -38,7 +39,7 @@ class ProfileBuffer final {
 
   // Add to the buffer a sample start (ThreadId) entry for aThreadId.
   // Returns the position of the entry.
-  uint64_t AddThreadIdEntry(int aThreadId);
+  uint64_t AddThreadIdEntry(ProfilerThreadId aThreadId);
 
   void CollectCodeLocation(
       const char* aLabel, const char* aStr, uint32_t aFrameFlags,
@@ -52,9 +53,9 @@ class ProfileBuffer final {
   // Add JIT frame information to aJITFrameInfo for any JitReturnAddr entries
   // that are currently in the buffer at or after aRangeStart, in samples
   // for the given thread.
-  void AddJITInfoForRange(uint64_t aRangeStart, int aThreadId,
-                          JSContext* aContext,
-                          JITFrameInfo& aJITFrameInfo) const;
+  void AddJITInfoForRange(uint64_t aRangeStart, ProfilerThreadId aThreadId,
+                          JSContext* aContext, JITFrameInfo& aJITFrameInfo,
+                          mozilla::ProgressLogger aProgressLogger) const;
 
   // Stream JSON for samples in the buffer to aWriter, using the supplied
   // UniqueStacks object.
@@ -66,27 +67,40 @@ class ProfileBuffer final {
   // words, you need to have called AddJITInfoForRange for every range that
   // might contain JIT frame information before calling this method.
   // Return the thread ID of the streamed sample(s), or 0.
-  int StreamSamplesToJSON(SpliceableJSONWriter& aWriter, int aThreadId,
-                          double aSinceTime, UniqueStacks& aUniqueStacks) const;
+  ProfilerThreadId StreamSamplesToJSON(
+      SpliceableJSONWriter& aWriter, ProfilerThreadId aThreadId,
+      double aSinceTime, UniqueStacks& aUniqueStacks,
+      mozilla::ProgressLogger aProgressLogger) const;
 
-  void StreamMarkersToJSON(SpliceableJSONWriter& aWriter, int aThreadId,
+  void StreamMarkersToJSON(SpliceableJSONWriter& aWriter,
+                           ProfilerThreadId aThreadId,
                            const mozilla::TimeStamp& aProcessStartTime,
-                           double aSinceTime,
-                           UniqueStacks& aUniqueStacks) const;
+                           double aSinceTime, UniqueStacks& aUniqueStacks,
+                           mozilla::ProgressLogger aProgressLogger) const;
+
+  // Stream samples and markers from all threads that `aProcessStreamingContext`
+  // accepts.
+  void StreamSamplesAndMarkersToJSON(
+      ProcessStreamingContext& aProcessStreamingContext,
+      mozilla::ProgressLogger aProgressLogger) const;
+
   void StreamPausedRangesToJSON(SpliceableJSONWriter& aWriter,
-                                double aSinceTime) const;
-  void StreamProfilerOverheadToJSON(SpliceableJSONWriter& aWriter,
-                                    const mozilla::TimeStamp& aProcessStartTime,
-                                    double aSinceTime) const;
+                                double aSinceTime,
+                                mozilla::ProgressLogger aProgressLogger) const;
+  void StreamProfilerOverheadToJSON(
+      SpliceableJSONWriter& aWriter,
+      const mozilla::TimeStamp& aProcessStartTime, double aSinceTime,
+      mozilla::ProgressLogger aProgressLogger) const;
   void StreamCountersToJSON(SpliceableJSONWriter& aWriter,
                             const mozilla::TimeStamp& aProcessStartTime,
-                            double aSinceTime) const;
+                            double aSinceTime,
+                            mozilla::ProgressLogger aProgressLogger) const;
 
   // Find (via |aLastSample|) the most recent sample for the thread denoted by
   // |aThreadId| and clone it, patching in the current time as appropriate.
   // Mutate |aLastSample| to point to the newly inserted sample.
   // Returns whether duplication was successful.
-  bool DuplicateLastSample(int aThreadId, double aSampleTimeMs,
+  bool DuplicateLastSample(ProfilerThreadId aThreadId, double aSampleTimeMs,
                            mozilla::Maybe<uint64_t>& aLastSample,
                            const RunningTimes& aRunningTimes);
 
@@ -139,7 +153,8 @@ class ProfileBuffer final {
   // `static` because it may be used to add an entry to a `ProfileChunkedBuffer`
   // that is not attached to a `ProfileBuffer`.
   static mozilla::ProfileBufferBlockIndex AddThreadIdEntry(
-      mozilla::ProfileChunkedBuffer& aProfileChunkedBuffer, int aThreadId);
+      mozilla::ProfileChunkedBuffer& aProfileChunkedBuffer,
+      ProfilerThreadId aThreadId);
 
   // The storage in which this ProfileBuffer stores its entries.
   mozilla::ProfileChunkedBuffer& mEntries;
@@ -167,10 +182,27 @@ class ProfileBuffer final {
   // - Adding JIT info.
   // - Streaming stacks to JSON.
   // Mutable because it's accessed from non-multithreaded const methods.
-  mutable mozilla::ProfileBufferChunkManagerSingle mWorkerChunkManager{
-      mozilla::ProfileBufferChunk::Create(
+  mutable mozilla::Maybe<mozilla::ProfileBufferChunkManagerSingle>
+      mMaybeWorkerChunkManager;
+  mozilla::ProfileBufferChunkManagerSingle& WorkerChunkManager() const {
+    if (mMaybeWorkerChunkManager.isNothing()) {
+      // Only actually allocate it on first use. (Some ProfileBuffers are
+      // temporary and don't actually need this.)
+      mMaybeWorkerChunkManager.emplace(
           mozilla::ProfileBufferChunk::SizeofChunkMetadata() +
-          mozilla::ProfileBufferChunkManager::scExpectedMaximumStackSize)};
+          mozilla::ProfileBufferChunkManager::scExpectedMaximumStackSize);
+    }
+    return *mMaybeWorkerChunkManager;
+  }
+
+  // GetStreamingParametersForThreadCallback:
+  //   (ProfilerThreadId) -> Maybe<StreamingParametersForThread>
+  template <typename GetStreamingParametersForThreadCallback>
+  ProfilerThreadId DoStreamSamplesAndMarkersToJSON(
+      GetStreamingParametersForThreadCallback&&
+          aGetStreamingParametersForThreadCallback,
+      double aSinceTime, ProcessStreamingContext* aStreamingContextForMarkers,
+      mozilla::ProgressLogger aProgressLogger) const;
 
   double mFirstSamplingTimeUs = 0.0;
   double mLastSamplingTimeUs = 0.0;

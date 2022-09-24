@@ -28,6 +28,7 @@
 #include "nsDisplayList.h"
 #include "nsIReflowCallback.h"
 #include "nsISound.h"
+#include "nsLayoutUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/Likely.h"
@@ -70,7 +71,8 @@ class nsMenuActivateEvent : public Runnable {
         mPresContext(aPresContext),
         mIsActivate(aIsActivate) {}
 
-  NS_IMETHOD Run() override {
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230, bug 1535398)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHOD Run() override {
     nsAutoString domEventToFire;
 
     if (mIsActivate) {
@@ -98,8 +100,8 @@ class nsMenuActivateEvent : public Runnable {
   }
 
  private:
-  RefPtr<Element> mMenu;
-  RefPtr<nsPresContext> mPresContext;
+  const RefPtr<Element> mMenu;
+  const RefPtr<nsPresContext> mPresContext;
   bool mIsActivate;
 };
 
@@ -269,6 +271,8 @@ void nsMenuFrame::SetInitialChildList(ChildListID aListID,
 
 void nsMenuFrame::DestroyFrom(nsIFrame* aDestructRoot,
                               PostDestroyData& aPostDestroyData) {
+  MOZ_ASSERT(!nsContentUtils::IsSafeToRunScript());
+
   if (mReflowCallbackPosted) {
     PresShell()->CancelReflowCallback(this);
     mReflowCallbackPosted = false;
@@ -289,8 +293,8 @@ void nsMenuFrame::DestroyFrom(nsIFrame* aDestructRoot,
 
   // if the menu content is just being hidden, it may be made visible again
   // later, so make sure to clear the highlighting.
-  mContent->AsElement()->UnsetAttr(kNameSpaceID_None, nsGkAtoms::menuactive,
-                                   false);
+  nsContentUtils::AddScriptRunner(
+      new nsUnsetAttrRunnable(mContent->AsElement(), nsGkAtoms::menuactive));
 
   // are we our menu parent's current menu item?
   nsMenuParent* menuParent = GetMenuParent();
@@ -608,14 +612,29 @@ nsresult nsMenuFrame::AttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
 }
 
 void nsMenuFrame::OpenMenu(bool aSelectFirstItem) {
-  if (!mContent) return;
+  if (!mContent) {
+    return;
+  }
 
   nsXULPopupManager* pm = nsXULPopupManager::GetInstance();
-  if (pm) {
-    pm->KillMenuTimer();
-    // This opens the menu asynchronously
-    pm->ShowMenu(mContent, aSelectFirstItem, true);
+  if (!pm) {
+    return;
   }
+
+  pm->KillMenuTimer();
+  if (!pm->MayShowMenu(mContent)) {
+    return;
+  }
+
+  // Open the menu asynchronously.
+  mContent->OwnerDoc()->Dispatch(
+      TaskCategory::Other,
+      NS_NewRunnableFunction("AsyncOpenMenu", [content = RefPtr{mContent.get()},
+                                               aSelectFirstItem] {
+        if (nsXULPopupManager* pm = nsXULPopupManager::GetInstance()) {
+          pm->ShowMenu(content, aSelectFirstItem);
+        }
+      }));
 }
 
 void nsMenuFrame::CloseMenu(bool aDeselectMenu) {
@@ -863,7 +882,7 @@ void nsMenuFrame::UpdateMenuSpecialState() {
 }
 
 void nsMenuFrame::Execute(WidgetGUIEvent* aEvent) {
-  nsCOMPtr<nsISound> sound(do_CreateInstance("@mozilla.org/sound;1"));
+  nsCOMPtr<nsISound> sound(do_GetService("@mozilla.org/sound;1"));
   if (sound) sound->PlayEventSound(nsISound::EVENT_MENU_EXECUTE);
 
   // Create a trusted event if the triggering event was trusted, or if
@@ -1092,13 +1111,8 @@ nsMenuFrame::GetActiveChild(dom::Element** aResult) {
 NS_IMETHODIMP
 nsMenuFrame::SetActiveChild(dom::Element* aChild) {
   nsMenuPopupFrame* popupFrame = GetPopup();
-  if (!popupFrame) return NS_ERROR_FAILURE;
-
-  // Force the child frames within the popup to be generated.
-  AutoWeakFrame weakFrame(popupFrame);
-  popupFrame->GenerateFrames();
-  if (!weakFrame.IsAlive()) {
-    return NS_OK;
+  if (!popupFrame) {
+    return NS_ERROR_FAILURE;
   }
 
   if (!aChild) {
@@ -1108,7 +1122,9 @@ nsMenuFrame::SetActiveChild(dom::Element* aChild) {
   }
 
   nsMenuFrame* menu = do_QueryFrame(aChild->GetPrimaryFrame());
-  if (menu) popupFrame->ChangeMenuItem(menu, false, false);
+  if (menu) {
+    popupFrame->ChangeMenuItem(menu, false, false);
+  }
   return NS_OK;
 }
 

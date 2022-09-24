@@ -2,11 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
-import {
-  getSelectedSource,
-  getBreakpointPositionsForLine,
-} from "../reducers/sources";
-import { getBreakpointsList } from "../reducers/breakpoints";
+import { getSelectedSource, getBreakpointPositionsForLine } from "./sources";
+import { getBreakpointsList } from "./breakpoints";
 import { isGenerated } from "../utils/source";
 
 function getColumn(column, selectedSource) {

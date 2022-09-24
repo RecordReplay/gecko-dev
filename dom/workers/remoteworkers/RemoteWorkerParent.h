@@ -9,8 +9,7 @@
 
 #include "mozilla/dom/PRemoteWorkerParent.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class RemoteWorkerController;
 
@@ -36,14 +35,14 @@ class RemoteWorkerParent final : public PRemoteWorkerParent {
  private:
   ~RemoteWorkerParent();
 
-  PFetchEventOpProxyParent* AllocPFetchEventOpProxyParent(
-      const ServiceWorkerFetchEventOpArgs& aArgs);
-
-  bool DeallocPFetchEventOpProxyParent(PFetchEventOpProxyParent* aActor);
+  already_AddRefed<PFetchEventOpProxyParent> AllocPFetchEventOpProxyParent(
+      const ParentToChildServiceWorkerFetchEventOpArgs& aArgs);
 
   void ActorDestroy(mozilla::ipc::IProtocol::ActorDestroyReason) override;
 
   mozilla::ipc::IPCResult RecvError(const ErrorValue& aValue);
+
+  mozilla::ipc::IPCResult RecvNotifyLock(const bool& aCreated);
 
   mozilla::ipc::IPCResult RecvClose();
 
@@ -56,7 +55,6 @@ class RemoteWorkerParent final : public PRemoteWorkerParent {
   RefPtr<RemoteWorkerController> mController;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_RemoteWorkerParent_h

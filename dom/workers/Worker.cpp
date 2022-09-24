@@ -21,8 +21,7 @@
 #  undef PostMessage
 #endif
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /* static */
 already_AddRefed<Worker> Worker::Constructor(const GlobalObject& aGlobal,
@@ -95,7 +94,6 @@ void Worker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
     return;
   }
 
-#ifdef MOZ_GECKO_PROFILER
   NS_ConvertUTF16toUTF8 nameOrScriptURL(mWorkerPrivate->WorkerName().IsEmpty()
                                             ? mWorkerPrivate->ScriptURL()
                                             : mWorkerPrivate->WorkerName());
@@ -107,7 +105,6 @@ void Worker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
   mozilla::AutoProfilerLabel PROFILER_RAII(
       "Worker.postMessage", nameOrScriptURL.get(),
       JS::ProfilingCategoryPair::DOM, flags);
-#endif
 
   RefPtr<MessageEventRunnable> runnable = new MessageEventRunnable(
       mWorkerPrivate, WorkerRunnable::WorkerThreadModifyBusyCount);
@@ -164,7 +161,8 @@ void Worker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
 }
 
 void Worker::PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                         const PostMessageOptions& aOptions, ErrorResult& aRv) {
+                         const StructuredSerializeOptions& aOptions,
+                         ErrorResult& aRv) {
   PostMessage(aCx, aMessage, aOptions.mTransfer, aRv);
 }
 
@@ -199,5 +197,4 @@ NS_INTERFACE_MAP_END_INHERITING(DOMEventTargetHelper)
 NS_IMPL_ADDREF_INHERITED(Worker, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(Worker, DOMEventTargetHelper)
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

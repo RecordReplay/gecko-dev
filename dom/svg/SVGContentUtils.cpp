@@ -30,7 +30,6 @@
 #include "SVGAnimatedPreserveAspectRatio.h"
 #include "SVGGeometryProperty.h"
 #include "nsContentUtils.h"
-#include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/Types.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/ComputedStyle.h"
@@ -326,7 +325,7 @@ Float SVGContentUtils::GetStrokeWidth(SVGElement* aElement,
                                       SVGContextPaint* aContextPaint) {
   Float res = 0.0;
 
-  auto doCompute = [&](ComputedStyle const* computedStyle) {
+  auto doCompute = [&](const ComputedStyle* computedStyle) {
     const nsStyleSVG* styleSVG = computedStyle->StyleSVG();
 
     if (styleSVG->mStrokeWidth.IsContextValue()) {
@@ -367,8 +366,8 @@ float SVGContentUtils::GetFontSize(Element* aElement) {
     return GetFontSize(f->Style(), pc);
   }
 
-  if (RefPtr<ComputedStyle> style =
-          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement, nullptr)) {
+  if (RefPtr<const ComputedStyle> style =
+          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement)) {
     return GetFontSize(style, pc);
   }
 
@@ -382,7 +381,7 @@ float SVGContentUtils::GetFontSize(nsIFrame* aFrame) {
   return GetFontSize(aFrame->Style(), aFrame->PresContext());
 }
 
-float SVGContentUtils::GetFontSize(ComputedStyle* aComputedStyle,
+float SVGContentUtils::GetFontSize(const ComputedStyle* aComputedStyle,
                                    nsPresContext* aPresContext) {
   MOZ_ASSERT(aComputedStyle);
   MOZ_ASSERT(aPresContext);
@@ -405,8 +404,8 @@ float SVGContentUtils::GetFontXHeight(Element* aElement) {
     return GetFontXHeight(f->Style(), pc);
   }
 
-  if (RefPtr<ComputedStyle> style =
-          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement, nullptr)) {
+  if (RefPtr<const ComputedStyle> style =
+          nsComputedDOMStyle::GetComputedStyleNoFlush(aElement)) {
     return GetFontXHeight(style, pc);
   }
 
@@ -420,7 +419,7 @@ float SVGContentUtils::GetFontXHeight(nsIFrame* aFrame) {
   return GetFontXHeight(aFrame->Style(), aFrame->PresContext());
 }
 
-float SVGContentUtils::GetFontXHeight(ComputedStyle* aComputedStyle,
+float SVGContentUtils::GetFontXHeight(const ComputedStyle* aComputedStyle,
                                       nsPresContext* aPresContext) {
   MOZ_ASSERT(aComputedStyle && aPresContext);
 

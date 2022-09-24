@@ -4,6 +4,7 @@
 <window title="Large Menu Tests"
         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
 
+  <script src="chrome://mochikit/content/tests/SimpleTest/SimpleTest.js"/>
   <script src="chrome://mochikit/content/tests/SimpleTest/EventUtils.js"/>
 
 <!--
@@ -102,17 +103,20 @@ function popupShown()
 
   var popup = document.getElementById("popup");
   var rect = popup.getBoundingClientRect();
+  var marginTop = parseFloat(getComputedStyle(popup).marginTop);
+  var marginBottom = parseFloat(getComputedStyle(popup).marginBottom);
   var scrollbox = popup.scrollBox.scrollbox;
   var expectedScrollPos = 0;
 
+  info(`${gTests[gTestIndex]}: ${JSON.stringify(rect)} | ${screen.width}x${screen.height} | ${gScreenY}`);
   if (gTestIndex == 0) {
     // the popup should be in the center of the screen
     // note that if the height is odd, the y-offset will have been rounded
     // down when we pass the fractional value to openPopupAtScreen above.
-    is(Math.round(rect.top) + gScreenY, Math.floor(screen.height / 2),
+    is(Math.round(rect.top - marginTop) + gScreenY, Math.floor(screen.height / 2),
                               gTests[gTestIndex] + " top");
-    ok(Math.round(rect.bottom) + gScreenY < screen.height,
-                                gTests[gTestIndex] + " bottom");
+    ok(Math.round(rect.bottom - marginBottom) + gScreenY < screen.height,
+                  gTests[gTestIndex] + " bottom");
     ok(!gOverflowed && !gUnderflowed, gTests[gTestIndex] + " overflow")
   }
   else if (gTestIndex == 1) {
@@ -128,16 +132,16 @@ function popupShown()
     else {
       // On other platforms the menu should be flipped to have its bottom
       // edge 100 pixels from the bottom
-      ok(Math.round(rect.top) + gScreenY >= screen.top, gTests[gTestIndex] + " top");
-      is(Math.round(rect.bottom) + gScreenY, screen.height - 100,
+      ok(Math.round(rect.top - marginTop) + gScreenY >= screen.top, gTests[gTestIndex] + " top");
+      is(Math.round(rect.bottom + marginBottom) + gScreenY, screen.height - 100,
                                   gTests[gTestIndex] + " bottom");
       ok(!gOverflowed && !gUnderflowed, gTests[gTestIndex] + " overflow");
     }
   }
   else if (gTestIndex == 2) {
     // the popup is too large so ensure that it is on screen
-    ok(Math.round(rect.top) + gScreenY >= screen.top, gTests[gTestIndex] + " top");
-    ok(Math.round(rect.bottom) + gScreenY <= screen.height, gTests[gTestIndex] + " bottom");
+    ok(Math.round(rect.top - marginTop) + gScreenY >= screen.top, gTests[gTestIndex] + " top");
+    ok(Math.round(rect.bottom + marginBottom) + gScreenY <= screen.height, gTests[gTestIndex] + " bottom");
     ok(gOverflowed && !gUnderflowed, gTests[gTestIndex] + " overflow")
 
     scrollbox.scrollTo(0, 40);
@@ -149,7 +153,7 @@ function popupShown()
   else if (gTestIndex == 4) {
     // note that if the height is odd, the y-offset will have been rounded
     // down when we pass the fractional value to openPopupAtScreen above.
-    is(Math.round(rect.top) + gScreenY, Math.floor(screen.height / 2),
+    is(Math.round(rect.top - marginTop) + gScreenY, Math.floor(screen.height / 2),
                               gTests[gTestIndex] + " top");
     ok(Math.round(rect.bottom) + gScreenY < screen.height,
                                 gTests[gTestIndex] + " bottom");
@@ -224,16 +228,20 @@ function contextMenuPopupShown()
 {
   var popup = document.getElementById("popup");
   var rect = popup.getBoundingClientRect();
+  var marginTop = parseFloat(getComputedStyle(popup).marginTop);
+  var marginLeft = parseFloat(getComputedStyle(popup).marginLeft);
   var labelrect = document.getElementById("label").getBoundingClientRect();
-  
+
   // Click to open popup in popupHidden() occurs at (4,4) in label's coordinate space
   var clickX = 4;
   var clickY = 4;
 
+  info(`${gTests[gTestIndex]}: ${JSON.stringify(rect)}`);
+
   var testPopupAppearedRightOfCursor = true;
   switch (gTests[gTestIndex]) {
     case "context menu enough space below":
-      is(rect.top, labelrect.top + clickY + (platformIsMac() ? -6 : 2), gTests[gTestIndex] + " top");
+      is(rect.top - marginTop, labelrect.top + clickY + (platformIsMac() ? -6 : 2), gTests[gTestIndex] + " top");
       break;
     case "context menu more space above":
       if (platformIsMac()) {
@@ -242,7 +250,7 @@ function contextMenuPopupShown()
         // Macs constrain their popup menus vertically rather than flip them.
         is(screenY, screen.availTop + screen.availHeight - rect.height, gTests[gTestIndex] + " top");
       } else {
-        is(rect.top, labelrect.top + clickY - rect.height - 2, gTests[gTestIndex] + " top");
+        is(rect.top + marginTop, labelrect.top + clickY - rect.height - 2, gTests[gTestIndex] + " top");
       }
 
       break;
@@ -250,13 +258,14 @@ function contextMenuPopupShown()
       [, gScreenY] = getScreenXY(document.documentElement);
       // compare against the available size as well as the total size, as some
       // platforms allow the menu to overlap os chrome and others do not
-      var pos = (screen.availTop + screen.availHeight - rect.height) - gScreenY;
-      var availPos = (screen.top + screen.height - rect.height) - gScreenY;
+      var pos = (screen.availTop + screen.availHeight - rect.height) - gScreenY - marginTop;
+      var availPos = (screen.top + screen.height - rect.height) - gScreenY - marginTop;
       ok(rect.top == pos || rect.top == availPos,
-         gTests[gTestIndex] + " top");
+         gTests[gTestIndex] + ` top  (${pos}/${availPos})`);
       break;
     case "context menu larger than screen":
-      ok(rect.top == -(gScreenY - screen.availTop) || rect.top == -(gScreenY - screen.top), gTests[gTestIndex] + " top");
+      ok(rect.top == -(gScreenY - screen.availTop) + marginTop || rect.top == -(gScreenY - screen.top) + marginTop,
+          `${gTests[gTestIndex]} top (top = ${rect.top} screenY = ${gScreenY} screenAvailTop = ${screen.availTop} screenTop = ${screen.top})`);
       break;
     case "context menu flips horizontally on osx":
       testPopupAppearedRightOfCursor = false;
@@ -267,7 +276,7 @@ function contextMenuPopupShown()
   }
 
   if (testPopupAppearedRightOfCursor) {
-    is(rect.left, labelrect.left + clickX + (platformIsMac() ? 1 : 2), gTests[gTestIndex] + " left");
+    is(rect.left - marginLeft, labelrect.left + clickX + (platformIsMac() ? 1 : 2), gTests[gTestIndex] + " left");
   }
 
   hidePopup();
@@ -317,6 +326,9 @@ function testPopupMovement()
 
   var screenX, screenY;
   var rect = popup.getBoundingClientRect();
+  var marginBottom = parseFloat(getComputedStyle(popup).marginBottom);
+  var marginLeft = parseFloat(getComputedStyle(popup).marginLeft);
+  var marginTop = parseFloat(getComputedStyle(popup).marginTop);
 
   var overlapOSChrome = !platformIsMac();
   popup.moveTo(1, 1);
@@ -336,7 +348,7 @@ function testPopupMovement()
   }
   else {
     expectedy = (overlapOSChrome ? screen.height + screen.top : screen.availHeight + screen.availTop) -
-                Math.round(rect.height);
+                Math.round(rect.height) - marginBottom;
   }
 
   [screenX, screenY] = getScreenXY(popup);
@@ -350,7 +362,7 @@ function testPopupMovement()
   }
   else {
     expectedx = (overlapOSChrome ? screen.width + screen.left : screen.availWidth + screen.availLeft) -
-                Math.round(rect.width);
+                Math.round(rect.width) - marginLeft;
   }
 
   [screenX, screenY] = getScreenXY(popup);
@@ -373,11 +385,11 @@ function testPopupMovement()
   popup.removeAttribute("left");
   popup.removeAttribute("top");
 
-  popup.moveTo(-1, -1);
+  popup.moveTo(-1 + marginLeft, -1 + marginTop);
   [screenX, screenY] = getScreenXY(popup);
 
-  expectedx = (overlapOSChrome ? screen.left : screen.availLeft);
-  expectedy = (overlapOSChrome ? screen.top : screen.availTop);
+  expectedx = (overlapOSChrome ? screen.left : screen.availLeft) + marginLeft;
+  expectedy = (overlapOSChrome ? screen.top : screen.availTop) + marginTop;
 
   is(screenX, expectedx, gTests[gTestIndex] + " move after set left and top x to -1");
   is(screenY, expectedy, gTests[gTestIndex] + " move after set left and top y to -1");

@@ -3,27 +3,6 @@
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 !macro PostUpdate
-  ; PostUpdate is called from both session 0 and from the user session
-  ; for service updates, make sure that we only register with the user session
-  ; Otherwise ApplicationID::Set can fail intermittently with a file in use error.
-  System::Call "kernel32::GetCurrentProcessId() i.r0"
-  System::Call "kernel32::ProcessIdToSessionId(i $0, *i ${NSIS_MAX_STRLEN} r9)"
-
-  ; Determine if we're the protected UserChoice default or not. If so fix the
-  ; start menu tile.  In case there are 2 Firefox installations, we only do
-  ; this if the application being updated is the default.
-  ReadRegStr $0 HKCU "Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice" "ProgId"
-  ${WordFind} "$0" "-" "+1{" $0
-  ${If} $0 == "FirefoxURL"
-  ${AndIf} $9 != 0 ; We're not running in session 0
-    ReadRegStr $0 HKCU "Software\Classes\FirefoxURL\shell\open\command" ""
-    ${GetPathFromString} "$0" $0
-    ${GetParent} "$0" $0
-    ${If} ${FileExists} "$0"
-      ${GetLongPath} "$0" $0
-    ${EndIf}
-  ${EndIf}
-
   ${CreateShortcutsLog}
 
   ; Remove registry entries for non-existent apps and for apps that point to our
@@ -105,6 +84,20 @@
 
   ; Fix the distribution.ini file if applicable
   ${FixDistributionsINI}
+
+  ; https://bugzilla.mozilla.org/show_bug.cgi?id=1616355
+  ; Migrate postSigningData file if present, and if it doesn't already exist.
+  ${GetLocalAppDataFolder} $0
+  ${If} ${FileExists} "$INSTDIR\postSigningData"
+    ; If it already exists, just delete the appdata one.
+    ; It's possible this was for a different install, but it's impossible to
+    ; know for sure, so we may as well just get rid of it.
+    Delete /REBOOTOK "$0\Mozilla\Firefox\postSigningData"
+  ${Else}
+    ${If} ${FileExists} "$0\Mozilla\Firefox\postSigningData"
+      Rename "$0\Mozilla\Firefox\postSigningData" "$INSTDIR\postSigningData"
+    ${EndIf}
+  ${EndIf}
 
   RmDir /r /REBOOTOK "$INSTDIR\${TO_BE_DELETED}"
 
@@ -417,9 +410,8 @@ ${RemoveDefaultBrowserAgentShortcut}
   Push $2
   Push $3
 
-  ; 2 is CSIDL_PROGRAMS, it's simpler to use this to get the user's Start Menu Programs than
-  ; to use $SMPROGRAMS and rely on SetShellVarContext current.
-  System::Call "Shell32::SHGetSpecialFolderPathW(p 0, t.r1, i 2, i 0)"
+  ; Get the current user's Start Menu Programs.
+  ${GetProgramsFolder} $1
 
   ; The shortcut would have been named MOZ_BASE_NAME regardless of branding.
   ; According to defines.nsi.in AppName should match application.ini, and application.ini.in sets
@@ -506,28 +498,36 @@ ${RemoveDefaultBrowserAgentShortcut}
   ${EndIf}
 
 
-  ${AddAssociationIfNoneExist} ".pdf" "FirefoxHTML$5"
+  ; Keep this list synchronized with
+  ; https://searchfox.org/mozilla-central/source/browser/installer/windows/msix/AppxManifest.xml.in.
+  ; and `os.environment.launched_to_handle` and `os.environment.invoked_to_handle` telemetry in
+  ; https://searchfox.org/mozilla-central/source/browser/components/BrowserContentHandler.jsm.
   ${AddAssociationIfNoneExist} ".oga" "FirefoxHTML$5"
   ${AddAssociationIfNoneExist} ".ogg" "FirefoxHTML$5"
   ${AddAssociationIfNoneExist} ".ogv" "FirefoxHTML$5"
-  ${AddAssociationIfNoneExist} ".pdf" "FirefoxHTML$5"
   ${AddAssociationIfNoneExist} ".webm" "FirefoxHTML$5"
   ${AddAssociationIfNoneExist} ".svg" "FirefoxHTML$5"
   ${AddAssociationIfNoneExist} ".webp"  "FirefoxHTML$5"
+  ${AddAssociationIfNoneExist} ".avif" "FirefoxHTML$5"
 
-  ; An empty string is used for the 5th param because FirefoxHTML is not a
-  ; protocol handler
-  ${AddDisabledDDEHandlerValues} "FirefoxHTML$5" "$2" "$8,1" \
+  ${AddAssociationIfNoneExist} ".pdf" "FirefoxPDF$5"
+
+  ; An empty string is used for the 5th param because FirefoxHTML- is not a
+  ; protocol handler.  Ditto for FirefoxPDF-.
+  ${AddDisabledDDEHandlerValues} "FirefoxHTML$5" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                  "${AppRegName} HTML Document" ""
 
-  ${AddDisabledDDEHandlerValues} "FirefoxURL$5" "$2" "$8,1" "${AppRegName} URL" \
+  ${AddDisabledDDEHandlerValues} "FirefoxPDF$5" "$2" "$8,${IDI_DOCUMENT_PDF_ZERO_BASED}" \
+                                 "${AppRegName} PDF Document" ""
+
+  ${AddDisabledDDEHandlerValues} "FirefoxURL$5" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "${AppRegName} URL" \
                                  "true"
   ; An empty string is used for the 4th & 5th params because the following
   ; protocol handlers already have a display name and the additional keys
   ; required for a protocol handler.
-  ${AddDisabledDDEHandlerValues} "http" "$2" "$8,1" "" ""
-  ${AddDisabledDDEHandlerValues} "https" "$2" "$8,1" "" ""
-  ${AddDisabledDDEHandlerValues} "mailto" "$2" "$8,1" "" ""
+  ${AddDisabledDDEHandlerValues} "http" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
+  ${AddDisabledDDEHandlerValues} "https" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
+  ${AddDisabledDDEHandlerValues} "mailto" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
 !macroend
 !define SetHandlers "!insertmacro SetHandlers"
 
@@ -575,7 +575,7 @@ ${RemoveDefaultBrowserAgentShortcut}
 
   WriteRegStr ${RegKey} "$0" "" "${BrandFullName}"
 
-  WriteRegStr ${RegKey} "$0\DefaultIcon" "" "$8,0"
+  WriteRegStr ${RegKey} "$0\DefaultIcon" "" "$8,${IDI_APPICON_ZERO_BASED}"
 
   ; The Reinstall Command is defined at
   ; http://msdn.microsoft.com/library/default.asp?url=/library/en-us/shellcc/platform/shell/programmersguide/shell_adv/registeringapps.asp
@@ -594,17 +594,19 @@ ${RemoveDefaultBrowserAgentShortcut}
 
   ; Capabilities registry keys
   WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationDescription" "$(REG_APP_DESC)"
-  WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationIcon" "$8,0"
+  WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationIcon" "$8,${IDI_APPICON_ZERO_BASED}"
   WriteRegStr ${RegKey} "$0\Capabilities" "ApplicationName" "${BrandShortName}"
 
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".htm"   "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".html"  "FirefoxHTML$2"
-  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".pdf"   "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".shtml" "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xht"   "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".xhtml" "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".svg"   "FirefoxHTML$2"
   WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".webp"  "FirefoxHTML$2"
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".avif"  "FirefoxHTML$2"
+
+  WriteRegStr ${RegKey} "$0\Capabilities\FileAssociations" ".pdf"   "FirefoxPDF$2"
 
   WriteRegStr ${RegKey} "$0\Capabilities\StartMenu" "StartMenuInternet" "$1"
 
@@ -635,7 +637,7 @@ ${RemoveDefaultBrowserAgentShortcut}
     ; Make sure files associated this way use the document icon instead of the
     ; application icon.
     WriteRegStr ${RegKey} "Software\Classes\Applications\${FileMainEXE}\DefaultIcon" \
-                "" "$8,1"
+                "" "$8,${IDI_DOCUMENT_ZERO_BASED}"
     ; If we're going to create this key at all, we also need to list our supported
     ; file types in it, because otherwise we'll be shown as a suggestion for every
     ; single file type, whether we support it in any way or not.
@@ -674,6 +676,7 @@ ${RemoveDefaultBrowserAgentShortcut}
     ${WriteApplicationsSupportedType} ${RegKey} ".svg"
     ${WriteApplicationsSupportedType} ${RegKey} ".webm"
     ${WriteApplicationsSupportedType} ${RegKey} ".webp"
+    ${WriteApplicationsSupportedType} ${RegKey} ".avif"
     ${WriteApplicationsSupportedType} ${RegKey} ".xht"
     ${WriteApplicationsSupportedType} ${RegKey} ".xhtml"
     ${WriteApplicationsSupportedType} ${RegKey} ".xml"
@@ -767,8 +770,8 @@ ${RemoveDefaultBrowserAgentShortcut}
   ${Unless} ${Errors}
     ReadRegStr $1 ${RegKey} "Software\Classes\$3\DefaultIcon" ""
     ${GetLongPath} "$INSTDIR\${FileMainEXE}" $2
-    ${If} "$1" != "$2,1"
-      WriteRegStr ${RegKey} "Software\Classes\$3\DefaultIcon" "" "$2,1"
+    ${If} "$1" != "$2,${IDI_DOCUMENT_ZERO_BASED}"
+      WriteRegStr ${RegKey} "Software\Classes\$3\DefaultIcon" "" "$2,${IDI_DOCUMENT_ZERO_BASED}"
     ${EndIf}
   ${EndUnless}
 !macroend
@@ -864,7 +867,7 @@ ${RemoveDefaultBrowserAgentShortcut}
 
     ; Write the uninstall registry keys
     ${WriteRegStr2} $1 "$0" "Comments" "${BrandFullNameInternal} ${AppVersion}$3 (${ARCH} ${AB_CD})" 0
-    ${WriteRegStr2} $1 "$0" "DisplayIcon" "$8\${FileMainEXE},0" 0
+    ${WriteRegStr2} $1 "$0" "DisplayIcon" "$8\${FileMainEXE},${IDI_APPICON_ZERO_BASED}" 0
     ${WriteRegStr2} $1 "$0" "DisplayName" "${BrandFullNameInternal}$3 (${ARCH} ${AB_CD})" 0
     ${WriteRegStr2} $1 "$0" "DisplayVersion" "${AppVersion}" 0
     ${WriteRegStr2} $1 "$0" "HelpLink" "${HelpLink}" 0
@@ -983,24 +986,32 @@ ${RemoveDefaultBrowserAgentShortcut}
   ${If} "$R9" == "true"
     ; An empty string is used for the 5th param because FirefoxHTML is not a
     ; protocol handler.
-    ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,1" \
+    ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                    "${AppRegName} HTML Document" ""
   ${Else}
     ${IsHandlerForInstallDir} "FirefoxHTML" $R9
     ${If} "$R9" == "true"
-      ${AddDisabledDDEHandlerValues} "FirefoxHTML" "$2" "$8,1" \
+      ${AddDisabledDDEHandlerValues} "FirefoxHTML" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                      "${AppRegName} HTML Document" ""
     ${EndIf}
   ${EndIf}
 
+  ; FirefoxPDF-* was added after FirefoxHTML and FirefoxURL, so we've never
+  ; supported bare "FirefoxPDF".  But we won't have it from the installer, so we
+  ; add/update it unconditionally.  `PostUpdate` is gated on `uninstall.log`
+  ; being present, so the invocation here will only happen for installed
+  ; directories, not unpackaged directories.
+  ${AddDisabledDDEHandlerValues} "FirefoxPDF-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_PDF_ZERO_BASED}" \
+                                 "${AppRegName} PDF Document" ""
+
   ${IsHandlerForInstallDir} "FirefoxURL-$AppUserModelID" $R9
   ${If} "$R9" == "true"
-    ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,1" \
+    ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                    "${AppRegName} URL" "true"
   ${Else}
     ${IsHandlerForInstallDir} "FirefoxURL" $R9
     ${If} "$R9" == "true"
-      ${AddDisabledDDEHandlerValues} "FirefoxURL" "$2" "$8,1" \
+      ${AddDisabledDDEHandlerValues} "FirefoxURL" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                      "${AppRegName} URL" "true"
     ${EndIf}
   ${EndIf}
@@ -1012,22 +1023,22 @@ ${RemoveDefaultBrowserAgentShortcut}
   ${IsHandlerForInstallDir} "ftp" $R9
   ${If} "$R9" == "true"
     ; In the past, we supported ftp, so we need to delete any registration.
-    ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,1" "" "delete"
+    ${AddDisabledDDEHandlerValues} "ftp" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" "delete"
   ${EndIf}
 
   ${IsHandlerForInstallDir} "http" $R9
   ${If} "$R9" == "true"
-    ${AddDisabledDDEHandlerValues} "http" "$2" "$8,1" "" ""
+    ${AddDisabledDDEHandlerValues} "http" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
   ${EndIf}
 
   ${IsHandlerForInstallDir} "https" $R9
   ${If} "$R9" == "true"
-    ${AddDisabledDDEHandlerValues} "https" "$2" "$8,1" "" ""
+    ${AddDisabledDDEHandlerValues} "https" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
   ${EndIf}
 
   ${IsHandlerForInstallDir} "mailto" $R9
   ${If} "$R9" == "true"
-    ${AddDisabledDDEHandlerValues} "mailto" "$2" "$8,1" "" ""
+    ${AddDisabledDDEHandlerValues} "mailto" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" "" ""
   ${EndIf}
 !macroend
 !define UpdateProtocolHandlers "!insertmacro UpdateProtocolHandlers"
@@ -1622,6 +1633,8 @@ Function SetAsDefaultAppUserHKCU
     AppAssocReg::SetAppAsDefault "$R9" ".shtml" "file"
     Pop $0
     AppAssocReg::SetAppAsDefault "$R9" ".webp" "file"
+    Pop $0
+    AppAssocReg::SetAppAsDefault "$R9" ".avif" "file"
     Pop $0
     AppAssocReg::SetAppAsDefault "$R9" ".xht" "file"
     Pop $0

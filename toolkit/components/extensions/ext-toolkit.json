@@ -162,7 +162,8 @@
     "settings": true,
     "paths": [
       ["proxy"]
-    ]
+    ],
+    "startupBlocking": true
   },
   "runtime": {
     "url": "chrome://extensions/content/parent/ext-runtime.js",
@@ -170,6 +171,14 @@
     "scopes": ["addon_parent", "content_parent", "devtools_parent"],
     "paths": [
       ["runtime"]
+    ]
+  },
+  "scripting": {
+    "url": "chrome://extensions/content/parent/ext-scripting.js",
+    "schema": "chrome://extensions/content/schemas/scripting.json",
+    "scopes": ["addon_parent"],
+    "paths": [
+      ["scripting"]
     ]
   },
   "storage": {
@@ -230,6 +239,7 @@
     "scopes": ["addon_parent"],
     "paths": [
       ["webRequest"]
-    ]
+    ],
+    "startupBlocking": true
   }
 }

@@ -97,7 +97,7 @@ etc.
 devtools
 --------
 
-The `Firefox Developer Tools <https://developer.mozilla.org/docs/Tools>`__ server and client components.
+The Firefox Developer Tools server and client components. See :ref:`contributor <devtools-contributor-doc>` and :ref:`user <devtools-user-doc>` documentation.
 
 
 docs
@@ -373,8 +373,7 @@ nsprpub
 -------
 
 Netscape Portable Runtime. Used as an abstraction layer to things like
-threads, file I/O, and socket I/O. See `Netscape Portable
-Runtime <https://www.mozilla.org/projects/nspr/>`__.
+threads, file I/O, and socket I/O. See :ref:`NSPR`.
 
 nsprpub/lib
 -----------

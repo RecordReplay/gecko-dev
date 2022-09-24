@@ -5,46 +5,42 @@
 
 #include "nsNativeThemeWin.h"
 
+#include <algorithm>
+#include <malloc.h>
+
+#include "gfxContext.h"
+#include "gfxPlatform.h"
+#include "gfxWindowsNativeDrawing.h"
+#include "gfxWindowsPlatform.h"
+#include "gfxWindowsSurface.h"
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/EventStates.h"
+#include "mozilla/gfx/Types.h"  // for Color::FromABGR
 #include "mozilla/Logging.h"
 #include "mozilla/RelativeLuminanceUtils.h"
 #include "mozilla/StaticPrefs_layout.h"
 #include "mozilla/StaticPrefs_widget.h"
 #include "mozilla/WindowsVersion.h"
-#include "mozilla/gfx/Types.h"  // for Color::FromABGR
-#include "nsNativeBasicTheme.h"
 #include "nsColor.h"
+#include "nsComboboxControlFrame.h"
 #include "nsDeviceContext.h"
-#include "nsRect.h"
-#include "nsSize.h"
-#include "nsTransform2D.h"
-#include "nsStyleConsts.h"
-#include "nsPresContext.h"
+#include "nsGkAtoms.h"
 #include "nsIContent.h"
 #include "nsIContentInlines.h"
 #include "nsIFrame.h"
 #include "nsLayoutUtils.h"
-#include "nsNameSpaceManager.h"
 #include "nsLookAndFeel.h"
 #include "nsMenuFrame.h"
-#include "nsGkAtoms.h"
-#include <malloc.h>
+#include "nsNameSpaceManager.h"
+#include "Theme.h"
+#include "nsPresContext.h"
+#include "nsRect.h"
+#include "nsSize.h"
+#include "nsStyleConsts.h"
+#include "nsTransform2D.h"
 #include "nsWindow.h"
-#include "nsComboboxControlFrame.h"
 #include "prinrval.h"
-#include "ScrollbarUtil.h"
 #include "WinUtils.h"
-
-#include "gfxPlatform.h"
-#include "gfxContext.h"
-#include "gfxWindowsPlatform.h"
-#include "gfxWindowsSurface.h"
-#include "gfxWindowsNativeDrawing.h"
-
-#include "nsUXThemeData.h"
-#include "nsUXThemeConstants.h"
-#include <algorithm>
 
 using namespace mozilla;
 using namespace mozilla::gfx;
@@ -52,10 +48,11 @@ using namespace mozilla::widget;
 
 extern mozilla::LazyLogModule gWindowsLog;
 
-NS_IMPL_ISUPPORTS_INHERITED(nsNativeThemeWin, nsNativeTheme, nsITheme)
+namespace mozilla::widget {
 
 nsNativeThemeWin::nsNativeThemeWin()
-    : mProgressDeterminateTimeStamp(TimeStamp::Now()),
+    : Theme(ScrollbarStyle()),
+      mProgressDeterminateTimeStamp(TimeStamp::Now()),
       mProgressIndeterminateTimeStamp(TimeStamp::Now()),
       mBorderCacheValid(),
       mMinimumWidgetSizeCacheValid(),
@@ -66,6 +63,23 @@ nsNativeThemeWin::nsNativeThemeWin()
 }
 
 nsNativeThemeWin::~nsNativeThemeWin() { nsUXThemeData::Invalidate(); }
+
+auto nsNativeThemeWin::IsWidgetNonNative(nsIFrame* aFrame,
+                                         StyleAppearance aAppearance)
+    -> NonNative {
+  if (IsWidgetScrollbarPart(aAppearance)) {
+    return NonNative::Always;
+  }
+
+  // We only know how to draw light widgets, so we defer to the non-native
+  // theme when appropriate.
+  if (Theme::ThemeSupportsWidget(aFrame->PresContext(), aFrame, aAppearance) &&
+      LookAndFeel::ColorSchemeForFrame(aFrame) ==
+          LookAndFeel::ColorScheme::Dark) {
+    return NonNative::BecauseColorMismatch;
+  }
+  return NonNative::No;
+}
 
 static int32_t GetTopLevelWindowActiveState(nsIFrame* aFrame) {
   // Used by window frame and button box rendering. We can end up in here in
@@ -81,7 +95,7 @@ static int32_t GetTopLevelWindowActiveState(nsIFrame* aFrame) {
   // Get the widget. nsIFrame's GetNearestWidget walks up the view chain
   // until it finds a real window.
   nsIWidget* widget = aFrame->GetNearestWidget();
-  nsWindowBase* window = static_cast<nsWindowBase*>(widget);
+  nsWindow* window = static_cast<nsWindow*>(widget);
   if (!window) return mozilla::widget::themeconst::FS_INACTIVE;
   if (widget && !window->IsTopLevelWidget() &&
       !(window = window->GetParentWindowBase(false)))
@@ -547,7 +561,7 @@ void nsNativeThemeWin::DrawThemedProgressMeter(
 
   EventStates eventStates = GetContentState(parentFrame, aAppearance);
   bool vertical = IsVerticalProgress(parentFrame);
-  bool indeterminate = IsIndeterminateProgress(parentFrame, eventStates);
+  bool indeterminate = eventStates.HasState(NS_EVENT_STATE_INDETERMINATE);
   bool animate = indeterminate;
 
   // Vista and up progress meter is fill style, rendered here. We render
@@ -688,8 +702,6 @@ mozilla::Maybe<nsUXThemeClass> nsNativeThemeWin::GetThemeClass(
     case StyleAppearance::Textarea:
     case StyleAppearance::FocusOutline:
       return Some(eUXEdit);
-    case StyleAppearance::Tooltip:
-      return Some(eUXTooltip);
     case StyleAppearance::Toolbox:
       return Some(eUXRebar);
     case StyleAppearance::MozWinMediaToolbox:
@@ -709,16 +721,6 @@ mozilla::Maybe<nsUXThemeClass> nsNativeThemeWin::GetThemeClass(
     case StyleAppearance::Tabpanel:
     case StyleAppearance::Tabpanels:
       return Some(eUXTab);
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::Scrollcorner:
-      return Some(eUXScrollbar);
     case StyleAppearance::Range:
     case StyleAppearance::RangeThumb:
       return Some(eUXTrackbar);
@@ -838,10 +840,11 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       }
 
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
         return NS_OK;
-      } else if (IsOpenButton(aFrame) || IsCheckedButton(aFrame)) {
+      }
+      if (IsOpenButton(aFrame) || IsCheckedButton(aFrame)) {
         aState = TS_ACTIVE;
         return NS_OK;
       }
@@ -864,15 +867,15 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       if (!aFrame) {
         aState = TS_NORMAL;
       } else {
-        if (GetCheckedOrSelected(aFrame, !isCheckbox)) {
+        EventStates eventState = GetContentState(aFrame, aAppearance);
+        if (eventState.HasState(NS_EVENT_STATE_CHECKED)) {
           inputState = CHECKED;
         }
-        if (isCheckbox && GetIndeterminate(aFrame)) {
+        if (isCheckbox && eventState.HasState(NS_EVENT_STATE_INDETERMINATE)) {
           inputState = INDETERMINATE;
         }
 
-        EventStates eventState = GetContentState(aFrame, aAppearance);
-        if (IsDisabled(aFrame, eventState)) {
+        if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
           aState = TS_DISABLED;
         } else {
           aState = StandardGetState(aFrame, aAppearance, false);
@@ -905,26 +908,18 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
 
       if (!aFrame) {
         aState = TFS_EDITBORDER_NORMAL;
-      } else if (IsDisabled(aFrame, eventState)) {
+      } else if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TFS_EDITBORDER_DISABLED;
       } else if (IsReadOnly(aFrame)) {
         /* no special read-only state */
         aState = TFS_EDITBORDER_NORMAL;
+      } else if (eventState.HasAtLeastOneOfStates(NS_EVENT_STATE_ACTIVE |
+                                                  NS_EVENT_STATE_FOCUSRING)) {
+        aState = TFS_EDITBORDER_FOCUSED;
+      } else if (eventState.HasState(NS_EVENT_STATE_HOVER)) {
+        aState = TFS_EDITBORDER_HOVER;
       } else {
-        nsIContent* content = aFrame->GetContent();
-
-        /* XUL textboxes don't get focused themselves, because they have child
-         * html:input.. but we can check the XUL focused attributes on them
-         */
-        if (content && content->IsXULElement() && IsFocused(aFrame))
-          aState = TFS_EDITBORDER_FOCUSED;
-        else if (eventState.HasAtLeastOneOfStates(NS_EVENT_STATE_ACTIVE |
-                                                  NS_EVENT_STATE_FOCUSRING))
-          aState = TFS_EDITBORDER_FOCUSED;
-        else if (eventState.HasState(NS_EVENT_STATE_HOVER))
-          aState = TFS_EDITBORDER_HOVER;
-        else
-          aState = TFS_EDITBORDER_NORMAL;
+        aState = TFS_EDITBORDER_NORMAL;
       }
 
       return NS_OK;
@@ -933,11 +928,6 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       // XXX the EDITBORDER values don't respect DTBG_OMITCONTENT
       aPart = TFP_TEXTFIELD;  // TFP_EDITBORDER_NOSCROLL;
       aState = TS_FOCUSED;    // TFS_EDITBORDER_FOCUSED;
-      return NS_OK;
-    }
-    case StyleAppearance::Tooltip: {
-      aPart = TTP_STANDARD;
-      aState = TS_NORMAL;
       return NS_OK;
     }
     case StyleAppearance::ProgressBar: {
@@ -965,7 +955,7 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       }
 
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
         return NS_OK;
       }
@@ -995,67 +985,6 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       aState = TS_NORMAL;
       return NS_OK;
     }
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight: {
-      aPart = SP_BUTTON;
-      aState = (int(aAppearance) - int(StyleAppearance::ScrollbarbuttonUp)) * 4;
-      EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (!aFrame)
-        aState += TS_NORMAL;
-      else if (IsDisabled(aFrame, eventState))
-        aState += TS_DISABLED;
-      else {
-        nsIFrame* parent = aFrame->GetParent();
-        EventStates parentState = GetContentState(
-            parent, parent->StyleDisplay()->EffectiveAppearance());
-        if (eventState.HasAllStates(NS_EVENT_STATE_HOVER |
-                                    NS_EVENT_STATE_ACTIVE))
-          aState += TS_ACTIVE;
-        else if (eventState.HasState(NS_EVENT_STATE_HOVER))
-          aState += TS_HOVER;
-        else if (parentState.HasState(NS_EVENT_STATE_HOVER))
-          aState =
-              (int(aAppearance) - int(StyleAppearance::ScrollbarbuttonUp)) +
-              SP_BUTTON_IMPLICIT_HOVER_BASE;
-        else
-          aState += TS_NORMAL;
-      }
-      return NS_OK;
-    }
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarVertical: {
-      aPart = (aAppearance == StyleAppearance::ScrollbarHorizontal)
-                  ? SP_TRACKSTARTHOR
-                  : SP_TRACKSTARTVERT;
-      aState = TS_NORMAL;
-      return NS_OK;
-    }
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarthumbVertical: {
-      aPart = (aAppearance == StyleAppearance::ScrollbarthumbHorizontal)
-                  ? SP_THUMBHOR
-                  : SP_THUMBVERT;
-      EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (!aFrame)
-        aState = TS_NORMAL;
-      else if (IsDisabled(aFrame, eventState))
-        aState = TS_DISABLED;
-      else {
-        if (eventState.HasState(
-                NS_EVENT_STATE_ACTIVE))  // Hover is not also a requirement for
-                                         // the thumb, since the drag is not
-                                         // canceled when you move outside the
-                                         // thumb.
-          aState = TS_ACTIVE;
-        else if (eventState.HasState(NS_EVENT_STATE_HOVER))
-          aState = TS_HOVER;
-        else
-          aState = TS_NORMAL;
-      }
-      return NS_OK;
-    }
     case StyleAppearance::Range: {
       if (IsRangeHorizontal(aFrame)) {
         aPart = TKP_TRACK;
@@ -1073,9 +1002,9 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
         aPart = IsFrameRTL(aFrame) ? TKP_THUMBLEFT : TKP_THUMBRIGHT;
       }
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (!aFrame)
+      if (!aFrame) {
         aState = TS_NORMAL;
-      else if (IsDisabled(aFrame, eventState)) {
+      } else if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TKP_DISABLED;
       } else {
         if (eventState.HasState(
@@ -1098,20 +1027,20 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       aPart = (aAppearance == StyleAppearance::SpinnerUpbutton) ? SPNP_UP
                                                                 : SPNP_DOWN;
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (!aFrame)
+      if (!aFrame) {
         aState = TS_NORMAL;
-      else if (IsDisabled(aFrame, eventState))
+      } else if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
-      else
+      } else {
         aState = StandardGetState(aFrame, aAppearance, false);
+      }
       return NS_OK;
     }
     case StyleAppearance::Toolbox:
     case StyleAppearance::MozWinMediaToolbox:
     case StyleAppearance::MozWinCommunicationsToolbox:
     case StyleAppearance::MozWinBrowsertabbarToolbox:
-    case StyleAppearance::Statusbar:
-    case StyleAppearance::Scrollcorner: {
+    case StyleAppearance::Statusbar: {
       aState = 0;
       aPart = RP_BACKGROUND;
       return NS_OK;
@@ -1176,7 +1105,7 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       }
 
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
         return NS_OK;
       }
@@ -1220,23 +1149,22 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       else
         aPart = CBP_DROPFRAME;
 
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
       } else if (IsReadOnly(aFrame)) {
         aState = TS_NORMAL;
       } else if (IsOpenButton(aFrame)) {
         aState = TS_ACTIVE;
+      } else if (useDropBorder &&
+                 eventState.HasState(NS_EVENT_STATE_FOCUSRING)) {
+        aState = TS_ACTIVE;
+      } else if (eventState.HasAllStates(NS_EVENT_STATE_HOVER |
+                                         NS_EVENT_STATE_ACTIVE)) {
+        aState = TS_ACTIVE;
+      } else if (eventState.HasState(NS_EVENT_STATE_HOVER)) {
+        aState = TS_HOVER;
       } else {
-        if (useDropBorder && (eventState.HasState(NS_EVENT_STATE_FOCUSRING) ||
-                              IsFocused(aFrame)))
-          aState = TS_ACTIVE;
-        else if (eventState.HasAllStates(NS_EVENT_STATE_HOVER |
-                                         NS_EVENT_STATE_ACTIVE))
-          aState = TS_ACTIVE;
-        else if (eventState.HasState(NS_EVENT_STATE_HOVER))
-          aState = TS_HOVER;
-        else
-          aState = TS_NORMAL;
+        aState = TS_NORMAL;
       }
 
       return NS_OK;
@@ -1261,14 +1189,14 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
                                    StyleAppearance::Menulist))
         aPart = CBP_DROPMARKER;
 
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState = TS_DISABLED;
         return NS_OK;
       }
 
       if (isHTML) {
         nsComboboxControlFrame* ccf = do_QueryFrame(aFrame);
-        isOpen = (ccf && ccf->IsDroppedDownOrHasParentPopup());
+        isOpen = (ccf && ccf->IsDroppedDown());
       } else
         isOpen = IsOpenButton(aFrame);
 
@@ -1346,7 +1274,9 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
           aState = MBI_NORMAL;
 
         // the disabled states are offset by 3
-        if (IsDisabled(aFrame, eventState)) aState += 3;
+        if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+          aState += 3;
+        }
       } else {
         aPart = MENU_POPUPITEM;
 
@@ -1356,7 +1286,9 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
           aState = MPI_NORMAL;
 
         // the disabled states are offset by 2
-        if (IsDisabled(aFrame, eventState)) aState += 2;
+        if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+          aState += 2;
+        }
       }
 
       return NS_OK;
@@ -1368,7 +1300,8 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
     case StyleAppearance::Menuarrow: {
       aPart = MENU_POPUPSUBMENU;
       EventStates eventState = GetContentState(aFrame, aAppearance);
-      aState = IsDisabled(aFrame, eventState) ? MSM_DISABLED : MSM_NORMAL;
+      aState = eventState.HasState(NS_EVENT_STATE_DISABLED) ? MSM_DISABLED
+                                                            : MSM_NORMAL;
       return NS_OK;
     }
     case StyleAppearance::Menucheckbox:
@@ -1382,7 +1315,9 @@ nsresult nsNativeThemeWin::GetThemePartAndState(nsIFrame* aFrame,
       if (aAppearance == StyleAppearance::Menuradio) aState += 2;
 
       // the disabled states are offset by 1
-      if (IsDisabled(aFrame, eventState)) aState += 1;
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+        aState += 1;
+      }
 
       return NS_OK;
     }
@@ -1462,7 +1397,7 @@ static bool AssumeThemePartAndStateAreTransparent(int32_t aPart,
 static inline double GetThemeDpiScaleFactor(nsPresContext* aPresContext) {
   if (WinUtils::IsPerMonitorDPIAware() ||
       StaticPrefs::layout_css_devPixelsPerPx() > 0.0) {
-    nsIWidget* rootWidget = aPresContext->GetRootWidget();
+    nsCOMPtr<nsIWidget> rootWidget = aPresContext->GetRootWidget();
     if (rootWidget) {
       double systemScale = WinUtils::SystemScaleFactor();
       return rootWidget->GetDefaultScale().scale / systemScale;
@@ -1479,12 +1414,11 @@ NS_IMETHODIMP
 nsNativeThemeWin::DrawWidgetBackground(gfxContext* aContext, nsIFrame* aFrame,
                                        StyleAppearance aAppearance,
                                        const nsRect& aRect,
-                                       const nsRect& aDirtyRect, DrawOverflow) {
-  if (IsWidgetScrollbarPart(aAppearance)) {
-    if (MayDrawCustomScrollbarPart(aContext, aFrame, aAppearance, aRect,
-                                   aDirtyRect)) {
-      return NS_OK;
-    }
+                                       const nsRect& aDirtyRect,
+                                       DrawOverflow aDrawOverflow) {
+  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+    return Theme::DrawWidgetBackground(aContext, aFrame, aAppearance, aRect,
+                                       aDirtyRect, aDrawOverflow);
   }
 
   HANDLE theme = GetTheme(aAppearance);
@@ -1655,7 +1589,9 @@ RENDER_AGAIN:
       EventStates eventState = GetContentState(aFrame, aAppearance);
 
       // the disabled states are offset by 1
-      if (IsDisabled(aFrame, eventState)) bgState += 1;
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+        bgState += 1;
+      }
 
       SIZE checkboxBGSize(GetCheckboxBGSize(theme, hdc));
 
@@ -1838,26 +1774,6 @@ RENDER_AGAIN:
     widgetRect.bottom = widgetRect.top + TB_SEPARATOR_HEIGHT;
     DrawThemeEdge(theme, hdc, RP_BAND, 0, &widgetRect, EDGE_ETCHED, BF_TOP,
                   nullptr);
-  } else if (aAppearance == StyleAppearance::ScrollbarthumbHorizontal ||
-             aAppearance == StyleAppearance::ScrollbarthumbVertical) {
-    // Draw the decorative gripper for the scrollbar thumb button, if it fits
-
-    SIZE gripSize;
-    MARGINS thumbMgns;
-    int gripPart = (aAppearance == StyleAppearance::ScrollbarthumbHorizontal)
-                       ? SP_GRIPPERHOR
-                       : SP_GRIPPERVERT;
-
-    if (GetThemePartSize(theme, hdc, gripPart, state, nullptr, TS_TRUE,
-                         &gripSize) == S_OK &&
-        GetThemeMargins(theme, hdc, part, state, TMT_CONTENTMARGINS, nullptr,
-                        &thumbMgns) == S_OK &&
-        gripSize.cx + thumbMgns.cxLeftWidth + thumbMgns.cxRightWidth <=
-            widgetRect.right - widgetRect.left &&
-        gripSize.cy + thumbMgns.cyTopHeight + thumbMgns.cyBottomHeight <=
-            widgetRect.bottom - widgetRect.top) {
-      DrawThemeBackground(theme, hdc, gripPart, state, &widgetRect, &clipRect);
-    }
   }
 
   nativeDrawing.EndNativeDrawing();
@@ -1867,6 +1783,18 @@ RENDER_AGAIN:
   nativeDrawing.PaintToContext();
 
   return NS_OK;
+}
+
+bool nsNativeThemeWin::CreateWebRenderCommandsForWidget(
+    wr::DisplayListBuilder& aBuilder, wr::IpcResourceUpdateQueue& aResources,
+    const layers::StackingContextHelper& aSc,
+    layers::RenderRootStateManager* aManager, nsIFrame* aFrame,
+    StyleAppearance aAppearance, const nsRect& aRect) {
+  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+    return Theme::CreateWebRenderCommandsForWidget(
+        aBuilder, aResources, aSc, aManager, aFrame, aAppearance, aRect);
+  }
+  return false;
 }
 
 static void ScaleForFrameDPI(LayoutDeviceIntMargin* aMargin, nsIFrame* aFrame) {
@@ -1909,9 +1837,6 @@ LayoutDeviceIntMargin nsNativeThemeWin::GetWidgetBorder(
       aAppearance == StyleAppearance::Statusbar ||
       aAppearance == StyleAppearance::Resizer ||
       aAppearance == StyleAppearance::Tabpanel ||
-      aAppearance == StyleAppearance::ScrollbarHorizontal ||
-      aAppearance == StyleAppearance::ScrollbarVertical ||
-      aAppearance == StyleAppearance::Scrollcorner ||
       aAppearance == StyleAppearance::Menuitem ||
       aAppearance == StyleAppearance::Checkmenuitem ||
       aAppearance == StyleAppearance::Radiomenuitem ||
@@ -2003,21 +1928,24 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
   if (aAppearance == StyleAppearance::MozWindowTitlebar ||
       aAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
     aResult->SizeTo(0, 0, 0, 0);
-    // XXX Maximized windows have an offscreen offset equal to
-    // the border padding. This should be addressed in nsWindow,
-    // but currently can't be, see UpdateNonClientMargins.
-    if (aAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
-      nsIWidget* rootWidget = nullptr;
+    // Prior to Windows 10, a bug in DwmDefWindowProc would cause window
+    // button presses/mouseovers to be missed.  This bug is circumvented by
+    // adding padding to the top of the window that is the size of the caption
+    // area and then "removing" it when calculating the client area for
+    // WM_NCCALCSIZE.  See bug 618353,
+    if (!IsWin10OrLater() &&
+        aAppearance == StyleAppearance::MozWindowTitlebarMaximized) {
+      nsCOMPtr<nsIWidget> rootWidget;
       if (WinUtils::HasSystemMetricsForDpi()) {
         rootWidget = aFrame->PresContext()->GetRootWidget();
       }
       if (rootWidget) {
         double dpi = rootWidget->GetDPI();
-        aResult->top = WinUtils::GetSystemMetricsForDpi(SM_CXFRAME, dpi) +
+        aResult->top = WinUtils::GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
                        WinUtils::GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
       } else {
         aResult->top =
-            GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+            GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
       }
     }
     return ok;
@@ -2038,18 +1966,6 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
     aResult->left = aResult->right = popupSize.cx;
     ScaleForFrameDPI(aResult, aFrame);
     return ok;
-  }
-
-  if (aAppearance == StyleAppearance::NumberInput ||
-      aAppearance == StyleAppearance::Textfield ||
-      aAppearance == StyleAppearance::Textarea ||
-      aAppearance == StyleAppearance::MenulistButton ||
-      aAppearance == StyleAppearance::Menulist) {
-    // If we have author-specified padding for these elements, don't do the
-    // fixups below.
-    if (aFrame->PresContext()->HasAuthorSpecifiedRules(
-            aFrame, NS_AUTHOR_SPECIFIED_PADDING))
-      return false;
   }
 
   /* textfields need extra pixels on all sides, otherwise they wrap their
@@ -2106,8 +2022,8 @@ bool nsNativeThemeWin::GetWidgetPadding(nsDeviceContext* aContext,
       if (aFrame->GetContent()->IsXULElement()) {
         top = 2;
         bottom = 3;
-        left = right = 5;
       }
+      left = right = 5;
       break;
     default:
       return false;
@@ -2131,6 +2047,11 @@ bool nsNativeThemeWin::GetWidgetOverflow(nsDeviceContext* aContext,
                                          nsIFrame* aFrame,
                                          StyleAppearance aAppearance,
                                          nsRect* aOverflowRect) {
+  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+    return Theme::GetWidgetOverflow(aContext, aFrame, aAppearance,
+                                    aOverflowRect);
+  }
+
   /* This is disabled for now, because it causes invalidation problems --
    * see bug 420381.  The effect of not updating the overflow area is that
    * for dropdown buttons in content areas, there is a 1px border on 3 sides
@@ -2181,6 +2102,11 @@ nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext,
                                        StyleAppearance aAppearance,
                                        LayoutDeviceIntSize* aResult,
                                        bool* aIsOverridable) {
+  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+    return Theme::GetMinimumWidgetSize(aPresContext, aFrame, aAppearance,
+                                       aResult, aIsOverridable);
+  }
+
   aResult->width = aResult->height = 0;
   *aIsOverridable = true;
   nsresult rv = NS_OK;
@@ -2229,14 +2155,6 @@ nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext,
   //  Windows appears to always use metrics when drawing standard scrollbars)
   THEMESIZE sizeReq = TS_TRUE;  // Best-fit size
   switch (aAppearance) {
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarVertical:
     case StyleAppearance::MozMenulistArrowButton: {
       rv = ClassicGetMinimumWidgetSize(aFrame, aAppearance, aResult,
                                        aIsOverridable);
@@ -2291,17 +2209,6 @@ nsNativeThemeWin::GetMinimumWidgetSize(nsPresContext* aPresContext,
       }
       ScaleForFrameDPI(aResult, aFrame);
       return rv;
-    }
-
-    case StyleAppearance::Scrollcorner: {
-      if (nsLookAndFeel::GetInt(nsLookAndFeel::IntID::UseOverlayScrollbars) !=
-          0) {
-        aResult->SizeTo(::GetSystemMetrics(SM_CXHSCROLL),
-                        ::GetSystemMetrics(SM_CYVSCROLL));
-        ScaleForFrameDPI(aResult, aFrame);
-        return rv;
-      }
-      break;
     }
 
     case StyleAppearance::Separator:
@@ -2424,7 +2331,6 @@ nsNativeThemeWin::WidgetStateChanged(nsIFrame* aFrame,
       aAppearance == StyleAppearance::Resizerpanel ||
       aAppearance == StyleAppearance::Progresschunk ||
       aAppearance == StyleAppearance::ProgressBar ||
-      aAppearance == StyleAppearance::Tooltip ||
       aAppearance == StyleAppearance::Tabpanels ||
       aAppearance == StyleAppearance::Tabpanel ||
       aAppearance == StyleAppearance::Separator ||
@@ -2497,6 +2403,10 @@ bool nsNativeThemeWin::ThemeSupportsWidget(nsPresContext* aPresContext,
     return true;
   }
 
+  if (IsWidgetNonNative(aFrame, aAppearance) == NonNative::Always) {
+    return Theme::ThemeSupportsWidget(aPresContext, aFrame, aAppearance);
+  }
+
   HANDLE theme = nullptr;
   if (aAppearance == StyleAppearance::CheckboxContainer)
     theme = GetTheme(StyleAppearance::Checkbox);
@@ -2523,7 +2433,11 @@ bool nsNativeThemeWin::WidgetIsContainer(StyleAppearance aAppearance) {
   return true;
 }
 
-bool nsNativeThemeWin::ThemeDrawsFocusForWidget(StyleAppearance aAppearance) {
+bool nsNativeThemeWin::ThemeDrawsFocusForWidget(nsIFrame* aFrame,
+                                                StyleAppearance aAppearance) {
+  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+    return Theme::ThemeDrawsFocusForWidget(aFrame, aAppearance);
+  }
   switch (aAppearance) {
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
@@ -2569,9 +2483,8 @@ nsITheme::ThemeGeometryType nsNativeThemeWin::ThemeGeometryTypeForWidget(
 
 nsITheme::Transparency nsNativeThemeWin::GetWidgetTransparency(
     nsIFrame* aFrame, StyleAppearance aAppearance) {
-  if (auto transparency =
-          ScrollbarUtil::GetScrollbarPartTransparency(aFrame, aAppearance)) {
-    return *transparency;
+  if (IsWidgetNonNative(aFrame, aAppearance) != NonNative::No) {
+    return Theme::GetWidgetTransparency(aFrame, aAppearance);
   }
 
   switch (aAppearance) {
@@ -2588,9 +2501,8 @@ nsITheme::Transparency nsNativeThemeWin::GetWidgetTransparency(
   HANDLE theme = GetTheme(aAppearance);
   // For the classic theme we don't really have a way of knowing
   if (!theme) {
-    // menu backgrounds and tooltips which can't be themed are opaque
-    if (aAppearance == StyleAppearance::Menupopup ||
-        aAppearance == StyleAppearance::Tooltip) {
+    // menu backgrounds which can't be themed are opaque
+    if (aAppearance == StyleAppearance::Menupopup) {
       return eOpaque;
     }
     return eUnknownTransparency;
@@ -2628,6 +2540,7 @@ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
     case StyleAppearance::Menupopup:
       // Classic non-flat menus are handled almost entirely through CSS.
       if (!nsUXThemeData::AreFlatMenusEnabled()) return false;
+      [[fallthrough]];
     case StyleAppearance::Button:
     case StyleAppearance::NumberInput:
     case StyleAppearance::Textfield:
@@ -2637,15 +2550,6 @@ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
     case StyleAppearance::Range:
     case StyleAppearance::RangeThumb:
     case StyleAppearance::Groupbox:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::Scrollcorner:
     case StyleAppearance::Menulist:
     case StyleAppearance::MenulistButton:
     case StyleAppearance::MozMenulistArrowButton:
@@ -2653,7 +2557,6 @@ bool nsNativeThemeWin::ClassicThemeSupportsWidget(nsIFrame* aFrame,
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::Listbox:
     case StyleAppearance::Treeview:
-    case StyleAppearance::Tooltip:
     case StyleAppearance::Statusbar:
     case StyleAppearance::Statusbarpanel:
     case StyleAppearance::Resizerpanel:
@@ -2718,9 +2621,6 @@ LayoutDeviceIntMargin nsNativeThemeWin::ClassicGetWidgetBorder(
       result.right = aFrame->GetNextSibling() ? 3 : 1;
       break;
     }
-    case StyleAppearance::Tooltip:
-      result.top = result.left = result.bottom = result.right = 1;
-      break;
     case StyleAppearance::ProgressBar:
       result.top = result.left = result.bottom = result.right = 1;
       break;
@@ -2798,31 +2698,6 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
       (*aResult).height = 8;  // No good metrics available for this
       *aIsOverridable = false;
       break;
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-      // For scrollbar-width:thin, we don't display the buttons.
-      if (!ScrollbarUtil::IsScrollbarWidthThin(aFrame)) {
-        (*aResult).width = ::GetSystemMetrics(SM_CXVSCROLL);
-        (*aResult).height = ::GetSystemMetrics(SM_CYVSCROLL);
-      }
-      *aIsOverridable = false;
-      break;
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-      // For scrollbar-width:thin, we don't display the buttons.
-      if (!ScrollbarUtil::IsScrollbarWidthThin(aFrame)) {
-        (*aResult).width = ::GetSystemMetrics(SM_CXHSCROLL);
-        (*aResult).height = ::GetSystemMetrics(SM_CYHSCROLL);
-      }
-      *aIsOverridable = false;
-      break;
-    case StyleAppearance::ScrollbarVertical:
-      // XXX HACK We should be able to have a minimum height for the scrollbar
-      // track.  However, this causes problems when uncollapsing a scrollbar
-      // inside a tree.  See bug 201379 for details.
-
-      //      (*aResult).height = ::GetSystemMetrics(SM_CYVTHUMB) << 1;
-      break;
     case StyleAppearance::RangeThumb: {
       if (IsRangeHorizontal(aFrame)) {
         (*aResult).width = 12;
@@ -2850,7 +2725,6 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
     case StyleAppearance::Statusbarpanel:
     case StyleAppearance::Resizerpanel:
     case StyleAppearance::Progresschunk:
-    case StyleAppearance::Tooltip:
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Tab:
     case StyleAppearance::Tabpanel:
@@ -2868,39 +2742,6 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
       *aIsOverridable = false;
       break;
     }
-    case StyleAppearance::ScrollbarthumbVertical:
-      (*aResult).width = ::GetSystemMetrics(SM_CXVSCROLL);
-      (*aResult).height = ::GetSystemMetrics(SM_CYVTHUMB);
-      // Without theming, divide the thumb size by two in order to look more
-      // native
-      if (!GetTheme(aAppearance)) {
-        (*aResult).height >>= 1;
-      }
-      // If scrollbar-width is thin, divide the thickness by two to make
-      // it look more compact.
-      if (ScrollbarUtil::IsScrollbarWidthThin(aFrame)) {
-        aResult->width >>= 1;
-      }
-      *aIsOverridable = false;
-      break;
-    case StyleAppearance::ScrollbarthumbHorizontal:
-      (*aResult).width = ::GetSystemMetrics(SM_CXHTHUMB);
-      (*aResult).height = ::GetSystemMetrics(SM_CYHSCROLL);
-      // Without theming, divide the thumb size by two in order to look more
-      // native
-      if (!GetTheme(aAppearance)) {
-        (*aResult).width >>= 1;
-      }
-      // If scrollbar-width is thin, divide the thickness by two to make
-      // it look more compact.
-      if (ScrollbarUtil::IsScrollbarWidthThin(aFrame)) {
-        aResult->height >>= 1;
-      }
-      *aIsOverridable = false;
-      break;
-    case StyleAppearance::ScrollbarHorizontal:
-      (*aResult).width = ::GetSystemMetrics(SM_CXHTHUMB) << 1;
-      break;
     case StyleAppearance::Menuseparator: {
       aResult->width = 0;
       aResult->height = 10;
@@ -2950,51 +2791,29 @@ nsresult nsNativeThemeWin::ClassicGetMinimumWidgetSize(
   return NS_OK;
 }
 
-auto nsNativeThemeWin::GetScrollbarSizes(nsPresContext* aPresContext,
-                                         StyleScrollbarWidth aWidth, Overlay)
-    -> ScrollbarSizes {
-  ScrollbarSizes sizes{::GetSystemMetrics(SM_CXVSCROLL),
-                       ::GetSystemMetrics(SM_CYHSCROLL)};
-  if (aWidth == StyleScrollbarWidth::Thin) {
-    sizes.mVertical = sizes.mVertical >> 1;
-    sizes.mHorizontal = sizes.mHorizontal >> 1;
-  }
-
-  double themeScale = GetThemeDpiScaleFactor(aPresContext);
-  if (themeScale != 1.0) {
-    sizes.mVertical = NSToIntRound(sizes.mVertical * themeScale);
-    sizes.mHorizontal = NSToIntRound(sizes.mHorizontal * themeScale);
-  }
-
-  return sizes;
-}
-
 nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
     nsIFrame* aFrame, StyleAppearance aAppearance, int32_t& aPart,
     int32_t& aState, bool& aFocused) {
   aFocused = false;
   switch (aAppearance) {
     case StyleAppearance::Button: {
-      EventStates contentState;
-
       aPart = DFC_BUTTON;
       aState = DFCS_BUTTONPUSH;
       aFocused = false;
 
-      contentState = GetContentState(aFrame, aAppearance);
-      if (IsDisabled(aFrame, contentState))
+      EventStates contentState = GetContentState(aFrame, aAppearance);
+      if (contentState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState |= DFCS_INACTIVE;
-      else if (IsOpenButton(aFrame))
+      } else if (IsOpenButton(aFrame)) {
         aState |= DFCS_PUSHED;
-      else if (IsCheckedButton(aFrame))
+      } else if (IsCheckedButton(aFrame)) {
         aState |= DFCS_CHECKED;
-      else {
+      } else {
         if (contentState.HasAllStates(NS_EVENT_STATE_ACTIVE |
                                       NS_EVENT_STATE_HOVER)) {
           aState |= DFCS_PUSHED;
-          const nsStyleUI* uiData = aFrame->StyleUI();
           // The down state is flat if the button is focusable
-          if (uiData->mUserFocus == StyleUserFocus::Normal) {
+          if (aFrame->StyleUI()->UserFocus() == StyleUserFocus::Normal) {
             if (!aFrame->GetContent()->IsHTMLElement()) aState |= DFCS_FLAT;
 
             aFocused = true;
@@ -3013,15 +2832,16 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
     }
     case StyleAppearance::Checkbox:
     case StyleAppearance::Radio: {
-      EventStates contentState;
+      EventStates contentState = GetContentState(aFrame, aAppearance);
       aFocused = false;
 
       aPart = DFC_BUTTON;
       aState = 0;
       nsIContent* content = aFrame->GetContent();
       bool isCheckbox = (aAppearance == StyleAppearance::Checkbox);
-      bool isChecked = GetCheckedOrSelected(aFrame, !isCheckbox);
-      bool isIndeterminate = isCheckbox && GetIndeterminate(aFrame);
+      bool isChecked = contentState.HasState(NS_EVENT_STATE_CHECKED);
+      bool isIndeterminate =
+          contentState.HasState(NS_EVENT_STATE_INDETERMINATE);
 
       if (isCheckbox) {
         // indeterminate state takes precedence over checkedness.
@@ -3037,13 +2857,12 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
         aState |= DFCS_CHECKED;
       }
 
-      contentState = GetContentState(aFrame, aAppearance);
       if (!content->IsXULElement() &&
           contentState.HasState(NS_EVENT_STATE_FOCUSRING)) {
         aFocused = true;
       }
 
-      if (IsDisabled(aFrame, contentState)) {
+      if (contentState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState |= DFCS_INACTIVE;
       } else if (contentState.HasAllStates(NS_EVENT_STATE_ACTIVE |
                                            NS_EVENT_STATE_HOVER)) {
@@ -3074,7 +2893,9 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
         isOpen = menuFrame->IsOpen();
       }
 
-      if (IsDisabled(aFrame, eventState)) aState |= DFCS_INACTIVE;
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+        aState |= DFCS_INACTIVE;
+      }
 
       if (isTopLevel) {
         aPart = 1;
@@ -3091,7 +2912,9 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
       aState = 0;
       EventStates eventState = GetContentState(aFrame, aAppearance);
 
-      if (IsDisabled(aFrame, eventState)) aState |= DFCS_INACTIVE;
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
+        aState |= DFCS_INACTIVE;
+      }
       if (IsMenuActive(aFrame, aAppearance)) aState |= DFCS_HOT;
 
       if (aAppearance == StyleAppearance::Menucheckbox ||
@@ -3112,16 +2935,10 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
     case StyleAppearance::MenulistButton:
     case StyleAppearance::Range:
     case StyleAppearance::RangeThumb:
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::Scrollcorner:
     case StyleAppearance::Statusbar:
     case StyleAppearance::Statusbarpanel:
     case StyleAppearance::Resizerpanel:
     case StyleAppearance::Progresschunk:
-    case StyleAppearance::Tooltip:
     case StyleAppearance::ProgressBar:
     case StyleAppearance::Tab:
     case StyleAppearance::Tabpanel:
@@ -3146,14 +2963,14 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
 
       EventStates eventState = GetContentState(aFrame, aAppearance);
 
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState |= DFCS_INACTIVE;
         return NS_OK;
       }
 
       if (isHTML) {
         nsComboboxControlFrame* ccf = do_QueryFrame(aFrame);
-        isOpen = (ccf && ccf->IsDroppedDownOrHasParentPopup());
+        isOpen = (ccf && ccf->IsDroppedDown());
       } else
         isOpen = IsOpenButton(aFrame);
 
@@ -3164,40 +2981,6 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
       // Dropdown button active state doesn't need :hover.
       if (eventState.HasState(NS_EVENT_STATE_ACTIVE))
         aState |= DFCS_PUSHED | DFCS_FLAT;
-
-      return NS_OK;
-    }
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight: {
-      EventStates contentState = GetContentState(aFrame, aAppearance);
-
-      aPart = DFC_SCROLL;
-      switch (aAppearance) {
-        case StyleAppearance::ScrollbarbuttonUp:
-          aState = DFCS_SCROLLUP;
-          break;
-        case StyleAppearance::ScrollbarbuttonDown:
-          aState = DFCS_SCROLLDOWN;
-          break;
-        case StyleAppearance::ScrollbarbuttonLeft:
-          aState = DFCS_SCROLLLEFT;
-          break;
-        case StyleAppearance::ScrollbarbuttonRight:
-          aState = DFCS_SCROLLRIGHT;
-          break;
-        default:
-          break;
-      }
-
-      if (IsDisabled(aFrame, contentState))
-        aState |= DFCS_INACTIVE;
-      else {
-        if (contentState.HasAllStates(NS_EVENT_STATE_HOVER |
-                                      NS_EVENT_STATE_ACTIVE))
-          aState |= DFCS_PUSHED | DFCS_FLAT;
-      }
 
       return NS_OK;
     }
@@ -3217,9 +3000,9 @@ nsresult nsNativeThemeWin::ClassicGetThemePartAndState(
           break;
       }
 
-      if (IsDisabled(aFrame, contentState))
+      if (contentState.HasState(NS_EVENT_STATE_DISABLED)) {
         aState |= DFCS_INACTIVE;
-      else {
+      } else {
         if (contentState.HasAllStates(NS_EVENT_STATE_HOVER |
                                       NS_EVENT_STATE_ACTIVE))
           aState |= DFCS_PUSHED;
@@ -3493,15 +3276,11 @@ RENDER_AGAIN:
         if (brush) ::FrameRect(hdc, &widgetRect, brush);
         InflateRect(&widgetRect, -1, -1);
       }
-      // fall-through...
+      [[fallthrough]];
     }
     // Draw controls supported by DrawFrameControl
     case StyleAppearance::Checkbox:
     case StyleAppearance::Radio:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
     case StyleAppearance::SpinnerUpbutton:
     case StyleAppearance::SpinnerDownbutton:
     case StyleAppearance::MozMenulistArrowButton:
@@ -3526,7 +3305,8 @@ RENDER_AGAIN:
       EventStates eventState = GetContentState(aFrame, aAppearance);
 
       // Fill in background
-      if (IsDisabled(aFrame, eventState) ||
+
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED) ||
           (aFrame->GetContent()->IsXULElement() && IsReadOnly(aFrame)))
         ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_BTNFACE + 1));
       else
@@ -3543,13 +3323,6 @@ RENDER_AGAIN:
 
       break;
     }
-    // Draw ToolTip background
-    case StyleAppearance::Tooltip:
-      ::FrameRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_WINDOWFRAME));
-      InflateRect(&widgetRect, -1, -1);
-      ::FillRect(hdc, &widgetRect, ::GetSysColorBrush(COLOR_INFOBK));
-
-      break;
     case StyleAppearance::Groupbox:
       ::DrawEdge(hdc, &widgetRect, EDGE_ETCHED, BF_RECT | BF_ADJUST);
       ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_BTNFACE + 1));
@@ -3559,7 +3332,7 @@ RENDER_AGAIN:
       // Draw 3D border
       ::DrawEdge(hdc, &widgetRect, BDR_SUNKENOUTER, BF_RECT | BF_MIDDLE);
       InflateRect(&widgetRect, -1, -1);
-      // fall through
+      [[fallthrough]];
     case StyleAppearance::Tabpanel:
     case StyleAppearance::Statusbar:
     case StyleAppearance::Resizerpanel: {
@@ -3576,49 +3349,17 @@ RENDER_AGAIN:
 
       break;
     }
-    // Draw scrollbar thumb
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal:
-      ::DrawEdge(hdc, &widgetRect, EDGE_RAISED, BF_RECT | BF_MIDDLE);
-
-      break;
     case StyleAppearance::RangeThumb: {
       EventStates eventState = GetContentState(aFrame, aAppearance);
 
       ::DrawEdge(hdc, &widgetRect, EDGE_RAISED,
                  BF_RECT | BF_SOFT | BF_MIDDLE | BF_ADJUST);
-      if (IsDisabled(aFrame, eventState)) {
+      if (eventState.HasState(NS_EVENT_STATE_DISABLED)) {
         DrawCheckedRect(hdc, widgetRect, COLOR_3DFACE, COLOR_3DHILIGHT,
                         (HBRUSH)COLOR_3DHILIGHT);
       }
 
       break;
-    }
-    // Draw scrollbar track background
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::ScrollbarHorizontal: {
-      // Windows fills in the scrollbar track differently
-      // depending on whether these are equal
-      DWORD color3D, colorScrollbar, colorWindow;
-
-      color3D = ::GetSysColor(COLOR_3DFACE);
-      colorWindow = ::GetSysColor(COLOR_WINDOW);
-      colorScrollbar = ::GetSysColor(COLOR_SCROLLBAR);
-
-      if ((color3D != colorScrollbar) && (colorWindow != colorScrollbar))
-        // Use solid brush
-        ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_SCROLLBAR + 1));
-      else {
-        DrawCheckedRect(hdc, widgetRect, COLOR_3DHILIGHT, COLOR_3DFACE,
-                        (HBRUSH)COLOR_SCROLLBAR + 1);
-      }
-      // XXX should invert the part of the track being clicked here
-      // but the track is never :active
-
-      break;
-    }
-    case StyleAppearance::Scrollcorner: {
-      ::FillRect(hdc, &widgetRect, (HBRUSH)(COLOR_SCROLLBAR + 1));
     }
     // Draw scale track background
     case StyleAppearance::Range: {
@@ -3649,7 +3390,8 @@ RENDER_AGAIN:
       nsIFrame* stateFrame = aFrame->GetParent();
       EventStates eventStates = GetContentState(stateFrame, aAppearance);
 
-      bool indeterminate = IsIndeterminateProgress(stateFrame, eventStates);
+      const bool indeterminate =
+          eventStates.HasState(NS_EVENT_STATE_INDETERMINATE);
       bool vertical = IsVerticalProgress(stateFrame);
 
       nsIContent* content = aFrame->GetContent();
@@ -3720,6 +3462,7 @@ RENDER_AGAIN:
     case StyleAppearance::Menucheckbox:
     case StyleAppearance::Menuradio:
       if (!(state & DFCS_CHECKED)) break;  // nothin' to do
+      [[fallthrough]];
     case StyleAppearance::Menuarrow: {
       uint32_t color = COLOR_MENUTEXT;
       if ((state & DFCS_INACTIVE))
@@ -3759,7 +3502,7 @@ RENDER_AGAIN:
       int32_t offset = GetSystemMetrics(SM_CXFRAME);
 
       // first fill the area to the color of the window background
-      FillRect(hdc, &rect, (HBRUSH)(COLOR_3DFACE + 1));
+      ::FillRect(hdc, &rect, (HBRUSH)(COLOR_3DFACE + 1));
 
       // inset the caption area so it doesn't overflow.
       rect.top += offset;
@@ -3769,9 +3512,9 @@ RENDER_AGAIN:
       SystemParametersInfo(SPI_GETGRADIENTCAPTIONS, 0, &bFlag, 0);
       if (!bFlag) {
         if (state == mozilla::widget::themeconst::FS_ACTIVE)
-          FillRect(hdc, &rect, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
+          ::FillRect(hdc, &rect, (HBRUSH)(COLOR_ACTIVECAPTION + 1));
         else
-          FillRect(hdc, &rect, (HBRUSH)(COLOR_INACTIVECAPTION + 1));
+          ::FillRect(hdc, &rect, (HBRUSH)(COLOR_INACTIVECAPTION + 1));
       } else {
         DWORD startColor, endColor;
         if (state == mozilla::widget::themeconst::FS_ACTIVE) {
@@ -3896,147 +3639,12 @@ uint32_t nsNativeThemeWin::GetWidgetNativeDrawingFlags(
   }
 }
 
-// This tries to draw a Windows 10 style scrollbar with given colors.
-bool nsNativeThemeWin::MayDrawCustomScrollbarPart(gfxContext* aContext,
-                                                  nsIFrame* aFrame,
-                                                  StyleAppearance aAppearance,
-                                                  const nsRect& aRect,
-                                                  const nsRect& aClipRect) {
-  ComputedStyle* style = ScrollbarUtil::GetCustomScrollbarStyle(aFrame);
-  if (!style) {
-    return false;
-  }
-
-  EventStates eventStates = GetContentState(aFrame, aAppearance);
-
-  gfxContextAutoSaveRestore autoSave(aContext);
-  RefPtr<gfxContext> ctx = aContext;
-  DrawTarget* dt = ctx->GetDrawTarget();
-  gfxFloat p2a = gfxFloat(aFrame->PresContext()->AppUnitsPerDevPixel());
-  gfxRect rect = ThebesRect(NSRectToSnappedRect(aRect, p2a, *dt));
-  gfxRect clipRect = ThebesRect(NSRectToSnappedRect(aClipRect, p2a, *dt));
-  ctx->Clip(clipRect);
-
-  nscolor trackColor = ScrollbarUtil::GetScrollbarTrackColor(aFrame);
-
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarHorizontal:
-    case StyleAppearance::ScrollbarVertical:
-    case StyleAppearance::Scrollcorner: {
-      ctx->SetColor(sRGBColor::FromABGR(trackColor));
-      ctx->Rectangle(rect);
-      ctx->Fill();
-      return true;
-    }
-    default:
-      break;
-  }
-
-  // Scrollbar thumb and button are two CSS pixels thinner than the track.
-  gfxRect bgRect = rect;
-  gfxFloat dev2css = round(AppUnitsPerCSSPixel() / p2a);
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-      bgRect.Deflate(dev2css, 0);
-      break;
-    case StyleAppearance::ScrollbarthumbHorizontal:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight:
-      bgRect.Deflate(0, dev2css);
-      break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unknown widget type");
-  }
-
-  switch (aAppearance) {
-    case StyleAppearance::ScrollbarthumbVertical:
-    case StyleAppearance::ScrollbarthumbHorizontal: {
-      nscolor faceColor =
-          ScrollbarUtil::GetScrollbarThumbColor(aFrame, eventStates);
-      ctx->SetColor(sRGBColor::FromABGR(faceColor));
-      ctx->Rectangle(bgRect);
-      ctx->Fill();
-      break;
-    }
-    case StyleAppearance::ScrollbarbuttonUp:
-    case StyleAppearance::ScrollbarbuttonDown:
-    case StyleAppearance::ScrollbarbuttonLeft:
-    case StyleAppearance::ScrollbarbuttonRight: {
-      nscolor buttonColor =
-          nsNativeBasicTheme::GetScrollbarButtonColor(trackColor, eventStates);
-      ctx->SetColor(sRGBColor::FromABGR(buttonColor));
-      ctx->Rectangle(bgRect);
-      ctx->Fill();
-
-      // We use the path of scrollbar up arrow on Windows 10 which is
-      // in a 17x17 area.
-      const gfxFloat kSize = 17.0;
-      // Setup the transform matrix.
-      gfxFloat width = rect.Width();
-      gfxFloat height = rect.Height();
-      gfxFloat size = std::min(width, height);
-      gfxFloat left = (width - size) / 2.0 + rect.x;
-      gfxFloat top = (height - size) / 2.0 + rect.y;
-      gfxFloat scale = size / kSize;
-      gfxFloat rad = 0.0;
-      if (aAppearance == StyleAppearance::ScrollbarbuttonRight) {
-        rad = M_PI / 2;
-      } else if (aAppearance == StyleAppearance::ScrollbarbuttonDown) {
-        rad = M_PI;
-      } else if (aAppearance == StyleAppearance::ScrollbarbuttonLeft) {
-        rad = -M_PI / 2;
-      }
-      gfx::Matrix mat = ctx->CurrentMatrix();
-      mat.PreTranslate(left, top);
-      mat.PreScale(scale, scale);
-      if (rad != 0.0) {
-        const gfxFloat kOffset = kSize / 2.0;
-        mat.PreTranslate(kOffset, kOffset);
-        mat.PreRotate(rad);
-        mat.PreTranslate(-kOffset, -kOffset);
-      }
-      ctx->SetMatrix(mat);
-      // The arrow should not have antialias applied.
-      ctx->SetAntialiasMode(gfx::AntialiasMode::NONE);
-      // Set the arrow path.
-      ctx->NewPath();
-      ctx->MoveTo(gfxPoint(5.0, 9.0));
-      ctx->LineTo(gfxPoint(8.5, 6.0));
-      ctx->LineTo(gfxPoint(12.0, 9.0));
-      ctx->LineTo(gfxPoint(12.0, 12.0));
-      ctx->LineTo(gfxPoint(8.5, 9.0));
-      ctx->LineTo(gfxPoint(5.0, 12.0));
-      ctx->ClosePath();
-      // And paint the arrow.
-      nscolor arrowColor =
-          nsNativeBasicTheme::GetScrollbarArrowColor(buttonColor)
-              .valueOrFrom([&] {
-                return ScrollbarUtil::GetScrollbarThumbColor(aFrame,
-                                                             eventStates);
-              });
-      ctx->SetColor(sRGBColor::FromABGR(arrowColor));
-      ctx->Fill();
-      break;
-    }
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unknown widget type");
-  }
-  return true;
-}
+}  // namespace mozilla::widget
 
 ///////////////////////////////////////////
 // Creation Routine
 ///////////////////////////////////////////
 
-already_AddRefed<nsITheme> do_GetNativeThemeDoNotUseDirectly() {
-  static nsCOMPtr<nsITheme> inst;
-
-  if (!inst) {
-    inst = new nsNativeThemeWin();
-    ClearOnShutdown(&inst);
-  }
-
-  return do_AddRef(inst);
+already_AddRefed<Theme> do_CreateNativeThemeDoNotUseDirectly() {
+  return do_AddRef(new nsNativeThemeWin());
 }

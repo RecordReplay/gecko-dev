@@ -1,3 +1,5 @@
+/* eslint-disable prettier/prettier */
+/* eslint-disable no-useless-concat */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -47,10 +49,19 @@ var HeuristicsRegExp = {
       "address-line3": "addrline3|address_3",
       "address-level1": "land", // de-DE
       "additional-name": "apellido.?materno|lastlastname",
+      "cc-name":
+        "accountholdername" + 
+        "|titulaire", // fr-FR
       "cc-number": "(cc|kk)nr", // de-DE
-      "cc-exp-month": "(cc|kk)month", // de-DE
-      "cc-exp-year": "(cc|kk)year", // de-DE
-      "cc-type": "type",
+      "cc-exp-month":
+        "month" + 
+        "|(cc|kk)month", // de-DE
+      "cc-exp-year":
+        "year" + 
+        "|(cc|kk)year", // de-DE
+      "cc-type":
+        "type" + 
+        "|kartenmarke", // de-DE
     },
 
     //=========================================================================
@@ -559,11 +570,16 @@ var HeuristicsRegExp = {
     let rules = [];
     this.RULE_SETS.forEach(set => {
       if (set[name]) {
-        rules.push(`(${set[name]})`.normalize("NFKC"));
+        // Add the rule.
+        // We make the regex lower case so that we can match it against the
+        // lower-cased field name and get a rough equivalent of a case-insensitive
+        // match. This avoids a performance cliff with the "iu" flag on regular
+        // expressions.
+        rules.push(`(${set[name].toLowerCase()})`.normalize("NFKC"));
       }
     });
 
-    const value = new RegExp(rules.join("|"), "iu");
+    const value = new RegExp(rules.join("|"), "u");
     Object.defineProperty(this.RULES, name, { get: undefined });
     Object.defineProperty(this.RULES, name, { value });
     return value;

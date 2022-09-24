@@ -11,8 +11,7 @@
 #include "mozilla/dom/KeyboardEventBinding.h"
 #include "mozilla/EventForwards.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class KeyboardEvent : public UIEvent {
  public:
@@ -64,6 +63,7 @@ class KeyboardEvent : public UIEvent {
                       nsGlobalWindowInner* aView, bool aCtrlKey, bool aAltKey,
                       bool aShiftKey, bool aMetaKey, uint32_t aKeyCode,
                       uint32_t aCharCode);
+  static bool IsInitKeyEventAvailable(JSContext*, JSObject*);
 
   void InitKeyboardEventJS(const nsAString& aType, bool aCanBubble,
                            bool aCancelable, nsGlobalWindowInner* aView,
@@ -121,8 +121,7 @@ class KeyboardEvent : public UIEvent {
       const WidgetKeyboardEvent& aKeyboardEvent, CallerType aCallerType) const;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 already_AddRefed<mozilla::dom::KeyboardEvent> NS_NewDOMKeyboardEvent(
     mozilla::dom::EventTarget* aOwner, nsPresContext* aPresContext,

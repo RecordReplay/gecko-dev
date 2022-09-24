@@ -174,9 +174,8 @@ struct BaseRect {
   }
 
   // Returns the smallest rectangle that contains both the area of both
-  // this and aRect2.
-  // Thus, empty input rectangles are ignored.
-  // If both rectangles are empty, returns this.
+  // this and aRect. Thus, empty input rectangles are ignored.
+  // Note: if both rectangles are empty, returns aRect.
   // WARNING! This is not safe against overflow, prefer using SafeUnion instead
   // when dealing with int-based rects.
   [[nodiscard]] Sub Union(const Sub& aRect) const {
@@ -589,12 +588,10 @@ struct BaseRect {
   void Scale(T aScale) { Scale(aScale, aScale); }
   // Scale 'this' by aXScale and aYScale, without doing any rounding.
   void Scale(T aXScale, T aYScale) {
-    T right = XMost() * aXScale;
-    T bottom = YMost() * aYScale;
     x = x * aXScale;
     y = y * aYScale;
-    width = right - x;
-    height = bottom - y;
+    width = width * aXScale;
+    height = height * aYScale;
   }
   // Scale 'this' by aScale, converting coordinates to integers so that the
   // result is the smallest integer-coordinate rectangle containing the

@@ -6,10 +6,9 @@
 // This is a kinto-specific test...
 Services.prefs.setBoolPref("webextensions.storage.sync.kinto", true);
 
-const { EncryptionRemoteTransformer } = ChromeUtils.import(
-  "resource://gre/modules/ExtensionStorageSyncKinto.jsm",
-  null
-);
+const {
+  KintoStorageTestUtils: { EncryptionRemoteTransformer },
+} = ChromeUtils.import("resource://gre/modules/ExtensionStorageSyncKinto.jsm");
 const { CryptoUtils } = ChromeUtils.import(
   "resource://services-crypto/utils.js"
 );
@@ -73,10 +72,7 @@ add_task(async function setup() {
     2 * 32
   );
   const KEY_BUNDLE = {
-    sha256HMACHasher: Utils.makeHMACHasher(
-      Ci.nsICryptoHMAC.SHA256,
-      Utils.makeHMACKey(STRETCHED_KEY.slice(0, 32))
-    ),
+    hmacKey: STRETCHED_KEY.slice(0, 32),
     encryptionKeyB64: btoa(STRETCHED_KEY.slice(32, 64)),
   };
   transformer = new StaticKeyEncryptionRemoteTransformer(KEY_BUNDLE);

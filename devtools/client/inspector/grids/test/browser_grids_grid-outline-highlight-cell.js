@@ -27,9 +27,6 @@ add_task(async function() {
   const HIGHLIGHTER_TYPE = inspector.highlighters.TYPES.GRID;
   const { waitForHighlighterTypeShown } = getHighlighterTestHelpers(inspector);
 
-  // Don't track reflows since this might cause intermittent failures.
-  inspector.off("reflow-in-selected-target", gridInspector.onReflow);
-
   const gridList = doc.getElementById("grid-list");
   const checkbox = gridList.children[0].querySelector("input");
 

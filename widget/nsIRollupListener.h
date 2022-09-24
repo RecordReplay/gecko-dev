@@ -9,6 +9,7 @@
 
 #include "nsTArray.h"
 #include "nsPoint.h"
+#include "Units.h"
 
 class nsIContent;
 class nsIWidget;
@@ -61,11 +62,6 @@ class nsIRollupListener {
    */
   virtual uint32_t GetSubmenuWidgetChain(
       nsTArray<nsIWidget*>* aWidgetChain) = 0;
-
-  /**
-   * Notify the RollupListener that the widget did a Move or Resize.
-   */
-  virtual void NotifyGeometryChange() = 0;
 
   virtual nsIWidget* GetRollupWidget() = 0;
 

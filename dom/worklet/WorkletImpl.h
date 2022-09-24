@@ -10,6 +10,7 @@
 #include "MainThreadUtils.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/OriginAttributes.h"
+#include "mozilla/OriginTrials.h"
 #include "mozilla/ipc/PBackgroundSharedTypes.h"
 
 class nsPIDOMWindowInner;
@@ -71,6 +72,7 @@ class WorkletImpl {
 
   // Any thread.
 
+  const OriginTrials& Trials() const { return mTrials; }
   const WorkletLoadInfo& LoadInfo() const { return mWorkletLoadInfo; }
   const OriginAttributes& OriginAttributesRef() const {
     return mPrincipalInfo.get_NullPrincipalInfo().attrs();
@@ -80,6 +82,16 @@ class WorkletImpl {
   const Maybe<nsID>& GetAgentClusterId() const { return mAgentClusterId; }
 
   bool IsSharedMemoryAllowed() const { return mSharedMemoryAllowed; }
+
+  virtual void OnAddModuleStarted() const {
+    MOZ_ASSERT(NS_IsMainThread());
+    // empty base impl
+  }
+
+  virtual void OnAddModulePromiseSettled() const {
+    MOZ_ASSERT(NS_IsMainThread());
+    // empty base impl
+  }
 
  protected:
   WorkletImpl(nsPIDOMWindowInner* aWindow, nsIPrincipal* aPrincipal);
@@ -105,6 +117,8 @@ class WorkletImpl {
   Maybe<nsID> mAgentClusterId;
 
   bool mSharedMemoryAllowed;
+
+  const OriginTrials mTrials;
 };
 
 }  // namespace mozilla

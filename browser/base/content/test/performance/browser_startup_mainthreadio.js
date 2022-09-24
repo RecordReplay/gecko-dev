@@ -46,9 +46,6 @@ const kSharedFontList = SpecialPowers.getBoolPref("gfx.e10s.font-list.shared");
  *    It's possible to have only a prefix, in thise case the directory will
  *    still be resolved, eg. "UAppData:"
  *  - use * at the begining and/or end as a wildcard
- *  - For Windows specific entries that require resolving the path to its
- *    canonical form, ie. the old DOS 8.3 format, use canonicalize: true.
- *    This is needed for stat calls to non-existent files.
  * The folder separator is '/' even for Windows paths, where it'll be
  * automatically converted to '\'.
  *
@@ -214,13 +211,6 @@ const startupPhases = {
       read: 1,
       close: 1,
     },
-    {
-      // bug 1546838
-      path: "ProfD:xulstore/data.mdb",
-      condition: WIN,
-      read: 1,
-      write: 1,
-    },
   ],
 
   "before opening first browser window": [
@@ -350,12 +340,6 @@ const startupPhases = {
       condition: WIN && !AppConstants.MOZILLA_OFFICIAL,
       stat: 1,
     },
-    {
-      // bug 1546838
-      path: "ProfD:xulstore/data.mdb",
-      condition: MAC,
-      write: 1,
-    },
   ],
 
   // We are at this phase once we are ready to handle user events.
@@ -370,31 +354,21 @@ const startupPhases = {
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:cert9.db",
+      path: `ProfD:cert9.db`,
       condition: WIN,
       read: 5,
-      stat: 2,
+      stat: AppConstants.NIGHTLY_BUILD ? 5 : 4,
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:cert9.db",
+      path: `ProfD:cert9.db-journal`,
       condition: WIN,
-      ignoreIfUnused: true, // if canonicalize(ProfD) == ProfD, we'll use the previous entry.
-      canonicalize: true,
-      stat: 2,
-    },
-    {
-      // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:cert9.db-journal",
-      condition: WIN,
-      canonicalize: true,
       stat: 3,
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:cert9.db-wal",
+      path: `ProfD:cert9.db-wal`,
       condition: WIN,
-      canonicalize: true,
       stat: 3,
     },
     {
@@ -405,31 +379,21 @@ const startupPhases = {
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:key4.db",
+      path: `ProfD:key4.db`,
       condition: WIN,
       read: 8,
-      stat: 2,
+      stat: AppConstants.NIGHTLY_BUILD ? 5 : 4,
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:key4.db",
+      path: `ProfD:key4.db-journal`,
       condition: WIN,
-      ignoreIfUnused: true, // if canonicalize(ProfD) == ProfD, we'll use the previous entry.
-      canonicalize: true,
-      stat: 2,
-    },
-    {
-      // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:key4.db-journal",
-      condition: WIN,
-      canonicalize: true,
       stat: 5,
     },
     {
       // bug 1370516 - NSS should be initialized off main thread.
-      path: "ProfD:key4.db-wal",
+      path: `ProfD:key4.db-wal`,
       condition: WIN,
-      canonicalize: true,
       stat: 5,
     },
     {
@@ -486,8 +450,8 @@ const startupPhases = {
       ignoreIfUnused: true,
       stat: 4,
       fsync: 3,
-      read: 40,
-      write: 156,
+      read: 51,
+      write: 178,
     },
     {
       // bug 1391590
@@ -503,7 +467,7 @@ const startupPhases = {
       fsync: 2,
       read: 4,
       stat: 3,
-      write: 1313,
+      write: 1324,
     },
     {
       // bug 1391590
@@ -540,15 +504,13 @@ const startupPhases = {
       write: 1300,
     },
     {
-      path: "ProfD:key4.db-journal",
+      path: `ProfD:key4.db-journal`,
       condition: WIN,
-      canonicalize: true,
       stat: 2,
     },
     {
-      path: "ProfD:key4.db-wal",
+      path: `ProfD:key4.db-wal`,
       condition: WIN,
-      canonicalize: true,
       stat: 2,
     },
     {
@@ -568,7 +530,7 @@ for (let name of ["d3d11layers", "glcontext", "wmfvpxvideo"]) {
   });
 }
 
-function expandPathWithDirServiceKey(path, canonicalize = false) {
+function expandPathWithDirServiceKey(path) {
   if (path.includes(":")) {
     let [prefix, suffix] = path.split(":");
     let [key, property] = prefix.split(".");
@@ -577,20 +539,16 @@ function expandPathWithDirServiceKey(path, canonicalize = false) {
       dir = dir[property];
     }
 
-    if (canonicalize) {
-      path = dir.QueryInterface(Ci.nsILocalFileWin).canonicalPath;
-    } else {
-      // Resolve symLinks.
-      let dirPath = dir.path;
-      while (dir && !dir.isSymlink()) {
-        dir = dir.parent;
-      }
-      if (dir) {
-        dirPath = dirPath.replace(dir.path, dir.target);
-      }
-
-      path = dirPath;
+    // Resolve symLinks.
+    let dirPath = dir.path;
+    while (dir && !dir.isSymlink()) {
+      dir = dir.parent;
     }
+    if (dir) {
+      dirPath = dirPath.replace(dir.path, dir.target);
+    }
+
+    path = dirPath;
 
     if (suffix) {
       path += "/" + suffix;
@@ -749,7 +707,7 @@ add_task(async function() {
     );
     startupPhases[phase].forEach(entry => {
       entry.listedPath = entry.path;
-      entry.path = expandPathWithDirServiceKey(entry.path, entry.canonicalize);
+      entry.path = expandPathWithDirServiceKey(entry.path);
     });
   }
 
@@ -849,7 +807,6 @@ add_task(async function() {
             "listedPath",
             "path",
             "condition",
-            "canonicalize",
             "ignoreIfUnused",
             "_used",
           ].includes(op)
@@ -883,12 +840,8 @@ add_task(async function() {
     let path = Cc["@mozilla.org/process/environment;1"]
       .getService(Ci.nsIEnvironment)
       .get("MOZ_UPLOAD_DIR");
-    let encoder = new TextEncoder();
-    let profilePath = OS.Path.join(path, filename);
-    await OS.File.writeAtomic(
-      profilePath,
-      encoder.encode(JSON.stringify(startupRecorder.data.profile))
-    );
+    let profilePath = PathUtils.join(path, filename);
+    await IOUtils.writeJSON(profilePath, startupRecorder.data.profile);
     ok(
       false,
       "Unexpected main thread I/O behavior during startup; open the " +

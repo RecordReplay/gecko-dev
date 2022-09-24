@@ -19,6 +19,7 @@
 #include "nsIMutableArray.h"
 #include "nsIObserverService.h"
 #include "nsIPrincipal.h"
+#include "nsITimer.h"
 #include "nsSupportsPrimitives.h"
 #include "nsXPCOM.h"
 
@@ -26,8 +27,7 @@
 // too old. This value should be in sync with what the UI needs.
 #define TIME_MAX_SECS 86400 /* 24 hours */
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 static StaticRefPtr<StorageActivityService> gStorageActivityService;
 static bool gStorageActivityShutdown = false;
@@ -208,9 +208,12 @@ void StorageActivityService::MaybeStartTimer() {
   MOZ_ASSERT(NS_IsMainThread());
 
   if (!mTimer) {
-    mTimer = do_CreateInstance(NS_TIMER_CONTRACTID);
-    mTimer->InitWithCallback(this, 1000 * 5 * 60 /* any 5 minutes */,
-                             nsITimer::TYPE_REPEATING_SLACK);
+    nsresult rv = NS_NewTimerWithCallback(
+        getter_AddRefs(mTimer), this, 1000 * 5 * 60 /* any 5 minutes */,
+        nsITimer::TYPE_REPEATING_SLACK, nullptr);
+    if (NS_FAILED(rv)) {
+      NS_WARNING("Could not start StorageActivityService timer");
+    }
   }
 }
 
@@ -241,6 +244,12 @@ StorageActivityService::Notify(nsITimer* aTimer) {
     MaybeStopTimer();
   }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+StorageActivityService::GetName(nsACString& aName) {
+  aName.AssignLiteral("StorageActivityService");
   return NS_OK;
 }
 
@@ -304,11 +313,11 @@ NS_INTERFACE_MAP_BEGIN(StorageActivityService)
   NS_INTERFACE_MAP_ENTRY(nsIStorageActivityService)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
   NS_INTERFACE_MAP_ENTRY(nsISupportsWeakReference)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_ADDREF(StorageActivityService)
 NS_IMPL_RELEASE(StorageActivityService)
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

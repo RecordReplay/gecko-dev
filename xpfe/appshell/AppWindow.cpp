@@ -113,9 +113,11 @@ using dom::AutoNoJSAPI;
 using dom::BrowserHost;
 using dom::BrowsingContext;
 using dom::Document;
+using dom::DocumentL10n;
 using dom::Element;
 using dom::EventTarget;
 using dom::LoadURIOptions;
+using dom::Promise;
 
 AppWindow::AppWindow(uint32_t aChromeFlags)
     : mChromeTreeOwner(nullptr),
@@ -448,6 +450,19 @@ AppWindow::GetPrimaryRemoteTab(nsIRemoteTab** aTab) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+AppWindow::GetPrimaryContentBrowsingContext(
+    mozilla::dom::BrowsingContext** aBc) {
+  if (mPrimaryBrowserParent) {
+    return mPrimaryBrowserParent->GetBrowsingContext(aBc);
+  }
+  if (mPrimaryContentShell) {
+    return mPrimaryContentShell->GetBrowsingContextXPCOM(aBc);
+  }
+  *aBc = nullptr;
+  return NS_OK;
+}
+
 static LayoutDeviceIntSize GetOuterToInnerSizeDifference(nsIWidget* aWindow) {
   if (!aWindow) {
     return LayoutDeviceIntSize();
@@ -510,7 +525,8 @@ NS_IMETHODIMP AppWindow::ShowModal() {
 
   {
     AutoNoJSAPI nojsapi;
-    SpinEventLoopUntil([&]() { return !mContinueModalLoop; });
+    SpinEventLoopUntil("AppWindow::ShowModal"_ns,
+                       [&]() { return !mContinueModalLoop; });
   }
 
   mContinueModalLoop = false;
@@ -1880,8 +1896,7 @@ nsresult AppWindow::MaybeSaveEarlyWindowPersistentValues(
                          bookmarksVisibility);
   settings.bookmarksToolbarShown =
       bookmarksVisibility.EqualsLiteral("always") ||
-      (Preferences::GetBool("browser.toolbars.bookmarks.2h2020", false) &&
-       bookmarksVisibility.EqualsLiteral("newtab"));
+      bookmarksVisibility.EqualsLiteral("newtab");
 
   Element* menubar = doc->GetElementById(u"toolbar-menubar"_ns);
   menubar->GetAttribute(u"autohide"_ns, attributeValue);
@@ -1895,7 +1910,7 @@ nsresult AppWindow::MaybeSaveEarlyWindowPersistentValues(
     return NS_ERROR_FAILURE;
   }
   mozilla::Vector<CSSPixelSpan> springs;
-  for (int i = 0; i < toolbarSprings->Length(); i++) {
+  for (size_t i = 0; i < toolbarSprings->Length(); i++) {
     RefPtr<Element> springEl = toolbarSprings->Item(i);
     RefPtr<dom::DOMRect> springRect;
     rv = utils->GetBoundsWithoutFlushing(springEl, getter_AddRefs(springRect));
@@ -2337,7 +2352,8 @@ NS_IMETHODIMP AppWindow::CreateNewContentWindow(
 
   {
     AutoNoJSAPI nojsapi;
-    SpinEventLoopUntil([&]() { return !appWin->IsLocked(); });
+    SpinEventLoopUntil("AppWindow::CreateNewContentWindow"_ns,
+                       [&]() { return !appWin->IsLocked(); });
   }
 
   NS_ENSURE_STATE(appWin->mPrimaryContentShell ||
@@ -2577,6 +2593,16 @@ AppWindow::LockAspectRatio(bool aShouldLock) {
   return NS_OK;
 }
 
+NS_IMETHODIMP
+AppWindow::NeedFastSnaphot() {
+  MOZ_ASSERT(mWindow);
+  if (!mWindow) {
+    return NS_ERROR_FAILURE;
+  }
+  mWindow->SetNeedFastSnaphot();
+  return NS_OK;
+}
+
 void AppWindow::LoadPersistentWindowState() {
   nsCOMPtr<dom::Element> docShellElement = GetWindowDOMElement();
   if (!docShellElement) {
@@ -2627,7 +2653,9 @@ void AppWindow::SizeShell() {
 
   // If we're using fingerprint resistance, we're going to resize the window
   // once we have primary content.
-  if (nsContentUtils::ShouldResistFingerprinting() &&
+  if (nsContentUtils::ShouldResistFingerprinting(
+          "if RFP is enabled we want to round the dimensions of the new"
+          "new pop up window regardless of their origin") &&
       windowType.EqualsLiteral("navigator:browser")) {
     // Once we've got primary content, force dimensions.
     if (mPrimaryContentShell || mPrimaryBrowserParent) {
@@ -2996,11 +3024,12 @@ void AppWindow::WindowActivated() {
   nsCOMPtr<nsIAppWindow> appWindow(this);
 
   // focusing the window could cause it to close, so keep a reference to it
-  nsCOMPtr<nsPIDOMWindowOuter> window =
-      mDocShell ? mDocShell->GetWindow() : nullptr;
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (fm && window) {
-    fm->WindowRaised(window, nsFocusManager::GenerateFocusActionId());
+  if (mDocShell) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
+      if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+        fm->WindowRaised(window, nsFocusManager::GenerateFocusActionId());
+      }
+    }
   }
 
   if (mChromeLoaded) {
@@ -3012,11 +3041,14 @@ void AppWindow::WindowActivated() {
 void AppWindow::WindowDeactivated() {
   nsCOMPtr<nsIAppWindow> appWindow(this);
 
-  nsCOMPtr<nsPIDOMWindowOuter> window =
-      mDocShell ? mDocShell->GetWindow() : nullptr;
-  nsFocusManager* fm = nsFocusManager::GetFocusManager();
-  if (fm && window && !fm->IsTestMode()) {
-    fm->WindowLowered(window, nsFocusManager::GenerateFocusActionId());
+  if (mDocShell) {
+    if (nsCOMPtr<nsPIDOMWindowOuter> window = mDocShell->GetWindow()) {
+      if (RefPtr<nsFocusManager> fm = nsFocusManager::GetFocusManager()) {
+        if (!fm->IsTestMode()) {
+          fm->WindowLowered(window, nsFocusManager::GenerateFocusActionId());
+        }
+      }
+    }
   }
 }
 
@@ -3054,11 +3086,13 @@ class L10nReadyPromiseHandler final : public dom::PromiseNativeHandler {
   L10nReadyPromiseHandler(Document* aDoc, nsIWidget* aParentWindow)
       : mDocument(aDoc), mWindow(aParentWindow) {}
 
-  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     LoadNativeMenus(mDocument, mWindow);
   }
 
-  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     // Again, this shouldn't happen, but fallback to loading the menus as is.
     NS_WARNING(
         "L10nReadyPromiseHandler rejected - loading fallback native "

@@ -58,7 +58,13 @@ Push.prototype = {
 
     this.initDOMRequestHelper(win);
 
-    this._principal = win.document.nodePrincipal;
+    // Get the client principal from the window. This won't be null because the
+    // service worker should be available when accessing the push manager.
+    this._principal = win.clientPrincipal;
+
+    if (!this._principal) {
+      throw new Error(" The client principal of the window is not available");
+    }
 
     try {
       this._topLevelPrincipal = win.top.document.nodePrincipal;
@@ -75,7 +81,7 @@ Push.prototype = {
   askPermission() {
     console.debug("askPermission()");
 
-    let isHandlingUserInput = this._window.document
+    let hasValidTransientUserGestureActivation = this._window.document
       .hasValidTransientUserGestureActivation;
 
     return this.createPromise((resolve, reject) => {
@@ -95,7 +101,11 @@ Push.prototype = {
         return;
       }
 
-      this._requestPermission(isHandlingUserInput, resolve, permissionDenied);
+      this._requestPermission(
+        hasValidTransientUserGestureActivation,
+        resolve,
+        permissionDenied
+      );
     });
   },
 
@@ -199,7 +209,11 @@ Push.prototype = {
     return permission;
   },
 
-  _requestPermission(isHandlingUserInput, allowCallback, cancelCallback) {
+  _requestPermission(
+    hasValidTransientUserGestureActivation,
+    allowCallback,
+    cancelCallback
+  ) {
     // Create an array with a single nsIContentPermissionType element.
     let type = {
       type: "desktop-notification",
@@ -216,7 +230,7 @@ Push.prototype = {
       QueryInterface: ChromeUtils.generateQI(["nsIContentPermissionRequest"]),
       types: typeArray,
       principal: this._principal,
-      isHandlingUserInput,
+      hasValidTransientUserGestureActivation,
       topLevelPrincipal: this._topLevelPrincipal,
       allow: allowCallback,
       cancel: cancelCallback,

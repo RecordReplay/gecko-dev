@@ -13,8 +13,9 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppInfo: "chrome://remote/content/marionette/appinfo.js",
   error: "chrome://remote/content/shared/webdriver/Errors.jsm",
+  EventPromise: "chrome://remote/content/shared/Sync.jsm",
   MessageManagerDestroyedPromise: "chrome://remote/content/marionette/sync.js",
-  waitForEvent: "chrome://remote/content/marionette/sync.js",
+  TabManager: "chrome://remote/content/shared/TabManager.jsm",
   WebElementEventTarget: "chrome://remote/content/marionette/dom.js",
   windowManager: "chrome://remote/content/shared/WindowManager.jsm",
 });
@@ -61,91 +62,6 @@ Context.Chrome = "chrome";
 Context.Content = "content";
 this.Context = Context;
 
-// GeckoView shim for Desktop's gBrowser
-class MobileTabBrowser {
-  constructor(window) {
-    this.window = window;
-  }
-
-  get tabs() {
-    return [this.window.tab];
-  }
-
-  get selectedTab() {
-    return this.window.tab;
-  }
-
-  set selectedTab(tab) {
-    if (tab != this.selectedTab) {
-      throw new Error("GeckoView only supports a single tab");
-    }
-
-    // Synthesize a custom TabSelect event to indicate that a tab has been
-    // selected even when we don't change it.
-    const event = this.window.CustomEvent("TabSelect", {
-      bubbles: true,
-      cancelable: false,
-      detail: {
-        previousTab: this.selectedTab,
-      },
-    });
-    this.window.document.dispatchEvent(event);
-  }
-
-  get selectedBrowser() {
-    return this.selectedTab.linkedBrowser;
-  }
-
-  addEventListener() {
-    this.window.addEventListener(...arguments);
-  }
-
-  removeEventListener() {
-    this.window.removeEventListener(...arguments);
-  }
-}
-
-/**
- * Get the <code>&lt;xul:browser&gt;</code> for the specified tab.
- *
- * @param {Tab} tab
- *     The tab whose browser needs to be returned.
- *
- * @return {Browser}
- *     The linked browser for the tab or null if no browser can be found.
- */
-browser.getBrowserForTab = function(tab) {
-  if (tab && "linkedBrowser" in tab) {
-    return tab.linkedBrowser;
-  }
-
-  return null;
-};
-
-/**
- * Return the tab browser for the specified chrome window.
- *
- * @param {ChromeWindow} win
- *     Window whose <code>tabbrowser</code> needs to be accessed.
- *
- * @return {Tab}
- *     Tab browser or null if it's not a browser window.
- */
-browser.getTabBrowser = function(window) {
-  // GeckoView
-  if (AppInfo.isAndroid) {
-    return new MobileTabBrowser(window);
-    // Firefox
-  } else if ("gBrowser" in window) {
-    return window.gBrowser;
-    // Thunderbird
-  } else if (window.document.getElementById("tabmail")) {
-    return window.document.getElementById("tabmail");
-  }
-
-  return null;
-};
-
 /**
  * Creates a browsing context wrapper.
  *
@@ -165,7 +81,7 @@ browser.Context = class {
 
     // In Firefox this is <xul:tabbrowser> (not <xul:browser>!)
     // and MobileTabBrowser in GeckoView.
-    this.tabBrowser = browser.getTabBrowser(this.window);
+    this.tabBrowser = TabManager.getTabBrowser(this.window);
 
     // Used to set curFrameId upon new session
     this.newSession = true;
@@ -186,7 +102,7 @@ browser.Context = class {
    */
   get contentBrowser() {
     if (this.tab) {
-      return browser.getBrowserForTab(this.tab);
+      return TabManager.getBrowserForTab(this.tab);
     } else if (
       this.tabBrowser &&
       this.driver.isReftestBrowser(this.tabBrowser)
@@ -277,8 +193,12 @@ browser.Context = class {
    * @return {Promise}
    *     A promise resolving to the newly created chrome window.
    */
-  async openBrowserWindow(focus = false, isPrivate = false) {
-    return windowManager.openBrowserWindow(this.window, focus, isPrivate);
+  openBrowserWindow(focus = false, isPrivate = false) {
+    return windowManager.openBrowserWindow({
+      openerWindow: this.window,
+      focus,
+      isPrivate,
+    });
   }
 
   /**
@@ -307,7 +227,7 @@ browser.Context = class {
 
     switch (AppInfo.name) {
       case "Firefox":
-        tabClosed = waitForEvent(this.tab, "TabClose");
+        tabClosed = new EventPromise(this.tab, "TabClose");
         this.tabBrowser.removeTab(this.tab);
         break;
 
@@ -328,7 +248,7 @@ browser.Context = class {
 
     switch (AppInfo.name) {
       case "Firefox":
-        const opened = waitForEvent(this.window, "TabOpen");
+        const opened = new EventPromise(this.window, "TabOpen");
         this.window.BrowserOpenTab();
         await opened;
 
@@ -370,11 +290,9 @@ browser.Context = class {
    *     If tab handling for the current application isn't supported.
    */
   async switchToTab(index, window = undefined, focus = true) {
-    let currentTab = this.tabBrowser.selectedTab;
-
     if (window) {
       this.window = window;
-      this.tabBrowser = browser.getTabBrowser(this.window);
+      this.tabBrowser = TabManager.getTabBrowser(this.window);
     }
 
     if (!this.tabBrowser) {
@@ -387,10 +305,8 @@ browser.Context = class {
       this.tab = this.tabBrowser.tabs[index];
     }
 
-    if (focus && this.tab != currentTab) {
-      const tabSelected = waitForEvent(this.window, "TabSelect");
-      this.tabBrowser.selectedTab = this.tab;
-      await tabSelected;
+    if (focus) {
+      await TabManager.selectTab(this.tab);
     }
 
     // TODO(ato): Currently tied to curBrowser, but should be moved to

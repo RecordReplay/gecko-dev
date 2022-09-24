@@ -7,9 +7,12 @@
 #ifndef jit_CacheIRCompiler_h
 #define jit_CacheIRCompiler_h
 
+#include "mozilla/Casting.h"
 #include "mozilla/Maybe.h"
 
 #include "jit/CacheIR.h"
+#include "jit/CacheIRReader.h"
+#include "jit/CacheIRWriter.h"
 #include "jit/JitOptions.h"
 #include "jit/MacroAssembler.h"
 #include "jit/SharedICRegisters.h"
@@ -22,11 +25,14 @@ class BigInt;
 namespace js {
 
 class TypedArrayObject;
+enum class UnaryMathFunction : uint8_t;
 
 namespace jit {
 
 class BaselineCacheIRCompiler;
+class ICCacheIRStub;
 class IonCacheIRCompiler;
+class IonScript;
 
 enum class ICStubEngine : uint8_t;
 
@@ -848,7 +854,7 @@ class MOZ_RAII CacheIRCompiler {
 
   using AtomicsReadWriteModify64Fn = JS::BigInt* (*)(JSContext*,
                                                      TypedArrayObject*, size_t,
-                                                     JS::BigInt*);
+                                                     const JS::BigInt*);
 
   template <AtomicsReadWriteModify64Fn fn>
   [[nodiscard]] bool emitAtomicsReadModifyWriteResult64(ObjOperandId objId,
@@ -861,6 +867,8 @@ class MOZ_RAII CacheIRCompiler {
   void emitLoadStubFieldConstant(StubFieldOffset val, Register dest);
 
   void emitLoadValueStubField(StubFieldOffset val, ValueOperand dest);
+  void emitLoadDoubleValueStubField(StubFieldOffset val, ValueOperand dest,
+                                    FloatRegister scratch);
 
   uintptr_t readStubWord(uint32_t offset, StubField::Type type) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -896,6 +904,11 @@ class MOZ_RAII CacheIRCompiler {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
     uint64_t raw = readStubInt64(offset, StubField::Type::Value);
     return Value::fromRawBits(raw);
+  }
+  double doubleStubField(uint32_t offset) {
+    MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
+    uint64_t raw = readStubInt64(offset, StubField::Type::Double);
+    return mozilla::BitwiseCast<double>(raw);
   }
   JSString* stringStubField(uint32_t offset) {
     MOZ_ASSERT(stubFieldPolicy_ == StubFieldPolicy::Constant);
@@ -1029,6 +1042,11 @@ class MOZ_RAII AutoScratchRegisterMaybeOutput {
       scratchReg_ = scratch_.ref();
     }
   }
+  AutoScratchRegisterMaybeOutput(CacheRegisterAllocator& alloc,
+                                 MacroAssembler& masm) {
+    scratch_.emplace(alloc, masm);
+    scratchReg_ = scratch_.ref();
+  }
 
   Register get() const { return scratchReg_; }
   operator Register() const { return scratchReg_; }
@@ -1064,6 +1082,7 @@ class MOZ_RAII AutoScratchRegisterMaybeOutputType {
 
   void operator=(const AutoScratchRegisterMaybeOutputType&) = delete;
 
+  Register get() const { return scratchReg_; }
   operator Register() const { return scratchReg_; }
 };
 
@@ -1202,27 +1221,25 @@ class MOZ_RAII AutoAvailableFloatRegister {
 // See the 'Sharing Baseline stub code' comment in CacheIR.h for a description
 // of this class.
 class CacheIRStubInfo {
-  // These fields don't require 8 bits, but GCC complains if these fields are
-  // smaller than the size of the enums.
-  CacheKind kind_ : 8;
-  ICStubEngine engine_ : 8;
-  bool makesGCCalls_ : 1;
-  uint8_t stubDataOffset_;
-
   const uint8_t* code_;
-  uint32_t length_;
   const uint8_t* fieldTypes_;
+  uint32_t length_;
+
+  CacheKind kind_;
+  ICStubEngine engine_;
+  uint8_t stubDataOffset_;
+  bool makesGCCalls_;
 
   CacheIRStubInfo(CacheKind kind, ICStubEngine engine, bool makesGCCalls,
                   uint32_t stubDataOffset, const uint8_t* code,
                   uint32_t codeLength, const uint8_t* fieldTypes)
-      : kind_(kind),
-        engine_(engine),
-        makesGCCalls_(makesGCCalls),
-        stubDataOffset_(stubDataOffset),
-        code_(code),
+      : code_(code),
+        fieldTypes_(fieldTypes),
         length_(codeLength),
-        fieldTypes_(fieldTypes) {
+        kind_(kind),
+        engine_(engine),
+        stubDataOffset_(stubDataOffset),
+        makesGCCalls_(makesGCCalls) {
     MOZ_ASSERT(kind_ == kind, "Kind must fit in bitfield");
     MOZ_ASSERT(engine_ == engine, "Engine must fit in bitfield");
     MOZ_ASSERT(stubDataOffset_ == stubDataOffset,

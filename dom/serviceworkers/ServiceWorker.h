@@ -18,11 +18,10 @@
 
 class nsIGlobalObject;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
-struct PostMessageOptions;
 class ServiceWorkerCloneData;
+struct StructuredSerializeOptions;
 
 #define NS_DOM_SERVICEWORKER_IID                     \
   {                                                  \
@@ -93,7 +92,8 @@ class ServiceWorker final : public DOMEventTargetHelper {
                    const Sequence<JSObject*>& aTransferable, ErrorResult& aRv);
 
   void PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                   const PostMessageOptions& aOptions, ErrorResult& aRv);
+                   const StructuredSerializeOptions& aOptions,
+                   ErrorResult& aRv);
 
   const ServiceWorkerDescriptor& Descriptor() const;
 
@@ -117,7 +117,6 @@ class ServiceWorker final : public DOMEventTargetHelper {
 
 NS_DEFINE_STATIC_IID_ACCESSOR(ServiceWorker, NS_DOM_SERVICEWORKER_IID)
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_serviceworker_h__

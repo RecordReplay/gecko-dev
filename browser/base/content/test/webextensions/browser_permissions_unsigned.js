@@ -1,13 +1,17 @@
 "use strict";
 
 const ID = "permissions@test.mozilla.org";
-const WARNING_ICON = "chrome://browser/skin/warning.svg";
+const WARNING_ICON = "chrome://global/skin/icons/warning.svg";
 
 add_task(async function test_unsigned() {
   await SpecialPowers.pushPrefEnv({
     set: [
       ["extensions.webapi.testing", true],
       ["extensions.install.requireBuiltInCerts", false],
+      ["extensions.InstallTrigger.enabled", true],
+      ["extensions.InstallTriggerImpl.enabled", true],
+      // Relax the user input requirements while running this test.
+      ["xpinstall.userActivation.required", false],
     ],
   });
 

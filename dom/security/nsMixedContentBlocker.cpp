@@ -248,6 +248,9 @@ bool nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackHost(
 }
 
 bool nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(nsIURI* aURL) {
+  if (!aURL) {
+    return false;
+  }
   nsAutoCString asciiHost;
   nsresult rv = aURL->GetAsciiHost(asciiHost);
   NS_ENSURE_SUCCESS(rv, false);
@@ -255,10 +258,10 @@ bool nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackURL(nsIURI* aURL) {
 }
 
 /* Maybe we have a .onion URL. Treat it as trustworthy as well if
- * `dom.securecontext.whitelist_onions` is `true`.
+ * `dom.securecontext.allowlist_onions` is `true`.
  */
 bool nsMixedContentBlocker::IsPotentiallyTrustworthyOnion(nsIURI* aURL) {
-  if (!StaticPrefs::dom_securecontext_whitelist_onions()) {
+  if (!StaticPrefs::dom_securecontext_allowlist_onions()) {
     return false;
   }
 
@@ -271,8 +274,8 @@ bool nsMixedContentBlocker::IsPotentiallyTrustworthyOnion(nsIURI* aURL) {
 // static
 void nsMixedContentBlocker::OnPrefChange(const char* aPref, void* aClosure) {
   MOZ_ASSERT(NS_IsMainThread());
-  MOZ_ASSERT(!strcmp(aPref, "dom.securecontext.whitelist"));
-  Preferences::GetCString("dom.securecontext.whitelist",
+  MOZ_ASSERT(!strcmp(aPref, "dom.securecontext.allowlist"));
+  Preferences::GetCString("dom.securecontext.allowlist",
                           *sSecurecontextAllowlist);
 }
 
@@ -284,7 +287,7 @@ void nsMixedContentBlocker::GetSecureContextAllowList(nsACString& aList) {
     sSecurecontextAllowlistCached = true;
     sSecurecontextAllowlist = new nsCString();
     Preferences::RegisterCallbackAndCall(OnPrefChange,
-                                         "dom.securecontext.whitelist");
+                                         "dom.securecontext.allowlist");
   }
   aList = *sSecurecontextAllowlist;
 }
@@ -360,11 +363,26 @@ bool nsMixedContentBlocker::IsPotentiallyTrustworthyOrigin(nsIURI* aURI) {
   }
 
   // Maybe we have a .onion URL. Treat it as trustworthy as well if
-  // `dom.securecontext.whitelist_onions` is `true`.
+  // `dom.securecontext.allowlist_onions` is `true`.
   if (nsMixedContentBlocker::IsPotentiallyTrustworthyOnion(aURI)) {
     return true;
   }
   return false;
+}
+
+/*
+ * Return the URI of the precusor principal or the URI of aPrincipal if there is
+ * no precursor URI.
+ */
+static already_AddRefed<nsIURI> GetPrincipalURIOrPrecursorPrincialURI(
+    nsIPrincipal* aPrincipal) {
+  nsCOMPtr<nsIURI> precursorURI = nullptr;
+  if (aPrincipal->GetIsNullPrincipal()) {
+    nsCOMPtr<nsIPrincipal> precursorPrin = aPrincipal->GetPrecursorPrincipal();
+    precursorURI = precursorPrin ? precursorPrin->GetURI() : nullptr;
+  }
+
+  return precursorURI ? precursorURI.forget() : aPrincipal->GetURI();
 }
 
 /* Static version of ShouldLoad() that contains all the Mixed Content Blocker
@@ -488,6 +506,11 @@ nsresult nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
   // properties as WebSockets w.r.t. mixed content. XHR's handling of redirects
   // amplifies these concerns.
   //
+  // TYPE_PROXIED_WEBRTC_MEDIA: Ordinarily, webrtc uses low-level sockets for
+  // peer-to-peer media, which bypasses this code entirely. However, when a
+  // web proxy is being used, the TCP and TLS webrtc connections are routed
+  // through the web proxy (using HTTP CONNECT), which causes these connections
+  // to be checked. We just skip mixed content blocking in that case.
 
   switch (contentType) {
     // The top-level document cannot be mixed content by definition
@@ -513,6 +536,13 @@ nsresult nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
       *aDecision = ACCEPT;
       return NS_OK;
       break;
+
+    // It does not make sense to subject webrtc media connections to mixed
+    // content blocking, since those connections are peer-to-peer and will
+    // therefore almost never match the origin.
+    case ExtContentPolicy::TYPE_PROXIED_WEBRTC_MEDIA:
+      *aDecision = ACCEPT;
+      return NS_OK;
 
     // Static display content is considered moderate risk for mixed content so
     // these will be blocked according to the mixed display preference
@@ -614,12 +644,14 @@ nsresult nsMixedContentBlocker::ShouldLoad(bool aHadInsecureImageRedirect,
   nsCOMPtr<nsIURI> requestingLocation;
   auto* baseLoadingPrincipal = BasePrincipal::Cast(loadingPrincipal);
   if (baseLoadingPrincipal) {
-    baseLoadingPrincipal->GetURI(getter_AddRefs(requestingLocation));
+    requestingLocation =
+        GetPrincipalURIOrPrecursorPrincialURI(baseLoadingPrincipal);
   }
   if (!requestingLocation) {
     auto* baseTriggeringPrincipal = BasePrincipal::Cast(triggeringPrincipal);
     if (baseTriggeringPrincipal) {
-      baseTriggeringPrincipal->GetURI(getter_AddRefs(requestingLocation));
+      requestingLocation =
+          GetPrincipalURIOrPrecursorPrincialURI(baseTriggeringPrincipal);
     }
   }
 
@@ -980,7 +1012,7 @@ void nsMixedContentBlocker::AccumulateMixedContentHSTS(
   if (NS_FAILED(rv)) {
     return;
   }
-  rv = sss->IsSecureURI(aURI, 0, aOriginAttributes, nullptr, nullptr, &hsts);
+  rv = sss->IsSecureURI(aURI, aOriginAttributes, nullptr, nullptr, &hsts);
   if (NS_FAILED(rv)) {
     return;
   }

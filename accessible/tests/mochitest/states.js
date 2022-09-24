@@ -13,6 +13,7 @@
 // State constants
 
 // const STATE_BUSY is defined in common.js
+const STATE_ANIMATED = nsIAccessibleStates.STATE_ANIMATED;
 const STATE_CHECKED = nsIAccessibleStates.STATE_CHECKED;
 const STATE_CHECKABLE = nsIAccessibleStates.STATE_CHECKABLE;
 const STATE_COLLAPSED = nsIAccessibleStates.STATE_COLLAPSED;
@@ -55,6 +56,7 @@ const EXT_STATE_SUPPORTS_AUTOCOMPLETION =
   nsIAccessibleStates.EXT_STATE_SUPPORTS_AUTOCOMPLETION;
 const EXT_STATE_VERTICAL = nsIAccessibleStates.EXT_STATE_VERTICAL;
 const EXT_STATE_SELECTABLE_TEXT = nsIAccessibleStates.EXT_STATE_SELECTABLE_TEXT;
+const EXT_STATE_OPAQUE = nsIAccessibleStates.EXT_STATE_OPAQUE;
 
 const kOrdinalState = false;
 const kExtraState = 1;

@@ -10,13 +10,14 @@
 #include "mozilla/dom/SVGFEFloodElementBinding.h"
 #include "nsColor.h"
 #include "nsIFrame.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEFlood)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEFloodElement::WrapNode(JSContext* aCx,
                                       JS::Handle<JSObject*> aGivenProto) {
@@ -60,6 +61,14 @@ SVGFEFloodElement::IsAttributeMapped(const nsAtom* name) const {
          SVGFEFloodElementBase::IsAttributeMapped(name);
 }
 
+nsresult SVGFEFloodElement::BindToTree(BindContext& aCtx, nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feFlood);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -68,5 +77,4 @@ SVGElement::StringAttributesInfo SVGFEFloodElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

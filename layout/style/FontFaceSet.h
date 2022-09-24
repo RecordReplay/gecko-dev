@@ -32,8 +32,7 @@ class Promise;
 }  // namespace dom
 }  // namespace mozilla
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class FontFaceSet final : public DOMEventTargetHelper,
                           public nsIDOMEventListener,
@@ -64,6 +63,10 @@ class FontFaceSet final : public DOMEventTargetHelper,
     gfxFontSrcPrincipal* GetStandardFontLoadPrincipal() const final {
       return mFontFaceSet ? mFontFaceSet->mStandardFontLoadPrincipal.get()
                           : nullptr;
+    }
+
+    nsPresContext* GetPresContext() const final {
+      return mFontFaceSet ? mFontFaceSet->GetPresContext() : nullptr;
     }
 
     bool IsFontLoadAllowed(const gfxFontFaceSrc&) final;
@@ -402,7 +405,6 @@ class FontFaceSet final : public DOMEventTargetHelper,
   bool mPrivateBrowsing;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // !defined(mozilla_dom_FontFaceSet_h)

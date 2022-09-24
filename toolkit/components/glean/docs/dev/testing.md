@@ -1,5 +1,13 @@
 # Testing
 
+```{admonition} This documentation is about testing FOG itself
+This document contains information about how FOG tests itself,
+how to add new tests, how and what to log, and stuff like that.
+If you're interested in learning how to test instrumentation you added,
+you'll want to read
+[the instrumetnation testing docs](../user/instrumentation_tests) instead.
+```
+
 Given the multiple API languages, processes, and dependencies,
 testing FOG is a matter of choosing the right tool for the situation.
 
@@ -7,13 +15,14 @@ testing FOG is a matter of choosing the right tool for the situation.
 
 To run all the things, here's the tl;dr:
 
-`MOZ_LOG="timestamp,sync,glean::*:5,fog::*:5,fog_control::*:5,glean_core::*:5"
-./mach build && ./mach lint -Ww -o --fix
+`./mach build && ./mach lint -Ww -o --fix
 && ./mach lint --linter clippy toolkit/components/glean/api/src
 && ./mach rusttests && ./mach gtest FOG*
-&& python3 ./mach python-test toolkit/components/glean/pytest
-&& ./mach test toolkit/components/glean/xpcshell
-&& ./mach telemetry-tests-client toolkit/components/telemetry/tests/marionette/tests/client/test_fog* --gecko-log "-"`
+&& python3 ./mach python-test toolkit/components/glean/tests/pytest
+&& ./mach test toolkit/components/glean/tests/xpcshell
+&& ./mach telemetry-tests-client toolkit/components/telemetry/tests/marionette/tests/client/test_fog* --gecko-log "-"
+&& ./mach test toolkit/components/glean/tests/browser
+`
 
 ## Logging
 
@@ -29,9 +38,47 @@ To turn on logging for FOG, use any of the following:
     * `logging.fog::*` to `5`
     * `logging.glean::*` to `5`
     * `logging.glean_core::*` to `5`
+    * `logging.config.clear_on_startup` to `false` (or all these prefs will be cleared on startup)
 
-For more information on logging in Firefox Desktop, see the
-[Gecko Logging docs](https://developer.mozilla.org/docs/Mozilla/Developer_guide/Gecko_Logging).
+For more information on logging in Gecko, see the
+[Gecko Logging docs](/xpcom/logging).
+
+User-destined logs (of the "You did something wrong" variety) might output to the
+[Browser Console](/devtools-user/browser_console/index)
+if they originate in JS land. Open via
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd>, or
+<kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd>.
+
+```{admonition} Note
+At present, Rust logging in non-main processes just doesn't work.
+```
+
+### What to log, and to where?
+
+FOG covers a lot a ground (languages, layers):
+where you are determines what logging you have available.
+
+Here are some common situtations for logging:
+
+#### JS to C++
+
+If your logging is aimed at the user using the JS API
+(e.g. because the type provided isn't convertable to the necessary C++ type)
+then use the Browser Console via
+[FOG's Common's `LogToBrowserConsole`](https://searchfox.org/mozilla-central/rev/d107bc8aeadcc816ba85cb21c1a6a1aac1d4ef9f/toolkit/components/glean/bindings/private/Common.cpp#19).
+
+#### C++
+
+If you are in C++ and didn't come from JS, use `MOZ_LOG` with module `fog`.
+
+#### Rust
+
+Use the logging macros from `log`, e.g. `log::info!` or `log::error!`.
+Remember that, no matter the log level, `log::debug!` and `log::trace!`
+[will not appear in non-debug builds](/testing-rust-code/index.html#gecko-logging)
+
+If you are logging due to a situation caused by and fixable by a developer using the API,
+use `log::error!(...)`. Otherwise, use a quieter level.
 
 ## `about:glean`
 
@@ -92,18 +139,18 @@ Because Gecko symbols aren't built for the
 `rusttests` build,
 any test that is written for code that uses Gecko symbols should be written as a
 [`gtest`](https://github.com/google/googletest)
-in `toolkit/components/glean/gtest/`.
+in `toolkit/components/glean/tests/gtest/`.
 You can write the actual test code in Rust.
 It needs to be accompanied by a C++ GTest that calls a C FFI-exported Rust function.
-See [Testing & Debugging Rust Code](/testing-rust-code/) for more.
-See [`toolkit/components/glean/gtest/TestFog.cpp`](https://searchfox.org/mozilla-central/source/toolkit/components/glean/gtest/TestFog.cpp)
-and [`toolkit/components/glean/gtest/test.rs`](https://searchfox.org/mozilla-central/source/toolkit/components/glean/gtest/test.rs)
+See [Testing & Debugging Rust Code](/testing-rust-code/index.md) for more.
+See [`toolkit/components/glean/tests/gtest/TestFog.cpp`](https://searchfox.org/mozilla-central/source/toolkit/components/glean/tests/gtest/TestFog.cpp)
+and [`toolkit/components/glean/tests/gtest/test.rs`](https://searchfox.org/mozilla-central/source/toolkit/components/glean/tests/gtest/test.rs)
 for an example.
 
 By necessity these can only be integration tests against the compiled crate.
 
 **Note:** When adding a new test file, don't forget to add it to
-`toolkit/components/glean/gtest/moz.build` and use the
+`toolkit/components/glean/tests/gtest/moz.build` and use the
 `FOG` prefix in your test names
 (e.g. `TEST(FOG, YourTestName) { ... }`).
 
@@ -115,18 +162,18 @@ The [Glean Parser](https://github.com/mozilla/glean_parser/)
 has been augmented to generate FOG-specific APIs for Glean metrics.
 This augmentation is tested by running:
 
-`mach test toolkit/components/glean/pytest`
+`mach test toolkit/components/glean/tests/pytest`
 
 These tests require Python 3+.
 If your default Python is Python 2, you may need to instead run:
 
-`python3 mach python-test toolkit/components/glean/pytest`
+`python3 mach python-test toolkit/components/glean/tests/pytest`
 
 These tests check the code generator output against known good file contents.
 If you change the code generator the files will need an update.
 Run the test suite with the `UPDATE_EXPECT` environment variable set to do that automatically:
 
-`UPDATE_EXPECT=1 mach test toolkit/components/glean/pytest`
+`UPDATE_EXPECT=1 mach test toolkit/components/glean/tests/pytest`
 
 ## C++ (Treeherder symbol `GTest` (a build task))
 
@@ -134,11 +181,11 @@ To test the C++ parts of FOG's implementation
 (like metric types)
 you should use `gtest`.
 FOG's `gtest` tests are in
-[`gtest/`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/gtest/).
+[`gtest/`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/gtest/).
 
 You can either add a test case to an existing file or add a new file.
 If you add a new file, remember to add it to the
-[`moz.build`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/gtest/moz.build))
+[`moz.build`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/gtest/moz.build))
 or the test runner won't be able to find it.
 
 All tests should start with `FOG` so that all tests are run with
@@ -150,15 +197,30 @@ To test the JS parts of FOG's implementation
 (like metric types)
 you should use `xpcshell`.
 FOG's `xpcshell` tests are in
-[`xpcshell/`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/xpcshell).
+[`xpcshell/`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/xpcshell).
 
 You can either add a test case to an existing file or add a new file.
 If you add a new file, remember to add it to the
-[`xpcshell.ini`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/xpcshell/xpcshell.ini)
+[`xpcshell.ini`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/xpcshell/xpcshell.ini)
 or the test runner will not be able to find it.
 
 To run FOG's JS tests, run:
-`./mach test toolkit/components/glean/xpcshell`
+`./mach test toolkit/components/glean/tests/xpcshell`
+
+## Non-content-process multiprocess (Browser Chrome Mochitests with Treeherder symbol `M(bcN)` for some number `N`)
+
+To test e.g. the GPU process support you need a full Firefox browser:
+xpcshell doesn't have the flexibility.
+To test that and have access to privileged JS (i.e. `Glean` and `FOG` APIs),
+we use browser-chrome-flavoured mochitests you can find in
+[`browser/`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/browser).
+
+If you need to add a new test file, remember to add it to the
+[`browser.ini`](https://hg.mozilla.org/mozilla-central/file/tip/toolkit/components/glean/tests/browser/browser.ini)
+manifest, or the test runner will not be able to find it.
+
+To run FOG's browser chrome tests, run:
+`./mach test toolkit/components/glean/tests/browser`
 
 ## Integration (Marionette, borrowing `telemetry-tests-client` Treeherder symbol `tt(c)`)
 

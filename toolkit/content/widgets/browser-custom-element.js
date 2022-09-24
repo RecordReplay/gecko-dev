@@ -175,6 +175,10 @@
 
           let linkHandler = Services.droppedLinkHandler;
           try {
+            if (!linkHandler.canDropLink(event, false)) {
+              return;
+            }
+
             // Pass true to prevent the dropping of javascript:/data: URIs
             var links = linkHandler.dropLinks(event, true);
           } catch (ex) {
@@ -482,7 +486,7 @@
       if (this.isRemoteBrowser) {
         if (!this._remoteFinder) {
           let jsm = "resource://gre/modules/FinderParent.jsm";
-          let { FinderParent } = ChromeUtils.import(jsm, {});
+          let { FinderParent } = ChromeUtils.import(jsm);
           this._remoteFinder = new FinderParent(this);
         }
         return this._remoteFinder;
@@ -492,8 +496,9 @@
           return null;
         }
 
-        let Finder = ChromeUtils.import("resource://gre/modules/Finder.jsm", {})
-          .Finder;
+        let { Finder } = ChromeUtils.import(
+          "resource://gre/modules/Finder.jsm"
+        );
         this._finder = new Finder(this.docShell);
       }
       return this._finder;
@@ -790,6 +795,7 @@
         postData,
         headers,
         csp,
+        remoteTypeOverride,
       } = aParams;
       let loadFlags =
         aParams.loadFlags ||
@@ -802,6 +808,7 @@
         loadFlags,
         postData,
         headers,
+        remoteTypeOverride,
       };
       this._wrapURIChangeCall(() =>
         this.webNavigation.loadURI(aURI, loadURIOptions)
@@ -826,9 +833,10 @@
       if (!this.isRemoteBrowser) {
         return;
       }
-      let { frameLoader } = this;
-      if (frameLoader.remoteTab) {
-        frameLoader.remoteTab.deprioritize();
+      let { remoteTab } = this.frameLoader;
+      if (remoteTab) {
+        remoteTab.priorityHint = false;
+        remoteTab.deprioritize();
       }
     }
 
@@ -1047,15 +1055,11 @@
       LazyModules.SessionStore?.maybeExitCrashedState(this);
 
       // Make sure that any open select is closed.
-      if (this.hasAttribute("selectmenulist")) {
-        let menulist = document.getElementById(
-          this.getAttribute("selectmenulist")
-        );
-        if (menulist && menulist.open) {
-          let resourcePath = "resource://gre/actors/SelectParent.jsm";
-          let { SelectParentHelper } = ChromeUtils.import(resourcePath);
-          SelectParentHelper.hide(menulist, this);
-        }
+      let menulist = document.getElementById("ContentSelectDropdown");
+      if (menulist?.open) {
+        let resourcePath = "resource://gre/actors/SelectParent.jsm";
+        let { SelectParentHelper } = ChromeUtils.import(resourcePath);
+        SelectParentHelper.hide(menulist, this);
       }
 
       this.resetFields();
@@ -1227,7 +1231,6 @@
             .getActor("AutoScroll")
             .sendAsyncMessage("Autoscroll:Stop", {});
         }
-        this._autoScrollBrowsingContext = null;
 
         try {
           Services.obs.removeObserver(this.observer, "apz:cancel-autoscroll");
@@ -1235,17 +1238,17 @@
           // It's not clear why this sometimes throws an exception
         }
 
-        if (this.isRemoteBrowser && this._autoScrollScrollId != null) {
-          let { remoteTab } = this.frameLoader;
-          if (remoteTab) {
-            remoteTab.stopApzAutoscroll(
-              this._autoScrollScrollId,
-              this._autoScrollPresShellId
-            );
-          }
+        if (this._autoScrollScrollId != null) {
+          this._autoScrollBrowsingContext.stopApzAutoscroll(
+            this._autoScrollScrollId,
+            this._autoScrollPresShellId
+          );
+
           this._autoScrollScrollId = null;
           this._autoScrollPresShellId = null;
         }
+
+        this._autoScrollBrowsingContext = null;
       }
     }
 
@@ -1264,8 +1267,8 @@
 
     startScroll({
       scrolldir,
-      screenX,
-      screenY,
+      screenXDevPx,
+      screenYDevPx,
       scrollId,
       presShellId,
       browsingContext,
@@ -1274,7 +1277,9 @@
         return { autoscrollEnabled: false, usingApz: false };
       }
 
-      const POPUP_SIZE = 32;
+      // The popup size is 32px for the circle plus space for a 4px box-shadow
+      // on each side.
+      const POPUP_SIZE = 40;
       if (!this._autoScrollPopup) {
         this._autoScrollPopup = this._getAndMaybeCreateAutoScrollPopup();
         document.documentElement.appendChild(this._autoScrollPopup);
@@ -1285,10 +1290,19 @@
         this._autoScrollPopup.style.margin = -POPUP_SIZE / 2 + "px";
       }
 
+      // In desktop pixels.
+      let screenXDesktopPx = screenXDevPx / window.desktopToDeviceScale;
+      let screenYDesktopPx = screenYDevPx / window.desktopToDeviceScale;
+
       let screenManager = Cc["@mozilla.org/gfx/screenmanager;1"].getService(
         Ci.nsIScreenManager
       );
-      let screen = screenManager.screenForRect(screenX, screenY, 1, 1);
+      let screen = screenManager.screenForRect(
+        screenXDesktopPx,
+        screenYDesktopPx,
+        1,
+        1
+      );
 
       // we need these attributes so themers don't need to create per-platform packages
       if (screen.colorDepth > 8) {
@@ -1308,30 +1322,39 @@
       this._autoScrollPopup.setAttribute("scrolldir", scrolldir);
       this._autoScrollPopup.addEventListener("popuphidden", this, true);
 
-      // Sanitize screenX/screenY for available screen size with half the size
-      // of the popup removed. The popup uses negative margins to center on the
-      // coordinates we pass. Unfortunately `window.screen.availLeft` can be negative
-      // on Windows in multi-monitor setups, so we use nsIScreenManager instead:
-      let left = {},
-        top = {},
-        width = {},
-        height = {};
-      screen.GetAvailRect(left, top, width, height);
+      // In CSS pixels
+      let popupX;
+      let popupY;
+      {
+        let cssToDesktopScale =
+          window.devicePixelRatio / window.desktopToDeviceScale;
 
-      // We need to get screen CSS-pixel (rather than display-pixel) coordinates.
-      // With 175% DPI, the actual ratio of display pixels to CSS pixels is
-      // 1.7647 because of rounding inside gecko. Unfortunately defaultCSSScaleFactor
-      // returns the original 1.75 dpi factor. While window.devicePixelRatio would
-      // get us the correct ratio, if the window is split between 2 screens,
-      // window.devicePixelRatio isn't guaranteed to match the screen we're
-      // autoscrolling on. So instead we do the same math as Gecko.
-      const scaleFactor = 60 / Math.round(60 / screen.defaultCSSScaleFactor);
-      let minX = left.value / scaleFactor + 0.5 * POPUP_SIZE;
-      let maxX = (left.value + width.value) / scaleFactor - 0.5 * POPUP_SIZE;
-      let minY = top.value / scaleFactor + 0.5 * POPUP_SIZE;
-      let maxY = (top.value + height.value) / scaleFactor - 0.5 * POPUP_SIZE;
-      let popupX = Math.max(minX, Math.min(maxX, screenX));
-      let popupY = Math.max(minY, Math.min(maxY, screenY));
+        // Sanitize screenX/screenY for available screen size with half the size
+        // of the popup removed. The popup uses negative margins to center on the
+        // coordinates we pass. Use desktop pixels to deal correctly with
+        // multi-monitor / multi-dpi scenarios.
+        let left = {},
+          top = {},
+          width = {},
+          height = {};
+        screen.GetAvailRectDisplayPix(left, top, width, height);
+
+        let popupSizeDesktopPx = POPUP_SIZE * cssToDesktopScale;
+        let minX = left.value + 0.5 * popupSizeDesktopPx;
+        let maxX = left.value + width.value - 0.5 * popupSizeDesktopPx;
+        let minY = top.value + 0.5 * popupSizeDesktopPx;
+        let maxY = top.value + height.value - 0.5 * popupSizeDesktopPx;
+
+        popupX =
+          Math.max(minX, Math.min(maxX, screenXDesktopPx)) / cssToDesktopScale;
+        popupY =
+          Math.max(minY, Math.min(maxY, screenYDesktopPx)) / cssToDesktopScale;
+      }
+
+      // In CSS pixels.
+      let screenX = screenXDevPx / window.devicePixelRatio;
+      let screenY = screenYDevPx / window.devicePixelRatio;
+
       this._autoScrollPopup.openPopupAtScreen(popupX, popupY);
       this._ignoreMouseEvents = true;
       this._startX = screenX;
@@ -1348,29 +1371,23 @@
       window.addEventListener("keyup", this, true);
 
       let usingApz = false;
+
       if (
-        this.isRemoteBrowser &&
         scrollId != null &&
         this.mPrefs.getBoolPref("apz.autoscroll.enabled", false)
       ) {
-        let { remoteTab } = this.frameLoader;
-        if (remoteTab) {
-          // If APZ is handling the autoscroll, it may decide to cancel
-          // it of its own accord, so register an observer to allow it
-          // to notify us of that.
-          Services.obs.addObserver(
-            this.observer,
-            "apz:cancel-autoscroll",
-            true
-          );
+        // If APZ is handling the autoscroll, it may decide to cancel
+        // it of its own accord, so register an observer to allow it
+        // to notify us of that.
+        Services.obs.addObserver(this.observer, "apz:cancel-autoscroll", true);
 
-          usingApz = remoteTab.startApzAutoscroll(
-            screenX,
-            screenY,
-            scrollId,
-            presShellId
-          );
-        }
+        usingApz = browsingContext.startApzAutoscroll(
+          screenX,
+          screenY,
+          scrollId,
+          presShellId
+        );
+
         // Save the IDs for later
         this._autoScrollScrollId = scrollId;
         this._autoScrollPresShellId = presShellId;
@@ -1686,8 +1703,43 @@
       };
     }
 
-    async drawSnapshot(x, y, w, h, scale, backgroundColor) {
-      let rect = new DOMRect(x, y, w, h);
+    /**
+     * Gets a screenshot of this browser as an ImageBitmap.
+     *
+     * @param {Number} x
+     *   The x coordinate of the region from the underlying document to capture
+     *   as a screenshot. This is ignored if fullViewport is true.
+     * @param {Number} y
+     *   The y coordinate of the region from the underlying document to capture
+     *   as a screenshot. This is ignored if fullViewport is true.
+     * @param {Number} w
+     *   The width of the region from the underlying document to capture as a
+     *   screenshot. This is ignored if fullViewport is true.
+     * @param {Number} h
+     *   The height of the region from the underlying document to capture as a
+     *   screenshot. This is ignored if fullViewport is true.
+     * @param {Number} scale
+     *   The scale factor for the captured screenshot. See the documentation for
+     *   WindowGlobalParent.drawSnapshot for more detail.
+     * @param {String} backgroundColor
+     *   The default background color for the captured screenshot. See the
+     *   documentation for WindowGlobalParent.drawSnapshot for more detail.
+     * @param {boolean|undefined} fullViewport
+     *   True if the viewport rect should be captured. If this is true, the
+     *   x, y, w and h parameters are ignored. Defaults to false.
+     * @returns {Promise}
+     * @resolves {ImageBitmap}
+     */
+    async drawSnapshot(
+      x,
+      y,
+      w,
+      h,
+      scale,
+      backgroundColor,
+      fullViewport = false
+    ) {
+      let rect = fullViewport ? null : new DOMRect(x, y, w, h);
       try {
         return this.browsingContext.currentWindowGlobal.drawSnapshot(
           rect,
@@ -1806,25 +1858,6 @@
         this._devicePermissionOrigins.set(key, origins);
       }
       return origins;
-    }
-
-    get processSwitchBehavior() {
-      // If a `remotenessChangeHandler` is attached to this browser, it supports
-      // having its toplevel process switched dynamically in response to
-      // navigations.
-      if (this.hasAttribute("maychangeremoteness")) {
-        return Ci.nsIBrowser.PROCESS_BEHAVIOR_STANDARD;
-      }
-
-      // For backwards compatibility, we need to mark remote, but
-      // non-`allowremote`, frames as `PROCESS_BEHAVIOR_SUBFRAME_ONLY`, as some
-      // tests rely on it.
-      // FIXME: Remove this?
-      if (this.isRemoteBrowser) {
-        return Ci.nsIBrowser.PROCESS_BEHAVIOR_SUBFRAME_ONLY;
-      }
-      // Otherwise, don't allow gecko-initiated toplevel process switches.
-      return Ci.nsIBrowser.PROCESS_BEHAVIOR_DISABLED;
     }
 
     // This method is replaced by frontend code in order to delay performing the

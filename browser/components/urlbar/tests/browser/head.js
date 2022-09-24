@@ -26,22 +26,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   UrlbarView: "resource:///modules/UrlbarView.jsm",
 });
 
-XPCOMUtils.defineLazyGetter(this, "UrlbarTestUtils", () => {
-  const { UrlbarTestUtils: module } = ChromeUtils.import(
-    "resource://testing-common/UrlbarTestUtils.jsm"
-  );
-  module.init(this);
-  return module;
-});
-
-XPCOMUtils.defineLazyGetter(this, "SearchTestUtils", () => {
-  const { SearchTestUtils: module } = ChromeUtils.import(
-    "resource://testing-common/SearchTestUtils.jsm"
-  );
-  module.init(this);
-  return module;
-});
-
 let sandbox;
 
 /* import-globals-from head-common.js */

@@ -1,8 +1,7 @@
-function handleRequest(request, response)
-{
-  var file = Components.classes["@mozilla.org/file/directory_service;1"]
-             .getService(Components.interfaces.nsIProperties)
-             .get("CurWorkD", Components.interfaces.nsIFile);
+function handleRequest(request, response) {
+  var file = Cc["@mozilla.org/file/directory_service;1"]
+    .getService(Ci.nsIProperties)
+    .get("CurWorkD", Ci.nsIFile);
 
   file.append("tests");
   file.append("image");
@@ -11,10 +10,10 @@ function handleRequest(request, response)
 
   var filestate = "/image/test/mochitest/bug671906.sjs";
   if (getState(filestate) == "") {
-    file.append('blue.png');
+    file.append("blue.png");
     setState(filestate, "red");
   } else {
-    file.append('red.png');
+    file.append("red.png");
     setState(filestate, "");
   }
 
@@ -24,8 +23,9 @@ function handleRequest(request, response)
   date.setFullYear(date.getFullYear() + 1);
   response.setHeader("Expires", date.toUTCString(), false);
 
-  var fileStream = Components.classes['@mozilla.org/network/file-input-stream;1']
-                   .createInstance(Components.interfaces.nsIFileInputStream);
+  var fileStream = Cc[
+    "@mozilla.org/network/file-input-stream;1"
+  ].createInstance(Ci.nsIFileInputStream);
   fileStream.init(file, 1, 0, false);
 
   response.bodyOutputStream.writeFrom(fileStream, fileStream.available());

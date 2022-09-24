@@ -54,6 +54,7 @@ struct Item {
     next: ItemIndex,
     shelf: ShelfIndex,
     allocated: bool,
+    generation: u16,
 }
 
 // Note: if allocating is slow we can use the guillotiere trick of storing multiple lists of free
@@ -156,6 +157,7 @@ impl AtlasAllocator {
                 next: ItemIndex::NONE,
                 shelf: current,
                 allocated: false,
+                generation: 1,
             });
 
             prev = current;
@@ -187,11 +189,12 @@ impl AtlasAllocator {
         adjust_size(self.alignment.height, &mut size.height);
 
         let (width, height) = convert_coordinates(self.flip_xy, size.width, size.height);
-        let height = shelf_height(height);
 
         if width > self.shelf_width as i32 || height > self.size.height {
             return None;
         }
+
+        let height = shelf_height(height, self.size.height);
 
         let mut width = width as u16;
         let mut height = height as u16;
@@ -264,6 +267,7 @@ impl AtlasAllocator {
                 next: ItemIndex::NONE,
                 shelf: new_shelf_idx,
                 allocated: false,
+                generation: 1,
             });
 
             self.shelves[new_shelf_idx.index()].first_item = new_item_idx;
@@ -290,6 +294,7 @@ impl AtlasAllocator {
                 next: item.next,
                 shelf: item.shelf,
                 allocated: false,
+                generation: 1,
             });
 
             self.items[selected_item.index()].width = width;
@@ -303,6 +308,7 @@ impl AtlasAllocator {
         }
 
         self.items[selected_item.index()].allocated = true;
+        let generation = self.items[selected_item.index()].generation;
 
         let x0 = item.x;
         let y0 = shelf.y;
@@ -322,18 +328,19 @@ impl AtlasAllocator {
         self.allocated_space += rectangle.area();
 
         Some(Allocation {
-            id: AllocId(selected_item.0 as u32),
+            id: AllocId::new(selected_item.0, generation),
             rectangle,
         })
     }
 
     /// Deallocate a rectangle in the atlas.
     pub fn deallocate(&mut self, id: AllocId) {
-        let item_idx = ItemIndex(id.0 as u16);
+        let item_idx = ItemIndex(id.index());
 
         //let item = self.items[item_idx.index()].clone();
-        let Item { mut prev, mut next, mut width, allocated, shelf, .. } = self.items[item_idx.index()];
+        let Item { mut prev, mut next, mut width, allocated, shelf, generation, .. } = self.items[item_idx.index()];
         assert!(allocated);
+        assert_eq!(generation, id.generation(), "Invalid AllocId");
 
         self.items[item_idx.index()].allocated = false;
         self.allocated_space -= width as i32 * self.shelves[shelf.index()].height as i32;
@@ -450,6 +457,13 @@ impl AtlasAllocator {
         self.size.area() - self.allocated_space
     }
 
+    pub fn iter(&self) -> Iter {
+        Iter {
+            atlas: self,
+            idx: 0,
+        }
+    }
+
     fn remove_item(&mut self, idx: ItemIndex) {
         self.items[idx.index()].next = self.free_items;
         self.free_items = idx;
@@ -463,9 +477,10 @@ impl AtlasAllocator {
         self.free_shelves = idx;
     }
 
-    fn add_item(&mut self, item: Item) -> ItemIndex {
+    fn add_item(&mut self, mut item: Item) -> ItemIndex {
         if self.free_items.is_some() {
             let idx = self.free_items;
+            item.generation = self.items[idx.index()].generation.wrapping_add(1);
             self.free_items = self.items[idx.index()].next;
             self.items[idx.index()] = item;
 
@@ -543,6 +558,56 @@ impl AtlasAllocator {
 
             shelf_idx = shelf.next;
         }
+    }
+
+    /// Turn a valid AllocId into an index that can be used as a key for external storage.
+    ///
+    /// The allocator internally stores all items in a single vector. In addition allocations
+    /// stay at the same index in the vector until they are deallocated. As a result the index
+    /// of an item can be used as a key for external storage using vectors. Note that:
+    ///  - The provided ID must correspond to an item that is currently allocated in the atlas.
+    ///  - After an item is deallocated, its index may be reused by a future allocation, so
+    ///    the returned index should only be considered valid during the lifetime of the its
+    ///    associated item.
+    ///  - indices are expected to be "reasonable" with respect to the number of allocated items,
+    ///    in other words it is never larger than the maximum number of allocated items in the
+    ///    atlas (making it a good fit for indexing within a sparsely populated vector).
+    pub fn get_index(&self, id: AllocId) -> u32 {
+        let index = id.index();
+        debug_assert_eq!(self.items[index as usize].generation, id.generation());
+
+        index as u32
+    }
+
+    /// Returns the allocation info associated to the allocation ID.
+    ///
+    /// The id must correspond to an existing allocation in the atlas.
+    pub fn get(&self, id: AllocId) -> Rectangle {
+        let index = id.index()as usize;
+        let item = &self.items[index];
+
+        assert!(item.allocated);
+        assert_eq!(item.generation, id.generation(), "Invalid AllocId");
+
+        let shelf = &self.shelves[item.shelf.index()];
+
+        let mut rectangle = Rectangle {
+            min: point2(
+                item.x as i32,
+                shelf.y as i32,
+            ),
+            max: point2(
+                (item.x + item.width) as i32,
+                (shelf.y + shelf.height) as i32,
+            ),
+        };
+
+        if self.flip_xy {
+            std::mem::swap(&mut rectangle.min.x, &mut rectangle.min.y);
+            std::mem::swap(&mut rectangle.max.x, &mut rectangle.max.y);
+        }
+
+        rectangle
     }
 
     /// Dump a visual representation of the atlas in SVG format.
@@ -645,7 +710,7 @@ fn convert_coordinates(flip_xy: bool, x: i32, y: i32) -> (i32, i32) {
     }
 }
 
-fn shelf_height(mut size: i32) -> i32 {
+fn shelf_height(size: i32, atlas_height: i32) -> i32 {
     let alignment = match size {
         0 ..= 31 => 8,
         32 ..= 127 => 16,
@@ -653,12 +718,73 @@ fn shelf_height(mut size: i32) -> i32 {
         _ => 64,
     };
 
+    let mut adjusted_size = size;
     let rem = size % alignment;
     if rem > 0 {
-        size += alignment - rem;
+        adjusted_size = size + alignment - rem;
+        if adjusted_size > atlas_height {
+            adjusted_size = size;
+        }
     }
 
-    size
+    adjusted_size
+}
+
+/// Iterator over the allocations of an atlas.
+pub struct Iter<'l> {
+    atlas: &'l AtlasAllocator,
+    idx: usize,
+}
+
+impl<'l> Iterator for Iter<'l> {
+    type Item = Allocation;
+
+    fn next(&mut self) -> Option<Allocation> {
+        if self.idx >= self.atlas.items.len() {
+            return None;
+        }
+
+        while !self.atlas.items[self.idx].allocated {
+            self.idx += 1;
+            if self.idx >= self.atlas.items.len() {
+                return None;
+            }
+        }
+
+        let item = &self.atlas.items[self.idx];
+        let shelf = &self.atlas.shelves[item.shelf.index()];
+
+        let mut alloc = Allocation {
+            rectangle: Rectangle {
+                min: point2(
+                    item.x as i32,
+                    shelf.y as i32,
+                ),
+                max: point2(
+                    (item.x + item.width) as i32,
+                    (shelf.y + shelf.height) as i32,
+                ),
+            },
+            id: AllocId::new(self.idx as u16, item.generation),
+        };
+
+        if self.atlas.flip_xy {
+            std::mem::swap(&mut alloc.rectangle.min.x, &mut alloc.rectangle.min.y);
+            std::mem::swap(&mut alloc.rectangle.max.x, &mut alloc.rectangle.max.y);
+        }
+
+        self.idx += 1;
+
+        Some(alloc)
+    }
+}
+
+impl<'l> std::iter::IntoIterator for &'l AtlasAllocator {
+    type Item = Allocation;
+    type IntoIter = Iter<'l>;
+    fn into_iter(self) -> Iter<'l> {
+        self.iter()
+    }
 }
 
 #[test]
@@ -716,6 +842,10 @@ fn test_options() {
     assert!(a1.id != a3.id);
     assert!(!atlas.is_empty());
 
+    for id in &atlas {
+        assert!(id == a1 || id == a2 || id == a3);
+    }
+
     assert_eq!(a1.rectangle.min.x % alignment.width, 0);
     assert_eq!(a1.rectangle.min.y % alignment.height, 0);
     assert_eq!(a2.rectangle.min.x % alignment.width, 0);
@@ -762,9 +892,13 @@ fn vertical() {
 
     let c = atlas.allocate(size2(128, 128)).unwrap();
 
+    for _ in &atlas {}
+
     atlas.deallocate(a.id);
     atlas.deallocate(b.id);
     atlas.deallocate(c.id);
+
+    for _ in &atlas {}
 
     assert!(atlas.is_empty());
     assert_eq!(atlas.allocated_space(), 0);
@@ -858,6 +992,8 @@ fn clear() {
         atlas.allocate(size2(11, 12)).unwrap();
         atlas.allocate(size2(29, 28)).unwrap();
         atlas.allocate(size2(32, 32)).unwrap();
+
+        for _ in &atlas {}
     }
 }
 
@@ -947,4 +1083,38 @@ fn fuzz_04() {
     let mut atlas = AtlasAllocator::new(size2(1000, 1000));
 
     assert!(atlas.allocate(size2(2560, 2147483647)).is_none());
+}
+
+#[test]
+fn issue_17_1() {
+    let mut atlas = AtlasAllocator::new(size2(1024, 1024));
+
+    let a = atlas.allocate(size2(100, 300)).unwrap();
+    let b = atlas.allocate(size2(500, 200)).unwrap();
+
+    assert_eq!(a.rectangle, atlas.get(a.id));
+    assert_eq!(b.rectangle, atlas.get(b.id));
+
+    atlas.deallocate(a.id);
+
+    let c = atlas.allocate(size2(300, 200)).unwrap();
+
+    assert_eq!(b.rectangle, atlas.get(b.id));
+    assert_eq!(c.rectangle, atlas.get(c.id));
+
+    atlas.deallocate(c.id);
+    atlas.deallocate(b.id);
+}
+
+#[test]
+fn issue_17_2() {
+    let mut atlas = AtlasAllocator::new(size2(1000, 1000));
+
+    assert!(atlas.allocate(size2(100, 1001)).is_none());
+    assert!(atlas.allocate(size2(1001, 1000)).is_none());
+    let a = atlas.allocate(size2(1000, 1000)).unwrap();
+
+    assert_eq!(a.rectangle, atlas.get(a.id));
+
+    atlas.deallocate(a.id);
 }

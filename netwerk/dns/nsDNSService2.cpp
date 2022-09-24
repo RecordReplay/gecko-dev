@@ -32,7 +32,7 @@
 #include "nsQueryObject.h"
 #include "nsIObserverService.h"
 #include "nsINetworkLinkService.h"
-#include "DNSResolverInfo.h"
+#include "DNSAdditionalInfo.h"
 #include "TRRService.h"
 
 #include "mozilla/Attributes.h"
@@ -56,13 +56,11 @@ static const char kPrefDnsCacheGrace[] =
     "network.dnsCacheExpirationGracePeriod";
 static const char kPrefIPv4OnlyDomains[] = "network.dns.ipv4OnlyDomains";
 static const char kPrefDisableIPv6[] = "network.dns.disableIPv6";
-static const char kPrefDisablePrefetch[] = "network.dns.disablePrefetch";
 static const char kPrefBlockDotOnion[] = "network.dns.blockDotOnion";
 static const char kPrefDnsLocalDomains[] = "network.dns.localDomains";
 static const char kPrefDnsForceResolve[] = "network.dns.forceResolve";
 static const char kPrefDnsOfflineLocalhost[] = "network.dns.offline-localhost";
 static const char kPrefDnsNotifyResolution[] = "network.dns.notifyResolution";
-static const char kPrefNetworkProxySOCKS[] = "network.proxy.socks";
 
 //-----------------------------------------------------------------------------
 
@@ -136,6 +134,12 @@ nsDNSRecord::IsTRR(bool* retval) {
   } else {
     *retval = false;
   }
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDNSRecord::ResolvedInSocketProcess(bool* retval) {
+  *retval = false;
   return NS_OK;
 }
 
@@ -352,6 +356,9 @@ nsDNSRecord::GetEffectiveTRRMode(uint32_t* aMode) {
   *aMode = mHostRecord->EffectiveTRRMode();
   return NS_OK;
 }
+
+NS_IMETHODIMP
+nsDNSRecord::GetTtl(uint32_t* aTtl) { return mHostRecord->GetTtl(aTtl); }
 
 class nsDNSByTypeRecord : public nsIDNSByTypeRecord,
                           public nsIDNSTXTRecord,
@@ -603,8 +610,56 @@ class NotifyDNSResolution : public Runnable {
 
 //-----------------------------------------------------------------------------
 
-NS_IMPL_ISUPPORTS(nsDNSService, nsIDNSService, nsPIDNSService, nsIObserver,
-                  nsIMemoryReporter)
+static StaticRefPtr<DNSServiceWrapper> gDNSServiceWrapper;
+
+NS_IMPL_ISUPPORTS(DNSServiceWrapper, nsIDNSService, nsPIDNSService)
+
+// static
+already_AddRefed<nsIDNSService> DNSServiceWrapper::GetSingleton() {
+  if (!gDNSServiceWrapper) {
+    gDNSServiceWrapper = new DNSServiceWrapper();
+    gDNSServiceWrapper->mDNSServiceInUse = ChildDNSService::GetSingleton();
+    if (gDNSServiceWrapper->mDNSServiceInUse) {
+      ClearOnShutdown(&gDNSServiceWrapper);
+      nsDNSPrefetch::Initialize(gDNSServiceWrapper);
+    } else {
+      gDNSServiceWrapper = nullptr;
+    }
+  }
+
+  return do_AddRef(gDNSServiceWrapper);
+}
+
+// static
+void DNSServiceWrapper::SwitchToBackupDNSService() {
+  if (!gDNSServiceWrapper) {
+    return;
+  }
+
+  gDNSServiceWrapper->mBackupDNSService = nsDNSService::GetSingleton();
+
+  MutexAutoLock lock(gDNSServiceWrapper->mLock);
+  gDNSServiceWrapper->mBackupDNSService.swap(
+      gDNSServiceWrapper->mDNSServiceInUse);
+}
+
+nsIDNSService* DNSServiceWrapper::DNSService() {
+  MOZ_ASSERT(XRE_IsParentProcess());
+
+  MutexAutoLock lock(mLock);
+  return mDNSServiceInUse.get();
+}
+
+nsPIDNSService* DNSServiceWrapper::PIDNSService() {
+  MOZ_ASSERT(XRE_IsParentProcess());
+
+  nsCOMPtr<nsPIDNSService> service = do_QueryInterface(DNSService());
+  return service.get();
+}
+
+//-----------------------------------------------------------------------------
+NS_IMPL_ISUPPORTS_INHERITED(nsDNSService, DNSServiceBase, nsIDNSService,
+                            nsPIDNSService, nsIMemoryReporter)
 
 /******************************************************************************
  * nsDNSService impl:
@@ -644,18 +699,22 @@ already_AddRefed<nsIDNSService> nsDNSService::GetXPCOMSingleton() {
         return GetSingleton();
       }
 
-      if (XRE_IsContentProcess() || XRE_IsParentProcess()) {
+      if (XRE_IsParentProcess()) {
+        return DNSServiceWrapper::GetSingleton();
+      }
+
+      if (XRE_IsContentProcess()) {
         return ChildDNSService::GetSingleton();
       }
 
       return nullptr;
     }
 
-    if (XRE_IsParentProcess()) {
+    if (XRE_IsParentProcess() || XRE_IsSocketProcess()) {
       return GetSingleton();
     }
 
-    if (XRE_IsContentProcess() || XRE_IsSocketProcess()) {
+    if (XRE_IsContentProcess()) {
       return ChildDNSService::GetSingleton();
     }
 
@@ -675,7 +734,6 @@ already_AddRefed<nsIDNSService> nsDNSService::GetXPCOMSingleton() {
 
 already_AddRefed<nsDNSService> nsDNSService::GetSingleton() {
   MOZ_ASSERT_IF(nsIOService::UseSocketProcess(), XRE_IsSocketProcess());
-  MOZ_ASSERT_IF(!nsIOService::UseSocketProcess(), XRE_IsParentProcess());
 
   if (!gDNSService) {
     if (!NS_IsMainThread()) {
@@ -692,7 +750,9 @@ already_AddRefed<nsDNSService> nsDNSService::GetSingleton() {
   return do_AddRef(gDNSService);
 }
 
-nsresult nsDNSService::ReadPrefs(const char* name) {
+void nsDNSService::ReadPrefs(const char* name) {
+  DNSServiceBase::ReadPrefs(name);
+
   bool tmpbool;
   uint32_t tmpint;
   mResolverPrefsUpdated = false;
@@ -735,11 +795,6 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
       mOfflineLocalhost = tmpbool;
     }
   }
-  if (!name || !strcmp(name, kPrefDisablePrefetch)) {
-    if (NS_SUCCEEDED(Preferences::GetBool(kPrefDisablePrefetch, &tmpbool))) {
-      mDisablePrefetch = tmpbool;
-    }
-  }
   if (!name || !strcmp(name, kPrefBlockDotOnion)) {
     if (NS_SUCCEEDED(Preferences::GetBool(kPrefBlockDotOnion, &tmpbool))) {
       mBlockDotOnion = tmpbool;
@@ -749,12 +804,6 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
     if (NS_SUCCEEDED(
             Preferences::GetBool(kPrefDnsNotifyResolution, &tmpbool))) {
       mNotifyResolution = tmpbool;
-    }
-  }
-  if (!name || !strcmp(name, kPrefNetworkProxySOCKS)) {
-    nsAutoCString socks;
-    if (NS_SUCCEEDED(Preferences::GetCString(kPrefNetworkProxySOCKS, socks))) {
-      mHasSocksProxy = !socks.IsEmpty();
     }
   }
   if (!name || !strcmp(name, kPrefIPv4OnlyDomains)) {
@@ -777,14 +826,6 @@ nsresult nsDNSService::ReadPrefs(const char* name) {
     Preferences::GetCString(kPrefDnsForceResolve, mForceResolve);
     mForceResolveOn = !mForceResolve.IsEmpty();
   }
-
-  if (StaticPrefs::network_proxy_type() ==
-      nsIProtocolProxyService::PROXYCONFIG_MANUAL) {
-    // Disable prefetching either by explicit preference or if a
-    // manual proxy is configured
-    mDisablePrefetch = true;
-  }
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -823,12 +864,9 @@ nsDNSService::Init() {
     prefs->AddObserver(kPrefDnsForceResolve, this, false);
     prefs->AddObserver(kPrefDisableIPv6, this, false);
     prefs->AddObserver(kPrefDnsOfflineLocalhost, this, false);
-    prefs->AddObserver(kPrefDisablePrefetch, this, false);
     prefs->AddObserver(kPrefBlockDotOnion, this, false);
     prefs->AddObserver(kPrefDnsNotifyResolution, this, false);
-
-    // Monitor these to see if there is a change in proxy configuration
-    prefs->AddObserver(kPrefNetworkProxySOCKS, this, false);
+    AddPrefObserver(prefs);
   }
 
   nsDNSPrefetch::Initialize(this);
@@ -894,25 +932,6 @@ nsDNSService::SetPrefetchEnabled(bool inVal) {
   return NS_OK;
 }
 
-bool nsDNSService::DNSForbiddenByActiveProxy(const nsACString& aHostname,
-                                             uint32_t flags) {
-  if (flags & nsIDNSService::RESOLVE_IGNORE_SOCKS_DNS) {
-    return false;
-  }
-
-  // We should avoid doing DNS when a proxy is in use.
-  NetAddr tempAddr;
-  if (StaticPrefs::network_proxy_type() ==
-          nsIProtocolProxyService::PROXYCONFIG_MANUAL &&
-      mHasSocksProxy && StaticPrefs::network_proxy_socks_remote_dns()) {
-    // Allow IP lookups through, but nothing else.
-    if (!HostIsIPLiteral(aHostname)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 already_AddRefed<nsHostResolver> nsDNSService::GetResolverLocked() {
   MutexAutoLock lock(mLock);
   return do_AddRef(mResolver);
@@ -958,7 +977,7 @@ nsresult nsDNSService::PreprocessHostname(bool aLocalDomain,
 
 nsresult nsDNSService::AsyncResolveInternal(
     const nsACString& aHostname, uint16_t type, uint32_t flags,
-    nsIDNSResolverInfo* aResolver, nsIDNSListener* aListener,
+    nsIDNSAdditionalInfo* aInfo, nsIDNSListener* aListener,
     nsIEventTarget* target_, const OriginAttributes& aOriginAttributes,
     nsICancelable** result) {
   // grab reference to global host resolver and IDN service.  beware
@@ -1026,13 +1045,14 @@ nsresult nsDNSService::AsyncResolveInternal(
 
   MOZ_ASSERT(listener);
   RefPtr<nsDNSAsyncRequest> req =
-      new nsDNSAsyncRequest(res, hostname, DNSResolverInfo::URL(aResolver),
-                            type, aOriginAttributes, listener, flags, af);
+      new nsDNSAsyncRequest(res, hostname, DNSAdditionalInfo::URL(aInfo), type,
+                            aOriginAttributes, listener, flags, af);
   if (!req) {
     return NS_ERROR_OUT_OF_MEMORY;
   }
 
-  rv = res->ResolveHost(req->mHost, DNSResolverInfo::URL(aResolver), type,
+  rv = res->ResolveHost(req->mHost, DNSAdditionalInfo::URL(aInfo),
+                        DNSAdditionalInfo::Port(aInfo), type,
                         req->mOriginAttributes, flags, af, req);
   req.forget(result);
   return rv;
@@ -1040,7 +1060,7 @@ nsresult nsDNSService::AsyncResolveInternal(
 
 nsresult nsDNSService::CancelAsyncResolveInternal(
     const nsACString& aHostname, uint16_t aType, uint32_t aFlags,
-    nsIDNSResolverInfo* aResolver, nsIDNSListener* aListener, nsresult aReason,
+    nsIDNSAdditionalInfo* aInfo, nsIDNSListener* aListener, nsresult aReason,
     const OriginAttributes& aOriginAttributes) {
   // grab reference to global host resolver and IDN service.  beware
   // simultaneous shutdown!!
@@ -1071,7 +1091,7 @@ nsresult nsDNSService::CancelAsyncResolveInternal(
   uint16_t af =
       (aType != RESOLVE_TYPE_DEFAULT) ? 0 : GetAFForLookup(hostname, aFlags);
 
-  res->CancelAsyncRequest(hostname, DNSResolverInfo::URL(aResolver), aType,
+  res->CancelAsyncRequest(hostname, DNSAdditionalInfo::URL(aInfo), aType,
                           aOriginAttributes, aFlags, af, aListener, aReason);
   return NS_OK;
 }
@@ -1079,7 +1099,7 @@ nsresult nsDNSService::CancelAsyncResolveInternal(
 NS_IMETHODIMP
 nsDNSService::AsyncResolve(const nsACString& aHostname,
                            nsIDNSService::ResolveType aType, uint32_t flags,
-                           nsIDNSResolverInfo* aResolver,
+                           nsIDNSAdditionalInfo* aInfo,
                            nsIDNSListener* listener, nsIEventTarget* target_,
                            JS::HandleValue aOriginAttributes, JSContext* aCx,
                            uint8_t aArgc, nsICancelable** result) {
@@ -1091,34 +1111,34 @@ nsDNSService::AsyncResolve(const nsACString& aHostname,
     }
   }
 
-  return AsyncResolveInternal(aHostname, aType, flags, aResolver, listener,
-                              target_, attrs, result);
+  return AsyncResolveInternal(aHostname, aType, flags, aInfo, listener, target_,
+                              attrs, result);
 }
 
 NS_IMETHODIMP
 nsDNSService::AsyncResolveNative(const nsACString& aHostname,
                                  nsIDNSService::ResolveType aType,
-                                 uint32_t flags, nsIDNSResolverInfo* aResolver,
+                                 uint32_t flags, nsIDNSAdditionalInfo* aInfo,
                                  nsIDNSListener* aListener,
                                  nsIEventTarget* target_,
                                  const OriginAttributes& aOriginAttributes,
                                  nsICancelable** result) {
-  return AsyncResolveInternal(aHostname, aType, flags, aResolver, aListener,
+  return AsyncResolveInternal(aHostname, aType, flags, aInfo, aListener,
                               target_, aOriginAttributes, result);
 }
 
 NS_IMETHODIMP
-nsDNSService::NewTRRResolverInfo(const nsACString& aTrrURL,
-                                 nsIDNSResolverInfo** aResolver) {
-  RefPtr<DNSResolverInfo> res = new DNSResolverInfo(aTrrURL);
-  res.forget(aResolver);
+nsDNSService::NewAdditionalInfo(const nsACString& aTrrURL, int32_t aPort,
+                                nsIDNSAdditionalInfo** aInfo) {
+  RefPtr<DNSAdditionalInfo> res = new DNSAdditionalInfo(aTrrURL, aPort);
+  res.forget(aInfo);
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsDNSService::CancelAsyncResolve(const nsACString& aHostname,
                                  nsIDNSService::ResolveType aType,
-                                 uint32_t aFlags, nsIDNSResolverInfo* aResolver,
+                                 uint32_t aFlags, nsIDNSAdditionalInfo* aInfo,
                                  nsIDNSListener* aListener, nsresult aReason,
                                  JS::HandleValue aOriginAttributes,
                                  JSContext* aCx, uint8_t aArgc) {
@@ -1130,17 +1150,17 @@ nsDNSService::CancelAsyncResolve(const nsACString& aHostname,
     }
   }
 
-  return CancelAsyncResolveInternal(aHostname, aType, aFlags, aResolver,
-                                    aListener, aReason, attrs);
+  return CancelAsyncResolveInternal(aHostname, aType, aFlags, aInfo, aListener,
+                                    aReason, attrs);
 }
 
 NS_IMETHODIMP
 nsDNSService::CancelAsyncResolveNative(
     const nsACString& aHostname, nsIDNSService::ResolveType aType,
-    uint32_t aFlags, nsIDNSResolverInfo* aResolver, nsIDNSListener* aListener,
+    uint32_t aFlags, nsIDNSAdditionalInfo* aInfo, nsIDNSListener* aListener,
     nsresult aReason, const OriginAttributes& aOriginAttributes) {
-  return CancelAsyncResolveInternal(aHostname, aType, aFlags, aResolver,
-                                    aListener, aReason, aOriginAttributes);
+  return CancelAsyncResolveInternal(aHostname, aType, aFlags, aInfo, aListener,
+                                    aReason, aOriginAttributes);
 }
 
 NS_IMETHODIMP
@@ -1238,7 +1258,7 @@ nsresult nsDNSService::ResolveInternal(
     flags |= RESOLVE_DISABLE_TRR;
   }
 
-  rv = res->ResolveHost(hostname, ""_ns, RESOLVE_TYPE_DEFAULT,
+  rv = res->ResolveHost(hostname, ""_ns, -1, RESOLVE_TYPE_DEFAULT,
                         aOriginAttributes, flags, af, syncReq);
   if (NS_SUCCEEDED(rv)) {
     // wait for result
@@ -1409,7 +1429,7 @@ nsDNSService::SetDetectedTrrURI(const nsACString& aURI) {
 NS_IMETHODIMP
 nsDNSService::GetCurrentTrrURI(nsACString& aURI) {
   if (mTrrService) {
-    return mTrrService->GetURI(aURI);
+    mTrrService->GetURI(aURI);
   }
   return NS_OK;
 }

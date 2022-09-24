@@ -22,7 +22,7 @@ const TEST_URL = "data:text/html,<html><body></body></html>";
 
 StarUI._closePanelQuickForTesting = true;
 
-add_task(async function setup() {
+add_setup(async function() {
   bookmarkPanel.setAttribute("animate", false);
   registerCleanupFunction(() => {
     bookmarkPanel.removeAttribute("animate");
@@ -299,6 +299,18 @@ add_task(async function panel_shown_for_new_bookmark_keypress_no_autoclose() {
       bookmarkPanel.hidePopup();
     },
     isBookmarkRemoved: false,
+  });
+});
+
+add_task(async function bookmark_with_invalid_default_folder() {
+  await createAndRemoveDefaultFolder();
+
+  await test_bookmarks_popup({
+    isNewBookmark: true,
+    shouldAutoClose: true,
+    async popupShowFn(browser) {
+      EventUtils.synthesizeKey("d", { accelKey: true }, window);
+    },
   });
 });
 

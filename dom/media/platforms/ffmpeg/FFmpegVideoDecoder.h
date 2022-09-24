@@ -7,16 +7,25 @@
 #ifndef __FFmpegVideoDecoder_h__
 #define __FFmpegVideoDecoder_h__
 
+#include "ImageContainer.h"
 #include "FFmpegDataDecoder.h"
 #include "FFmpegLibWrapper.h"
 #include "SimpleMap.h"
+#include "mozilla/ScopeExit.h"
+#include "nsTHashSet.h"
+#if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
+#  include "mozilla/layers/TextureClient.h"
+#endif
+#ifdef MOZ_WAYLAND_USE_VAAPI
+#  include "FFmpegVideoFramePool.h"
+#endif
 
 struct _VADRMPRIMESurfaceDescriptor;
 typedef struct _VADRMPRIMESurfaceDescriptor VADRMPRIMESurfaceDescriptor;
 
 namespace mozilla {
 
-class VideoFramePool;
+class ImageBufferWrapper;
 
 template <int V>
 class FFmpegVideoDecoder : public FFmpegDataDecoder<V> {};
@@ -41,8 +50,10 @@ class FFmpegVideoDecoder<LIBAV_VER>
                      ImageContainer* aImageContainer, bool aLowLatency,
                      bool aDisableHardwareDecoding);
 
+  ~FFmpegVideoDecoder();
+
   RefPtr<InitPromise> Init() override;
-  void InitCodecContext() override;
+  void InitCodecContext() REQUIRES(sMutex) override;
   nsCString GetDescriptionName() const override {
 #ifdef USING_MOZFFVPX
     return "ffvpx video decoder"_ns;
@@ -55,6 +66,19 @@ class FFmpegVideoDecoder<LIBAV_VER>
   }
 
   static AVCodecID GetCodecId(const nsACString& aMimeType);
+
+#if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
+  int GetVideoBuffer(struct AVCodecContext* aCodecContext, AVFrame* aFrame,
+                     int aFlags);
+  int GetVideoBufferDefault(struct AVCodecContext* aCodecContext,
+                            AVFrame* aFrame, int aFlags) {
+    mIsUsingShmemBufferForDecode = Some(false);
+    return mLib->avcodec_default_get_buffer2(aCodecContext, aFrame, aFlags);
+  }
+  void ReleaseAllocatedImage(ImageBufferWrapper* aImage) {
+    mAllocatedImages.Remove(aImage);
+  }
+#endif
 
  private:
   RefPtr<FlushPromise> ProcessFlush() override;
@@ -74,9 +98,26 @@ class FFmpegVideoDecoder<LIBAV_VER>
 #endif
   }
   gfx::YUVColorSpace GetFrameColorSpace() const;
+  gfx::ColorRange GetFrameColorRange() const;
 
   MediaResult CreateImage(int64_t aOffset, int64_t aPts, int64_t aDuration,
                           MediaDataDecoder::DecodedData& aResults) const;
+
+  bool IsHardwareAccelerated(nsACString& aFailureReason) const override;
+  bool IsHardwareAccelerated() const {
+    nsAutoCString dummy;
+    return IsHardwareAccelerated(dummy);
+  }
+  void UpdateDecodeTimes(TimeStamp aDecodeStart);
+
+#if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
+  layers::TextureClient* AllocateTextureClientForImage(
+      struct AVCodecContext* aCodecContext, layers::PlanarYCbCrImage* aImage);
+
+  gfx::IntSize GetAlignmentVideoFrameSize(struct AVCodecContext* aCodecContext,
+                                          int32_t aWidth,
+                                          int32_t aHeight) const;
+#endif
 
 #ifdef MOZ_WAYLAND_USE_VAAPI
   void InitHWDecodingPrefs();
@@ -84,26 +125,36 @@ class FFmpegVideoDecoder<LIBAV_VER>
   bool CreateVAAPIDeviceContext();
   void InitVAAPICodecContext();
   AVCodec* FindVAAPICodec();
-  bool IsHardwareAccelerated(nsACString& aFailureReason) const override;
   bool GetVAAPISurfaceDescriptor(VADRMPRIMESurfaceDescriptor* aVaDesc);
+  void AddAcceleratedFormats(nsTArray<AVCodecID>& aCodecList,
+                             AVCodecID aCodecID, AVVAAPIHWConfig* hwconfig);
+  nsTArray<AVCodecID> GetAcceleratedFormats();
+  bool IsFormatAccelerated(AVCodecID aCodecID) const;
 
   MediaResult CreateImageVAAPI(int64_t aOffset, int64_t aPts, int64_t aDuration,
                                MediaDataDecoder::DecodedData& aResults);
-  MediaResult CreateImageDMABuf(int64_t aOffset, int64_t aPts,
-                                int64_t aDuration,
-                                MediaDataDecoder::DecodedData& aResults);
 #endif
 
 #ifdef MOZ_WAYLAND_USE_VAAPI
   AVBufferRef* mVAAPIDeviceContext;
   bool mEnableHardwareDecoding;
   VADisplay mDisplay;
-  bool mUseDMABufSurfaces;
-  UniquePtr<VideoFramePool> mVideoFramePool;
+  UniquePtr<VideoFramePool<LIBAV_VER>> mVideoFramePool;
+  static nsTArray<AVCodecID> mAcceleratedFormats;
 #endif
   RefPtr<KnowsCompositor> mImageAllocator;
   RefPtr<ImageContainer> mImageContainer;
   VideoInfo mInfo;
+  int mDecodedFrames;
+#if LIBAVCODEC_VERSION_MAJOR >= 58
+  int mDecodedFramesLate;
+  // Tracks when decode time of recent frame and averange decode time of
+  // previous frames is bigger than frame interval,
+  // i.e. we fail to decode in time.
+  // We switch to SW decode when we hit HW_DECODE_LATE_FRAMES treshold.
+  int mMissedDecodeInAverangeTime;
+#endif
+  float mAverangeDecodeTime;
 
   class PtsCorrectionContext {
    public:
@@ -123,7 +174,53 @@ class FFmpegVideoDecoder<LIBAV_VER>
 
   DurationMap mDurationMap;
   const bool mLowLatency;
+
+  // True if we're allocating shmem for ffmpeg decode buffer.
+  Maybe<Atomic<bool>> mIsUsingShmemBufferForDecode;
+
+#if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
+  // These images are buffers for ffmpeg in order to store decoded data when
+  // using custom allocator for decoding. We want to explictly track all images
+  // we allocate to ensure that we won't leak any of them.
+  //
+  // All images tracked by mAllocatedImages are used by ffmpeg,
+  // i.e. ffmpeg holds a reference to them and uses them in
+  // its internal decoding queue.
+  //
+  // When an image is removed from mAllocatedImages it's recycled
+  // for a new frame by AllocateTextureClientForImage() in
+  // FFmpegVideoDecoder::GetVideoBuffer().
+  nsTHashSet<RefPtr<ImageBufferWrapper>> mAllocatedImages;
+#endif
 };
+
+#if LIBAVCODEC_VERSION_MAJOR >= 57 && LIBAVUTIL_VERSION_MAJOR >= 56
+class ImageBufferWrapper final {
+ public:
+  typedef mozilla::layers::Image Image;
+  typedef mozilla::layers::PlanarYCbCrImage PlanarYCbCrImage;
+
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ImageBufferWrapper)
+
+  ImageBufferWrapper(Image* aImage, void* aDecoder)
+      : mImage(aImage), mDecoder(aDecoder) {
+    MOZ_ASSERT(aImage);
+    MOZ_ASSERT(mDecoder);
+  }
+
+  Image* AsImage() { return mImage; }
+
+  void ReleaseBuffer() {
+    auto* decoder = static_cast<FFmpegVideoDecoder<LIBAV_VER>*>(mDecoder);
+    decoder->ReleaseAllocatedImage(this);
+  }
+
+ private:
+  ~ImageBufferWrapper() = default;
+  const RefPtr<Image> mImage;
+  void* const MOZ_NON_OWNING_REF mDecoder;
+};
+#endif
 
 }  // namespace mozilla
 

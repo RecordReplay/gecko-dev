@@ -38,7 +38,6 @@
 #include "nsIURI.h"
 #include "nsThreadUtils.h"
 #include "nsDisplayList.h"
-#include "ImageLayers.h"
 #include "ImageRegion.h"
 #include "ImageContainer.h"
 #include "nsIContent.h"
@@ -52,6 +51,7 @@
 #include "mozilla/StaticPrefs_image.h"
 #include "mozilla/SVGImageContext.h"
 #include "Units.h"
+#include "mozilla/image/WebRenderImageProvider.h"
 #include "mozilla/layers/RenderRootStateManager.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/dom/ImageTracker.h"
@@ -82,14 +82,14 @@ class nsImageBoxFrameEvent : public Runnable {
   NS_IMETHOD Run() override;
 
  private:
-  nsCOMPtr<nsIContent> mContent;
+  const nsCOMPtr<nsIContent> mContent;
   EventMessage mMessage;
 };
 
-NS_IMETHODIMP
-nsImageBoxFrameEvent::Run() {
-  RefPtr<nsPresContext> pres_context = mContent->OwnerDoc()->GetPresContext();
-  if (!pres_context) {
+// TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230, bug 1535398)
+MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP nsImageBoxFrameEvent::Run() {
+  RefPtr<nsPresContext> presContext = mContent->OwnerDoc()->GetPresContext();
+  if (!presContext) {
     return NS_OK;
   }
 
@@ -97,7 +97,7 @@ nsImageBoxFrameEvent::Run() {
   WidgetEvent event(true, mMessage);
 
   event.mFlags.mBubbles = false;
-  EventDispatcher::Dispatch(mContent, pres_context, &event, nullptr, &status);
+  EventDispatcher::Dispatch(mContent, presContext, &event, nullptr, &status);
   return NS_OK;
 }
 
@@ -330,7 +330,7 @@ void nsImageBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
   DisplayListClipState::AutoClipContainingBlockDescendantsToContentBox clip(
       aBuilder, this, clipFlags);
 
-  nsDisplayList list;
+  nsDisplayList list(aBuilder);
   list.AppendNewToTop<nsDisplayXULImage>(aBuilder, this);
 
   CreateOwnLayerIfNeeded(aBuilder, &list,
@@ -429,40 +429,22 @@ ImgDrawResult nsImageBoxFrame::CreateWebRenderCommands(
           imgCon, aItem->Frame(), fillRect, fillRect, aSc, aFlags, svgContext,
           region);
 
-  RefPtr<layers::ImageContainer> container;
-  result = imgCon->GetImageContainerAtSize(aManager->LayerManager(), decodeSize,
-                                           svgContext, region, aFlags,
-                                           getter_AddRefs(container));
-  if (!container) {
-    NS_WARNING("Failed to get image container");
-    return result;
-  }
+  RefPtr<image::WebRenderImageProvider> provider;
+  result =
+      imgCon->GetImageProvider(aManager->LayerManager(), decodeSize, svgContext,
+                               region, aFlags, getter_AddRefs(provider));
 
-  mozilla::wr::ImageRendering rendering = wr::ToImageRendering(
-      nsLayoutUtils::GetSamplingFilterForFrame(aItem->Frame()));
-  wr::LayoutRect fill = wr::ToLayoutRect(fillRect);
-
-  if (aFlags & imgIContainer::FLAG_RECORD_BLOB) {
-    Maybe<wr::BlobImageKey> key = aManager->CommandBuilder().CreateBlobImageKey(
-        aItem, container, aResources);
-    if (key.isNothing()) {
-      return result;
-    }
-
-    aBuilder.PushImage(fill, fill, !BackfaceIsHidden(), rendering,
-                       wr::AsImageKey(key.value()));
-    return result;
-  }
-
-  gfx::IntSize size;
-  Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageKey(
-      aItem, container, aBuilder, aResources, rendering, aSc, size, Nothing());
+  Maybe<wr::ImageKey> key = aManager->CommandBuilder().CreateImageProviderKey(
+      aItem, provider, result, aResources);
   if (key.isNothing()) {
     return result;
   }
 
-  aBuilder.PushImage(fill, fill, !BackfaceIsHidden(), rendering, key.value());
+  auto rendering = wr::ToImageRendering(aItem->Frame()->UsedImageRendering());
+  wr::LayoutRect fill = wr::ToLayoutRect(fillRect);
 
+  aBuilder.PushImage(fill, fill, !BackfaceIsHidden(), false, rendering,
+                     key.value());
   return result;
 }
 
@@ -523,7 +505,7 @@ void nsDisplayXULImage::Paint(nsDisplayListBuilder* aBuilder,
     flags |= imgIContainer::FLAG_HIGH_QUALITY_SCALING;
 
   ImgDrawResult result = static_cast<nsImageBoxFrame*>(mFrame)->PaintImage(
-      *aCtx, GetPaintRect(), ToReferenceFrame(), flags);
+      *aCtx, GetPaintRect(aBuilder, aCtx), ToReferenceFrame(), flags);
 
   nsDisplayItemGenericImageGeometry::UpdateDrawResult(this, result);
 }
@@ -580,36 +562,8 @@ void nsDisplayXULImage::ComputeInvalidationRegion(
     aInvalidRegion->Or(*aInvalidRegion, GetBounds(aBuilder, &snap));
   }
 
-  nsDisplayImageContainer::ComputeInvalidationRegion(aBuilder, aGeometry,
-                                                     aInvalidRegion);
-}
-
-bool nsDisplayXULImage::CanOptimizeToImageLayer(
-    LayerManager* aManager, nsDisplayListBuilder* aBuilder) {
-  nsImageBoxFrame* imageFrame = static_cast<nsImageBoxFrame*>(mFrame);
-  if (!imageFrame->CanOptimizeToImageLayer()) {
-    return false;
-  }
-
-  return nsDisplayImageContainer::CanOptimizeToImageLayer(aManager, aBuilder);
-}
-
-already_AddRefed<imgIContainer> nsDisplayXULImage::GetImage() {
-  nsImageBoxFrame* imageFrame = static_cast<nsImageBoxFrame*>(mFrame);
-  if (!imageFrame->mImageRequest) {
-    return nullptr;
-  }
-
-  nsCOMPtr<imgIContainer> imgCon;
-  imageFrame->mImageRequest->GetImage(getter_AddRefs(imgCon));
-
-  return imgCon.forget();
-}
-
-nsRect nsDisplayXULImage::GetDestRect() const {
-  Maybe<nsPoint> anchorPoint;
-  return static_cast<nsImageBoxFrame*>(mFrame)->GetDestRect(ToReferenceFrame(),
-                                                            anchorPoint);
+  nsPaintedDisplayItem::ComputeInvalidationRegion(aBuilder, aGeometry,
+                                                  aInvalidRegion);
 }
 
 bool nsImageBoxFrame::CanOptimizeToImageLayer() {
@@ -871,8 +825,8 @@ void nsImageBoxFrame::OnFrameUpdate(imgIRequest* aRequest) {
   // Check if WebRender has interacted with this frame. If it has
   // we need to let it know that things have changed.
   const auto type = DisplayItemType::TYPE_XUL_IMAGE;
-  const auto producerId = aRequest->GetProducerId();
-  if (WebRenderUserData::ProcessInvalidateForImage(this, type, producerId)) {
+  const auto providerId = aRequest->GetProviderId();
+  if (WebRenderUserData::ProcessInvalidateForImage(this, type, providerId)) {
     return;
   }
 

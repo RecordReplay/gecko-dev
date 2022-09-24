@@ -126,6 +126,8 @@ class ProcessHandlerMixin(object):
 
             # Parameter for whether or not we should attempt to track child processes
             self._ignore_children = ignore_children
+            self._job = None
+            self._io_port = None
 
             if not self._ignore_children and not isWin:
                 # Set the process group id for linux systems
@@ -1287,7 +1289,7 @@ class StreamOutput(object):
     def __call__(self, line):
         ensure = six.ensure_text if self.text else six.ensure_binary
         try:
-            self.stream.write(ensure(line) + ensure("\n"))
+            self.stream.write(ensure(line, errors="ignore") + ensure("\n"))
         except TypeError:
             print(
                 "HEY! If you're reading this, you're about to encounter a "

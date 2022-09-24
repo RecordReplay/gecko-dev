@@ -30,6 +30,7 @@ const INSPECTOR_L10N = new LocalizationHelper(
 
 registerCleanupFunction(() => {
   Services.prefs.clearUserPref("devtools.inspector.activeSidebar");
+  Services.prefs.clearUserPref("devtools.inspector.selectedSidebar");
 });
 
 registerCleanupFunction(function() {
@@ -64,6 +65,16 @@ var startPicker = async function(toolbox, skipFocus) {
       content.focus();
     });
   }
+};
+
+/**
+ * Stop the element picker using the Escape keyboard shortcut
+ * @param {Toolbox} toolbox
+ */
+var stopPickerWithEscapeKey = async function(toolbox) {
+  const onPickerStopped = toolbox.nodePicker.once("picker-node-canceled");
+  EventUtils.synthesizeKey("VK_ESCAPE", {}, toolbox.win);
+  await onPickerStopped;
 };
 
 /**
@@ -127,7 +138,7 @@ function pickElement(inspector, selector, x, y) {
  */
 async function hoverElement(inspector, selector, x, y) {
   const { waitForHighlighterTypeShown } = getHighlighterTestHelpers(inspector);
-  info("Waiting for element " + selector + " to be hovered");
+  info(`Waiting for element "${selector}" to be hovered`);
   const onHovered = inspector.toolbox.nodePicker.once("picker-node-hovered");
   const onHighlighterShown = waitForHighlighterTypeShown(
     inspector.highlighters.TYPES.BOXMODEL
@@ -162,6 +173,12 @@ async function hoverElement(inspector, selector, x, y) {
       browsingContext
     );
   }
+
+  info("Wait for picker-node-hovered");
+  await onHovered;
+
+  info("Wait for highlighter shown");
+  await onHighlighterShown;
 
   return Promise.all([onHighlighterShown, onHovered]);
 }
@@ -1412,30 +1429,36 @@ function reflowContentPage() {
  * @return {Promise<Object>} A promise that resolves with an object with each property of
  *         a box-model region, each of them being an object with the p1/p2/p3/p4 properties.
  */
-async function getAllAdjustedQuadsForContentPageElement(selector) {
+async function getAllAdjustedQuadsForContentPageElement(
+  selector,
+  useTopWindowAsBoundary = true
+) {
+  const selectors = Array.isArray(selector) ? selector : [selector];
+
+  const browsingContext =
+    selectors.length == 1
+      ? gBrowser.selectedBrowser.browsingContext
+      : await getBrowsingContextInFrames(
+          gBrowser.selectedBrowser.browsingContext,
+          selectors.slice(0, -1)
+        );
+
+  const inBrowsingContextSelector = selectors.at(-1);
   return SpecialPowers.spawn(
-    gBrowser.selectedBrowser,
-    [selector],
-    _selector => {
+    browsingContext,
+    [inBrowsingContextSelector, useTopWindowAsBoundary],
+    (_selector, _useTopWindowAsBoundary) => {
       const { require } = ChromeUtils.import(
-        "resource://devtools/shared/Loader.jsm"
+        "resource://devtools/shared/loader/Loader.jsm"
       );
       const { getAdjustedQuads } = require("devtools/shared/layout/utils");
 
-      let document = content.document;
-      if (Array.isArray(_selector)) {
-        while (_selector.length > 1) {
-          const str = _selector.shift();
-          const iframe = document.querySelector(str);
-          document = iframe.contentWindow.document;
-        }
-        _selector = _selector.shift();
-      }
-      const node = document.querySelector(_selector);
+      const node = content.document.querySelector(_selector);
 
+      const boundaryWindow = _useTopWindowAsBoundary ? content.top : content;
       const regions = {};
       for (const boxType of ["content", "padding", "border", "margin"]) {
-        regions[boxType] = getAdjustedQuads(content, node, boxType);
+        regions[boxType] = getAdjustedQuads(boundaryWindow, node, boxType);
       }
 
       return regions;
@@ -1452,7 +1475,12 @@ async function getAllAdjustedQuadsForContentPageElement(selector) {
  */
 async function isNodeCorrectlyHighlighted(highlighterTestFront, selector) {
   const boxModel = await highlighterTestFront.getBoxModelStatus();
-  const regions = await getAllAdjustedQuadsForContentPageElement(selector);
+
+  const useTopWindowAsBoundary = !!highlighterTestFront.parentFront.isTopLevel;
+  const regions = await getAllAdjustedQuadsForContentPageElement(
+    selector,
+    useTopWindowAsBoundary
+  );
 
   for (const boxType of ["content", "padding", "border", "margin"]) {
     const [quad] = regions[boxType];

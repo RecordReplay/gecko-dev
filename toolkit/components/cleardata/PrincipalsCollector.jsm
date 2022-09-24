@@ -12,13 +12,6 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyServiceGetter(
   this,
-  "quotaManagerService",
-  "@mozilla.org/dom/quota-manager-service;1",
-  "nsIQuotaManagerService"
-);
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
   "serviceWorkerManager",
   "@mozilla.org/serviceworkers/manager;1",
   "nsIServiceWorkerManager"
@@ -88,7 +81,7 @@ class PrincipalsCollector {
   async _getAllPrincipalsInternal(progress = {}) {
     progress.step = "principals-quota-manager";
     let principals = await new Promise(resolve => {
-      quotaManagerService.listOrigins().callback = request => {
+      Services.qms.listOrigins().callback = request => {
         progress.step = "principals-quota-manager-listOrigins";
         if (request.resultCode != Cr.NS_OK) {
           // We are probably shutting down. We don't want to propagate the
@@ -97,18 +90,18 @@ class PrincipalsCollector {
           return;
         }
 
-        let list = [];
+        let principalsMap = new Map();
         for (const origin of request.result) {
           let principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
             origin
           );
           if (PrincipalsCollector.isSupportedPrincipal(principal)) {
-            list.push(principal);
+            principalsMap.set(principal.origin, principal);
           }
         }
 
         progress.step = "principals-quota-manager-completed";
-        resolve(list);
+        resolve(principalsMap);
       };
     }).catch(ex => {
       Cu.reportError("QuotaManagerService promise failed: " + ex);
@@ -123,7 +116,7 @@ class PrincipalsCollector {
         Ci.nsIServiceWorkerRegistrationInfo
       );
       // We don't need to check the scheme. SW are just exposed to http/https URLs.
-      principals.push(sw.principal);
+      principals.set(sw.principal.origin, sw.principal);
     }
 
     // Let's take the list of unique hosts+OA from cookies.
@@ -141,14 +134,14 @@ class PrincipalsCollector {
     hosts.forEach(host => {
       // Cookies and permissions are handled by origin/host. Doesn't matter if we
       // use http: or https: schema here.
-      principals.push(
-        Services.scriptSecurityManager.createContentPrincipalFromOrigin(
-          "https://" + host
-        )
+      const principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(
+        "https://" + host
       );
+      principals.set(principal.origin, principal);
     });
 
     progress.step = "total-principals:" + principals.length;
+    principals = Array.from(principals.values());
     return principals;
   }
 }

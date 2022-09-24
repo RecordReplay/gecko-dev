@@ -1,5 +1,5 @@
-commit 0e7b4428866f3133b4abba2d932ee3faa708db1d
-Author: Long Nguyen <nguyen.long.908132@gmail.com>
-Date:   Thu Mar 25 22:26:56 2021 +0700
+commit c205e7ee49a7086a28b9c275fcfdac9ca3dc815d
+Author: yumaoka <y.umaoka@gmail.com>
+Date:   Wed Mar 30 14:47:46 2022 -0400
 
-    ICU-21560 mingw: Remove version numbers from link flags
+    ICU-21971 Added a new numeric currecny code SLE/695 for Sierra Leone Leone.

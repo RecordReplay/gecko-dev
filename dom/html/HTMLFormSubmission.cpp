@@ -5,11 +5,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "HTMLFormSubmission.h"
-
 #include "HTMLFormElement.h"
+#include "HTMLFormSubmissionConstants.h"
 #include "nsCOMPtr.h"
-#include "nsIForm.h"
-#include "mozilla/dom/Document.h"
 #include "nsComponentManagerUtils.h"
 #include "nsGkAtoms.h"
 #include "nsIFormControl.h"
@@ -31,11 +29,14 @@
 #include "nsCExternalHandlerService.h"
 #include "nsContentUtils.h"
 
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/AncestorIterator.h"
 #include "mozilla/dom/Directory.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/StaticPrefs_dom.h"
 #include "mozilla/RandomNum.h"
+
+#include <tuple>
 
 namespace mozilla::dom {
 
@@ -687,11 +688,10 @@ nsresult FSTextPlain::GetEncodedSubmission(nsIURI* aURI,
 
 HTMLFormSubmission::HTMLFormSubmission(
     nsIURI* aActionURL, const nsAString& aTarget,
-    mozilla::NotNull<const mozilla::Encoding*> aEncoding, Element* aSubmitter)
+    mozilla::NotNull<const mozilla::Encoding*> aEncoding)
     : mActionURL(aActionURL),
       mTarget(aTarget),
       mEncoding(aEncoding),
-      mSubmitter(aSubmitter),
       mInitiatedFromUserInput(UserActivation::IsHandlingUserInput()) {
   MOZ_COUNT_CTOR(HTMLFormSubmission);
 }
@@ -699,7 +699,7 @@ HTMLFormSubmission::HTMLFormSubmission(
 EncodingFormSubmission::EncodingFormSubmission(
     nsIURI* aActionURL, const nsAString& aTarget,
     NotNull<const Encoding*> aEncoding, Element* aSubmitter)
-    : HTMLFormSubmission(aActionURL, aTarget, aEncoding, aSubmitter) {
+    : HTMLFormSubmission(aActionURL, aTarget, aEncoding) {
   if (!aEncoding->CanEncodeEverything()) {
     nsAutoCString name;
     aEncoding->Name(name);
@@ -717,8 +717,7 @@ nsresult EncodingFormSubmission::EncodeVal(const nsAString& aStr,
                                            nsCString& aOut,
                                            EncodeType aEncodeType) {
   nsresult rv;
-  const Encoding* ignored;
-  Tie(rv, ignored) = mEncoding->Encode(aStr, aOut);
+  std::tie(rv, std::ignore) = mEncoding->Encode(aStr, aOut);
   if (NS_FAILED(rv)) {
     return rv;
   }
@@ -793,7 +792,8 @@ nsresult HTMLFormSubmission::GetFromForm(HTMLFormElement* aForm,
     // policy - do *not* consult default-src, see:
     // http://www.w3.org/TR/CSP2/#directive-default-src
     rv = csp->Permits(aForm, nullptr /* nsICSPEventListener */, actionURL,
-                      nsIContentSecurityPolicy::FORM_ACTION_DIRECTIVE, true,
+                      nsIContentSecurityPolicy::FORM_ACTION_DIRECTIVE,
+                      true /* aSpecific */, true /* aSendViolationReports */,
                       &permitsFormAction);
     NS_ENSURE_SUCCESS(rv, rv);
     if (!permitsFormAction) {
@@ -847,8 +847,8 @@ nsresult HTMLFormSubmission::GetFromForm(HTMLFormElement* aForm,
     if (aSubmitter) {
       aSubmitter->ResultForDialogSubmit(result);
     }
-    *aFormSubmission = new DialogFormSubmission(result, actionURL, target,
-                                                aEncoding, aSubmitter, dialog);
+    *aFormSubmission =
+        new DialogFormSubmission(result, actionURL, target, aEncoding, dialog);
     return NS_OK;
   }
 

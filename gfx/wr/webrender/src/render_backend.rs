@@ -8,11 +8,11 @@
 //! See the comment at the top of the `renderer` module for a description of
 //! how these two pieces interact.
 
-use api::{DebugFlags, BlobImageHandler};
+use api::{DebugFlags, Parameter, BoolParameter};
 use api::{DocumentId, ExternalScrollId, HitTestResult};
-use api::{IdNamespace, PipelineId, RenderNotifier, ScrollClamping};
+use api::{IdNamespace, PipelineId, RenderNotifier, SampledScrollOffset};
 use api::{NotificationRequest, Checkpoint, QualitySettings};
-use api::{PrimitiveKeyKind};
+use api::{PrimitiveKeyKind, RenderReasons};
 use api::units::*;
 use api::channel::{single_msg_channel, Sender, Receiver};
 #[cfg(any(feature = "capture", feature = "replay"))]
@@ -31,12 +31,13 @@ use crate::gpu_cache::GpuCache;
 use crate::hit_test::{HitTest, HitTester, SharedHitTester};
 use crate::intern::DataStore;
 #[cfg(any(feature = "capture", feature = "replay"))]
-use crate::internal_types::DebugOutput;
-use crate::internal_types::{FastHashMap, RenderedDocument, ResultMsg};
+use crate::internal_types::{DebugOutput};
+use crate::internal_types::{FastHashMap, RenderedDocument, ResultMsg, FrameId, FrameStamp};
 use malloc_size_of::{MallocSizeOf, MallocSizeOfOps};
-use crate::picture::{TileCacheLogger, PictureScratchBuffer, SliceId, TileCacheInstance, TileCacheParams};
+use crate::picture::{PictureScratchBuffer, SliceId, TileCacheInstance, TileCacheParams, SurfaceInfo, RasterConfig};
+use crate::picture::{PicturePrimitive};
 use crate::prim_store::{PrimitiveScratchBuffer, PrimitiveInstance};
-use crate::prim_store::{PrimitiveInstanceKind, PrimTemplateCommonData, PrimitiveStore};
+use crate::prim_store::{PrimitiveInstanceKind, PrimTemplateCommonData};
 use crate::prim_store::interned::*;
 use crate::profiler::{self, TransactionProfile};
 use crate::render_task_graph::RenderTaskGraphBuilder;
@@ -50,13 +51,16 @@ use crate::resource_cache::PlainResources;
 use crate::scene::Scene;
 use crate::scene::{BuiltScene, SceneProperties};
 use crate::scene_builder_thread::*;
+use crate::spatial_tree::SpatialTree;
+#[cfg(feature = "replay")]
+use crate::spatial_tree::SceneSpatialTree;
+use crate::telemetry::Telemetry;
 #[cfg(feature = "serialize")]
 use serde::{Serialize, Deserialize};
 #[cfg(feature = "replay")]
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{UNIX_EPOCH, SystemTime};
 use std::{mem, u32};
 #[cfg(feature = "capture")]
 use std::path::PathBuf;
@@ -81,140 +85,10 @@ pub struct SceneView {
     pub quality_settings: QualitySettings,
 }
 
-#[derive(Copy, Clone, Hash, MallocSizeOf, PartialEq, PartialOrd, Debug, Eq, Ord)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct FrameId(usize);
-
-impl FrameId {
-    /// Returns a FrameId corresponding to the first frame.
-    ///
-    /// Note that we use 0 as the internal id here because the current code
-    /// increments the frame id at the beginning of the frame, rather than
-    /// at the end, and we want the first frame to be 1. It would probably
-    /// be sensible to move the advance() call to after frame-building, and
-    /// then make this method return FrameId(1).
-    pub fn first() -> Self {
-        FrameId(0)
-    }
-
-    /// Returns the backing usize for this FrameId.
-    pub fn as_usize(&self) -> usize {
-        self.0
-    }
-
-    /// Advances this FrameId to the next frame.
-    pub fn advance(&mut self) {
-        self.0 += 1;
-    }
-
-    /// An invalid sentinel FrameId, which will always compare less than
-    /// any valid FrameId.
-    pub const INVALID: FrameId = FrameId(0);
-}
-
-impl Default for FrameId {
-    fn default() -> Self {
-        FrameId::INVALID
-    }
-}
-
-impl ::std::ops::Add<usize> for FrameId {
-    type Output = Self;
-    fn add(self, other: usize) -> FrameId {
-        FrameId(self.0 + other)
-    }
-}
-
-impl ::std::ops::Sub<usize> for FrameId {
-    type Output = Self;
-    fn sub(self, other: usize) -> FrameId {
-        assert!(self.0 >= other, "Underflow subtracting FrameIds");
-        FrameId(self.0 - other)
-    }
-}
 enum RenderBackendStatus {
     Continue,
     StopRenderBackend,
     ShutDown(Option<Sender<()>>),
-}
-
-/// Identifier to track a sequence of frames.
-///
-/// This is effectively a `FrameId` with a ridealong timestamp corresponding
-/// to when advance() was called, which allows for more nuanced cache eviction
-/// decisions. As such, we use the `FrameId` for equality and comparison, since
-/// we should never have two `FrameStamps` with the same id but different
-/// timestamps.
-#[derive(Copy, Clone, Debug, MallocSizeOf)]
-#[cfg_attr(feature = "capture", derive(Serialize))]
-#[cfg_attr(feature = "replay", derive(Deserialize))]
-pub struct FrameStamp {
-    id: FrameId,
-    time: SystemTime,
-    document_id: DocumentId,
-}
-
-impl Eq for FrameStamp {}
-
-impl PartialEq for FrameStamp {
-    fn eq(&self, other: &Self) -> bool {
-        // We should not be checking equality unless the documents are the same
-        debug_assert!(self.document_id == other.document_id);
-        self.id == other.id
-    }
-}
-
-impl PartialOrd for FrameStamp {
-    fn partial_cmp(&self, other: &Self) -> Option<::std::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
-    }
-}
-
-impl FrameStamp {
-    /// Gets the FrameId in this stamp.
-    pub fn frame_id(&self) -> FrameId {
-        self.id
-    }
-
-    /// Gets the time associated with this FrameStamp.
-    pub fn time(&self) -> SystemTime {
-        self.time
-    }
-
-    /// Gets the DocumentId in this stamp.
-    pub fn document_id(&self) -> DocumentId {
-        self.document_id
-    }
-
-    pub fn is_valid(&self) -> bool {
-        // If any fields are their default values, the whole struct should equal INVALID
-        debug_assert!((self.time != UNIX_EPOCH && self.id != FrameId(0) && self.document_id != DocumentId::INVALID) ||
-                      *self == Self::INVALID);
-        self.document_id != DocumentId::INVALID
-    }
-
-    /// Returns a FrameStamp corresponding to the first frame.
-    pub fn first(document_id: DocumentId) -> Self {
-        FrameStamp {
-            id: FrameId::first(),
-            time: SystemTime::now(),
-            document_id,
-        }
-    }
-
-    /// Advances to a new frame.
-    pub fn advance(&mut self) {
-        self.id.advance();
-        self.time = SystemTime::now();
-    }
-
-    /// An invalid sentinel FrameStamp.
-    pub const INVALID: FrameStamp = FrameStamp {
-        id: FrameId(0),
-        time: UNIX_EPOCH,
-        document_id: DocumentId::INVALID,
-    };
 }
 
 macro_rules! declare_data_stores {
@@ -263,12 +137,53 @@ impl DataStores {
     pub fn get_local_prim_rect(
         &self,
         prim_instance: &PrimitiveInstance,
-        prim_store: &PrimitiveStore,
+        pictures: &[PicturePrimitive],
+        surfaces: &[SurfaceInfo],
     ) -> LayoutRect {
         match prim_instance.kind {
             PrimitiveInstanceKind::Picture { pic_index, .. } => {
-                let pic = &prim_store.pictures[pic_index.0];
-                pic.precise_local_rect
+                let pic = &pictures[pic_index.0];
+
+                match pic.raster_config {
+                    Some(RasterConfig { surface_index, ref composite_mode, .. }) => {
+                        let surface = &surfaces[surface_index.0];
+
+                        composite_mode.get_rect(surface, None)
+                    }
+                    None => {
+                        panic!("bug: get_local_prim_rect should not be called for pass-through pictures");
+                    }
+                }
+            }
+            _ => {
+                self.as_common_data(prim_instance).prim_rect
+            }
+        }
+    }
+
+    /// Returns the local coverage (space occupied) for a primitive. For most primitives,
+    /// this is stored in the template. For pictures, this is stored inside the picture
+    /// primitive instance itself, since this is determined during frame building.
+    pub fn get_local_prim_coverage_rect(
+        &self,
+        prim_instance: &PrimitiveInstance,
+        pictures: &[PicturePrimitive],
+        surfaces: &[SurfaceInfo],
+    ) -> LayoutRect {
+        match prim_instance.kind {
+            PrimitiveInstanceKind::Picture { pic_index, .. } => {
+                let pic = &pictures[pic_index.0];
+
+                match pic.raster_config {
+                    Some(RasterConfig { surface_index, ref composite_mode, .. }) => {
+                        let surface = &surfaces[surface_index.0];
+
+                        composite_mode.get_coverage(surface, None)
+                    }
+                    None => {
+                        panic!("bug: get_local_prim_coverage_rect should not be called for pass-through pictures");
+                    }
+                }
             }
             _ => {
                 self.as_common_data(prim_instance).prim_rect
@@ -343,8 +258,12 @@ impl DataStores {
                 let prim_data = &self.yuv_image[data_handle];
                 &prim_data.common
             }
-            PrimitiveInstanceKind::Backdrop { data_handle, .. } => {
-                let prim_data = &self.backdrop[data_handle];
+            PrimitiveInstanceKind::BackdropCapture { data_handle, .. } => {
+                let prim_data = &self.backdrop_capture[data_handle];
+                &prim_data.common
+            }
+            PrimitiveInstanceKind::BackdropRender { data_handle, .. } => {
+                let prim_data = &self.backdrop_render[data_handle];
                 &prim_data.common
             }
         }
@@ -373,7 +292,6 @@ impl ScratchBuffer {
     pub fn recycle(&mut self, recycler: &mut Recycler) {
         self.primitive.recycle(recycler);
         self.picture.recycle(recycler);
-        self.frame.recycle(recycler);
     }
 
     pub fn memory_pressure(&mut self) {
@@ -430,6 +348,9 @@ struct Document {
 
     data_stores: DataStores,
 
+    /// Retained frame-building version of the spatial tree
+    spatial_tree: SpatialTree,
+
     /// Contains various vecs of data that is used only during frame building,
     /// where we want to recycle the memory each new display list, to avoid constantly
     /// re-allocating and moving memory around.
@@ -474,6 +395,7 @@ impl Document {
             rendered_frame_is_valid: false,
             has_built_scene: false,
             data_stores: DataStores::default(),
+            spatial_tree: SpatialTree::new(),
             scratch: ScratchBuffer::default(),
             #[cfg(feature = "replay")]
             loaded_scene: Scene::new(),
@@ -501,14 +423,14 @@ impl Document {
             FrameMsg::UpdateEpoch(pipeline_id, epoch) => {
                 self.scene.pipeline_epochs.insert(pipeline_id, epoch);
             }
-            FrameMsg::HitTest(pipeline_id, point, tx) => {
+            FrameMsg::HitTest(point, tx) => {
                 if !self.hit_tester_is_valid {
                     self.rebuild_hit_tester();
                 }
 
                 let result = match self.hit_tester {
                     Some(ref hit_tester) => {
-                        hit_tester.hit_test(HitTest::new(pipeline_id, point))
+                        hit_tester.hit_test(HitTest::new(point))
                     }
                     None => HitTestResult { items: Vec::new() },
                 };
@@ -518,10 +440,10 @@ impl Document {
             FrameMsg::RequestHitTester(tx) => {
                 tx.send(self.shared_hit_tester.clone()).unwrap();
             }
-            FrameMsg::ScrollNodeWithId(origin, id, clamp) => {
-                profile_scope!("ScrollNodeWithScrollId");
+            FrameMsg::SetScrollOffsets(id, offset) => {
+                profile_scope!("SetScrollOffset");
 
-                if self.scroll_node(origin, id, clamp) {
+                if self.set_scroll_offsets(id, offset) {
                     self.hit_tester_is_valid = false;
                     self.frame_is_valid = false;
                 }
@@ -531,20 +453,19 @@ impl Document {
                     ..DocumentOps::nop()
                 };
             }
-            FrameMsg::GetScrollNodeState(tx) => {
-                profile_scope!("GetScrollNodeState");
-                tx.send(self.scene.spatial_tree.get_scroll_node_state()).unwrap();
+            FrameMsg::ResetDynamicProperties => {
+                self.dynamic_properties.reset_properties();
             }
-            FrameMsg::UpdateDynamicProperties(property_bindings) => {
-                self.dynamic_properties.set_properties(property_bindings);
+            FrameMsg::AppendDynamicProperties(property_bindings) => {
+                self.dynamic_properties.add_properties(property_bindings);
             }
             FrameMsg::AppendDynamicTransformProperties(property_bindings) => {
                 self.dynamic_properties.add_transforms(property_bindings);
             }
             FrameMsg::SetIsTransformAsyncZooming(is_zooming, animation_id) => {
-                let node = self.scene.spatial_tree.spatial_nodes.iter_mut()
-                    .find(|node| node.is_transform_bound_to_property(animation_id));
-                if let Some(node) = node {
+                if let Some(node_index) = self.spatial_tree.find_spatial_node_by_anim_id(animation_id) {
+                    let node = self.spatial_tree.get_spatial_node_mut(node_index);
+
                     if node.is_async_zooming != is_zooming {
                         node.is_async_zooming = is_zooming;
                         self.frame_is_valid = false;
@@ -561,9 +482,9 @@ impl Document {
         resource_cache: &mut ResourceCache,
         gpu_cache: &mut GpuCache,
         debug_flags: DebugFlags,
-        tile_cache_logger: &mut TileCacheLogger,
         tile_caches: &mut FastHashMap<SliceId, Box<TileCacheInstance>>,
-        frame_stats: Option<FullFrameStats>
+        frame_stats: Option<FullFrameStats>,
+        render_reasons: RenderReasons,
     ) -> RenderedDocument {
         let frame_build_start_time = precise_time_ns();
 
@@ -585,8 +506,8 @@ impl Document {
                 &mut self.data_stores,
                 &mut self.scratch,
                 debug_flags,
-                tile_cache_logger,
                 tile_caches,
+                &mut self.spatial_tree,
                 self.dirty_rects_are_valid,
                 &mut self.profile,
             );
@@ -613,14 +534,15 @@ impl Document {
             frame,
             is_new_scene,
             profile: self.profile.take_and_reset(),
-            frame_stats: frame_stats
+            frame_stats: frame_stats,
+            render_reasons,
         }
     }
 
     fn rebuild_hit_tester(&mut self) {
-        self.scene.spatial_tree.update_tree(&self.dynamic_properties);
+        self.spatial_tree.update_tree(&self.dynamic_properties);
 
-        let hit_tester = Arc::new(self.scene.create_hit_tester());
+        let hit_tester = Arc::new(self.scene.create_hit_tester(&self.spatial_tree));
         self.hit_tester = Some(Arc::clone(&hit_tester));
         self.shared_hit_tester.update(hit_tester);
         self.hit_tester_is_valid = true;
@@ -636,13 +558,12 @@ impl Document {
     }
 
     /// Returns true if the node actually changed position or false otherwise.
-    pub fn scroll_node(
+    pub fn set_scroll_offsets(
         &mut self,
-        origin: LayoutPoint,
         id: ExternalScrollId,
-        clamp: ScrollClamping
+        offsets: Vec<SampledScrollOffset>,
     ) -> bool {
-        self.scene.spatial_tree.scroll_node(origin, id, clamp)
+        self.spatial_tree.set_scroll_offsets(id, offsets)
     }
 
     /// Update the state of tile caches when a new scene is being swapped in to
@@ -713,10 +634,8 @@ impl Document {
             resource_cache,
         );
 
-        let old_scrolling_states = self.scene.spatial_tree.drain();
         self.scene = built_scene;
         self.scratch.recycle(recycler);
-        self.scene.spatial_tree.finalize_and_apply_pending_scroll_offsets(old_scrolling_states);
     }
 }
 
@@ -762,16 +681,10 @@ pub struct RenderBackend {
     documents: FastHashMap<DocumentId, Document>,
 
     notifier: Box<dyn RenderNotifier>,
-    tile_cache_logger: TileCacheLogger,
     sampler: Option<Box<dyn AsyncPropertySampler + Send>>,
     size_of_ops: Option<MallocSizeOfOps>,
     debug_flags: DebugFlags,
     namespace_alloc_by_client: bool,
-
-    // We keep one around to be able to call clear_namespace
-    // after the api object is deleted. For most purposes the
-    // api object's blob handler should be used instead.
-    blob_image_handler: Option<Box<dyn BlobImageHandler>>,
 
     recycler: Recycler,
 
@@ -796,7 +709,6 @@ impl RenderBackend {
         scene_tx: Sender<SceneBuilderRequest>,
         resource_cache: ResourceCache,
         notifier: Box<dyn RenderNotifier>,
-        blob_image_handler: Option<Box<dyn BlobImageHandler>>,
         frame_config: FrameBuilderConfig,
         sampler: Option<Box<dyn AsyncPropertySampler + Send>>,
         size_of_ops: Option<MallocSizeOfOps>,
@@ -813,13 +725,11 @@ impl RenderBackend {
             default_compositor_kind : frame_config.compositor_kind,
             documents: FastHashMap::default(),
             notifier,
-            tile_cache_logger: TileCacheLogger::new(500usize),
             sampler,
             size_of_ops,
             debug_flags,
             namespace_alloc_by_client,
             recycler: Recycler::new(),
-            blob_image_handler,
             #[cfg(feature = "capture")]
             capture_config: None,
             #[cfg(feature = "replay")]
@@ -828,7 +738,7 @@ impl RenderBackend {
         }
     }
 
-    fn next_namespace_id(&self) -> IdNamespace {
+    pub fn next_namespace_id() -> IdNamespace {
         IdNamespace(NEXT_NAMESPACE_ID.fetch_add(1, Ordering::Relaxed) as u32)
     }
 
@@ -927,6 +837,10 @@ impl RenderBackend {
                     Some(txn.frame_stats)
                 };
 
+                if let Some(updates) = txn.spatial_tree_updates.take() {
+                    doc.spatial_tree.apply_updates(updates);
+                }
+
                 if let Some(built_scene) = txn.built_scene.take() {
                     doc.new_async_scene_ready(
                         built_scene,
@@ -940,12 +854,6 @@ impl RenderBackend {
                 // during the scene build, apply them to the data store now.
                 // This needs to happen before we build the hit tester.
                 if let Some(updates) = txn.interner_updates.take() {
-                    #[cfg(feature = "capture")]
-                    {
-                        if self.debug_flags.contains(DebugFlags::TILE_CACHE_LOGGING_DBG) {
-                            self.tile_cache_logger.serialize_updates(&updates);
-                        }
-                    }
                     doc.data_stores.apply_updates(updates, &mut doc.profile);
                 }
 
@@ -963,12 +871,6 @@ impl RenderBackend {
                     // we can sample from the sampler hook which might happen
                     // in the update_document call below.
                     resume_rx.recv().ok();
-                }
-
-                for pipeline_id in &txn.discard_frame_state_for_pipelines {
-                    doc.scene
-                        .spatial_tree
-                        .discard_frame_state_for_pipeline(*pipeline_id);
                 }
 
                 self.resource_cache.add_rasterized_blob_images(
@@ -992,6 +894,7 @@ impl RenderBackend {
                 txn.frame_ops.take(),
                 txn.notifications.take(),
                 txn.render_frame,
+                RenderReasons::SCENE,
                 None,
                 txn.invalidate_rendered_frame,
                 frame_counter,
@@ -1010,7 +913,7 @@ impl RenderBackend {
         match msg {
             ApiMsg::CloneApi(sender) => {
                 assert!(!self.namespace_alloc_by_client);
-                sender.send(self.next_namespace_id()).unwrap();
+                sender.send(Self::next_namespace_id()).unwrap();
             }
             ApiMsg::CloneApiByClient(namespace_id) => {
                 assert!(self.namespace_alloc_by_client);
@@ -1066,6 +969,12 @@ impl RenderBackend {
                     }
                     DebugCommand::SetPictureTileSize(tile_size) => {
                         self.frame_config.tile_size_override = tile_size;
+                        self.update_frame_builder_config();
+
+                        return RenderBackendStatus::Continue;
+                    }
+                    DebugCommand::SetMaximumSurfaceSize(surface_size) => {
+                        self.frame_config.max_surface_override = surface_size;
                         self.update_frame_builder_config();
 
                         return RenderBackendStatus::Continue;
@@ -1135,10 +1044,6 @@ impl RenderBackend {
                         self.update_frame_builder_config();
 
                         // We don't want to forward this message to the renderer.
-                        return RenderBackendStatus::Continue;
-                    }
-                    DebugCommand::EnableMultithreading(enable) => {
-                        self.resource_cache.enable_multithreading(enable);
                         return RenderBackendStatus::Continue;
                     }
                     DebugCommand::SetBatchingLookback(count) => {
@@ -1243,7 +1148,8 @@ impl RenderBackend {
             }
             SceneBuilderResult::GetGlyphDimensions(request) => {
                 let mut glyph_dimensions = Vec::with_capacity(request.glyph_indices.len());
-                if let Some(base) = self.resource_cache.get_font_instance(request.key) {
+                let instance_key = self.resource_cache.map_font_instance_key(request.key);
+                if let Some(base) = self.resource_cache.get_font_instance(instance_key) {
                     let font = FontInstance::from_base(Arc::clone(&base));
                     for glyph_index in &request.glyph_indices {
                         let glyph_dim = self.resource_cache.get_glyph_dimensions(&font, *glyph_index);
@@ -1254,8 +1160,9 @@ impl RenderBackend {
             }
             SceneBuilderResult::GetGlyphIndices(request) => {
                 let mut glyph_indices = Vec::with_capacity(request.text.len());
+                let font_key = self.resource_cache.map_font_key(request.key);
                 for ch in request.text.chars() {
-                    let index = self.resource_cache.get_glyph_index(request.key, ch);
+                    let index = self.resource_cache.get_glyph_index(font_key, ch);
                     glyph_indices.push(index);
                 }
                 request.sender.send(glyph_indices).unwrap();
@@ -1269,12 +1176,15 @@ impl RenderBackend {
             SceneBuilderResult::ClearNamespace(id) => {
                 self.resource_cache.clear_namespace(id);
                 self.documents.retain(|doc_id, _doc| doc_id.namespace_id != id);
-                if let Some(handler) = &mut self.blob_image_handler {
-                    handler.clear_namespace(id);
-                }
             }
             SceneBuilderResult::DeleteDocument(document_id) => {
                 self.documents.remove(&document_id);
+            }
+            SceneBuilderResult::SetParameter(param) => {
+                if let Parameter::Bool(BoolParameter::Multithreading, enabled) = param {
+                    self.resource_cache.enable_multithreading(enabled);
+                }
+                let _ = self.result_tx.send(ResultMsg::SetParameter(param));
             }
             SceneBuilderResult::StopRenderBackend => {
                 return RenderBackendStatus::StopRenderBackend;
@@ -1332,6 +1242,7 @@ impl RenderBackend {
                 txn.frame_ops.take(),
                 txn.notifications.take(),
                 txn.generate_frame.as_bool(),
+                txn.render_reasons,
                 txn.generate_frame.id(),
                 txn.invalidate_rendered_frame,
                 frame_counter,
@@ -1369,6 +1280,7 @@ impl RenderBackend {
                     Vec::default(),
                     Vec::default(),
                     false,
+                    RenderReasons::empty(),
                     None,
                     false,
                     frame_counter,
@@ -1389,6 +1301,7 @@ impl RenderBackend {
         mut frame_ops: Vec<FrameMsg>,
         mut notifications: Vec<NotificationRequest>,
         mut render_frame: bool,
+        render_reasons: RenderReasons,
         generated_frame_id: Option<u64>,
         invalidate_rendered_frame: bool,
         frame_counter: &mut u32,
@@ -1462,7 +1375,6 @@ impl RenderBackend {
             }
         }
 
-        let mut frame_build_time = None;
         if build_frame {
             profile_scope!("generate frame");
 
@@ -1470,7 +1382,7 @@ impl RenderBackend {
 
             // borrow ck hack for profile_counters
             let (pending_update, mut rendered_document) = {
-                let frame_build_start_time = precise_time_ns();
+                let timer_id = Telemetry::start_framebuild_time();
 
                 let frame_stats = doc.frame_stats.take();
 
@@ -1478,9 +1390,9 @@ impl RenderBackend {
                     &mut self.resource_cache,
                     &mut self.gpu_cache,
                     self.debug_flags,
-                    &mut self.tile_cache_logger,
                     &mut self.tile_caches,
-                    frame_stats
+                    frame_stats,
+                    render_reasons,
                 );
 
                 debug!("generated frame for document {:?} with {} passes",
@@ -1489,7 +1401,7 @@ impl RenderBackend {
                 let msg = ResultMsg::UpdateGpuCache(self.gpu_cache.extract_updates());
                 self.result_tx.send(msg).unwrap();
 
-                frame_build_time = Some(precise_time_ns() - frame_build_start_time);
+                Telemetry::stop_and_accumulate_framebuild_time(timer_id);
 
                 let pending_update = self.resource_cache.pending_updates();
                 (pending_update, rendered_document)
@@ -1531,6 +1443,9 @@ impl RenderBackend {
 
                     let data_stores_name = format!("data-stores-{}-{}", document_id.namespace_id.0, document_id.id);
                     config.serialize_for_frame(&doc.data_stores, data_stores_name);
+
+                    let frame_spatial_tree_name = format!("frame-spatial-tree-{}-{}", document_id.namespace_id.0, document_id.id);
+                    config.serialize_for_frame::<SpatialTree, _>(&doc.spatial_tree, frame_spatial_tree_name);
 
                     let properties_name = format!("properties-{}-{}", document_id.namespace_id.0, document_id.id);
                     config.serialize_for_frame(&doc.dynamic_properties, properties_name);
@@ -1577,7 +1492,7 @@ impl RenderBackend {
             } else if render_frame {
                 doc.rendered_frame_is_valid = true;
             }
-            self.notifier.new_frame_ready(document_id, scroll, render_frame, frame_build_time);
+            self.notifier.new_frame_ready(document_id, scroll, render_frame);
         }
 
         if !doc.hit_tester_is_valid {
@@ -1672,9 +1587,9 @@ impl RenderBackend {
                     &mut self.resource_cache,
                     &mut self.gpu_cache,
                     self.debug_flags,
-                    &mut self.tile_cache_logger,
                     &mut self.tile_caches,
                     None,
+                    RenderReasons::empty(),
                 );
                 // After we rendered the frames, there are pending updates to both
                 // GPU cache and resources. Instead of serializing them, we are going to make sure
@@ -1687,7 +1602,7 @@ impl RenderBackend {
                 let file_name = format!("frame-{}-{}", id.namespace_id.0, id.id);
                 config.serialize_for_frame(&rendered_document.frame, file_name);
                 let file_name = format!("spatial-{}-{}", id.namespace_id.0, id.id);
-                config.serialize_tree_for_frame(&doc.scene.spatial_tree, file_name);
+                config.serialize_tree_for_frame(&doc.spatial_tree, file_name);
                 let file_name = format!("built-primitives-{}-{}", id.namespace_id.0, id.id);
                 config.serialize_for_frame(&doc.scene.prim_store, file_name);
                 let file_name = format!("built-clips-{}-{}", id.namespace_id.0, id.id);
@@ -1726,6 +1641,9 @@ impl RenderBackend {
             let data_stores_name = format!("data-stores-{}-{}", id.namespace_id.0, id.id);
             config.serialize_for_frame(&doc.data_stores, data_stores_name);
 
+            let frame_spatial_tree_name = format!("frame-spatial-tree-{}-{}", id.namespace_id.0, id.id);
+            config.serialize_for_frame::<SpatialTree, _>(&doc.spatial_tree, frame_spatial_tree_name);
+
             let properties_name = format!("properties-{}-{}", id.namespace_id.0, id.id);
             config.serialize_for_frame(&doc.dynamic_properties, properties_name);
         }
@@ -1745,11 +1663,6 @@ impl RenderBackend {
 
         debug!("\tresource cache");
         let (resources, deferred) = self.resource_cache.save_capture(&config.root);
-
-        if config.bits.contains(CaptureBits::TILE_CACHE) {
-            debug!("\ttile cache");
-            self.tile_cache_logger.save_capture(&config.root);
-        }
 
         info!("\tbackend");
         let backend = PlainRenderBackend {
@@ -1866,6 +1779,10 @@ impl RenderBackend {
             let scene = config.deserialize_for_scene::<Scene, _>(&scene_name)
                 .expect(&format!("Unable to open {}.ron", scene_name));
 
+            let scene_spatial_tree_name = format!("scene-spatial-tree-{}-{}", id.namespace_id.0, id.id);
+            let scene_spatial_tree = config.deserialize_for_scene::<SceneSpatialTree, _>(&scene_spatial_tree_name)
+                .expect(&format!("Unable to open {}.ron", scene_spatial_tree_name));
+
             let interners_name = format!("interners-{}-{}", id.namespace_id.0, id.id);
             let interners = config.deserialize_for_scene::<Interners, _>(&interners_name)
                 .expect(&format!("Unable to open {}.ron", interners_name));
@@ -1878,6 +1795,10 @@ impl RenderBackend {
             let properties = config.deserialize_for_frame::<SceneProperties, _>(&properties_name)
                 .expect(&format!("Unable to open {}.ron", properties_name));
 
+            let frame_spatial_tree_name = format!("frame-spatial-tree-{}-{}", id.namespace_id.0, id.id);
+            let frame_spatial_tree = config.deserialize_for_frame::<SpatialTree, _>(&frame_spatial_tree_name)
+                .expect(&format!("Unable to open {}.ron", frame_spatial_tree_name));
+
             // Update the document if it still exists, rather than replace it entirely.
             // This allows us to preserve state information such as the frame stamp,
             // which is necessary for cache sanity.
@@ -1887,6 +1808,7 @@ impl RenderBackend {
                     doc.view = view;
                     doc.loaded_scene = scene.clone();
                     doc.data_stores = data_stores;
+                    doc.spatial_tree = frame_spatial_tree;
                     doc.dynamic_properties = properties;
                     doc.frame_is_valid = false;
                     doc.rendered_frame_is_valid = false;
@@ -1910,6 +1832,7 @@ impl RenderBackend {
                         has_built_scene: false,
                         data_stores,
                         scratch: ScratchBuffer::default(),
+                        spatial_tree: frame_spatial_tree,
                         loaded_scene: scene.clone(),
                         prev_composite_descriptor: CompositeDescriptor::empty(),
                         dirty_rects_are_valid: false,
@@ -1932,12 +1855,18 @@ impl RenderBackend {
 
                     let msg_publish = ResultMsg::PublishDocument(
                         id,
-                        RenderedDocument { frame, is_new_scene: true, profile: TransactionProfile::new(), frame_stats: None },
+                        RenderedDocument {
+                            frame,
+                            is_new_scene: true,
+                            profile: TransactionProfile::new(),
+                            render_reasons: RenderReasons::empty(),
+                            frame_stats: None,
+                        },
                         self.resource_cache.pending_updates(),
                     );
                     self.result_tx.send(msg_publish).unwrap();
 
-                    self.notifier.new_frame_ready(id, false, true, None);
+                    self.notifier.new_frame_ready(id, false, true);
 
                     // We deserialized the state of the frame so we don't want to build
                     // it (but we do want to update the scene builder's state)
@@ -1951,9 +1880,10 @@ impl RenderBackend {
                 scene,
                 view: view.scene.clone(),
                 config: self.frame_config.clone(),
-                font_instances: self.resource_cache.get_font_instances(),
+                fonts: self.resource_cache.get_fonts(),
                 build_frame,
                 interners,
+                spatial_tree: scene_spatial_tree,
             });
         }
 

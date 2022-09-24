@@ -266,6 +266,7 @@ class nsCocoaUtils {
       @return NS_OK if the conversion worked, NS_ERROR_FAILURE otherwise
    */
   static nsresult CreateNSImageFromImageContainer(imgIContainer* aImage, uint32_t aWhichFrame,
+                                                  const nsPresContext* aPresContext,
                                                   const mozilla::ComputedStyle* aComputedStyle,
                                                   NSImage** aResult, CGFloat scaleFactor,
                                                   bool* aIsEntirelyBlack = nullptr);
@@ -284,8 +285,9 @@ class nsCocoaUtils {
       @return NS_OK if the conversion worked, NS_ERROR_FAILURE otherwise
    */
   static nsresult CreateDualRepresentationNSImageFromImageContainer(
-      imgIContainer* aImage, uint32_t aWhichFrame, const mozilla::ComputedStyle* aComputedStyle,
-      NSImage** aResult, bool* aIsEntirelyBlack = nullptr);
+      imgIContainer* aImage, uint32_t aWhichFrame, const nsPresContext* aPresContext,
+      const mozilla::ComputedStyle* aComputedStyle, NSImage** aResult,
+      bool* aIsEntirelyBlack = nullptr);
 
   /**
    * Returns nsAString for aSrc.
@@ -296,6 +298,11 @@ class nsCocoaUtils {
    * Makes NSString instance for aString.
    */
   static NSString* ToNSString(const nsAString& aString);
+
+  /**
+   * Returns an NSURL instance for the provided string.
+   */
+  static NSURL* ToNSURL(const nsAString& aURLString);
 
   /**
    * Makes NSString instance for aCString.
@@ -494,7 +501,7 @@ class nsCocoaUtils {
   /**
    * Lock protecting |sVideoCapturePromises| and |sAudioCapturePromises|.
    */
-  static StaticMutex sMediaCaptureMutex;
+  static StaticMutex sMediaCaptureMutex MOZ_UNANNOTATED;
 };
 
 #endif  // nsCocoaUtils_h_

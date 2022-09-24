@@ -25,7 +25,6 @@
 #include "nsIObserverService.h"
 #include "nsXULAppAPI.h"
 #include "mozilla/Services.h"
-#include "GeckoProfiler.h"
 
 #include <stdlib.h>
 
@@ -113,28 +112,30 @@ nsProcess::Init(nsIFile* aExecutable) {
 void nsProcess::Monitor(void* aArg) {
   RefPtr<nsProcess> process = dont_AddRef(static_cast<nsProcess*>(aArg));
 
-#ifdef MOZ_GECKO_PROFILER
-  Maybe<AutoProfilerRegisterThread> registerThread;
-  if (!process->mBlocking) {
-    registerThread.emplace("RunProcess");
-  }
-#endif
   if (!process->mBlocking) {
     NS_SetCurrentThreadName("RunProcess");
   }
 
 #if defined(PROCESSMODEL_WINAPI)
+  HANDLE processHandle;
+  {
+    // The mutex region cannot include WaitForSingleObject otherwise we'll
+    // block calls such as Kill. So lock on access and store a local.
+    MutexAutoLock lock(process->mLock);
+    processHandle = process->mProcess;
+  }
+
   DWORD dwRetVal;
   unsigned long exitCode = -1;
 
-  dwRetVal = WaitForSingleObject(process->mProcess, INFINITE);
+  dwRetVal = WaitForSingleObject(processHandle, INFINITE);
   if (dwRetVal != WAIT_FAILED) {
-    if (GetExitCodeProcess(process->mProcess, &exitCode) == FALSE) {
+    if (GetExitCodeProcess(processHandle, &exitCode) == FALSE) {
       exitCode = -1;
     }
   }
 
-  // Lock in case Kill or GetExitCode are called during this
+  // Lock in case Kill or GetExitCode are called during this.
   {
     MutexAutoLock lock(process->mLock);
     CloseHandle(process->mProcess);
@@ -161,7 +162,14 @@ void nsProcess::Monitor(void* aArg) {
   }
 #  else
   int32_t exitCode = -1;
-  if (PR_WaitProcess(process->mProcess, &exitCode) != PR_SUCCESS) {
+  PRProcess* prProcess;
+  {
+    // The mutex region cannot include PR_WaitProcess otherwise we'll
+    // block calls such as Kill. So lock on access and store a local.
+    MutexAutoLock lock(process->mLock);
+    prProcess = process->mProcess;
+  }
+  if (PR_WaitProcess(prProcess, &exitCode) != PR_SUCCESS) {
     exitCode = -1;
   }
 #  endif
@@ -200,10 +208,13 @@ void nsProcess::ProcessComplete() {
   }
 
   const char* topic;
-  if (mExitValue != 0) {
-    topic = "process-failed";
-  } else {
-    topic = "process-finished";
+  {
+    MutexAutoLock lock(mLock);
+    if (mExitValue != 0) {
+      topic = "process-failed";
+    } else {
+      topic = "process-finished";
+    }
   }
 
   mPid = -1;
@@ -313,8 +324,11 @@ nsresult nsProcess::RunProcess(bool aBlocking, char** aMyArgv,
     }
   }
 
-  mExitValue = -1;
-  mPid = -1;
+  {
+    MutexAutoLock lock(mLock);
+    mExitValue = -1;
+    mPid = -1;
+  }
 
 #if defined(PROCESSMODEL_WINAPI)
   BOOL retVal;
@@ -363,6 +377,8 @@ nsresult nsProcess::RunProcess(bool aBlocking, char** aMyArgv,
 
     CloseHandle(processInfo.hThread);
 
+    // TODO(bug 1763051): assess if we need further work around this locking.
+    MutexAutoLock lock(mLock);
     mProcess = processInfo.hProcess;
   } else {
     SHELLEXECUTEINFOW sinfo;
@@ -388,10 +404,14 @@ nsresult nsProcess::RunProcess(bool aBlocking, char** aMyArgv,
       return NS_ERROR_FILE_EXECUTION_FAILED;
     }
 
+    MutexAutoLock lock(mLock);
     mProcess = sinfo.hProcess;
   }
 
-  mPid = GetProcessId(mProcess);
+  {
+    MutexAutoLock lock(mLock);
+    mPid = GetProcessId(mProcess);
+  }
 #elif defined(XP_MACOSX)
   // Note: |aMyArgv| is already null-terminated as required by posix_spawnp.
   pid_t newPid = 0;
@@ -417,28 +437,34 @@ nsresult nsProcess::RunProcess(bool aBlocking, char** aMyArgv,
     return NS_ERROR_FAILURE;
   }
 #else
-  mProcess = PR_CreateProcess(aMyArgv[0], aMyArgv, nullptr, nullptr);
-  if (!mProcess) {
-    return NS_ERROR_FAILURE;
+  {
+    PRProcess* prProcess =
+        PR_CreateProcess(aMyArgv[0], aMyArgv, nullptr, nullptr);
+    if (!prProcess) {
+      return NS_ERROR_FAILURE;
+    }
+    {
+      MutexAutoLock lock(mLock);
+      mProcess = prProcess;
+    }
+    struct MYProcess {
+      uint32_t pid;
+    };
+    MYProcess* ptrProc = (MYProcess*)mProcess;
+    mPid = ptrProc->pid;
   }
-  struct MYProcess {
-    uint32_t pid;
-  };
-  MYProcess* ptrProc = (MYProcess*)mProcess;
-  mPid = ptrProc->pid;
 #endif
 
   NS_ADDREF_THIS();
   mBlocking = aBlocking;
   if (aBlocking) {
     Monitor(this);
+    MutexAutoLock lock(mLock);
     if (mExitValue < 0) {
       return NS_ERROR_FILE_EXECUTION_FAILED;
     }
   } else {
-    mThread =
-        PR_CreateThread(PR_SYSTEM_THREAD, Monitor, this, PR_PRIORITY_NORMAL,
-                        PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
+    mThread = CreateMonitorThread();
     if (!mThread) {
       NS_RELEASE_THIS();
       return NS_ERROR_FAILURE;
@@ -452,6 +478,15 @@ nsresult nsProcess::RunProcess(bool aBlocking, char** aMyArgv,
   }
 
   return NS_OK;
+}
+
+// We don't guarantee that monitor threads are joined before Gecko exits, which
+// can cause TSAN to complain about thread leaks. We handle this with a TSAN
+// suppression, and route thread creation through this helper so that the
+// suppression is as narrowly-scoped as possible.
+PRThread* nsProcess::CreateMonitorThread() {
+  return PR_CreateThread(PR_SYSTEM_THREAD, Monitor, this, PR_PRIORITY_NORMAL,
+                         PR_GLOBAL_THREAD, PR_JOINABLE_THREAD, 0);
 }
 
 NS_IMETHODIMP

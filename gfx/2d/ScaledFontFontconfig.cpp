@@ -11,10 +11,8 @@
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/webrender/WebRenderTypes.h"
 
-#ifdef USE_SKIA
-#  include "skia/include/ports/SkTypeface_cairo.h"
-#  include "HelpersSkia.h"
-#endif
+#include "skia/include/ports/SkTypeface_cairo.h"
+#include "HelpersSkia.h"
 
 #include <fontconfig/fcfreetype.h>
 
@@ -50,7 +48,6 @@ bool ScaledFontFontconfig::UseSubpixelPosition() const {
                   gfx_text_subpixel_position_force_enabled_AtStartup()));
 }
 
-#ifdef USE_SKIA
 SkTypeface* ScaledFontFontconfig::CreateSkTypeface() {
   SkPixelGeometry geo = mInstanceData.mFlags & InstanceData::SUBPIXEL_BGR
                             ? (mInstanceData.mFlags & InstanceData::LCD_VERTICAL
@@ -78,9 +75,12 @@ void ScaledFontFontconfig::SetupSkFontDrawOptions(SkFont& aFont) {
 
   aFont.setHinting(GfxHintingToSkiaHinting(mInstanceData.mHinting));
 }
-#endif
 
-#ifdef USE_CAIRO_SCALED_FONT
+bool ScaledFontFontconfig::MayUseBitmaps() {
+  return mInstanceData.mFlags & InstanceData::EMBEDDED_BITMAP &&
+         !FT_IS_SCALABLE(mFace->GetFace());
+}
+
 cairo_font_face_t* ScaledFontFontconfig::CreateCairoFontFace(
     cairo_font_options_t* aFontOptions) {
   int loadFlags;
@@ -90,10 +90,42 @@ cairo_font_face_t* ScaledFontFontconfig::CreateCairoFontFace(
   return cairo_ft_font_face_create_for_ft_face(mFace->GetFace(), loadFlags,
                                                synthFlags, mFace.get());
 }
-#endif
 
 AntialiasMode ScaledFontFontconfig::GetDefaultAAMode() {
   return mInstanceData.mAntialias;
+}
+
+bool FcPatternAllowsBitmaps(FcPattern* aPattern, bool aAntialias,
+                            bool aHinting) {
+  if (!aAntialias) {
+    // Always allow bitmaps when antialiasing is disabled
+    return true;
+  }
+  FcBool bitmap;
+  if (FcPatternGetBool(aPattern, FC_EMBEDDED_BITMAP, 0, &bitmap) !=
+          FcResultMatch ||
+      !bitmap) {
+    // If bitmaps were explicitly disabled, then disallow them
+    return false;
+  }
+  if (aHinting) {
+    // If hinting is used and bitmaps were enabled, then allow them
+    return true;
+  }
+  // When hinting is disabled, then avoid loading bitmaps from outline
+  // fonts. However, emoji fonts may have no outlines while containing
+  // bitmaps intended to be scaled, so still allow those.
+  FcBool outline;
+  if (FcPatternGetBool(aPattern, FC_OUTLINE, 0, &outline) == FcResultMatch &&
+      outline) {
+    return false;
+  }
+  FcBool scalable;
+  if (FcPatternGetBool(aPattern, FC_SCALABLE, 0, &scalable) != FcResultMatch ||
+      !scalable) {
+    return false;
+  }
+  return true;
 }
 
 ScaledFontFontconfig::InstanceData::InstanceData(FcPattern* aPattern)
@@ -157,11 +189,7 @@ ScaledFontFontconfig::InstanceData::InstanceData(FcPattern* aPattern)
 
     // Otherwise, if AA is enabled, disable embedded bitmaps unless explicitly
     // enabled.
-    FcBool bitmap;
-    if (mHinting != FontHinting::NONE &&
-        FcPatternGetBool(aPattern, FC_EMBEDDED_BITMAP, 0, &bitmap) ==
-            FcResultMatch &&
-        bitmap) {
+    if (FcPatternAllowsBitmaps(aPattern, true, mHinting != FontHinting::NONE)) {
       mFlags |= EMBEDDED_BITMAP;
     }
 

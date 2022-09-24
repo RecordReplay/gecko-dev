@@ -2,14 +2,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-%filter substitution
-
-%define item #downloadsRichListBox > richlistitem
-%define itemFocused @item@[selected]
+@import "chrome://browser/skin/downloads/progressmeter.css";
+@import "chrome://browser/skin/downloads/download-blockedStates.css";
 
 /*** View and outer controls ***/
 
-#downloadsRichListBox {
+#downloadsListBox {
   /** The default listbox appearance comes with an unwanted margin. **/
   appearance: none;
   margin: 0;
@@ -17,7 +15,7 @@
 
 /*** List items ***/
 
-@item@ {
+#downloadsListBox > richlistitem {
   height: var(--downloads-item-height);
 }
 
@@ -25,25 +23,6 @@
   margin: 8px 13px;
   width: 32px;
   height: 32px;
-}
-
-.downloadBlockedBadge {
-  margin: 0 5px;
-  background: url("chrome://browser/skin/downloads/download-blocked.svg") top right / 16px no-repeat;
-}
-
-.downloadBlockedBadge:-moz-locale-dir(rtl) {
-  background-position-x: left;
-}
-
-@item@[verdict="PotentiallyUnwanted"] .downloadBlockedBadge {
-  background-image: url("chrome://browser/skin/warning.svg");
-}
-
-@item@[verdict="Uncommon"] .downloadBlockedBadge {
-  -moz-context-properties: fill;
-  fill: #00a1f2;
-  background-image: url("chrome://global/skin/icons/info-filled.svg");
 }
 
 .downloadTarget {
@@ -76,7 +55,6 @@
 }
 
 .downloadButton > .button-box {
-  appearance: none;
   padding: 8px;
   border-radius: 4px;
 }
@@ -108,16 +86,15 @@
 }
 
 .downloadIconShow > .button-box > .button-icon {
-%ifdef XP_MACOSX
-  list-style-image: url("chrome://global/skin/icons/search-glass.svg");
-%else
   list-style-image: url("chrome://global/skin/icons/folder.svg");
-%endif
+}
+
+@media (-moz-platform: macos) {
+  .downloadIconShow > .button-box > .button-icon {
+    list-style-image: url("chrome://global/skin/icons/search-glass.svg");
+  }
 }
 
 .downloadIconRetry > .button-box > .button-icon {
-  list-style-image: url("chrome://browser/skin/reload.svg");
+  list-style-image: url("chrome://global/skin/icons/reload.svg");
 }
-
-/*** Progressmeter ***/
-%include progressmeter.inc.css

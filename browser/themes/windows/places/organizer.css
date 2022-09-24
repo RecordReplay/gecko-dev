@@ -10,11 +10,11 @@
   --organizer-pane-background: -moz-Dialog;
   --organizer-content-background: -moz-Dialog;
 
-  --organizer-hover-background: Highlight;
-  --organizer-hover-color: HighlightText;
-  --organizer-selected-background: Highlight;
-  --organizer-selected-color: HighlightText;
-  --organizer-outline-color: Highlight;
+  --organizer-hover-background: SelectedItem;
+  --organizer-hover-color: SelectedItemText;
+  --organizer-selected-background: SelectedItem;
+  --organizer-selected-color: SelectedItemText;
+  --organizer-outline-color: SelectedItem;
 
   --organizer-separator-color: ThreeDDarkShadow;
   --organizer-border-color: ThreeDShadow;
@@ -22,7 +22,7 @@
   --organizer-toolbar-field-background: Field;
   --organizer-toolbar-field-background-focused: Field;
   --organizer-toolbar-field-border-color: ThreeDShadow;
-  --organizer-toolbar-field-focus-border-color: transparent;
+  --organizer-toolbar-field-focus-border-color: var(--organizer-outline-color);
   --organizer-toolbar-field-focus-box-shadow: unset;
   --organizer-pane-field-border-color: ThreeDShadow;
 }
@@ -43,17 +43,17 @@
     --organizer-outline-color: rgb(0,97,224);
 
     --organizer-separator-color: var(--organizer-pane-field-border-color);
-    --organizer-border-color: hsla(210,4%,10%,.14);
+    --organizer-border-color: ThreeDLightShadow;
 
     --organizer-toolbar-field-background: rgb(240,240,244);
     --organizer-toolbar-field-background-focused: Field;
     --organizer-toolbar-field-border-color: transparent;
     --organizer-toolbar-field-focus-border-color: color-mix(in srgb, var(--organizer-outline-color) 50%, transparent);
-    --organizer-toolbar-field-focus-box-shadow: 0 1px 3px rgba(0, 0, 0, 0.23), 0 0 0 1px var(--organizer-toolbar-field-focus-border-color) inset;
+    --organizer-toolbar-field-focus-box-shadow: 0 1px 3px rgba(0, 0, 0, 0.23);
     --organizer-pane-field-border-color: color-mix(in srgb, currentColor 41%, transparent);
   }
 
-  @media (-moz-toolbar-prefers-color-scheme: dark) {
+  @media (prefers-color-scheme: dark) {
     :root {
       --organizer-color: rgb(251,251,254);
       --organizer-deemphasized-color: rgb(191,191,201);
@@ -66,18 +66,10 @@
       --organizer-selected-background: rgb(91,91,102);
       --organizer-outline-color: rgb(0,221,255);
 
-      --organizer-border-color: rgba(249,249,250,.1);
-
       --organizer-toolbar-field-background: rgb(28,27,34);
       --organizer-toolbar-field-background-focused: rgb(66,65,77);
       scrollbar-color: rgba(249,249,250,.4) rgba(20,20,25,.3);
     }
-  }
-}
-
-@media (prefers-contrast) {
-  #searchFilter[focused] {
-    outline: 2px solid var(--organizer-outline-color);
   }
 }
 
@@ -196,7 +188,9 @@
 #searchFilter[focused] {
   box-shadow: var(--organizer-toolbar-field-focus-box-shadow);
   background-color: var(--organizer-toolbar-field-background-focused);
-  border-color: var(--organizer-toolbar-field-focus-border-color);
+  border-color: transparent;
+  outline: 2px solid var(--organizer-toolbar-field-focus-border-color);
+  outline-offset: -2px;
 }
 
 /* Sidebar and splitter */
@@ -217,7 +211,7 @@
 
 /* Downloads pane */
 
-#downloadsRichListBox {
+#downloadsListBox {
   color: var(--organizer-color);
   background-color: var(--organizer-content-background);
 }
@@ -229,24 +223,10 @@
 /* Tree */
 
 #contentView treecol {
-  appearance: none;
-  background-color: var(--organizer-toolbar-background);
-  color: var(--organizer-color);
-  border-inline-end: 1px solid var(--organizer-border-color);
-  padding: 4px;
   /* Use box-shadow to draw a bottom border instead of border-bottom
    * because otherwise the items on contentView won't be perfectly
    * aligned with the items on the sidebar. */
   box-shadow: inset 0 -1px var(--organizer-border-color)
-}
-
-#contentView treecol:hover {
-  background-color: var(--organizer-hover-background);
-  color: var(--organizer-hover-color);
-}
-
-#contentView treecol:hover:active {
-  background-color: var(--organizer-selected-background);
 }
 
 tree {

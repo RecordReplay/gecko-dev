@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var EXPORTED_SYMBOLS = ["SelectChild"];
+var EXPORTED_SYMBOLS = ["SelectChild", "SelectContentHelper"];
 
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
@@ -129,6 +129,7 @@ SelectContentHelper.prototype = {
       isOpenedViaTouch: this.isOpenedViaTouch,
       options,
       rect,
+      custom: !this.element.nodePrincipal.isSystemPrincipal,
       selectedIndex: this.element.selectedIndex,
       style: supportedStyles(computedStyles, SUPPORTED_SELECT_PROPERTIES),
       defaultStyle: supportedStyles(defaultStyles, SUPPORTED_SELECT_PROPERTIES),
@@ -198,6 +199,7 @@ SelectContentHelper.prototype = {
     );
     this.actor.sendAsyncMessage("Forms:UpdateDropDown", {
       options: this._buildOptionList(),
+      custom: !this.element.nodePrincipal.isSystemPrincipal,
       selectedIndex: this.element.selectedIndex,
       style: supportedStyles(computedStyles, SUPPORTED_SELECT_PROPERTIES),
       defaultStyle: supportedStyles(defaultStyles, SUPPORTED_SELECT_PROPERTIES),
@@ -259,6 +261,7 @@ SelectContentHelper.prototype = {
         if (this.initialSelection !== selectedOption) {
           let inputEvent = new win.Event("input", {
             bubbles: true,
+            composed: true,
           });
 
           let changeEvent = new win.Event("change", {

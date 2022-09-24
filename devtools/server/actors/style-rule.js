@@ -44,7 +44,7 @@ loader.lazyRequireGetter(
 );
 loader.lazyRequireGetter(
   this,
-  "inactivePropertyHelper",
+  "isPropertyUsed",
   "devtools/server/actors/utils/inactive-property-helper",
   true
 );
@@ -60,6 +60,8 @@ loader.lazyRequireGetter(
   "devtools/server/actors/style-sheet",
   true
 );
+
+loader.lazyRequireGetter(this, "ChromeUtils");
 
 const XHTML_NS = "http://www.w3.org/1999/xhtml";
 
@@ -285,16 +287,12 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
   },
 
   getDocument: function(sheet) {
-    if (sheet.ownerNode) {
-      return sheet.ownerNode.nodeType == sheet.ownerNode.DOCUMENT_NODE
-        ? sheet.ownerNode
-        : sheet.ownerNode.ownerDocument;
-    } else if (sheet.parentStyleSheet) {
-      return this.getDocument(sheet.parentStyleSheet);
+    if (!sheet.associatedDocument) {
+      throw new Error(
+        "Failed trying to get the document of an invalid stylesheet"
+      );
     }
-    throw new Error(
-      "Failed trying to get the document of an invalid stylesheet"
-    );
+    return sheet.associatedDocument;
   },
 
   toString: function() {
@@ -308,6 +306,7 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
       type: this.type,
       line: this.line || undefined,
       column: this.column,
+      ancestorData: [],
       traits: {
         // Indicates whether StyleRuleActor implements and can use the setRuleText method.
         // It cannot use it if the stylesheet was programmatically mutated via the CSSOM.
@@ -315,22 +314,27 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
       },
     };
 
-    if (this.rawRule.parentRule) {
-      form.parentRule = this.pageStyle._styleRef(
-        this.rawRule.parentRule
-      ).actorID;
-
-      // CSS rules that we call media rules are STYLE_RULES that are children
-      // of MEDIA_RULEs. We need to check the parentRule to check if a rule is
-      // a media rule so we do this here instead of in the switch statement
-      // below.
-      if (this.rawRule.parentRule.type === CSSRule.MEDIA_RULE) {
-        form.media = [];
-        for (let i = 0, n = this.rawRule.parentRule.media.length; i < n; i++) {
-          form.media.push(this.rawRule.parentRule.media.item(i));
-        }
+    // Go through all ancestor so we can build an array of all the media queries and
+    // layers this rule is in.
+    for (const ancestorRule of this.ancestorRules) {
+      if (
+        ancestorRule.type === CSSRule.MEDIA_RULE &&
+        ancestorRule.rawRule.media?.length
+      ) {
+        form.ancestorData.push({
+          type: "media",
+          value: Array.from(ancestorRule.rawRule.media).join(", "),
+        });
+      } else if (
+        ChromeUtils.getClassName(ancestorRule.rawRule) === "CSSLayerBlockRule"
+      ) {
+        form.ancestorData.push({
+          type: "layer",
+          value: ancestorRule.rawRule.name,
+        });
       }
     }
+
     if (this._parentSheet) {
       if (this.pageStyle.hasStyleSheetWatcherSupport) {
         form.parentStyleSheet = this.pageStyle.styleSheetsManager.getStyleSheetResourceId(
@@ -340,6 +344,18 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
         form.parentStyleSheet = this.pageStyle._sheetRef(
           this._parentSheet
         ).actorID;
+      }
+
+      // If the rule is in a imported stylesheet with a specified layer, put it at the top
+      // of the ancestor data array.
+      if (
+        this._parentSheet.ownerRule &&
+        this._parentSheet.ownerRule.layerName !== null
+      ) {
+        form.ancestorData.unshift({
+          type: "layer",
+          value: this._parentSheet.ownerRule.layerName,
+        });
       }
     }
 
@@ -434,12 +450,7 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
           supportsOptions
         );
         // TODO: convert from Object to Boolean. See Bug 1574471
-        decl.isUsed = inactivePropertyHelper.isPropertyUsed(
-          el,
-          style,
-          this.rawRule,
-          decl.name
-        );
+        decl.isUsed = isPropertyUsed(el, style, this.rawRule, decl.name);
         // Check property name. All valid CSS properties support "initial" as a value.
         decl.isNameValid = InspectorUtils.supports(
           `${decl.name}:initial`,
@@ -718,11 +729,10 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
         newText +
         cssText.substring(offset + text.length);
 
-      await this.pageStyle.styleSheetsManager.update(
+      await this.pageStyle.styleSheetsManager.setStyleSheetText(
         resourceId,
         cssText,
-        false,
-        UPDATE_PRESERVING_RULES
+        { kind: UPDATE_PRESERVING_RULES }
       );
     } else {
       // For stylesheet rules, set the text in the stylesheet.
@@ -850,11 +860,10 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
           value +
           authoredText.substring(endOffset);
 
-        await this.pageStyle.styleSheetsManager.update(
+        await this.pageStyle.styleSheetsManager.setStyleSheetText(
           resourceId,
           authoredText,
-          false,
-          UPDATE_PRESERVING_RULES
+          { kind: UPDATE_PRESERVING_RULES }
         );
       } else {
         const sheetActor = this.pageStyle._sheetRef(parentStyleSheet);
@@ -1085,12 +1094,7 @@ const StyleRuleActor = protocol.ActorClassWithSpec(styleRuleSpec, {
 
     for (const decl of this._declarations) {
       // TODO: convert from Object to Boolean. See Bug 1574471
-      const isUsed = inactivePropertyHelper.isPropertyUsed(
-        el,
-        style,
-        this.rawRule,
-        decl.name
-      );
+      const isUsed = isPropertyUsed(el, style, this.rawRule, decl.name);
 
       if (decl.isUsed.used !== isUsed.used) {
         decl.isUsed = isUsed;

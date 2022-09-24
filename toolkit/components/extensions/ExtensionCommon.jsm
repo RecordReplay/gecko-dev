@@ -25,7 +25,6 @@ XPCOMUtils.defineLazyGlobalGetters(this, ["fetch"]);
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   ConsoleAPI: "resource://gre/modules/Console.jsm",
-  MessageChannel: "resource://gre/modules/MessageChannel.jsm",
   PrivateBrowsingUtils: "resource://gre/modules/PrivateBrowsingUtils.jsm",
   Schemas: "resource://gre/modules/Schemas.jsm",
   SchemaRoot: "resource://gre/modules/Schemas.jsm",
@@ -60,11 +59,7 @@ function getConsole() {
 
 XPCOMUtils.defineLazyGetter(this, "console", getConsole);
 
-XPCOMUtils.defineLazyPreferenceGetter(
-  this,
-  "DELAYED_BG_STARTUP",
-  "extensions.webextensions.background-delayed-startup"
-);
+const BACKGROUND_SCRIPTS_VIEW_TYPES = ["background", "background_worker"];
 
 var ExtensionCommon;
 
@@ -193,6 +188,10 @@ function makeWidgetId(id) {
 
 function isDeadOrRemote(obj) {
   return Cu.isDeadWrapper(obj) || Cu.isRemoteProxy(obj);
+}
+
+function isInBFCache(window) {
+  return !!window?.windowGlobalChild?.windowContext?.isInBFCache;
 }
 
 /**
@@ -372,6 +371,70 @@ class ExtensionAPI extends EventEmitter {
 }
 
 /**
+ * Subclass to add APIs commonly used with persistent events.
+ * If a namespace uses events, it should use this subclass.
+ *
+ * this.apiNamespace = class extends ExtensionAPIPersistent {};
+ */
+class ExtensionAPIPersistent extends ExtensionAPI {
+  /**
+   * Check for event entry.
+   *
+   * @param {string} event The event name e.g. onStateChanged
+   * @returns {boolean}
+   */
+  hasEventRegistrar(event) {
+    return (
+      this.PERSISTENT_EVENTS && Object.hasOwn(this.PERSISTENT_EVENTS, event)
+    );
+  }
+
+  /**
+   * Get the event registration fuction
+   *
+   * @param {string} event The event name e.g. onStateChanged
+   * @returns {Function} register is used to start the listener
+   *                     register returns an object containing
+   *                     a convert and unregister function.
+   */
+  getEventRegistrar(event) {
+    if (this.hasEventRegistrar(event)) {
+      return this.PERSISTENT_EVENTS[event].bind(this);
+    }
+  }
+
+  /**
+   * Used when instantiating an EventManager instance to register the listener.
+   *
+   * @param {Object}      options         Options used for event registration
+   * @param {BaseContext} options.context Extension Context passed when creating an EventManager instance.
+   * @param {string}      options.event   The eAPI vent name.
+   * @param {Function}    options.fire    The function passed to the listener to fire the event.
+   * @param {Array<any>}  params          An optional array of parameters received along with the
+   *                                      addListener request.
+   * @returns {Function}                  The unregister function used in the EventManager.
+   */
+  registerEventListener(options, params) {
+    const apiRegistar = this.getEventRegistrar(options.event);
+    return apiRegistar?.(options, params).unregister;
+  }
+
+  /**
+   * Used to prime a listener for when the background script is not running.
+   *
+   * @param {string} event The event name e.g. onStateChanged or captiveURL.onChange.
+   * @param {Function} fire The function passed to the listener to fire the event.
+   * @param {Array} params Params passed to the event listener.
+   * @param {boolean} isInStartup unused here but passed for subclass use.
+   * @returns {Object} the unregister and convert functions used in the EventManager.
+   */
+  primeListener(event, fire, params, isInStartup) {
+    const apiRegistar = this.getEventRegistrar(event);
+    return apiRegistar?.({ fire, isInStartup }, params);
+  }
+}
+
+/**
  * A wrapper around a window that returns the window iff the inner window
  * matches the inner window at the construction of this wrapper.
  *
@@ -404,6 +467,7 @@ class InnerWindowReference {
     if (
       !this.needWindowIDCheck ||
       (!isDeadOrRemote(this.contentWindow) &&
+        !isInBFCache(this.contentWindow) &&
         getInnerWindowID(this.contentWindow) === this.innerWindowID)
     ) {
       return this.contentWindow;
@@ -490,6 +554,22 @@ class BaseContext {
     return this.extension.privateBrowsingAllowed;
   }
 
+  get isBackgroundContext() {
+    return BACKGROUND_SCRIPTS_VIEW_TYPES.includes(this.viewType);
+  }
+
+  /**
+   * Whether the extension context is using the WebIDL bindings for the
+   * WebExtensions APIs.
+   * To be overridden in subclasses (e.g. WorkerContextChild) and to be
+   * optionally used in ExtensionAPI classes to customize the behavior of the
+   * API when the calls to the extension API are originated from the WebIDL
+   * bindings.
+   */
+  get useWebIDLBindings() {
+    return false;
+  }
+
   canAccessWindow(window) {
     return this.extension.canAccessWindow(window);
   }
@@ -535,8 +615,6 @@ class BaseContext {
         contentWindow
       );
     }
-
-    MessageChannel.setupMessageManagers([this.messageManager]);
 
     let windowRef = new InnerWindowReference(contentWindow, this.innerWindowID);
     Object.defineProperty(this, "active", {
@@ -671,33 +749,6 @@ class BaseContext {
 
   forgetOnClose(obj) {
     this.onClose.delete(obj);
-  }
-
-  /**
-   * A wrapper around MessageChannel.sendMessage which adds the extension ID
-   * to the recipient object, and ensures replies are not processed after the
-   * context has been unloaded.
-   *
-   * @param {nsIMessageManager} target
-   * @param {string} messageName
-   * @param {object} data
-   * @param {object} [options]
-   * @param {object} [options.sender]
-   * @param {object} [options.recipient]
-   *
-   * @returns {Promise}
-   */
-  sendMessage(target, messageName, data, options = {}) {
-    options.recipient = Object.assign(
-      { extensionId: this.extension.id },
-      options.recipient
-    );
-    options.sender = options.sender || {};
-
-    options.sender.extensionId = this.extension.id;
-    options.sender.contextId = this.contextId;
-
-    return MessageChannel.sendMessage(target, messageName, data, options);
   }
 
   get lastError() {
@@ -912,11 +963,6 @@ class BaseContext {
 
   unload() {
     this.unloaded = true;
-
-    MessageChannel.abortResponses({
-      extensionId: this.extension.id,
-      contextId: this.contextId,
-    });
 
     for (let obj of this.onClose) {
       obj.close();
@@ -1713,6 +1759,11 @@ class SchemaAPIManager extends EventEmitter {
    */
   _checkGetAPI(name, extension, scope = null) {
     let module = this.getModule(name);
+    if (!module) {
+      // A module may not exist for a particular manifest version, but
+      // we allow keys in the manifest.  An example is pageAction.
+      return false;
+    }
 
     if (
       module.permissions &&
@@ -1767,12 +1818,14 @@ class SchemaAPIManager extends EventEmitter {
     );
 
     Object.assign(global, {
+      AppConstants,
       Cc,
       ChromeWorker,
       Ci,
       Cr,
       Cu,
       ExtensionAPI,
+      ExtensionAPIPersistent,
       ExtensionCommon,
       MatchGlob,
       MatchPattern,
@@ -1784,8 +1837,6 @@ class SchemaAPIManager extends EventEmitter {
       extensions: this,
       global,
     });
-
-    ChromeUtils.import("resource://gre/modules/AppConstants.jsm", global);
 
     XPCOMUtils.defineLazyGetter(global, "console", getConsole);
 
@@ -2155,64 +2206,105 @@ defineLazyGetter(LocaleData.prototype, "availableLocales", function() {
  */
 class EventManager {
   /*
+   * A persistent event must provide module and name.  Additionally the
+   * module must implement primeListeners in the ExtensionAPI class.
+   *
+   * A startup blocking event must also add the startupBlocking flag in
+   * ext-toolkit.json or ext-browser.json.
+   *
+   * Listeners synchronously added from a background extension context
+   * will be persisted, for a persistent background script only the
+   * "startup blocking" events will be persisted.
+   *
+   * EventManager instances created in a child process can't persist any listener.
+   *
    * @param {object} params
    *        Parameters that control this EventManager.
    * @param {BaseContext} params.context
    *        An object representing the extension instance using this event.
-   * @param {string} params.name
-   *        A name used only for debugging.
+   * @param {string} params.module
+   *        The API module name, required for persistent events.
+   * @param {string} params.event
+   *        The API event name, required for persistent events.
+   * @param {ExtensionAPI} params.extensionApi
+   *        The API intance.  If the API uses the ExtensionAPIPersistent class, some simplification is
+   *        possible by passing the api (self or this) and the internal register function will be used.
+   * @param {string} [params.name]
+   *        A name used only for debugging.  If not provided, name is built from module and event.
    * @param {functon} params.register
    *        A function called whenever a new listener is added.
    * @param {boolean} [params.inputHandling=false]
    *        If true, the "handling user input" flag is set while handlers
    *        for this event are executing.
-   * @param {object} [params.persistent]
-   *        Details for persistent event listeners
-   * @param {string} params.persistent.module
-   *        The name of the module in which this event is defined.
-   * @param {string} params.persistent.event
-   *        The name of this event.
    */
   constructor(params) {
     let {
       context,
+      module,
+      event,
       name,
       register,
+      extensionApi,
       inputHandling = false,
-      persistent = null,
+      resetIdleOnEvent = true,
     } = params;
     this.context = context;
+    this.module = module;
+    this.event = event;
     this.name = name;
     this.register = register;
     this.inputHandling = inputHandling;
-    this.persistent = persistent;
+    this.resetIdleOnEvent = resetIdleOnEvent;
+    if (!name) {
+      this.name = `${module}.${event}`;
+    }
 
-    // Don't bother with persistent event handling if delayed background
-    // startup is not enabled.
-    if (!DELAYED_BG_STARTUP) {
-      this.persistent = null;
+    if (!this.register && extensionApi instanceof ExtensionAPIPersistent) {
+      this.register = (fire, ...params) => {
+        return extensionApi.registerEventListener(
+          { context, event, fire },
+          params
+        );
+      };
+    }
+    if (!this.register) {
+      throw new Error(
+        `EventManager requires register method for ${this.name}.`
+      );
+    }
+
+    this.canPersistEvents =
+      module &&
+      event &&
+      ["background", "background_worker"].includes(this.context.viewType) &&
+      this.context.envType == "addon_parent";
+
+    if (this.canPersistEvents) {
+      let { extension } = context;
+      if (extension.persistentBackground) {
+        // Persistent backgrounds will only persist startup blocking APIs.
+        let api_module = extension.apiManager.getModule(this.module);
+        if (!api_module?.startupBlocking) {
+          this.canPersistEvents = false;
+        }
+      } else {
+        // Event pages will persist all APIs that implement primeListener.
+        // The api is already loaded so this does not have performance effect.
+        let api = extension.apiManager.getAPI(
+          this.module,
+          extension,
+          "addon_parent"
+        );
+
+        // If the api doesn't implement primeListener we do not persist the events.
+        if (!api?.primeListener) {
+          this.canPersistEvents = false;
+        }
+      }
     }
 
     this.unregister = new Map();
     this.remove = new Map();
-
-    if (this.persistent) {
-      if (AppConstants.DEBUG) {
-        if (this.context.envType !== "addon_parent") {
-          throw new Error(
-            "Persistent event managers can only be created for addon_parent"
-          );
-        }
-        if (!this.persistent.module || !this.persistent.event) {
-          throw new Error(
-            "Persistent event manager must specify module and event"
-          );
-        }
-      }
-      if (this.context.viewType !== "background") {
-        this.persistent = null;
-      }
-    }
   }
 
   /*
@@ -2239,13 +2331,13 @@ class EventManager {
    */
   static _initPersistentListeners(extension) {
     if (extension.persistentListeners) {
-      return false;
+      return !!extension.persistentListeners.size;
     }
 
     let listeners = new DefaultMap(() => new DefaultMap(() => new Map()));
     extension.persistentListeners = listeners;
 
-    let { persistentListeners } = extension.startupData;
+    let persistentListeners = extension.startupData?.persistentListeners;
     if (!persistentListeners) {
       return false;
     }
@@ -2289,13 +2381,23 @@ class EventManager {
   // in an extension's startup data.
   // This function is only called during browser startup, it stores details
   // about all primed listeners in the extension's persistentListeners Map.
-  static primeListeners(extension) {
+  static primeListeners(extension, isInStartup = false) {
     if (!EventManager._initPersistentListeners(extension)) {
       return;
     }
 
     for (let [module, moduleEntry] of extension.persistentListeners) {
+      // If we're in startup, we only want to continue attempting to prime a
+      // subset of events that should be startup blocking.
+      if (isInStartup) {
+        let api_module = extension.apiManager.getModule(module);
+        if (!api_module.startupBlocking) {
+          continue;
+        }
+      }
+
       let api = extension.apiManager.getAPI(module, extension, "addon_parent");
+
       // If an extension is upgraded and a permission, such as webRequest, is
       // removed, we will have been called but the API is no longer available.
       if (!api?.primeListener) {
@@ -2304,62 +2406,110 @@ class EventManager {
         EventManager._writePersistentListeners(extension);
         continue;
       }
-      for (let [event, eventEntry] of moduleEntry) {
-        for (let listener of eventEntry.values()) {
+      for (let [event, listeners] of moduleEntry) {
+        for (let [key, listener] of listeners) {
           let primed = { pendingEvents: [] };
-          listener.primed = primed;
 
           let fireEvent = (...args) =>
             new Promise((resolve, reject) => {
               if (!listener.primed) {
-                reject(new Error("primed listener not re-registered"));
+                reject(
+                  new Error(
+                    `primed listener ${module}.${event} not re-registered`
+                  )
+                );
                 return;
               }
               primed.pendingEvents.push({ args, resolve, reject });
-              extension.emit("background-page-event");
+              extension.emit("background-script-event");
             });
 
           let fire = {
             wakeup: () => extension.wakeupBackground(),
             sync: fireEvent,
             async: fireEvent,
+            // fire.async for ProxyContextParent is already not cloning.
+            raw: fireEvent,
           };
 
-          let { unregister, convert } = api.primeListener(
-            extension,
-            event,
-            fire,
-            listener.params
-          );
-          Object.assign(primed, { unregister, convert });
+          try {
+            let handler = api.primeListener(
+              event,
+              fire,
+              listener.params,
+              isInStartup
+            );
+            if (handler) {
+              listener.primed = primed;
+              Object.assign(primed, handler);
+            }
+          } catch (e) {
+            Cu.reportError(
+              `Error priming listener ${module}.${event}: ${e} :: ${e.stack}`
+            );
+            // Force this listener to be cleared.
+            listener.error = true;
+          }
+          // If an attempt to prime a listener failed, ensure it is cleared now.
+          // If a module is a startup blocking module, not all listeners may
+          // get primed during early startup.  For that reason, we don't clear
+          // persisted listeners during early startup.  At the end of background
+          // execution any listeners that were not renewed will be cleared.
+          if (listener.error || (!isInStartup && !listener.primed)) {
+            EventManager.clearPersistentListener(extension, module, event, key);
+          }
         }
       }
     }
   }
 
-  // Remove any primed listeners that were not re-registered.
-  // This function is called after the background page has started.
-  // The removed listeners are removed from the set of saved listeners, unless
-  // `clearPersistent` is false. If false, the listeners are cleared from
-  // memory, but not removed from the extension's startup data.
+  /**
+   * This is called as a result of background script startup-finished and shutdown.
+   *
+   * After startup, it removes any remaining primed listeners.  These exist if the
+   * listener was not renewed during startup.  In this case the persisted listener
+   * data is also removed.
+   *
+   * During shutdown, care should be taken to set clearPersistent to false.
+   * persisted listener data should NOT be cleared during shutdown.
+   *
+   * @param {Extension} extension
+   * @param {boolean} clearPersistent whether the persisted listener data should be cleared.
+   */
   static clearPrimedListeners(extension, clearPersistent = true) {
+    if (!extension.persistentListeners) {
+      return;
+    }
+
     for (let [module, moduleEntry] of extension.persistentListeners) {
       for (let [event, listeners] of moduleEntry) {
         for (let [key, listener] of listeners) {
-          let { primed } = listener;
-          if (!primed) {
+          let { primed, added } = listener;
+          // When a primed listener is added or renewed during initial
+          // background execution we set an added flag.  If it was primed
+          // when added, primed is set to null.
+          if (added) {
             continue;
           }
-          listener.primed = null;
 
-          for (let evt of primed.pendingEvents) {
-            evt.reject(new Error("listener not re-registered"));
+          if (primed) {
+            // When a primed listener was not renewed, primed will still be truthy.
+            // These need to be cleared on shutdown (important for event pages), but
+            // we only clear the persisted listener data after the startup of a background.
+            // Release any pending events and unregister the primed handler.
+            listener.primed = null;
+
+            for (let evt of primed.pendingEvents) {
+              evt.reject(new Error("listener not re-registered"));
+            }
+            primed.unregister();
           }
 
+          // Clear any persisted events that were not renewed, should typically
+          // only be done at the end of the background page load.
           if (clearPersistent) {
             EventManager.clearPersistentListener(extension, module, event, key);
           }
-          primed.unregister();
         }
       }
     }
@@ -2374,7 +2524,8 @@ class EventManager {
     extension.persistentListeners
       .get(module)
       .get(event)
-      .set(key, { params: args });
+      // when writing, only args are written, other properties are dropped
+      .set(key, { params: args, added: true });
     EventManager._writePersistentListeners(extension);
   }
 
@@ -2413,9 +2564,18 @@ class EventManager {
       return false;
     };
 
+    let { extension } = this.context;
+    const resetIdle = () => {
+      if (this.resetIdleOnEvent) {
+        extension?.emit("background-script-reset-idle");
+      }
+    };
+
     let fire = {
+      // Bug 1754866 fire.sync doesn't match documentation.
       sync: (...args) => {
         if (shouldFire()) {
+          resetIdle();
           let result = this.context.applySafe(callback, args);
           this.context.logActivity("api_event", this.name, { args, result });
           return result;
@@ -2424,6 +2584,7 @@ class EventManager {
       async: (...args) => {
         return Promise.resolve().then(() => {
           if (shouldFire()) {
+            resetIdle();
             let result = this.context.applySafe(callback, args);
             this.context.logActivity("api_event", this.name, { args, result });
             return result;
@@ -2434,6 +2595,7 @@ class EventManager {
         if (!shouldFire()) {
           throw new Error("Called raw() on unloaded/inactive context");
         }
+        resetIdle();
         let result = Reflect.apply(callback, null, args);
         this.context.logActivity("api_event", this.name, { args, result });
         return result;
@@ -2441,6 +2603,7 @@ class EventManager {
       asyncWithoutClone: (...args) => {
         return Promise.resolve().then(() => {
           if (shouldFire()) {
+            resetIdle();
             let result = this.context.applySafeWithoutClone(callback, args);
             this.context.logActivity("api_event", this.name, { args, result });
             return result;
@@ -2449,7 +2612,7 @@ class EventManager {
       },
     };
 
-    let { extension } = this.context;
+    let { module, event } = this;
 
     let unregister = null;
     let recordStartupData = false;
@@ -2457,9 +2620,10 @@ class EventManager {
     // If this is a persistent event, check for a listener that was already
     // created during startup.  If there is one, use it and don't create a
     // new one.
-    if (this.persistent) {
-      recordStartupData = true;
-      let { module, event } = this.persistent;
+    if (this.canPersistEvents) {
+      // Once a background is started, listenerPromises is set to null. At
+      // that point, we stop recording startup data.
+      recordStartupData = !!this.context.listenerPromises;
 
       let key = uneval(args);
       EventManager._initPersistentListeners(extension);
@@ -2469,10 +2633,8 @@ class EventManager {
         .get(key);
 
       if (listener) {
-        // If extensions.webextensions.background-delayed-startup is disabled,
-        // we can have stored info here but no primed listener.  This check
-        // can be removed if/when we make delayed background startup the only
-        // supported setting.
+        // During startup only a subset of persisted listeners are primed.  As
+        // well, each API determines whether to prime a specific listener.
         let { primed } = listener;
         if (primed) {
           listener.primed = null;
@@ -2484,6 +2646,7 @@ class EventManager {
             evt.resolve(fire.async(...evt.args));
           }
         }
+        listener.added = true;
 
         recordStartupData = false;
         this.remove.set(callback, () => {
@@ -2507,7 +2670,6 @@ class EventManager {
     // If this is a new listener for a persistent event, record
     // the details for subsequent startups.
     if (recordStartupData) {
-      let { module, event } = this.persistent;
       EventManager.savePersistentListener(extension, module, event, args);
       this.remove.set(callback, () => {
         EventManager.clearPersistentListener(
@@ -2603,6 +2765,55 @@ const stylesheetMap = new DefaultMap(url => {
   return styleSheetService.preloadSheet(uri, styleSheetService.AGENT_SHEET);
 });
 
+/**
+ * Updates the in-memory representation of extension host permissions, i.e.
+ * policy.allowedOrigins.
+ *
+ * @param {WebExtensionPolicy} policy
+ *        A policy. All MatchPattern instances in policy.allowedOrigins are
+ *        expected to have been constructed with ignorePath: true.
+ * @param {string[]} origins
+ *        A list of already-normalized origins, equivalent to using the
+ *        MatchPattern constructor with ignorePath: true.
+ * @param {boolean} isAdd
+ *        Whether to add instead of removing the host permissions.
+ */
+function updateAllowedOrigins(policy, origins, isAdd) {
+  if (!origins.length) {
+    // Nothing to modify.
+    return;
+  }
+  let patternMap = new Map();
+  for (let pattern of policy.allowedOrigins.patterns) {
+    patternMap.set(pattern.pattern, pattern);
+  }
+  if (!isAdd) {
+    for (let origin of origins) {
+      patternMap.delete(origin);
+    }
+  } else {
+    // In the parent process, policy.extension.restrictSchemes is available.
+    // In the content process, we need to check the mozillaAddons permission,
+    // which is only available if approved by the parent.
+    const restrictSchemes =
+      policy.extension?.restrictSchemes ??
+      policy.hasPermission("mozillaAddons");
+    for (let origin of origins) {
+      if (patternMap.has(origin)) {
+        continue;
+      }
+      patternMap.set(
+        origin,
+        new MatchPattern(origin, { restrictSchemes, ignorePath: true })
+      );
+    }
+  }
+  // patternMap contains only MatchPattern instances, so we don't need to set
+  // the options parameter (with restrictSchemes, etc.) since that is only used
+  // if the input is a string.
+  policy.allowedOrigins = new MatchPatternSet(Array.from(patternMap.values()));
+}
+
 ExtensionCommon = {
   BaseContext,
   CanOfAPIs,
@@ -2624,6 +2835,7 @@ ExtensionCommon = {
   normalizeTime,
   runSafeSyncWithoutClone,
   stylesheetMap,
+  updateAllowedOrigins,
   withHandlingUserInput,
 
   MultiAPIManager,

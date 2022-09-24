@@ -18,13 +18,11 @@
 
 #include <algorithm>
 
-#include "jsapi.h"
-#include "jsfriendapi.h"
 #include "jstypes.h"
 #include "NamespaceImports.h"
 
 #include "gc/Barrier.h"
-#include "gc/FreeOp.h"
+#include "gc/GCContext.h"
 #include "gc/MaybeRooted.h"
 #include "gc/Rooting.h"
 #include "js/HashTable.h"
@@ -84,9 +82,6 @@
 //   - Removing a property other than the object's last property.
 //   - The object has many properties. See maybeConvertToDictionaryForAdd for
 //     the heuristics.
-//   - For prototype objects: when a shadowing property is added to an object
-//     with this object on its prototype chain. This is used to invalidate the
-//     shape teleporting optimization. See reshapeForShadowedProp.
 //
 //   Dictionary shapes are unshared, private to a single object, and always have
 //   a DictionaryPropMap that's similarly unshared. Dictionary shape mutations
@@ -205,7 +200,7 @@ class BaseShape : public gc::TenuredCellWithNonGCPointer<const JSClass> {
   BaseShape& operator=(const BaseShape& other) = delete;
 
  public:
-  void finalize(JSFreeOp* fop) {}
+  void finalize(JS::GCContext* gcx) {}
 
   BaseShape(const JSClass* clasp, JS::Realm* realm, TaggedProto proto);
 
@@ -219,9 +214,6 @@ class BaseShape : public gc::TenuredCellWithNonGCPointer<const JSClass> {
   JS::Compartment* maybeCompartment() const { return compartment(); }
 
   TaggedProto proto() const { return proto_; }
-
-  void setRealmForMergeRealms(JS::Realm* realm) { realm_ = realm; }
-  void setProtoForMergeRealms(TaggedProto proto) { proto_ = proto; }
 
   /*
    * Lookup base shapes from the zone's baseShapes table, adding if not
@@ -466,8 +458,8 @@ class Shape : public gc::CellWithTenuredGCPointer<gc::TenuredCell, BaseShape> {
   void dump() const;
 #endif
 
-  inline void purgeCache(JSFreeOp* fop);
-  inline void finalize(JSFreeOp* fop);
+  inline void purgeCache(JS::GCContext* gcx);
+  inline void finalize(JS::GCContext* gcx);
 
   static const JS::TraceKind TraceKind = JS::TraceKind::Shape;
 

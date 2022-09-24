@@ -3,7 +3,7 @@
 
 "use strict";
 
-requestLongerTimeout(2);
+requestLongerTimeout(4);
 
 var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { EnterprisePolicyTesting, PoliciesPrefTracker } = ChromeUtils.import(
@@ -45,6 +45,15 @@ const defaultPrefValues = Object.freeze({
   [TRR_MODE_PREF]: 0,
   [TRR_CUSTOM_URI_PREF]: "",
 });
+
+// See bug 1741554. This test should not actually try to create a connection to
+// the real DoH endpoint. But a background request could do that while the test
+// is in progress, before we've actually disabled TRR, and would cause a crash
+// due to connecting to a non-local IP.
+// To prevent that we override the IP to a local address.
+Cc["@mozilla.org/network/native-dns-override;1"]
+  .getService(Ci.nsINativeDNSResolverOverride)
+  .addIPOverride("mozilla.cloudflare-dns.com", "127.0.0.1");
 
 async function resetPrefs() {
   await DoHTestUtils.resetRemoteSettingsConfig();

@@ -5,13 +5,13 @@
 
 #include "nsICanvasRenderingContextInternal.h"
 
+#include "mozilla/dom/CanvasUtils.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/PresShell.h"
 #include "nsRefreshDriver.h"
 
-nsICanvasRenderingContextInternal::nsICanvasRenderingContextInternal()
-    : mSharedPtrPtr(
-          std::make_shared<nsICanvasRenderingContextInternal*>(this)) {}
+nsICanvasRenderingContextInternal::nsICanvasRenderingContextInternal() =
+    default;
 
 nsICanvasRenderingContextInternal::~nsICanvasRenderingContextInternal() =
     default;
@@ -19,6 +19,30 @@ nsICanvasRenderingContextInternal::~nsICanvasRenderingContextInternal() =
 mozilla::PresShell* nsICanvasRenderingContextInternal::GetPresShell() {
   if (mCanvasElement) {
     return mCanvasElement->OwnerDoc()->GetPresShell();
+  }
+  return nullptr;
+}
+
+nsIGlobalObject* nsICanvasRenderingContextInternal::GetParentObject() const {
+  if (mCanvasElement) {
+    return mCanvasElement->OwnerDoc()->GetScopeObject();
+  }
+  if (mOffscreenCanvas) {
+    return mOffscreenCanvas->GetParentObject();
+  }
+  return nullptr;
+}
+
+nsIPrincipal* nsICanvasRenderingContextInternal::PrincipalOrNull() const {
+  MOZ_ASSERT(NS_IsMainThread());
+  if (mCanvasElement) {
+    return mCanvasElement->NodePrincipal();
+  }
+  if (mOffscreenCanvas) {
+    nsIGlobalObject* global = mOffscreenCanvas->GetParentObject();
+    if (global) {
+      return global->PrincipalOrNull();
+    }
   }
   return nullptr;
 }
@@ -37,4 +61,14 @@ void nsICanvasRenderingContextInternal::AddPostRefreshObserverIfNecessary() {
   }
   mRefreshDriver = GetPresShell()->GetPresContext()->RefreshDriver();
   mRefreshDriver->AddPostRefreshObserver(this);
+}
+
+void nsICanvasRenderingContextInternal::DoSecurityCheck(
+    nsIPrincipal* aPrincipal, bool aForceWriteOnly, bool aCORSUsed) {
+  if (mCanvasElement) {
+    mozilla::CanvasUtils::DoDrawImageSecurityCheck(mCanvasElement, aPrincipal,
+                                                   aForceWriteOnly, aCORSUsed);
+  } else if (mOffscreenCanvas && (aForceWriteOnly || aCORSUsed)) {
+    mOffscreenCanvas->SetWriteOnly();
+  }
 }

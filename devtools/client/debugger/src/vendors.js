@@ -14,15 +14,12 @@
  * Both are fine, but cannot be mixed for the same module.
  */
 
-import * as devtoolsUtils from "devtools-utils";
 import * as fuzzaldrinPlus from "fuzzaldrin-plus";
 import * as transition from "react-transition-group/Transition";
 import * as reactAriaComponentsTabs from "react-aria-components/src/tabs";
 
 // Modules imported without destructuring
 import classnames from "classnames";
-import devtoolsSplitter from "devtools-splitter";
-import move from "lodash-move";
 
 // We cannot directly export literals containing special characters
 // (eg. "my-module/Test") which is why they are nested in "vendored".
@@ -30,10 +27,7 @@ import move from "lodash-move";
 // !!! Should remain synchronized with .babel/transform-mc.js !!!
 export const vendored = {
   classnames,
-  "devtools-splitter": devtoolsSplitter,
-  "devtools-utils": devtoolsUtils,
   "fuzzaldrin-plus": fuzzaldrinPlus,
-  "lodash-move": move,
   "react-aria-components/src/tabs": reactAriaComponentsTabs,
   "react-transition-group/Transition": transition,
 };

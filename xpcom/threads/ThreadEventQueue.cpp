@@ -9,6 +9,7 @@
 
 #include "LeakRefPtr.h"
 #include "nsComponentManagerUtils.h"
+#include "nsITargetShutdownTask.h"
 #include "nsIThreadInternal.h"
 #include "nsThreadUtils.h"
 #include "nsThread.h"
@@ -31,7 +32,14 @@ class ThreadEventQueue::NestedSink : public ThreadTargetSink {
 
   void Disconnect(const MutexAutoLock& aProofOfLock) final { mQueue = nullptr; }
 
-  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
+  nsresult RegisterShutdownTask(nsITargetShutdownTask* aTask) final {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+  nsresult UnregisterShutdownTask(nsITargetShutdownTask* aTask) final {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
+
+  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) {
     if (mQueue) {
       return mQueue->SizeOfIncludingThis(aMallocSizeOf);
     }
@@ -85,6 +93,8 @@ bool ThreadEventQueue::PutEventInternal(already_AddRefed<nsIRunnable>&& aEvent,
         runnablePrio->GetPriority(&prio);
         if (prio == nsIRunnablePriority::PRIORITY_CONTROL) {
           aPriority = EventQueuePriority::Control;
+        } else if (prio == nsIRunnablePriority::PRIORITY_RENDER_BLOCKING) {
+          aPriority = EventQueuePriority::RenderBlocking;
         } else if (prio == nsIRunnablePriority::PRIORITY_VSYNC) {
           aPriority = EventQueuePriority::Vsync;
         } else if (prio == nsIRunnablePriority::PRIORITY_INPUT_HIGH) {
@@ -258,14 +268,17 @@ void ThreadEventQueue::PopEventQueue(nsIEventTarget* aTarget) {
 }
 
 size_t ThreadEventQueue::SizeOfExcludingThis(
-    mozilla::MallocSizeOf aMallocSizeOf) const {
+    mozilla::MallocSizeOf aMallocSizeOf) {
   size_t n = 0;
 
   n += mBaseQueue->SizeOfIncludingThis(aMallocSizeOf);
 
-  n += mNestedQueues.ShallowSizeOfExcludingThis(aMallocSizeOf);
-  for (auto& queue : mNestedQueues) {
-    n += queue.mEventTarget->SizeOfIncludingThis(aMallocSizeOf);
+  {
+    MutexAutoLock lock(mLock);
+    n += mNestedQueues.ShallowSizeOfExcludingThis(aMallocSizeOf);
+    for (auto& queue : mNestedQueues) {
+      n += queue.mEventTarget->SizeOfIncludingThis(aMallocSizeOf);
+    }
   }
 
   return SynchronizedEventQueue::SizeOfExcludingThis(aMallocSizeOf) + n;
@@ -276,16 +289,55 @@ already_AddRefed<nsIThreadObserver> ThreadEventQueue::GetObserver() {
   return do_AddRef(mObserver);
 }
 
-already_AddRefed<nsIThreadObserver> ThreadEventQueue::GetObserverOnThread() {
+already_AddRefed<nsIThreadObserver> ThreadEventQueue::GetObserverOnThread()
+    NO_THREAD_SAFETY_ANALYSIS {
+  // only written on this thread
   return do_AddRef(mObserver);
 }
 
 void ThreadEventQueue::SetObserver(nsIThreadObserver* aObserver) {
-  MutexAutoLock lock(mLock);
-  nsCOMPtr observer = aObserver;
-  mObserver.swap(observer);
+  // Always called from the thread - single writer.
+  nsCOMPtr<nsIThreadObserver> observer = aObserver;
+  {
+    MutexAutoLock lock(mLock);
+    mObserver.swap(observer);
+  }
   if (NS_IsMainThread()) {
     TaskController::Get()->SetThreadObserver(aObserver);
+  }
+}
+
+nsresult ThreadEventQueue::RegisterShutdownTask(nsITargetShutdownTask* aTask) {
+  NS_ENSURE_ARG(aTask);
+  MutexAutoLock lock(mLock);
+  if (mEventsAreDoomed || mShutdownTasksRun) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  MOZ_ASSERT(!mShutdownTasks.Contains(aTask));
+  mShutdownTasks.AppendElement(aTask);
+  return NS_OK;
+}
+
+nsresult ThreadEventQueue::UnregisterShutdownTask(
+    nsITargetShutdownTask* aTask) {
+  NS_ENSURE_ARG(aTask);
+  MutexAutoLock lock(mLock);
+  if (mEventsAreDoomed || mShutdownTasksRun) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  return mShutdownTasks.RemoveElement(aTask) ? NS_OK : NS_ERROR_UNEXPECTED;
+}
+
+void ThreadEventQueue::RunShutdownTasks() {
+  nsTArray<nsCOMPtr<nsITargetShutdownTask>> shutdownTasks;
+  {
+    MutexAutoLock lock(mLock);
+    shutdownTasks = std::move(mShutdownTasks);
+    mShutdownTasks.Clear();
+    mShutdownTasksRun = true;
+  }
+  for (auto& task : shutdownTasks) {
+    task->TargetShutdown();
   }
 }
 

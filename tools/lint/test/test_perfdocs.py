@@ -481,6 +481,19 @@ def test_perfdocs_framework_gatherers(logger, structured_logger, perfdocs_sample
                 "Example": perfdocs_sample["manifest"]
             }
 
+        if framework == "talos":
+            fg._get_ci_tasks = mock.Mock()
+            for suite, suitetests in fg.get_test_list().items():
+                assert suite == "Talos Tests"
+                assert suitetests
+            continue
+
+        if framework == "awsy":
+            for suite, suitetests in fg.get_test_list().items():
+                assert suite == "Awsy tests"
+                assert suitetests
+            continue
+
         for suite, suitetests in fg.get_test_list().items():
             assert suite == "suite"
             for test, manifest in suitetests.items():
@@ -542,7 +555,8 @@ def test_perfdocs_framework_gatherers_urls(logger, structured_logger, perfdocs_s
             desc = gn._verifier._gatherer.framework_gatherers[
                 "raptor"
             ].build_test_description(fg, test_name, tests[test_name], suite_name)
-            assert suite_name in desc[0]
+            assert f"**test url**: `<{url[0]['test_url']}>`__" in desc[0]
+            assert f"**expected**: {url[0]['expected']}" in desc[0]
             assert test_name in desc[0]
 
 

@@ -44,6 +44,7 @@ interface mixin GlobalEventHandlers {
            attribute EventHandler ondrag;
            attribute EventHandler ondragend;
            attribute EventHandler ondragenter;
+           [Func="Event::IsDragExitEnabled"]
            attribute EventHandler ondragexit;
            attribute EventHandler ondragleave;
            attribute EventHandler ondragover;
@@ -79,11 +80,13 @@ interface mixin GlobalEventHandlers {
            attribute EventHandler onreset;
            attribute EventHandler onresize;
            attribute EventHandler onscroll;
+           attribute EventHandler onsecuritypolicyviolation;
            attribute EventHandler onseeked;
            attribute EventHandler onseeking;
            attribute EventHandler onselect;
            [Pref="dom.menuitem.enabled"]
            attribute EventHandler onshow;
+           attribute EventHandler onslotchange;
            //(Not implemented)attribute EventHandler onsort;
            attribute EventHandler onstalled;
            attribute EventHandler onsubmit;
@@ -93,6 +96,7 @@ interface mixin GlobalEventHandlers {
            attribute EventHandler onwaiting;
 
            attribute EventHandler onselectstart;
+           attribute EventHandler onselectionchange;
 
            attribute EventHandler ontoggle;
 

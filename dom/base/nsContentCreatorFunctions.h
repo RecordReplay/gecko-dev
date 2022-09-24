@@ -22,13 +22,11 @@ class nsIContent;
 class imgRequestProxy;
 class nsGenericHTMLElement;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class Element;
 class NodeInfo;
 struct CustomElementDefinition;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 nsresult NS_NewElement(mozilla::dom::Element** aResult,
                        already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
@@ -54,7 +52,6 @@ nsresult NS_NewMathMLElement(
     mozilla::dom::Element** aResult,
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-#ifdef MOZ_XUL
 nsresult NS_NewXULElement(
     mozilla::dom::Element** aResult,
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,
@@ -64,7 +61,6 @@ nsresult NS_NewXULElement(
 void NS_TrustedNewXULElement(
     mozilla::dom::Element** aResult,
     already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
-#endif
 
 nsresult NS_NewSVGElement(mozilla::dom::Element** aResult,
                           already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo,

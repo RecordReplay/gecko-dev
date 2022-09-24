@@ -16,7 +16,6 @@ pub use cssparser::{SourceLocation, Token, RGBA};
 use precomputed_hash::PrecomputedHash;
 use selectors::parser::SelectorParseErrorKind;
 use std::fmt::{self, Debug, Write};
-use std::hash;
 use style_traits::{CssWriter, ParseError, StyleParseErrorKind, ToCss};
 use to_shmem::impl_trivial_to_shmem;
 
@@ -294,6 +293,16 @@ impl cssparser::ToCss for AtomIdent {
 }
 
 #[cfg(feature = "gecko")]
+impl style_traits::ToCss for AtomIdent {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
+    where
+        W: Write,
+    {
+        cssparser::ToCss::to_css(self, dest)
+    }
+}
+
+#[cfg(feature = "gecko")]
 impl PrecomputedHash for AtomIdent {
     #[inline]
     fn precomputed_hash(&self) -> u32 {
@@ -438,11 +447,7 @@ impl CustomIdent {
         ident: &CowRcStr<'i>,
         excluding: &[&str],
     ) -> Result<Self, ParseError<'i>> {
-        let valid = match_ignore_ascii_case! { ident,
-            "initial" | "inherit" | "unset" | "default" | "revert" => false,
-            _ => true
-        };
-        if !valid {
+        if !Self::is_valid(ident, excluding) {
             return Err(
                 location.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident.clone()))
             );
@@ -452,6 +457,22 @@ impl CustomIdent {
         } else {
             Ok(CustomIdent(Atom::from(ident.as_ref())))
         }
+    }
+
+    fn is_valid(ident: &str, excluding: &[&str]) -> bool {
+        use crate::properties::CSSWideKeyword;
+        // https://drafts.csswg.org/css-values-4/#custom-idents:
+        //
+        //     The CSS-wide keywords are not valid <custom-ident>s. The default
+        //     keyword is reserved and is also not a valid <custom-ident>.
+        if CSSWideKeyword::from_ident(ident).is_ok() || ident.eq_ignore_ascii_case("default") {
+            return false;
+        }
+
+        // https://drafts.csswg.org/css-values-4/#custom-idents:
+        //
+        //     Excluded keywords are excluded in all ASCII case permutations.
+        !excluding.iter().any(|s| ident.eq_ignore_ascii_case(s))
     }
 }
 
@@ -464,49 +485,77 @@ impl ToCss for CustomIdent {
     }
 }
 
+/// The <timeline-name> or <keyframes-name>.
+/// The definition of these two names are the same, so we use the same type for them.
+///
+/// <https://drafts.csswg.org/css-animations-2/#typedef-timeline-name>
 /// <https://drafts.csswg.org/css-animations/#typedef-keyframes-name>
+///
+/// We use a single atom for these. Empty atom represents `none` animation.
+#[repr(transparent)]
 #[derive(
-    Clone, Debug, MallocSizeOf, SpecifiedValueInfo, ToComputedValue, ToResolvedValue, ToShmem,
+    Clone, Debug, Hash, PartialEq, MallocSizeOf, SpecifiedValueInfo, ToComputedValue, ToResolvedValue, ToShmem,
 )]
-pub enum KeyframesName {
-    /// <custom-ident>
-    Ident(CustomIdent),
-    /// <string>
-    QuotedString(Atom),
-}
+pub struct TimelineOrKeyframesName(Atom);
 
-impl KeyframesName {
+impl TimelineOrKeyframesName {
     /// <https://drafts.csswg.org/css-animations/#dom-csskeyframesrule-name>
     pub fn from_ident(value: &str) -> Self {
-        let location = SourceLocation { line: 0, column: 0 };
-        let custom_ident = CustomIdent::from_ident(location, &value.into(), &["none"]).ok();
-        match custom_ident {
-            Some(ident) => KeyframesName::Ident(ident),
-            None => KeyframesName::QuotedString(value.into()),
-        }
+        Self(Atom::from(value))
     }
 
-    /// Create a new KeyframesName from Atom.
+    /// Returns the `none` value.
+    pub fn none() -> Self {
+        Self(atom!(""))
+    }
+
+    /// Returns whether this is the special `none` value.
+    pub fn is_none(&self) -> bool {
+        self.0 == atom!("")
+    }
+
+    /// Create a new TimelineOrKeyframesName from Atom.
     #[cfg(feature = "gecko")]
     pub fn from_atom(atom: Atom) -> Self {
-        debug_assert_ne!(atom, atom!(""));
-
-        // FIXME: We might want to preserve <string>, but currently Gecko
-        // stores both of <custom-ident> and <string> into nsAtom, so
-        // we can't tell it.
-        KeyframesName::Ident(CustomIdent(atom))
+        Self(atom)
     }
 
     /// The name as an Atom
     pub fn as_atom(&self) -> &Atom {
-        match *self {
-            KeyframesName::Ident(ref ident) => &ident.0,
-            KeyframesName::QuotedString(ref atom) => atom,
+        &self.0
+    }
+
+    fn parse<'i, 't>(input: &mut Parser<'i, 't>, invalid: &[&str]) -> Result<Self, ParseError<'i>> {
+        debug_assert!(invalid.contains(&"none"));
+        let location = input.current_source_location();
+        Ok(match *input.next()? {
+            Token::Ident(ref s) => Self(CustomIdent::from_ident(location, s, invalid)?.0),
+            Token::QuotedString(ref s) => Self(Atom::from(s.as_ref())),
+            ref t => return Err(location.new_unexpected_token_error(t.clone())),
+        })
+    }
+
+    fn to_css<W>(&self, dest: &mut CssWriter<W>, invalid: &[&str]) -> fmt::Result
+    where
+        W: Write,
+    {
+        debug_assert!(invalid.contains(&"none"));
+
+        if self.0 == atom!("") {
+            return dest.write_str("none")
         }
+
+        self.0.with_str(|s| {
+            if CustomIdent::is_valid(s, invalid) {
+                serialize_identifier(s, dest)
+            } else {
+                s.to_css(dest)
+            }
+        })
     }
 }
 
-impl Eq for KeyframesName {}
+impl Eq for TimelineOrKeyframesName {}
 
 /// A trait that returns whether a given type is the `auto` value or not. So far
 /// only needed for background-size serialization, which special-cases `auto`.
@@ -515,36 +564,57 @@ pub trait IsAuto {
     fn is_auto(&self) -> bool;
 }
 
-impl PartialEq for KeyframesName {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_atom() == other.as_atom()
+/// The typedef of <timeline-name>.
+#[repr(transparent)]
+#[derive(
+    Clone, Debug, Deref, Hash, Eq, PartialEq, MallocSizeOf, SpecifiedValueInfo, ToComputedValue, ToResolvedValue, ToShmem,
+)]
+pub struct TimelineName(TimelineOrKeyframesName);
+
+impl TimelineName {
+    /// Returns the `none` value.
+    pub fn none() -> Self {
+        Self(TimelineOrKeyframesName::none())
     }
 }
 
-impl hash::Hash for KeyframesName {
-    fn hash<H>(&self, state: &mut H)
+impl Parse for TimelineName {
+    fn parse<'i, 't>(_: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+        Ok(Self(TimelineOrKeyframesName::parse(input, &["none", "auto"])?))
+    }
+}
+
+impl ToCss for TimelineName {
+    fn to_css<W>(&self, dest: &mut CssWriter<W>) -> fmt::Result
     where
-        H: hash::Hasher,
+        W: Write,
     {
-        self.as_atom().hash(state)
+        self.0.to_css(dest, &["none", "auto"])
+    }
+}
+
+/// The typedef of <keyframes-name>.
+#[derive(
+    Clone, Debug, Deref, Hash, Eq, PartialEq, MallocSizeOf, SpecifiedValueInfo, ToComputedValue, ToResolvedValue, ToShmem,
+)]
+pub struct KeyframesName(TimelineOrKeyframesName);
+
+impl KeyframesName {
+    /// Create a new KeyframesName from Atom.
+    #[cfg(feature = "gecko")]
+    pub fn from_atom(atom: Atom) -> Self {
+        Self(TimelineOrKeyframesName::from_atom(atom))
+    }
+
+    /// Returns the `none` value.
+    pub fn none() -> Self {
+        Self(TimelineOrKeyframesName::none())
     }
 }
 
 impl Parse for KeyframesName {
-    fn parse<'i, 't>(
-        _context: &ParserContext,
-        input: &mut Parser<'i, 't>,
-    ) -> Result<Self, ParseError<'i>> {
-        let location = input.current_source_location();
-        match *input.next()? {
-            Token::Ident(ref s) => Ok(KeyframesName::Ident(CustomIdent::from_ident(
-                location,
-                s,
-                &["none"],
-            )?)),
-            Token::QuotedString(ref s) => Ok(KeyframesName::QuotedString(Atom::from(s.as_ref()))),
-            ref t => Err(location.new_unexpected_token_error(t.clone())),
-        }
+    fn parse<'i, 't>(_: &ParserContext, input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
+        Ok(Self(TimelineOrKeyframesName::parse(input, &["none"])?))
     }
 }
 
@@ -553,9 +623,6 @@ impl ToCss for KeyframesName {
     where
         W: Write,
     {
-        match *self {
-            KeyframesName::Ident(ref ident) => ident.to_css(dest),
-            KeyframesName::QuotedString(ref atom) => atom.to_string().to_css(dest),
-        }
+        self.0.to_css(dest, &["none"])
     }
 }

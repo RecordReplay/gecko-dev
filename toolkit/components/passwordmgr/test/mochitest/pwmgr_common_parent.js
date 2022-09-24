@@ -225,16 +225,16 @@ addMessageListener("isLoggedIn", () => {
   return Services.logins.isLoggedIn;
 });
 
-addMessageListener("setMasterPassword", ({ enable }) => {
+addMessageListener("setPrimaryPassword", ({ enable }) => {
   if (enable) {
-    LoginTestUtils.masterPassword.enable();
+    LoginTestUtils.primaryPassword.enable();
   } else {
-    LoginTestUtils.masterPassword.disable();
+    LoginTestUtils.primaryPassword.disable();
   }
 });
 
 LoginManagerParent.setListenerForTests((msg, { origin, data }) => {
-  if (msg == "FormSubmit") {
+  if (msg == "ShowDoorhanger") {
     sendAsyncMessage("formSubmissionProcessed", { origin, data });
   } else if (msg == "PasswordEditedOrGenerated") {
     sendAsyncMessage("passwordEditedOrGenerated", { origin, data });

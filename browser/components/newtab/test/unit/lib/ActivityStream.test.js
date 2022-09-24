@@ -67,6 +67,15 @@ describe("ActivityStream", () => {
         "browser.newtabpage.activity-stream.discoverystream.config"
       );
     });
+    it("should call addObserver for the app locales", () => {
+      sandbox.stub(global.Services.obs, "addObserver");
+      as.init();
+      assert.calledWith(
+        global.Services.obs.addObserver,
+        as,
+        "intl:app-locales-changed"
+      );
+    });
   });
   describe("#uninit", () => {
     beforeEach(() => {
@@ -79,7 +88,7 @@ describe("ActivityStream", () => {
     it("should call .store.uninit", () => {
       assert.calledOnce(as.store.uninit);
     });
-    it("should call removeObserver", () => {
+    it("should call removeObserver for the region", () => {
       sandbox.stub(global.Services.obs, "removeObserver");
       as.geo = "";
       as.uninit();
@@ -87,6 +96,15 @@ describe("ActivityStream", () => {
         global.Services.obs.removeObserver,
         as,
         global.Region.REGION_TOPIC
+      );
+    });
+    it("should call removeObserver for the app locales", () => {
+      sandbox.stub(global.Services.obs, "removeObserver");
+      as.uninit();
+      assert.calledWith(
+        global.Services.obs.removeObserver,
+        as,
+        "intl:app-locales-changed"
       );
     });
   });
@@ -142,8 +160,8 @@ describe("ActivityStream", () => {
       const feed = as.feeds.get("feeds.favicon")();
       assert.ok(feed, "feed should exist");
     });
-    it("should create a RecommendationProviderSwitcher feed", () => {
-      const feed = as.feeds.get("feeds.recommendationproviderswitcher")();
+    it("should create a RecommendationProvider feed", () => {
+      const feed = as.feeds.get("feeds.recommendationprovider")();
       assert.ok(feed, "feed should exist");
     });
     it("should create a DiscoveryStreamFeed feed", () => {

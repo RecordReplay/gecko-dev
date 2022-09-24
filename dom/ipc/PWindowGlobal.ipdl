@@ -59,7 +59,7 @@ struct IPCWebShareData
  * link either between the chrome/content process, or will be in-process, for
  * documents which are loaded in the chrome process.
  */
-async refcounted protocol PWindowGlobal
+async protocol PWindowGlobal
 {
   manager PBrowser or PInProcess;
 
@@ -180,15 +180,14 @@ parent:
 
   async RequestRestoreTabContent();
 
-  async UpdateSessionStore(FormData? aFormData, nsPoint? aScrollPosition,
-                           uint32_t aEpoch);
-
-  async ResetSessionStore(uint32_t aEpoch);
-
   // Add the flags in aOnFlags to the current BFCache status and remove the
   // flags in aOffFlags from the current BFCache status. See the BFCacheStatus
   // enum for the valid flags.
-  async UpdateBFCacheStatus(uint16_t aOnFlags, uint16_t aOffFlags);
+  async UpdateBFCacheStatus(uint32_t aOnFlags, uint32_t aOffFlags);
+
+  // Signal whether the first connection is added (aIsAdded = true) or
+  // the last connection is removed (aIsAdded = false).
+  async UpdateActivePeerConnectionStatus(bool aIsAdded);
 
   /**
    * Used to notify the parent when there's a change in the number of requests
@@ -203,6 +202,8 @@ parent:
   async SetDocumentDomain(nsIURI aDomain);
 
   async Destroy();
+
+  async ReloadWithHttpsOnlyException();
 };
 
 } // namespace dom

@@ -9,11 +9,10 @@
 #include <cstdint>
 #include "mozilla/Maybe.h"
 
-namespace mozilla {
-namespace webgpu {
+namespace mozilla::webgpu {
 
-typedef uint64_t RawId;
-typedef uint64_t BufferAddress;
+using RawId = uint64_t;
+using BufferAddress = uint64_t;
 
 struct ScopedError {
   bool operationError = false;
@@ -21,7 +20,6 @@ struct ScopedError {
 };
 using MaybeScopedError = Maybe<ScopedError>;
 
-}  // namespace webgpu
-}  // namespace mozilla
+}  // namespace mozilla::webgpu
 
 #endif  // WEBGPU_TYPES_H_

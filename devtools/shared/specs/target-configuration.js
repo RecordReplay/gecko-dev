@@ -17,7 +17,6 @@ types.addDictType("target-configuration.configuration", {
   customUserAgent: "nullable:string",
   javascriptEnabled: "nullable:boolean",
   overrideDPPX: "nullable:number",
-  paintFlashing: "nullable:boolean",
   printSimulationEnabled: "nullable:boolean",
   rdmPaneOrientation: "nullable:json",
   reloadOnTouchSimulationToggle: "nullable:boolean",

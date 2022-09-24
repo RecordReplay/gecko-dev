@@ -2254,7 +2254,7 @@ Maybe<nsIFrame::Cursor> nsTreeBodyFrame::GetCursor(const nsPoint& aPoint) {
     if (child) {
       // Our scratch array is already prefilled.
       RefPtr<ComputedStyle> childContext = GetPseudoComputedStyle(child);
-      StyleCursorKind kind = childContext->StyleUI()->mCursor.keyword;
+      StyleCursorKind kind = childContext->StyleUI()->Cursor().keyword;
       if (kind == StyleCursorKind::Auto) {
         kind = StyleCursorKind::Default;
       }
@@ -2480,6 +2480,8 @@ nsresult nsTreeBodyFrame::HandleEvent(nsPresContext* aPresContext,
   return NS_OK;
 }
 
+namespace mozilla {
+
 class nsDisplayTreeBody final : public nsPaintedDisplayItem {
  public:
   nsDisplayTreeBody(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame)
@@ -2523,11 +2525,8 @@ class nsDisplayTreeBody final : public nsPaintedDisplayItem {
   virtual void Paint(nsDisplayListBuilder* aBuilder,
                      gfxContext* aCtx) override {
     MOZ_ASSERT(aBuilder);
-    DrawTargetAutoDisableSubpixelAntialiasing disable(aCtx->GetDrawTarget(),
-                                                      IsSubpixelAADisabled());
-
     ImgDrawResult result = static_cast<nsTreeBodyFrame*>(mFrame)->PaintTreeBody(
-        *aCtx, GetPaintRect(), ToReferenceFrame(), aBuilder);
+        *aCtx, GetPaintRect(aBuilder, aCtx), ToReferenceFrame(), aBuilder);
 
     nsDisplayTreeBodyGeometry::UpdateDrawResult(this, result);
   }
@@ -2540,6 +2539,8 @@ class nsDisplayTreeBody final : public nsPaintedDisplayItem {
     return GetBounds(aBuilder, &snap);
   }
 };
+
+}  // namespace mozilla
 
 #ifdef XP_MACOSX
 static bool IsInSourceList(nsIFrame* aFrame) {
@@ -3218,8 +3219,8 @@ ImgDrawResult nsTreeBodyFrame::PaintTwisty(
 
         // Apply context paint if applicable
         Maybe<SVGImageContext> svgContext;
-        SVGImageContext::MaybeStoreContextPaint(svgContext, twistyContext,
-                                                image);
+        SVGImageContext::MaybeStoreContextPaint(svgContext, *aPresContext,
+                                                *twistyContext, image);
 
         // Paint the image.
         result &= nsLayoutUtils::DrawSingleUnscaledImage(
@@ -3592,7 +3593,8 @@ ImgDrawResult nsTreeBodyFrame::PaintCheckbox(int32_t aRowIndex,
 
     // Apply context paint if applicable
     Maybe<SVGImageContext> svgContext;
-    SVGImageContext::MaybeStoreContextPaint(svgContext, checkboxContext, image);
+    SVGImageContext::MaybeStoreContextPaint(svgContext, *aPresContext,
+                                            *checkboxContext, image);
     // Paint the image.
     result &= nsLayoutUtils::DrawSingleUnscaledImage(
         aRenderingContext, aPresContext, image, SamplingFilter::POINT, pt,
@@ -3871,15 +3873,15 @@ nsresult nsTreeBodyFrame::ScrollHorzInternal(const ScrollParts& aParts,
 
 void nsTreeBodyFrame::ScrollByPage(nsScrollbarFrame* aScrollbar,
                                    int32_t aDirection,
-                                   nsIScrollbarMediator::ScrollSnapMode aSnap) {
+                                   ScrollSnapFlags aSnapFlags) {
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   ScrollByPages(aDirection);
 }
 
-void nsTreeBodyFrame::ScrollByWhole(
-    nsScrollbarFrame* aScrollbar, int32_t aDirection,
-    nsIScrollbarMediator::ScrollSnapMode aSnap) {
+void nsTreeBodyFrame::ScrollByWhole(nsScrollbarFrame* aScrollbar,
+                                    int32_t aDirection,
+                                    ScrollSnapFlags aSnapFlags) {
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   int32_t newIndex = aDirection < 0 ? 0 : mTopRowIndex;
@@ -3888,16 +3890,15 @@ void nsTreeBodyFrame::ScrollByWhole(
 
 void nsTreeBodyFrame::ScrollByLine(nsScrollbarFrame* aScrollbar,
                                    int32_t aDirection,
-                                   nsIScrollbarMediator::ScrollSnapMode aSnap) {
+                                   ScrollSnapFlags aSnapFlags) {
   // CSS Scroll Snapping is not enabled for XUL, aSnap is ignored
   MOZ_ASSERT(aScrollbar != nullptr);
   ScrollByLines(aDirection);
 }
 
-void nsTreeBodyFrame::ScrollByUnit(nsScrollbarFrame* aScrollbar,
-                                   ScrollMode aMode, int32_t aDirection,
-                                   ScrollUnit aUnit,
-                                   ScrollSnapMode aSnap /* = DISABLE_SNAP */) {
+void nsTreeBodyFrame::ScrollByUnit(
+    nsScrollbarFrame* aScrollbar, ScrollMode aMode, int32_t aDirection,
+    ScrollUnit aUnit, ScrollSnapFlags aSnapFlags /* = Disabled */) {
   MOZ_ASSERT_UNREACHABLE("Can't get here, we pass false to MoveToNewPosition");
 }
 
@@ -4177,8 +4178,8 @@ void nsTreeBodyFrame::ScrollCallback(nsITimer* aTimer, void* aClosure) {
   }
 }
 
-NS_IMETHODIMP
-nsTreeBodyFrame::ScrollEvent::Run() {
+// TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230, bug 1535398)
+MOZ_CAN_RUN_SCRIPT_BOUNDARY NS_IMETHODIMP nsTreeBodyFrame::ScrollEvent::Run() {
   if (mInner) {
     mInner->FireScrollEvent();
   }
@@ -4190,7 +4191,9 @@ void nsTreeBodyFrame::FireScrollEvent() {
   WidgetGUIEvent event(true, eScroll, nullptr);
   // scroll events fired at elements don't bubble
   event.mFlags.mBubbles = false;
-  EventDispatcher::Dispatch(GetContent(), PresContext(), &event);
+  RefPtr<nsIContent> content = GetContent();
+  RefPtr<nsPresContext> presContext = PresContext();
+  EventDispatcher::Dispatch(content, presContext, &event);
 }
 
 void nsTreeBodyFrame::PostScrollEvent() {

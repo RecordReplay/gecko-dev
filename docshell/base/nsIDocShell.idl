@@ -55,7 +55,6 @@ interface nsIScriptGlobalObject;
 interface nsIStructuredCloneContainer;
 interface nsIDOMStorage;
 interface nsIPrincipal;
-interface nsIWebBrowserPrint;
 interface nsIPrivacyTransitionObserver;
 interface nsIReflowObserver;
 interface nsIScrollObserver;
@@ -97,41 +96,16 @@ interface nsIDocShell : nsIDocShellTreeItem
                 in AString aURL, in boolean aReplace);
 
   /**
-   * Helper for addState and document.open that does just the
-   * history-manipulation guts.
-   *
-   * Arguments the spec defines:
-   *
-   * @param aDocument the document we're manipulating.  This will get the new URI.
-   * @param aNewURI the new URI.
-   * @param aData The serialized state data.  May be null.
-   * @param aTitle The new title.  May be empty.
-   * @param aReplace whether this should replace the exising SHEntry.
-   *
-   * Arguments we need internally because deriving them from the
-   * others is a bit complicated:
-   *
-   * @param aCurrentURI the current URI we're working with.  Might be null.
-   * @param aEqualURIs whether the two URIs involved are equal.
-   */
-  [nostdcall]
-  void updateURLAndHistory(in Document aDocument, in nsIURI aNewURI,
-                           in nsIStructuredCloneContainer aData, in AString aTitle,
-                           in boolean aReplace, in nsIURI aCurrentURI,
-                           in boolean aEqualURIs);
-
-  /**
    * Reset state to a new content model within the current document and the document
    * viewer.  Called by the document before initiating an out of band document.write().
    */
   void prepareForNewContentModel();
 
   /**
-   * For editors and suchlike who wish to change the URI associated with the
-   * document. Note if you want to get the current URI, use the read-only
-   * property on nsIWebNavigation.
+   * Helper for the session store to change the URI associated with the
+   * document.
    */
-  void setCurrentURI(in nsIURI aURI);
+  void setCurrentURIForSessionStore(in nsIURI aURI);
 
   /**
    * Notify the associated content viewer and all child docshells that they are

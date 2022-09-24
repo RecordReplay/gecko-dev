@@ -8,10 +8,12 @@
 
 #include "DisplayItemClipChain.h"
 #include "FrameMetrics.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/layers/StackingContextHelper.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "nsDisplayList.h"
+#include "nsRefreshDriver.h"
 #include "nsStyleStructInlines.h"
 #include "UnitTransforms.h"
 
@@ -89,14 +91,13 @@ void ClipManager::EndList(const StackingContextHelper& aStackingContext) {
 
 void ClipManager::PushOverrideForASR(const ActiveScrolledRoot* aASR,
                                      const wr::WrSpatialId& aSpatialId) {
-  Maybe<wr::WrSpaceAndClip> spaceAndClip = GetScrollLayer(aASR);
-  MOZ_ASSERT(spaceAndClip.isSome());
+  Maybe<wr::WrSpatialId> space = GetScrollLayer(aASR);
+  MOZ_ASSERT(space.isSome());
 
-  CLIP_LOG("Pushing %p override %zu -> %s\n", aASR, spaceAndClip->space.id,
+  CLIP_LOG("Pushing %p override %zu -> %s\n", aASR, space->id,
            ToString(aSpatialId.id).c_str());
 
-  auto it =
-      mASROverride.insert({spaceAndClip->space, std::stack<wr::WrSpatialId>()});
+  auto it = mASROverride.insert({*space, std::stack<wr::WrSpatialId>()});
   it.first->second.push(aSpatialId);
 
   // Start a new cache
@@ -107,11 +108,11 @@ void ClipManager::PopOverrideForASR(const ActiveScrolledRoot* aASR) {
   MOZ_ASSERT(!mCacheStack.empty());
   mCacheStack.pop();
 
-  Maybe<wr::WrSpaceAndClip> spaceAndClip = GetScrollLayer(aASR);
-  MOZ_ASSERT(spaceAndClip.isSome());
+  Maybe<wr::WrSpatialId> space = GetScrollLayer(aASR);
+  MOZ_ASSERT(space.isSome());
 
-  auto it = mASROverride.find(spaceAndClip->space);
-  CLIP_LOG("Popping %p override %zu -> %s\n", aASR, spaceAndClip->space.id,
+  auto it = mASROverride.find(*space);
+  CLIP_LOG("Popping %p override %zu -> %s\n", aASR, space->id,
            ToString(it->second.top().id).c_str());
 
   it->second.pop();
@@ -133,8 +134,18 @@ wr::WrSpatialId ClipManager::SpatialIdAfterOverride(
   return it->second.top();
 }
 
-wr::WrSpaceAndClipChain ClipManager::SwitchItem(nsDisplayItem* aItem) {
+wr::WrSpaceAndClipChain ClipManager::SwitchItem(nsDisplayListBuilder* aBuilder,
+                                                nsDisplayItem* aItem) {
   const DisplayItemClipChain* clip = aItem->GetClipChain();
+  if (mBuilder->GetInheritedClipChain() &&
+      mBuilder->GetInheritedClipChain() != clip) {
+    if (!clip) {
+      clip = mBuilder->GetInheritedClipChain();
+    } else {
+      clip = aBuilder->CreateClipChainIntersection(
+          mBuilder->GetInheritedClipChain(), clip);
+    }
+  }
   const ActiveScrolledRoot* asr = aItem->GetActiveScrolledRoot();
   CLIP_LOG("processing item %p (%s) asr %p\n", aItem,
            DisplayItemTypeName(aItem->GetType()), asr);
@@ -215,18 +226,17 @@ wr::WrSpaceAndClipChain ClipManager::SwitchItem(nsDisplayItem* aItem) {
   if (clip) {
     leafmostASR = ActiveScrolledRoot::PickDescendant(leafmostASR, clip->mASR);
   }
-  Maybe<wr::WrSpaceAndClip> leafmostId = DefineScrollLayers(leafmostASR, aItem);
+  Maybe<wr::WrSpatialId> leafmostId = DefineScrollLayers(leafmostASR, aItem);
   Unused << leafmostId;
 
   // Define all the clips in the item's clip chain, and obtain a clip chain id
   // for it.
   clips.mClipChainId = DefineClipChain(clip, auPerDevPixel);
 
-  Maybe<wr::WrSpaceAndClip> spaceAndClip = GetScrollLayer(asr);
-  MOZ_ASSERT(spaceAndClip.isSome());
-  clips.mScrollId = SpatialIdAfterOverride(spaceAndClip->space);
-  CLIP_LOG("\tassigning %d -> %d\n", (int)spaceAndClip->space.id,
-           (int)clips.mScrollId.id);
+  Maybe<wr::WrSpatialId> space = GetScrollLayer(asr);
+  MOZ_ASSERT(space.isSome());
+  clips.mScrollId = SpatialIdAfterOverride(*space);
+  CLIP_LOG("\tassigning %d -> %d\n", (int)space->id, (int)clips.mScrollId.id);
 
   // Now that we have the scroll id and a clip id for the item, push it onto
   // the WR stack.
@@ -238,13 +248,13 @@ wr::WrSpaceAndClipChain ClipManager::SwitchItem(nsDisplayItem* aItem) {
   return spaceAndClipChain;
 }
 
-Maybe<wr::WrSpaceAndClip> ClipManager::GetScrollLayer(
+Maybe<wr::WrSpatialId> ClipManager::GetScrollLayer(
     const ActiveScrolledRoot* aASR) {
   for (const ActiveScrolledRoot* asr = aASR; asr; asr = asr->mParent) {
-    Maybe<wr::WrSpaceAndClip> spaceAndClip =
+    Maybe<wr::WrSpatialId> space =
         mBuilder->GetScrollIdForDefinedScrollLayer(asr->GetViewId());
-    if (spaceAndClip) {
-      return spaceAndClip;
+    if (space) {
+      return space;
     }
 
     // If this ASR doesn't have a scroll ID, then we should check its ancestor.
@@ -252,47 +262,47 @@ Maybe<wr::WrSpaceAndClip> ClipManager::GetScrollLayer(
     // failed to get the scroll metadata.
   }
 
-  Maybe<wr::WrSpaceAndClip> spaceAndClip =
-      mBuilder->GetScrollIdForDefinedScrollLayer(
-          ScrollableLayerGuid::NULL_SCROLL_ID);
-  MOZ_ASSERT(spaceAndClip.isSome());
-  return spaceAndClip;
+  Maybe<wr::WrSpatialId> space = mBuilder->GetScrollIdForDefinedScrollLayer(
+      ScrollableLayerGuid::NULL_SCROLL_ID);
+  MOZ_ASSERT(space.isSome());
+  return space;
 }
 
-Maybe<wr::WrSpaceAndClip> ClipManager::DefineScrollLayers(
+Maybe<wr::WrSpatialId> ClipManager::DefineScrollLayers(
     const ActiveScrolledRoot* aASR, nsDisplayItem* aItem) {
   if (!aASR) {
     // Recursion base case
     return Nothing();
   }
   ScrollableLayerGuid::ViewID viewId = aASR->GetViewId();
-  Maybe<wr::WrSpaceAndClip> spaceAndClip =
+  Maybe<wr::WrSpatialId> space =
       mBuilder->GetScrollIdForDefinedScrollLayer(viewId);
-  if (spaceAndClip) {
+  if (space) {
     // If we've already defined this scroll layer before, we can early-exit
-    return spaceAndClip;
+    return space;
   }
   // Recurse to define the ancestors
-  Maybe<wr::WrSpaceAndClip> ancestorSpaceAndClip =
+  Maybe<wr::WrSpatialId> ancestorSpace =
       DefineScrollLayers(aASR->mParent, aItem);
 
   Maybe<ScrollMetadata> metadata =
-      aASR->mScrollableFrame->ComputeScrollMetadata(
-          mManager, aItem->ReferenceFrame(), Nothing(), nullptr);
+      aASR->mScrollableFrame->ComputeScrollMetadata(mManager, aItem->Frame(),
+                                                    aItem->ToReferenceFrame());
   if (!metadata) {
     MOZ_ASSERT_UNREACHABLE("Expected scroll metadata to be available!");
-    return ancestorSpaceAndClip;
+    return ancestorSpace;
   }
 
   FrameMetrics& metrics = metadata->GetMetrics();
   if (!metrics.IsScrollable()) {
     // This item is a scrolling no-op, skip over it in the ASR chain.
-    return ancestorSpaceAndClip;
+    return ancestorSpace;
   }
 
   nsIScrollableFrame* scrollableFrame = aASR->mScrollableFrame;
   nsIFrame* scrollFrame = do_QueryFrame(scrollableFrame);
-  nsPoint offset = scrollFrame->GetOffsetToCrossDoc(aItem->ReferenceFrame());
+  nsPoint offset = scrollFrame->GetOffsetToCrossDoc(aItem->Frame()) +
+                   aItem->ToReferenceFrame();
   float auPerDevPixel = aItem->Frame()->PresContext()->AppUnitsPerDevPixel();
   nsRect scrollPort = scrollableFrame->GetScrollPortRect() + offset;
   LayoutDeviceRect clipBounds =
@@ -311,9 +321,9 @@ Maybe<wr::WrSpaceAndClip> ClipManager::DefineScrollLayers(
       metrics.GetExpandedScrollableRect() * metrics.GetDevPixelsPerCSSPixel();
   contentRect.MoveTo(clipBounds.TopLeft());
 
-  Maybe<wr::WrSpaceAndClip> parent = ancestorSpaceAndClip;
+  Maybe<wr::WrSpatialId> parent = ancestorSpace;
   if (parent) {
-    parent->space = SpatialIdAfterOverride(parent->space);
+    *parent = SpatialIdAfterOverride(*parent);
   }
   // The external scroll offset is accumulated into the local space positions of
   // display items inside WR, so that the elements hash (intern) to the same
@@ -324,9 +334,19 @@ Maybe<wr::WrSpaceAndClip> ClipManager::DefineScrollLayers(
   LayoutDevicePoint scrollOffset = LayoutDevicePoint::FromAppUnitsRounded(
       scrollableFrame->GetScrollPosition(), auPerDevPixel);
 
+  // Currently we track scroll-linked effects at the granularity of documents,
+  // not scroll frames, so we consider a scroll frame to have a scroll-linked
+  // effect whenever its containing document does.
+  nsPresContext* presContext = aItem->Frame()->PresContext();
+  const bool hasScrollLinkedEffect =
+      presContext->Document()->HasScrollLinkedEffect();
+
   return Some(mBuilder->DefineScrollLayer(
       viewId, parent, wr::ToLayoutRect(contentRect),
-      wr::ToLayoutRect(clipBounds), wr::ToLayoutPoint(scrollOffset)));
+      wr::ToLayoutRect(clipBounds), wr::ToLayoutVector2D(scrollOffset),
+      wr::ToWrAPZScrollGeneration(scrollableFrame->ScrollGenerationOnApz()),
+      wr::ToWrHasScrollLinkedEffect(hasScrollLinkedEffect),
+      wr::SpatialKey(uint64_t(scrollFrame), 0, wr::SpatialKeyKind::Scroll)));
 }
 
 Maybe<wr::WrClipChainId> ClipManager::DefineClipChain(
@@ -355,24 +375,22 @@ Maybe<wr::WrClipChainId> ClipManager::DefineClipChain(
     AutoTArray<wr::ComplexClipRegion, 6> wrRoundedRects;
     chain->mClip.ToComplexClipRegions(aAppUnitsPerDevPixel, wrRoundedRects);
 
-    Maybe<wr::WrSpaceAndClip> spaceAndClip = GetScrollLayer(chain->mASR);
+    Maybe<wr::WrSpatialId> space = GetScrollLayer(chain->mASR);
     // Before calling DefineClipChain we defined the ASRs by calling
     // DefineScrollLayers, so we must have a scrollId here.
-    MOZ_ASSERT(spaceAndClip.isSome());
+    MOZ_ASSERT(space.isSome());
 
     // Define the clip
-    spaceAndClip->space = SpatialIdAfterOverride(spaceAndClip->space);
+    *space = SpatialIdAfterOverride(*space);
 
     AutoTArray<wr::WrClipId, 4> chainClipIds;
 
-    auto rectClipId = mBuilder->DefineRectClip(Some(spaceAndClip->space),
-                                               wr::ToLayoutRect(clip));
+    auto rectClipId = mBuilder->DefineRectClip(space, wr::ToLayoutRect(clip));
     CLIP_LOG("cache[%p] <= %zu\n", chain, rectClipId);
     chainClipIds.AppendElement(rectClipId);
 
     for (const auto& complexClip : wrRoundedRects) {
-      auto complexClipId = mBuilder->DefineRoundedRectClip(
-          Some(spaceAndClip->space), complexClip);
+      auto complexClipId = mBuilder->DefineRoundedRectClip(space, complexClip);
       CLIP_LOG("cache[%p] <= %zu\n", chain, complexClipId);
       chainClipIds.AppendElement(complexClipId);
     }

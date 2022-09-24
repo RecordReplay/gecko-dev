@@ -5,7 +5,8 @@
 
 // Test that we can log a message to the web console from the toolbox.
 
-const TEST_URI = "data:text/html;charset=utf-8,<p>test logErrorInPage";
+const TEST_URI =
+  "data:text/html;charset=utf-8,<!DOCTYPE html><p>test logErrorInPage";
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
@@ -13,7 +14,7 @@ add_task(async function() {
 
   toolbox.target.logErrorInPage("beware the octopus", "content javascript");
 
-  const node = await waitFor(() => findMessage(hud, "octopus"));
+  const node = await waitFor(() => findErrorMessage(hud, "octopus"));
   ok(node, "text is displayed in web console");
   ok(node.classList.contains("error"), "the log represents an error");
 });

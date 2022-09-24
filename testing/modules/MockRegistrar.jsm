@@ -9,17 +9,8 @@ var EXPORTED_SYMBOLS = ["MockRegistrar"];
 const Cm = Components.manager;
 
 const { Log } = ChromeUtils.import("resource://gre/modules/Log.jsm");
-const { XPCOMUtils } = ChromeUtils.import(
-  "resource://gre/modules/XPCOMUtils.jsm"
-);
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 var logger = Log.repository.getLogger("MockRegistrar");
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "UUIDGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
-);
 
 var MockRegistrar = Object.freeze({
   _registeredComponents: new Map(),
@@ -52,14 +43,10 @@ var MockRegistrar = Object.freeze({
 
     let originalFactory = Cm.getClassObject(originalCID, Ci.nsIFactory);
 
-    let cid = UUIDGen.generateUUID();
+    let cid = Services.uuid.generateUUID();
 
     let factory = {
-      createInstance(outer, iid) {
-        if (outer) {
-          throw Components.Exception("", Cr.NS_ERROR_NO_AGGREGATION);
-        }
-
+      createInstance(iid) {
         let wrappedMock;
         if (mock.prototype && mock.prototype.constructor) {
           wrappedMock = Object.create(mock.prototype);
@@ -69,16 +56,13 @@ var MockRegistrar = Object.freeze({
         }
 
         try {
-          let genuine = originalFactory.createInstance(outer, iid);
+          let genuine = originalFactory.createInstance(iid);
           wrappedMock._genuine = genuine;
         } catch (ex) {
           logger.info("Creating original instance failed", ex);
         }
 
         return wrappedMock.QueryInterface(iid);
-      },
-      lockFactory(lock) {
-        throw Components.Exception("", Cr.NS_ERROR_NOT_IMPLEMENTED);
       },
       QueryInterface: ChromeUtils.generateQI(["nsIFactory"]),
     };

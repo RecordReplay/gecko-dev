@@ -10,14 +10,15 @@
 #include "mozilla/DeclarationBlock.h"
 #include "mozilla/ServoBindings.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // -- CSSPageRuleDeclaration ---------------------------------------
 
 CSSPageRuleDeclaration::CSSPageRuleDeclaration(
     already_AddRefed<RawServoDeclarationBlock> aDecls)
-    : mDecls(new DeclarationBlock(std::move(aDecls))) {}
+    : mDecls(new DeclarationBlock(std::move(aDecls))) {
+  mDecls->SetOwningRule(Rule());
+}
 
 CSSPageRuleDeclaration::~CSSPageRuleDeclaration() {
   mDecls->SetOwningRule(nullptr);
@@ -51,17 +52,25 @@ nsISupports* CSSPageRuleDeclaration::GetParentObject() const {
 
 DeclarationBlock* CSSPageRuleDeclaration::GetOrCreateCSSDeclaration(
     Operation aOperation, DeclarationBlock** aCreated) {
+  if (aOperation != Operation::Read) {
+    if (StyleSheet* sheet = Rule()->GetStyleSheet()) {
+      sheet->WillDirty();
+    }
+  }
   return mDecls;
+}
+
+void CSSPageRuleDeclaration::SetRawAfterClone(
+    RefPtr<RawServoDeclarationBlock> aDeclarationBlock) {
+  mDecls->SetOwningRule(nullptr);
+  mDecls = new DeclarationBlock(aDeclarationBlock.forget());
+  mDecls->SetOwningRule(Rule());
 }
 
 nsresult CSSPageRuleDeclaration::SetCSSDeclaration(
     DeclarationBlock* aDecl, MutationClosureData* aClosureData) {
   MOZ_ASSERT(aDecl, "must be non-null");
   CSSPageRule* rule = Rule();
-
-  if (rule->IsReadOnly()) {
-    return NS_OK;
-  }
 
   if (aDecl != mDecls) {
     mDecls->SetOwningRule(nullptr);
@@ -77,7 +86,7 @@ nsresult CSSPageRuleDeclaration::SetCSSDeclaration(
 nsDOMCSSDeclaration::ParsingEnvironment
 CSSPageRuleDeclaration::GetParsingEnvironment(
     nsIPrincipal* aSubjectPrincipal) const {
-  return GetParsingEnvironmentForRule(Rule(), CSSRule_Binding::PAGE_RULE);
+  return GetParsingEnvironmentForRule(Rule(), StyleCssRuleType::Page);
 }
 
 // -- CSSPageRule --------------------------------------------------
@@ -129,6 +138,13 @@ bool CSSPageRule::IsCCLeaf() const {
   return !mDecls.PreservingWrapper();
 }
 
+void CSSPageRule::SetRawAfterClone(RefPtr<RawServoPageRule> aRaw) {
+  mRawRule = std::move(aRaw);
+  mDecls.SetRawAfterClone(Servo_PageRule_GetStyle(mRawRule.get()).Consume());
+}
+
+StyleCssRuleType CSSPageRule::Type() const { return StyleCssRuleType::Page; }
+
 size_t CSSPageRule::SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const {
   // TODO Implement this!
   return aMallocSizeOf(this);
@@ -153,6 +169,25 @@ void CSSPageRule::GetCssText(nsACString& aCssText) const {
 
 /* CSSPageRule implementation */
 
+void CSSPageRule::GetSelectorText(nsACString& aSelectorText) const {
+  Servo_PageRule_GetSelectorText(mRawRule.get(), &aSelectorText);
+}
+
+void CSSPageRule::SetSelectorText(const nsACString& aSelectorText) {
+  if (IsReadOnly()) {
+    return;
+  }
+
+  if (StyleSheet* const sheet = GetStyleSheet()) {
+    sheet->WillDirty();
+    const RawServoStyleSheetContents* const contents = sheet->RawContents();
+    if (Servo_PageRule_SetSelectorText(contents, mRawRule.get(),
+                                       &aSelectorText)) {
+      sheet->RuleChanged(this, StyleRuleChangeKind::Generic);
+    }
+  }
+}
+
 nsICSSDeclaration* CSSPageRule::Style() { return &mDecls; }
 
 JSObject* CSSPageRule::WrapObject(JSContext* aCx,
@@ -160,5 +195,4 @@ JSObject* CSSPageRule::WrapObject(JSContext* aCx,
   return CSSPageRule_Binding::Wrap(aCx, this, aGivenProto);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

@@ -13,8 +13,7 @@
 #include "nsAttrValueInlines.h"
 #include <algorithm>
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class HTMLProgressElement final : public nsGenericHTMLElement {
  public:
@@ -50,21 +49,11 @@ class HTMLProgressElement final : public nsGenericHTMLElement {
                              JS::Handle<JSObject*> aGivenProto) override;
 
  protected:
-  /**
-   * Returns whethem the progress element is in the indeterminate state.
-   * A progress element is in the indeterminate state if its value is ommited
-   * or is not a floating point number..
-   *
-   * @return whether the progress element is in the indeterminate state.
-   */
-  bool IsIndeterminate() const;
-
   static const double kIndeterminatePosition;
   static const double kDefaultValue;
   static const double kDefaultMax;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_HTMLProgressElement_h

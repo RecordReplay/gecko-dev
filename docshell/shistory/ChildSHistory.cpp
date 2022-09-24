@@ -89,8 +89,7 @@ nsID ChildSHistory::AddPendingHistoryChange() {
 
 nsID ChildSHistory::AddPendingHistoryChange(int32_t aIndexDelta,
                                             int32_t aLengthDelta) {
-  nsID changeID = {};
-  nsContentUtils::GenerateUUIDInPlace(changeID);
+  nsID changeID = nsID::GenerateUUID();
   PendingSHistoryChange change = {changeID, aIndexDelta, aLengthDelta};
   mPendingSHistoryChanges.AppendElement(change);
   return changeID;
@@ -265,7 +264,7 @@ NS_INTERFACE_MAP_END
 NS_IMPL_CYCLE_COLLECTING_ADDREF(ChildSHistory)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(ChildSHistory)
 
-NS_IMPL_CYCLE_COLLECTION_CLASS(ChildSHistory)
+NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(ChildSHistory)
 
 NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(ChildSHistory)
   if (tmp->mHistory) {
@@ -278,8 +277,6 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN(ChildSHistory)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mBrowsingContext, mHistory)
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
-
-NS_IMPL_CYCLE_COLLECTION_TRACE_WRAPPERCACHE(ChildSHistory)
 
 JSObject* ChildSHistory::WrapObject(JSContext* cx,
                                     JS::Handle<JSObject*> aGivenProto) {

@@ -5,8 +5,7 @@
 // http://opensource.org/licenses/MIT>, at your option. This file may not be
 // copied, modified, or distributed except according to those terms.
 
-use super::{DeviceRef, HeapRef};
-use cocoa_foundation::foundation::NSUInteger;
+use super::{DeviceRef, HeapRef, NSUInteger};
 use objc::runtime::{NO, YES};
 
 #[repr(u64)]
@@ -72,9 +71,18 @@ bitflags! {
 }
 
 bitflags! {
+    /// Options that describe how a graphics or compute function uses an argument buffer’s resource.
+    ///
+    /// Enabling certain options for certain resources determines whether the Metal driver should
+    /// convert the resource to another format (for example, whether to decompress a color render target).
     pub struct MTLResourceUsage: NSUInteger {
+        /// An option that enables reading from the resource.
         const Read   = 1 << 0;
+        /// An option that enables writing to the resource.
         const Write  = 1 << 1;
+        /// An option that enables sampling from the resource.
+        ///
+        /// Specify this option only if the resource is a texture.
         const Sample = 1 << 2;
     }
 }

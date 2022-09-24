@@ -265,6 +265,8 @@ static int GetEffectiveSandboxLevel(GeckoProcessType aType) {
       // GetEffectiveSocketProcessSandboxLevel is main-thread-only due to prefs.
       MOZ_ASSERT(NS_IsMainThread());
       return GetEffectiveSocketProcessSandboxLevel();
+    case GeckoProcessType_Utility:
+      return PR_GetEnv("MOZ_DISABLE_UTILITY_SANDBOX") == nullptr ? 1 : 0;
     default:
       return 0;
   }
@@ -326,7 +328,8 @@ void SandboxLaunchPrepare(GeckoProcessType aType,
     case GeckoProcessType_RDD:
       if (level >= 1) {
         canChroot = true;
-        flags |= CLONE_NEWNET | CLONE_NEWIPC;
+        // Can't use CLONE_NEWIPC because of intel-media-driver.
+        flags |= CLONE_NEWNET;
       }
       break;
     case GeckoProcessType_Content:

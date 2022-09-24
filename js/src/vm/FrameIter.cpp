@@ -833,8 +833,7 @@ bool FrameIter::matchCallee(JSContext* cx, JS::Handle<JSFunction*> fun) const {
   // the script clones do not use the same script, they also have a different
   // group and Ion will not inline them interchangeably.
   //
-  // See: js::jit::InlineFrameIterator::findNextFrame(),
-  //      js::CloneFunctionAndScript()
+  // See: js::jit::InlineFrameIterator::findNextFrame()
   if (currentCallee->hasBaseScript()) {
     if (currentCallee->baseScript() != fun->baseScript()) {
       return false;
@@ -944,19 +943,6 @@ Value FrameIter::thisArgument(JSContext* cx) const {
       return jsJitFrame().baselineFrame()->thisArgument();
     case INTERP:
       return interpFrame()->thisArgument();
-  }
-  MOZ_CRASH("Unexpected state");
-}
-
-Value FrameIter::newTarget() const {
-  switch (data_.state_) {
-    case DONE:
-      break;
-    case INTERP:
-      return interpFrame()->newTarget();
-    case JIT:
-      MOZ_ASSERT(jsJitFrame().isBaselineJS());
-      return jsJitFrame().baselineFrame()->newTarget();
   }
   MOZ_CRASH("Unexpected state");
 }

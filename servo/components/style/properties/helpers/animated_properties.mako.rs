@@ -19,7 +19,7 @@ use servo_arc::Arc;
 use smallvec::SmallVec;
 use std::ptr;
 use std::mem;
-use crate::hash::FxHashMap;
+use fxhash::FxHashMap;
 use super::ComputedValues;
 use crate::values::animated::{Animate, Procedure, ToAnimatedValue, ToAnimatedZero};
 use crate::values::animated::effects::AnimatedFilter;
@@ -311,9 +311,9 @@ impl AnimationValue {
                     % for prop in data.longhands:
                     % if prop.animatable:
                     LonghandId::${prop.camel_case} => {
-                        // FIXME(emilio, bug 1533327): I think
-                        // CSSWideKeyword::Revert handling is not fine here, but
-                        // what to do instead?
+                        // FIXME(emilio, bug 1533327): I think revert (and
+                        // revert-layer) handling is not fine here, but what to
+                        // do instead?
                         //
                         // Seems we'd need the computed value as if it was
                         // revert, somehow. Treating it as `unset` seems fine
@@ -321,6 +321,7 @@ impl AnimationValue {
                         let style_struct = match declaration.keyword {
                             % if not prop.style_struct.inherited:
                             CSSWideKeyword::Revert |
+                            CSSWideKeyword::RevertLayer |
                             CSSWideKeyword::Unset |
                             % endif
                             CSSWideKeyword::Initial => {
@@ -328,6 +329,7 @@ impl AnimationValue {
                             },
                             % if prop.style_struct.inherited:
                             CSSWideKeyword::Revert |
+                            CSSWideKeyword::RevertLayer |
                             CSSWideKeyword::Unset |
                             % endif
                             CSSWideKeyword::Inherit => {
@@ -797,7 +799,7 @@ impl<'a> TransitionPropertyIterator<'a> {
     pub fn from_style(style: &'a ComputedValues) -> Self {
         Self {
             style,
-            index_range: 0..style.get_box().transition_property_count(),
+            index_range: 0..style.get_ui().transition_property_count(),
             longhand_iterator: None,
         }
     }
@@ -830,7 +832,7 @@ impl<'a> Iterator for TransitionPropertyIterator<'a> {
             }
 
             let index = self.index_range.next()?;
-            match self.style.get_box().transition_property_at(index) {
+            match self.style.get_ui().transition_property_at(index) {
                 TransitionProperty::Longhand(longhand_id) => {
                     return Some(TransitionPropertyIteration {
                         longhand_id,

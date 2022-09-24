@@ -10,11 +10,8 @@
 // mousemove event.
 const TIME_BEFORE_SORTING_AGAIN = 5000;
 
-// How often we should add a sample to our buffer.
-const BUFFER_SAMPLING_RATE_MS = 1000;
-
-// The age of the oldest sample to keep.
-const BUFFER_DURATION_MS = 10000;
+// How long we should wait between samples.
+const MINIMUM_INTERVAL_BETWEEN_SAMPLES_MS = 1000;
 
 // How often we should update
 const UPDATE_INTERVAL_MS = 2000;
@@ -34,10 +31,19 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
+const { AppConstants } = ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
+);
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ContextualIdentityService:
     "resource://gre/modules/ContextualIdentityService.jsm",
+});
+
+XPCOMUtils.defineLazyGetter(this, "ProfilerPopupBackground", function() {
+  return ChromeUtils.import(
+    "resource://devtools/client/performance-new/popup/background.jsm.js"
+  );
 });
 
 const { WebExtensionPolicy } = Cu.getGlobalForObject(Services);
@@ -48,34 +54,13 @@ const SHOW_THREADS = Services.prefs.getBoolPref(
 const SHOW_ALL_SUBFRAMES = Services.prefs.getBoolPref(
   "toolkit.aboutProcesses.showAllSubframes"
 );
-
-/**
- * Returns a Promise that's resolved after the next turn of the event loop.
- *
- * Just returning a resolved Promise would mean that any `then` callbacks
- * would be called right after the end of the current turn, so `setTimeout`
- * is used to delay Promise resolution until the next turn.
- *
- * In mochi tests, it's possible for this to be called after the
- * about:performance window has been torn down, which causes `setTimeout` to
- * throw an NS_ERROR_NOT_INITIALIZED exception. In that case, returning
- * `undefined` is fine.
- */
-function wait(ms = 0) {
-  try {
-    let resolve;
-    let p = new Promise(resolve_ => {
-      resolve = resolve_;
-    });
-    setTimeout(resolve, ms);
-    return p;
-  } catch (e) {
-    dump(
-      "WARNING: wait aborted because of an invalid Window state in aboutPerformance.js.\n"
-    );
-    return undefined;
-  }
-}
+const SHOW_PROFILER_ICONS = Services.prefs.getBoolPref(
+  "toolkit.aboutProcesses.showProfilerIcons"
+);
+const PROFILE_DURATION = Math.max(
+  1,
+  Services.prefs.getIntPref("toolkit.aboutProcesses.profileDuration")
+);
 
 /**
  * For the time being, Fluent doesn't support duration or memory formats, so we need
@@ -144,17 +129,8 @@ let tabFinder = {
  * Utilities for dealing with state
  */
 var State = {
-  /**
-   * Indexed by the number of minutes since the snapshot was taken.
-   *
-   * @type {Array<ApplicationSnapshot>}
-   */
-  _buffer: [],
-  /**
-   * The latest snapshot.
-   *
-   * @type ApplicationSnapshot
-   */
+  // Store the previous and current samples so they can be compared.
+  _previous: null,
   _latest: null,
 
   async _promiseSnapshot() {
@@ -178,27 +154,18 @@ var State = {
    * @return {Promise}
    */
   async update(force = false) {
-    // If the buffer is empty, add one value for bootstraping purposes.
-    if (!this._buffer.length) {
-      this._latest = await this._promiseSnapshot();
-      this._buffer.push(this._latest);
-      await wait(BUFFER_SAMPLING_RATE_MS * 1.1);
-    }
-
-    let now = Cu.now();
-
-    // If we haven't sampled in a while, add a sample to the buffer.
-    let latestInBuffer = this._buffer[this._buffer.length - 1];
-    let deltaT = now - latestInBuffer.date;
-    if (force || deltaT > BUFFER_SAMPLING_RATE_MS) {
-      this._latest = await this._promiseSnapshot();
-      this._buffer.push(this._latest);
-    }
-
-    // If we have too many samples, remove the oldest sample.
-    let oldestInBuffer = this._buffer[0];
-    if (oldestInBuffer.date + BUFFER_DURATION_MS < this._latest.date) {
-      this._buffer.shift();
+    if (
+      force ||
+      !this._latest ||
+      Cu.now() - this._latest.date > MINIMUM_INTERVAL_BETWEEN_SAMPLES_MS
+    ) {
+      // Replacing this._previous before we are done awaiting
+      // this._promiseSnapshot can cause this._previous and this._latest to be
+      // equal for a short amount of time, which can cause test failures when
+      // a forced update of the display is triggered in the meantime.
+      let newSnapshot = await this._promiseSnapshot();
+      this._previous = this._latest;
+      this._latest = newSnapshot;
     }
   },
 
@@ -206,25 +173,17 @@ var State = {
     let result = {
       tid: cur.tid,
       name: cur.name || `(${cur.tid})`,
-      // Total amount of CPU used, in ns (user).
-      totalCpuUser: cur.cpuUser,
-      slopeCpuUser: null,
-      // Total amount of CPU used, in ns (kernel).
-      totalCpuKernel: cur.cpuKernel,
-      slopeCpuKernel: null,
-      // Total amount of CPU used, in ns (user + kernel).
-      totalCpu: cur.cpuUser + cur.cpuKernel,
+      // Total amount of CPU used, in ns.
+      totalCpu: cur.cpuTime,
       slopeCpu: null,
+      active: null,
     };
-    if (!prev) {
+    if (!deltaT) {
       return result;
     }
-    if (prev.tid != cur.tid) {
-      throw new Error("Assertion failed: A thread cannot change tid.");
-    }
-    result.slopeCpuUser = (cur.cpuUser - prev.cpuUser) / deltaT;
-    result.slopeCpuKernel = (cur.cpuKernel - prev.cpuKernel) / deltaT;
-    result.slopeCpu = result.slopeCpuKernel + result.slopeCpuUser;
+    result.slopeCpu = (result.totalCpu - (prev ? prev.cpuTime : 0)) / deltaT;
+    result.active =
+      !!result.slopeCpu || cur.cpuCycleCount > (prev ? prev.cpuCycleCount : 0);
     return result;
   },
 
@@ -295,30 +254,20 @@ var State = {
    */
   _getProcessDelta(cur, prev) {
     let windows = this._getDOMWindows(cur);
-    // Resident set size is the total memory used by the process, including shared memory.
-    // Resident unique size is the memory used by the process, without shared memory.
-    // Since all processes share memory with the parent process, we count the shared memory
-    // as part of the parent process (`"browser"`) rather than as part of the individual
-    // processes.
-    let totalRamSize =
-      cur.type == "browser" ? cur.residentSetSize : cur.residentUniqueSize;
     let result = {
       pid: cur.pid,
       childID: cur.childID,
-      filename: cur.filename,
-      totalRamSize,
+      totalRamSize: cur.memory,
       deltaRamSize: null,
-      totalCpuUser: cur.cpuUser,
-      slopeCpuUser: null,
-      totalCpuKernel: cur.cpuKernel,
-      slopeCpuKernel: null,
-      totalCpu: cur.cpuUser + cur.cpuKernel,
+      totalCpu: cur.cpuTime,
       slopeCpu: null,
+      active: null,
       type: cur.type,
       origin: cur.origin || "",
       threads: null,
       displayRank: Control._getDisplayGroupRank(cur, windows),
       windows,
+      utilityActors: cur.utilityActors,
       // If this process has an unambiguous title, store it here.
       title: null,
     };
@@ -335,9 +284,7 @@ var State = {
     }
     if (!prev) {
       if (SHOW_THREADS) {
-        result.threads = cur.threads.map(data =>
-          this._getThreadDelta(data, null, null)
-        );
+        result.threads = cur.threads.map(data => this._getThreadDelta(data));
       }
       return result;
     }
@@ -351,21 +298,13 @@ var State = {
       for (let thread of prev.threads) {
         prevThreads.set(thread.tid, thread);
       }
-      threads = cur.threads.map(curThread => {
-        let prevThread = prevThreads.get(curThread.tid);
-        if (!prevThread) {
-          return this._getThreadDelta(curThread);
-        }
-        return this._getThreadDelta(curThread, prevThread, deltaT);
-      });
+      threads = cur.threads.map(curThread =>
+        this._getThreadDelta(curThread, prevThreads.get(curThread.tid), deltaT)
+      );
     }
-    result.deltaRamSize =
-      cur.type == "browser"
-        ? cur.residentSetSize - prev.residentSetSize
-        : cur.residentUniqueSize - prev.residentUniqueSize;
-    result.slopeCpuUser = (cur.cpuUser - prev.cpuUser) / deltaT;
-    result.slopeCpuKernel = (cur.cpuKernel - prev.cpuKernel) / deltaT;
-    result.slopeCpu = result.slopeCpuUser + result.slopeCpuKernel;
+    result.deltaRamSize = cur.memory - prev.memory;
+    result.slopeCpu = (cur.cpuTime - prev.cpuTime) / deltaT;
+    result.active = !!result.slopeCpu || cur.cpuCycleCount > prev.cpuCycleCount;
     result.threads = threads;
     return result;
   },
@@ -373,32 +312,11 @@ var State = {
   getCounters() {
     tabFinder.update();
 
-    // We rebuild the maps during each iteration to make sure that
-    // we do not maintain references to processes that have been
-    // shutdown.
-
-    let current = this._latest;
     let counters = [];
 
-    for (let cur of current.processes.values()) {
-      // Look for the oldest point of comparison
-      let oldest = null;
-      let delta;
-      for (let index = 0; index <= this._buffer.length - 2; ++index) {
-        oldest = this._buffer[index].processes.get(cur.pid);
-        if (oldest) {
-          // Found it!
-          break;
-        }
-      }
-      if (oldest) {
-        // Existing process. Let's display slopes info.
-        delta = this._getProcessDelta(cur, oldest);
-      } else {
-        // New process. Let's display basic info.
-        delta = this._getProcessDelta(cur, null);
-      }
-      counters.push(delta);
+    for (let cur of this._latest.processes.values()) {
+      let prev = this._previous?.processes.get(cur.pid);
+      counters.push(this._getProcessDelta(cur, prev));
     }
 
     return counters;
@@ -468,13 +386,70 @@ var View = {
     return row;
   },
 
+  displayCpu(data, cpuCell, maxSlopeCpu) {
+    // Put a value < 0% when we really don't want to see a bar as
+    // otherwise it sometimes appears due to rounding errors when we
+    // don't have an integer number of pixels.
+    let barWidth = -0.5;
+    if (data.slopeCpu == null) {
+      this._fillCell(cpuCell, {
+        fluentName: "about-processes-cpu-user-and-kernel-not-ready",
+        classes: ["cpu"],
+      });
+    } else {
+      let { duration, unit } = this._getDuration(data.totalCpu);
+      if (data.totalCpu == 0) {
+        // A thread having used exactly 0ns of CPU time is not possible.
+        // When we get 0 it means the thread used less than the precision of
+        // the measurement, and it makes more sense to show '0ms' than '0ns'.
+        // This is useful on Linux where the minimum non-zero CPU time value
+        // for threads of child processes is 10ms, and on Windows ARM64 where
+        // the minimum non-zero value is 16ms.
+        unit = "ms";
+      }
+      let localizedUnit = gLocalizedUnits.duration[unit];
+      if (data.slopeCpu == 0) {
+        let fluentName = data.active
+          ? "about-processes-cpu-almost-idle"
+          : "about-processes-cpu-fully-idle";
+        this._fillCell(cpuCell, {
+          fluentName,
+          fluentArgs: {
+            total: duration,
+            unit: localizedUnit,
+          },
+          classes: ["cpu"],
+        });
+      } else {
+        this._fillCell(cpuCell, {
+          fluentName: "about-processes-cpu",
+          fluentArgs: {
+            percent: data.slopeCpu,
+            total: duration,
+            unit: localizedUnit,
+          },
+          classes: ["cpu"],
+        });
+
+        let cpuPercent = data.slopeCpu * 100;
+        if (maxSlopeCpu > 1) {
+          cpuPercent /= maxSlopeCpu;
+        }
+        // Ensure we always have a visible bar for non-0 values.
+        barWidth = Math.max(0.5, cpuPercent);
+      }
+    }
+    cpuCell.style.setProperty("--bar-width", barWidth);
+  },
+
   /**
    * Display a row showing a single process (without its threads).
    *
    * @param {ProcessDelta} data The data to display.
+   * @param {Number} maxSlopeCpu The largest slopeCpu value.
    * @return {DOMElement} The row displaying the process.
    */
-  displayProcessRow(data) {
+  displayProcessRow(data, maxSlopeCpu) {
     const cellCount = 4;
     let rowId = "p:" + data.pid;
     let row = this._getOrCreateRow(rowId, cellCount);
@@ -503,8 +478,8 @@ var View = {
           fluentName = "about-processes-web-isolated-process";
           fluentArgs.origin = data.origin;
           break;
-        case "webLargeAllocation":
-          fluentName = "about-processes-web-large-allocation-process";
+        case "webServiceWorker":
+          fluentName = "about-processes-web-serviceworker";
           fluentArgs.origin = data.origin;
           break;
         case "file":
@@ -554,6 +529,9 @@ var View = {
         case "preallocated":
           fluentName = "about-processes-preallocated-process";
           break;
+        case "utility":
+          fluentName = "about-processes-utility-process";
+          break;
         // The following are probably not going to show up for users
         // but let's handle the case anyway to avoid heisenoranges
         // during tests in case of a leftover process from a previous
@@ -590,11 +568,26 @@ var View = {
         }
       }
 
-      this._fillCell(nameCell, {
-        fluentName,
-        fluentArgs,
-        classes: ["type", "favicon", ...classNames],
-      });
+      let processNameElement = nameCell;
+      if (SHOW_PROFILER_ICONS) {
+        if (!nameCell.firstChild) {
+          processNameElement = document.createElement("span");
+          nameCell.appendChild(processNameElement);
+
+          let profilerIcon = document.createElement("span");
+          profilerIcon.className = "profiler-icon";
+          document.l10n.setAttributes(
+            profilerIcon,
+            "about-processes-profile-process",
+            { duration: PROFILE_DURATION }
+          );
+          nameCell.appendChild(profilerIcon);
+        } else {
+          processNameElement = nameCell.firstChild;
+        }
+      }
+      document.l10n.setAttributes(processNameElement, fluentName, fluentArgs);
+      nameCell.className = ["type", "favicon", ...classNames].join(" ");
 
       let image;
       switch (data.type) {
@@ -629,7 +622,7 @@ var View = {
             }
           }
           if (!image) {
-            image = "chrome://browser/skin/link.svg";
+            image = "chrome://global/skin/icons/link.svg";
           }
       }
       nameCell.style.backgroundImage = `url('${image}')`;
@@ -664,43 +657,15 @@ var View = {
       }
     }
 
-    // Column: CPU: User and Kernel
+    // Column: CPU
     let cpuCell = memoryCell.nextSibling;
-    if (data.slopeCpu == null) {
-      this._fillCell(cpuCell, {
-        fluentName: "about-processes-cpu-user-and-kernel-not-ready",
-        classes: ["cpu"],
-      });
-    } else {
-      let { duration, unit } = this._getDuration(data.totalCpu);
-      let localizedUnit = gLocalizedUnits.duration[unit];
-      if (data.slopeCpu == 0) {
-        this._fillCell(cpuCell, {
-          fluentName: "about-processes-cpu-idle",
-          fluentArgs: {
-            total: duration,
-            unit: localizedUnit,
-          },
-          classes: ["cpu"],
-        });
-      } else {
-        this._fillCell(cpuCell, {
-          fluentName: "about-processes-cpu",
-          fluentArgs: {
-            percent: data.slopeCpu,
-            total: duration,
-            unit: localizedUnit,
-          },
-          classes: ["cpu"],
-        });
-      }
-    }
+    this.displayCpu(data, cpuCell, maxSlopeCpu);
 
     // Column: Kill button – but not for all processes.
     let killButton = cpuCell.nextSibling;
     killButton.className = "action-icon";
 
-    if (["web", "webIsolated", "webLargeAllocation"].includes(data.type)) {
+    if (data.type.startsWith("web")) {
       // This type of process can be killed.
       if (this._killedRecently.some(kill => kill.pid && kill.pid == data.pid)) {
         // We're racing between the "kill" action and the visual refresh.
@@ -743,25 +708,44 @@ var View = {
     // Column: Name
     let nameCell = row.firstChild;
     let threads = data.threads;
-    let activeThreads = data.threads.filter(t => t.slopeCpu);
+    let activeThreads = new Map();
+    let activeThreadCount = 0;
+    for (let t of data.threads) {
+      if (!t.active) {
+        continue;
+      }
+      ++activeThreadCount;
+      let name = t.name.replace(/ ?#[0-9]+$/, "");
+      if (!activeThreads.has(name)) {
+        activeThreads.set(name, { name, slopeCpu: t.slopeCpu, count: 1 });
+      } else {
+        let thread = activeThreads.get(name);
+        thread.count++;
+        thread.slopeCpu += t.slopeCpu;
+      }
+    }
     let fluentName, fluentArgs;
-    if (activeThreads.length) {
+    if (activeThreadCount) {
       let percentFormatter = new Intl.NumberFormat(undefined, {
         style: "percent",
         minimumSignificantDigits: 1,
       });
-      activeThreads.sort((t1, t2) => (t2.slopeCpu || 0) - (t1.slopeCpu || 0));
+
+      let threadList = Array.from(activeThreads.values());
+      threadList.sort((t1, t2) => t2.slopeCpu - t1.slopeCpu);
+
       fluentName = "about-processes-active-threads";
       fluentArgs = {
         number: threads.length,
-        active: activeThreads.length,
+        active: activeThreadCount,
         list: new Intl.ListFormat(undefined, { style: "narrow" }).format(
-          activeThreads.map(t => {
-            let percent = Math.round((t.slopeCpu || 0) * 1000) / 1000;
+          threadList.map(t => {
+            let name = t.count > 1 ? `${t.count} × ${t.name}` : t.name;
+            let percent = Math.round(t.slopeCpu * 1000) / 1000;
             if (percent) {
-              return `${t.name} ${percentFormatter.format(percent)}`;
+              return `${name} ${percentFormatter.format(percent)}`;
             }
-            return t.name;
+            return name;
           })
         ),
       };
@@ -804,7 +788,7 @@ var View = {
     row.win = data;
     row.className = "window";
 
-    // Column: filename
+    // Column: name
     let nameCell = row.firstChild;
     let tab = tabFinder.get(data.outerWindowId);
     let fluentName;
@@ -868,19 +852,48 @@ var View = {
     }
   },
 
+  displayUtilityActorRow(data, parent) {
+    const cellCount = 2;
+    // The actor name is expected to be unique within a given utility process.
+    let rowId = "u:" + parent.pid + data.actorName;
+    let row = this._getOrCreateRow(rowId, cellCount);
+    row.actor = data;
+    row.className = "actor";
+
+    // Column: name
+    let nameCell = row.firstChild;
+    let fluentName;
+    let fluentArgs = {};
+    switch (data.actorName) {
+      case "audioDecoder":
+        fluentName = "about-processes-utility-actor-audio-decoder";
+        break;
+
+      default:
+        fluentName = "about-processes-utility-actor-unknown";
+        break;
+    }
+    this._fillCell(nameCell, {
+      fluentName,
+      fluentArgs,
+      classes: ["name", "indent", "favicon"],
+    });
+  },
+
   /**
    * Display a row showing a single thread.
    *
    * @param {ThreadDelta} data The data to display.
+   * @param {Number} maxSlopeCpu The largest slopeCpu value.
    */
-  displayThreadRow(data) {
+  displayThreadRow(data, maxSlopeCpu) {
     const cellCount = 3;
     let rowId = "t:" + data.tid;
     let row = this._getOrCreateRow(rowId, cellCount);
     row.thread = data;
     row.className = "thread";
 
-    // Column: filename
+    // Column: name
     let nameCell = row.firstChild;
     this._fillCell(nameCell, {
       fluentName: "about-processes-thread-name-and-id",
@@ -891,37 +904,8 @@ var View = {
       classes: ["name", "double_indent"],
     });
 
-    // Column: CPU: User and Kernel
-    let cpuCell = nameCell.nextSibling;
-    if (data.slopeCpu == null) {
-      this._fillCell(cpuCell, {
-        fluentName: "about-processes-cpu-user-and-kernel-not-ready",
-        classes: ["cpu"],
-      });
-    } else {
-      let { duration, unit } = this._getDuration(data.totalCpu);
-      let localizedUnit = gLocalizedUnits.duration[unit];
-      if (data.slopeCpu == 0) {
-        this._fillCell(cpuCell, {
-          fluentName: "about-processes-cpu-idle",
-          fluentArgs: {
-            total: duration,
-            unit: localizedUnit,
-          },
-          classes: ["cpu"],
-        });
-      } else {
-        this._fillCell(cpuCell, {
-          fluentName: "about-processes-cpu",
-          fluentArgs: {
-            percent: data.slopeCpu,
-            total: duration,
-            unit: localizedUnit,
-          },
-          classes: ["cpu"],
-        });
-      }
-    }
+    // Column: CPU
+    this.displayCpu(data, nameCell.nextSibling, maxSlopeCpu);
 
     // Third column (Buttons) is empty, nothing to do.
   },
@@ -1075,6 +1059,24 @@ var Control = {
         return;
       }
 
+      if (target.classList.contains("profiler-icon")) {
+        if (Services.profiler.IsActive()) {
+          return;
+        }
+        Services.profiler.StartProfiler(
+          10000000,
+          1,
+          ["default", "ipcmessages"],
+          ["pid:" + target.parentNode.parentNode.process.pid]
+        );
+        target.classList.add("profiler-active");
+        setTimeout(() => {
+          ProfilerPopupBackground.captureProfile("aboutprofiling");
+          target.classList.remove("profiler-active");
+        }, PROFILE_DURATION * 1000);
+        return;
+      }
+
       // Handle selection changes
       let row = target.closest("tr");
       if (!row) {
@@ -1142,11 +1144,15 @@ var Control = {
         if (!event.target.classList.contains("clickable")) {
           return;
         }
+        // Linux has conventions opposite to Windows and macOS on the direction of arrows
+        // when sorting.
+        const platformIsLinux = AppConstants.platform == "linux";
+        const ascArrow = platformIsLinux ? "arrow-up" : "arrow-down";
+        const descArrow = platformIsLinux ? "arrow-down" : "arrow-up";
 
         if (this._sortColumn) {
           const td = document.getElementById(this._sortColumn);
-          td.classList.remove("asc");
-          td.classList.remove("desc");
+          td.classList.remove(ascArrow, descArrow);
         }
 
         const columnId = event.target.id;
@@ -1158,13 +1164,8 @@ var Control = {
           this._sortAscendent = true;
         }
 
-        if (this._sortAscendent) {
-          event.target.classList.remove("desc");
-          event.target.classList.add("asc");
-        } else {
-          event.target.classList.remove("asc");
-          event.target.classList.add("desc");
-        }
+        event.target.classList.toggle(ascArrow, this._sortAscendent);
+        event.target.classList.toggle(descArrow, !this._sortAscendent);
 
         await this._updateDisplay(true);
       });
@@ -1203,8 +1204,6 @@ var Control = {
       return;
     }
 
-    await wait(0);
-
     await this._updateDisplay(force);
   },
 
@@ -1225,13 +1224,17 @@ var Control = {
     this._hungItems = new Set();
 
     counters = this._sortProcesses(counters);
+
+    // Stored because it is used when opening the list of threads.
+    this._maxSlopeCpu = Math.max(...counters.map(process => process.slopeCpu));
+
     let previousProcess = null;
     for (let process of counters) {
       this._sortDOMWindows(process.windows);
 
       process.isHung = process.childID && hungItems.has(process.childID);
 
-      let processRow = View.displayProcessRow(process);
+      let processRow = View.displayProcessRow(process, this._maxSlopeCpu);
 
       if (process.type != "extension") {
         // We do not want to display extensions.
@@ -1242,9 +1245,15 @@ var Control = {
         }
       }
 
+      if (process.type === "utility") {
+        for (let actor of process.utilityActors) {
+          View.displayUtilityActorRow(actor, process);
+        }
+      }
+
       if (SHOW_THREADS) {
         if (View.displayThreadSummaryRow(process)) {
-          this._showThreads(processRow);
+          this._showThreads(processRow, this._maxSlopeCpu);
         }
       }
       if (
@@ -1279,12 +1288,20 @@ var Control = {
     if (this.selectedRow && !this.selectedRow.parentNode) {
       this.selectedRow = null;
     }
+
+    // Used by tests to differentiate full updates from l10n updates.
+    document.dispatchEvent(new CustomEvent("AboutProcessesUpdated"));
   },
-  _showThreads(row) {
+  _compareCpu(a, b) {
+    return (
+      b.slopeCpu - a.slopeCpu || b.active - a.active || b.totalCpu - a.totalCpu
+    );
+  },
+  _showThreads(row, maxSlopeCpu) {
     let process = row.process;
     this._sortThreads(process.threads);
     for (let thread of process.threads) {
-      View.displayThreadRow(thread);
+      View.displayThreadRow(thread, maxSlopeCpu);
     }
   },
   _sortThreads(threads) {
@@ -1295,7 +1312,7 @@ var Control = {
           order = a.name.localeCompare(b.name) || a.tid - b.tid;
           break;
         case "column-cpu-total":
-          order = b.slopeCpu - a.slopeCpu;
+          order = this._compareCpu(a, b);
           break;
         case "column-memory-resident":
         case null:
@@ -1321,7 +1338,7 @@ var Control = {
             a.pid - b.pid;
           break;
         case "column-cpu-total":
-          order = b.slopeCpu - a.slopeCpu;
+          order = this._compareCpu(a, b);
           break;
         case "column-memory-resident":
           order = b.totalRamSize - a.totalRamSize;
@@ -1375,7 +1392,7 @@ var Control = {
         return RANK_BROWSER;
       // Web content comes next.
       case "webIsolated":
-      case "webLargeAllocation":
+      case "webServiceWorker":
       case "withCoopCoep": {
         if (windows.some(w => w.tab)) {
           return RANK_WEB_TABS;
@@ -1411,7 +1428,7 @@ var Control = {
   _handleTwisty(target) {
     let row = target.parentNode.parentNode;
     if (target.classList.toggle("open")) {
-      this._showThreads(row);
+      this._showThreads(row, this._maxSlopeCpu);
       View.insertAfterRow(row);
     } else {
       this._removeSubtree(row);
@@ -1488,6 +1505,17 @@ var Control = {
 
 window.onload = async function() {
   Control.init();
+
+  // Display immediately the list of processes. CPU values will be missing.
   await Control.update();
+
+  // After the minimum interval between samples, force an update to show
+  // valid CPU values asap.
+  await new Promise(resolve =>
+    setTimeout(resolve, MINIMUM_INTERVAL_BETWEEN_SAMPLES_MS)
+  );
+  await Control.update(true);
+
+  // Then update at the normal frequency.
   window.setInterval(() => Control.update(), UPDATE_INTERVAL_MS);
 };

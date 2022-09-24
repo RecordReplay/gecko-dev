@@ -116,7 +116,8 @@ Maybe<APZWheelAction> APZInputBridge::ActionForWheelEvent(
   return EventStateManager::APZWheelActionFor(aEvent);
 }
 
-APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
+APZEventResult APZInputBridge::ReceiveInputEvent(
+    WidgetInputEvent& aEvent, InputBlockCallback&& aCallback) {
   APZThreadUtils::AssertOnControllerThread();
 
   APZEventResult result;
@@ -125,18 +126,12 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
     case eMouseEventClass:
     case eDragEventClass: {
       WidgetMouseEvent& mouseEvent = *aEvent.AsMouseEvent();
-
-      // Note, we call this before having transformed the reference point.
-      if (mouseEvent.IsReal()) {
-        UpdateWheelTransaction(mouseEvent.mRefPoint, mouseEvent.mMessage);
-      }
-
       if (WillHandleMouseEvent(mouseEvent)) {
         MouseInput input(mouseEvent);
         input.mOrigin =
             ScreenPoint(mouseEvent.mRefPoint.x, mouseEvent.mRefPoint.y);
 
-        result = ReceiveInputEvent(input);
+        result = ReceiveInputEvent(input, std::move(aCallback));
 
         mouseEvent.mRefPoint.x = input.mOrigin.x;
         mouseEvent.mRefPoint.y = input.mOrigin.y;
@@ -160,7 +155,18 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
                       mouseEvent.mMessage == eMouseDown ||
                           mouseEvent.mMessage == eMouseUp);
         aEvent.mLayersId = input.mLayersId;
+
+        if (mouseEvent.IsReal()) {
+          UpdateWheelTransaction(mouseEvent.mRefPoint, mouseEvent.mMessage,
+                                 Some(result.mTargetGuid));
+        }
+
         return result;
+      }
+
+      if (mouseEvent.IsReal()) {
+        UpdateWheelTransaction(mouseEvent.mRefPoint, mouseEvent.mMessage,
+                               Nothing());
       }
 
       ProcessUnhandledEvent(&mouseEvent.mRefPoint, &result.mTargetGuid,
@@ -170,7 +176,7 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
     case eTouchEventClass: {
       WidgetTouchEvent& touchEvent = *aEvent.AsTouchEvent();
       MultiTouchInput touchInput(touchEvent);
-      result = ReceiveInputEvent(touchInput);
+      result = ReceiveInputEvent(touchInput, std::move(aCallback));
       // touchInput was modified in-place to possibly remove some
       // touch points (if we are overscrolled), and the coordinates were
       // modified using the APZ untransform. We need to copy these changes
@@ -236,7 +242,7 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
               &wheelEvent, &input.mUserDeltaMultiplierX,
               &input.mUserDeltaMultiplierY);
 
-          result = ReceiveInputEvent(input);
+          result = ReceiveInputEvent(input, std::move(aCallback));
           wheelEvent.mRefPoint.x = input.mOrigin.x;
           wheelEvent.mRefPoint.y = input.mOrigin.y;
           wheelEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
@@ -247,7 +253,7 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
         }
       }
 
-      UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage);
+      UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage, Nothing());
       ProcessUnhandledEvent(&aEvent.mRefPoint, &result.mTargetGuid,
                             &aEvent.mFocusSequenceNumber, &aEvent.mLayersId);
       MOZ_ASSERT(result.GetStatus() == nsEventStatus_eIgnore);
@@ -258,14 +264,14 @@ APZEventResult APZInputBridge::ReceiveInputEvent(WidgetInputEvent& aEvent) {
 
       KeyboardInput input(keyboardEvent);
 
-      result = ReceiveInputEvent(input);
+      result = ReceiveInputEvent(input, std::move(aCallback));
 
       keyboardEvent.mFlags.mHandledByAPZ = input.mHandledByAPZ;
       keyboardEvent.mFocusSequenceNumber = input.mFocusSequenceNumber;
       return result;
     }
     default: {
-      UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage);
+      UpdateWheelTransaction(aEvent.mRefPoint, aEvent.mMessage, Nothing());
       ProcessUnhandledEvent(&aEvent.mRefPoint, &result.mTargetGuid,
                             &aEvent.mFocusSequenceNumber, &aEvent.mLayersId);
       return result;

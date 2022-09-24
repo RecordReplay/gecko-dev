@@ -20,6 +20,7 @@
 #include "mozilla/HashFunctions.h"
 #include "mozilla/MathAlgorithms.h"
 #include "mozilla/PresShell.h"
+#include "mozilla/StaticPtr.h"
 #include "mozilla/SVGImageContext.h"
 #include "gfxFont.h"
 #include "ScaledFontBase.h"
@@ -426,7 +427,7 @@ struct InlineBackgroundData {
   }
 };
 
-static InlineBackgroundData* gInlineBGData = nullptr;
+static StaticAutoPtr<InlineBackgroundData> gInlineBGData;
 
 // Initialize any static variables used by nsCSSRendering.
 void nsCSSRendering::Init() {
@@ -435,10 +436,7 @@ void nsCSSRendering::Init() {
 }
 
 // Clean up any global variables used by nsCSSRendering.
-void nsCSSRendering::Shutdown() {
-  delete gInlineBGData;
-  gInlineBGData = nullptr;
-}
+void nsCSSRendering::Shutdown() { gInlineBGData = nullptr; }
 
 /**
  * Make a bevel color
@@ -728,11 +726,13 @@ ImgDrawResult nsCSSRendering::CreateWebRenderCommandsForBorderWithStyleBorder(
     flags |= nsImageRenderer::FLAG_SYNC_DECODE_IMAGES;
   }
 
+  bool dummy;
   image::ImgDrawResult result;
   Maybe<nsCSSBorderImageRenderer> bir =
       nsCSSBorderImageRenderer::CreateBorderImageRenderer(
           aForFrame->PresContext(), aForFrame, aBorderArea, aStyleBorder,
-          aItem->GetPaintRect(), aForFrame->GetSkipSides(), flags, &result);
+          aItem->GetBounds(aDisplayListBuilder, &dummy),
+          aForFrame->GetSkipSides(), flags, &result);
 
   if (!bir) {
     // We aren't ready. Try to fallback to the null border image if present but
@@ -1099,9 +1099,11 @@ static void ComputeObjectAnchorCoord(const LengthPercentage& aCoord,
 
   // The anchor-point doesn't care about our image's size; just the size
   // of the region we're rendering into.
-  *aAnchorPointCoord = aCoord.Resolve(aOriginBounds, NSToCoordRoundWithClamp);
+  *aAnchorPointCoord = aCoord.Resolve(
+      aOriginBounds, static_cast<nscoord (*)(float)>(NSToCoordRoundWithClamp));
   // Adjust aTopLeftCoord by the specified % of the extra space.
-  *aTopLeftCoord = aCoord.Resolve(extraSpace, NSToCoordRoundWithClamp);
+  *aTopLeftCoord = aCoord.Resolve(
+      extraSpace, static_cast<nscoord (*)(float)>(NSToCoordRoundWithClamp));
 }
 
 void nsImageRenderer::ComputeObjectAnchorPoint(const Position& aPos,
@@ -1809,7 +1811,7 @@ ImgDrawResult nsCSSRendering::PaintStyleImageLayer(const PaintBGParams& aParams,
 }
 
 bool nsCSSRendering::CanBuildWebRenderDisplayItemsForStyleImageLayer(
-    LayerManager* aManager, nsPresContext& aPresCtx, nsIFrame* aFrame,
+    WebRenderLayerManager* aManager, nsPresContext& aPresCtx, nsIFrame* aFrame,
     const nsStyleBackground* aBackgroundStyle, int32_t aLayer,
     uint32_t aPaintFlags) {
   if (!aBackgroundStyle) {
@@ -2135,7 +2137,7 @@ void nsCSSRendering::GetImageLayerClip(
     aClipState->mBGClipArea.Deflate(border);
 
     if (haveRoundedCorners) {
-      nsIFrame::InsetBorderRadii(aClipState->mRadii, border);
+      nsIFrame::AdjustBorderRadii(aClipState->mRadii, -border);
     }
   }
 
@@ -2626,7 +2628,7 @@ nsCSSRendering::BuildWebRenderDisplayItemsForStyleImageLayerWithSC(
   result &= state.mImageRenderer.PrepareResult();
 
   if (!state.mFillArea.IsEmpty()) {
-    return state.mImageRenderer.BuildWebRenderDisplayItemsForLayer(
+    result &= state.mImageRenderer.BuildWebRenderDisplayItemsForLayer(
         &aParams.presCtx, aBuilder, aResources, aSc, aManager, aItem,
         state.mDestArea, state.mFillArea,
         state.mAnchor + paintBorderArea.TopLeft(),
@@ -2970,6 +2972,13 @@ nsBackgroundLayerState nsCSSRendering::PrepareImageLayer(
   }
   if (aFlags & nsCSSRendering::PAINTBG_HIGH_QUALITY_SCALING) {
     irFlags |= nsImageRenderer::FLAG_HIGH_QUALITY_SCALING;
+  }
+  // Only do partial bg image drawing in content documents: non-content
+  // documents are viewed as UI of the browser and a partial draw of a bg image
+  // might look weird in that context.
+  if (StaticPrefs::layout_display_partial_background_images() &&
+      XRE_IsContentProcess() && !aPresContext->IsChrome()) {
+    irFlags |= nsImageRenderer::FLAG_DRAW_PARTIAL_FRAMES;
   }
 
   nsBackgroundLayerState state(aForFrame, &aLayer.mImage, irFlags);
@@ -4816,7 +4825,7 @@ bool nsContextBoxBlur::InsetBoxBlur(
   // input data to the blur. This way, we don't have to scale the min
   // inset blur to the invert of the dest context, then rescale it back
   // when we draw to the destination surface.
-  gfx::Size scale = aDestinationCtx->CurrentMatrix().ScaleFactors();
+  auto scale = aDestinationCtx->CurrentMatrix().ScaleFactors();
   Matrix transform = aDestinationCtx->CurrentMatrix();
 
   // XXX: we could probably handle negative scales but for now it's easier just
@@ -4840,9 +4849,9 @@ bool nsContextBoxBlur::InsetBoxBlur(
 
   for (size_t i = 0; i < 4; i++) {
     aInnerClipRectRadii[i].width =
-        std::floor(scale.width * aInnerClipRectRadii[i].width);
+        std::floor(scale.xScale * aInnerClipRectRadii[i].width);
     aInnerClipRectRadii[i].height =
-        std::floor(scale.height * aInnerClipRectRadii[i].height);
+        std::floor(scale.yScale * aInnerClipRectRadii[i].height);
   }
 
   mAlphaBoxBlur.BlurInsetBox(aDestinationCtx, transformedDestRect,

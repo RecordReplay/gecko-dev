@@ -74,38 +74,6 @@ class TabBase {
   }
 
   /**
-   * Sends a message, via the given context, to the ExtensionContent running in
-   * this tab. The tab's current innerWindowID is automatically added to the
-   * recipient filter for the message, and is used to ensure that the message is
-   * not processed if the content process navigates to a different content page
-   * before the message is received.
-   *
-   * @param {BaseContext} context
-   *        The context through which to send the message.
-   * @param {string} messageName
-   *        The name of the message to send.
-   * @param {object} [data = {}]
-   *        Arbitrary, structured-clonable message data to send.
-   * @param {object} [options]
-   *        An options object, as accepted by BaseContext.sendMessage.
-   *
-   * @returns {Promise}
-   */
-  sendMessage(context, messageName, data = {}, options = null) {
-    let { browser, innerWindowID } = this;
-
-    options = Object.assign({}, options);
-    options.recipient = Object.assign({ innerWindowID }, options.recipient);
-
-    return context.sendMessage(
-      browser.messageManager,
-      messageName,
-      data,
-      options
-    );
-  }
-
-  /**
    * Capture the visible area of this tab, and return the result as a data: URI.
    *
    * @param {BaseContext} context
@@ -132,8 +100,20 @@ class TabBase {
     let scale = options?.scale || win.devicePixelRatio;
     let rect = options?.rect && win.DOMRect.fromRect(options.rect);
 
+    // We only allow mozilla addons to use the resetScrollPosition option,
+    // since it's not standardized.
+    let resetScrollPosition = false;
+    if (!context.extension.restrictSchemes) {
+      resetScrollPosition = !!options?.resetScrollPosition;
+    }
+
     let wgp = this.browsingContext.currentWindowGlobal;
-    let image = await wgp.drawSnapshot(rect, scale * zoom, "white");
+    let image = await wgp.drawSnapshot(
+      rect,
+      scale * zoom,
+      "white",
+      resetScrollPosition
+    );
 
     let doc = Services.appShell.hiddenDOMWindow.document;
     let canvas = doc.createElement("canvas");
@@ -575,7 +555,6 @@ class TabBase {
     const PROPS = [
       "active",
       "audible",
-      "cookieStoreId",
       "discarded",
       "hidden",
       "highlighted",
@@ -611,6 +590,13 @@ class TabBase {
         return false;
       }
     }
+
+    if (queryInfo.cookieStoreId) {
+      if (!queryInfo.cookieStoreId.includes(this.cookieStoreId)) {
+        return false;
+      }
+    }
+
     if (queryInfo.url || queryInfo.title) {
       if (!this.hasTabPermission) {
         return false;
@@ -690,29 +676,47 @@ class TabBase {
 
   /**
    * Query each content process hosting subframes of the tab, return results.
+   *
    * @param {string} message
    * @param {object} options
-   * @param {number} options.frameID
-   * @param {boolean} options.allFrames
+   *        These options are also sent to the message handler in the
+   *        `ExtensionContentChild`.
+   * @param {number[]} options.frameIds
+   *        When omitted, all frames will be queried.
+   * @param {boolean} options.returnResultsWithFrameIds
    * @returns {Promise[]}
    */
   async queryContent(message, options) {
-    let { allFrames, frameID } = options;
+    let { frameIds } = options;
 
     /** @type {Map<nsIDOMProcessParent, innerWindowId[]>} */
     let byProcess = new DefaultMap(() => []);
+    // We use this set to know which frame IDs are potentially invalid (as in
+    // not found when visiting the tab's BC tree below) when frameIds is a
+    // non-empty list of frame IDs.
+    let frameIdsSet = new Set(frameIds);
 
     // Recursively walk the tab's BC tree, find all frames, group by process.
     function visit(bc) {
       let win = bc.currentWindowGlobal;
-      if (win?.domProcess && (!frameID || frameID === bc.id)) {
+      let frameId = bc.parent ? bc.id : 0;
+
+      if (win?.domProcess && (!frameIds || frameIdsSet.has(frameId))) {
         byProcess.get(win.domProcess).push(win.innerWindowId);
+        frameIdsSet.delete(frameId);
       }
-      if (allFrames || (frameID && !byProcess.size)) {
+
+      if (!frameIds || frameIdsSet.size > 0) {
         bc.children.forEach(visit);
       }
     }
     visit(this.browsingContext);
+
+    if (frameIdsSet.size > 0) {
+      throw new ExtensionError(
+        `Invalid frame IDs: [${Array.from(frameIdsSet).join(", ")}].`
+      );
+    }
 
     let promises = Array.from(byProcess.entries(), ([proc, windows]) =>
       proc.getActor("ExtensionContent").sendQuery(message, { windows, options })
@@ -729,15 +733,15 @@ class TabBase {
     results = results.flat();
 
     if (!results.length) {
-      if (frameID) {
-        throw new ExtensionError("Frame not found, or missing host permission");
+      let errorMessage = "Missing host permission for the tab";
+      if (!frameIds || frameIds.length > 1 || frameIds[0] !== 0) {
+        errorMessage += " or frames";
       }
 
-      let frames = allFrames ? ", and any iframes" : "";
-      throw new ExtensionError(`Missing host permission for the tab${frames}`);
+      throw new ExtensionError(errorMessage);
     }
 
-    if (!allFrames && results.length > 1) {
+    if (frameIds && frameIds.length === 1 && results.length > 1) {
       throw new ExtensionError("Internal error: multiple windows matched");
     }
 
@@ -801,12 +805,15 @@ class TabBase {
       }
       options[`${kind}Paths`].push(url);
     }
+
     if (details.allFrames) {
-      options.allFrames = details.allFrames;
+      options.allFrames = true;
+    } else if (details.frameId !== null) {
+      options.frameIds = [details.frameId];
+    } else if (!details.allFrames) {
+      options.frameIds = [0];
     }
-    if (details.frameId !== null) {
-      options.frameID = details.frameId;
-    }
+
     if (details.matchAboutBlank) {
       options.matchAboutBlank = details.matchAboutBlank;
     }
@@ -822,6 +829,10 @@ class TabBase {
     }
 
     options.wantReturnValue = true;
+
+    // The scripting API (defined in `parent/ext-scripting.js`) has its own
+    // `execute()` function that calls `queryContent()` as well. Make sure to
+    // keep both in sync when relevant.
     return this.queryContent("Execute", options);
   }
 
@@ -2034,6 +2045,10 @@ class TabManagerBase {
         queryInfo.url = parseMatchPatterns([].concat(queryInfo.url), {
           restrictSchemes: false,
         });
+      }
+
+      if (queryInfo.cookieStoreId !== null) {
+        queryInfo.cookieStoreId = [].concat(queryInfo.cookieStoreId);
       }
 
       if (queryInfo.title !== null) {

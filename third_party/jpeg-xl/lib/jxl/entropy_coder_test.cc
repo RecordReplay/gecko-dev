@@ -7,9 +7,8 @@
 
 #include <stdint.h>
 
-#include <random>
-
 #include "gtest/gtest.h"
+#include "lib/jxl/base/random.h"
 #include "lib/jxl/common.h"
 #include "lib/jxl/dec_ans.h"
 
@@ -19,7 +18,7 @@ namespace {
 TEST(EntropyCoderTest, PackUnpack) {
   for (int32_t i = -31; i < 32; ++i) {
     uint32_t packed = PackSigned(i);
-    EXPECT_LT(packed, 63);
+    EXPECT_LT(packed, 63u);
     int32_t unpacked = UnpackSigned(packed);
     EXPECT_EQ(i, unpacked);
   }
@@ -35,15 +34,14 @@ struct DummyBitReader {
 };
 
 void HybridUintRoundtrip(HybridUintConfig config, size_t limit = 1 << 24) {
-  std::mt19937 rng(0);
-  std::uniform_int_distribution<uint32_t> dist(0, limit);
+  Rng rng(0);
   constexpr size_t kNumIntegers = 1 << 20;
   std::vector<uint32_t> integers(kNumIntegers);
   std::vector<uint32_t> token(kNumIntegers);
   std::vector<uint32_t> nbits(kNumIntegers);
   std::vector<uint32_t> bits(kNumIntegers);
   for (size_t i = 0; i < kNumIntegers; i++) {
-    integers[i] = dist(rng);
+    integers[i] = rng.UniformU(0, limit + 1);
     config.Encode(integers[i], &token[i], &nbits[i], &bits[i]);
   }
   for (size_t i = 0; i < kNumIntegers; i++) {

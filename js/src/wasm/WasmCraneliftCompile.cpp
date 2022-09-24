@@ -47,21 +47,21 @@ static inline SymbolicAddress ToSymbolicAddress(BD_SymbolicAddress bd) {
     case BD_SymbolicAddress::RefFunc:
       return SymbolicAddress::RefFunc;
     case BD_SymbolicAddress::MemoryGrow:
-      return SymbolicAddress::MemoryGrow;
+      return SymbolicAddress::MemoryGrowM32;
     case BD_SymbolicAddress::MemorySize:
-      return SymbolicAddress::MemorySize;
+      return SymbolicAddress::MemorySizeM32;
     case BD_SymbolicAddress::MemoryCopy:
-      return SymbolicAddress::MemCopy32;
+      return SymbolicAddress::MemCopyM32;
     case BD_SymbolicAddress::MemoryCopyShared:
-      return SymbolicAddress::MemCopyShared32;
+      return SymbolicAddress::MemCopySharedM32;
     case BD_SymbolicAddress::DataDrop:
       return SymbolicAddress::DataDrop;
     case BD_SymbolicAddress::MemoryFill:
-      return SymbolicAddress::MemFill32;
+      return SymbolicAddress::MemFillM32;
     case BD_SymbolicAddress::MemoryFillShared:
-      return SymbolicAddress::MemFillShared32;
+      return SymbolicAddress::MemFillSharedM32;
     case BD_SymbolicAddress::MemoryInit:
-      return SymbolicAddress::MemInit32;
+      return SymbolicAddress::MemInitM32;
     case BD_SymbolicAddress::TableCopy:
       return SymbolicAddress::TableCopy;
     case BD_SymbolicAddress::ElemDrop:
@@ -99,11 +99,11 @@ static inline SymbolicAddress ToSymbolicAddress(BD_SymbolicAddress bd) {
     case BD_SymbolicAddress::PostBarrier:
       return SymbolicAddress::PostBarrierFiltering;
     case BD_SymbolicAddress::WaitI32:
-      return SymbolicAddress::WaitI32;
+      return SymbolicAddress::WaitI32M32;
     case BD_SymbolicAddress::WaitI64:
-      return SymbolicAddress::WaitI64;
+      return SymbolicAddress::WaitI64M32;
     case BD_SymbolicAddress::Wake:
-      return SymbolicAddress::Wake;
+      return SymbolicAddress::WakeM32;
     case BD_SymbolicAddress::Limit:
       break;
   }
@@ -128,9 +128,9 @@ static bool GenerateCraneliftCode(
     CodeOffset trapInsnOffset = pair.first;
     size_t nBytesReservedBeforeTrap = pair.second;
 
-    MachineState trapExitLayout;
+    RegisterOffsets trapExitLayout;
     size_t trapExitLayoutNumWords;
-    GenerateTrapExitMachineState(&trapExitLayout, &trapExitLayoutNumWords);
+    GenerateTrapExitRegisterOffsets(&trapExitLayout, &trapExitLayoutNumWords);
 
     size_t nInboundStackArgBytes = StackArgAreaSizeUnaligned(funcType.args());
 
@@ -249,7 +249,7 @@ static bool GenerateCraneliftCode(
         break;
       }
       case CraneliftMetadataEntry::Which::IndirectCall: {
-        CallSiteDesc desc(bytecodeOffset, CallSiteDesc::Dynamic);
+        CallSiteDesc desc(bytecodeOffset, CallSiteDesc::Indirect);
         masm.append(desc, CodeOffset(offset.value()));
         break;
       }
@@ -299,13 +299,12 @@ class CraneliftContext {
       // In the huge memory configuration, we always reserve the full 4 GB
       // index space for a heap.
       staticEnv_.static_memory_bound = HugeIndexRange;
-      staticEnv_.memory_guard_size = HugeOffsetGuardLimit;
-    } else {
-      staticEnv_.memory_guard_size = OffsetGuardLimit;
     }
 #endif
+    staticEnv_.memory_guard_size =
+        GetMaxOffsetGuardLimit(moduleEnv.hugeMemoryEnabled());
     // Otherwise, heap bounds are stored in the `boundsCheckLimit` field
-    // of TlsData.
+    // of Instance.
   }
   bool init() {
     compiler_ = cranelift_compiler_create(&staticEnv_, &moduleEnv_);
@@ -326,7 +325,7 @@ CraneliftFuncCompileInput::CraneliftFuncCompileInput(
       index(func.index),
       offset_in_module(func.lineOrBytecode) {}
 
-static_assert(offsetof(TlsData, boundsCheckLimit) == sizeof(void*),
+static_assert(Instance::offsetOfBoundsCheckLimit() == sizeof(void*),
               "fix make_heap() in wasm2clif.rs");
 
 CraneliftStaticEnvironment::CraneliftStaticEnvironment()
@@ -362,37 +361,40 @@ CraneliftStaticEnvironment::CraneliftStaticEnvironment()
       v128_enabled(false),
       static_memory_bound(0),
       memory_guard_size(0),
-      memory_base_tls_offset(offsetof(TlsData, memoryBase)),
-      instance_tls_offset(offsetof(TlsData, instance)),
-      interrupt_tls_offset(offsetof(TlsData, interrupt)),
-      cx_tls_offset(offsetof(TlsData, cx)),
+      memory_base_instance_offset(Instance::offsetOfMemoryBase()),
+      interrupt_instance_offset(Instance::offsetOfInterrupt()),
+      cx_instance_offset(Instance::offsetOfCx()),
       realm_cx_offset(JSContext::offsetOfRealm()),
-      realm_tls_offset(offsetof(TlsData, realm)),
-      realm_func_import_tls_offset(offsetof(FuncImportTls, realm)),
+      realm_instance_offset(Instance::offsetOfRealm()),
+      realm_func_import_instance_offset(
+          offsetof(FuncImportInstanceData, realm)),
       size_of_wasm_frame(sizeof(wasm::Frame)) {
 }
 
 // Most of BaldrMonkey's data structures refer to a "global offset" which is a
-// byte offset into the `globalArea` field of the  `TlsData` struct.
+// byte offset into the `globalArea` field of the  `Instance` struct.
 //
 // Cranelift represents global variables with their byte offset from the "VM
-// context pointer" which is the `WasmTlsReg` pointing to the `TlsData`
+// context pointer" which is the `InstanceReg` pointing to the `Instance`
 // struct.
 //
 // This function translates between the two.
 
-static size_t globalToTlsOffset(size_t globalOffset) {
-  return offsetof(wasm::TlsData, globalArea) + globalOffset;
+static size_t globalToInstanceOffset(size_t globalOffset) {
+  return wasm::Instance::offsetOfGlobalArea() + globalOffset;
 }
 
 CraneliftModuleEnvironment::CraneliftModuleEnvironment(
     const ModuleEnvironment& env)
     : env(&env) {
-  // env.minMemoryLength is in bytes.  Convert it to wasm pages.
-  static_assert(sizeof(env.minMemoryLength) == 8);
-  MOZ_RELEASE_ASSERT(env.minMemoryLength <= (((uint64_t)1) << 32));
-  MOZ_RELEASE_ASSERT((env.minMemoryLength & wasm::PageMask) == 0);
-  min_memory_length = (uint32_t)(env.minMemoryLength >> wasm::PageBits);
+  if (env.memory.isSome()) {
+    // We use |auto| here rather than |uint64_t| so that the static_assert will
+    // fail if |pages| is changed to some other size.
+    auto pages = env.memory->initialPages().value();
+    static_assert(sizeof(pages) == 8);
+    MOZ_RELEASE_ASSERT(pages <= MaxMemory32LimitField);
+    min_memory_length = uint32_t(pages);
+  }
 }
 
 TypeCode env_unpack(BD_ValType valType) {
@@ -414,17 +416,22 @@ TypeCode env_elem_typecode(const CraneliftModuleEnvironment* env,
 // Returns a number of pages in the range [0..65536], or UINT32_MAX to signal
 // that no maximum has been set.
 uint32_t env_max_memory(const CraneliftModuleEnvironment* env) {
-  // env.maxMemoryLength is in bytes.  Convert it to wasm pages.
-  if (env->env->maxMemoryLength.isSome()) {
-    // We use |auto| here rather than |uint64_t| so that the static_assert will
-    // fail if |maxMemoryLength| is changed to some other size.
-    auto inBytes = *(env->env->maxMemoryLength);
-    static_assert(sizeof(inBytes) == 8);
-    MOZ_RELEASE_ASSERT(inBytes <= (((uint64_t)1) << 32));
-    MOZ_RELEASE_ASSERT((inBytes & wasm::PageMask) == 0);
-    return (uint32_t)(inBytes >> wasm::PageBits);
+  const ModuleEnvironment& moduleEnv = *env->env;
+  if (moduleEnv.memory.isNothing()) {
+    return UINT32_MAX;
   }
-  return UINT32_MAX;
+
+  Maybe<Pages> maxPages = moduleEnv.memory->maximumPages();
+  if (maxPages.isNothing()) {
+    return UINT32_MAX;
+  }
+
+  // We use |auto| here rather than |uint64_t| so that the static_assert will
+  // fail if |maxPages| is changed to some other size.
+  auto pages = maxPages->value();
+  static_assert(sizeof(pages) == 8);
+  MOZ_RELEASE_ASSERT(pages <= MaxMemory32LimitField);
+  return pages;
 }
 
 bool env_uses_shared_memory(const CraneliftModuleEnvironment* env) {
@@ -436,11 +443,11 @@ bool env_has_memory(const CraneliftModuleEnvironment* env) {
 }
 
 size_t env_num_types(const CraneliftModuleEnvironment* env) {
-  return env->env->types.length();
+  return env->env->types->length();
 }
 const FuncType* env_type(const CraneliftModuleEnvironment* env,
                          size_t typeIndex) {
-  return &env->env->types[typeIndex].funcType();
+  return &(*env->env->types)[typeIndex].funcType();
 }
 
 size_t env_num_funcs(const CraneliftModuleEnvironment* env) {
@@ -463,9 +470,10 @@ bool env_is_func_valid_for_ref(const CraneliftModuleEnvironment* env,
   return env->env->funcs[index].canRefFunc();
 }
 
-size_t env_func_import_tls_offset(const CraneliftModuleEnvironment* env,
-                                  size_t funcIndex) {
-  return globalToTlsOffset(env->env->funcImportGlobalDataOffsets[funcIndex]);
+size_t env_func_import_instance_offset(const CraneliftModuleEnvironment* env,
+                                       size_t funcIndex) {
+  return globalToInstanceOffset(
+      env->env->funcImportGlobalDataOffsets[funcIndex]);
 }
 
 bool env_func_is_import(const CraneliftModuleEnvironment* env,
@@ -475,7 +483,7 @@ bool env_func_is_import(const CraneliftModuleEnvironment* env,
 
 const FuncType* env_signature(const CraneliftModuleEnvironment* env,
                               size_t funcTypeIndex) {
-  return &env->env->types[funcTypeIndex].funcType();
+  return &(*env->env->types)[funcTypeIndex].funcType();
 }
 
 const TypeIdDesc* env_signature_id(const CraneliftModuleEnvironment* env,
@@ -514,6 +522,8 @@ bool wasm::CraneliftCompileFunctions(const ModuleEnvironment& moduleEnv,
   TempAllocator alloc(&lifo);
   JitContext jitContext(&alloc);
   WasmMacroAssembler masm(alloc, moduleEnv);
+  AutoCreatedBy acb(masm, "wasm::CraneliftCompileFunctions");
+
   MOZ_ASSERT(IsCompilingWasm());
 
   // Swap in already-allocated empty vectors to avoid malloc/free.
@@ -642,13 +652,13 @@ void wasm::CraneliftFreeReusableData(void* ptr) {
 // Callbacks from Rust to C++.
 
 // Offsets assumed by the `make_heap()` function.
-static_assert(offsetof(wasm::TlsData, memoryBase) == 0, "memory base moved");
+static_assert(wasm::Instance::offsetOfMemoryBase() == 0, "memory base moved");
 
 // The translate_call() function in wasm2clif.rs depends on these offsets.
-static_assert(offsetof(wasm::FuncImportTls, code) == 0,
+static_assert(offsetof(wasm::FuncImportInstanceData, code) == 0,
               "Import code field moved");
-static_assert(offsetof(wasm::FuncImportTls, tls) == sizeof(void*),
-              "Import tls moved");
+static_assert(offsetof(wasm::FuncImportInstanceData, instance) == sizeof(void*),
+              "Import instance data moved");
 
 // Global
 
@@ -695,14 +705,14 @@ TypeCode global_type(const GlobalDesc* global) {
   return global->type().packed().typeCode();
 }
 
-size_t global_tlsOffset(const GlobalDesc* global) {
-  return globalToTlsOffset(global->offset());
+size_t global_instanceOffset(const GlobalDesc* global) {
+  return globalToInstanceOffset(global->offset());
 }
 
 // TableDesc
 
-size_t table_tlsOffset(const TableDesc* table) {
-  return globalToTlsOffset(table->globalDataOffset);
+size_t table_instanceOffset(const TableDesc* table) {
+  return globalToInstanceOffset(table->globalDataOffset);
 }
 
 uint32_t table_initialLimit(const TableDesc* table) {
@@ -743,8 +753,8 @@ size_t funcType_idImmediate(const TypeIdDesc* funcTypeId) {
   return funcTypeId->immediate();
 }
 
-size_t funcType_idTlsOffset(const TypeIdDesc* funcTypeId) {
-  return globalToTlsOffset(funcTypeId->globalDataOffset());
+size_t funcType_idInstanceOffset(const TypeIdDesc* funcTypeId) {
+  return globalToInstanceOffset(funcTypeId->globalDataOffset());
 }
 
 void stackmaps_add(BD_Stackmaps* sink, const uint32_t* bitMap,

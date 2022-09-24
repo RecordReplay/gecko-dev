@@ -55,9 +55,6 @@ class DrawTargetOffset : public DrawTarget {
   // We'll pestimistically return true here
   virtual bool IsTiledDrawTarget() const override { return true; }
 
-  virtual bool IsCaptureDT() const override {
-    return mDrawTarget->IsCaptureDT();
-  }
   virtual DrawTargetType GetType() const override {
     return mDrawTarget->GetType();
   }
@@ -82,8 +79,7 @@ class DrawTargetOffset : public DrawTarget {
                           const Point& aDestPoint,
                           const DrawOptions& aOptions = DrawOptions()) override;
   virtual void DrawSurfaceWithShadow(
-      SourceSurface* aSurface, const Point& aDest, const DeviceColor& aColor,
-      const Point& aOffset, Float aSigma,
+      SourceSurface* aSurface, const Point& aDest, const ShadowOptions& aShadow,
       CompositionOp aOperator) override { /* Not implemented */
     MOZ_CRASH("GFX: DrawSurfaceWithShadow");
   }

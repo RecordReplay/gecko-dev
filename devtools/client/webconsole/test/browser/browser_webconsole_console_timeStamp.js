@@ -5,7 +5,7 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html,<meta charset=utf8>";
+const TEST_URI = "data:text/html,<!DOCTYPE html><meta charset=utf8>";
 
 add_task(async function() {
   // We open the console and an empty tab, as we only want to evaluate something.
@@ -13,8 +13,8 @@ add_task(async function() {
   // We execute `console.timeStamp('test')` from the console input.
   execute(hud, "console.timeStamp('test')");
   info(`Checking size`);
-  await waitFor(() => findMessages(hud, "").length == 2);
-  const [first, second] = findMessages(hud, "").map(message =>
+  await waitFor(() => findAllMessages(hud).length == 2);
+  const [first, second] = findAllMessages(hud).map(message =>
     message.textContent.trim()
   );
   info(`Checking first message`);

@@ -37,23 +37,19 @@
 #include "mozilla/UniquePtr.h"
 #include "mozilla/Unused.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/dom/FetchService.h"
 #include "mozilla/dom/InternalHeaders.h"
 #include "mozilla/dom/InternalResponse.h"
 #include "mozilla/dom/PRemoteWorkerControllerChild.h"
 #include "mozilla/dom/ServiceWorkerRegistrationInfo.h"
 #include "mozilla/net/NeckoChannelParams.h"
 
-namespace mozilla {
-
-using ipc::AutoIPCStream;
-using ipc::BackgroundChild;
-using ipc::PBackgroundChild;
-
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
-bool CSPPermitsResponse(nsILoadInfo* aLoadInfo, InternalResponse* aResponse,
+bool CSPPermitsResponse(nsILoadInfo* aLoadInfo,
+                        SafeRefPtr<InternalResponse> aResponse,
                         const nsACString& aWorkerScriptSpec) {
   AssertIsOnMainThread();
   MOZ_ASSERT(aLoadInfo);
@@ -185,9 +181,10 @@ NS_IMPL_ISUPPORTS(SynthesizeResponseWatcher, nsIInterceptedBodyCallback)
 
 /* static */ RefPtr<GenericPromise> FetchEventOpChild::SendFetchEvent(
     PRemoteWorkerControllerChild* aManager,
-    ServiceWorkerFetchEventOpArgs&& aArgs,
+    ParentToParentServiceWorkerFetchEventOpArgs&& aArgs,
     nsCOMPtr<nsIInterceptedChannel> aInterceptedChannel,
     RefPtr<ServiceWorkerRegistrationInfo> aRegistration,
+    RefPtr<FetchServicePromises>&& aPreloadResponseReadyPromises,
     RefPtr<KeepAliveToken>&& aKeepAliveToken) {
   AssertIsOnMainThread();
   MOZ_ASSERT(aManager);
@@ -196,8 +193,10 @@ NS_IMPL_ISUPPORTS(SynthesizeResponseWatcher, nsIInterceptedBodyCallback)
 
   FetchEventOpChild* actor = new FetchEventOpChild(
       std::move(aArgs), std::move(aInterceptedChannel),
-      std::move(aRegistration), std::move(aKeepAliveToken));
+      std::move(aRegistration), std::move(aPreloadResponseReadyPromises),
+      std::move(aKeepAliveToken));
 
+  actor->mWasSent = true;
   Unused << aManager->SendPFetchEventOpConstructor(actor, actor->mArgs);
 
   return actor->mPromiseHolder.Ensure(__func__);
@@ -210,14 +209,68 @@ FetchEventOpChild::~FetchEventOpChild() {
 }
 
 FetchEventOpChild::FetchEventOpChild(
-    ServiceWorkerFetchEventOpArgs&& aArgs,
+    ParentToParentServiceWorkerFetchEventOpArgs&& aArgs,
     nsCOMPtr<nsIInterceptedChannel>&& aInterceptedChannel,
     RefPtr<ServiceWorkerRegistrationInfo>&& aRegistration,
+    RefPtr<FetchServicePromises>&& aPreloadResponseReadyPromises,
     RefPtr<KeepAliveToken>&& aKeepAliveToken)
     : mArgs(std::move(aArgs)),
       mInterceptedChannel(std::move(aInterceptedChannel)),
       mRegistration(std::move(aRegistration)),
-      mKeepAliveToken(std::move(aKeepAliveToken)) {}
+      mKeepAliveToken(std::move(aKeepAliveToken)),
+      mPreloadResponseReadyPromises(std::move(aPreloadResponseReadyPromises)) {
+  if (mPreloadResponseReadyPromises) {
+    // This promise should be configured to use synchronous dispatch, so if it's
+    // already resolved when we run this code then the callback will be called
+    // synchronously and pass the preload response with the constructor message.
+    //
+    // Note that it's fine to capture the this pointer in the callbacks because
+    // we disconnect the request in Recv__delete__().
+    mPreloadResponseReadyPromises->GetResponseAvailablePromise()
+        ->Then(
+            GetCurrentSerialEventTarget(), __func__,
+            [this](FetchServiceResponse&& aResponse) {
+              if (!mWasSent) {
+                // The actor wasn't sent yet, we can still send the preload
+                // response with it.
+                mArgs.preloadResponse() =
+                    Some(aResponse->ToParentToParentInternalResponse());
+              } else {
+                // It's too late to send the preload response with the actor, we
+                // have to send it in a separate message.
+                SendPreloadResponse(
+                    aResponse->ToParentToParentInternalResponse());
+              }
+              mPreloadResponseAvailablePromiseRequestHolder.Complete();
+            },
+            [this](const CopyableErrorResult&) {
+              mPreloadResponseAvailablePromiseRequestHolder.Complete();
+            })
+        ->Track(mPreloadResponseAvailablePromiseRequestHolder);
+
+    mPreloadResponseReadyPromises->GetResponseEndPromise()
+        ->Then(
+            GetCurrentSerialEventTarget(), __func__,
+            [this](ResponseEndArgs&& aResponse) {
+              if (!mWasSent) {
+                // The actor wasn't sent yet, we can still send the preload
+                // response end args with it.
+                mArgs.preloadResponseEndArgs() = Some(std::move(aResponse));
+              } else {
+                // It's too late to send the preload response end with the
+                // actor, we have to send it in a separate message.
+                SendPreloadResponseEnd(aResponse);
+              }
+              mPreloadResponseReadyPromises = nullptr;
+              mPreloadResponseEndPromiseRequestHolder.Complete();
+            },
+            [this](const CopyableErrorResult&) {
+              mPreloadResponseReadyPromises = nullptr;
+              mPreloadResponseEndPromiseRequestHolder.Complete();
+            })
+        ->Track(mPreloadResponseEndPromiseRequestHolder);
+  }
+}
 
 mozilla::ipc::IPCResult FetchEventOpChild::RecvAsyncLog(
     const nsCString& aScriptSpec, const uint32_t& aLineNumber,
@@ -233,22 +286,62 @@ mozilla::ipc::IPCResult FetchEventOpChild::RecvAsyncLog(
 }
 
 mozilla::ipc::IPCResult FetchEventOpChild::RecvRespondWith(
-    IPCFetchEventRespondWithResult&& aResult) {
+    ParentToParentFetchEventRespondWithResult&& aResult) {
   AssertIsOnMainThread();
 
   switch (aResult.type()) {
-    case IPCFetchEventRespondWithResult::TIPCSynthesizeResponseArgs:
-      SynthesizeResponse(std::move(aResult.get_IPCSynthesizeResponseArgs()));
+    case ParentToParentFetchEventRespondWithResult::
+        TParentToParentSynthesizeResponseArgs:
+      mInterceptedChannel->SetFetchHandlerStart(
+          aResult.get_ParentToParentSynthesizeResponseArgs()
+              .timeStamps()
+              .fetchHandlerStart());
+      mInterceptedChannel->SetFetchHandlerFinish(
+          aResult.get_ParentToParentSynthesizeResponseArgs()
+              .timeStamps()
+              .fetchHandlerFinish());
+      SynthesizeResponse(
+          std::move(aResult.get_ParentToParentSynthesizeResponseArgs()));
       break;
-    case IPCFetchEventRespondWithResult::TResetInterceptionArgs:
+    case ParentToParentFetchEventRespondWithResult::TResetInterceptionArgs:
+      mInterceptedChannel->SetFetchHandlerStart(
+          aResult.get_ResetInterceptionArgs().timeStamps().fetchHandlerStart());
+      mInterceptedChannel->SetFetchHandlerFinish(
+          aResult.get_ResetInterceptionArgs()
+              .timeStamps()
+              .fetchHandlerFinish());
       ResetInterception(false);
       break;
-    case IPCFetchEventRespondWithResult::TCancelInterceptionArgs:
+    case ParentToParentFetchEventRespondWithResult::TCancelInterceptionArgs:
+      mInterceptedChannel->SetFetchHandlerStart(
+          aResult.get_CancelInterceptionArgs()
+              .timeStamps()
+              .fetchHandlerStart());
+      mInterceptedChannel->SetFetchHandlerFinish(
+          aResult.get_CancelInterceptionArgs()
+              .timeStamps()
+              .fetchHandlerFinish());
       CancelInterception(aResult.get_CancelInterceptionArgs().status());
       break;
     default:
       MOZ_CRASH("Unknown IPCFetchEventRespondWithResult type!");
       break;
+  }
+
+  // Preload response is too late to be ready after we receive RespondWith, so
+  // disconnect the promise.
+  // Notice that if mPreloadResponseAvailablePromiseRequestHolder does not
+  // exist. We don't disconnect mPreloadResponseEndPromiseRequestHolder and
+  // cancel the navigation preload fetch here. Since ServiceWorker script could
+  // call FetchEvent.respondWith(FetchEvent.preloadResponse), then we get here
+  // but the navigation preload is not yet finished.
+  if (mPreloadResponseAvailablePromiseRequestHolder.Exists()) {
+    mPreloadResponseAvailablePromiseRequestHolder.Disconnect();
+    mPreloadResponseEndPromiseRequestHolder.Disconnect();
+    if (mPreloadResponseReadyPromises) {
+      RefPtr<FetchService> fetchService = FetchService::GetInstance();
+      fetchService->CancelFetch(std::move(mPreloadResponseReadyPromises));
+    }
   }
 
   return IPC_OK();
@@ -269,6 +362,12 @@ mozilla::ipc::IPCResult FetchEventOpChild::Recv__delete__(
   }
 
   mPromiseHolder.ResolveIfExists(true, __func__);
+  mPreloadResponseAvailablePromiseRequestHolder.DisconnectIfExists();
+  mPreloadResponseEndPromiseRequestHolder.DisconnectIfExists();
+  if (mPreloadResponseReadyPromises) {
+    RefPtr<FetchService> fetchService = FetchService::GetInstance();
+    fetchService->CancelFetch(std::move(mPreloadResponseReadyPromises));
+  }
 
   /**
    * This corresponds to the "Fire Functional Event" algorithm's step 9:
@@ -297,7 +396,7 @@ void FetchEventOpChild::ActorDestroy(ActorDestroyReason) {
 }
 
 nsresult FetchEventOpChild::StartSynthesizedResponse(
-    IPCSynthesizeResponseArgs&& aArgs) {
+    ParentToParentSynthesizeResponseArgs&& aArgs) {
   AssertIsOnMainThread();
   MOZ_ASSERT(mInterceptedChannel);
   MOZ_ASSERT(!mInterceptedChannelHandled);
@@ -308,7 +407,7 @@ nsresult FetchEventOpChild::StartSynthesizedResponse(
    * there isn't a prefect-forwarding or rvalue-ref-parameter overload of
    * `InternalResponse::FromIPC().`
    */
-  RefPtr<InternalResponse> response =
+  SafeRefPtr<InternalResponse> response =
       InternalResponse::FromIPC(aArgs.internalResponse());
   if (NS_WARN_IF(!response)) {
     return NS_ERROR_FAILURE;
@@ -322,7 +421,8 @@ nsresult FetchEventOpChild::StartSynthesizedResponse(
   }
 
   nsCOMPtr<nsILoadInfo> loadInfo = underlyingChannel->LoadInfo();
-  if (!CSPPermitsResponse(loadInfo, response, mArgs.workerScriptSpec())) {
+  if (!CSPPermitsResponse(loadInfo, response.clonePtr(),
+                          mArgs.common().workerScriptSpec())) {
     return NS_ERROR_CONTENT_BLOCKED;
   }
 
@@ -372,7 +472,7 @@ nsresult FetchEventOpChild::StartSynthesizedResponse(
   // Propagate the URL to the content if the request mode is not "navigate".
   // Note that, we only reflect the final URL if the response.redirected is
   // false. We propagate all the URLs if the response.redirected is true.
-  const IPCInternalRequest& request = mArgs.internalRequest();
+  const IPCInternalRequest& request = mArgs.common().internalRequest();
   nsAutoCString responseURL;
   if (request.requestMode() != RequestMode::Navigate) {
     responseURL = response->GetUnfilteredURL();
@@ -405,8 +505,9 @@ nsresult FetchEventOpChild::StartSynthesizedResponse(
   }
 
   RefPtr<SynthesizeResponseWatcher> watcher = new SynthesizeResponseWatcher(
-      interceptedChannel, registration, mArgs.isNonSubresourceRequest(),
-      std::move(aArgs.closure()), NS_ConvertUTF8toUTF16(responseURL));
+      interceptedChannel, registration,
+      mArgs.common().isNonSubresourceRequest(), std::move(aArgs.closure()),
+      NS_ConvertUTF8toUTF16(responseURL));
 
   rv = mInterceptedChannel->StartSynthesizedResponse(
       body, watcher, nullptr /* TODO */, responseURL, response->IsRedirected());
@@ -423,7 +524,8 @@ nsresult FetchEventOpChild::StartSynthesizedResponse(
   return rv;
 }
 
-void FetchEventOpChild::SynthesizeResponse(IPCSynthesizeResponseArgs&& aArgs) {
+void FetchEventOpChild::SynthesizeResponse(
+    ParentToParentSynthesizeResponseArgs&& aArgs) {
   AssertIsOnMainThread();
   MOZ_ASSERT(mInterceptedChannel);
   MOZ_ASSERT(!mInterceptedChannelHandled);
@@ -469,7 +571,7 @@ void FetchEventOpChild::CancelInterception(nsresult aStatus) {
   // worker, which should be the case in non-shutdown/content-process-crash
   // situations).
   RefPtr<ServiceWorkerInfo> mActive = mRegistration->GetActive();
-  if (mActive && mArgs.isNonSubresourceRequest()) {
+  if (mActive && mArgs.common().isNonSubresourceRequest()) {
     mActive->ReportNavigationFault();
     // Additional mitigations such as unregistering the registration are handled
     // in ServiceWorkerRegistrationInfo::MaybeScheduleUpdate which will be
@@ -501,12 +603,11 @@ void FetchEventOpChild::MaybeScheduleRegistrationUpdate() const {
   MOZ_ASSERT(mRegistration);
   MOZ_ASSERT(mInterceptedChannelHandled);
 
-  if (mArgs.isNonSubresourceRequest()) {
+  if (mArgs.common().isNonSubresourceRequest()) {
     mRegistration->MaybeScheduleUpdate();
   } else {
     mRegistration->MaybeScheduleTimeCheckAndUpdate();
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

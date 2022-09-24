@@ -43,11 +43,11 @@ StreamLoader::OnStartRequest(nsIRequest* aRequest) {
     int64_t length;
     nsresult rv = channel->GetContentLength(&length);
     if (NS_SUCCEEDED(rv) && length > 0) {
-      if (uint64_t(length) >
-          std::numeric_limits<nsACString::size_type>::max()) {
+      CheckedInt<nsACString::size_type> checkedLength(length);
+      if (!checkedLength.isValid()) {
         return (mStatus = NS_ERROR_OUT_OF_MEMORY);
       }
-      if (!mBytes.SetCapacity(length, fallible)) {
+      if (!mBytes.SetCapacity(checkedLength.value(), fallible)) {
         return (mStatus = NS_ERROR_OUT_OF_MEMORY);
       }
     }
@@ -116,19 +116,8 @@ StreamLoader::OnStopRequest(nsIRequest* aRequest, nsresult aStatus) {
     }
   }  // run destructor for `bytes`
 
-  auto info = nsContentUtils::GetSubresourceCacheValidationInfo(aRequest);
-
-  // data: URIs are safe to cache across documents under any circumstance, so we
-  // special-case them here even though the channel itself doesn't have any
-  // caching policy.
-  //
-  // TODO(emilio): Figure out which other schemes that don't have caching
-  // policies are safe to cache. Blobs should be...
-  if (mSheetLoadData->mURI->SchemeIs("data")) {
-    MOZ_ASSERT(!info.mExpirationTime);
-    MOZ_ASSERT(!info.mMustRevalidate);
-    info.mExpirationTime = Some(0);  // 0 means "doesn't expire".
-  }
+  auto info = nsContentUtils::GetSubresourceCacheValidationInfo(
+      aRequest, mSheetLoadData->mURI);
 
   // For now, we never cache entries that we have to revalidate, or whose
   // channel don't support caching.
@@ -162,9 +151,7 @@ void StreamLoader::HandleBOM() {
   MOZ_ASSERT(mEncodingFromBOM.isNothing());
   MOZ_ASSERT(mBytes.IsEmpty());
 
-  const Encoding* encoding;
-  size_t bomLength;
-  Tie(encoding, bomLength) = Encoding::ForBOM(mBOMBytes);
+  auto [encoding, bomLength] = Encoding::ForBOM(mBOMBytes);
   mEncodingFromBOM.emplace(encoding);  // Null means no BOM.
 
   // BOMs are three bytes at most, but may be fewer. Copy over anything

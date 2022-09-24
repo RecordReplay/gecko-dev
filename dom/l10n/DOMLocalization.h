@@ -14,12 +14,13 @@
 #include "mozilla/dom/L10nMutations.h"
 #include "mozilla/dom/L10nOverlaysBinding.h"
 #include "mozilla/dom/LocalizationBinding.h"
+#include "mozilla/dom/PromiseNativeHandler.h"
+#include "mozilla/intl/L10nRegistry.h"
 
 // XXX Avoid including this here by moving function bodies to the cpp file
 #include "nsINode.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class Element;
 class L10nMutations;
@@ -29,15 +30,14 @@ class DOMLocalization : public intl::Localization {
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(DOMLocalization, Localization)
 
-  static already_AddRefed<DOMLocalization> Create(
-      nsIGlobalObject* aGlobal, const bool aSync,
-      const BundleGenerator& aBundleGenerator);
-
   void Destroy();
 
   static already_AddRefed<DOMLocalization> Constructor(
-      const GlobalObject& aGlobal, const Sequence<nsString>& aResourceIds,
-      const bool aSync, const BundleGenerator& aBundleGenerator,
+      const dom::GlobalObject& aGlobal,
+      const dom::Sequence<dom::OwningUTF8StringOrResourceId>& aResourceIds,
+      bool aIsSync,
+      const dom::Optional<dom::NonNull<intl::L10nRegistry>>& aRegistry,
+      const dom::Optional<dom::Sequence<nsCString>>& aLocales,
       ErrorResult& aRv);
 
   virtual JSObject* WrapObject(JSContext* aCx,
@@ -63,9 +63,9 @@ class DOMLocalization : public intl::Localization {
   already_AddRefed<Promise> TranslateFragment(nsINode& aNode, ErrorResult& aRv);
 
   already_AddRefed<Promise> TranslateElements(
-      const Sequence<OwningNonNull<Element>>& aElements, ErrorResult& aRv);
+      const nsTArray<OwningNonNull<Element>>& aElements, ErrorResult& aRv);
   already_AddRefed<Promise> TranslateElements(
-      const Sequence<OwningNonNull<Element>>& aElements,
+      const nsTArray<OwningNonNull<Element>>& aElements,
       nsXULPrototypeDocument* aProto, ErrorResult& aRv);
 
   already_AddRefed<Promise> TranslateRoots(ErrorResult& aRv);
@@ -111,9 +111,11 @@ class DOMLocalization : public intl::Localization {
     return false;
   }
 
+  DOMLocalization(nsIGlobalObject* aGlobal, bool aSync);
+  DOMLocalization(nsIGlobalObject* aGlobal, bool aIsSync,
+                  const intl::ffi::LocalizationRc* aRaw);
+
  protected:
-  explicit DOMLocalization(nsIGlobalObject* aGlobal, const bool aSync,
-                           const BundleGenerator& aBundleGenerator);
   virtual ~DOMLocalization();
   void OnChange() override;
   void DisconnectMutations();
@@ -126,7 +128,6 @@ class DOMLocalization : public intl::Localization {
   nsTHashSet<RefPtr<nsINode>> mRoots;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif

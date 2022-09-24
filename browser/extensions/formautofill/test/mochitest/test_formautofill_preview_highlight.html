@@ -17,36 +17,46 @@ Form autofill test: preview and highlight
 
 "use strict";
 
-const MOCK_STORAGE = [{
-  organization: "Sesame Street",
-  "street-address": "123 Sesame Street.",
-  tel: "+13453453456",
-}, {
-  organization: "Mozilla",
-  "street-address": "331 E. Evelyn Avenue",
-}, {
-  organization: "Tel org",
-  tel: "+12223334444",
-}];
-
-async function checkFormFieldsStyle(profile, isPreviewing = true) {
-  const elems = document.querySelectorAll("input, select");
-
-  for (const elem of elems) {
-    const fillableValue = profile && profile[elem.id];
-    const previewValue = isPreviewing && fillableValue || "";
-
-    await checkFieldHighlighted(elem, !!fillableValue);
-    await checkFieldPreview(elem, previewValue);
+const MOCK_STORAGE = [
+  {
+    organization: "Sesame Street",
+    "street-address": "123 Sesame Street.",
+    tel: "+13453453456",
+  },
+  {
+    organization: "Mozilla",
+    "street-address": "331 E. Evelyn Avenue",
+  },
+  {
+    organization: "Tel org",
+    tel: "+12223334444",
+  },
+  {
+    organization: "Random Org",
+    "address-level1": "First Admin Level",
+    tel: "+13453453456",
+  },
+  {
+    organization: "readonly Org",
+    "address-level1": "First Admin Level",
+    tel: "+13453453456",
+    name: "John Doe",
+  },
+  {
+    organization: "test org",
+    "address-level2": "Not a Town",
+    tel: "+13453453456",
+    name: "John Doe",
   }
-}
+];
+
 
 initPopupListener();
 
 add_task(async function setup_storage() {
-  await addAddress(MOCK_STORAGE[0]);
-  await addAddress(MOCK_STORAGE[1]);
-  await addAddress(MOCK_STORAGE[2]);
+  for (const storage of MOCK_STORAGE) {
+    await addAddress(storage);
+  }
 });
 
 add_task(async function check_preview() {
@@ -57,6 +67,7 @@ add_task(async function check_preview() {
   await checkFormFieldsStyle(null);
 
   for (let i = 0; i < MOCK_STORAGE.length; i++) {
+    info(`Checking organization: ${MOCK_STORAGE[i].organization} preview`);
     synthesizeKey("KEY_ArrowDown");
     await notifySelectedIndex(i);
     await checkFormFieldsStyle(MOCK_STORAGE[i]);
@@ -93,6 +104,14 @@ add_task(async function check_filled_highlight() {
     <p><label>streetAddress: <input id="street-address" autocomplete="street-address"></label></p>
     <p><label>tel: <input id="tel" autocomplete="tel"></label></p>
     <p><label>country: <input id="country" autocomplete="country"></label></p>
+    <p><label>address-level1:
+      <select id="address-level1" autocomplete="address-level1">
+        <option>First Admin Level</option>
+        <option>Second Admin Level</option>
+      </select>
+    </label></p>
+    <p><label>full name: <input id="name" autocomplete="name" readonly value="UNCHANGED"></label></p>
+    <p><label>address-level2: <input id="address-level2" autocomplete="address-level2" disabled value="Town"></label></p>
   </form>
 
 </div>

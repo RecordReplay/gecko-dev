@@ -20,7 +20,6 @@
 using namespace mozilla;
 using namespace mozilla::gfx;
 using mozilla::layers::ImageContainer;
-using mozilla::layers::LayerManager;
 
 namespace mozilla {
 namespace image {
@@ -52,7 +51,6 @@ uint32_t DynamicImage::GetAnimationConsumers() { return 0; }
 #endif
 
 nsresult DynamicImage::OnImageDataAvailable(nsIRequest* aRequest,
-                                            nsISupports* aContext,
                                             nsIInputStream* aInStr,
                                             uint64_t aSourceOffset,
                                             uint32_t aCount) {
@@ -60,7 +58,6 @@ nsresult DynamicImage::OnImageDataAvailable(nsIRequest* aRequest,
 }
 
 nsresult DynamicImage::OnImageDataComplete(nsIRequest* aRequest,
-                                           nsISupports* aContext,
                                            nsresult aStatus, bool aLastPart) {
   return NS_OK;
 }
@@ -124,7 +121,7 @@ DynamicImage::GetType(uint16_t* aType) {
 }
 
 NS_IMETHODIMP
-DynamicImage::GetProducerId(uint32_t* aId) {
+DynamicImage::GetProviderId(uint32_t* aId) {
   *aId = 0;
   return NS_OK;
 }
@@ -165,30 +162,18 @@ NS_IMETHODIMP_(bool)
 DynamicImage::WillDrawOpaqueNow() { return false; }
 
 NS_IMETHODIMP_(bool)
-DynamicImage::IsImageContainerAvailable(LayerManager* aManager,
+DynamicImage::IsImageContainerAvailable(WindowRenderer* aRenderer,
                                         uint32_t aFlags) {
   return false;
 }
 
-NS_IMETHODIMP_(already_AddRefed<ImageContainer>)
-DynamicImage::GetImageContainer(LayerManager* aManager, uint32_t aFlags) {
-  return nullptr;
-}
-
-NS_IMETHODIMP_(bool)
-DynamicImage::IsImageContainerAvailableAtSize(LayerManager* aManager,
-                                              const IntSize& aSize,
-                                              uint32_t aFlags) {
-  return false;
-}
-
 NS_IMETHODIMP_(ImgDrawResult)
-DynamicImage::GetImageContainerAtSize(layers::LayerManager* aManager,
-                                      const gfx::IntSize& aSize,
-                                      const Maybe<SVGImageContext>& aSVGContext,
-                                      const Maybe<ImageIntRegion>& aRegion,
-                                      uint32_t aFlags,
-                                      layers::ImageContainer** aContainer) {
+DynamicImage::GetImageProvider(WindowRenderer* aRenderer,
+                               const gfx::IntSize& aSize,
+                               const Maybe<SVGImageContext>& aSVGContext,
+                               const Maybe<ImageIntRegion>& aRegion,
+                               uint32_t aFlags,
+                               WebRenderImageProvider** aProvider) {
   return ImgDrawResult::NOT_SUPPORTED;
 }
 
@@ -233,6 +218,8 @@ bool DynamicImage::StartDecodingWithResult(uint32_t aFlags,
                                            uint32_t aWhichFrame) {
   return true;
 }
+
+bool DynamicImage::HasDecodedPixels() { return true; }
 
 imgIContainer::DecodeResult DynamicImage::RequestDecodeWithResult(
     uint32_t aFlags, uint32_t aWhichFrame) {

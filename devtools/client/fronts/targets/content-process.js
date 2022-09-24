@@ -30,6 +30,7 @@ class ContentProcessTargetFront extends TargetMixin(
     this.targetForm = json;
 
     this.remoteType = json.remoteType;
+    this.isXpcShellTarget = json.isXpcShellTarget;
   }
 
   get name() {
@@ -41,15 +42,6 @@ class ContentProcessTargetFront extends TargetMixin(
       )}`;
     }
     return `(pid ${this.processID}) Content Process`;
-  }
-
-  attach() {
-    // All target actors have a console actor to attach.
-    // All but xpcshell test actors... which is using a ContentProcessTargetActor
-    if (this.targetForm.consoleActor) {
-      return this.attachConsole();
-    }
-    return Promise.resolve();
   }
 
   reconfigure() {

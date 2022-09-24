@@ -10,6 +10,7 @@
 #define mozilla_ColorPreferences_h
 
 #include "nsColor.h"
+#include "mozilla/ColorScheme.h"
 
 namespace mozilla {
 
@@ -19,37 +20,52 @@ class Document;
 
 struct PreferenceSheet {
   struct Prefs {
-    nscolor mLinkColor = NS_RGB(0x00, 0x00, 0xEE);
-    nscolor mActiveLinkColor = NS_RGB(0xEE, 0x00, 0x00);
-    nscolor mVisitedLinkColor = NS_RGB(0x55, 0x1A, 0x8B);
+    struct Colors {
+      nscolor mLink = NS_RGB(0x00, 0x00, 0xEE);
+      nscolor mActiveLink = NS_RGB(0xEE, 0x00, 0x00);
+      nscolor mVisitedLink = NS_RGB(0x55, 0x1A, 0x8B);
 
-    nscolor mDefaultColor = NS_RGB(0, 0, 0);
-    nscolor mDefaultBackgroundColor = NS_RGB(0xFF, 0xFF, 0xFF);
+      nscolor mDefault = NS_RGB(0, 0, 0);
+      nscolor mDefaultBackground = NS_RGB(0xFF, 0xFF, 0xFF);
 
-    nscolor mLinkBackgroundColor = mDefaultBackgroundColor;
+      nscolor mFocusText = mDefault;
+      nscolor mFocusBackground = mDefaultBackground;
+    } mLightColors, mDarkColors;
 
-    nscolor mFocusTextColor = mDefaultColor;
-    nscolor mFocusBackgroundColor = mDefaultBackgroundColor;
+    const Colors& ColorsFor(ColorScheme aScheme) const {
+      return mMustUseLightColorSet || aScheme == ColorScheme::Light
+                 ? mLightColors
+                 : mDarkColors;
+    }
 
     bool mIsChrome = false;
     bool mUseAccessibilityTheme = false;
-
-    bool mUnderlineLinks = true;
-    bool mUseFocusColors = false;
     bool mUseDocumentColors = true;
-    uint8_t mFocusRingWidth = 1;
-    uint8_t mFocusRingStyle = 1;
-    bool mFocusRingOnAnything = false;
+    bool mUsePrefColors = false;
+    bool mUseStandins = false;
+    bool mMustUseLightColorSet = false;
 
-    // Whether the non-native theme should use system colors for widgets.
-    // We only do that if we have a high-contrast theme _and_ we are overriding
-    // the document colors. Otherwise it causes issues when pages only override
-    // some of the system colors, specially in dark themes mode.
-    bool NonNativeThemeShouldUseSystemColors() const {
-      return mUseAccessibilityTheme && !mUseDocumentColors;
-    }
+    // Sometimes we can force a color scheme on a document, or honor the
+    // preferred color-scheme in more cases, depending on whether we're forcing
+    // colors or not.
+    enum class ColorSchemeChoice : uint8_t {
+      // We're not forcing colors, use standard algorithm based on specified
+      // style and meta tags and so on.
+      Standard,
+      // We can honor whatever the preferred color-scheme for the document is
+      // (the preferred color-scheme of the user, since we're forcing colors).
+      UserPreferred,
+      Light,
+      Dark,
+    };
+
+    ColorSchemeChoice mColorSchemeChoice = ColorSchemeChoice::Standard;
+
+    // Whether the non-native theme should use real system colors for widgets.
+    bool NonNativeThemeShouldBeHighContrast() const;
 
     void Load(bool aIsChrome);
+    void LoadColors(bool aIsLight);
   };
 
   static void EnsureInitialized() {
@@ -61,8 +77,10 @@ struct PreferenceSheet {
 
   static void Refresh() {
     sInitialized = false;
-    EnsureInitialized();
+    Initialize();
   }
+
+  static bool AffectedByPref(const nsACString&);
 
   static Prefs& ContentPrefs() {
     MOZ_ASSERT(sInitialized);
@@ -74,15 +92,42 @@ struct PreferenceSheet {
     return sChromePrefs;
   }
 
-  static bool ShouldUseChromePrefs(const dom::Document&);
+  static Prefs& PrintPrefs() {
+    MOZ_ASSERT(sInitialized);
+    return sPrintPrefs;
+  }
+
+  enum class PrefsKind {
+    Chrome,
+    Print,
+    Content,
+  };
+
+  static PrefsKind PrefsKindFor(const dom::Document&);
+
+  static bool ShouldUseChromePrefs(const dom::Document& aDocument) {
+    return PrefsKindFor(aDocument) == PrefsKind::Chrome;
+  }
+
+  static bool MayForceColors() { return !ContentPrefs().mUseDocumentColors; }
+
   static const Prefs& PrefsFor(const dom::Document& aDocument) {
-    return ShouldUseChromePrefs(aDocument) ? ChromePrefs() : ContentPrefs();
+    switch (PrefsKindFor(aDocument)) {
+      case PrefsKind::Chrome:
+        return ChromePrefs();
+      case PrefsKind::Print:
+        return PrintPrefs();
+      case PrefsKind::Content:
+        break;
+    }
+    return ContentPrefs();
   }
 
  private:
   static bool sInitialized;
-  static Prefs sContentPrefs;
   static Prefs sChromePrefs;
+  static Prefs sPrintPrefs;
+  static Prefs sContentPrefs;
 
   static void Initialize();
 };

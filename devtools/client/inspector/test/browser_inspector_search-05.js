@@ -9,7 +9,7 @@ requestLongerTimeout(2);
 
 add_task(async function() {
   const { inspector } = await openInspectorForURL(
-    `${URL_ROOT_ORG}doc_inspector_search-iframes.html`
+    `${URL_ROOT_ORG_SSL}doc_inspector_search-iframes.html`
   );
 
   info("Focus the search box");
@@ -18,10 +18,9 @@ add_task(async function() {
   info("Enter # to search for all ids");
   let processingDone = once(inspector.searchSuggestions, "processing-done");
   EventUtils.synthesizeKey("#", {}, inspector.panelWin);
-  await processingDone;
 
   info("Wait for search query to complete");
-  await inspector.searchSuggestions._lastQuery;
+  await processingDone;
 
   info("Press tab to fill the search input with the first suggestion");
   processingDone = once(inspector.searchSuggestions, "processing-done");
@@ -33,42 +32,39 @@ add_task(async function() {
   EventUtils.synthesizeKey("VK_RETURN", {}, inspector.panelWin);
   await onSelect;
 
-  await checkCorrectButton(inspector, "#iframe-1");
+  await checkCorrectButton(inspector, ["#iframe-1"]);
 
   info("Press enter to cycle through multiple nodes matching this suggestion");
   onSelect = inspector.once("inspector-updated");
   EventUtils.synthesizeKey("VK_RETURN", {}, inspector.panelWin);
   await onSelect;
 
-  await checkCorrectButton(inspector, "#iframe-2");
+  await checkCorrectButton(inspector, ["#iframe-2"]);
 
   info("Press enter to cycle through multiple nodes matching this suggestion");
   onSelect = inspector.once("inspector-updated");
   EventUtils.synthesizeKey("VK_RETURN", {}, inspector.panelWin);
   await onSelect;
 
-  await checkCorrectButton(inspector, "#iframe-3");
+  await checkCorrectButton(inspector, ["#iframe-3"]);
 
   info("Press enter to cycle through multiple nodes matching this suggestion");
   onSelect = inspector.once("inspector-updated");
   EventUtils.synthesizeKey("VK_RETURN", {}, inspector.panelWin);
   await onSelect;
 
-  await checkCorrectButton(inspector, "#iframe-4");
+  await checkCorrectButton(inspector, ["#iframe-3", "#iframe-4"]);
 
   info("Press enter to cycle through multiple nodes matching this suggestion");
   onSelect = inspector.once("inspector-updated");
   EventUtils.synthesizeKey("VK_RETURN", {}, inspector.panelWin);
   await onSelect;
 
-  await checkCorrectButton(inspector, "#iframe-1");
+  await checkCorrectButton(inspector, ["#iframe-1"]);
 });
 
 const checkCorrectButton = async function(inspector, frameSelector) {
-  const { walker } = inspector;
-
   const nodeFrontInfo = await getSelectedNodeFrontInfo(inspector);
-
   is(nodeFrontInfo.nodeFront.id, "b1", "The selected node is #b1");
   is(
     nodeFrontInfo.nodeFront.tagName.toLowerCase(),
@@ -76,9 +72,8 @@ const checkCorrectButton = async function(inspector, frameSelector) {
     "The selected node is <button>"
   );
 
-  const iframes = await walker.multiFrameQuerySelectorAll(frameSelector);
-  const iframe = await iframes.item(0);
-  const expectedDocument = (await walker.children(iframe)).nodes[0];
+  const iframe = await getNodeFrontInFrames(frameSelector, inspector);
+  const expectedDocument = (await iframe.walkerFront.children(iframe)).nodes[0];
 
   is(
     nodeFrontInfo.document,

@@ -6,7 +6,6 @@
 
 const DevToolsUtils = require("devtools/shared/DevToolsUtils");
 const EventEmitter = require("devtools/shared/event-emitter");
-const { getCurrentZoom } = require("devtools/shared/layout/utils");
 
 /**
  * A partial implementation of the Menu API provided by electron:
@@ -62,18 +61,31 @@ Menu.prototype.insert = function(pos, menuItem) {
  *
  * @param {Element} target
  *        The element to use as anchor.
- * @param {Document} doc
- *        The document that should own the popup.
  */
-Menu.prototype.popupAtTarget = function(target, doc) {
-  const zoom = getCurrentZoom(doc);
-
+Menu.prototype.popupAtTarget = function(target) {
   const rect = target.getBoundingClientRect();
-  const defaultView = target.ownerDocument.defaultView;
+  const doc = target.ownerDocument;
+  const defaultView = doc.defaultView;
   const x = rect.left + defaultView.mozInnerScreenX;
   const y = rect.bottom + defaultView.mozInnerScreenY;
 
-  this.popup(x * zoom, y * zoom, doc);
+  this.popup(x, y, doc);
+};
+
+/**
+ * Hide an existing menu, if there's any.
+ *
+ * @param {Document} doc
+ *        The document that should own the context menu.
+ */
+Menu.prototype.hide = function(doc) {
+  const win = doc.defaultView;
+  doc = DevToolsUtils.getTopWindow(win).document;
+  const popup = doc.querySelector('popupset menupopup[menu-api="true"]');
+  if (!popup) {
+    return;
+  }
+  popup.hidePopup();
 };
 
 /**
@@ -89,27 +101,32 @@ Menu.prototype.popupAtTarget = function(target, doc) {
  *        The document that should own the context menu.
  */
 Menu.prototype.popup = function(screenX, screenY, doc) {
+  // See bug 1285229, on Windows, opening the same popup multiple times in a
+  // row ends up duplicating the popup. The newly inserted popup doesn't
+  // dismiss the old one. So remove any previously displayed popup before
+  // opening a new one.
+  this.hide(doc);
+
   // The context-menu will be created in the topmost window to preserve keyboard
   // navigation (see Bug 1543940).
   // Keep a reference on the window owning the menu to hide the popup on unload.
   const win = doc.defaultView;
-  doc = DevToolsUtils.getTopWindow(doc.defaultView).document;
+  const topWin = DevToolsUtils.getTopWindow(win);
+
+  // Convert coordinates from win's CSS coordinate space to topWin's
+  const winToTopWinCssScale = win.devicePixelRatio / topWin.devicePixelRatio;
+  screenX = screenX * winToTopWinCssScale;
+  screenY = screenY * winToTopWinCssScale;
+
+  doc = topWin.document;
 
   let popupset = doc.querySelector("popupset");
   if (!popupset) {
     popupset = doc.createXULElement("popupset");
     doc.documentElement.appendChild(popupset);
   }
-  // See bug 1285229, on Windows, opening the same popup multiple times in a
-  // row ends up duplicating the popup. The newly inserted popup doesn't
-  // dismiss the old one. So remove any previously displayed popup before
-  // opening a new one.
-  let popup = popupset.querySelector('menupopup[menu-api="true"]');
-  if (popup) {
-    popup.hidePopup();
-  }
 
-  popup = doc.createXULElement("menupopup");
+  const popup = doc.createXULElement("menupopup");
   popup.setAttribute("menu-api", "true");
   popup.setAttribute("consumeoutsideclicks", "false");
   popup.setAttribute("incontentshell", "false");

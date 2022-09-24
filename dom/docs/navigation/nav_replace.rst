@@ -35,10 +35,11 @@ objects to be replaced. The general rules look something like this:
 .. [#inner]
 
    When navigating from the initial ``about:blank`` document to a same-origin
-   document, the same ``nsGlobalWindowInner`` may be used. This initial
-   ``about:blank`` document is the one created when synchronously accessing a
-   newly-created pop-up window from ``window.open``, or a newly-created
-   document in an ``<iframe>``.
+   document, the same ``nsGlobalWindowInner``, ``WindowContext`` and
+   ``WindowGlobal{Parent,Child}`` may be used. This initial ``about:blank``
+   document is the one created when synchronously accessing a newly-created
+   pop-up window from ``window.open``, or a newly-created document in an
+   ``<iframe>``.
 
 Types of Navigations
 --------------------
@@ -98,8 +99,6 @@ in the following circumstances, though this may change in the future:
 - When switching processes between the parent process, and a content process.
 - When loading an extension document in a toplevel browsing context.
 - When navigating away from a preloaded ``about:newtab`` document.
-- Sometimes, when loading a document with the ``Large-Allocation`` header on
-  32-bit windows.
 - When putting a ``BrowsingContext`` into BFCache for the session history
   in-parent BFCache implementation. This will happen on most toplevel
   navigations without opener relationships when the ``fission.bfcacheInParent``

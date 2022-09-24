@@ -32,9 +32,9 @@ function run_test() {
 
   h3Route = "foo.example.com:" + h3Port;
   do_get_profile();
-  prefs = Cc["@mozilla.org/preferences-service;1"].getService(Ci.nsIPrefBranch);
+  prefs = Services.prefs;
 
-  prefs.setBoolPref("network.http.http3.enabled", true);
+  prefs.setBoolPref("network.http.http3.enable", true);
   prefs.setCharPref("network.dns.localDomains", "foo.example.com");
   // We always resolve elements of localDomains as it's hardcoded without the
   // following pref:
@@ -133,7 +133,7 @@ function test_https_alt_svc() {
 }
 
 function testsDone() {
-  prefs.clearUserPref("network.http.http3.enabled");
+  prefs.clearUserPref("network.http.http3.enable");
   prefs.clearUserPref("network.dns.localDomains");
   prefs.clearUserPref("network.proxy.allow_hijacking_localhost");
   dump("testDone\n");

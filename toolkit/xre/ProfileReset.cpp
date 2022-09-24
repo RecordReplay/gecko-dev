@@ -15,13 +15,11 @@
 #include "nsDirectoryServiceUtils.h"
 #include "nsPIDOMWindow.h"
 #include "nsString.h"
-#include "nsXPCOMCIDInternal.h"
 #include "mozilla/Components.h"
 #include "mozilla/XREAppData.h"
 
 #include "mozilla/SpinEventLoopUntil.h"
 #include "mozilla/Unused.h"
-#include "prtime.h"
 
 using namespace mozilla;
 
@@ -133,7 +131,8 @@ nsresult ProfileResetCleanup(nsToolkitProfileService* aService,
     // The result callback will shut down the worker thread.
 
     // Wait for the cleanup thread to complete.
-    SpinEventLoopUntil([&]() { return gProfileResetCleanupCompleted; });
+    SpinEventLoopUntil("xre:ProfileResetCreateBackup"_ns,
+                       [&]() { return gProfileResetCleanupCompleted; });
   } else {
     gProfileResetCleanupCompleted = true;
     NS_WARNING("Cleanup thread creation failed");

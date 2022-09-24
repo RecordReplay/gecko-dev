@@ -22,6 +22,7 @@
 #include "lib/jxl/chroma_from_luma.h"
 #include "lib/jxl/image_ops.h"
 #include "lib/jxl/opsin_params.h"
+#include "lib/jxl/sanitizers.h"
 #include "lib/jxl/xorshift128plus-inl.h"
 HWY_BEFORE_NAMESPACE();
 namespace jxl {
@@ -31,7 +32,9 @@ namespace HWY_NAMESPACE {
 using hwy::HWY_NAMESPACE::ShiftRight;
 using hwy::HWY_NAMESPACE::Vec;
 
-using D = HWY_CAPPED(float, 1);
+using D = HWY_CAPPED(float, kBlockDim);
+using DI = hwy::HWY_NAMESPACE::Rebind<int, D>;
+using DI8 = hwy::HWY_NAMESPACE::Repartition<uint8_t, D>;
 
 // Converts one vector's worth of random bits to floats in [1, 2).
 // NOTE: as the convolution kernel sums to 0, it doesn't matter if inputs are in
@@ -82,121 +85,15 @@ void RandomImage(Xorshift128Plus* rng, const Rect& rect,
     }
   }
 }
-
-// [0, max_value]
-template <class D, class V>
-static HWY_INLINE V Clamp0ToMax(D d, const V x, const V max_value) {
-  const auto clamped = Min(x, max_value);
-  return ZeroIfNegative(clamped);
-}
-
-// x is in [0+delta, 1+delta], delta ~= 0.06
-template <class StrengthEval>
-typename StrengthEval::V NoiseStrength(const StrengthEval& eval,
-                                       const typename StrengthEval::V x) {
-  return Clamp0ToMax(D(), eval(x), Set(D(), 1.0f));
-}
-
-// TODO(veluca): SIMD-fy.
-class StrengthEvalLut {
- public:
-  using V = Vec<D>;
-
-  explicit StrengthEvalLut(const NoiseParams& noise_params)
-      : noise_params_(noise_params) {}
-
-  V operator()(const V vx) const {
-    float x;
-    Store(vx, D(), &x);
-    std::pair<int, float> pos = IndexAndFrac(x);
-    JXL_DASSERT(pos.first >= 0 && static_cast<size_t>(pos.first) <
-                                      NoiseParams::kNumNoisePoints - 1);
-    float low = noise_params_.lut[pos.first];
-    float hi = noise_params_.lut[pos.first + 1];
-    return Set(D(), low * (1.0f - pos.second) + hi * pos.second);
-  }
-
- private:
-  const NoiseParams noise_params_;
-};
-
-template <class D>
-void AddNoiseToRGB(const D d, const Vec<D> rnd_noise_r,
-                   const Vec<D> rnd_noise_g, const Vec<D> rnd_noise_cor,
-                   const Vec<D> noise_strength_g, const Vec<D> noise_strength_r,
-                   float ytox, float ytob, float* JXL_RESTRICT out_x,
-                   float* JXL_RESTRICT out_y, float* JXL_RESTRICT out_b) {
-  const auto kRGCorr = Set(d, 0.9921875f);   // 127/128
-  const auto kRGNCorr = Set(d, 0.0078125f);  // 1/128
-
-  const auto red_noise = kRGNCorr * rnd_noise_r * noise_strength_r +
-                         kRGCorr * rnd_noise_cor * noise_strength_r;
-  const auto green_noise = kRGNCorr * rnd_noise_g * noise_strength_g +
-                           kRGCorr * rnd_noise_cor * noise_strength_g;
-
-  auto vx = Load(d, out_x);
-  auto vy = Load(d, out_y);
-  auto vb = Load(d, out_b);
-
-  vx += red_noise - green_noise + Set(d, ytox) * (red_noise + green_noise);
-  vy += red_noise + green_noise;
-  vb += Set(d, ytob) * (red_noise + green_noise);
-
-  Store(vx, d, out_x);
-  Store(vy, d, out_y);
-  Store(vb, d, out_b);
-}
-
-void AddNoise(const NoiseParams& noise_params, const Rect& noise_rect,
-              const Image3F& noise, const Rect& opsin_rect,
-              const ColorCorrelationMap& cmap, Image3F* opsin) {
-  if (!noise_params.HasAny()) return;
-  const StrengthEvalLut noise_model(noise_params);
-  D d;
-  const auto half = Set(d, 0.5f);
-
-  const size_t xsize = opsin_rect.xsize();
-  const size_t ysize = opsin_rect.ysize();
-
-  // With the prior subtract-random Laplacian approximation, rnd_* ranges were
-  // about [-1.5, 1.6]; Laplacian3 about doubles this to [-3.6, 3.6], so the
-  // normalizer is half of what it was before (0.5).
-  const auto norm_const = Set(d, 0.22f);
-
-  float ytox = cmap.YtoXRatio(0);
-  float ytob = cmap.YtoBRatio(0);
-
-  for (size_t y = 0; y < ysize; ++y) {
-    float* JXL_RESTRICT row_x = opsin_rect.PlaneRow(opsin, 0, y);
-    float* JXL_RESTRICT row_y = opsin_rect.PlaneRow(opsin, 1, y);
-    float* JXL_RESTRICT row_b = opsin_rect.PlaneRow(opsin, 2, y);
-    const float* JXL_RESTRICT row_rnd_r = noise_rect.ConstPlaneRow(noise, 0, y);
-    const float* JXL_RESTRICT row_rnd_g = noise_rect.ConstPlaneRow(noise, 1, y);
-    const float* JXL_RESTRICT row_rnd_c = noise_rect.ConstPlaneRow(noise, 2, y);
-    for (size_t x = 0; x < xsize; x += Lanes(d)) {
-      const auto vx = Load(d, row_x + x);
-      const auto vy = Load(d, row_y + x);
-      const auto in_g = vy - vx;
-      const auto in_r = vy + vx;
-      const auto noise_strength_g = NoiseStrength(noise_model, in_g * half);
-      const auto noise_strength_r = NoiseStrength(noise_model, in_r * half);
-      const auto addit_rnd_noise_red = Load(d, row_rnd_r + x) * norm_const;
-      const auto addit_rnd_noise_green = Load(d, row_rnd_g + x) * norm_const;
-      const auto addit_rnd_noise_correlated =
-          Load(d, row_rnd_c + x) * norm_const;
-      AddNoiseToRGB(D(), addit_rnd_noise_red, addit_rnd_noise_green,
-                    addit_rnd_noise_correlated, noise_strength_g,
-                    noise_strength_r, ytox, ytob, row_x + x, row_y + x,
-                    row_b + x);
-    }
-  }
-}
-
-void RandomImage3(size_t seed, const Rect& rect, Image3F* JXL_RESTRICT noise) {
-  HWY_ALIGN Xorshift128Plus rng(seed);
-  RandomImage(&rng, rect, &noise->Plane(0));
-  RandomImage(&rng, rect, &noise->Plane(1));
-  RandomImage(&rng, rect, &noise->Plane(2));
+void Random3Planes(size_t visible_frame_index, size_t nonvisible_frame_index,
+                   size_t x0, size_t y0, const std::pair<ImageF*, Rect>& plane0,
+                   const std::pair<ImageF*, Rect>& plane1,
+                   const std::pair<ImageF*, Rect>& plane2) {
+  HWY_ALIGN Xorshift128Plus rng(visible_frame_index, nonvisible_frame_index, x0,
+                                y0);
+  RandomImage(&rng, plane0.second, plane0.first);
+  RandomImage(&rng, plane1.second, plane1.first);
+  RandomImage(&rng, plane2.second, plane2.first);
 }
 
 // NOLINTNEXTLINE(google-readability-namespace-comments)
@@ -207,17 +104,14 @@ HWY_AFTER_NAMESPACE();
 #if HWY_ONCE
 namespace jxl {
 
-HWY_EXPORT(AddNoise);
-void AddNoise(const NoiseParams& noise_params, const Rect& noise_rect,
-              const Image3F& noise, const Rect& opsin_rect,
-              const ColorCorrelationMap& cmap, Image3F* opsin) {
-  return HWY_DYNAMIC_DISPATCH(AddNoise)(noise_params, noise_rect, noise,
-                                        opsin_rect, cmap, opsin);
-}
-
-HWY_EXPORT(RandomImage3);
-void RandomImage3(size_t seed, const Rect& rect, Image3F* JXL_RESTRICT noise) {
-  return HWY_DYNAMIC_DISPATCH(RandomImage3)(seed, rect, noise);
+HWY_EXPORT(Random3Planes);
+void Random3Planes(size_t visible_frame_index, size_t nonvisible_frame_index,
+                   size_t x0, size_t y0, const std::pair<ImageF*, Rect>& plane0,
+                   const std::pair<ImageF*, Rect>& plane1,
+                   const std::pair<ImageF*, Rect>& plane2) {
+  return HWY_DYNAMIC_DISPATCH(Random3Planes)(visible_frame_index,
+                                             nonvisible_frame_index, x0, y0,
+                                             plane0, plane1, plane2);
 }
 
 void DecodeFloatParam(float precision, float* val, BitReader* br) {

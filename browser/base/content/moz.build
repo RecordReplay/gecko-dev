@@ -7,9 +7,6 @@
 with Files("**"):
     BUG_COMPONENT = ("Firefox", "General")
 
-with Files("defaultthemes/**"):
-    BUG_COMPONENT = ("Firefox", "Theme")
-
 with Files("docs/**"):
     BUG_COMPONENT = ("Core", "Security")
 
@@ -109,6 +106,9 @@ with Files("test/tabs/**"):
 with Files("test/touch/**"):
     BUG_COMPONENT = ("Firefox", "General")
 
+with Files("test/utilityOverlay/**"):
+    BUG_COMPONENT = ("Firefox", "Tabbed Browser")
+
 with Files("test/protectionsUI/**"):
     BUG_COMPONENT = ("Firefox", "Protections UI")
 
@@ -143,7 +143,7 @@ with Files("browser-fullZoom.js"):
     BUG_COMPONENT = ("Firefox", "Tabbed Browser")
 
 with Files("browser-gestureSupport.js"):
-    BUG_COMPONENT = ("Core", "Widget: Cocoa")
+    BUG_COMPONENT = ("Core", "Widget")
 
 with Files("browser-pageActions.js"):
     BUG_COMPONENT = ("Firefox", "Toolbars and Customization")

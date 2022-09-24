@@ -7,11 +7,13 @@
 #include "nsXULAppAPI.h"
 #include "jsapi.h"
 #include "jsfriendapi.h"
-#include "js/Array.h"  // JS::NewArrayObject
+#include "js/Array.h"             // JS::NewArrayObject
+#include "js/CallAndConstruct.h"  // JS_CallFunctionValue
 #include "js/CharacterEncoding.h"
 #include "js/CompilationAndEvaluation.h"  // JS::Evaluate
 #include "js/ContextOptions.h"
 #include "js/Printf.h"
+#include "js/PropertyAndElement.h"  // JS_DefineElement, JS_DefineFunctions, JS_DefineProperty
 #include "js/PropertySpec.h"
 #include "js/SourceText.h"  // JS::SourceText
 #include "mozilla/ChaosMode.h"
@@ -44,8 +46,8 @@
 
 #include "nsIXULRuntime.h"
 #include "nsIAppStartup.h"
-#include "GeckoProfiler.h"
 #include "Components.h"
+#include "ProfilerControl.h"
 
 #ifdef ANDROID
 #  include <android/log.h>
@@ -1076,10 +1078,10 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
   // with the IOInterposer will be properly tracked.
   mozilla::IOInterposerInit ioInterposerGuard;
 
-#ifdef MOZ_GECKO_PROFILER
+  XRE_InitCommandLine(argc, argv);
+
   char aLocal;
   profiler_init(&aLocal);
-#endif
 
 #ifdef MOZ_ASAN_REPORTER
   PR_SetEnv("MOZ_DISABLE_ASAN_REPORTER=1");
@@ -1316,7 +1318,7 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
 
     // Ensure that DLL Services are running
     RefPtr<DllServices> dllSvc(DllServices::Get());
-    dllSvc->StartUntrustedModulesProcessor();
+    dllSvc->StartUntrustedModulesProcessor(true);
     auto dllServicesDisable =
         MakeScopeExit([&dllSvc]() { dllSvc->DisableFull(); });
 
@@ -1378,7 +1380,7 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
 
           result = FuzzXPCRuntimeStart(&jsapi, &argc, &argv,
                                        aShellData->fuzzerDriver);
-#  elif __AFL_COMPILER
+#  elif AFLFUZZ
           MOZ_CRASH("AFL is unsupported for XPC runtime fuzzing integration");
 #  endif
         } else {
@@ -1438,13 +1440,13 @@ int XRE_XPCShellMain(int argc, char** argv, char** envp,
     CrashReporter::UnsetExceptionHandler();
   }
 
-#ifdef MOZ_GECKO_PROFILER
   // This must precede NS_LogTerm(), otherwise xpcshell return non-zero
   // during some tests, which causes failures.
   profiler_shutdown();
-#endif
 
   NS_LogTerm();
+
+  XRE_DeinitCommandLine();
 
   return result;
 }
@@ -1501,6 +1503,13 @@ XPCShellDirProvider::GetFile(const char* prop, bool* persistent,
     file.forget(result);
     return NS_OK;
   }
+#ifdef MOZ_SANDBOX
+  if (!strcmp(prop, NS_APP_CONTENT_PROCESS_TEMP_DIR)) {
+    // Forward to the OS Temp directory
+    *persistent = true;
+    return NS_GetSpecialDirectory(NS_OS_TEMP_DIR, result);
+  }
+#endif
 
   return NS_ERROR_FAILURE;
 }

@@ -39,7 +39,6 @@
 #define USE(Cat) use_syllable_machine_ex_##Cat
 
 enum use_syllable_type_t {
-  use_independent_cluster,
   use_virama_terminated_cluster,
   use_sakot_terminated_cluster,
   use_standard_cluster,
@@ -68,15 +67,16 @@ export O	= 0; # OTHER
 export B	= 1; # BASE
 export N	= 4; # BASE_NUM
 export GB	= 5; # BASE_OTHER
+export CGJ	= 6; # CGJ
 export SUB	= 11; # CONS_SUB
 export H	= 12; # HALANT
 
 export HN	= 13; # HALANT_NUM
 export ZWNJ	= 14; # Zero width non-joiner
+export WJ	= 16; # Word joiner
 export R	= 18; # REPHA
-export S	= 19; # SYM
 export CS	= 43; # CONS_WITH_STACKER
-export HVM	= 44; # HALANT_OR_VOWEL_MODIFIER
+export IS	= 44; # INVISIBLE_STACKER
 export Sk	= 48; # SAKOT
 export G	= 49; # HIEROGLYPH
 export J	= 50; # HIEROGLYPH_JOINER
@@ -107,12 +107,12 @@ export FMBlw	= 46; # CONS_FINAL_MOD	UIPC = Bottom
 export FMPst	= 47; # CONS_FINAL_MOD	UIPC = Not_Applicable
 
 
-h = H | HVM | Sk;
+h = H | IS | Sk;
 
 consonant_modifiers = CMAbv* CMBlw* ((h B | SUB) CMAbv? CMBlw*)*;
 medial_consonants = MPre? MAbv? MBlw? MPst?;
-dependent_vowels = VPre* VAbv* VBlw* VPst*;
-vowel_modifiers = HVM? VMPre* VMAbv* VMBlw* VMPst*;
+dependent_vowels = VPre* VAbv* VBlw* VPst* | H;
+vowel_modifiers = VMPre* VMAbv* VMBlw* VMPst*;
 final_consonants = FAbv* FBlw* FPst*;
 final_modifiers = FMAbv* FMBlw* | FMPst?;
 
@@ -133,34 +133,39 @@ number_joiner_terminated_cluster_tail = (HN N)* HN;
 numeral_cluster_tail = (HN N)+;
 symbol_cluster_tail = SMAbv+ SMBlw* | SMBlw+;
 
+virama_terminated_cluster_tail =
+	consonant_modifiers
+	IS
+;
 virama_terminated_cluster =
 	complex_syllable_start
-	consonant_modifiers
-	h
+	virama_terminated_cluster_tail
+;
+sakot_terminated_cluster_tail =
+	complex_syllable_middle
+	Sk
 ;
 sakot_terminated_cluster =
 	complex_syllable_start
-	complex_syllable_middle
-	Sk
+	sakot_terminated_cluster_tail
 ;
 standard_cluster =
 	complex_syllable_start
 	complex_syllable_tail
 ;
+tail = complex_syllable_tail | sakot_terminated_cluster_tail | symbol_cluster_tail | virama_terminated_cluster_tail;
 broken_cluster =
 	R?
-	(complex_syllable_tail | number_joiner_terminated_cluster_tail | numeral_cluster_tail | symbol_cluster_tail)
+	(tail | number_joiner_terminated_cluster_tail | numeral_cluster_tail)
 ;
 
 number_joiner_terminated_cluster = N number_joiner_terminated_cluster_tail;
 numeral_cluster = N numeral_cluster_tail?;
-symbol_cluster = (S | GB) symbol_cluster_tail?;
+symbol_cluster = (O | GB) tail?;
 hieroglyph_cluster = SB+ | SB* G SE* (J SE* (G SE*)?)*;
-independent_cluster = O;
 other = any;
 
 main := |*
-	independent_cluster			=> { found_syllable (use_independent_cluster); };
 	virama_terminated_cluster		=> { found_syllable (use_virama_terminated_cluster); };
 	sakot_terminated_cluster		=> { found_syllable (use_sakot_terminated_cluster); };
 	standard_cluster			=> { found_syllable (use_standard_cluster); };
@@ -191,7 +196,9 @@ struct machine_index_t :
 			  typename Iter::item_t>
 {
   machine_index_t (const Iter& it) : it (it) {}
-  machine_index_t (const machine_index_t& o) : it (o.it) {}
+  machine_index_t (const machine_index_t& o) : hb_iter_with_fallback_t<machine_index_t<Iter>,
+								       typename Iter::item_t> (),
+					       it (o.it) {}
 
   static constexpr bool is_random_access_iterator = Iter::is_random_access_iterator;
   static constexpr bool is_sorted_iterator = Iter::is_sorted_iterator;
@@ -225,8 +232,8 @@ HB_FUNCOBJ (machine_index);
 
 
 static bool
-not_standard_default_ignorable (const hb_glyph_info_t &i)
-{ return !(i.use_category() == USE(O) && _hb_glyph_info_is_default_ignorable (&i)); }
+not_ccs_default_ignorable (const hb_glyph_info_t &i)
+{ return i.use_category() != USE(CGJ); }
 
 static inline void
 find_syllables_use (hb_buffer_t *buffer)
@@ -235,13 +242,13 @@ find_syllables_use (hb_buffer_t *buffer)
   auto p =
     + hb_iter (info, buffer->len)
     | hb_enumerate
-    | hb_filter ([] (const hb_glyph_info_t &i) { return not_standard_default_ignorable (i); },
+    | hb_filter ([] (const hb_glyph_info_t &i) { return not_ccs_default_ignorable (i); },
 		 hb_second)
     | hb_filter ([&] (const hb_pair_t<unsigned, const hb_glyph_info_t &> p)
 		 {
 		   if (p.second.use_category() == USE(ZWNJ))
 		     for (unsigned i = p.first + 1; i < buffer->len; ++i)
-		       if (not_standard_default_ignorable (info[i]))
+		       if (not_ccs_default_ignorable (info[i]))
 			 return !_hb_glyph_info_is_unicode_mark (&info[i]);
 		   return true;
 		 })

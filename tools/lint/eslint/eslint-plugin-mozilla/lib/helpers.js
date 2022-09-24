@@ -15,39 +15,38 @@ const fs = require("fs");
 const ini = require("multi-ini");
 const recommendedConfig = require("./configs/recommended");
 
-var gModules = null;
 var gRootDir = null;
 var directoryManifests = new Map();
 
 const callExpressionDefinitions = [
-  /^loader\.lazyGetter\(this, "(\w+)"/,
-  /^loader\.lazyImporter\(this, "(\w+)"/,
-  /^loader\.lazyServiceGetter\(this, "(\w+)"/,
-  /^loader\.lazyRequireGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyModuleGetter\(this, "(\w+)"/,
-  /^ChromeUtils\.defineModuleGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyPreferenceGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyProxy\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyScriptGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineLazyServiceGetter\(this, "(\w+)"/,
-  /^XPCOMUtils\.defineConstant\(this, "(\w+)"/,
-  /^DevToolsUtils\.defineLazyModuleGetter\(this, "(\w+)"/,
-  /^DevToolsUtils\.defineLazyGetter\(this, "(\w+)"/,
-  /^Object\.defineProperty\(this, "(\w+)"/,
-  /^Reflect\.defineProperty\(this, "(\w+)"/,
+  /^loader\.lazyGetter\((?:globalThis|this), "(\w+)"/,
+  /^loader\.lazyImporter\((?:globalThis|this), "(\w+)"/,
+  /^loader\.lazyServiceGetter\((?:globalThis|this), "(\w+)"/,
+  /^loader\.lazyRequireGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyModuleGetter\((?:globalThis|this), "(\w+)"/,
+  /^ChromeUtils\.defineModuleGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyPreferenceGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyProxy\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyScriptGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineLazyServiceGetter\((?:globalThis|this), "(\w+)"/,
+  /^XPCOMUtils\.defineConstant\((?:globalThis|this), "(\w+)"/,
+  /^DevToolsUtils\.defineLazyModuleGetter\((?:globalThis|this), "(\w+)"/,
+  /^DevToolsUtils\.defineLazyGetter\((?:globalThis|this), "(\w+)"/,
+  /^Object\.defineProperty\((?:globalThis|this), "(\w+)"/,
+  /^Reflect\.defineProperty\((?:globalThis|this), "(\w+)"/,
   /^this\.__defineGetter__\("(\w+)"/,
 ];
 
 const callExpressionMultiDefinitions = [
   "XPCOMUtils.defineLazyGlobalGetters(this,",
+  "XPCOMUtils.defineLazyGlobalGetters(globalThis,",
   "XPCOMUtils.defineLazyModuleGetters(this,",
+  "XPCOMUtils.defineLazyModuleGetters(globalThis,",
   "XPCOMUtils.defineLazyServiceGetters(this,",
+  "XPCOMUtils.defineLazyServiceGetters(globalThis,",
   "loader.lazyRequireGetter(this,",
-];
-
-const imports = [
-  /^(?:Cu|Components\.utils|ChromeUtils)\.import\(".*\/((.*?)\.jsm?)", this\)/,
+  "loader.lazyRequireGetter(globalThis,",
 ];
 
 const workerImportFilenameMatch = /(.*\/)*((.*?)\.jsm?)/;
@@ -58,24 +57,6 @@ module.exports = {
       this._iniParser = new ini.Parser();
     }
     return this._iniParser;
-  },
-
-  get modulesGlobalData() {
-    if (!gModules) {
-      if (this.isMozillaCentralBased()) {
-        gModules = require(path.join(
-          this.rootDir,
-          "tools",
-          "lint",
-          "eslint",
-          "modules.json"
-        ));
-      } else {
-        gModules = require("./modules.json");
-      }
-    }
-
-    return gModules;
   },
 
   get servicesData() {
@@ -172,6 +153,8 @@ module.exports = {
           " " +
           this.getASTSource(node.right)
         );
+      case "UnaryExpression":
+        return node.operator + " " + this.getASTSource(node.argument);
       default:
         throw new Error("getASTSource unsupported node type: " + node.type);
     }
@@ -233,8 +216,6 @@ module.exports = {
   convertWorkerExpressionToGlobals(node, isGlobal, dirname) {
     var getGlobalsForFile = require("./globals").getGlobalsForFile;
 
-    let globalModules = this.modulesGlobalData;
-
     let results = [];
     let expr = node.expression;
 
@@ -253,15 +234,9 @@ module.exports = {
               let additionalGlobals = getGlobalsForFile(filePath);
               results = results.concat(additionalGlobals);
             }
-          } else if (match[2] in globalModules) {
-            results = results.concat(
-              globalModules[match[2]].map(name => {
-                return { name, writable: true };
-              })
-            );
-          } else {
-            results.push({ name: match[3], writable: true, explicit: true });
           }
+          // Import with relative/absolute path should explicitly use
+          // `import-globals-from` comment.
         }
       }
     }
@@ -301,7 +276,7 @@ module.exports = {
 
   /**
    * Attempts to convert an CallExpressions that look like module imports
-   * into global variable definitions, using modules.json data if appropriate.
+   * into global variable definitions.
    *
    * @param  {Object} node
    *         The AST node to convert.
@@ -341,33 +316,6 @@ module.exports = {
       source = this.getASTSource(node);
     } catch (e) {
       return [];
-    }
-
-    for (let reg of imports) {
-      let match = source.match(reg);
-      if (match) {
-        // The two argument form is only acceptable in the global scope
-        if (node.expression.arguments.length > 1 && !isGlobal) {
-          return [];
-        }
-
-        let globalModules = this.modulesGlobalData;
-
-        if (match[1] in globalModules) {
-          // XXX We mark as explicit when there is only one exported symbol from
-          // the module. For now this avoids no-unused-vars complaining in the
-          // cases where we import everything from a module but only use one
-          // of them.
-          let explicit = globalModules[match[1]].length == 1;
-          return globalModules[match[1]].map(name => ({
-            name,
-            writable: true,
-            explicit,
-          }));
-        }
-
-        return [{ name: match[2], writable: true, explicit: true }];
-      }
     }
 
     // The definition matches below must be in the global scope for us to define
@@ -445,7 +393,11 @@ module.exports = {
     variable.eslintExplicitGlobal = false;
     variable.writeable = writable;
     if (node) {
-      variable.defs.push({ node, name: { name } });
+      variable.defs.push({
+        type: "Variable",
+        node,
+        name: { name, parent: node.parent },
+      });
       variable.identifiers.push(node);
     }
 
@@ -700,6 +652,15 @@ module.exports = {
     }
 
     return !!this.getTestType(scope);
+  },
+
+  /*
+   * Check if this is an .sjs file.
+   */
+  getIsSjs(scope) {
+    let filepath = this.cleanUpPath(scope.getFilename());
+
+    return path.extname(filepath) == ".sjs";
   },
 
   /**

@@ -2,17 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-%include ../../shared/customizableui/panelUI.inc.css
-
-panel[type="arrow"][side="top"],
-panel[type="arrow"][side="bottom"] {
-  margin-inline: -16px;
-}
-
-panel[type="arrow"][side="left"],
-panel[type="arrow"][side="right"] {
-  margin-block: -16px;
-}
+@import "chrome://browser/skin/customizableui/panelUI-shared.css";
 
 #customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="top"],
 #customizationui-widget-panel[viewId="PanelUI-profiler"][type="arrow"][side="bottom"] {
@@ -30,35 +20,22 @@ panel[type="arrow"][side="right"] {
 #customizationui-widget-panel,
 #identity-popup,
 #permission-popup,
-#protections-popup {
-  margin-top: -1px; /* Overrides value from panelUI.inc.css */
+#protections-popup,
+#appMenu-notification-popup,
+#editBookmarkPanel {
+  margin-top: -1px; /* Overrides value from panelUI-shared.css */
 }
 
 #BMB_bookmarksPopup {
-  margin-top: -4px; /* Overrides value from panelUI.inc.css */
-}
-
-panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
-  width: 42px; /* 18px toolbarbutton padding + 16px icon + 8px label padding start */
+  margin-top: -4px; /* Overrides value from panelUI-shared.css */
 }
 
 .panel-subview-body {
   scrollbar-color: color-mix(in srgb, currentColor 26%, transparent) transparent;
 }
 
-#appMenu-addon-banners > .addon-banner-item,
 #appMenu-mainView > .panel-subview-body > .panel-banner-item {
   padding-inline-start: 18px;
-}
-
-#appMenu-fxa-status[fxastatus="signedin"] > #appMenu-fxa-label {
-  /* 18px space before the avatar, then 16px for the avatar */
-  padding-inline-start: 34px;
-  margin-inline-start: -34px;
-}
-
-#appMenu-fxa-status[fxastatus="signedin"] > #appMenu-fxa-avatar {
-  margin-inline-start: 18px;
 }
 
 .subviewbutton:not([image],[targetURI],.bookmark-item) > .menu-iconic-left {
@@ -71,18 +48,6 @@ panelmultiview .toolbaritem-combined-buttons > spacer.before-label {
 
 #BMB_bookmarksPopup .subviewbutton > .menu-iconic-text {
   padding-inline-start: 0;
-}
-
-#BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme {
-  appearance: none;
-  background: transparent;
-  --panel-background: var(--arrowpanel-background);
-  --panel-border-color: var(--arrowpanel-border-color);
-  --panel-color: var(--arrowpanel-color);
-}
-
-#BMB_bookmarksPopup menupopup[placespopup=true]:-moz-lwtheme::part(content) {
-  margin: 1px;
 }
 
 /* Override OSX-specific toolkit styles for the bookmarks panel */
@@ -116,14 +81,14 @@ menu.subviewbutton > .menu-right {
   padding: 2px 6px;
 }
 
-.panel-button@buttonStateHover@ {
-  background-color: var(--arrowpanel-dimmed-further);
+.panel-button:not([disabled]):hover {
+  background-color: var(--panel-item-hover-bgcolor);
 }
 
-.panel-button@buttonStateActive@ {
-  background-color: var(--arrowpanel-dimmed-even-further);
+.panel-button:not([disabled]):hover:active {
+  background-color: var(--panel-item-active-bgcolor);
 }
 
-.panel-button:-moz-focusring {
-  box-shadow: var(--focus-ring-box-shadow);
+.panel-button:focus-visible {
+  outline: var(--focus-outline);
 }

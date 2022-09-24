@@ -1,6 +1,5 @@
-const BlocklistGlobal = ChromeUtils.import(
-  "resource://gre/modules/Blocklist.jsm",
-  null
+const { BlocklistPrivate } = ChromeUtils.import(
+  "resource://gre/modules/Blocklist.jsm"
 );
 const { RemoteSettings } = ChromeUtils.import(
   "resource://services-settings/remote-settings.js"
@@ -21,7 +20,8 @@ async function createRecords(records) {
     id: `record-${i}`,
     ...record,
   }));
-  return client.db.importChanges({}, 42, withId);
+  // Prevent packaged dump to be loaded with high collection timestamp
+  return client.db.importChanges({}, Date.now(), withId);
 }
 
 function run_test() {
@@ -33,7 +33,7 @@ function run_test() {
   );
   // This will initialize the remote settings clients for blocklists,
   // with their specific options etc.
-  BlocklistGlobal.ExtensionBlocklistRS.ensureInitialized();
+  BlocklistPrivate.ExtensionBlocklistRS.ensureInitialized();
   // Obtain one of the instantiated client for our tests.
   client = RemoteSettings("addons", { bucketName: "blocklists" });
 

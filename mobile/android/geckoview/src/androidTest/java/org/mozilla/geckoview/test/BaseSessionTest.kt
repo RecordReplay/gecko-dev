@@ -22,6 +22,7 @@ import org.json.JSONObject
 import org.junit.Assume.assumeThat
 import org.junit.Rule
 import org.junit.rules.ErrorCollector
+import org.junit.rules.RuleChain
 
 import kotlin.reflect.KClass
 
@@ -38,10 +39,14 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
         const val DOWNLOAD_HTML_PATH = "/assets/www/download.html"
         const val FORM_BLANK_HTML_PATH = "/assets/www/form_blank.html"
         const val FORMS_HTML_PATH = "/assets/www/forms.html"
+        const val FORMS_XORIGIN_HTML_PATH = "/assets/www/forms_xorigin.html"
         const val FORMS2_HTML_PATH = "/assets/www/forms2.html"
         const val FORMS3_HTML_PATH = "/assets/www/forms3.html"
         const val FORMS4_HTML_PATH = "/assets/www/forms4.html"
         const val FORMS5_HTML_PATH = "/assets/www/forms5.html"
+        const val SELECT_HTML_PATH = "/assets/www/select.html"
+        const val SELECT_MULTIPLE_HTML_PATH = "/assets/www/select-multiple.html"
+        const val SELECT_LISTBOX_HTML_PATH = "/assets/www/select-listbox.html"
         const val ADDRESS_FORM_HTML_PATH = "/assets/www/address_form.html"
         const val FORMS_AUTOCOMPLETE_HTML_PATH = "/assets/www/forms_autocomplete.html"
         const val FORMS_ID_VALUE_HTML_PATH = "/assets/www/forms_id_value.html"
@@ -53,18 +58,21 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
         const val INVALID_URI = "not a valid uri"
         const val LINKS_HTML_PATH = "/assets/www/links.html"
         const val LOREM_IPSUM_HTML_PATH = "/assets/www/loremIpsum.html"
+        const val METATAGS_PATH = "/assets/www/metatags.html"
+        const val MOUSE_TO_RELOAD_HTML_PATH = "/assets/www/mouseToReload.html"
         const val NEW_SESSION_CHILD_HTML_PATH = "/assets/www/newSession_child.html"
         const val NEW_SESSION_HTML_PATH = "/assets/www/newSession.html"
         const val POPUP_HTML_PATH = "/assets/www/popup.html"
         const val PROMPT_HTML_PATH = "/assets/www/prompts.html"
         const val SAVE_STATE_PATH = "/assets/www/saveState.html"
+        const val TEST_GIF_PATH = "/assets/www/images/test.gif"
         const val TITLE_CHANGE_HTML_PATH = "/assets/www/titleChange.html"
         const val TRACKERS_PATH = "/assets/www/trackers.html"
         const val VIDEO_OGG_PATH = "/assets/www/ogg.html"
         const val VIDEO_MP4_PATH = "/assets/www/mp4.html"
         const val VIDEO_WEBM_PATH = "/assets/www/webm.html"
         const val VIDEO_BAD_PATH = "/assets/www/badVideoPath.html"
-        const val UNKNOWN_HOST_URI = "http://www.test.invalid/"
+        const val UNKNOWN_HOST_URI = "https://www.test.invalid/"
         const val UNKNOWN_PROTOCOL_URI = "htt://invalid"
         const val FULLSCREEN_PATH = "/assets/www/fullscreen.html"
         const val VIEWPORT_PATH = "/assets/www/viewport.html"
@@ -101,11 +109,30 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
         const val OVERSCROLL_BEHAVIOR_NONE_AUTO_HTML_PATH = "/assets/www/overscroll-behavior-none-auto.html"
         const val OVERSCROLL_BEHAVIOR_NONE_NON_ROOT_HTML_PATH = "/assets/www/overscroll-behavior-none-on-non-root.html"
         const val SCROLL_HANDOFF_HTML_PATH = "/assets/www/scroll-handoff.html"
+        const val SHOW_DYNAMIC_TOOLBAR_HTML_PATH = "/assets/www/showDynamicToolbar.html"
+        const val CONTEXT_MENU_AUDIO_HTML_PATH = "/assets/www/context_menu_audio.html"
+        const val CONTEXT_MENU_IMAGE_NESTED_HTML_PATH = "/assets/www/context_menu_image_nested.html"
+        const val CONTEXT_MENU_IMAGE_HTML_PATH = "/assets/www/context_menu_image.html"
+        const val CONTEXT_MENU_LINK_HTML_PATH = "/assets/www/context_menu_link.html"
+        const val CONTEXT_MENU_VIDEO_HTML_PATH = "/assets/www/context_menu_video.html"
+        const val CONTEXT_MENU_BLOB_FULL_HTML_PATH = "/assets/www/context_menu_blob_full.html"
+        const val CONTEXT_MENU_BLOB_BUFFERED_HTML_PATH = "/assets/www/context_menu_blob_buffered.html"
+        const val REMOTE_IFRAME = "/assets/www/accessibility/test-remote-iframe.html"
+        const val LOCAL_IFRAME = "/assets/www/accessibility/test-local-iframe.html"
+        const val BODY_FULLY_COVERED_BY_GREEN_ELEMENT = "/assets/www/red-background-body-fully-covered-by-green-element.html"
 
         const val TEST_ENDPOINT = GeckoSessionTestRule.TEST_ENDPOINT
+        const val TEST_HOST = GeckoSessionTestRule.TEST_HOST
+        const val TEST_PORT = GeckoSessionTestRule.TEST_PORT
     }
 
-    @get:Rule val sessionRule = GeckoSessionTestRule()
+    val sessionRule = GeckoSessionTestRule()
+
+    // Override this to include more `evaluate` rules in the chain
+    @get:Rule
+    open val rules = RuleChain.outerRule(sessionRule)
+
+    @get:Rule var temporaryProfile = TemporaryProfileRule()
 
     @get:Rule val errors = ErrorCollector()
 
@@ -183,6 +210,9 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
     fun GeckoSession.synthesizeTap(x: Int, y: Int) =
             sessionRule.synthesizeTap(this, x, y)
 
+    fun GeckoSession.synthesizeMouseMove(x: Int, y: Int) =
+            sessionRule.synthesizeMouseMove(this, x, y)
+
     fun GeckoSession.evaluateJS(js: String): Any? =
             sessionRule.evaluateJS(this, js)
 
@@ -208,6 +238,13 @@ open class BaseSessionTest(noErrorCollector: Boolean = false) {
     }
 
     fun GeckoSession.flushApzRepaints() = sessionRule.flushApzRepaints(this)
+
+    fun GeckoSession.promiseAllPaintsDone() = sessionRule.promiseAllPaintsDone(this)
+
+    fun GeckoSession.getLinkColor(selector: String) = sessionRule.getLinkColor(this, selector)
+
+    fun GeckoSession.setResolutionAndScaleTo(resolution: Float) =
+            sessionRule.setResolutionAndScaleTo(this, resolution)
 
     var GeckoSession.active: Boolean
             get() = sessionRule.getActive(this)

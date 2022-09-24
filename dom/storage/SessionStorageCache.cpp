@@ -8,12 +8,12 @@
 
 #include "LocalStorageManager.h"
 #include "StorageIPC.h"
+#include "mozilla/Assertions.h"
 #include "mozilla/dom/LSWriteOptimizer.h"
 #include "mozilla/dom/PBackgroundSessionStorageCache.h"
 #include "nsDOMString.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 void SSWriteOptimizer::Enumerate(nsTArray<SSWriteInfo>& aWriteInfos) {
   AssertIsOnOwningThread();
@@ -289,5 +289,4 @@ bool SessionStorageCache::DataSet::ProcessUsageDelta(int64_t aDelta) {
   return true;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

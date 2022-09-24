@@ -56,13 +56,9 @@ pref("toolkit.zoomManager.zoomValues", ".2,.3,.5,.67,.8,.9,1,1.1,1.2,1.33,1.5,1.
 pref("browser.viewport.defaultZoom", -1);
 
 // Show/Hide scrollbars when active/inactive
-pref("ui.showHideScrollbars", 1);
 pref("ui.useOverlayScrollbars", 1);
 pref("ui.scrollbarFadeBeginDelay", 450);
 pref("ui.scrollbarFadeDuration", 0);
-
-/* turn off the caret blink after 10 cycles */
-pref("ui.caretBlinkCount", 10);
 
 pref("browser.cache.memory_limit", 5120); // 5 MB
 
@@ -85,8 +81,8 @@ pref("network.http.max-persistent-connections-per-server", 6);
 pref("network.http.max-persistent-connections-per-proxy", 20);
 
 // spdy
-pref("network.http.spdy.push-allowance", 32768);
-pref("network.http.spdy.default-hpack-buffer", 4096); // 4k
+pref("network.http.http2.push-allowance", 32768);
+pref("network.http.http2.default-hpack-buffer", 4096); // 4k
 
 // http3
 pref("network.http.http3.default-qpack-table-size", 0);
@@ -198,10 +194,7 @@ pref("extensions.compatability.locales.buildid", "0");
 /* Don't let XPIProvider install distribution add-ons; we do our own thing on mobile. */
 pref("extensions.installDistroAddons", false);
 
-pref("extensions.webextPermissionPrompts", true);
 pref("extensions.webextOptionalPermissionPrompts", true);
-
-pref("extensions.webextensions.background-delayed-startup", true);
 
 pref("extensions.experiments.enabled", false);
 
@@ -355,9 +348,6 @@ pref("security.warn_viewing_mixed", false); // Warning is disabled.  See Bug 616
 // Enable pinning
 pref("security.cert_pinning.enforcement_level", 1);
 
-// Only fetch OCSP for EV certificates
-pref("security.OCSP.enabled", 2);
-
 /* prefs used by the update timer system (including blocklist pings) */
 pref("app.update.timerFirstInterval", 30000); // milliseconds
 pref("app.update.timerMinimumDelay", 30); // seconds
@@ -393,15 +383,6 @@ pref("apz.overscroll.enabled", true);
 pref("apz.second_tap_tolerance", "0.3");
 pref("apz.touch_move_tolerance", "0.03");
 pref("apz.touch_start_tolerance", "0.06");
-
-pref("layers.progressive-paint", true);
-pref("layers.low-precision-buffer", true);
-// We want to limit layers for two reasons:
-// 1) We can't scroll smoothly if we have to many draw calls
-// 2) Pages that have too many layers consume too much memory and crash.
-// By limiting the number of layers on mobile we're making the main thread
-// work harder keep scrolling smooth and memory low.
-pref("layers.max-active", 20);
 
 pref("notification.feature.enabled", true);
 
@@ -533,8 +514,6 @@ pref("media.plugins.enabled", true);
 // 16 = Force hardware decoding
 pref("media.stagefright.omxcodec.flags", 0);
 
-pref("layers.enable-tiles", true);
-
 // Enable the dynamic toolbar
 pref("browser.chrome.dynamictoolbar", true);
 
@@ -543,20 +522,6 @@ pref("browser.urlbar.autocomplete.enabled", true);
 
 // Hide common parts of URLs like "www." or "http://"
 pref("browser.urlbar.trimURLs", true);
-
-// initial web feed readers list
-pref("browser.contentHandlers.types.0.title", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.0.uri", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.0.type", "application/vnd.mozilla.maybe.feed");
-pref("browser.contentHandlers.types.1.title", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.1.uri", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.1.type", "application/vnd.mozilla.maybe.feed");
-pref("browser.contentHandlers.types.2.title", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.2.uri", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.2.type", "application/vnd.mozilla.maybe.feed");
-pref("browser.contentHandlers.types.3.title", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.3.uri", "chrome://browser/locale/region.properties");
-pref("browser.contentHandlers.types.3.type", "application/vnd.mozilla.maybe.feed");
 
 // Shortnumber matching needed for e.g. Brazil:
 // 01187654321 can be found with 87654321
@@ -655,4 +620,3 @@ pref("browser.tabs.remote.enforceRemoteTypeRestrictions", false);
 
 // Allow Web Authentication
 pref("security.webauth.webauthn_enable_android_fido2", true);
-pref("browser.tabs.remote.separatePrivilegedMozillaWebContentProcess", false);

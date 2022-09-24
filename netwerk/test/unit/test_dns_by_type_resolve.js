@@ -12,7 +12,11 @@ const dns = Cc["@mozilla.org/network/dns-service;1"].getService(
   Ci.nsIDNSService
 );
 
-function setup() {
+const { TestUtils } = ChromeUtils.import(
+  "resource://testing-common/TestUtils.jsm"
+);
+
+add_setup(async function setup() {
   let env = Cc["@mozilla.org/process/environment;1"].getService(
     Ci.nsIEnvironment
   );
@@ -21,12 +25,15 @@ function setup() {
   Assert.notEqual(h2Port, "");
 
   trr_test_setup();
-  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRFIRST);
-}
+  registerCleanupFunction(() => {
+    trr_clear_prefs();
+  });
 
-setup();
-registerCleanupFunction(() => {
-  trr_clear_prefs();
+  if (mozinfo.socketprocess_networking) {
+    await TestUtils.waitForCondition(() => Services.io.socketProcessLaunched);
+  }
+
+  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRFIRST);
 });
 
 let test_answer = "bXkgdm9pY2UgaXMgbXkgcGFzc3dvcmQ=";
@@ -39,7 +46,7 @@ add_task(async function testTXTResolve() {
     "https://foo.example.com:" + h2Port + "/doh"
   );
 
-  let [, inRecord] = await new TRRDNSListener("_esni.example.com", {
+  let { inRecord } = await new TRRDNSListener("_esni.example.com", {
     type: dns.RESOLVE_TYPE_TXT,
   });
 
@@ -55,7 +62,7 @@ add_task(async function testTXTRecordPushPart1() {
     "network.trr.uri",
     "https://foo.example.com:" + h2Port + "/txt-dns-push"
   );
-  let [, inRecord] = await new TRRDNSListener("_esni_push.example.com", {
+  let { inRecord } = await new TRRDNSListener("_esni_push.example.com", {
     type: dns.RESOLVE_TYPE_DEFAULT,
     expectedAnswer: "127.0.0.1",
   });
@@ -73,7 +80,7 @@ add_task(async function testTXTRecordPushPart2() {
     "network.trr.uri",
     "https://foo.example.com:" + h2Port + "/404"
   );
-  let [, inRecord] = await new TRRDNSListener("_esni_push.example.com", {
+  let { inRecord } = await new TRRDNSListener("_esni_push.example.com", {
     type: dns.RESOLVE_TYPE_TXT,
   });
 

@@ -8,7 +8,6 @@
 
 #include "ActorsChild.h"  // IndexedDB
 #include "BroadcastChannelChild.h"
-#include "FileDescriptorSetChild.h"
 #ifdef MOZ_WEBRTC
 #  include "CamerasChild.h"
 #endif
@@ -46,17 +45,14 @@
 #include "mozilla/dom/ServiceWorkerContainerChild.h"
 #include "mozilla/dom/ServiceWorkerManagerChild.h"
 #include "mozilla/dom/BrowserChild.h"
-#include "mozilla/dom/VsyncChild.h"
-#include "mozilla/ipc/IPCStreamAlloc.h"
 #include "mozilla/ipc/PBackgroundTestChild.h"
-#include "mozilla/ipc/PChildToParentStreamChild.h"
-#include "mozilla/ipc/PParentToChildStreamChild.h"
 #include "mozilla/net/HttpBackgroundChannelChild.h"
 #include "mozilla/net/PUDPSocketChild.h"
 #include "mozilla/dom/network/UDPSocketChild.h"
 #include "mozilla/dom/WebAuthnTransactionChild.h"
 #include "mozilla/dom/MIDIPortChild.h"
 #include "mozilla/dom/MIDIManagerChild.h"
+#include "mozilla/psm/IPCClientCertsChild.h"
 #include "mozilla/RemoteLazyInputStreamChild.h"
 #include "nsID.h"
 #include "nsTraceRefcnt.h"
@@ -387,43 +383,6 @@ bool BackgroundChildImpl::DeallocPFileCreatorChild(PFileCreatorChild* aActor) {
   return true;
 }
 
-already_AddRefed<PRemoteLazyInputStreamChild>
-BackgroundChildImpl::AllocPRemoteLazyInputStreamChild(const nsID& aID,
-                                                      const uint64_t& aSize) {
-  RefPtr<RemoteLazyInputStreamChild> actor =
-      new RemoteLazyInputStreamChild(aID, aSize);
-  return actor.forget();
-}
-
-PFileDescriptorSetChild* BackgroundChildImpl::AllocPFileDescriptorSetChild(
-    const FileDescriptor& aFileDescriptor) {
-  return new FileDescriptorSetChild(aFileDescriptor);
-}
-
-bool BackgroundChildImpl::DeallocPFileDescriptorSetChild(
-    PFileDescriptorSetChild* aActor) {
-  MOZ_ASSERT(aActor);
-
-  delete static_cast<FileDescriptorSetChild*>(aActor);
-  return true;
-}
-
-dom::PVsyncChild* BackgroundChildImpl::AllocPVsyncChild() {
-  RefPtr<dom::VsyncChild> actor = new dom::VsyncChild();
-  // There still has one ref-count after return, and it will be released in
-  // DeallocPVsyncChild().
-  return actor.forget().take();
-}
-
-bool BackgroundChildImpl::DeallocPVsyncChild(PVsyncChild* aActor) {
-  MOZ_ASSERT(aActor);
-
-  // This actor already has one ref-count. Please check AllocPVsyncChild().
-  RefPtr<dom::VsyncChild> actor =
-      dont_AddRef(static_cast<dom::VsyncChild*>(aActor));
-  return true;
-}
-
 PUDPSocketChild* BackgroundChildImpl::AllocPUDPSocketChild(
     const Maybe<PrincipalInfo>& aPrincipalInfo, const nsCString& aFilter) {
   MOZ_CRASH("AllocPUDPSocket should not be called");
@@ -538,28 +497,6 @@ bool BackgroundChildImpl::DeallocPMessagePortChild(PMessagePortChild* aActor) {
   RefPtr<dom::MessagePortChild> child =
       dont_AddRef(static_cast<dom::MessagePortChild*>(aActor));
   MOZ_ASSERT(child);
-  return true;
-}
-
-PChildToParentStreamChild*
-BackgroundChildImpl::AllocPChildToParentStreamChild() {
-  MOZ_CRASH("PChildToParentStreamChild actors should be manually constructed!");
-}
-
-bool BackgroundChildImpl::DeallocPChildToParentStreamChild(
-    PChildToParentStreamChild* aActor) {
-  delete aActor;
-  return true;
-}
-
-PParentToChildStreamChild*
-BackgroundChildImpl::AllocPParentToChildStreamChild() {
-  return mozilla::ipc::AllocPParentToChildStreamChild();
-}
-
-bool BackgroundChildImpl::DeallocPParentToChildStreamChild(
-    PParentToChildStreamChild* aActor) {
-  delete aActor;
   return true;
 }
 
@@ -685,17 +622,6 @@ bool BackgroundChildImpl::DeallocPMediaTransportChild(
     dom::PMediaTransportChild* aActor) {
   delete aActor;
   return true;
-}
-
-PChildToParentStreamChild*
-BackgroundChildImpl::SendPChildToParentStreamConstructor(
-    PChildToParentStreamChild* aActor) {
-  return PBackgroundChild::SendPChildToParentStreamConstructor(aActor);
-}
-
-PFileDescriptorSetChild* BackgroundChildImpl::SendPFileDescriptorSetConstructor(
-    const FileDescriptor& aFD) {
-  return PBackgroundChild::SendPFileDescriptorSetConstructor(aFD);
 }
 
 }  // namespace mozilla::ipc

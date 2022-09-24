@@ -11,7 +11,8 @@
 #include "nsIScriptGlobalObject.h"
 
 #include "jsapi.h"
-#include "js/Object.h"  // JS::GetClass
+#include "js/Object.h"              // JS::GetClass
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 #include "mozilla/ClearOnShutdown.h"
 #include "mozilla/ContentEvents.h"
 #include "mozilla/EventDispatcher.h"
@@ -21,7 +22,9 @@
 #include "mozilla/dom/ErrorEvent.h"
 #include "mozilla/dom/ErrorEventBinding.h"
 #include "mozilla/dom/WorkerScope.h"
-#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/RootedDictionary.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
+#include "mozilla/intl/LocaleCanonicalizer.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "nsContentUtils.h"
@@ -38,7 +41,6 @@
 #include "ProfilerHelpers.h"
 #include "ScriptErrorHelper.h"
 #include "nsCharSeparatedTokenizer.h"
-#include "unicode/locid.h"
 
 // Bindings for ResolveConstructors
 #include "mozilla/dom/IDBCursorBinding.h"
@@ -102,8 +104,6 @@ class FileManagerInfo {
 using namespace mozilla::dom::indexedDB;
 
 namespace {
-
-NS_DEFINE_IID(kIDBPrivateRequestIID, PRIVATE_IDBREQUEST_IID);
 
 // The threshold we use for structured clone data storing.
 // Anything smaller than the threshold is compressed and stored in the database.
@@ -253,7 +253,7 @@ IndexedDatabaseManager* IndexedDatabaseManager::GetOrCreate() {
 
     RefPtr<IndexedDatabaseManager> instance(new IndexedDatabaseManager());
 
-    QM_TRY(instance->Init(), nullptr);
+    QM_TRY(MOZ_TO_RESULT(instance->Init()), nullptr);
 
     if (gInitialized.exchange(true)) {
       NS_ERROR("Initialized more than once?!");
@@ -323,11 +323,11 @@ nsresult IndexedDatabaseManager::Init() {
   // Split values on commas.
   for (const auto& lang :
        nsCCharSeparatedTokenizer(acceptLang, ',').ToRange()) {
-    icu::Locale locale =
-        icu::Locale::createCanonical(PromiseFlatCString(lang).get());
-    if (!locale.isBogus()) {
-      // icu::Locale::getBaseName is always ASCII as per BCP 47
-      mLocale.AssignASCII(locale.getBaseName());
+    mozilla::intl::LocaleCanonicalizer::Vector asciiString{};
+    auto result = mozilla::intl::LocaleCanonicalizer::CanonicalizeICULevel1(
+        PromiseFlatCString(lang).get(), asciiString);
+    if (result.isOk()) {
+      mLocale.AssignASCII(asciiString);
       break;
     }
   }
@@ -408,8 +408,9 @@ nsresult IndexedDatabaseManager::CommonPostHandleEvent(
 
   // Only mess with events that were originally targeted to an IDBRequest.
   RefPtr<IDBRequest> request;
-  if (NS_FAILED(eventTarget->QueryInterface(kIDBPrivateRequestIID,
-                                            getter_AddRefs(request))) ||
+  if (NS_FAILED(eventTarget->QueryInterface(
+          NS_GET_IID(mozilla::dom::detail::PrivateIDBRequest),
+          getter_AddRefs(request))) ||
       !request) {
     return NS_OK;
   }
@@ -458,7 +459,7 @@ nsresult IndexedDatabaseManager::CommonPostHandleEvent(
 
     errorEvent->SetTrusted(true);
 
-    auto* target = static_cast<EventTarget*>(globalScope.get());
+    RefPtr<EventTarget> target = static_cast<EventTarget*>(globalScope.get());
 
     if (NS_WARN_IF(NS_FAILED(EventDispatcher::DispatchDOMEvent(
             target,
@@ -611,7 +612,7 @@ bool IndexedDatabaseManager::ExperimentalFeaturesEnabled(JSContext* aCx,
   // actually going through IndexedDatabaseManager.
   // See Bug 1198093 comment 14 for detailed explanation.
   MOZ_DIAGNOSTIC_ASSERT(JS_IsGlobalObject(aGlobal));
-  if (IsNonExposedGlobal(aCx, aGlobal, GlobalNames::BackstagePass)) {
+  if (!strcmp(JS::GetClass(aGlobal)->name, "BackstagePass")) {
     MOZ_ASSERT(NS_IsMainThread());
     static bool featureRetrieved = false;
     if (!featureRetrieved) {

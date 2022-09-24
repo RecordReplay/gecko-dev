@@ -20,6 +20,7 @@
 #include "mozilla/InitializedOnce.h"
 #include "mozilla/NotNull.h"
 #include "mozilla/dom/quota/QuotaCommon.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/dom/quota/ScopedLogExtraInfo.h"
 
 namespace mozilla::dom::quota {
@@ -93,7 +94,7 @@ class CachingDatabaseConnection {
                                   BindFunctor&& aBindFunctor) {
     QM_TRY_INSPECT(const auto& stmt, BorrowCachedStatement(aQuery));
     QM_TRY(std::forward<BindFunctor>(aBindFunctor)(*stmt));
-    QM_TRY(stmt->Execute());
+    QM_TRY(MOZ_TO_RESULT(stmt->Execute()));
 
     return NS_OK;
   }
@@ -209,8 +210,9 @@ class CachingDatabaseConnection::LazyStatement final {
 
     QM_TRY(std::forward<BindFunctor>(aBindFunctor)(*borrowedStatement));
 
-    QM_TRY_INSPECT(const bool& hasResult,
-                   MOZ_TO_RESULT_INVOKE(&*borrowedStatement, ExecuteStep));
+    QM_TRY_INSPECT(
+        const bool& hasResult,
+        MOZ_TO_RESULT_INVOKE_MEMBER(&*borrowedStatement, ExecuteStep));
 
     return hasResult ? Some(std::move(borrowedStatement)) : Nothing{};
   }

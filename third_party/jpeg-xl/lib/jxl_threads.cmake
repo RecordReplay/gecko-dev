@@ -6,6 +6,7 @@
 find_package(Threads REQUIRED)
 
 set(JPEGXL_THREADS_SOURCES
+  threads/resizable_parallel_runner.cc
   threads/thread_parallel_runner.cc
   threads/thread_parallel_runner_internal.cc
   threads/thread_parallel_runner_internal.h
@@ -42,7 +43,10 @@ set_target_properties(${_target} PROPERTIES
 if (NOT WIN32)
   set_target_properties(${_target} PROPERTIES OUTPUT_NAME "jxl_threads")
 endif()
-install(TARGETS ${_target} DESTINATION ${CMAKE_INSTALL_LIBDIR})
+install(TARGETS ${_target}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 endfunction()
 
@@ -60,7 +64,7 @@ target_compile_definitions(jxl_threads-static
 
 ### Public shared library.
 if (((NOT DEFINED "${TARGET_SUPPORTS_SHARED_LIBS}") OR
-     TARGET_SUPPORTS_SHARED_LIBS) AND NOT JPEGXL_STATIC)
+     TARGET_SUPPORTS_SHARED_LIBS) AND NOT JPEGXL_STATIC AND BUILD_SHARED_LIBS)
 add_library(jxl_threads SHARED ${JPEGXL_THREADS_SOURCES})
 _set_jxl_threads(jxl_threads)
 
@@ -69,6 +73,18 @@ set_target_properties(jxl_threads PROPERTIES
   SOVERSION ${JPEGXL_LIBRARY_SOVERSION}
   LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+  set_target_properties(jxl_threads PROPERTIES
+      LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/jxl/jxl.version)
+  if(APPLE)
+  set_property(TARGET ${target} APPEND_STRING PROPERTY
+      LINK_FLAGS "-Wl,-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/jxl/jxl_osx.syms")
+  elseif(WIN32)
+    # Nothing needed here, we use __declspec(dllexport) (jxl_threads_export.h)
+  else()
+  set_property(TARGET jxl_threads APPEND_STRING PROPERTY
+      LINK_FLAGS " -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/jxl/jxl.version")
+  endif()  # APPLE
 
 # Compile the shared library such that the JXL_THREADS_EXPORT symbols are
 # exported. Users of the library will not set this flag and therefore import
@@ -88,7 +104,8 @@ add_library(jxl_threads ALIAS jxl_threads-static)
 generate_export_header(jxl_threads-static
   BASE_NAME JXL_THREADS
   EXPORT_FILE_NAME include/jxl/jxl_threads_export.h)
-endif()  # TARGET_SUPPORTS_SHARED_LIBS AND NOT JPEGXL_STATIC
+endif()  # TARGET_SUPPORTS_SHARED_LIBS AND NOT JPEGXL_STATIC AND
+         # BUILD_SHARED_LIBS
 
 
 ### Add a pkg-config file for libjxl_threads.

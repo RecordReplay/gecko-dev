@@ -4,7 +4,6 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#include "nsContentUtils.h"
 #include "nsThreadUtils.h"
 #include "mozilla/AbstractThread.h"
 #include "mozilla/Logging.h"
@@ -31,7 +30,7 @@ namespace mozilla {
 //
 // class IPCTimeout
 //
-NS_IMPL_ISUPPORTS(IPCTimeout, nsIObserver)
+NS_IMPL_ISUPPORTS(IPCTimeout, nsITimerCallback, nsINamed)
 
 // static
 IPCTimeout* IPCTimeout::CreateInstance(AggregatedResults* aResults) {
@@ -47,7 +46,7 @@ IPCTimeout::IPCTimeout(AggregatedResults* aResults, uint32_t aDelay)
     : mResults(aResults) {
   MOZ_ASSERT(aResults);
   MOZ_ASSERT(aDelay > 0);
-  mozilla::DebugOnly<nsresult> rv = NS_NewTimerWithObserver(
+  mozilla::DebugOnly<nsresult> rv = NS_NewTimerWithCallback(
       getter_AddRefs(mTimer), this, aDelay, nsITimer::TYPE_ONE_SHOT);
   MOZ_ASSERT(NS_SUCCEEDED(rv));
   LOG(("IPCTimeout timer created"));
@@ -64,11 +63,15 @@ void IPCTimeout::Cancel() {
 }
 
 NS_IMETHODIMP
-IPCTimeout::Observe(nsISupports* aSubject, const char* aTopic,
-                    const char16_t* aData) {
-  MOZ_ASSERT(strcmp(aTopic, NS_TIMER_CALLBACK_TOPIC) == 0);
+IPCTimeout::Notify(nsITimer* aTimer) {
   LOG(("IPCTimeout timer triggered"));
   mResults->ResolveNow();
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+IPCTimeout::GetName(nsACString& aName) {
+  aName.AssignLiteral("IPCTimeout");
   return NS_OK;
 }
 
@@ -214,7 +217,7 @@ RefPtr<RequestMetricsPromise>
 PerformanceMetricsCollector::RequestMetricsInternal() {
   // each request has its own UUID
   nsID uuid;
-  nsresult rv = nsContentUtils::GenerateUUIDInPlace(uuid);
+  nsresult rv = nsID::GenerateUUIDInPlace(uuid);
   if (NS_WARN_IF(NS_FAILED(rv))) {
     return RequestMetricsPromise::CreateAndReject(rv, __func__);
   }

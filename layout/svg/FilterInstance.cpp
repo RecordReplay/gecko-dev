@@ -28,6 +28,8 @@
 #include "mozilla/StaticPrefs_gfx.h"
 #include "mozilla/SVGFilterInstance.h"
 #include "mozilla/SVGUtils.h"
+#include "mozilla/dom/Document.h"
+#include "nsLayoutUtils.h"
 #include "CSSFilterInstance.h"
 #include "SVGIntegrationUtils.h"
 
@@ -60,20 +62,19 @@ static UniquePtr<UserSpaceMetrics> UserSpaceMetricsForFrame(nsIFrame* aFrame) {
 }
 
 void FilterInstance::PaintFilteredFrame(
-    nsIFrame* aFilteredFrame, gfxContext* aCtx,
-    const SVGFilterPaintCallback& aPaintCallback, const nsRegion* aDirtyArea,
-    imgDrawingParams& aImgParams, float aOpacity) {
-  auto filterChain = aFilteredFrame->StyleEffects()->mFilters.AsSpan();
+    nsIFrame* aFilteredFrame, Span<const StyleFilter> aFilterChain,
+    gfxContext* aCtx, const SVGFilterPaintCallback& aPaintCallback,
+    const nsRegion* aDirtyArea, imgDrawingParams& aImgParams, float aOpacity) {
   UniquePtr<UserSpaceMetrics> metrics =
       UserSpaceMetricsForFrame(aFilteredFrame);
 
   gfxContextMatrixAutoSaveRestore autoSR(aCtx);
-  gfxSize scaleFactors = aCtx->CurrentMatrixDouble().ScaleFactors();
-  if (scaleFactors.IsEmpty()) {
+  auto scaleFactors = aCtx->CurrentMatrixDouble().ScaleFactors();
+  if (scaleFactors.xScale == 0 || scaleFactors.yScale == 0) {
     return;
   }
 
-  gfxMatrix scaleMatrix(scaleFactors.width, 0.0f, 0.0f, scaleFactors.height,
+  gfxMatrix scaleMatrix(scaleFactors.xScale, 0.0f, 0.0f, scaleFactors.yScale,
                         0.0f, 0.0f);
 
   gfxMatrix reverseScaleMatrix = scaleMatrix;
@@ -89,7 +90,7 @@ void FilterInstance::PaintFilteredFrame(
   // Hardcode InputIsTainted to true because we don't want JS to be able to
   // read the rendered contents of aFilteredFrame.
   FilterInstance instance(aFilteredFrame, aFilteredFrame->GetContent(),
-                          *metrics, filterChain, /* InputIsTainted */ true,
+                          *metrics, aFilterChain, /* InputIsTainted */ true,
                           aPaintCallback, scaleMatrixInDevUnits, aDirtyArea,
                           nullptr, nullptr, nullptr);
   if (instance.IsInitialized()) {
@@ -119,7 +120,23 @@ static mozilla::wr::ComponentTransferFuncType FuncTypeToWr(uint8_t aFuncType) {
 bool FilterInstance::BuildWebRenderFilters(nsIFrame* aFilteredFrame,
                                            Span<const StyleFilter> aFilters,
                                            WrFiltersHolder& aWrFilters,
-                                           Maybe<nsRect>& aPostFilterClip) {
+                                           Maybe<nsRect>& aPostFilterClip,
+                                           bool& aInitialized) {
+  bool status = BuildWebRenderFiltersImpl(aFilteredFrame, aFilters, aWrFilters,
+                                          aPostFilterClip, aInitialized);
+  if (!status) {
+    aFilteredFrame->PresContext()->Document()->SetUseCounter(
+        eUseCounter_custom_WrFilterFallback);
+  }
+
+  return status;
+}
+
+bool FilterInstance::BuildWebRenderFiltersImpl(nsIFrame* aFilteredFrame,
+                                               Span<const StyleFilter> aFilters,
+                                               WrFiltersHolder& aWrFilters,
+                                               Maybe<nsRect>& aPostFilterClip,
+                                               bool& aInitialized) {
   aWrFilters.filters.Clear();
   aWrFilters.filter_datas.Clear();
   aWrFilters.values.Clear();
@@ -142,7 +159,8 @@ bool FilterInstance::BuildWebRenderFilters(nsIFrame* aFilteredFrame,
                           nullptr);
 
   if (!instance.IsInitialized()) {
-    return false;
+    aInitialized = false;
+    return true;
   }
 
   // If there are too many filters to render, then just pretend that we
@@ -507,7 +525,7 @@ bool FilterInstance::ComputeTargetBBoxInFilterSpace() {
 
 bool FilterInstance::ComputeUserSpaceToFilterSpaceScale() {
   if (mTargetFrame) {
-    mUserSpaceToFilterSpaceScale = mPaintTransform.ScaleFactors();
+    mUserSpaceToFilterSpaceScale = mPaintTransform.ScaleFactors().ToSize();
     if (mUserSpaceToFilterSpaceScale.width <= 0.0f ||
         mUserSpaceToFilterSpaceScale.height <= 0.0f) {
       // Nothing should be rendered.

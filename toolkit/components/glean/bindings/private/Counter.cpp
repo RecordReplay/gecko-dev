@@ -19,27 +19,24 @@ namespace impl {
 
 void CounterMetric::Add(int32_t aAmount) const {
   auto scalarId = ScalarIdForMetric(mId);
-  if (scalarId) {
-    Telemetry::ScalarAdd(scalarId.extract(), aAmount);
-  } else if (IsSubmetricId(mId)) {
-    auto lock = GetLabeledMirrorLock();
-    auto tuple = lock.ref()->MaybeGet(mId);
-    if (tuple && aAmount > 0) {
-      Telemetry::ScalarSet(Get<0>(tuple.ref()), Get<1>(tuple.ref()),
-                           (uint32_t)aAmount);
+  if (aAmount >= 0) {
+    if (scalarId) {
+      Telemetry::ScalarAdd(scalarId.extract(), aAmount);
+    } else if (IsSubmetricId(mId)) {
+      GetLabeledMirrorLock().apply([&](auto& lock) {
+        auto tuple = lock.ref()->MaybeGet(mId);
+        if (tuple && aAmount > 0) {
+          Telemetry::ScalarAdd(Get<0>(tuple.ref()), Get<1>(tuple.ref()),
+                               (uint32_t)aAmount);
+        }
+      });
     }
   }
-#ifndef MOZ_GLEAN_ANDROID
   fog_counter_add(mId, aAmount);
-#endif
 }
 
 Result<Maybe<int32_t>, nsCString> CounterMetric::TestGetValue(
     const nsACString& aPingName) const {
-#ifdef MOZ_GLEAN_ANDROID
-  Unused << mId;
-  return Maybe<int32_t>();
-#else
   nsCString err;
   if (fog_counter_test_get_error(mId, &aPingName, &err)) {
     return Err(err);
@@ -48,7 +45,6 @@ Result<Maybe<int32_t>, nsCString> CounterMetric::TestGetValue(
     return Maybe<int32_t>();  // can't use Nothing() or templates will fail.
   }
   return Some(fog_counter_test_get_value(mId, &aPingName));
-#endif
 }
 
 }  // namespace impl

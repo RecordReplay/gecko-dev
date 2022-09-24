@@ -30,6 +30,9 @@ const MAX_TIME_DIFFERENCE = 3000;
 // times are modified (10 hours old).
 const MAKE_FILE_OLD_DIFFERENCE = 10 * 3600 * 1000;
 
+const { AddonManager, AddonManagerPrivate } = ChromeUtils.import(
+  "resource://gre/modules/AddonManager.jsm"
+);
 var { AppConstants } = ChromeUtils.import(
   "resource://gre/modules/AppConstants.jsm"
 );
@@ -207,13 +210,6 @@ Object.defineProperty(this, "TEST_UNPACKED", {
     AddonTestUtils.testUnpacked = val;
   },
 });
-
-// We need some internal bits of AddonManager
-var AMscope = ChromeUtils.import(
-  "resource://gre/modules/AddonManager.jsm",
-  null
-);
-var { AddonManager, AddonManagerInternal, AddonManagerPrivate } = AMscope;
 
 const promiseAddonByID = AddonManager.getAddonByID;
 const promiseAddonsByIDs = AddonManager.getAddonsByIDs;
@@ -1199,14 +1195,13 @@ async function mockGfxBlocklistItemsFromDisk(path) {
 }
 
 async function mockGfxBlocklistItems(items) {
-  const { generateUUID } = Cc["@mozilla.org/uuid-generator;1"].getService(
-    Ci.nsIUUIDGenerator
+  const { generateUUID } = Services.uuid;
+  const { BlocklistPrivate } = ChromeUtils.import(
+    "resource://gre/modules/Blocklist.jsm"
   );
-  let bsPass = ChromeUtils.import("resource://gre/modules/Blocklist.jsm", null);
-  const client = RemoteSettings(
-    Services.prefs.getCharPref("services.blocklist.gfx.collection"),
-    { bucketNamePref: "services.blocklist.bucket" }
-  );
+  const client = RemoteSettings("gfx", {
+    bucketName: "blocklists",
+  });
   const records = items.map(item => {
     if (item.id && item.last_modified) {
       return item;
@@ -1223,7 +1218,7 @@ async function mockGfxBlocklistItems(items) {
   await client.db.importChanges({}, collectionTimestamp, records, {
     clear: true,
   });
-  let rv = await bsPass.GfxBlocklistRS.checkForEntries();
+  let rv = await BlocklistPrivate.GfxBlocklistRS.checkForEntries();
   return rv;
 }
 

@@ -48,10 +48,12 @@
 #include "mozilla/dom/BindContext.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/Element.h"
+#include "mozilla/dom/PContent.h"  // For TextRecognitionResult
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/ImageTracker.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/net/UrlClassifierFeatureFactory.h"
+#include "mozilla/widget/TextRecognition.h"
 
 #include "Orientation.h"
 
@@ -93,9 +95,7 @@ const nsAttrValue::EnumTable* nsImageLoadingContent::kDecodingTableDefault =
     &nsImageLoadingContent::kDecodingTable[0];
 
 nsImageLoadingContent::nsImageLoadingContent()
-    : mCurrentRequestFlags(0),
-      mPendingRequestFlags(0),
-      mObserverList(nullptr),
+    : mObserverList(nullptr),
       mOutstandingDecodePromises(0),
       mRequestGeneration(0),
       mLoadingEnabled(true),
@@ -161,8 +161,7 @@ void nsImageLoadingContent::Notify(imgIRequest* aRequest, int32_t aType,
   }
 
   if (aType == imgINotificationObserver::UNLOCKED_DRAW) {
-    OnUnlockedDraw();
-    return;
+    return OnUnlockedDraw();
   }
 
   {
@@ -205,11 +204,8 @@ void nsImageLoadingContent::Notify(imgIRequest* aRequest, int32_t aType,
        */
       if (net::UrlClassifierFeatureFactory::IsClassifierBlockingErrorCode(
               errorCode)) {
-        nsCOMPtr<nsIContent> thisNode =
-            do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-
         Document* doc = GetOurOwnerDoc();
-        doc->AddBlockedNodeByClassifier(thisNode);
+        doc->AddBlockedNodeByClassifier(AsContent());
       }
     }
     nsresult status =
@@ -275,38 +271,19 @@ void nsImageLoadingContent::OnLoadComplete(imgIRequest* aRequest,
     FireEvent(u"loadend"_ns);
   }
 
-  nsCOMPtr<nsINode> thisNode =
-      do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
-  SVGObserverUtils::InvalidateDirectRenderingObservers(thisNode->AsElement());
+  SVGObserverUtils::InvalidateDirectRenderingObservers(
+      AsContent()->AsElement());
   MaybeResolveDecodePromises();
 }
 
-static bool ImageIsAnimated(imgIRequest* aRequest) {
-  if (!aRequest) {
-    return false;
-  }
-
-  nsCOMPtr<imgIContainer> image;
-  if (NS_SUCCEEDED(aRequest->GetImage(getter_AddRefs(image)))) {
-    bool isAnimated = false;
-    nsresult rv = image->GetAnimated(&isAnimated);
-    if (NS_SUCCEEDED(rv) && isAnimated) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 void nsImageLoadingContent::OnUnlockedDraw() {
-  // It's OK for non-animated images to wait until the next frame visibility
-  // update to become locked. (And that's preferable, since in the case of
-  // scrolling it keeps memory usage minimal.) For animated images, though, we
-  // want to mark them visible right away so we can call
-  // IncrementAnimationConsumers() on them and they'll start animating.
-  if (!ImageIsAnimated(mCurrentRequest) && !ImageIsAnimated(mPendingRequest)) {
-    return;
-  }
+  // This notification is only sent for animated images. It's OK for
+  // non-animated images to wait until the next frame visibility update to
+  // become locked. (And that's preferable, since in the case of scrolling it
+  // keeps memory usage minimal.)
+  //
+  // For animated images, though, we want to mark them visible right away so we
+  // can call IncrementAnimationConsumers() on them and they'll start animating.
 
   nsIFrame* frame = GetOurPrimaryFrame();
   if (!frame) {
@@ -332,11 +309,17 @@ void nsImageLoadingContent::OnUnlockedDraw() {
 }
 
 void nsImageLoadingContent::OnImageIsAnimated(imgIRequest* aRequest) {
-  bool* requestFlag = GetRegisteredFlagForRequest(aRequest);
-  if (requestFlag) {
-    nsLayoutUtils::RegisterImageRequest(GetFramePresContext(), aRequest,
-                                        requestFlag);
+  bool* requestFlag = nullptr;
+  if (aRequest == mCurrentRequest) {
+    requestFlag = &mCurrentRequestRegistered;
+  } else if (aRequest == mPendingRequest) {
+    requestFlag = &mPendingRequestRegistered;
+  } else {
+    MOZ_ASSERT_UNREACHABLE("Which image is this?");
+    return;
   }
+  nsLayoutUtils::RegisterImageRequest(GetFramePresContext(), aRequest,
+                                      requestFlag);
 }
 
 /*
@@ -1176,6 +1159,14 @@ nsresult nsImageLoadingContent::LoadImage(nsIURI* aNewURI, bool aForce,
   aDocument->ForgetImagePreload(aNewURI);
 
   if (NS_SUCCEEDED(rv)) {
+    // Based on performance testing unsuppressing painting soon after the page
+    // has gotten an image may improve visual metrics.
+    if (Document* doc = element->GetComposedDoc()) {
+      if (PresShell* shell = doc->GetPresShell()) {
+        shell->TryUnsuppressPaintingSoon();
+      }
+    }
+
     CloneScriptedRequests(req);
     TrackImage(req);
     ResetAnimationIfNeeded();
@@ -1218,6 +1209,57 @@ void nsImageLoadingContent::ForceImageState(bool aForce,
                                             EventStates::InternalType aState) {
   mIsImageStateForced = aForce;
   mForcedImageState = EventStates(aState);
+}
+
+already_AddRefed<Promise> nsImageLoadingContent::RecognizeCurrentImageText(
+    ErrorResult& aRv) {
+  using widget::TextRecognition;
+
+  if (!mCurrentRequest) {
+    aRv.ThrowInvalidStateError("No current request");
+    return nullptr;
+  }
+  nsCOMPtr<imgIContainer> image;
+  mCurrentRequest->GetImage(getter_AddRefs(image));
+  if (!image) {
+    aRv.ThrowInvalidStateError("No image");
+    return nullptr;
+  }
+
+  RefPtr<Promise> domPromise =
+      Promise::Create(GetOurOwnerDoc()->GetScopeObject(), aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  TextRecognition::FindText(*image)->Then(
+      GetCurrentSerialEventTarget(), __func__,
+      [weak = RefPtr{do_GetWeakReference(this)},
+       request = RefPtr{mCurrentRequest}, domPromise](
+          TextRecognition::NativePromise::ResolveOrRejectValue&& aValue) {
+        if (aValue.IsReject()) {
+          domPromise->MaybeRejectWithNotSupportedError(aValue.RejectValue());
+          return;
+        }
+        RefPtr<nsIImageLoadingContent> iilc = do_QueryReferent(weak.get());
+        if (!iilc) {
+          domPromise->MaybeRejectWithInvalidStateError(
+              "Element was dead when we got the results");
+          return;
+        }
+        auto* ilc = static_cast<nsImageLoadingContent*>(iilc.get());
+        if (ilc->mCurrentRequest != request) {
+          domPromise->MaybeRejectWithInvalidStateError("Request not current");
+          return;
+        }
+        Element* el = ilc->AsContent()->AsElement();
+        el->AttachAndSetUAShadowRoot(Element::NotifyUAWidgetSetup::No);
+        TextRecognition::FillShadow(*el->GetShadowRoot(),
+                                    aValue.ResolveValue());
+        // TODO: Maybe resolve with the recognition results?
+        domPromise->MaybeResolveWithUndefined();
+      });
+  return domPromise.forget();
 }
 
 CSSIntSize nsImageLoadingContent::GetWidthHeightForImage() {
@@ -1363,8 +1405,7 @@ nsresult nsImageLoadingContent::FireEvent(const nsAString& aEventType,
   // loops in cases when onLoad handlers reset the src and the new src is in
   // cache.
 
-  nsCOMPtr<nsINode> thisNode =
-      do_QueryInterface(static_cast<nsIImageLoadingContent*>(this));
+  nsCOMPtr<nsINode> thisNode = AsContent();
 
   RefPtr<AsyncEventDispatcher> loadBlockingAsyncDispatcher =
       new LoadBlockingAsyncEventDispatcher(thisNode, aEventType, CanBubble::eNo,
@@ -1547,17 +1588,6 @@ void nsImageLoadingContent::ClearPendingRequest(
   mPendingRequest->CancelAndForgetObserver(aReason);
   mPendingRequest = nullptr;
   mPendingRequestFlags = 0;
-}
-
-bool* nsImageLoadingContent::GetRegisteredFlagForRequest(
-    imgIRequest* aRequest) {
-  if (aRequest == mCurrentRequest) {
-    return &mCurrentRequestRegistered;
-  }
-  if (aRequest == mPendingRequest) {
-    return &mPendingRequestRegistered;
-  }
-  return nullptr;
 }
 
 void nsImageLoadingContent::ResetAnimationIfNeeded() {

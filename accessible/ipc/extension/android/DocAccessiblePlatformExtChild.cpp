@@ -12,7 +12,7 @@
 namespace mozilla {
 namespace a11y {
 
-mozilla::ipc::IPCResult DocAccessiblePlatformExtChild::RecvPivot(
+mozilla::ipc::IPCResult DocAccessiblePlatformExtChild::RecvPivotTo(
     uint64_t aID, int32_t aGranularity, bool aForward, bool aInclusive) {
   if (auto acc = IdToAccessibleWrap(aID)) {
     acc->PivotTo(aGranularity, aForward, aInclusive);
@@ -60,15 +60,6 @@ mozilla::ipc::IPCResult DocAccessiblePlatformExtChild::RecvCopy(uint64_t aID) {
 mozilla::ipc::IPCResult DocAccessiblePlatformExtChild::RecvPaste(uint64_t aID) {
   if (auto acc = IdToAccessibleWrap(aID)) {
     acc->Paste();
-  }
-
-  return IPC_OK();
-}
-
-mozilla::ipc::IPCResult DocAccessiblePlatformExtChild::RecvExploreByTouch(
-    uint64_t aID, float aX, float aY) {
-  if (auto acc = IdToAccessibleWrap(aID)) {
-    acc->ExploreByTouch(aX, aY);
   }
 
   return IPC_OK();

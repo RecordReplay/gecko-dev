@@ -3,7 +3,7 @@ set -x -e -v
 
 export TARGET_TRIPLE="x86_64-apple-darwin"
 
-MACOS_SYSROOT="${MOZ_FETCHES_DIR}/MacOSX10.12.sdk"
+MACOS_SYSROOT="${MOZ_FETCHES_DIR}/MacOSX11.0.sdk"
 CLANGDIR="${MOZ_FETCHES_DIR}/clang"
 
 # Deploy the wrench dependencies
@@ -29,7 +29,7 @@ END_PKGCONFIG_WRAPPER
 chmod +x "${TARGET_TRIPLE}-pkg-config"
 popd
 
-export PATH="${MOZ_FETCHES_DIR}/rustc/bin:${MOZ_FETCHES_DIR}/cctools/bin:${MOZ_FETCHES_DIR}/clang/bin:${MOZ_FETCHES_DIR}/llvm-dsymutil/bin:${MOZ_FETCHES_DIR}/wrench-deps/meson:${PATH}"
+export PATH="${MOZ_FETCHES_DIR}/rustc/bin:${MOZ_FETCHES_DIR}/cctools/bin:${MOZ_FETCHES_DIR}/clang/bin:${MOZ_FETCHES_DIR}/wrench-deps/meson:${PATH}"
 
 # The x86_64-darwin11-ld linker from cctools requires libraries provided
 # by clang, so we need to set LD_LIBRARY_PATH for that to work.
@@ -55,5 +55,6 @@ export AR="${CLANGDIR}/bin/llvm-ar"
 # the right arguments to the linker when invoked by cargo is nigh impossible
 # without this.
 export MOZ_CARGO_WRAP_LD="${CC}"
+export MOZ_CARGO_WRAP_LD_CXX="${CXX}"
 export MOZ_CARGO_WRAP_LDFLAGS="${TARGET_CFLAGS}"
 export CARGO_TARGET_X86_64_APPLE_DARWIN_LINKER="${GECKO_PATH}/build/cargo-linker"

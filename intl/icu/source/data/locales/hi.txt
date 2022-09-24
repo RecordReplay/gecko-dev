@@ -2,7 +2,7 @@
 // License & terms of use: http://www.unicode.org/copyright.html
 // Generated using tools/cldr/cldr-to-icu/build-icu-data.xml
 hi{
-    AuxExemplarCharacters{"[\u200C\u200D]"}
+    AuxExemplarCharacters{"[\u200C\u200D \u0944]"}
     Ellipsis{
         final{"{0}…"}
         initial{"…{0}"}
@@ -14,7 +14,7 @@ hi{
     ExemplarCharacters{
         "[\u093C ॐ \u0902 \u0901 ः अ आ इ ई उ ऊ ऋ ऌ ऍ ए ऐ ऑ ओ औ क ख ग घ ङ च छ ज झ ञ ट "
         "ठ ड ढ ण त थ द ध न प फ ब भ म य र ल ळ व श ष स ह ऽ ा ि ी \u0941 \u0942 \u0943 "
-        "\u0944 \u0945 \u0947 \u0948 ॉ ो ौ \u094D]"
+        "\u0945 \u0947 \u0948 ॉ ो ौ \u094D]"
     }
     ExemplarCharactersIndex{
         "[अ आ इ ई उ ऊ ऋ ए ऐ ओ औ क ख ग घ ङ च छ ज झ ञ ट ठ ड ढ ण त थ द ध न प फ ब भ म य र"
@@ -224,6 +224,14 @@ hi{
             }
         }
         minimalPairs{
+            case{
+                nominative{"{0} लगेगा/लगेंगे"}
+                oblique{"{0} का समय लगेगा"}
+            }
+            gender{
+                feminine{"{0} बड़ी है."}
+                masculine{"{0} बड़ा है."}
+            }
             ordinal{
                 few{"{0} दाहिना मोड़ लें."}
                 many{"{0}ठा दाहिना मोड़ लें."}
@@ -232,7 +240,7 @@ hi{
                 two{"{0}रा दाहिना मोड़ लें."}
             }
             plural{
-                one{"{0} घंटा"}
+                one{"{0}❬1 घंटा❭ लगेगा/लगेंगे"}
                 other{"{0} घंटे"}
             }
         }
@@ -344,6 +352,16 @@ hi{
                 "{1}, {0}",
                 "{1}, {0}",
             }
+            DateTimeSkeletons{
+                "ahmmsszzzz",
+                "ahmmssz",
+                "ahmmss",
+                "ahmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMd",
+            }
             availableFormats{
                 Bh{"B h"}
                 Bhm{"B h:mm"}
@@ -360,6 +378,7 @@ hi{
                 GyMMM{"G y MMM"}
                 GyMMMEd{"G E, d MMM y"}
                 GyMMMd{"G d MMM y"}
+                GyMd{"GGGGG d/M/y"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -522,6 +541,16 @@ hi{
                 "{1}, {0}",
                 "{1}, {0}",
             }
+            DateTimeSkeletons{
+                "ahmmsszzzz",
+                "ahmmssz",
+                "ahmmss",
+                "ahmm",
+                "yMMMMEEEEd",
+                "yMMMMd",
+                "yMMMd",
+                "yyMd",
+            }
             appendItems{
                 Timezone{"{0} {1}"}
             }
@@ -541,6 +570,7 @@ hi{
                 GyMMM{"MMM G y"}
                 GyMMMEd{"E, d MMM y G"}
                 GyMMMd{"d MMM y G"}
+                GyMd{"GGGGG d/M/y"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -985,6 +1015,16 @@ hi{
                 "{1} को {0}",
                 "{1}, {0}",
                 "{1}, {0}",
+            }
+            DateTimeSkeletons{
+                "ahmmsszzzz",
+                "ahmmssz",
+                "ahmmss",
+                "ahmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GGGGGyMd",
             }
             availableFormats{
                 Gy{"y G"}

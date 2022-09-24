@@ -2,7 +2,7 @@
 /* vim: set sts=2 sw=2 et tw=80: */
 "use strict";
 
-add_task(async function setup() {
+add_setup(async function() {
   // make sure userContext is enabled.
   return SpecialPowers.pushPrefEnv({
     set: [["privacy.userContext.enabled", true]],
@@ -110,25 +110,27 @@ add_task(async function() {
             browser.test.assertTrue(!!data.failure, "we want a failure");
 
             if (data.failure == "illegal") {
-              browser.test.assertTrue(
-                /Illegal cookieStoreId/.test(error.message),
+              browser.test.assertEq(
+                `Illegal cookieStoreId: ${data.cookieStoreId}`,
+                error.message,
                 "runtime.lastError should report the expected error message"
               );
             } else if (data.failure == "defaultToPrivate") {
-              browser.test.assertTrue(
-                "Illegal to set private cookieStorageId in a non private window",
+              browser.test.assertEq(
+                "Illegal to set private cookieStoreId in a non-private window",
                 error.message,
                 "runtime.lastError should report the expected error message"
               );
             } else if (data.failure == "privateToDefault") {
-              browser.test.assertTrue(
-                "Illegal to set non private cookieStorageId in a private window",
+              browser.test.assertEq(
+                "Illegal to set non-private cookieStoreId in a private window",
                 error.message,
                 "runtime.lastError should report the expected error message"
               );
             } else if (data.failure == "exist") {
-              browser.test.assertTrue(
-                /No cookie store exists/.test(error.message),
+              browser.test.assertEq(
+                `No cookie store exists with ID ${data.cookieStoreId}`,
+                error.message,
                 "runtime.lastError should report the expected error message"
               );
             } else {
@@ -269,5 +271,58 @@ add_task(async function tabs_query_cookiestoreid_nocookiepermission() {
   });
   await extension.startup();
   await extension.awaitMessage("done");
+  await extension.unload();
+});
+
+add_task(async function tabs_query_multiple_cookiestoreId() {
+  let extension = ExtensionTestUtils.loadExtension({
+    manifest: {
+      permissions: ["cookies"],
+    },
+
+    async background() {
+      let tab1 = await browser.tabs.create({
+        cookieStoreId: "firefox-container-1",
+      });
+      browser.test.log(`Tab created for cookieStoreId:${tab1.cookieStoreId}`);
+
+      let tab2 = await browser.tabs.create({
+        cookieStoreId: "firefox-container-2",
+      });
+      browser.test.log(`Tab created for cookieStoreId:${tab2.cookieStoreId}`);
+
+      let tab3 = await browser.tabs.create({
+        cookieStoreId: "firefox-container-3",
+      });
+      browser.test.log(`Tab created for cookieStoreId:${tab3.cookieStoreId}`);
+
+      let tabs = await browser.tabs.query({
+        cookieStoreId: ["firefox-container-1", "firefox-container-2"],
+      });
+
+      browser.test.assertEq(
+        2,
+        tabs.length,
+        "Expecting tabs for firefox-container-1 and firefox-container-2"
+      );
+
+      browser.test.assertEq(
+        "firefox-container-1",
+        tabs[0].cookieStoreId,
+        "Expecting tab for firefox-container-1 cookieStoreId"
+      );
+
+      browser.test.assertEq(
+        "firefox-container-2",
+        tabs[1].cookieStoreId,
+        "Expecting tab forfirefox-container-2 cookieStoreId"
+      );
+
+      await browser.tabs.remove([tab1.id, tab2.id, tab3.id]);
+      browser.test.sendMessage("test-done");
+    },
+  });
+  await extension.startup();
+  await extension.awaitMessage("test-done");
   await extension.unload();
 });

@@ -59,6 +59,8 @@ const EXAMPLE_ORG_URL =
   "http://example.org/browser/devtools/client/netmonitor/test/";
 const HTTPS_EXAMPLE_URL =
   "https://example.com/browser/devtools/client/netmonitor/test/";
+const HTTPS_EXAMPLE_ORG_URL =
+  "https://example.org/browser/devtools/client/netmonitor/test/";
 /* Since the test server will proxy `ws://example.com` to websocket server on 9988,
 so we must sepecify the port explicitly */
 const WS_URL = "ws://127.0.0.1:8888/browser/devtools/client/netmonitor/test/";
@@ -70,14 +72,17 @@ const WS_BASE_URL =
 const WS_PAGE_URL = WS_BASE_URL + "html_ws-test-page.html";
 const WS_PAGE_EARLY_CONNECTION_URL =
   WS_BASE_URL + "html_ws-early-connection-page.html";
-const API_CALLS_URL = EXAMPLE_URL + "html_api-calls-test-page.html";
+const API_CALLS_URL = HTTPS_EXAMPLE_URL + "html_api-calls-test-page.html";
 const SIMPLE_URL = EXAMPLE_URL + "html_simple-test-page.html";
+const HTTPS_SIMPLE_URL = HTTPS_EXAMPLE_URL + "html_simple-test-page.html";
 const NAVIGATE_URL = EXAMPLE_URL + "html_navigate-test-page.html";
 const CONTENT_TYPE_WITHOUT_CACHE_URL =
   EXAMPLE_URL + "html_content-type-without-cache-test-page.html";
 const CONTENT_TYPE_WITHOUT_CACHE_REQUESTS = 8;
 const CYRILLIC_URL = EXAMPLE_URL + "html_cyrillic-test-page.html";
 const STATUS_CODES_URL = EXAMPLE_URL + "html_status-codes-test-page.html";
+const HTTPS_STATUS_CODES_URL =
+  HTTPS_EXAMPLE_URL + "html_status-codes-test-page.html";
 const POST_DATA_URL = EXAMPLE_URL + "html_post-data-test-page.html";
 const POST_ARRAY_DATA_URL = EXAMPLE_URL + "html_post-array-data-test-page.html";
 const POST_JSON_URL = EXAMPLE_URL + "html_post-json-test-page.html";
@@ -95,25 +100,32 @@ const JSON_TEXT_MIME_URL = EXAMPLE_URL + "html_json-text-mime-test-page.html";
 const JSON_B64_URL = EXAMPLE_URL + "html_json-b64.html";
 const JSON_BASIC_URL = EXAMPLE_URL + "html_json-basic.html";
 const JSON_EMPTY_URL = EXAMPLE_URL + "html_json-empty.html";
+const JSON_XSSI_PROTECTION_URL = EXAMPLE_URL + "html_json-xssi-protection.html";
 const FONTS_URL = EXAMPLE_URL + "html_fonts-test-page.html";
 const SORTING_URL = EXAMPLE_URL + "html_sorting-test-page.html";
 const FILTERING_URL = EXAMPLE_URL + "html_filter-test-page.html";
+const HTTPS_FILTERING_URL = HTTPS_EXAMPLE_URL + "html_filter-test-page.html";
 const INFINITE_GET_URL = EXAMPLE_URL + "html_infinite-get-page.html";
 const CUSTOM_GET_URL = EXAMPLE_URL + "html_custom-get-page.html";
 const HTTPS_CUSTOM_GET_URL = HTTPS_EXAMPLE_URL + "html_custom-get-page.html";
 const SINGLE_GET_URL = EXAMPLE_URL + "html_single-get-page.html";
+const HTTPS_SINGLE_GET_URL = HTTPS_EXAMPLE_URL + "html_single-get-page.html";
 const STATISTICS_URL = EXAMPLE_URL + "html_statistics-test-page.html";
 const CURL_URL = EXAMPLE_URL + "html_copy-as-curl.html";
-const CURL_UTILS_URL = EXAMPLE_URL + "html_curl-utils.html";
+const HTTPS_CURL_URL = HTTPS_EXAMPLE_URL + "html_copy-as-curl.html";
+const HTTPS_CURL_UTILS_URL = HTTPS_EXAMPLE_URL + "html_curl-utils.html";
 const SEND_BEACON_URL = EXAMPLE_URL + "html_send-beacon.html";
 const CORS_URL = EXAMPLE_URL + "html_cors-test-page.html";
+const HTTPS_CORS_URL = HTTPS_EXAMPLE_URL + "html_cors-test-page.html";
 const PAUSE_URL = EXAMPLE_URL + "html_pause-test-page.html";
 const OPEN_REQUEST_IN_TAB_URL = EXAMPLE_URL + "html_open-request-in-tab.html";
 const CSP_URL = EXAMPLE_URL + "html_csp-test-page.html";
 const CSP_RESEND_URL = EXAMPLE_URL + "html_csp-resend-test-page.html";
+const IMAGE_CACHE_URL = HTTPS_EXAMPLE_URL + "html_image-cache.html";
 const SLOW_REQUESTS_URL = EXAMPLE_URL + "html_slow-requests-test-page.html";
 
 const SIMPLE_SJS = EXAMPLE_URL + "sjs_simple-test-server.sjs";
+const HTTPS_SIMPLE_SJS = HTTPS_EXAMPLE_URL + "sjs_simple-test-server.sjs";
 const SIMPLE_UNSORTED_COOKIES_SJS =
   EXAMPLE_URL + "sjs_simple-unsorted-cookies-test-server.sjs";
 const CONTENT_TYPE_SJS = EXAMPLE_URL + "sjs_content-type-test-server.sjs";
@@ -131,8 +143,10 @@ const CORS_SJS_PATH =
 const HSTS_SJS = EXAMPLE_URL + "sjs_hsts-test-server.sjs";
 const METHOD_SJS = EXAMPLE_URL + "sjs_method-test-server.sjs";
 const SLOW_SJS = EXAMPLE_URL + "sjs_slow-test-server.sjs";
+const HTTPS_SLOW_SJS = HTTPS_EXAMPLE_URL + "sjs_slow-test-server.sjs";
 const SET_COOKIE_SAME_SITE_SJS = EXAMPLE_URL + "sjs_set-cookie-same-site.sjs";
 const SEARCH_SJS = EXAMPLE_URL + "sjs_search-test-server.sjs";
+const HTTPS_SEARCH_SJS = HTTPS_EXAMPLE_URL + "sjs_search-test-server.sjs";
 
 const HSTS_BASE_URL = EXAMPLE_URL;
 const HSTS_PAGE_URL = CUSTOM_GET_URL;
@@ -368,7 +382,7 @@ function teardown(monitor) {
   info("Destroying the specified network monitor.");
 
   return (async function() {
-    const tab = monitor.toolbox.target.localTab;
+    const tab = monitor.commands.descriptorFront.localTab;
 
     await waitForAllNetworkUpdateEvents();
     info("All pending requests finished.");
@@ -422,9 +436,13 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
       // * for any blocked request,
       let expectedEventTimings =
         document.visibilityState == "hidden" ? 0 : nonBlockedNetworkEvent;
+      let expectedPayloadReady = getRequests;
       // Typically ignore this option if it is undefined or null
       if (typeof options?.expectedEventTimings == "number") {
         expectedEventTimings = options.expectedEventTimings;
+      }
+      if (typeof options?.expectedPayloadReady == "number") {
+        expectedPayloadReady = options.expectedPayloadReady;
       }
       info(
         "> Network event progress: " +
@@ -436,7 +454,7 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
           "PayloadReady: " +
           payloadReady +
           "/" +
-          getRequests +
+          expectedPayloadReady +
           ", " +
           "EventTimings: " +
           eventTimings +
@@ -451,7 +469,7 @@ function waitForNetworkEvents(monitor, getRequests, options = {}) {
 
       if (
         networkEvent >= getRequests &&
-        payloadReady >= getRequests &&
+        payloadReady >= expectedPayloadReady &&
         eventTimings >= expectedEventTimings
       ) {
         panel.api.off(TEST_EVENTS.NETWORK_EVENT, onNetworkEvent);

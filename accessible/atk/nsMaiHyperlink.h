@@ -22,27 +22,34 @@ namespace a11y {
 
 class MaiHyperlink {
  public:
-  explicit MaiHyperlink(AccessibleOrProxy aHyperLink);
+  explicit MaiHyperlink(Accessible* aHyperLink);
   ~MaiHyperlink();
 
  public:
   AtkHyperlink* GetAtkHyperlink() const { return mMaiAtkHyperlink; }
   LocalAccessible* GetAccHyperlink() {
-    if (!mHyperlink.IsAccessible()) return nullptr;
+    if (!mHyperlink || !mHyperlink->IsLocal()) return nullptr;
 
-    LocalAccessible* link = mHyperlink.AsAccessible();
-    if (!link) {
-      return nullptr;
-    }
+    LocalAccessible* link = mHyperlink->AsLocal();
 
     NS_ASSERTION(link->IsLink(), "Why isn't it a link!");
     return link;
   }
 
-  RemoteAccessible* Proxy() const { return mHyperlink.AsProxy(); }
+  RemoteAccessible* Proxy() const {
+    return mHyperlink ? mHyperlink->AsRemote() : nullptr;
+  }
+
+  Accessible* Acc() {
+    if (!mHyperlink) {
+      return nullptr;
+    }
+    NS_ASSERTION(mHyperlink->IsLink(), "Why isn't it a link!");
+    return mHyperlink;
+  }
 
  protected:
-  AccessibleOrProxy mHyperlink;
+  Accessible* mHyperlink;
   AtkHyperlink* mMaiAtkHyperlink;
 };
 

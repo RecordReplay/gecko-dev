@@ -9,7 +9,7 @@ mod hir;
 use glsl::parser::Parse;
 use glsl::syntax;
 use glsl::syntax::{TranslationUnit, UnaryOp};
-use hir::{Statement, SwizzleSelector, Type};
+use hir::{Statement, Type};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
@@ -358,8 +358,9 @@ fn write_set_uniform_1i(
 ) {
     write!(
         state,
-        "static void set_uniform_1i(Self *self, int index, int value) {{\n"
+        "static void set_uniform_1i(VertexShaderImpl* impl, int index, int value) {{\n"
     );
+    write!(state, " Self* self = (Self*)impl;\n");
     write!(state, " if (self->samplers.set_slot(index, value)) return;\n");
     write!(state, " switch (index) {{\n");
     for (name, (index, tk, _)) in uniforms {
@@ -385,8 +386,9 @@ fn write_set_uniform_4fv(
 ) {
     write!(
         state,
-        "static void set_uniform_4fv(Self *self, int index, const float *value) {{\n"
+        "static void set_uniform_4fv(VertexShaderImpl* impl, int index, const float *value) {{\n"
     );
+    write!(state, " Self* self = (Self*)impl;\n");
     write!(state, " switch (index) {{\n");
     for (name, (index, tk, _)) in uniforms {
         write!(state, " case {}:\n", index);
@@ -411,8 +413,9 @@ fn write_set_uniform_matrix4fv(
 ) {
     write!(
         state,
-        "static void set_uniform_matrix4fv(Self *self, int index, const float *value) {{\n"
+        "static void set_uniform_matrix4fv(VertexShaderImpl* impl, int index, const float *value) {{\n"
     );
+    write!(state, " Self* self = (Self*)impl;\n");
     write!(state, " switch (index) {{\n");
     for (name, (index, tk, _)) in uniforms {
         write!(state, " case {}:\n", index);
@@ -510,8 +513,9 @@ fn write_common_globals(state: &mut OutputState, attribs: &[hir::SymRef],
 
 fn write_load_attribs(state: &mut OutputState, attribs: &[hir::SymRef]) {
     write!(state, "static void load_attribs(\
-                   Self *self, VertexAttrib *attribs, \
-                   uint32_t start, int instance, int count) {{\n");
+                   VertexShaderImpl* impl, VertexAttrib *attribs, \
+                   uint32_t start, int instance, int count) {{\
+                     Self* self = (Self*)impl;\n");
     for i in attribs {
         let sym = state.hir.sym(*i);
         match &sym.decl {
@@ -622,7 +626,10 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
 
     write!(state,
         "static void read_interp_inputs(\
-            Self *self, const InterpInputs *init, const InterpInputs *step) {{\n");
+            FragmentShaderImpl* impl, const void* init_, const void* step_) {{\
+            Self* self = (Self*)impl;\
+            const InterpInputs* init = (const InterpInputs*)init_;\
+            const InterpInputs* step = (const InterpInputs*)step_;\n");
     for i in inputs {
         let sym = state.hir.sym(*i);
         match &sym.decl {
@@ -653,7 +660,10 @@ fn write_read_inputs(state: &mut OutputState, inputs: &[hir::SymRef]) {
     if state.use_perspective {
         write!(state,
             "static void read_perspective_inputs(\
-                Self *self, const InterpInputs *init, const InterpInputs *step) {{\n");
+                FragmentShaderImpl* impl, const void* init_, const void* step_) {{\
+                Self* self = (Self*)impl;\
+                const InterpInputs* init = (const InterpInputs*)init_;\
+                const InterpInputs* step = (const InterpInputs*)step_;\n");
         if has_varying {
             write!(state, "  Float w = 1.0f / self->gl_FragCoord.w;\n");
         }
@@ -1465,25 +1475,6 @@ pub fn show_double(state: &OutputState, x: f64) {
     }
 }
 
-trait SwizzelSelectorExt {
-    fn to_args(&self) -> String;
-}
-
-impl SwizzelSelectorExt for SwizzleSelector {
-    fn to_args(&self) -> String {
-        let mut s = Vec::new();
-        let fs = match self.field_set {
-            hir::FieldSet::Rgba => ["R", "G", "B", "A"],
-            hir::FieldSet::Xyzw => ["X", "Y", "Z", "W"],
-            hir::FieldSet::Stpq => ["S", "T", "P", "Q"],
-        };
-        for i in &self.components {
-            s.push(fs[*i as usize])
-        }
-        s.join(", ")
-    }
-}
-
 fn expr_run_class(state: &OutputState, expr: &hir::Expr) -> hir::RunClass {
     match &expr.kind {
         hir::ExprKind::Variable(i) => symbol_run_class(&state.hir.sym(*i).decl, state.vector_mask),
@@ -2018,13 +2009,25 @@ pub fn show_hir_expr_inner(state: &OutputState, expr: &hir::Expr, top_level: boo
                 }
                 state.write("(");
                 show_hir_expr(state, &e);
-                if state.is_lval.get() && s.components.len() > 1 {
-                    state.write(").lsel(");
+                state.write(").");
+                if s.components.len() == 1 {
+                    // For single component swizzles, output a field access to
+                    // avoid stressing inlining of sel().
+                    state.write(&s.to_field_set(hir::FieldSet::Xyzw));
                 } else {
-                    state.write(").sel(");
+                    if state.is_lval.get() && s.components.len() > 1 {
+                        state.write("lsel(");
+                    } else {
+                        state.write("sel(");
+                    }
+                    for (i, c) in s.to_string().chars().enumerate() {
+                        if i > 0 {
+                            state.write(",");
+                        }
+                        write!(state, "{}", c.to_uppercase());
+                    }
+                    state.write(")");
                 }
-                state.write(&s.to_args());
-                state.write(")");
             } else {
                 state.write("(");
                 show_hir_expr(state, &e);
@@ -3551,83 +3554,87 @@ pub fn show_translation_unit(state: &mut OutputState, tu: &hir::TranslationUnit)
 fn write_abi(state: &mut OutputState) {
     match state.kind {
         ShaderKind::Fragment => {
-            state.write("static void run(Self *self) {\n");
+            state.write("static void run(FragmentShaderImpl* impl) {\n");
+            state.write(" Self* self = (Self*)impl;\n");
             if state.uses_discard {
                 state.write(" self->swgl_IsPixelDiscarded = false;\n");
             }
             state.write(" self->main();\n");
             state.write(" self->step_interp_inputs();\n");
             state.write("}\n");
-            state.write("static void skip(Self* self, int steps) {\n");
+            state.write("static void skip(FragmentShaderImpl* impl, int steps) {\n");
+            state.write(" Self* self = (Self*)impl;\n");
             state.write(" self->step_interp_inputs(steps);\n");
             state.write("}\n");
             if state.use_perspective {
-                state.write("static void run_perspective(Self *self) {\n");
+                state.write("static void run_perspective(FragmentShaderImpl* impl) {\n");
+                state.write(" Self* self = (Self*)impl;\n");
                 if state.uses_discard {
                     state.write(" self->swgl_IsPixelDiscarded = false;\n");
                 }
                 state.write(" self->main();\n");
                 state.write(" self->step_perspective_inputs();\n");
                 state.write("}\n");
-                state.write("static void skip_perspective(Self* self, int steps) {\n");
+                state.write("static void skip_perspective(FragmentShaderImpl* impl, int steps) {\n");
+                state.write(" Self* self = (Self*)impl;\n");
                 state.write(" self->step_perspective_inputs(steps);\n");
                 state.write("}\n");
             }
             if state.hir.lookup("swgl_drawSpanRGBA8").is_some() {
-                state.write(
-                    "static int draw_span_RGBA8(Self* self) { DISPATCH_DRAW_SPAN(self, RGBA8); }\n");
+                state.write("static int draw_span_RGBA8(FragmentShaderImpl* impl) {\n");
+                state.write(" Self* self = (Self*)impl; DISPATCH_DRAW_SPAN(self, RGBA8); }\n");
             }
             if state.hir.lookup("swgl_drawSpanR8").is_some() {
-                state.write(
-                    "static int draw_span_R8(Self* self) { DISPATCH_DRAW_SPAN(self, R8); }\n");
+                state.write("static int draw_span_R8(FragmentShaderImpl* impl) {\n");
+                state.write(" Self* self = (Self*)impl; DISPATCH_DRAW_SPAN(self, R8); }\n");
             }
 
             write!(state, "public:\n{}_frag() {{\n", state.name);
         }
         ShaderKind::Vertex => {
-            state.write(
-                "static void run(Self* self, char* interps, size_t interp_stride) {\n",
-            );
+            state.write("static void run(VertexShaderImpl* impl, char* interps, size_t interp_stride) {\n");
+            state.write(" Self* self = (Self*)impl;\n");
             state.write(" self->main();\n");
             state.write(" self->store_interp_outputs(interps, interp_stride);\n");
             state.write("}\n");
-            state.write("static void init_batch(Self *self) { self->bind_textures(); }\n");
+            state.write("static void init_batch(VertexShaderImpl* impl) {\n");
+            state.write(" Self* self = (Self*)impl; self->bind_textures(); }\n");
 
             write!(state, "public:\n{}_vert() {{\n", state.name);
         }
     }
     match state.kind {
         ShaderKind::Fragment => {
-            state.write(" init_span_func = (InitSpanFunc)&read_interp_inputs;\n");
-            state.write(" run_func = (RunFunc)&run;\n");
-            state.write(" skip_func = (SkipFunc)&skip;\n");
+            state.write(" init_span_func = &read_interp_inputs;\n");
+            state.write(" run_func = &run;\n");
+            state.write(" skip_func = &skip;\n");
             if state.hir.lookup("swgl_drawSpanRGBA8").is_some() {
-                state.write(" draw_span_RGBA8_func = (DrawSpanRGBA8Func)&draw_span_RGBA8;\n");
+                state.write(" draw_span_RGBA8_func = &draw_span_RGBA8;\n");
             }
             if state.hir.lookup("swgl_drawSpanR8").is_some() {
-                state.write(" draw_span_R8_func = (DrawSpanR8Func)&draw_span_R8;\n");
+                state.write(" draw_span_R8_func = &draw_span_R8;\n");
             }
             if state.uses_discard {
                 state.write(" enable_discard();\n");
             }
             if state.use_perspective {
                 state.write(" enable_perspective();\n");
-                state.write(" init_span_w_func = (InitSpanWFunc)&read_perspective_inputs;\n");
-                state.write(" run_w_func = (RunWFunc)&run_perspective;\n");
-                state.write(" skip_w_func = (SkipWFunc)&skip_perspective;\n");
+                state.write(" init_span_w_func = &read_perspective_inputs;\n");
+                state.write(" run_w_func = &run_perspective;\n");
+                state.write(" skip_w_func = &skip_perspective;\n");
             } else {
-                state.write(" init_span_w_func = (InitSpanWFunc)&read_interp_inputs;\n");
-                state.write(" run_w_func = (RunWFunc)&run;\n");
-                state.write(" skip_w_func = (SkipWFunc)&skip;\n");
+                state.write(" init_span_w_func = &read_interp_inputs;\n");
+                state.write(" run_w_func = &run;\n");
+                state.write(" skip_w_func = &skip;\n");
             }
         }
         ShaderKind::Vertex => {
-            state.write(" set_uniform_1i_func = (SetUniform1iFunc)&set_uniform_1i;\n");
-            state.write(" set_uniform_4fv_func = (SetUniform4fvFunc)&set_uniform_4fv;\n");
-            state.write(" set_uniform_matrix4fv_func = (SetUniformMatrix4fvFunc)&set_uniform_matrix4fv;\n");
-            state.write(" init_batch_func = (InitBatchFunc)&init_batch;\n");
-            state.write(" load_attribs_func = (LoadAttribsFunc)&load_attribs;\n");
-            state.write(" run_primitive_func = (RunPrimitiveFunc)&run;\n");
+            state.write(" set_uniform_1i_func = &set_uniform_1i;\n");
+            state.write(" set_uniform_4fv_func = &set_uniform_4fv;\n");
+            state.write(" set_uniform_matrix4fv_func = &set_uniform_matrix4fv;\n");
+            state.write(" init_batch_func = &init_batch;\n");
+            state.write(" load_attribs_func = &load_attribs;\n");
+            state.write(" run_primitive_func = &run;\n");
             if state.hir.used_clip_dist != 0 {
                 state.write(" enable_clip_distance();\n");
             }

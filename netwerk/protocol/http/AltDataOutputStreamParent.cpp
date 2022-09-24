@@ -6,7 +6,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "mozilla/net/AltDataOutputStreamParent.h"
+#include "mozilla/PerfStats.h"
 #include "mozilla/Unused.h"
+#include "nsIAsyncOutputStream.h"
 
 namespace mozilla {
 namespace net {
@@ -16,6 +18,7 @@ NS_IMPL_ISUPPORTS0(AltDataOutputStreamParent)
 AltDataOutputStreamParent::AltDataOutputStreamParent(nsIOutputStream* aStream)
     : mOutputStream(aStream), mStatus(NS_OK), mIPCOpen(true) {
   MOZ_ASSERT(NS_IsMainThread(), "Main thread only");
+  PerfStats::RecordMeasurementStart(PerfStats::Metric::JSBC_IO_Write);
 }
 
 AltDataOutputStreamParent::~AltDataOutputStreamParent() {
@@ -44,6 +47,8 @@ mozilla::ipc::IPCResult AltDataOutputStreamParent::RecvWriteData(
 
 mozilla::ipc::IPCResult AltDataOutputStreamParent::RecvClose(
     const nsresult& aStatus) {
+  PerfStats::RecordMeasurementEnd(PerfStats::Metric::JSBC_IO_Write);
+
   if (NS_FAILED(mStatus)) {
     if (mIPCOpen) {
       Unused << SendError(mStatus);

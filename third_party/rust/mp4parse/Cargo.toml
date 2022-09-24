@@ -1,6 +1,6 @@
 [package]
 name = "mp4parse"
-version = "0.11.5"
+version = "0.13.0"
 authors = [
   "Ralph Giles <giles@mozilla.com>",
   "Matthew Gregan <kinetik@flim.org>",
@@ -30,7 +30,6 @@ byteorder = "1.2.1"
 bitreader = { version = "0.3.2" }
 env_logger = "0.8"
 fallible_collections = { version = "0.4", features = ["std_io"] }
-hashbrown = "0.9"
 num-traits = "0.2.14"
 log = "0.4"
 static_assertions = "1.1.0"
@@ -41,6 +40,7 @@ walkdir = "2.3.1"
 criterion = "0.3"
 
 [features]
+missing-pixi-permitted = []
 3gpp = []
 meta-xml = []
 unstable-api = []

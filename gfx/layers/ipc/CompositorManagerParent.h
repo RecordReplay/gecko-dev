@@ -38,10 +38,11 @@ class CompositorManagerParent final : public PCompositorManagerParent {
   CreateSameProcessWidgetCompositorBridge(CSSToLayoutDeviceScale aScale,
                                           const CompositorOptions& aOptions,
                                           bool aUseExternalSurfaceSize,
-                                          const gfx::IntSize& aSurfaceSize);
+                                          const gfx::IntSize& aSurfaceSize,
+                                          uint64_t aInnerWindowId);
 
-  mozilla::ipc::IPCResult RecvAddSharedSurface(
-      const wr::ExternalImageId& aId, const SurfaceDescriptorShared& aDesc);
+  mozilla::ipc::IPCResult RecvAddSharedSurface(const wr::ExternalImageId& aId,
+                                               SurfaceDescriptorShared&& aDesc);
   mozilla::ipc::IPCResult RecvRemoveSharedSurface(
       const wr::ExternalImageId& aId);
   mozilla::ipc::IPCResult RecvReportSharedSurfacesMemory(
@@ -50,6 +51,9 @@ class CompositorManagerParent final : public PCompositorManagerParent {
   mozilla::ipc::IPCResult RecvNotifyMemoryPressure();
 
   mozilla::ipc::IPCResult RecvReportMemory(ReportMemoryResolver&&);
+
+  mozilla::ipc::IPCResult RecvInitCanvasManager(
+      Endpoint<PCanvasManagerParent>&&);
 
   void BindComplete(bool aIsRoot);
   void ActorDestroy(ActorDestroyReason aReason) override;
@@ -61,7 +65,7 @@ class CompositorManagerParent final : public PCompositorManagerParent {
 
  private:
   static StaticRefPtr<CompositorManagerParent> sInstance;
-  static StaticMutex sMutex;
+  static StaticMutex sMutex MOZ_UNANNOTATED;
 
 #ifdef COMPOSITOR_MANAGER_PARENT_EXPLICIT_SHUTDOWN
   static StaticAutoPtr<nsTArray<CompositorManagerParent*>> sActiveActors;

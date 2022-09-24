@@ -8,6 +8,7 @@
 #include "ApplicationAccessible.h"
 
 #include "AccAttributes.h"
+#include "LocalAccessible-inl.h"
 #include "nsAccessibilityService.h"
 #include "nsAccUtils.h"
 #include "Relation.h"
@@ -57,7 +58,7 @@ ENameValueFlag ApplicationAccessible::Name(nsString& aName) const {
   return eNameOK;
 }
 
-void ApplicationAccessible::Description(nsString& aDescription) {
+void ApplicationAccessible::Description(nsString& aDescription) const {
   aDescription.Truncate();
 }
 
@@ -93,7 +94,9 @@ Relation ApplicationAccessible::RelationByType(
   return Relation();
 }
 
-nsIntRect ApplicationAccessible::Bounds() const { return nsIntRect(); }
+mozilla::LayoutDeviceIntRect ApplicationAccessible::Bounds() const {
+  return mozilla::LayoutDeviceIntRect();
+}
 
 nsRect ApplicationAccessible::BoundsInAppUnits() const { return nsRect(); }
 

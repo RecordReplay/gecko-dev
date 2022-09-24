@@ -30,11 +30,6 @@ void gecko_printf_stderr_output(const char* msg);
 void* get_proc_address_from_glcontext(void* glcontext_ptr,
                                       const char* procname);
 
-void gecko_profiler_start_marker(const char* name);
-void gecko_profiler_end_marker(const char* name);
-void gecko_profiler_event_marker(const char* name);
-void gecko_profiler_add_text_marker(const char* name, const char* text_ptr,
-                                    size_t text_len, uint64_t microseconds);
 bool gecko_profiler_thread_is_being_profiled();
 
 // IMPORTANT: Keep this synchronized with enumerate_interners in
@@ -53,7 +48,8 @@ bool gecko_profiler_thread_is_being_profiled();
   macro(picture);                          \
   macro(text_run);                         \
   macro(filterdata);                       \
-  macro(backdrop);                         \
+  macro(backdrop_capture);                 \
+  macro(backdrop_render);                  \
   macro(polyon);
 
 // Prelude of types necessary before including webrender_ffi_generated.h
@@ -109,12 +105,11 @@ void omta_deregister_sampler(mozilla::wr::WrWindowId aWindowId);
 
 #pragma pop_macro("TRANSPARENT")
 
-// More functions invoked from Rust code. These are down here because they
-// refer to data structures from webrender_ffi_generated.h
-extern "C" {
-void record_telemetry_time(mozilla::wr::TelemetryProbe aProbe,
-                           uint64_t aTimeNs);
-}
+template struct mozilla::wr::Point2D<int32_t, mozilla::wr::DevicePixel>;
+template struct mozilla::wr::Point2D<int, mozilla::wr::WorldPixel>;
+template struct mozilla::wr::Point2D<float, mozilla::wr::WorldPixel>;
+template struct mozilla::wr::Box2D<int32_t, mozilla::wr::DevicePixel>;
+template struct mozilla::wr::Box2D<int, mozilla::wr::LayoutPixel>;
 
 namespace mozilla {
 namespace wr {

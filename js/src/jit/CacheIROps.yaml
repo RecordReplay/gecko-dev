@@ -157,6 +157,13 @@
   args:
     input: ValId
 
+- name: GuardToNonGCThing
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    input: ValId
+
 # If the Value is a boolean, convert it to int32.
 - name: GuardBooleanToInt32
   shared: true
@@ -574,6 +581,15 @@
     expected: ObjId
     slot: RawInt32Field
 
+# Guard obj[slot] is not an object.
+- name: GuardDynamicSlotIsNotObject
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+    slot: RawInt32Field
+
 - name: GuardFixedSlotValue
   shared: true
   transpile: true
@@ -591,6 +607,15 @@
     obj: ObjId
     offset: RawInt32Field
     val: ValueField
+
+- name: LoadDynamicSlot
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    result: ValId
+    obj: ObjId
+    slot: RawInt32Field
 
 - name: GuardNoAllocationMetadataBuilder
   shared: true
@@ -761,6 +786,13 @@
     id: ValId
     hasOwn: BoolImm
 
+- name: ValueToIteratorResult
+  shared: true
+  transpile: true
+  cost_estimate: 5
+  args:
+    val: ValId
+
 # See CacheIR.cpp 'DOM proxies' comment.
 - name: LoadDOMExpandoValue
   shared: true
@@ -845,6 +877,15 @@
     newShape: ShapeField
     numNewSlots: RawInt32Field
 
+- name: AddSlotAndCallAddPropHook
+  shared: true
+  transpile: true
+  cost_estimate: 6
+  args:
+    obj: ObjId
+    rhs: ValId
+    newShape: ShapeField
+
 - name: StoreDenseElement
   shared: true
   transpile: true
@@ -901,6 +942,16 @@
   args:
     templateObject: ObjectField
     array: ObjId
+    begin: Int32Id
+    end: Int32Id
+
+- name: ArgumentsSliceResult
+  shared: false
+  transpile: true
+  cost_estimate: 5
+  args:
+    templateObject: ObjectField
+    args: ObjId
     begin: Int32Id
     end: Int32Id
 
@@ -1636,14 +1687,13 @@
 
 
 # Meta ops generate no code, but contain data for BaselineInspector.
-- name: MetaTwoByte
+- name: MetaScriptedThisShape
   shared: true
   transpile: true
   cost_estimate: 0
   custom_writer: true
   args:
-    functionObject: ObjectField
-    templateObject: ObjectField
+    thisShape: ShapeField
 
 - name: LoadFixedSlotResult
   shared: false
@@ -1774,12 +1824,36 @@
     obj: ObjId
     index: Int32Id
 
+- name: LoadArgumentsObjectArgHoleResult
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    obj: ObjId
+    index: Int32Id
+
+- name: LoadArgumentsObjectArgExistsResult
+  shared: true
+  transpile: true
+  cost_estimate: 2
+  args:
+    obj: ObjId
+    index: Int32Id
+
 - name: LoadArgumentsObjectLengthResult
   shared: true
   transpile: true
   cost_estimate: 1
   args:
     obj: ObjId
+
+- name: LoadArgumentsObjectLength
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    obj: ObjId
+    result: Int32Id
 
 - name: LoadFunctionLengthResult
   shared: true
@@ -2022,6 +2096,14 @@
   args:
     val: RawInt32Field
     result: Int32Id
+
+- name: LoadDoubleConstant
+  shared: true
+  transpile: true
+  cost_estimate: 1
+  args:
+    val: DoubleField
+    result: NumberId
 
 - name: LoadBooleanConstant
   shared: true
@@ -2605,6 +2687,158 @@
   args:
     bits: Int32Id
     bigInt: BigIntId
+
+- name: SetHasResult
+  shared: true
+  transpile: true
+  cost_estimate: 5
+  args:
+    set: ObjId
+    val: ValId
+
+- name: SetHasNonGCThingResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    set: ObjId
+    val: ValId
+
+- name: SetHasStringResult
+  shared: false
+  transpile: true
+  cost_estimate: 5
+  args:
+    set: ObjId
+    str: StringId
+
+- name: SetHasSymbolResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    set: ObjId
+    sym: SymbolId
+
+- name: SetHasBigIntResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    set: ObjId
+    bigInt: BigIntId
+
+- name: SetHasObjectResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    set: ObjId
+    obj: ObjId
+
+- name: MapHasResult
+  shared: true
+  transpile: true
+  cost_estimate: 5
+  args:
+    map: ObjId
+    val: ValId
+
+- name: MapHasNonGCThingResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    val: ValId
+
+- name: MapHasStringResult
+  shared: false
+  transpile: true
+  cost_estimate: 5
+  args:
+    map: ObjId
+    str: StringId
+
+- name: MapHasSymbolResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    sym: SymbolId
+
+- name: MapHasBigIntResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    bigInt: BigIntId
+
+- name: MapHasObjectResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    obj: ObjId
+
+- name: MapGetResult
+  shared: true
+  transpile: true
+  cost_estimate: 5
+  args:
+    map: ObjId
+    val: ValId
+
+- name: MapGetNonGCThingResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    val: ValId
+
+- name: MapGetStringResult
+  shared: false
+  transpile: true
+  cost_estimate: 5
+  args:
+    map: ObjId
+    str: StringId
+
+- name: MapGetSymbolResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    sym: SymbolId
+
+- name: MapGetBigIntResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    bigInt: BigIntId
+
+- name: MapGetObjectResult
+  shared: true
+  transpile: true
+  cost_estimate: 3
+  args:
+    map: ObjId
+    obj: ObjId
+
+- name: ArrayFromArgumentsObjectResult
+  shared: true
+  transpile: true
+  cost_estimate: 5
+  args:
+    obj: ObjId
+    shape: ShapeField
 
 - name: CallPrintString
   shared: true

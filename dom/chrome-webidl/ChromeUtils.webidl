@@ -58,6 +58,15 @@ dictionary ProfilerMarkerOptions {
 dictionary InteractionData {
   unsigned long interactionCount = 0;
   unsigned long interactionTimeInMilliseconds = 0;
+  unsigned long scrollingDistanceInPixels = 0;
+};
+
+/**
+ * Confidence value of credit card fields. This is used by the native
+ * Fathom Credit Card model to return the score to JS.
+ */
+dictionary FormAutofillConfidences {
+  double ccNumber = 0;
 };
 
 /**
@@ -236,6 +245,12 @@ namespace ChromeUtils {
   boolean isRecordingOrReplaying();
 
   /**
+   * Return the symbolic name of any given XPCOM error code (nsresult):
+   * "NS_OK", "NS_ERROR_FAILURE",...
+   */
+  UTF8String getXPCOMErrorName(unsigned long aErrorCode);
+
+  /**
    * IF YOU ADD NEW METHODS HERE, MAKE SURE THEY ARE THREAD-SAFE.
    */
 };
@@ -320,6 +335,18 @@ partial namespace ChromeUtils {
   getBaseDomainFromPartitionKey(DOMString partitionKey);
 
   /**
+   * Returns the partitionKey for a given URL.
+   *
+   * The function will treat the URL as a first party and construct the
+   * partitionKey according to the scheme, site and port in the URL.
+   *
+   * Throws for invalid urls.
+   */
+  [Throws]
+  DOMString
+  getPartitionKeyFromURL(DOMString url);
+
+  /**
    * Loads and compiles the script at the given URL and returns an object
    * which may be used to execute it repeatedly, in different globals, without
    * re-parsing.
@@ -387,17 +414,8 @@ partial namespace ChromeUtils {
    * Synchronously loads and evaluates the js file located at
    * 'aResourceURI' with a new, fully privileged global object.
    *
-   * If `aTargetObj` is specified, and non-null, all properties exported by
-   * the module are copied to that object.
-   *
-   * If `aTargetObj` is not specified, or is non-null, an object is returned
-   * containing all of the module's exported properties. The same object is
-   * returned for every call.
-   *
-   * If `aTargetObj` is specified and null, the module's global object is
-   * returned, rather than its explicit exports. This behavior is deprecated,
-   * and will removed in the near future, since it is incompatible with the
-   * ES6 module semanitcs we intend to migrate to. It should not be used in
+   * If `aTargetObj` is specified all properties exported by the module are
+   * copied to that object. This is deprecated and should not be used in
    * new code.
    *
    * @param aResourceURI A resource:// URI string to load the module from.
@@ -411,7 +429,7 @@ partial namespace ChromeUtils {
    * specified target object and the global object returned as above.
    */
   [Throws]
-  object import(DOMString aResourceURI, optional object? aTargetObj);
+  object import(UTF8String aResourceURI, optional object aTargetObj);
 
   /**
    * Defines a property on the given target which lazily imports a JavaScript
@@ -465,7 +483,7 @@ partial namespace ChromeUtils {
   /**
    * Request performance metrics to the current process & all content processes.
    */
-  [Throws]
+  [NewObject]
   Promise<sequence<PerformanceInfoDictionary>> requestPerformanceMetrics();
 
   /**
@@ -482,20 +500,26 @@ partial namespace ChromeUtils {
    * Collect results of detailed performance timing information.
    * The output is a JSON string containing performance timings.
    */
-  [Throws]
+  [NewObject]
   Promise<DOMString> collectPerfStats();
 
   /**
   * Returns a Promise containing a sequence of I/O activities
   */
-  [Throws]
+  [NewObject]
   Promise<sequence<IOActivityDataDictionary>> requestIOActivity();
 
   /**
   * Returns a Promise containing all processes info
   */
-  [Throws]
+  [NewObject]
   Promise<ParentProcInfoDictionary> requestProcInfo();
+
+  /**
+   * For testing purpose.
+   */
+  [ChromeOnly]
+  boolean vsyncEnabled();
 
   [ChromeOnly, Throws]
   boolean hasReportingHeaderForOrigin(DOMString aOrigin);
@@ -574,11 +598,22 @@ partial namespace ChromeUtils {
    */
   [Throws, ChromeOnly]
   record<DOMString, InteractionData> consumeInteractionData();
-  
+
+  /**
+   * Returns a record of user scrolling interactions collected from content processes.
+   *
+   * Valid keys: "Scrolling"
+   */
+  [NewObject]
+  Promise<InteractionData> collectScrollingData();
+
+  [Throws]
+  sequence<FormAutofillConfidences> getFormAutofillConfidences(sequence<Element> elements);
 };
 
 /*
  * This type is a WebIDL representation of mozilla::ProcType.
+ * These must match the similar ones in E10SUtils.jsm, RemoteTypes.h, ProcInfo.h and ChromeUtils.cpp
  */
 enum WebIDLProcType {
  "web",
@@ -587,8 +622,8 @@ enum WebIDLProcType {
  "extension",
  "privilegedabout",
  "privilegedmozilla",
- "webLargeAllocation",
  "withCoopCoep",
+ "webServiceWorker",
  "browser",
  "ipdlUnitTest",
  "gmpPlugin",
@@ -600,6 +635,7 @@ enum WebIDLProcType {
 #ifdef MOZ_ENABLE_FORKSERVER
  "forkServer",
 #endif
+ "utility",
  "preallocated",
  "unknown",
 };
@@ -613,8 +649,8 @@ enum WebIDLProcType {
 dictionary ThreadInfoDictionary {
   long long tid = 0;
   DOMString name = "";
-  unsigned long long cpuUser = 0;
-  unsigned long long cpuKernel = 0;
+  unsigned long long cpuCycleCount = 0;
+  unsigned long long cpuTime = 0;
 };
 
 dictionary WindowInfoDictionary {
@@ -635,6 +671,20 @@ dictionary WindowInfoDictionary {
   boolean isInProcess = false;
 };
 
+/*
+ * Add new entry to WebIDLUtilityActorName here and update accordingly
+ * UtilityActorNameToWebIDL in dom/base/ChromeUtils.cpp as well as
+ * UtilityActorName in toolkit/components/processtools/ProcInfo.h
+ */
+enum WebIDLUtilityActorName {
+  "unknown",
+  "audioDecoder",
+};
+
+dictionary UtilityActorsDictionary {
+  WebIDLUtilityActorName actorName = "unknown";
+};
+
 /**
  * Information on a child process.
  *
@@ -651,24 +701,19 @@ dictionary ChildProcInfoDictionary {
   // The cross-process descriptor for this process.
   long long pid = 0;
 
-  // Process filename (without the path name).
-  DOMString filename = "";
+  // The best end-user measure for "memory used" that we can obtain without
+  // triggering expensive computations. The value is in bytes.
+  // On Mac and Linux this matches the values shown by the system monitors.
+  // On Windows this will return the Commit Size.
+  unsigned long long memory = 0;
 
-  // RSS, in bytes, i.e. the total amount of memory allocated
-  // by this process.
-  long long residentSetSize = 0;
+  // Total CPU time spent by the process, in ns.
+  unsigned long long cpuTime = 0;
 
-  // Resident unique size, i.e. the total amount of memory
-  // allocated by this process *and not shared with other processes*.
-  // Given that we share lots of memory between processes,
-  // this is probably the best end-user measure for "memory used".
-  long long residentUniqueSize = 0;
-
-  // Time spent by the process in user mode, in ns.
-  unsigned long long cpuUser = 0;
-
-  // Time spent by the process in kernel mode, in ns.
-  unsigned long long cpuKernel = 0;
+  // Total CPU cycles used by this process.
+  // On Windows where the resolution of CPU timings is 16ms, this can
+  // be used to determine if a process is idle or slightly active.
+  unsigned long long cpuCycleCount = 0;
 
   // Thread information for this process.
   sequence<ThreadInfoDictionary> threads = [];
@@ -687,6 +732,9 @@ dictionary ChildProcInfoDictionary {
 
   // The windows implemented by this process.
   sequence<WindowInfoDictionary> windows = [];
+
+  // The utility process list of actors if any
+  sequence<UtilityActorsDictionary> utilityActors = [];
 };
 
 /**
@@ -698,24 +746,19 @@ dictionary ParentProcInfoDictionary {
   // The cross-process descriptor for this process.
   long long pid = 0;
 
-  // Process filename (without the path name).
-  DOMString filename = "";
+  // The best end-user measure for "memory used" that we can obtain without
+  // triggering expensive computations. The value is in bytes.
+  // On Mac and Linux this matches the values shown by the system monitors.
+  // On Windows this will return the Commit Size.
+  unsigned long long memory = 0;
 
-  // RSS, in bytes, i.e. the total amount of memory allocated
-  // by this process.
-  long long residentSetSize = 0;
+  // Total CPU time spent by the process, in ns.
+  unsigned long long cpuTime = 0;
 
-  // Resident unique size, i.e. the total amount of memory
-  // allocated by this process *and not shared with other processes*.
-  // Given that we share lots of memory between processes,
-  // this is probably the best end-user measure for "memory used".
-  long long residentUniqueSize = 0;
-
-  // Time spent by the process in user mode, in ns.
-  unsigned long long cpuUser = 0;
-
-  // Time spent by the process in kernel mode, in ns.
-  unsigned long long cpuKernel = 0;
+  // Total CPU cycles used by this process.
+  // On Windows where the resolution of CPU timings is 16ms, this can
+  // be used to determine if a process is idle or slightly active.
+  unsigned long long cpuCycleCount = 0;
 
   // Thread information for this process.
   sequence<ThreadInfoDictionary> threads = [];

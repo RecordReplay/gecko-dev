@@ -34,6 +34,36 @@ async function addTab(url = "http://mochi.test:8888/", params = {}) {
   return tab;
 }
 
+async function addMediaTab() {
+  const PAGE =
+    "https://example.com/browser/browser/base/content/test/tabs/file_mediaPlayback.html";
+  const tab = BrowserTestUtils.addTab(gBrowser, PAGE, { skipAnimation: true });
+  const browser = gBrowser.getBrowserForTab(tab);
+  await BrowserTestUtils.browserLoaded(browser);
+  return tab;
+}
+
+function muted(tab) {
+  return tab.linkedBrowser.audioMuted;
+}
+
+function activeMediaBlocked(tab) {
+  return tab.activeMediaBlocked;
+}
+
+async function toggleMuteAudio(tab, expectMuted) {
+  let mutedPromise = get_wait_for_mute_promise(tab, expectMuted);
+  tab.toggleMuteAudio();
+  await mutedPromise;
+}
+
+async function pressIcon(icon) {
+  let tooltip = document.getElementById("tabbrowser-tab-tooltip");
+  await hover_icon(icon, tooltip);
+  EventUtils.synthesizeMouseAtCenter(icon, { button: 0 });
+  leave_icon(icon);
+}
+
 async function wait_for_tab_playing_event(tab, expectPlaying) {
   if (tab.soundPlaying == expectPlaying) {
     ok(true, "The tab should " + (expectPlaying ? "" : "not ") + "be playing");
@@ -213,12 +243,18 @@ async function test_mute_tab(tab, icon, expectMuted) {
   return mutedPromise;
 }
 
-async function dragAndDrop(tab1, tab2, copy, destWindow = window) {
+async function dragAndDrop(
+  tab1,
+  tab2,
+  copy,
+  destWindow = window,
+  afterTab = true
+) {
   let rect = tab2.getBoundingClientRect();
   let event = {
     ctrlKey: copy,
     altKey: copy,
-    clientX: rect.left + rect.width / 2 + 10,
+    clientX: rect.left + rect.width / 2 + 10 * (afterTab ? 1 : -1),
     clientY: rect.top + rect.height / 2,
   };
 

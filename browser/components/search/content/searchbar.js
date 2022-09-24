@@ -24,24 +24,22 @@
     static get markup() {
       return `
         <stringbundle src="chrome://browser/locale/search.properties"></stringbundle>
-        <hbox class="searchbar-search-button" tooltiptext="&searchIcon.tooltip;">
+        <hbox class="searchbar-search-button" data-l10n-id="searchbar-icon">
           <image class="searchbar-search-icon"></image>
           <image class="searchbar-search-icon-overlay"></image>
         </hbox>
-        <html:input class="searchbar-textbox" is="autocomplete-input" type="search" placeholder="&searchInput.placeholder;" autocompletepopup="PopupSearchAutoComplete" autocompletesearch="search-autocomplete" autocompletesearchparam="searchbar-history" maxrows="10" completeselectedindex="true" minresultsforpopup="0"/>
+        <html:input class="searchbar-textbox" is="autocomplete-input" type="search" data-l10n-id="searchbar-input" autocompletepopup="PopupSearchAutoComplete" autocompletesearch="search-autocomplete" autocompletesearchparam="searchbar-history" maxrows="10" completeselectedindex="true" minresultsforpopup="0"/>
         <menupopup class="textbox-contextmenu"></menupopup>
         <hbox class="search-go-container">
-          <image class="search-go-button urlbar-icon" hidden="true" onclick="handleSearchCommand(event);" tooltiptext="&contentSearchSubmit.tooltip;"></image>
+          <image class="search-go-button urlbar-icon" hidden="true" onclick="handleSearchCommand(event);" data-l10n-id="searchbar-submit"></image>
         </hbox>
       `;
     }
 
-    static get entities() {
-      return ["chrome://browser/locale/browser.dtd"];
-    }
-
     constructor() {
       super();
+
+      MozXULElement.insertFTLIfNeeded("browser/search.ftl");
 
       this.destroy = this.destroy.bind(this);
       this._setupEventListeners();
@@ -104,12 +102,10 @@
       window.addEventListener("unload", this.destroy);
 
       this.FormHistory = ChromeUtils.import(
-        "resource://gre/modules/FormHistory.jsm",
-        {}
+        "resource://gre/modules/FormHistory.jsm"
       ).FormHistory;
       this.SearchSuggestionController = ChromeUtils.import(
-        "resource://gre/modules/SearchSuggestionController.jsm",
-        {}
+        "resource://gre/modules/SearchSuggestionController.jsm"
       ).SearchSuggestionController;
 
       Services.obs.addObserver(this.observer, "browser-search-engine-modified");
@@ -696,14 +692,22 @@
         }
 
         let popup = this.textbox.popup;
-        if (!popup.popupOpen) {
-          return false;
+        if (popup.popupOpen) {
+          let suggestionsHidden =
+            popup.richlistbox.getAttribute("collapsed") == "true";
+          let numItems = suggestionsHidden ? 0 : popup.matchCount;
+          return popup.oneOffButtons.handleKeyDown(aEvent, numItems, true);
+        } else if (aEvent.keyCode == KeyEvent.DOM_VK_ESCAPE) {
+          let undoCount = this.textbox.editor.transactionManager
+            .numberOfUndoItems;
+          if (undoCount) {
+            this.textbox.editor.undo(undoCount);
+          } else {
+            this.textbox.select();
+          }
+          return true;
         }
-
-        let suggestionsHidden =
-          popup.richlistbox.getAttribute("collapsed") == "true";
-        let numItems = suggestionsHidden ? 0 : popup.matchCount;
-        return popup.oneOffButtons.handleKeyDown(aEvent, numItems, true);
+        return false;
       };
 
       // This method overrides the autocomplete binding's openPopup (essentially
@@ -783,6 +787,8 @@
 
       // override |onTextEntered| in autocomplete.xml
       this.textbox.onTextEntered = event => {
+        this.textbox.editor.transactionManager.clearUndoStack();
+
         let engine;
         let oneOff = this.textbox.selectedButton;
         if (oneOff) {

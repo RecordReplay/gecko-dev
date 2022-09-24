@@ -66,15 +66,14 @@ async function runPopupPositionTest(parentDocumentFileName) {
     await focusPromise;
   });
 
-  const menulist = document.getElementById("ContentSelectDropdown");
-  const selectPopup = menulist.menupopup;
-
-  await openSelectPopup(selectPopup);
+  const selectPopup = await openSelectPopup();
 
   const popup_rect = selectPopup.getBoundingClientRect();
+  const popupMarginTop = parseFloat(getComputedStyle(selectPopup).marginTop);
+  const popupMarginLeft = parseFloat(getComputedStyle(selectPopup).marginLeft);
 
   is(
-    popup_rect.left,
+    popup_rect.left - popupMarginLeft,
     selectRect.x * 2.0,
     "select popup position should be scaled by the desktop zoom"
   );
@@ -83,20 +82,20 @@ async function runPopupPositionTest(parentDocumentFileName) {
   // option element.
   if (!navigator.platform.includes("Mac")) {
     is(
-      popup_rect.top,
+      popup_rect.top - popupMarginTop,
       tab.linkedBrowser.getBoundingClientRect().top +
         (selectRect.y + selectRect.height) * 2.0,
       "select popup position should be scaled by the desktop zoom"
     );
   } else {
     is(
-      popup_rect.top,
+      popup_rect.top - popupMarginTop,
       tab.linkedBrowser.getBoundingClientRect().top + selectRect.y * 2.0,
       "select popup position should be scaled by the desktop zoom"
     );
   }
 
-  await hideSelectPopup(selectPopup);
+  await hideSelectPopup();
 
   BrowserTestUtils.removeTab(tab);
 }

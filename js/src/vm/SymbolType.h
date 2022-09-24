@@ -9,8 +9,6 @@
 
 #include <stdio.h>
 
-#include "jsapi.h"
-
 #include "gc/Barrier.h"
 #include "gc/Tracer.h"
 #include "js/AllocPolicy.h"
@@ -23,10 +21,6 @@
 #include "js/Utility.h"
 #include "vm/Printer.h"
 #include "vm/StringType.h"
-
-namespace js {
-class AutoAccessAtomsZone;
-}  // namespace js
 
 namespace JS {
 
@@ -65,6 +59,8 @@ class Symbol
  public:
   static Symbol* new_(JSContext* cx, SymbolCode code,
                       js::HandleString description);
+  static Symbol* newWellKnown(JSContext* cx, SymbolCode code,
+                              js::HandlePropertyName description);
   static Symbol* for_(JSContext* cx, js::HandleString description);
 
   SymbolCode code() const { return code_; }
@@ -88,10 +84,10 @@ class Symbol
 
   static const JS::TraceKind TraceKind = JS::TraceKind::Symbol;
 
-  inline void traceChildren(JSTracer* trc) {
+  void traceChildren(JSTracer* trc) {
     js::TraceNullableCellHeaderEdge(trc, this, "symbol description");
   }
-  inline void finalize(JSFreeOp*) {}
+  void finalize(JS::GCContext* gcx) {}
 
   // Override base class implementation to tell GC about well-known symbols.
   bool isPermanentAndMayBeShared() const { return isWellKnownSymbol(); }
@@ -104,6 +100,8 @@ class Symbol
   void dump();  // Debugger-friendly stderr dump.
   void dump(js::GenericPrinter& out);
 #endif
+
+  static constexpr size_t offsetOfHash() { return offsetof(Symbol, hash_); }
 };
 
 } /* namespace JS */

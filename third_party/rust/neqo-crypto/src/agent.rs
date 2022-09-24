@@ -71,12 +71,6 @@ impl HandshakeState {
     }
 }
 
-#[allow(
-    unknown_lints,
-    renamed_and_removed_lints,
-    clippy::unknown_clippy_lints,
-    clippy::unnested_or_patterns
-)] // Until we require rust 1.53 we can't use or_patterns.
 fn get_alpn(fd: *mut ssl::PRFileDesc, pre: bool) -> Res<Option<String>> {
     let mut alpn_state = ssl::SSLNextProtoState::SSL_NEXT_PROTO_NO_SUPPORT;
     let mut chosen = vec![0_u8; 255];
@@ -283,7 +277,6 @@ pub struct SecretAgent {
     now: TimeHolder,
 
     extension_handlers: Vec<ExtensionTracker>,
-    inf: Option<SecretAgentInfo>,
 
     /// The encrypted client hello (ECH) configuration that is in use.
     /// Empty if ECH is not enabled.
@@ -306,7 +299,6 @@ impl SecretAgent {
             now: TimeHolder::default(),
 
             extension_handlers: Vec::new(),
-            inf: None,
 
             ech_config: Vec::new(),
         })
@@ -496,6 +488,8 @@ impl SecretAgent {
     /// This should always panic rather than return an error.
     /// # Panics
     /// If any of the provided `protocols` are more than 255 bytes long.
+    ///
+    /// [RFC7301]: https://datatracker.ietf.org/doc/html/rfc7301
     pub fn set_alpn(&mut self, protocols: &[impl AsRef<str>]) -> Res<()> {
         // Validate and set length.
         let mut encoded_len = protocols.len();
@@ -714,6 +708,7 @@ impl SecretAgent {
         Ok(*Pin::into_inner(records))
     }
 
+    #[allow(unknown_lints, clippy::branches_sharing_code)]
     pub fn close(&mut self) {
         // It should be safe to close multiple times.
         if self.fd.is_null() {
@@ -798,7 +793,12 @@ impl ResumptionToken {
 
 /// A TLS Client.
 #[derive(Debug)]
-#[allow(clippy::box_vec)] // We need the Box.
+#[allow(
+    renamed_and_removed_lints,
+    clippy::box_vec,
+    unknown_lints,
+    clippy::box_collection
+)] // We need the Box.
 pub struct Client {
     agent: SecretAgent,
 
@@ -986,14 +986,12 @@ impl ZeroRttChecker for AllowZeroRtt {
 
 #[derive(Debug)]
 struct ZeroRttCheckState {
-    fd: *mut ssl::PRFileDesc,
     checker: Pin<Box<dyn ZeroRttChecker>>,
 }
 
 impl ZeroRttCheckState {
-    pub fn new(fd: *mut ssl::PRFileDesc, checker: Box<dyn ZeroRttChecker>) -> Self {
+    pub fn new(checker: Box<dyn ZeroRttChecker>) -> Self {
         Self {
-            fd,
             checker: Pin::new(checker),
         }
     }
@@ -1088,7 +1086,7 @@ impl Server {
         max_early_data: u32,
         checker: Box<dyn ZeroRttChecker>,
     ) -> Res<()> {
-        let mut check_state = Box::pin(ZeroRttCheckState::new(self.agent.fd, checker));
+        let mut check_state = Box::pin(ZeroRttCheckState::new(checker));
         unsafe {
             ssl::SSL_HelloRetryRequestCallback(
                 self.agent.fd,

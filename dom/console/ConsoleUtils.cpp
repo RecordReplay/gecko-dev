@@ -16,6 +16,7 @@
 #include "mozilla/dom/ConsoleBinding.h"
 #include "mozilla/dom/RootedDictionary.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 
 namespace mozilla::dom {
 
@@ -137,7 +138,7 @@ void ConsoleUtils::ReportForServiceWorkerScopeInternal(
     return;
   }
 
-  storage->RecordEvent(u"ServiceWorker"_ns, aScope, eventValue);
+  storage->RecordEvent(u"ServiceWorker"_ns, eventValue);
 }
 
 JSObject* ConsoleUtils::GetOrCreateSandbox(JSContext* aCx) {

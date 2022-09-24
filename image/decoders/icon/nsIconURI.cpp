@@ -19,6 +19,7 @@
 #include "nsIURL.h"
 #include "nsNetUtil.h"
 #include "plstr.h"
+#include "nsCRT.h"
 #include <stdlib.h>
 
 using namespace mozilla;
@@ -36,18 +37,11 @@ using namespace mozilla::ipc;
 
 static NS_DEFINE_CID(kThisIconURIImplementationCID,
                      NS_THIS_ICONURI_IMPLEMENTATION_CID);
-static NS_DEFINE_CID(kIconURICID, NS_ICONURI_CID);
 
-// helper function for parsing out attributes like size, and contentType
-// from the icon url.
-static void extractAttributeValue(const char* aSearchString,
-                                  const char* aAttributeName,
-                                  nsCString& aResult);
+static const char* const kSizeStrings[] = {"button", "toolbar", "toolbarsmall",
+                                           "menu",   "dnd",     "dialog"};
 
-static const char* kSizeStrings[] = {"button", "toolbar", "toolbarsmall",
-                                     "menu",   "dnd",     "dialog"};
-
-static const char* kStateStrings[] = {"normal", "disabled"};
+static const char* const kStateStrings[] = {"normal", "disabled"};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -164,14 +158,15 @@ nsMozIconURI::Mutate(nsIURIMutator** aMutator) {
   return NS_OK;
 }
 
+// helper function for parsing out attributes like size, and contentType
+// from the icon url.
 // takes a string like ?size=32&contentType=text/html and returns a new string
 // containing just the attribute value. i.e you could pass in this string with
 // an attribute name of 'size=', this will return 32
 // Assumption: attribute pairs in the string are separated by '&'.
-void extractAttributeValue(const char* aSearchString,
-                           const char* aAttributeName, nsCString& aResult) {
-  // NS_ENSURE_ARG_POINTER(extractAttributeValue);
-
+static void extractAttributeValue(const char* aSearchString,
+                                  const char* aAttributeName,
+                                  nsCString& aResult) {
   aResult.Truncate();
 
   if (aSearchString && aAttributeName) {
@@ -224,7 +219,7 @@ nsresult nsMozIconURI::SetSpecInternal(const nsACString& aSpec) {
     if (!sizeString.IsEmpty()) {
       const char* sizeStr = sizeString.get();
       for (uint32_t i = 0; i < ArrayLength(kSizeStrings); i++) {
-        if (PL_strcasecmp(sizeStr, kSizeStrings[i]) == 0) {
+        if (nsCRT::strcasecmp(sizeStr, kSizeStrings[i]) == 0) {
           mIconSize = i;
           break;
         }
@@ -241,7 +236,7 @@ nsresult nsMozIconURI::SetSpecInternal(const nsACString& aSpec) {
     if (!stateString.IsEmpty()) {
       const char* stateStr = stateString.get();
       for (uint32_t i = 0; i < ArrayLength(kStateStrings); i++) {
-        if (PL_strcasecmp(stateStr, kStateStrings[i]) == 0) {
+        if (nsCRT::strcasecmp(stateStr, kStateStrings[i]) == 0) {
           mIconState = i;
           break;
         }
@@ -418,7 +413,7 @@ nsMozIconURI::Equals(nsIURI* other, bool* result) {
   rv = other->GetSpec(spec2);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (!PL_strcasecmp(spec1.get(), spec2.get())) {
+  if (!nsCRT::strcasecmp(spec1.get(), spec2.get())) {
     *result = true;
   } else {
     *result = false;
@@ -441,7 +436,7 @@ nsMozIconURI::SchemeIs(const char* aScheme, bool* aEquals) {
     return NS_OK;
   }
 
-  *aEquals = PL_strcasecmp("moz-icon", aScheme) ? false : true;
+  *aEquals = nsCRT::strcasecmp("moz-icon", aScheme) == 0;
   return NS_OK;
 }
 

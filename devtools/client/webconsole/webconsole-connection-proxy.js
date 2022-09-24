@@ -7,6 +7,7 @@
 const Services = require("Services");
 
 const l10n = require("devtools/client/webconsole/utils/l10n");
+const { safeAsyncMethod } = require("devtools/shared/async-utils");
 
 const PREF_CONNECTION_TIMEOUT = "devtools.debugger.remote-timeout";
 // Web Console connection proxy
@@ -31,6 +32,12 @@ class WebConsoleConnectionProxy {
     this._onLastPrivateContextExited = this._onLastPrivateContextExited.bind(
       this
     );
+
+    // Swallow async errors to _asyncConnect if the target was destroyed in the
+    // meantime.
+    this._asyncConnect = safeAsyncMethod(this._asyncConnect.bind(this), () =>
+      this.target.isDestroyed()
+    );
   }
 
   /**
@@ -49,20 +56,7 @@ class WebConsoleConnectionProxy {
       return Promise.reject("target was destroyed");
     }
 
-    const connection = (async () => {
-      this.webConsoleFront = await this.target.getFront("console");
-
-      // There is no way to view response bodies from the Browser Console, so do
-      // not waste the memory.
-      const saveBodies =
-        !this.webConsoleUI.isBrowserConsole &&
-        Services.prefs.getBoolPref(
-          "devtools.netmonitor.saveRequestAndResponseBodies"
-        );
-      await this.webConsoleUI.setSaveRequestAndResponseBodies(saveBodies);
-
-      this._addWebConsoleFrontEventListeners();
-    })();
+    const connection = this._asyncConnect();
 
     let timeoutId;
     const connectionTimeout = new Promise((_, reject) => {
@@ -85,8 +79,54 @@ class WebConsoleConnectionProxy {
     return this._connecter;
   }
 
+  async _asyncConnect() {
+    this.webConsoleFront = await this.target.getFront("console");
+
+    // Once we support only server watcher for NETWORK_EVENT,
+    // we will be able to drop this in favor of code from WebConsoleUI._attachTargets.
+    // We have to wait for the fully enabling of NETWORK_EVENT watchers, especially on the Browser Toolbox.
+    const { targetCommand, resourceCommand } = this.webConsoleUI.hud.commands;
+    const hasNetworkResourceCommandSupport = resourceCommand.hasResourceCommandSupport(
+      resourceCommand.TYPES.NETWORK_EVENT
+    );
+    const supportsWatcherRequest = targetCommand.hasTargetWatcherSupport();
+    if (!hasNetworkResourceCommandSupport || !supportsWatcherRequest) {
+      // There is no way to view response bodies from the Browser Console, so do
+      // not waste the memory.
+      const saveBodies =
+        !this.webConsoleUI.isBrowserConsole &&
+        Services.prefs.getBoolPref(
+          "devtools.netmonitor.saveRequestAndResponseBodies"
+        );
+      await this.setSaveRequestAndResponseBodies(saveBodies);
+    }
+
+    this._addWebConsoleFrontEventListeners();
+  }
+
   getConnectionPromise() {
     return this._connecter;
+  }
+
+  /**
+   * Setter for saving of network request and response bodies.
+   *
+   * @param boolean value
+   *        The new value you want to set.
+   */
+  async setSaveRequestAndResponseBodies(value) {
+    if (!this.webConsoleFront) {
+      // Don't continue if the webconsole disconnected.
+      return null;
+    }
+
+    const newValue = !!value;
+    const toSet = {
+      "NetworkMonitor.saveRequestAndResponseBodies": newValue,
+    };
+
+    // Make sure the web console client connection is established first.
+    return this.webConsoleFront.setPreferences(toSet);
   }
 
   /**

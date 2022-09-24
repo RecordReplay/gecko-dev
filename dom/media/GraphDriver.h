@@ -31,6 +31,11 @@ class nsAutoRefTraits<cubeb_stream> : public nsPointerRefTraits<cubeb_stream> {
 
 namespace mozilla {
 
+// A thread pool containing only one thread to execute the cubeb operations. We
+// should always use this thread to init, destroy, start, or stop cubeb streams,
+// to avoid data racing or deadlock issues across platforms.
+#define CUBEB_TASK_THREAD SharedThreadPool::Get("CubebOperation"_ns, 1)
+
 /**
  * Assume we can run an iteration of the MediaTrackGraph loop in this much time
  * or less.
@@ -74,7 +79,7 @@ class OfflineClockDriver;
 class SystemClockDriver;
 
 namespace dom {
-enum class AudioContextOperation;
+enum class AudioContextOperation : uint8_t;
 }
 
 struct GraphInterface : public nsISupports {
@@ -377,7 +382,7 @@ class MediaTrackGraphInitThreadRunnable;
  */
 class ThreadedDriver : public GraphDriver {
   class IterationWaitHelper {
-    Monitor mMonitor;
+    Monitor mMonitor MOZ_UNANNOTATED;
     // The below members are guarded by mMonitor.
     bool mNeedAnotherIteration = false;
     TimeStamp mWakeTime;
@@ -743,8 +748,8 @@ class AudioCallbackDriver : public GraphDriver, public MixerCallbackReceiver {
   /* The mixer that the graph mixes into during an iteration. Audio thread only.
    */
   AudioMixer mMixer;
-  /* Contains the id of the audio thread, from profiler_get_thread_id. */
-  std::atomic<int> mAudioThreadId;
+  /* Contains the id of the audio thread, from profiler_current_thread_id. */
+  std::atomic<ProfilerThreadId> mAudioThreadId;
   /* This allows implementing AutoInCallback. This is equal to the current
    * thread id when in an audio callback, and is an invalid thread id otherwise.
    */

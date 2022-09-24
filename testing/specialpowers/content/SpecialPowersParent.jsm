@@ -402,15 +402,28 @@ class SpecialPowersParent extends JSWindowActorParent {
   /*
     Iterate through one atomic set of pref actions and perform sets/clears as appropriate.
     All actions performed must modify the relevant pref.
+
+    Returns whether we need to wait for a refresh driver tick for the pref to
+    have effect. This is only needed for ui. and font. prefs, which affect the
+    look and feel code and have some change-coalescing going on.
   */
   _applyPrefs(actions) {
+    let requiresRefresh = false;
     for (let pref of actions) {
+      // This logic should match PrefRequiresRefresh in reftest.jsm
+      requiresRefresh =
+        requiresRefresh ||
+        pref.name == "layout.css.prefers-color-scheme.content-override" ||
+        pref.name.startsWith("ui.") ||
+        pref.name.startsWith("browser.display.") ||
+        pref.name.startsWith("font.");
       if (pref.action == "set") {
         this._setPref(pref.name, pref.type, pref.value, pref.iid);
       } else if (pref.action == "clear") {
         Services.prefs.clearUserPref(pref.name);
       }
     }
+    return requiresRefresh;
   }
 
   /**
@@ -492,7 +505,8 @@ class SpecialPowersParent extends JSWindowActorParent {
       }
 
       prefUndoStack.push(cleanupActions);
-      this._applyPrefs(pendingActions);
+      let requiresRefresh = this._applyPrefs(pendingActions);
+      return { requiresRefresh };
     });
   }
 
@@ -500,17 +514,19 @@ class SpecialPowersParent extends JSWindowActorParent {
     return doPrefEnvOp(() => {
       let env = prefUndoStack.pop();
       if (env) {
-        this._applyPrefs(env);
-        return true;
+        let requiresRefresh = this._applyPrefs(env);
+        return { popped: true, requiresRefresh };
       }
-      return false;
+      return { popped: false, requiresRefresh: false };
     });
   }
 
   flushPrefEnv() {
+    let requiresRefresh = false;
     while (prefUndoStack.length) {
-      this.popPrefEnv();
+      requiresRefresh |= this.popPrefEnv().requiresRefresh;
     }
+    return { requiresRefresh };
   }
 
   _setPref(name, type, value, iid) {
@@ -708,6 +724,15 @@ class SpecialPowersParent extends JSWindowActorParent {
             !AppConstants.ASAN &&
             !AppConstants.TSAN
           ) {
+            if (Services.profiler.IsActive()) {
+              let filename = Cc["@mozilla.org/process/environment;1"]
+                .getService(Ci.nsIEnvironment)
+                .get("MOZ_PROFILER_SHUTDOWN");
+              if (filename) {
+                await Services.profiler.dumpProfileToFileAsync(filename);
+                await Services.profiler.StopProfiler();
+              }
+            }
             Cu.exitIfInAutomation();
           } else {
             Services.startup.quit(Ci.nsIAppStartup.eForceQuit);
@@ -1034,12 +1059,11 @@ class SpecialPowersParent extends JSWindowActorParent {
 
         case "SPCleanUpSTSData": {
           let origin = aMessage.data.origin;
-          let flags = aMessage.data.flags;
           let uri = Services.io.newURI(origin);
           let sss = Cc["@mozilla.org/ssservice;1"].getService(
             Ci.nsISiteSecurityService
           );
-          sss.resetState(uri, flags);
+          sss.resetState(uri);
           return undefined;
         }
 
@@ -1072,6 +1096,23 @@ class SpecialPowersParent extends JSWindowActorParent {
         case "SPLoadExtension": {
           let id = aMessage.data.id;
           let ext = aMessage.data.ext;
+          if (AppConstants.platform === "android") {
+            // Some extension APIs are partially implemented in Java, and the
+            // interface between the JS and Java side (GeckoViewWebExtension)
+            // expects extensions to be registered with the AddonManager.
+            //
+            // For simplicity, default to using an Addon Manager (if not null).
+            if (ext.useAddonManager === undefined) {
+              ext.useAddonManager = "android-only";
+            }
+          }
+          // delayedStartup is only supported in xpcshell
+          if (ext.delayedStartup !== undefined) {
+            throw new Error(
+              `delayedStartup is only supported in xpcshell, use "useAddonManager".`
+            );
+          }
+
           let extension = ExtensionTestCommon.generate(ext);
 
           let resultListener = (...args) => {
@@ -1184,6 +1225,18 @@ class SpecialPowersParent extends JSWindowActorParent {
           });
         }
 
+        case "SPExtensionTerminateBackground": {
+          let id = aMessage.data.id;
+          let extension = this._extensions.get(id);
+          return extension.terminateBackground();
+        }
+
+        case "SPExtensionWakeupBackground": {
+          let id = aMessage.data.id;
+          let extension = this._extensions.get(id);
+          return extension.wakeupBackground();
+        }
+
         case "SetAsDefaultAssertHandler": {
           defaultAssertHandler = this;
           return undefined;
@@ -1232,10 +1285,15 @@ class SpecialPowersParent extends JSWindowActorParent {
         }
 
         case "Snapshot": {
-          let { browsingContext, rect, background } = aMessage.data;
+          let {
+            browsingContext,
+            rect,
+            background,
+            resetScrollPosition,
+          } = aMessage.data;
 
           return browsingContext.currentWindowGlobal
-            .drawSnapshot(rect, 1.0, background)
+            .drawSnapshot(rect, 1.0, background, resetScrollPosition)
             .then(async image => {
               let hiddenFrame = new HiddenFrame();
               let win = await hiddenFrame.get();

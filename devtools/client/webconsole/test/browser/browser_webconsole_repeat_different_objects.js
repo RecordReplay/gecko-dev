@@ -6,14 +6,27 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html,Test repeated objects";
+const TEST_URI = "data:text/html,<!DOCTYPE html>Test repeated objects";
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
 
-  const onMessages = waitForMessages({
+  const onMessages = waitForMessagesByType({
     hud,
-    messages: [{ text: "abba" }, { text: "abba" }, { text: "abba" }],
+    messages: [
+      {
+        text: "abba",
+        typeSelector: ".console-api",
+      },
+      {
+        text: "abba",
+        typeSelector: ".console-api",
+      },
+      {
+        text: "abba",
+        typeSelector: ".console-api",
+      },
+    ],
   });
 
   SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {

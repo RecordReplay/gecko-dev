@@ -6,12 +6,15 @@
 
 // List of all command modules
 // (please try to keep the list alphabetically sorted)
-/*eslint sort-keys: "error"*/
+/* eslint sort-keys: "error" */
+/* eslint-enable sort-keys */
 const Commands = {
   inspectedWindowCommand:
     "devtools/shared/commands/inspected-window/inspected-window-command",
   inspectorCommand: "devtools/shared/commands/inspector/inspector-command",
   resourceCommand: "devtools/shared/commands/resource/resource-command",
+  rootResourceCommand:
+    "devtools/shared/commands/root-resource/root-resource-command",
   scriptCommand: "devtools/shared/commands/script/script-command",
   targetCommand: "devtools/shared/commands/target/target-command",
   targetConfigurationCommand:
@@ -19,6 +22,7 @@ const Commands = {
   threadConfigurationCommand:
     "devtools/shared/commands/thread-configuration/thread-configuration-command",
 };
+/* eslint-disable sort-keys */
 
 /**
  * For a given descriptor and its related Targets, already initialized,
@@ -39,6 +43,7 @@ async function createCommandsDictionary(descriptorFront) {
     // But ideally only commands should interact with these two objects
     client,
     descriptorFront,
+    watcherFront,
 
     // Expose for tests
     waitForRequestsToSettle() {
@@ -46,7 +51,6 @@ async function createCommandsDictionary(descriptorFront) {
     },
 
     // We want to keep destroy being defined last
-    // eslint-disable-next-line sort-keys
     async destroy() {
       await descriptorFront.destroy();
       await client.close();

@@ -5,10 +5,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "ServiceWorkerManager.h"
+#include "ServiceWorkerPrivateImpl.h"
 
 #include <algorithm>
 
 #include "nsCOMPtr.h"
+#include "nsICookieJarSettings.h"
 #include "nsIHttpChannel.h"
 #include "nsIHttpChannelInternal.h"
 #include "nsINamed.h"
@@ -61,11 +63,14 @@
 #include "mozilla/PermissionManager.h"
 #include "mozilla/ScopeExit.h"
 #include "mozilla/StaticPrefs_extensions.h"
+#include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/StoragePrincipalHelper.h"
 #include "mozilla/Unused.h"
 #include "mozilla/EnumSet.h"
 
 #include "nsComponentManagerUtils.h"
 #include "nsContentUtils.h"
+#include "nsIDUtils.h"
 #include "nsNetUtil.h"
 #include "nsProxyRelease.h"
 #include "nsQueryObject.h"
@@ -86,17 +91,29 @@
 #include "ServiceWorkerUnregisterJob.h"
 #include "ServiceWorkerUpdateJob.h"
 #include "ServiceWorkerUtils.h"
+#include "ServiceWorkerQuotaUtils.h"
 
 #ifdef PostMessage
 #  undef PostMessage
 #endif
 
+mozilla::LazyLogModule sWorkerTelemetryLog("WorkerTelemetry");
+
+#ifdef LOG
+#  undef LOG
+#endif
+#define LOG(_args) MOZ_LOG(sWorkerTelemetryLog, LogLevel::Debug, _args);
+
 using namespace mozilla;
 using namespace mozilla::dom;
 using namespace mozilla::ipc;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
+
+// Counts the number of registered ServiceWorkers, and the number that
+// handle Fetch, for reporting in Telemetry
+uint32_t gServiceWorkersRegistered = 0;
+uint32_t gServiceWorkersRegisteredFetch = 0;
 
 static_assert(
     nsIHttpChannelInternal::CORS_MODE_SAME_ORIGIN ==
@@ -487,6 +504,45 @@ void ServiceWorkerManager::Init(ServiceWorkerRegistrar* aRegistrar) {
   }
 
   mActor = static_cast<ServiceWorkerManagerChild*>(actor);
+
+  mTelemetryLastChange = TimeStamp::Now();
+}
+
+void ServiceWorkerManager::RecordTelemetry(uint32_t aNumber, uint32_t aFetch) {
+  // Submit N value pairs to Telemetry for the time we were at those values
+  auto now = TimeStamp::Now();
+  // round down, with a minimum of 1 repeat.  In theory this gives
+  // inaccuracy if there are frequent changes, but that's uncommon.
+  uint32_t repeats = (uint32_t)((now - mTelemetryLastChange).ToMilliseconds()) /
+                     mTelemetryPeriodMs;
+  mTelemetryLastChange = now;
+  if (repeats == 0) {
+    repeats = 1;
+  }
+  nsCOMPtr<nsIRunnable> runnable = NS_NewRunnableFunction(
+      "ServiceWorkerTelemetryRunnable", [aNumber, aFetch, repeats]() {
+        LOG(("ServiceWorkers running: %u samples of %u/%u", repeats, aNumber,
+             aFetch));
+        // Don't allocate infinitely huge arrays if someone visits a SW site
+        // after a few months running. 1 month is about 500K repeats @ 5s
+        // sampling
+        uint32_t num_repeats = std::min(repeats, 1000000U);  // 4MB max
+        nsTArray<uint32_t> values;
+
+        uint32_t* array = values.AppendElements(num_repeats);
+        for (uint32_t i = 0; i < num_repeats; i++) {
+          array[i] = aNumber;
+        }
+        Telemetry::Accumulate(Telemetry::SERVICE_WORKER_RUNNING, "All"_ns,
+                              values);
+
+        for (uint32_t i = 0; i < num_repeats; i++) {
+          array[i] = aFetch;
+        }
+        Telemetry::Accumulate(Telemetry::SERVICE_WORKER_RUNNING, "Fetch"_ns,
+                              values);
+      });
+  NS_DispatchBackgroundTask(runnable.forget(), nsIEventTarget::DISPATCH_NORMAL);
 }
 
 RefPtr<GenericErrorResultPromise> ServiceWorkerManager::StartControllingClient(
@@ -528,7 +584,7 @@ RefPtr<GenericErrorResultPromise> ServiceWorkerManager::StartControllingClient(
                                 1);
 
           // Always check to see if we failed to actually control the client. In
-          // that case removed the client from our list of controlled clients.
+          // that case remove the client from our list of controlled clients.
           return promise->Then(
               GetMainThreadSerialEventTarget(), __func__,
               [](bool) {
@@ -661,6 +717,9 @@ void ServiceWorkerManager::MaybeFinishShutdown() {
   nsresult rv = NS_DispatchToMainThread(runnable);
   Unused << NS_WARN_IF(NS_FAILED(rv));
   mActor = nullptr;
+
+  // This also submits final telemetry
+  ServiceWorkerPrivateImpl::RunningShutdown();
 }
 
 class ServiceWorkerResolveWindowPromiseOnRegisterCallback final
@@ -725,21 +784,25 @@ ServiceWorkerManager::RegisterForTest(nsIPrincipal* aPrincipal,
     outer->MaybeRejectWithAbortError(
         "registerForTest only allowed when dom.serviceWorkers.testing.enabled "
         "is true");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
   if (aPrincipal == nullptr) {
     outer->MaybeRejectWithAbortError("Missing principal");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
   if (aScriptURL.IsEmpty()) {
     outer->MaybeRejectWithAbortError("Missing script url");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
   if (aScopeURL.IsEmpty()) {
     outer->MaybeRejectWithAbortError("Missing scope url");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -750,6 +813,7 @@ ServiceWorkerManager::RegisterForTest(nsIPrincipal* aPrincipal,
 
   if (!clientInfo.isSome()) {
     outer->MaybeRejectWithUnknownError("Error creating clientInfo");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -841,7 +905,6 @@ RefPtr<ServiceWorkerRegistrationPromise> ServiceWorkerManager::Register(
   queue->ScheduleJob(job);
 
   MOZ_ASSERT(NS_IsMainThread());
-  Telemetry::Accumulate(Telemetry::SERVICE_WORKER_REGISTRATIONS, 1);
 
   return cb->Promise();
 }
@@ -1489,7 +1552,7 @@ void ServiceWorkerManager::LoadRegistration(
     // If active worker script matches our expectations for a "current worker",
     // then we are done. Since scripts with the same URL might have different
     // contents such as updated scripts or scripts with different LoadFlags, we
-    // use the CacheName to judje whether the two scripts are identical, where
+    // use the CacheName to judge whether the two scripts are identical, where
     // the CacheName is an UUID generated when a new script is found.
     if (registration->GetActive() &&
         registration->GetActive()->CacheName() == aRegistration.cacheName()) {
@@ -1524,10 +1587,21 @@ void ServiceWorkerManager::LoadRegistration(
 void ServiceWorkerManager::LoadRegistrations(
     const nsTArray<ServiceWorkerRegistrationData>& aRegistrations) {
   MOZ_ASSERT(NS_IsMainThread());
-
+  uint32_t fetch = 0;
   for (uint32_t i = 0, len = aRegistrations.Length(); i < len; ++i) {
     LoadRegistration(aRegistrations[i]);
+    if (aRegistrations[i].currentWorkerHandlesFetch()) {
+      fetch++;
+    }
   }
+  gServiceWorkersRegistered = aRegistrations.Length();
+  gServiceWorkersRegisteredFetch = fetch;
+  Telemetry::ScalarSet(Telemetry::ScalarID::SERVICEWORKER_REGISTRATIONS,
+                       u"All"_ns, gServiceWorkersRegistered);
+  Telemetry::ScalarSet(Telemetry::ScalarID::SERVICEWORKER_REGISTRATIONS,
+                       u"Fetch"_ns, gServiceWorkersRegisteredFetch);
+  LOG(("LoadRegistrations: %u, fetch %u\n", gServiceWorkersRegistered,
+       gServiceWorkersRegisteredFetch));
 }
 
 void ServiceWorkerManager::StoreRegistration(
@@ -1537,6 +1611,25 @@ void ServiceWorkerManager::StoreRegistration(
 
   if (mShuttingDown) {
     return;
+  }
+
+  // Do not store a registration for addons that are not installed, not enabled
+  // or installed temporarily.
+  //
+  // If the dom.serviceWorkers.testing.persistTemporaryInstalledAddons is set
+  // to true, the registration for a temporary installed addon will still be
+  // persisted (only meant to be used to make it easier to test some particular
+  // scenario with a temporary installed addon which doesn't need to be signed
+  // to be installed on release channel builds).
+  if (aPrincipal->SchemeIs("moz-extension")) {
+    RefPtr<extensions::WebExtensionPolicy> addonPolicy =
+        BasePrincipal::Cast(aPrincipal)->AddonPolicy();
+    if (!addonPolicy || !addonPolicy->Active() ||
+        (addonPolicy->TemporarilyInstalled() &&
+         !StaticPrefs::
+             dom_serviceWorkers_testing_persistTemporarilyInstalledAddons())) {
+      return;
+    }
   }
 
   ServiceWorkerRegistrationData data;
@@ -1676,7 +1769,6 @@ void ServiceWorkerManager::AddScopeAndRegistration(
   MOZ_ASSERT(!scopeKey.IsEmpty());
 
   auto* const data = swm->mRegistrationInfos.GetOrInsertNew(scopeKey);
-
   data->mScopeContainer.InsertScope(aScope);
   data->mInfos.InsertOrUpdate(aScope, RefPtr{aInfo});
   swm->NotifyListenersOnRegister(aInfo);
@@ -1776,6 +1868,14 @@ void ServiceWorkerManager::MaybeRemoveRegistrationInfo(
     if (entry.Data()->mScopeContainer.IsEmpty() &&
         entry.Data()->mJobQueues.Count() == 0) {
       entry.Remove();
+
+      // Need to reset the mQuotaUsageCheckCount, if
+      // RegistrationDataPerPrincipal:: mScopeContainer is empty. This
+      // RegistrationDataPerPrincipal might be reused, such that quota usage
+      // mitigation can be triggered for the new added registration.
+    } else if (entry.Data()->mScopeContainer.IsEmpty() &&
+               entry.Data()->mQuotaUsageCheckCount) {
+      entry.Data()->mQuotaUsageCheckCount = 0;
     }
   }
 }
@@ -1924,14 +2024,9 @@ class ContinueDispatchFetchEventRunnable : public Runnable {
     nsString clientId;
     nsString resultingClientId;
     nsCOMPtr<nsILoadInfo> loadInfo = channel->LoadInfo();
-    char buf[NSID_LENGTH];
     Maybe<ClientInfo> clientInfo = loadInfo->GetClientInfo();
     if (clientInfo.isSome()) {
-      clientInfo.ref().Id().ToProvidedString(buf);
-      NS_ConvertASCIItoUTF16 uuid(buf);
-
-      // Remove {} and the null terminator
-      clientId.Assign(Substring(uuid, 1, NSID_LENGTH - 3));
+      clientId = NSID_TrimBracketsUTF16(clientInfo->Id());
     }
 
     // Having an initial or reserved client are mutually exclusive events:
@@ -1949,10 +2044,7 @@ class ContinueDispatchFetchEventRunnable : public Runnable {
     }
 
     if (resulting.isSome()) {
-      resulting.ref().Id().ToProvidedString(buf);
-      NS_ConvertASCIItoUTF16 uuid(buf);
-
-      resultingClientId.Assign(Substring(uuid, 1, NSID_LENGTH - 3));
+      resultingClientId = NSID_TrimBracketsUTF16(resulting->Id());
     }
 
     rv = mServiceWorkerPrivate->SendFetchEvent(mChannel, mLoadGroup, clientId,
@@ -1971,6 +2063,7 @@ void ServiceWorkerManager::DispatchFetchEvent(nsIInterceptedChannel* aChannel,
                                               ErrorResult& aRv) {
   MOZ_ASSERT(aChannel);
   MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(XRE_IsParentProcess());
 
   nsCOMPtr<nsIChannel> internalChannel;
   aRv = aChannel->GetChannel(getter_AddRefs(internalChannel));
@@ -2017,8 +2110,15 @@ void ServiceWorkerManager::DispatchFetchEvent(nsIInterceptedChannel* aChannel,
     }
 
     // non-subresource request means the URI contains the principal
-    nsCOMPtr<nsIPrincipal> principal = BasePrincipal::CreateContentPrincipal(
-        uri, loadInfo->GetOriginAttributes());
+    OriginAttributes attrs = loadInfo->GetOriginAttributes();
+    if (StaticPrefs::privacy_partition_serviceWorkers()) {
+      StoragePrincipalHelper::GetOriginAttributes(
+          internalChannel, attrs,
+          StoragePrincipalHelper::eForeignPartitionedPrincipal);
+    }
+
+    nsCOMPtr<nsIPrincipal> principal =
+        BasePrincipal::CreateContentPrincipal(uri, attrs);
 
     RefPtr<ServiceWorkerRegistrationInfo> registration =
         GetServiceWorkerRegistrationInfo(principal, uri);
@@ -2132,28 +2232,13 @@ void ServiceWorkerManager::DispatchFetchEvent(nsIInterceptedChannel* aChannel,
   // When this service worker was registered, we also sent down the permissions
   // for the runnable. They should have arrived by now, but we still need to
   // wait for them if they have not.
-  nsCOMPtr<nsIRunnable> permissionsRunnable = NS_NewRunnableFunction(
-      "dom::ServiceWorkerManager::DispatchFetchEvent", [=]() {
-        RefPtr<PermissionManager> permMgr = PermissionManager::GetInstance();
-        if (permMgr) {
-          permMgr->WhenPermissionsAvailable(serviceWorker->Principal(),
-                                            continueRunnable);
-        } else {
-          continueRunnable->HandleError();
-        }
-      });
-
-  nsCOMPtr<nsIUploadChannel2> uploadChannel =
-      do_QueryInterface(internalChannel);
-
-  // If there is no upload stream, then continue immediately
-  if (!uploadChannel) {
-    MOZ_ALWAYS_SUCCEEDS(permissionsRunnable->Run());
-    return;
+  RefPtr<PermissionManager> permMgr = PermissionManager::GetInstance();
+  if (permMgr) {
+    permMgr->WhenPermissionsAvailable(serviceWorker->Principal(),
+                                      continueRunnable);
+  } else {
+    continueRunnable->HandleError();
   }
-  // Otherwise, ensure the upload stream can be cloned directly.  This may
-  // require some async copying, so provide a callback.
-  aRv = uploadChannel->EnsureUploadStreamIsCloneable(permissionsRunnable);
 }
 
 bool ServiceWorkerManager::IsAvailable(nsIPrincipal* aPrincipal, nsIURI* aURI,
@@ -2176,16 +2261,26 @@ bool ServiceWorkerManager::IsAvailable(nsIPrincipal* aPrincipal, nsIURI* aURI,
   //    correspoinding ClinetInfo
   // 2. Maybe schedule a soft update
   if (!registration->GetActive()->HandlesFetch()) {
-    // Checkin if the channel is not storage allowed first.
-    if (StorageAllowedForChannel(aChannel) != StorageAccess::eAllow) {
-      return false;
+    // Checkin if the channel is not allowed for the service worker.
+    auto storageAccess = StorageAllowedForChannel(aChannel);
+    nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
+
+    if (storageAccess != StorageAccess::eAllow) {
+      if (!StaticPrefs::privacy_partition_serviceWorkers()) {
+        return false;
+      }
+
+      nsCOMPtr<nsICookieJarSettings> cookieJarSettings;
+      loadInfo->GetCookieJarSettings(getter_AddRefs(cookieJarSettings));
+
+      if (!StoragePartitioningEnabled(storageAccess, cookieJarSettings)) {
+        return false;
+      }
     }
 
     // ServiceWorkerInterceptController::ShouldPrepareForIntercept() handles the
     // subresource cases. Must be non-subresource case here.
     MOZ_ASSERT(nsContentUtils::IsNonSubresourceRequest(aChannel));
-
-    nsCOMPtr<nsILoadInfo> loadInfo = aChannel->LoadInfo();
 
     Maybe<ClientInfo> clientInfo = loadInfo->GetReservedClientInfo();
     if (clientInfo.isNothing()) {
@@ -2251,6 +2346,46 @@ int32_t ServiceWorkerManager::GetPrincipalQuotaUsageCheckCount(
   }
 
   return data->mQuotaUsageCheckCount;
+}
+
+void ServiceWorkerManager::CheckPrincipalQuotaUsage(nsIPrincipal* aPrincipal,
+                                                    const nsACString& aScope) {
+  MOZ_ASSERT(NS_IsMainThread());
+  MOZ_ASSERT(aPrincipal);
+
+  nsAutoCString scopeKey;
+  nsresult rv = PrincipalToScopeKey(aPrincipal, scopeKey);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return;
+  }
+
+  RegistrationDataPerPrincipal* data;
+  if (!mRegistrationInfos.Get(scopeKey, &data)) {
+    return;
+  }
+
+  // Had already schedule a quota usage check.
+  if (data->mQuotaUsageCheckCount != 0) {
+    return;
+  }
+
+  ++data->mQuotaUsageCheckCount;
+
+  // Get the corresponding ServiceWorkerRegistrationInfo here. Unregisteration
+  // might be triggered later, should get it here before it be removed from
+  // data.mInfos, such that NotifyListenersOnQuotaCheckFinish() can notify the
+  // corresponding ServiceWorkerRegistrationInfo after asynchronous quota
+  // checking finish.
+  RefPtr<ServiceWorkerRegistrationInfo> info;
+  data->mInfos.Get(aScope, getter_AddRefs(info));
+  MOZ_ASSERT(info);
+
+  RefPtr<ServiceWorkerManager> self = this;
+
+  ClearQuotaUsageIfNeeded(aPrincipal, [self, info](bool aResult) {
+    MOZ_ASSERT(NS_IsMainThread());
+    self->NotifyListenersOnQuotaUsageCheckFinish(info);
+  });
 }
 
 void ServiceWorkerManager::SoftUpdate(const OriginAttributes& aOriginAttributes,
@@ -2555,6 +2690,39 @@ ServiceWorkerManager::GetRegistration(const PrincipalInfo& aPrincipalInfo,
 }
 
 NS_IMETHODIMP
+ServiceWorkerManager::ReloadRegistrationsForTest() {
+  if (NS_WARN_IF(!StaticPrefs::dom_serviceWorkers_testing_enabled())) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Let's keep it simple and fail if there are any controlled client,
+  // the test case can take care of making sure there is none when this
+  // method will be called.
+  if (NS_WARN_IF(!mControlledClients.IsEmpty())) {
+    return NS_ERROR_FAILURE;
+  }
+
+  for (const auto& info : mRegistrationInfos.Values()) {
+    for (ServiceWorkerRegistrationInfo* reg : info->mInfos.Values()) {
+      MOZ_ASSERT(reg);
+      reg->ForceShutdown();
+    }
+  }
+
+  mRegistrationInfos.Clear();
+
+  nsTArray<ServiceWorkerRegistrationData> data;
+  RefPtr<ServiceWorkerRegistrar> swr = ServiceWorkerRegistrar::Get();
+  if (NS_WARN_IF(!swr->ReloadDataForTest())) {
+    return NS_ERROR_FAILURE;
+  }
+  swr->GetRegistrations(data);
+  LoadRegistrations(data);
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
                                                 JSContext* aCx,
                                                 dom::Promise** aPromise) {
@@ -2574,6 +2742,7 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
   if (!enabled) {
     outer->MaybeRejectWithNotAllowedError(
         "Disabled. extensions.backgroundServiceWorker.enabled is false");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -2581,6 +2750,7 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
   auto* addonPolicy = BasePrincipal::Cast(aPrincipal)->AddonPolicy();
   if (!addonPolicy) {
     outer->MaybeRejectWithNotAllowedError("Not an extension principal");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -2590,6 +2760,7 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
     scope.Assign(NS_ConvertUTF16toUTF8(result.unwrap()));
   } else {
     outer->MaybeRejectWithUnknownError("Unable to resolve addon scope URL");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -2598,6 +2769,7 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
 
   if (scriptURL.IsEmpty()) {
     outer->MaybeRejectWithNotFoundError("Missing background worker script url");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -2606,6 +2778,7 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
 
   if (!clientInfo.isSome()) {
     outer->MaybeRejectWithUnknownError("Error creating clientInfo");
+    outer.forget(aPromise);
     return NS_OK;
   }
 
@@ -2634,6 +2807,115 @@ ServiceWorkerManager::RegisterForAddonPrincipal(nsIPrincipal* aPrincipal,
 
   outer.forget(aPromise);
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerManager::GetRegistrationForAddonPrincipal(
+    nsIPrincipal* aPrincipal, nsIServiceWorkerRegistrationInfo** aInfo) {
+  MOZ_ASSERT(aPrincipal);
+
+  MOZ_ASSERT(aPrincipal);
+  auto* addonPolicy = BasePrincipal::Cast(aPrincipal)->AddonPolicy();
+  if (!addonPolicy) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCString scope;
+  auto result = addonPolicy->GetURL(u""_ns);
+  if (result.isOk()) {
+    scope.Assign(NS_ConvertUTF16toUTF8(result.unwrap()));
+  } else {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIURI> scopeURI;
+  nsresult rv = NS_NewURI(getter_AddRefs(scopeURI), scope);
+  if (NS_FAILED(rv)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  RefPtr<ServiceWorkerRegistrationInfo> info =
+      GetServiceWorkerRegistrationInfo(aPrincipal, scopeURI);
+  if (!info) {
+    aInfo = nullptr;
+    return NS_OK;
+  }
+  info.forget(aInfo);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+ServiceWorkerManager::WakeForExtensionAPIEvent(
+    const nsAString& aExtensionBaseURL, const nsAString& aAPINamespace,
+    const nsAString& aAPIEventName, JSContext* aCx, dom::Promise** aPromise) {
+  nsIGlobalObject* global = xpc::CurrentNativeGlobal(aCx);
+  if (NS_WARN_IF(!global)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  ErrorResult erv;
+  RefPtr<Promise> outer = Promise::Create(global, erv);
+  if (NS_WARN_IF(erv.Failed())) {
+    return erv.StealNSResult();
+  }
+
+  auto enabled =
+      StaticPrefs::extensions_backgroundServiceWorker_enabled_AtStartup();
+  if (!enabled) {
+    outer->MaybeRejectWithNotAllowedError(
+        "Disabled. extensions.backgroundServiceWorker.enabled is false");
+    outer.forget(aPromise);
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIURI> scopeURI;
+  nsresult rv = NS_NewURI(getter_AddRefs(scopeURI), aExtensionBaseURL);
+  if (NS_FAILED(rv)) {
+    outer->MaybeReject(rv);
+    outer.forget(aPromise);
+    return NS_OK;
+  }
+
+  nsCOMPtr<nsIPrincipal> principal;
+  MOZ_TRY_VAR(principal, ScopeToPrincipal(scopeURI, {}));
+
+  auto* addonPolicy = BasePrincipal::Cast(principal)->AddonPolicy();
+  if (NS_WARN_IF(!addonPolicy)) {
+    outer->MaybeRejectWithNotAllowedError(
+        "Not an extension principal or extension disabled");
+    outer.forget(aPromise);
+    return NS_OK;
+  }
+
+  OriginAttributes attrs;
+  ServiceWorkerInfo* info = GetActiveWorkerInfoForScope(
+      attrs, NS_ConvertUTF16toUTF8(aExtensionBaseURL));
+  if (NS_WARN_IF(!info)) {
+    outer->MaybeRejectWithInvalidStateError(
+        "No active worker for the extension background service worker");
+    outer.forget(aPromise);
+    return NS_OK;
+  }
+
+  ServiceWorkerPrivate* workerPrivate = info->WorkerPrivate();
+  auto result =
+      workerPrivate->WakeForExtensionAPIEvent(aAPINamespace, aAPIEventName);
+  if (result.isErr()) {
+    outer->MaybeReject(result.propagateErr());
+    outer.forget(aPromise);
+    return NS_OK;
+  }
+
+  RefPtr<ServiceWorkerPrivate::PromiseExtensionWorkerHasListener> innerPromise =
+      result.unwrap();
+
+  innerPromise->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [outer](bool aSubscribedEvent) { outer->MaybeResolve(aSubscribedEvent); },
+      [outer](nsresult aErrorResult) { outer->MaybeReject(aErrorResult); });
+
+  outer.forget(aPromise);
   return NS_OK;
 }
 
@@ -2847,6 +3129,13 @@ ServiceWorkerManager::PropagateUnregister(
   MOZ_ASSERT(NS_IsMainThread());
   MOZ_ASSERT(aPrincipal);
 
+  // Return earlier with an explicit failure if this xpcom method is called
+  // when the ServiceWorkerManager is not initialized yet or it is already
+  // shutting down.
+  if (NS_WARN_IF(!mActor)) {
+    return NS_ERROR_FAILURE;
+  }
+
   PrincipalInfo principalInfo;
   if (NS_WARN_IF(
           NS_FAILED(PrincipalToPrincipalInfo(aPrincipal, &principalInfo)))) {
@@ -2878,6 +3167,15 @@ void ServiceWorkerManager::NotifyListenersOnUnregister(
       mListeners.Clone());
   for (size_t index = 0; index < listeners.Length(); ++index) {
     listeners[index]->OnUnregister(aInfo);
+  }
+}
+
+void ServiceWorkerManager::NotifyListenersOnQuotaUsageCheckFinish(
+    nsIServiceWorkerRegistrationInfo* aRegistration) {
+  nsTArray<nsCOMPtr<nsIServiceWorkerManagerListener>> listeners(
+      mListeners.Clone());
+  for (size_t index = 0; index < listeners.Length(); ++index) {
+    listeners[index]->OnQuotaUsageCheckFinish(aRegistration);
   }
 }
 
@@ -3071,5 +3369,4 @@ void ServiceWorkerManager::ReportServiceWorkerShutdownProgress(
   mShutdownBlocker->ReportShutdownProgress(aShutdownStateId, aProgress);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

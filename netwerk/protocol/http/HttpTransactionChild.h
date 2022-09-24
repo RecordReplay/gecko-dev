@@ -10,6 +10,7 @@
 #include "mozilla/net/NeckoChannelParams.h"
 #include "mozilla/net/PHttpTransactionChild.h"
 #include "nsHttpRequestHead.h"
+#include "nsIEarlyHintObserver.h"
 #include "nsIRequest.h"
 #include "nsIStreamListener.h"
 #include "nsIThreadRetargetableStreamListener.h"
@@ -18,8 +19,7 @@
 
 class nsInputStreamPump;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 class BackgroundDataBridgeParent;
 class InputChannelThrottleQueueChild;
@@ -35,7 +35,8 @@ class HttpTransactionChild final : public PHttpTransactionChild,
                                    public nsIStreamListener,
                                    public nsITransportEventSink,
                                    public nsIThrottledInputChannel,
-                                   public nsIThreadRetargetableStreamListener {
+                                   public nsIThreadRetargetableStreamListener,
+                                   public nsIEarlyHintObserver {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIREQUESTOBSERVER
@@ -43,6 +44,7 @@ class HttpTransactionChild final : public PHttpTransactionChild,
   NS_DECL_NSITRANSPORTEVENTSINK
   NS_DECL_NSITHROTTLEDINPUTCHANNEL
   NS_DECL_NSITHREADRETARGETABLESTREAMLISTENER
+  NS_DECL_NSIEARLYHINTOBSERVER
 
   explicit HttpTransactionChild();
 
@@ -53,7 +55,7 @@ class HttpTransactionChild final : public PHttpTransactionChild,
       const bool& aReqBodyIncludesHeaders,
       const uint64_t& aTopLevelOuterContentWindowId,
       const uint8_t& aHttpTrafficCategory, const uint64_t& aRequestContextID,
-      const uint32_t& aClassOfService, const uint32_t& aInitialRwin,
+      const ClassOfService& aClassOfService, const uint32_t& aInitialRwin,
       const bool& aResponseTimeoutEnabled, const uint64_t& aChannelId,
       const bool& aHasTransactionObserver,
       const Maybe<H2PushedStreamArg>& aPushedStreamArg,
@@ -85,8 +87,8 @@ class HttpTransactionChild final : public PHttpTransactionChild,
       nsIInputStream* requestBody,  // use the trick in bug 1277681
       uint64_t requestContentLength, bool requestBodyHasHeaders,
       uint64_t topLevelOuterContentWindowId, uint8_t httpTrafficCategory,
-      uint64_t requestContextID, uint32_t classOfService, uint32_t initialRwin,
-      bool responseTimeoutEnabled, uint64_t channelId,
+      uint64_t requestContextID, ClassOfService classOfService,
+      uint32_t initialRwin, bool responseTimeoutEnabled, uint64_t channelId,
       bool aHasTransactionObserver,
       const Maybe<H2PushedStreamArg>& aPushedStreamArg);
 
@@ -117,8 +119,7 @@ class HttpTransactionChild final : public PHttpTransactionChild,
   RefPtr<BackgroundDataBridgeParent> mDataBridgeParent;
 };
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 inline nsISupports* ToSupports(mozilla::net::HttpTransactionChild* p) {
   return static_cast<nsIStreamListener*>(p);

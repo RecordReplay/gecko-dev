@@ -6,6 +6,7 @@
 #ifndef nsHttpConnection_h__
 #define nsHttpConnection_h__
 
+#include <functional>
 #include "HttpConnectionBase.h"
 #include "nsHttpConnectionInfo.h"
 #include "nsHttpResponseHead.h"
@@ -13,17 +14,19 @@
 #include "nsCOMPtr.h"
 #include "nsProxyRelease.h"
 #include "prinrval.h"
-#include "TunnelUtils.h"
+#include "TLSFilterTransaction.h"
 #include "mozilla/Mutex.h"
 #include "ARefBase.h"
 #include "TimingStruct.h"
 #include "HttpTrafficAnalyzer.h"
+#include "TlsHandshaker.h"
 
 #include "nsIAsyncInputStream.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsISupportsPriority.h"
 #include "nsITimer.h"
+#include "nsITlsHandshakeListener.h"
 
 class nsISocketTransport;
 class nsISSLSocketControl;
@@ -119,10 +122,7 @@ class nsHttpConnection final : public HttpConnectionBase,
   HttpVersion GetLastHttpResponseVersion() { return mLastHttpResponseVersion; }
 
   friend class HttpConnectionForceIO;
-
-  [[nodiscard]] static nsresult ReadFromStream(nsIInputStream*, void*,
-                                               const char*, uint32_t, uint32_t,
-                                               uint32_t*);
+  friend class TlsHandshaker;
 
   // When a persistent connection is in the connection manager idle
   // connection pool, the nsHttpConnection still reads errors and hangups
@@ -156,11 +156,8 @@ class nsHttpConnection final : public HttpConnectionBase,
 
   int64_t ContentBytesWritten() { return mContentBytesWritten; }
 
-  [[nodiscard]] static nsresult MakeConnectString(nsAHttpTransaction* trans,
-                                                  nsHttpRequestHead* request,
-                                                  nsACString& result,
-                                                  bool h2ws);
-  void SetupSecondaryTLS(nsAHttpTransaction* aSpdyConnectTransaction = nullptr);
+  void SetupSecondaryTLS(
+      nsAHttpTransaction* aHttp2ConnectTransaction = nullptr);
   void SetInSpdyTunnel(bool arg);
 
   // Check active connections for traffic (or not). SPDY connections send a
@@ -193,7 +190,35 @@ class nsHttpConnection final : public HttpConnectionBase,
 
   bool IsForWebSocket() { return mForWebSocket; }
 
+  // The following functions are related to setting up a tunnel.
+  [[nodiscard]] static nsresult MakeConnectString(nsAHttpTransaction* trans,
+                                                  nsHttpRequestHead* request,
+                                                  nsACString& result,
+                                                  bool h2ws);
+  [[nodiscard]] static nsresult ReadFromStream(nsIInputStream*, void*,
+                                               const char*, uint32_t, uint32_t,
+                                               uint32_t*);
+
  private:
+  enum HttpConnectionState {
+    UNINITIALIZED,
+    SETTING_UP_TUNNEL,
+    REQUEST,
+  } mState{HttpConnectionState::UNINITIALIZED};
+  void ChangeState(HttpConnectionState newState);
+
+  // Tunnel retated functions:
+  bool TunnelSetupInProgress() { return mState == SETTING_UP_TUNNEL; }
+  void SetTunnelSetupDone();
+  nsresult CheckTunnelIsNeeded();
+  nsresult SetupProxyConnectStream();
+  nsresult SendConnectRequest(void* closure, uint32_t* transactionBytes);
+
+  void HandleTunnelResponse(uint16_t responseStatus, bool* reset);
+  void HandleWebSocketResponse(nsHttpRequestHead* requestHead,
+                               nsHttpResponseHead* responseHead,
+                               uint16_t responseStatus);
+
   // Value (set in mTCPKeepaliveConfig) indicates which set of prefs to use.
   enum TCPKeepaliveConfig {
     kTCPKeepaliveDisabled = 0,
@@ -201,26 +226,12 @@ class nsHttpConnection final : public HttpConnectionBase,
     kTCPKeepaliveLongLivedConfig
   };
 
-  // called to cause the underlying socket to start speaking SSL
-  [[nodiscard]] nsresult InitSSLParams(bool connectingToProxy,
-                                       bool ProxyStartSSL);
-  [[nodiscard]] nsresult SetupNPNList(nsISSLSocketControl* ssl, uint32_t caps);
-
   [[nodiscard]] nsresult OnTransactionDone(nsresult reason);
   [[nodiscard]] nsresult OnSocketWritable();
   [[nodiscard]] nsresult OnSocketReadable();
 
-  [[nodiscard]] nsresult SetupProxyConnect();
-
   PRIntervalTime IdleTime();
   bool IsAlive();
-
-  // Makes certain the SSL handshake is complete and NPN negotiation
-  // has had a chance to happen
-  [[nodiscard]] bool EnsureNPNComplete(nsresult& aOut0RTTWriteHandshakeValue,
-                                       uint32_t& aOut0RTTBytesWritten);
-
-  void SetupSSL();
 
   // Start the Spdy transaction handler when NPN indicates spdy/*
   void StartSpdy(nsISSLSocketControl* ssl, SpdyVersion spdyVersion);
@@ -243,11 +254,18 @@ class nsHttpConnection final : public HttpConnectionBase,
   [[nodiscard]] nsresult DisableTCPKeepalives();
 
   bool CheckCanWrite0RTTData();
+  void PostProcessNPNSetup(bool handshakeSucceeded, bool hasSecurityInfo,
+                           bool earlyDataUsed);
+  void Reset0RttForSpdy();
+  void HandshakeDoneInternal();
+  uint32_t TransactionCaps() const { return mTransactionCaps; }
 
  private:
   // mTransaction only points to the HTTP Transaction callbacks if the
   // transaction is open, otherwise it is null.
   RefPtr<nsAHttpTransaction> mTransaction;
+
+  RefPtr<TlsHandshaker> mTlsHandshaker;
 
   nsCOMPtr<nsIAsyncInputStream> mSocketIn;
   nsCOMPtr<nsIAsyncOutputStream> mSocketOut;
@@ -255,11 +273,8 @@ class nsHttpConnection final : public HttpConnectionBase,
   nsresult mSocketInCondition{NS_ERROR_NOT_INITIALIZED};
   nsresult mSocketOutCondition{NS_ERROR_NOT_INITIALIZED};
 
-  nsCOMPtr<nsIInputStream> mProxyConnectStream;
-  nsCOMPtr<nsIInputStream> mRequestStream;
-
   RefPtr<TLSFilterTransaction> mTLSFilter;
-  nsWeakPtr mWeakTrans;  // SpdyConnectTransaction *
+  nsWeakPtr mWeakTrans;  // Http2ConnectTransaction *
 
   RefPtr<nsHttpHandler> mHttpHandler;  // keep gHttpHandler alive
 
@@ -288,10 +303,8 @@ class nsHttpConnection final : public HttpConnectionBase,
   bool mKeepAliveMask{true};
   bool mDontReuse{false};
   bool mIsReused{false};
-  bool mCompletedProxyConnect{false};
   bool mLastTransactionExpectedNoContent{false};
   bool mIdleMonitoring{false};
-  bool mProxyConnectInProgress{false};
   bool mInSpdyTunnel{false};
   bool mForcePlainText{false};
 
@@ -307,10 +320,6 @@ class nsHttpConnection final : public HttpConnectionBase,
   // transactions (including the current one) that the server expects to allow
   // on this persistent connection.
   uint32_t mRemainingConnectionUses{0xffffffff};
-
-  // SPDY related
-  bool mNPNComplete{false};
-  bool mSetupSSLCalled{false};
 
   // version level in use, 0 if unused
   SpdyVersion mUsingSpdyVersion{SpdyVersion::NONE};
@@ -342,15 +351,7 @@ class nsHttpConnection final : public HttpConnectionBase,
   bool mForceSendPending{false};
   nsCOMPtr<nsITimer> mForceSendTimer;
 
-  // Helper variable for 0RTT handshake;
-  // Possible 0RTT has been checked.
-  bool m0RTTChecked{false};
-  // We have are sending 0RTT data and we are waiting
-  // for the end of the handsake.
-  bool mWaitingFor0RTTResponse{false};
   int64_t mContentBytesWritten0RTT{0};
-  bool mEarlyDataNegotiated{false};  // Only used for telemetry
-  nsCString mEarlyNegotiatedALPN;
   bool mDid0RTTSpdy{false};
 
   nsresult mErrorBeforeConnect = NS_OK;
@@ -359,9 +360,13 @@ class nsHttpConnection final : public HttpConnectionBase,
 
   bool mForWebSocket{false};
 
+  std::function<void()> mContinueHandshakeDone{nullptr};
+
  private:
   bool mThroughCaptivePortal;
   int64_t mTotalBytesWritten = 0;  // does not include CONNECT tunnel
+
+  nsCOMPtr<nsIInputStream> mProxyConnectStream;
 };
 
 NS_DEFINE_STATIC_IID_ACCESSOR(nsHttpConnection, NS_HTTPCONNECTION_IID)

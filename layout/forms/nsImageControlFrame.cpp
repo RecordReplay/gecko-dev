@@ -74,8 +74,8 @@ void nsImageControlFrame::Init(nsIContent* aContent, nsContainerFrame* aParent,
     return;
   }
 
-  mContent->SetProperty(nsGkAtoms::imageClickedPoint, new nsIntPoint(0, 0),
-                        nsINode::DeleteProperty<nsIntPoint>);
+  mContent->SetProperty(nsGkAtoms::imageClickedPoint, new CSSIntPoint(0, 0),
+                        nsINode::DeleteProperty<CSSIntPoint>);
 }
 
 NS_QUERYFRAME_HEAD(nsImageControlFrame)
@@ -123,13 +123,13 @@ nsresult nsImageControlFrame::HandleEvent(nsPresContext* aPresContext,
       aEvent->AsMouseEvent()->mButton == MouseButton::ePrimary) {
     // Store click point for HTMLInputElement::SubmitNamesValues
     // Do this on MouseUp because the specs don't say and that's what IE does
-    nsIntPoint* lastClickPoint = static_cast<nsIntPoint*>(
+    auto* lastClickedPoint = static_cast<CSSIntPoint*>(
         mContent->GetProperty(nsGkAtoms::imageClickedPoint));
-    if (lastClickPoint) {
+    if (lastClickedPoint) {
       // normally lastClickedPoint is not null, as it's allocated in Init()
       nsPoint pt = nsLayoutUtils::GetEventCoordinatesRelativeTo(
           aEvent, RelativeTo{this});
-      TranslateEventCoords(pt, *lastClickPoint);
+      *lastClickedPoint = TranslateEventCoords(pt);
     }
   }
   return nsImageFrame::HandleEvent(aPresContext, aEvent, aEventStatus);
@@ -138,7 +138,7 @@ nsresult nsImageControlFrame::HandleEvent(nsPresContext* aPresContext,
 void nsImageControlFrame::SetFocus(bool aOn, bool aRepaint) {}
 
 Maybe<nsIFrame::Cursor> nsImageControlFrame::GetCursor(const nsPoint&) {
-  StyleCursorKind kind = StyleUI()->mCursor.keyword;
+  StyleCursorKind kind = StyleUI()->Cursor().keyword;
   if (kind == StyleCursorKind::Auto) {
     kind = StyleCursorKind::Pointer;
   }

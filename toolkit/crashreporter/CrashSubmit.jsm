@@ -142,7 +142,7 @@ function Submitter(id, recordSubmission, noThrottle, extraExtraKeyVals) {
   this.recordSubmission = recordSubmission;
   this.noThrottle = noThrottle;
   this.additionalDumps = [];
-  this.extraKeyVals = extraExtraKeyVals || {};
+  this.extraKeyVals = extraExtraKeyVals;
   // mimic deferred Promise behavior
   this.submitStatusPromise = new Promise((resolve, reject) => {
     this.resolveSubmitStatusPromise = resolve;
@@ -237,18 +237,46 @@ Submitter.prototype = {
     }
     let formData = new FormData();
 
-    // When submitting Record Replay crash reports, only include keys of particular
-    // interest (none of which include personally identifiable information).
-    const permittedKeys = [
-      "RecordReplay",
-      "MozCrashReason",
-      "StackTraces",
-    ];
+    // tell the server not to throttle this if requested
+    this.extraKeyVals.Throttleable = this.noThrottle ? "0" : "1";
 
     // add the data
-    for (let [name, value] of Object.entries(this.extraKeyVals)) {
-      if (permittedKeys.includes(name)) {
-        formData.append(name, JSON.stringify(value));
+    let payload = Object.assign({}, this.extraKeyVals);
+    let json = new Blob([JSON.stringify(payload)], {
+      type: "application/json",
+    });
+    formData.append("extra", json);
+
+    // add the minidumps
+    let promises = [
+      File.createFromFileName(this.dump, {
+        type: "application/octet-stream",
+      }).then(file => {
+        formData.append("upload_file_minidump", file);
+      }),
+    ];
+
+    if (this.memory) {
+      promises.push(
+        File.createFromFileName(this.memory, {
+          type: "application/gzip",
+        }).then(file => {
+          formData.append("memory_report", file);
+        })
+      );
+    }
+
+    if (this.additionalDumps.length) {
+      let names = [];
+      for (let i of this.additionalDumps) {
+        names.push(i.name);
+        promises.push(
+          File.createFromFileName(i.dump, {
+            type: "application/octet-stream",
+          }).then(file => {
+            formData.append("upload_file_minidump_" + i.name, file);
+          })
+        );
       }
     }
 
@@ -316,11 +344,21 @@ Submitter.prototype = {
       propBag.setPropertyAsAString("serverCrashID", ret.CrashID);
     }
 
+    // When submitting Record Replay crash reports, only include keys of particular
+    // interest (none of which include personally identifiable information).
+    const permittedKeys = [
+      "RecordReplay",
+      "MozCrashReason",
+      "StackTraces",
+    ];
+
     let extraKeyValsBag = Cc["@mozilla.org/hash-property-bag;1"].createInstance(
       Ci.nsIWritablePropertyBag2
     );
     for (let key in this.extraKeyVals) {
-      extraKeyValsBag.setPropertyAsAString(key, this.extraKeyVals[key]);
+      if (permittedKeys.includes(key)) {
+        extraKeyValsBag.setPropertyAsAString(key, this.extraKeyVals[key]);
+      }
     }
     propBag.setPropertyAsInterface("extra", extraKeyValsBag);
 
@@ -418,18 +456,27 @@ Submitter.prototype = {
 // ===================================
 // External API goes here
 var CrashSubmit = {
+  // A set of strings representing how a user subnmitted a given crash
+  SUBMITTED_FROM_AUTO: "Auto",
+  SUBMITTED_FROM_INFOBAR: "Infobar",
+  SUBMITTED_FROM_ABOUT_CRASHES: "AboutCrashes",
+  SUBMITTED_FROM_CRASH_TAB: "CrashedTab",
+
   /**
    * Submit the crash report named id.dmp from the "pending" directory.
    *
    * @param id
    *        Filename (minus .dmp extension) of the minidump to submit.
+   * @param submittedFrom
+   *        One of the SUBMITTED_FROM_* constants representing how the
+   *        user submitted this crash.
    * @param params
    *        An object containing any of the following optional parameters:
    *        - recordSubmission
    *          If true, a submission event is recorded in CrashManager.
    *        - noThrottle
    *          If true, this crash report should be submitted with
-   *          an extra parameter of "Throttleable=0" indicating that
+   *          the Throttleable annotation set to "0" indicating that
    *          it should be processed right away. This should be set
    *          when the report is being submitted and the user expects
    *          to see the results immediately. Defaults to false.
@@ -442,11 +489,11 @@ var CrashSubmit = {
    *  @return a Promise that is fulfilled with the server crash ID when the
    *          submission succeeds and rejected otherwise.
    */
-  submit: function CrashSubmit_submit(id, params) {
+  submit: function CrashSubmit_submit(id, submittedFrom, params) {
     params = params || {};
     let recordSubmission = false;
     let noThrottle = false;
-    let extraExtraKeyVals = null;
+    let extraExtraKeyVals = {};
 
     if ("recordSubmission" in params) {
       recordSubmission = params.recordSubmission;
@@ -459,6 +506,8 @@ var CrashSubmit = {
     if ("extraExtraKeyVals" in params) {
       extraExtraKeyVals = params.extraExtraKeyVals;
     }
+
+    extraExtraKeyVals.SubmittedFrom = submittedFrom;
 
     let submitter = new Submitter(
       id,

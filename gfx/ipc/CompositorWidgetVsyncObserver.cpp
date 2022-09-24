@@ -18,13 +18,14 @@ CompositorWidgetVsyncObserver::CompositorWidgetVsyncObserver(
   MOZ_ASSERT(NS_IsMainThread());
 }
 
-bool CompositorWidgetVsyncObserver::NotifyVsync(const VsyncEvent& aVsync) {
+CompositorWidgetVsyncObserver::~CompositorWidgetVsyncObserver() = default;
+
+void CompositorWidgetVsyncObserver::NotifyVsync(const VsyncEvent& aVsync) {
   // Vsync notifications should only arrive on the vsync thread.
   MOZ_ASSERT(XRE_IsParentProcess());
   MOZ_ASSERT(!NS_IsMainThread());
 
   mVsyncBridge->NotifyVsync(aVsync, mRootLayerTreeId);
-  return true;
 }
 
 }  // namespace widget

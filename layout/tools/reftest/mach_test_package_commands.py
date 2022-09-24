@@ -10,10 +10,8 @@ from argparse import Namespace
 from functools import partial
 
 from mach.decorators import (
-    CommandProvider,
     Command,
 )
-from mozbuild.base import MachCommandBase
 
 here = os.path.abspath(os.path.dirname(__file__))
 logger = None
@@ -63,7 +61,7 @@ def run_reftest_desktop(context, args):
 def run_reftest_android(context, args):
     from remotereftest import run_test_harness
 
-    args.app = args.app or "org.mozilla.geckoview.test"
+    args.app = args.app or "org.mozilla.geckoview.test_runner"
     args.utilityPath = context.hostutils
     args.xrePath = context.hostutils
     args.httpdPath = context.module_dir
@@ -107,15 +105,13 @@ def setup_argument_parser():
     return parser
 
 
-@CommandProvider
-class ReftestCommands(MachCommandBase):
-    @Command(
-        "reftest",
-        category="testing",
-        description="Run the reftest harness.",
-        parser=setup_argument_parser,
-    )
-    def reftest(self, command_context, **kwargs):
-        self._mach_context.activate_mozharness_venv()
-        kwargs["suite"] = "reftest"
-        return run_reftest(self._mach_context, **kwargs)
+@Command(
+    "reftest",
+    category="testing",
+    description="Run the reftest harness.",
+    parser=setup_argument_parser,
+)
+def reftest(command_context, **kwargs):
+    command_context._mach_context.activate_mozharness_venv()
+    kwargs["suite"] = "reftest"
+    return run_reftest(command_context._mach_context, **kwargs)

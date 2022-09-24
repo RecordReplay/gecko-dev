@@ -7,12 +7,14 @@
 #ifndef MOZILLA_GFX_DCLAYER_TREE_H
 #define MOZILLA_GFX_DCLAYER_TREE_H
 
+#include <dxgiformat.h>
 #include <unordered_map>
 #include <vector>
 #include <windows.h>
 
 #include "GLTypes.h"
 #include "mozilla/HashFunctions.h"
+#include "mozilla/layers/OverlayInfo.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
@@ -51,6 +53,17 @@ class DCSurface;
 class DCSurfaceVideo;
 class RenderTextureHost;
 
+struct GpuOverlayInfo {
+  bool mSupportsOverlays = false;
+  bool mSupportsHardwareOverlays = false;
+  DXGI_FORMAT mOverlayFormatUsed = DXGI_FORMAT_B8G8R8A8_UNORM;
+  DXGI_FORMAT mOverlayFormatUsedHdr = DXGI_FORMAT_R10G10B10A2_UNORM;
+  UINT mNv12OverlaySupportFlags = 0;
+  UINT mYuy2OverlaySupportFlags = 0;
+  UINT mBgra8OverlaySupportFlags = 0;
+  UINT mRgb10a2OverlaySupportFlags = 0;
+};
+
 /**
  * DCLayerTree manages direct composition layers.
  * It does not manage gecko's layers::Layer.
@@ -61,6 +74,9 @@ class DCLayerTree {
                                        ID3D11Device* aDevice,
                                        ID3D11DeviceContext* aCtx, HWND aHwnd,
                                        nsACString& aError);
+
+  static void Shutdown();
+
   explicit DCLayerTree(gl::GLContext* aGL, EGLConfig aEGLConfig,
                        ID3D11Device* aDevice, ID3D11DeviceContext* aCtx,
                        IDCompositionDevice2* aCompositionDevice);
@@ -103,12 +119,16 @@ class DCLayerTree {
   ID3D11VideoProcessorEnumerator* GetVideoProcessorEnumerator() const {
     return mVideoProcessorEnumerator;
   }
-  bool EnsureVideoProcessor(const gfx::IntSize& aVideoSize);
+  bool EnsureVideoProcessor(const gfx::IntSize& aInputSize,
+                            const gfx::IntSize& aOutputSize);
 
   DCSurface* GetSurface(wr::NativeSurfaceId aId) const;
 
   // Get or create an FBO with depth buffer suitable for specified dimensions
   GLuint GetOrCreateFbo(int aWidth, int aHeight);
+
+  bool SupportsHardwareOverlays();
+  DXGI_FORMAT GetOverlayFormatForSDR();
 
  protected:
   bool Initialize(HWND aHwnd, nsACString& aError);
@@ -121,6 +141,7 @@ class DCLayerTree {
       RefPtr<IDCompositionSurface> aCompositionSurface,
       wr::DeviceIntPoint aSurfaceOffset);
   void ReleaseNativeCompositorResources();
+  layers::OverlayInfo GetOverlayInfo();
 
   RefPtr<gl::GLContext> mGL;
   EGLConfig mEGLConfig;
@@ -137,9 +158,8 @@ class DCLayerTree {
   RefPtr<ID3D11VideoContext> mVideoContext;
   RefPtr<ID3D11VideoProcessor> mVideoProcessor;
   RefPtr<ID3D11VideoProcessorEnumerator> mVideoProcessorEnumerator;
-  gfx::IntSize mVideoSize;
-
-  bool mVideoOverlaySupported;
+  gfx::IntSize mVideoInputSize;
+  gfx::IntSize mVideoOutputSize;
 
   bool mDebugCounter;
   bool mDebugVisualRedrawRegions;
@@ -185,6 +205,8 @@ class DCLayerTree {
   int mCurrentFrame = 0;
 
   bool mPendingCommit;
+
+  static UniquePtr<GpuOverlayInfo> sGpuOverlayInfo;
 };
 
 /**
@@ -255,20 +277,27 @@ class DCSurfaceVideo : public DCSurface {
   DCSurfaceVideo(bool aIsOpaque, DCLayerTree* aDCLayerTree);
 
   void AttachExternalImage(wr::ExternalImageId aExternalImage);
+  bool CalculateSwapChainSize(gfx::Matrix& aTransform);
+  void PresentVideo();
 
   DCSurfaceVideo* AsDCSurfaceVideo() override { return this; }
 
  protected:
-  bool CreateVideoSwapChain(RenderTextureHost* aTexture);
-  bool CallVideoProcessorBlt(RenderTextureHost* aTexture);
+  DXGI_FORMAT GetSwapChainFormat();
+  bool CreateVideoSwapChain();
+  bool CallVideoProcessorBlt();
   void ReleaseDecodeSwapChainResources();
 
   RefPtr<ID3D11VideoProcessorOutputView> mOutputView;
   RefPtr<IDXGIResource> mDecodeResource;
   RefPtr<IDXGISwapChain1> mVideoSwapChain;
   RefPtr<IDXGIDecodeSwapChain> mDecodeSwapChain;
-  HANDLE mSwapChainSurfaceHandle;
+  HANDLE mSwapChainSurfaceHandle = 0;
+  gfx::IntSize mVideoSize;
   gfx::IntSize mSwapChainSize;
+  DXGI_FORMAT mSwapChainFormat = DXGI_FORMAT_B8G8R8A8_UNORM;
+  bool mFailedYuvSwapChain = false;
+  RefPtr<RenderTextureHost> mRenderTextureHost;
   RefPtr<RenderTextureHost> mPrevTexture;
 };
 

@@ -22,28 +22,22 @@ void BooleanMetric::Set(bool aValue) const {
   if (scalarId) {
     Telemetry::ScalarSet(scalarId.extract(), aValue);
   } else if (IsSubmetricId(mId)) {
-    auto lock = GetLabeledMirrorLock();
-    auto tuple = lock.ref()->MaybeGet(mId);
-    if (tuple) {
-      Telemetry::ScalarSet(Get<0>(tuple.ref()), Get<1>(tuple.ref()), aValue);
-    }
+    GetLabeledMirrorLock().apply([&](auto& lock) {
+      auto tuple = lock.ref()->MaybeGet(mId);
+      if (tuple) {
+        Telemetry::ScalarSet(Get<0>(tuple.ref()), Get<1>(tuple.ref()), aValue);
+      }
+    });
   }
-#ifndef MOZ_GLEAN_ANDROID
   fog_boolean_set(mId, int(aValue));
-#endif
 }
 
 Result<Maybe<bool>, nsCString> BooleanMetric::TestGetValue(
     const nsACString& aPingName) const {
-#ifdef MOZ_GLEAN_ANDROID
-  Unused << mId;
-  return Maybe<bool>();
-#else
   if (!fog_boolean_test_has_value(mId, &aPingName)) {
     return Maybe<bool>();
   }
   return Some(fog_boolean_test_get_value(mId, &aPingName));
-#endif
 }
 
 }  // namespace impl

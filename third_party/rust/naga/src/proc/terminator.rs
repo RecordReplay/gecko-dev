@@ -21,25 +21,22 @@ pub fn ensure_block_returns(block: &mut crate::Block) {
         Some(&mut S::Switch {
             selector: _,
             ref mut cases,
-            ref mut default,
         }) => {
             for case in cases.iter_mut() {
                 if !case.fall_through {
                     ensure_block_returns(&mut case.body);
                 }
             }
-            ensure_block_returns(default);
         }
-        Some(&mut S::Emit(_))
-        | Some(&mut S::Break)
-        | Some(&mut S::Continue)
-        | Some(&mut S::Return { .. })
-        | Some(&mut S::Kill) => (),
-        Some(&mut S::Loop { .. })
-        | Some(&mut S::Store { .. })
-        | Some(&mut S::ImageStore { .. })
-        | Some(&mut S::Call { .. })
-        | Some(&mut S::Barrier(_))
-        | None => block.push(S::Return { value: None }),
+        Some(&mut (S::Emit(_) | S::Break | S::Continue | S::Return { .. } | S::Kill)) => (),
+        Some(
+            &mut (S::Loop { .. }
+            | S::Store { .. }
+            | S::ImageStore { .. }
+            | S::Call { .. }
+            | S::Atomic { .. }
+            | S::Barrier(_)),
+        )
+        | None => block.push(S::Return { value: None }, Default::default()),
     }
 }

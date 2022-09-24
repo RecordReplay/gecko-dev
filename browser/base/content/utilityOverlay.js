@@ -81,20 +81,21 @@ function isBlankPageURL(aURL) {
   );
 }
 
-function getTopWin(skipPopups) {
+function getTopWin({ skipPopups, forceNonPrivate } = {}) {
   // If this is called in a browser window, use that window regardless of
   // whether it's the frontmost window, since commands can be executed in
   // background windows (bug 626148).
   if (
     top.document.documentElement.getAttribute("windowtype") ==
       "navigator:browser" &&
-    (!skipPopups || top.toolbar.visible)
+    (!skipPopups || top.toolbar.visible) &&
+    (!forceNonPrivate || !PrivateBrowsingUtils.isWindowPrivate(top))
   ) {
     return top;
   }
 
   return BrowserWindowTracker.getTopWindow({
-    private: PrivateBrowsingUtils.isWindowPrivate(window),
+    private: !forceNonPrivate && PrivateBrowsingUtils.isWindowPrivate(window),
     allowPopups: !skipPopups,
   });
 }
@@ -293,6 +294,7 @@ function openLinkIn(url, where, params) {
   var aInBackground = params.inBackground;
   var aInitiatingDoc = params.initiatingDoc;
   var aIsPrivate = params.private;
+  var aForceNonPrivate = params.forceNonPrivate;
   var aSkipTabAnimation = params.skipTabAnimation;
   var aAllowPinnedTabHostChange = !!params.allowPinnedTabHostChange;
   var aAllowPopups = !!params.allowPopups;
@@ -304,6 +306,8 @@ function openLinkIn(url, where, params) {
   var aCsp = params.csp;
   var aForceAboutBlankViewerInCurrent = params.forceAboutBlankViewerInCurrent;
   var aResolveOnNewTabCreated = params.resolveOnNewTabCreated;
+  // This callback will be called with the content browser once it's created.
+  var aResolveOnContentBrowserReady = params.resolveOnContentBrowserCreated;
 
   if (!aTriggeringPrincipal) {
     throw new Error("Must load with a triggering Principal");
@@ -313,6 +317,7 @@ function openLinkIn(url, where, params) {
     if ("isContentWindowPrivate" in params) {
       saveURL(
         url,
+        null,
         null,
         null,
         true,
@@ -331,7 +336,17 @@ function openLinkIn(url, where, params) {
         );
         return;
       }
-      saveURL(url, null, null, true, true, aReferrerInfo, null, aInitiatingDoc);
+      saveURL(
+        url,
+        null,
+        null,
+        null,
+        true,
+        true,
+        aReferrerInfo,
+        null,
+        aInitiatingDoc
+      );
     }
     return;
   }
@@ -341,12 +356,12 @@ function openLinkIn(url, where, params) {
   if (where == "current" && params.targetBrowser) {
     w = params.targetBrowser.ownerGlobal;
   } else {
-    w = getTopWin();
+    w = getTopWin({ forceNonPrivate: aForceNonPrivate });
   }
   // We don't want to open tabs in popups, so try to find a non-popup window in
   // that case.
   if ((where == "tab" || where == "tabshifted") && w && !w.toolbar.visible) {
-    w = getTopWin(true);
+    w = getTopWin({ skipPopups: true, forceNonPrivate: aForceNonPrivate });
     aRelatedToCurrent = false;
   }
 
@@ -382,6 +397,8 @@ function openLinkIn(url, where, params) {
         false,
         aReferrerInfo.originalReferrer
       );
+    } else if (aForceNonPrivate) {
+      features += ",non-private";
     }
 
     // This propagates to window.arguments.
@@ -424,36 +441,53 @@ function openLinkIn(url, where, params) {
 
     const sourceWindow = w || window;
     let win;
+
+    // Returns a promise that will be resolved when the new window's startup is finished.
+    function waitForWindowStartup() {
+      return new Promise(resolve => {
+        const delayedStartupObserver = aSubject => {
+          if (aSubject == win) {
+            Services.obs.removeObserver(
+              delayedStartupObserver,
+              "browser-delayed-startup-finished"
+            );
+            resolve();
+          }
+        };
+        Services.obs.addObserver(
+          delayedStartupObserver,
+          "browser-delayed-startup-finished"
+        );
+      });
+    }
+
     if (params.frameID != undefined && sourceWindow) {
       // Only notify it as a WebExtensions' webNavigation.onCreatedNavigationTarget
       // event if it contains the expected frameID params.
       // (e.g. we should not notify it as a onCreatedNavigationTarget if the user is
       // opening a new window using the keyboard shortcut).
       const sourceTabBrowser = sourceWindow.gBrowser.selectedBrowser;
-      let delayedStartupObserver = aSubject => {
-        if (aSubject == win) {
-          Services.obs.removeObserver(
-            delayedStartupObserver,
-            "browser-delayed-startup-finished"
-          );
-          Services.obs.notifyObservers(
-            {
-              wrappedJSObject: {
-                url,
-                createdTabBrowser: win.gBrowser.selectedBrowser,
-                sourceTabBrowser,
-                sourceFrameID: params.frameID,
-              },
+      waitForWindowStartup().then(() => {
+        Services.obs.notifyObservers(
+          {
+            wrappedJSObject: {
+              url,
+              createdTabBrowser: win.gBrowser.selectedBrowser,
+              sourceTabBrowser,
+              sourceFrameID: params.frameID,
             },
-            "webNavigation-createdNavigationTarget"
-          );
-        }
-      };
-      Services.obs.addObserver(
-        delayedStartupObserver,
-        "browser-delayed-startup-finished"
+          },
+          "webNavigation-createdNavigationTarget"
+        );
+      });
+    }
+
+    if (aResolveOnContentBrowserReady) {
+      waitForWindowStartup().then(() =>
+        aResolveOnContentBrowserReady(win.gBrowser.selectedBrowser)
       );
     }
+
     win = Services.ww.openWindow(
       sourceWindow,
       AppConstants.BROWSER_CHROME_URL,
@@ -461,6 +495,7 @@ function openLinkIn(url, where, params) {
       features,
       sa
     );
+
     return;
   }
 
@@ -477,14 +512,20 @@ function openLinkIn(url, where, params) {
   if (where == "current") {
     targetBrowser = params.targetBrowser || w.gBrowser.selectedBrowser;
     loadInBackground = false;
-
     try {
       uriObj = Services.io.newURI(url);
     } catch (e) {}
 
-    if (
+    // In certain tabs, we restrict what if anything may replace the loaded
+    // page. If a load request bounces off for the currently selected tab,
+    // we'll open a new tab instead.
+    let tab = w.gBrowser.getTabForBrowser(targetBrowser);
+    if (tab == w.gFirefoxViewTab) {
+      where = "tab";
+      targetBrowser = null;
+    } else if (
       !aAllowPinnedTabHostChange &&
-      w.gBrowser.getTabForBrowser(targetBrowser).pinned &&
+      tab.pinned &&
       url != "about:crashcontent"
     ) {
       try {
@@ -495,15 +536,15 @@ function openLinkIn(url, where, params) {
             targetBrowser.currentURI.host != uriObj.host)
         ) {
           where = "tab";
-          loadInBackground = false;
+          targetBrowser = null;
         }
       } catch (err) {
         where = "tab";
-        loadInBackground = false;
+        targetBrowser = null;
       }
     }
   } else {
-    // 'where' is "tab" or "tabshifted", so we'll load the link in a new tab.
+    // `where` is "tab" or "tabshifted", so we'll load the link in a new tab.
     loadInBackground = aInBackground;
     if (loadInBackground == null) {
       loadInBackground = aFromChrome
@@ -560,6 +601,9 @@ function openLinkIn(url, where, params) {
         postData: aPostData,
         userContextId: aUserContextId,
       });
+      if (aResolveOnContentBrowserReady) {
+        aResolveOnContentBrowserReady(targetBrowser);
+      }
 
       // Don't focus the content area if focus is in the address bar and we're
       // loading the New Tab page.
@@ -597,6 +641,9 @@ function openLinkIn(url, where, params) {
 
       if (aResolveOnNewTabCreated) {
         aResolveOnNewTabCreated(targetBrowser);
+      }
+      if (aResolveOnContentBrowserReady) {
+        aResolveOnContentBrowserReady(targetBrowser);
       }
 
       if (params.frameID != undefined && w) {
@@ -917,7 +964,7 @@ function openAboutDialog() {
   window.openDialog("chrome://browser/content/aboutDialog.xhtml", "", features);
 }
 
-function openPreferences(paneID, extraArgs) {
+async function openPreferences(paneID, extraArgs) {
   // This function is duplicated from preferences.js.
   function internalPrefCategoryNameToFriendlyName(aName) {
     return (aName || "").replace(/^pane./, function(toReplace) {
@@ -972,17 +1019,15 @@ function openPreferences(paneID, extraArgs) {
     browser = win.gBrowser.selectedBrowser;
   }
 
-  if (newLoad) {
-    Services.obs.addObserver(function panesLoadedObs(prefWin, topic, data) {
-      if (!browser) {
-        browser = win.gBrowser.selectedBrowser;
-      }
-      if (prefWin != browser.contentWindow) {
-        return;
-      }
-      Services.obs.removeObserver(panesLoadedObs, "sync-pane-loaded");
-    }, "sync-pane-loaded");
-  } else if (paneID) {
+  if (!newLoad && paneID) {
+    if (browser.contentDocument?.readyState != "complete") {
+      await new Promise(resolve => {
+        browser.addEventListener("load", resolve, {
+          capture: true,
+          once: true,
+        });
+      });
+    }
     browser.contentWindow.gotoPref(paneID);
   }
 }
@@ -1088,16 +1133,4 @@ function openHelpLink(aHelpTopic, aCalledFromModal, aWhere) {
 function openPrefsHelp(aEvent) {
   let helpTopic = aEvent.target.getAttribute("helpTopic");
   openHelpLink(helpTopic);
-}
-
-/**
- * Updates the enabled state of the "Import From Another Browser" command
- * depending on the DisableProfileImport policy.
- */
-function updateImportCommandEnabledState() {
-  if (!Services.policies.isAllowed("profileImport")) {
-    document
-      .getElementById("cmd_file_importFromAnotherBrowser")
-      .setAttribute("disabled", "true");
-  }
 }

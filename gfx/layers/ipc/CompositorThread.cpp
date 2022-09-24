@@ -24,6 +24,7 @@ namespace layers {
 static StaticRefPtr<CompositorThreadHolder> sCompositorThreadHolder;
 static Atomic<bool> sFinishedCompositorShutDown(false);
 static mozilla::BackgroundHangMonitor* sBackgroundHangMonitor;
+static ProfilerThreadId sProfilerThreadId;
 
 nsISerialEventTarget* CompositorThread() {
   return sCompositorThreadHolder
@@ -51,12 +52,15 @@ CompositorThreadHolder::CreateCompositorThread() {
   MOZ_ASSERT(!sCompositorThreadHolder,
              "The compositor thread has already been started!");
 
-  // This is 320K, which is higher than the default 256K.
-  // Increased to work the stack overflow in the Intel Vulkan driver
-  // initialization https://bugzilla.mozilla.org/show_bug.cgi?id=1716120
+  // This is 512K, which is higher than the default 256K.
+  // Increased to accommodate Mesa in bug 1753340.
+  //
+  // Previously increased to 320K to avoid a stack overflow in the
+  // Intel Vulkan driver initialization in bug 1716120.
+  //
   // Note: we only override it if it's limited already.
   const uint32_t stackSize =
-      nsIThreadManager::DEFAULT_STACK_SIZE ? 320 << 10 : 0;
+      nsIThreadManager::DEFAULT_STACK_SIZE ? 512 << 10 : 0;
 
   nsCOMPtr<nsIThread> compositorThread;
   nsresult rv = NS_NewNamedThread(
@@ -64,6 +68,7 @@ CompositorThreadHolder::CreateCompositorThread() {
       NS_NewRunnableFunction(
           "CompositorThreadHolder::CompositorThreadHolderSetup",
           []() {
+            sProfilerThreadId = profiler_current_thread_id();
             sBackgroundHangMonitor = new mozilla::BackgroundHangMonitor(
                 "Compositor",
                 /* Timeout values are powers-of-two to enable us get better
@@ -100,6 +105,7 @@ void CompositorThreadHolder::Start() {
   // either the GPU process or the UI process, the user will have a usable
   // browser. If we get neither, it will crash as soon as we try to post to the
   // compositor thread for the first time.
+  sProfilerThreadId = ProfilerThreadId();
   sCompositorThreadHolder = new CompositorThreadHolder();
   if (!sCompositorThreadHolder->GetCompositorThread()) {
     gfxCriticalNote << "Compositor thread not started ("
@@ -138,7 +144,7 @@ void CompositorThreadHolder::Shutdown() {
   sCompositorThreadHolder = nullptr;
   sBackgroundHangMonitor = nullptr;
 
-  SpinEventLoopUntil([&]() {
+  SpinEventLoopUntil("CompositorThreadHolder::Shutdown"_ns, [&]() {
     bool finished = sFinishedCompositorShutDown;
     return finished;
   });
@@ -160,6 +166,11 @@ bool CompositorThreadHolder::IsInCompositorThread() {
   bool in = false;
   MOZ_ALWAYS_SUCCEEDS(CompositorThread()->IsOnCurrentThread(&in));
   return in;
+}
+
+/* static */
+ProfilerThreadId CompositorThreadHolder::GetThreadId() {
+  return sCompositorThreadHolder ? sProfilerThreadId : ProfilerThreadId();
 }
 
 }  // namespace layers

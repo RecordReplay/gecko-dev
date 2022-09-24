@@ -7,6 +7,7 @@
 #define mozilla_a11y_ImageAccessible_h__
 
 #include "BaseAccessibles.h"
+#include "imgINotificationObserver.h"
 
 namespace mozilla {
 namespace a11y {
@@ -16,11 +17,16 @@ namespace a11y {
  * - gets name, role
  * - support basic state
  */
-class ImageAccessible : public LinkableAccessible {
+class ImageAccessible : public LinkableAccessible,
+                        public imgINotificationObserver {
  public:
   ImageAccessible(nsIContent* aContent, DocAccessible* aDoc);
 
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_IMGINOTIFICATIONOBSERVER
+
   // LocalAccessible
+  virtual void Shutdown() override;
   virtual a11y::role NativeRole() const override;
   virtual uint64_t NativeState() const override;
   virtual already_AddRefed<AccAttributes> NativeAttributes() override;
@@ -31,16 +37,9 @@ class ImageAccessible : public LinkableAccessible {
   virtual bool DoAction(uint8_t aIndex) const override;
 
   // ImageAccessible
-  nsIntPoint Position(uint32_t aCoordType);
-  nsIntSize Size();
+  LayoutDeviceIntPoint Position(uint32_t aCoordType);
+  LayoutDeviceIntSize Size();
 
- protected:
-  virtual ~ImageAccessible();
-
-  // LocalAccessible
-  virtual ENameValueFlag NativeName(nsString& aName) const override;
-
- private:
   /**
    * Return whether the element has a longdesc URI.
    */
@@ -49,6 +48,18 @@ class ImageAccessible : public LinkableAccessible {
     return uri;
   }
 
+ protected:
+  virtual ~ImageAccessible();
+
+  // LocalAccessible
+  virtual ENameValueFlag NativeName(nsString& aName) const override;
+
+  virtual void DOMAttributeChanged(int32_t aNameSpaceID, nsAtom* aAttribute,
+                                   int32_t aModType,
+                                   const nsAttrValue* aOldValue,
+                                   uint64_t aOldState) override;
+
+ private:
   /**
    * Return an URI for showlongdesc action if any.
    */
@@ -66,6 +77,8 @@ class ImageAccessible : public LinkableAccessible {
    * @returns  true if index is valid for longdesc action.
    */
   inline bool IsLongDescIndex(uint8_t aIndex) const;
+
+  uint32_t mImageRequestStatus;
 };
 
 ////////////////////////////////////////////////////////////////////////////////

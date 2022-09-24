@@ -10,21 +10,21 @@
 add_task(async function() {
   info("Test requests blocked by CSP in the top level document");
   await testRequestsBlockedByCSP(
-    EXAMPLE_URL,
-    EXAMPLE_URL + "html_csp-test-page.html"
+    HTTPS_EXAMPLE_URL,
+    HTTPS_EXAMPLE_URL + "html_csp-test-page.html"
   );
 
   // The html_csp-frame-test-page.html (in the .com domain) includes
   // an iframe from the .org domain
   info("Test requests blocked by CSP in remote frames");
   await testRequestsBlockedByCSP(
-    EXAMPLE_ORG_URL,
-    EXAMPLE_URL + "html_csp-frame-test-page.html"
+    HTTPS_EXAMPLE_ORG_URL,
+    HTTPS_EXAMPLE_URL + "html_csp-frame-test-page.html"
   );
 });
 
 async function testRequestsBlockedByCSP(baseUrl, page) {
-  const { tab, monitor } = await initNetMonitor(page, { requestCount: 3 });
+  const { monitor } = await initNetMonitor(page, { requestCount: 3 });
 
   const { document, store, windowRequire } = monitor.panelWin;
   const Actions = windowRequire("devtools/client/netmonitor/src/actions/index");
@@ -38,7 +38,7 @@ async function testRequestsBlockedByCSP(baseUrl, page) {
   store.dispatch(Actions.batchEnable(false));
 
   const wait = waitForNetworkEvents(monitor, 3);
-  tab.linkedBrowser.reload();
+  await reloadBrowser();
   info("Waiting until the requests appear in netmonitor");
   await wait;
 

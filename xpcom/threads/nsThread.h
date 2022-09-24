@@ -11,6 +11,7 @@
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
+#include "mozilla/DataMutex.h"
 #include "mozilla/EventQueue.h"
 #include "mozilla/LinkedList.h"
 #include "mozilla/MemoryReporting.h"
@@ -21,7 +22,6 @@
 #include "mozilla/TaskDispatcher.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
-#include "nsIDelayedRunnableObserver.h"
 #include "nsIDirectTaskDispatcher.h"
 #include "nsIEventTarget.h"
 #include "nsISerialEventTarget.h"
@@ -46,6 +46,7 @@ using mozilla::NotNull;
 class nsIRunnable;
 class nsLocalExecutionRecord;
 class nsThreadEnumerator;
+class nsThreadShutdownContext;
 
 // See https://www.w3.org/TR/longtasks
 #define LONGTASK_BUSY_WINDOW_MS 50
@@ -154,7 +155,6 @@ class PerformanceCounterState {
 // A native thread
 class nsThread : public nsIThreadInternal,
                  public nsISupportsPriority,
-                 public nsIDelayedRunnableObserver,
                  public nsIDirectTaskDispatcher,
                  private mozilla::LinkedListElement<nsThread> {
   friend mozilla::LinkedList<nsThread>;
@@ -182,6 +182,13 @@ class nsThread : public nsIThreadInternal,
 
   // Initialize this as a wrapper for the current PRThread.
   nsresult InitCurrentThread();
+
+  // Get this thread's name, thread-safe.
+  void GetThreadName(nsACString& aNameBuffer);
+
+  // Set this thread's name. Consider using
+  // NS_SetCurrentThreadName if you are not sure.
+  void SetThreadNameInternal(const nsACString& aName);
 
  private:
   // Initializes the mThreadId and stack base/size members, and adds the thread
@@ -211,7 +218,7 @@ class nsThread : public nsIThreadInternal,
 
   uint32_t RecursionDepth() const;
 
-  void ShutdownComplete(NotNull<struct nsThreadShutdownContext*> aContext);
+  void ShutdownComplete(NotNull<nsThreadShutdownContext*> aContext);
 
   void WaitForAllAsynchronousShutdowns();
 
@@ -261,10 +268,6 @@ class nsThread : public nsIThreadInternal,
     mUseHangMonitor = aValue;
   }
 
-  void OnDelayedRunnableCreated(mozilla::DelayedRunnable* aRunnable) override;
-  void OnDelayedRunnableScheduled(mozilla::DelayedRunnable* aRunnable) override;
-  void OnDelayedRunnableRan(mozilla::DelayedRunnable* aRunnable) override;
-
  private:
   void DoMainThreadSpecificProcessing() const;
 
@@ -284,14 +287,13 @@ class nsThread : public nsIThreadInternal,
     return already_AddRefed<nsIThreadObserver>(obs);
   }
 
-  struct nsThreadShutdownContext* ShutdownInternal(bool aSync);
+  already_AddRefed<nsThreadShutdownContext> ShutdownInternal(bool aSync);
 
   friend class nsThreadManager;
   friend class nsThreadPool;
 
   static mozilla::OffTheBooksMutex& ThreadListMutex();
   static mozilla::LinkedList<nsThread>& ThreadList();
-  static void ClearThreadList();
 
   void AddToThreadList();
   void MaybeRemoveFromThreadList();
@@ -305,21 +307,16 @@ class nsThread : public nsIThreadInternal,
   RefPtr<mozilla::SynchronizedEventQueue> mEvents;
   RefPtr<mozilla::ThreadEventTarget> mEventTarget;
 
-  // The shutdown contexts for any other threads we've asked to shut down.
-  using ShutdownContexts =
-      nsTArray<mozilla::UniquePtr<struct nsThreadShutdownContext>>;
-
-  // Helper for finding a ShutdownContext in the contexts array.
-  struct ShutdownContextsComp {
-    bool Equals(const ShutdownContexts::elem_type& a,
-                const ShutdownContexts::elem_type::Pointer b) const;
-  };
-
-  ShutdownContexts mRequestedShutdownContexts;
+  // The number of outstanding nsThreadShutdownContext started by this thread.
+  // The thread will not be allowed to exit until this number reaches 0.
+  uint32_t mOutstandingShutdownContexts;
   // The shutdown context for ourselves.
-  struct nsThreadShutdownContext* mShutdownContext;
+  RefPtr<nsThreadShutdownContext> mShutdownContext;
 
   mozilla::CycleCollectedJSContext* mScriptObserver;
+
+  // Our name.
+  mozilla::DataMutex<nsCString> mThreadName;
 
   void* mStackBase = nullptr;
   uint32_t mStackSize;
@@ -337,8 +334,6 @@ class nsThread : public nsIThreadInternal,
 
   // Set to true if this thread creates a JSRuntime.
   bool mCanInvokeJS;
-
-  bool mHasTLSEntry = false;
 
   // The time the currently running event spent in event queues, and
   // when it started running.  If no event is running, they are
@@ -359,26 +354,40 @@ class nsThread : public nsIThreadInternal,
   mozilla::SimpleTaskQueue mDirectTasks;
 };
 
-struct nsThreadShutdownContext {
+class nsThreadShutdownContext final : public nsIThreadShutdown {
+ public:
+  NS_DECL_THREADSAFE_ISUPPORTS
+  NS_DECL_NSITHREADSHUTDOWN
+
+ private:
+  friend class nsThread;
+  friend class nsThreadShutdownEvent;
+  friend class nsThreadShutdownAckEvent;
+
   nsThreadShutdownContext(NotNull<nsThread*> aTerminatingThread,
-                          NotNull<nsThread*> aJoiningThread,
-                          bool aAwaitingShutdownAck)
+                          nsThread* aJoiningThread)
       : mTerminatingThread(aTerminatingThread),
         mTerminatingPRThread(aTerminatingThread->GetPRThread()),
-        mJoiningThread(aJoiningThread),
-        mAwaitingShutdownAck(aAwaitingShutdownAck),
-        mIsMainThreadJoining(NS_IsMainThread()) {
-    MOZ_COUNT_CTOR(nsThreadShutdownContext);
-  }
-  MOZ_COUNTED_DTOR(nsThreadShutdownContext)
+        mJoiningThread(aJoiningThread,
+                       "nsThreadShutdownContext::mJoiningThread") {}
 
-  // NB: This will be the last reference.
-  NotNull<RefPtr<nsThread>> mTerminatingThread;
+  ~nsThreadShutdownContext() = default;
+
+  // Must be called on the joining thread.
+  void MarkCompleted();
+
+  // NB: This may be the last reference.
+  NotNull<RefPtr<nsThread>> const mTerminatingThread;
   PRThread* const mTerminatingPRThread;
-  NotNull<nsThread*> MOZ_UNSAFE_REF(
-      "Thread manager is holding reference to joining thread") mJoiningThread;
-  bool mAwaitingShutdownAck;
-  bool mIsMainThreadJoining;
+
+  // May only be accessed on the joining thread.
+  bool mCompleted = false;
+  nsTArray<nsCOMPtr<nsIRunnable>> mCompletionCallbacks;
+
+  // The thread waiting for this thread to shut down. Will either be cleared by
+  // the joining thread if `StopWaitingAndLeakThread` is called or by the
+  // terminating thread upon exiting and notifying the joining thread.
+  mozilla::DataMutex<RefPtr<nsThread>> mJoiningThread;
 };
 
 // This RAII class controls the duration of the associated nsThread's local

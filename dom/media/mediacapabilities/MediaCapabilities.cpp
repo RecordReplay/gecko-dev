@@ -32,6 +32,7 @@
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/layers/KnowsCompositor.h"
 #include "nsContentUtils.h"
+#include "WindowRenderer.h"
 
 static mozilla::LazyLogModule sMediaCapabilitiesLog("MediaCapabilities");
 
@@ -44,11 +45,35 @@ static nsCString VideoConfigurationToStr(const VideoConfiguration* aConfig) {
   if (!aConfig) {
     return nsCString();
   }
+
+  nsCString hdrMetaType(
+      aConfig->mHdrMetadataType.WasPassed()
+          ? HdrMetadataTypeValues::GetString(aConfig->mHdrMetadataType.Value())
+          : "?");
+
+  nsCString colorGamut(
+      aConfig->mColorGamut.WasPassed()
+          ? ColorGamutValues::GetString(aConfig->mColorGamut.Value())
+          : "?");
+
+  nsCString transferFunction(aConfig->mTransferFunction.WasPassed()
+                                 ? TransferFunctionValues::GetString(
+                                       aConfig->mTransferFunction.Value())
+                                 : "?");
+
   auto str = nsPrintfCString(
-      "[contentType:%s width:%d height:%d bitrate:%" PRIu64 " framerate:%s]",
+      "[contentType:%s width:%d height:%d bitrate:%" PRIu64
+      " framerate:%lf hasAlphaChannel:%s hdrMetadataType:%s colorGamut:%s "
+      "transferFunction:%s scalabilityMode:%s]",
       NS_ConvertUTF16toUTF8(aConfig->mContentType).get(), aConfig->mWidth,
-      aConfig->mHeight, aConfig->mBitrate,
-      NS_ConvertUTF16toUTF8(aConfig->mFramerate).get());
+      aConfig->mHeight, aConfig->mBitrate, aConfig->mFramerate,
+      aConfig->mHasAlphaChannel.WasPassed()
+          ? aConfig->mHasAlphaChannel.Value() ? "true" : "false"
+          : "?",
+      hdrMetaType.get(), colorGamut.get(), transferFunction.get(),
+      aConfig->mScalabilityMode.WasPassed()
+          ? NS_ConvertUTF16toUTF8(aConfig->mScalabilityMode.Value()).get()
+          : "?");
   return std::move(str);
 }
 
@@ -176,6 +201,12 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
     }
     MOZ_DIAGNOSTIC_ASSERT(videoTracks.ElementAt(0),
                           "must contain a valid trackinfo");
+    // If the type refers to an audio codec, reject now.
+    if (videoTracks[0]->GetType() != TrackInfo::kVideoTrack) {
+      promise
+          ->MaybeRejectWithTypeError<MSG_INVALID_MEDIA_VIDEO_CONFIGURATION>();
+      return promise.forget();
+    }
     tracks.AppendElements(std::move(videoTracks));
   }
   if (aConfiguration.mAudio.WasPassed()) {
@@ -192,17 +223,22 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
     }
     MOZ_DIAGNOSTIC_ASSERT(audioTracks.ElementAt(0),
                           "must contain a valid trackinfo");
+    // If the type refers to a video codec, reject now.
+    if (audioTracks[0]->GetType() != TrackInfo::kAudioTrack) {
+      promise
+          ->MaybeRejectWithTypeError<MSG_INVALID_MEDIA_AUDIO_CONFIGURATION>();
+      return promise.forget();
+    }
     tracks.AppendElements(std::move(audioTracks));
   }
 
-  typedef MozPromise<MediaCapabilitiesInfo, MediaResult,
-                     /* IsExclusive = */ true>
-      CapabilitiesPromise;
+  using CapabilitiesPromise = MozPromise<MediaCapabilitiesInfo, MediaResult,
+                                         /* IsExclusive = */ true>;
   nsTArray<RefPtr<CapabilitiesPromise>> promises;
 
   RefPtr<TaskQueue> taskQueue =
-      new TaskQueue(GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
-                    "MediaCapabilities::TaskQueue");
+      TaskQueue::Create(GetMediaThreadPool(MediaThreadType::PLATFORM_DECODER),
+                        "MediaCapabilities::TaskQueue");
   for (auto&& config : tracks) {
     TrackInfo::TrackType type =
         config->IsVideo() ? TrackInfo::kVideoTrack : TrackInfo::kAudioTrack;
@@ -236,7 +272,8 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
     // to create such decoder and perform initialization.
 
     RefPtr<layers::KnowsCompositor> compositor = GetCompositor();
-    double frameRate = videoContainer->ExtendedType().GetFramerate().ref();
+    float frameRate =
+        static_cast<float>(videoContainer->ExtendedType().GetFramerate().ref());
     // clang-format off
     promises.AppendElement(InvokeAsync(
         taskQueue, __func__,
@@ -298,8 +335,7 @@ already_AddRefed<Promise> MediaCapabilities::DecodingInfo(
                               bool powerEfficient =
                                   decoder->IsHardwareAccelerated(reason);
 
-                              int32_t videoFrameRate =
-                                  frameRate < 1 ? 1 : frameRate;
+                              int32_t videoFrameRate = std::clamp<int32_t>(frameRate, 1, INT32_MAX);
 
                               DecoderBenchmarkInfo benchmarkInfo{
                                   config->mMimeType,
@@ -572,12 +608,11 @@ already_AddRefed<layers::KnowsCompositor> MediaCapabilities::GetCompositor() {
   if (NS_WARN_IF(!doc)) {
     return nullptr;
   }
-  RefPtr<layers::LayerManager> layerManager =
-      nsContentUtils::LayerManagerForDocument(doc);
-  if (NS_WARN_IF(!layerManager)) {
+  WindowRenderer* renderer = nsContentUtils::WindowRendererForDocument(doc);
+  if (NS_WARN_IF(!renderer)) {
     return nullptr;
   }
-  RefPtr<layers::KnowsCompositor> knows = layerManager->AsKnowsCompositor();
+  RefPtr<layers::KnowsCompositor> knows = renderer->AsKnowsCompositor();
   if (NS_WARN_IF(!knows)) {
     return nullptr;
   }

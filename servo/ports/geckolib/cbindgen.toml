@@ -74,6 +74,7 @@ exclude = [
   "NS_LogDtor",
 ]
 include = [
+  "AnimationTimeline",
   "Appearance",
   "BreakBetween",
   "BreakWithin",
@@ -90,8 +91,10 @@ include = [
   "DisplayOutside",
   "DisplayInside",
   "DisplayMode",
+  "Platform",
   "PrefersColorScheme",
   "PrefersContrast",
+  "DynamicRange",
   "FillRule",
   "FontDisplay",
   "FontFaceSourceListComponent",
@@ -137,6 +140,7 @@ include = [
   "BorderImageSlice",
   "BorderSpacing",
   "BorderRadius",
+  "ColorScheme",
   "NonNegativeLengthOrNumberRect",
   "Perspective",
   "ZIndex",
@@ -144,6 +148,9 @@ include = [
   "LineBreak",
   "WordBreak",
   "Contain",
+  "ContainerType",
+  "ContainerName",
+  "ContentVisibility",
   "Origin",
   "RestyleHint",
   "TouchAction",
@@ -155,7 +162,6 @@ include = [
   "TextOverflow",
   "MozControlCharacterVisibility",
   "RubyPosition",
-  "MozListReversed",
   "Owned",
   "OwnedOrNull",
   "Strong",
@@ -200,7 +206,8 @@ include = [
   "PaintOrder",
   "SVGPaintOrder",
   "ClipRectOrAuto",
-  "CounterSetOrReset",
+  "CounterReset",
+  "CounterSet",
   "CounterIncrement",
   "WritingMode",
   "Content",
@@ -229,8 +236,14 @@ include = [
   "AspectRatio",
   "DefaultFontSizes",
   "RuleChangeKind",
+  "PageName",
   "PageSize",
   "DProperty",
+  "ImageRendering",
+  "PrintColorAdjust",
+  "ScrollbarGutter",
+  "ScrollDirection",
+  "HyphenateCharacter",
 ]
 item_types = ["enums", "structs", "unions", "typedefs", "functions", "constants"]
 renaming_overrides_prefixing = true
@@ -471,8 +484,8 @@ renaming_overrides_prefixing = true
   inline bool IsRight() const;
 """
 
-# TODO(emilio): Add hooks to cbindgen to be able to generate MOZ_MUST_USE_TYPE
-# or [[nodiscard]] on the functions.
+# TODO(emilio): Add hooks to cbindgen to be able to generate [[nodiscard]]
+# on the functions.
 "Owned" = """
   UniquePtr<GeckoType> Consume() {
     UniquePtr<GeckoType> ret(ptr);
@@ -529,7 +542,7 @@ renaming_overrides_prefixing = true
 """
 
 "OwnedSlice" = """
-  StyleOwnedSlice() :
+  constexpr StyleOwnedSlice() :
     ptr((T*)alignof(T)),
     len(0) {}
 
@@ -863,8 +876,6 @@ renaming_overrides_prefixing = true
 """
 
 "FontFamilyList" = """
-  // Whether the `fallback` generic is already on the family list.
-  inline bool ContainsFallback() const;
   static StyleFontFamilyList WithOneUnquotedFamily(const nsACString&);
   // Constructs a font family list with a list of names.
   static StyleFontFamilyList WithNames(nsTArray<StyleSingleFontFamily>&&);
@@ -874,4 +885,14 @@ renaming_overrides_prefixing = true
   static StyleSingleFontFamily Parse(const nsACString& aName);
   void AppendToString(nsACString& aFamily, bool aIncludeQuotes = true) const;
   bool IsNamedFamily(const nsAString&) const;
+"""
+
+"AnimationTimeline" = """
+ public:
+  StyleAnimationTimeline(): tag(Tag::Auto) {}
+"""
+
+"TimelineOrKeyframesName" = """
+ public:
+  inline nsAtom* AsAtom() const;
 """

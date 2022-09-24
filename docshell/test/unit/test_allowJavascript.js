@@ -31,12 +31,8 @@ server.registerPathHandler("/", (request, response) => {
   response.write(HTML);
 });
 
-function getResourceURI(file) {
-  return Services.io.newFileURI(do_get_file(file)).spec;
-}
-
 const { AllowJavascriptParent } = ChromeUtils.import(
-  getResourceURI("AllowJavascriptParent.jsm")
+  "resource://test/AllowJavascriptParent.jsm"
 );
 
 async function assertScriptsAllowed(bc, expectAllowed, desc) {
@@ -65,14 +61,15 @@ function createSubframe(bc, url) {
 }
 
 add_task(async function() {
+  Services.prefs.setBoolPref("dom.security.https_first", false);
   ChromeUtils.registerWindowActor(ACTOR, {
     allFrames: true,
     child: {
-      moduleURI: getResourceURI("AllowJavascriptChild.jsm"),
+      moduleURI: "resource://test/AllowJavascriptChild.jsm",
       events: { load: { capture: true } },
     },
     parent: {
-      moduleURI: getResourceURI("AllowJavascriptParent.jsm"),
+      moduleURI: "resource://test/AllowJavascriptParent.jsm",
     },
   });
 
@@ -268,4 +265,5 @@ add_task(async function() {
   await assertScriptsAllowed(bc, false, "top BC with scripts disabled");
 
   await page.close();
+  Services.prefs.clearUserPref("dom.security.https_first");
 });

@@ -7,7 +7,11 @@
 #include "MIDIPlatformService.h"
 #include "MIDIMessageQueue.h"
 #include "TestMIDIPlatformService.h"
+#ifdef MOZ_WEBMIDI_MIDIR_IMPL
+#  include "midirMIDIPlatformService.h"
+#endif  // MOZ_WEBMIDI_MIDIR_IMPL
 #include "mozilla/ErrorResult.h"
+#include "mozilla/StaticPrefs_midi.h"
 #include "mozilla/StaticPtr.h"
 #include "mozilla/Unused.h"
 #include "mozilla/dom/MIDIManagerParent.h"
@@ -38,7 +42,7 @@ void MIDIPlatformService::CheckAndReceive(const nsAString& aPortId,
     }
     if (!port->SysexEnabled()) {
       nsTArray<MIDIMessage> msgs;
-      for (auto& msg : aMsgs) {
+      for (const auto& msg : aMsgs) {
         if (!MIDIUtils::IsSysexMessage(msg)) {
           msgs.AppendElement(msg);
         }
@@ -83,8 +87,9 @@ void MIDIPlatformService::QueueMessages(const nsAString& aId,
     MutexAutoLock lock(mMessageQueueMutex);
     MIDIMessageQueue* msgQueue = mMessageQueues.GetOrInsertNew(aId);
     msgQueue->Add(aMsgs);
-    ScheduleSend(aId);
   }
+
+  ScheduleSend(aId);
 }
 
 void MIDIPlatformService::SendPortList() {
@@ -178,13 +183,14 @@ MIDIPlatformService* MIDIPlatformService::Get() {
   MOZ_ASSERT(XRE_IsParentProcess());
   ::mozilla::ipc::AssertIsOnBackgroundThread();
   if (!IsRunning()) {
-    ErrorResult rv;
-    // Uncomment once we have an actual platform library to test.
-    //
-    // bool useTestService = false;
-    // rv = Preferences::GetRootBranch()->GetBoolPref("midi.testing",
-    // &useTestService);
-    gMIDIPlatformService = new TestMIDIPlatformService();
+    if (StaticPrefs::midi_testing()) {
+      gMIDIPlatformService = new TestMIDIPlatformService();
+    }
+#ifdef MOZ_WEBMIDI_MIDIR_IMPL
+    else {
+      gMIDIPlatformService = new midirMIDIPlatformService();
+    }
+#endif  // MOZ_WEBMIDI_MIDIR_IMPL
     gMIDIPlatformService->Init();
   }
   return gMIDIPlatformService;
@@ -223,14 +229,10 @@ void MIDIPlatformService::RemoveManager(MIDIManagerParent* aManager) {
 }
 
 void MIDIPlatformService::UpdateStatus(
-    const nsAString& aPortId, const MIDIPortDeviceState& aDeviceState,
+    MIDIPortParent* aPort, const MIDIPortDeviceState& aDeviceState,
     const MIDIPortConnectionState& aConnectionState) {
   ::mozilla::ipc::AssertIsOnBackgroundThread();
-  for (auto port : mPorts) {
-    if (port->MIDIPortInterface::Id() == aPortId) {
-      port->SendUpdateStatus(aDeviceState, aConnectionState);
-    }
-  }
+  aPort->SendUpdateStatus(aDeviceState, aConnectionState);
 }
 
 void MIDIPlatformService::GetMessages(const nsAString& aPortId,

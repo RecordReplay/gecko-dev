@@ -36,10 +36,10 @@
 #include "mozilla/dom/Document.h"
 #include "nsIObjectInputStream.h"
 #include "nsIObjectOutputStream.h"
-#include "nsITextToSubURI.h"
 #include "nsIWritablePropertyBag2.h"
 #include "nsIContentSecurityPolicy.h"
 #include "nsSandboxFlags.h"
+#include "nsTextToSubURI.h"
 #include "mozilla/BasePrincipal.h"
 #include "mozilla/CycleCollectedJSContext.h"
 #include "mozilla/dom/AutoEntryScript.h"
@@ -1100,15 +1100,9 @@ NS_IMPL_ISUPPORTS(nsJSProtocolHandler, nsIProtocolHandler)
     const nsCString& aSpec, const char* aCharset, nsACString& aUTF8Spec) {
   aUTF8Spec.Truncate();
 
-  nsresult rv;
-
-  nsCOMPtr<nsITextToSubURI> txtToSubURI =
-      do_GetService(NS_ITEXTTOSUBURI_CONTRACTID, &rv);
-  NS_ENSURE_SUCCESS(rv, rv);
-
   nsAutoString uStr;
-  rv = txtToSubURI->UnEscapeNonAsciiURI(nsDependentCString(aCharset), aSpec,
-                                        uStr);
+  nsresult rv = nsTextToSubURI::UnEscapeNonAsciiURI(
+      nsDependentCString(aCharset), aSpec, uStr);
   NS_ENSURE_SUCCESS(rv, rv);
 
   if (!IsAscii(uStr)) {
@@ -1156,7 +1150,7 @@ nsJSProtocolHandler::GetProtocolFlags(uint32_t* result) {
 
   NS_MutateURI mutator(new nsJSURI::Mutator());
   nsCOMPtr<nsIURI> base(aBaseURI);
-  mutator.Apply(NS_MutatorMethod(&nsIJSURIMutator::SetBase, base));
+  mutator.Apply(&nsIJSURIMutator::SetBase, base);
   if (!aCharset || !nsCRT::strcasecmp("UTF-8", aCharset)) {
     mutator.SetSpec(aSpec);
   } else {

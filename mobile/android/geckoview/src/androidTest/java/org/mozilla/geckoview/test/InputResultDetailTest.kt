@@ -11,10 +11,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.ContentDelegate
 import org.mozilla.geckoview.PanZoomController
 import org.mozilla.geckoview.PanZoomController.InputResultDetail
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule
-import org.mozilla.geckoview.test.util.Callbacks
 
 @RunWith(AndroidJUnit4::class)
 @MediumTest
@@ -22,13 +22,13 @@ class InputResultDetailTest : BaseSessionTest() {
     private val scrollWaitTimeout = 10000.0 // 10 seconds
 
     private fun setupDocument(documentPath: String) {
-        sessionRule.session.loadTestPath(documentPath)
-        sessionRule.waitUntilCalled(object : Callbacks.ContentDelegate {
+        mainSession.loadTestPath(documentPath)
+        sessionRule.waitUntilCalled(object : ContentDelegate {
             @GeckoSessionTestRule.AssertCalled(count = 1)
             override fun onFirstContentfulPaint(session: GeckoSession) {
             }
         })
-        sessionRule.session.flushApzRepaints()
+        mainSession.flushApzRepaints()
     }
 
     private fun sendDownEvent(x: Float, y: Float): GeckoResult<InputResultDetail> {
@@ -177,7 +177,7 @@ class InputResultDetailTest : BaseSessionTest() {
             scroll.scrollTo(0, scroll.scrollHeight);
         """.trimIndent())
         assertThat("scroll", scrollPromise.value as Boolean, equalTo(true));
-        sessionRule.session.flushApzRepaints()
+        mainSession.flushApzRepaints()
     }
 
     @WithDisplay(width = 100, height = 100)

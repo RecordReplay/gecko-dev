@@ -74,6 +74,7 @@ async function receiveMessage(event) {
   currentRun++;
   if (currentTest >= redirectQueries.length -1  && currentRun === ALL_COOKIE_COMB.length && !sameOriginRequest) {
     window.removeEventListener("message", receiveMessage);
+    SpecialPowers.clearUserPref("network.cookie.sameSite.laxByDefault");
     SimpleTest.finish();
     return;
   }
@@ -106,7 +107,8 @@ async function runTest() {
 }
 
 SpecialPowers.pushPrefEnv({ set: [
-    ["dom.security.https_first", true]
+    ["dom.security.https_first", true],
+    ["network.cookie.sameSite.noneRequiresSecure", false],
   ]}, runTest);
 
 </script>

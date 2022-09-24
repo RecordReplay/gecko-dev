@@ -14,8 +14,8 @@ loader.lazyRequireGetter(
 );
 loader.lazyRequireGetter(
   this,
-  "BrowsingContextTargetFront",
-  "devtools/client/fronts/targets/browsing-context",
+  "WindowGlobalTargetFront",
+  "devtools/client/fronts/targets/window-global",
   true
 );
 const {
@@ -28,6 +28,7 @@ const {
 
 const SERVER_TARGET_SWITCHING_ENABLED_PREF =
   "devtools.target-switching.server.enabled";
+const POPUP_DEBUG_PREF = "devtools.popups.debug";
 
 /**
  * DescriptorFront for tab targets.
@@ -48,8 +49,21 @@ class TabDescriptorFront extends DescriptorMixin(
     // debugging).
     this._localTab = null;
 
+    // Flag to prevent the server from trying to spawn targets by the watcher actor.
+    this._disableTargetSwitching = false;
+
     this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
     this._handleTabEvent = this._handleTabEvent.bind(this);
+
+    // When the target is created from the server side,
+    // it is not created via TabDescriptor.getTarget.
+    // Instead, it is retrieved by the TargetCommand which
+    // will call TabDescriptor.setTarget from TargetCommand.onTargetAvailable
+    if (this.isServerTargetSwitchingEnabled()) {
+      this._targetFrontPromise = new Promise(
+        r => (this._resolveTargetFrontPromise = r)
+      );
+    }
   }
 
   form(json) {
@@ -83,6 +97,17 @@ class TabDescriptorFront extends DescriptorMixin(
     super.destroy();
   }
 
+  getWatcher() {
+    const isPopupDebuggingEnabled = Services.prefs.getBoolPref(
+      POPUP_DEBUG_PREF,
+      false
+    );
+    return super.getWatcher({
+      isServerTargetSwitchingEnabled: this.isServerTargetSwitchingEnabled(),
+      isPopupDebuggingEnabled,
+    });
+  }
+
   setLocalTab(localTab) {
     this._localTab = localTab;
     this._setupLocalTabListeners();
@@ -92,16 +117,6 @@ class TabDescriptorFront extends DescriptorMixin(
     // but also ensure cleaning up the client and everything on tab closing.
     // (this flag is handled by DescriptorMixin)
     this.shouldCloseClient = true;
-
-    // When the target is created from the server side,
-    // it is not created via TabDescriptor.getTarget.
-    // Instead, it is retrieved by the TargetCommand which
-    // will call TabDescriptor.setTarget from TargetCommand.onTargetAvailable
-    if (this.isServerTargetSwitchingEnabled()) {
-      this._targetFrontPromise = new Promise(
-        r => (this._resolveTargetFrontPromise = r)
-      );
-    }
   }
 
   get isTabDescriptor() {
@@ -134,15 +149,38 @@ class TabDescriptorFront extends DescriptorMixin(
       SERVER_TARGET_SWITCHING_ENABLED_PREF,
       false
     );
-    return isEnabled && this.isLocalTab;
+    const enabled = isEnabled && !this._disableTargetSwitching;
+    return enabled;
+  }
+
+  /**
+   * Called by CommandsFactory, when the WebExtension codebase instantiates
+   * a commands. We have to flag the TabDescriptor for them as they don't support
+   * target switching and gets severely broken when enabling server target which
+   * introduce target switching for all navigations and reloads
+   */
+  setIsForWebExtension() {
+    this.disableTargetSwitching();
+  }
+
+  /**
+   * Method used by the WebExtension which still need to disable server side targets,
+   * and also a few xpcshell tests which are using legacy API and don't support watcher actor.
+   */
+  disableTargetSwitching() {
+    this._disableTargetSwitching = true;
+    // Delete these two attributes which have to be set early from the constructor,
+    // but we don't know yet if target switch should be disabled.
+    delete this._targetFrontPromise;
+    delete this._resolveTargetFrontPromise;
   }
 
   get isZombieTab() {
     return this._form.isZombieTab;
   }
 
-  get outerWindowID() {
-    return this._form.outerWindowID;
+  get browserId() {
+    return this._form.browserId;
   }
 
   get selected() {
@@ -164,7 +202,7 @@ class TabDescriptorFront extends DescriptorMixin(
   }
 
   _createTabTarget(form) {
-    const front = new BrowsingContextTargetFront(this._client, null, this);
+    const front = new WindowGlobalTargetFront(this._client, null, this);
 
     // As these fronts aren't instantiated by protocol.js, we have to set their actor ID
     // manually like that:
@@ -179,14 +217,6 @@ class TabDescriptorFront extends DescriptorMixin(
     // Note that we are also checking that _targetFront has a valid actorID
     // in getTarget, this acts as an additional security to avoid races.
     this._targetFront = null;
-
-    // about:debugging / remote debugging tabs don't support top level
-    // target-switching so we have to remove the descriptor when the target is
-    // destroyed. When about:debugging supports target switching, we can remove
-    // the !isLocalTab check. See Bug 1709267.
-    if (!this.isLocalTab) {
-      this.destroy();
-    }
   }
 
   /**
@@ -227,9 +257,25 @@ class TabDescriptorFront extends DescriptorMixin(
 
     if (this.isServerTargetSwitchingEnabled()) {
       this._resolveTargetFrontPromise(targetFront);
+
+      // Set a new promise in order to:
+      // 1) Avoid leaking the targetFront we just resolved into the previous promise.
+      // 2) Never return an empty target from `getTarget`
+      //
+      // About the second point:
+      // There is a race condition where we call `onTargetDestroyed` (which clears `this.targetFront`)
+      // a bit before calling `setTarget`. So that `this.targetFront` could be null,
+      // while we now a new target will eventually come when calling `setTarget`.
+      // Setting a new promise will help wait for the next target while `_targetFront` is null.
+      // Note that `getTarget` first look into `_targetFront` before checking for `_targetFrontPromise`.
+      this._targetFrontPromise = new Promise(
+        r => (this._resolveTargetFrontPromise = r)
+      );
     }
   }
-
+  getCachedTarget() {
+    return this._targetFront;
+  }
   async getTarget() {
     if (this._targetFront && !this._targetFront.isDestroyed()) {
       return this._targetFront;
@@ -244,7 +290,6 @@ class TabDescriptorFront extends DescriptorMixin(
       try {
         const targetForm = await super.getTarget();
         newTargetFront = this._createTabTarget(targetForm);
-        await newTargetFront.attach();
         this.setTarget(newTargetFront);
       } catch (e) {
         console.log(

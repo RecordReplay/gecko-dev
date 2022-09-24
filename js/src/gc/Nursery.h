@@ -64,8 +64,10 @@ class HeapSlot;
 class JSONPrinter;
 class MapObject;
 class SetObject;
+class TenuringTracer;
 
 namespace gc {
+class AutoGCSession;
 class AutoMaybeStartBackgroundAllocation;
 class AutoTraceSession;
 struct Cell;
@@ -106,75 +108,6 @@ class NurseryDecommitTask : public GCParallelTask {
 
   MainThreadOrGCTaskData<NurseryChunk*> partialChunk;
   MainThreadOrGCTaskData<size_t> partialCapacity;
-};
-
-class TenuringTracer final : public GenericTracer {
-  friend class Nursery;
-  Nursery& nursery_;
-
-  // Amount of data moved to the tenured generation during collection.
-  size_t tenuredSize;
-  // Number of cells moved to the tenured generation.
-  size_t tenuredCells;
-
-  // These lists are threaded through the Nursery using the space from
-  // already moved things. The lists are used to fix up the moved things and
-  // to find things held live by intra-Nursery pointers.
-  gc::RelocationOverlay* objHead;
-  gc::RelocationOverlay** objTail;
-  gc::StringRelocationOverlay* stringHead;
-  gc::StringRelocationOverlay** stringTail;
-
-  TenuringTracer(JSRuntime* rt, Nursery* nursery);
-
-  JSObject* onObjectEdge(JSObject* obj) override;
-  JSString* onStringEdge(JSString* str) override;
-  JS::Symbol* onSymbolEdge(JS::Symbol* sym) override;
-  JS::BigInt* onBigIntEdge(JS::BigInt* bi) override;
-  js::BaseScript* onScriptEdge(BaseScript* script) override;
-  js::Shape* onShapeEdge(Shape* shape) override;
-  js::RegExpShared* onRegExpSharedEdge(RegExpShared* shared) override;
-  js::BaseShape* onBaseShapeEdge(BaseShape* base) override;
-  js::GetterSetter* onGetterSetterEdge(GetterSetter* gs) override;
-  js::PropMap* onPropMapEdge(PropMap* map) override;
-  js::jit::JitCode* onJitCodeEdge(jit::JitCode* code) override;
-  js::Scope* onScopeEdge(Scope* scope) override;
-
- public:
-  Nursery& nursery() { return nursery_; }
-
-  void traverse(JS::Value* thingp);
-
-  // The store buffers need to be able to call these directly.
-  void traceObject(JSObject* src);
-  void traceObjectSlots(NativeObject* nobj, uint32_t start, uint32_t end);
-  void traceSlots(JS::Value* vp, uint32_t nslots);
-  void traceString(JSString* src);
-  void traceBigInt(JS::BigInt* src);
-
- private:
-  inline void insertIntoObjectFixupList(gc::RelocationOverlay* entry);
-  inline void insertIntoStringFixupList(gc::StringRelocationOverlay* entry);
-
-  template <typename T>
-  inline T* allocTenured(JS::Zone* zone, gc::AllocKind kind);
-  JSString* allocTenuredString(JSString* src, JS::Zone* zone,
-                               gc::AllocKind dstKind);
-
-  inline JSObject* movePlainObjectToTenured(PlainObject* src);
-  JSObject* moveToTenuredSlow(JSObject* src);
-  JSString* moveToTenured(JSString* src);
-  JS::BigInt* moveToTenured(JS::BigInt* src);
-
-  size_t moveElementsToTenured(NativeObject* dst, NativeObject* src,
-                               gc::AllocKind dstKind);
-  size_t moveSlotsToTenured(NativeObject* dst, NativeObject* src);
-  size_t moveStringToTenured(JSString* dst, JSString* src,
-                             gc::AllocKind dstKind);
-  size_t moveBigIntToTenured(JS::BigInt* dst, JS::BigInt* src,
-                             gc::AllocKind dstKind);
-
-  void traceSlots(JS::Value* vp, JS::Value* end);
 };
 
 // Classes with JSCLASS_SKIP_NURSERY_FINALIZE or Wrapper classes with
@@ -387,7 +320,7 @@ class Nursery {
   void renderProfileJSON(JSONPrinter& json) const;
 
   // Print header line for profile times.
-  static void printProfileHeader();
+  void printProfileHeader();
 
   // Print total profile times on shutdown.
   void printTotalProfileTimes();
@@ -503,8 +436,10 @@ class Nursery {
   // Report how many strings were deduplicated.
   bool reportDeduplications_;
 
-  // Report information on allocation sites and pretenuring.
+  // Whether to report information on pretenuring, and if so the allocation
+  // threshold at which to report details of each allocation site.
   bool reportPretenuring_;
+  size_t reportPretenuringThreshold_;
 
   // Whether and why a collection of this nursery has been requested. This is
   // mutable as it is set by the store buffer, which otherwise cannot modify
@@ -544,7 +479,7 @@ class Nursery {
   PreviousGC previousGC;
 
   bool hasRecentGrowthData;
-  double smoothedGrowthFactor;
+  double smoothedTargetSize;
 
   // Calculate the promotion rate of the most recent minor GC.
   // The valid_for_tenuring parameter is used to return whether this
@@ -702,26 +637,10 @@ class Nursery {
     size_t tenuredCells;
   };
   CollectionResult doCollection(JS::GCReason reason);
+  void traceRoots(gc::AutoGCSession& session, TenuringTracer& mover);
 
   size_t doPretenuring(JSRuntime* rt, JS::GCReason reason,
                        bool validPromotionRate, double promotionRate);
-
-  // Move all objects and everything they can reach to the tenured heap.
-  void collectToObjectFixedPoint(TenuringTracer& mover);
-
-  // Move all strings and all strings they can reach to the tenured heap, and
-  // additionally do any fixups for when strings are pointing into memory that
-  // was deduplicated.
-  void collectToStringFixedPoint(TenuringTracer& mover);
-
-  // The dependent string chars needs to be relocated if the base which it's
-  // using chars from has been deduplicated.
-  template <typename CharT>
-  void relocateDependentStringChars(JSDependentString* tenuredDependentStr,
-                                    JSLinearString* baseOrRelocOverlay,
-                                    size_t* offset,
-                                    bool* rootBaseNotYetForwarded,
-                                    JSLinearString** rootBase);
 
   // Handle relocation of slots/elements pointers stored in Ion frames.
   inline void setForwardingPointer(void* oldData, void* newData, bool direct);
@@ -741,7 +660,7 @@ class Nursery {
 
   // Updates pointers to nursery objects that have been tenured and discards
   // pointers to objects that have been freed.
-  void sweep(JSTracer* trc);
+  void sweep();
 
   // Reset the current chunk and position after a minor collection. Also poison
   // the nursery on debug & nightly builds.
@@ -772,7 +691,7 @@ class Nursery {
   void maybeClearProfileDurations();
   void startProfile(ProfileKey key);
   void endProfile(ProfileKey key);
-  static void printProfileDurations(const ProfileDurations& times);
+  static void printProfileDurations(FILE* file, const ProfileDurations& times);
 
   mozilla::TimeStamp collectionStartTime() const;
   mozilla::TimeStamp lastCollectionEndTime() const;

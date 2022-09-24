@@ -13,7 +13,7 @@ use std::thread;
 use crate::{
     api::units::*, api::ColorDepth, api::ColorF, api::ExternalImageId, api::ImageRendering, api::YuvRangedColorSpace,
     Compositor, CompositorCapabilities, CompositorSurfaceTransform, NativeSurfaceId, NativeSurfaceInfo, NativeTileId,
-    profiler, MappableCompositor, SWGLCompositeSurfaceInfo,
+    profiler, MappableCompositor, SWGLCompositeSurfaceInfo, WindowVisibility,
 };
 
 pub struct SwTile {
@@ -72,8 +72,8 @@ impl SwTile {
         clip_rect: &DeviceIntRect,
     ) -> Option<DeviceIntRect> {
         let bounds = self.local_bounds(surface);
-        let device_rect = transform.outer_transformed_box2d(&bounds.to_f32())?.round_out().to_i32();
-        device_rect.intersection(clip_rect)
+        let device_rect = transform.outer_transformed_box2d(&bounds.to_f32())?.round_out();
+        Some(device_rect.intersection(&clip_rect.to_f32())?.to_i32())
     }
 
     /// Determine if the tile's bounds may overlap the dependency rect if it were
@@ -97,12 +97,12 @@ impl SwTile {
         surface: &SwSurface,
         transform: &CompositorSurfaceTransform,
         clip_rect: &DeviceIntRect,
-    ) -> Option<(DeviceIntRect, DeviceIntRect, bool)> {
+    ) -> Option<(DeviceIntRect, DeviceIntRect, bool, bool)> {
         // Offset the valid rect to the appropriate surface origin.
         let valid = self.local_bounds(surface);
         // The destination rect is the valid rect transformed and then clipped.
-        let dest_rect = transform.outer_transformed_box2d(&valid.to_f32())?.round_out().to_i32();
-        if !dest_rect.intersects(clip_rect) {
+        let dest_rect = transform.outer_transformed_box2d(&valid.to_f32())?.round_out();
+        if !dest_rect.intersects(&clip_rect.to_f32()) {
             return None;
         }
         // To get a valid source rect, we need to inverse transform the clipped destination rect to find out the effect
@@ -110,11 +110,17 @@ impl SwTile {
         // a source rect that is now relative to the surface origin rather than absolute.
         let inv_transform = transform.inverse()?;
         let src_rect = inv_transform
-            .outer_transformed_box2d(&dest_rect.to_f32())?
+            .outer_transformed_box2d(&dest_rect)?
             .round()
-            .to_i32()
-            .translate(-valid.min.to_vector());
-        Some((src_rect, dest_rect, transform.m22 < 0.0))
+            .translate(-valid.min.to_vector().to_f32());
+        // Ensure source and dest rects when transformed from Box2D to Rect formats will still fit in an i32.
+        // If p0=i32::MIN and p1=i32::MAX, then evaluating the size with p1-p0 will overflow an i32 and not
+        // be representable. 
+        if src_rect.size().try_cast::<i32>().is_none() ||
+           dest_rect.size().try_cast::<i32>().is_none() {
+            return None;
+        }
+        Some((src_rect.try_cast()?, dest_rect.try_cast()?, transform.m11 < 0.0, transform.m22 < 0.0))
     }
 }
 
@@ -157,8 +163,8 @@ impl SwSurface {
         clip_rect: &DeviceIntRect,
     ) -> Option<DeviceIntRect> {
         let bounds = self.local_bounds();
-        let device_rect = transform.outer_transformed_box2d(&bounds.to_f32())?.round_out().to_i32();
-        device_rect.intersection(clip_rect)
+        let device_rect = transform.outer_transformed_box2d(&bounds.to_f32())?.round_out();
+        Some(device_rect.intersection(&clip_rect.to_f32())?.to_i32())
     }
 }
 
@@ -198,6 +204,7 @@ struct SwCompositeJob {
     dst_rect: DeviceIntRect,
     clipped_dst: DeviceIntRect,
     opaque: bool,
+    flip_x: bool,
     flip_y: bool,
     filter: ImageRendering,
     /// The total number of bands for this job
@@ -232,6 +239,7 @@ impl SwCompositeJob {
                     self.dst_rect.width(),
                     self.dst_rect.height(),
                     self.opaque,
+                    self.flip_x,
                     self.flip_y,
                     image_rendering_to_gl_filter(self.filter),
                     band_clip.min.x,
@@ -264,6 +272,7 @@ impl SwCompositeJob {
                     self.dst_rect.min.y,
                     self.dst_rect.width(),
                     self.dst_rect.height(),
+                    self.flip_x,
                     self.flip_y,
                     band_clip.min.x,
                     band_clip.min.y,
@@ -477,7 +486,8 @@ impl SwCompositeThread {
             // so using the default stack size is excessive. A reasonably small
             // stack size should be more than enough for SWGL and reduce memory
             // overhead.
-            .stack_size(32 * 1024)
+            // Bug 1731569 - Need at least 36K to avoid problems with ASAN.
+            .stack_size(40 * 1024)
             .spawn(move || {
                 profiler::register_thread(thread_name);
                 // Process any available jobs. This will return a non-Ok
@@ -518,6 +528,7 @@ impl SwCompositeThread {
         dst_rect: DeviceIntRect,
         clip_rect: DeviceIntRect,
         opaque: bool,
+        flip_x: bool,
         flip_y: bool,
         filter: ImageRendering,
         mut graph_node: SwCompositeGraphNodeRef,
@@ -542,6 +553,7 @@ impl SwCompositeThread {
             dst_rect,
             clipped_dst,
             opaque,
+            flip_x,
             flip_y,
             filter,
             num_bands,
@@ -687,12 +699,6 @@ impl SwCompositeThread {
         // Done waiting for job completion.
         self.waiting_for_jobs.store(false, Ordering::SeqCst);
     }
-
-    /// Check if all in-flight jobs have not been completed yet. If they have
-    /// not, then we assume the SwComposite thread is currently busy compositing.
-    fn is_busy_compositing(&self) -> bool {
-        !self.jobs_completed.load(Ordering::SeqCst)
-    }
 }
 
 /// Parameters describing how to composite a surface within a frame
@@ -728,6 +734,8 @@ pub struct SwCompositor {
     composite_thread: Option<Arc<SwCompositeThread>>,
     /// SWGL locked resource for sharing framebuffer with SwComposite thread
     locked_framebuffer: Option<swgl::LockedResource>,
+    /// Whether we are currently in the middle of compositing
+    is_compositing: bool,
 }
 
 impl SwCompositor {
@@ -761,6 +769,7 @@ impl SwCompositor {
             depth_id,
             composite_thread,
             locked_framebuffer: None,
+            is_compositing: false,
         }
     }
 
@@ -952,7 +961,7 @@ impl SwCompositor {
         job_queue: &mut SwCompositeJobQueue,
     ) {
         if let Some(ref composite_thread) = self.composite_thread {
-            if let Some((src_rect, dst_rect, flip_y)) = tile.composite_rects(surface, transform, clip_rect) {
+            if let Some((src_rect, dst_rect, flip_x, flip_y)) = tile.composite_rects(surface, transform, clip_rect) {
                 let source = if surface.external_image.is_some() {
                     // If the surface has an attached external image, lock any textures supplied in the descriptor.
                     match surface.composite_surface {
@@ -993,6 +1002,7 @@ impl SwCompositor {
                         dst_rect,
                         *clip_rect,
                         surface.is_opaque,
+                        flip_x,
                         flip_y,
                         filter,
                         tile.graph_node.clone(),
@@ -1366,7 +1376,7 @@ impl Compositor for SwCompositor {
             // surfaces instead of trying to sort into the main frame queue.
             // These late surfaces will not have any overlap tracking done for
             // them and must be processed synchronously at the end of the frame.
-            if self.composite_thread.as_ref().unwrap().is_busy_compositing() {
+            if self.is_compositing {
                 self.late_surfaces.push((id, transform, clip_rect, filter));
                 return;
             }
@@ -1381,6 +1391,8 @@ impl Compositor for SwCompositor {
     /// be added to the late_surfaces queue to be processed at the end of the
     /// frame.
     fn start_compositing(&mut self, clear_color: ColorF, dirty_rects: &[DeviceIntRect], _opaque_rects: &[DeviceIntRect]) {
+        self.is_compositing = true;
+
         // Opaque rects are currently only computed here, not by WR itself, so we
         // ignore the passed parameter and forward our own version onto the native
         // compositor.
@@ -1448,6 +1460,8 @@ impl Compositor for SwCompositor {
     }
 
     fn end_frame(&mut self) {
+        self.is_compositing = false;
+
         if self.use_native_compositor {
             self.compositor.end_frame();
         } else if let Some(ref composite_thread) = self.composite_thread {
@@ -1495,5 +1509,9 @@ impl Compositor for SwCompositor {
 
     fn get_capabilities(&self) -> CompositorCapabilities {
         self.compositor.get_capabilities()
+    }
+
+    fn get_window_visibility(&self) -> WindowVisibility {
+        self.compositor.get_window_visibility()
     }
 }

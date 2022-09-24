@@ -218,8 +218,16 @@ class Output(object):
 
         # This is the output that treeherder expects to find when parsing the
         # log file
-        if "gecko-profile" not in self.results.extra_options:
-            LOG.info("PERFHERDER_DATA: %s" % json.dumps(results, ignore_nan=True))
+        if "gecko-profile" in self.results.extra_options:
+            LOG.info("gecko-profile enabled")
+
+            for suite in results["suites"]:
+                suite["shouldAlert"] = False
+                for subtest in suite["subtests"]:
+                    subtest["shouldAlert"] = False
+
+        LOG.info("PERFHERDER_DATA: %s" % json.dumps(results, ignore_nan=True))
+
         if results_scheme in ("file"):
             json.dump(
                 results,
@@ -314,6 +322,15 @@ class Output(object):
         score = 60 * 1000 / filter.geometric_mean(results) / correctionFactor
         return score
 
+    @classmethod
+    def damp_score(cls, val_list):
+        """
+        damp_score: damp is only interested in the value of subtests and will
+        aggregate data from several suites.
+        Use a hardcoded value for the suite to avoid inconsistencies.
+        """
+        return 100
+
     def construct_results(self, vals, testname):
         if "responsiveness" in testname:
             return filter.responsiveness_Metric([val for (val, page) in vals])
@@ -329,6 +346,8 @@ class Output(object):
             return self.speedometer_score(vals)
         elif testname.startswith("stylebench"):
             return self.stylebench_score(vals)
+        elif testname.startswith("damp"):
+            return self.damp_score(vals)
         elif len(vals) > 1:
             return filter.geometric_mean([i for i, j in vals])
         else:

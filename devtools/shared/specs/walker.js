@@ -147,14 +147,6 @@ const walkerSpec = generateActorSpec({
         list: RetVal("domnodelist"),
       },
     },
-    multiFrameQuerySelectorAll: {
-      request: {
-        selector: Arg(0),
-      },
-      response: {
-        list: RetVal("domnodelist"),
-      },
-    },
     search: {
       request: {
         query: Arg(0),
@@ -362,11 +354,16 @@ const walkerSpec = generateActorSpec({
     pick: {
       request: {
         doFocus: Arg(0, "nullable:boolean"),
+        isLocalTab: Arg(1, "nullable:boolean"),
       },
     },
     cancelPick: {
       request: {},
       response: {},
+    },
+    clearPicker: {
+      request: {},
+      oneway: true,
     },
     watchRootNode: {
       request: {},

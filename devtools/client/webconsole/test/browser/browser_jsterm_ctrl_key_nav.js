@@ -10,7 +10,7 @@
 "use strict";
 
 const TEST_URI =
-  "data:text/html;charset=utf-8,Web Console test for " +
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console test for " +
   "bug 804845 and bug 619598";
 
 add_task(async function() {
@@ -231,7 +231,7 @@ async function testNavWithHistory(hud) {
 
   // submit to history
   for (const value of values) {
-    const onResult = waitForMessage(hud, "", ".result");
+    const onResult = waitForMessageByType(hud, "", ".result");
     setInputValue(hud, value);
     EventUtils.synthesizeKey("KEY_Enter");
     await onResult;

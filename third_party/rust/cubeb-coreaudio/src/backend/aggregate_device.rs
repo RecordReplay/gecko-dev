@@ -7,6 +7,7 @@ pub const DRIFT_COMPENSATION: u32 = 1;
 pub struct AggregateDevice {
     plugin_id: AudioObjectID,
     device_id: AudioObjectID,
+    // For log only
     input_id: AudioObjectID,
     output_id: AudioObjectID,
 }
@@ -77,7 +78,7 @@ impl AggregateDevice {
         });
 
         Self::set_sub_devices_sync(device_id, input_id, output_id)?;
-        Self::set_master_device(device_id)?;
+        Self::set_master_device(device_id, output_id)?;
         Self::activate_clock_drift_compensation(device_id)?;
         Self::workaround_for_airpod(device_id, input_id, output_id)?;
 
@@ -465,18 +466,27 @@ impl AggregateDevice {
         }
     }
 
-    pub fn set_master_device(device_id: AudioDeviceID) -> std::result::Result<(), Error> {
+    pub fn set_master_device(
+        device_id: AudioDeviceID,
+        primary_id: AudioDeviceID,
+    ) -> std::result::Result<(), Error> {
         assert_ne!(device_id, kAudioObjectUnknown);
+        assert_ne!(primary_id, kAudioObjectUnknown);
+
+        cubeb_log!(
+            "Set master device of the aggregate device {} to device {}",
+            device_id,
+            primary_id
+        );
+
         let address = AudioObjectPropertyAddress {
             mSelector: kAudioAggregateDevicePropertyMasterSubDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMaster,
         };
 
-        // Master become the 1st output sub device
-        let output_device_id = audiounit_get_default_device_id(DeviceType::OUTPUT);
-        assert_ne!(output_device_id, kAudioObjectUnknown);
-        let output_sub_devices = Self::get_sub_devices(output_device_id)?;
+        // Master become the 1st sub device of the primary device
+        let output_sub_devices = Self::get_sub_devices(primary_id)?;
         assert!(!output_sub_devices.is_empty());
         let master_sub_device_uid = get_device_global_uid(output_sub_devices[0]).unwrap();
         let master_sub_device = master_sub_device_uid.get_raw();
@@ -669,7 +679,12 @@ impl Drop for AggregateDevice {
                     r
                 );
             } else {
-                cubeb_log!("Destroyed aggregate device {}", self.device_id);
+                cubeb_log!(
+                    "Destroyed aggregate device {} (input {}, output {})",
+                    self.device_id,
+                    self.input_id,
+                    self.output_id
+                );
             }
         }
     }

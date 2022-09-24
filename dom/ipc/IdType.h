@@ -14,8 +14,7 @@ template <typename T>
 struct ParamTraits;
 }  // namespace IPC
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class BrowsingContext;
 class ContentParent;
 class BrowserParent;
@@ -41,24 +40,22 @@ class IdType {
   uint64_t mId;
 };
 
-typedef IdType<BrowserParent> TabId;
-typedef IdType<ContentParent> ContentParentId;
-}  // namespace dom
-}  // namespace mozilla
+using TabId = IdType<BrowserParent>;
+using ContentParentId = IdType<ContentParent>;
+}  // namespace mozilla::dom
 
 namespace IPC {
 
 template <typename T>
 struct ParamTraits<mozilla::dom::IdType<T>> {
-  typedef mozilla::dom::IdType<T> paramType;
+  using paramType = mozilla::dom::IdType<T>;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mId);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.mId);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->mId);
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return ReadParam(aReader, &aResult->mId);
   }
 };
 

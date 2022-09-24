@@ -47,8 +47,7 @@ class SourceSurfaceSharedDataWrapper final : public DataSourceSurface {
         mCreatorRef(true) {}
 
   void Init(const IntSize& aSize, int32_t aStride, SurfaceFormat aFormat,
-            const SharedMemoryBasic::Handle& aHandle,
-            base::ProcessId aCreatorPid);
+            SharedMemoryBasic::Handle aHandle, base::ProcessId aCreatorPid);
 
   void Init(SourceSurfaceSharedData* aSurface);
 
@@ -66,7 +65,7 @@ class SourceSurfaceSharedDataWrapper final : public DataSourceSurface {
 
   bool OnHeap() const override { return false; }
 
-  bool Map(MapType, MappedSurface* aMappedSurface) final;
+  bool Map(MapType aMapType, MappedSurface* aMappedSurface) final;
 
   void Unmap() final;
 
@@ -157,8 +156,6 @@ class SourceSurfaceSharedData : public DataSourceSurface {
   IntSize GetSize() const final { return mSize; }
   SurfaceFormat GetFormat() const final { return mFormat; }
 
-  void GuaranteePersistance() final;
-
   void SizeOfExcludingThis(MallocSizeOf aMallocSizeOf,
                            SizeOfInfo& aInfo) const final;
 
@@ -177,8 +174,12 @@ class SourceSurfaceSharedData : public DataSourceSurface {
    * the same data pointer by retaining the old shared buffer until
    * the last mapping is freed via Unmap.
    */
-  bool Map(MapType, MappedSurface* aMappedSurface) final {
+  bool Map(MapType aMapType, MappedSurface* aMappedSurface) final {
     MutexAutoLock lock(mMutex);
+    if (mFinalized && aMapType != MapType::READ) {
+      // Once finalized the data may be write-protected
+      return false;
+    }
     ++mMapCount;
     aMappedSurface->mData = GetDataInternal();
     aMappedSurface->mStride = mStride;
@@ -199,8 +200,7 @@ class SourceSurfaceSharedData : public DataSourceSurface {
    *   NS_ERROR_NOT_AVAILABLE -- handle was closed, need to reallocate.
    *   NS_ERROR_FAILURE -- failed to create a handle to share.
    */
-  nsresult ShareToProcess(base::ProcessId aPid,
-                          SharedMemoryBasic::Handle& aHandle);
+  nsresult CloneHandle(SharedMemoryBasic::Handle& aHandle);
 
   /**
    * Indicates the buffer is not expected to be shared with any more processes.
@@ -224,7 +224,7 @@ class SourceSurfaceSharedData : public DataSourceSurface {
 
   /**
    * Allocate a new shared memory buffer so that we can get a new handle for
-   * sharing to new processes. ShareToProcess must have failed with
+   * sharing to new processes. CloneHandle must have failed with
    * NS_ERROR_NOT_AVAILABLE in order for this to be safe to call. Returns true
    * if the operation succeeds. If it fails, there is no state change.
    */
@@ -326,7 +326,7 @@ class SourceSurfaceSharedData : public DataSourceSurface {
    */
   void CloseHandleInternal();
 
-  mutable Mutex mMutex;
+  mutable Mutex mMutex MOZ_UNANNOTATED;
   int32_t mStride;
   int32_t mHandleCount;
   Maybe<IntRect> mDirtyRect;

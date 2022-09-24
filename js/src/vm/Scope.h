@@ -24,7 +24,6 @@
 #include "gc/Allocator.h"          // AllowGC
 #include "gc/Barrier.h"            // HeapPtr
 #include "gc/Cell.h"               // TenuredCellWithNonGCPointer
-#include "gc/MaybeRooted.h"        // MaybeRooted
 #include "gc/Rooting.h"      // HandleScope, HandleShape, MutableHandleShape
 #include "js/GCPolicyAPI.h"  // GCPolicy, IgnoreGCPolicy
 #include "js/HeapAPI.h"      // CellFlagBitsReservedForGC
@@ -34,15 +33,12 @@
 #include "js/UbiNode.h"      // ubi::*
 #include "js/UniquePtr.h"    // UniquePtr
 #include "util/Poison.h"  // AlwaysPoison, JS_SCOPE_DATA_TRAILING_NAMES_PATTERN, MemCheckKind
-#include "vm/BytecodeUtil.h"  // LOCALNO_LIMIT, ENVCOORD_SLOT_LIMIT
-#include "vm/JSFunction.h"    // JSFunction
-#include "vm/ScopeKind.h"     // ScopeKind
-#include "vm/Shape.h"         // Shape
-#include "vm/Xdr.h"           // XDRResult, XDRState
-#include "wasm/WasmJS.h"      // WasmInstanceObject
+#include "vm/JSFunction.h"  // JSFunction
+#include "vm/ScopeKind.h"   // ScopeKind
+#include "vm/Shape.h"       // Shape
+#include "wasm/WasmJS.h"    // WasmInstanceObject
 
 class JSAtom;
-class JSFreeOp;
 class JSFunction;
 class JSScript;
 class JSTracer;
@@ -58,9 +54,8 @@ class GenericPrinter;
 
 namespace frontend {
 struct CompilationAtomCache;
-struct CompilationStencilMerger;
 class ScopeStencil;
-class ParserAtom;
+struct ScopeStencilRef;
 }  // namespace frontend
 
 template <typename NameT>
@@ -119,22 +114,6 @@ class AbstractBindingName<JSAtom> {
                       bool isTopLevelFunction = false)
       : bits_(uintptr_t(name) | (closedOver ? ClosedOverFlag : 0x0) |
               (isTopLevelFunction ? TopLevelFunctionFlag : 0x0)) {}
-
- private:
-  // For fromXDR.
-  AbstractBindingName(NameT* name, uint8_t flags)
-      : bits_(uintptr_t(name) | flags) {
-    static_assert(FlagMask < alignof(NameT),
-                  "Flags should fit into unused low bits of atom repr");
-    MOZ_ASSERT((flags & FlagMask) == flags);
-  }
-
- public:
-  static AbstractBindingName<NameT> fromXDR(NameT* name, uint8_t flags) {
-    return AbstractBindingName<NameT>(name, flags);
-  }
-
-  uint8_t flagsForXDR() const { return static_cast<uint8_t>(bits_ & FlagMask); }
 
   NamePointerT name() const {
     return reinterpret_cast<NameT*>(bits_ & ~FlagMask);
@@ -348,13 +327,6 @@ class Scope : public gc::TenuredCellWithNonGCPointer<BaseScopeData> {
   static Scope* create(JSContext* cx, ScopeKind kind, HandleScope enclosing,
                        HandleShape envShape);
 
-  template <typename ConcreteScope, XDRMode mode>
-  static XDRResult XDRSizedBindingNames(
-      XDRState<mode>* xdr, Handle<ConcreteScope*> scope,
-      MutableHandle<typename ConcreteScope::RuntimeData*> data);
-
-  Shape* maybeCloneEnvironmentShape(JSContext* cx);
-
   template <typename ConcreteScope>
   void initData(
       MutableHandle<UniquePtr<typename ConcreteScope::RuntimeData>> data);
@@ -362,13 +334,7 @@ class Scope : public gc::TenuredCellWithNonGCPointer<BaseScopeData> {
   template <typename F>
   void applyScopeDataTyped(F&& f);
 
-  template <typename EnvironmentT>
-  static bool updateEnvShapeIfRequired(JSContext* cx, MutableHandleShape shape,
-                                       bool needsEnvironment);
-
-  template <typename EnvironmentT>
-  static bool updateEnvShapeIfRequired(JSContext* cx,
-                                       mozilla::Maybe<uint32_t>* envShape,
+  static void updateEnvShapeIfRequired(mozilla::Maybe<uint32_t>* envShape,
                                        bool needsEnvironment);
 
  public:
@@ -448,10 +414,8 @@ class Scope : public gc::TenuredCellWithNonGCPointer<BaseScopeData> {
     return false;
   }
 
-  static Scope* clone(JSContext* cx, HandleScope scope, HandleScope enclosing);
-
   void traceChildren(JSTracer* trc);
-  void finalize(JSFreeOp* fop);
+  void finalize(JS::GCContext* gcx);
 
   size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf) const;
 
@@ -475,12 +439,6 @@ inline size_t SizeOfScopeData(uint32_t length) {
 //
 template <typename ScopeT, typename AtomT>
 using AbstractScopeData = typename ScopeT::template AbstractData<AtomT>;
-
-template <typename ScopeT, typename AtomT>
-using MaybeRootedScopeData = std::conditional_t<
-    std::is_same_v<AtomT, JSAtom>,
-    MaybeRooted<UniquePtr<typename ScopeT::RuntimeData>, AllowGC::CanGC>,
-    MaybeRooted<AbstractScopeData<ScopeT, AtomT>*, AllowGC::NoGC>>;
 
 // Binding names are stored from `this+1`.
 // Make sure the class aligns the binding name size.
@@ -558,21 +516,10 @@ class LexicalScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,
-                       HandleScope enclosing, MutableHandleScope scope);
-
  private:
-  static LexicalScope* createWithData(
-      JSContext* cx, ScopeKind kind, MutableHandle<UniquePtr<RuntimeData>> data,
-      uint32_t firstFrameSlot, HandleScope enclosing);
-
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx, ScopeKind kind, uint32_t firstFrameSlot,
-      typename MaybeRootedScopeData<LexicalScope, AtomT>::MutableHandleType
-          data,
-      ShapeT envShape);
+  static void prepareForScopeCreation(ScopeKind kind, uint32_t firstFrameSlot,
+                                      LexicalScope::ParserData* data,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
   const RuntimeData& data() const {
@@ -644,21 +591,10 @@ class ClassBodyScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,
-                       HandleScope enclosing, MutableHandleScope scope);
-
  private:
-  static ClassBodyScope* createWithData(
-      JSContext* cx, ScopeKind kind, MutableHandle<UniquePtr<RuntimeData>> data,
-      uint32_t firstFrameSlot, HandleScope enclosing);
-
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx, ScopeKind kind, uint32_t firstFrameSlot,
-      typename MaybeRootedScopeData<ClassBodyScope, AtomT>::MutableHandleType
-          data,
-      ShapeT envShape);
+  static void prepareForScopeCreation(ScopeKind kind, uint32_t firstFrameSlot,
+                                      ClassBodyScope::ParserData* data,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
   const RuntimeData& data() const {
@@ -770,27 +706,12 @@ class FunctionScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx,
-      typename MaybeRootedScopeData<FunctionScope, AtomT>::MutableHandleType
-          data,
-      bool hasParameterExprs, bool needsEnvironment, HandleFunction fun,
-      ShapeT envShape);
-
-  static FunctionScope* clone(JSContext* cx, Handle<FunctionScope*> scope,
-                              HandleFunction fun, HandleScope enclosing);
-
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, HandleFunction fun,
-                       HandleScope enclosing, MutableHandleScope scope);
+  static void prepareForScopeCreation(FunctionScope::ParserData* data,
+                                      bool hasParameterExprs,
+                                      bool needsEnvironment,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
  private:
-  static FunctionScope* createWithData(
-      JSContext* cx, MutableHandle<UniquePtr<RuntimeData>> data,
-      bool hasParameterExprs, bool needsEnvironment, HandleFunction fun,
-      HandleScope enclosing);
-
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
 
   const RuntimeData& data() const {
@@ -813,7 +734,6 @@ class FunctionScope : public Scope {
     return data().slotInfo.nonPositionalFormalStart;
   }
 
-  static bool isSpecialName(JSContext* cx, JSAtom* name);
   static bool isSpecialName(JSContext* cx,
                             frontend::TaggedParserAtomIndex name);
 };
@@ -852,21 +772,12 @@ class VarScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,
-                       HandleScope enclosing, MutableHandleScope scope);
-
  private:
-  static VarScope* createWithData(JSContext* cx, ScopeKind kind,
-                                  MutableHandle<UniquePtr<RuntimeData>> data,
-                                  uint32_t firstFrameSlot,
-                                  bool needsEnvironment, HandleScope enclosing);
-
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx, ScopeKind kind,
-      typename MaybeRootedScopeData<VarScope, AtomT>::MutableHandleType data,
-      uint32_t firstFrameSlot, bool needsEnvironment, ShapeT envShape);
+  static void prepareForScopeCreation(ScopeKind kind,
+                                      VarScope::ParserData* data,
+                                      uint32_t firstFrameSlot,
+                                      bool needsEnvironment,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
 
@@ -928,18 +839,7 @@ class GlobalScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  static GlobalScope* create(JSContext* cx, ScopeKind kind,
-                             Handle<RuntimeData*> data);
-
-  static GlobalScope* createEmpty(JSContext* cx, ScopeKind kind) {
-    return create(cx, kind, nullptr);
-  }
-
-  static GlobalScope* clone(JSContext* cx, Handle<GlobalScope*> scope);
-
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,
-                       MutableHandleScope scope);
+  static GlobalScope* createEmpty(JSContext* cx, ScopeKind kind);
 
  private:
   static GlobalScope* createWithData(
@@ -974,10 +874,6 @@ class WithScope : public Scope {
 
  public:
   static WithScope* create(JSContext* cx, HandleScope enclosing);
-
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, HandleScope enclosing,
-                       MutableHandleScope scope);
 };
 
 //
@@ -1021,20 +917,10 @@ class EvalScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, ScopeKind kind,
-                       HandleScope enclosing, MutableHandleScope scope);
-
  private:
-  static EvalScope* createWithData(JSContext* cx, ScopeKind kind,
-                                   MutableHandle<UniquePtr<RuntimeData>> data,
-                                   HandleScope enclosing);
-
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx, ScopeKind scopeKind,
-      typename MaybeRootedScopeData<EvalScope, AtomT>::MutableHandleType data,
-      ShapeT envShape);
+  static void prepareForScopeCreation(ScopeKind scopeKind,
+                                      EvalScope::ParserData* data,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
 
@@ -1118,20 +1004,9 @@ class ModuleScope : public Scope {
       typename std::conditional_t<std::is_same<NameT, JSAtom>::value,
                                   RuntimeData, ParserData>;
 
-  template <XDRMode mode>
-  static XDRResult XDR(XDRState<mode>* xdr, HandleModuleObject module,
-                       HandleScope enclosing, MutableHandleScope scope);
-
  private:
-  static ModuleScope* createWithData(JSContext* cx,
-                                     MutableHandle<UniquePtr<RuntimeData>> data,
-                                     Handle<ModuleObject*> module,
-                                     HandleScope enclosing);
-  template <typename AtomT, typename ShapeT>
-  static bool prepareForScopeCreation(
-      JSContext* cx,
-      typename MaybeRootedScopeData<ModuleScope, AtomT>::MutableHandleType data,
-      HandleModuleObject module, ShapeT envShape);
+  static void prepareForScopeCreation(ModuleScope::ParserData* data,
+                                      mozilla::Maybe<uint32_t>* envShape);
 
   RuntimeData& data() { return *static_cast<RuntimeData*>(rawData()); }
 
@@ -1649,11 +1524,11 @@ class AbstractBindingIter<JSAtom> : public BaseAbstractBindingIter<JSAtom> {
   using Base = BaseAbstractBindingIter<JSAtom>;
 
  public:
-  AbstractBindingIter<JSAtom>(ScopeKind kind, BaseScopeData* data,
-                              uint32_t firstFrameSlot);
+  AbstractBindingIter(ScopeKind kind, BaseScopeData* data,
+                      uint32_t firstFrameSlot);
 
-  explicit AbstractBindingIter<JSAtom>(Scope* scope);
-  explicit AbstractBindingIter<JSAtom>(JSScript* script);
+  explicit AbstractBindingIter(Scope* scope);
+  explicit AbstractBindingIter(JSScript* script);
 
   using Base::Base;
 
@@ -1666,6 +1541,8 @@ class AbstractBindingIter<frontend::TaggedParserAtomIndex>
   using Base = BaseAbstractBindingIter<frontend::TaggedParserAtomIndex>;
 
  public:
+  explicit AbstractBindingIter(const frontend::ScopeStencilRef& ref);
+
   using Base::Base;
 };
 
@@ -1828,11 +1705,6 @@ class MutableWrappedPtrOperations<ScopeIter, Wrapper>
 Shape* CreateEnvironmentShape(JSContext* cx, BindingIter& bi,
                               const JSClass* cls, uint32_t numSlots,
                               ObjectFlags objectFlags);
-
-Shape* CreateEnvironmentShape(
-    JSContext* cx, frontend::CompilationAtomCache& atomCache,
-    AbstractBindingIter<frontend::TaggedParserAtomIndex>& bi,
-    const JSClass* cls, uint32_t numSlots, ObjectFlags objectFlags);
 
 Shape* EmptyEnvironmentShape(JSContext* cx, const JSClass* cls,
                              uint32_t numSlots, ObjectFlags objectFlags);

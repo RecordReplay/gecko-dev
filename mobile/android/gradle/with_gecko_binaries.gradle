@@ -22,8 +22,12 @@ def getNDKDirectory() {
     if (project.mozconfig.substs.ANDROID_NDK) {
         return project.mozconfig.substs.ANDROID_NDK
     }
-    if (project.android.ndkDirectory) {
-        return project.android.ndkDirectory
+    try {
+        if (project.android.ndkDirectory) {
+            return project.android.ndkDirectory
+        }
+    } catch (InvalidUserDataException ex) {
+        // The NDK is not installed, that's ok.
     }
     def mozbuild = System.getenv('MOZBUILD_STATE_PATH') ?: "${System.getProperty('user.home')}/.mozbuild"
     def files = new FileNameFinder().getFileNames(mozbuild, "android-ndk-*/source.properties")
@@ -32,6 +36,11 @@ def getNDKDirectory() {
         return project.file(files.first()).parentFile.toString()
     }
     return null
+}
+
+def hasCompileArtifacts() {
+    return project.mozconfig.substs.COMPILE_ENVIRONMENT
+        || project.mozconfig.substs.MOZ_ARTIFACT_BUILDS
 }
 
 // Get the LLVM bin folder, either from the currently used toolchain or, if
@@ -55,7 +64,7 @@ def getLlvmBinFolder() {
     // and return its parent directory.
     return project
         .file(new FileNameFinder()
-                  .getFileNames(ndkDirectory, "toolchains/llvm/prebuilt/**/bin/llvm-*")
+                  .getFileNames(ndkDirectory.toString(), "toolchains/llvm/prebuilt/**/bin/llvm-*")
                   .first())
         .parentFile
 }
@@ -89,7 +98,7 @@ class SyncLibsAndUpdateGenerationID extends DefaultTask {
     @OutputDirectory
     File destinationDir
 
-    @Input
+    @InputDirectory
     File llvmBin = project.ext.getLlvmBinFolder()
 
     // Sibling to `.note.gnu.build-id`.
@@ -188,19 +197,22 @@ ext.configureVariantWithGeckoBinaries = { variant ->
     def omnijarDir = "${topobjdir}/dist/geckoview"
     def distDir = "${topobjdir}/dist/geckoview"
 
-    def syncOmnijarFromDistDir = task("syncOmnijarFromDistDirFor${variant.name.capitalize()}", type: Sync) {
-        onlyIf {
-            if (source.empty) {
-                throw new StopExecutionException("Required omnijar not found in ${omnijarDir}/{omni.ja,assets/omni.ja}.  Have you built and packaged?")
+    def syncOmnijarFromDistDir
+    if (hasCompileArtifacts()) {
+        syncOmnijarFromDistDir = task("syncOmnijarFromDistDirFor${variant.name.capitalize()}", type: Sync) {
+            onlyIf {
+                if (source.empty) {
+                    throw new StopExecutionException("Required omnijar not found in ${omnijarDir}/{omni.ja,assets/omni.ja}.  Have you built and packaged?")
+                }
+                return true
             }
-            return true
-        }
 
-        into("${project.buildDir}/moz.build/src/${variant.name}/omnijar")
-        from("${omnijarDir}/omni.ja",
-             "${omnijarDir}/assets/omni.ja") {
-            // Throw an exception if we find multiple, potentially conflicting omni.ja files.
-            duplicatesStrategy 'fail'
+            into("${project.buildDir}/moz.build/src/${variant.name}/omnijar")
+            from("${omnijarDir}/omni.ja",
+                 "${omnijarDir}/assets/omni.ja") {
+                // Throw an exception if we find multiple, potentially conflicting omni.ja files.
+                duplicatesStrategy 'fail'
+            }
         }
     }
 
@@ -222,7 +234,7 @@ ext.configureVariantWithGeckoBinaries = { variant ->
     }()
 
     def syncLibsFromDistDir = { if (shouldUpdateGenerationID) {
-        def jarTask = tasks["bundleLibRuntime${variant.name.capitalize()}"]
+        def jarTask = tasks["bundleLibRuntimeToJar${variant.name.capitalize()}"]
         def bundleJar = jarTask.outputs.files.find({ it.name == 'classes.jar' })
 
         task("syncLibsAndUpdateGenerationIDFromDistDirFor${variant.name.capitalize()}", type: SyncLibsAndUpdateGenerationID) {
@@ -242,7 +254,7 @@ ext.configureVariantWithGeckoBinaries = { variant ->
     } }()
 
     syncLibsFromDistDir.onlyIf { task ->
-        if (!mozconfig.substs.COMPILE_ENVIRONMENT && !mozconfig.substs.MOZ_ARTIFACT_BUILDS) {
+        if (!hasCompileArtifacts()) {
             // We won't have JNI libraries if we're not compiling and we're not downloading
             // artifacts.  Such a configuration is used for running lints, generating docs, etc.
             return true
@@ -260,31 +272,33 @@ ext.configureVariantWithGeckoBinaries = { variant ->
         }
     }
 
-    // Local (read, not 'official') builds want to reflect developer changes to
-    // the omnijar sources, and (when compiling) to reflect developer changes to
-    // the native binaries.  To do this, the Gradle build calls out to the
-    // moz.build system, which can be re-entrant.  Official builds are driven by
-    // the moz.build system and should never be re-entrant in this way.
-    if (!mozconfig.substs.MOZILLA_OFFICIAL) {
-        syncOmnijarFromDistDir.dependsOn rootProject.machStagePackage
-        syncLibsFromDistDir.dependsOn rootProject.machStagePackage
-        syncAssetsFromDistDir.dependsOn rootProject.machStagePackage
-    }
+    if (hasCompileArtifacts()) {
+        // Local (read, not 'official') builds want to reflect developer changes to
+        // the omnijar sources, and (when compiling) to reflect developer changes to
+        // the native binaries.  To do this, the Gradle build calls out to the
+        // moz.build system, which can be re-entrant.  Official builds are driven by
+        // the moz.build system and should never be re-entrant in this way.
+        if (!mozconfig.substs.MOZILLA_OFFICIAL) {
+            syncOmnijarFromDistDir.dependsOn rootProject.machStagePackage
+            syncLibsFromDistDir.dependsOn rootProject.machStagePackage
+            syncAssetsFromDistDir.dependsOn rootProject.machStagePackage
+        }
 
-    def assetGenTask = tasks.findByName("generate${variant.name.capitalize()}Assets")
-    def jniLibFoldersTask = tasks.findByName("merge${variant.name.capitalize()}JniLibFolders")
-    if ((variant.productFlavors*.name).contains('withGeckoBinaries')) {
-        assetGenTask.dependsOn syncOmnijarFromDistDir
-        assetGenTask.dependsOn syncAssetsFromDistDir
-        jniLibFoldersTask.dependsOn syncLibsFromDistDir
+        def assetGenTask = tasks.findByName("generate${variant.name.capitalize()}Assets")
+        def jniLibFoldersTask = tasks.findByName("merge${variant.name.capitalize()}JniLibFolders")
+        if ((variant.productFlavors*.name).contains('withGeckoBinaries')) {
+            assetGenTask.dependsOn syncOmnijarFromDistDir
+            assetGenTask.dependsOn syncAssetsFromDistDir
+            jniLibFoldersTask.dependsOn syncLibsFromDistDir
 
-        android.sourceSets."${variant.name}".assets.srcDir syncOmnijarFromDistDir.destinationDir
-        android.sourceSets."${variant.name}".assets.srcDir syncAssetsFromDistDir.destinationDir
+            android.sourceSets."${variant.name}".assets.srcDir syncOmnijarFromDistDir.destinationDir
+            android.sourceSets."${variant.name}".assets.srcDir syncAssetsFromDistDir.destinationDir
 
-        if (!mozconfig.substs.MOZ_ANDROID_FAT_AAR_ARCHITECTURES) {
-            android.sourceSets."${variant.name}".jniLibs.srcDir syncLibsFromDistDir.destinationDir
-        } else {
-            android.sourceSets."${variant.name}".jniLibs.srcDir "${topobjdir}/dist/fat-aar/output/jni"
+            if (!mozconfig.substs.MOZ_ANDROID_FAT_AAR_ARCHITECTURES) {
+                android.sourceSets."${variant.name}".jniLibs.srcDir syncLibsFromDistDir.destinationDir
+            } else {
+                android.sourceSets."${variant.name}".jniLibs.srcDir "${topobjdir}/dist/fat-aar/output/jni"
+            }
         }
     }
 }
@@ -292,7 +306,7 @@ ext.configureVariantWithGeckoBinaries = { variant ->
 ext.configureLibraryVariantWithJNIWrappers = { variant, module ->
     // BundleLibRuntime prepares the library for further processing to be
     // incorporated in an app. We use this version to create the JNI wrappers.
-    def jarTask = tasks["bundleLibRuntime${variant.name.capitalize()}"]
+    def jarTask = tasks["bundleLibRuntimeToJar${variant.name.capitalize()}"]
     def bundleJar = jarTask.outputs.files.find({ it.name == 'classes.jar' })
 
     def annotationProcessorsJarTask = project(':annotations').jar
@@ -310,11 +324,9 @@ ext.configureLibraryVariantWithJNIWrappers = { variant, module ->
             // configuration-time: see above comment.
             doFirst {
                 classpath variant.javaCompileProvider.get().classpath
-                // Include android.jar.
-                classpath variant.javaCompileProvider.get().options.bootstrapClasspath
             }
     
-            main = 'org.mozilla.gecko.annotationProcessors.AnnotationProcessor'
+            mainClass = 'org.mozilla.gecko.annotationProcessors.AnnotationProcessor'
             args module
             args bundleJar
             

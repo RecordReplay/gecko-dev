@@ -1,7 +1,7 @@
 "use strict";
 
 const { HttpServer } = ChromeUtils.import("resource://testing-common/httpd.js");
-let h2Port = trr_test_setup();
+trr_test_setup();
 let httpServerIPv4 = new HttpServer();
 let httpServerIPv6 = new HttpServer();
 let trrServer;
@@ -9,6 +9,7 @@ let testpath = "/simple";
 let httpbody = "0123456789";
 let CC_IPV4 = "example_cc_ipv4.com";
 let CC_IPV6 = "example_cc_ipv6.com";
+Services.prefs.clearUserPref("network.dns.native-is-localhost");
 
 XPCOMUtils.defineLazyGetter(this, "URL_CC_IPV4", function() {
   return `http://${CC_IPV4}:${httpServerIPv4.identity.primaryPort}${testpath}`;
@@ -29,6 +30,9 @@ const dns = Cc["@mozilla.org/network/dns-service;1"].getService(
 const ncs = Cc[
   "@mozilla.org/network/network-connectivity-service;1"
 ].getService(Ci.nsINetworkConnectivityService);
+const { TestUtils } = ChromeUtils.import(
+  "resource://testing-common/TestUtils.jsm"
+);
 
 registerCleanupFunction(async () => {
   Services.prefs.clearUserPref("network.http.speculative-parallel-limit");
@@ -72,16 +76,25 @@ add_task(async function test_setup() {
   trrServer = new TRRServer();
   await trrServer.start();
 
+  if (mozinfo.socketprocess_networking) {
+    await TestUtils.waitForCondition(() => Services.io.socketProcessLaunched);
+  }
+
   Services.prefs.setIntPref("network.trr.mode", 3);
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
 
+  await registerDoHAnswers(true, true);
+});
+
+async function registerDoHAnswers(ipv4, ipv6) {
   let hosts = ["example6a.com", "example6b.com"];
   for (const host of hosts) {
-    await trrServer.registerDoHAnswers(host, "A", {
-      answers: [
+    let ipv4answers = [];
+    if (ipv4) {
+      ipv4answers = [
         {
           name: host,
           ttl: 55,
@@ -89,11 +102,15 @@ add_task(async function test_setup() {
           flush: false,
           data: "127.0.0.1",
         },
-      ],
+      ];
+    }
+    await trrServer.registerDoHAnswers(host, "A", {
+      answers: ipv4answers,
     });
 
-    await trrServer.registerDoHAnswers(host, "AAAA", {
-      answers: [
+    let ipv6answers = [];
+    if (ipv6) {
+      ipv6answers = [
         {
           name: host,
           ttl: 55,
@@ -101,10 +118,16 @@ add_task(async function test_setup() {
           flush: false,
           data: "::1",
         },
-      ],
+      ];
+    }
+
+    await trrServer.registerDoHAnswers(host, "AAAA", {
+      answers: ipv6answers,
     });
   }
-});
+
+  dns.clearCache(true);
+}
 
 let StatusCounter = function() {
   this._statusCount = {};
@@ -166,12 +189,12 @@ async function make_request(uri, check_events, succeeded) {
 
   if (check_events) {
     equal(
-      statusCounter._statusCount[0x804b000b],
+      statusCounter._statusCount[0x804b000b] || 0,
       1,
       "Expecting only one instance of NS_NET_STATUS_RESOLVED_HOST"
     );
     equal(
-      statusCounter._statusCount[0x804b0007],
+      statusCounter._statusCount[0x804b0007] || 0,
       1,
       "Expecting only one instance of NS_NET_STATUS_CONNECTING_TO"
     );
@@ -205,9 +228,11 @@ async function setup_connectivity(ipv6, ipv4) {
     );
   }
 
-  let observerNotification = promiseObserverNotification(
-    "network:connectivity-service:ip-checks-complete"
-  );
+  let topic = "network:connectivity-service:ip-checks-complete";
+  if (mozinfo.socketprocess_networking) {
+    topic += "-from-socket-process";
+  }
+  let observerNotification = promiseObserverNotification(topic);
   ncs.recheckIPConnectivity();
   await observerNotification;
 
@@ -236,9 +261,8 @@ async function setup_connectivity(ipv6, ipv4) {
 // present, but a ConnectionEntry have IPv6 prefered set.
 // Speculative connections are disabled.
 add_task(async function test_prefer_address_version_fail_trr3_1() {
-  dns.clearCache(true);
-
   Services.prefs.setIntPref("network.http.speculative-parallel-limit", 0);
+  await registerDoHAnswers(true, true);
 
   // Make a request to setup the address version preference to a ConnectionEntry.
   await make_request(URL6a, true, true);
@@ -251,6 +275,11 @@ add_task(async function test_prefer_address_version_fail_trr3_1() {
 
   dns.clearCache(true);
 
+  // This will succeed as we query both DNS records
+  await make_request(URL6a, true, true);
+
+  // Now make the DNS server only return IPv4 records
+  await registerDoHAnswers(true, false);
   // This will fail, because the server is not lisenting to IPv4 address as well,
   // We should still get NS_NET_STATUS_RESOLVED_HOST and
   // NS_NET_STATUS_CONNECTING_TO notification.
@@ -264,9 +293,8 @@ add_task(async function test_prefer_address_version_fail_trr3_1() {
 // present, but a ConnectionEntry have IPv6 prefered set.
 // Speculative connections are enabled.
 add_task(async function test_prefer_address_version_fail_trr3_2() {
-  dns.clearCache(true);
-
   Services.prefs.setIntPref("network.http.speculative-parallel-limit", 6);
+  await registerDoHAnswers(true, true);
 
   // Make a request to setup the address version preference to a ConnectionEntry.
   await make_request(URL6b, false, true);
@@ -279,6 +307,11 @@ add_task(async function test_prefer_address_version_fail_trr3_2() {
 
   dns.clearCache(true);
 
+  // This will succeed as we query both DNS records
+  await make_request(URL6b, false, true);
+
+  // Now make the DNS server only return IPv4 records
+  await registerDoHAnswers(true, false);
   // This will fail, because the server is not lisenting to IPv4 address as well,
   // We should still get NS_NET_STATUS_RESOLVED_HOST and
   // NS_NET_STATUS_CONNECTING_TO notification.

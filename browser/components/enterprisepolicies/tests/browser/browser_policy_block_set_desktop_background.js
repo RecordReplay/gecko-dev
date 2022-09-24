@@ -2,7 +2,7 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 "use strict";
 
-add_task(async function setup() {
+add_setup(async function() {
   await setupPolicyEngineWithJson({
     policies: {
       DisableSetDesktopBackground: true,
@@ -45,12 +45,6 @@ add_task(async function test_check_set_desktop_background() {
     true,
     'The "Set Desktop Background" context menu element should be hidden'
   );
-
-  let promiseContextMenuHidden = BrowserTestUtils.waitForEvent(
-    contextMenu,
-    "popuphidden"
-  );
   contextMenu.hidePopup();
-  await promiseContextMenuHidden;
   BrowserTestUtils.removeTab(tab);
 });

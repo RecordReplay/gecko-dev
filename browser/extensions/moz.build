@@ -11,10 +11,5 @@ DIRS += [
     "webcompat",
     "report-site-issue",
     "pictureinpicture",
-    "proxy-failover",
+    "search-detection",
 ]
-
-if CONFIG["NIGHTLY_BUILD"]:
-    DIRS += [
-        "translations",
-    ]

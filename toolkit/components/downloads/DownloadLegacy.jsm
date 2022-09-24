@@ -14,6 +14,8 @@
 
 "use strict";
 
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 ChromeUtils.defineModuleGetter(
   this,
   "Downloads",
@@ -263,6 +265,7 @@ DownloadLegacyTransfer.prototype = {
   // nsITransfer
   init: function DLT_init(
     aSource,
+    aSourceOriginalURI,
     aTarget,
     aDisplayName,
     aMIMEInfo,
@@ -270,10 +273,13 @@ DownloadLegacyTransfer.prototype = {
     aTempFile,
     aCancelable,
     aIsPrivate,
-    aDownloadClassification
+    aDownloadClassification,
+    aReferrerInfo,
+    aOpenDownloadsListOnStart
   ) {
     return this._nsITransferInitInternal(
       aSource,
+      aSourceOriginalURI,
       aTarget,
       aDisplayName,
       aMIMEInfo,
@@ -281,7 +287,9 @@ DownloadLegacyTransfer.prototype = {
       aTempFile,
       aCancelable,
       aIsPrivate,
-      aDownloadClassification
+      aDownloadClassification,
+      aReferrerInfo,
+      aOpenDownloadsListOnStart
     );
   },
 
@@ -296,8 +304,11 @@ DownloadLegacyTransfer.prototype = {
     aCancelable,
     aIsPrivate,
     aDownloadClassification,
+    aReferrerInfo,
+    aOpenDownloadsListOnStart,
     aBrowsingContext,
-    aHandleInternally
+    aHandleInternally,
+    aHttpChannel
   ) {
     let browsingContextId;
     let userContextId;
@@ -309,6 +320,7 @@ DownloadLegacyTransfer.prototype = {
     }
     return this._nsITransferInitInternal(
       aSource,
+      null,
       aTarget,
       aDisplayName,
       aMIMEInfo,
@@ -317,14 +329,18 @@ DownloadLegacyTransfer.prototype = {
       aCancelable,
       aIsPrivate,
       aDownloadClassification,
+      aReferrerInfo,
+      aOpenDownloadsListOnStart,
       userContextId,
       browsingContextId,
-      aHandleInternally
+      aHandleInternally,
+      aHttpChannel
     );
   },
 
   _nsITransferInitInternal(
     aSource,
+    aSourceOriginalURI,
     aTarget,
     aDisplayName,
     aMIMEInfo,
@@ -333,9 +349,12 @@ DownloadLegacyTransfer.prototype = {
     aCancelable,
     isPrivate,
     aDownloadClassification,
+    referrerInfo,
+    openDownloadsListOnStart = true,
     userContextId = 0,
     browsingContextId = 0,
-    handleInternally = false
+    handleInternally = false,
+    aHttpChannel = null
   ) {
     this._cancelable = aCancelable;
     let launchWhenSucceeded = false,
@@ -358,12 +377,21 @@ DownloadLegacyTransfer.prototype = {
     // Create a new Download object associated to a DownloadLegacySaver, and
     // wait for it to be available.  This operation may cause the entire
     // download system to initialize before the object is created.
+    let authHeader = null;
+    if (aHttpChannel) {
+      try {
+        authHeader = aHttpChannel.getRequestHeader("Authorization");
+      } catch (e) {}
+    }
     let serialisedDownload = {
       source: {
         url: aSource.spec,
+        originalUrl: aSourceOriginalURI && aSourceOriginalURI.spec,
         isPrivate,
         userContextId,
         browsingContextId,
+        referrerInfo,
+        authHeader,
       },
       target: {
         path: aTarget.QueryInterface(Ci.nsIFileURL).file.path,
@@ -374,12 +402,17 @@ DownloadLegacyTransfer.prototype = {
       contentType,
       launcherPath,
       handleInternally,
+      openDownloadsListOnStart,
     };
 
     // In case the Download was classified as insecure/dangerous
     // it is already canceled, so we need to generate and attach the
     // corresponding error to the download.
     if (aDownloadClassification == Ci.nsITransfer.DOWNLOAD_POTENTIALLY_UNSAFE) {
+      Services.telemetry
+        .getKeyedHistogramById("DOWNLOADS_USER_ACTION_ON_BLOCKED_DOWNLOAD")
+        .add(DownloadError.BLOCK_VERDICT_INSECURE, 0);
+
       serialisedDownload.errorObj = {
         becauseBlockedByReputationCheck: true,
         reputationCheckVerdict: DownloadError.BLOCK_VERDICT_INSECURE,

@@ -6,13 +6,14 @@
 
 #include "mozilla/dom/SVGFECompositeElement.h"
 #include "mozilla/dom/SVGFECompositeElementBinding.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEComposite)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFECompositeElement::WrapNode(JSContext* aCx,
                                           JS::Handle<JSObject*> aGivenProto) {
@@ -117,6 +118,15 @@ void SVGFECompositeElement::GetSourceImageNames(
   aSources.AppendElement(SVGStringInfo(&mStringAttributes[IN2], this));
 }
 
+nsresult SVGFECompositeElement::BindToTree(BindContext& aCtx,
+                                           nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feComposite);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -134,5 +144,4 @@ SVGElement::StringAttributesInfo SVGFECompositeElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

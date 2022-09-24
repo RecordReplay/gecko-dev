@@ -18,6 +18,7 @@
 #include "mozilla/a11y/Platform.h"
 #include "RelationType.h"
 #include "mozilla/a11y/Role.h"
+#include "mozilla/StaticPrefs_accessibility.h"
 
 #include <comutil.h>
 
@@ -31,12 +32,16 @@ bool RemoteAccessible::GetCOMInterface(void** aOutAccessible) const {
     return false;
   }
 
+  // This should never be called if the cache is enabled. We can't get a COM
+  // proxy from the content process in that case. Instead, the code below would
+  // return an MsaaAccessible from our process which would end up calling
+  // methods here in RemoteAccessible, causing infinite recursion.
+  MOZ_ASSERT(!StaticPrefs::accessibility_cache_enabled_AtStartup());
   if (!mCOMProxy && mSafeToRecurse) {
-    // See if we can lazily obtain a COM proxy
-    AccessibleWrap* wrap = WrapperFor(this);
-    MsaaAccessible* msaa = wrap->GetMsaa();
-    bool isDefunct = false;
     RemoteAccessible* thisPtr = const_cast<RemoteAccessible*>(this);
+    // See if we can lazily obtain a COM proxy
+    MsaaAccessible* msaa = MsaaAccessible::GetFrom(thisPtr);
+    bool isDefunct = false;
     // NB: Don't pass CHILDID_SELF here, use the absolute MSAA ID. Otherwise
     // GetIAccessibleFor will recurse into this function and we will just
     // overflow the stack.
@@ -119,7 +124,11 @@ static RemoteAccessible* GetProxyFor(DocAccessibleParent* aDoc,
   return aDoc->GetAccessible(id);
 }
 
-uint32_t RemoteAccessible::Name(nsString& aName) const {
+ENameValueFlag RemoteAccessible::Name(nsString& aName) const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::Name(aName);
+  }
+
   /* The return values here exist only to match behvaiour required
    * by the header declaration of this function. On Mac, we'd like
    * to return the associated ENameValueFlag, but we don't have
@@ -142,6 +151,11 @@ uint32_t RemoteAccessible::Name(nsString& aName) const {
 }
 
 void RemoteAccessible::Value(nsString& aValue) const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    RemoteAccessibleBase<RemoteAccessible>::Value(aValue);
+    return;
+  }
+
   aValue.Truncate();
   RefPtr<IAccessible> acc;
   if (!GetCOMInterface((void**)getter_AddRefs(acc))) {
@@ -157,7 +171,11 @@ void RemoteAccessible::Value(nsString& aValue) const {
   aValue = (wchar_t*)resultWrap;
 }
 
-double RemoteAccessible::Step() {
+double RemoteAccessible::Step() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::Step();
+  }
+
   RefPtr<IGeckoCustom> custom = QueryInterface<IGeckoCustom>(this);
   if (!custom) {
     return 0;
@@ -173,6 +191,10 @@ double RemoteAccessible::Step() {
 }
 
 void RemoteAccessible::Description(nsString& aDesc) const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::Description(aDesc);
+  }
+
   aDesc.Truncate();
   RefPtr<IAccessible> acc;
   if (!GetCOMInterface((void**)getter_AddRefs(acc))) {
@@ -188,7 +210,11 @@ void RemoteAccessible::Description(nsString& aDesc) const {
   aDesc = (wchar_t*)resultWrap;
 }
 
-uint64_t RemoteAccessible::State() const {
+uint64_t RemoteAccessible::State() {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::State();
+  }
+
   RefPtr<IGeckoCustom> custom = QueryInterface<IGeckoCustom>(this);
   if (!custom) {
     return 0;
@@ -202,8 +228,12 @@ uint64_t RemoteAccessible::State() const {
   return state;
 }
 
-nsIntRect RemoteAccessible::Bounds() {
-  nsIntRect rect;
+LayoutDeviceIntRect RemoteAccessible::Bounds() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::Bounds();
+  }
+
+  LayoutDeviceIntRect rect;
 
   RefPtr<IAccessible> acc;
   if (!GetCOMInterface((void**)getter_AddRefs(acc))) {
@@ -285,7 +315,7 @@ static bool IsEscapedChar(const wchar_t c) {
 static bool ConvertBSTRAttributesToAccAttributes(
     const nsAString& aStr, RefPtr<AccAttributes>& aAttrs) {
   enum { eName = 0, eValue = 1, eNumStates } state;
-  nsAutoString tokens[eNumStates];
+  nsString tokens[eNumStates];
   auto itr = aStr.BeginReading(), end = aStr.EndReading();
 
   state = eName;
@@ -314,9 +344,8 @@ static bool ConvertBSTRAttributesToAccAttributes(
         }
         state = eName;
         RefPtr<nsAtom> nameAtom = NS_Atomize(tokens[eName]);
-        aAttrs->SetAttribute(nameAtom, tokens[eValue]);
+        aAttrs->SetAttribute(nameAtom, std::move(tokens[eValue]));
         tokens[eName].Truncate();
-        tokens[eValue].Truncate();
         ++itr;
         continue;
       }
@@ -329,28 +358,32 @@ static bool ConvertBSTRAttributesToAccAttributes(
   return true;
 }
 
-void RemoteAccessible::Attributes(RefPtr<AccAttributes>* aAttrs) const {
+already_AddRefed<AccAttributes> RemoteAccessible::Attributes() {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::Attributes();
+  }
+  RefPtr<AccAttributes> attrsObj = new AccAttributes();
   RefPtr<IAccessible> acc;
   if (!GetCOMInterface((void**)getter_AddRefs(acc))) {
-    return;
+    return attrsObj.forget();
   }
 
   RefPtr<IAccessible2> acc2;
   if (FAILED(acc->QueryInterface(IID_IAccessible2,
                                  (void**)getter_AddRefs(acc2)))) {
-    return;
+    return attrsObj.forget();
   }
 
   BSTR attrs;
   HRESULT hr = acc2->get_attributes(&attrs);
   _bstr_t attrsWrap(attrs, false);
   if (FAILED(hr)) {
-    return;
+    return attrsObj.forget();
   }
 
-  *aAttrs = new AccAttributes();
   ConvertBSTRAttributesToAccAttributes(
-      nsDependentString((wchar_t*)attrs, attrsWrap.length()), *aAttrs);
+      nsDependentString((wchar_t*)attrs, attrsWrap.length()), attrsObj);
+  return attrsObj.forget();
 }
 
 nsTArray<RemoteAccessible*> RemoteAccessible::RelationByType(
@@ -391,7 +424,11 @@ nsTArray<RemoteAccessible*> RemoteAccessible::RelationByType(
   return proxies;
 }
 
-double RemoteAccessible::CurValue() {
+double RemoteAccessible::CurValue() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::CurValue();
+  }
+
   RefPtr<IAccessibleValue> acc = QueryInterface<IAccessibleValue>(this);
   if (!acc) {
     return UnspecifiedNaN<double>();
@@ -420,7 +457,11 @@ bool RemoteAccessible::SetCurValue(double aValue) {
   return SUCCEEDED(hr);
 }
 
-double RemoteAccessible::MinValue() {
+double RemoteAccessible::MinValue() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::MinValue();
+  }
+
   RefPtr<IAccessibleValue> acc = QueryInterface<IAccessibleValue>(this);
   if (!acc) {
     return UnspecifiedNaN<double>();
@@ -435,7 +476,11 @@ double RemoteAccessible::MinValue() {
   return minimumValue.dblVal;
 }
 
-double RemoteAccessible::MaxValue() {
+double RemoteAccessible::MaxValue() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::MaxValue();
+  }
+
   RefPtr<IAccessibleValue> acc = QueryInterface<IAccessibleValue>(this);
   if (!acc) {
     return UnspecifiedNaN<double>();
@@ -494,31 +539,37 @@ int32_t RemoteAccessible::OffsetAtPoint(int32_t aX, int32_t aY,
   return static_cast<int32_t>(offset);
 }
 
-bool RemoteAccessible::TextSubstring(int32_t aStartOffset, int32_t aEndOffset,
-                                     nsString& aText) const {
+void RemoteAccessible::TextSubstring(int32_t aStartOffset, int32_t aEndOffset,
+                                     nsAString& aText) const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::TextSubstring(
+        aStartOffset, aEndOffset, aText);
+  }
+
   RefPtr<IAccessibleText> acc = QueryInterface<IAccessibleText>(this);
   if (!acc) {
-    return false;
+    return;
   }
 
   BSTR result;
   HRESULT hr = acc->get_text(static_cast<long>(aStartOffset),
                              static_cast<long>(aEndOffset), &result);
   if (FAILED(hr)) {
-    return false;
+    return;
   }
 
   _bstr_t resultWrap(result, false);
   aText = (wchar_t*)result;
-
-  return true;
 }
 
-void RemoteAccessible::GetTextBeforeOffset(int32_t aOffset,
-                                           AccessibleTextBoundary aBoundaryType,
-                                           nsString& aText,
-                                           int32_t* aStartOffset,
-                                           int32_t* aEndOffset) {
+void RemoteAccessible::TextBeforeOffset(int32_t aOffset,
+                                        AccessibleTextBoundary aBoundaryType,
+                                        int32_t* aStartOffset,
+                                        int32_t* aEndOffset, nsAString& aText) {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::TextBeforeOffset(
+        aOffset, aBoundaryType, aStartOffset, aEndOffset, aText);
+  }
   RefPtr<IAccessibleText> acc = QueryInterface<IAccessibleText>(this);
   if (!acc) {
     return;
@@ -538,11 +589,14 @@ void RemoteAccessible::GetTextBeforeOffset(int32_t aOffset,
   aText = (wchar_t*)result;
 }
 
-void RemoteAccessible::GetTextAfterOffset(int32_t aOffset,
-                                          AccessibleTextBoundary aBoundaryType,
-                                          nsString& aText,
-                                          int32_t* aStartOffset,
-                                          int32_t* aEndOffset) {
+void RemoteAccessible::TextAfterOffset(int32_t aOffset,
+                                       AccessibleTextBoundary aBoundaryType,
+                                       int32_t* aStartOffset,
+                                       int32_t* aEndOffset, nsAString& aText) {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::TextAfterOffset(
+        aOffset, aBoundaryType, aStartOffset, aEndOffset, aText);
+  }
   RefPtr<IAccessibleText> acc = QueryInterface<IAccessibleText>(this);
   if (!acc) {
     return;
@@ -562,10 +616,14 @@ void RemoteAccessible::GetTextAfterOffset(int32_t aOffset,
   *aEndOffset = end;
 }
 
-void RemoteAccessible::GetTextAtOffset(int32_t aOffset,
-                                       AccessibleTextBoundary aBoundaryType,
-                                       nsString& aText, int32_t* aStartOffset,
-                                       int32_t* aEndOffset) {
+void RemoteAccessible::TextAtOffset(int32_t aOffset,
+                                    AccessibleTextBoundary aBoundaryType,
+                                    int32_t* aStartOffset, int32_t* aEndOffset,
+                                    nsAString& aText) {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::TextAtOffset(
+        aOffset, aBoundaryType, aStartOffset, aEndOffset, aText);
+  }
   RefPtr<IAccessibleText> acc = QueryInterface<IAccessibleText>(this);
   if (!acc) {
     return;
@@ -605,7 +663,11 @@ bool RemoteAccessible::RemoveFromSelection(int32_t aSelectionNum) {
   return SUCCEEDED(acc->removeSelection(static_cast<long>(aSelectionNum)));
 }
 
-int32_t RemoteAccessible::CaretOffset() {
+int32_t RemoteAccessible::CaretOffset() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::CaretOffset();
+  }
+
   RefPtr<IAccessibleText> acc = QueryInterface<IAccessibleText>(this);
   if (!acc) {
     return -1;
@@ -673,30 +735,6 @@ void RemoteAccessible::ScrollSubstringToPoint(int32_t aStartOffset,
                               static_cast<long>(aX), static_cast<long>(aY));
 }
 
-uint32_t RemoteAccessible::StartOffset(bool* aOk) {
-  RefPtr<IAccessibleHyperlink> acc = QueryInterface<IAccessibleHyperlink>(this);
-  if (!acc) {
-    *aOk = false;
-    return 0;
-  }
-
-  long startOffset;
-  *aOk = SUCCEEDED(acc->get_startIndex(&startOffset));
-  return static_cast<uint32_t>(startOffset);
-}
-
-uint32_t RemoteAccessible::EndOffset(bool* aOk) {
-  RefPtr<IAccessibleHyperlink> acc = QueryInterface<IAccessibleHyperlink>(this);
-  if (!acc) {
-    *aOk = false;
-    return 0;
-  }
-
-  long endOffset;
-  *aOk = SUCCEEDED(acc->get_endIndex(&endOffset));
-  return static_cast<uint32_t>(endOffset);
-}
-
 bool RemoteAccessible::IsLinkValid() {
   RefPtr<IAccessibleHyperlink> acc = QueryInterface<IAccessibleHyperlink>(this);
   if (!acc) {
@@ -745,7 +783,11 @@ RemoteAccessible* RemoteAccessible::AnchorAt(uint32_t aIdx) {
   return proxyAnchor;
 }
 
-void RemoteAccessible::DOMNodeID(nsString& aID) {
+void RemoteAccessible::DOMNodeID(nsString& aID) const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::DOMNodeID(aID);
+  }
+
   aID.Truncate();
   RefPtr<IGeckoCustom> custom = QueryInterface<IGeckoCustom>(this);
   if (!custom) {
@@ -761,7 +803,10 @@ void RemoteAccessible::DOMNodeID(nsString& aID) {
   aID = (wchar_t*)resultWrap;
 }
 
-void RemoteAccessible::TakeFocus() {
+void RemoteAccessible::TakeFocus() const {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::TakeFocus();
+  }
   RefPtr<IAccessible> acc;
   if (!GetCOMInterface((void**)getter_AddRefs(acc))) {
     return;
@@ -811,6 +856,15 @@ Accessible* RemoteAccessible::ChildAtPoint(
     }
   }
   return proxy;
+}
+
+GroupPos RemoteAccessible::GroupPosition() {
+  if (StaticPrefs::accessibility_cache_enabled_AtStartup()) {
+    return RemoteAccessibleBase<RemoteAccessible>::GroupPosition();
+  }
+
+  // This is only supported when cache is enabled.
+  return GroupPos();
 }
 
 }  // namespace a11y

@@ -56,9 +56,7 @@ nsBaseChannel::nsBaseChannel() : NeckoTargetHolder(nullptr) {
   mContentType.AssignLiteral(UNKNOWN_CONTENT_TYPE);
 }
 
-nsBaseChannel::~nsBaseChannel() {
-  NS_ReleaseOnMainThread("nsBaseChannel::mLoadInfo", mLoadInfo.forget());
-}
+nsBaseChannel::~nsBaseChannel() {}
 
 nsresult nsBaseChannel::Redirect(nsIChannel* newChannel, uint32_t redirectFlags,
                                  bool openNewChannel) {
@@ -78,19 +76,11 @@ nsresult nsBaseChannel::Redirect(nsIChannel* newChannel, uint32_t redirectFlags,
       static_cast<net::LoadInfo*>(mLoadInfo.get())
           ->CloneWithNewSecFlags(secFlags);
 
-  nsCOMPtr<nsIPrincipal> uriPrincipal;
-  nsIScriptSecurityManager* sm = nsContentUtils::GetSecurityManager();
-  sm->GetChannelURIPrincipal(this, getter_AddRefs(uriPrincipal));
   bool isInternalRedirect =
       (redirectFlags & (nsIChannelEventSink::REDIRECT_INTERNAL |
                         nsIChannelEventSink::REDIRECT_STS_UPGRADE));
 
-  // nsBaseChannel hst no thing to do with HttpBaseChannel, we would not care
-  // about referrer and remote address in this case
-  nsCOMPtr<nsIRedirectHistoryEntry> entry =
-      new net::nsRedirectHistoryEntry(uriPrincipal, nullptr, ""_ns);
-
-  newLoadInfo->AppendRedirectHistoryEntry(entry, isInternalRedirect);
+  newLoadInfo->AppendRedirectHistoryEntry(this, isInternalRedirect);
 
   // Ensure the channel's loadInfo's result principal URI so that it's
   // either non-null or updated to the redirect target URI.

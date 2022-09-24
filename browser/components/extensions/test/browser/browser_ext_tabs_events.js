@@ -340,12 +340,12 @@ add_task(async function testTabEventsSize() {
 
     browser.test.onMessage.addListener(async (msg, arg) => {
       if (msg === "create-tab") {
-        let tab = await browser.tabs.create({ url: "http://example.com/" });
+        let tab = await browser.tabs.create({ url: "https://example.com/" });
         sendSizeMessages(tab, "create");
         browser.test.sendMessage("created-tab-id", tab.id);
       } else if (msg === "update-tab") {
         let tab = await browser.tabs.update(arg, {
-          url: "http://example.org/",
+          url: "https://example.org/",
         });
         sendSizeMessages(tab, "update");
       } else if (msg === "remove-tab") {
@@ -462,7 +462,7 @@ add_task(async function testTabRemovalEvent() {
 
     try {
       let url =
-        "http://example.com/browser/browser/components/extensions/test/browser/context.html";
+        "https://example.com/browser/browser/components/extensions/test/browser/context.html";
       let tab = await browser.tabs.create({ url: url });
       await awaitLoad(tab.id);
 
@@ -538,7 +538,7 @@ add_task(async function testTabCreateRelated() {
 
   // Create a *opener* tab page which has a link to "example.com".
   let pageURL =
-    "http://example.com/browser/browser/components/extensions/test/browser/file_dummy.html";
+    "https://example.com/browser/browser/components/extensions/test/browser/file_dummy.html";
   let openerTab = await BrowserTestUtils.openNewForegroundTab(
     gBrowser,
     pageURL
@@ -549,7 +549,7 @@ add_task(async function testTabCreateRelated() {
 
   let newTabPromise = BrowserTestUtils.waitForNewTab(
     gBrowser,
-    "http://example.com/#linkclick",
+    "https://example.com/#linkclick",
     true
   );
   await BrowserTestUtils.synthesizeMouseAtCenter(
@@ -560,7 +560,7 @@ add_task(async function testTabCreateRelated() {
   let openTab = await newTabPromise;
   is(
     openTab.linkedBrowser.currentURI.spec,
-    "http://example.com/#linkclick",
+    "https://example.com/#linkclick",
     "Middle click should open site to correct url."
   );
   BrowserTestUtils.removeTab(openTab);
@@ -716,4 +716,79 @@ add_task(async function testTabActivationEvent() {
   await extension.startup();
   await extension.awaitFinish("tabs-events");
   await extension.unload();
+});
+
+add_task(async function test_tabs_event_page() {
+  await SpecialPowers.pushPrefEnv({
+    set: [["extensions.eventPages.enabled", true]],
+  });
+
+  let extension = ExtensionTestUtils.loadExtension({
+    useAddonManager: "permanent",
+    manifest: {
+      applications: { gecko: { id: "eventpage@tabs" } },
+      permissions: ["tabs"],
+      background: { persistent: false },
+    },
+    background() {
+      const EVENTS = [
+        "onActivated",
+        "onAttached",
+        "onDetached",
+        "onRemoved",
+        "onMoved",
+        "onHighlighted",
+        "onUpdated",
+      ];
+      browser.tabs.onCreated.addListener(() => {
+        browser.test.sendMessage("onCreated");
+      });
+      for (let event of EVENTS) {
+        browser.tabs[event].addListener(() => {});
+      }
+      browser.test.sendMessage("ready");
+    },
+  });
+
+  const EVENTS = [
+    "onActivated",
+    "onAttached",
+    "onCreated",
+    "onDetached",
+    "onRemoved",
+    "onMoved",
+    "onHighlighted",
+    "onUpdated",
+  ];
+
+  await extension.startup();
+  await extension.awaitMessage("ready");
+  for (let event of EVENTS) {
+    assertPersistentListeners(extension, "tabs", event, {
+      primed: false,
+    });
+  }
+
+  // test events waken background
+  await extension.terminateBackground();
+  for (let event of EVENTS) {
+    assertPersistentListeners(extension, "tabs", event, {
+      primed: true,
+    });
+  }
+
+  let win = await BrowserTestUtils.openNewBrowserWindow();
+
+  await extension.awaitMessage("ready");
+  await extension.awaitMessage("onCreated");
+  ok(true, "persistent event woke background");
+  for (let event of EVENTS) {
+    assertPersistentListeners(extension, "tabs", event, {
+      primed: false,
+    });
+  }
+  await BrowserTestUtils.closeWindow(win);
+
+  await extension.unload();
+  await SpecialPowers.popPrefEnv();
 });

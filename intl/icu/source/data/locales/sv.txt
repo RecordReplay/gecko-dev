@@ -240,6 +240,10 @@ sv{
             }
         }
         minimalPairs{
+            case{
+                genitive{"På {0} avstånd"}
+                nominative{"Jag tror att {0} är tillräckligt."}
+            }
             gender{
                 common{"En {0} är"}
                 neuter{"Ett {0} är"}
@@ -272,6 +276,16 @@ sv{
                 "{1} {0}",
                 "{1} {0}",
                 "{1} {0}",
+            }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMMdd",
             }
             availableFormats{
                 MMdd{"d/M"}
@@ -346,6 +360,16 @@ sv{
                 "{1} {0}",
                 "{1} {0}",
                 "{1} {0}",
+            }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "rMMMMEEEEd",
+                "rMMMMd",
+                "rMMMd",
+                "rMMdd",
             }
             availableFormats{
                 Ed{"E d"}
@@ -677,6 +701,16 @@ sv{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "GyMMMMEEEEd",
+                "GyMMMMd",
+                "GyMMMd",
+                "GyMMdd",
+            }
             availableFormats{
                 Bh{"h B"}
                 Bhm{"h:mm B"}
@@ -693,6 +727,7 @@ sv{
                 GyMMM{"MMM y G"}
                 GyMMMEd{"E d MMM y G"}
                 GyMMMd{"d MMM y G"}
+                GyMd{"y-MM-dd GGGGG"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -893,6 +928,16 @@ sv{
                 "{1} {0}",
                 "{1} {0}",
             }
+            DateTimeSkeletons{
+                "HHmmsszzzz",
+                "HHmmssz",
+                "HHmmss",
+                "HHmm",
+                "yMMMMEEEEd",
+                "yMMMMd",
+                "yMMMd",
+                "yMMdd",
+            }
             appendItems{
                 Timezone{"{0} {1}"}
             }
@@ -912,6 +957,7 @@ sv{
                 GyMMM{"MMM y G"}
                 GyMMMEd{"E d MMM y G"}
                 GyMMMd{"d MMM y G"}
+                GyMd{"y-MM-dd GGGGG"}
                 H{"HH"}
                 Hm{"HH:mm"}
                 Hms{"HH:mm:ss"}
@@ -1124,8 +1170,8 @@ sv{
                 }
                 Bhm{
                     B{"h:mm B–h:mm B"}
-                    h{"h:mm – h:mm B"}
-                    m{"h:mm – h:mm B"}
+                    h{"hh:mm – hh:mm B"}
+                    m{"hh:mm – hh:mm B"}
                 }
                 Gy{
                     G{"y G – y G"}

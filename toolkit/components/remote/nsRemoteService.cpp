@@ -5,18 +5,14 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-#ifdef XP_UNIX
-#  include <sys/types.h>
-#  include <pwd.h>
-#endif
 
 #ifdef MOZ_WIDGET_GTK
-#  include "mozilla/WidgetUtilsGtk.h"
-#  include "nsGTKRemoteServer.h"
-#  include "nsXRemoteClient.h"
 #  ifdef MOZ_ENABLE_DBUS
 #    include "nsDBusRemoteServer.h"
 #    include "nsDBusRemoteClient.h"
+#  else
+#    include "nsGTKRemoteServer.h"
+#    include "nsXRemoteClient.h"
 #  endif
 #elif defined(XP_WIN)
 #  include "nsWinRemoteServer.h"
@@ -30,19 +26,13 @@
 #include "nsIObserverService.h"
 #include "nsString.h"
 #include "nsServiceManagerUtils.h"
-#include "mozilla/ModuleUtils.h"
 #include "SpecialSystemDirectory.h"
-#include "mozilla/CmdLineAndEnvUtils.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
 
 // Time to wait for the remoting service to start
 #define START_TIMEOUT_SEC 5
 #define START_SLEEP_MSEC 100
-
-// When MOZ_DBUS_REMOTE is set both X11 and Wayland backends
-// use only DBus remote.
-#define DBUS_REMOTE_ENV "MOZ_DBUS_REMOTE"
 
 using namespace mozilla;
 
@@ -102,18 +92,12 @@ RemoteResult nsRemoteService::StartClient(const char* aDesktopStartupID) {
   }
 
   UniquePtr<nsRemoteClient> client;
-
 #ifdef MOZ_WIDGET_GTK
-  bool useX11Remote = mozilla::widget::GdkIsX11Display();
-
 #  if defined(MOZ_ENABLE_DBUS)
-  if (!useX11Remote || getenv(DBUS_REMOTE_ENV)) {
-    client = MakeUnique<nsDBusRemoteClient>();
-  }
+  client = MakeUnique<nsDBusRemoteClient>();
+#  else
+  client = MakeUnique<nsXRemoteClient>();
 #  endif
-  if (!client && useX11Remote) {
-    client = MakeUnique<nsXRemoteClient>();
-  }
 #elif defined(XP_WIN)
   client = MakeUnique<nsWinRemoteClient>();
 #elif defined(XP_DARWIN)
@@ -153,16 +137,11 @@ void nsRemoteService::StartupServer() {
   }
 
 #ifdef MOZ_WIDGET_GTK
-  bool useX11Remote = mozilla::widget::GdkIsX11Display();
-
 #  if defined(MOZ_ENABLE_DBUS)
-  if (!useX11Remote || getenv(DBUS_REMOTE_ENV)) {
-    mRemoteServer = MakeUnique<nsDBusRemoteServer>();
-  }
+  mRemoteServer = MakeUnique<nsDBusRemoteServer>();
+#  else
+  mRemoteServer = MakeUnique<nsGTKRemoteServer>();
 #  endif
-  if (!mRemoteServer && useX11Remote) {
-    mRemoteServer = MakeUnique<nsGTKRemoteServer>();
-  }
 #elif defined(XP_WIN)
   mRemoteServer = MakeUnique<nsWinRemoteServer>();
 #elif defined(XP_DARWIN)

@@ -43,6 +43,12 @@ class nsIPrincipal;
 #  include "GpsdLocationProvider.h"
 #endif
 
+#ifdef MOZ_ENABLE_DBUS
+#  include "mozilla/WidgetUtilsGtk.h"
+#  include "GeoclueLocationProvider.h"
+#  include "PortalLocationProvider.h"
+#endif
+
 #ifdef MOZ_WIDGET_COCOA
 #  include "CoreLocationLocationProvider.h"
 #endif
@@ -260,7 +266,7 @@ nsGeolocationRequest::Allow(JS::HandleValue aChoices) {
   bool canUseCache = false;
   CachedPositionAndAccuracy lastPosition = gs->GetCachedPosition();
   if (lastPosition.position) {
-    DOMTimeStamp cachedPositionTime_ms;
+    EpochTimeStamp cachedPositionTime_ms;
     lastPosition.position->GetTimestamp(&cachedPositionTime_ms);
     // check to see if we can use a cached value
     // if the user has specified a maximumAge, return a cached value.
@@ -269,7 +275,7 @@ nsGeolocationRequest::Allow(JS::HandleValue aChoices) {
       bool isCachedWithinRequestedAccuracy =
           WantsHighAccuracy() <= lastPosition.isHighAccuracy;
       bool isCachedWithinRequestedTime =
-          DOMTimeStamp(PR_Now() / PR_USEC_PER_MSEC - maximumAge_ms) <=
+          EpochTimeStamp(PR_Now() / PR_USEC_PER_MSEC - maximumAge_ms) <=
           cachedPositionTime_ms;
       canUseCache =
           isCachedWithinRequestedAccuracy && isCachedWithinRequestedTime;
@@ -298,8 +304,7 @@ nsGeolocationRequest::Allow(JS::HandleValue aChoices) {
   }
 
   // Kick off the geo device, if it isn't already running
-  nsCOMPtr<nsIPrincipal> principal = GetPrincipal();
-  nsresult rv = gs->StartDevice(principal);
+  nsresult rv = gs->StartDevice();
 
   if (NS_FAILED(rv)) {
     // Location provider error
@@ -344,11 +349,11 @@ void nsGeolocationRequest::SendLocation(nsIDOMGeoPosition* aPosition) {
   }
 
   if (mOptions && mOptions->mMaximumAge > 0) {
-    DOMTimeStamp positionTime_ms;
+    EpochTimeStamp positionTime_ms;
     aPosition->GetTimestamp(&positionTime_ms);
     const uint32_t maximumAge_ms = mOptions->mMaximumAge;
-    const bool isTooOld = DOMTimeStamp(PR_Now() / PR_USEC_PER_MSEC -
-                                       maximumAge_ms) > positionTime_ms;
+    const bool isTooOld = EpochTimeStamp(PR_Now() / PR_USEC_PER_MSEC -
+                                         maximumAge_ms) > positionTime_ms;
     if (isTooOld) {
       return;
     }
@@ -490,10 +495,24 @@ nsresult nsGeolocationService::Init() {
 #endif
 
 #ifdef MOZ_WIDGET_GTK
-#  ifdef MOZ_GPSD
-  if (Preferences::GetBool("geo.provider.use_gpsd", false)) {
+#  ifdef MOZ_ENABLE_DBUS
+  if (!mProvider && widget::ShouldUsePortal(widget::PortalKind::Location)) {
+    mProvider = new PortalLocationProvider();
+  }
+  // Geoclue includes GPS data so it has higher priority than raw GPSD
+  if (!mProvider && StaticPrefs::geo_provider_use_geoclue()) {
+    nsCOMPtr<nsIGeolocationProvider> gcProvider = new GeoclueLocationProvider();
+    // The Startup() method will only succeed if Geoclue is available on D-Bus
+    if (NS_SUCCEEDED(gcProvider->Startup())) {
+      gcProvider->Shutdown();
+      mProvider = std::move(gcProvider);
+    }
+  }
+#    ifdef MOZ_GPSD
+  if (!mProvider && Preferences::GetBool("geo.provider.use_gpsd", false)) {
     mProvider = new GpsdLocationProvider();
   }
+#    endif
 #  endif
 #endif
 
@@ -601,7 +620,7 @@ CachedPositionAndAccuracy nsGeolocationService::GetCachedPosition() {
   return mLastPosition;
 }
 
-nsresult nsGeolocationService::StartDevice(nsIPrincipal* aPrincipal) {
+nsresult nsGeolocationService::StartDevice() {
   if (!StaticPrefs::geo_enabled()) {
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -751,7 +770,7 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(Geolocation, mPendingCallbacks,
                                       mWatchingCallbacks, mPendingRequests)
 
 Geolocation::Geolocation()
-    : mProtocolType(ProtocolType::OTHER), mLastWatchId(0) {}
+    : mProtocolType(ProtocolType::OTHER), mLastWatchId(1) {}
 
 Geolocation::~Geolocation() {
   if (mService) {
@@ -862,6 +881,18 @@ Geolocation::Update(nsIDOMGeoPosition* aSomewhere) {
     return NS_OK;
   }
 
+  // Don't update position if window is not fully active or the document is
+  // hidden. We keep the pending callaback and watchers waiting for the next
+  // update.
+  nsCOMPtr<nsPIDOMWindowInner> window = do_QueryReferent(this->GetOwner());
+  if (window) {
+    nsCOMPtr<Document> document = window->GetDoc();
+    bool isHidden = document && document->Hidden();
+    if (isHidden || !window->IsFullyActive()) {
+      return NS_OK;
+    }
+  }
+
   if (aSomewhere) {
     nsCOMPtr<nsIDOMGeoPositionCoords> coords;
     aSomewhere->GetCoords(getter_AddRefs(coords));
@@ -908,6 +939,16 @@ Geolocation::NotifyError(uint16_t aErrorCode) {
   }
 
   return NS_OK;
+}
+
+bool Geolocation::IsFullyActiveOrChrome() {
+  // For regular content window, only allow this proceed if the window is "fully
+  // active".
+  if (nsPIDOMWindowInner* window = this->GetParentObject()) {
+    return window->IsFullyActive();
+  }
+  // Calls coming from chrome code don't have window, so we can proceed.
+  return true;
 }
 
 bool Geolocation::IsAlreadyCleared(nsGeolocationRequest* aRequest) {
@@ -981,6 +1022,14 @@ nsresult Geolocation::GetCurrentPosition(GeoPositionCallback callback,
                                          GeoPositionErrorCallback errorCallback,
                                          UniquePtr<PositionOptions>&& options,
                                          CallerType aCallerType) {
+  if (!IsFullyActiveOrChrome()) {
+    RefPtr<GeolocationPositionError> positionError =
+        new GeolocationPositionError(
+            this, GeolocationPositionError_Binding::POSITION_UNAVAILABLE);
+    positionError->NotifyCallback(errorCallback);
+    return NS_OK;
+  }
+
   if (mPendingCallbacks.Length() > MAX_GEO_REQUESTS_PER_WINDOW) {
     return NS_ERROR_NOT_AVAILABLE;
   }
@@ -1041,15 +1090,23 @@ int32_t Geolocation::WatchPosition(
                        std::move(aOptions), CallerType::System, IgnoreErrors());
 }
 
-// On errors we return -1 because that's not a valid watch id and will
+// On errors we return 0 because that's not a valid watch id and will
 // get ignored in clearWatch.
 int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
                                    GeoPositionErrorCallback aErrorCallback,
                                    UniquePtr<PositionOptions>&& aOptions,
                                    CallerType aCallerType, ErrorResult& aRv) {
+  if (!IsFullyActiveOrChrome()) {
+    RefPtr<GeolocationPositionError> positionError =
+        new GeolocationPositionError(
+            this, GeolocationPositionError_Binding::POSITION_UNAVAILABLE);
+    positionError->NotifyCallback(aErrorCallback);
+    return 0;
+  }
+
   if (mWatchingCallbacks.Length() > MAX_GEO_REQUESTS_PER_WINDOW) {
     aRv.Throw(NS_ERROR_NOT_AVAILABLE);
-    return -1;
+    return 0;
   }
 
   // The watch ID:
@@ -1069,13 +1126,13 @@ int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
 
   if (!mOwner && aCallerType != CallerType::System) {
     aRv.Throw(NS_ERROR_FAILURE);
-    return -1;
+    return 0;
   }
 
   if (mOwner) {
     if (!RegisterRequestWithPrompt(request)) {
       aRv.Throw(NS_ERROR_NOT_AVAILABLE);
-      return -1;
+      return 0;
     }
 
     return watchId;
@@ -1083,7 +1140,7 @@ int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
 
   if (aCallerType != CallerType::System) {
     aRv.Throw(NS_ERROR_FAILURE);
-    return -1;
+    return 0;
   }
 
   request->Allow(JS::UndefinedHandleValue);
@@ -1091,7 +1148,7 @@ int32_t Geolocation::WatchPosition(GeoPositionCallback aCallback,
 }
 
 void Geolocation::ClearWatch(int32_t aWatchId) {
-  if (aWatchId < 0) {
+  if (aWatchId < 1) {
     return;
   }
 

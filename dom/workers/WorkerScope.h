@@ -15,8 +15,12 @@
 #include "mozilla/NotNull.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/TimeStamp.h"
+#include "mozilla/dom/AnimationFrameProvider.h"
+#include "mozilla/dom/ImageBitmapBinding.h"
 #include "mozilla/dom/ImageBitmapSource.h"
 #include "mozilla/dom/SafeRefPtr.h"
+#include "mozilla/dom/WorkerPrivate.h"
 #include "nsCOMPtr.h"
 #include "nsCycleCollectionParticipant.h"
 #include "nsIGlobalObject.h"
@@ -32,6 +36,7 @@ class nsISerialEventTarget;
 
 namespace mozilla {
 class ErrorResult;
+struct VsyncEvent;
 
 namespace extensions {
 
@@ -58,7 +63,6 @@ class OnErrorEventHandlerNonNull;
 template <typename T>
 class Optional;
 class Performance;
-struct PostMessageOptions;
 class Promise;
 class RequestOrUSVString;
 template <typename T>
@@ -66,9 +70,14 @@ class Sequence;
 class ServiceWorkerDescriptor;
 class ServiceWorkerRegistration;
 class ServiceWorkerRegistrationDescriptor;
+struct StructuredSerializeOptions;
+class WorkerDocumentListener;
 class WorkerLocation;
 class WorkerNavigator;
 class WorkerPrivate;
+class VsyncWorkerChild;
+class WebTaskScheduler;
+class WebTaskSchedulerWorker;
 struct RequestInit;
 
 namespace cache {
@@ -78,6 +87,7 @@ class CacheStorage;
 }  // namespace cache
 
 class WorkerGlobalScopeBase : public DOMEventTargetHelper,
+                              public nsSupportsWeakReference,
                               public nsIGlobalObject {
   friend class WorkerPrivate;
 
@@ -86,7 +96,7 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(WorkerGlobalScopeBase,
                                                          DOMEventTargetHelper)
 
-  WorkerGlobalScopeBase(NotNull<WorkerPrivate*> aWorkerPrivate,
+  WorkerGlobalScopeBase(WorkerPrivate* aWorkerPrivate,
                         UniquePtr<ClientSource> aClientSource);
 
   virtual bool WrapGlobalObject(JSContext* aCx,
@@ -105,6 +115,14 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
 
   bool IsSharedMemoryAllowed() const final;
 
+  bool ShouldResistFingerprinting() const final;
+
+  uint32_t GetPrincipalHashValue() const final;
+
+  OriginTrials Trials() const final;
+
+  StorageAccess GetStorageAccess() final;
+
   Maybe<ClientInfo> GetClientInfo() const final;
 
   Maybe<ServiceWorkerDescriptor> GetController() const final;
@@ -121,6 +139,10 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
     MOZ_CRASH("AbstractMainThreadFor not supported for workers.");
   }
 
+  MOZ_CAN_RUN_SCRIPT
+  void ReportError(JSContext* aCx, JS::Handle<JS::Value> aError,
+                   CallerType aCallerType, ErrorResult& aRv);
+
   // atob, btoa, and dump are declared (separately) by both WorkerGlobalScope
   // and WorkerDebuggerGlobalScope WebIDL interfaces
   void Atob(const nsAString& aAtob, nsAString& aOut, ErrorResult& aRv) const;
@@ -135,6 +157,10 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
 
   void NoteTerminating() { StartDying(); }
 
+  // Usually global scope dies earlier than the WorkerPrivate, but if we see
+  // it leak at least we can tell it to not carry away a dead pointer.
+  void NoteWorkerTerminated() { mWorkerPrivate = nullptr; }
+
   ClientSource& MutableClientSourceRef() const { return *mClientSource; }
 
   // WorkerPrivate wants to be able to forbid script when its state machine
@@ -145,12 +171,19 @@ class WorkerGlobalScopeBase : public DOMEventTargetHelper,
  protected:
   ~WorkerGlobalScopeBase();
 
-  const NotNull<WorkerPrivate*> mWorkerPrivate;
+  CheckedUnsafePtr<WorkerPrivate> mWorkerPrivate;
+
+  void AssertIsOnWorkerThread() const {
+    MOZ_ASSERT(mWorkerThreadUsedOnlyForAssert == PR_GetCurrentThread());
+  }
 
  private:
   RefPtr<Console> mConsole;
   const UniquePtr<ClientSource> mClientSource;
   nsCOMPtr<nsISerialEventTarget> mSerialEventTarget;
+#ifdef DEBUG
+  PRThread* mWorkerThreadUsedOnlyForAssert;
+#endif
 };
 
 namespace workerinternals {
@@ -170,8 +203,7 @@ class NamedWorkerGlobalScopeMixin {
 
 }  // namespace workerinternals
 
-class WorkerGlobalScope : public WorkerGlobalScopeBase,
-                          public nsSupportsWeakReference {
+class WorkerGlobalScope : public WorkerGlobalScopeBase {
  public:
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(WorkerGlobalScope,
@@ -258,13 +290,18 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase,
   MOZ_CAN_RUN_SCRIPT
   void ClearInterval(int32_t aHandle);
 
-  already_AddRefed<Promise> CreateImageBitmap(const ImageBitmapSource& aImage,
-                                              ErrorResult& aRv);
+  already_AddRefed<Promise> CreateImageBitmap(
+      const ImageBitmapSource& aImage, const ImageBitmapOptions& aOptions,
+      ErrorResult& aRv);
 
-  already_AddRefed<Promise> CreateImageBitmap(const ImageBitmapSource& aImage,
-                                              int32_t aSx, int32_t aSy,
-                                              int32_t aSw, int32_t aSh,
-                                              ErrorResult& aRv);
+  already_AddRefed<Promise> CreateImageBitmap(
+      const ImageBitmapSource& aImage, int32_t aSx, int32_t aSy, int32_t aSw,
+      int32_t aSh, const ImageBitmapOptions& aOptions, ErrorResult& aRv);
+
+  void StructuredClone(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                       const StructuredSerializeOptions& aOptions,
+                       JS::MutableHandle<JS::Value> aRetval,
+                       ErrorResult& aError);
 
   already_AddRefed<Promise> Fetch(const RequestOrUSVString& aInput,
                                   const RequestInit& aInit,
@@ -276,6 +313,9 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase,
 
   already_AddRefed<cache::CacheStorage> GetCaches(ErrorResult& aRv);
 
+  WebTaskScheduler* Scheduler();
+  WebTaskScheduler* GetExistingScheduler() const;
+
   bool WindowInteractionAllowed() const;
 
   void AllowWindowInteraction();
@@ -283,6 +323,11 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase,
   void ConsumeWindowInteraction();
 
   void StorageAccessPermissionGranted();
+
+  virtual void OnDocumentVisible(bool aVisible) {}
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  virtual void OnVsync(const VsyncEvent& aVsync) {}
 
  protected:
   ~WorkerGlobalScope();
@@ -306,6 +351,7 @@ class WorkerGlobalScope : public WorkerGlobalScopeBase,
   RefPtr<IDBFactory> mIndexedDB;
   RefPtr<cache::CacheStorage> mCacheStorage;
   RefPtr<DebuggerNotificationManager> mDebuggerNotificationManager;
+  RefPtr<WebTaskSchedulerWorker> mWebTaskScheduler;
   uint32_t mWindowInteractionsAllowed = 0;
 };
 
@@ -313,7 +359,11 @@ class DedicatedWorkerGlobalScope final
     : public WorkerGlobalScope,
       public workerinternals::NamedWorkerGlobalScopeMixin {
  public:
-  DedicatedWorkerGlobalScope(NotNull<WorkerPrivate*> aWorkerPrivate,
+  NS_DECL_ISUPPORTS_INHERITED
+  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_INHERITED(
+      DedicatedWorkerGlobalScope, WorkerGlobalScope)
+
+  DedicatedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
                              UniquePtr<ClientSource> aClientSource,
                              const nsString& aName);
 
@@ -324,22 +374,40 @@ class DedicatedWorkerGlobalScope final
                    const Sequence<JSObject*>& aTransferable, ErrorResult& aRv);
 
   void PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                   const PostMessageOptions& aOptions, ErrorResult& aRv);
+                   const StructuredSerializeOptions& aOptions,
+                   ErrorResult& aRv);
 
   void Close();
+
+  MOZ_CAN_RUN_SCRIPT
+  int32_t RequestAnimationFrame(FrameRequestCallback& aCallback,
+                                ErrorResult& aError);
+
+  MOZ_CAN_RUN_SCRIPT
+  void CancelAnimationFrame(int32_t aHandle, ErrorResult& aError);
+
+  void OnDocumentVisible(bool aVisible) override;
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  void OnVsync(const VsyncEvent& aVsync) override;
 
   IMPL_EVENT_HANDLER(message)
   IMPL_EVENT_HANDLER(messageerror)
 
  private:
   ~DedicatedWorkerGlobalScope() = default;
+
+  FrameRequestManager mFrameRequestManager;
+  RefPtr<VsyncWorkerChild> mVsyncChild;
+  RefPtr<WorkerDocumentListener> mDocListener;
+  bool mDocumentVisible = false;
 };
 
 class SharedWorkerGlobalScope final
     : public WorkerGlobalScope,
       public workerinternals::NamedWorkerGlobalScopeMixin {
  public:
-  SharedWorkerGlobalScope(NotNull<WorkerPrivate*> aWorkerPrivate,
+  SharedWorkerGlobalScope(WorkerPrivate* aWorkerPrivate,
                           UniquePtr<ClientSource> aClientSource,
                           const nsString& aName);
 
@@ -361,8 +429,7 @@ class ServiceWorkerGlobalScope final : public WorkerGlobalScope {
                                            WorkerGlobalScope)
 
   ServiceWorkerGlobalScope(
-      NotNull<WorkerPrivate*> aWorkerPrivate,
-      UniquePtr<ClientSource> aClientSource,
+      WorkerPrivate* aWorkerPrivate, UniquePtr<ClientSource> aClientSource,
       const ServiceWorkerRegistrationDescriptor& aRegistrationDescriptor);
 
   bool WrapGlobalObject(JSContext* aCx,
@@ -439,6 +506,8 @@ class WorkerDebuggerGlobalScope final : public WorkerGlobalScopeBase {
 
   void RetrieveConsoleEvents(JSContext* aCx, nsTArray<JS::Value>& aEvents,
                              ErrorResult& aRv);
+
+  void ClearConsoleEvents(JSContext* aCx, ErrorResult& aRv);
 
   void SetConsoleEventHandler(JSContext* aCx, AnyCallback* aHandler,
                               ErrorResult& aRv);

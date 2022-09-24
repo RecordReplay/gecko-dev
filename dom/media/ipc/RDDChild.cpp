@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 #include "RDDChild.h"
 
+#include "mozilla/FOGIPC.h"
 #include "mozilla/RDDProcessManager.h"
 #include "mozilla/dom/ContentParent.h"
 #include "mozilla/dom/MemoryReportRequest.h"
@@ -58,7 +59,14 @@ bool RDDChild::Init() {
 
   nsTArray<GfxVarUpdate> updates = gfxVars::FetchNonDefaultVars();
 
-  SendInit(updates, brokerFd, Telemetry::CanRecordReleaseData());
+  bool isReadyForBackgroundProcessing = false;
+#if defined(XP_WIN)
+  RefPtr<DllServices> dllSvc(DllServices::Get());
+  isReadyForBackgroundProcessing = dllSvc->IsReadyForBackgroundProcessing();
+#endif
+
+  SendInit(updates, brokerFd, Telemetry::CanRecordReleaseData(),
+           isReadyForBackgroundProcessing);
 
   Unused << SendInitProfiler(ProfilerParent::CreateForProcess(OtherPid()));
 
@@ -117,10 +125,10 @@ mozilla::ipc::IPCResult RDDChild::RecvAddMemoryReport(
   return IPC_OK();
 }
 
+#if defined(XP_WIN)
 mozilla::ipc::IPCResult RDDChild::RecvGetModulesTrust(
     ModulePaths&& aModPaths, bool aRunAtNormalPriority,
     GetModulesTrustResolver&& aResolver) {
-#if defined(XP_WIN)
   RefPtr<DllServices> dllSvc(DllServices::Get());
   dllSvc->GetModulesTrust(std::move(aModPaths), aRunAtNormalPriority)
       ->Then(
@@ -130,15 +138,18 @@ mozilla::ipc::IPCResult RDDChild::RecvGetModulesTrust(
           },
           [aResolver](nsresult aRv) { aResolver(Nothing()); });
   return IPC_OK();
-#else
-  return IPC_FAIL(this, "Unsupported on this platform");
-#endif  // defined(XP_WIN)
 }
+#endif  // defined(XP_WIN)
 
 mozilla::ipc::IPCResult RDDChild::RecvUpdateMediaCodecsSupported(
     const PDMFactory::MediaCodecsSupported& aSupported) {
   dom::ContentParent::BroadcastMediaCodecsSupportedUpdate(
       RemoteDecodeIn::RddProcess, aSupported);
+  return IPC_OK();
+}
+
+mozilla::ipc::IPCResult RDDChild::RecvFOGData(ByteBuf&& aBuf) {
+  glean::FOGData(std::move(aBuf));
   return IPC_OK();
 }
 

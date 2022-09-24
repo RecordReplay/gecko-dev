@@ -47,14 +47,11 @@ this.startBackground = (function() {
 
   const backgroundScripts = [
     "log.js",
-    "makeUuid.js",
     "catcher.js",
     "blobConverters.js",
     "background/selectorLoader.js",
     "background/communication.js",
-    "background/auth.js",
     "background/senderror.js",
-    "build/raven.js",
     "build/shot.js",
     "build/thumbnailGenerator.js",
     "background/analytics.js",
@@ -64,46 +61,25 @@ this.startBackground = (function() {
   ];
 
   browser.experiments.screenshots.onScreenshotCommand.addListener(
-    async isContextMenuClick => {
+    async type => {
       try {
         let [[tab]] = await Promise.all([
           browser.tabs.query({ currentWindow: true, active: true }),
           loadIfNecessary(),
         ]);
         zoomFactor = await browser.tabs.getZoom(tab.id);
-        isContextMenuClick
-          ? main.onClickedContextMenu(tab)
-          : main.onClicked(tab);
+        if (type === "contextMenu") {
+          main.onClickedContextMenu(tab);
+        } else if (type === "toolbar") {
+          main.onClicked(tab);
+        } else if (type === "shortcut") {
+          main.onShortcut(tab);
+        }
       } catch (error) {
         console.error("Error loading Screenshots:", error);
       }
     }
   );
-
-  browser.commands.onCommand.addListener(cmd => {
-    if (cmd !== "take-screenshot") {
-      return;
-    }
-    loadIfNecessary()
-      .then(() => {
-        browser.tabs
-          .query({ currentWindow: true, active: true })
-          .then(async tabs => {
-            const activeTab = tabs[0];
-            zoomFactor = await browser.tabs.getZoom(activeTab.id);
-            main.onCommand(activeTab);
-          })
-          .catch(error => {
-            throw error;
-          });
-      })
-      .catch(error => {
-        console.error(
-          "Error toggling Screenshots via keyboard shortcut: ",
-          error
-        );
-      });
-  });
 
   browser.runtime.onMessage.addListener((req, sender, sendResponse) => {
     loadIfNecessary()

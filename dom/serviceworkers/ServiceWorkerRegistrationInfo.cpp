@@ -14,8 +14,7 @@
 #include "mozilla/SchedulerGroup.h"
 #include "mozilla/StaticPrefs_dom.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -509,7 +508,7 @@ void ServiceWorkerRegistrationInfo::MaybeScheduleUpdate() {
 
   // When reach the navigation fault threshold, calling unregister instead of
   // scheduling update.
-  if (mActiveWorker) {
+  if (mActiveWorker && !mUnregistered) {
     uint32_t navigationFaultCount;
     mActiveWorker->GetNavigationFaultCount(&navigationFaultCount);
     const auto navigationFaultThreshold = StaticPrefs::
@@ -517,6 +516,7 @@ void ServiceWorkerRegistrationInfo::MaybeScheduleUpdate() {
     // Disable unregister mitigation when navigation fault threshold is 0.
     if (navigationFaultThreshold <= navigationFaultCount &&
         navigationFaultThreshold != 0) {
+      CheckQuotaUsage();
       swm->Unregister(mPrincipal, nullptr, NS_ConvertUTF8toUTF16(Scope()));
       return;
     }
@@ -895,5 +895,13 @@ void ServiceWorkerRegistrationInfo::ForEachWorker(
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+void ServiceWorkerRegistrationInfo::CheckQuotaUsage() {
+  MOZ_ASSERT(NS_IsMainThread());
+
+  RefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  MOZ_ASSERT(swm);
+
+  swm->CheckPrincipalQuotaUsage(mPrincipal, Scope());
+}
+
+}  // namespace mozilla::dom

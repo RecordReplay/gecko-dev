@@ -10,7 +10,8 @@ include DOMTypes;
 namespace mozilla {
 namespace dom {
 
-refcounted protocol PServiceWorker
+[ChildImpl=virtual, ParentImpl=virtual]
+protocol PServiceWorker
 {
   manager PBackground;
 

@@ -133,7 +133,7 @@ void BRFrame::Reflow(nsPresContext* aPresContext, ReflowOutput& aMetrics,
       RefPtr<nsFontMetrics> fm =
           nsLayoutUtils::GetInflatedFontMetricsForFrame(this);
       if (fm) {
-        nscoord logicalHeight = aReflowInput.CalcLineHeight();
+        nscoord logicalHeight = aReflowInput.GetLineHeight();
         finalSize.BSize(wm) = logicalHeight;
         aMetrics.SetBlockStartAscent(nsLayoutUtils::GetCenteredFontBaseline(
             fm, logicalHeight, wm.IsLineInverted()));
@@ -210,7 +210,7 @@ nsIFrame::ContentOffsets BRFrame::CalcContentOffsetsFromFramePoint(
   ContentOffsets offsets;
   offsets.content = mContent->GetParent();
   if (offsets.content) {
-    offsets.offset = offsets.content->ComputeIndexOf(mContent);
+    offsets.offset = offsets.content->ComputeIndexOf_Deprecated(mContent);
     offsets.secondaryOffset = offsets.offset;
     offsets.associate = CARET_ASSOCIATE_AFTER;
   }

@@ -70,6 +70,15 @@ RaptorErrorList = (
     ]
 )
 
+# When running raptor locally, we can attempt to make use of
+# the users locally cached ffmpeg binary from from when the user
+# ran `./mach browsertime --setup`
+FFMPEG_LOCAL_CACHE = {
+    "mac": "ffmpeg-4.1.1-macos64-static",
+    "linux": "ffmpeg-4.1.4-i686-static",
+    "win": "ffmpeg-4.1.1-win64-static",
+}
+
 
 class Raptor(
     TestingMixin, MercurialScript, CodeCoverageMixin, AndroidMixin, Python3Virtualenv
@@ -148,6 +157,16 @@ class Raptor(
             },
         ],
         [
+            ["--browsertime-arg"],
+            {
+                "action": "append",
+                "metavar": "PREF=VALUE",
+                "dest": "browsertime_user_args",
+                "default": [],
+                "help": argparse.SUPPRESS,
+            },
+        ],
+        [
             ["--browsertime"],
             {
                 "dest": "browsertime",
@@ -214,15 +233,6 @@ class Raptor(
                     "dest": "raptor_cmd_line_args",
                     "default": None,
                     "help": "Extra options to Raptor.",
-                },
-            ],
-            [
-                ["--enable-webrender"],
-                {
-                    "action": "store_true",
-                    "dest": "enable_webrender",
-                    "default": False,
-                    "help": "Enable the WebRender compositor in Gecko.",
                 },
             ],
             [
@@ -466,12 +476,12 @@ class Raptor(
                 },
             ],
             [
-                ["--enable-fission"],
+                ["--disable-fission"],
                 {
-                    "action": "store_true",
-                    "dest": "enable_fission",
-                    "default": False,
-                    "help": "Enable Fission (site isolation) in Gecko.",
+                    "action": "store_false",
+                    "dest": "fission",
+                    "default": True,
+                    "help": "Disable Fission (site isolation) in Gecko.",
                 },
             ],
             [
@@ -492,6 +502,15 @@ class Raptor(
                     "dest": "environment",
                     "default": [],
                     "help": "Set a variable in the test environment. May be used multiple times.",
+                },
+            ],
+            [
+                ["--skip-preflight"],
+                {
+                    "action": "store_true",
+                    "dest": "skip_preflight",
+                    "default": False,
+                    "help": "skip preflight commands to prepare machine.",
                 },
             ],
             [
@@ -519,6 +538,18 @@ class Raptor(
                     "dest": "enable_marionette_trace",
                     "default": False,
                     "help": "Enable marionette tracing",
+                },
+            ],
+            [
+                ["--clean"],
+                {
+                    "action": "store_true",
+                    "dest": "clean",
+                    "default": False,
+                    "help": (
+                        "Clean the python virtualenv (remove, and rebuild) for "
+                        "Raptor before running tests."
+                    ),
                 },
             ],
         ]
@@ -636,22 +667,18 @@ class Raptor(
         self.firefox_android_browsers = ["fennec", "geckoview", "refbrow", "fenix"]
         self.android_browsers = self.firefox_android_browsers + ["chrome-m"]
         self.browsertime_visualmetrics = self.config.get("browsertime_visualmetrics")
+        self.browsertime_node = self.config.get("browsertime_node")
+        self.browsertime_user_args = self.config.get("browsertime_user_args")
         self.browsertime_video = False
         self.enable_marionette_trace = self.config.get("enable_marionette_trace")
         self.browser_cycles = self.config.get("browser_cycles")
+        self.clean = self.config.get("clean")
 
         for (arg,), details in Raptor.browsertime_options:
             # Allow overriding defaults on the `./mach raptor-test ...` command-line.
             value = self.config.get(details["dest"])
             if value and arg not in self.config.get("raptor_cmd_line_args", []):
                 setattr(self, details["dest"], value)
-
-        if (
-            not self.run_local
-            and self.browsertime_visualmetrics
-            and self.browsertime_video
-        ):
-            self.error("Cannot run visual metrics in the same CI task as the test.")
 
     # We accept some configuration options from the try commit message in the
     # format mozharness: <options>. Example try commit message: mozharness:
@@ -729,7 +756,7 @@ class Raptor(
 
         # Disable verification and install the APK
         self.device.shell_output("settings put global verifier_verify_adb_installs 0")
-        self.install_apk(chromeapk, replace=True)
+        self.install_android_app(chromeapk, replace=True)
 
         # Re-enable verification and delete the temporary directory
         self.device.shell_output("settings put global verifier_verify_adb_installs 1")
@@ -906,10 +933,8 @@ class Raptor(
             options.extend(["--disable-perf-tuning"])
         if self.config.get("cold", False):
             options.extend(["--cold"])
-        if self.config.get("enable_webrender", False):
-            options.extend(["--enable-webrender"])
-        if self.config.get("enable_fission", False):
-            options.extend(["--enable-fission"])
+        if not self.config.get("fission", True):
+            options.extend(["--disable-fission"])
         if self.config.get("verbose", False):
             options.extend(["--verbose"])
         if self.config.get("extra_prefs"):
@@ -930,9 +955,15 @@ class Raptor(
         for (arg,), details in Raptor.browsertime_options:
             # Allow overriding defaults on the `./mach raptor-test ...` command-line
             value = self.config.get(details["dest"])
+            if value is None or value != getattr(self, details["dest"], None):
+                # Check for modifications done to the instance variables
+                value = getattr(self, details["dest"], None)
             if value and arg not in self.config.get("raptor_cmd_line_args", []):
                 if isinstance(value, string_types):
                     options.extend([arg, os.path.expandvars(value)])
+                elif isinstance(value, (tuple, list)):
+                    for val in value:
+                        options.extend([arg, val])
                 else:
                     options.extend([arg])
 
@@ -957,13 +988,13 @@ class Raptor(
         if not os.path.isdir(upload_dir):
             self.mkdir_p(upload_dir)
 
-    def install_apk(self, apk, replace=False):
-        # Override AndroidMixin's install_apk in order to capture
+    def install_android_app(self, apk, replace=False):
+        # Override AndroidMixin's install_android_app in order to capture
         # logcat during the installation. If the installation fails,
         # the logcat file will be left in the upload directory.
         self.logcat_start()
         try:
-            super(Raptor, self).install_apk(apk, replace=replace)
+            super(Raptor, self).install_android_app(apk, replace=replace)
         finally:
             self.logcat_stop()
 
@@ -980,8 +1011,15 @@ class Raptor(
         # We need it in-path to import jsonschema later when validating output for perfherder.
         _virtualenv_path = self.config.get("virtualenv_path")
 
+        if self.clean:
+            rmtree(_virtualenv_path, ignore_errors=True)
+
         if self.run_local and os.path.exists(_virtualenv_path):
             self.info("Virtualenv already exists, skipping creation")
+            # ffmpeg exists outside of this virtual environment so
+            # we re-add it to the platform environment on repeated
+            # local runs of browsertime visual metric tests
+            self.setup_local_ffmpeg()
             _python_interp = self.config.get("exes")["python"]
 
             if "win" in self.platform_name():
@@ -1018,11 +1056,32 @@ class Raptor(
         )
 
         modules = ["pip>=1.5"]
-        if self.run_local and self.browsertime_visualmetrics:
-            # Add modules required for visual metrics
+
+        # Add modules required for visual metrics
+        py3_minor = sys.version_info.minor
+        if py3_minor <= 7:
             modules.extend(
-                ["numpy==1.16.1", "Pillow==6.1.0", "scipy==1.2.3", "pyssim==0.4"]
+                [
+                    "numpy==1.16.1",
+                    "Pillow==6.1.0",
+                    "scipy==1.2.3",
+                    "pyssim==0.4",
+                    "opencv-python==4.5.4.60",
+                ]
             )
+        else:  # python version >= 3.8
+            modules.extend(
+                [
+                    "numpy==1.22.0",
+                    "Pillow==9.0.0",
+                    "scipy==1.7.3",
+                    "pyssim==0.4",
+                    "opencv-python==4.5.4.60",
+                ]
+            )
+
+        if self.run_local:
+            self.setup_local_ffmpeg()
 
         # Require pip >= 1.5 so pip will prefer .whl files to install
         super(Raptor, self).create_virtualenv(modules=modules)
@@ -1032,11 +1091,54 @@ class Raptor(
             requirements=[os.path.join(self.raptor_path, "requirements.txt")]
         )
 
+    def setup_local_ffmpeg(self):
+        """Make use of the users local ffmpeg when running browsertime visual
+        metrics tests.
+        """
+
+        # TODO expand this logic below for Windows and Linux (Bug 1746206 and 1746208)
+        # and refactor once all the paths are finalized across platforms
+
+        if "ffmpeg" in os.environ["PATH"]:
+            return
+
+        platform = self.platform_name()
+        btime_cache = os.path.join(self.config["mozbuild_path"], "browsertime")
+        if "mac" in platform:
+            path_to_ffmpeg = os.path.join(
+                btime_cache,
+                FFMPEG_LOCAL_CACHE["mac"],
+                "bin",
+            )
+        elif "linux" in platform:
+            path_to_ffmpeg = os.path.join(
+                btime_cache,
+                FFMPEG_LOCAL_CACHE["linux"],
+            )
+        elif "win" in platform:
+            path_to_ffmpeg = os.path.join(
+                btime_cache,
+                FFMPEG_LOCAL_CACHE["win"],
+                "bin",
+            )
+
+        if os.path.exists(path_to_ffmpeg):
+            os.environ["PATH"] += os.pathsep + path_to_ffmpeg
+            self.browsertime_ffmpeg = path_to_ffmpeg
+            self.info(
+                "Added local ffmpeg found at: %s to environment." % path_to_ffmpeg
+            )
+        else:
+            raise Exception(
+                "No local ffmpeg binary found. Expected it to be here: %s"
+                % path_to_ffmpeg
+            )
+
     def install(self):
         if not self.config.get("noinstall", False):
             if self.app in self.firefox_android_browsers:
                 self.device.uninstall_app(self.binary_path)
-                self.install_apk(self.installer_path)
+                self.install_android_app(self.installer_path)
             else:
                 super(Raptor, self).install()
 

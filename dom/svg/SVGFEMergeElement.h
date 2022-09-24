@@ -12,8 +12,7 @@
 nsresult NS_NewSVGFEMergeElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFEMergeElementBase = SVGFE;
 
@@ -42,6 +41,8 @@ class SVGFEMergeElement : public SVGFEMergeElementBase {
   // nsIContent
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
+  virtual nsresult BindToTree(BindContext& aCtx, nsINode& aParent) override;
+
  protected:
   virtual StringAttributesInfo GetStringInfo() override;
 
@@ -50,7 +51,6 @@ class SVGFEMergeElement : public SVGFEMergeElementBase {
   static StringInfo sStringInfo[1];
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFEMERGEELEMENT_H_

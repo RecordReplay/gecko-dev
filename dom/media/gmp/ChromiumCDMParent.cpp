@@ -14,6 +14,7 @@
 #include "GMPLog.h"
 #include "GMPService.h"
 #include "GMPUtils.h"
+#include "VideoUtils.h"
 #include "mozilla/dom/MediaKeyMessageEventBinding.h"
 #include "mozilla/gmp/GMPTypes.h"
 #include "mozilla/ScopeExit.h"
@@ -378,7 +379,7 @@ bool ChromiumCDMParent::InitCDMInputBuffer(gmp::CDMInputBuffer& aBuffer,
                                     ? crypto.mIV
                                     : crypto.mConstantIV;
   aBuffer = gmp::CDMInputBuffer(
-      std::move(shmem), crypto.mKeyId, iv, aSample->mTime.ToMicroseconds(),
+      shmem, crypto.mKeyId, iv, aSample->mTime.ToMicroseconds(),
       aSample->mDuration.ToMicroseconds(), crypto.mPlainSizes,
       crypto.mEncryptedSizes, crypto.mCryptByteBlock, crypto.mSkipByteBlock,
       encryptionScheme);
@@ -959,6 +960,8 @@ already_AddRefed<VideoData> ChromiumCDMParent::CreateVideoFrame(
   b.mPlanes[2].mStride = aFrame.mVPlane().mStride();
   b.mPlanes[2].mSkip = 0;
 
+  b.mChromaSubsampling = gfx::ChromaSubsampling::HALF_WIDTH_AND_HEIGHT;
+
   // We unfortunately can't know which colorspace the video is using at this
   // stage.
   b.mYUVColorSpace =
@@ -969,7 +972,7 @@ already_AddRefed<VideoData> ChromiumCDMParent::CreateVideoFrame(
       mVideoInfo, mImageContainer, mLastStreamOffset,
       media::TimeUnit::FromMicroseconds(aFrame.mTimestamp()),
       media::TimeUnit::FromMicroseconds(aFrame.mDuration()), b, false,
-      media::TimeUnit::FromMicroseconds(-1), pictureRegion);
+      media::TimeUnit::FromMicroseconds(-1), pictureRegion, mKnowsCompositor);
 
   return v.forget();
 }
@@ -1036,7 +1039,8 @@ void ChromiumCDMParent::ActorDestroy(ActorDestroyReason aWhy) {
 
 RefPtr<MediaDataDecoder::InitPromise> ChromiumCDMParent::InitializeVideoDecoder(
     const gmp::CDMVideoDecoderConfig& aConfig, const VideoInfo& aInfo,
-    RefPtr<layers::ImageContainer> aImageContainer) {
+    RefPtr<layers::ImageContainer> aImageContainer,
+    RefPtr<layers::KnowsCompositor> aKnowsCompositor) {
   MOZ_ASSERT(mGMPThread->IsOnCurrentThread());
   if (mIsShutdown) {
     return MediaDataDecoder::InitPromise::CreateAndReject(
@@ -1083,6 +1087,7 @@ RefPtr<MediaDataDecoder::InitPromise> ChromiumCDMParent::InitializeVideoDecoder(
 
   mVideoDecoderInitialized = true;
   mImageContainer = aImageContainer;
+  mKnowsCompositor = aKnowsCompositor;
   mVideoInfo = aInfo;
   mVideoFrameBufferSize = bufferSize;
 

@@ -15,7 +15,6 @@ ChromeUtils.defineModuleGetter(
   "FileUtils",
   "resource://gre/modules/FileUtils.jsm"
 );
-ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 ChromeUtils.defineModuleGetter(
   this,
   "FileTestUtils",
@@ -34,7 +33,6 @@ ChromeUtils.defineModuleGetter(
 
 async function createDownloadedFile(pathname, contents) {
   info("createDownloadedFile: " + pathname);
-  let encoder = new TextEncoder();
   let file = new FileUtils.File(pathname);
   if (file.exists()) {
     info(`File at ${pathname} already exists`);
@@ -46,7 +44,7 @@ async function createDownloadedFile(pathname, contents) {
     }
   }
   if (contents) {
-    await OS.File.writeAtomic(pathname, encoder.encode(contents));
+    await IOUtils.writeUTF8(pathname, contents);
     ok(file.exists(), `Created ${pathname}`);
   }
   // No post-test cleanup necessary; tmp downloads directory is already removed after each test
@@ -83,7 +81,7 @@ function run_test() {
   run_next_test();
 }
 
-add_task(async function test_common_initialize() {
+add_setup(async function test_common_initialize() {
   gDownloadDir = await setDownloadDir();
   Services.prefs.setCharPref("browser.download.loglevel", "Debug");
 });

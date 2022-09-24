@@ -239,8 +239,7 @@ class nsAutoRetainUIKitObject {
 - (BOOL)isUsingMainThreadOpenGL {
   if (!mGeckoChild || ![self window]) return NO;
 
-  return mGeckoChild->GetLayerManager(nullptr)->GetBackendType() ==
-         mozilla::layers::LayersBackend::LAYERS_OPENGL;
+  return NO;
 }
 
 - (void)drawUsingOpenGL {
@@ -331,7 +330,6 @@ class nsAutoRetainUIKitObject {
           << "Window context problem 2 " << backingSize;
       return;
     }
-    dt->AddUserData(&gfxContext::sDontUseAsSourceKey, dt, nullptr);
     targetContext = gfxContext::CreateOrNull(dt);
   } else {
     MOZ_ASSERT_UNREACHABLE("COREGRAPHICS is the only supported backend");
@@ -348,15 +346,6 @@ class nsAutoRetainUIKitObject {
 
   // nsAutoRetainCocoaObject kungFuDeathGrip(self);
   bool painted = false;
-  if (mGeckoChild->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_BASIC) {
-    nsBaseWidget::AutoLayerManagerSetup setupLayerManager(mGeckoChild, targetContext,
-                                                          BufferMode::BUFFER_NONE);
-    painted = mGeckoChild->PaintWindow(region);
-  } else if (mGeckoChild->GetLayerManager()->GetBackendType() == LayersBackend::LAYERS_CLIENT) {
-    // We only need this so that we actually get DidPaintWindow fired
-    painted = mGeckoChild->PaintWindow(region);
-  }
-
   targetContext = nullptr;
   targetSurface = nullptr;
 
@@ -389,7 +378,8 @@ class nsAutoRetainUIKitObject {
 }
 @end
 
-nsWindow::nsWindow() : mNativeView(nullptr), mVisible(false), mParent(nullptr) {}
+nsWindow::nsWindow()
+    : mNativeView(nullptr), mVisible(false), mSizeMode(nsSizeMode_Normal), mParent(nullptr) {}
 
 nsWindow::~nsWindow() {
   [mNativeView widgetDestroyed];  // Safe if mNativeView is nil.
@@ -492,16 +482,6 @@ void nsWindow::Destroy() {
   return NS_OK;
 }
 
-nsresult nsWindow::ConfigureChildren(const nsTArray<nsIWidget::Configuration>& config) {
-  for (uint32_t i = 0; i < config.Length(); ++i) {
-    nsWindow* childWin = (nsWindow*)config[i].mChild.get();
-    childWin->Resize(config[i].mBounds.x, config[i].mBounds.y, config[i].mBounds.width,
-                     config[i].mBounds.height, false);
-  }
-
-  return NS_OK;
-}
-
 void nsWindow::Show(bool aState) {
   if (aState != mVisible) {
     mNativeView.hidden = aState ? NO : YES;
@@ -583,7 +563,7 @@ void nsWindow::SetSizeMode(nsSizeMode aMode) {
 void nsWindow::Invalidate(const LayoutDeviceIntRect& aRect) {
   if (!mNativeView || !mVisible) return;
 
-  MOZ_RELEASE_ASSERT(GetLayerManager()->GetBackendType() != LayersBackend::LAYERS_CLIENT,
+  MOZ_RELEASE_ASSERT(GetLayerManager()->GetBackendType() != LayersBackend::LAYERS_WR,
                      "Shouldn't need to invalidate with accelerated OMTC layers!");
 
   [mNativeView setNeedsLayout];
@@ -710,10 +690,6 @@ void* nsWindow::GetNativeData(uint32_t aDataType) {
 
     case NS_NATIVE_OFFSETY:
       retVal = 0;
-      break;
-
-    case NS_NATIVE_PLUGIN_PORT:
-      // not implemented
       break;
 
     case NS_RAW_NATIVE_IME_CONTEXT:

@@ -65,10 +65,25 @@
                 android:process=":socket">
         </service>
         <service
-                android:name="org.mozilla.gecko.gfx.SurfaceAllocatorService"
+                android:name="org.mozilla.gecko.process.GeckoChildProcessServices$gpu"
                 android:enabled="true"
                 android:exported="false"
-                android:isolatedProcess="false">
+                android:isolatedProcess="false"
+                android:process=":gpu">
+        </service>
+        <service
+                android:name="org.mozilla.gecko.process.GeckoChildProcessServices$utility"
+                android:enabled="true"
+                android:exported="false"
+                android:isolatedProcess="false"
+                android:process=":utility">
+        </service>
+        <service
+                android:name="org.mozilla.gecko.process.GeckoChildProcessServices$ipdlunittest"
+                android:enabled="true"
+                android:exported="false"
+                android:isolatedProcess="false"
+                android:process=":ipdlunittest">
         </service>
     </application>
 

@@ -4,18 +4,22 @@
 
 //! Specified values for font properties
 
+use crate::context::QuirksMode;
+use crate::font_metrics::FontMetricsProvider;
 use crate::parser::{Parse, ParserContext};
 use crate::values::computed::font::{FamilyName, FontFamilyList, FontStyleAngle, SingleFontFamily};
+use crate::values::computed::FontSizeAdjust as ComputedFontSizeAdjust;
 use crate::values::computed::{font as computed, Length, NonNegativeLength};
 use crate::values::computed::{Angle as ComputedAngle, Percentage as ComputedPercentage};
 use crate::values::computed::{CSSPixelLength, Context, ToComputedValue};
-use crate::values::computed::FontSizeAdjust as ComputedFontSizeAdjust;
 use crate::values::generics::font::VariationValue;
-use crate::values::generics::font::{self as generics, FeatureTagValue, FontSettings, FontTag, GenericFontSizeAdjust};
+use crate::values::generics::font::{
+    self as generics, FeatureTagValue, FontSettings, FontTag, GenericFontSizeAdjust,
+};
 use crate::values::generics::NonNegative;
-use crate::values::specified::length::{FontBaseSize, AU_PER_PT, AU_PER_PX};
+use crate::values::specified::length::{FontBaseSize, PX_PER_PT};
 use crate::values::specified::{AllowQuirks, Angle, Integer, LengthPercentage};
-use crate::values::specified::{NoCalcLength, NonNegativeNumber, Number, NonNegativePercentage};
+use crate::values::specified::{NoCalcLength, NonNegativeNumber, NonNegativePercentage, Number};
 use crate::values::CustomIdent;
 use crate::Atom;
 use cssparser::{Parser, Token};
@@ -64,7 +68,7 @@ macro_rules! system_font_methods {
 /// System fonts.
 #[repr(u8)]
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem
+    Clone, Copy, Debug, Eq, Hash, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
 )]
 #[allow(missing_docs)]
 pub enum SystemFont {
@@ -383,7 +387,9 @@ impl ToComputedValue for FontStyle {
 ///
 /// https://drafts.csswg.org/css-fonts-4/#font-stretch-prop
 #[allow(missing_docs)]
-#[derive(Clone, Copy, Debug, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem)]
+#[derive(
+    Clone, Copy, Debug, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+)]
 #[repr(u8)]
 pub enum FontStretch {
     Stretch(NonNegativePercentage),
@@ -487,7 +493,9 @@ impl ToComputedValue for FontStretch {
     }
 
     fn from_computed_value(computed: &Self::ComputedValue) -> Self {
-        FontStretch::Stretch(NonNegativePercentage::from_computed_value(&NonNegative((computed.0).0)))
+        FontStretch::Stretch(NonNegativePercentage::from_computed_value(&NonNegative(
+            (computed.0).0,
+        )))
     }
 }
 
@@ -658,15 +666,6 @@ pub enum FontFamily {
 
 impl FontFamily {
     system_font_methods!(FontFamily, font_family);
-
-    /// Parse a specified font-family value
-    pub fn parse_specified<'i, 't>(input: &mut Parser<'i, 't>) -> Result<Self, ParseError<'i>> {
-        let values = input.parse_comma_separated(SingleFontFamily::parse)?;
-        Ok(FontFamily::Values(FontFamilyList {
-            list: crate::ArcSlice::from_iter(values.into_iter()),
-            fallback: computed::GenericFontFamily::None,
-        }))
-    }
 }
 
 impl ToComputedValue for FontFamily {
@@ -677,6 +676,7 @@ impl ToComputedValue for FontFamily {
             FontFamily::Values(ref list) => computed::FontFamily {
                 families: list.clone(),
                 is_system_font: false,
+                is_initial: false,
             },
             FontFamily::System(_) => self.compute_system(context),
         }
@@ -706,23 +706,27 @@ impl Parse for FontFamily {
     /// <family-name> = <string> | [ <ident>+ ]
     /// TODO: <generic-family>
     fn parse<'i, 't>(
-        _: &ParserContext,
+        context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<FontFamily, ParseError<'i>> {
-        FontFamily::parse_specified(input)
+        let values =
+            input.parse_comma_separated(|input| SingleFontFamily::parse(context, input))?;
+        Ok(FontFamily::Values(FontFamilyList {
+            list: crate::ArcSlice::from_iter(values.into_iter()),
+        }))
     }
 }
 
 impl SpecifiedValueInfo for FontFamily {}
 
-/// `FamilyName::parse` is based on `SingleFontFamily::parse` and not the other way around
-/// because we want the former to exclude generic family keywords.
+/// `FamilyName::parse` is based on `SingleFontFamily::parse` and not the other
+/// way around because we want the former to exclude generic family keywords.
 impl Parse for FamilyName {
     fn parse<'i, 't>(
-        _: &ParserContext,
+        context: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self, ParseError<'i>> {
-        match SingleFontFamily::parse(input) {
+        match SingleFontFamily::parse(context, input) {
             Ok(SingleFontFamily::FamilyName(name)) => Ok(name),
             Ok(SingleFontFamily::Generic(_)) => {
                 Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
@@ -733,9 +737,7 @@ impl Parse for FamilyName {
 }
 
 /// Preserve the readability of text when font fallback occurs
-#[derive(
-    Clone, Copy, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
-)]
+#[derive(Clone, Copy, Debug, MallocSizeOf, PartialEq, SpecifiedValueInfo, ToCss, ToShmem)]
 #[allow(missing_docs)]
 pub enum FontSizeAdjust {
     Value(GenericFontSizeAdjust<NonNegativeNumber>),
@@ -779,7 +781,9 @@ impl Parse for FontSizeAdjust {
         }
         // Without a basis keyword, the number refers to the 'ex-height' metric.
         let value = NonNegativeNumber::parse(context, input)?;
-        Ok(FontSizeAdjust::Value(GenericFontSizeAdjust::ExHeight(value)))
+        Ok(FontSizeAdjust::Value(GenericFontSizeAdjust::ExHeight(
+            value,
+        )))
     }
 }
 
@@ -827,7 +831,30 @@ impl FontSizeKeyword {
     #[cfg(feature = "gecko")]
     #[inline]
     fn to_length(&self, cx: &Context) -> NonNegativeLength {
-        use crate::context::QuirksMode;
+        let gecko_font = cx.style().get_font().gecko();
+        let family = &gecko_font.mFont.family.families;
+        unsafe {
+            Atom::with(gecko_font.mLanguage.mRawPtr, |language| {
+                self.to_length_without_context(
+                    cx.quirks_mode,
+                    cx.font_metrics_provider,
+                    language,
+                    family,
+                )
+            })
+        }
+    }
+
+    /// Resolve a keyword length without any context, with explicit arguments.
+    #[cfg(feature = "gecko")]
+    #[inline]
+    pub fn to_length_without_context(
+        &self,
+        quirks_mode: QuirksMode,
+        font_metrics_provider: &dyn FontMetricsProvider,
+        language: &Atom,
+        family: &FontFamilyList,
+    ) -> NonNegativeLength {
 
         // The tables in this function are originally from
         // nsRuleNode::CalcFontPointSize in Gecko:
@@ -873,18 +900,12 @@ impl FontSizeKeyword {
 
         static FONT_SIZE_FACTORS: [i32; 8] = [60, 75, 89, 100, 120, 150, 200, 300];
 
-        let ref gecko_font = cx.style().get_font().gecko();
-        let generic = gecko_font.mFont.family.families.single_generic().unwrap_or(computed::GenericFontFamily::None);
-        let base_size = unsafe {
-            Atom::with(gecko_font.mLanguage.mRawPtr, |atom| {
-                cx.font_metrics_provider.get_size(atom, generic)
-            })
-        };
-
+        let generic = family.single_generic().unwrap_or(computed::GenericFontFamily::None);
+        let base_size = font_metrics_provider.get_size(language, generic);
         let base_size_px = base_size.px().round() as i32;
         let html_size = self.html_size() as usize;
         NonNegative(if base_size_px >= 9 && base_size_px <= 16 {
-            let mapping = if cx.quirks_mode == QuirksMode::Quirks {
+            let mapping = if quirks_mode == QuirksMode::Quirks {
                 QUIRKS_FONT_SIZE_MAPPING
             } else {
                 FONT_SIZE_MAPPING
@@ -1950,28 +1971,22 @@ impl Parse for FontFeatureSettings {
 }
 
 #[derive(
-    Clone,
-    Copy,
-    Debug,
-    MallocSizeOf,
-    PartialEq,
-    SpecifiedValueInfo,
-    ToComputedValue,
-    ToResolvedValue,
-    ToShmem,
+    Clone, Copy, Debug, MallocSizeOf, PartialEq, ToComputedValue, ToResolvedValue, ToShmem,
 )]
 /// Whether user agents are allowed to synthesize bold or oblique font faces
-/// when a font family lacks bold or italic faces
+/// when a font family lacks those faces, or a small-caps variant when this is
+/// not supported by the face.
 pub struct FontSynthesis {
     /// If a `font-weight` is requested that the font family does not contain,
     /// the user agent may synthesize the requested weight from the weights
     /// that do exist in the font family.
-    #[css(represents_keyword)]
     pub weight: bool,
     /// If a font-style is requested that the font family does not contain,
     /// the user agent may synthesize the requested style from the normal face in the font family.
-    #[css(represents_keyword)]
     pub style: bool,
+    /// This bit controls whether the user agent is allowed to synthesize small caps variant
+    /// when a font face lacks it.
+    pub small_caps: bool,
 }
 
 impl FontSynthesis {
@@ -1981,6 +1996,7 @@ impl FontSynthesis {
         FontSynthesis {
             weight: true,
             style: true,
+            small_caps: true,
         }
     }
     #[inline]
@@ -1989,7 +2005,13 @@ impl FontSynthesis {
         FontSynthesis {
             weight: false,
             style: false,
+            small_caps: false,
         }
+    }
+    #[inline]
+    /// Return true if this is the 'none' value
+    pub fn is_none(&self) -> bool {
+        *self == Self::none()
     }
 }
 
@@ -1998,26 +2020,23 @@ impl Parse for FontSynthesis {
         _: &ParserContext,
         input: &mut Parser<'i, 't>,
     ) -> Result<FontSynthesis, ParseError<'i>> {
-        let mut result = FontSynthesis {
-            weight: false,
-            style: false,
-        };
-        try_match_ident_ignore_ascii_case! { input,
-            "none" => Ok(result),
-            "weight" => {
-                result.weight = true;
-                if input.try_parse(|input| input.expect_ident_matching("style")).is_ok() {
-                    result.style = true;
-                }
-                Ok(result)
-            },
-            "style" => {
-                result.style = true;
-                if input.try_parse(|input| input.expect_ident_matching("weight")).is_ok() {
-                    result.weight = true;
-                }
-                Ok(result)
-            },
+        use crate::values::SelectorParseErrorKind;
+        let mut result = Self::none();
+        while let Ok(ident) = input.try_parse(|i| i.expect_ident_cloned()) {
+            match_ignore_ascii_case! { &ident,
+                "none" if result.is_none() => return Ok(result),
+                "weight" if !result.weight => result.weight = true,
+                "style" if !result.style => result.style = true,
+                "small-caps" if !result.small_caps &&
+                                static_prefs::pref!("layout.css.font-synthesis-small-caps.enabled")
+                                    => result.small_caps = true,
+                _ => return Err(input.new_custom_error(SelectorParseErrorKind::UnexpectedIdent(ident))),
+            }
+        }
+        if !result.is_none() {
+            Ok(result)
+        } else {
+            Err(input.new_custom_error(StyleParseErrorKind::UnspecifiedError))
         }
     }
 }
@@ -2027,14 +2046,37 @@ impl ToCss for FontSynthesis {
     where
         W: Write,
     {
-        if self.weight && self.style {
-            dest.write_str("weight style")
-        } else if self.style {
-            dest.write_str("style")
-        } else if self.weight {
-            dest.write_str("weight")
-        } else {
-            dest.write_str("none")
+        if self.is_none() {
+            return dest.write_str("none");
+        }
+
+        let mut need_space = false;
+        if self.weight {
+            dest.write_str("weight")?;
+            need_space = true;
+        }
+        if self.style {
+            if need_space {
+                dest.write_str(" ")?;
+            }
+            dest.write_str("style")?;
+            need_space = true;
+        }
+        if self.small_caps {
+            if need_space {
+                dest.write_str(" ")?;
+            }
+            dest.write_str("small-caps")?;
+        }
+        Ok(())
+    }
+}
+
+impl SpecifiedValueInfo for FontSynthesis {
+    fn collect_completion_keywords(f: KeywordsCollectFn) {
+        f(&["none", "weight", "style"]);
+        if static_prefs::pref!("layout.css.font-synthesis-small-caps.enabled") {
+            f(&["small-caps"]);
         }
     }
 }
@@ -2047,6 +2089,7 @@ impl From<u8> for FontSynthesis {
         FontSynthesis {
             weight: bits & structs::NS_FONT_SYNTHESIS_WEIGHT as u8 != 0,
             style: bits & structs::NS_FONT_SYNTHESIS_STYLE as u8 != 0,
+            small_caps: bits & structs::NS_FONT_SYNTHESIS_SMALL_CAPS as u8 != 0,
         }
     }
 }
@@ -2062,6 +2105,9 @@ impl From<FontSynthesis> for u8 {
         }
         if v.style {
             bits |= structs::NS_FONT_SYNTHESIS_STYLE as u8;
+        }
+        if v.small_caps {
+            bits |= structs::NS_FONT_SYNTHESIS_SMALL_CAPS as u8;
         }
         bits
     }
@@ -2241,7 +2287,9 @@ impl Parse for VariationValue<Number> {
 /// A metrics override value for a @font-face descriptor
 ///
 /// https://drafts.csswg.org/css-fonts/#font-metrics-override-desc
-#[derive(Clone, Copy, Debug, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem)]
+#[derive(
+    Clone, Copy, Debug, MallocSizeOf, Parse, PartialEq, SpecifiedValueInfo, ToCss, ToShmem,
+)]
 pub enum MetricsOverride {
     /// A non-negative `<percentage>` of the computed font size
     Override(NonNegativePercentage),
@@ -2342,7 +2390,7 @@ impl MozScriptMinSize {
     #[inline]
     /// Calculate initial value of -moz-script-min-size.
     pub fn get_initial_value() -> Length {
-        Length::new(DEFAULT_SCRIPT_MIN_SIZE_PT as f32 * (AU_PER_PT / AU_PER_PX))
+        Length::new(DEFAULT_SCRIPT_MIN_SIZE_PT as f32 * PX_PER_PT)
     }
 }
 

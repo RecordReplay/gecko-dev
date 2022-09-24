@@ -14,9 +14,7 @@
                 >
             <menu id="file-menu" data-l10n-id="menu-file">
               <menupopup id="menu_FilePopup"
-                         onpopupshowing="updateFileMenuUserContextUIVisibility('menu_newUserContext');
-                                         updateImportCommandEnabledState();
-                                         PrintUtils.updatePrintPreviewMenuHiddenState();">
+                         onpopupshowing="gFileMenu.onPopupShowing(event);">
                 <menuitem id="menu_newNavigatorTab"
                           command="cmd_newNavigatorTab"
                           key="key_newNavigatorTab" data-l10n-id="menu-file-new-tab"/>
@@ -30,14 +28,6 @@
                 <menuitem id="menu_newPrivateWindow"
                           command="Tools:PrivateBrowsing"
                           key="key_privatebrowsing" data-l10n-id="menu-file-new-private-window"/>
-#ifdef NIGHTLY_BUILD
-                <menuitem id="menu_newFissionWindow"
-                          command="Tools:FissionWindow"
-                          accesskey="s" label="New Fission Window"/>
-                <menuitem id="menu_newNonFissionWindow"
-                          command="Tools:NonFissionWindow"
-                          accesskey="s" label="New Non-Fission Window"/>
-#endif
                 <menuitem id="menu_openLocation"
                           hidden="true"
                           command="Browser:OpenLocation"
@@ -48,7 +38,7 @@
                 <menuitem id="menu_close"
                           class="show-only-for-keyboard"
                           key="key_close"
-                          command="cmd_close" data-l10n-id="menu-file-close"/>
+                          command="cmd_close" data-l10n-id="menu-file-close-tab" data-l10n-args='{"tabCount": 1}'/>
                 <menuitem id="menu_closeWindow"
                           class="show-only-for-keyboard"
                           hidden="true"
@@ -58,16 +48,14 @@
                 <menuitem id="menu_savePage"
                           key="key_savePage"
                           command="Browser:SavePage" data-l10n-id="menu-file-save-page"/>
+#ifndef XP_MACOSX
                 <menuitem id="menu_sendLink"
                           command="Browser:SendLink" data-l10n-id="menu-file-email-link"/>
+#endif
                 <menuseparator/>
 #if !defined(MOZ_WIDGET_GTK)
                 <menuitem id="menu_printSetup"
                           command="cmd_pageSetup" data-l10n-id="menu-file-print-setup" hidden="true"/>
-#endif
-#ifndef XP_MACOSX
-                <menuitem id="menu_printPreview"
-                          command="cmd_printPreview" data-l10n-id="menu-file-print-preview" hidden="true"/>
 #endif
                 <menuitem id="menu_print"
                           key="printKb"
@@ -237,7 +225,7 @@
             </menu>
 
             <menu id="history-menu" data-l10n-id="menu-history">
-              <menupopup id="goPopup"
+              <menupopup id="historyMenuPopup"
 #ifndef XP_MACOSX
                          placespopup="true"
                          is="places-popup"
@@ -406,7 +394,7 @@
                         hidden="true"
                         oncommand="gSync.openSignInAgainPage('menubar');" data-l10n-id="menu-tools-fxa-re-auth"/>
               <menuseparator id="devToolsSeparator"/>
-              <menu id="webDeveloperMenu" data-l10n-id="menu-tools-browser-tools">
+              <menu id="browserToolsMenu" data-l10n-id="menu-tools-browser-tools">
                 <menupopup id="menuWebDeveloperPopup">
                   <menuitem id="menu_taskManager"
                             oncommand="switchToTabHavingURI('about:performance', true)"
@@ -474,8 +462,8 @@
 #endif
                 <menuitem id="feedbackPage"
                           oncommand="openFeedbackPage()"
-                          data-l10n-id="menu-help-feedback-page"
-                          appmenu-data-l10n-id="appmenu-help-feedback-page"/>
+                          data-l10n-id="menu-help-share-ideas"
+                          appmenu-data-l10n-id="appmenu-help-share-ideas"/>
                 <menuitem id="helpSafeMode"
                           oncommand="safeModeRestart();"
                           data-l10n-id="menu-help-enter-troubleshoot-mode2"

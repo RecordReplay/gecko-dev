@@ -126,17 +126,16 @@ enum CheckboxValue {
 @implementation mozPaneAccessible
 
 - (NSArray*)moxChildren {
-  if (!mGeckoAccessible.AsAccessible()) return nil;
+  if (!mGeckoAccessible->AsLocal()) return nil;
 
   nsDeckFrame* deckFrame =
-      do_QueryFrame(mGeckoAccessible.AsAccessible()->GetFrame());
+      do_QueryFrame(mGeckoAccessible->AsLocal()->GetFrame());
   nsIFrame* selectedFrame = deckFrame ? deckFrame->GetSelectedBox() : nullptr;
 
   LocalAccessible* selectedAcc = nullptr;
   if (selectedFrame) {
     nsINode* node = selectedFrame->GetContent();
-    selectedAcc =
-        mGeckoAccessible.AsAccessible()->Document()->GetAccessible(node);
+    selectedAcc = mGeckoAccessible->AsLocal()->Document()->GetAccessible(node);
   }
 
   if (selectedAcc) {
@@ -187,40 +186,27 @@ enum CheckboxValue {
  *    amount by which to increment/decrement the current value.
  */
 - (void)changeValueBySteps:(int)factor {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull(), "mGeckoAccessible is null");
+  MOZ_ASSERT(mGeckoAccessible, "mGeckoAccessible is null");
 
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    double newValue = acc->CurValue() + (acc->Step() * factor);
-    [self setValue:(newValue)];
-  } else {
-    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
-    double newValue = proxy->CurValue() + (proxy->Step() * factor);
-    [self setValue:(newValue)];
-  }
+  double newValue =
+      mGeckoAccessible->CurValue() + (mGeckoAccessible->Step() * factor);
+  [self setValue:(newValue)];
 }
 
 /*
  * Updates the accessible's current value to the specified value
  */
 - (void)setValue:(double)value {
-  MOZ_ASSERT(!mGeckoAccessible.IsNull(), "mGeckoAccessible is null");
+  MOZ_ASSERT(mGeckoAccessible, "mGeckoAccessible is null");
 
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    double min = acc->MinValue();
-    double max = acc->MaxValue();
-    // Because min and max are not required attributes, we first check
-    // if the value is undefined. If this check fails,
-    // the value is defined, and we verify our new value falls
-    // within the bound (inclusive).
-    if ((IsNaN(min) || value >= min) && (IsNaN(max) || value <= max)) {
+  double min = mGeckoAccessible->MinValue();
+  double max = mGeckoAccessible->MaxValue();
+
+  if ((IsNaN(min) || value >= min) && (IsNaN(max) || value <= max)) {
+    if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
       acc->SetCurValue(value);
-    }
-  } else {
-    RemoteAccessible* proxy = mGeckoAccessible.AsProxy();
-    double min = proxy->MinValue();
-    double max = proxy->MaxValue();
-    // As above, check if the value is within bounds.
-    if ((IsNaN(min) || value >= min) && (IsNaN(max) || value <= max)) {
+    } else {
+      RemoteAccessible* proxy = mGeckoAccessible->AsRemote();
       proxy->SetCurValue(value);
     }
   }

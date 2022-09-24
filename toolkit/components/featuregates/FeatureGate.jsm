@@ -133,11 +133,16 @@ class FeatureGate {
       return;
     }
     let features = await FeatureGate.all();
-    let enabledFeatures = features
-      .filter(async f => f.getValue())
-      .map(f => f.preference)
-      .join(",");
-    crashReporter.annotateCrashReport("ExperimentalFeatures", enabledFeatures);
+    let enabledFeatures = [];
+    for (let feature of features) {
+      if (await feature.getValue()) {
+        enabledFeatures.push(feature.preference);
+      }
+    }
+    crashReporter.annotateCrashReport(
+      "ExperimentalFeatures",
+      enabledFeatures.join(",")
+    );
   }
 
   /**
@@ -220,7 +225,10 @@ class FeatureGate {
   }
 
   static targetingFacts = new Map([
-    ["release", AppConstants.MOZ_UPDATE_CHANNEL === "release"],
+    [
+      "release",
+      AppConstants.MOZ_UPDATE_CHANNEL === "release" || AppConstants.IS_ESR,
+    ],
     ["beta", AppConstants.MOZ_UPDATE_CHANNEL === "beta"],
     ["early_beta_or_earlier", AppConstants.EARLY_BETA_OR_EARLIER],
     ["dev-edition", AppConstants.MOZ_DEV_EDITION],
@@ -229,6 +237,7 @@ class FeatureGate {
     ["mac", AppConstants.platform === "macosx"],
     ["linux", AppConstants.platform === "linux"],
     ["android", AppConstants.platform === "android"],
+    ["thunderbird", AppConstants.MOZ_APP_NAME === "thunderbird"],
   ]);
 
   /**

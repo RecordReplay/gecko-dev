@@ -30,18 +30,18 @@ class ScaledFontMac : public ScaledFontBase {
       CGFontRef aFont, const RefPtr<UnscaledFont>& aUnscaledFont, Float aSize,
       bool aOwnsFont = false,
       const DeviceColor& aFontSmoothingBackgroundColor = DeviceColor(),
-      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false);
+      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false,
+      bool aHasColorGlyphs = false);
   ScaledFontMac(
       CTFontRef aFont, const RefPtr<UnscaledFont>& aUnscaledFont,
       const DeviceColor& aFontSmoothingBackgroundColor = DeviceColor(),
-      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false);
+      bool aUseFontSmoothing = true, bool aApplySyntheticBold = false,
+      bool aHasColorGlyphs = false);
   ~ScaledFontMac();
 
   FontType GetType() const override { return FontType::MAC; }
-#ifdef USE_SKIA
   SkTypeface* CreateSkTypeface() override;
   void SetupSkFontDrawOptions(SkFont& aFont) override;
-#endif
   already_AddRefed<Path> GetPathForGlyphs(const GlyphBuffer& aBuffer,
                                           const DrawTarget* aTarget) override;
 
@@ -54,14 +54,14 @@ class ScaledFontMac : public ScaledFontBase {
 
   bool CanSerialize() override { return true; }
 
+  bool MayUseBitmaps() override { return mHasColorGlyphs; }
+
   DeviceColor FontSmoothingBackgroundColor() {
     return mFontSmoothingBackgroundColor;
   }
 
-#ifdef USE_CAIRO_SCALED_FONT
   cairo_font_face_t* CreateCairoFontFace(
       cairo_font_options_t* aFontOptions) override;
-#endif
 
  private:
   friend class DrawTargetSkia;
@@ -74,13 +74,15 @@ class ScaledFontMac : public ScaledFontBase {
   DeviceColor mFontSmoothingBackgroundColor;
   bool mUseFontSmoothing;
   bool mApplySyntheticBold;
+  bool mHasColorGlyphs;
 
   struct InstanceData {
     explicit InstanceData(ScaledFontMac* aScaledFont)
         : mFontSmoothingBackgroundColor(
               aScaledFont->mFontSmoothingBackgroundColor),
           mUseFontSmoothing(aScaledFont->mUseFontSmoothing),
-          mApplySyntheticBold(aScaledFont->mApplySyntheticBold) {}
+          mApplySyntheticBold(aScaledFont->mApplySyntheticBold),
+          mHasColorGlyphs(aScaledFont->mHasColorGlyphs) {}
 
     InstanceData(const wr::FontInstanceOptions* aOptions,
                  const wr::FontInstancePlatformOptions* aPlatformOptions);
@@ -88,6 +90,7 @@ class ScaledFontMac : public ScaledFontBase {
     DeviceColor mFontSmoothingBackgroundColor;
     bool mUseFontSmoothing;
     bool mApplySyntheticBold;
+    bool mHasColorGlyphs;
   };
 };
 

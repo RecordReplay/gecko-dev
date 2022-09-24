@@ -11,6 +11,7 @@
 
 #import "mozView.h"
 
+#include "gfxPlatform.h"
 // This must be included last:
 #include "nsObjCExceptions.h"
 
@@ -29,14 +30,14 @@ static id<mozAccessible, mozView> getNativeViewFromRootAccessible(
 
 @implementation mozRootAccessible
 
-- (id)initWithAccessible:(mozilla::a11y::AccessibleOrProxy)aAccOrProxy {
+- (id)initWithAccessible:(mozilla::a11y::Accessible*)aAcc {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
-  MOZ_ASSERT(!aAccOrProxy.IsProxy(), "mozRootAccessible is never a proxy");
+  MOZ_ASSERT(!aAcc->IsRemote(), "mozRootAccessible is never a proxy");
 
-  mParallelView = getNativeViewFromRootAccessible(aAccOrProxy.AsAccessible());
+  mParallelView = getNativeViewFromRootAccessible(aAcc->AsLocal());
 
-  return [super initWithAccessible:aAccOrProxy];
+  return [super initWithAccessible:aAcc];
 
   NS_OBJC_END_TRY_BLOCK_RETURN(nil);
 }
@@ -68,7 +69,7 @@ static id<mozAccessible, mozView> getNativeViewFromRootAccessible(
 - (id)representedView {
   NS_OBJC_BEGIN_TRY_BLOCK_RETURN;
 
-  MOZ_ASSERT(mParallelView,
+  MOZ_ASSERT(mParallelView || gfxPlatform::IsHeadless(),
              "root accessible does not have a native parallel view.");
 
   return mParallelView;

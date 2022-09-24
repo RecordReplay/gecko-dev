@@ -17,10 +17,8 @@
 
 #include "mozilla/gfx/2D.h"
 #include "mozilla/RefPtr.h"
-#include "nsBaseScreen.h"
 #include "nsBaseWidget.h"
 #include "nsCOMArray.h"
-#include "nsIScreenManager.h"
 #include "nsThreadUtils.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/ContentCache.h"
@@ -29,10 +27,15 @@
 #include "mozilla/layers/MemoryPressureObserver.h"
 
 namespace mozilla {
+enum class NativeKeyBindingsType : uint8_t;
 
 namespace dom {
 class BrowserChild;
 }  // namespace dom
+
+namespace layers {
+class WebRenderLayerManager;
+}  // namespace layers
 
 namespace widget {
 
@@ -44,6 +47,7 @@ class PuppetWidget : public nsBaseWidget,
   typedef mozilla::CSSRect CSSRect;
   typedef mozilla::dom::BrowserChild BrowserChild;
   typedef mozilla::gfx::DrawTarget DrawTarget;
+  typedef mozilla::layers::WebRenderLayerManager WebRenderLayerManager;
 
   // Avoiding to make compiler confused between mozilla::widget and nsIWidget.
   typedef mozilla::widget::TextEventDispatcher TextEventDispatcher;
@@ -110,10 +114,10 @@ class PuppetWidget : public nsBaseWidget,
   virtual void Enable(bool aState) override { mEnabled = aState; }
   virtual bool IsEnabled() const override { return mEnabled; }
 
-  virtual void SetFocus(Raise, mozilla::dom::CallerType aCallerType) override;
+  virtual nsSizeMode SizeMode() override { return mSizeMode; }
+  virtual void SetSizeMode(nsSizeMode aMode) override { mSizeMode = aMode; }
 
-  virtual nsresult ConfigureChildren(
-      const nsTArray<Configuration>& aConfigurations) override;
+  virtual void SetFocus(Raise, mozilla::dom::CallerType aCallerType) override;
 
   virtual void Invalidate(const LayoutDeviceIntRect& aRect) override;
 
@@ -171,10 +175,7 @@ class PuppetWidget : public nsBaseWidget,
     return eTransparencyTransparent;
   }
 
-  virtual LayerManager* GetLayerManager(
-      PLayerTransactionChild* aShadowManager = nullptr,
-      LayersBackend aBackendHint = mozilla::layers::LayersBackend::LAYERS_NONE,
-      LayerManagerPersistence aPersistence = LAYER_MANAGER_CURRENT) override;
+  virtual WindowRenderer* GetWindowRenderer() override;
 
   // This is used for creating remote layer managers and for re-creating
   // them after a compositor reset. The lambda aInitializeFunc is used to
@@ -182,9 +183,9 @@ class PuppetWidget : public nsBaseWidget,
   // manager; in the event of a failure, return false and it will destroy the
   // new layer manager without changing the state of the widget.
   bool CreateRemoteLayerManager(
-      const std::function<bool(LayerManager*)>& aInitializeFunc);
+      const std::function<bool(WebRenderLayerManager*)>& aInitializeFunc);
 
-  bool HasLayerManager() { return !!mLayerManager; }
+  bool HasWindowRenderer() { return !!mWindowRenderer; }
 
   virtual void SetInputContext(const InputContext& aContext,
                                const InputContextAction& aAction) override;
@@ -224,8 +225,6 @@ class PuppetWidget : public nsBaseWidget,
     mDefaultScale = aScale;
   }
 
-  nsIntSize GetScreenDimensions();
-
   // safe area insets support
   virtual ScreenIntMargin GetSafeAreaInsets() const override;
   void UpdateSafeAreaInsets(const ScreenIntMargin& aSafeAreaInsets);
@@ -263,20 +262,29 @@ class PuppetWidget : public nsBaseWidget,
                                               uint32_t aPointerOrientation,
                                               nsIObserver* aObserver) override;
   virtual nsresult SynthesizeNativeTouchPadPinch(
-      TouchpadPinchPhase aEventPhase, float aScale, LayoutDeviceIntPoint aPoint,
-      int32_t aModifierFlags) override;
+      TouchpadGesturePhase aEventPhase, float aScale,
+      LayoutDeviceIntPoint aPoint, int32_t aModifierFlags) override;
   virtual nsresult SynthesizeNativeTouchTap(LayoutDeviceIntPoint aPoint,
                                             bool aLongTap,
                                             nsIObserver* aObserver) override;
   virtual nsresult ClearNativeTouchSequence(nsIObserver* aObserver) override;
   virtual uint32_t GetMaxTouchPoints() const override;
-  virtual nsresult SynthesizeNativePenInput(
-      uint32_t aPointerId, TouchPointerState aPointerState,
-      LayoutDeviceIntPoint aPoint, double aPressure, uint32_t aRotation,
-      int32_t aTiltX, int32_t aTiltY, nsIObserver* aObserver) override;
+  virtual nsresult SynthesizeNativePenInput(uint32_t aPointerId,
+                                            TouchPointerState aPointerState,
+                                            LayoutDeviceIntPoint aPoint,
+                                            double aPressure,
+                                            uint32_t aRotation, int32_t aTiltX,
+                                            int32_t aTiltY, int32_t aButton,
+                                            nsIObserver* aObserver) override;
 
   virtual nsresult SynthesizeNativeTouchpadDoubleTap(
       LayoutDeviceIntPoint aPoint, uint32_t aModifierFlags) override;
+
+  virtual nsresult SynthesizeNativeTouchpadPan(TouchpadGesturePhase aEventPhase,
+                                               LayoutDeviceIntPoint aPoint,
+                                               double aDeltaX, double aDeltaY,
+                                               int32_t aModifierFlags,
+                                               nsIObserver* aObserver) override;
 
   virtual void LockNativePointer() override;
   virtual void UnlockNativePointer() override;
@@ -393,6 +401,8 @@ class PuppetWidget : public nsBaseWidget,
   bool mVisible;
 
  private:
+  nsSizeMode mSizeMode;
+
   bool mNeedIMEStateInit;
   // When remote process requests to commit/cancel a composition, the
   // composition may have already been committed in the main process.  In such
@@ -402,32 +412,6 @@ class PuppetWidget : public nsBaseWidget,
   // destroyed. So, until this meets new eCompositionStart, following
   // composition events should be ignored if this is set to true.
   bool mIgnoreCompositionEvents;
-};
-
-class PuppetScreen : public nsBaseScreen {
- public:
-  explicit PuppetScreen(void* nativeScreen);
-  ~PuppetScreen();
-
-  NS_IMETHOD GetRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth,
-                     int32_t* aHeight) override;
-  NS_IMETHOD GetAvailRect(int32_t* aLeft, int32_t* aTop, int32_t* aWidth,
-                          int32_t* aHeight) override;
-  NS_IMETHOD GetPixelDepth(int32_t* aPixelDepth) override;
-  NS_IMETHOD GetColorDepth(int32_t* aColorDepth) override;
-};
-
-class PuppetScreenManager final : public nsIScreenManager {
-  ~PuppetScreenManager();
-
- public:
-  PuppetScreenManager();
-
-  NS_DECL_ISUPPORTS
-  NS_DECL_NSISCREENMANAGER
-
- protected:
-  nsCOMPtr<nsIScreen> mOneScreen;
 };
 
 }  // namespace widget

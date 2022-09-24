@@ -6,36 +6,21 @@
 
 "use strict";
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "AddonManager",
-  "resource://gre/modules/AddonManager.jsm"
+var { XPCOMUtils } = ChromeUtils.import(
+  "resource://gre/modules/XPCOMUtils.jsm"
 );
-ChromeUtils.defineModuleGetter(
-  this,
-  "BrowserUtils",
-  "resource://gre/modules/BrowserUtils.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "DeferredTask",
-  "resource://gre/modules/DeferredTask.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "ExtensionSettingsStore",
-  "resource://gre/modules/ExtensionSettingsStore.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "ExtensionPreferencesManager",
-  "resource://gre/modules/ExtensionPreferencesManager.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "Management",
-  "resource://gre/modules/Extension.jsm"
-);
+
+// Note: we get loaded in dialogs so we need to define our
+// own getters, separate from preferences.js .
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AddonManager: "resource://gre/modules/AddonManager.jsm",
+  BrowserUtils: "resource://gre/modules/BrowserUtils.jsm",
+  DeferredTask: "resource://gre/modules/DeferredTask.jsm",
+  ExtensionPreferencesManager:
+    "resource://gre/modules/ExtensionPreferencesManager.jsm",
+  ExtensionSettingsStore: "resource://gre/modules/ExtensionSettingsStore.jsm",
+  Management: "resource://gre/modules/Extension.jsm",
+});
 
 const PREF_SETTING_TYPE = "prefs";
 const PROXY_KEY = "proxy.settings";
@@ -139,7 +124,7 @@ function settingNameToL10nID(settingName) {
       `Unknown extension controlled setting name: ${settingName}`
     );
   }
-  return `extension-controlled-${extensionControlledL10nKeys[settingName]}`;
+  return `extension-controlling-${extensionControlledL10nKeys[settingName]}`;
 }
 
 /**
@@ -181,6 +166,7 @@ function setControllingExtensionDescription(elem, addon, settingName) {
     let image = document.createElementNS("http://www.w3.org/1999/xhtml", "img");
     image.setAttribute("src", src);
     image.setAttribute("data-l10n-name", "icon");
+    image.setAttribute("role", "presentation");
     image.classList.add("extension-controlled-icon");
     elem.appendChild(image);
   } else if (existingImg.getAttribute("src") !== src) {
@@ -246,6 +232,7 @@ function showEnableExtensionMessage(settingName) {
     let img = document.createElementNS("http://www.w3.org/1999/xhtml", "img");
     img.src = url;
     img.setAttribute("data-l10n-name", name);
+    img.setAttribute("role", "presentation");
     img.className = "extension-controlled-icon";
     return img;
   };

@@ -8,6 +8,7 @@
 
 const AVAILABLE_SHIMS = [
   {
+    hiddenInAboutCompat: true,
     id: "LiveTestShim",
     platform: "all",
     name: "Live test shim",
@@ -17,6 +18,7 @@ const AVAILABLE_SHIMS = [
     needsShimHelpers: ["getOptions", "optIn"],
   },
   {
+    hiddenInAboutCompat: true,
     id: "MochitestShim",
     platform: "all",
     branch: ["all:ignoredOtherPlatform"],
@@ -36,6 +38,7 @@ const AVAILABLE_SHIMS = [
     unblocksOnOptIn: ["*://trackertest.org/*"],
   },
   {
+    hiddenInAboutCompat: true,
     disabled: true,
     id: "MochitestShim2",
     platform: "all",
@@ -55,6 +58,7 @@ const AVAILABLE_SHIMS = [
     unblocksOnOptIn: ["*://trackertest.org/*"],
   },
   {
+    hiddenInAboutCompat: true,
     id: "MochitestShim3",
     platform: "all",
     name: "Test shim for Mochitests (host)",
@@ -66,6 +70,7 @@ const AVAILABLE_SHIMS = [
     ],
   },
   {
+    hiddenInAboutCompat: true,
     id: "MochitestShim4",
     platform: "all",
     name: "Test shim for Mochitests (notHost)",
@@ -77,6 +82,7 @@ const AVAILABLE_SHIMS = [
     ],
   },
   {
+    hiddenInAboutCompat: true,
     id: "MochitestShim5",
     platform: "all",
     name: "Test shim for Mochitests (branch)",
@@ -88,6 +94,7 @@ const AVAILABLE_SHIMS = [
     ],
   },
   {
+    hiddenInAboutCompat: true,
     id: "MochitestShim6",
     platform: "never matches",
     name: "Test shim for Mochitests (platform)",
@@ -96,6 +103,50 @@ const AVAILABLE_SHIMS = [
     matches: [
       "*://example.com/browser/browser/extensions/webcompat/tests/browser/shims_test_3.js",
     ],
+  },
+  {
+    id: "AddThis",
+    platform: "all",
+    name: "AddThis",
+    bug: "1713694",
+    file: "addthis-angular.js",
+    matches: [
+      "*://s7.addthis.com/icons/official-addthis-angularjs/current/dist/official-addthis-angularjs.min.js*",
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Adform",
+    platform: "all",
+    name: "Adform",
+    bug: "1713695",
+    file: "adform.js",
+    matches: [
+      "*://track.adform.net/serving/scripts/trackpoint/",
+      "*://track.adform.net/serving/scripts/trackpoint/async/",
+      {
+        patterns: ["*://track.adform.net/Serving/TrackPoint/*"],
+        target: "tracking-pixel.png",
+        types: ["image", "imageset", "xmlhttprequest"],
+      },
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "AdNexus",
+    platform: "all",
+    name: "AdNexus",
+    bug: "1713696",
+    file: "empty-script.js",
+    matches: [
+      "*://acdn.adnxs.com/ast/ast.js",
+      {
+        patterns: ["*://*.adnxs.com/*/pb.js", "*://*.adnxs.com/*/prebid"],
+        target: "adnexus-prebid.js",
+        types: ["script"],
+      },
+    ],
+    onlyIfBlockedByETP: true,
   },
   {
     id: "AdSafeProtectedGoogleIMAAdapter",
@@ -111,9 +162,18 @@ const AVAILABLE_SHIMS = [
     id: "AdsByGoogle",
     platform: "all",
     name: "Ads by Google",
-    bug: "1629644",
-    file: "empty-script.js",
+    bug: "1713726",
+    file: "google-ads.js",
     matches: ["*://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js"],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "AmazonTAM",
+    platform: "all",
+    name: "Amazon Transparent Ad Marketplace",
+    bug: "1713698",
+    file: "apstag.js",
+    matches: ["*://c.amazon-adsystem.com/aax2/apstag.js"],
     onlyIfBlockedByETP: true,
   },
   {
@@ -123,6 +183,27 @@ const AVAILABLE_SHIMS = [
     bug: "1486337",
     file: "bmauth.js",
     matches: ["*://auth.9c9media.ca/auth/main.js"],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Chartbeat",
+    platform: "all",
+    name: "Chartbeat",
+    bug: "1713699",
+    file: "chartbeat.js",
+    matches: [
+      "*://static.chartbeat.com/js/chartbeat.js",
+      "*://static.chartbeat.com/js/chartbeat_video.js",
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Criteo",
+    platform: "all",
+    name: "Criteo",
+    bug: "1713720",
+    file: "criteo.js",
+    matches: ["*://static.criteo.net/js/ld/publishertag.js"],
     onlyIfBlockedByETP: true,
   },
   {
@@ -239,7 +320,7 @@ const AVAILABLE_SHIMS = [
   {
     id: "GoogleAnalyticsLegacy",
     platform: "all",
-    name: "Legacy Google Analytics",
+    name: "Google Analytics (legacy version)",
     bug: "1487072",
     file: "google-analytics-legacy.js",
     matches: ["*://ssl.google-analytics.com/ga.js"],
@@ -258,17 +339,57 @@ const AVAILABLE_SHIMS = [
     onlyIfBlockedByETP: true,
   },
   {
+    id: "GooglePageAd",
+    platform: "all",
+    name: "Google Page Ad",
+    bug: "1713692",
+    file: "google-page-ad.js",
+    matches: ["*://www.googleadservices.com/pagead/conversion_async.js"],
+    onlyIfBlockedByETP: true,
+  },
+  {
     id: "GooglePublisherTags",
     platform: "all",
     name: "Google Publisher Tags",
     bug: "1713685",
     file: "google-publisher-tags.js",
     matches: [
-      "*://www.googletagservices.com/tag/js/gpt.js",
-      "*://securepubads.g.doubleclick.net/tag/js/gpt.js",
-      "*://securepubads.g.doubleclick.net/gpt/pubads_impl_*.js",
+      "*://www.googletagservices.com/tag/js/gpt.js*",
+      "*://securepubads.g.doubleclick.net/tag/js/gpt.js*",
+      "*://securepubads.g.doubleclick.net/gpt/pubads_impl_*.js*",
     ],
     onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Google SafeFrame",
+    platform: "all",
+    name: "Google SafeFrame",
+    bug: "1713691",
+    matches: [
+      {
+        patterns: [
+          "*://tpc.googlesyndication.com/safeframe/*/html/container.html",
+          "*://*.safeframe.googlesyndication.com/safeframe/*/html/container.html",
+        ],
+        target: "google-safeframe.html",
+        types: ["sub_frame"],
+      },
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "GoogleTrends",
+    platform: "all",
+    name: "Google Trends",
+    bug: "1624914",
+    custom: "google-trends-dfpi-fix",
+    onlyIfDFPIActive: true,
+    matches: [
+      {
+        patterns: ["*://trends.google.com/trends/embed*"],
+        types: ["sub_frame"],
+      },
+    ],
   },
   {
     id: "IASPET",
@@ -276,7 +397,43 @@ const AVAILABLE_SHIMS = [
     name: "Integral Ad Science PET",
     bug: "1713701",
     file: "iaspet.js",
-    matches: ["*://cdn.adsafeprotected.com/iasPET.1.js"],
+    matches: [
+      "*://cdn.adsafeprotected.com/iasPET.1.js",
+      "*://static.adsafeprotected.com/iasPET.1.js",
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "MNet",
+    platform: "all",
+    name: "Media.net Ads",
+    bug: "1713703",
+    file: "empty-script.js",
+    matches: ["*://adservex.media.net/videoAds.js*"],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Moat",
+    platform: "all",
+    name: "Moat",
+    bug: "1713704",
+    file: "moat.js",
+    matches: [
+      "*://*.moatads.com/*/moatad.js*",
+      "*://*.moatads.com/*/moatapi.js*",
+      "*://*.moatads.com/*/moatheader.js*",
+      "*://*.moatads.com/*/yi.js*",
+    ],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "Optimizely",
+    platform: "all",
+    name: "Optimizely",
+    bug: "1714431",
+    file: "optimizely.js",
+    matches: ["*://cdn.optimizely.com/js/*.js"],
+    onlyIfBlockedByETP: true,
   },
   {
     id: "Rambler",
@@ -295,6 +452,176 @@ const AVAILABLE_SHIMS = [
     bug: "1713725",
     file: "rich-relevance.js",
     matches: ["*://media.richrelevance.com/rrserver/js/1.2/p13n.js"],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "StackBlitz",
+    platform: "all",
+    name: "StackBlitz",
+    bug: "1668408",
+    onlyIfDFPIActive: true,
+    contentScripts: [
+      {
+        js: "stackblitz.js",
+        matches: ["*://*.stackblitz.com/*", "*://*.stackblitz.io/*"],
+        runAt: "document_start",
+        allFrames: true,
+      },
+    ],
+  },
+  {
+    id: "Vidible",
+    branch: ["nightly"],
+    platform: "all",
+    name: "Vidible",
+    bug: "1713710",
+    file: "vidible.js",
+    logos: ["play.svg"],
+    matches: [
+      "*://*.vidible.tv/*/vidible-min.js*",
+      "*://vdb-cdn-files.s3.amazonaws.com/*/vidible-min.js*",
+    ],
+    needsShimHelpers: ["optIn"],
+    onlyIfBlockedByETP: true,
+    unblocksOnOptIn: [
+      "*://delivery.vidible.tv/jsonp/pid=*/vid=*/*.js*",
+      "*://delivery.vidible.tv/placement/*",
+      "*://img.vidible.tv/prod/*",
+      "*://cdn-ssl.vidible.tv/prod/player/js/*.js",
+      "*://hlsrv.vidible.tv/prod/*.m3u8*",
+      "*://videos.vidible.tv/prod/*.key*",
+      "*://videos.vidible.tv/prod/*.mp4*",
+      "*://videos.vidible.tv/prod/*.webm*",
+      "*://videos.vidible.tv/prod/*.ts*",
+    ],
+  },
+  {
+    id: "Hamropatro",
+    platform: "all",
+    name: "Hamropatro",
+    bug: "1660446",
+    contentScripts: [
+      {
+        js: "hamropatro.js",
+        matches: ["*://we.hamropatro.com/login*"],
+        runAt: "document_start",
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "Kinja",
+    platform: "all",
+    name: "Kinja",
+    bug: "1656171",
+    contentScripts: [
+      {
+        js: "kinja.js",
+        matches: [
+          "*://www.avclub.com/*",
+          "*://deadspin.com/*",
+          "*://gizmodo.com/*",
+          "*://jalopnik.com/*",
+          "*://jezebel.com/*",
+          "*://kotaku.com/*",
+          "*://lifehacker.com/*",
+          "*://www.theonion.com/*",
+          "*://www.theroot.com/*",
+          "*://thetakeout.com/*",
+          "*://theinventory.com/*",
+        ],
+        runAt: "document_start",
+        allFrames: true,
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "MicrosoftLogin",
+    platform: "desktop",
+    name: "Microsoft Login",
+    bug: "1638383",
+    requestStorageAccessForRedirect: [
+      ["*://web.powerva.microsoft.com/*", "*://login.microsoftonline.com/*"],
+      ["*://teams.microsoft.com/*", "*://login.microsoftonline.com/*"],
+    ],
+    contentScripts: [
+      {
+        js: "microsoftLogin.js",
+        matches: [
+          "*://web.powerva.microsoft.com/*",
+          "*://teams.microsoft.com/*",
+        ],
+        runAt: "document_start",
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "Humblebundle",
+    platform: "all",
+    name: "Humblebundle",
+    bug: "1742553",
+    contentScripts: [
+      {
+        js: "humblebundle.js",
+        matches: [
+          "*://www.humblebundle.com/login*",
+          "*://www.humblebundle.com/signup*",
+        ],
+        runAt: "document_start",
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "History",
+    platform: "all",
+    name: "History.com",
+    bug: "1624853",
+    contentScripts: [
+      {
+        js: "history.js",
+        matches: ["*://play.history.com/*"],
+        runAt: "document_start",
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "Crave.ca",
+    platform: "all",
+    name: "Crave.ca",
+    bug: "1746439",
+    contentScripts: [
+      {
+        js: "crave-ca.js",
+        matches: ["*://account.bellmedia.ca/login*"],
+        runAt: "document_start",
+      },
+    ],
+    onlyIfDFPIActive: true,
+  },
+  {
+    id: "MaxMindGeoIP",
+    platform: "all",
+    name: "MaxMind GeoIP",
+    bug: "1754389",
+    file: "maxmind-geoip.js",
+    matches: ["*://js.maxmind.com/js/apis/geoip2/*/geoip2.js"],
+    onlyIfBlockedByETP: true,
+  },
+  {
+    id: "WebTrends",
+    platform: "all",
+    name: "WebTrends",
+    bug: "1766414",
+    file: "webtrends.js",
+    matches: [
+      "*://s.webtrends.com/js/advancedLinkTracking.js",
+      "*://s.webtrends.com/js/webtrends.js",
+      "*://s.webtrends.com/js/webtrends.min.js",
+    ],
     onlyIfBlockedByETP: true,
   },
 ];

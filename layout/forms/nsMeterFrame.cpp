@@ -11,6 +11,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/HTMLMeterElement.h"
 #include "nsIContent.h"
+#include "nsLayoutUtils.h"
 #include "nsPresContext.h"
 #include "nsGkAtoms.h"
 #include "nsNameSpaceManager.h"
@@ -119,17 +120,8 @@ void nsMeterFrame::ReflowBarFrame(nsIFrame* aBarFrame,
   nscoord xoffset = aReflowInput.ComputedPhysicalBorderPadding().left;
   nscoord yoffset = aReflowInput.ComputedPhysicalBorderPadding().top;
 
-  // NOTE: Introduce a new function getPosition in the content part ?
-  HTMLMeterElement* meterElement = static_cast<HTMLMeterElement*>(GetContent());
-
-  double max = meterElement->Max();
-  double min = meterElement->Min();
-  double value = meterElement->Value();
-
-  double position = max - min;
-  position = position != 0 ? (value - min) / position : 1;
-
-  size = NSToCoordRound(size * position);
+  auto* meterElement = static_cast<HTMLMeterElement*>(GetContent());
+  size = NSToCoordRound(size * meterElement->Position());
 
   if (!vertical && wm.IsPhysicalRTL()) {
     xoffset += aReflowInput.ComputedWidth() - size;
@@ -226,11 +218,8 @@ bool nsMeterFrame::ShouldUseNativeStyle() const {
   // - neither frame has author specified rules setting the border or the
   //   background.
   return StyleDisplay()->EffectiveAppearance() == StyleAppearance::Meter &&
-         !PresContext()->HasAuthorSpecifiedRules(
-             this, NS_AUTHOR_SPECIFIED_BORDER_OR_BACKGROUND) &&
-         barFrame &&
+         !Style()->HasAuthorSpecifiedBorderOrBackground() && barFrame &&
          barFrame->StyleDisplay()->EffectiveAppearance() ==
              StyleAppearance::Meterchunk &&
-         !PresContext()->HasAuthorSpecifiedRules(
-             barFrame, NS_AUTHOR_SPECIFIED_BORDER_OR_BACKGROUND);
+         !barFrame->Style()->HasAuthorSpecifiedBorderOrBackground();
 }

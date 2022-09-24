@@ -35,9 +35,9 @@ using namespace mozilla;
 //----------------------------------------------------------------------------
 
 static bool gInitialized = false;
-static nsIURLParser* gNoAuthURLParser = nullptr;
-static nsIURLParser* gAuthURLParser = nullptr;
-static nsIURLParser* gStdURLParser = nullptr;
+static StaticRefPtr<nsIURLParser> gNoAuthURLParser;
+static StaticRefPtr<nsIURLParser> gAuthURLParser;
+static StaticRefPtr<nsIURLParser> gStdURLParser;
 
 static void InitGlobals() {
   nsCOMPtr<nsIURLParser> parser;
@@ -45,22 +45,19 @@ static void InitGlobals() {
   parser = do_GetService(NS_NOAUTHURLPARSER_CONTRACTID);
   NS_ASSERTION(parser, "failed getting 'noauth' url parser");
   if (parser) {
-    gNoAuthURLParser = parser.get();
-    NS_ADDREF(gNoAuthURLParser);
+    gNoAuthURLParser = parser;
   }
 
   parser = do_GetService(NS_AUTHURLPARSER_CONTRACTID);
   NS_ASSERTION(parser, "failed getting 'auth' url parser");
   if (parser) {
-    gAuthURLParser = parser.get();
-    NS_ADDREF(gAuthURLParser);
+    gAuthURLParser = parser;
   }
 
   parser = do_GetService(NS_STDURLPARSER_CONTRACTID);
   NS_ASSERTION(parser, "failed getting 'std' url parser");
   if (parser) {
-    gStdURLParser = parser.get();
-    NS_ADDREF(gStdURLParser);
+    gStdURLParser = parser;
   }
 
   gInitialized = true;
@@ -68,11 +65,11 @@ static void InitGlobals() {
 
 void net_ShutdownURLHelper() {
   if (gInitialized) {
-    NS_IF_RELEASE(gNoAuthURLParser);
-    NS_IF_RELEASE(gAuthURLParser);
-    NS_IF_RELEASE(gStdURLParser);
     gInitialized = false;
   }
+  gNoAuthURLParser = nullptr;
+  gAuthURLParser = nullptr;
+  gStdURLParser = nullptr;
 }
 
 //----------------------------------------------------------------------------
@@ -1123,7 +1120,7 @@ void SerializeString(const nsCString& aInput, nsAString& aValue) {
 
 }  // namespace
 
-void URLParams::Serialize(nsAString& aValue) const {
+void URLParams::Serialize(nsAString& aValue, bool aEncode) const {
   aValue.Truncate();
   bool first = true;
 
@@ -1136,9 +1133,15 @@ void URLParams::Serialize(nsAString& aValue) const {
 
     // XXX Actually, it's not necessary to build a new string object. Generally,
     // such cases could just convert each codepoint one-by-one.
-    SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mKey), aValue);
-    aValue.Append('=');
-    SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mValue), aValue);
+    if (aEncode) {
+      SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mKey), aValue);
+      aValue.Append('=');
+      SerializeString(NS_ConvertUTF16toUTF8(mParams[i].mValue), aValue);
+    } else {
+      aValue.Append(mParams[i].mKey);
+      aValue.Append('=');
+      aValue.Append(mParams[i].mValue);
+    }
   }
 }
 

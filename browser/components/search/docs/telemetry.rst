@@ -2,7 +2,12 @@ Telemetry
 =========
 
 This section describes existing telemetry probes measuring interaction with
-search engines.
+search engines from the browser UI.
+
+Other search-related telemetry is recorded by Toolkit such as search service
+telemetry and telemetry related to fetching search suggestions. Toolkit search
+telemetry is relevant to Firefox as well as other consumers of Toolkit. See
+:doc:`/toolkit/search/Telemetry` in the Toolkit documentation for details.
 
 .. toctree::
    :caption: Table of Contents
@@ -51,6 +56,7 @@ SEARCH_COUNTS - SAP usage
     - ``searchbar``
     - ``system``
     - ``urlbar`` Except aliases and search mode.
+    - ``urlbar_handoff`` Used when searching from about:newtab.
     - ``urlbar-searchmode`` Used when the Urlbar is in search mode.
     - ``webextension``
 
@@ -62,6 +68,7 @@ browser.engagement.navigation.*
   Possible SAPs are:
 
     - ``urlbar``  Except search mode.
+    - ``urlbar_handoff`` Used when searching from about:newtab.
     - ``urlbar_searchmode``  Used when the Urlbar is in search mode.
     - ``searchbar``
     - ``about_home``
@@ -115,6 +122,7 @@ browser.search.content.*
   They are broken down by the originating SAP where known:
 
   - ``urlbar``  Except search mode.
+  - ``urlbar_handoff`` Used when searching from about:newtab.
   - ``urlbar_searchmode``  Used when the Urlbar is in search mode.
   - ``searchbar``
   - ``about_home``

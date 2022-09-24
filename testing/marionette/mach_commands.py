@@ -13,12 +13,10 @@ import sys
 from six import iteritems
 
 from mach.decorators import (
-    CommandProvider,
     Command,
 )
 
 from mozbuild.base import (
-    MachCommandBase,
     MachCommandConditions as conditions,
     BinaryNotFoundException,
 )
@@ -52,6 +50,9 @@ def run_marionette(tests, binary=None, topsrcdir=None, **kwargs):
 
     parser.verify_usage(args)
 
+    # Causes Firefox to crash when using non-local connections.
+    os.environ["MOZ_DISABLE_NONLOCAL_CONNECTIONS"] = "1"
+
     if not args.logger:
         args.logger = commandline.setup_logging(
             "Marionette Unit Tests", args, {"mach": sys.stdout}
@@ -63,50 +64,52 @@ def run_marionette(tests, binary=None, topsrcdir=None, **kwargs):
         return 0
 
 
-@CommandProvider
-class MarionetteTest(MachCommandBase):
-    @Command(
-        "marionette-test",
-        category="testing",
-        description="Remote control protocol to Gecko, used for browser automation.",
-        conditions=[functools.partial(conditions.is_buildapp_in, apps=SUPPORTED_APPS)],
-        parser=create_parser_tests,
-    )
-    def marionette_test(self, command_context, tests, **kwargs):
-        if "test_objects" in kwargs:
-            tests = []
-            for obj in kwargs["test_objects"]:
-                tests.append(obj["file_relpath"])
-            del kwargs["test_objects"]
+@Command(
+    "marionette-test",
+    category="testing",
+    description="Remote control protocol to Gecko, used for browser automation.",
+    conditions=[functools.partial(conditions.is_buildapp_in, apps=SUPPORTED_APPS)],
+    parser=create_parser_tests,
+)
+def marionette_test(command_context, tests, **kwargs):
+    if "test_objects" in kwargs:
+        tests = []
+        for obj in kwargs["test_objects"]:
+            tests.append(obj["file_relpath"])
+        del kwargs["test_objects"]
 
-        if not tests:
-            if conditions.is_thunderbird(self):
-                tests = [
-                    os.path.join(
-                        self.topsrcdir, "comm/testing/marionette/unit-tests.ini"
-                    )
-                ]
-            else:
-                tests = [
-                    os.path.join(
-                        self.topsrcdir,
-                        "testing/marionette/harness/marionette_harness/tests/unit-tests.ini",
-                    )
-                ]
-
-        if not kwargs.get("binary") and (
-            conditions.is_firefox(self) or conditions.is_thunderbird(self)
-        ):
-            try:
-                kwargs["binary"] = self.get_binary_path("app")
-            except BinaryNotFoundException as e:
-                self.log(
-                    logging.ERROR,
-                    "marionette-test",
-                    {"error": str(e)},
-                    "ERROR: {error}",
+    if not tests:
+        if conditions.is_thunderbird(command_context):
+            tests = [
+                os.path.join(
+                    command_context.topsrcdir,
+                    "comm/testing/marionette/unit-tests.ini",
                 )
-                self.log(logging.INFO, "marionette-test", {"help": e.help()}, "{help}")
-                return 1
+            ]
+        else:
+            tests = [
+                os.path.join(
+                    command_context.topsrcdir,
+                    "testing/marionette/harness/marionette_harness/tests/unit-tests.ini",
+                )
+            ]
 
-        return run_marionette(tests, topsrcdir=self.topsrcdir, **kwargs)
+    if not kwargs.get("binary") and (
+        conditions.is_firefox(command_context)
+        or conditions.is_thunderbird(command_context)
+    ):
+        try:
+            kwargs["binary"] = command_context.get_binary_path("app")
+        except BinaryNotFoundException as e:
+            command_context.log(
+                logging.ERROR,
+                "marionette-test",
+                {"error": str(e)},
+                "ERROR: {error}",
+            )
+            command_context.log(
+                logging.INFO, "marionette-test", {"help": e.help()}, "{help}"
+            )
+            return 1
+
+    return run_marionette(tests, topsrcdir=command_context.topsrcdir, **kwargs)

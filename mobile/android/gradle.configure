@@ -28,7 +28,7 @@ def with_gradle(value):
         return True
 
 
-@depends(host, "--with-gradle", check_build_environment)
+@depends(host, "--with-gradle", build_environment)
 @imports(_from="os.path", _import="isfile")
 def gradle(host, value, build_env):
     if len(value):
@@ -98,16 +98,87 @@ def gradle_android_intermediates_folder(build_config):
     )
     buildType = uncapitalize(build_config.geckoview.variant.buildType)
 
-    return "gradle/build/mobile/android/geckoview/intermediates/javac/{}{}/compile{}{}JavaWithJavac/classes".format(
-        productFlavor,
-        capitalize(buildType),
-        capitalize(productFlavor),
-        capitalize(buildType),
+    return (
+        "gradle/build/mobile/android/geckoview/intermediates/javac/{}{}/classes".format(
+            productFlavor,
+            capitalize(buildType),
+        )
     )
 
 
 set_config(
     "GRADLE_ANDROID_GECKOVIEW_APILINT_FOLDER", gradle_android_intermediates_folder
+)
+
+
+@depends(gradle_android_build_config)
+def gradle_android_geckoview_test_runner_bundle(build_config):
+    """Path to intermediates classes folder."""
+
+    def uncapitalize(s):
+        if s:
+            return s[0].lower() + s[1:]
+        else:
+            return s
+
+    def capitalize(s):
+        # str.capitalize lower cases trailing letters.
+        if s:
+            return s[0].upper() + s[1:]
+        else:
+            return s
+
+    productFlavor = uncapitalize(
+        "".join(capitalize(f) for f in build_config.geckoview.variant.productFlavors)
+    )
+    buildType = uncapitalize(build_config.geckoview.variant.buildType)
+    variant = uncapitalize(build_config.geckoview.variant.name)
+
+    return "gradle/build/mobile/android/test_runner/outputs/bundle/{}/test_runner-{}-{}.aab".format(
+        variant,
+        productFlavor,
+        buildType,
+    )
+
+
+set_config(
+    "GRADLE_ANDROID_GECKOVIEW_TEST_RUNNER_BUNDLE",
+    gradle_android_geckoview_test_runner_bundle,
+)
+
+
+@depends(gradle_android_build_config)
+def gradle_android_geckoview_example_bundle(build_config):
+    """Path to intermediates classes folder."""
+
+    def uncapitalize(s):
+        if s:
+            return s[0].lower() + s[1:]
+        else:
+            return s
+
+    def capitalize(s):
+        # str.capitalize lower cases trailing letters.
+        if s:
+            return s[0].upper() + s[1:]
+        else:
+            return s
+
+    productFlavor = uncapitalize(
+        "".join(capitalize(f) for f in build_config.geckoview.variant.productFlavors)
+    )
+    buildType = uncapitalize(build_config.geckoview.variant.buildType)
+    variant = uncapitalize(build_config.geckoview.variant.name)
+
+    return "gradle/build/mobile/android/geckoview_example/outputs/bundle/{}/geckoview_example-{}-{}.aab".format(
+        variant,
+        productFlavor,
+        buildType,
+    )
+
+
+set_config(
+    "GRADLE_ANDROID_GECKOVIEW_EXAMPLE_BUNDLE", gradle_android_geckoview_example_bundle
 )
 
 
@@ -213,6 +284,31 @@ def gradle_android_api_lint_tasks(build_config):
 set_config("GRADLE_ANDROID_API_LINT_TASKS", gradle_android_api_lint_tasks)
 
 
+set_config("GRADLE_ANDROID_FORMAT_LINT_FIX_TASKS", ["spotlessJavaApply"])
+
+
+@dependable
+def gradle_android_format_lint_check_tasks():
+    return ["spotlessJavaCheck"]
+
+
+set_config(
+    "GRADLE_ANDROID_FORMAT_LINT_CHECK_TASKS", gradle_android_format_lint_check_tasks
+)
+
+set_config(
+    "GRADLE_ANDROID_FORMAT_LINT_FOLDERS",
+    [
+        "mobile/android/annotations",
+        "mobile/android/geckoview",
+        "mobile/android/geckoview_example",
+        "mobile/android/test_runner",
+        "mobile/android/examples/messaging_example",
+        "mobile/android/examples/port_messaging_example",
+    ],
+)
+
+
 @depends(gradle_android_build_config)
 def gradle_android_checkstyle_tasks(build_config):
     """Gradle tasks run by |mach android checkstyle|."""
@@ -249,15 +345,26 @@ set_config(
 )
 
 
-@depends(gradle_android_build_config)
-def gradle_android_archive_geckoview_tasks(build_config):
+option(
+    "--disable-android-bundle",
+    help="{Enable|Disable} AAB build.",
+)
+
+imply_option("--disable-android-bundle", False, when="--enable-address-sanitizer")
+
+
+@depends(gradle_android_build_config, "--disable-android-bundle")
+def gradle_android_archive_geckoview_tasks(build_config, aab_enabled):
     """Gradle tasks run by |mach android archive-geckoview|."""
-    return [
+    tasks = [
         "geckoview:assemble{geckoview.variant.name}".format(
             geckoview=build_config.geckoview
         ),
         "geckoview:assemble{geckoview.variant.name}AndroidTest".format(
             geckoview=build_config.geckoview
+        ),
+        "test_runner:assemble{geckoview_example.variant.name}".format(
+            geckoview_example=build_config.geckoview_example
         ),
         "geckoview_example:assemble{geckoview_example.variant.name}".format(
             geckoview_example=build_config.geckoview_example
@@ -271,7 +378,19 @@ def gradle_android_archive_geckoview_tasks(build_config):
         "geckoview:publish{geckoview.variant.name}PublicationToMavenRepository".format(
             geckoview=build_config.geckoview
         ),
+        "exoplayer2:publishDebugPublicationToMavenRepository",
     ]
+
+    if aab_enabled:
+        tasks += [
+            "test_runner:bundle{geckoview_example.variant.name}".format(
+                geckoview_example=build_config.geckoview_example
+            ),
+            "geckoview_example:bundle{geckoview_example.variant.name}".format(
+                geckoview_example=build_config.geckoview_example
+            ),
+        ]
+    return tasks
 
 
 set_config(
@@ -357,7 +476,16 @@ def gradle_android_build_geckoview_example_tasks(build_config):
         "geckoview_example:assemble{geckoview_example.variant.name}".format(
             geckoview_example=build_config.geckoview_example
         ),
+        "geckoview_example:bundle{geckoview_example.variant.name}".format(
+            geckoview_example=build_config.geckoview_example
+        ),
         "geckoview:assemble{geckoview.variant.name}AndroidTest".format(
+            geckoview=build_config.geckoview
+        ),
+        "test_runner:assemble{geckoview.variant.name}".format(
+            geckoview=build_config.geckoview
+        ),
+        "test_runner:bundle{geckoview.variant.name}".format(
             geckoview=build_config.geckoview
         ),
     ]
@@ -370,14 +498,43 @@ set_config(
 
 
 @depends(gradle_android_build_config)
+def gradle_android_install_geckoview_test_runner_tasks(build_config):
+    """Gradle tasks run by |mach android install-geckoview-test_runner|."""
+    return [
+        "test_runner:install{geckoview.variant.name}".format(
+            geckoview=build_config.geckoview
+        ),
+    ]
+
+
+set_config(
+    "GRADLE_ANDROID_INSTALL_GECKOVIEW_TEST_RUNNER_TASKS",
+    gradle_android_install_geckoview_test_runner_tasks,
+)
+
+
+@depends(gradle_android_build_config)
+def gradle_android_install_geckoview_test_tasks(build_config):
+    """Gradle tasks run by |mach android install-geckoview-test|."""
+    return [
+        "geckoview:install{geckoview.variant.name}AndroidTest".format(
+            geckoview=build_config.geckoview
+        ),
+    ]
+
+
+set_config(
+    "GRADLE_ANDROID_INSTALL_GECKOVIEW_TEST_TASKS",
+    gradle_android_install_geckoview_test_tasks,
+)
+
+
+@depends(gradle_android_build_config)
 def gradle_android_install_geckoview_example_tasks(build_config):
     """Gradle tasks run by |mach android install-geckoview_example|."""
     return [
         "geckoview_example:install{geckoview_example.variant.name}".format(
             geckoview_example=build_config.geckoview_example
-        ),
-        "geckoview:install{geckoview.variant.name}AndroidTest".format(
-            geckoview=build_config.geckoview
         ),
     ]
 
@@ -388,20 +545,10 @@ set_config(
 )
 
 
-@dependable
-def gradle_android_dependencies():
-    """Gradle tasks that download all dependencies."""
-    # These tasks download most dependencies from each configuration, the
-    # notable exception is dependencies added at runtime by gradle plugins
-    return [
-        "downloadDependencies",
-    ]
-
-
 @depends(
     gradle_android_api_lint_tasks,
+    gradle_android_format_lint_check_tasks,
     gradle_android_checkstyle_tasks,
-    gradle_android_dependencies,
 )
 @imports(_from="itertools", _import="chain")
 def gradle_android_dependencies_tasks(*tasks):
@@ -435,11 +582,23 @@ option(
     env="GRADLE_MAVEN_REPOSITORIES",
     nargs="+",
     default=(
+        "https://maven.mozilla.org/maven2/",
         "https://maven.google.com/",
         "https://repo.maven.apache.org/maven2/",
         "https://plugins.gradle.org/m2/",
     ),
     help="Comma-separated URLs of Maven repositories containing Gradle dependencies.",
+)
+
+option(
+    "--allow-insecure-gradle-repositories",
+    help="Gradle is allowed to connect to insecure Maven repositories.",
+)
+
+set_config(
+    "ALLOW_INSECURE_GRADLE_REPOSITORIES",
+    True,
+    when="--allow-insecure-gradle-repositories",
 )
 
 

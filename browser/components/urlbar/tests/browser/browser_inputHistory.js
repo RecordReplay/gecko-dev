@@ -7,8 +7,6 @@
 
 "use strict";
 
-let win;
-
 async function bumpScore(
   uri,
   searchString,
@@ -27,20 +25,20 @@ async function bumpScore(
         value: searchString,
       });
       let promise = needToLoad
-        ? BrowserTestUtils.browserLoaded(win.gBrowser.selectedBrowser)
+        ? BrowserTestUtils.browserLoaded(gBrowser.selectedBrowser)
         : BrowserTestUtils.waitForDocLoadAndStopIt(
             uri,
-            win.gBrowser.selectedBrowser
+            gBrowser.selectedBrowser
           );
       // Look for the expected uri.
-      while (win.gURLBar.untrimmedValue != uri) {
-        EventUtils.synthesizeKey("KEY_ArrowDown", {}, win);
+      while (gURLBar.untrimmedValue != uri) {
+        EventUtils.synthesizeKey("KEY_ArrowDown", {});
       }
       if (useMouseClick) {
         let element = UrlbarTestUtils.getSelectedRow(win);
         EventUtils.synthesizeMouseAtCenter(element, {}, win);
       } else {
-        EventUtils.synthesizeKey("KEY_Enter", {}, win);
+        EventUtils.synthesizeKey("KEY_Enter", {});
       }
       await promise;
     }
@@ -53,10 +51,7 @@ async function decayInputHistory() {
   await PlacesTestUtils.promiseAsyncUpdates();
 }
 
-add_task(async function setup() {
-  // Use new window to avoid timeout failure for autocomplete popup happens on Linux TV.
-  win = await BrowserTestUtils.openNewBrowserWindow();
-
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     set: [
       // We don't want autofill to influence this test.
@@ -300,7 +295,7 @@ add_task(async function test_adaptive_behaviors() {
     window: win,
     value: "site",
   });
-  let result = (await UrlbarTestUtils.waitForAutocompleteResultAt(win, 1))
+  let result = (await UrlbarTestUtils.waitForAutocompleteResultAt(window, 1))
     .result;
   Assert.equal(result.payload.url, bookmarkURL, "Check bookmarked result");
   Assert.notEqual(
@@ -309,7 +304,7 @@ add_task(async function test_adaptive_behaviors() {
     "The bookmarked result is not from InputHistory."
   );
   Assert.equal(
-    UrlbarTestUtils.getResultCount(win),
+    UrlbarTestUtils.getResultCount(window),
     2,
     "Check there are no unexpected results"
   );
@@ -323,10 +318,11 @@ add_task(async function test_adaptive_behaviors() {
     url: historyUrl,
   });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "sit",
   });
-  result = (await UrlbarTestUtils.waitForAutocompleteResultAt(win, 1)).result;
+  result = (await UrlbarTestUtils.waitForAutocompleteResultAt(window, 1))
+    .result;
   Assert.equal(result.payload.url, historyUrl, "Check bookmarked result");
   Assert.equal(
     result.providerName,
@@ -340,7 +336,7 @@ add_task(async function test_adaptive_behaviors() {
   );
 
   Assert.equal(
-    UrlbarTestUtils.getResultCount(win),
+    UrlbarTestUtils.getResultCount(window),
     2,
     "Check there are no unexpected results"
   );
@@ -358,15 +354,44 @@ add_task(async function test_adaptive_behaviors() {
   });
 
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "site",
   });
   Assert.equal(
-    UrlbarTestUtils.getResultCount(win),
+    UrlbarTestUtils.getResultCount(window),
     1,
     "There is no adaptive history result because it is not an open page."
   );
   await SpecialPowers.popPrefEnv();
+
+  // Clearing history but not deleting the bookmark. This simulates the case
+  // where the user has cleared their history or is using permanent private
+  // browsing mode.
+  await PlacesUtils.history.clear();
+  await SpecialPowers.pushPrefEnv({
+    set: [
+      ["browser.urlbar.suggest.bookmark", true],
+      ["browser.urlbar.suggest.history", false],
+      ["browser.urlbar.suggest.openpage", false],
+    ],
+  });
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: "sit",
+  });
+  result = (await UrlbarTestUtils.waitForAutocompleteResultAt(window, 1))
+    .result;
+  Assert.equal(result.payload.url, historyUrl, "Check bookmarked result");
+  Assert.equal(
+    result.providerName,
+    "InputHistory",
+    "The bookmarked result is from InputHistory."
+  );
+  Assert.equal(
+    result.source,
+    UrlbarUtils.RESULT_SOURCE.BOOKMARKS,
+    "The input history result is a bookmark."
+  );
 
   // Clearing history but not deleting the bookmark. This simulates the case
   // where the user has cleared their history or is using permanent private
@@ -468,6 +493,31 @@ add_task(async function test_adaptive_searchmode() {
   });
 
   await Services.search.removeEngine(suggestionsEngine);
+});
+
+add_task(async function test_ignore_case() {
+  const url1 = "http://example.com/yes";
+  const url2 = "http://example.com/no";
+  await PlacesUtils.history.clear();
+  await PlacesTestUtils.addVisits([url1, url2]);
+  await UrlbarUtils.addToInputHistory(url1, "SampLE");
+  await UrlbarUtils.addToInputHistory(url1, "SaMpLE");
+  await UrlbarUtils.addToInputHistory(url1, "SAMPLE");
+  await UrlbarUtils.addToInputHistory(url1, "sample");
+  await UrlbarUtils.addToInputHistory(url2, "sample");
+  await UrlbarUtils.addToInputHistory(url2, "sample");
+  await UrlbarUtils.addToInputHistory(url2, "sample");
+  await UrlbarUtils.addToInputHistory(url2, "sample");
+  await UrlbarTestUtils.promiseAutocompleteResultPopup({
+    window,
+    value: "sAM",
+  });
+  const result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
+  Assert.equal(
+    result.url,
+    url1,
+    "Seaching for input history is case-insensitive"
+  );
 });
 
 add_task(async function test_adaptive_history_in_privatewindow() {

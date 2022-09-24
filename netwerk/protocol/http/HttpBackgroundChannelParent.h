@@ -43,7 +43,8 @@ class HttpBackgroundChannelParent final : public PHttpBackgroundChannelParent {
   bool OnStartRequest(const nsHttpResponseHead& aResponseHead,
                       const bool& aUseResponseHead,
                       const nsHttpHeaderArray& aRequestHeaders,
-                      const HttpChannelOnStartRequestArgs& aArgs);
+                      const HttpChannelOnStartRequestArgs& aArgs,
+                      const nsCOMPtr<nsICacheEntry>& aCacheEntry);
 
   // To send OnTransportAndData message over background channel.
   bool OnTransportAndData(const nsresult& aChannelStatus,
@@ -107,7 +108,7 @@ class HttpBackgroundChannelParent final : public PHttpBackgroundChannelParent {
   Atomic<bool> mIPCOpened;
 
   // Used to ensure atomicity of mBackgroundThread
-  Mutex mBgThreadMutex;
+  Mutex mBgThreadMutex MOZ_UNANNOTATED;
 
   nsCOMPtr<nsISerialEventTarget> mBackgroundThread;
 

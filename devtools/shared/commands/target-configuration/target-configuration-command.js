@@ -68,22 +68,26 @@ class TargetConfigurationCommand {
       return true;
     }
 
-    // @backward-compat { version 91 } Old servers handled javascriptEnabled in
-    //                  the content process.
-    const { targetFront } = this._commands.targetCommand;
-    if (!targetFront.traits.javascriptEnabledHandledInParent) {
-      // If available, read the value in the configuration.
-      if (typeof this.configuration.javascriptEnabled !== "undefined") {
-        return this.configuration.javascriptEnabled;
-      }
-
-      // If the TargetConfigurationActor does not know the value yet, fallback
-      // on the initial value cached by the target front.
-      return targetFront._javascriptEnabled;
-    }
-
     const front = await this.getFront();
     return front.isJavascriptEnabled();
+  }
+
+  /**
+   * Reports if the given configuration key is supported by the server.
+   * If the debugged context doesn't support the watcher actor,
+   * we won't be using the target configuration actor and report all keys
+   * as not supported.
+   *
+   * @param {Object} configurationKey
+   *                 Name of the configuration you would like to set.
+   * @return {Promise<Boolean>} True, if this configuration can be set via this API.
+   */
+  async supports(configurationKey) {
+    if (!this._hasTargetWatcherSupport()) {
+      return false;
+    }
+    const front = await this.getFront();
+    return !!front.traits.supportedOptions[configurationKey];
   }
 
   /**

@@ -34,7 +34,7 @@ function executeSoon(aFun) {
 
 function clearAllDatabases(callback) {
   let qms = SpecialPowers.Services.qms;
-  let principal = SpecialPowers.wrap(document).nodePrincipal;
+  let principal = SpecialPowers.wrap(document).effectiveStoragePrincipal;
   let request = qms.clearStoragesForPrincipal(principal);
   let cb = SpecialPowers.wrapCallback(callback);
   request.callback = cb;
@@ -100,7 +100,7 @@ function* testHarnessSteps() {
   yield undefined;
 
   if (testScriptFilename && !window.disableWorkerTest) {
-    // For the AsyncFunction, let AddTask.js handle the executing sequece by
+    // For the AsyncFunction, handle the executing sequece using
     // add_task(). For the GeneratorFunction, we just handle the sequence
     // manually.
     if (testSteps.constructor.name === "AsyncFunction") {

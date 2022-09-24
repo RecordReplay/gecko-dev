@@ -10,14 +10,15 @@
 #include "nsGenericHTMLElement.h"
 #include "nsContentList.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class HTMLDataListElement final : public nsGenericHTMLElement {
  public:
   explicit HTMLDataListElement(
       already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo)
-      : nsGenericHTMLElement(std::move(aNodeInfo)) {}
+      : nsGenericHTMLElement(std::move(aNodeInfo)) {
+    SetFlags(ELEMENT_IS_DATALIST_OR_HAS_DATALIST_ANCESTOR);
+  }
 
   // nsISupports
   NS_DECL_ISUPPORTS_INHERITED
@@ -48,7 +49,6 @@ class HTMLDataListElement final : public nsGenericHTMLElement {
   RefPtr<nsContentList> mOptions;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* HTMLDataListElement_h___ */

@@ -28,7 +28,7 @@ namespace mozilla::dom {
 NS_IMPL_CYCLE_COLLECTION_INHERITED(MediaController, DOMEventTargetHelper)
 NS_IMPL_ISUPPORTS_CYCLE_COLLECTION_INHERITED(MediaController,
                                              DOMEventTargetHelper,
-                                             nsITimerCallback)
+                                             nsITimerCallback, nsINamed)
 NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(MediaController,
                                                DOMEventTargetHelper)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
@@ -310,6 +310,11 @@ NS_IMETHODIMP MediaController::Notify(nsITimer* aTimer) {
   return NS_OK;
 }
 
+NS_IMETHODIMP MediaController::GetName(nsACString& aName) {
+  aName.AssignLiteral("MediaController");
+  return NS_OK;
+}
+
 void MediaController::NotifyMediaAudibleChanged(uint64_t aBrowsingContextId,
                                                 MediaAudibleState aState) {
   if (mShutdown) {
@@ -542,13 +547,13 @@ CopyableTArray<MediaControlKey> MediaController::GetSupportedMediaKeys() const {
 
 void MediaController::Select() const {
   if (RefPtr<BrowsingContext> bc = BrowsingContext::Get(Id())) {
-    Unused << bc->SetHasMainMediaController(true);
+    bc->Canonical()->AddPageAwakeRequest();
   }
 }
 
 void MediaController::Unselect() const {
   if (RefPtr<BrowsingContext> bc = BrowsingContext::Get(Id())) {
-    Unused << bc->SetHasMainMediaController(false);
+    bc->Canonical()->RemovePageAwakeRequest();
   }
 }
 

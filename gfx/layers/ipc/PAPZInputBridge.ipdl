@@ -3,9 +3,12 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+include "ipc/nsGUIEventIPC.h";
+
 using LayoutDeviceIntPoint from "Units.h";
 using struct mozilla::layers::ScrollableLayerGuid from "mozilla/layers/ScrollableLayerGuid.h";
 using struct mozilla::layers::APZEventResult from "mozilla/layers/APZInputBridge.h";
+using struct mozilla::layers::APZHandledResult from "mozilla/layers/APZInputBridge.h";
 
 using EventMessage from "mozilla/EventForwards.h";
 using class mozilla::MultiTouchInput from "InputData.h";
@@ -18,8 +21,6 @@ using class mozilla::KeyboardInput from "InputData.h";
 
 using mozilla::layers::LayersId from "mozilla/layers/LayersTypes.h";
 
-include protocol PGPU;
-
 namespace mozilla {
 namespace layers {
 
@@ -27,47 +28,49 @@ namespace layers {
  * This protocol is used to send input events from the UI process to the
  * GPU process for handling by APZ. There is one instance per top-level
  * compositor, or in other words, one instance per concrete APZCTreeManager
- * instance. The child side lives on the main thread in the UI process,
- * and the parent side lives on the main thread in the GPU process. If there
- * is no GPU process, then this protocol is not instantiated.
+ * instance. The child side lives on the controller thread in the UI process,
+ * ie the main thread on most platforms, but the Android UI thread on Android.
+ * The parent side lives on the main thread in the GPU process. If there is no
+ * GPU process, then this protocol is not instantiated.
  */
-sync refcounted protocol PAPZInputBridge
+sync protocol PAPZInputBridge
 {
-manager PGPU;
-
 parent:
   // The following messages are used to
   // implement the ReceiveInputEvent methods
 
-  sync ReceiveMultiTouchInputEvent(MultiTouchInput aEvent)
-    returns (APZEventResult  aOutResult,
-             MultiTouchInput aOutEvent);
+  sync ReceiveMultiTouchInputEvent(MultiTouchInput aEvent, bool aWantsCallback)
+      returns(APZEventResult aOutResult, MultiTouchInput aOutEvent);
 
-  sync ReceiveMouseInputEvent(MouseInput aEvent)
+  sync ReceiveMouseInputEvent(MouseInput aEvent, bool aWantsCallback)
     returns (APZEventResult aOutResult,
              MouseInput     aOutEvent);
 
-  sync ReceivePanGestureInputEvent(PanGestureInput aEvent)
+  sync ReceivePanGestureInputEvent(PanGestureInput aEvent, bool aWantsCallback)
     returns (APZEventResult  aOutResult,
              PanGestureInput aOutEvent);
 
-  sync ReceivePinchGestureInputEvent(PinchGestureInput aEvent)
+  sync ReceivePinchGestureInputEvent(PinchGestureInput aEvent,
+                                     bool aWantsCallback)
     returns (APZEventResult    aOutResult,
              PinchGestureInput aOutEvent);
 
-  sync ReceiveTapGestureInputEvent(TapGestureInput aEvent)
+  sync ReceiveTapGestureInputEvent(TapGestureInput aEvent, bool aWantsCallback)
     returns (APZEventResult  aOutResult,
              TapGestureInput aOutEvent);
 
-  sync ReceiveScrollWheelInputEvent(ScrollWheelInput aEvent)
+  sync ReceiveScrollWheelInputEvent(ScrollWheelInput aEvent,
+                                    bool aWantsCallback)
     returns (APZEventResult   aOutResult,
              ScrollWheelInput aOutEvent);
 
-  sync ReceiveKeyboardInputEvent(KeyboardInput aEvent)
+  sync ReceiveKeyboardInputEvent(KeyboardInput aEvent, bool aWantsCallback)
     returns (APZEventResult aOutResult,
              KeyboardInput  aOutEvent);
 
-  async UpdateWheelTransaction(LayoutDeviceIntPoint aRefPoint, EventMessage aEventMessage);
+  async UpdateWheelTransaction(LayoutDeviceIntPoint aRefPoint,
+                               EventMessage aEventMessage,
+                               ScrollableLayerGuid? aTargetGuid);
 
   sync ProcessUnhandledEvent(LayoutDeviceIntPoint aRefPoint)
     returns (LayoutDeviceIntPoint   aOutRefPoint,
@@ -75,7 +78,9 @@ parent:
              uint64_t               aOutFocusSequenceNumber,
              LayersId               aOutLayersId);
 
-  async __delete__();
+child:
+  async CallInputBlockCallback(uint64_t aInputBlockId,
+                               APZHandledResult aHandledResult);
 };
 
 } // namespace gfx

@@ -42,6 +42,9 @@ bool RecvLoadSessionStorageData(
     uint64_t aTopContextId,
     nsTArray<mozilla::dom::SSCacheCopy>&& aCacheCopyList);
 
+bool RecvClearStoragesForOrigin(const nsACString& aOriginAttrs,
+                                const nsACString& aOriginKey);
+
 class BrowsingContext;
 class ContentParent;
 class SSSetItemInfo;
@@ -89,6 +92,12 @@ class SessionStorageManagerBase {
     FlippedOnce<false> mLoaded;
   };
 
+  void ClearStoragesInternal(const OriginAttributesPattern& aPattern,
+                             const nsACString& aOriginScope);
+
+  void ClearStoragesForOriginInternal(const nsACString& aOriginAttrs,
+                                      const nsACString& aOriginKey);
+
   OriginRecord* GetOriginRecord(const nsACString& aOriginAttrs,
                                 const nsACString& aOriginKey,
                                 bool aMakeIfNeeded,
@@ -124,6 +133,9 @@ class SessionStorageManager final : public SessionStorageManagerBase,
 
   void CheckpointData(nsIPrincipal& aPrincipal, SessionStorageCache& aCache);
 
+  nsresult ClearStoragesForOrigin(const nsACString& aOriginAttrs,
+                                  const nsACString& aOriginKey);
+
  private:
   ~SessionStorageManager();
 
@@ -146,11 +158,11 @@ class SessionStorageManager final : public SessionStorageManagerBase,
   void ClearStorages(const OriginAttributesPattern& aPattern,
                      const nsACString& aOriginScope);
 
-  SessionStorageCacheChild* EnsureCache(const nsCString& aOriginAttrs,
+  SessionStorageCacheChild* EnsureCache(nsIPrincipal& aPrincipal,
                                         const nsCString& aOriginKey,
                                         SessionStorageCache& aCache);
 
-  void CheckpointDataInternal(const nsCString& aOriginAttrs,
+  void CheckpointDataInternal(nsIPrincipal& aPrincipal,
                               const nsCString& aOriginKey,
                               SessionStorageCache& aCache);
 
@@ -203,11 +215,21 @@ class BackgroundSessionStorageManager final : public SessionStorageManagerBase {
   void UpdateData(const nsACString& aOriginAttrs, const nsACString& aOriginKey,
                   const nsTArray<SSSetItemInfo>& aData);
 
+  void ClearStorages(const OriginAttributesPattern& aPattern,
+                     const nsCString& aOriginScope);
+
+  void ClearStoragesForOrigin(const nsACString& aOriginAttrs,
+                              const nsACString& aOriginKey);
+
   void SetCurrentBrowsingContextId(uint64_t aBrowsingContextId);
 
   void MaybeDispatchSessionStoreUpdate();
 
   void CancelSessionStoreUpdate();
+
+  void AddParticipatingActor(SessionStorageManagerParent* aActor);
+
+  void RemoveParticipatingActor(SessionStorageManagerParent* aActor);
 
  private:
   // Only be called by GetOrCreate() on the parent process.
@@ -253,6 +275,8 @@ class BackgroundSessionStorageManager final : public SessionStorageManagerBase {
   // they use async-returns so the response is inherently matched up via
   // the issued promise).
   nsCOMPtr<nsITimer> mSessionStoreCallbackTimer;
+
+  nsTArray<RefPtr<SessionStorageManagerParent>> mParticipatingActors;
 };
 
 }  // namespace dom

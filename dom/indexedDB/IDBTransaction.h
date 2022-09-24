@@ -208,39 +208,6 @@ class IDBTransaction final
   bool WasExplicitlyCommitted() const { return mWasExplicitlyCommitted; }
 #endif
 
-  template <ReadyState OriginalState, ReadyState TemporaryState>
-  class AutoRestoreState {
-   public:
-    explicit AutoRestoreState(IDBTransaction& aOwner) : mOwner { aOwner }
-#ifdef DEBUG
-    , mSavedPendingRequestCount { mOwner.mPendingRequestCount }
-#endif
-    {
-      mOwner.AssertIsOnOwningThread();
-      MOZ_ASSERT(mOwner.mReadyState == OriginalState);
-      mOwner.mReadyState = TemporaryState;
-    }
-
-    ~AutoRestoreState() {
-      mOwner.AssertIsOnOwningThread();
-      MOZ_ASSERT(mOwner.mReadyState == TemporaryState);
-      MOZ_ASSERT(mOwner.mPendingRequestCount == mSavedPendingRequestCount);
-
-      mOwner.mReadyState = OriginalState;
-    }
-
-   private:
-    IDBTransaction& mOwner;
-#ifdef DEBUG
-    const uint32_t mSavedPendingRequestCount;
-#endif
-  };
-
-  AutoRestoreState<ReadyState::Inactive, ReadyState::Active>
-  TemporarilyTransitionToActive();
-  AutoRestoreState<ReadyState::Active, ReadyState::Inactive>
-  TemporarilyTransitionToInactive();
-
   void TransitionToActive() {
     MOZ_ASSERT(mReadyState == ReadyState::Inactive);
     mReadyState = ReadyState::Active;
@@ -265,6 +232,8 @@ class IDBTransaction final
     return mMode;
   }
 
+  uint32_t GetPendingRequestCount() const { return mPendingRequestCount; }
+
   IDBDatabase* Database() const {
     AssertIsOnOwningThread();
     return mDatabase;
@@ -281,15 +250,15 @@ class IDBTransaction final
 
   void DeleteObjectStore(int64_t aObjectStoreId);
 
-  void RenameObjectStore(int64_t aObjectStoreId, const nsAString& aName);
+  void RenameObjectStore(int64_t aObjectStoreId, const nsAString& aName) const;
 
   void CreateIndex(IDBObjectStore* aObjectStore,
-                   const indexedDB::IndexMetadata& aMetadata);
+                   const indexedDB::IndexMetadata& aMetadata) const;
 
-  void DeleteIndex(IDBObjectStore* aObjectStore, int64_t aIndexId);
+  void DeleteIndex(IDBObjectStore* aObjectStore, int64_t aIndexId) const;
 
   void RenameIndex(IDBObjectStore* aObjectStore, int64_t aIndexId,
-                   const nsAString& aName);
+                   const nsAString& aName) const;
 
   void Abort(IDBRequest* aRequest);
 

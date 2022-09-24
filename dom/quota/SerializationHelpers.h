@@ -11,6 +11,7 @@
 #include "ipc/IPCMessageUtils.h"
 
 #include "mozilla/dom/quota/Client.h"
+#include "mozilla/dom/quota/CommonMetadata.h"
 #include "mozilla/dom/quota/PersistenceType.h"
 #include "mozilla/OriginAttributes.h"
 
@@ -30,24 +31,46 @@ struct ParamTraits<mozilla::dom::quota::Client::Type>
                                       mozilla::dom::quota::Client::TYPE_MAX> {};
 
 template <>
+struct ParamTraits<mozilla::dom::quota::FullOriginMetadata> {
+  using ParamType = mozilla::dom::quota::FullOriginMetadata;
+
+  static void Write(MessageWriter* aWriter, const ParamType& aParam) {
+    WriteParam(aWriter, aParam.mSuffix);
+    WriteParam(aWriter, aParam.mGroup);
+    WriteParam(aWriter, aParam.mOrigin);
+    WriteParam(aWriter, aParam.mPersistenceType);
+    WriteParam(aWriter, aParam.mPersisted);
+    WriteParam(aWriter, aParam.mLastAccessTime);
+  }
+
+  static bool Read(MessageReader* aReader, ParamType* aResult) {
+    return ReadParam(aReader, &aResult->mSuffix) &&
+           ReadParam(aReader, &aResult->mGroup) &&
+           ReadParam(aReader, &aResult->mOrigin) &&
+           ReadParam(aReader, &aResult->mPersistenceType) &&
+           ReadParam(aReader, &aResult->mPersisted) &&
+           ReadParam(aReader, &aResult->mLastAccessTime);
+  }
+};
+
+template <>
 struct ParamTraits<mozilla::OriginAttributesPattern> {
   typedef mozilla::OriginAttributesPattern paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mFirstPartyDomain);
-    WriteParam(aMsg, aParam.mInIsolatedMozBrowser);
-    WriteParam(aMsg, aParam.mPrivateBrowsingId);
-    WriteParam(aMsg, aParam.mUserContextId);
-    WriteParam(aMsg, aParam.mGeckoViewSessionContextId);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.mFirstPartyDomain);
+    WriteParam(aWriter, aParam.mInIsolatedMozBrowser);
+    WriteParam(aWriter, aParam.mPrivateBrowsingId);
+    WriteParam(aWriter, aParam.mUserContextId);
+    WriteParam(aWriter, aParam.mGeckoViewSessionContextId);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
-    return ReadParam(aMsg, aIter, &aResult->mFirstPartyDomain) &&
-           ReadParam(aMsg, aIter, &aResult->mInIsolatedMozBrowser) &&
-           ReadParam(aMsg, aIter, &aResult->mPrivateBrowsingId) &&
-           ReadParam(aMsg, aIter, &aResult->mUserContextId) &&
-           ReadParam(aMsg, aIter, &aResult->mGeckoViewSessionContextId);
+  static bool Read(MessageReader* aReader, paramType* aResult) {
+    return ReadParam(aReader, &aResult->mFirstPartyDomain) &&
+           ReadParam(aReader, &aResult->mInIsolatedMozBrowser) &&
+           ReadParam(aReader, &aResult->mPrivateBrowsingId) &&
+           ReadParam(aReader, &aResult->mUserContextId) &&
+           ReadParam(aReader, &aResult->mGeckoViewSessionContextId);
   }
 };
 

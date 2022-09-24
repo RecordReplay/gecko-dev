@@ -12,10 +12,12 @@ here = os.path.dirname(os.path.realpath(__file__))
 topsrcdir = os.path.join(here, os.pardir, os.pardir)
 
 EXTRA_PATHS = (
-    "python/mozversioncontrol",
+    "python/mach",
     "python/mozbuild",
+    "python/mozversioncontrol",
     "testing/mozbase/mozfile",
     "third_party/python/jsmin",
+    "third_party/python/six",
 )
 sys.path[:0] = [os.path.join(topsrcdir, p) for p in EXTRA_PATHS]
 
@@ -41,7 +43,7 @@ def run_clang_format(hooktype, changedFiles):
     path_list = []
     for filename in sorted(changedFiles):
         # Ignore files unsupported in clang-format
-        if filename.decode().endswith(extensions):
+        if filename.endswith(extensions):
             path_list.append(filename)
 
     if not path_list:
@@ -51,7 +53,7 @@ def run_clang_format(hooktype, changedFiles):
     arguments = ["clang-format", "-p"] + path_list
     # On windows we need this to call the command in a shell, see Bug 1511594
     if os.name == "nt":
-        clang_format_cmd = ["sh", "mach"] + arguments
+        clang_format_cmd = [sys.executable, "mach"] + arguments
     else:
         clang_format_cmd = [os.path.join(topsrcdir, "mach")] + arguments
     if "commit" in hooktype:
@@ -82,7 +84,8 @@ def git():
 
     try:
         changedFiles = check_output(
-            ["git", "diff", "--staged", "--diff-filter=d", "--name-only", "HEAD"]
+            ["git", "diff", "--staged", "--diff-filter=d", "--name-only", "HEAD"],
+            text=True,
         ).split()
         # TODO we should detect if we are in a "add -p" mode and show a warning
         return run_clang_format(hooktype, changedFiles)

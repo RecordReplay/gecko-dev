@@ -35,8 +35,6 @@ scenarios:
 
 */
 
-const DEFAULT_INDEX = PlacesUtils.bookmarks.DEFAULT_INDEX;
-
 var test = {
   _testRootId: null,
   _testRootTitle: "test root",
@@ -225,7 +223,7 @@ tests.push(test);
 
 add_task(async function() {
   // make json file
-  let jsonFile = OS.Path.join(OS.Constants.Path.profileDir, "bookmarks.json");
+  let jsonFile = PathUtils.join(PathUtils.profileDir, "bookmarks.json");
 
   // populate db
   for (let singleTest of tests) {
@@ -251,5 +249,5 @@ add_task(async function() {
   }
 
   // clean up
-  await OS.File.remove(jsonFile);
+  await IOUtils.remove(jsonFile);
 });

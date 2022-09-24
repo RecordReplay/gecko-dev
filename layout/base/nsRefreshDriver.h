@@ -140,10 +140,8 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    * @note Technically, imgIRequest objects are not nsARefreshObservers, but
    * for controlling animated image repaint events, we subscribe the
    * imgIRequests to the nsRefreshDriver for notification of paint events.
-   *
-   * @returns whether the operation succeeded, or void in the case of removal.
    */
-  bool AddImageRequest(imgIRequest* aRequest);
+  void AddImageRequest(imgIRequest* aRequest);
   void RemoveImageRequest(imgIRequest* aRequest);
 
   /**
@@ -279,7 +277,9 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    */
   void Disconnect();
 
-  bool IsFrozen() { return mFreezeCount > 0; }
+  bool IsFrozen() const { return mFreezeCount > 0; }
+
+  bool IsThrottled() const { return mThrottled; }
 
   /**
    * Freeze the refresh driver.  It should stop delivering future
@@ -300,7 +300,7 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    * Throttle or unthrottle the refresh driver.  This is done if the
    * corresponding presshell is hidden or shown.
    */
-  void SetThrottled(bool aThrottled);
+  void SetActivity(bool aIsActive, bool aIsInActiveTab);
 
   /**
    * Return the prescontext we were initialized with
@@ -359,14 +359,27 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
    *
    * If we're animating and we have skipped paints a time in the past
    * is returned.
+   *
+   * If aCheckType is AllVsyncListeners and we're in the parent process,
+   * which doesn't have a RefreshDriver ticking, but some other process does
+   * have, the return value is
+   * (now + refreshrate - layout.idle_period.time_limit) as an approximation
+   * when something will happen.
+   * This can be useful check when parent process tries to avoid having too
+   * long idle periods for example when it is sending input events to an
+   * active child process.
    */
-  static mozilla::TimeStamp GetIdleDeadlineHint(mozilla::TimeStamp aDefault);
+  enum IdleCheck { OnlyThisProcessRefreshDriver, AllVsyncListeners };
+  static mozilla::TimeStamp GetIdleDeadlineHint(mozilla::TimeStamp aDefault,
+                                                IdleCheck aCheckType);
 
   /**
    * It returns the expected timestamp of the next tick or nothing if the next
    * tick is missed.
    */
   static mozilla::Maybe<mozilla::TimeStamp> GetNextTickHint();
+
+  static bool IsRegularRateTimerTicking();
 
   static void DispatchIdleTaskAfterTickUnlessExists(mozilla::Task* aTask);
   static void CancelIdleTask(mozilla::Task* aTask);
@@ -426,7 +439,7 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   typedef nsTArray<RefPtr<VVPResizeEvent>> VisualViewportResizeEventArray;
   typedef nsTArray<RefPtr<mozilla::Runnable>> ScrollEventArray;
   typedef nsTArray<RefPtr<VVPScrollEvent>> VisualViewportScrollEventArray;
-  typedef nsTHashSet<nsCOMPtr<nsISupports>> RequestTable;
+  using RequestTable = nsTHashSet<RefPtr<imgIRequest>>;
   struct ImageStartData {
     ImageStartData() = default;
 
@@ -471,6 +484,10 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   };
   void EnsureTimerStarted(EnsureTimerStartedFlags aFlags = eNone);
   void StopTimer();
+
+  bool ComputeShouldBeThrottled() const;
+  bool ShouldStopActivityGracePeriod() const;
+  void UpdateThrottledState();
 
   bool HasObservers() const;
   void AppendObserverDescriptionsToString(nsACString& aStr) const;
@@ -547,6 +564,13 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   mozilla::UniquePtr<mozilla::ProfileChunkedBuffer> mViewManagerFlushCause;
 
   bool mThrottled : 1;
+  bool mIsActive : 1;
+  bool mIsInActiveTab : 1;
+  // We grant a period of activity to out-of-process iframes that are in the
+  // foreground tab but inactive (hidden), in case they can set themselves up
+  // and get shown soon enough (see bug 1745869).
+  bool mIsGrantingActivityGracePeriod : 1;
+  bool mHasGrantedActivityGracePeriod : 1;
   bool mNeedToRecomputeVisibility : 1;
   bool mTestControllingRefreshes : 1;
 
@@ -591,10 +615,8 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
 
   bool mHasExceededAfterLoadTickPeriod : 1;
 
-  // Number of seconds that the refresh driver is blocked waiting for a
-  // compositor transaction to be completed before we append a note to the gfx
-  // critical log. The number is doubled every time the threshold is hit.
-  uint64_t mWarningThreshold;
+  bool mHasStartedTimerAtLeastOnce : 1;
+
   mozilla::TimeStamp mMostRecentRefresh;
   mozilla::TimeStamp mTickStart;
   mozilla::VsyncId mTickVsyncId;
@@ -602,6 +624,7 @@ class nsRefreshDriver final : public mozilla::layers::TransactionIdAllocator,
   mozilla::TimeStamp mNextThrottledFrameRequestTick;
   mozilla::TimeStamp mNextRecomputeVisibilityTick;
   mozilla::TimeStamp mBeforeFirstContentfulPaintTimerRunningLimit;
+  mozilla::TimeStamp mActivityGracePeriodStart;
 
   // separate arrays for each flush type we support
   ObserverArray mObservers[4];

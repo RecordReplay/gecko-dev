@@ -17,7 +17,9 @@
 #include "nsIInterfaceRequestor.h"
 #include "nsIAsyncOutputStream.h"
 #include "nsITimer.h"
+#include "nsIEarlyHintObserver.h"
 #include "nsTHashMap.h"
+#include "nsIClassOfService.h"
 #include "TimingStruct.h"
 #include "Http2Push.h"
 #include "mozilla/net/DNS.h"
@@ -26,7 +28,6 @@
 
 //-----------------------------------------------------------------------------
 
-class nsIHttpActivityObserver;
 class nsIDNSHTTPSSVCRecord;
 class nsIEventTarget;
 class nsIInputStream;
@@ -34,8 +35,7 @@ class nsIOutputStream;
 class nsIRequestContext;
 class nsISVCBRecord;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 class HTTPSRecordResolver;
 class nsHttpChunkedDecoder;
@@ -43,7 +43,7 @@ class nsHttpHeaderArray;
 class nsHttpRequestHead;
 class nsHttpResponseHead;
 class NullHttpTransaction;
-class SpdyConnectTransaction;
+class Http2ConnectTransaction;
 
 //-----------------------------------------------------------------------------
 // nsHttpTransaction represents a single HTTP transaction.  It is thread-safe,
@@ -56,7 +56,8 @@ class nsHttpTransaction final : public nsAHttpTransaction,
                                 public nsIInputStreamCallback,
                                 public nsIOutputStreamCallback,
                                 public ARefBase,
-                                public nsITimerCallback {
+                                public nsITimerCallback,
+                                public nsINamed {
  public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSAHTTPTRANSACTION
@@ -64,6 +65,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   NS_DECL_NSIINPUTSTREAMCALLBACK
   NS_DECL_NSIOUTPUTSTREAMCALLBACK
   NS_DECL_NSITIMERCALLBACK
+  NS_DECL_NSINAMED
 
   nsHttpTransaction();
 
@@ -83,6 +85,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   void MakeSticky() { mCaps |= NS_HTTP_STICKY_CONNECTION; }
   void MakeNonSticky() override { mCaps &= ~NS_HTTP_STICKY_CONNECTION; }
 
+  bool WaitingForHTTPSRR() const { return mCaps & NS_HTTP_FORCE_WAIT_HTTP_RR; }
   void MakeDontWaitHTTPSRR() { mCaps &= ~NS_HTTP_FORCE_WAIT_HTTP_RR; }
 
   // SetPriority() may only be used by the connection manager.
@@ -116,7 +119,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
 
   void DisableSpdy() override;
   void DoNotRemoveAltSvc() override { mDoNotRemoveAltSvc = true; }
-  void DisableHttp3() override;
+  void DisableHttp3(bool aAllowRetryHTTPSRR) override;
 
   nsHttpTransaction* QueryHttpTransaction() override { return this; }
 
@@ -151,7 +154,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   void SetHttpTrailers(nsCString& aTrailers);
 
   bool IsWebsocketUpgrade();
-  void SetH2WSTransaction(SpdyConnectTransaction*);
+  void SetH2WSTransaction(Http2ConnectTransaction*);
 
   void OnProxyConnectComplete(int32_t aResponseCode) override;
   void SetFlat407Headers(const nsACString& aHeaders);
@@ -163,11 +166,13 @@ class nsHttpTransaction final : public nsAHttpTransaction,
 
   void UpdateConnectionInfo(nsHttpConnectionInfo* aConnInfo);
 
-  void SetClassOfService(uint32_t cos);
+  void SetClassOfService(ClassOfService cos);
 
   virtual nsresult OnHTTPSRRAvailable(
       nsIDNSHTTPSSVCRecord* aHTTPSSVCRecord,
       nsISVCBRecord* aHighestPriorityRecord) override;
+
+  void GetHashKeyOfConnectionEntry(nsACString& aResult);
 
  private:
   friend class DeleteHttpTransaction;
@@ -270,6 +275,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
     TRANSACTION_RESTART_HTTPS_RR_FAST_FALLBACK,
     TRANSACTION_RESTART_HTTP3_FAST_FALLBACK,
     TRANSACTION_RESTART_OTHERS,
+    TRANSACTION_RESTART_PROTOCOL_VERSION_ALERT,
   };
   void SetRestartReason(TRANSACTION_RESTART_REASON aReason);
 
@@ -294,7 +300,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
     nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
   };
 
-  Mutex mLock{"transaction lock"};
+  Mutex mLock MOZ_UNANNOTATED{"transaction lock"};
 
   nsCOMPtr<nsIInterfaceRequestor> mCallbacks;
   nsCOMPtr<nsITransportEventSink> mTransportSink;
@@ -305,7 +311,6 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   nsCOMPtr<nsIRequestContext> mRequestContext;
 
   uint64_t mChannelId{0};
-  nsCOMPtr<nsIHttpActivityObserver> mActivityDistributor;
 
   nsCString mReqHeaderBuf;  // flattened request headers
   nsCOMPtr<nsIInputStream> mRequestStream;
@@ -387,6 +392,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   Atomic<uint32_t> mCapsToClear{0};
   Atomic<bool, ReleaseAcquire> mResponseIsComplete{false};
   Atomic<bool, ReleaseAcquire> mClosed{false};
+  Atomic<bool, Relaxed> mIsHttp3Used{false};
 
   // True iff WriteSegments was called while this transaction should be
   // throttled (stop reading) Used to resume read on unblock of reading.  Conn
@@ -417,8 +423,6 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   bool mContentDecodingCheck{false};
   bool mDeferredSendProgress{false};
   bool mWaitingOnPipeOut{false};
-
-  bool mIsHttp3Used = false;
   bool mDoNotRemoveAltSvc{false};
 
   // mClosed           := transaction has been explicitly closed
@@ -440,7 +444,6 @@ class nsHttpTransaction final : public nsAHttpTransaction,
 
   // The time when the transaction was submitted to the Connection Manager
   TimeStamp mPendingTime;
-  TimeStamp mHTTPSRRQueryStart;
   TimeDuration mPendingDurationTime;
 
   uint64_t mTopBrowsingContextId{0};
@@ -482,10 +485,13 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   void CollectTelemetryForUploads();
 
  public:
-  uint32_t ClassOfService() { return mClassOfService; }
+  ClassOfService GetClassOfService() {
+    return {mClassOfServiceFlags, mClassOfServiceIncremental};
+  }
 
  private:
-  Atomic<uint32_t, Relaxed> mClassOfService{0};
+  Atomic<uint32_t, Relaxed> mClassOfServiceFlags{0};
+  Atomic<bool, Relaxed> mClassOfServiceIncremental{false};
 
  public:
   // setting TunnelProvider to non-null means the transaction should only
@@ -499,7 +505,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   ASpdySession* TunnelProvider() { return mTunnelProvider; }
   nsIInterfaceRequestor* SecurityCallbacks() { return mCallbacks; }
   // Called when this transaction is inserted in the pending queue.
-  void OnPendingQueueInserted();
+  void OnPendingQueueInserted(const nsACString& aConnectionHashKey);
 
  private:
   RefPtr<ASpdySession> mTunnelProvider;
@@ -519,7 +525,7 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   } mEarlyDataDisposition{EARLY_NONE};
 
   // H2 websocket support
-  RefPtr<SpdyConnectTransaction> mH2WSTransaction;
+  RefPtr<Http2ConnectTransaction> mH2WSTransaction;
 
   HttpTrafficCategory mTrafficCategory{HttpTrafficCategory::eInvalid};
   bool mThroughCaptivePortal;
@@ -546,9 +552,19 @@ class nsHttpTransaction final : public nsAHttpTransaction,
   nsTHashMap<nsUint32HashKey, uint32_t> mEchRetryCounterMap;
 
   bool mSupportsHTTP3 = false;
+
+  bool mEarlyDataWasAvailable = false;
+  bool ShouldRestartOn0RttError(nsresult reason);
+
+  nsCOMPtr<nsIEarlyHintObserver> mEarlyHintObserver;
+  // This hash key is set when a transaction is inserted into the connection
+  // entry's pending queue.
+  // See nsHttpConnectionMgr::GetOrCreateConnectionEntry(). A transaction could
+  // be associated with the connection entry whose hash key is not the same as
+  // this transaction's.
+  nsCString mHashKeyOfConnectionEntry;
 };
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 #endif  // nsHttpTransaction_h__

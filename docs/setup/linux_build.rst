@@ -36,7 +36,7 @@ Python development files as well to install some pip packages.
 
 You should be able to install Python using your system package manager:
 
--  For Debian-based Linux (such as Ubuntu): ``sudo apt-get install python3 python3-dev``
+-  For Debian-based Linux (such as Ubuntu): ``sudo apt-get install curl python3 python3-dev python3-pip``
 -  For Fedora Linux: ``sudo dnf install python3 python3-devel``
 
 If you need a version of Python that your package manager doesn't have (e.g.:
@@ -111,9 +111,18 @@ the interactive setup process.
 Choosing a build type
 ~~~~~~~~~~~~~~~~~~~~~
 
-If you aren't modifying the Firefox backend, then then select one of the
+If you aren't modifying the Firefox backend, then select one of the
 :ref:`Artifact Mode <Understanding Artifact Builds>` options. If you are
 building Firefox for Android, you should also see the :ref:`GeckoView Contributor Guide`.
+
+Cleanup
+~~~~~~~
+
+After finishing the bootstrap process, ``bootstrap.py`` can be removed.
+
+.. code-block:: shell
+
+    rm bootstrap.py
 
 3. Build
 --------
@@ -122,7 +131,6 @@ Now that your system is bootstrapped, you should be able to build!
 
 .. code-block:: shell
 
-    rm bootstrap.py
     cd mozilla-unified
     ./mach build
     ./mach run

@@ -13,6 +13,9 @@
 #include "SerializedLoadContext.h"
 #include "mozilla/net/NeckoCommon.h"
 #include "mozilla/net/WebSocketChannel.h"
+#include "nsComponentManagerUtils.h"
+#include "IPCTransportProvider.h"
+#include "mozilla/net/ChannelEventQueue.h"
 
 using namespace mozilla::ipc;
 
@@ -47,7 +50,8 @@ mozilla::ipc::IPCResult WebSocketChannelParent::RecvDeleteSelf() {
 }
 
 mozilla::ipc::IPCResult WebSocketChannelParent::RecvAsyncOpen(
-    nsIURI* aURI, const nsCString& aOrigin, const uint64_t& aInnerWindowID,
+    nsIURI* aURI, const nsCString& aOrigin,
+    const OriginAttributes& aOriginAttributes, const uint64_t& aInnerWindowID,
     const nsCString& aProtocol, const bool& aSecure,
     const uint32_t& aPingInterval, const bool& aClientSetPingInterval,
     const uint32_t& aPingTimeout, const bool& aClientSetPingTimeout,
@@ -118,7 +122,8 @@ mozilla::ipc::IPCResult WebSocketChannelParent::RecvAsyncOpen(
     MOZ_ASSERT(NS_SUCCEEDED(rv));
   }
 
-  rv = mChannel->AsyncOpen(uri, aOrigin, aInnerWindowID, this, nullptr);
+  rv = mChannel->AsyncOpenNative(uri, aOrigin, aOriginAttributes,
+                                 aInnerWindowID, this, nullptr);
   if (NS_FAILED(rv)) goto fail;
 
   return IPC_OK();

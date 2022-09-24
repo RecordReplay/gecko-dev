@@ -9,6 +9,7 @@
 #include "nsAttrValueInlines.h"
 #include "nsHTMLStyleSheet.h"
 #include "nsMappedAttributes.h"
+#include "nsWrapperCacheInlines.h"
 #include "mozilla/dom/Document.h"
 #include "mozilla/dom/HTMLCollectionBinding.h"
 #include "mozilla/dom/HTMLTableElementBinding.h"
@@ -47,8 +48,8 @@ class TableRowsCollection final : public nsIHTMLCollection,
 
   NS_IMETHOD ParentDestroyed();
 
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(TableRowsCollection,
-                                                         nsIHTMLCollection)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS_AMBIGUOUS(TableRowsCollection,
+                                                        nsIHTMLCollection)
 
   // nsWrapperCache
   using nsWrapperCache::GetWrapperPreserveColor;

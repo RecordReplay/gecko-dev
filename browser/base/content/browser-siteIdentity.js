@@ -54,12 +54,6 @@ var gIdentityHandler = {
   _state: 0,
 
   /**
-   * RegExp used to decide if an about url should be shown as being part of
-   * the browser UI.
-   */
-  _secureInternalPages: /^(?:accounts|addons|cache|certificate|config|crashes|downloads|license|logins|preferences|protections|rights|sessionrestore|support|welcomeback|ion)(?:[?#]|$)/i,
-
-  /**
    * Whether the established HTTPS connection is considered "broken".
    * This could have several reasons, such as mixed content or weak
    * cryptography. If this is true, _isSecureConnection is false.
@@ -132,58 +126,42 @@ var gIdentityHandler = {
     return this._state & Ci.nsIWebProgressListener.STATE_CERT_USER_OVERRIDDEN;
   },
 
-  get _isAboutCertErrorPage() {
+  get _isCertErrorPage() {
+    let { documentURI } = gBrowser.selectedBrowser;
+    if (documentURI?.scheme != "about") {
+      return false;
+    }
+
     return (
-      gBrowser.selectedBrowser.documentURI &&
-      gBrowser.selectedBrowser.documentURI.scheme == "about" &&
-      gBrowser.selectedBrowser.documentURI.pathQueryRef.startsWith("certerror")
+      documentURI.filePath == "certerror" ||
+      (documentURI.filePath == "neterror" &&
+        new URLSearchParams(documentURI.query).get("e") == "nssFailure2")
     );
   },
 
   get _isAboutNetErrorPage() {
-    return (
-      gBrowser.selectedBrowser.documentURI &&
-      gBrowser.selectedBrowser.documentURI.scheme == "about" &&
-      gBrowser.selectedBrowser.documentURI.pathQueryRef.startsWith("neterror")
-    );
+    let { documentURI } = gBrowser.selectedBrowser;
+    return documentURI?.scheme == "about" && documentURI.filePath == "neterror";
   },
 
   get _isAboutHttpsOnlyErrorPage() {
+    let { documentURI } = gBrowser.selectedBrowser;
     return (
-      gBrowser.selectedBrowser.documentURI &&
-      gBrowser.selectedBrowser.documentURI.scheme == "about" &&
-      gBrowser.selectedBrowser.documentURI.pathQueryRef.startsWith(
-        "httpsonlyerror"
-      )
+      documentURI?.scheme == "about" && documentURI.filePath == "httpsonlyerror"
     );
   },
 
-  get _isPDFViewer() {
-    return gBrowser.contentPrincipal?.originNoSuffix == "resource://pdf.js";
-  },
-
   get _isPotentiallyTrustworthy() {
-    // For PDF viewer pages (pdf.js) we can't rely on the isSecureContext
-    // field. The backend will return isSecureContext = true, because the
-    // content principal has a resource:// URI. Since we don't check
-    // isSecureContext for PDF viewer pages anymore, otherwise secure
-    // contexts, such as a localhost, will me marked as insecure when showing
-    // PDFs.
     return (
       !this._isBrokenConnection &&
-      !this._isPDFViewer &&
       (this._isSecureContext ||
-        (gBrowser.selectedBrowser.documentURI &&
-          gBrowser.selectedBrowser.documentURI.scheme == "chrome"))
+        gBrowser.selectedBrowser.documentURI?.scheme == "chrome")
     );
   },
 
   get _isAboutBlockedPage() {
-    return (
-      gBrowser.selectedBrowser.documentURI &&
-      gBrowser.selectedBrowser.documentURI.scheme == "about" &&
-      gBrowser.selectedBrowser.documentURI.pathQueryRef.startsWith("blocked")
-    );
+    let { documentURI } = gBrowser.selectedBrowser;
+    return documentURI?.scheme == "about" && documentURI.filePath == "blocked";
   },
 
   _popupInitialized: false,
@@ -378,16 +356,6 @@ var gIdentityHandler = {
       "dom.security.https_only_mode_pbm"
     );
     return this._httpsOnlyModeEnabledPBM;
-  },
-  get _useGrayLockIcon() {
-    delete this._useGrayLockIcon;
-    XPCOMUtils.defineLazyPreferenceGetter(
-      this,
-      "_useGrayLockIcon",
-      "security.secure_connection_icon_color_gray",
-      false
-    );
-    return this._useGrayLockIcon;
   },
 
   /**
@@ -640,6 +608,32 @@ var gIdentityHandler = {
     return result;
   },
 
+  _getIsSecureContext() {
+    if (gBrowser.contentPrincipal?.originNoSuffix != "resource://pdf.js") {
+      return gBrowser.securityUI.isSecureContext;
+    }
+
+    // For PDF viewer pages (pdf.js) we can't rely on the isSecureContext field.
+    // The backend will return isSecureContext = true, because the content
+    // principal has a resource:// URI. Instead use the URI of the selected
+    // browser to perform the isPotentiallyTrustWorthy check.
+
+    let principal;
+    try {
+      principal = Services.scriptSecurityManager.createContentPrincipal(
+        gBrowser.selectedBrowser.documentURI,
+        {}
+      );
+      return principal.isOriginPotentiallyTrustworthy;
+    } catch (error) {
+      Cu.reportError(
+        "Error while computing isPotentiallyTrustWorthy for pdf viewer page: " +
+          error
+      );
+      return false;
+    }
+  },
+
   /**
    * Update the identity user interface for the page currently being displayed.
    *
@@ -660,7 +654,7 @@ var gIdentityHandler = {
     // the documentation of the individual properties for details.
     this.setURI(uri);
     this._secInfo = gBrowser.securityUI.secInfo;
-    this._isSecureContext = gBrowser.securityUI.isSecureContext;
+    this._isSecureContext = this._getIsSecureContext();
 
     // Then, update the user interface with the available data.
     this.refreshIdentityBlock();
@@ -823,9 +817,12 @@ var gIdentityHandler = {
       } else {
         this._identityBox.classList.add("weakCipher");
       }
-    } else if (this._isAboutCertErrorPage) {
-      // We show a warning lock icon for 'about:certerror' page.
-      this._identityBox.className = "certErrorPage";
+    } else if (this._isCertErrorPage) {
+      // We show a warning lock icon for certificate errors, and
+      // show the "Not Secure" text.
+      this._identityBox.className = "certErrorPage notSecureText";
+      icon_label = gNavigatorBundle.getString("identity.notSecure.label");
+      tooltip = gNavigatorBundle.getString("identity.notSecure.tooltip");
     } else if (this._isAboutHttpsOnlyErrorPage) {
       // We show a not secure lock icon for 'about:httpsonlyerror' page.
       this._identityBox.className = "httpsOnlyErrorPage";
@@ -864,13 +861,6 @@ var gIdentityHandler = {
         "identity.identified.verified_by_you"
       );
     }
-
-    // Gray lock icon for secure connections if pref set
-    this._updateAttribute(
-      this._identityIcon,
-      "lock-icon-gray",
-      this._useGrayLockIcon
-    );
 
     // Push the appropriate strings out to the UI
     this._identityIcon.setAttribute("tooltiptext", tooltip);
@@ -964,7 +954,7 @@ var gIdentityHandler = {
     } else if (this._isSecureConnection) {
       connection = "secure";
       customRoot = this._hasCustomRoot();
-    } else if (this._isAboutCertErrorPage) {
+    } else if (this._isCertErrorPage) {
       connection = "cert-error-page";
     } else if (this._isAboutHttpsOnlyErrorPage) {
       connection = "https-only-error-page";
@@ -976,7 +966,11 @@ var gIdentityHandler = {
       connection = "file";
     }
 
-    document.getElementById("identity-popup-security-button").disabled = ![
+    let securityButtonNode = document.getElementById(
+      "identity-popup-security-button"
+    );
+
+    let disableSecurityButton = ![
       "not-secure",
       "secure",
       "secure-ev",
@@ -985,6 +979,13 @@ var gIdentityHandler = {
       "net-error-page",
       "https-only-error-page",
     ].includes(connection);
+    if (disableSecurityButton) {
+      securityButtonNode.disabled = true;
+      securityButtonNode.classList.remove("subviewbutton-nav");
+    } else {
+      securityButtonNode.disabled = false;
+      securityButtonNode.classList.add("subviewbutton-nav");
+    }
 
     // Determine the mixed content state.
     let mixedcontent = [];
@@ -1009,13 +1010,6 @@ var gIdentityHandler = {
     ) {
       ciphers = "weak";
     }
-
-    // Gray lock icon for secure connections if pref set
-    this._updateAttribute(
-      this._identityPopup,
-      "lock-icon-gray",
-      this._useGrayLockIcon
-    );
 
     // If HTTPS-Only Mode is enabled, check the permission status
     const privateBrowsingWindow = PrivateBrowsingUtils.isWindowPrivate(window);
@@ -1140,9 +1134,17 @@ var gIdentityHandler = {
       this._uriHasHost = false;
     }
 
-    this._isSecureInternalUI =
-      uri.schemeIs("about") && this._secureInternalPages.test(uri.pathQueryRef);
-
+    if (uri.schemeIs("about")) {
+      let module = E10SUtils.getAboutModule(uri);
+      if (module) {
+        let flags = module.getURIFlags(uri);
+        this._isSecureInternalUI = !!(
+          flags & Ci.nsIAboutModule.IS_SECURE_CHROME_UI
+        );
+      }
+    } else {
+      this._isSecureInternalUI = false;
+    }
     this._pageExtensionPolicy = WebExtensionPolicy.getByURI(uri);
 
     // Create a channel for the sole purpose of getting the resolved URI
@@ -1268,8 +1270,7 @@ var gIdentityHandler = {
     let urlString = value + "\n" + gBrowser.contentTitle;
     let htmlString = '<a href="' + value + '">' + value + "</a>";
 
-    let windowUtils = window.windowUtils;
-    let scale = windowUtils.screenPixelsPerCSSPixel / windowUtils.fullZoom;
+    let scale = window.devicePixelRatio;
     let canvas = document.createElementNS(
       "http://www.w3.org/1999/xhtml",
       "canvas"

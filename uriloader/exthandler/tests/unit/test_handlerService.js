@@ -22,8 +22,6 @@ function run_test() {
     Ci.nsIEnvironment
   );
 
-  const rootPrefBranch = prefSvc.getBranch("");
-
   let noMailto = false;
   if (mozinfo.os == "win") {
     // Check mailto handler from registry.
@@ -105,25 +103,19 @@ function run_test() {
   Assert.equal(handlerInfo.preferredAction, Ci.nsIHandlerInfo.saveToDisk);
   Assert.equal(handlerInfo.preferredApplicationHandler, null);
   Assert.equal(handlerInfo.possibleApplicationHandlers.length, 0);
-  Assert.ok(handlerInfo.alwaysAskBeforeHandling);
+  Assert.equal(
+    handlerInfo.alwaysAskBeforeHandling,
+    prefSvc.getBoolPref(
+      "browser.download.always_ask_before_handling_new_types",
+      false
+    )
+  );
 
   // These properties are initialized to default values by the service,
   // so we might as well make sure they're initialized to the right defaults.
   Assert.equal(handlerInfo.description, "");
   Assert.equal(handlerInfo.hasDefaultHandler, false);
   Assert.equal(handlerInfo.defaultDescription, "");
-
-  // test some default protocol info properties
-  var haveDefaultHandlersVersion = false;
-  try {
-    // If we have a defaultHandlersVersion pref, then assume that we're in the
-    // firefox tree and that we'll also have default handlers.
-    // Bug 395131 has been filed to make this test work more generically
-    // by providing our own prefs for this test rather than this icky
-    // special casing.
-    rootPrefBranch.getCharPref("gecko.handlerService.defaultHandlersVersion");
-    haveDefaultHandlersVersion = true;
-  } catch (ex) {}
 
   const kExternalWarningDefault =
     "network.protocol-handler.warn-external-default";
@@ -142,6 +134,12 @@ function run_test() {
   prefSvc.setBoolPref(kExternalWarningPrefPrefix + "http", false);
   protoInfo = protoSvc.getProtocolHandlerInfo("http");
   Assert.equal(0, protoInfo.possibleApplicationHandlers.length);
+  // NOTE: this assertion will fail if the system executing the test does not
+  // have a handler registered for the http protocol. This is very unlikely to
+  // actually happen except on certain configurations of Linux, but one of
+  // those configurations is the default WSL Ubuntu install. So, if you are
+  // running this test locally and seeing a failure here, it might not be
+  // anything to really worry about.
   Assert.ok(!protoInfo.alwaysAskBeforeHandling);
 
   // OS default exists, injected default does not exist,
@@ -157,10 +155,10 @@ function run_test() {
   // OS default exists, injected default exists, explicit warning pref: false
   prefSvc.setBoolPref(kExternalWarningPrefPrefix + "mailto", false);
   protoInfo = protoSvc.getProtocolHandlerInfo("mailto");
-  if (haveDefaultHandlersVersion) {
-    Assert.equal(2, protoInfo.possibleApplicationHandlers.length);
-  } else {
+  if (AppConstants.MOZ_APP_NAME == "thunderbird") {
     Assert.equal(0, protoInfo.possibleApplicationHandlers.length);
+  } else {
+    Assert.equal(1, protoInfo.possibleApplicationHandlers.length);
   }
 
   // Win7+ or Linux's GIO might not have a default mailto: handler
@@ -173,8 +171,10 @@ function run_test() {
   // OS default exists, injected default exists, explicit warning pref: true
   prefSvc.setBoolPref(kExternalWarningPrefPrefix + "mailto", true);
   protoInfo = protoSvc.getProtocolHandlerInfo("mailto");
-  if (haveDefaultHandlersVersion) {
-    Assert.equal(2, protoInfo.possibleApplicationHandlers.length);
+  if (AppConstants.MOZ_APP_NAME == "thunderbird") {
+    Assert.equal(0, protoInfo.possibleApplicationHandlers.length);
+  } else {
+    Assert.equal(1, protoInfo.possibleApplicationHandlers.length);
     // Win7+ or Linux's GIO may have no default mailto: handler, so we'd ask
     // anyway. Otherwise, the default handlers will not have stored preferred
     // actions etc., so re-requesting them after the warning pref has changed
@@ -183,20 +183,18 @@ function run_test() {
     Assert.ok(protoInfo.alwaysAskBeforeHandling);
     // As soon as anyone actually stores updated defaults into the profile
     // database, that default will stop tracking the warning pref.
-  } else {
-    Assert.equal(0, protoInfo.possibleApplicationHandlers.length);
-    Assert.ok(protoInfo.alwaysAskBeforeHandling);
   }
-
-  if (haveDefaultHandlersVersion) {
-    // Now set the value stored in RDF to true, and the pref to false, to make
-    // sure we still get the right value. (Basically, same thing as above but
-    // with the values reversed.)
-    prefSvc.setBoolPref(kExternalWarningPrefPrefix + "mailto", false);
-    protoInfo.alwaysAskBeforeHandling = true;
-    handlerSvc.store(protoInfo);
-    protoInfo = protoSvc.getProtocolHandlerInfo("mailto");
-    Assert.equal(2, protoInfo.possibleApplicationHandlers.length);
+  // Now set the value stored in RDF to true, and the pref to false, to make
+  // sure we still get the right value. (Basically, same thing as above but
+  // with the values reversed.)
+  prefSvc.setBoolPref(kExternalWarningPrefPrefix + "mailto", false);
+  protoInfo.alwaysAskBeforeHandling = true;
+  handlerSvc.store(protoInfo);
+  protoInfo = protoSvc.getProtocolHandlerInfo("mailto");
+  if (AppConstants.MOZ_APP_NAME == "thunderbird") {
+    Assert.equal(0, protoInfo.possibleApplicationHandlers.length);
+  } else {
+    Assert.equal(1, protoInfo.possibleApplicationHandlers.length);
     Assert.ok(protoInfo.alwaysAskBeforeHandling);
   }
 
@@ -232,11 +230,7 @@ function run_test() {
   var handlerInfo2 = mimeSvc.getFromTypeAndExtension("nonexistent/type2", null);
   handlerSvc.store(handlerInfo2);
   var handlerTypes = ["nonexistent/type", "nonexistent/type2"];
-  if (haveDefaultHandlersVersion) {
-    handlerTypes.push("mailto");
-    handlerTypes.push("irc");
-    handlerTypes.push("ircs");
-  }
+  handlerTypes.push("mailto");
   for (let handler of handlerSvc.enumerate()) {
     Assert.notEqual(handlerTypes.indexOf(handler.type), -1);
     handlerTypes.splice(handlerTypes.indexOf(handler.type), 1);
@@ -467,7 +461,12 @@ function run_test() {
     handlerInfo = mimeSvc.getFromTypeAndExtension("text/plain", null);
     Assert.equal(
       handlerInfo.preferredAction,
-      Ci.nsIHandlerInfo.useSystemDefault
+      prefSvc.getBoolPref(
+        "browser.download.improvements_to_download_panel",
+        false
+      )
+        ? Ci.nsIHandlerInfo.saveToDisk
+        : Ci.nsIHandlerInfo.useSystemDefault
     );
     Assert.equal(handlerInfo.defaultDescription, "sed");
   }

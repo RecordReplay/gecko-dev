@@ -16,6 +16,20 @@
       "--newtab-background-color",
       {
         lwtProperty: "ntp_background",
+        processColor(rgbaChannels) {
+          if (!rgbaChannels) {
+            return null;
+          }
+          const { r, g, b } = rgbaChannels;
+          // Drop alpha channel
+          return `rgb(${r}, ${g}, ${b})`;
+        },
+      },
+    ],
+    [
+      "--newtab-background-color-secondary",
+      {
+        lwtProperty: "ntp_card_background",
       },
     ],
     [
@@ -84,12 +98,6 @@
       "--lwt-sidebar-highlight-background-color",
       {
         lwtProperty: "sidebar_highlight",
-      },
-    ],
-    [
-      "--lwt-sidebar-highlight-text-color",
-      {
-        lwtProperty: "sidebar_highlight_text",
         processColor(rgbaChannels, element) {
           if (!rgbaChannels) {
             element.removeAttribute("lwt-sidebar-highlight");
@@ -100,6 +108,12 @@
           const { r, g, b, a } = rgbaChannels;
           return `rgba(${r}, ${g}, ${b}, ${a})`;
         },
+      },
+    ],
+    [
+      "--lwt-sidebar-highlight-text-color",
+      {
+        lwtProperty: "sidebar_highlight_text",
       },
     ],
   ];

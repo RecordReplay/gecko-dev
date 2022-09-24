@@ -16,16 +16,17 @@
 
 #include "ClearKeyStorage.h"
 
-#include "ClearKeyUtils.h"
-
+#include <assert.h>
 // This include is required in order for content_decryption_module to work
 // on Unix systems.
-#include "stddef.h"
+#include <stddef.h>
+
+#include <vector>
+
 #include "content_decryption_module.h"
 
-#include <assert.h>
 #include "ArrayUtils.h"
-#include <vector>
+#include "ClearKeyUtils.h"
 
 using namespace cdm;
 
@@ -42,8 +43,8 @@ class WriteRecordClient : public FileIOClient {
   static void Write(Host_10* aHost, string& aRecordName,
                     const vector<uint8_t>& aData, function<void()>&& aOnSuccess,
                     function<void()>&& aOnFailure) {
-    WriteRecordClient* client =
-        new WriteRecordClient(aData, move(aOnSuccess), move(aOnFailure));
+    WriteRecordClient* client = new WriteRecordClient(
+        aData, std::move(aOnSuccess), std::move(aOnFailure));
     client->Do(aRecordName, aHost);
   }
 
@@ -70,8 +71,8 @@ class WriteRecordClient : public FileIOClient {
                              function<void()>&& aOnSuccess,
                              function<void()>&& aOnFailure)
       : mFileIO(nullptr),
-        mOnSuccess(move(aOnSuccess)),
-        mOnFailure(move(aOnFailure)),
+        mOnSuccess(std::move(aOnSuccess)),
+        mOnFailure(std::move(aOnFailure)),
         mData(aData) {}
 
   void Do(const string& aName, Host_10* aHost) {
@@ -110,8 +111,8 @@ class WriteRecordClient : public FileIOClient {
 void WriteData(Host_10* aHost, string& aRecordName,
                const vector<uint8_t>& aData, function<void()>&& aOnSuccess,
                function<void()>&& aOnFailure) {
-  WriteRecordClient::Write(aHost, aRecordName, aData, move(aOnSuccess),
-                           move(aOnFailure));
+  WriteRecordClient::Write(aHost, aRecordName, aData, std::move(aOnSuccess),
+                           std::move(aOnFailure));
 }
 
 class ReadRecordClient : public FileIOClient {
@@ -123,7 +124,7 @@ class ReadRecordClient : public FileIOClient {
   static void Read(Host_10* aHost, string& aRecordName,
                    function<void(const uint8_t*, uint32_t)>&& aOnSuccess,
                    function<void()>&& aOnFailure) {
-    (new ReadRecordClient(move(aOnSuccess), move(aOnFailure)))
+    (new ReadRecordClient(std::move(aOnSuccess), std::move(aOnFailure)))
         ->Do(aRecordName, aHost);
   }
 
@@ -151,8 +152,8 @@ class ReadRecordClient : public FileIOClient {
       function<void(const uint8_t*, uint32_t)>&& aOnSuccess,
       function<void()>&& aOnFailure)
       : mFileIO(nullptr),
-        mOnSuccess(move(aOnSuccess)),
-        mOnFailure(move(aOnFailure)) {}
+        mOnSuccess(std::move(aOnSuccess)),
+        mOnFailure(std::move(aOnFailure)) {}
 
   void Do(const string& aName, Host_10* aHost) {
     mFileIO = aHost->CreateFileIO(this);
@@ -188,6 +189,6 @@ class ReadRecordClient : public FileIOClient {
 void ReadData(Host_10* aHost, string& aRecordName,
               function<void(const uint8_t*, uint32_t)>&& aOnSuccess,
               function<void()>&& aOnFailure) {
-  ReadRecordClient::Read(aHost, aRecordName, move(aOnSuccess),
-                         move(aOnFailure));
+  ReadRecordClient::Read(aHost, aRecordName, std::move(aOnSuccess),
+                         std::move(aOnFailure));
 }

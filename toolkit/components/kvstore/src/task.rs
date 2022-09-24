@@ -11,7 +11,7 @@ use nserror::{nsresult, NS_ERROR_FAILURE};
 use nsstring::nsCString;
 use owned_value::owned_to_variant;
 use rkv::backend::{BackendInfo, SafeMode, SafeModeDatabase, SafeModeEnvironment};
-use rkv::{Migrator, OwnedValue, StoreError, StoreOptions, Value};
+use rkv::{OwnedValue, StoreError, StoreOptions, Value};
 use std::{
     path::Path,
     str,
@@ -44,9 +44,9 @@ type SingleStore = rkv::SingleStore<SafeModeDatabase>;
 macro_rules! task_done {
     (value) => {
         fn done(&self) -> Result<(), nsresult> {
-            // If TaskRunnable.run() calls Task.done() to return a result
-            // on the main thread before TaskRunnable.run() returns on the database
-            // thread, then the Task will get dropped on the database thread.
+            // If TaskRunnable calls Task.done() to return a result on the
+            // main thread before TaskRunnable returns on the database thread,
+            // then the Task will get dropped on the database thread.
             //
             // But the callback is an nsXPCWrappedJS that isn't safe to release
             // on the database thread.  So we move it out of the Task here to ensure
@@ -65,9 +65,9 @@ macro_rules! task_done {
 
     (void) => {
         fn done(&self) -> Result<(), nsresult> {
-            // If TaskRunnable.run() calls Task.done() to return a result
-            // on the main thread before TaskRunnable.run() returns on the database
-            // thread, then the Task will get dropped on the database thread.
+            // If TaskRunnable calls Task.done() to return a result on the
+            // main thread before TaskRunnable returns on the database thread,
+            // then the Task will get dropped on the database thread.
             //
             // But the callback is an nsXPCWrappedJS that isn't safe to release
             // on the database thread.  So we move it out of the Task here to ensure
@@ -199,7 +199,6 @@ impl Task for GetOrCreateTask {
                 // https://bugzilla.mozilla.org/show_bug.cgi?id=1531887
                 let path = Path::new(str::from_utf8(&self.path)?);
                 let rkv = manager.get_or_create(path, Rkv::new::<SafeMode>)?;
-                Migrator::easy_migrate_lmdb_to_safe_mode(path, rkv.read()?)?;
                 {
                     let env = rkv.read()?;
                     let load_ratio = env.load_ratio()?.unwrap_or(0.0);

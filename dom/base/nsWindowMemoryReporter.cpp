@@ -21,9 +21,7 @@
 #include "js/MemoryMetrics.h"
 #include "nsQueryObject.h"
 #include "nsServiceManagerUtils.h"
-#ifdef MOZ_XUL
-#  include "nsXULPrototypeCache.h"
-#endif
+#include "nsXULPrototypeCache.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -169,7 +167,7 @@ static void AppendWindowURI(nsGlobalWindowInner* aWindow, nsACString& aStr,
 MOZ_DEFINE_MALLOC_SIZE_OF(WindowsMallocSizeOf)
 
 // The key is the window ID.
-typedef nsTHashMap<nsUint64HashKey, nsCString> WindowPaths;
+using WindowPaths = nsTHashMap<nsUint64HashKey, nsCString>;
 
 static void ReportAmount(const nsCString& aBasePath, const char* aPathTail,
                          size_t aAmount, const nsCString& aDescription,
@@ -510,7 +508,7 @@ static void CollectWindowReports(nsGlobalWindowInner* aWindow,
 #undef REPORT_COUNT
 }
 
-typedef nsTArray<RefPtr<nsGlobalWindowInner>> WindowArray;
+using WindowArray = nsTArray<RefPtr<nsGlobalWindowInner>>;
 
 NS_IMETHODIMP
 nsWindowMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
@@ -576,9 +574,7 @@ nsWindowMemoryReporter::CollectReports(nsIHandleReportCallback* aHandleReport,
   xpc::JSReporter::CollectReports(&windowPaths, &topWindowPaths, aHandleReport,
                                   aData, aAnonymize);
 
-#ifdef MOZ_XUL
   nsXULPrototypeCache::CollectMemoryReports(aHandleReport, aData);
-#endif
 
 #define REPORT(_path, _amount, _desc)                                    \
   aHandleReport->Callback(""_ns, nsLiteralCString(_path), KIND_OTHER,    \

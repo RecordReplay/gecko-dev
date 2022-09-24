@@ -9,8 +9,7 @@
 
 #include "mozilla/dom/PMIDIManagerParent.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /**
  * Actor implementation for the Parent (PBackground thread) side of MIDIManager
@@ -22,6 +21,7 @@ class MIDIManagerParent final : public PMIDIManagerParent {
  public:
   NS_INLINE_DECL_REFCOUNTING(MIDIManagerParent);
   MIDIManagerParent() = default;
+  mozilla::ipc::IPCResult RecvRefresh();
   mozilla::ipc::IPCResult RecvShutdown();
   void Teardown();
   void ActorDestroy(ActorDestroyReason aWhy) override;
@@ -30,7 +30,6 @@ class MIDIManagerParent final : public PMIDIManagerParent {
   ~MIDIManagerParent() = default;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_MIDIManagerParent_h

@@ -31,6 +31,10 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/WindowsProcessMitigations.h"
 
+#ifdef MOZ_BACKGROUNDTASKS
+#  include "mozilla/BackgroundTasks.h"
+#endif
+
 #if defined(ACCESSIBILITY)
 #  include "mozilla/a11y/Compatibility.h"
 #  include "mozilla/a11y/Platform.h"
@@ -97,7 +101,7 @@ class WinWakeLockListener final : public nsIDOMMozWakeLockListener {
     context.Reason.SimpleReasonString = RequestTypeLPWSTR(aType);
     HANDLE handle = PowerCreateRequest(&context);
     if (!handle) {
-      WAKE_LOCK_LOG("Failed to create handle for %s, error=%d",
+      WAKE_LOCK_LOG("Failed to create handle for %s, error=%lu",
                     RequestTypeStr(aType), GetLastError());
       return nullptr;
     }
@@ -146,7 +150,7 @@ class WinWakeLockListener final : public nsIDOMMozWakeLockListener {
     if (PowerSetRequest(handle, aType)) {
       WAKE_LOCK_LOG("Requested %s lock", RequestTypeStr(aType));
     } else {
-      WAKE_LOCK_LOG("Failed to request %s lock, error=%d",
+      WAKE_LOCK_LOG("Failed to request %s lock, error=%lu",
                     RequestTypeStr(aType), GetLastError());
       SetHandle(nullptr, aType);
     }
@@ -160,7 +164,7 @@ class WinWakeLockListener final : public nsIDOMMozWakeLockListener {
 
     WAKE_LOCK_LOG("Prepare to release wakelock for %s", RequestTypeStr(aType));
     if (!PowerClearRequest(GetHandle(aType), aType)) {
-      WAKE_LOCK_LOG("Failed to release %s lock, error=%d",
+      WAKE_LOCK_LOG("Failed to release %s lock, error=%lu",
                     RequestTypeStr(aType), GetLastError());
       return;
     }
@@ -534,11 +538,13 @@ nsresult nsAppShell::Init() {
       wc.hbrBackground = (HBRUSH) nullptr;
       wc.lpszMenuName = (LPCWSTR) nullptr;
       wc.lpszClassName = kWindowClass;
-      RegisterClassW(&wc);
+      [[maybe_unused]] ATOM wcA = RegisterClassW(&wc);
+      MOZ_DIAGNOSTIC_ASSERT(wcA, "RegisterClassW for EventWindowClass failed");
     }
 
     mEventWnd = CreateWindowW(kWindowClass, L"nsAppShell:EventWindow", 0, 0, 0,
                               10, 10, HWND_MESSAGE, nullptr, module, nullptr);
+    MOZ_DIAGNOSTIC_ASSERT(mEventWnd, "CreateWindowW for EventWindow failed");
     NS_ENSURE_STATE(mEventWnd);
   } else if (XRE_IsContentProcess() && !IsWin32kLockedDown()) {
     // We're not generally processing native events, but still using GDI and we
@@ -583,20 +589,21 @@ nsresult nsAppShell::Init() {
 
 NS_IMETHODIMP
 nsAppShell::Run(void) {
-  // Content processes initialize audio later through PContent using audio
-  // tray id information pulled from the browser process AudioSession. This
-  // way the two share a single volume control.
-  // Note StopAudioSession() is called from nsAppRunner.cpp after xpcom is torn
-  // down to insure the browser shuts down after child processes.
+  bool wantAudio = true;
   if (XRE_IsParentProcess()) {
-    mozilla::widget::StartAudioSession();
-  }
+#ifdef MOZ_BACKGROUNDTASKS
+    if (BackgroundTasks::IsBackgroundTaskMode()) {
+      wantAudio = false;
+    }
+#endif
+    if (MOZ_LIKELY(wantAudio)) {
+      mozilla::widget::StartAudioSession();
+    }
 
-  // Add an observer that disables the screen saver when requested by Gecko.
-  // For example when we're playing video in the foreground tab. Whole firefox
-  // only needs one wakelock instance, so we would only create one listener in
-  // chrome process to prevent requesting unnecessary wakelock.
-  if (XRE_IsParentProcess()) {
+    // Add an observer that disables the screen saver when requested by Gecko.
+    // For example when we're playing video in the foreground tab. Whole firefox
+    // only needs one wakelock instance, so we would only create one listener in
+    // chrome process to prevent requesting unnecessary wakelock.
     AddScreenWakeLockListener();
   }
 
@@ -604,6 +611,10 @@ nsAppShell::Run(void) {
 
   if (XRE_IsParentProcess()) {
     RemoveScreenWakeLockListener();
+
+    if (MOZ_LIKELY(wantAudio)) {
+      mozilla::widget::StopAudioSession();
+    }
   }
 
   return rv;
@@ -682,7 +693,6 @@ bool nsAppShell::ProcessNextNativeEvent(bool mayWait) {
 
   do {
     MSG msg;
-    bool uiMessage = false;
 
     // For avoiding deadlock between our process and plugin process by
     // mouse wheel messages, we're handling actually when we receive one of
@@ -696,15 +706,10 @@ bool nsAppShell::ProcessNextNativeEvent(bool mayWait) {
                                          MOZ_WM_MOUSEWHEEL_LAST, PM_REMOVE);
       NS_ASSERTION(gotMessage,
                    "waiting internal wheel message, but it has not come");
-      uiMessage = gotMessage;
     }
 
     if (!gotMessage) {
       gotMessage = WinUtils::PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE);
-      uiMessage =
-          (msg.message >= WM_KEYFIRST && msg.message <= WM_IME_KEYLAST) ||
-          (msg.message >= NS_WM_IMEFIRST && msg.message <= NS_WM_IMELAST) ||
-          (msg.message >= WM_MOUSEFIRST && msg.message <= WM_MOUSELAST);
     }
 
     if (gotMessage) {

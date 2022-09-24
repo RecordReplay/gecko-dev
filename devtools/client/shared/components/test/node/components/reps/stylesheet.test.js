@@ -16,7 +16,7 @@ const {
 } = require("devtools/client/shared/components/test/node/components/reps/test-helpers");
 
 describe("Test StyleSheet", () => {
-  const stub = stubs.get("StyleSheet");
+  const stub = stubs.get("StyleSheet")._grip;
 
   it("selects the StyleSheet Rep", () => {
     expect(getRep(stub)).toEqual(StyleSheet.rep);
@@ -31,10 +31,10 @@ describe("Test StyleSheet", () => {
     );
 
     expect(renderedComponent.text()).toEqual(
-      "StyleSheet https://example.com/styles.css"
+      "CSSStyleSheet https://example.com/styles.css"
     );
     expect(renderedComponent.prop("title")).toEqual(
-      "StyleSheet https://example.com/styles.css"
+      "CSSStyleSheet https://example.com/styles.css"
     );
     expectActorAttribute(renderedComponent, stub.actor);
   });

@@ -6,7 +6,7 @@
 // Test that the in-line layout works as expected
 
 const TEST_URI =
-  "data:text/html,<meta charset=utf8>Test in-line console layout";
+  "data:text/html,<!DOCTYPE html><meta charset=utf8>Test in-line console layout";
 
 const MINIMUM_MESSAGE_HEIGHT = 20;
 
@@ -38,7 +38,11 @@ add_task(async function() {
   );
 
   info("Logging a message in the content window");
-  const onLogMessage = waitForMessage(hud, "simple text message");
+  const onLogMessage = waitForMessageByType(
+    hud,
+    "simple text message",
+    ".console-api"
+  );
   SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {
     content.wrappedJSObject.console.log("simple text message");
   });
@@ -51,7 +55,11 @@ add_task(async function() {
   );
 
   info("Logging multiple messages to make the output overflow");
-  const onLastMessage = waitForMessage(hud, "message-100");
+  const onLastMessage = waitForMessageByType(
+    hud,
+    "message-100",
+    ".console-api"
+  );
   SpecialPowers.spawn(gBrowser.selectedBrowser, [], () => {
     for (let i = 1; i <= 100; i++) {
       content.wrappedJSObject.console.log("message-" + i);

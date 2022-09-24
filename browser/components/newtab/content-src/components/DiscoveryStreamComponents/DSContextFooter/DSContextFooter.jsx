@@ -10,6 +10,36 @@ import React from "react";
 // Animation time is mirrored in DSContextFooter.scss
 const ANIMATION_DURATION = 3000;
 
+export const DSMessageLabel = props => {
+  const {
+    context,
+    context_type,
+    display_engagement_labels,
+    engagement,
+  } = props;
+  const { icon, fluentID } = cardContextTypes[context_type] || {};
+
+  if (!context && (context_type || (display_engagement_labels && engagement))) {
+    return (
+      <TransitionGroup component={null}>
+        <CSSTransition
+          key={fluentID}
+          timeout={ANIMATION_DURATION}
+          classNames="story-animate"
+        >
+          {engagement && !context_type ? (
+            <div className="story-view-count">{engagement}</div>
+          ) : (
+            <StatusMessage icon={icon} fluentID={fluentID} />
+          )}
+        </CSSTransition>
+      </TransitionGroup>
+    );
+  }
+
+  return null;
+};
+
 export const StatusMessage = ({ icon, fluentID }) => (
   <div className="status-message">
     <span
@@ -20,8 +50,13 @@ export const StatusMessage = ({ icon, fluentID }) => (
   </div>
 );
 
-export const SponsorLabel = ({ sponsored_by_override, sponsor, context }) => {
-  const classList = "story-sponsored-label clamp";
+export const SponsorLabel = ({
+  sponsored_by_override,
+  sponsor,
+  context,
+  newSponsoredLabel,
+}) => {
+  const classList = `story-sponsored-label ${newSponsoredLabel || ""} clamp`;
   // If override is not false or an empty string.
   if (sponsored_by_override) {
     return <p className={classList}>{sponsored_by_override}</p>;
@@ -58,28 +93,52 @@ export class DSContextFooter extends React.PureComponent {
       sponsor,
       sponsored_by_override,
     } = this.props;
-    const { icon, fluentID } = cardContextTypes[context_type] || {};
 
-    return (
-      <div className="story-footer">
-        {SponsorLabel({ sponsored_by_override, sponsor, context })}
-        <TransitionGroup component={null}>
-          {!context &&
-            (context_type || (display_engagement_labels && engagement)) && (
-              <CSSTransition
-                key={fluentID}
-                timeout={ANIMATION_DURATION}
-                classNames="story-animate"
-              >
-                {engagement && !context_type ? (
-                  <div className="story-view-count">{engagement}</div>
-                ) : (
-                  <StatusMessage icon={icon} fluentID={fluentID} />
-                )}
-              </CSSTransition>
-            )}
-        </TransitionGroup>
-      </div>
-    );
+    const sponsorLabel = SponsorLabel({
+      sponsored_by_override,
+      sponsor,
+      context,
+    });
+    const dsMessageLabel = DSMessageLabel({
+      context,
+      context_type,
+      display_engagement_labels,
+      engagement,
+    });
+
+    if (sponsorLabel || dsMessageLabel) {
+      return (
+        <div className="story-footer">
+          {sponsorLabel}
+          {dsMessageLabel}
+        </div>
+      );
+    }
+
+    return null;
   }
 }
+
+export const DSMessageFooter = props => {
+  const {
+    context,
+    context_type,
+    engagement,
+    display_engagement_labels,
+    saveToPocketCard,
+  } = props;
+
+  const dsMessageLabel = DSMessageLabel({
+    context,
+    context_type,
+    engagement,
+    display_engagement_labels,
+  });
+
+  // This case is specific and already displayed to the user elsewhere.
+  if (!dsMessageLabel || (saveToPocketCard && context_type === "pocket")) {
+    return null;
+  }
+
+  return <div className="story-footer">{dsMessageLabel}</div>;
+};

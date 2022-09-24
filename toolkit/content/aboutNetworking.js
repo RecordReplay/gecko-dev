@@ -82,7 +82,7 @@ function displaySockets(data) {
     let row = document.createElement("tr");
     row.appendChild(col(data.sockets[i].host));
     row.appendChild(col(data.sockets[i].port));
-    row.appendChild(col(data.sockets[i].tcp));
+    row.appendChild(col(data.sockets[i].type));
     row.appendChild(col(data.sockets[i].active));
     row.appendChild(col(data.sockets[i].sent));
     row.appendChild(col(data.sockets[i].received));
@@ -112,6 +112,7 @@ function displayDns(data) {
   trr_url_tbody.id = "dns_trr_url";
   let trr_url = document.createElement("tr");
   trr_url.appendChild(col(gDNSService.currentTrrURI));
+  trr_url.appendChild(col(gDNSService.currentTrrMode));
   trr_url_tbody.appendChild(trr_url);
   let prevURL = document.getElementById("dns_trr_url");
   prevURL.parentNode.replaceChild(trr_url_tbody, prevURL);
@@ -136,6 +137,7 @@ function displayDns(data) {
     row.appendChild(column);
     row.appendChild(col(data.entries[i].expiration));
     row.appendChild(col(data.entries[i].originAttributesSuffix));
+    row.appendChild(col(data.entries[i].flags));
     new_cont.appendChild(row);
   }
 
@@ -555,7 +557,7 @@ function displayHTTPSRRLookup(data) {
         ? `echConfig="${record.echConfig.echConfig}" `
         : "";
       let ODoHConfig = record.ODoHConfig
-        ? `ODoHConfig="${record.ODoHConfig.ODoHConfig}" `
+        ? `odoh="${record.ODoHConfig.ODoHConfig}" `
         : "";
       let ipv4hint = "";
       let ipv6hint = "";

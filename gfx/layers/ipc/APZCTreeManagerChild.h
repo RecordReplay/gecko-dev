@@ -11,6 +11,8 @@
 #include "mozilla/layers/IAPZCTreeManager.h"
 #include "mozilla/layers/PAPZCTreeManagerChild.h"
 
+#include <unordered_map>
+
 namespace mozilla {
 namespace layers {
 
@@ -62,9 +64,6 @@ class APZCTreeManagerChild : public IAPZCTreeManager,
   void SetLongTapEnabled(bool aTapGestureEnabled) override;
 
   APZInputBridge* InputBridge() override;
-
-  void AddInputBlockCallback(uint64_t aInputBlockId,
-                             InputBlockCallback&& aCallback) override;
 
   void AddIPDLReference();
   void ReleaseIPDLReference();

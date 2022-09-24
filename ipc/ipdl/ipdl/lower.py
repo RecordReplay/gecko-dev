@@ -11,7 +11,6 @@ import ipdl.ast
 import ipdl.builtin
 from ipdl.cxx.ast import *
 from ipdl.cxx.code import *
-from ipdl.direct_call import VIRTUAL_CALL_CLASSES, DIRECT_CALL_OVERRIDES
 from ipdl.type import ActorType, UnionType, TypeVisitor, builtinHeaderIncludes
 from ipdl.util import hash_str
 
@@ -164,10 +163,6 @@ def _backstagePass():
     return ExprCall(ExprVar("mozilla::ipc::PrivateIPDLInterface"))
 
 
-def _iterType(ptr):
-    return Type("PickleIterator", ptr=ptr)
-
-
 def _deleteId():
     return ExprVar("Msg___delete____ID")
 
@@ -269,10 +264,6 @@ def _refptr(T):
     return Type("RefPtr", T=T)
 
 
-def _uniqueptr(T):
-    return Type("UniquePtr", T=T)
-
-
 def _alreadyaddrefed(T):
     return Type("already_AddRefed", T=T)
 
@@ -300,8 +291,8 @@ def _makePromise(returns, side, resolver=False):
 
 def _resolveType(returns, side):
     if len(returns) > 1:
-        return _tuple([d.moveType(side) for d in returns])
-    return returns[0].moveType(side)
+        return _tuple([d.inType(side) for d in returns])
+    return returns[0].inType(side)
 
 
 def _makeResolver(returns, side):
@@ -467,6 +458,7 @@ class _DestroyReason:
     NormalShutdown = ExprVar("NormalShutdown")
     AbnormalShutdown = ExprVar("AbnormalShutdown")
     FailedConstructor = ExprVar("FailedConstructor")
+    ManagedEndpointDropped = ExprVar("ManagedEndpointDropped")
 
 
 class _ResponseRejectReason:
@@ -562,16 +554,13 @@ def _cxxConstRefType(ipdltype, side):
     if ipdltype.isIPDL() and ipdltype.isShmem():
         t.ref = True
         return t
-    if ipdltype.isIPDL() and ipdltype.isByteBuf():
-        t.ref = True
-        return t
     if ipdltype.isIPDL() and ipdltype.hasBaseType():
         # Keep same constness as inner type.
         inner = _cxxConstRefType(ipdltype.basetype, side)
         t.const = inner.const or not inner.ref
         t.ref = True
         return t
-    if ipdltype.isCxx() and ipdltype.isMoveonly():
+    if ipdltype.isCxx() and (ipdltype.isSendMoveOnly() or ipdltype.isDataMoveOnly()):
         t.const = True
         t.ref = True
         return t
@@ -580,41 +569,46 @@ def _cxxConstRefType(ipdltype, side):
         t = t.T
         t.ptr = True
         return t
-    if ipdltype.isUniquePtr():
-        t.ref = True
-        return t
     t.const = True
     t.ref = True
     return t
 
 
-def _cxxTypeCanMoveSend(ipdltype):
-    return ipdltype.isUniquePtr()
+def _cxxTypeNeedsMoveForSend(ipdltype, context="root", visited=None):
+    """Returns `True` if serializing ipdltype requires a mutable reference, e.g.
+    because the underlying resource represented by the value is being
+    transferred to another process. This is occasionally distinct from whether
+    the C++ type exposes a copy constructor, such as for types which are not
+    cheaply copiable, but are not mutated when serialized."""
 
+    if visited is None:
+        visited = set()
 
-def _cxxTypeNeedsMove(ipdltype):
-    if _cxxTypeNeedsMoveForSend(ipdltype):
-        return True
-
-    if ipdltype.isIPDL():
-        return ipdltype.isArray()
-
-    return False
-
-
-def _cxxTypeNeedsMoveForSend(ipdltype):
-    if ipdltype.isUniquePtr():
-        return True
+    visited.add(ipdltype)
 
     if ipdltype.isCxx():
-        return ipdltype.isMoveonly()
+        return ipdltype.isSendMoveOnly()
 
     if ipdltype.isIPDL():
         if ipdltype.hasBaseType():
-            return _cxxTypeNeedsMove(ipdltype.basetype)
+            return _cxxTypeNeedsMoveForSend(ipdltype.basetype, "wrapper", visited)
+        if ipdltype.isStruct() or ipdltype.isUnion():
+            return any(
+                _cxxTypeNeedsMoveForSend(t, "compound", visited)
+                for t in ipdltype.itercomponents()
+                if t not in visited
+            )
+
+        # For historical reasons, shmem is `const_cast` to a mutable reference
+        # when being stored in a struct or union (see
+        # `_StructField.constRefExpr` and `_UnionMember.getConstValue`), meaning
+        # that they do not cause the containing struct to require move for
+        # sending.
+        if ipdltype.isShmem():
+            return context != "compound"
+
         return (
-            ipdltype.isShmem()
-            or ipdltype.isByteBuf()
+            ipdltype.isByteBuf()
             or ipdltype.isEndpoint()
             or ipdltype.isManagedEndpoint()
         )
@@ -622,42 +616,46 @@ def _cxxTypeNeedsMoveForSend(ipdltype):
     return False
 
 
-# FIXME Bug 1547019 This should be the same as _cxxTypeNeedsMoveForSend, but
-#                   a lot of existing code needs to be updated and fixed before
-#                   we can do that.
-def _cxxTypeCanOnlyMove(ipdltype, visited=None):
+def _cxxTypeNeedsMoveForData(ipdltype, context="root", visited=None):
+    """Returns `True` if the bare C++ type corresponding to ipdltype does not
+    satisfy std::is_copy_constructible_v<T>. All C++ types supported by IPDL
+    must support std::is_move_constructible_v<T>, so non-movable types must be
+    passed behind a `UniquePtr`."""
+
     if visited is None:
         visited = set()
 
     visited.add(ipdltype)
 
+    if ipdltype.isUniquePtr():
+        return True
+
     if ipdltype.isCxx():
-        return ipdltype.isMoveonly()
+        return ipdltype.isDataMoveOnly()
 
     if ipdltype.isIPDL():
-        if ipdltype.isMaybe() or ipdltype.isArray():
-            return _cxxTypeCanOnlyMove(ipdltype.basetype, visited)
+        # When nested within a maybe or array, arrays are no longer copyable.
+        if context == "wrapper" and ipdltype.isArray():
+            return True
+        if ipdltype.hasBaseType():
+            return _cxxTypeNeedsMoveForData(ipdltype.basetype, "wrapper", visited)
         if ipdltype.isStruct() or ipdltype.isUnion():
             return any(
-                _cxxTypeCanOnlyMove(t, visited)
+                _cxxTypeNeedsMoveForData(t, "compound", visited)
                 for t in ipdltype.itercomponents()
                 if t not in visited
             )
-        return ipdltype.isManagedEndpoint()
+        return (
+            ipdltype.isByteBuf()
+            or ipdltype.isEndpoint()
+            or ipdltype.isManagedEndpoint()
+        )
 
     return False
 
 
 def _cxxTypeCanMove(ipdltype):
     return not (ipdltype.isIPDL() and ipdltype.isActor())
-
-
-def _cxxMoveRefType(ipdltype, side):
-    t = _cxxBareType(ipdltype, side)
-    if _cxxTypeNeedsMove(ipdltype):
-        t.rvalref = True
-        return t
-    return _cxxConstRefType(ipdltype, side)
 
 
 def _cxxForceMoveRefType(ipdltype, side):
@@ -685,6 +683,23 @@ def _cxxConstPtrToType(ipdltype, side):
         return t
     t.const = True
     t.ptr = True
+    return t
+
+
+def _cxxInType(ipdltype, side):
+    t = _cxxBareType(ipdltype, side)
+    if ipdltype.isIPDL() and ipdltype.isActor():
+        return t
+    if _cxxTypeNeedsMoveForSend(ipdltype):
+        t.rvalref = True
+        return t
+    if ipdltype.isCxx() and ipdltype.isRefcounted():
+        # Use T* instead of const RefPtr<T>&
+        t = t.T
+        t.ptr = True
+        return t
+    t.const = True
+    t.ref = True
     return t
 
 
@@ -728,10 +743,6 @@ class _HybridDecl:
         """Return this decl's C++ type as a const, 'reference' type."""
         return _cxxConstRefType(self.ipdltype, side)
 
-    def rvalueRefType(self, side):
-        """Return this decl's C++ type as an r-value 'reference' type."""
-        return _cxxMoveRefType(self.ipdltype, side)
-
     def ptrToType(self, side):
         return _cxxPtrToType(self.ipdltype, side)
 
@@ -739,18 +750,8 @@ class _HybridDecl:
         return _cxxConstPtrToType(self.ipdltype, side)
 
     def inType(self, side):
-        """Return this decl's C++ Type with inparam semantics."""
-        if self.ipdltype.isIPDL() and self.ipdltype.isActor():
-            return self.bareType(side)
-        elif _cxxTypeNeedsMoveForSend(self.ipdltype):
-            return self.rvalueRefType(side)
-        return self.constRefType(side)
-
-    def moveType(self, side):
-        """Return this decl's C++ Type with move semantics."""
-        if self.ipdltype.isIPDL() and self.ipdltype.isActor():
-            return self.bareType(side)
-        return self.rvalueRefType(side)
+        """Return this decl's C++ Type with sending inparam semantics."""
+        return _cxxInType(self.ipdltype, side)
 
     def outType(self, side):
         """Return this decl's C++ Type with outparam semantics."""
@@ -851,10 +852,6 @@ class _StructField(_CompoundTypeComponent):
         refexpr = self.refExpr(thisexpr)
         if "Shmem" == self.ipdltype.name():
             refexpr = ExprCast(refexpr, Type("Shmem", ref=True), const=True)
-        if "ByteBuf" == self.ipdltype.name():
-            refexpr = ExprCast(refexpr, Type("ByteBuf", ref=True), const=True)
-        if "FileDescriptor" == self.ipdltype.name():
-            refexpr = ExprCast(refexpr, Type("FileDescriptor", ref=True), const=True)
         return refexpr
 
     def argVar(self):
@@ -1028,12 +1025,8 @@ class _UnionMember(_CompoundTypeComponent):
     def getConstValue(self):
         v = ExprDeref(self.callGetConstPtr())
         # sigh
-        if "ByteBuf" == self.ipdltype.name():
-            v = ExprCast(v, Type("ByteBuf", ref=True), const=True)
         if "Shmem" == self.ipdltype.name():
             v = ExprCast(v, Type("Shmem", ref=True), const=True)
-        if "FileDescriptor" == self.ipdltype.name():
-            v = ExprCast(v, Type("FileDescriptor", ref=True), const=True)
         return v
 
 
@@ -1126,9 +1119,23 @@ class MessageDecl(ipdl.ast.MessageDecl):
                 return Decl(Type("Tainted", T=d.bareType(side)), d.name)
 
             if sems == "in":
-                return Decl(d.inType(side), d.name)
+                t = d.inType(side)
+                # If this is the `recv` side, and we're not using "move"
+                # semantics, that means we're an alloc method, and cannot accept
+                # values by rvalue reference. Downgrade to an lvalue reference.
+                if direction == "recv" and t.rvalref:
+                    t.rvalref = False
+                    t.ref = True
+                return Decl(t, d.name)
             elif sems == "move":
-                return Decl(d.moveType(side), d.name)
+                assert direction == "recv"
+                # For legacy reasons, use an rvalue reference when generating
+                # parameters for recv methods which accept arrays.
+                if d.ipdltype.isIPDL() and d.ipdltype.isArray():
+                    t = d.bareType(side)
+                    t.rvalref = True
+                    return Decl(t, d.name)
+                return Decl(d.inType(side), d.name)
             elif sems == "out":
                 return Decl(d.outType(side), d.name)
             else:
@@ -1260,9 +1267,6 @@ def _subtreeUsesShmem(p):
 
 
 class Protocol(ipdl.ast.Protocol):
-    def cxxTypedefs(self):
-        return self.decl.cxxtypedefs
-
     def managerInterfaceType(self, ptr=False):
         return Type("mozilla::ipc::IProtocol", ptr=ptr)
 
@@ -1288,15 +1292,6 @@ class Protocol(ipdl.ast.Protocol):
     def deallocManageeMethod(self):
         return ExprVar("DeallocManagee")
 
-    def otherPidMethod(self):
-        return ExprVar("OtherPid")
-
-    def callOtherPid(self, actorThis=None):
-        fn = self.otherPidMethod()
-        if actorThis is not None:
-            fn = ExprSelect(actorThis, "->", fn.name)
-        return ExprCall(fn)
-
     def getChannelMethod(self):
         return ExprVar("GetIPCChannel")
 
@@ -1313,22 +1308,6 @@ class Protocol(ipdl.ast.Protocol):
     def shouldContinueFromTimeoutVar(self):
         assert self.decl.type.isToplevel()
         return ExprVar("ShouldContinueFromReplyTimeout")
-
-    def enteredCxxStackVar(self):
-        assert self.decl.type.isToplevel()
-        return ExprVar("EnteredCxxStack")
-
-    def exitedCxxStackVar(self):
-        assert self.decl.type.isToplevel()
-        return ExprVar("ExitedCxxStack")
-
-    def enteredCallVar(self):
-        assert self.decl.type.isToplevel()
-        return ExprVar("EnteredCall")
-
-    def exitedCallVar(self):
-        assert self.decl.type.isToplevel()
-        return ExprVar("ExitedCall")
 
     def routingId(self, actorThis=None):
         if self.decl.type.isToplevel():
@@ -1415,31 +1394,6 @@ class _DecorateWithCxxStuff(ipdl.ast.Visitor):
 
     def __init__(self):
         self.visitedTus = set()
-        # the set of typedefs that allow generated classes to
-        # reference known C++ types by their "short name" rather than
-        # fully-qualified name. e.g. |Foo| rather than |a::b::Foo|.
-        self.typedefs = []
-        self.typedefSet = set(
-            [
-                Typedef(Type("mozilla::ipc::ActorHandle"), "ActorHandle"),
-                Typedef(Type("base::ProcessId"), "ProcessId"),
-                Typedef(Type("mozilla::ipc::ProtocolId"), "ProtocolId"),
-                Typedef(Type("mozilla::ipc::Transport"), "Transport"),
-                Typedef(Type("mozilla::ipc::Endpoint"), "Endpoint", ["FooSide"]),
-                Typedef(
-                    Type("mozilla::ipc::ManagedEndpoint"),
-                    "ManagedEndpoint",
-                    ["FooSide"],
-                ),
-                Typedef(
-                    Type("mozilla::ipc::TransportDescriptor"), "TransportDescriptor"
-                ),
-                Typedef(Type("mozilla::UniquePtr"), "UniquePtr", ["T"]),
-                Typedef(
-                    Type("mozilla::ipc::ResponseRejectReason"), "ResponseRejectReason"
-                ),
-            ]
-        )
         self.protocolName = None
 
     def visitTranslationUnit(self, tu):
@@ -1448,7 +1402,6 @@ class _DecorateWithCxxStuff(ipdl.ast.Visitor):
             ipdl.ast.Visitor.visitTranslationUnit(self, tu)
             if not isinstance(tu, TranslationUnit):
                 TranslationUnit.upgrade(tu)
-            self.typedefs[:] = sorted(list(self.typedefSet))
 
     def visitInclude(self, inc):
         if inc.tu.filetype == "header":
@@ -1456,15 +1409,8 @@ class _DecorateWithCxxStuff(ipdl.ast.Visitor):
 
     def visitProtocol(self, pro):
         self.protocolName = pro.name
-        pro.decl.cxxtypedefs = self.typedefs
         Protocol.upgrade(pro)
         return ipdl.ast.Visitor.visitProtocol(self, pro)
-
-    def visitUsingStmt(self, using):
-        if using.decl.fullname is not None:
-            self.typedefSet.add(
-                Typedef(Type(using.decl.fullname), using.decl.shortname)
-            )
 
     def visitStructDecl(self, sd):
         if not isinstance(sd, StructDecl):
@@ -1496,9 +1442,6 @@ class _DecorateWithCxxStuff(ipdl.ast.Visitor):
             sd.packed_field_order = permutation
             StructDecl.upgrade(sd)
 
-        if sd.decl.fullname is not None:
-            self.typedefSet.add(Typedef(Type(sd.fqClassName()), sd.name))
-
     def visitUnionDecl(self, ud):
         ud.decl.special = False
         newcomponents = []
@@ -1513,9 +1456,6 @@ class _DecorateWithCxxStuff(ipdl.ast.Visitor):
                 newcomponents.append(_UnionMember(ctype, ud))
         ud.components = newcomponents
         UnionDecl.upgrade(ud)
-
-        if ud.decl.fullname is not None:
-            self.typedefSet.add(Typedef(Type(ud.fqClassName()), ud.name))
 
     def visitDecl(self, decl):
         return _HybridDecl(decl.type, decl.progname, decl.attributes)
@@ -1659,6 +1599,10 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
             self.hdrfile.addthing(
                 CppDirective("include", '"' + _ipdlhHeaderName(inc.tu) + '.h"')
             )
+            # Inherit cpp includes defined by imported header files, as they may
+            # be required to serialize an imported `using` type.
+            for cxxinc in inc.tu.cxxIncludes:
+                cxxinc.accept(self)
         else:
             self.cppIncludeHeaders += [
                 _protocolHeaderName(inc.tu.protocol, "parent") + ".h",
@@ -1766,9 +1710,10 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         self.hdrfile.addthing(_putInNamespaces(ns, p.namespaces))
         ns.addstmt(Whitespace.NL)
 
-        edecl, edefn = _splitFuncDeclDefn(self.genEndpointFunc())
-        ns.addstmts([edecl, Whitespace.NL])
-        self.funcDefns.append(edefn)
+        for func in self.genEndpointFuncs():
+            edecl, edefn = _splitFuncDeclDefn(func)
+            ns.addstmts([edecl, Whitespace.NL])
+            self.funcDefns.append(edefn)
 
         # spit out message type enum and classes
         msgenum = msgenums(self.protocol)
@@ -1802,38 +1747,45 @@ class _GenerateProtocolCode(ipdl.ast.Visitor):
         ns.addstmts([Whitespace.NL, Whitespace.NL])
 
     # Generate code for PFoo::CreateEndpoints.
-    def genEndpointFunc(self):
+    def genEndpointFuncs(self):
         p = self.protocol.decl.type
         tparent = _cxxBareType(ActorType(p), "Parent", fq=True)
         tchild = _cxxBareType(ActorType(p), "Child", fq=True)
 
-        openfunc = MethodDefn(
-            MethodDecl(
-                "CreateEndpoints",
-                params=[
+        def mkOverload(includepids):
+            params = []
+            if includepids:
+                params = [
                     Decl(Type("base::ProcessId"), "aParentDestPid"),
                     Decl(Type("base::ProcessId"), "aChildDestPid"),
-                    Decl(
-                        Type("mozilla::ipc::Endpoint<" + tparent.name + ">", ptr=True),
-                        "aParent",
-                    ),
-                    Decl(
-                        Type("mozilla::ipc::Endpoint<" + tchild.name + ">", ptr=True),
-                        "aChild",
-                    ),
-                ],
-                ret=Type.NSRESULT,
+                ]
+            params += [
+                Decl(
+                    Type("mozilla::ipc::Endpoint<" + tparent.name + ">", ptr=True),
+                    "aParent",
+                ),
+                Decl(
+                    Type("mozilla::ipc::Endpoint<" + tchild.name + ">", ptr=True),
+                    "aChild",
+                ),
+            ]
+            openfunc = MethodDefn(
+                MethodDecl("CreateEndpoints", params=params, ret=Type.NSRESULT)
             )
-        )
-        openfunc.addcode(
-            """
-            return mozilla::ipc::CreateEndpoints(
-                mozilla::ipc::PrivateIPDLInterface(),
-                aParentDestPid, aChildDestPid,
-                aParent, aChild);
-            """
-        )
-        return openfunc
+            openfunc.addcode(
+                """
+                return mozilla::ipc::CreateEndpoints(
+                    mozilla::ipc::PrivateIPDLInterface(),
+                    $,{args});
+                """,
+                args=[ExprVar(d.name) for d in params],
+            )
+            return openfunc
+
+        funcs = [mkOverload(True)]
+        if not p.hasOtherPid():
+            funcs.append(mkOverload(False))
+        return funcs
 
 
 # --------------------------------------------------
@@ -1859,7 +1811,7 @@ def _generateMessageConstructor(md, segmentSize, protocol, forReply=False):
         FunctionDecl(
             clsname,
             params=[Decl(Type("int32_t"), routingId.name)],
-            ret=Type("IPC::Message", ptr=True),
+            ret=Type("mozilla::UniquePtr<IPC::Message>"),
         )
     )
 
@@ -1895,10 +1847,15 @@ def _generateMessageConstructor(md, segmentSize, protocol, forReply=False):
     else:
         syncEnum = "ASYNC"
 
+    # FIXME(bug ???) - remove support for interrupt messages from the IPDL compiler.
     if md.decl.type.isInterrupt():
-        interruptEnum = "INTERRUPT"
-    else:
-        interruptEnum = "NOT_INTERRUPT"
+        func.addcode(
+            """
+            static_assert(
+                false,
+                "runtime support for intr messages has been removed from IPDL");
+            """
+        )
 
     if md.decl.type.isCtor():
         ctorEnum = "CONSTRUCTOR"
@@ -1916,37 +1873,26 @@ def _generateMessageConstructor(md, segmentSize, protocol, forReply=False):
             messageEnum(compression),
             messageEnum(ctorEnum),
             messageEnum(syncEnum),
-            messageEnum(interruptEnum),
             messageEnum(replyEnum),
         ],
     )
 
     segmentSize = int(segmentSize)
-    if segmentSize:
-        func.addstmt(
-            StmtReturn(
-                ExprNew(
-                    Type("IPC::Message"),
-                    args=[
-                        routingId,
-                        ExprVar(msgid),
-                        ExprLiteral.Int(int(segmentSize)),
-                        flags,
-                        # Pass `true` to recordWriteLatency to collect telemetry
-                        ExprLiteral.TRUE,
-                    ],
-                )
+    if not segmentSize:
+        segmentSize = 0
+    func.addstmt(
+        StmtReturn(
+            ExprCall(
+                ExprVar("IPC::Message::IPDLMessage"),
+                args=[
+                    routingId,
+                    ExprVar(msgid),
+                    ExprLiteral.Int(int(segmentSize)),
+                    flags,
+                ],
             )
         )
-    else:
-        func.addstmt(
-            StmtReturn(
-                ExprCall(
-                    ExprVar("IPC::Message::IPDLMessage"),
-                    args=[routingId, ExprVar(msgid), flags],
-                )
-            )
-        )
+    )
 
     return func
 
@@ -1956,18 +1902,21 @@ def _generateMessageConstructor(md, segmentSize, protocol, forReply=False):
 
 class _ParamTraits:
     var = ExprVar("aVar")
-    msgvar = ExprVar("aMsg")
-    itervar = ExprVar("aIter")
-    actor = ExprVar("aActor")
+    writervar = ExprVar("aWriter")
+    readervar = ExprVar("aReader")
 
     @classmethod
-    def ifsideis(cls, side, then, els=None):
+    def ifsideis(cls, rdrwtr, side, then, els=None):
         cxxside = ExprVar("mozilla::ipc::ChildSide")
         if side == "parent":
             cxxside = ExprVar("mozilla::ipc::ParentSide")
 
         ifstmt = StmtIf(
-            ExprBinary(cxxside, "==", ExprCall(ExprSelect(cls.actor, "->", "GetSide")))
+            ExprBinary(
+                cxxside,
+                "==",
+                ExprCode("${rdrwtr}->GetActor()->GetSide()", rdrwtr=rdrwtr),
+            )
         )
         ifstmt.addifstmt(then)
         if els is not None:
@@ -1975,29 +1924,31 @@ class _ParamTraits:
         return ifstmt
 
     @classmethod
-    def fatalError(cls, reason):
+    def fatalError(cls, rdrwtr, reason):
         return StmtCode(
-            "aActor->FatalError(${reason});", reason=ExprLiteral.String(reason)
+            "${rdrwtr}->FatalError(${reason});",
+            rdrwtr=rdrwtr,
+            reason=ExprLiteral.String(reason),
         )
 
     @classmethod
-    def writeSentinel(cls, msgvar, sentinelKey):
+    def writeSentinel(cls, writervar, sentinelKey):
         return [
             Whitespace("// Sentinel = " + repr(sentinelKey) + "\n", indent=True),
             StmtExpr(
                 ExprCall(
-                    ExprSelect(msgvar, "->", "WriteSentinel"),
+                    ExprSelect(writervar, "->", "WriteSentinel"),
                     args=[ExprLiteral.Int(hashfunc(sentinelKey))],
                 )
             ),
         ]
 
     @classmethod
-    def readSentinel(cls, msgvar, itervar, sentinelKey, sentinelFail):
+    def readSentinel(cls, readervar, sentinelKey, sentinelFail):
         # Read the sentinel
         read = ExprCall(
-            ExprSelect(msgvar, "->", "ReadSentinel"),
-            args=[itervar, ExprLiteral.Int(hashfunc(sentinelKey))],
+            ExprSelect(readervar, "->", "ReadSentinel"),
+            args=[ExprLiteral.Int(hashfunc(sentinelKey))],
         )
         ifsentinel = StmtIf(ExprNot(read))
         ifsentinel.addifstmts(sentinelFail)
@@ -2008,15 +1959,13 @@ class _ParamTraits:
         ]
 
     @classmethod
-    def write(cls, var, msgvar, actor, ipdltype=None):
-        # WARNING: This doesn't set AutoForActor for you, make sure this is
-        # only called when the actor is already correctly set.
+    def write(cls, var, writervar, ipdltype=None):
         if ipdltype and _cxxTypeNeedsMoveForSend(ipdltype):
             var = ExprMove(var)
-        return ExprCall(ExprVar("WriteIPDLParam"), args=[msgvar, actor, var])
+        return ExprCall(ExprVar("IPC::WriteParam"), args=[writervar, var])
 
     @classmethod
-    def checkedWrite(cls, ipdltype, var, msgvar, sentinelKey, actor):
+    def checkedWrite(cls, ipdltype, var, writervar, sentinelKey):
         assert sentinelKey
         block = Block()
 
@@ -2033,10 +1982,10 @@ class _ParamTraits:
 
         block.addstmts(
             [
-                StmtExpr(cls.write(var, msgvar, actor, ipdltype)),
+                StmtExpr(cls.write(var, writervar, ipdltype)),
             ]
         )
-        block.addstmts(cls.writeSentinel(msgvar, sentinelKey))
+        block.addstmts(cls.writeSentinel(writervar, sentinelKey))
         return block
 
     @classmethod
@@ -2052,7 +2001,7 @@ class _ParamTraits:
             [
                 StmtExpr(
                     ExprCall(
-                        ExprSelect(cls.msgvar, "->", "WriteBytes"),
+                        ExprSelect(cls.writervar, "->", "WriteBytes"),
                         args=[
                             ExprAddrOf(
                                 ExprCall(first.getMethod(thisexpr=cls.var, sel="."))
@@ -2063,7 +2012,7 @@ class _ParamTraits:
                 )
             ]
         )
-        block.addstmts(cls.writeSentinel(cls.msgvar, cls.bulkSentinelKey(fields)))
+        block.addstmts(cls.writeSentinel(cls.writervar, cls.bulkSentinelKey(fields)))
 
         return block
 
@@ -2073,21 +2022,19 @@ class _ParamTraits:
         first = fields[0]
 
         readbytes = ExprCall(
-            ExprSelect(cls.msgvar, "->", "ReadBytesInto"),
+            ExprSelect(cls.readervar, "->", "ReadBytesInto"),
             args=[
-                cls.itervar,
                 ExprAddrOf(ExprCall(first.getMethod(thisexpr=cls.var, sel="->"))),
                 ExprLiteral.Int(size * len(fields)),
             ],
         )
         ifbad = StmtIf(ExprNot(readbytes))
         errmsg = "Error bulk reading fields from %s" % first.ipdltype.name()
-        ifbad.addifstmts([cls.fatalError(errmsg), StmtReturn.FALSE])
+        ifbad.addifstmts([cls.fatalError(cls.readervar, errmsg), StmtReturn.FALSE])
         block.addstmt(ifbad)
         block.addstmts(
             cls.readSentinel(
-                cls.msgvar,
-                cls.itervar,
+                cls.readervar,
                 cls.bulkSentinelKey(fields),
                 errfnSentinel()(errmsg),
             )
@@ -2100,21 +2047,17 @@ class _ParamTraits:
         cls,
         ipdltype,
         var,
-        msgvar,
-        itervar,
+        readervar,
         errfn,
         paramtype,
         sentinelKey,
         errfnSentinel,
-        actor,
     ):
         block = Block()
 
         # Read the data
         ifbad = StmtIf(
-            ExprNot(
-                ExprCall(ExprVar("ReadIPDLParam"), args=[msgvar, itervar, actor, var])
-            )
+            ExprNot(ExprCall(ExprVar("IPC::ReadParam"), args=[readervar, var]))
         )
         if not isinstance(paramtype, list):
             paramtype = ["Error deserializing " + paramtype]
@@ -2133,7 +2076,7 @@ class _ParamTraits:
             block.addstmt(ifnull)
 
         block.addstmts(
-            cls.readSentinel(msgvar, itervar, sentinelKey, errfnSentinel(*paramtype))
+            cls.readSentinel(readervar, sentinelKey, errfnSentinel(*paramtype))
         )
 
         return block
@@ -2142,25 +2085,23 @@ class _ParamTraits:
     @classmethod
     def _checkedRead(cls, ipdltype, var, sentinelKey, what):
         def errfn(msg):
-            return [cls.fatalError(msg), StmtReturn.FALSE]
+            return [cls.fatalError(cls.readervar, msg), StmtReturn.FALSE]
 
         return cls.checkedRead(
             ipdltype,
             var,
-            cls.msgvar,
-            cls.itervar,
+            cls.readervar,
             errfn=errfn,
             paramtype=what,
             sentinelKey=sentinelKey,
             errfnSentinel=errfnSentinel(),
-            actor=cls.actor,
         )
 
     @classmethod
-    def generateDecl(cls, fortype, write, read, constin=True):
-        # IPDLParamTraits impls are selected ignoring constness, and references.
+    def generateDecl(cls, fortype, write, read, needsmove=False):
+        # ParamTraits impls are selected ignoring constness, and references.
         pt = Class(
-            "IPDLParamTraits",
+            "ParamTraits",
             specializes=Type(
                 fortype.name, T=fortype.T, inner=fortype.inner, ptr=fortype.ptr
             ),
@@ -2170,16 +2111,16 @@ class _ParamTraits:
         # typedef T paramType;
         pt.addstmt(Typedef(fortype, "paramType"))
 
-        iprotocoltype = Type("mozilla::ipc::IProtocol", ptr=True)
-
         # static void Write(Message*, const T&);
-        intype = Type("paramType", ref=True, const=constin)
+        if needsmove:
+            intype = Type("paramType", rvalref=True)
+        else:
+            intype = Type("paramType", ref=True, const=True)
         writemthd = MethodDefn(
             MethodDecl(
                 "Write",
                 params=[
-                    Decl(Type("IPC::Message", ptr=True), cls.msgvar.name),
-                    Decl(iprotocoltype, cls.actor.name),
+                    Decl(Type("IPC::MessageWriter", ptr=True), cls.writervar.name),
                     Decl(intype, cls.var.name),
                 ],
                 methodspec=MethodSpec.STATIC,
@@ -2194,9 +2135,7 @@ class _ParamTraits:
             MethodDecl(
                 "Read",
                 params=[
-                    Decl(Type("IPC::Message", ptr=True, const=True), cls.msgvar.name),
-                    Decl(_iterType(ptr=True), cls.itervar.name),
-                    Decl(iprotocoltype, cls.actor.name),
+                    Decl(Type("IPC::MessageReader", ptr=True), cls.readervar.name),
                     Decl(outtype, cls.var.name),
                 ],
                 ret=Type.BOOL,
@@ -2209,7 +2148,7 @@ class _ParamTraits:
         # Split the class into declaration and definition
         clsdecl, methoddefns = _splitClassDeclDefn(pt)
 
-        namespaces = [Namespace("mozilla"), Namespace("ipc")]
+        namespaces = [Namespace("IPC")]
         clsns = _putInNamespaces(clsdecl, namespaces)
         defns = _putInNamespaces(methoddefns, namespaces)
         return clsns, defns
@@ -2223,6 +2162,10 @@ class _ParamTraits:
 
         write = StmtCode(
             """
+            MOZ_RELEASE_ASSERT(
+                ${writervar}->GetActor(),
+                "Cannot serialize managed actors without an actor");
+
             int32_t id;
             if (!${var}) {
                 id = 0;  // kNullActorId
@@ -2232,7 +2175,7 @@ class _ParamTraits:
                     ${var}->FatalError("Actor has been |delete|d");
                 }
                 MOZ_RELEASE_ASSERT(
-                    ${actor}->GetIPCChannel() == ${var}->GetIPCChannel(),
+                    ${writervar}->GetActor()->GetIPCChannel() == ${var}->GetIPCChannel(),
                     "Actor must be from the same channel as the"
                     " actor it's being sent over");
                 MOZ_RELEASE_ASSERT(
@@ -2243,15 +2186,19 @@ class _ParamTraits:
             ${write};
             """,
             var=cls.var,
-            actor=cls.actor,
-            write=cls.write(ExprVar("id"), cls.msgvar, cls.actor),
+            writervar=cls.writervar,
+            write=cls.write(ExprVar("id"), cls.writervar),
         )
 
         # bool Read(..) impl
         read = StmtCode(
             """
+            MOZ_RELEASE_ASSERT(
+                ${readervar}->GetActor(),
+                "Cannot deserialize managed actors without an actor");
+
             mozilla::Maybe<mozilla::ipc::IProtocol*> actor =
-                ${actor}->ReadActor(${msgvar}, ${itervar}, true, ${actortype}, ${protocolid});
+                ${readervar}->GetActor()->ReadActor(${readervar}, true, ${actortype}, ${protocolid});
             if (actor.isNothing()) {
                 return false;
             }
@@ -2259,9 +2206,7 @@ class _ParamTraits:
             *${var} = static_cast<${cxxtype}>(actor.value());
             return true;
             """,
-            actor=cls.actor,
-            msgvar=cls.msgvar,
-            itervar=cls.itervar,
+            readervar=cls.readervar,
             actortype=ExprLiteral.String(actortype.name()),
             protocolid=_protocolId(actortype),
             var=cls.var,
@@ -2282,6 +2227,29 @@ class _ParamTraits:
         write = []
         read = []
 
+        # If any field is special, make sure we have an actor
+        for f in sd.fields_ipdl_order():
+            if not f.special:
+                continue
+
+            noactorerror = (
+                "'%s' (%s) member of '%s' must be sent over an IPDL actor"
+                % (f.getMethod().name, f.ipdltype.name(), structtype.name())
+            )
+            write.append(
+                _abortIfFalse(
+                    ExprCode("${writervar}->GetActor()", writervar=cls.writervar),
+                    noactorerror,
+                )
+            )
+            read.append(
+                _abortIfFalse(
+                    ExprCode("${readervar}->GetActor()", readervar=cls.readervar),
+                    noactorerror,
+                )
+            )
+            break
+
         for (size, fields) in itertools.groupby(
             sd.fields_member_order(), lambda f: pod_size(f.ipdltype)
         ):
@@ -2292,9 +2260,8 @@ class _ParamTraits:
                     writefield = cls.checkedWrite(
                         f.ipdltype,
                         get(".", f),
-                        cls.msgvar,
+                        cls.writervar,
                         sentinelKey=f.basename,
-                        actor=cls.actor,
                     )
                     readfield = cls._checkedRead(
                         f.ipdltype,
@@ -2313,8 +2280,8 @@ class _ParamTraits:
 
                     # Wrap the read/write in a side check if the field is special.
                     if f.special:
-                        writefield = cls.ifsideis(f.side, writefield)
-                        readfield = cls.ifsideis(f.side, readfield)
+                        writefield = cls.ifsideis(cls.writervar, f.side, writefield)
+                        readfield = cls.ifsideis(cls.readervar, f.side, readfield)
 
                     write.append(writefield)
                     read.append(readfield)
@@ -2330,7 +2297,9 @@ class _ParamTraits:
 
         read.append(StmtReturn.TRUE)
 
-        return cls.generateDecl(cxxtype, write, read)
+        return cls.generateDecl(
+            cxxtype, write, read, needsmove=_cxxTypeNeedsMoveForSend(structtype)
+        )
 
     @classmethod
     def unionPickling(cls, uniontype):
@@ -2350,7 +2319,7 @@ class _ParamTraits:
         write = prelude + [
             StmtDecl(Decl(Type.INT, typevar.name), init=ud.callType(cls.var)),
             cls.checkedWrite(
-                None, typevar, cls.msgvar, sentinelKey=uniontype.name(), actor=cls.actor
+                None, typevar, cls.writervar, sentinelKey=uniontype.name()
             ),
             Whitespace.NL,
             writeswitch,
@@ -2374,18 +2343,40 @@ class _ParamTraits:
             caselabel = CaseLabel(alias + "::" + c.enum())
             origenum = c.enum()
 
+            if c.special:
+                noactorerror = (
+                    "variant '%s' of '%s' must be sent over an IPDL actor"
+                    % (origenum, uniontype.name())
+                )
+
             writecase = StmtBlock()
             wstmt = cls.checkedWrite(
                 c.ipdltype,
                 ExprCall(ExprSelect(cls.var, ".", c.getTypeName())),
-                cls.msgvar,
+                cls.writervar,
                 sentinelKey=c.enum(),
-                actor=cls.actor,
             )
             if c.special:
-                # Report an error if the type is special and the side is wrong
-                wstmt = cls.ifsideis(c.side, wstmt, els=cls.fatalError("wrong side!"))
-            writecase.addstmts([wstmt, StmtReturn()])
+                writecase.addstmts(
+                    [
+                        _abortIfFalse(
+                            ExprCode(
+                                "${writervar}->GetActor()", writervar=cls.writervar
+                            ),
+                            noactorerror,
+                        ),
+                        # Report an error if the type is special and the side is wrong
+                        cls.ifsideis(
+                            cls.writervar,
+                            c.side,
+                            wstmt,
+                            els=cls.fatalError(cls.writervar, "wrong side!"),
+                        ),
+                        StmtReturn(),
+                    ]
+                )
+            else:
+                writecase.addstmts([wstmt, StmtReturn()])
             writeswitch.addcase(caselabel, writecase)
 
             readcase = StmtBlock()
@@ -2394,11 +2385,25 @@ class _ParamTraits:
                 # this side; i.e. child->parent messages will have PFooChild
                 # when received on the parent side. Report an error if the sides
                 # match, and handle c.other instead.
-                readcase.addstmt(
-                    cls.ifsideis(
-                        c.side,
-                        StmtBlock([cls.fatalError("wrong side!"), StmtReturn.FALSE]),
-                    )
+                readcase.addstmts(
+                    [
+                        _abortIfFalse(
+                            ExprCode(
+                                "${readervar}->GetActor()", readervar=cls.readervar
+                            ),
+                            noactorerror,
+                        ),
+                        cls.ifsideis(
+                            cls.readervar,
+                            c.side,
+                            StmtBlock(
+                                [
+                                    cls.fatalError(cls.readervar, "wrong side!"),
+                                    StmtReturn.FALSE,
+                                ]
+                            ),
+                        ),
+                    ]
                 )
                 c = c.other
             tmpvar = ExprVar("tmp")
@@ -2423,14 +2428,20 @@ class _ParamTraits:
         # Add the error default case
         writeswitch.addcase(
             DefaultLabel(),
-            StmtBlock([cls.fatalError("unknown union type"), StmtReturn()]),
+            StmtBlock(
+                [cls.fatalError(cls.writervar, "unknown union type"), StmtReturn()]
+            ),
         )
         readswitch.addcase(
             DefaultLabel(),
-            StmtBlock([cls.fatalError("unknown union type"), StmtReturn.FALSE]),
+            StmtBlock(
+                [cls.fatalError(cls.readervar, "unknown union type"), StmtReturn.FALSE]
+            ),
         )
 
-        return cls.generateDecl(cxxtype, write, read)
+        return cls.generateDecl(
+            cxxtype, write, read, needsmove=_cxxTypeNeedsMoveForSend(uniontype)
+        )
 
 
 # --------------------------------------------------
@@ -2604,12 +2615,11 @@ def _generateCxxStruct(sd):
     constreftype = Type(sd.name, const=True, ref=True)
 
     def fieldsAsParamList():
-        # FIXME Bug 1547019 inType() should do the right thing once
-        #                   _cxxTypeCanOnlyMove is replaced with
-        #                   _cxxTypeNeedsMoveForSend
         return [
             Decl(
-                f.forceMoveType() if _cxxTypeCanOnlyMove(f.ipdltype) else f.inType(),
+                f.forceMoveType()
+                if _cxxTypeNeedsMoveForData(f.ipdltype)
+                else f.constRefType(),
                 f.argVar().name,
             )
             for f in sd.fields_ipdl_order()
@@ -2641,7 +2651,7 @@ def _generateCxxStruct(sd):
     valctor.memberinits = []
     for f in sd.fields_member_order():
         arg = f.argVar()
-        if _cxxTypeCanOnlyMove(f.ipdltype):
+        if _cxxTypeNeedsMoveForData(f.ipdltype):
             arg = ExprMove(arg)
         valctor.memberinits.append(ExprMemberInit(f.memberVar(), args=[arg]))
 
@@ -2952,9 +2962,9 @@ def _generateCxxUnion(ud):
     # Union(const T&) copy & Union(T&&) move ctors
     othervar = ExprVar("aOther")
     for c in ud.components:
-        if not _cxxTypeCanOnlyMove(c.ipdltype):
+        if not _cxxTypeNeedsMoveForData(c.ipdltype):
             copyctor = ConstructorDefn(
-                ConstructorDecl(ud.name, params=[Decl(c.inType(), othervar.name)])
+                ConstructorDecl(ud.name, params=[Decl(c.constRefType(), othervar.name)])
             )
             copyctor.addstmts(
                 [
@@ -2964,7 +2974,7 @@ def _generateCxxUnion(ud):
             )
             cls.addstmts([copyctor, Whitespace.NL])
 
-        if not _cxxTypeCanMove(c.ipdltype) or _cxxTypeNeedsMoveForSend(c.ipdltype):
+        if not _cxxTypeCanMove(c.ipdltype):
             continue
         movector = ConstructorDefn(
             ConstructorDecl(ud.name, params=[Decl(c.forceMoveType(), othervar.name)])
@@ -2977,7 +2987,7 @@ def _generateCxxUnion(ud):
         )
         cls.addstmts([movector, Whitespace.NL])
 
-    unionNeedsMove = any(_cxxTypeCanOnlyMove(c.ipdltype) for c in ud.components)
+    unionNeedsMove = any(_cxxTypeNeedsMoveForData(c.ipdltype) for c in ud.components)
 
     # Union(const Union&) copy ctor
     if not unionNeedsMove:
@@ -3094,11 +3104,13 @@ def _generateCxxUnion(ud):
     # Union& operator= methods
     rhsvar = ExprVar("aRhs")
     for c in ud.components:
-        if not _cxxTypeCanOnlyMove(c.ipdltype):
+        if not _cxxTypeNeedsMoveForData(c.ipdltype):
             # Union& operator=(const T&)
             opeq = MethodDefn(
                 MethodDecl(
-                    "operator=", params=[Decl(c.inType(), rhsvar.name)], ret=refClsType
+                    "operator=",
+                    params=[Decl(c.constRefType(), rhsvar.name)],
+                    ret=refClsType,
                 )
             )
             opeq.addstmts(
@@ -3113,7 +3125,7 @@ def _generateCxxUnion(ud):
             cls.addstmts([opeq, Whitespace.NL])
 
         # Union& operator=(T&&)
-        if not _cxxTypeCanMove(c.ipdltype) or _cxxTypeNeedsMoveForSend(c.ipdltype):
+        if not _cxxTypeCanMove(c.ipdltype):
             continue
 
         opeq = MethodDefn(
@@ -3254,7 +3266,7 @@ def _generateCxxUnion(ud):
             opeqeq = MethodDefn(
                 MethodDecl(
                     "operator==",
-                    params=[Decl(c.inType(), rhsvar.name)],
+                    params=[Decl(c.constRefType(), rhsvar.name)],
                     ret=Type.BOOL,
                     const=True,
                 )
@@ -3405,12 +3417,28 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         self.cppfile = None
         self.ns = None
         self.cls = None
-        self.includedActorTypedefs = []
         self.protocolCxxIncludes = []
         self.actorForwardDecls = []
         self.usingDecls = []
         self.externalIncludes = set()
         self.nonForwardDeclaredHeaders = set()
+        self.typedefSet = set(
+            [
+                Typedef(Type("mozilla::ipc::ActorHandle"), "ActorHandle"),
+                Typedef(Type("base::ProcessId"), "ProcessId"),
+                Typedef(Type("mozilla::ipc::ProtocolId"), "ProtocolId"),
+                Typedef(Type("mozilla::ipc::Endpoint"), "Endpoint", ["FooSide"]),
+                Typedef(
+                    Type("mozilla::ipc::ManagedEndpoint"),
+                    "ManagedEndpoint",
+                    ["FooSide"],
+                ),
+                Typedef(Type("mozilla::UniquePtr"), "UniquePtr", ["T"]),
+                Typedef(
+                    Type("mozilla::ipc::ResponseRejectReason"), "ResponseRejectReason"
+                ),
+            ]
+        )
 
     def lower(self, tu, clsname, cxxHeaderFile, cxxFile):
         self.clsname = clsname
@@ -3448,8 +3476,12 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         for inc in tu.cxxIncludes:
             inc.accept(self)
 
+        for using in tu.builtinUsing:
+            using.accept(self)
         for using in tu.using:
             using.accept(self)
+        for su in tu.structsAndUnions:
+            su.accept(self)
 
         # this generates the actor's full impl in self.cls
         tu.protocol.accept(self)
@@ -3496,19 +3528,19 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         self.hdrfile.addthings([traitsdecl, Whitespace.NL] + _includeGuardEnd(hf))
 
-        # make the .cpp file
-        if (self.protocol.name, self.side) not in VIRTUAL_CALL_CLASSES:
-            if (self.protocol.name, self.side) in DIRECT_CALL_OVERRIDES:
-                (_, header_file) = DIRECT_CALL_OVERRIDES[self.protocol.name, self.side]
-            else:
-                assert self.protocol.name.startswith("P")
-                header_file = "{}/{}{}.h".format(
-                    "/".join(n.name for n in self.protocol.namespaces),
-                    self.protocol.name[1:],
-                    self.side.capitalize(),
-                )
-            self.externalIncludes.add(header_file)
+        # If the implementation type is not overridden, add an implicit import
+        # for the default implementation header file. Explicit implementation
+        # types will specify their headers manually with `include`.
+        if self.protocol.implAttribute(self.side) is None:
+            assert self.protocol.name.startswith("P")
+            self.externalIncludes.add(
+                "".join(n.name + "/" for n in self.protocol.namespaces)
+                + self.protocol.name[1:]
+                + self.side.capitalize()
+                + ".h"
+            )
 
+        # make the .cpp file
         cf.addthings(
             [
                 _DISCLAIMER,
@@ -3545,6 +3577,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         cf.addthing(traitsdefn)
 
     def visitUsingStmt(self, using):
+        if using.decl.fullname is not None:
+            self.typedefSet.add(
+                Typedef(Type(using.decl.fullname), using.decl.shortname)
+            )
+
         if using.header is None:
             return
 
@@ -3570,33 +3607,56 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         self.externalIncludes.add(inc.file)
 
     def visitInclude(self, inc):
-        ip = inc.tu.protocol
-        if not ip:
-            return
+        if inc.tu.filetype == "header":
+            # Including a header will declare any globals defined by "using"
+            # statements into our scope. To serialize these, we also may need
+            # cxx include statements, so visit them as well.
+            for cxxinc in inc.tu.cxxIncludes:
+                cxxinc.accept(self)
+            for using in inc.tu.using:
+                using.accept(self)
+            for su in inc.tu.structsAndUnions:
+                su.accept(self)
+        else:
+            # Includes for protocols only include types explicitly exported by
+            # those protocols.
+            ip = inc.tu.protocol
+            if ip == self.protocol:
+                return
 
-        self.actorForwardDecls.extend(
-            [
-                _makeForwardDeclForActor(ip.decl.type, self.side),
-                _makeForwardDeclForActor(ip.decl.type, _otherSide(self.side)),
-                Whitespace.NL,
-            ]
-        )
-        self.protocolCxxIncludes.append(_protocolHeaderName(ip, self.side))
-
-        if ip.decl.fullname is not None:
-            self.includedActorTypedefs.append(
-                Typedef(
-                    Type(_actorName(ip.decl.fullname, self.side.title())),
-                    _actorName(ip.decl.shortname, self.side.title()),
-                )
+            self.actorForwardDecls.extend(
+                [
+                    _makeForwardDeclForActor(ip.decl.type, self.side),
+                    _makeForwardDeclForActor(ip.decl.type, _otherSide(self.side)),
+                    Whitespace.NL,
+                ]
             )
+            self.protocolCxxIncludes.append(_protocolHeaderName(ip, self.side))
 
-            self.includedActorTypedefs.append(
-                Typedef(
-                    Type(_actorName(ip.decl.fullname, _otherSide(self.side).title())),
-                    _actorName(ip.decl.shortname, _otherSide(self.side).title()),
+            if ip.decl.fullname is not None:
+                self.typedefSet.add(
+                    Typedef(
+                        Type(_actorName(ip.decl.fullname, self.side.title())),
+                        _actorName(ip.decl.shortname, self.side.title()),
+                    )
                 )
-            )
+
+                self.typedefSet.add(
+                    Typedef(
+                        Type(
+                            _actorName(ip.decl.fullname, _otherSide(self.side).title())
+                        ),
+                        _actorName(ip.decl.shortname, _otherSide(self.side).title()),
+                    )
+                )
+
+    def visitStructDecl(self, sd):
+        if sd.decl.fullname is not None:
+            self.typedefSet.add(Typedef(Type(sd.fqClassName()), sd.name))
+
+    def visitUnionDecl(self, ud):
+        if ud.decl.fullname is not None:
+            self.typedefSet.add(Typedef(Type(ud.fqClassName()), ud.name))
 
     def visitProtocol(self, p):
         self.hdrfile.addcode(
@@ -3654,9 +3714,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             )
 
         self.cls.addstmt(Label.PROTECTED)
-        for typedef in p.cxxTypedefs():
-            self.cls.addstmt(typedef)
-        for typedef in self.includedActorTypedefs:
+        for typedef in sorted(self.typedefSet):
             self.cls.addstmt(typedef)
 
         self.cls.addstmt(Whitespace.NL)
@@ -3707,7 +3765,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                     defaultRecv = MethodDefn(recvDecl)
                     defaultRecv.addcode("return IPC_OK();\n")
                     self.cls.addstmt(defaultRecv)
-                elif (self.protocol.name, self.side) in VIRTUAL_CALL_CLASSES:
+                elif self.protocol.implAttribute(self.side) == "virtual":
                     # If we're using virtual calls, we need the methods to be
                     # declared on the base class.
                     recvDecl.methodspec = MethodSpec.PURE
@@ -3715,7 +3773,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
         # If we're using virtual calls, we need the methods to be declared on
         # the base class.
-        if (self.protocol.name, self.side) in VIRTUAL_CALL_CLASSES:
+        if self.protocol.implAttribute(self.side) == "virtual":
             for md in p.messageDecls:
                 managed = md.decl.type.constructedType()
                 if not ptype.isManagerOf(managed) or md.decl.type.isDtor():
@@ -3787,28 +3845,10 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             )
             shouldcontinue.addcode("return true;\n")
 
-            # void Entered*()/Exited*(); default to no-op
-            entered = MethodDefn(
-                MethodDecl(p.enteredCxxStackVar().name, methodspec=MethodSpec.OVERRIDE)
-            )
-            exited = MethodDefn(
-                MethodDecl(p.exitedCxxStackVar().name, methodspec=MethodSpec.OVERRIDE)
-            )
-            enteredcall = MethodDefn(
-                MethodDecl(p.enteredCallVar().name, methodspec=MethodSpec.OVERRIDE)
-            )
-            exitedcall = MethodDefn(
-                MethodDecl(p.exitedCallVar().name, methodspec=MethodSpec.OVERRIDE)
-            )
-
             self.cls.addstmts(
                 [
                     processingerror,
                     shouldcontinue,
-                    entered,
-                    exited,
-                    enteredcall,
-                    exitedcall,
                     Whitespace.NL,
                 ]
             )
@@ -3860,6 +3900,20 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             )
 
         self.cls.addstmt(Label.PUBLIC)
+        if ptype.hasOtherPid():
+            otherpidmeth = MethodDefn(
+                MethodDecl("OtherPid", ret=Type("::base::ProcessId"), const=True)
+            )
+            otherpidmeth.addcode(
+                """
+                ::base::ProcessId pid =
+                    ::mozilla::ipc::IProtocol::ToplevelProtocol()->OtherPidMaybeInvalid();
+                MOZ_RELEASE_ASSERT(pid != ::base::kInvalidProcessId);
+                return pid;
+                """
+            )
+            self.cls.addstmts([otherpidmeth, Whitespace.NL])
+
         if not ptype.isToplevel():
             if 1 == len(p.managers):
                 # manager() const
@@ -3985,8 +4039,6 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         self.msgvar = msgvar
         replyvar = ExprVar("reply__")
         self.replyvar = replyvar
-        itervar = ExprVar("iter__")
-        self.itervar = itervar
         var = ExprVar("v__")
         self.var = var
         # for ctor recv cases, we can't read the actor ID into a PFoo*
@@ -4003,6 +4055,40 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             self.syncSwitch = StmtSwitch(msgtype)
             if toplevel.isInterrupt():
                 self.interruptSwitch = StmtSwitch(msgtype)
+
+        # Add a handler for the MANAGED_ENDPOINT_BOUND and
+        # MANAGED_ENDPOINT_DROPPED message types for managed actors.
+        if not ptype.isToplevel():
+            clearawaitingmanagedendpointbind = """
+                if (!mAwaitingManagedEndpointBind) {
+                    NS_WARNING("Unexpected managed endpoint lifecycle message after actor bound!");
+                    return MsgNotAllowed;
+                }
+                mAwaitingManagedEndpointBind = false;
+                """
+            self.asyncSwitch.addcase(
+                CaseLabel("MANAGED_ENDPOINT_BOUND_MESSAGE_TYPE"),
+                StmtBlock(
+                    [
+                        StmtCode(clearawaitingmanagedendpointbind),
+                        StmtReturn(_Result.Processed),
+                    ]
+                ),
+            )
+            self.asyncSwitch.addcase(
+                CaseLabel("MANAGED_ENDPOINT_DROPPED_MESSAGE_TYPE"),
+                StmtBlock(
+                    [
+                        StmtCode(clearawaitingmanagedendpointbind),
+                        *self.destroyActor(
+                            None,
+                            ExprVar.THIS,
+                            why=_DestroyReason.ManagedEndpointDropped,
+                        ),
+                        StmtReturn(_Result.Processed),
+                    ]
+                ),
+            )
 
         # implement Send*() methods and add dispatcher cases to
         # message switch()es
@@ -4026,7 +4112,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         def makeHandlerMethod(name, switch, hasReply, dispatches=False):
             params = [Decl(Type("Message", const=True, ref=True), msgvar.name)]
             if hasReply:
-                params.append(Decl(Type("Message", ref=True, ptr=True), replyvar.name))
+                params.append(Decl(Type("UniquePtr<Message>", ref=True), replyvar.name))
 
             method = MethodDefn(
                 MethodDecl(
@@ -4199,6 +4285,17 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         # or we're toplevel
         self.cls.addstmts([clearsubtree, Whitespace.NL])
 
+        if not ptype.isToplevel():
+            self.cls.addstmts(
+                [
+                    StmtDecl(
+                        Decl(Type.BOOL, "mAwaitingManagedEndpointBind"),
+                        init=ExprLiteral.FALSE,
+                    ),
+                    Whitespace.NL,
+                ]
+            )
+
         for managed in ptype.manages:
             self.cls.addstmts(
                 [
@@ -4232,7 +4329,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         openmeth.addcode(
             """
             $*{bind}
-            return ${thereEp}(mozilla::ipc::PrivateIPDLInterface(), aActor->Id());
+            // Mark our actor as awaiting the other side to be bound. This will
+            // be cleared when a `MANAGED_ENDPOINT_{DROPPED,BOUND}` message is
+            // received.
+            aActor->mAwaitingManagedEndpointBind = true;
+            return ${thereEp}(mozilla::ipc::PrivateIPDLInterface(), aActor);
             """,
             bind=self.bindManagedActor(actor, errfn=ExprCall(ExprVar(thereEp))),
             thereEp=thereEp,
@@ -4251,13 +4352,9 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         )
         bindmeth.addcode(
             """
-            MOZ_RELEASE_ASSERT(aEndpoint.ActorId(), "Invalid Endpoint!");
-            $*{bind}
-            return true;
+            return aEndpoint.Bind(mozilla::ipc::PrivateIPDLInterface(), aActor, this, ${container});
             """,
-            bind=self.bindManagedActor(
-                actor, errfn=ExprLiteral.FALSE, idexpr=ExprCode("*aEndpoint.ActorId()")
-            ),
+            container=self.protocol.managedVar(managed, self.side),
         )
 
         self.cls.addstmts([openmeth, bindmeth, Whitespace.NL])
@@ -4450,16 +4547,18 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
     ##
 
     def concreteThis(self):
-        if (self.protocol.name, self.side) in VIRTUAL_CALL_CLASSES:
+        implAttr = self.protocol.implAttribute(self.side)
+        if implAttr == "virtual":
             return ExprVar.THIS
 
-        if (self.protocol.name, self.side) in DIRECT_CALL_OVERRIDES:
-            (class_name, _) = DIRECT_CALL_OVERRIDES[self.protocol.name, self.side]
-        else:
+        if implAttr is None:
             assert self.protocol.name.startswith("P")
-            class_name = "{}{}".format(self.protocol.name[1:], self.side.capitalize())
+            className = self.protocol.name[1:] + self.side.capitalize()
+        else:
+            assert isinstance(implAttr, ipdl.ast.StringLiteral)
+            className = implAttr.value
 
-        return ExprCode("static_cast<${class_name}*>(this)", class_name=class_name)
+        return ExprCode("static_cast<${className}*>(this)", className=className)
 
     def thisCall(self, function, args):
         return ExprCall(ExprSelect(self.concreteThis(), "->", function), args=args)
@@ -4604,7 +4703,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         sendok, sendstmts = self.sendBlocking(md, msgvar, replyvar)
         replystmts = self.deserializeReply(
             md,
-            ExprAddrOf(replyvar),
+            replyvar,
             self.side,
             errfnSendCtor,
             errfnSentinel(ExprLiteral.NULL),
@@ -4620,7 +4719,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             // Synchronously send the constructor message to the other side. If
             // the send fails, e.g. due to the remote side shutting down, the
             // actor will be destroyed and potentially freed.
-            Message ${replyvar};
+            UniquePtr<Message> ${replyvar};
             $*{sendstmts}
 
             if (!(${sendok})) {
@@ -4684,7 +4783,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         helper.addstmts(
             [
                 self.callAllocActor(md, retsems="out", side=self.side),
-                StmtReturn(ExprCall(ExprVar(helperdecl.name), args=md.makeCxxArgs())),
+                StmtReturn(
+                    ExprCall(
+                        ExprVar(helperdecl.name), args=md.makeCxxArgs(paramsems="move")
+                    )
+                ),
             ]
         )
         return helper
@@ -4727,12 +4830,12 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         sendok, sendstmts = self.sendBlocking(md, msgvar, replyvar, actorvar)
         method.addstmts(
             stmts
-            + [Whitespace.NL, StmtDecl(Decl(Type("Message"), replyvar.name))]
+            + [Whitespace.NL, StmtDecl(Decl(Type("UniquePtr<Message>"), replyvar.name))]
             + sendstmts
         )
 
         destmts = self.deserializeReply(
-            md, ExprAddrOf(replyvar), self.side, errfnSend, errfnSentinel(), actorvar
+            md, replyvar, self.side, errfnSend, errfnSentinel(), actorvar
         )
         ifsendok = StmtIf(ExprLiteral.FALSE)
         ifsendok.addifstmts(destmts)
@@ -4749,7 +4852,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         return method
 
     def destroyActor(self, md, actorexpr, why=_DestroyReason.Deletion):
-        if md.decl.type.isCtor():
+        if md and md.decl.type.isCtor():
             destroyedType = md.decl.type.constructedType()
         else:
             destroyedType = self.protocol.decl.type
@@ -4757,11 +4860,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         return [
             StmtCode(
                 """
-            IProtocol* mgr = ${actor}->Manager();
-            ${actor}->DestroySubtree(${why});
-            ${actor}->ClearSubtree();
-            mgr->RemoveManagee(${protoId}, ${actor});
-            """,
+                IProtocol* mgr = ${actor}->Manager();
+                ${actor}->DestroySubtree(${why});
+                ${actor}->ClearSubtree();
+                mgr->RemoveManagee(${protoId}, ${actor});
+                """,
                 actor=actorexpr,
                 why=why,
                 protoId=_protocolId(destroyedType),
@@ -4803,7 +4906,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             $*{prologue}
 
             UniquePtr<MessageChannel::UntypedCallbackHolder> untypedCallback =
-                GetIPCChannel()->PopCallback(${msgvar});
+                GetIPCChannel()->PopCallback(${msgvar}, Id());
 
             typedef MessageChannel::CallbackHolder<${resolvetype}> CallbackHolder;
             auto* callback = static_cast<CallbackHolder*>(untypedCallback.get());
@@ -4865,12 +4968,12 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         failif.addifstmt(StmtReturn.FALSE)
 
         desstmts = self.deserializeReply(
-            md, ExprAddrOf(replyvar), self.side, errfnSend, errfnSentinel()
+            md, replyvar, self.side, errfnSend, errfnSentinel()
         )
 
         method.addstmts(
             serstmts
-            + [Whitespace.NL, StmtDecl(Decl(Type("Message"), replyvar.name))]
+            + [Whitespace.NL, StmtDecl(Decl(Type("UniquePtr<Message>"), replyvar.name))]
             + sendstmts
             + [failif]
             + desstmts
@@ -4968,6 +5071,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
     def makeMessage(self, md, errfn, fromActor=None):
         msgvar = self.msgvar
+        writervar = ExprVar("writer__")
         routingId = self.protocol.routingId(fromActor)
         this = ExprVar.THIS
         if md.decl.type.isDtor():
@@ -4976,14 +5080,21 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         stmts = (
             [
                 StmtDecl(
-                    Decl(Type("IPC::Message", ptr=True), msgvar.name),
+                    Decl(Type("UniquePtr<IPC::Message>"), msgvar.name),
                     init=ExprCall(ExprVar(md.pqMsgCtorFunc()), args=[routingId]),
-                )
+                ),
+                StmtDecl(
+                    Decl(Type("IPC::MessageWriter"), writervar.name),
+                    initargs=[ExprDeref(msgvar), this],
+                ),
             ]
             + [Whitespace.NL]
             + [
                 _ParamTraits.checkedWrite(
-                    p.ipdltype, p.var(), msgvar, sentinelKey=p.name, actor=this
+                    p.ipdltype,
+                    p.var(),
+                    ExprAddrOf(writervar),
+                    sentinelKey=p.name,
                 )
                 for p in md.params
             ]
@@ -5008,9 +5119,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             _ParamTraits.checkedWrite(
                 p.ipdltype,
                 paramValue(idx),
-                self.replyvar,
+                ExprAddrOf(ExprVar("writer__")),
                 sentinelKey=p.name,
-                actor=ExprVar("self__"),
             )
             for idx, p in enumerate(md.returns)
         ]
@@ -5026,6 +5136,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
                 ${resolvertype} resolver = [resolver__ = std::move(resolver__)](${resolveType} aParam) {
                     resolver__->Resolve([&] (IPC::Message* ${replyvar}, IProtocol* self__) {
+                        IPC::MessageWriter writer__(*${replyvar}, self__);
                         $*{serializeParams}
                         ${logSendingReply}
                     });
@@ -5065,15 +5176,18 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                         ExprCall(ExprVar(md.pqReplyCtorFunc()), args=[routingId]),
                     )
                 ),
+                StmtDecl(
+                    Decl(Type("IPC::MessageWriter"), "writer__"),
+                    initargs=[ExprDeref(replyvar), ExprVar.THIS],
+                ),
                 Whitespace.NL,
             ]
             + [
                 _ParamTraits.checkedWrite(
                     r.ipdltype,
                     r.var(),
-                    replyvar,
+                    ExprAddrOf(ExprVar("writer__")),
                     sentinelKey=r.name,
-                    actor=ExprVar.THIS,
                 )
                 for r in md.returns
             ]
@@ -5093,8 +5207,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
     def deserializeMessage(self, md, side, errfn, errfnSent):
         msgvar = self.msgvar
-        itervar = self.itervar
         msgexpr = ExprAddrOf(msgvar)
+        readervar = ExprVar("reader__")
         isctor = md.decl.type.isCtor()
         stmts = [
             self.logMessage(md, msgexpr, "Received ", receiving=True),
@@ -5116,13 +5230,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _ParamTraits.checkedRead(
                     None,
                     ExprAddrOf(handlevar),
-                    msgexpr,
-                    ExprAddrOf(self.itervar),
+                    ExprAddrOf(readervar),
                     errfn,
                     "'%s'" % handletype.name,
                     sentinelKey="actor",
                     errfnSentinel=errfnSent,
-                    actor=ExprVar.THIS,
                 )
             ]
             start = 1
@@ -5148,13 +5260,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _ParamTraits.checkedRead(
                     p.ipdltype,
                     ExprAddrOf(p.var()),
-                    msgexpr,
-                    ExprAddrOf(itervar),
+                    ExprAddrOf(readervar),
                     errfn,
                     "'%s'" % p.ipdltype.name(),
                     sentinelKey=p.name,
                     errfnSentinel=errfnSent,
-                    actor=ExprVar.THIS,
                 )
                 for p in md.params[start:]
             ]
@@ -5164,13 +5274,14 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             (
                 [
                     StmtDecl(
-                        Decl(_iterType(ptr=False), self.itervar.name), initargs=[msgvar]
+                        Decl(Type("IPC::MessageReader"), readervar.name),
+                        initargs=[msgvar, ExprVar.THIS],
                     )
                 ]
                 + decls
                 + [Whitespace.NL]
                 + reads
-                + [self.endRead(msgvar, itervar)]
+                + [StmtCode("${reader}.EndRead();\n", reader=readervar)]
             )
         )
 
@@ -5178,7 +5289,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
 
     def deserializeAsyncReply(self, md, side, errfn, errfnSent):
         msgvar = self.msgvar
-        itervar = self.itervar
+        readervar = ExprVar("reader__")
         msgexpr = ExprAddrOf(msgvar)
         isctor = md.decl.type.isCtor()
         resolve = ExprVar("resolve__")
@@ -5191,28 +5302,26 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             StmtCode(
                 """
                 bool resolve__ = false;
-                if (!ReadIPDLParam(${msgexpr}, &${itervar}, this, &resolve__)) {
+                if (!IPC::ReadParam(&${readervar}, &resolve__)) {
                     FatalError("Error deserializing bool");
                     return MsgValueError;
                 }
                 """,
-                msgexpr=msgexpr,
-                itervar=itervar,
+                readervar=readervar,
             ),
         ]
         desrej = [
             StmtCode(
                 """
                 ResponseRejectReason reason__{};
-                if (!ReadIPDLParam(${msgexpr}, &${itervar}, this, &reason__)) {
+                if (!IPC::ReadParam(&${readervar}, &reason__)) {
                     FatalError("Error deserializing ResponseRejectReason");
                     return MsgValueError;
                 }
+                ${readervar}.EndRead();
                 """,
-                msgexpr=msgexpr,
-                itervar=itervar,
+                readervar=readervar,
             ),
-            self.endRead(msgvar, itervar),
         ]
         prologue = [
             self.logMessage(md, msgexpr, "Received ", receiving=True),
@@ -5224,7 +5333,12 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             return prologue
 
         prologue.extend(
-            [StmtDecl(Decl(_iterType(ptr=False), itervar.name), initargs=[msgvar])]
+            [
+                StmtDecl(
+                    Decl(Type("IPC::MessageReader"), readervar.name),
+                    initargs=[msgvar, ExprVar.THIS],
+                )
+            ]
             + desresolve
         )
 
@@ -5239,13 +5353,11 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _ParamTraits.checkedRead(
                     None,
                     ExprAddrOf(handlevar),
-                    msgexpr,
-                    ExprAddrOf(itervar),
+                    ExprAddrOf(readervar),
                     errfn,
                     "'%s'" % handletype.name,
                     sentinelKey="actor",
                     errfnSentinel=errfnSent,
-                    actor=ExprVar.THIS,
                 )
             ]
             start = 1
@@ -5262,17 +5374,15 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _ParamTraits.checkedRead(
                     p.ipdltype,
                     ExprAddrOf(p.var()),
-                    msgexpr,
-                    ExprAddrOf(itervar),
+                    ExprAddrOf(readervar),
                     errfn,
                     "'%s'" % p.ipdltype.name(),
                     sentinelKey=p.name,
                     errfnSentinel=errfnSent,
-                    actor=ExprVar.THIS,
                 )
                 for p in md.returns[start:]
             ]
-            + [self.endRead(msgvar, itervar)]
+            + [StmtCode("${reader}.EndRead();", reader=readervar)]
         )
 
         return resolve, reason, prologue, desrej, stmts
@@ -5287,7 +5397,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         if 0 == len(md.returns):
             return stmts
 
-        itervar = self.itervar
+        readervar = ExprVar("reader__")
         declstmts = []
         if decls:
             declstmts = [
@@ -5298,7 +5408,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             [
                 Whitespace.NL,
                 StmtDecl(
-                    Decl(_iterType(ptr=False), itervar.name), initargs=[self.replyvar]
+                    Decl(Type("IPC::MessageReader"), readervar.name),
+                    initargs=[ExprDeref(self.replyvar), ExprVar.THIS],
                 ),
             ]
             + declstmts
@@ -5307,17 +5418,15 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 _ParamTraits.checkedRead(
                     r.ipdltype,
                     r.var(),
-                    ExprAddrOf(self.replyvar),
-                    ExprAddrOf(self.itervar),
+                    ExprAddrOf(readervar),
                     errfn,
                     "'%s'" % r.ipdltype.name(),
                     sentinelKey=r.name,
                     errfnSentinel=errfnSentinel,
-                    actor=ExprVar.THIS,
                 )
                 for r in md.returns
             ]
-            + [self.endRead(self.replyvar, itervar)]
+            + [StmtCode("${reader}.EndRead();", reader=readervar)]
         )
 
         return stmts
@@ -5342,7 +5451,13 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             stmts.append(
                 StmtExpr(
                     ExprCall(
-                        send, args=[msgexpr, ExprMove(resolvefn), ExprMove(rejectfn)]
+                        send,
+                        args=[
+                            ExprMove(msgexpr),
+                            ExprVar(md.pqReplyId()),
+                            ExprMove(resolvefn),
+                            ExprMove(rejectfn),
+                        ],
                     )
                 )
             )
@@ -5350,7 +5465,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         else:
             stmts.append(
                 StmtDecl(
-                    Decl(Type.BOOL, sendok.name), init=ExprCall(send, args=[msgexpr])
+                    Decl(Type.BOOL, sendok.name),
+                    init=ExprCall(send, args=[ExprMove(msgexpr)]),
                 )
             )
             retvar = sendok
@@ -5397,7 +5513,8 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                                 ExprAssn(
                                     sendok,
                                     ExprCall(
-                                        send, args=[msgexpr, ExprAddrOf(replyexpr)]
+                                        send,
+                                        args=[ExprMove(msgexpr), ExprAddrOf(replyexpr)],
                                     ),
                                 )
                             ),
@@ -5464,19 +5581,19 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         retsems = "in"
         if md.decl.type.isAsync() and md.returns:
             retsems = "resolver"
-        failif = StmtIf(
-            ExprNot(
-                self.thisCall(
-                    md.recvMethod(),
-                    md.makeCxxArgs(
-                        paramsems="move",
-                        retsems=retsems,
-                        retcallsems="out",
-                        implicit=implicit,
-                    ),
-                )
-            )
+        okdecl = StmtDecl(
+            Decl(Type("mozilla::ipc::IPCResult"), "__ok"),
+            init=self.thisCall(
+                md.recvMethod(),
+                md.makeCxxArgs(
+                    paramsems="move",
+                    retsems=retsems,
+                    retcallsems="out",
+                    implicit=implicit,
+                ),
+            ),
         )
+        failif = StmtIf(ExprNot(ExprVar("__ok")))
         failif.addifstmts(
             [
                 _protocolErrorBreakpoint("Handler returned error code!"),
@@ -5486,7 +5603,7 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
                 StmtReturn(_Result.ProcessingError),
             ]
         )
-        return [failif]
+        return [okdecl, failif]
 
     def makeDtorMethodDecl(self, md):
         decl = self.makeSendMethodDecl(md)
@@ -5532,14 +5649,14 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
             if (mozilla::ipc::LoggingEnabledFor(${actorname})) {
                 mozilla::ipc::LogMessageForProtocol(
                     ${actorname},
-                    ${otherpid},
+                    ${actor}->ToplevelProtocol()->OtherPidMaybeInvalid(),
                     ${pfx},
                     ${msgptr}->type(),
                     mozilla::ipc::MessageDirection::${direction});
             }
             """,
             actorname=ExprLiteral.String(actorname),
-            otherpid=self.protocol.callOtherPid(actor),
+            actor=actor or ExprVar.THIS,
             pfx=ExprLiteral.String(pfx),
             msgptr=msgptr,
             direction="eReceiving" if receiving else "eSending",
@@ -5566,15 +5683,6 @@ class _GenerateProtocolActorCode(ipdl.ast.Visitor):
         else:
             saveIdStmts = []
         return idvar, saveIdStmts
-
-    def endRead(self, msgexpr, iterexpr):
-        return StmtCode(
-            """
-            ${msg}.EndRead(${iter}, ${msg}.type());
-            """,
-            msg=msgexpr,
-            iter=iterexpr,
-        )
 
 
 class _GenerateProtocolParentCode(_GenerateProtocolActorCode):

@@ -103,11 +103,16 @@ function continueToNextStepSync() {
 }
 
 function enableTesting() {
-  SpecialPowers.setBoolPref("dom.storage.next_gen", true);
+  SpecialPowers.setBoolPref(
+    "dom.storage.enable_unsupported_legacy_implementation",
+    false
+  );
 }
 
 function resetTesting() {
-  SpecialPowers.clearUserPref("dom.storage.next_gen");
+  SpecialPowers.clearUserPref(
+    "dom.storage.enable_unsupported_legacy_implementation"
+  );
 }
 
 function setGlobalLimit(globalLimit) {
@@ -168,6 +173,16 @@ function initTemporaryOrigin(persistence, principal, callback) {
   return request;
 }
 
+function getFullOriginMetadata(persistence, principal, callback) {
+  const request = SpecialPowers._getQuotaManager().getFullOriginMetadata(
+    persistence,
+    principal
+  );
+  request.callback = callback;
+
+  return request;
+}
+
 function clearClient(principal, persistence, client, callback) {
   let request = SpecialPowers._getQuotaManager().clearStoragesForPrincipal(
     principal,
@@ -208,6 +223,13 @@ function persist(principal, callback) {
 
 function persisted(principal, callback) {
   let request = SpecialPowers._getQuotaManager().persisted(principal);
+  request.callback = callback;
+
+  return request;
+}
+
+function estimateOrigin(principal, callback) {
+  let request = SpecialPowers._getQuotaManager().estimate(principal);
   request.callback = callback;
 
   return request;

@@ -25,18 +25,37 @@ def Libxul(name, output_category=None):
         SHARED_LIBRARY_NAME = "xul"
 
     DELAYLOAD_DLLS += [
+        "avrt.dll",
         "comdlg32.dll",
         "credui.dll",
         "d3d11.dll",
         "D3DCompiler_47.dll",
+        "dhcpcsvc.dll",
+        "dnsapi.dll",
+        "dwmapi.dll",
         "dxgi.dll",
+        "gdi32.dll",
         "hid.dll",
+        "imm32.dll",
+        "iphlpapi.dll",
+        "msi.dll",
         "msimg32.dll",
         "netapi32.dll",
+        "ole32.dll",
+        "oleaut32.dll",
         "secur32.dll",
+        "setupapi.dll",
+        "shell32.dll",
+        "shlwapi.dll",
         "urlmon.dll",
+        "user32.dll",
+        "userenv.dll",
+        "usp10.dll",
+        "uxtheme.dll",
         "wininet.dll",
+        "winmm.dll",
         "winspool.drv",
+        "wtsapi32.dll",
     ]
 
     if CONFIG["ACCESSIBILITY"]:
@@ -95,15 +114,6 @@ def Libxul(name, output_category=None):
             flags=["xul%s" % CONFIG["MOZILLA_SYMBOLVERSION"]],
         )
         SYMBOLS_FILE = "!symverscript"
-
-    # Generate GDB pretty printer-autoload files only on Linux. OSX's GDB is
-    # too old to support Python pretty-printers; if this changes, we could
-    # make this 'ifdef __GNUC__'.
-    if CONFIG["OS_ARCH"] == "Linux":
-        # Create a GDB Python auto-load file alongside the libxul shared library
-        # in the build directory.
-        DEFINES["topsrcdir"] = TOPSRCDIR
-        OBJDIR_FILES.toolkit.library.build += ["../libxul.so-gdb.py"]
 
 
 # The real libxul definition is in ./build/moz.build, but we define a
@@ -189,9 +199,6 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" or CONFIG["MOZ_TREE_FREETYPE"]:
         "freetype",
     ]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
-    CXXFLAGS += CONFIG["TK_CFLAGS"]
-
 if CONFIG["MOZ_WEBRTC"]:
     if CONFIG["OS_TARGET"] == "WINNT":
         OS_LIBS += [
@@ -207,7 +214,23 @@ if CONFIG["MOZ_WEBRTC"]:
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     OS_LIBS += [
+        "-framework Foundation",
+        "-framework CoreFoundation",
+        "-framework CoreLocation",
+        "-framework QuartzCore",
+        "-framework Carbon",
+        "-framework CoreAudio",
+        "-framework CoreVideo",
+        "-framework AudioToolbox",
+        "-framework AudioUnit",
+        "-framework AddressBook",
         "-framework OpenGL",
+        "-framework Security",
+        "-framework ServiceManagement",
+        "-framework CoreServices",
+        "-framework ApplicationServices",
+        "-framework AppKit",
+        "-framework CoreMIDI",
         "-framework SystemConfiguration",
         "-framework AVFoundation",
         "-framework CoreMedia",
@@ -216,6 +239,20 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
         "-framework CoreUI",
         "-framework CoreSymbolication",
         "cups",
+    ]
+
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "uikit":
+    OS_LIBS += [
+        "-framework Foundation",
+        "-framework CoreFoundation",
+        "-framework CoreGraphics",
+        "-framework CoreText",
+        "-framework AVFoundation",
+        "-framework AudioToolbox",
+        "-framework CoreMedia",
+        "-framework CoreVideo",
+        "-framework OpenGLES",
+        "-framework QuartzCore",
     ]
 
 if CONFIG["MOZ_WMF"]:
@@ -233,11 +270,14 @@ if CONFIG["OS_ARCH"] == "FreeBSD":
 if CONFIG["OS_ARCH"] == "WINNT":
     OS_LIBS += [
         "crypt32",
+        "gdi32",
         "shell32",
         "ntdll",
         "ole32",
         "version",
         "winspool",
+        "userenv",
+        "uuid",
     ]
 
 if CONFIG["OS_ARCH"] == "Linux" and CONFIG["OS_TARGET"] != "Android":
@@ -250,9 +290,6 @@ if CONFIG["MOZ_ANDROID_GOOGLE_VR"]:
         "-L%s" % CONFIG["MOZ_ANDROID_GOOGLE_VR_LIBS"],
         "-lgvr",
     ]
-
-OS_LIBS += CONFIG["MOZ_CAIRO_OSLIBS"]
-OS_LIBS += CONFIG["MOZ_WEBRTC_X11_LIBS"]
 
 if CONFIG["MOZ_SYSTEM_JPEG"]:
     OS_LIBS += CONFIG["MOZ_JPEG_LIBS"]
@@ -277,9 +314,6 @@ if CONFIG["HAVE_CLOCK_MONOTONIC"]:
 
 OS_LIBS += CONFIG["ICONV_LIBS"]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("cocoa", "uikit"):
-    OS_LIBS += CONFIG["TK_LIBS"]
-
 if CONFIG["OS_ARCH"] == "OpenBSD":
     OS_LIBS += [
         "sndio",
@@ -288,16 +322,10 @@ if CONFIG["OS_ARCH"] == "OpenBSD":
 if CONFIG["MOZ_ENABLE_DBUS"]:
     OS_LIBS += CONFIG["MOZ_DBUS_GLIB_LIBS"]
 
-if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
-    OS_LIBS += [l for l in CONFIG["TK_LIBS"] if l not in ("-lgtk-3", "-lgdk-3")]
-    OS_LIBS += CONFIG["XLDFLAGS"]
-    OS_LIBS += CONFIG["XLIBS"]
-    OS_LIBS += CONFIG["XEXT_LIBS"]
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk" and CONFIG["COMPILE_ENVIRONMENT"]:
+    OS_LIBS += [l for l in CONFIG["MOZ_GTK3_LIBS"] if l not in ("-lgtk-3", "-lgdk-3")]
+    OS_LIBS += CONFIG["MOZ_X11_LIBS"]
     OS_LIBS += CONFIG["MOZ_PANGO_LIBS"]
-    OS_LIBS += CONFIG["XT_LIBS"]
-    OS_LIBS += [
-        "gthread-2.0",
-    ]
 
 if CONFIG["MOZ_ENABLE_LIBPROXY"]:
     OS_LIBS += CONFIG["MOZ_LIBPROXY_LIBS"]

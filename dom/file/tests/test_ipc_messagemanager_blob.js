@@ -37,7 +37,7 @@ add_task(async function test() {
     "",
     2,
     -0.04,
-    3432987324987239872948732982,
+    34329873249872400000000000000,
     true,
     false,
     null,
@@ -97,5 +97,6 @@ add_task(async function test() {
     mm.sendAsyncMessage("test:ipcClonedMessage", message);
   }
 
+  await done;
   await page.close();
 });

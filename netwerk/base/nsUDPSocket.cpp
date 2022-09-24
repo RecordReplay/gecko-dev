@@ -9,6 +9,7 @@
 #include "mozilla/HoldDropJSObjects.h"
 #include "mozilla/Telemetry.h"
 
+#include "nsQueryObject.h"
 #include "nsSocketTransport2.h"
 #include "nsUDPSocket.h"
 #include "nsProxyRelease.h"
@@ -28,7 +29,15 @@
 #include "nsIDNSRecord.h"
 #include "nsIDNSService.h"
 #include "nsICancelable.h"
+#include "nsIPipe.h"
 #include "nsWrapperCacheInlines.h"
+#include "HttpConnectionUDP.h"
+#include "mozilla/StaticPrefs_network.h"
+
+#if defined(FUZZING)
+#  include "FuzzyLayer.h"
+#  include "mozilla/StaticPrefs_fuzzing.h"
+#endif
 
 namespace mozilla {
 namespace net {
@@ -70,7 +79,9 @@ static nsresult CheckIOStatus(const NetAddr* aAddr) {
     return NS_ERROR_FAILURE;
   }
 
-  if (gIOService->IsOffline() && !aAddr->IsLoopbackAddr()) {
+  if (gIOService->IsOffline() &&
+      (StaticPrefs::network_disable_localhost_when_offline() ||
+       !aAddr->IsLoopbackAddr())) {
     return NS_ERROR_OFFLINE;
   }
 
@@ -200,7 +211,7 @@ nsUDPMessage::GetData(nsACString& aData) {
 NS_IMETHODIMP
 nsUDPMessage::GetOutputStream(nsIOutputStream** aOutputStream) {
   NS_ENSURE_ARG_POINTER(aOutputStream);
-  NS_IF_ADDREF(*aOutputStream = mOutputStream);
+  *aOutputStream = do_AddRef(mOutputStream).take();
   return NS_OK;
 }
 
@@ -364,7 +375,7 @@ UDPMessageProxy::GetRawData(JSContext* cx, JS::MutableHandleValue aRawData) {
 NS_IMETHODIMP
 UDPMessageProxy::GetOutputStream(nsIOutputStream** aOutputStream) {
   NS_ENSURE_ARG_POINTER(aOutputStream);
-  NS_IF_ADDREF(*aOutputStream = mOutputStream);
+  *aOutputStream = do_AddRef(mOutputStream).take();
   return NS_OK;
 }
 
@@ -475,6 +486,17 @@ void nsUDPSocket::IsLocal(bool* aIsLocal) {
   *aIsLocal = mAddr.IsLoopbackAddr();
 }
 
+nsresult nsUDPSocket::GetRemoteAddr(NetAddr* addr) {
+  if (!mSyncListener) {
+    return NS_ERROR_FAILURE;
+  }
+  RefPtr<HttpConnectionUDP> connUDP = do_QueryObject(mSyncListener);
+  if (!connUDP) {
+    return NS_ERROR_FAILURE;
+  }
+  return connUDP->GetPeerAddr(addr);
+}
+
 //-----------------------------------------------------------------------------
 // nsSocket::nsISupports
 //-----------------------------------------------------------------------------
@@ -555,6 +577,18 @@ nsUDPSocket::InitWithAddress(const NetAddr* aAddr, nsIPrincipal* aPrincipal,
     NS_WARNING("unable to create UDP socket");
     return NS_ERROR_FAILURE;
   }
+
+#ifdef FUZZING
+  if (StaticPrefs::fuzzing_necko_enabled()) {
+    rv = AttachFuzzyIOLayer(mFD);
+    if (NS_FAILED(rv)) {
+      UDPSOCKET_LOG(("Failed to attach fuzzing IOLayer [rv=%" PRIx32 "].\n",
+                     static_cast<uint32_t>(rv)));
+      return rv;
+    }
+    UDPSOCKET_LOG(("Successfully attached fuzzing IOLayer.\n"));
+  }
+#endif
 
   uint16_t port;
   if (NS_FAILED(aAddr->GetPort(&port))) {

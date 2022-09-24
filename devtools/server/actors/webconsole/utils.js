@@ -5,11 +5,12 @@
 "use strict";
 
 const { Cu } = require("chrome");
-const CONSOLE_WORKER_IDS = (exports.CONSOLE_WORKER_IDS = [
+
+const CONSOLE_WORKER_IDS = (exports.CONSOLE_WORKER_IDS = new Set([
   "SharedWorker",
   "ServiceWorker",
   "Worker",
-]);
+]));
 
 var WebConsoleUtils = {
   /**
@@ -19,54 +20,8 @@ var WebConsoleUtils = {
    * @return string
    */
   getWorkerType: function(message) {
-    const id = message ? message.innerID : null;
-    return CONSOLE_WORKER_IDS[CONSOLE_WORKER_IDS.indexOf(id)] || null;
-  },
-
-  /**
-   * Clone an object.
-   *
-   * @param object object
-   *        The object you want cloned.
-   * @param boolean recursive
-   *        Tells if you want to dig deeper into the object, to clone
-   *        recursively.
-   * @param function [filter]
-   *        Optional, filter function, called for every property. Three
-   *        arguments are passed: key, value and object. Return true if the
-   *        property should be added to the cloned object. Return false to skip
-   *        the property.
-   * @return object
-   *         The cloned object.
-   */
-  cloneObject: function(object, recursive, filter) {
-    if (typeof object != "object") {
-      return object;
-    }
-
-    let temp;
-
-    if (Array.isArray(object)) {
-      temp = [];
-      object.forEach(function(value, index) {
-        if (!filter || filter(index, value, object)) {
-          temp.push(recursive ? WebConsoleUtils.cloneObject(value) : value);
-        }
-      });
-    } else {
-      temp = {};
-      for (const key in object) {
-        const value = object[key];
-        if (
-          object.hasOwnProperty(key) &&
-          (!filter || filter(key, value, object))
-        ) {
-          temp[key] = recursive ? WebConsoleUtils.cloneObject(value) : value;
-        }
-      }
-    }
-
-    return temp;
+    const innerID = message?.innerID;
+    return CONSOLE_WORKER_IDS.has(innerID) ? innerID : null;
   },
 
   /**
@@ -549,7 +504,12 @@ WebConsoleCommands._registerOriginal("copy", function(owner, value) {
       payload = JSON.stringify(value, null, "  ");
     }
   } catch (ex) {
-    payload = "/* " + ex + " */";
+    owner.helperResult = {
+      type: "error",
+      message: "webconsole.error.commands.copyError",
+      messageArgs: [ex.toString()],
+    };
+    return;
   }
   owner.helperResult = {
     type: "copyValueToClipboard",
@@ -570,6 +530,24 @@ WebConsoleCommands._registerOriginal("screenshot", function(owner, args = {}) {
     // the args
     return {
       type: "screenshotOutput",
+      args,
+    };
+  })();
+});
+
+/**
+ * Shows a history of commands and expressions previously executed within the command line.
+ *
+ * @param object args
+ *               The arguments to be passed to the history
+ * @return void
+ */
+WebConsoleCommands._registerOriginal("history", function(owner, args = {}) {
+  owner.helperResult = (async () => {
+    // everything is handled on the client side, so we return a very simple object with
+    // the args
+    return {
+      type: "historyOutput",
       args,
     };
   })();

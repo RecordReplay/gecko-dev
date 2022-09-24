@@ -159,7 +159,7 @@ where
                 let label = self.static_label(label);
                 self.new_metric_with_name(combine_base_identifier_and_label(
                     &self.submetric.meta().name,
-                    &label,
+                    label,
                 ))
             }
             None => self.new_metric_with_dynamic_label(label.to_string()),
@@ -182,8 +182,7 @@ pub fn combine_base_identifier_and_label(base_identifer: &str, label: &str) -> S
 
 /// Strips the label off of a complete identifier
 pub fn strip_label(identifier: &str) -> &str {
-    // safe unwrap, first field of a split always valid
-    identifier.splitn(2, '/').next().unwrap()
+    identifier.split_once('/').map_or(identifier, |s| s.0)
 }
 
 /// Validates a dynamic label, changing it to `OTHER_LABEL` if it's invalid.
@@ -222,7 +221,7 @@ pub fn validate_dynamic_label(
     for store in &meta.send_in_pings {
         glean
             .storage()
-            .iter_store_from(lifetime, store, Some(&prefix), &mut snapshotter);
+            .iter_store_from(lifetime, store, Some(prefix), &mut snapshotter);
     }
 
     let error = if label_count >= MAX_LABELS {

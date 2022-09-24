@@ -36,6 +36,8 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIHandlerService"
 );
 
+const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 var HandlerServiceTestUtils = {
   /**
    * Retrieves the names of all the MIME types and protocols configured in the
@@ -137,6 +139,8 @@ var HandlerServiceTestUtils = {
     let handlerInfo = this.getHandlerInfo(type);
 
     let preferredAction, preferredApplicationHandler;
+    let alwaysAskBeforeHandling = true;
+
     if (AppConstants.platform == "android") {
       // On Android, the default preferredAction for MIME types is useHelperApp.
       // For protocols, we always behave as if an operating system provided
@@ -151,17 +155,27 @@ var HandlerServiceTestUtils = {
       };
     } else {
       // On Desktop, the default preferredAction for MIME types is saveToDisk,
-      // while for protocols it is alwaysAsk.
-      preferredAction = type.includes("/")
-        ? Ci.nsIHandlerInfo.saveToDisk
-        : Ci.nsIHandlerInfo.alwaysAsk;
+      // while for protocols it is alwaysAsk. Since Bug 1735843, for new MIME
+      // types we default to not asking before handling unless a pref is set.
+      alwaysAskBeforeHandling = Services.prefs.getBoolPref(
+        "browser.download.always_ask_before_handling_new_types",
+        false
+      );
+
+      if (type.includes("/")) {
+        preferredAction = Ci.nsIHandlerInfo.saveToDisk;
+      } else {
+        preferredAction = Ci.nsIHandlerInfo.alwaysAsk;
+        // we'll always ask before handling protocols
+        alwaysAskBeforeHandling = true;
+      }
       preferredApplicationHandler = null;
     }
 
     this.assertHandlerInfoMatches(handlerInfo, {
       type,
       preferredAction,
-      alwaysAskBeforeHandling: true,
+      alwaysAskBeforeHandling,
       preferredApplicationHandler,
     });
     return handlerInfo;

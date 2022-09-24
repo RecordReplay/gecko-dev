@@ -5,7 +5,7 @@
 
 const TEST_FILE = "test-network-request.html";
 const TEST_PATH =
-  "http://example.com/browser/devtools/client/webconsole/" + "test/browser/";
+  "https://example.com/browser/devtools/client/webconsole/" + "test/browser/";
 const TEST_URI = TEST_PATH + TEST_FILE;
 
 registerCleanupFunction(async function() {
@@ -41,7 +41,9 @@ add_task(async function task() {
   const { hud } = await toolbox.selectTool("webconsole");
 
   const xhrUrl = TEST_PATH + "test-data.json";
-  const messageNode = await waitFor(() => findMessage(hud, xhrUrl));
+  const messageNode = await waitFor(() =>
+    findMessageByType(hud, xhrUrl, ".network")
+  );
   const urlNode = messageNode.querySelector(".url");
   info("Network message found.");
 

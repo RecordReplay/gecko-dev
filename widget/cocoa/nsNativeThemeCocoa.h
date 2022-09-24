@@ -11,12 +11,8 @@
 
 #include "mozilla/Variant.h"
 
-#include "LookAndFeel.h"
 #include "nsITheme.h"
-#include "nsCOMPtr.h"
-#include "nsAtom.h"
-#include "nsNativeTheme.h"
-#include "ScrollbarDrawingMac.h"
+#include "ThemeCocoa.h"
 
 @class MOZCellDrawWindow;
 @class MOZCellDrawView;
@@ -32,7 +28,9 @@ class DrawTarget;
 }  // namespace gfx
 }  // namespace mozilla
 
-class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
+class nsNativeThemeCocoa : public mozilla::widget::ThemeCocoa {
+  using ThemeCocoa = mozilla::widget::ThemeCocoa;
+
  public:
   enum class MenuIcon : uint8_t {
     eCheckmark,
@@ -168,8 +166,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     bool reverse = false;
   };
 
-  using ScrollbarParams = mozilla::widget::ScrollbarParams;
-
   enum Widget : uint8_t {
     eColorFill,      // mozilla::gfx::sRGBColor
     eMenuIcon,       // MenuIconParams
@@ -194,9 +190,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     eMeter,               // MeterParams
     eTreeHeaderCell,      // TreeHeaderCellParams
     eScale,               // ScaleParams
-    eScrollbarThumb,      // ScrollbarParams
-    eScrollbarTrack,      // ScrollbarParams
-    eScrollCorner,        // ScrollbarParams
     eMultilineTextField,  // bool
     eListBox,
     eActiveSourceListSelection,    // bool
@@ -265,15 +258,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
     static WidgetInfo Scale(const ScaleParams& aParams) {
       return WidgetInfo(Widget::eScale, aParams);
     }
-    static WidgetInfo ScrollbarThumb(const ScrollbarParams& aParams) {
-      return WidgetInfo(Widget::eScrollbarThumb, aParams);
-    }
-    static WidgetInfo ScrollbarTrack(const ScrollbarParams& aParams) {
-      return WidgetInfo(Widget::eScrollbarTrack, aParams);
-    }
-    static WidgetInfo ScrollCorner(const ScrollbarParams& aParams) {
-      return WidgetInfo(Widget::eScrollCorner, aParams);
-    }
     static WidgetInfo MultilineTextField(bool aParams) {
       return WidgetInfo(Widget::eMultilineTextField, aParams);
     }
@@ -301,16 +285,13 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
 
     mozilla::Variant<mozilla::gfx::sRGBColor, MenuIconParams, MenuItemParams, CheckboxOrRadioParams,
                      ButtonParams, DropdownParams, SpinButtonParams, SegmentParams, TextFieldParams,
-                     ProgressParams, MeterParams, TreeHeaderCellParams, ScaleParams,
-                     ScrollbarParams, bool>
+                     ProgressParams, MeterParams, TreeHeaderCellParams, ScaleParams, bool>
         mVariant;
 
     enum Widget mWidget;
   };
 
-  using ScrollbarDrawingMac = mozilla::widget::ScrollbarDrawingMac;
-
-  nsNativeThemeCocoa();
+  explicit nsNativeThemeCocoa();
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -333,7 +314,6 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   virtual bool GetWidgetOverflow(nsDeviceContext* aContext, nsIFrame* aFrame,
                                  StyleAppearance aAppearance, nsRect* aOverflowRect) override;
 
-  ScrollbarSizes GetScrollbarSizes(nsPresContext*, StyleScrollbarWidth, Overlay) override;
   NS_IMETHOD GetMinimumWidgetSize(nsPresContext* aPresContext, nsIFrame* aFrame,
                                   StyleAppearance aAppearance,
                                   mozilla::LayoutDeviceIntSize* aResult,
@@ -344,7 +324,7 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   bool ThemeSupportsWidget(nsPresContext* aPresContext, nsIFrame* aFrame,
                            StyleAppearance aAppearance) override;
   bool WidgetIsContainer(StyleAppearance aAppearance) override;
-  bool ThemeDrawsFocusForWidget(StyleAppearance aAppearance) override;
+  bool ThemeDrawsFocusForWidget(nsIFrame*, StyleAppearance) override;
   bool ThemeNeedsComboboxDropmarker() override;
   virtual bool WidgetAppearanceDependsOnWindowFocus(StyleAppearance aAppearance) override;
   virtual ThemeGeometryType ThemeGeometryTypeForWidget(nsIFrame* aFrame,
@@ -424,7 +404,7 @@ class nsNativeThemeCocoa : private nsNativeTheme, public nsITheme {
   void DrawSourceListSelection(CGContextRef aContext, const CGRect& aRect, bool aWindowIsActive,
                                bool aSelectionIsActive);
 
-  void RenderWidget(const WidgetInfo& aWidgetInfo, mozilla::LookAndFeel::ColorScheme,
+  void RenderWidget(const WidgetInfo& aWidgetInfo, mozilla::ColorScheme,
                     mozilla::gfx::DrawTarget& aDrawTarget, const mozilla::gfx::Rect& aWidgetRect,
                     const mozilla::gfx::Rect& aDirtyRect, float aScale);
 

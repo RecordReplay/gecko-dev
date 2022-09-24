@@ -51,9 +51,7 @@ static bool sInited = 0;
 // before we first CC benignly violate the black-gray invariant, due
 // to dom::TraceBlackJS().
 uint32_t nsCCUncollectableMarker::sGeneration = 1;
-#ifdef MOZ_XUL
-#  include "nsXULPrototypeCache.h"
-#endif
+#include "nsXULPrototypeCache.h"
 
 NS_IMPL_ISUPPORTS(nsCCUncollectableMarker, nsIObserver)
 
@@ -366,12 +364,10 @@ nsresult nsCCUncollectableMarker::Observe(nsISupports* aSubject,
     }
   }
 
-#ifdef MOZ_XUL
   nsXULPrototypeCache* xulCache = nsXULPrototypeCache::GetInstance();
   if (xulCache) {
     xulCache->MarkInCCGeneration(sGeneration);
   }
-#endif
 
   enum ForgetSkippableCleanupState {
     eInitial = 0,
@@ -429,20 +425,7 @@ nsresult nsCCUncollectableMarker::Observe(nsISupports* aSubject,
   return NS_OK;
 }
 
-void mozilla::dom::TraceBlackJS(JSTracer* aTrc, bool aIsShutdownGC) {
-#ifdef MOZ_XUL
-  // Mark the scripts held in the XULPrototypeCache. This is required to keep
-  // the JS script in the cache live across GC.
-  nsXULPrototypeCache* cache = nsXULPrototypeCache::MaybeGetInstance();
-  if (cache) {
-    if (aIsShutdownGC) {
-      cache->FlushScripts();
-    } else {
-      cache->MarkInGC(aTrc);
-    }
-  }
-#endif
-
+void mozilla::dom::TraceBlackJS(JSTracer* aTrc) {
   if (!nsCCUncollectableMarker::sGeneration) {
     return;
   }
@@ -504,13 +487,6 @@ void mozilla::dom::TraceBlackJS(JSTracer* aTrc, bool aIsShutdownGC) {
             }
           }
         }
-
-#ifdef MOZ_XUL
-        Document* doc = window->GetExtantDoc();
-        if (doc) {
-          doc->TraceProtos(aTrc);
-        }
-#endif
       }
     }
   }

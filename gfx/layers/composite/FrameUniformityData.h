@@ -12,12 +12,10 @@
 #include "ipc/IPCMessageUtilsSpecializations.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/UniquePtr.h"
-#include "mozilla/gfx/Point.h"
 #include "nsTArray.h"
 
 namespace mozilla {
 namespace layers {
-class Layer;
 
 class FrameUniformityData {
   friend struct IPC::ParamTraits<FrameUniformityData>;
@@ -28,34 +26,6 @@ class FrameUniformityData {
   std::map<uintptr_t, float> mUniformities;
 };
 
-struct LayerTransforms {
-  LayerTransforms() = default;
-
-  gfx::Point GetAverage();
-  gfx::Point GetStdDev();
-  bool Sanitize();
-
-  // 60 fps * 5 seconds worth of data
-  AutoTArray<gfx::Point, 300> mTransforms;
-};
-
-class LayerTransformRecorder {
- public:
-  LayerTransformRecorder() = default;
-  ~LayerTransformRecorder();
-
-  void RecordTransform(Layer* aLayer, const gfx::Point& aTransform);
-  void Reset();
-  void EndTest(FrameUniformityData* aOutData);
-
- private:
-  float CalculateFrameUniformity(uintptr_t aLayer);
-  LayerTransforms* GetLayerTransforms(uintptr_t aLayer);
-  using FrameTransformMap =
-      std::map<uintptr_t, mozilla::UniquePtr<LayerTransforms>>;
-  FrameTransformMap mFrameTransforms;
-};
-
 }  // namespace layers
 }  // namespace mozilla
 
@@ -64,14 +34,13 @@ template <>
 struct ParamTraits<mozilla::layers::FrameUniformityData> {
   typedef mozilla::layers::FrameUniformityData paramType;
 
-  static void Write(Message* aMsg, const paramType& aParam) {
-    WriteParam(aMsg, aParam.mUniformities);
+  static void Write(MessageWriter* aWriter, const paramType& aParam) {
+    WriteParam(aWriter, aParam.mUniformities);
   }
 
-  static bool Read(const Message* aMsg, PickleIterator* aIter,
-                   paramType* aResult) {
+  static bool Read(MessageReader* aReader, paramType* aResult) {
     return ParamTraitsStd<std::map<uintptr_t, float>>::Read(
-        aMsg, aIter, &aResult->mUniformities);
+        aReader, &aResult->mUniformities);
   }
 };
 

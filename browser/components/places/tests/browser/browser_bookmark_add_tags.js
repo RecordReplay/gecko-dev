@@ -24,7 +24,7 @@ async function hideBookmarksPanel(callback) {
   await hiddenPromise;
 }
 
-add_task(function setup() {
+add_setup(function() {
   let oldTimeout = StarUI._autoCloseTimeout;
 
   bookmarkPanel.setAttribute("animate", false);
@@ -103,8 +103,9 @@ add_task(async function test_add_bookmark_tags_from_bookmarkProperties() {
   // Click the bookmark star again, add more tags.
   await clickBookmarkStar();
   promiseNotification = PlacesTestUtils.waitForNotification(
-    "onItemChanged",
-    (id, property) => property == "tags"
+    "bookmark-tags-changed",
+    () => true,
+    "places"
   );
   await fillBookmarkTextField(
     "editBMPanel_tagsField",

@@ -86,6 +86,7 @@ class VideoFrameContainer {
   void ForgetElement() { mOwner = nullptr; }
 
   uint32_t GetDroppedImageCount() {
+    MutexAutoLock lock(mMutex);
     return mImageContainer->GetDroppedImageCount();
   }
 
@@ -94,7 +95,7 @@ class VideoFrameContainer {
       const gfx::IntSize& aIntrinsicSize,
       const nsTArray<ImageContainer::NonOwningImage>& aImages);
 
-  // Non-addreffed pointer to the owner. The ownenr calls ForgetElement
+  // Non-addreffed pointer to the owner. The owner calls ForgetElement
   // to clear this reference when the owner is destroyed.
   MediaDecoderOwner* mOwner;
   RefPtr<ImageContainer> mImageContainer;
@@ -116,7 +117,7 @@ class VideoFrameContainer {
   } mMainThreadState;
 
   // mMutex protects all the fields below.
-  Mutex mMutex;
+  Mutex mMutex MOZ_UNANNOTATED;
   // The intrinsic size is the ideal size which we should render the
   // ImageContainer's current Image at.
   // This can differ from the Image's actual size when the media resource

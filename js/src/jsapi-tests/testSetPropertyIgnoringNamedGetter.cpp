@@ -4,6 +4,7 @@
 
 #include "jsfriendapi.h"
 
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 #include "js/Proxy.h"
 
 #include "jsapi-tests/tests.h"
@@ -18,8 +19,8 @@ class CustomProxyHandler : public Wrapper {
   bool getOwnPropertyDescriptor(
       JSContext* cx, HandleObject proxy, HandleId id,
       MutableHandle<mozilla::Maybe<PropertyDescriptor>> desc) const override {
-    if (JSID_IS_STRING(id) &&
-        JS_LinearStringEqualsLiteral(JSID_TO_LINEAR_STRING(id), "phantom")) {
+    if (id.isString() &&
+        JS_LinearStringEqualsLiteral(id.toLinearString(), "phantom")) {
       desc.set(mozilla::Some(PropertyDescriptor::Data(
           Int32Value(42),
           {PropertyAttribute::Configurable, PropertyAttribute::Enumerable,

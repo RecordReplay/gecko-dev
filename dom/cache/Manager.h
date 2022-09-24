@@ -197,6 +197,11 @@ class Manager final : public SafeRefCounted<Manager> {
   void NoteStreamOpenComplete(const nsID& aBodyId, ErrorResult&& aRv,
                               nsCOMPtr<nsIInputStream>&& aBodyStream);
 
+#ifdef MOZ_DIAGNOSTIC_ASSERT_ENABLED
+  void RecordMayNotDeleteCSCP(int32_t aCacheStreamControlParentId);
+  void RecordHaveDeletedCSCP(int32_t aCacheStreamControlParentId);
+#endif
+
  private:
   class Factory;
   class BaseAction;
@@ -216,7 +221,7 @@ class Manager final : public SafeRefCounted<Manager> {
 
   class OpenStreamAction;
 
-  typedef uint64_t ListenerId;
+  using ListenerId = uint64_t;
 
   void Init(Maybe<Manager&> aOldManager);
   void Shutdown();
@@ -263,7 +268,7 @@ class Manager final : public SafeRefCounted<Manager> {
     }
   };
 
-  typedef nsTArray<ListenerEntry> ListenerList;
+  using ListenerList = nsTArray<ListenerEntry>;
   ListenerList mListeners;
   static ListenerId sNextListenerId;
 

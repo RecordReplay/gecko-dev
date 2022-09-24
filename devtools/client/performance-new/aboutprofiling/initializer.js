@@ -3,9 +3,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 // @ts-check
 /**
- * @typedef {import("../@types/perf").InitializeStoreValues} InitializeStoreValues
- * @typedef {import("../@types/perf").PopupWindow} PopupWindow
- * @typedef {import("../@types/perf").RecordingStateFromPreferences} RecordingStateFromPreferences
+ * @typedef {import("../@types/perf").RecordingSettings} RecordingSettings
  * @typedef {import("../@types/perf").PerfFront} PerfFront
  * @typedef {import("../@types/perf").PageContext} PageContext
  */
@@ -22,7 +20,7 @@
   // the section on "Do not overload require" for more information.
 
   const { BrowserLoader } = ChromeUtils.import(
-    "resource://devtools/client/shared/browser-loader.js"
+    "resource://devtools/shared/loader/browser-loader.js"
   );
   const browserLoader = BrowserLoader({
     baseURI: "resource://devtools/client/performance-new/aboutprofiling",
@@ -44,16 +42,9 @@
  * profiler shortcuts. In order to do this, the background code needs to live in a
  * JSM module, that can be shared with the DevTools keyboard shortcut manager.
  */
-const {
-  getRecordingPreferences,
-  setRecordingPreferences,
-  getSymbolsFromThisBrowser,
-  presets,
-} = ChromeUtils.import(
+const { presets } = ChromeUtils.import(
   "resource://devtools/client/performance-new/popup/background.jsm.js"
 );
-
-const { receiveProfile } = require("devtools/client/performance-new/browser");
 
 const ReactDOM = require("devtools/client/shared/vendor/react-dom");
 const React = require("devtools/client/shared/vendor/react");
@@ -64,38 +55,44 @@ const {
 const Provider = React.createFactory(
   require("devtools/client/shared/vendor/react-redux").Provider
 );
+const ProfilerPreferenceObserver = React.createFactory(
+  require("devtools/client/performance-new/components/ProfilerPreferenceObserver")
+);
 const LocalizationProvider = React.createFactory(
   FluentReact.LocalizationProvider
 );
 const AboutProfiling = React.createFactory(
   require("devtools/client/performance-new/components/AboutProfiling")
 );
-const ProfilerEventHandling = React.createFactory(
-  require("devtools/client/performance-new/components/ProfilerEventHandling")
-);
 const createStore = require("devtools/client/shared/redux/create-store");
 const reducers = require("devtools/client/performance-new/store/reducers");
 const actions = require("devtools/client/performance-new/store/actions");
-const {
-  ActorReadyGeckoProfilerInterface,
-} = require("devtools/shared/performance-new/gecko-profiler-interface");
+const { Ci } = require("chrome");
+const Services = require("Services");
 
 /**
  * Initialize the panel by creating a redux store, and render the root component.
  *
- * @param {PerfFront} perfFront - The Perf actor's front. Used to start and stop recordings.
  * @param {PageContext} pageContext - The context that the UI is being loaded in under.
+ * @param {boolean} isSupportedPlatform
+ * @param {string[]} supportedFeatures
  * @param {(() => void)} [openRemoteDevTools] Optionally provide a way to go back to
  *                                            the remote devtools page.
  */
-async function gInit(perfFront, pageContext, openRemoteDevTools) {
+async function gInit(
+  pageContext,
+  isSupportedPlatform,
+  supportedFeatures,
+  openRemoteDevTools
+) {
   const store = createStore(reducers);
-  const supportedFeatures = await perfFront.getSupportedFeatures();
 
   const l10n = new FluentL10n();
   await l10n.init(
     [
       "devtools/client/perftools.ftl",
+      // For -brand-shorter-name used in some profiler preset descriptions.
+      "branding/brand.ftl",
       // Needed for the onboarding UI
       "browser/branding/brandings.ftl",
     ],
@@ -108,27 +105,9 @@ async function gInit(perfFront, pageContext, openRemoteDevTools) {
   // the browser.
   store.dispatch(
     actions.initializeStore({
-      perfFront,
-      receiveProfile,
+      isSupportedPlatform,
       supportedFeatures,
       presets,
-      // Get the preferences from the current browser
-      recordingPreferences: getRecordingPreferences(
-        pageContext,
-        supportedFeatures
-      ),
-      /**
-       * @param {RecordingStateFromPreferences} newRecordingPreferences
-       */
-      setRecordingPreferences: newRecordingPreferences =>
-        setRecordingPreferences(pageContext, newRecordingPreferences),
-
-      // The popup doesn't need to support remote symbol tables from the debuggee.
-      // Only get the symbols from this browser.
-      getSymbolTableGetter: () => {
-        return (debugName, breakpadId) =>
-          getSymbolsFromThisBrowser(pageContext, debugName, breakpadId);
-      },
       pageContext,
       openRemoteDevTools,
     })
@@ -142,7 +121,7 @@ async function gInit(perfFront, pageContext, openRemoteDevTools) {
         React.createElement(
           React.Fragment,
           null,
-          ProfilerEventHandling(),
+          ProfilerPreferenceObserver(),
           AboutProfiling()
         )
       )
@@ -150,21 +129,26 @@ async function gInit(perfFront, pageContext, openRemoteDevTools) {
     document.querySelector("#root")
   );
 
-  window.addEventListener("unload", function() {
-    // Do not destroy the perf front if working remotely, about:debugging will do
-    // this for us.
-    if (pageContext !== "aboutprofiling-remote") {
-      // The perf front interface needs to be unloaded in order to remove event handlers.
-      // Not doing so leads to leaks.
-      perfFront.destroy();
-    }
-  });
+  window.addEventListener("unload", () => gDestroy(), { once: true });
+}
+
+async function gDestroy() {
+  // This allows all unregister commands to run.
+  ReactDOM.unmountComponentAtNode(document.querySelector("#root"));
 }
 
 // Automatically initialize the page if it's not a remote connection, otherwise
 // the page will be initialized by about:debugging.
 if (window.location.hash !== "#remote") {
-  document.addEventListener("DOMContentLoaded", () => {
-    gInit(new ActorReadyGeckoProfilerInterface(), "aboutprofiling");
-  });
+  document.addEventListener(
+    "DOMContentLoaded",
+    () => {
+      const isSupportedPlatform = "nsIProfiler" in Ci;
+      const supportedFeatures = isSupportedPlatform
+        ? Services.profiler.GetFeatures()
+        : [];
+      gInit("aboutprofiling", isSupportedPlatform, supportedFeatures);
+    },
+    { once: true }
+  );
 }

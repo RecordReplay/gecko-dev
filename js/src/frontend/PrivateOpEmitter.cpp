@@ -8,9 +8,7 @@
 
 #include "frontend/BytecodeEmitter.h"
 #include "frontend/NameOpEmitter.h"
-#include "frontend/SharedContext.h"
 #include "vm/Opcodes.h"
-#include "vm/StringType.h"
 #include "vm/ThrowMsgKind.h"  // ThrowMsgKind
 
 using namespace js;
@@ -23,17 +21,11 @@ PrivateOpEmitter::PrivateOpEmitter(BytecodeEmitter* bce, Kind kind,
 }
 
 bool PrivateOpEmitter::init() {
-  if (!bce_->makeAtomIndex(name_, &atomIndex_)) {
-    return false;
-  }
-
   // Static analysis needs us to initialise this to something, so use Dynamic()
   NameLocation loc = NameLocation::Dynamic();
-  bool result = bce_->lookupPrivate(name_, loc, brandLoc_);
-  if (result) {
-    loc_ = mozilla::Some(loc);
-  }
-  return result;
+  bce_->lookupPrivate(name_, loc, brandLoc_);
+  loc_ = mozilla::Some(loc);
+  return true;
 }
 
 bool PrivateOpEmitter::emitLoad(TaggedParserAtomIndex name,
@@ -70,8 +62,8 @@ bool PrivateOpEmitter::emitBrandCheck() {
       return false;
     }
   } else {
-    bool assigning = isSimpleAssignment() || isFieldInit() ||
-                     isCompoundAssignment() || isIncDec();
+    bool assigning =
+        isSimpleAssignment() || isCompoundAssignment() || isIncDec();
     if (!bce_->emitCheckPrivateField(ThrowCondition::ThrowHasNot,
                                      assigning
                                          ? ThrowMsgKind::MissingPrivateOnSet
@@ -310,9 +302,22 @@ bool PrivateOpEmitter::emitIncDec() {
     return false;
   }
 
-  if (!bce_->emitElemOpBase(JSOp::StrictSetElem)) {
-    //              [stack] N? N+1
-    return false;
+  if (brandLoc_) {
+    if (!bce_->emit2(JSOp::ThrowMsg,
+                     uint8_t(ThrowMsgKind::AssignToPrivateMethod))) {
+      return false;
+    }
+
+    // Balance the expression stack.
+    if (!bce_->emitPopN(2)) {
+      //            [stack] N? N+1
+      return false;
+    }
+  } else {
+    if (!bce_->emitElemOpBase(JSOp::StrictSetElem)) {
+      //            [stack] N? N+1
+      return false;
+    }
   }
 
   if (isPostIncDec()) {

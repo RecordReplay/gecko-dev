@@ -33,6 +33,7 @@ typedef (HTMLImageElement or
 typedef (HTMLOrSVGImageElement or
          HTMLCanvasElement or
          HTMLVideoElement or
+         OffscreenCanvas or
          ImageBitmap) CanvasImageSource;
 
 [Exposed=Window]
@@ -43,10 +44,13 @@ interface CanvasRenderingContext2D {
   readonly attribute HTMLCanvasElement? canvas;
 
   // Mozilla-specific stuff
-  // FIXME Bug 768048 mozCurrentTransform/mozCurrentTransformInverse should return a WebIDL array.
-  [Throws]
+  [Deprecated="MozCurrentTransform",
+   Pref="dom.mozCurrentTransform.enabled",
+   Throws]
   attribute object mozCurrentTransform; // [ m11, m12, m21, m22, dx, dy ], i.e. row major
-  [Throws]
+  [Deprecated="MozCurrentTransformInverse",
+   Pref="dom.mozCurrentTransform.enabled",
+   Throws]
   attribute object mozCurrentTransformInverse;
 
   [SetterThrows]
@@ -301,6 +305,7 @@ interface mixin CanvasTextDrawingStyles {
   attribute UTF8String font; // (default 10px sans-serif)
   attribute DOMString textAlign; // "start", "end", "left", "right", "center" (default: "start")
   attribute DOMString textBaseline; // "top", "hanging", "middle", "alphabetic", "ideographic", "bottom" (default: "alphabetic")
+  attribute DOMString direction; // "ltr", "rtl", "inherit" (default: "inherit")
 };
 
 interface mixin CanvasPathMethods {
@@ -337,7 +342,8 @@ interface mixin CanvasHitRegions {
   [Pref="canvas.hitregions.enabled"] void clearHitRegions();
 };
 
-[Exposed=Window]
+[Exposed=(Window,Worker),
+ Func="mozilla::dom::OffscreenCanvas::PrefEnabledOnWorkerThread"]
 interface CanvasGradient {
   // opaque object
   [Throws]
@@ -345,7 +351,8 @@ interface CanvasGradient {
   void addColorStop(float offset, UTF8String color);
 };
 
-[Exposed=Window]
+[Exposed=(Window,Worker),
+ Func="mozilla::dom::OffscreenCanvas::PrefEnabledOnWorkerThread"]
 interface CanvasPattern {
   // opaque object
   // [Throws, LenientFloat] - could not do this overload because of bug 1020975
@@ -396,7 +403,8 @@ interface TextMetrics {
 };
 
 [Pref="canvas.path.enabled",
- Exposed=Window]
+ Func="mozilla::dom::OffscreenCanvas::PrefEnabledOnWorkerThread",
+ Exposed=(Window,Worker)]
 interface Path2D
 {
   constructor();

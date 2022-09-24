@@ -44,9 +44,9 @@ CachingDatabaseConnection::GetCachedStatement(const nsACString& aQuery) {
                 ScopedLogExtraInfo{ScopedLogExtraInfo::kTagQuery, aQuery};
 
             QM_TRY_RETURN(
-                MOZ_TO_RESULT_INVOKE_TYPED(nsCOMPtr<mozIStorageStatement>,
-                                           **mStorageConnection,
-                                           CreateStatement, aQuery),
+                MOZ_TO_RESULT_INVOKE_MEMBER_TYPED(
+                    nsCOMPtr<mozIStorageStatement>, **mStorageConnection,
+                    CreateStatement, aQuery),
                 QM_PROPAGATE,
                 ([&aQuery,
                   &storageConnection = **mStorageConnection](const auto&) {
@@ -79,7 +79,8 @@ CachingDatabaseConnection::BorrowCachedStatement(const nsACString& aQuery) {
 
 nsresult CachingDatabaseConnection::ExecuteCachedStatement(
     const nsACString& aQuery) {
-  return ExecuteCachedStatement(aQuery, [](auto&) { return NS_OK; });
+  return ExecuteCachedStatement(
+      aQuery, [](auto&) -> Result<Ok, nsresult> { return Ok{}; });
 }
 
 void CachingDatabaseConnection::Close() {

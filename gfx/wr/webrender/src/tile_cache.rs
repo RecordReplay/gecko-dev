@@ -2,18 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-use api::{ColorF, PrimitiveFlags, QualitySettings};
+use api::{ColorF, PrimitiveFlags, QualitySettings, RasterSpace};
 use api::units::*;
 use crate::clip::{ClipChainId, ClipNodeKind, ClipStore, ClipInstance};
 use crate::frame_builder::FrameBuilderConfig;
-use crate::internal_types::{FastHashMap, FastHashSet};
-use crate::picture::{PrimitiveList, PictureCompositeMode, PictureOptions, PicturePrimitive, SliceId};
-use crate::picture::{Picture3DContext, TileCacheParams, TileOffset};
+use crate::internal_types::{FastHashMap};
+use crate::picture::{PrimitiveList, PictureCompositeMode, PicturePrimitive, SliceId};
+use crate::picture::{Picture3DContext, TileCacheParams, TileOffset, PictureFlags};
 use crate::prim_store::{PrimitiveInstance, PrimitiveStore, PictureIndex};
 use crate::scene_building::SliceFlags;
 use crate::scene_builder_thread::Interners;
-use crate::spatial_tree::{ROOT_SPATIAL_NODE_INDEX, SpatialNodeIndex, SpatialTree};
+use crate::spatial_tree::{SpatialNodeIndex, SceneSpatialTree};
 use crate::util::VecHelper;
+use std::mem;
 
 /*
  Types and functionality related to picture caching. In future, we'll
@@ -30,29 +31,115 @@ use crate::util::VecHelper;
 // page has so many slices there isn't a single major scroll region).
 const MAX_CACHE_SLICES: usize = 12;
 
-/// Created during scene building, describes how to create a tile cache for a given slice.
-pub struct PendingTileCache {
-    /// List of primitives that are part of this slice
-    pub prim_list: PrimitiveList,
-    /// Parameters that define the tile cache (such as background color, shared clips, reference spatial node)
-    pub params: TileCacheParams,
-    /// An additional clip chain that get applied to the shared clips unconditionally for this tile cache
-    pub iframe_clip: Option<ClipChainId>,
+struct SliceDescriptor {
+    prim_list: PrimitiveList,
+    scroll_root: SpatialNodeIndex,
+    shared_clips: Vec<ClipInstance>,
+}
+
+enum SliceKind {
+    Default {
+        secondary_slices: Vec<SliceDescriptor>,
+    },
+    Atomic {
+        prim_list: PrimitiveList,
+    },
+}
+
+impl SliceKind {
+    fn default() -> Self {
+        SliceKind::Default {
+            secondary_slices: Vec::new(),
+        }
+    }
+}
+
+struct PrimarySlice {
+    /// Whether this slice is atomic or has secondary slice(s)
+    kind: SliceKind,
+    /// Optional background color of this slice
+    background_color: Option<ColorF>,
+    /// Optional root clip for the iframe
+    iframe_clip: Option<ClipChainId>,
+    /// Information about how to draw and composite this slice
+    slice_flags: SliceFlags,
+    /// Wrapping clip-chain for this slice
+    clip_chain_id: ClipChainId,
+}
+
+impl PrimarySlice {
+    fn new(
+        slice_flags: SliceFlags,
+        iframe_clip: Option<ClipChainId>,
+        background_color: Option<ColorF>,
+    ) -> Self {
+        PrimarySlice {
+            kind: SliceKind::default(),
+            background_color,
+            iframe_clip,
+            slice_flags,
+            clip_chain_id: ClipChainId::NONE,
+        }
+    }
+
+    fn atomic(
+        prim_list: PrimitiveList,
+        iframe_clip: Option<ClipChainId>,
+        clip_chain_id: ClipChainId,
+    ) -> Self {
+        PrimarySlice {
+            kind: SliceKind::Atomic { prim_list },
+            background_color: None,
+            iframe_clip,
+            slice_flags: SliceFlags::IS_ATOMIC,
+            clip_chain_id,
+        }
+    }
+
+    fn has_too_many_slices(&self) -> bool {
+        match self.kind {
+            SliceKind::Atomic { .. } => false,
+            SliceKind::Default { ref secondary_slices } => secondary_slices.len() > MAX_CACHE_SLICES,
+        }
+    }
+
+    fn merge(&mut self) {
+        self.slice_flags |= SliceFlags::IS_ATOMIC;
+
+        let old = mem::replace(
+            &mut self.kind,
+            SliceKind::Default { secondary_slices: Vec::new() },
+        );
+
+        self.kind = match old {
+            SliceKind::Default { mut secondary_slices } => {
+                let mut prim_list = PrimitiveList::empty();
+
+                for descriptor in secondary_slices.drain(..) {
+                    prim_list.merge(descriptor.prim_list);
+                }
+
+                SliceKind::Atomic {
+                    prim_list,
+                }
+            }
+            atomic => atomic,
+        }
+    }
 }
 
 /// Used during scene building to construct the list of pending tile caches.
 pub struct TileCacheBuilder {
-    /// When Some(..), a new tile cache will be created for the next primitive.
-    force_new_tile_cache: Option<SliceFlags>,
     /// List of tile caches that have been created so far (last in the list is currently active).
-    pending_tile_caches: Vec<PendingTileCache>,
-
+    primary_slices: Vec<PrimarySlice>,
     /// Cache the previous scroll root search for a spatial node, since they are often the same.
     prev_scroll_root_cache: (SpatialNodeIndex, SpatialNodeIndex),
     /// A buffer for collecting clips for a clip-chain. Retained here to avoid memory allocations in add_prim.
     prim_clips_buffer: Vec<ClipInstance>,
     /// Cache the last clip-chain that was added to the shared clips as it's often the same between prims.
     last_checked_clip_chain: ClipChainId,
+    /// Handle to the root reference frame
+    root_spatial_node_index: SpatialNodeIndex,
 }
 
 /// The output of a tile cache builder, containing all details needed to construct the
@@ -61,13 +148,6 @@ pub struct TileCacheBuilder {
 pub struct TileCacheConfig {
     /// Mapping of slice id to the parameters needed to construct this tile cache.
     pub tile_caches: FastHashMap<SliceId, TileCacheParams>,
-    /// A set of any spatial nodes that are attached to either a picture cache
-    /// root, or a clip node on the picture cache primitive. These are used
-    /// to detect cases where picture caching must be disabled. This is mostly
-    /// a temporary workaround for some existing wrench tests. I don't think
-    /// Gecko ever produces picture cache slices with complex transforms, so
-    /// in future we should prevent this in the public API and remove this hack.
-    pub picture_cache_spatial_nodes: FastHashSet<SpatialNodeIndex>,
     /// Number of picture cache slices that were created (for profiler)
     pub picture_cache_slice_count: usize,
 }
@@ -76,7 +156,6 @@ impl TileCacheConfig {
     pub fn new(picture_cache_slice_count: usize) -> Self {
         TileCacheConfig {
             tile_caches: FastHashMap::default(),
-            picture_cache_spatial_nodes: FastHashSet::default(),
             picture_cache_slice_count,
         }
     }
@@ -84,30 +163,39 @@ impl TileCacheConfig {
 
 impl TileCacheBuilder {
     /// Construct a new tile cache builder.
-    pub fn new() -> Self {
+    pub fn new(
+        root_spatial_node_index: SpatialNodeIndex,
+        background_color: Option<ColorF>,
+    ) -> Self {
         TileCacheBuilder {
-            force_new_tile_cache: None,
-            pending_tile_caches: Vec::new(),
-            prev_scroll_root_cache: (ROOT_SPATIAL_NODE_INDEX, ROOT_SPATIAL_NODE_INDEX),
+            primary_slices: vec![PrimarySlice::new(SliceFlags::empty(), None, background_color)],
+            prev_scroll_root_cache: (SpatialNodeIndex::INVALID, SpatialNodeIndex::INVALID),
             prim_clips_buffer: Vec::new(),
             last_checked_clip_chain: ClipChainId::INVALID,
+            root_spatial_node_index,
         }
+    }
+
+    pub fn make_current_slice_atomic(&mut self) {
+        self.primary_slices
+            .last_mut()
+            .unwrap()
+            .merge();
     }
 
     /// Set a barrier that forces a new tile cache next time a prim is added.
     pub fn add_tile_cache_barrier(
         &mut self,
         slice_flags: SliceFlags,
+        iframe_clip: Option<ClipChainId>,
     ) {
-        self.force_new_tile_cache = Some(slice_flags);
-    }
+        let new_slice = PrimarySlice::new(
+            slice_flags,
+            iframe_clip,
+            None,
+        );
 
-    /// Returns true if it's OK to add a container tile cache (will return false
-    /// if too many slices have been created).
-    pub fn can_add_container_tile_cache(&self) -> bool {
-        // See the logic and comments around MAX_CACHE_SLICES in add_prim
-        // to explain why < MAX_CACHE_SLICES-1 is used.
-        self.pending_tile_caches.len() < MAX_CACHE_SLICES-1
+        self.primary_slices.push(new_slice);
     }
 
     /// Create a new tile cache for an existing prim_list
@@ -115,17 +203,36 @@ impl TileCacheBuilder {
         &mut self,
         prim_list: PrimitiveList,
         clip_chain_id: ClipChainId,
-        spatial_tree: &SpatialTree,
+        iframe_clip: Option<ClipChainId>,
+    ) {
+        let atomic_slice = PrimarySlice::atomic(
+            prim_list,
+            iframe_clip,
+            clip_chain_id,
+        );
+
+        let next_slice = PrimarySlice::new(
+            SliceFlags::empty(),
+            iframe_clip,
+            None,
+        );
+
+        self.primary_slices.push(atomic_slice);
+        self.primary_slices.push(next_slice);
+    }
+
+    /// Create a new tile cache for an existing prim_list
+    fn build_tile_cache(
+        &mut self,
+        prim_list: PrimitiveList,
+        clip_chain_id: ClipChainId,
+        spatial_tree: &SceneSpatialTree,
         clip_store: &ClipStore,
         interners: &Interners,
-        config: &FrameBuilderConfig,
-        iframe_clip: Option<ClipChainId>,
-        slice_flags: SliceFlags,
-    ) {
-        assert!(self.can_add_container_tile_cache());
-
+        prim_instances: &[PrimitiveInstance],
+    ) -> Option<SliceDescriptor> {
         if prim_list.is_empty() {
-            return;
+            return None;
         }
 
         // Iterate the clusters and determine which is the most commonly occurring
@@ -136,8 +243,17 @@ impl TileCacheBuilder {
         let mut scroll_root_occurrences = FastHashMap::default();
 
         for cluster in &prim_list.clusters {
-            let scroll_root = self.find_scroll_root(
+            // If we encounter a cluster which has an unknown spatial node,
+            // we don't include that in the set of spatial nodes that we
+            // are trying to find scroll roots for. Later on, in finalize_picture,
+            // the cluster spatial node will be updated to the selected scroll root.
+            if cluster.spatial_node_index == SpatialNodeIndex::UNKNOWN {
+                continue;
+            }
+
+            let scroll_root = find_scroll_root(
                 cluster.spatial_node_index,
+                &mut self.prev_scroll_root_cache,
                 spatial_tree,
             );
 
@@ -170,7 +286,7 @@ impl TileCacheBuilder {
             .iter()
             .max_by_key(|entry | entry.1)
             .map(|(spatial_node_index, _)| *spatial_node_index)
-            .unwrap_or(ROOT_SPATIAL_NODE_INDEX);
+            .unwrap_or(self.root_spatial_node_index);
 
         let mut first = true;
         let prim_clips_buffer = &mut self.prim_clips_buffer;
@@ -181,7 +297,7 @@ impl TileCacheBuilder {
         // during initial scene build which are the relevant compositor clips, but for now
         // this is unlikely to be a significant cost.
         for cluster in &prim_list.clusters {
-            for prim_instance in &prim_list.prim_instances[cluster.prim_range()] {
+            for prim_instance in &prim_instances[cluster.prim_range()] {
                 if first {
                     add_clips(
                         scroll_root,
@@ -210,8 +326,7 @@ impl TileCacheBuilder {
                         shared_clips.retain(|h1: &ClipInstance| {
                             let uid = h1.handle.uid();
                             prim_clips_buffer.iter().any(|h2| {
-                                uid == h2.handle.uid() &&
-                                h1.spatial_node_index == h2.spatial_node_index
+                                uid == h2.handle.uid()
                             })
                         });
 
@@ -231,35 +346,17 @@ impl TileCacheBuilder {
 
             let clip_node_data = &interners.clip[clip_chain_node.handle];
             if let ClipNodeKind::Rectangle = clip_node_data.clip_node_kind {
-                shared_clips.push(ClipInstance::new(clip_chain_node.handle, clip_chain_node.spatial_node_index));
+                shared_clips.push(ClipInstance::new(clip_chain_node.handle));
             }
 
             current_clip_chain_id = clip_chain_node.parent_clip_chain_id;
         }
 
-        // Construct the new tile cache and add to the list to be built
-        let slice = self.pending_tile_caches.len();
-
-        let params = TileCacheParams {
-            slice,
-            slice_flags,
-            spatial_node_index: scroll_root,
-            background_color: None,
+        Some(SliceDescriptor {
+            scroll_root,
             shared_clips,
-            shared_clip_chain: ClipChainId::NONE,
-            virtual_surface_size: config.compositor_kind.get_virtual_surface_size(),
-            compositor_surface_count: prim_list.compositor_surface_count,
-        };
-
-        self.pending_tile_caches.push(PendingTileCache {
             prim_list,
-            params,
-            iframe_clip,
-        });
-
-        // Add a tile cache barrier so that the next prim definitely gets added to a
-        // new tile cache, even if it's otherwise compatible with the blend container.
-        self.force_new_tile_cache = Some(SliceFlags::empty());
+        })
     }
 
     /// Add a primitive, either to the current tile cache, or a new one, depending on various conditions.
@@ -269,137 +366,121 @@ impl TileCacheBuilder {
         prim_rect: LayoutRect,
         spatial_node_index: SpatialNodeIndex,
         prim_flags: PrimitiveFlags,
-        spatial_tree: &SpatialTree,
+        spatial_tree: &SceneSpatialTree,
         clip_store: &ClipStore,
         interners: &Interners,
-        config: &FrameBuilderConfig,
         quality_settings: &QualitySettings,
-        iframe_clip: Option<ClipChainId>,
+        prim_instances: &mut Vec<PrimitiveInstance>,
     ) {
-        // Check if we want to create a new slice based on the current / next scroll root
-        let scroll_root = self.find_scroll_root(spatial_node_index, spatial_tree);
+        let primary_slice = self.primary_slices.last_mut().unwrap();
 
-        // Also create a new slice if there was a barrier previously set
-        let mut want_new_tile_cache =
-            self.force_new_tile_cache.is_some() ||
-            self.pending_tile_caches.is_empty();
+        match primary_slice.kind {
+            SliceKind::Atomic { ref mut prim_list } => {
+                prim_list.add_prim(
+                    prim_instance,
+                    prim_rect,
+                    spatial_node_index,
+                    prim_flags,
+                    prim_instances,
+                );
+            }
+            SliceKind::Default { ref mut secondary_slices } => {
+                assert_ne!(spatial_node_index, SpatialNodeIndex::UNKNOWN);
 
-        let current_scroll_root = self.pending_tile_caches
-            .last()
-            .map(|p| p.params.spatial_node_index);
-
-        if let Some(current_scroll_root) = current_scroll_root {
-            want_new_tile_cache |= match (current_scroll_root, scroll_root) {
-                (ROOT_SPATIAL_NODE_INDEX, ROOT_SPATIAL_NODE_INDEX) => {
-                    // Both current slice and this cluster are fixed position, no need to cut
-                    false
-                }
-                (ROOT_SPATIAL_NODE_INDEX, _) => {
-                    // A real scroll root is being established, so create a cache slice
-                    true
-                }
-                (_, ROOT_SPATIAL_NODE_INDEX) => {
-                    // If quality settings force subpixel AA over performance, skip creating
-                    // a slice for the fixed position element(s) here.
-                    if quality_settings.force_subpixel_aa_where_possible {
-                        false
-                    } else {
-                        // A fixed position slice is encountered within a scroll root. Only create
-                        // a slice in this case if all the clips referenced by this cluster are also
-                        // fixed position. There's no real point in creating slices for these cases,
-                        // since we'll have to rasterize them as the scrolling clip moves anyway. It
-                        // also allows us to retain subpixel AA in these cases. For these types of
-                        // slices, the intra-slice dirty rect handling typically works quite well
-                        // (a common case is parallax scrolling effects).
-                        let mut create_slice = true;
-                        let mut current_clip_chain_id = prim_instance.clip_set.clip_chain_id;
-
-                        while current_clip_chain_id != ClipChainId::NONE {
-                            let clip_chain_node = &clip_store.clip_chain_nodes[current_clip_chain_id.0 as usize];
-                            let spatial_root = self.find_scroll_root(clip_chain_node.spatial_node_index, spatial_tree);
-                            if spatial_root != ROOT_SPATIAL_NODE_INDEX {
-                                create_slice = false;
-                                break;
-                            }
-                            current_clip_chain_id = clip_chain_node.parent_clip_chain_id;
-                        }
-
-                        create_slice
-                    }
-                }
-                (curr_scroll_root, scroll_root) => {
-                    // Two scrolling roots - only need a new slice if they differ
-                    curr_scroll_root != scroll_root
-                }
-            };
-
-            // Update the list of clips that apply to this primitive instance, to track which are the
-            // shared clips for this tile cache that can be applied during compositing.
-            if self.last_checked_clip_chain != prim_instance.clip_set.clip_chain_id {
-                let prim_clips_buffer = &mut self.prim_clips_buffer;
-                prim_clips_buffer.clear();
-                add_clips(
-                    current_scroll_root,
-                    prim_instance.clip_set.clip_chain_id,
-                    prim_clips_buffer,
-                    clip_store,
-                    interners,
+                // Check if we want to create a new slice based on the current / next scroll root
+                let scroll_root = find_scroll_root(
+                    spatial_node_index,
+                    &mut self.prev_scroll_root_cache,
                     spatial_tree,
                 );
 
-                let current_shared_clips = &self.pending_tile_caches
+                let current_scroll_root = secondary_slices
                     .last()
-                    .unwrap()
-                    .params
-                    .shared_clips;
+                    .map(|p| p.scroll_root);
 
-                // If the shared clips are not compatible, create a new slice.
-                // TODO(gw): Does Gecko ever supply duplicate or out-of-order
-                //           shared clips? It doesn't seem to, but if it does,
-                //           we will need to be more clever here to check if
-                //           the shared clips are compatible.
-                want_new_tile_cache |= current_shared_clips != prim_clips_buffer;
+                let mut want_new_tile_cache = secondary_slices.is_empty();
 
-                self.last_checked_clip_chain = prim_instance.clip_set.clip_chain_id;
-            }
-        }
+                if let Some(current_scroll_root) = current_scroll_root {
+                    want_new_tile_cache |= match (current_scroll_root, scroll_root) {
+                        (_, _) if current_scroll_root == self.root_spatial_node_index && scroll_root == self.root_spatial_node_index => {
+                            // Both current slice and this cluster are fixed position, no need to cut
+                            false
+                        }
+                        (_, _) if current_scroll_root == self.root_spatial_node_index => {
+                            // A real scroll root is being established, so create a cache slice
+                            true
+                        }
+                        (_, _) if scroll_root == self.root_spatial_node_index => {
+                            // If quality settings force subpixel AA over performance, skip creating
+                            // a slice for the fixed position element(s) here.
+                            if quality_settings.force_subpixel_aa_where_possible {
+                                false
+                            } else {
+                                // A fixed position slice is encountered within a scroll root. Only create
+                                // a slice in this case if all the clips referenced by this cluster are also
+                                // fixed position. There's no real point in creating slices for these cases,
+                                // since we'll have to rasterize them as the scrolling clip moves anyway. It
+                                // also allows us to retain subpixel AA in these cases. For these types of
+                                // slices, the intra-slice dirty rect handling typically works quite well
+                                // (a common case is parallax scrolling effects).
+                                let mut create_slice = true;
+                                let mut current_clip_chain_id = prim_instance.clip_set.clip_chain_id;
 
-        if want_new_tile_cache {
-            let slice = self.pending_tile_caches.len();
+                                while current_clip_chain_id != ClipChainId::NONE {
+                                    let clip_chain_node = &clip_store.clip_chain_nodes[current_clip_chain_id.0 as usize];
+                                    let clip_node_data = &interners.clip[clip_chain_node.handle];
+                                    let spatial_root = find_scroll_root(
+                                        clip_node_data.spatial_node_index,
+                                        &mut self.prev_scroll_root_cache,
+                                        spatial_tree,
+                                    );
+                                    if spatial_root != self.root_spatial_node_index {
+                                        create_slice = false;
+                                        break;
+                                    }
+                                    current_clip_chain_id = clip_chain_node.parent_clip_chain_id;
+                                }
 
-            // If we have exceeded the maximum number of slices, skip creating a new
-            // one and the primitive will be added to the last slice.
-            if slice < MAX_CACHE_SLICES {
-                // When we reach the last valid slice that can be created, it is created as
-                // a fixed slice without shared clips, ensuring that we can safely add any
-                // subsequent primitives to it. This doesn't seem to occur on any real
-                // world content (only contrived test cases), where this acts as a fail safe
-                // to ensure we don't allocate too much GPU memory for surface caches.
-                // However, if we _do_ ever see this occur on real world content, we could
-                // probably consider increasing the max cache slices a bit more than the
-                // current limit.
-                let (params, iframe_clip) = if slice == MAX_CACHE_SLICES-1 {
-                    let params = TileCacheParams {
-                        slice,
-                        slice_flags: SliceFlags::empty(),
-                        spatial_node_index: ROOT_SPATIAL_NODE_INDEX,
-                        background_color: None,
-                        shared_clips: Vec::new(),
-                        shared_clip_chain: ClipChainId::NONE,
-                        virtual_surface_size: config.compositor_kind.get_virtual_surface_size(),
-                        compositor_surface_count: 0,
+                                create_slice
+                            }
+                        }
+                        (curr_scroll_root, scroll_root) => {
+                            // Two scrolling roots - only need a new slice if they differ
+                            curr_scroll_root != scroll_root
+                        }
                     };
 
-                    (params, None)
-                } else {
-                    let slice_flags = self.force_new_tile_cache.unwrap_or(SliceFlags::empty());
+                    // Update the list of clips that apply to this primitive instance, to track which are the
+                    // shared clips for this tile cache that can be applied during compositing.
+                    if self.last_checked_clip_chain != prim_instance.clip_set.clip_chain_id {
+                        let prim_clips_buffer = &mut self.prim_clips_buffer;
+                        prim_clips_buffer.clear();
+                        add_clips(
+                            current_scroll_root,
+                            prim_instance.clip_set.clip_chain_id,
+                            prim_clips_buffer,
+                            clip_store,
+                            interners,
+                            spatial_tree,
+                        );
 
-                    let background_color = if slice == 0 {
-                        config.background_color
-                    } else {
-                        None
-                    };
+                        let current_shared_clips = &secondary_slices
+                            .last()
+                            .unwrap()
+                            .shared_clips;
 
+                        // If the shared clips are not compatible, create a new slice.
+                        // TODO(gw): Does Gecko ever supply duplicate or out-of-order
+                        //           shared clips? It doesn't seem to, but if it does,
+                        //           we will need to be more clever here to check if
+                        //           the shared clips are compatible.
+                        want_new_tile_cache |= current_shared_clips != prim_clips_buffer;
+
+                        self.last_checked_clip_chain = prim_instance.clip_set.clip_chain_id;
+                    }
+                }
+
+                if want_new_tile_cache {
                     let mut shared_clips = Vec::new();
                     add_clips(
                         scroll_root,
@@ -412,100 +493,113 @@ impl TileCacheBuilder {
 
                     self.last_checked_clip_chain = prim_instance.clip_set.clip_chain_id;
 
-                    let params = TileCacheParams {
-                        slice,
-                        slice_flags,
-                        spatial_node_index: scroll_root,
-                        background_color,
+                    secondary_slices.push(SliceDescriptor {
+                        prim_list: PrimitiveList::empty(),
+                        scroll_root,
                         shared_clips,
-                        shared_clip_chain: ClipChainId::NONE,
-                        virtual_surface_size: config.compositor_kind.get_virtual_surface_size(),
-                        compositor_surface_count: 0,
-                    };
+                    });
+                }
 
-                    (params, iframe_clip)
-                };
-
-                self.pending_tile_caches.push(PendingTileCache {
-                    prim_list: PrimitiveList::empty(),
-                    params,
-                    iframe_clip,
-                });
-
-                self.force_new_tile_cache = None;
+                secondary_slices
+                    .last_mut()
+                    .unwrap()
+                    .prim_list
+                    .add_prim(
+                        prim_instance,
+                        prim_rect,
+                        spatial_node_index,
+                        prim_flags,
+                        prim_instances,
+                    );
             }
         }
-
-        self.pending_tile_caches
-            .last_mut()
-            .unwrap()
-            .prim_list
-            .add_prim(
-                prim_instance,
-                prim_rect,
-                spatial_node_index,
-                prim_flags,
-            );
     }
 
     /// Consume this object and build the list of tile cache primitives
     pub fn build(
-        self,
+        mut self,
         config: &FrameBuilderConfig,
         clip_store: &mut ClipStore,
         prim_store: &mut PrimitiveStore,
         interners: &Interners,
+        spatial_tree: &SceneSpatialTree,
+        prim_instances: &[PrimitiveInstance],
     ) -> (TileCacheConfig, Vec<PictureIndex>) {
-        let mut result = TileCacheConfig::new(self.pending_tile_caches.len());
+        let mut result = TileCacheConfig::new(self.primary_slices.len());
         let mut tile_cache_pictures = Vec::new();
+        let primary_slices = std::mem::replace(&mut self.primary_slices, Vec::new());
 
-        for mut pending_tile_cache in self.pending_tile_caches {
-            // Accumulate any clip instances from the iframe_clip into the shared clips
-            // that will be applied by this tile cache during compositing.
-            if let Some(clip_chain_id) = pending_tile_cache.iframe_clip {
-                add_all_rect_clips(
-                    clip_chain_id,
-                    &mut pending_tile_cache.params.shared_clips,
-                    clip_store,
-                    interners,
-                );
+        for mut primary_slice in primary_slices {
+
+            if primary_slice.has_too_many_slices() {
+                primary_slice.merge();
             }
 
-            let pic_index = create_tile_cache(
-                pending_tile_cache.params.slice,
-                pending_tile_cache.params.slice_flags,
-                pending_tile_cache.params.spatial_node_index,
-                pending_tile_cache.prim_list,
-                pending_tile_cache.params.background_color,
-                pending_tile_cache.params.shared_clips,
-                prim_store,
-                clip_store,
-                &mut result.picture_cache_spatial_nodes,
-                config,
-                &mut result.tile_caches,
-            );
-
-            tile_cache_pictures.push(pic_index);
+            match primary_slice.kind {
+                SliceKind::Atomic { prim_list } => {
+                    if let Some(descriptor) = self.build_tile_cache(
+                        prim_list,
+                        primary_slice.clip_chain_id,
+                        spatial_tree,
+                        clip_store,
+                        interners,
+                        prim_instances,
+                    ) {
+                        create_tile_cache(
+                            primary_slice.slice_flags,
+                            descriptor.scroll_root,
+                            primary_slice.iframe_clip,
+                            descriptor.prim_list,
+                            primary_slice.background_color,
+                            descriptor.shared_clips,
+                            prim_store,
+                            clip_store,
+                            config,
+                            &mut result.tile_caches,
+                            &mut tile_cache_pictures,
+                            interners,
+                        );
+                    }
+                }
+                SliceKind::Default { secondary_slices } => {
+                    for descriptor in secondary_slices {
+                        create_tile_cache(
+                            primary_slice.slice_flags,
+                            descriptor.scroll_root,
+                            primary_slice.iframe_clip,
+                            descriptor.prim_list,
+                            primary_slice.background_color,
+                            descriptor.shared_clips,
+                            prim_store,
+                            clip_store,
+                            config,
+                            &mut result.tile_caches,
+                            &mut tile_cache_pictures,
+                            interners,
+                        );
+                    }
+                }
+            }
         }
 
         (result, tile_cache_pictures)
     }
+}
 
-    /// Find the scroll root for a given spatial node
-    fn find_scroll_root(
-        &mut self,
-        spatial_node_index: SpatialNodeIndex,
-        spatial_tree: &SpatialTree,
-    ) -> SpatialNodeIndex {
-        if self.prev_scroll_root_cache.0 == spatial_node_index {
-            return self.prev_scroll_root_cache.1;
-        }
-
-        let scroll_root = spatial_tree.find_scroll_root(spatial_node_index);
-        self.prev_scroll_root_cache = (spatial_node_index, scroll_root);
-
-        scroll_root
+/// Find the scroll root for a given spatial node
+fn find_scroll_root(
+    spatial_node_index: SpatialNodeIndex,
+    prev_scroll_root_cache: &mut (SpatialNodeIndex, SpatialNodeIndex),
+    spatial_tree: &SceneSpatialTree,
+) -> SpatialNodeIndex {
+    if prev_scroll_root_cache.0 == spatial_node_index {
+        return prev_scroll_root_cache.1;
     }
+
+    let scroll_root = spatial_tree.find_scroll_root(spatial_node_index);
+    *prev_scroll_root_cache = (spatial_node_index, scroll_root);
+
+    scroll_root
 }
 
 // Helper fn to collect clip handles from a given clip chain.
@@ -515,7 +609,7 @@ fn add_clips(
     prim_clips: &mut Vec<ClipInstance>,
     clip_store: &ClipStore,
     interners: &Interners,
-    spatial_tree: &SpatialTree,
+    spatial_tree: &SceneSpatialTree,
 ) {
     let mut current_clip_chain_id = clip_chain_id;
 
@@ -526,10 +620,10 @@ fn add_clips(
         let clip_node_data = &interners.clip[clip_chain_node.handle];
         if let ClipNodeKind::Rectangle = clip_node_data.clip_node_kind {
             if spatial_tree.is_ancestor(
-                clip_chain_node.spatial_node_index,
+                clip_node_data.spatial_node_index,
                 scroll_root,
             ) {
-                prim_clips.push(ClipInstance::new(clip_chain_node.handle, clip_chain_node.spatial_node_index));
+                prim_clips.push(ClipInstance::new(clip_chain_node.handle));
             }
         }
 
@@ -552,7 +646,7 @@ fn add_all_rect_clips(
 
         let clip_node_data = &interners.clip[clip_chain_node.handle];
         if let ClipNodeKind::Rectangle = clip_node_data.clip_node_kind {
-            prim_clips.push(ClipInstance::new(clip_chain_node.handle, clip_chain_node.spatial_node_index));
+            prim_clips.push(ClipInstance::new(clip_chain_node.handle));
         }
 
         current_clip_chain_id = clip_chain_node.parent_clip_chain_id;
@@ -562,21 +656,29 @@ fn add_all_rect_clips(
 /// Given a PrimitiveList and scroll root, construct a tile cache primitive instance
 /// that wraps the primitive list.
 fn create_tile_cache(
-    slice: usize,
     slice_flags: SliceFlags,
     scroll_root: SpatialNodeIndex,
+    iframe_clip: Option<ClipChainId>,
     prim_list: PrimitiveList,
     background_color: Option<ColorF>,
-    shared_clips: Vec<ClipInstance>,
+    mut shared_clips: Vec<ClipInstance>,
     prim_store: &mut PrimitiveStore,
     clip_store: &mut ClipStore,
-    picture_cache_spatial_nodes: &mut FastHashSet<SpatialNodeIndex>,
     frame_builder_config: &FrameBuilderConfig,
     tile_caches: &mut FastHashMap<SliceId, TileCacheParams>,
-) -> PictureIndex {
-    // Add this spatial node to the list to check for complex transforms
-    // at the start of a frame build.
-    picture_cache_spatial_nodes.insert(scroll_root);
+    tile_cache_pictures: &mut Vec<PictureIndex>,
+    interners: &Interners,
+) {
+    // Accumulate any clip instances from the iframe_clip into the shared clips
+    // that will be applied by this tile cache during compositing.
+    if let Some(clip_chain_id) = iframe_clip {
+        add_all_rect_clips(
+            clip_chain_id,
+            &mut shared_clips,
+            clip_store,
+            interners,
+        );
+    }
 
     // Build a clip-chain for the tile cache, that contains any of the shared clips
     // we will apply when drawing the tiles. In all cases provided by Gecko, these
@@ -585,15 +687,18 @@ fn create_tile_cache(
     // also work with any complex clips, such as rounded rects and image masks, by
     // producing a clip mask that is applied to the picture cache tiles.
 
+    let slice = tile_cache_pictures.len();
+
+    let background_color = if slice == 0 {
+        background_color
+    } else {
+        None
+    };
+
     let mut parent_clip_chain_id = ClipChainId::NONE;
     for clip_instance in &shared_clips {
-        // Add this spatial node to the list to check for complex transforms
-        // at the start of a frame build.
-        picture_cache_spatial_nodes.insert(clip_instance.spatial_node_index);
-
         parent_clip_chain_id = clip_store.add_clip_chain_node(
             clip_instance.handle,
-            clip_instance.spatial_node_index,
             parent_clip_chain_id,
         );
     }
@@ -620,10 +725,11 @@ fn create_tile_cache(
         PrimitiveFlags::IS_BACKFACE_VISIBLE,
         prim_list,
         scroll_root,
-        PictureOptions::default(),
+        RasterSpace::Screen,
+        PictureFlags::empty(),
     ));
 
-    PictureIndex(pic_index)
+    tile_cache_pictures.push(PictureIndex(pic_index));
 }
 
 /// Debug information about a set of picture cache slices, exposed via RenderResults

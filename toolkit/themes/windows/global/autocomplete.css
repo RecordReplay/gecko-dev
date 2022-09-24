@@ -29,11 +29,12 @@ panel[type="autocomplete-richlistbox"] {
 .autocomplete-richlistbox {
   appearance: none;
   margin: 0;
+  border: 0;
 }
 
 .autocomplete-richlistitem[selected] {
-  background-color: Highlight;
-  color: HighlightText;
+  background-color: SelectedItem;
+  color: SelectedItemText;
 }
 
 .ac-type-icon {

@@ -340,7 +340,7 @@ else:
         CONFIGURE_ARGS += " --target=x86_64-pc-mingw32"
 
 if platform.system() == "Linux" and AUTOMATION:
-    CONFIGURE_ARGS = "--enable-stdcxx-compat --disable-gold " + CONFIGURE_ARGS
+    CONFIGURE_ARGS = "--enable-stdcxx-compat " + CONFIGURE_ARGS
 
 # Timeouts.
 ACTIVE_PROCESSES = set()
@@ -437,7 +437,7 @@ if use_minidump:
     }.get(platform.system())
 
     injector_lib = resolve_path((DIR.fetches,), "injector", injector_basename)
-    stackwalk = resolve_path((DIR.fetches,), "minidump_stackwalk", "minidump_stackwalk")
+    stackwalk = resolve_path((DIR.fetches,), "minidump-stackwalk", "minidump-stackwalk")
     if stackwalk is not None:
         env.setdefault("MINIDUMP_STACKWALK", stackwalk)
     dump_syms = resolve_path((DIR.fetches,), "dump_syms", "dump_syms")
@@ -470,7 +470,7 @@ mach = posixpath.join(PDIR.source, "mach")
 
 if not args.nobuild:
     # Do the build
-    run_command([mach, "build"], check=True)
+    run_command([sys.executable, mach, "build"], check=True)
 
     if use_minidump:
         # Convert symbols to breakpad format.
@@ -481,6 +481,7 @@ if not args.nobuild:
         cmd_env["MOZ_AUTOMATION_BUILD_SYMBOLS"] = "1"
         run_command(
             [
+                sys.executable,
                 mach,
                 "build",
                 "recurse_syms",
@@ -649,9 +650,18 @@ if args.variant == "msan":
     command += files
     subprocess.call(command)
 
+# Upload dist/bin/js as js.wasm for the WASI build.
+if args.variant == "wasi":
+    command = [
+        "cp",
+        os.path.join(OBJDIR, "dist/bin/js"),
+        os.path.join(env["MOZ_UPLOAD_DIR"], "js.wasm"),
+    ]
+    subprocess.call(command)
+
 # Generate stacks from minidumps.
 if use_minidump:
-    venv_python = os.path.join(OBJDIR, "_virtualenvs", "common", "bin", "python3")
+    venv_python = os.path.join(OBJDIR, "_virtualenvs", "build", "bin", "python3")
     run_command(
         [
             venv_python,

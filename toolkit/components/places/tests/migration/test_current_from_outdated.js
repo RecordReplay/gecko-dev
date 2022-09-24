@@ -11,12 +11,12 @@ add_task(async function setup() {
 });
 
 add_task(async function corrupt_database_not_exists() {
-  let corruptPath = OS.Path.join(
-    OS.Constants.Path.profileDir,
+  let corruptPath = PathUtils.join(
+    PathUtils.profileDir,
     "places.sqlite.corrupt"
   );
   Assert.ok(
-    !(await OS.File.exists(corruptPath)),
+    !(await IOUtils.exists(corruptPath)),
     "Corrupt file should not exist"
   );
 });
@@ -39,9 +39,9 @@ add_task(async function check_columns() {
 });
 
 add_task(async function corrupt_database_exists() {
-  let corruptPath = OS.Path.join(
-    OS.Constants.Path.profileDir,
+  let corruptPath = PathUtils.join(
+    PathUtils.profileDir,
     "places.sqlite.corrupt"
   );
-  Assert.ok(await OS.File.exists(corruptPath), "Corrupt file should exist");
+  Assert.ok(await IOUtils.exists(corruptPath), "Corrupt file should exist");
 });

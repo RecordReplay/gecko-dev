@@ -18,7 +18,7 @@ class nsITextToSubURI;
 
 class nsDirIndexParser : public nsIDirIndexParser {
  private:
-  virtual ~nsDirIndexParser();
+  virtual ~nsDirIndexParser() = default;
 
   nsDirIndexParser() = default;
   nsresult Init();
@@ -57,7 +57,7 @@ class nsDirIndexParser : public nsIDirIndexParser {
   bool mHasDescription{false};
   int mFormat[8]{-1};
 
-  nsresult ProcessData(nsIRequest* aRequest, nsISupports* aCtxt);
+  nsresult ProcessData(nsIRequest* aRequest);
   void ParseFormat(const char* aFormatStr);
   void ParseData(nsIDirIndex* aIdx, char* aDataStr, int32_t lineLen);
 
@@ -67,9 +67,6 @@ class nsDirIndexParser : public nsIDirIndexParser {
   };
 
   static Field gFieldTable[];
-
-  static nsrefcnt gRefCntParser;
-  static nsITextToSubURI* gTextToSubURI;
 };
 
 #endif

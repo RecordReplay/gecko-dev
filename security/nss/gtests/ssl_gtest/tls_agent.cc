@@ -93,7 +93,8 @@ TlsAgent::TlsAgent(const std::string& nm, Role rl, SSLProtocolVariant var)
       auth_certificate_callback_(),
       sni_callback_(),
       skip_version_checks_(false),
-      resumption_token_() {
+      resumption_token_(),
+      policy_() {
   memset(&info_, 0, sizeof(info_));
   memset(&csinfo_, 0, sizeof(csinfo_));
   SECStatus rv = SSL_VersionRangeGetDefault(variant_, &vrange_);
@@ -227,6 +228,7 @@ bool TlsAgent::ConfigServerCert(const std::string& id, bool updateKeyBits,
 bool TlsAgent::EnsureTlsSetup(PRFileDesc* modelSocket) {
   // Don't set up twice
   if (ssl_fd_) return true;
+  NssManagePolicy policyManage(policy_, option_);
 
   ScopedPRFileDesc dummy_fd(adapter_->CreateFD());
   EXPECT_NE(nullptr, dummy_fd);
@@ -319,7 +321,7 @@ bool TlsAgent::MaybeSetResumptionToken() {
 }
 
 void TlsAgent::SetAntiReplayContext(ScopedSSLAntiReplayContext& ctx) {
-  EXPECT_EQ(SECSuccess, SSL_SetAntiReplayContext(ssl_fd_.get(), ctx.get()));
+  EXPECT_EQ(SECSuccess, SSL_SetAntiReplayContext(ssl_fd(), ctx.get()));
 }
 
 void TlsAgent::SetupClientAuth() {
@@ -869,8 +871,8 @@ void TlsAgent::ResetPreliminaryInfo() {
 }
 
 void TlsAgent::UpdatePreliminaryChannelInfo() {
-  SECStatus rv = SSL_GetPreliminaryChannelInfo(ssl_fd_.get(), &pre_info_,
-                                               sizeof(pre_info_));
+  SECStatus rv =
+      SSL_GetPreliminaryChannelInfo(ssl_fd(), &pre_info_, sizeof(pre_info_));
   EXPECT_EQ(SECSuccess, rv);
   EXPECT_EQ(sizeof(pre_info_), pre_info_.length);
 }
@@ -1170,9 +1172,9 @@ void TlsAgent::ConfigureSessionCache(SessionResumptionMode mode) {
             mode & RESUME_TICKET ? PR_TRUE : PR_FALSE);
 }
 
-void TlsAgent::DisableECDHEServerKeyReuse() {
+void TlsAgent::EnableECDHEServerKeyReuse() {
   ASSERT_EQ(TlsAgent::SERVER, role_);
-  SetOption(SSL_REUSE_SERVER_ECDHE_KEY, PR_FALSE);
+  SetOption(SSL_REUSE_SERVER_ECDHE_KEY, PR_TRUE);
 }
 
 static const std::string kTlsRolesAllArr[] = {"CLIENT", "SERVER"};

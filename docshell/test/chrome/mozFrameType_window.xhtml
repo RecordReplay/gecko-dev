@@ -9,7 +9,6 @@
   <html:iframe id="normalFrame"/>
   <html:iframe id="typeContentFrame" mozframetype="content"/>
 
-  <script type="application/javascript" src="docshell_helpers.js" />
   <script type="application/javascript"><![CDATA[
     function runTests() {
       let opener = window.arguments[0];
@@ -30,8 +29,7 @@
       SimpleTest.executeSoon(function () {
         // First focus the parent window and then close this one.
         SimpleTest.waitForFocus(function() {
-          let ww = Cc["@mozilla.org/embedcomp/window-watcher;1"]
-                       .getService(Ci.nsIWindowWatcher);
+          let ww = SpecialPowers.Services.ww;
           ww.registerNotification(function windowObs(subject, topic, data) {
             if (topic == "domwindowclosed") {
               ww.unregisterNotification(windowObs);
@@ -49,4 +47,3 @@
     }
   ]]></script>
 </window>
-

@@ -10,8 +10,7 @@
 #include "GMPSharedMemManager.h"
 #include "nsISupportsImpl.h"
 
-namespace mozilla {
-namespace gmp {
+namespace mozilla::gmp {
 
 class GMPParent;
 class GMPVideoDecoderParent;
@@ -28,14 +27,14 @@ class GMPContentParent final : public PGMPContentParent, public GMPSharedMem {
 
   explicit GMPContentParent(GMPParent* aParent = nullptr);
 
-  nsresult GetGMPVideoDecoder(GMPVideoDecoderParent** aGMPVD,
-                              uint32_t aDecryptorId);
+  nsresult GetGMPVideoDecoder(GMPVideoDecoderParent** aGMPVD);
   void VideoDecoderDestroyed(GMPVideoDecoderParent* aDecoder);
 
   nsresult GetGMPVideoEncoder(GMPVideoEncoderParent** aGMPVE);
   void VideoEncoderDestroyed(GMPVideoEncoderParent* aEncoder);
 
-  already_AddRefed<ChromiumCDMParent> GetChromiumCDM();
+  already_AddRefed<ChromiumCDMParent> GetChromiumCDM(
+      const nsCString& aKeySystem);
   void ChromiumCDMDestroyed(ChromiumCDMParent* aCDM);
 
   nsCOMPtr<nsISerialEventTarget> GMPEventTarget();
@@ -86,7 +85,6 @@ class GMPContentParent final : public PGMPContentParent, public GMPSharedMem {
   uint32_t mCloseBlockerCount = 0;
 };
 
-}  // namespace gmp
-}  // namespace mozilla
+}  // namespace mozilla::gmp
 
 #endif  // GMPParent_h_

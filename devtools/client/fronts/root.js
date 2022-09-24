@@ -166,15 +166,22 @@ class RootFront extends FrontClassWithSpec(rootSpec) {
       const processWorkers = await Promise.all(
         processes.map(async processDescriptorFront => {
           // Ignore parent process
-          if (processDescriptorFront.isParent) {
+          if (processDescriptorFront.isParentProcessDescriptor) {
             return [];
           }
-          const front = await processDescriptorFront.getTarget();
-          if (!front) {
-            return [];
+          try {
+            const front = await processDescriptorFront.getTarget();
+            if (!front) {
+              return [];
+            }
+            const response = await front.listWorkers();
+            return response.workers;
+          } catch (e) {
+            if (e.message.includes("Connection closed")) {
+              return [];
+            }
+            throw e;
           }
-          const response = await front.listWorkers();
-          return response.workers;
         })
       );
 
@@ -205,29 +212,20 @@ class RootFront extends FrontClassWithSpec(rootSpec) {
    *
    * @param [optional] object filter
    *        A dictionary object with following optional attributes:
-   *         - outerWindowID: used to match tabs in parent process
-   *         - tabId: used to match tabs in child processes
-   *         - tab: a reference to xul:tab element
+   *         - browserId: use to match any tab
+   *         - tab: a reference to xul:tab element (used for local tab debugging)
+   *         - isWebExtension: an optional boolean to flag TabDescriptors
    *        If nothing is specified, returns the actor for the currently
    *        selected tab.
    */
   async getTab(filter) {
     const packet = {};
     if (filter) {
-      if (typeof filter.outerWindowID == "number") {
-        packet.outerWindowID = filter.outerWindowID;
-      } else if (typeof filter.tabId == "number") {
-        packet.tabId = filter.tabId;
+      if (typeof filter.browserId == "number") {
+        packet.browserId = filter.browserId;
       } else if ("tab" in filter) {
         const browser = filter.tab.linkedBrowser;
-        if (browser.frameLoader.remoteTab) {
-          // Tabs in child process
-          packet.tabId = browser.frameLoader.remoteTab.tabId;
-        } else {
-          // <xul:browser> or <iframe mozbrowser> tabs in parent process
-          packet.outerWindowID =
-            browser.browsingContext.currentWindowGlobal.outerWindowId;
-        }
+        packet.browserId = browser.browserId;
       } else {
         // Throw if a filter object have been passed but without
         // any clearly idenfified filter.
@@ -236,6 +234,11 @@ class RootFront extends FrontClassWithSpec(rootSpec) {
     }
 
     const descriptorFront = await super.getTab(packet);
+
+    // Will flag TabDescriptor used by WebExtension codebase.
+    if (filter?.isWebExtension) {
+      descriptorFront.setIsForWebExtension(true);
+    }
 
     // If the tab is a local tab, forward it to the descriptor.
     if (filter?.tab?.tagName == "tab") {

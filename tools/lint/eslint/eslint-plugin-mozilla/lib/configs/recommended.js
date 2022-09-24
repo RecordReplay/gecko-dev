@@ -21,8 +21,8 @@ module.exports = {
   extends: ["eslint:recommended", "plugin:prettier/recommended"],
 
   globals: {
+    // These are all specific to Firefox unless otherwise stated.
     Cc: false,
-    // Specific to Firefox (Chrome code only).
     ChromeUtils: false,
     Ci: false,
     Components: false,
@@ -30,40 +30,40 @@ module.exports = {
     Cu: false,
     Debugger: false,
     InstallTrigger: false,
-    // Specific to Firefox
     // https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/InternalError
     InternalError: true,
-    Intl: false,
-    SharedArrayBuffer: false,
-    StopIteration: false,
+    // https://developer.mozilla.org/docs/Web/API/Window/dump
     dump: true,
-    // Override the "browser" env definition of "location" to allow writing as it
-    // is a writeable property.
-    // See https://bugzilla.mozilla.org/show_bug.cgi?id=1509270#c1 for more information.
-    location: true,
     openDialog: false,
-    saveStack: false,
-    sizeToContent: false,
-    // Specific to Firefox
-    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/uneval
+    // https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/uneval
     uneval: false,
   },
 
   overrides: [
     {
-      // We don't have the general browser environment for jsm files, but we do
-      // have our own special environments for them.
+      // System mjs files and jsm files are not loaded in the browser scope,
+      // so we turn that off for those. Though we do have our own special
+      // environment for them.
       env: {
         browser: false,
         "mozilla/jsm": true,
       },
-      files: ["**/*.jsm", "**/*.jsm.js"],
+      files: ["**/*.sys.mjs", "**/*.jsm", "**/*.jsm.js"],
       rules: {
-        "mozilla/mark-exported-symbols-as-used": "error",
+        "mozilla/reject-top-level-await": "error",
+        // Bug 1703953: We don't have a good way to check a file runs in a
+        // privilieged context. Apply this for these files as we know those are
+        // privilieged, and then include more directories elsewhere.
+        "mozilla/use-isInstance": "error",
         // TODO: Bug 1575506 turn `builtinGlobals` on here.
         // We can enable builtinGlobals for jsms due to their scopes.
         "no-redeclare": ["error", { builtinGlobals: false }],
-        // JSM modules are far easier to check for no-unused-vars on a global scope,
+      },
+    },
+    {
+      files: ["**/*.mjs", "**/*.jsm"],
+      rules: {
+        // Modules are far easier to check for no-unused-vars on a global scope,
         // than our content files. Hence we turn that on here.
         "no-unused-vars": [
           "error",
@@ -72,6 +72,26 @@ module.exports = {
             vars: "all",
           },
         ],
+      },
+    },
+    {
+      files: ["**/*.jsm", "**/*.jsm.js"],
+      rules: {
+        "mozilla/mark-exported-symbols-as-used": "error",
+      },
+    },
+    {
+      env: {
+        browser: false,
+        "mozilla/privileged": false,
+        "mozilla/sjs": true,
+      },
+      files: ["**/*.sjs"],
+      rules: {
+        // TODO Bug 1501127: sjs files have their own sandbox, and do not inherit
+        // the Window backstage pass directly. Turn this rule off for sjs files for
+        // now until we develop a solution.
+        "mozilla/reject-importGlobalProperties": "off",
       },
     },
   ],
@@ -129,8 +149,11 @@ module.exports = {
     "mozilla/no-useless-removeEventListener": "error",
     "mozilla/prefer-boolean-length-check": "error",
     "mozilla/prefer-formatValues": "error",
+    "mozilla/reject-addtask-only": "error",
     "mozilla/reject-chromeutils-import-params": "error",
     "mozilla/reject-importGlobalProperties": ["error", "allownonwebidl"],
+    "mozilla/reject-osfile": "warn",
+    "mozilla/reject-scriptableunicodeconverter": "warn",
     "mozilla/rejects-requires-await": "error",
     "mozilla/use-cc-etc": "error",
     "mozilla/use-chromeutils-generateqi": "error",
@@ -154,6 +177,9 @@ module.exports = {
     // XXX Bug 1487642 - decide if we want to enable this or not.
     // Disallow the use of console
     "no-console": "off",
+
+    // Disallows expressions where the operation doesn't affect the value.
+    "no-constant-binary-expression": "error",
 
     // XXX Bug 1487642 - decide if we want to enable this or not.
     // Disallow constant expressions in conditions
@@ -208,6 +234,9 @@ module.exports = {
 
     // No single if block inside an else block
     "no-lonely-if": "error",
+
+    // Disallow the use of number literals that immediately lose precision at runtime when converted to JS Number
+    "no-loss-of-precision": "error",
 
     // Nested ternary statements are confusing
     "no-nested-ternary": "error",

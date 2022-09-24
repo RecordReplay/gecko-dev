@@ -15,18 +15,11 @@ flat varying vec4 v_src_uv_sample_bounds;
 varying vec2 v_backdrop_uv;
 flat varying vec4 v_backdrop_uv_sample_bounds;
 
-#if defined(PLATFORM_ANDROID) && !defined(SWGL)
-// Work around Adreno 3xx driver bug. See the v_perspective comment in
-// brush_image or bug 1630356 for details.
-flat varying vec2 v_perspective_vec;
-#define v_perspective v_perspective_vec.x
-#else
 // Flag to allow perspective interpolation of UV.
-flat varying float v_perspective;
-#endif
-
-// mix-blend op
-flat varying int v_op;
+// Packed in to vector to work around bug 1630356.
+flat varying vec2 v_perspective;
+// mix-blend op. Packed in to vector to work around bug 1630356.
+flat varying ivec2 v_op;
 
 #ifdef WR_VERTEX_SHADER
 
@@ -65,8 +58,8 @@ void brush_vs(
     vec2 f = (vi.local_pos - local_rect.p0) / rect_size(local_rect);
     float perspective_interpolate = (brush_flags & BRUSH_FLAG_PERSPECTIVE_INTERPOLATION) != 0 ? 1.0 : 0.0;
     float perspective_f = mix(vi.world_pos.w, 1.0, perspective_interpolate);
-    v_perspective = perspective_interpolate;
-    v_op = prim_user_data.x;
+    v_perspective.x = perspective_interpolate;
+    v_op.x = prim_user_data.x;
 
     get_uv(
         prim_user_data.y,
@@ -141,10 +134,6 @@ float SoftLight(float Cb, float Cs) {
 
 vec3 Difference(vec3 Cb, vec3 Cs) {
     return abs(Cb - Cs);
-}
-
-vec3 Exclusion(vec3 Cb, vec3 Cs) {
-    return Cb + Cs - 2.0 * Cb * Cs;
 }
 
 // These functions below are taken from the spec.
@@ -245,9 +234,10 @@ const int MixBlendMode_Hue         = 12;
 const int MixBlendMode_Saturation  = 13;
 const int MixBlendMode_Color       = 14;
 const int MixBlendMode_Luminosity  = 15;
+const int MixBlendMode_PlusLighter = 16;
 
 Fragment brush_fs() {
-    float perspective_divisor = mix(gl_FragCoord.w, 1.0, v_perspective);
+    float perspective_divisor = mix(gl_FragCoord.w, 1.0, v_perspective.x);
 
     vec2 src_uv = v_src_uv * perspective_divisor;
     src_uv = clamp(src_uv, v_src_uv_sample_bounds.xy, v_src_uv_sample_bounds.zw);
@@ -269,12 +259,16 @@ Fragment brush_fs() {
     // Return yellow if none of the branches match (shouldn't happen).
     vec4 result = vec4(1.0, 1.0, 0.0, 1.0);
 
-    switch (v_op) {
+    // On Android v_op has been packed in to a vector to avoid a driver bug
+    // on Adreno 3xx. However, this runs in to another Adreno 3xx driver bug
+    // where the switch doesn't match any cases. Unpacking the value from the
+    // vec in to a local variable prior to the switch works around this, but
+    // gets optimized away by glslopt. Adding a bitwise AND prevents that.
+    // See bug 1726755.
+    // default: default: to appease angle_shader_validation
+    switch (v_op.x & 0xFF) {
         case MixBlendMode_Multiply:
             result.rgb = Multiply(Cb.rgb, Cs.rgb);
-            break;
-        case MixBlendMode_Screen:
-            result.rgb = Screen(Cb.rgb, Cs.rgb);
             break;
         case MixBlendMode_Overlay:
             // Overlay is inverse of Hardlight
@@ -307,9 +301,6 @@ Fragment brush_fs() {
         case MixBlendMode_Difference:
             result.rgb = Difference(Cb.rgb, Cs.rgb);
             break;
-        case MixBlendMode_Exclusion:
-            result.rgb = Exclusion(Cb.rgb, Cs.rgb);
-            break;
         case MixBlendMode_Hue:
             result.rgb = Hue(Cb.rgb, Cs.rgb);
             break;
@@ -322,12 +313,18 @@ Fragment brush_fs() {
         case MixBlendMode_Luminosity:
             result.rgb = Luminosity(Cb.rgb, Cs.rgb);
             break;
+        case MixBlendMode_Screen:
+        case MixBlendMode_Exclusion:
+        case MixBlendMode_PlusLighter:
+            // This should be unreachable, since we implement
+            // MixBlendMode::Screen, MixBlendMode::Exclusion and
+            // MixBlendMode::PlusLighter using glBlendFuncSeparate.
+            break;
         default: break;
     }
 
     result.rgb = (1.0 - Cb.a) * Cs.rgb + Cb.a * result.rgb;
     result.a = Cs.a;
-
     result.rgb *= result.a;
 
     return Fragment(result);

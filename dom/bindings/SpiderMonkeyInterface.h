@@ -11,8 +11,7 @@
 #include "js/RootingAPI.h"
 #include "js/TracingAPI.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 /*
  * Class that just handles the JSObject storage and tracing for spidermonkey
@@ -35,10 +34,10 @@ struct SpiderMonkeyInterfaceObjectStorage {
 
  public:
   inline void TraceSelf(JSTracer* trc) {
-    JS::UnsafeTraceRoot(trc, &mImplObj,
-                        "SpiderMonkeyInterfaceObjectStorage.mImplObj");
-    JS::UnsafeTraceRoot(trc, &mWrappedObj,
-                        "SpiderMonkeyInterfaceObjectStorage.mWrappedObj");
+    JS::TraceRoot(trc, &mImplObj,
+                  "SpiderMonkeyInterfaceObjectStorage.mImplObj");
+    JS::TraceRoot(trc, &mWrappedObj,
+                  "SpiderMonkeyInterfaceObjectStorage.mWrappedObj");
   }
 
   inline bool inited() const { return !!mImplObj; }
@@ -110,7 +109,6 @@ class MOZ_RAII RootedSpiderMonkeyInterface final
         SpiderMonkeyInterfaceRooter<InterfaceType>(cx, this) {}
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_SpiderMonkeyInterface_h */

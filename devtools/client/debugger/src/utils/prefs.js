@@ -35,7 +35,6 @@ if (isNode()) {
   pref("devtools.debugger.end-panel-collapsed", false);
   pref("devtools.debugger.start-panel-size", 300);
   pref("devtools.debugger.end-panel-size", 300);
-  pref("devtools.debugger.tabsBlackBoxed", "[]");
   pref("devtools.debugger.ui.editor-wrapping", false);
   pref("devtools.debugger.ui.framework-grouping-on", true);
   pref("devtools.debugger.pending-selected-location", "{}");
@@ -60,19 +59,18 @@ if (isNode()) {
   pref("devtools.debugger.features.command-click", false);
   pref("devtools.debugger.features.outline", true);
   pref("devtools.debugger.features.column-breakpoints", true);
-  pref("devtools.debugger.features.skip-pausing", true);
   pref("devtools.debugger.features.component-pane", false);
   pref("devtools.debugger.features.autocomplete-expressions", false);
   pref("devtools.debugger.features.map-expression-bindings", true);
   pref("devtools.debugger.features.map-await-expression", true);
   pref("devtools.debugger.features.xhr-breakpoints", true);
-  pref("devtools.debugger.features.original-blackbox", true);
   pref("devtools.debugger.features.event-listeners-breakpoints", true);
   pref("devtools.debugger.features.dom-mutation-breakpoints", true);
   pref("devtools.debugger.features.log-points", true);
   pref("devtools.debugger.features.inline-preview", true);
   pref("devtools.debugger.features.overlay-step-buttons", true);
   pref("devtools.debugger.features.frame-step", true);
+  pref("devtools.debugger.features.blackbox-lines", false);
   pref("devtools.editor.tabsize", 2);
 }
 
@@ -140,13 +138,11 @@ export const features = new PrefsHelper("devtools.debugger.features", {
   windowlessWorkers: ["Bool", "windowless-workers"],
   outline: ["Bool", "outline"],
   codeFolding: ["Bool", "code-folding"],
-  skipPausing: ["Bool", "skip-pausing"],
   autocompleteExpression: ["Bool", "autocomplete-expressions"],
   mapExpressionBindings: ["Bool", "map-expression-bindings"],
   mapAwaitExpression: ["Bool", "map-await-expression"],
   componentPane: ["Bool", "component-pane"],
   xhrBreakpoints: ["Bool", "xhr-breakpoints"],
-  originalBlackbox: ["Bool", "original-blackbox"],
   eventListenersBreakpoints: ["Bool", "event-listeners-breakpoints"],
   domMutationBreakpoints: ["Bool", "dom-mutation-breakpoints"],
   logPoints: ["Bool", "log-points"],
@@ -155,6 +151,7 @@ export const features = new PrefsHelper("devtools.debugger.features", {
   inlinePreview: ["Bool", "inline-preview"],
   windowlessServiceWorkers: ["Bool", "windowless-service-workers"],
   frameStep: ["Bool", "frame-step"],
+  blackboxLines: ["Bool", "blackbox-lines"],
 });
 
 // Import the asyncStore already spawned by the TargetMixin class

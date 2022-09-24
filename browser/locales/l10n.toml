@@ -88,6 +88,8 @@ locales = [
     "rm",
     "ro",
     "ru",
+    "sat",
+    "sc",
     "scn",
     "sco",
     "si",
@@ -168,14 +170,5 @@ locales = [
     path = [
         "{l}browser/defines.inc",
         "{l}browser/firefox-l10n.js",
-    ]
-    action = "ignore"
-
-[[filters]]
-    path = "{l}browser/chrome/browser-region/region.properties"
-    key = [
-        "re:^browser\\.contentHandlers\\.types\\.[0-5]\\..*$",
-        "re:^gecko\\.handlerService\\.schemes\\..*$",
-        "re:^gecko\\.handlerService\\.defaultHandlersVersion$"
     ]
     action = "ignore"

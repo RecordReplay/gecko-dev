@@ -21,7 +21,7 @@
  *  - Float64Array
  */
 
-const TEST_URI = `data:text/html;charset=utf-8,
+const TEST_URI = `data:text/html;charset=utf-8,<!DOCTYPE html>
   <html>
     <head>
       <title>Test document for bug 977500</title>
@@ -113,7 +113,7 @@ async function testKeyOrder(hud, command, expectedKeys) {
   info(
     "Wait for a new .result message with an object inspector to be displayed"
   );
-  const { node } = await executeAndWaitForMessage(hud, command, "", ".result");
+  const { node } = await executeAndWaitForResultMessage(hud, command, "");
   const oi = node.querySelector(".tree");
 
   info("Expand object inspector");

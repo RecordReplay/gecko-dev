@@ -41,6 +41,7 @@
 #include "mozilla/TelemetryScalarEnums.h"
 #include "mozilla/dom/quota/DecryptingInputStream_impl.h"
 #include "mozilla/dom/quota/QuotaCommon.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/dom/quota/ScopedLogExtraInfo.h"
 #include "mozilla/fallible.h"
 #include "mozilla/ipc/BackgroundParent.h"
@@ -66,6 +67,8 @@ namespace mozilla::dom::indexedDB {
 static_assert(SNAPPY_VERSION == 0x010108);
 
 using mozilla::ipc::IsOnBackgroundThread;
+
+const nsLiteralString kJournalDirectoryName = u"journals"_ns;
 
 namespace {
 
@@ -101,10 +104,10 @@ Result<StructuredCloneFileParent, nsresult> DeserializeStructuredCloneFile(
   const StructuredCloneFileBase::FileType type =
       ToStructuredCloneFileType(aText.First());
 
-  QM_TRY_INSPECT(
-      const auto& id,
-      ToResultGet<int32_t>(
-          ToInteger, type == StructuredCloneFileBase::eBlob
+  QM_TRY_INSPECT(const auto& id,
+                 MOZ_TO_RESULT_GET_TYPED(
+                     int32_t, ToInteger,
+                     type == StructuredCloneFileBase::eBlob
                          ? aText
                          : static_cast<const nsAString&>(Substring(aText, 1))));
 
@@ -157,7 +160,9 @@ class SandboxHolder final {
           NullPrincipal::CreateWithoutOriginAttributes();
 
       JS::Rooted<JSObject*> sandbox(aCx);
-      QM_TRY(xpc->CreateSandbox(aCx, principal, sandbox.address()), nullptr);
+      QM_TRY(
+          MOZ_TO_RESULT(xpc->CreateSandbox(aCx, principal, sandbox.address())),
+          nullptr);
 
       mSandbox = new JSObjectHolder(aCx, sandbox);
     }
@@ -309,8 +314,9 @@ nsresult ReadCompressedIndexDataValuesFromSource(
   MOZ_ASSERT(aOutIndexValues);
   MOZ_ASSERT(aOutIndexValues->IsEmpty());
 
-  QM_TRY_INSPECT(const int32_t& columnType,
-                 MOZ_TO_RESULT_INVOKE(aSource, GetTypeOfIndex, aColumnIndex));
+  QM_TRY_INSPECT(
+      const int32_t& columnType,
+      MOZ_TO_RESULT_INVOKE_MEMBER(aSource, GetTypeOfIndex, aColumnIndex));
 
   switch (columnType) {
     case mozIStorageStatement::VALUE_TYPE_NULL:
@@ -321,13 +327,14 @@ nsresult ReadCompressedIndexDataValuesFromSource(
       // we also can't use QM_TRY_UNWRAP/QM_TRY_INSPECT here.
       const uint8_t* blobData;
       uint32_t blobDataLength;
-      QM_TRY(aSource.GetSharedBlob(aColumnIndex, &blobDataLength, &blobData));
+      QM_TRY(MOZ_TO_RESULT(
+          aSource.GetSharedBlob(aColumnIndex, &blobDataLength, &blobData)));
 
       QM_TRY(OkIf(blobDataLength), NS_ERROR_FILE_CORRUPTED,
              IDB_REPORT_INTERNAL_ERR_LAMBDA);
 
-      QM_TRY(ReadCompressedIndexDataValuesFromBlob(
-          Span(blobData, blobDataLength), aOutIndexValues));
+      QM_TRY(MOZ_TO_RESULT(ReadCompressedIndexDataValuesFromBlob(
+          Span(blobData, blobDataLength), aOutIndexValues)));
 
       return NS_OK;
     }
@@ -355,7 +362,9 @@ GetStructuredCloneReadInfoFromBlob(const uint8_t* aBlobData,
                                             &uncompressedLength)),
          Err(NS_ERROR_FILE_CORRUPTED));
 
-  AutoTArray<uint8_t, 512> uncompressed;
+  // `data` (JSStructuredCloneData) currently uses 4k buffer internally.
+  // For performance reasons, it's better to align `uncompressed` with that.
+  AutoTArray<uint8_t, 4096> uncompressed;
   QM_TRY(OkIf(uncompressed.SetLength(uncompressedLength, fallible)),
          Err(NS_ERROR_OUT_OF_MEMORY));
 
@@ -432,7 +441,8 @@ GetStructuredCloneReadInfoFromExternalBlob(
               return fileInputStream;
             }));
 
-    QM_TRY(SnappyUncompressStructuredCloneData(*fileInputStream, data));
+    QM_TRY(MOZ_TO_RESULT(
+        SnappyUncompressStructuredCloneData(*fileInputStream, data)));
   }
 
   return StructuredCloneReadInfoParent{std::move(data), std::move(files),
@@ -448,23 +458,25 @@ GetStructuredCloneReadInfoFromSource(T* aSource, uint32_t aDataIndex,
   MOZ_ASSERT(!IsOnBackgroundThread());
   MOZ_ASSERT(aSource);
 
-  QM_TRY_INSPECT(const int32_t& columnType,
-                 MOZ_TO_RESULT_INVOKE(aSource, GetTypeOfIndex, aDataIndex));
+  QM_TRY_INSPECT(
+      const int32_t& columnType,
+      MOZ_TO_RESULT_INVOKE_MEMBER(aSource, GetTypeOfIndex, aDataIndex));
 
-  QM_TRY_INSPECT(const bool& isNull,
-                 MOZ_TO_RESULT_INVOKE(aSource, GetIsNull, aFileIdsIndex));
+  QM_TRY_INSPECT(const bool& isNull, MOZ_TO_RESULT_INVOKE_MEMBER(
+                                         aSource, GetIsNull, aFileIdsIndex));
 
   QM_TRY_INSPECT(const nsString& fileIds, ([aSource, aFileIdsIndex, isNull] {
                    return isNull ? Result<nsString, nsresult>{VoidString()}
-                                 : MOZ_TO_RESULT_INVOKE_TYPED(nsString, aSource,
-                                                              GetString,
-                                                              aFileIdsIndex);
+                                 : MOZ_TO_RESULT_INVOKE_MEMBER_TYPED(
+                                       nsString, aSource, GetString,
+                                       aFileIdsIndex);
                  }()));
 
   switch (columnType) {
     case mozIStorageStatement::VALUE_TYPE_INTEGER: {
-      QM_TRY_INSPECT(const int64_t& intData,
-                     MOZ_TO_RESULT_INVOKE(aSource, GetInt64, aDataIndex));
+      QM_TRY_INSPECT(
+          const int64_t& intData,
+          MOZ_TO_RESULT_INVOKE_MEMBER(aSource, GetInt64, aDataIndex));
 
       uint64_t uintData;
       memcpy(&uintData, &intData, sizeof(uint64_t));
@@ -476,7 +488,8 @@ GetStructuredCloneReadInfoFromSource(T* aSource, uint32_t aDataIndex,
     case mozIStorageStatement::VALUE_TYPE_BLOB: {
       const uint8_t* blobData;
       uint32_t blobDataLength;
-      QM_TRY(aSource->GetSharedBlob(aDataIndex, &blobDataLength, &blobData));
+      QM_TRY(MOZ_TO_RESULT(
+          aSource->GetSharedBlob(aDataIndex, &blobDataLength, &blobData)));
 
       return GetStructuredCloneReadInfoFromBlob(
           blobData, blobDataLength, aFileManager, fileIds, aMaybeKey);
@@ -624,8 +637,9 @@ nsresult ReadCompressedIndexDataValues(
 template <typename T>
 Result<IndexDataValuesAutoArray, nsresult> ReadCompressedIndexDataValues(
     T& aValues, uint32_t aColumnIndex) {
-  return ToResultInvoke<IndexDataValuesAutoArray>(
-      &ReadCompressedIndexDataValuesFromSource<T>, aValues, aColumnIndex);
+  return MOZ_TO_RESULT_INVOKE_TYPED(IndexDataValuesAutoArray,
+                                    &ReadCompressedIndexDataValuesFromSource<T>,
+                                    aValues, aColumnIndex);
 }
 
 template Result<IndexDataValuesAutoArray, nsresult>
@@ -717,7 +731,7 @@ nsresult ExecuteSimpleSQLSequence(mozIStorageConnection& aConnection,
     const auto extraInfo = quota::ScopedLogExtraInfo{
         quota::ScopedLogExtraInfo::kTagQuery, aSQLCommand};
 
-    QM_TRY(aConnection.ExecuteSimpleSQL(aSQLCommand));
+    QM_TRY(MOZ_TO_RESULT(aConnection.ExecuteSimpleSQL(aSQLCommand)));
   }
 
   return NS_OK;

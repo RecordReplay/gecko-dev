@@ -15,27 +15,28 @@
 #include "jsfriendapi.h"  // js::WeakMapTracer
 #include "jstypes.h"      // JS_PUBLIC_API
 
-#include "gc/Allocator.h"   // js::CanGC
-#include "gc/Cell.h"        // js::gc::Cell, js::gc::TenuredCell
-#include "gc/GC.h"          // js::TraceRuntimeWithoutEviction
-#include "gc/Heap.h"        // js::gc::Arena
-#include "gc/Tracer.h"      // js::TraceChildren
-#include "gc/WeakMap.h"     // js::IterateHeapUnbarriered, js::WeakMapBase
-#include "js/GCAPI.h"       // JS::GCReason
-#include "js/GCVector.h"    // JS::RootedVector
-#include "js/HeapAPI.h"     // JS::GCCellPtr, js::gc::IsInsideNursery
-#include "js/Id.h"          // JS::PropertyKey
-#include "js/RootingAPI.h"  // JS::Handle, JS::Rooted
-#include "js/TracingAPI.h"  // JS::CallbackTracer, JS_GetTraceThingInfo
-#include "js/UbiNode.h"     // JS::ubi::Node
-#include "js/Value.h"       // JS::Value
-#include "js/Wrapper.h"     // js::UncheckedUnwrapWithoutExpose
-#include "vm/BigIntType.h"  // JS::BigInt::dump
-#include "vm/FrameIter.h"   // js::AllFramesIter, js::FrameIter
-#include "vm/JSContext.h"   // JSContext
-#include "vm/JSFunction.h"  // JSFunction
-#include "vm/JSObject.h"    // JSObject
-#include "vm/JSScript.h"    // JSScript
+#include "gc/Allocator.h"         // js::CanGC
+#include "gc/Cell.h"              // js::gc::Cell, js::gc::TenuredCell
+#include "gc/GC.h"                // js::TraceRuntimeWithoutEviction
+#include "gc/Heap.h"              // js::gc::Arena
+#include "gc/Tracer.h"            // js::TraceChildren
+#include "gc/WeakMap.h"           // js::IterateHeapUnbarriered, js::WeakMapBase
+#include "js/CallAndConstruct.h"  // JS::IsCallable
+#include "js/GCAPI.h"             // JS::GCReason
+#include "js/GCVector.h"          // JS::RootedVector
+#include "js/HeapAPI.h"           // JS::GCCellPtr, js::gc::IsInsideNursery
+#include "js/Id.h"                // JS::PropertyKey
+#include "js/RootingAPI.h"        // JS::Handle, JS::Rooted
+#include "js/TracingAPI.h"        // JS::CallbackTracer, JS_GetTraceThingInfo
+#include "js/UbiNode.h"           // JS::ubi::Node
+#include "js/Value.h"             // JS::Value
+#include "js/Wrapper.h"           // js::UncheckedUnwrapWithoutExpose
+#include "vm/BigIntType.h"        // JS::BigInt::dump
+#include "vm/FrameIter.h"         // js::AllFramesIter, js::FrameIter
+#include "vm/JSContext.h"         // JSContext
+#include "vm/JSFunction.h"        // JSFunction
+#include "vm/JSObject.h"          // JSObject
+#include "vm/JSScript.h"          // JSScript
 #include "vm/Printer.h"     // js::GenericPrinter, js::QuoteString, js::Sprinter
 #include "vm/Realm.h"       // JS::Realm
 #include "vm/Runtime.h"     // JSRuntime
@@ -535,7 +536,7 @@ struct DumpHeapTracer final : public JS::CallbackTracer, public WeakMapTracer {
             key.asCell(), kdelegate, value.asCell());
   }
 
-  void onChild(const JS::GCCellPtr& thing) override;
+  void onChild(JS::GCCellPtr thing) override;
 };
 
 static char MarkDescriptor(js::gc::Cell* thing) {
@@ -601,7 +602,7 @@ static void DumpHeapVisitCell(JSRuntime* rt, void* data, JS::GCCellPtr cellptr,
   JS::TraceChildren(dtrc, cellptr);
 }
 
-void DumpHeapTracer::onChild(const JS::GCCellPtr& thing) {
+void DumpHeapTracer::onChild(JS::GCCellPtr thing) {
   if (js::gc::IsInsideNursery(thing.asCell())) {
     return;
   }

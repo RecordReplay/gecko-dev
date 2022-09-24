@@ -20,11 +20,6 @@ XPIDL_SOURCES += [
     "nsIWebBrowserPrint.idl",
 ]
 
-if CONFIG["NS_PRINTING"]:
-    XPIDL_SOURCES += [
-        "nsIPrintingPromptService.idl",
-    ]
-
 XPIDL_MODULE = "webBrowser_core"
 
 UNIFIED_SOURCES += [
@@ -41,10 +36,9 @@ LOCAL_INCLUDES += [
     "/layout/style",
 ]
 
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
-
 EXPORTS += [
     "nsEmbedCID.h",
     "nsWebBrowser.h",
 ]
+
+REQUIRES_UNIFIED_BUILD = True

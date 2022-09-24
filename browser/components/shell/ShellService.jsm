@@ -27,6 +27,18 @@ XPCOMUtils.defineLazyServiceGetter(
   "nsIXREDirProvider"
 );
 
+XPCOMUtils.defineLazyGetter(this, "log", () => {
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
+  let consoleOptions = {
+    // tip: set maxLogLevel to "debug" and use log.debug() to create detailed
+    // messages during development. See LOG_LEVELS in Console.jsm for details.
+    maxLogLevel: "debug",
+    maxLogLevelPref: "browser.shell.loglevel",
+    prefix: "ShellService",
+  };
+  return new ConsoleAPI(consoleOptions);
+});
+
 /**
  * Internal functionality to save and restore the docShell.allow* properties.
  */
@@ -121,6 +133,104 @@ let ShellServiceInternal = {
   },
 
   /*
+   * Invoke the Windows Default Browser agent with the given options.
+   *
+   * Separated for easy stubbing in tests.
+   */
+  _callExternalDefaultBrowserAgent(options = {}) {
+    const wdba = Services.dirsvc.get("XREExeF", Ci.nsIFile);
+    wdba.leafName = "default-browser-agent.exe";
+    return Subprocess.call({
+      ...options,
+      command: options.command || wdba.path,
+    });
+  },
+
+  /*
+   * Check if UserChoice is impossible.
+   *
+   * Separated for easy stubbing in tests.
+   *
+   * @return string telemetry result like "Err*", or null if UserChoice
+   * is possible.
+   */
+  _userChoiceImpossibleTelemetryResult() {
+    if (!ShellService.checkAllProgIDsExist()) {
+      return "ErrProgID";
+    }
+    if (!ShellService.checkBrowserUserChoiceHashes()) {
+      return "ErrHash";
+    }
+    return null;
+  },
+
+  /*
+   * Accommodate `setDefaultPDFHandlerOnlyReplaceBrowsers` feature.
+   * @return true if Firefox should set itself as default PDF handler, false
+   * otherwise.
+   */
+  _shouldSetDefaultPDFHandler() {
+    if (
+      !NimbusFeatures.shellService.getVariable(
+        "setDefaultPDFHandlerOnlyReplaceBrowsers"
+      )
+    ) {
+      return true;
+    }
+
+    const knownBrowserPrefixes = [
+      "AppXq0fevzme2pys62n3e0fbqa7peapykr8v", // Edge before Blink, per https://stackoverflow.com/a/32724723.
+      "Brave", // For "BraveFile".
+      "Chrome", // For "ChromeHTML".
+      "Firefox", // For "FirefoxHTML-*" or "FirefoxPDF-*".  Need to take from other installations of Firefox!
+      "IE", // Best guess.
+      "MSEdge", // For "MSEdgePDF".  Edgium.
+      "Opera", // For "OperaStable", presumably varying with channel.
+      "Yandex", // For "YandexPDF.IHKFKZEIOKEMR6BGF62QXCRIKM", presumably varying with installation.
+    ];
+    let currentProgID = "";
+    try {
+      // Returns the empty string when no association is registered, in
+      // which case the prefix matching will fail and we'll set Firefox as
+      // the default PDF handler.
+      currentProgID = this.queryCurrentDefaultHandlerFor(".pdf");
+    } catch (e) {
+      // We only get an exception when something went really wrong.  Fail
+      // safely: don't set Firefox as default PDF handler.
+      log.warn(
+        "Failed to queryCurrentDefaultHandlerFor: " +
+          "not setting Firefox as default PDF handler!"
+      );
+      return false;
+    }
+
+    if (currentProgID == "") {
+      log.debug(
+        `Current default PDF handler has no registered association; ` +
+          `should set as default PDF handler.`
+      );
+      return true;
+    }
+
+    let knownBrowserPrefix = knownBrowserPrefixes.find(it =>
+      currentProgID.startsWith(it)
+    );
+    if (knownBrowserPrefix) {
+      log.debug(
+        `Current default PDF handler progID matches known browser prefix: ` +
+          `'${knownBrowserPrefix}'; should set as default PDF handler.`
+      );
+      return true;
+    }
+
+    log.debug(
+      `Current default PDF handler progID does not match known browser prefix; ` +
+        `should not set as default PDF handler.`
+    );
+    return false;
+  },
+
+  /*
    * Set the default browser through the UserChoice registry keys on Windows.
    *
    * NOTE: This does NOT open the System Settings app for manual selection
@@ -134,6 +244,8 @@ let ShellServiceInternal = {
       throw new Error("Windows-only");
     }
 
+    log.info("Setting Firefox as default using UserChoice");
+
     // We launch the WDBA to handle the registry writes, see
     // SetDefaultBrowserUserChoice() in
     // toolkit/mozapps/defaultagent/SetDefaultBrowser.cpp.
@@ -144,37 +256,29 @@ let ShellServiceInternal = {
     let telemetryResult = "ErrOther";
 
     try {
-      if (!ShellService.checkAllProgIDsExist()) {
-        telemetryResult = "ErrProgID";
+      telemetryResult =
+        this._userChoiceImpossibleTelemetryResult() ?? "ErrOther";
+      if (telemetryResult == "ErrProgID") {
         throw new Error("checkAllProgIDsExist() failed");
       }
-
-      if (!ShellService.checkBrowserUserChoiceHashes()) {
-        telemetryResult = "ErrHash";
+      if (telemetryResult == "ErrHash") {
         throw new Error("checkBrowserUserChoiceHashes() failed");
       }
 
-      // We can't set the hash consistently until Win 10 1703 (build 15063).
-      // This check is after the hash check so that telemetry can indicate
-      // when the hash check unexpectedly succeeds on an early build.
-      if (
-        !(
-          AppConstants.isPlatformAndVersionAtLeast("win", "10") &&
-          parseInt(Services.sysinfo.getProperty("build")) >= 15063
-        )
-      ) {
-        telemetryResult = "ErrBuild";
-        throw new Error("Windows build is unsupported");
-      }
-
-      const wdba = Services.dirsvc.get("XREExeF", Ci.nsIFile);
-      wdba.leafName = "default-browser-agent.exe";
       const aumi = XreDirProvider.getInstallHash();
 
       telemetryResult = "ErrLaunchExe";
-      const exeProcess = await Subprocess.call({
-        command: wdba.path,
-        arguments: ["set-default-browser-user-choice", aumi],
+      const exeArgs = ["set-default-browser-user-choice", aumi];
+      if (NimbusFeatures.shellService.getVariable("setDefaultPDFHandler")) {
+        if (this._shouldSetDefaultPDFHandler()) {
+          log.info("Setting Firefox as default PDF handler");
+          exeArgs.push(".pdf", "FirefoxPDF");
+        } else {
+          log.info("Not setting Firefox as default PDF handler");
+        }
+      }
+      const exeProcess = await this._callExternalDefaultBrowserAgent({
+        arguments: exeArgs,
       });
       telemetryResult = "ErrOther";
 
@@ -184,6 +288,7 @@ let ShellServiceInternal = {
       const MOZ_E_NO_PROGID = 0xa0000001;
       const MOZ_E_HASH_CHECK = 0xa0000002;
       const MOZ_E_REJECTED = 0xa0000003;
+      const MOZ_E_BUILD = 0xa0000004;
 
       const exeWaitTimeoutMs = 2000; // 2 seconds
       const exeWaitPromise = exeProcess.wait();
@@ -199,6 +304,7 @@ let ShellServiceInternal = {
             [MOZ_E_NO_PROGID, "ErrExeProgID"],
             [MOZ_E_HASH_CHECK, "ErrExeHash"],
             [MOZ_E_REJECTED, "ErrExeRejected"],
+            [MOZ_E_BUILD, "ErrBuild"],
           ]).get(exitCode) ?? "ErrExeOther";
         throw new Error(
           `WDBA nonzero exit code ${exitCode}: ${telemetryResult}`
@@ -269,11 +375,26 @@ let ShellServiceInternal = {
   },
 
   /**
+   * Determine if we're the default handler for the given file extension (like
+   * ".pdf") or protocol (like "https").  Windows-only for now.
+   *
+   * @returns true if we are the default handler, false otherwise.
+   */
+  isDefaultHandlerFor(aFileExtensionOrProtocol) {
+    if (AppConstants.platform == "win") {
+      return this.shellService
+        .QueryInterface(Ci.nsIWindowsShellService)
+        .isDefaultHandlerFor(aFileExtensionOrProtocol);
+    }
+    return false;
+  },
+
+  /**
    * Checks if Firefox app can and isn't pinned to OS "taskbar."
    *
    * @throws if not called from main process.
    */
-  async doesAppNeedPin() {
+  async doesAppNeedPin(privateBrowsing = false) {
     if (
       Services.appinfo.processType !== Services.appinfo.PROCESS_TYPE_DEFAULT
     ) {
@@ -291,17 +412,28 @@ let ShellServiceInternal = {
     // Currently this only works on certain Windows versions.
     try {
       // First check if we can even pin the app where an exception means no.
-      this.shellService
+      await this.shellService
         .QueryInterface(Ci.nsIWindowsShellService)
-        .checkPinCurrentAppToTaskbar();
+        .checkPinCurrentAppToTaskbarAsync(privateBrowsing);
+      let winTaskbar = Cc["@mozilla.org/windows-taskbar;1"].getService(
+        Ci.nsIWinTaskbar
+      );
 
       // Then check if we're already pinned.
-      return !(await this.shellService.isCurrentAppPinnedToTaskbarAsync());
+      return !(await this.shellService.isCurrentAppPinnedToTaskbarAsync(
+        privateBrowsing
+          ? winTaskbar.defaultPrivateGroupId
+          : winTaskbar.defaultGroupId
+      ));
     } catch (ex) {}
 
     // Next check mac pinning to dock.
     try {
-      return !this.macDockSupport.isAppInDock;
+      // Accessing this.macDockSupport will ensure we're actually running
+      // on Mac (it's possible to be on Linux in this block).
+      const isInDock = this.macDockSupport.isAppInDock;
+      // We can't pin Private Browsing mode on Mac, only a shortcut to the vanilla app
+      return privateBrowsing ? false : !isInDock;
     } catch (ex) {}
     return false;
   },
@@ -309,12 +441,12 @@ let ShellServiceInternal = {
   /**
    * Pin Firefox app to the OS "taskbar."
    */
-  async pinToTaskbar() {
-    if (await this.doesAppNeedPin()) {
+  async pinToTaskbar(privateBrowsing = false) {
+    if (await this.doesAppNeedPin(privateBrowsing)) {
       try {
         if (AppConstants.platform == "win") {
-          this.shellService.pinCurrentAppToTaskbar();
-        } else {
+          await this.shellService.pinCurrentAppToTaskbarAsync(privateBrowsing);
+        } else if (AppConstants.platform == "macosx") {
           this.macDockSupport.ensureAppIsPinnedToDock();
         }
       } catch (ex) {

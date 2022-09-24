@@ -69,19 +69,20 @@ ChromeUtils.defineModuleGetter(
   "pktTelemetry",
   "chrome://pocket/content/pktTelemetry.jsm"
 );
+ChromeUtils.defineModuleGetter(
+  this,
+  "ExperimentAPI",
+  "resource://nimbus/ExperimentAPI.jsm"
+);
+XPCOMUtils.defineLazyModuleGetters(this, {
+  NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
+});
 
 const POCKET_ONSAVERECS_PREF = "extensions.pocket.onSaveRecs";
 const POCKET_ONSAVERECS_LOCLES_PREF = "extensions.pocket.onSaveRecs.locales";
 const POCKET_HOME_PREF = "extensions.pocket.showHome";
 
 var pktUI = (function() {
-  // -- Initialization (on startup and new windows) -- //
-
-  // Init panel id at 0. The first actual panel id will have the number 1 so
-  // in case at some point any panel has the id 0 we know there is something
-  // wrong
-  var _panelId = 0;
-
   let _titleToSave = "";
   let _urlToSave = "";
 
@@ -89,14 +90,20 @@ var pktUI = (function() {
   const initialPanelSize = {
     signup: {
       control: { height: 450, width: 300 },
+      refresh: { height: 315, width: 328 },
     },
     saved: {
       control: { height: 132, width: 350 },
+      refresh: { height: 110, width: 350 },
     },
     home: {
       control: { height: 477, width: 328 },
-      // This is for non English sizes, this is not for an AB experiment.
-      no_topics: { height: 247, width: 328 },
+      refresh: { height: 251, width: 328 },
+    },
+    // This is for non English sizes, this is not for an AB experiment.
+    home_no_topics: {
+      control: { height: 247, width: 328 },
+      refresh: { height: 86, width: 328 },
     },
   };
 
@@ -113,6 +120,7 @@ var pktUI = (function() {
       POCKET_ONSAVERECS_LOCLES_PREF,
       ""
     );
+
     pocketHomePref = Services.prefs.getBoolPref(POCKET_HOME_PREF);
   }
   initPrefs();
@@ -155,14 +163,11 @@ var pktUI = (function() {
    */
   function showSignUp() {
     getFirefoxAccountSignedInUser(function(userdata) {
-      let sizes = initialPanelSize.signup.control;
-
       showPanel(
-        "about:pocket-signup?pockethost=" +
-          Services.prefs.getCharPref("extensions.pocket.site") +
-          "&locale=" +
-          getUILocale(),
-        sizes
+        "about:pocket-signup?" +
+          "emailButton=" +
+          NimbusFeatures.saveToPocket.getVariable("emailButton"),
+        `signup`
       );
     });
   }
@@ -189,18 +194,12 @@ var pktUI = (function() {
    */
   function saveAndShowConfirmation() {
     getFirefoxAccountSignedInUser(function(userdata) {
-      const variant = "control";
-      const sizes = initialPanelSize.saved[variant];
       showPanel(
-        "about:pocket-saved?pockethost=" +
-          Services.prefs.getCharPref("extensions.pocket.site") +
-          "&premiumStatus=" +
+        "about:pocket-saved?premiumStatus=" +
           (pktApi.isPremiumUser() ? "1" : "0") +
           "&fxasignedin=" +
-          (typeof userdata == "object" && userdata !== null ? "1" : "0") +
-          "&locale=" +
-          getUILocale(),
-        sizes
+          (typeof userdata == "object" && userdata !== null ? "1" : "0"),
+        `saved`
       );
     });
   }
@@ -209,35 +208,60 @@ var pktUI = (function() {
    * Show the Pocket home panel state
    */
   function showPocketHome() {
-    const locale = getUILocale();
-    let homeVersion = "no_topics";
-    // We have different height for non English because of topics.
-    // In order to have a clean panel load, we optimize the starting height.
-    if (locale.startsWith("en-")) {
-      homeVersion = "control";
-    }
-    const sizes = initialPanelSize.home[homeVersion];
-    showPanel(
-      "about:pocket-home?pockethost=" +
-        Services.prefs.getCharPref("extensions.pocket.site") +
-        "&locale=" +
-        locale,
-      sizes
+    const hideRecentSaves = NimbusFeatures.saveToPocket.getVariable(
+      "hideRecentSaves"
     );
+    const locale = getUILocale();
+    let panel = `home_no_topics`;
+    if (locale.startsWith("en-")) {
+      panel = `home`;
+    }
+    showPanel(`about:pocket-home?hiderecentsaves=${hideRecentSaves}`, panel);
   }
 
   /**
    * Open a generic panel
    */
-  function showPanel(url, options) {
-    // Add new panel id
-    _panelId += 1;
-    url += "&panelId=" + _panelId;
+  function showPanel(urlString, panel) {
+    const locale = getUILocale();
+    let variant = `control`;
+    const layoutRefresh = NimbusFeatures.saveToPocket.getVariable(
+      "layoutRefresh"
+    );
+    if (layoutRefresh) {
+      variant = `refresh`;
+    }
 
+    const options = initialPanelSize[panel][variant];
     resizePanel({
       width: options.width,
       height: options.height,
     });
+    const saveToPocketExperiment = ExperimentAPI.getExperiment({
+      featureId: "saveToPocket",
+    });
+    const pocketNewtabExperiment = ExperimentAPI.getExperiment({
+      featureId: "pocketNewtab",
+    });
+
+    let utmSource = "firefox_pocket_save_button";
+    // We want to know if the user is in a Pocket related experiment,
+    // but we have 2 Pocket related features, so we prioritize the saveToPocket feature.
+    let utmCampaign =
+      saveToPocketExperiment?.slug || pocketNewtabExperiment?.slug;
+    let utmContent =
+      saveToPocketExperiment?.branch?.slug ||
+      pocketNewtabExperiment?.branch?.slug;
+
+    const url = new URL(urlString);
+    // A set of params shared across all panels.
+    url.searchParams.append("utmSource", utmSource);
+    if (utmCampaign && utmContent) {
+      url.searchParams.append("utmCampaign", utmCampaign);
+      url.searchParams.append("utmContent", utmContent);
+    }
+    url.searchParams.append("layoutRefresh", layoutRefresh);
+    url.searchParams.append("locale", locale);
 
     // We don't have to hide and show the panel again if it's already shown
     // as if the user tries to click again on the toolbar button the overlay
@@ -245,7 +269,7 @@ var pktUI = (function() {
     var frame = getPanelFrame();
 
     // Load the frame
-    frame.setAttribute("src", url);
+    frame.setAttribute("src", url.href);
   }
 
   function onShowSignup() {
@@ -264,7 +288,7 @@ var pktUI = (function() {
     );
   }
 
-  function onShowHome() {
+  async function onShowHome() {
     // A successful home button click.
     pktTelemetry.sendStructuredIngestionEvent(
       pktTelemetry.createPingPayload({
@@ -276,6 +300,35 @@ var pktUI = (function() {
         ],
       })
     );
+
+    if (
+      NimbusFeatures.saveToPocket.getVariable("layoutRefresh") &&
+      !NimbusFeatures.saveToPocket.getVariable("hideRecentSaves")
+    ) {
+      let recentSaves = await pktApi.getRecentSavesCache();
+      if (recentSaves) {
+        // We have cache, so we can use those.
+        pktUIMessaging.sendMessageToPanel("PKT_renderRecentSaves", recentSaves);
+      } else {
+        // Let the client know we're loading fresh recs.
+        pktUIMessaging.sendMessageToPanel(
+          "PKT_loadingRecentSaves",
+          recentSaves
+        );
+        // We don't have cache, so fetch fresh stories.
+        pktApi.getRecentSaves({
+          success(data) {
+            pktUIMessaging.sendMessageToPanel("PKT_renderRecentSaves", data);
+          },
+          error(error) {
+            pktUIMessaging.sendErrorMessageToPanel(
+              "PKT_renderRecentSaves",
+              error
+            );
+          },
+        });
+      }
+    }
   }
 
   function onShowSaved() {
@@ -286,11 +339,7 @@ var pktUI = (function() {
       let errorData = {
         localizedKey: "pocket-panel-saved-error-only-links",
       };
-      pktUIMessaging.sendErrorMessageToPanel(
-        saveLinkMessageId,
-        _panelId,
-        errorData
-      );
+      pktUIMessaging.sendErrorMessageToPanel(saveLinkMessageId, errorData);
       return;
     }
 
@@ -299,11 +348,7 @@ var pktUI = (function() {
       let errorData = {
         localizedKey: "pocket-panel-saved-error-no-internet",
       };
-      pktUIMessaging.sendErrorMessageToPanel(
-        saveLinkMessageId,
-        _panelId,
-        errorData
-      );
+      pktUIMessaging.sendErrorMessageToPanel(saveLinkMessageId, errorData);
       return;
     }
 
@@ -333,20 +378,25 @@ var pktUI = (function() {
           item,
           ho2,
         };
-        pktUIMessaging.sendMessageToPanel(
-          saveLinkMessageId,
-          _panelId,
-          successResponse
-        );
+        pktUIMessaging.sendMessageToPanel(saveLinkMessageId, successResponse);
         SaveToPocket.itemSaved();
+
+        if (
+          item?.resolved_id &&
+          item?.resolved_id !== "0" &&
+          NimbusFeatures.saveToPocket.getVariable("layoutRefresh") &&
+          !NimbusFeatures.saveToPocket.getVariable("hideRecentSaves")
+        ) {
+          pktApi.getArticleInfo(item.resolved_url, {
+            success(data) {
+              pktUIMessaging.sendMessageToPanel("PKT_renderSavedStory", data);
+            },
+          });
+        }
 
         getAndShowRecsForItem(item, {
           success(data) {
-            pktUIMessaging.sendMessageToPanel(
-              "PKT_renderItemRecs",
-              _panelId,
-              data
-            );
+            pktUIMessaging.sendMessageToPanel("PKT_renderItemRecs", data);
             if (data?.recommendations?.[0]?.experiment) {
               const payload = pktTelemetry.createPingPayload({
                 // This is the ML model used to recommend the story.
@@ -379,11 +429,7 @@ var pktUI = (function() {
         };
 
         // Send error message to panel
-        pktUIMessaging.sendErrorMessageToPanel(
-          saveLinkMessageId,
-          _panelId,
-          errorData
-        );
+        pktUIMessaging.sendErrorMessageToPanel(saveLinkMessageId, errorData);
       },
     };
 
@@ -457,7 +503,7 @@ var pktUI = (function() {
   }
 
   // Open a new tab with a given url
-  function onOpenTabWithUrl(panelId, data, contentPrincipal, csp) {
+  function onOpenTabWithUrl(data, contentPrincipal, csp) {
     try {
       urlSecurityCheck(
         data.url,
@@ -470,8 +516,9 @@ var pktUI = (function() {
 
     // We don't track every click, only clicks with a known source.
     if (data.source) {
-      const { position, source } = data;
+      const { position, source, model } = data;
       const payload = pktTelemetry.createPingPayload({
+        ...(model ? { model } : {}),
         events: [
           {
             action: "click",
@@ -490,7 +537,7 @@ var pktUI = (function() {
   }
 
   // Open a new tab with a Pocket story url
-  function onOpenTabWithPocketUrl(panelId, data, contentPrincipal, csp) {
+  function onOpenTabWithPocketUrl(data, contentPrincipal, csp) {
     try {
       urlSecurityCheck(
         data.url,
@@ -578,6 +625,8 @@ var pktUI = (function() {
     setToolbarPanelFrame,
     getPanelFrame,
     initPrefs,
+    showPanel,
+    getUILocale,
 
     openTabWithUrl,
     onOpenTabWithUrl,
@@ -599,13 +648,10 @@ var pktUIMessaging = (function() {
   /**
    * Send a message to the panel's frame
    */
-  function sendMessageToPanel(messageId, panelId, payload) {
-    if (!isPanelIdValid(panelId)) {
-      return;
-    }
-
+  function sendMessageToPanel(messageId, payload) {
     var panelFrame = pktUI.getPanelFrame();
-    if (!isPocketPanelFrameValid(panelFrame)) {
+    if (!panelFrame) {
+      console.warn("Pocket panel frame is undefined");
       return;
     }
 
@@ -614,66 +660,16 @@ var pktUIMessaging = (function() {
     );
 
     // Send message to panel
-    aboutPocketActor?.sendAsyncMessage(`${messageId}_${panelId}`, payload);
+    aboutPocketActor?.sendAsyncMessage(messageId, payload);
   }
 
   /**
    * Helper function to package an error object and send it to the panel
    * frame as a message response
    */
-  function sendErrorMessageToPanel(messageId, panelId, error) {
+  function sendErrorMessageToPanel(messageId, error) {
     var errorResponse = { status: "error", error };
-    sendMessageToPanel(messageId, panelId, errorResponse);
-  }
-
-  /**
-   * Validation
-   */
-
-  function isPanelIdValid(panelId) {
-    // First check if panelId has a valid value > 0. We set the panelId to
-    // 0 to start. But if for some reason the message is attempted to be
-    // sent before the panel has a panelId, then it's going to send out
-    // a message with panelId 0, which is never going to be heard. If this
-    // happens, it means some race condition occurred where the panel was
-    // trying to communicate before it should.
-    if (panelId === 0) {
-      console.warn("Tried to send message to panel with id 0.");
-      return false;
-    }
-
-    return true;
-  }
-
-  function isPocketPanelFrameValid(panelFrame) {
-    // Check if panel is available if not throw a warning and bailout.
-    // We likely try to send to a panel that is not visible anymore
-    if (typeof panelFrame === "undefined") {
-      console.warn("Pocket panel frame is undefined");
-      return false;
-    }
-
-    var contentWindow = panelFrame.contentWindow;
-    if (typeof contentWindow == "undefined") {
-      console.warn("Pocket panel frame content window is undefined");
-      return false;
-    }
-
-    var doc = contentWindow.document;
-    if (typeof doc === "undefined") {
-      console.warn("Pocket panel frame content window document is undefined");
-      return false;
-    }
-
-    var documentElement = doc.documentElement;
-    if (typeof documentElement === "undefined") {
-      console.warn(
-        "Pocket panel frame content window document document element is undefined"
-      );
-      return false;
-    }
-
-    return true;
+    sendMessageToPanel(messageId, errorResponse);
   }
 
   /**

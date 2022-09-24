@@ -32,12 +32,14 @@
 #include "nsIURIMutator.h"
 #include "mozilla/StaticPrefs_permissions.h"
 #include "nsIURIMutator.h"
+#include "nsMixedContentBlocker.h"
 #include "prnetdb.h"
 #include "nsIURIFixup.h"
 #include "mozilla/dom/StorageUtils.h"
 #include "mozilla/ContentBlocking.h"
 #include "nsPIDOMWindow.h"
 #include "nsIURIMutator.h"
+#include "mozilla/PermissionManager.h"
 
 #include "json/json.h"
 #include "nsSerializationHelper.h"
@@ -391,8 +393,36 @@ BasePrincipal::EqualsForPermission(nsIPrincipal* aOther, bool aExactHost,
   NS_ENSURE_ARG_POINTER(aOther);
   NS_ENSURE_ARG_POINTER(aResult);
 
-  // If the principals are equal, then they match.
-  if (FastEquals(aOther)) {
+  auto* other = Cast(aOther);
+  if (Kind() != other->Kind()) {
+    // Principals of different kinds can't be equal.
+    return NS_OK;
+  }
+
+  if (Kind() == eSystemPrincipal) {
+    *aResult = this == other;
+    return NS_OK;
+  }
+
+  if (Kind() == eNullPrincipal) {
+    // We don't store permissions for NullPrincipals.
+    return NS_OK;
+  }
+
+  MOZ_ASSERT(Kind() == eExpandedPrincipal || Kind() == eContentPrincipal);
+
+  // Certain origin attributes should not be used to isolate permissions.
+  // Create a stripped copy of both OA sets to compare.
+  mozilla::OriginAttributes ourAttrs = mOriginAttributes;
+  PermissionManager::MaybeStripOriginAttributes(false, ourAttrs);
+  mozilla::OriginAttributes theirAttrs = aOther->OriginAttributesRef();
+  PermissionManager::MaybeStripOriginAttributes(false, theirAttrs);
+
+  if (ourAttrs != theirAttrs) {
+    return NS_OK;
+  }
+
+  if (mOriginNoSuffix == other->mOriginNoSuffix) {
     *aResult = true;
     return NS_OK;
   }
@@ -403,22 +433,18 @@ BasePrincipal::EqualsForPermission(nsIPrincipal* aOther, bool aExactHost,
     return NS_OK;
   }
 
-  // Compare their OriginAttributes
-  const mozilla::OriginAttributes& theirAttrs = aOther->OriginAttributesRef();
-  const mozilla::OriginAttributes& ourAttrs = OriginAttributesRef();
-
-  if (theirAttrs != ourAttrs) {
-    return NS_OK;
-  }
-
   nsCOMPtr<nsIURI> ourURI;
   nsresult rv = GetURI(getter_AddRefs(ourURI));
   NS_ENSURE_SUCCESS(rv, rv);
-  auto* basePrin = BasePrincipal::Cast(aOther);
+  // Some principal types may indicate success, but still return nullptr for
+  // URI.
+  NS_ENSURE_TRUE(ourURI, NS_ERROR_FAILURE);
 
   nsCOMPtr<nsIURI> otherURI;
-  rv = basePrin->GetURI(getter_AddRefs(otherURI));
+  rv = other->GetURI(getter_AddRefs(otherURI));
   NS_ENSURE_SUCCESS(rv, rv);
+  NS_ENSURE_TRUE(otherURI, NS_ERROR_FAILURE);
+
   // Compare schemes
   nsAutoCString otherScheme;
   rv = otherURI->GetScheme(otherScheme);
@@ -633,19 +659,23 @@ BasePrincipal::IsThirdPartyChannel(nsIChannel* aChan, bool* aRes) {
 }
 
 NS_IMETHODIMP
-BasePrincipal::IsSameOrigin(nsIURI* aURI, bool aIsPrivateWin, bool* aRes) {
+BasePrincipal::IsSameOrigin(nsIURI* aURI, bool* aRes) {
   *aRes = false;
   nsCOMPtr<nsIURI> prinURI;
   nsresult rv = GetURI(getter_AddRefs(prinURI));
   if (NS_FAILED(rv) || !prinURI) {
+    // Note that expanded and system principals return here, because they have
+    // no URI.
     return NS_OK;
   }
   nsIScriptSecurityManager* ssm = nsContentUtils::GetSecurityManager();
   if (!ssm) {
-    return NS_ERROR_UNEXPECTED;
+    return NS_OK;
   }
+  bool reportError = false;
+  bool isPrivateWindow = false;  // Only used for error reporting.
   *aRes = NS_SUCCEEDED(
-      ssm->CheckSameOriginURI(prinURI, aURI, false, aIsPrivateWin));
+      ssm->CheckSameOriginURI(prinURI, aURI, reportError, isPrivateWindow));
   return NS_OK;
 }
 
@@ -956,7 +986,7 @@ BasePrincipal::SchemeIs(const char* aScheme, bool* aResult) {
   *aResult = false;
   nsCOMPtr<nsIURI> prinURI;
   nsresult rv = GetURI(getter_AddRefs(prinURI));
-  if (NS_FAILED(rv) || !prinURI) {
+  if (NS_WARN_IF(NS_FAILED(rv)) || !prinURI) {
     return NS_OK;
   }
   *aResult = prinURI->SchemeIs(aScheme);
@@ -972,6 +1002,20 @@ BasePrincipal::IsURIInPrefList(const char* aPref, bool* aResult) {
     return NS_OK;
   }
   *aResult = nsContentUtils::IsURIInPrefList(prinURI, aPref);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::IsURIInList(const nsACString& aList, bool* aResult) {
+  *aResult = false;
+  nsCOMPtr<nsIURI> prinURI;
+
+  nsresult rv = GetURI(getter_AddRefs(prinURI));
+  if (NS_FAILED(rv) || !prinURI) {
+    return NS_OK;
+  }
+
+  *aResult = nsContentUtils::IsURIInList(prinURI, nsCString(aList));
   return NS_OK;
 }
 
@@ -1045,7 +1089,8 @@ BasePrincipal::GetIsInIsolatedMozBrowserElement(
   return NS_OK;
 }
 
-nsresult BasePrincipal::GetAddonPolicy(nsISupports** aResult) {
+nsresult BasePrincipal::GetAddonPolicy(
+    extensions::WebExtensionPolicy** aResult) {
   RefPtr<extensions::WebExtensionPolicy> policy(AddonPolicy());
   policy.forget(aResult);
   return NS_OK;
@@ -1070,6 +1115,13 @@ nsIPrincipal* BasePrincipal::PrincipalToInherit(nsIURI* aRequestedURI) {
     return As<ExpandedPrincipal>()->PrincipalToInherit(aRequestedURI);
   }
   return this;
+}
+
+bool BasePrincipal::IsLoopbackHost() {
+  nsAutoCString host;
+  nsresult rv = GetHost(host);
+  NS_ENSURE_SUCCESS(rv, false);
+  return nsMixedContentBlocker::IsPotentiallyTrustworthyLoopbackHost(host);
 }
 
 already_AddRefed<BasePrincipal> BasePrincipal::CreateContentPrincipal(
@@ -1380,6 +1432,12 @@ BasePrincipal::CreateReferrerInfo(mozilla::dom::ReferrerPolicy aReferrerPolicy,
   }
   info = new dom::ReferrerInfo(prinURI, aReferrerPolicy);
   info.forget(_retval);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+BasePrincipal::GetPrecursorPrincipal(nsIPrincipal** aPrecursor) {
+  *aPrecursor = nullptr;
   return NS_OK;
 }
 

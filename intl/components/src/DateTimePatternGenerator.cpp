@@ -9,24 +9,25 @@ DateTimePatternGenerator::~DateTimePatternGenerator() {
   // The mGenerator will not exist when the DateTimePatternGenerator is being
   // moved.
   if (mGenerator) {
-    udatpg_close(mGenerator);
+    udatpg_close(mGenerator.GetMut());
   }
 }
 
 /* static */
-Result<UniquePtr<DateTimePatternGenerator>, DateTimePatternGenerator::Error>
+Result<UniquePtr<DateTimePatternGenerator>, ICUError>
 DateTimePatternGenerator::TryCreate(const char* aLocale) {
   UErrorCode status = U_ZERO_ERROR;
-  UDateTimePatternGenerator* generator = udatpg_open(aLocale, &status);
+  UDateTimePatternGenerator* generator =
+      udatpg_open(IcuLocale(aLocale), &status);
   if (U_FAILURE(status)) {
-    return Err(Error::InternalError);
+    return Err(ToICUError(status));
   }
   return MakeUnique<DateTimePatternGenerator>(generator);
 };
 
 DateTimePatternGenerator::DateTimePatternGenerator(
     DateTimePatternGenerator&& other) noexcept
-    : mGenerator(other.mGenerator) {
+    : mGenerator(other.mGenerator.GetMut()) {
   other.mGenerator = nullptr;
 }
 
@@ -37,9 +38,9 @@ DateTimePatternGenerator& DateTimePatternGenerator::operator=(
   }
 
   if (mGenerator) {
-    udatpg_close(mGenerator);
+    udatpg_close(mGenerator.GetMut());
   }
-  mGenerator = other.mGenerator;
+  mGenerator = other.mGenerator.GetMut();
   other.mGenerator = nullptr;
 
   return *this;

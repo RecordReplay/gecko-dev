@@ -17,16 +17,22 @@ const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 ChromeUtils.defineModuleGetter(
   this,
+  "AppConstants",
+  "resource://gre/modules/AppConstants.jsm"
+);
+
+ChromeUtils.defineModuleGetter(
+  this,
   "FinderIterator",
   "resource://gre/modules/FinderIterator.jsm"
 );
 
-XPCOMUtils.defineLazyServiceGetter(
+ChromeUtils.defineModuleGetter(
   this,
-  "Clipboard",
-  "@mozilla.org/widget/clipboard;1",
-  "nsIClipboard"
+  "PrivateBrowsingUtils",
+  "resource://gre/modules/PrivateBrowsingUtils.jsm"
 );
+
 XPCOMUtils.defineLazyServiceGetter(
   this,
   "ClipboardHelper",
@@ -149,7 +155,9 @@ Finder.prototype = {
   },
 
   set clipboardSearchString(aSearchString) {
-    SetClipboardSearchString(aSearchString);
+    if (!PrivateBrowsingUtils.isContentWindowPrivate(this._getWindow())) {
+      SetClipboardSearchString(aSearchString);
+    }
   },
 
   set caseSensitive(aSensitive) {
@@ -405,7 +413,7 @@ Finder.prototype = {
     if (
       focusedElement &&
       "frameLoader" in focusedElement &&
-      focusedElement.browsingContext instanceof BrowsingContext
+      BrowsingContext.isInstance(focusedElement.browsingContext)
     ) {
       return {
         focusedChildBrowserContextId: focusedElement.browsingContext.id,
@@ -523,6 +531,8 @@ Finder.prototype = {
 
   keyPress(aEvent) {
     let controller = this._getSelectionController(this._getWindow());
+    let accelKeyPressed =
+      AppConstants.platform == "macosx" ? aEvent.metaKey : aEvent.ctrlKey;
 
     switch (aEvent.keyCode) {
       case aEvent.DOM_VK_RETURN:
@@ -555,10 +565,18 @@ Finder.prototype = {
         controller.scrollPage(true);
         break;
       case aEvent.DOM_VK_UP:
-        controller.scrollLine(false);
+        if (accelKeyPressed) {
+          controller.completeScroll(false);
+        } else {
+          controller.scrollLine(false);
+        }
         break;
       case aEvent.DOM_VK_DOWN:
-        controller.scrollLine(true);
+        if (accelKeyPressed) {
+          controller.completeScroll(true);
+        } else {
+          controller.scrollLine(true);
+        }
         break;
     }
   },
@@ -807,7 +825,7 @@ Finder.prototype = {
 
 function GetClipboardSearchString(aLoadContext) {
   let searchString = "";
-  if (!Clipboard.supportsFindClipboard()) {
+  if (!Services.clipboard.supportsFindClipboard()) {
     return searchString;
   }
 
@@ -818,7 +836,7 @@ function GetClipboardSearchString(aLoadContext) {
     trans.init(aLoadContext);
     trans.addDataFlavor("text/unicode");
 
-    Clipboard.getData(trans, Ci.nsIClipboard.kFindClipboard);
+    Services.clipboard.getData(trans, Ci.nsIClipboard.kFindClipboard);
 
     let data = {};
     trans.getTransferData("text/unicode", data);
@@ -832,7 +850,7 @@ function GetClipboardSearchString(aLoadContext) {
 }
 
 function SetClipboardSearchString(aSearchString) {
-  if (!aSearchString || !Clipboard.supportsFindClipboard()) {
+  if (!aSearchString || !Services.clipboard.supportsFindClipboard()) {
     return;
   }
 

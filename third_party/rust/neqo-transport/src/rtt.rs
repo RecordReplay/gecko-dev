@@ -24,7 +24,7 @@ use crate::tracking::PacketNumberSpace;
 /// `select()`, or similar) can reliably deliver; see `neqo_common::hrtime`.
 pub const GRANULARITY: Duration = Duration::from_millis(1);
 // Defined in -recovery 6.2 as 333ms but using lower value.
-const INITIAL_RTT: Duration = Duration::from_millis(100);
+pub(crate) const INITIAL_RTT: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 #[allow(clippy::module_name_repetitions)]
@@ -51,7 +51,7 @@ impl RttEstimate {
         qtrace!("initial RTT={:?}", rtt);
         if rtt >= GRANULARITY {
             // Ignore if the value is too small.
-            self.init(rtt)
+            self.init(rtt);
         }
     }
 
@@ -71,7 +71,7 @@ impl RttEstimate {
 
     pub fn update(
         &mut self,
-        mut qlog: &mut NeqoQlog,
+        qlog: &mut NeqoQlog,
         mut rtt_sample: Duration,
         ack_delay: Duration,
         confirmed: bool,
@@ -114,7 +114,7 @@ impl RttEstimate {
             self.rttvar
         );
         qlog::metrics_updated(
-            &mut qlog,
+            qlog,
             &[
                 QlogMetric::LatestRtt(self.latest_rtt),
                 QlogMetric::MinRtt(self.min_rtt),
@@ -131,7 +131,7 @@ impl RttEstimate {
     pub fn pto(&self, pn_space: PacketNumberSpace) -> Duration {
         let mut t = self.estimate() + max(4 * self.rttvar, GRANULARITY);
         if pn_space == PacketNumberSpace::ApplicationData {
-            t += self.ack_delay.max()
+            t += self.ack_delay.max();
         }
         t
     }
@@ -155,7 +155,6 @@ impl RttEstimate {
         self.latest_rtt
     }
 
-    #[cfg(test)]
     pub fn rttvar(&self) -> Duration {
         self.rttvar
     }

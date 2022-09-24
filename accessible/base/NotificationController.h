@@ -79,12 +79,12 @@ class TNotification : public Notification {
 
   template <size_t... Indices>
   void ProcessHelper(std::index_sequence<Indices...>) {
-    (mInstance->*mCallback)(Get<Indices>(mArgs)...);
+    (mInstance->*mCallback)(std::get<Indices>(mArgs)...);
   }
 
   Class* mInstance;
   Callback mCallback;
-  Tuple<RefPtr<Args>...> mArgs;
+  std::tuple<RefPtr<Args>...> mArgs;
 };
 
 /**
@@ -175,6 +175,7 @@ class NotificationController final : public EventQueue,
                "A text node is not visible");
 
     mTextHash.Insert(aTextNode);
+
     ScheduleProcessing();
   }
 
@@ -317,6 +318,11 @@ class NotificationController final : public EventQueue,
   }
 
  private:
+  /**
+   * Remove a specific hide event if it should not be propagated.
+   */
+  void CoalesceHideEvent(AccHideEvent* aHideEvent);
+
   /**
    * get rid of a mutation event that is no longer necessary.
    */

@@ -11,8 +11,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/ScriptElement.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class HTMLScriptElement final : public nsGenericHTMLElement,
                                 public ScriptElement {
@@ -130,6 +129,9 @@ class HTMLScriptElement final : public nsGenericHTMLElement,
     GetEnumAttr(nsGkAtoms::referrerpolicy, "", aReferrerPolicy);
   }
 
+  [[nodiscard]] static bool Supports(const GlobalObject& aGlobal,
+                                     const nsAString& aType);
+
  protected:
   virtual ~HTMLScriptElement();
 
@@ -142,7 +144,6 @@ class HTMLScriptElement final : public nsGenericHTMLElement,
   virtual bool HasScriptContent() override;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_HTMLScriptElement_h

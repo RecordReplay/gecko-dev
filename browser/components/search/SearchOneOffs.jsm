@@ -69,7 +69,7 @@ class SearchOneOffs {
 
     this.header = this.querySelector(".search-panel-one-offs-header");
 
-    this.settingsButtonCompact = this.querySelector(".search-setting-button");
+    this.settingsButton = this.querySelector(".search-setting-button");
 
     this.contextMenuPopup = this.querySelector(".search-one-offs-context-menu");
 
@@ -268,7 +268,7 @@ class SearchOneOffs {
           "searchbar-engine-one-off-item"
         ) &&
         !(
-          this.selectedButton == this.settingsButtonCompact &&
+          this.selectedButton == this.settingsButton &&
           this.hasAttribute("is_searchbar")
         );
       // Typing de-selects the settings or opensearch buttons at the bottom
@@ -462,7 +462,7 @@ class SearchOneOffs {
 
     // Ensure we can refer to the settings buttons by ID:
     let origin = this.telemetryOrigin;
-    this.settingsButtonCompact.id = origin + "-anon-search-settings";
+    this.settingsButton.id = origin + "-anon-search-settings";
 
     if (this.popup) {
       let buttonsWidth = this.popup.clientWidth;
@@ -474,13 +474,13 @@ class SearchOneOffs {
       // This is likely because the clientWidth getter rounds the value, but
       // the panel's border width is not an integer.
       // As a workaround, decrement the width if the scale is not an integer.
-      let scale = this.window.windowUtils.screenPixelsPerCSSPixel;
+      let scale = this.window.devicePixelRatio;
       if (Math.floor(scale) != scale) {
         --buttonsWidth;
       }
 
       // 8 is for the margin-inline of the setting button.
-      buttonsWidth -= this.settingsButtonCompact.clientWidth + 8;
+      buttonsWidth -= this.settingsButton.clientWidth + 8;
 
       // If the header string is very long, then the searchbar buttons will
       // overflow their container unless max-width is set.
@@ -565,7 +565,7 @@ class SearchOneOffs {
     ];
 
     if (aIncludeNonEngineButtons) {
-      buttons.push(this.settingsButtonCompact);
+      buttons.push(this.settingsButton);
     }
 
     return buttons;
@@ -597,13 +597,13 @@ class SearchOneOffs {
     } else {
       let newTabPref = Services.prefs.getBoolPref("browser.search.openintab");
       if (
-        (aEvent instanceof KeyboardEvent && aEvent.altKey) ^ newTabPref &&
+        (KeyboardEvent.isInstance(aEvent) && aEvent.altKey) ^ newTabPref &&
         !this.window.gBrowser.selectedTab.isEmpty
       ) {
         where = "tab";
       }
       if (
-        aEvent instanceof MouseEvent &&
+        MouseEvent.isInstance(aEvent) &&
         (aEvent.button == 1 || aEvent.getModifierState("Accel"))
       ) {
         where = "tab";
@@ -903,17 +903,17 @@ class SearchOneOffs {
 
     let target = event.originalTarget;
 
-    if (event instanceof KeyboardEvent && this.selectedButton) {
+    if (KeyboardEvent.isInstance(event) && this.selectedButton) {
       return true;
     }
     if (
-      event instanceof MouseEvent &&
+      MouseEvent.isInstance(event) &&
       target.classList.contains("searchbar-engine-one-off-item")
     ) {
       return true;
     }
     if (
-      event instanceof this.window.XULCommandEvent &&
+      this.window.XULCommandEvent.isInstance(event) &&
       target.classList.contains("search-one-offs-context-open-in-new-tab")
     ) {
       return true;
@@ -1019,7 +1019,7 @@ class SearchOneOffs {
   _on_command(event) {
     let target = event.target;
 
-    if (target == this.settingsButtonCompact) {
+    if (target == this.settingsButton) {
       this.window.openPreferences("paneSearch");
 
       // If the preference tab was already selected, the panel doesn't

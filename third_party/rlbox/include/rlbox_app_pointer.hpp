@@ -23,22 +23,23 @@ private:
 
   std::map<T_PointerTypeUnsigned, void*> pointer_map;
   T_PointerTypeUnsigned counter = 1;
+#ifndef RLBOX_SINGLE_THREADED_INVOCATIONS
   RLBOX_SHARED_LOCK(map_mutex);
+#endif
 
-  T_PointerType get_unused_index()
+  T_PointerType get_unused_index(T_PointerType max_ptr_val)
   {
-    constexpr auto max_val = std::numeric_limits<T_PointerTypeUnsigned>::max();
-    constexpr auto min_val = std::numeric_limits<T_PointerTypeUnsigned>::min();
-    for (T_PointerTypeUnsigned i = counter; i < max_val; i++) {
+    const auto max_val = (T_PointerTypeUnsigned)max_ptr_val;
+    for (T_PointerTypeUnsigned i = counter; i <= max_val; i++) {
       if (pointer_map.find(i) == pointer_map.end()) {
         counter = i + 1;
-        return reinterpret_cast<T_PointerType>(i);
+        return (T_PointerType)i;
       }
     }
-    for (T_PointerTypeUnsigned i = min_val; i < counter; i++) {
+    for (T_PointerTypeUnsigned i = 1; i < counter; i++) {
       if (pointer_map.find(i) == pointer_map.end()) {
         counter = i + 1;
-        return reinterpret_cast<T_PointerType>(i);
+        return (T_PointerType)i;
       }
     }
     detail::dynamic_check(false, "Could not find free app pointer slot");
@@ -53,21 +54,23 @@ public:
     pointer_map[0] = nullptr;
   }
 
-  T_PointerType get_app_pointer_idx(void* ptr)
+  T_PointerType get_app_pointer_idx(void* ptr, T_PointerType max_ptr_val)
   {
+#ifndef RLBOX_SINGLE_THREADED_INVOCATIONS
     RLBOX_ACQUIRE_UNIQUE_GUARD(lock, map_mutex);
-    T_PointerType idx = get_unused_index();
-    T_PointerTypeUnsigned idx_int =
-      reinterpret_cast<T_PointerTypeUnsigned>(idx);
+#endif
+    T_PointerType idx = get_unused_index(max_ptr_val);
+    T_PointerTypeUnsigned idx_int = (T_PointerTypeUnsigned)idx;
     pointer_map[idx_int] = ptr;
     return idx;
   }
 
   void remove_app_ptr(T_PointerType idx)
   {
+#ifndef RLBOX_SINGLE_THREADED_INVOCATIONS
     RLBOX_ACQUIRE_UNIQUE_GUARD(lock, map_mutex);
-    T_PointerTypeUnsigned idx_int =
-      reinterpret_cast<T_PointerTypeUnsigned>(idx);
+#endif
+    T_PointerTypeUnsigned idx_int = (T_PointerTypeUnsigned)idx;
     auto it = pointer_map.find(idx_int);
     detail::dynamic_check(it != pointer_map.end(),
                           "Error: removing a non-existing app pointer");
@@ -76,9 +79,10 @@ public:
 
   void* lookup_index(T_PointerType idx)
   {
+#ifndef RLBOX_SINGLE_THREADED_INVOCATIONS
     RLBOX_ACQUIRE_SHARED_GUARD(lock, map_mutex);
-    T_PointerTypeUnsigned idx_int =
-      reinterpret_cast<T_PointerTypeUnsigned>(idx);
+#endif
+    T_PointerTypeUnsigned idx_int = (T_PointerTypeUnsigned)idx;
     auto it = pointer_map.find(idx_int);
     detail::dynamic_check(it != pointer_map.end(),
                           "Error: looking up a non-existing app pointer");

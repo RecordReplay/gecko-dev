@@ -139,13 +139,20 @@ class DecodingTask final : public Task {
   explicit DecodingTask(RefPtr<IDecodingTask>&& aTask)
       : Task(false, aTask->Priority() == TaskPriority::eLow
                         ? EventQueuePriority::Normal
-                        : EventQueuePriority::MediumHigh),
+                        : EventQueuePriority::RenderBlocking),
         mTask(aTask) {}
 
   bool Run() override {
     mTask->Run();
     return true;
   }
+
+#ifdef MOZ_COLLECTING_RUNNABLE_TELEMETRY
+  bool GetName(nsACString& aName) override {
+    aName.AssignLiteral("ImageDecodingTask");
+    return true;
+  }
+#endif
 
  private:
   RefPtr<IDecodingTask> mTask;

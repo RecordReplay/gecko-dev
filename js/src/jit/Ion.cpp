@@ -12,8 +12,7 @@
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/ThreadLocal.h"
 
-#include "gc/FreeOp.h"
-#include "gc/Marking.h"
+#include "gc/GCContext.h"
 #include "gc/PublicIterators.h"
 #include "jit/AliasAnalysis.h"
 #include "jit/AlignmentMaskAnalysis.h"
@@ -21,7 +20,6 @@
 #include "jit/BacktrackingAllocator.h"
 #include "jit/BaselineFrame.h"
 #include "jit/BaselineJIT.h"
-#include "jit/CacheIRSpewer.h"
 #include "jit/CodeGenerator.h"
 #include "jit/CompileInfo.h"
 #include "jit/EdgeCaseAnalysis.h"
@@ -37,7 +35,6 @@
 #include "jit/IonOptimizationLevels.h"
 #include "jit/IonScript.h"
 #include "jit/JitcodeMap.h"
-#include "jit/JitCommon.h"
 #include "jit/JitFrames.h"
 #include "jit/JitRealm.h"
 #include "jit/JitRuntime.h"
@@ -59,8 +56,7 @@
 #include "js/Printf.h"
 #include "js/UniquePtr.h"
 #include "util/Memory.h"
-#include "util/Windows.h"
-#include "vm/BytecodeIterator.h"
+#include "util/WindowsWrapper.h"
 #include "vm/HelperThreads.h"
 #include "vm/Realm.h"
 #include "vm/TraceLogging.h"
@@ -68,19 +64,13 @@
 #  include "vtune/VTuneWrapper.h"
 #endif
 
-#include "debugger/DebugAPI-inl.h"
 #include "gc/GC-inl.h"
 #include "jit/InlineScriptTree-inl.h"
 #include "jit/MacroAssembler-inl.h"
 #include "jit/SafepointIndex-inl.h"
-#include "jit/shared/Lowering-shared-inl.h"
-#include "vm/BytecodeIterator-inl.h"
-#include "vm/EnvironmentObject-inl.h"
 #include "vm/GeckoProfiler-inl.h"
-#include "vm/JSObject-inl.h"
 #include "vm/JSScript-inl.h"
 #include "vm/Realm-inl.h"
-#include "vm/Stack-inl.h"
 
 #if defined(ANDROID)
 #  include <sys/system_properties.h>
@@ -103,6 +93,8 @@ JitRuntime::~JitRuntime() {
 }
 
 uint32_t JitRuntime::startTrampolineCode(MacroAssembler& masm) {
+  AutoCreatedBy acb(masm, "startTrampolineCode");
+
   masm.assumeUnreachable("Shouldn't get here");
   masm.flushBuffer();
   masm.haltingAlign(CodeAlignment);
@@ -149,10 +141,9 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
   JitSpew(JitSpew_Codegen, "# Emitting bailout tail stub");
   generateBailoutTailStub(masm, &bailoutTail);
 
-  if (JitOptions.supportsFloatingPoint) {
+  {
     JitSpew(JitSpew_Codegen, "# Emitting bailout tables");
 
-    // Initialize some Ion-only stubs that require floating-point support.
     BailoutTableVector& bailoutTables = bailoutTables_.writeRef();
     if (!bailoutTables.reserve(FrameSizeClass::ClassLimit().classId())) {
       return false;
@@ -167,13 +158,13 @@ bool JitRuntime::generateTrampolines(JSContext* cx) {
       bailoutTables.infallibleAppend(
           generateBailoutTable(masm, &bailoutTail, id));
     }
-
-    JitSpew(JitSpew_Codegen, "# Emitting bailout handler");
-    generateBailoutHandler(masm, &bailoutTail);
-
-    JitSpew(JitSpew_Codegen, "# Emitting invalidator");
-    generateInvalidator(masm, &bailoutTail);
   }
+
+  JitSpew(JitSpew_Codegen, "# Emitting bailout handler");
+  generateBailoutHandler(masm, &bailoutTail);
+
+  JitSpew(JitSpew_Codegen, "# Emitting invalidator");
+  generateInvalidator(masm, &bailoutTail);
 
   // The arguments rectifier has to use the same frame layout as the function
   // frames it rectifies.
@@ -296,7 +287,8 @@ uint8_t* JitRuntime::allocateIonOsrTempData(size_t size) {
 
 void JitRuntime::freeIonOsrTempData() { ionOsrTempData_.ref().reset(); }
 
-JitRealm::JitRealm() : stubCodes_(nullptr), stringsCanBeInNursery(false) {}
+JitRealm::JitRealm()
+    : stubCodes_(nullptr), initialStringHeap(gc::TenuredHeap) {}
 
 JitRealm::~JitRealm() { js_delete(stubCodes_); }
 
@@ -400,8 +392,7 @@ uint8_t* jit::LazyLinkTopActivation(JSContext* cx,
 }
 
 /* static */
-void JitRuntime::TraceAtomZoneRoots(JSTracer* trc,
-                                    const AutoAccessAtomsZone& access) {
+void JitRuntime::TraceAtomZoneRoots(JSTracer* trc) {
   MOZ_ASSERT(!JS::RuntimeHeapIsMinorCollecting());
 
   // Shared stubs are allocated in the atoms zone, so do not iterate
@@ -410,7 +401,7 @@ void JitRuntime::TraceAtomZoneRoots(JSTracer* trc,
     return;
   }
 
-  Zone* zone = trc->runtime()->atomsZone(access);
+  Zone* zone = trc->runtime()->atomsZone();
   for (auto i = zone->cellIterUnsafe<JitCode>(); !i.done(); i.next()) {
     JitCode* code = i;
     TraceRoot(trc, &code, "wrapper");
@@ -443,9 +434,7 @@ void JitRealm::traceWeak(JSTracer* trc, JS::Realm* realm) {
   stubCodes_->traceWeak(trc);
 
   for (WeakHeapPtrJitCode& stub : stubs_) {
-    if (stub) {
-      TraceWeakEdge(trc, &stub, "JitRealm::stubs_");
-    }
+    TraceWeakEdge(trc, &stub, "JitRealm::stubs_");
   }
 }
 
@@ -645,10 +634,10 @@ void JitCode::traceChildren(JSTracer* trc) {
   }
 }
 
-void JitCode::finalize(JSFreeOp* fop) {
+void JitCode::finalize(JS::GCContext* gcx) {
   // If this jitcode had a bytecode map, it must have already been removed.
 #ifdef DEBUG
-  JSRuntime* rt = fop->runtime();
+  JSRuntime* rt = gcx->runtime();
   if (hasBytecodeMap_) {
     MOZ_ASSERT(rt->jitRuntime()->hasJitcodeGlobalTable());
     MOZ_ASSERT(!rt->jitRuntime()->getJitcodeGlobalTable()->lookup(raw()));
@@ -664,7 +653,7 @@ void JitCode::finalize(JSFreeOp* fop) {
   // With W^X JIT code, reprotecting memory for each JitCode instance is
   // slow, so we record the ranges and poison them later all at once. It's
   // safe to ignore OOM here, it just means we won't poison the code.
-  if (fop->appendJitPoisonRange(JitPoisonRange(pool_, raw() - headerSize_,
+  if (gcx->appendJitPoisonRange(JitPoisonRange(pool_, raw() - headerSize_,
                                                headerSize_ + bufferSize_))) {
     pool_->addRef();
   }
@@ -951,7 +940,7 @@ const OsiIndex* IonScript::getOsiIndex(uint8_t* retAddr) const {
   return getOsiIndex(disp);
 }
 
-void IonScript::Destroy(JSFreeOp* fop, IonScript* script) {
+void IonScript::Destroy(JS::GCContext* gcx, IonScript* script) {
   // Make sure there are no pointers into the IonScript's nursery objects list
   // in the store buffer. Because this can be called during sweeping when
   // discarding JIT code, we have to lock the store buffer when we find an
@@ -963,18 +952,18 @@ void IonScript::Destroy(JSFreeOp* fop, IonScript* script) {
       continue;
     }
     if (lock.isNothing()) {
-      lock.emplace(&fop->runtime()->gc.storeBuffer());
+      lock.emplace(&gcx->runtime()->gc.storeBuffer());
     }
     script->nurseryObjects()[i] = HeapPtrObject();
   }
 
   // This allocation is tracked by JSScript::setIonScriptImpl.
-  fop->deleteUntracked(script);
+  gcx->deleteUntracked(script);
 }
 
 void JS::DeletePolicy<js::jit::IonScript>::operator()(
     const js::jit::IonScript* script) {
-  IonScript::Destroy(rt_->defaultFreeOp(), const_cast<IonScript*>(script));
+  IonScript::Destroy(rt_->gcContext(), const_cast<IonScript*>(script));
 }
 
 void IonScript::purgeICs(Zone* zone) {
@@ -1025,6 +1014,20 @@ bool OptimizeMIR(MIRGenerator* mir) {
     AssertBasicGraphCoherency(graph);
 
     if (mir->shouldCancel("Fold Empty Blocks")) {
+      return false;
+    }
+  }
+
+  // Remove trivially dead resume point operands before folding tests, so the
+  // latter pass can optimize more aggressively.
+  if (!mir->compilingWasm()) {
+    if (!EliminateTriviallyDeadResumePointOperands(mir, graph)) {
+      return false;
+    }
+    gs.spewPass("Eliminate trivially dead resume point operands");
+    AssertBasicGraphCoherency(graph);
+
+    if (mir->shouldCancel("Eliminate trivially dead resume point operands")) {
       return false;
     }
   }
@@ -1153,9 +1156,11 @@ bool OptimizeMIR(MIRGenerator* mir) {
   ValueNumberer gvn(mir, graph);
 
   // Alias analysis is required for LICM and GVN so that we don't move
-  // loads across stores.
+  // loads across stores. We also use alias information when removing
+  // redundant shapeguards.
   if (mir->optimizationInfo().licmEnabled() ||
-      mir->optimizationInfo().gvnEnabled()) {
+      mir->optimizationInfo().gvnEnabled() ||
+      mir->optimizationInfo().eliminateRedundantShapeGuardsEnabled()) {
     {
       AutoTraceLog log(logger, TraceLogger_AliasAnalysis);
 
@@ -1180,6 +1185,9 @@ bool OptimizeMIR(MIRGenerator* mir) {
       if (!EliminateDeadResumePointOperands(mir, graph)) {
         return false;
       }
+
+      gs.spewPass("Eliminate dead resume point operands");
+      AssertExtendedGraphCoherency(graph);
 
       if (mir->shouldCancel("Eliminate dead resume point operands")) {
         return false;
@@ -1452,6 +1460,14 @@ bool OptimizeMIR(MIRGenerator* mir) {
     AssertGraphCoherency(graph);
   }
 
+  if (mir->optimizationInfo().eliminateRedundantShapeGuardsEnabled()) {
+    if (!EliminateRedundantShapeGuards(graph)) {
+      return false;
+    }
+    gs.spewPass("Shape Guard Elimination");
+    AssertGraphCoherency(graph);
+  }
+
   if (!mir->compilingWasm() && !mir->outerInfo().hadUnboxFoldingBailout()) {
     AutoTraceLog log(logger, TraceLogger_FoldLoadsWithUnbox);
     if (!FoldLoadsWithUnbox(mir, graph)) {
@@ -1627,7 +1643,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
   auto alloc =
       cx->make_unique<LifoAlloc>(TempAllocator::PreferredLifoChunkSize);
   if (!alloc) {
-    return AbortReason::Alloc;
+    return AbortReason::Error;
   }
 
   TempAllocator* temp = alloc->new_<TempAllocator>(alloc.get());
@@ -1638,11 +1654,11 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
   JitContext jctx(cx, temp);
 
   if (!cx->realm()->ensureJitRealmExists(cx)) {
-    return AbortReason::Alloc;
+    return AbortReason::Error;
   }
 
   if (!cx->realm()->jitRealm()->ensureIonStubsExist(cx)) {
-    return AbortReason::Alloc;
+    return AbortReason::Error;
   }
 
   MIRGraph* graph = alloc->new_<MIRGraph>(temp);
@@ -1695,7 +1711,7 @@ static AbortReason IonCompile(JSContext* cx, HandleScript script,
             ". (Compiled on background thread.)",
             script->filename(), script->lineno(), script->column());
 
-    IonCompileTask* task = alloc->new_<IonCompileTask>(*mirGen, snapshot);
+    IonCompileTask* task = alloc->new_<IonCompileTask>(cx, *mirGen, snapshot);
     if (!task) {
       return AbortReason::Alloc;
     }
@@ -1793,14 +1809,6 @@ static bool CanIonCompileOrInlineScript(JSScript* script, const char** reason) {
     // object as scope chain, this is not valid when the script has a
     // non-syntactic global scope.
     *reason = "has non-syntactic global scope";
-    return false;
-  }
-
-  if (script->functionHasExtraBodyVarScope() &&
-      script->functionExtraBodyVarScope()->hasEnvironment()) {
-    // This restriction will be lifted when intra-function scope chains
-    // are compilable by Ion. See bug 1273858.
-    *reason = "has extra var environment";
     return false;
   }
 
@@ -2300,7 +2308,7 @@ bool jit::IonCompileScriptForBaselineOSR(JSContext* cx, BaselineFrame* frame,
   return true;
 }
 
-static void InvalidateActivation(JSFreeOp* fop,
+static void InvalidateActivation(JS::GCContext* gcx,
                                  const JitActivationIterator& activations,
                                  bool invalidateAll) {
   JitSpew(JitSpew_IonInvalidate, "BEGIN invalidating activation");
@@ -2464,7 +2472,7 @@ static void InvalidateActivation(JSFreeOp* fop,
   JitSpew(JitSpew_IonInvalidate, "END invalidating activation");
 }
 
-void jit::InvalidateAll(JSFreeOp* fop, Zone* zone) {
+void jit::InvalidateAll(JS::GCContext* gcx, Zone* zone) {
   // The caller should previously have cancelled off thread compilation.
 #ifdef DEBUG
   for (RealmsInZoneIter realm(zone); !realm.done(); realm.next()) {
@@ -2478,7 +2486,7 @@ void jit::InvalidateAll(JSFreeOp* fop, Zone* zone) {
   for (JitActivationIterator iter(cx); !iter.done(); ++iter) {
     if (iter->compartment()->zone() == zone) {
       JitSpew(JitSpew_IonInvalidate, "Invalidating all frames for GC");
-      InvalidateActivation(fop, iter, true);
+      InvalidateActivation(gcx, iter, true);
     }
   }
 }
@@ -2489,7 +2497,7 @@ static void ClearIonScriptAfterInvalidation(JSContext* cx, JSScript* script,
   // Null out the JitScript's IonScript pointer. The caller is responsible for
   // destroying the IonScript using the invalidation count mechanism.
   DebugOnly<IonScript*> clearedIonScript =
-      script->jitScript()->clearIonScript(cx->defaultFreeOp(), script);
+      script->jitScript()->clearIonScript(cx->gcContext(), script);
   MOZ_ASSERT(clearedIonScript == ionScript);
 
   // Wait for the scripts to get warm again before doing another
@@ -2533,9 +2541,9 @@ void jit::Invalidate(JSContext* cx, const RecompileInfoVector& invalid,
     return;
   }
 
-  JSFreeOp* fop = cx->defaultFreeOp();
+  JS::GCContext* gcx = cx->gcContext();
   for (JitActivationIterator iter(cx); !iter.done(); ++iter) {
-    InvalidateActivation(fop, iter, false);
+    InvalidateActivation(gcx, iter, false);
   }
 
   // Drop the references added above. If a script was never active, its
@@ -2555,7 +2563,7 @@ void jit::Invalidate(JSContext* cx, const RecompileInfoVector& invalid,
       ClearIonScriptAfterInvalidation(cx, info.script(), ionScript, resetUses);
     }
 
-    ionScript->decrementInvalidationCount(fop);
+    ionScript->decrementInvalidationCount(gcx);
     numInvalidations--;
   }
 
@@ -2623,18 +2631,18 @@ void jit::Invalidate(JSContext* cx, JSScript* script, bool resetUses,
   Invalidate(cx, scripts, resetUses, cancelOffThread);
 }
 
-void jit::FinishInvalidation(JSFreeOp* fop, JSScript* script) {
+void jit::FinishInvalidation(JS::GCContext* gcx, JSScript* script) {
   if (!script->hasIonScript()) {
     return;
   }
 
   // In all cases, null out jitScript->ionScript_ to avoid re-entry.
-  IonScript* ion = script->jitScript()->clearIonScript(fop, script);
+  IonScript* ion = script->jitScript()->clearIonScript(gcx, script);
 
   // If this script has Ion code on the stack, invalidated() will return
   // true. In this case we have to wait until destroying it.
   if (!ion->invalidated()) {
-    jit::IonScript::Destroy(fop, ion);
+    jit::IonScript::Destroy(gcx, ion);
   }
 }
 

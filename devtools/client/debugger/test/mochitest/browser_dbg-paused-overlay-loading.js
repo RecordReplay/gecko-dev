@@ -5,6 +5,8 @@
 // Tests that the paused overlay isn't visible after resuming if the debugger paused
 // while the DOM was still loading (Bug 1678636).
 
+"use strict";
+
 add_task(async function() {
   const dbg = await initDebuggerWithAbsoluteURL(
     "data:text/html,<meta charset=utf8><script>debugger;</script>"
@@ -13,22 +15,31 @@ add_task(async function() {
   info("Reload the page to hit the debugger statement while loading");
   reload(dbg);
   await waitForPaused(dbg);
-  // TODO: Check that the overlay is displayed (Bug 1580394), it's not at the moment.
   ok(true, "We're paused");
 
-  // TODO: Resume with clicking on the overlay button, when Bug 1580394 is fixed.
-  info("Resume");
-  await resume(dbg);
-  ok(true, "We're not paused anymore");
-
-  info("Wait for a bit, just to make sure the overlay isn't displayed");
-  await waitForTime(5000);
-
-  const highlighterTestFront = await getHighlighterTestFront(dbg.toolbox);
-  const isPausedOverlayVisible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
-  is(
-    isPausedOverlayVisible,
-    false,
-    "The pause overlay is not visible after resuming"
+  info("Check that the paused overlay is displayed");
+  const highlighterTestFront = await dbg.toolbox.target.getFront(
+    "highlighterTest"
   );
+
+  await waitFor(async () => {
+    const visible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
+    return visible;
+  });
+  ok(true, "Paused debugger overlay is visible");
+
+  info("Click the resume button");
+  await highlighterTestFront.clickPausedDebuggerOverlayButton(
+    "paused-dbg-resume-button"
+  );
+
+  await waitForResumed(dbg);
+  ok("The debugger isn't paused after clicking on the resume button");
+
+  await waitFor(async () => {
+    const visible = await highlighterTestFront.isPausedDebuggerOverlayVisible();
+    return !visible;
+  });
+
+  ok(true, "The overlay is now hidden");
 });

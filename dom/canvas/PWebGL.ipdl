@@ -5,14 +5,13 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-include protocol PCompositorBridge;
-include protocol PLayerTransaction;
+include protocol PCanvasManager;
 
 using mozilla::layers::CompositableHandle from "mozilla/layers/LayersTypes.h";
 using mozilla::layers::SurfaceDescriptor from "mozilla/layers/LayersTypes.h";
 using std::string from "string";
 using mozilla::uvec2 from "mozilla/dom/WebGLIpdl.h";
-using mozilla::webgl::Int32Vector from "mozilla/dom/WebGLIpdl.h";
+using mozilla::uvec3 from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::CompileResult from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::ContextLossReason from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::FrontBufferSnapshotIpc from "mozilla/dom/WebGLIpdl.h";
@@ -21,12 +20,12 @@ using mozilla::webgl::InitContextDesc from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::InitContextResult from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::Int32Vector from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::LinkResult from "mozilla/dom/WebGLIpdl.h";
-using mozilla::webgl::ShaderPrecisionFormat from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::OpaqueFramebufferOptions from "mozilla/dom/WebGLIpdl.h";
+using mozilla::webgl::PackingInfo from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::ReadPixelsDesc from "mozilla/dom/WebGLIpdl.h";
 using mozilla::webgl::ReadPixelsResultIpc from "mozilla/dom/WebGLIpdl.h";
-using mozilla::dom::IpdlQueueBuffer from "mozilla/dom/IpdlQueue.h";
-using mozilla::dom::IpdlQueueBuffers from "mozilla/dom/IpdlQueue.h";
+using mozilla::webgl::ShaderPrecisionFormat from "mozilla/dom/WebGLIpdl.h";
+[MoveOnly] using mozilla::webgl::TexUnpackBlobDesc from "mozilla/dom/WebGLIpdl.h";
 
 namespace mozilla {
 namespace dom {
@@ -36,9 +35,9 @@ namespace dom {
  * command from the content process, and a WebGLParent in the compositor
  * process that runs the commands.
  */
-sync refcounted protocol PWebGL
+sync protocol PWebGL
 {
-  manager PCompositorBridge;
+  manager PCanvasManager;
 
 parent:
   sync Initialize(InitContextDesc desc)
@@ -49,6 +48,9 @@ parent:
   // -
 
   async DispatchCommands(Shmem commands, uint64_t size);
+
+  async TexImage(uint32_t level, uint32_t respecFormat, uvec3 offset,
+                 PackingInfo pi, TexUnpackBlobDesc src);
 
   // -
 

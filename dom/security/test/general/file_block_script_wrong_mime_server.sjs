@@ -2,7 +2,7 @@
 // Bug 1288361 - Block scripts with wrong MIME type
 
 "use strict";
-Components.utils.importGlobalProperties(["URLSearchParams"]);
+Cu.importGlobalProperties(["URLSearchParams"]);
 
 const WORKER = `
   onmessage = function(event) {
@@ -27,7 +27,11 @@ function handleRequest(request, response) {
       response.write(WORKER);
       break;
     case "worker-import":
-      response.write(`importScripts("file_block_script_wrong_mime_server.sjs?type=script&mime=${query.get("mime")}");`);
+      response.write(
+        `importScripts("file_block_script_wrong_mime_server.sjs?type=script&mime=${query.get(
+          "mime"
+        )}");`
+      );
       response.write(WORKER);
       break;
   }

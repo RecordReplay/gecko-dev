@@ -12,31 +12,40 @@
 #include "mozilla/TextUtils.h"
 #include "nsTArray.h"
 #include "nsCRT.h"
-#include "plstr.h"
 #include "nsASCIIMask.h"
 
 static const char hexCharsUpper[] = "0123456789ABCDEF";
 static const char hexCharsUpperLower[] = "0123456789ABCDEFabcdef";
 
-static const int netCharType[256] =
+static const unsigned char netCharType[256] =
     // clang-format off
 /*  Bit 0       xalpha      -- the alphas
 **  Bit 1       xpalpha     -- as xalpha but
 **                             converts spaces to plus and plus to %2B
 **  Bit 3 ...   path        -- as xalphas but doesn't escape '/'
+**  Bit 4 ...   NSURL-ref   -- extra encoding for Apple NSURL compatibility.
+**                             This encoding set is used on encoded URL ref
+**                             components before converting a URL to an NSURL
+**                             so we don't include '%' to avoid double encoding.
 */
-  /* 0 1 2 3 4 5 6 7 8 9 A B C D E F */
-  {  0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,   /* 0x */
-     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,   /* 1x */
-     0,0,0,0,0,0,0,0,0,0,7,4,0,7,7,4,   /* 2x   !"#$%&'()*+,-./  */
-     7,7,7,7,7,7,7,7,7,7,0,0,0,0,0,0,   /* 3x  0123456789:;<=>?  */
-     0,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,   /* 4x  @ABCDEFGHIJKLMNO  */
+  /*   0   1   2   3   4   5   6   7   8   9   A   B   C   D   E   F */
+  {  0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0, /* 0x */
+     0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0,0x0, /* 1x */
+  /*       !   "   #   $   %   &   '   (   )   *   +   ,   -   .   /        */
+     0x0,0x8,0x0,0x0,0x8,0x8,0x8,0x8,0x8,0x8,0xf,0xc,0x8,0xf,0xf,0xc, /* 2x */
+  /*   0   1   2   3   4   5   6   7   8   9   :   ;   <   =   >   ?        */
+     0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0x8,0x8,0x0,0x8,0x0,0x8, /* 3x */
+  /*   @   A   B   C   D   E   F   G   H   I   J   K   L   M   N   O        */
+     0x8,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf, /* 4x */
      /* bits for '@' changed from 7 to 0 so '@' can be escaped   */
      /* in usernames and passwords in publishing.                */
-     7,7,7,7,7,7,7,7,7,7,7,0,0,0,0,7,   /* 5X  PQRSTUVWXYZ[\]^_  */
-     0,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,   /* 6x  `abcdefghijklmno  */
-     7,7,7,7,7,7,7,7,7,7,7,0,0,0,0,0,   /* 7X  pqrstuvwxyz{\}~  DEL */
-     0,
+  /*   P   Q   R   S   T   U   V   W   X   Y   Z   [   \   ]   ^   _        */
+     0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0x0,0x0,0x0,0x0,0xf, /* 5x */
+  /*   `   a   b   c   d   e   f   g   h   i   j   k   l   m   n   o        */
+     0x0,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf, /* 6x */
+  /*   p   q   r   s   t   u   v   w   x   y   z   {   |   }   ~ DEL        */
+     0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0xf,0x0,0x0,0x0,0x8,0x0, /* 7x */
+     0x0,
   };
 
 /* decode % escaped hex codes into character values
@@ -47,7 +56,7 @@ static const int netCharType[256] =
      ((C >= 'a' && C <= 'f') ? C - 'a' + 10 : 0)))
 // clang-format on
 
-#define IS_OK(C) (netCharType[((unsigned int)(C))] & (aFlags))
+#define IS_OK(C) (netCharType[((unsigned char)(C))] & (aFlags))
 #define HEX_ESCAPE '%'
 
 static const uint32_t ENCODE_MAX_LEN = 6;  // %uABCD
@@ -181,8 +190,8 @@ int32_t nsUnescapeCount(char* aStr)
       c2[0] = *(src + 2);
     }
 
-    if (*src != HEX_ESCAPE || PL_strpbrk(pc1, hexCharsUpperLower) == 0 ||
-        PL_strpbrk(pc2, hexCharsUpperLower) == 0) {
+    if (*src != HEX_ESCAPE || strpbrk(pc1, hexCharsUpperLower) == nullptr ||
+        strpbrk(pc2, hexCharsUpperLower) == nullptr) {
       *dst++ = *src++;
     } else {
       src++; /* walk over escape */
@@ -235,21 +244,63 @@ void nsAppendEscapedHTML(const nsACString& aSrc, nsACString& aDst) {
 // The following table encodes which characters needs to be escaped for which
 // parts of an URL.  The bits are the "url components" in the enum EscapeMask,
 // see nsEscape.h.
-//
-// esc_Scheme        =      1
-// esc_Username      =      2
-// esc_Password      =      4
-// esc_Host          =      8
-// esc_Directory     =     16
-// esc_FileBaseName  =     32
-// esc_FileExtension =     64
-// esc_Param         =    128
-// esc_Query         =    256
-// esc_Ref           =    512
-// esc_ExtHandler    = 131072
 
-static const uint32_t EscapeChars[256] =
-    // clang-format off
+template <size_t N>
+static constexpr void AddUnescapedChars(const char (&aChars)[N],
+                                        uint32_t aFlags,
+                                        std::array<uint32_t, 256>& aTable) {
+  for (size_t i = 0; i < N - 1; ++i) {
+    aTable[static_cast<unsigned char>(aChars[i])] |= aFlags;
+  }
+}
+
+static constexpr std::array<uint32_t, 256> BuildEscapeChars() {
+  constexpr uint32_t kAllModes = esc_Scheme | esc_Username | esc_Password |
+                                 esc_Host | esc_Directory | esc_FileBaseName |
+                                 esc_FileExtension | esc_Param | esc_Query |
+                                 esc_Ref | esc_ExtHandler;
+
+  std::array<uint32_t, 256> table{0};
+
+  // Alphanumerics shouldn't be escaped in all escape modes.
+  AddUnescapedChars("0123456789", kAllModes, table);
+  AddUnescapedChars("ABCDEFGHIJKLMNOPQRSTUVWXYZ", kAllModes, table);
+  AddUnescapedChars("abcdefghijklmnopqrstuvwxyz", kAllModes, table);
+  AddUnescapedChars("!$&()*+,-_~", kAllModes, table);
+
+  // Extra characters which aren't escaped in particular escape modes.
+  AddUnescapedChars(".", esc_Scheme, table);
+  // esc_Username has no additional unescaped characters.
+  AddUnescapedChars("|", esc_Password, table);
+  AddUnescapedChars(".", esc_Host, table);
+  AddUnescapedChars("'./:;=@[]|", esc_Directory, table);
+  AddUnescapedChars("'.:;=@[]|", esc_FileBaseName, table);
+  AddUnescapedChars("':;=@[]|", esc_FileExtension, table);
+  AddUnescapedChars(".:;=@[\\]^`{|}", esc_Param, table);
+  AddUnescapedChars("./:;=?@[\\]^`{|}", esc_Query, table);
+  AddUnescapedChars("#'./:;=?@[\\]^{|}", esc_Ref, table);
+  AddUnescapedChars("#'./:;=?@[]", esc_ExtHandler, table);
+
+  return table;
+}
+
+static constexpr std::array<uint32_t, 256> EscapeChars = BuildEscapeChars();
+
+static bool dontNeedEscape(unsigned char aChar, uint32_t aFlags) {
+  return EscapeChars[(size_t)aChar] & aFlags;
+}
+static bool dontNeedEscape(uint16_t aChar, uint32_t aFlags) {
+  return aChar < EscapeChars.size() ? (EscapeChars[(size_t)aChar] & aFlags)
+                                    : false;
+}
+
+// Temporary static assert to make sure that the rewrite to using
+// `BuildEscapeChars` didn't change the final array in memory.
+// It will be removed in Bug 1750945.
+
+static_assert([]() constexpr {
+  constexpr uint32_t OldEscapeChars[256] =
+      // clang-format off
 //     0      1      2      3      4      5      6      7      8      9      A      B      C      D      E      F
 {
        0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,     0,  // 0x
@@ -262,16 +313,15 @@ static const uint32_t EscapeChars[256] =
   132095,132095,132095,132095,132095,132095,132095,132095,132095,132095,132095,   896,  1012,   896,132095,     0,  // 7x  pqrstuvwxyz{|}~ DEL
        0                                                                                                            // 80 to FF are zero
 };
-// clang-format on
+  // clang-format on
 
-static bool dontNeedEscape(unsigned char aChar, uint32_t aFlags) {
-  return EscapeChars[(uint32_t)aChar] & aFlags;
-}
-static bool dontNeedEscape(uint16_t aChar, uint32_t aFlags) {
-  return aChar < mozilla::ArrayLength(EscapeChars)
-             ? (EscapeChars[(uint32_t)aChar] & aFlags)
-             : false;
-}
+  for (size_t i = 0; i < EscapeChars.size(); ++i) {
+    if (OldEscapeChars[i] != EscapeChars[i]) {
+      return false;
+    }
+  }
+  return true;
+}());
 
 //----------------------------------------------------------------------------------------
 

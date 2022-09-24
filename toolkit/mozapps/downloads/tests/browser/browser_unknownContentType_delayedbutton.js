@@ -51,6 +51,9 @@ function waitDelay(delay) {
 }
 
 add_task(async function test_unknownContentType_delayedbutton() {
+  info("Starting browser_unknownContentType_delayedbutton.js...");
+  forcePromptForFiles("text/plain", "txt");
+
   Services.ww.registerNotification(UCTObserver);
 
   await BrowserTestUtils.withNewTab(

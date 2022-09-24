@@ -27,8 +27,7 @@ class BackgroundChildImpl;
 
 }  // namespace ipc
 
-namespace dom {
-namespace quota {
+namespace dom::quota {
 
 class QuotaManagerService;
 class Request;
@@ -144,6 +143,8 @@ class QuotaRequestChild final : public PQuotaRequestChild {
 
   void HandleResponse(const nsTArray<nsCString>& aResponse);
 
+  void HandleResponse(const GetFullOriginMetadataResponse& aResponse);
+
   // IPDL methods are only called by IPDL.
   virtual void ActorDestroy(ActorDestroyReason aWhy) override;
 
@@ -151,8 +152,7 @@ class QuotaRequestChild final : public PQuotaRequestChild {
       const RequestResponse& aResponse) override;
 };
 
-}  // namespace quota
-}  // namespace dom
+}  // namespace dom::quota
 }  // namespace mozilla
 
 #endif  // mozilla_dom_quota_ActorsChild_h

@@ -24,6 +24,10 @@ Getting attention: If a reviewer doesn't respond within a week, or so of the rev
   * Join developers on `Mozilla's Matrix server <https://chat.mozilla.org>`_, and ask if anyone knows why a review may be delayed. Please link to the bug too.
   * If the review is still not addressed, mail the reviewer directly, asking if/when they'll have time to review the patch, or might otherwise be able to review it.
 
+For simple documentation changes, reviews are not required.
+
+For more information about the review process, see the :ref:`Code Review FAQ`.
+
 Review groups
 -------------
 
@@ -34,15 +38,18 @@ Review groups
    * - Name
      - Owns
      - Members
+   * - #anti-tracking or #anti-tracking-reviewers
+     - `Anti-Tracking <https://wiki.mozilla.org/Modules/All#Anti-Tracking>`__
+     - `Member list <https://phabricator.services.mozilla.com/project/members/157/>`__
    * - #build or #firefox-build-system-reviewers
      - The configure & build system
      - `Member list <https://phabricator.services.mozilla.com/project/members/20/>`__
    * - #dom-workers-and-storage-reviewers
      - DOM Workers & Storage
      - `Member list <https://phabricator.services.mozilla.com/project/members/115/>`__
-   * - #devtools-inspector-reviewers
-     - The devtools inspector tool
-     - `Member list <https://phabricator.services.mozilla.com/project/members/109/>`__
+   * - #devtools-reviewers
+     - Firefox DevTools
+     - `Member list <https://phabricator.services.mozilla.com/project/members/153/>`__
    * - #fluent-reviewers
      - Changes to Fluent (FTL) files (translation).
      - `Member list <https://phabricator.services.mozilla.com/project/members/105/>`__
@@ -70,15 +77,27 @@ Review groups
    * - #linter-reviewers
      - tools/lint/*
      - `Member list <https://phabricator.services.mozilla.com/project/members/119/>`__
+   * - #mac-reviewers
+     - Changes to Mac-specific code
+     - `Member list <https://phabricator.services.mozilla.com/project/members/149/>`__
    * - #mozbase
      - Changes to Mozbase
      - `Member list <https://phabricator.services.mozilla.com/project/members/113/>`__
    * - #mozbase-rust
      - Changes to Mozbase in Rust
      - `Member list <https://phabricator.services.mozilla.com/project/members/114/>`__
+   * - #nss-reviewers
+     - Changes to Network Security Services (NSS)
+     - `Member list <https://phabricator.services.mozilla.com/project/members/156/>`__
    * - #perftest-reviewers
      - Perf Tests
      - `Member list <https://phabricator.services.mozilla.com/project/members/102/>`__
+   * - #permissions or #permissions-reviewers
+     - `Permissions <https://wiki.mozilla.org/Modules/All#Permissions>`__
+     - `Member list <https://phabricator.services.mozilla.com/project/members/158/>`__
+   * - #platform-i18n-reviewers
+     - Platform Internationalization
+     - `Member list <https://phabricator.services.mozilla.com/project/members/150/>`__
    * - #preferences-reviewers
      - Firefox for Desktop Preferences (Options) user interface
      - `Member list <https://phabricator.services.mozilla.com/project/members/132/>`__
@@ -103,6 +122,9 @@ Review groups
    * - #xpcom-reviewers
      - Changes related to XPCOM
      - `Member list <https://phabricator.services.mozilla.com/project/members/125/>`__
+   * - #media-playback-reviewers
+     - `Media playback <https://wiki.mozilla.org/Modules/All#Media_Playback>`__
+     - `Member list <https://phabricator.services.mozilla.com/project/profile/159/>`__
 
 To create a new group, fill a `new bug in Conduit::Administration <https://bugzilla.mozilla.org/enter_bug.cgi?product=Conduit&component=Administration>`__.
 See `bug 1613306 <https://bugzilla.mozilla.org/show_bug.cgi?id=1613306>`__ as example.

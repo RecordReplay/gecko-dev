@@ -19,8 +19,8 @@ const {
 const makeDebugger = require("devtools/server/actors/utils/make-debugger");
 const protocol = require("devtools/shared/protocol");
 const {
-  browsingContextTargetSpec,
-} = require("devtools/shared/specs/targets/browsing-context");
+  windowGlobalTargetSpec,
+} = require("devtools/shared/specs/targets/window-global");
 const { tabDescriptorSpec } = require("devtools/shared/specs/descriptors/tab");
 const Targets = require("devtools/server/actors/targets/index");
 
@@ -146,7 +146,7 @@ const TestDescriptorActor = protocol.ActorClassWithSpec(tabDescriptorSpec, {
   },
 });
 
-const TestTargetActor = protocol.ActorClassWithSpec(browsingContextTargetSpec, {
+const TestTargetActor = protocol.ActorClassWithSpec(windowGlobalTargetSpec, {
   initialize: function(conn, global) {
     protocol.Actor.prototype.initialize.call(this, conn);
     this.conn = conn;
@@ -154,7 +154,6 @@ const TestTargetActor = protocol.ActorClassWithSpec(browsingContextTargetSpec, {
     this._global.wrappedJSObject = global;
     this.threadActor = new ThreadActor(this, this._global);
     this.conn.addActor(this.threadActor);
-    this._attached = false;
     this._extraActors = {};
     // This is a hack in order to enable threadActor to be accessed from getFront
     this._extraActors.threadActor = this.threadActor;
@@ -189,7 +188,11 @@ const TestTargetActor = protocol.ActorClassWithSpec(browsingContextTargetSpec, {
   },
 
   form: function() {
-    const response = { actor: this.actorID, title: this.title };
+    const response = {
+      actor: this.actorID,
+      title: this.title,
+      threadActor: this.threadActor.actorID,
+    };
 
     // Walk over target-scoped actors and add them to a new LazyPool.
     const actorPool = new LazyPool(this.conn);
@@ -206,16 +209,7 @@ const TestTargetActor = protocol.ActorClassWithSpec(browsingContextTargetSpec, {
     return { ...response, ...actors };
   },
 
-  attach: function(request) {
-    this._attached = true;
-
-    return { threadActor: this.threadActor.actorID };
-  },
-
   detach: function(request) {
-    if (!this._attached) {
-      return { error: "wrongState" };
-    }
     this.threadActor.destroy();
     return { type: "detached" };
   },

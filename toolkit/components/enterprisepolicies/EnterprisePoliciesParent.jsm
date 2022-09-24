@@ -186,8 +186,16 @@ EnterprisePoliciesManager.prototype = {
         continue;
       }
 
-      this._parsedPolicies[policyName] = parsedParameters;
       let policyImpl = Policies[policyName];
+
+      if (policyImpl.validate && !policyImpl.validate(parsedParameters)) {
+        log.error(
+          `Parameters for ${policyName} did not validate successfully.`
+        );
+        continue;
+      }
+
+      this._parsedPolicies[policyName] = parsedParameters;
 
       for (let timing of Object.keys(this._callbacks)) {
         let policyCallback = policyImpl[timing];
@@ -249,6 +257,7 @@ EnterprisePoliciesManager.prototype = {
     Services.ppmm.sharedData.delete("EnterprisePolicies:DisallowedFeatures");
 
     this._status = Ci.nsIEnterprisePolicies.UNINITIALIZED;
+    this._parsedPolicies = undefined;
     for (let timing of Object.keys(this._callbacks)) {
       this._callbacks[timing] = [];
     }
@@ -426,6 +435,31 @@ EnterprisePoliciesManager.prototype = {
   allowedInstallSource(uri) {
     return InstallSources ? InstallSources.matches(uri) : true;
   },
+
+  isExemptExecutableExtension(origin, extension) {
+    let url;
+    try {
+      url = new URL(origin);
+    } catch (e) {
+      return false;
+    }
+    let { hostname } = url;
+    let exemptArray = this.getActivePolicies()
+      ?.ExemptDomainFileTypePairsFromFileTypeDownloadWarnings;
+    if (!hostname || !extension || !exemptArray) {
+      return false;
+    }
+    let domains = exemptArray
+      .filter(item => item.file_extension == extension)
+      .map(item => item.domains)
+      .flat();
+    for (let domain of domains) {
+      if (Services.eTLD.hasRootDomain(hostname, domain)) {
+        return true;
+      }
+    }
+    return false;
+  },
 };
 
 let DisallowedFeatures = {};
@@ -456,11 +490,11 @@ function areEnterpriseOnlyPoliciesAllowed() {
     return true;
   }
 
-  if (AppConstants.MOZ_UPDATE_CHANNEL != "release") {
-    return true;
-  }
-
-  return false;
+  return (
+    AppConstants.IS_ESR ||
+    AppConstants.MOZ_DEV_EDITION ||
+    AppConstants.NIGHTLY_BUILD
+  );
 }
 
 /*
@@ -561,6 +595,8 @@ class JSONPoliciesProvider {
     try {
       let data = Cu.readUTF8File(configFile);
       if (data) {
+        log.debug(`policies.json path = ${configFile.path}`);
+        log.debug(`policies.json content = ${data}`);
         this._policies = JSON.parse(data).policies;
 
         if (!this._policies) {
@@ -595,11 +631,9 @@ class WindowsGPOPoliciesProvider {
 
     // Machine policies override user policies, so we read
     // user policies first and then replace them if necessary.
-    log.debug("root = HKEY_CURRENT_USER");
     this._readData(wrk, wrk.ROOT_KEY_CURRENT_USER);
     // We don't access machine policies in testing
     if (!Cu.isInAutomation && !isXpcshell) {
-      log.debug("root = HKEY_LOCAL_MACHINE");
       this._readData(wrk, wrk.ROOT_KEY_LOCAL_MACHINE);
     }
   }
@@ -626,6 +660,13 @@ class WindowsGPOPoliciesProvider {
       }
       wrk.open(root, regLocation, wrk.ACCESS_READ);
       if (wrk.hasChild("Mozilla\\" + Services.appinfo.name)) {
+        log.debug(
+          `root = ${
+            root == wrk.ROOT_KEY_CURRENT_USER
+              ? "HKEY_CURRENT_USER"
+              : "HKEY_LOCAL_MACHINE"
+          }`
+        );
         this._policies = WindowsGPOParser.readPolicies(wrk, this._policies);
       }
       wrk.close();

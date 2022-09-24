@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "jstypes.h"
+#include "NamespaceImports.h"
 
 #include "js/ScalarType.h"  // js::Scalar::Type
 #include "js/Value.h"
@@ -167,6 +168,9 @@ enum class BailoutKind : uint8_t {
   // A bailout to baseline from Ion on exception to handle Debugger hooks.
   IonExceptionDebugMode,
 
+  // A bailout to baseline from Ion on exception to handle a finally block.
+  Finally,
+
   // We returned to a stack frame after invalidating its IonScript.
   OnStackInvalidation,
 
@@ -210,6 +214,8 @@ inline const char* BailoutKindString(BailoutKind kind) {
       return "UninitializedLexical";
     case BailoutKind::IonExceptionDebugMode:
       return "IonExceptionDebugMode";
+    case BailoutKind::Finally:
+      return "Finally";
     case BailoutKind::OnStackInvalidation:
       return "OnStackInvalidation";
     case BailoutKind::Unreachable:
@@ -672,6 +678,11 @@ static inline bool IsMagicType(MIRType type) {
          type == MIRType::MagicUninitializedLexical;
 }
 
+static inline bool IsNonGCThing(MIRType type) {
+  return type == MIRType::Undefined || type == MIRType::Null ||
+         type == MIRType::Boolean || IsNumberType(type);
+}
+
 static inline MIRType ScalarTypeToMIRType(Scalar::Type type) {
   switch (type) {
     case Scalar::Int8:
@@ -735,12 +746,12 @@ enum ABIArgType {
 
 namespace detail {
 
-static constexpr int MakeABIFunctionType(
+static constexpr uint64_t MakeABIFunctionType(
     ABIArgType ret, std::initializer_list<ABIArgType> args) {
-  int abiType = ret << RetType_Shift;
+  uint64_t abiType = (uint64_t)ret << RetType_Shift;
   int i = 1;
   for (auto arg : args) {
-    abiType |= (arg << (ArgType_Shift * i));
+    abiType |= ((uint64_t)arg << (ArgType_Shift * i));
     i++;
   }
   return abiType;
@@ -748,7 +759,7 @@ static constexpr int MakeABIFunctionType(
 
 }  // namespace detail
 
-enum ABIFunctionType : uint32_t {
+enum ABIFunctionType : uint64_t {
   // The enum must be explicitly typed to avoid UB: some validly constructed
   // members are larger than any explicitly declared members.
 
@@ -857,6 +868,7 @@ enum ABIFunctionType : uint32_t {
                                       (ArgType_Int64 << (ArgType_Shift * 3)) |
                                       (ArgType_Int64 << (ArgType_Shift * 4)),
 
+  // int32_t f(...) variants
   Args_Int32_General =
       detail::MakeABIFunctionType(ArgType_Int32, {ArgType_General}),
   Args_Int32_GeneralInt32 = detail::MakeABIFunctionType(
@@ -869,6 +881,32 @@ enum ABIFunctionType : uint32_t {
   Args_Int32_GeneralInt32Int32Int32Int32Int32 = detail::MakeABIFunctionType(
       ArgType_Int32, {ArgType_General, ArgType_Int32, ArgType_Int32,
                       ArgType_Int32, ArgType_Int32, ArgType_Int32}),
+  Args_Int32_GeneralInt32Int32Int32Int32General = detail::MakeABIFunctionType(
+      ArgType_Int32, {ArgType_General, ArgType_Int32, ArgType_Int32,
+                      ArgType_Int32, ArgType_Int32, ArgType_General}),
+  Args_Int32_GeneralInt32Int32Int32Int32Int32Int32General =
+      detail::MakeABIFunctionType(
+          ArgType_Int32,
+          {ArgType_General, ArgType_Int32, ArgType_Int32, ArgType_Int32,
+           ArgType_Int32, ArgType_Int32, ArgType_Int32, ArgType_General}),
+  Args_Int32_GeneralInt32Float32Float32Int32Int32Int32General =
+      detail::MakeABIFunctionType(
+          ArgType_Int32,
+          {ArgType_General, ArgType_Int32, ArgType_Float32, ArgType_Float32,
+           ArgType_Int32, ArgType_Int32, ArgType_Int32, ArgType_General}),
+  Args_Int32_GeneralInt32Float32Float32Float32Float32Int32Int32Int32Int32General =
+      detail::MakeABIFunctionType(
+          ArgType_Int32,
+          {ArgType_General, ArgType_Int32, ArgType_Float32, ArgType_Float32,
+           ArgType_Float32, ArgType_Float32, ArgType_Int32, ArgType_Int32,
+           ArgType_Int32, ArgType_Int32, ArgType_General}),
+  Args_Int32_GeneralInt32Float32Float32Int32Float32Float32Int32Float32Int32Int32Int32Int32General =
+      detail::MakeABIFunctionType(
+          ArgType_Int32,
+          {ArgType_General, ArgType_Int32, ArgType_Float32, ArgType_Float32,
+           ArgType_Int32, ArgType_Float32, ArgType_Float32, ArgType_Int32,
+           ArgType_Float32, ArgType_Int32, ArgType_Int32, ArgType_Int32,
+           ArgType_Int32, ArgType_General}),
   Args_Int32_GeneralInt32Int32Int32General = detail::MakeABIFunctionType(
       ArgType_Int32, {ArgType_General, ArgType_Int32, ArgType_Int32,
                       ArgType_Int32, ArgType_General}),
@@ -894,12 +932,39 @@ enum ABIFunctionType : uint32_t {
   Args_Int32_GeneralGeneralInt32Int32 = detail::MakeABIFunctionType(
       ArgType_Int32,
       {ArgType_General, ArgType_General, ArgType_Int32, ArgType_Int32}),
+
+  // general f(...) variants
   Args_General_GeneralInt32 = detail::MakeABIFunctionType(
       ArgType_General, {ArgType_General, ArgType_Int32}),
   Args_General_GeneralInt32Int32 = detail::MakeABIFunctionType(
       ArgType_General, {ArgType_General, ArgType_Int32, ArgType_Int32}),
   Args_General_GeneralInt32General = detail::MakeABIFunctionType(
       ArgType_General, {ArgType_General, ArgType_Int32, ArgType_General}),
+  Args_Int32_GeneralInt64Int32Int32Int32 = detail::MakeABIFunctionType(
+      ArgType_Int32, {ArgType_General, ArgType_Int64, ArgType_Int32,
+                      ArgType_Int32, ArgType_Int32}),
+  Args_Int32_GeneralInt64Int32 = detail::MakeABIFunctionType(
+      ArgType_Int32, {ArgType_General, ArgType_Int64, ArgType_Int32}),
+  Args_Int32_GeneralInt64Int32Int64 = detail::MakeABIFunctionType(
+      ArgType_Int32,
+      {ArgType_General, ArgType_Int64, ArgType_Int32, ArgType_Int64}),
+  Args_Int32_GeneralInt64Int32Int64General = detail::MakeABIFunctionType(
+      ArgType_Int32, {ArgType_General, ArgType_Int64, ArgType_Int32,
+                      ArgType_Int64, ArgType_General}),
+  Args_Int32_GeneralInt64Int64Int64 = detail::MakeABIFunctionType(
+      ArgType_Int32,
+      {ArgType_General, ArgType_Int64, ArgType_Int64, ArgType_Int64}),
+  Args_Int32_GeneralInt64Int64Int64General = detail::MakeABIFunctionType(
+      ArgType_Int32, {ArgType_General, ArgType_Int64, ArgType_Int64,
+                      ArgType_Int64, ArgType_General}),
+
+  // Functions that return Int64 are tricky because SpiderMonkey's ReturnRegI64
+  // does not match the ABI int64 return register on x86.  Wasm only!
+  Args_Int64_General =
+      detail::MakeABIFunctionType(ArgType_Int64, {ArgType_General}),
+  Args_Int64_GeneralInt64 = detail::MakeABIFunctionType(
+      ArgType_Int64, {ArgType_General, ArgType_Int64}),
+
 };
 
 static constexpr ABIFunctionType MakeABIFunctionType(
@@ -929,6 +994,42 @@ constexpr T SplatByteToUInt(uint8_t val, uint8_t x) {
     splatted |= splatted << 8;
   }
   return splatted;
+}
+
+// Resume information for a frame, stored in a resume point.
+enum class ResumeMode : uint8_t {
+  // Innermost frame. Resume at the next bytecode op when bailing out.
+  ResumeAfter,
+
+  // Innermost frame. Resume at the current bytecode op when bailing out.
+  ResumeAt,
+
+  // Outer frame for an inlined "standard" call at an IsInvokeOp bytecode op.
+  InlinedStandardCall,
+
+  // Outer frame for an inlined js::fun_call at an IsInvokeOp bytecode op.
+  InlinedFunCall,
+
+  // Outer frame for an inlined getter/setter at a Get*/Set* bytecode op.
+  InlinedAccessor,
+
+  Last = InlinedAccessor
+};
+
+inline const char* ResumeModeToString(ResumeMode mode) {
+  switch (mode) {
+    case ResumeMode::ResumeAfter:
+      return "ResumeAfter";
+    case ResumeMode::ResumeAt:
+      return "ResumeAt";
+    case ResumeMode::InlinedStandardCall:
+      return "InlinedStandardCall";
+    case ResumeMode::InlinedFunCall:
+      return "InlinedFunCall";
+    case ResumeMode::InlinedAccessor:
+      return "InlinedAccessor";
+  }
+  MOZ_CRASH("Invalid mode");
 }
 
 }  // namespace jit

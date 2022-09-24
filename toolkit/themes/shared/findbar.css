@@ -44,17 +44,17 @@ findbar[noanim] {
 /* Don't apply theme colors on findbar when header image is applied to avoid
 contrast issues, see bug 1506913 */
 html|html[lwtheme-image] findbar {
-  --lwt-toolbar-field-background-color: initial;
-  --lwt-toolbar-field-color: initial;
-  --lwt-toolbar-field-border-color: initial;
-  --lwt-toolbar-field-focus: initial;
-  --lwt-toolbar-field-focus-color: initial;
+  --toolbar-field-background-color: initial;
+  --toolbar-field-color: initial;
+  --toolbar-field-border-color: initial;
+  --toolbar-field-focus-background-color: initial;
+  --toolbar-field-focus-color: initial;
 }
 
 html|input.findbar-textbox {
   appearance: none;
   background-color: Field;
-  border: 1px solid var(--input-border-color, var(--lwt-toolbar-field-border-color, ThreeDShadow));
+  border: 1px solid var(--input-border-color, var(--toolbar-field-border-color));
   border-radius: 4px;
   outline: none;
   margin: 0;
@@ -64,20 +64,33 @@ html|input.findbar-textbox {
 }
 
 html|input.findbar-textbox:-moz-lwtheme {
-  background-color: var(--input-bgcolor, var(--lwt-toolbar-field-background-color, Field));
-  color: var(--input-color, var(--lwt-toolbar-field-color, FieldText));
+  background-color: var(--input-bgcolor, var(--toolbar-field-background-color));
+  color: var(--input-color, var(--toolbar-field-color));
+  color-scheme: light;
+}
+
+:root[lwt-toolbar-field-focus-brighttext] html|input.findbar-textbox {
+  color-scheme: dark;
 }
 
 html|input.findbar-textbox:focus {
   border-color: transparent;
-  outline: 2px solid color-mix(in srgb, var(--focus-outline-color, -moz-accent-color) 50%, transparent);
-  outline-offset: -2px;
+  outline: var(--focus-outline);
+  outline-offset: var(--focus-outline-inset);
+}
+
+html|input.findbar-textbox:-moz-lwtheme::selection {
+  background-color: var(--lwt-toolbar-field-highlight, Highlight);
+  color: var(--lwt-toolbar-field-highlight-text, HighlightText);
+}
+
+html|input.findbar-textbox:not(:focus):-moz-lwtheme::selection {
+  background-color: var(--lwt-toolbar-field-highlight, text-select-background-disabled);
 }
 
 html|input.findbar-textbox[status="notfound"] {
-  border-color: transparent;
-  outline: 2px solid var(--input-error-border-color, #E22850);
-  outline-offset: -2px;
+  background-color: rgba(226,40,80,.3);
+  color: inherit;
 }
 
 html|input.findbar-textbox[flash="true"] {

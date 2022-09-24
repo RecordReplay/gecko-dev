@@ -9,20 +9,17 @@
 #include "nsICanvasRenderingContextInternal.h"
 #include "nsWrapperCache.h"
 #include "ObjectModel.h"
-#include "SwapChain.h"
+#include "mozilla/layers/LayersTypes.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 
 namespace mozilla {
 namespace dom {
 class Promise;
+struct GPUCanvasConfiguration;
 enum class GPUTextureFormat : uint8_t;
 }  // namespace dom
-namespace layers {
-class WebRenderLocalCanvasData;
-};
 namespace webgpu {
 class Adapter;
-class SwapChain;
 class Texture;
 
 class CanvasContext final : public nsICanvasRenderingContextInternal,
@@ -34,21 +31,14 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
  public:
   // nsISupports interface + CC
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(CanvasContext)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(CanvasContext)
 
   CanvasContext();
 
   JSObject* WrapObject(JSContext* aCx,
                        JS::Handle<JSObject*> aGivenProto) override;
 
-  void RemoveSwapChain();
-
-  Maybe<wr::ImageKey> GetImageKey() const;
-  wr::ImageKey CreateImageKey(layers::RenderRootStateManager* aManager);
-  bool UpdateWebRenderLocalCanvasData(
-      layers::WebRenderLocalCanvasData* aCanvasData);
-
-  wr::ExternalImageId mExternalImageId;
+  layers::CompositableHandle mHandle;
 
  public:  // nsICanvasRenderingContextInternal
   int32_t GetWidth() override { return mWidth; }
@@ -64,29 +54,18 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
     return NS_OK;
   }
 
-  mozilla::UniquePtr<uint8_t[]> GetImageBuffer(int32_t* aFormat) override {
-    MOZ_CRASH("todo");
-  }
+  bool InitializeCanvasRenderer(nsDisplayListBuilder* aBuilder,
+                                layers::CanvasRenderer* aRenderer) override;
+  mozilla::UniquePtr<uint8_t[]> GetImageBuffer(int32_t* aFormat) override;
   NS_IMETHOD GetInputStream(const char* aMimeType,
                             const nsAString& aEncoderOptions,
-                            nsIInputStream** aStream) override {
-    *aStream = nullptr;
-    return NS_OK;
-  }
-
+                            nsIInputStream** aStream) override;
   already_AddRefed<mozilla::gfx::SourceSurface> GetSurfaceSnapshot(
-      gfxAlphaType* aOutAlphaType) override {
-    return nullptr;
-  }
+      gfxAlphaType* aOutAlphaType) override;
 
   void SetOpaqueValueFromOpaqueAttr(bool aOpaqueAttrValue) override {}
   bool GetIsOpaque() override { return true; }
   NS_IMETHOD Reset() override { return NS_OK; }
-  already_AddRefed<Layer> GetCanvasLayer(nsDisplayListBuilder* aBuilder,
-                                         Layer* aOldLayer,
-                                         LayerManager* aManager) override;
-  bool UpdateWebRenderCanvasData(nsDisplayListBuilder* aBuilder,
-                                 WebRenderCanvasData* aCanvasData) override;
   void MarkContextClean() override {}
 
   NS_IMETHOD Redraw(const gfxRect& aDirty) override { return NS_OK; }
@@ -95,19 +74,27 @@ class CanvasContext final : public nsICanvasRenderingContextInternal,
   void DidRefresh() override {}
 
   void MarkContextCleanForFrameCapture() override {}
-  bool IsContextCleanForFrameCapture() override { return false; }
+  Watchable<FrameCaptureState>* GetFrameCaptureState() override {
+    return nullptr;
+  }
 
  public:
-  dom::GPUTextureFormat GetSwapChainPreferredFormat(Adapter& aAdapter) const;
-  RefPtr<SwapChain> ConfigureSwapChain(const dom::GPUSwapChainDescriptor& aDesc,
-                                       ErrorResult& aRv);
+  void Configure(const dom::GPUCanvasConfiguration& aDesc);
+  void Unconfigure();
+
+  dom::GPUTextureFormat GetPreferredFormat(Adapter& aAdapter) const;
+  RefPtr<Texture> GetCurrentTexture(ErrorResult& aRv);
+  void MaybeQueueSwapChainPresent();
+  void SwapChainPresent();
 
  private:
   uint32_t mWidth = 0, mHeight = 0;
+  bool mPendingSwapChainPresent = false;
 
-  RefPtr<SwapChain> mSwapChain;
-  RefPtr<layers::RenderRootStateManager> mRenderRootStateManager;
-  Maybe<wr::ImageKey> mImageKey;
+  RefPtr<WebGPUChild> mBridge;
+  RefPtr<Texture> mTexture;
+  gfx::SurfaceFormat mGfxFormat = gfx::SurfaceFormat::R8G8B8A8;
+  gfx::IntSize mGfxSize;
 };
 
 }  // namespace webgpu

@@ -468,6 +468,22 @@ TestRunner.getParameterInfo = function() {
 };
 
 /**
+ * Print information about which prefs are set.
+ * This is used to help validate that the tests are actually
+ * running in the expected context.
+ */
+TestRunner.dumpPrefContext = function() {
+  let prefs = ["fission.autostart"];
+
+  let message = ["Dumping test context:"];
+  prefs.forEach(function formatPref(pref) {
+    let val = SpecialPowers.getBoolPref(pref);
+    message.push(pref + "=" + val);
+  });
+  TestRunner.structuredLogger.info(message.join("\n  "));
+};
+
+/**
  * TestRunner entry point.
  *
  * The arguments are the URLs of the test to be ran.
@@ -475,16 +491,16 @@ TestRunner.getParameterInfo = function() {
  **/
 TestRunner.runTests = function(/*url...*/) {
   TestRunner.structuredLogger.info("SimpleTest START");
+  TestRunner.dumpPrefContext();
   TestRunner.originalTestURL = $("current-test").innerHTML;
 
   SpecialPowers.registerProcessCrashObservers();
 
   // Initialize code coverage
   if (TestRunner.jscovDirPrefix != "") {
-    var CoverageCollector = SpecialPowers.Cu.import(
-      "resource://testing-common/CoverageUtils.jsm",
-      {}
-    ).CoverageCollector;
+    var { CoverageCollector } = SpecialPowers.ChromeUtils.import(
+      "resource://testing-common/CoverageUtils.jsm"
+    );
     coverageCollector = new CoverageCollector(TestRunner.jscovDirPrefix);
   }
 

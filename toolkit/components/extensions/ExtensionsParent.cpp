@@ -10,6 +10,7 @@
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/RefPtr.h"
 #include "jsapi.h"
+#include "js/PropertyAndElement.h"  // JS_SetProperty
 #include "nsImportModule.h"
 #include "xpcpublic.h"
 
@@ -23,7 +24,6 @@ extIWebNavigation* ExtensionsParent::WebNavigation() {
   if (!mWebNavigation) {
     mWebNavigation = do_ImportModule("resource://gre/modules/WebNavigation.jsm",
                                      "WebNavigationManager");
-    MOZ_RELEASE_ASSERT(mWebNavigation);
   }
   return mWebNavigation;
 }

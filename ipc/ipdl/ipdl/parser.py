@@ -61,7 +61,7 @@ class Parser:
 
         if self.tu.name in Parser.parsed:
             priorTU = Parser.parsed[self.tu.name].tu
-            if priorTU.filename != filename:
+            if os.path.normcase(priorTU.filename) != os.path.normcase(filename):
                 _error(
                     Loc(filename),
                     "Trying to load `%s' from a file when we'd already seen it in file `%s'"
@@ -130,18 +130,15 @@ reserved = set(
         "manager",
         "manages",
         "namespace",
-        "nested",
         "nullable",
         "or",
         "parent",
         "protocol",
-        "refcounted",
         "returns",
         "struct",
         "sync",
         "union",
         "UniquePtr",
-        "upto",
         "using",
     )
 )
@@ -180,7 +177,7 @@ def t_ID(t):
 
 def t_STRING(t):
     r'"[^"\n]*"'
-    t.value = t.value[1:-1]
+    t.value = StringLiteral(Loc(Parser.current.filename, t.lineno), t.value[1:-1])
     return t
 
 
@@ -262,7 +259,7 @@ def p_PreambleStmt(p):
 
 def p_CxxIncludeStmt(p):
     """CxxIncludeStmt : INCLUDE STRING"""
-    p[0] = CxxInclude(locFromTok(p, 1), p[2])
+    p[0] = CxxInclude(locFromTok(p, 1), p[2].value)
 
 
 def p_IncludeStmt(p):
@@ -294,12 +291,6 @@ def p_UsingKind(p):
     p[0] = p[1] if 2 == len(p) else None
 
 
-def p_MaybeRefcounted(p):
-    """MaybeRefcounted : REFCOUNTED
-    |"""
-    p[0] = 2 == len(p)
-
-
 def p_UsingStmt(p):
     """UsingStmt : Attributes USING UsingKind CxxType FROM STRING"""
     p[0] = UsingStmt(
@@ -307,7 +298,7 @@ def p_UsingStmt(p):
         attributes=p[1],
         kind=p[3],
         cxxTypeSpec=p[4],
-        cxxHeader=p[6],
+        cxxHeader=p[6].value,
     )
 
 
@@ -378,14 +369,13 @@ def p_ComponentTypes(p):
 
 
 def p_ProtocolDefn(p):
-    """ProtocolDefn : OptionalProtocolSendSemanticsQual MaybeRefcounted \
+    """ProtocolDefn : Attributes OptionalSendSemantics \
                       PROTOCOL ID '{' ProtocolBody '}' ';'"""
     protocol = p[6]
     protocol.loc = locFromTok(p, 3)
     protocol.name = p[4]
-    protocol.nested = p[1][0]
-    protocol.sendSemantics = p[1][1]
-    protocol.refcounted = p[2]
+    protocol.attributes = p[1]
+    protocol.sendSemantics = p[2]
     p[0] = protocol
 
     if Parser.current.type == "header":
@@ -552,24 +542,12 @@ def p_Attribute(p):
 
 def p_AttributeValue(p):
     """AttributeValue : '=' ID
+    | '=' STRING
     |"""
     if 1 == len(p):
         p[0] = None
     else:
         p[0] = p[2]
-
-
-# --------------------
-# Minor stuff
-def p_Nested(p):
-    """Nested : ID"""
-    kinds = {"not": 1, "inside_sync": 2, "inside_cpow": 3}
-    if p[1] not in kinds:
-        _error(
-            locFromTok(p, 1), "Expected not, inside_sync, or inside_cpow for nested()"
-        )
-
-    p[0] = {"nested": kinds[p[1]]}
 
 
 def p_SendSemantics(p):
@@ -585,38 +563,17 @@ def p_SendSemantics(p):
         p[0] = INTR
 
 
-def p_OptionalProtocolSendSemanticsQual(p):
-    """OptionalProtocolSendSemanticsQual : ProtocolSendSemanticsQual
+def p_OptionalSendSemantics(p):
+    """OptionalSendSemantics : SendSemantics
     |"""
     if 2 == len(p):
         p[0] = p[1]
     else:
-        p[0] = [NOT_NESTED, ASYNC]
+        p[0] = ASYNC
 
 
-def p_ProtocolSendSemanticsQual(p):
-    """ProtocolSendSemanticsQual : ASYNC
-    | SYNC
-    | NESTED '(' UPTO Nested ')' ASYNC
-    | NESTED '(' UPTO Nested ')' SYNC
-    | INTR"""
-    if p[1] == "nested":
-        mtype = p[6]
-        nested = p[4]
-    else:
-        mtype = p[1]
-        nested = NOT_NESTED
-
-    if mtype == "async":
-        mtype = ASYNC
-    elif mtype == "sync":
-        mtype = SYNC
-    elif mtype == "intr":
-        mtype = INTR
-    else:
-        assert 0
-
-    p[0] = [nested, mtype]
+# --------------------
+# Minor stuff
 
 
 def p_ParamList(p):

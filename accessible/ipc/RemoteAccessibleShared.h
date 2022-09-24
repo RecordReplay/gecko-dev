@@ -15,7 +15,7 @@
 /*
  * Return the states for the proxied accessible.
  */
-uint64_t State() const;
+virtual uint64_t State() override;
 
 /*
  * Return the native states for the proxied accessible.
@@ -26,12 +26,12 @@ uint64_t NativeState() const;
  * Set aName to the name of the proxied accessible.
  * Return the ENameValueFlag passed from Accessible::Name
  */
-uint32_t Name(nsString& aName) const;
+ENameValueFlag Name(nsString& aName) const override;
 
 /*
  * Set aValue to the value of the proxied accessible.
  */
-void Value(nsString& aValue) const;
+void Value(nsString& aValue) const override;
 
 /*
  * Set aHelp to the help string of the proxied accessible.
@@ -41,12 +41,12 @@ void Help(nsString& aHelp) const;
 /**
  * Set aDesc to the description of the proxied accessible.
  */
-void Description(nsString& aDesc) const;
+void Description(nsString& aDesc) const override;
 
 /**
  * Get the set of attributes on the proxied accessible.
  */
-void Attributes(RefPtr<AccAttributes>* aAttributes) const;
+virtual already_AddRefed<AccAttributes> Attributes() override;
 
 /**
  * Return set of targets of given relation type.
@@ -61,59 +61,37 @@ void Relations(nsTArray<RelationType>* aTypes,
 
 bool IsSearchbox() const;
 
-nsAtom* LandmarkRole() const;
-
 nsStaticAtom* ARIARoleAtom() const;
 
-mozilla::a11y::GroupPos GroupPosition();
-void ScrollTo(uint32_t aScrollType);
+virtual mozilla::a11y::GroupPos GroupPosition() override;
 void ScrollToPoint(uint32_t aScrollType, int32_t aX, int32_t aY);
 
 void Announce(const nsString& aAnnouncement, uint16_t aPriority);
 
 int32_t CaretLineNumber();
-int32_t CaretOffset();
+virtual int32_t CaretOffset() const override;
 void SetCaretOffset(int32_t aOffset);
 
-int32_t CharacterCount();
-int32_t SelectionCount();
+virtual void TextSubstring(int32_t aStartOffset, int32_t aEndOfset,
+                           nsAString& aText) const override;
 
-/**
- * Get the text between the given offsets.
- */
-bool TextSubstring(int32_t aStartOffset, int32_t aEndOfset,
-                   nsString& aText) const;
+virtual void TextAfterOffset(int32_t aOffset,
+                             AccessibleTextBoundary aBoundaryType,
+                             int32_t* aStartOffset, int32_t* aEndOffset,
+                             nsAString& aText) override;
 
-void GetTextAfterOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                        nsString& aText, int32_t* aStartOffset,
-                        int32_t* aEndOffset);
+virtual void TextAtOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
+                          int32_t* aStartOffset, int32_t* aEndOffset,
+                          nsAString& aText) override;
 
-void GetTextAtOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                     nsString& aText, int32_t* aStartOffset,
-                     int32_t* aEndOffset);
-
-void GetTextBeforeOffset(int32_t aOffset, AccessibleTextBoundary aBoundaryType,
-                         nsString& aText, int32_t* aStartOffset,
-                         int32_t* aEndOffset);
+virtual void TextBeforeOffset(int32_t aOffset,
+                              AccessibleTextBoundary aBoundaryType,
+                              int32_t* aStartOffset, int32_t* aEndOffset,
+                              nsAString& aText) override;
 
 char16_t CharAt(int32_t aOffset);
 
-void TextAttributes(bool aIncludeDefAttrs, const int32_t aOffset,
-                    RefPtr<AccAttributes>* aAttributes, int32_t* aStartOffset,
-                    int32_t* aEndOffset);
-void DefaultTextAttributes(RefPtr<AccAttributes>* aAttrs);
-
-nsIntRect TextBounds(
-    int32_t aStartOffset, int32_t aEndOffset,
-    uint32_t aCoordType =
-        nsIAccessibleCoordinateType::COORDTYPE_SCREEN_RELATIVE);
-
-nsIntRect CharBounds(int32_t aOffset, uint32_t aCoordType);
-
 int32_t OffsetAtPoint(int32_t aX, int32_t aY, uint32_t aCoordType);
-
-bool SelectionBoundsAt(int32_t aSelectionNum, nsString& aData,
-                       int32_t* aStartOffset, int32_t* aEndOffset);
 
 bool SetSelectionBoundsAt(int32_t aSelectionNum, int32_t aStartOffset,
                           int32_t aEndOffset);
@@ -142,13 +120,9 @@ bool DeleteText(int32_t aStartPos, int32_t aEndPos);
 
 bool PasteText(int32_t aPosition);
 
-nsIntPoint ImagePosition(uint32_t aCoordType);
+LayoutDeviceIntPoint ImagePosition(uint32_t aCoordType);
 
-nsIntSize ImageSize();
-
-uint32_t StartOffset(bool* aOk);
-
-uint32_t EndOffset(bool* aOk);
+LayoutDeviceIntSize ImageSize();
 
 bool IsLinkValid();
 
@@ -161,10 +135,6 @@ RemoteAccessible* AnchorAt(uint32_t aIndex);
 uint32_t LinkCount();
 
 RemoteAccessible* LinkAt(const uint32_t& aIndex);
-
-int32_t LinkIndexOf(RemoteAccessible* aLink);
-
-int32_t LinkIndexAtOffset(uint32_t aOffset);
 
 RemoteAccessible* TableOfACell();
 
@@ -215,42 +185,24 @@ void TableSelectColumn(uint32_t aCol);
 void TableSelectRow(uint32_t aRow);
 void TableUnselectColumn(uint32_t aCol);
 void TableUnselectRow(uint32_t aRow);
-bool TableIsProbablyForLayout();
 RemoteAccessible* AtkTableColumnHeader(int32_t aCol);
 RemoteAccessible* AtkTableRowHeader(int32_t aRow);
 
-void SelectedItems(nsTArray<RemoteAccessible*>* aSelectedItems);
-uint32_t SelectedItemCount();
-RemoteAccessible* GetSelectedItem(uint32_t aIndex);
-bool IsItemSelected(uint32_t aIndex);
-bool AddItemToSelection(uint32_t aIndex);
-bool RemoveItemFromSelection(uint32_t aIndex);
-bool SelectAll();
-bool UnselectAll();
-
-void TakeSelection();
-void SetSelected(bool aSelect);
-
-bool DoAction(uint8_t aIndex);
-uint8_t ActionCount();
-void ActionDescriptionAt(uint8_t aIndex, nsString& aDescription);
-void ActionNameAt(uint8_t aIndex, nsString& aName);
 KeyBinding AccessKey();
 KeyBinding KeyboardShortcut();
 void AtkKeyBinding(nsString& aBinding);
 
-double CurValue();
+double CurValue() const override;
+double MinValue() const override;
+double MaxValue() const override;
+double Step() const override;
 bool SetCurValue(double aValue);
-double MinValue();
-double MaxValue();
-double Step();
 
-void TakeFocus();
 RemoteAccessible* FocusedChild();
 virtual Accessible* ChildAtPoint(
     int32_t aX, int32_t aY,
     LocalAccessible::EWhichChildAtPoint aWhichChild) override;
-nsIntRect Bounds();
+LayoutDeviceIntRect Bounds() const override;
 nsIntRect BoundsInCSSPixels();
 
 void Language(nsString& aLocale);
@@ -264,10 +216,6 @@ void URLDocTypeMimeType(nsString& aURL, nsString& aDocType,
 void Extents(bool aNeedsScreenCoords, int32_t* aX, int32_t* aY, int32_t* aWidth,
              int32_t* aHeight);
 
-/**
- * Return the id of the dom node this accessible represents.  Note this
- * should probably only be used for testing.
- */
-void DOMNodeID(nsString& aID);
+virtual void DOMNodeID(nsString& aID) const override;
 
 #endif

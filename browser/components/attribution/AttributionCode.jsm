@@ -3,7 +3,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
 
-var EXPORTED_SYMBOLS = ["AttributionCode"];
+var EXPORTED_SYMBOLS = ["AttributionCode", "AttributionIOUtils"];
+
+/**
+ * This is a policy object used to override behavior for testing.
+ */
+const AttributionIOUtils = {
+  write: async (path, bytes) => IOUtils.write(path, bytes),
+  read: async path => IOUtils.read(path),
+  exists: async path => IOUtils.exists(path),
+};
 
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
@@ -13,7 +22,6 @@ ChromeUtils.defineModuleGetter(
   "AppConstants",
   "resource://gre/modules/AppConstants.jsm"
 );
-ChromeUtils.defineModuleGetter(this, "OS", "resource://gre/modules/osfile.jsm");
 ChromeUtils.defineModuleGetter(
   this,
   "Services",
@@ -25,8 +33,7 @@ ChromeUtils.defineModuleGetter(
   "resource:///modules/MacAttribution.jsm"
 );
 XPCOMUtils.defineLazyGetter(this, "log", () => {
-  let ConsoleAPI = ChromeUtils.import("resource://gre/modules/Console.jsm", {})
-    .ConsoleAPI;
+  let { ConsoleAPI } = ChromeUtils.import("resource://gre/modules/Console.jsm");
   let consoleOptions = {
     // tip: set maxLogLevel to "debug" and use log.debug() to create detailed
     // messages during development. See LOG_LEVELS in Console.jsm for details.
@@ -38,6 +45,13 @@ XPCOMUtils.defineLazyGetter(this, "log", () => {
 });
 XPCOMUtils.defineLazyGlobalGetters(this, ["URL"]);
 
+// This maximum length was originally based on how much space we have in the PE
+// file header that we store attribution codes in for full and stub installers.
+// Windows Store builds instead use a "Campaign ID" passed through URLs to send
+// attribution information, which Microsoft's documentation claims must be no
+// longer than 100 characters. In our own testing, we've been able to retrieve
+// the first 208 characters of the Campaign ID. Either way, the "max" length
+// for Microsoft Store builds is much lower than this limit implies.
 const ATTR_CODE_MAX_LENGTH = 1010;
 const ATTR_CODE_VALUE_REGEX = /[a-zA-Z0-9_%\\-\\.\\(\\)]*/;
 const ATTR_CODE_FIELD_SEPARATOR = "%26"; // URL-encoded &
@@ -51,6 +65,7 @@ const ATTR_CODE_KEYS = [
   "variation",
   "ua",
   "dltoken",
+  "msstoresignedin",
 ];
 
 let gCachedAttrData = null;
@@ -63,10 +78,7 @@ var AttributionCode = {
    */
   get attributionFile() {
     if (AppConstants.platform == "win") {
-      let file = Services.dirsvc.get("LocalAppData", Ci.nsIFile);
-      // appinfo does not exist in xpcshell, so we need defaults.
-      file.append(Services.appinfo.vendor || "mozilla");
-      file.append(AppConstants.MOZ_APP_NAME);
+      let file = Services.dirsvc.get("GreD", Ci.nsIFile);
       file.append("postSigningData");
       return file;
     } else if (AppConstants.platform == "macosx") {
@@ -112,19 +124,9 @@ var AttributionCode = {
    */
   async writeAttributionFile(code) {
     let file = AttributionCode.attributionFile;
-    let dir = file.parent;
-    try {
-      // This is a simple way to create the entire directory tree.
-      // `OS.File.makeDir` has an awkward API for our situation.
-      dir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
-    } catch (ex) {
-      if (ex.result != Cr.NS_ERROR_FILE_ALREADY_EXISTS) {
-        throw ex;
-      }
-      // Ignore the exception due to a directory that already exists.
-    }
+    await IOUtils.makeDirectory(file.parent.path);
     let bytes = new TextEncoder().encode(code);
-    await OS.File.writeAtomic(file.path, bytes);
+    await AttributionIOUtils.write(file.path, bytes);
   },
 
   /**
@@ -150,7 +152,17 @@ var AttributionCode = {
       let [key, value] = param.split(ATTR_CODE_KEY_VALUE_SEPARATOR, 2);
       if (key && ATTR_CODE_KEYS.includes(key)) {
         if (value && ATTR_CODE_VALUE_REGEX.test(value)) {
-          parsed[key] = value;
+          if (key === "msstoresignedin") {
+            if (value === "true") {
+              parsed[key] = true;
+            } else if (value === "false") {
+              parsed[key] = false;
+            } else {
+              throw new Error("Couldn't parse msstoresignedin");
+            }
+          } else {
+            parsed[key] = value;
+          }
         }
       } else {
         log.debug(
@@ -259,7 +271,7 @@ var AttributionCode = {
 
     if (
       AppConstants.platform == "macosx" &&
-      !(await OS.File.exists(attributionFile.path))
+      !(await AttributionIOUtils.exists(attributionFile.path))
     ) {
       log.debug(
         `getAttrDataAsync: macOS && !exists("${attributionFile.path}")`
@@ -317,9 +329,31 @@ var AttributionCode = {
 
     let bytes;
     try {
-      bytes = await OS.File.read(attributionFile.path);
+      if (
+        AppConstants.platform === "win" &&
+        Services.sysinfo.getProperty("hasWinPackageId")
+      ) {
+        // This comes out of windows-package-manager _not_ URL encoded or in an ArrayBuffer,
+        // but the parsing code wants it that way. It's easier to just provide that
+        // than have the parsing code support both.
+        log.debug(
+          `winPackageFamilyName is: ${Services.sysinfo.getProperty(
+            "winPackageFamilyName"
+          )}`
+        );
+        let encoder = new TextEncoder();
+        bytes = encoder.encode(
+          encodeURIComponent(
+            Cc["@mozilla.org/windows-package-manager;1"]
+              .createInstance(Ci.nsIWindowsPackageManager)
+              .getCampaignId()
+          )
+        );
+      } else {
+        bytes = await AttributionIOUtils.read(attributionFile.path);
+      }
     } catch (ex) {
-      if (ex instanceof OS.File.Error && ex.becauseNoSuchFile) {
+      if (DOMException.isInstance(ex) && ex.name == "NotFoundError") {
         log.debug(
           `getAttrDataAsync: !exists("${
             attributionFile.path
@@ -327,6 +361,13 @@ var AttributionCode = {
         );
         return gCachedAttrData;
       }
+      log.debug(
+        `other error trying to read attribution data:
+          attributionFile.path is: ${attributionFile.path}`
+      );
+      log.debug("Full exception is:");
+      log.debug(ex);
+
       Services.telemetry
         .getHistogramById("BROWSER_ATTRIBUTION_ERRORS")
         .add("read_error");
@@ -336,7 +377,7 @@ var AttributionCode = {
         let decoder = new TextDecoder();
         let code = decoder.decode(bytes);
         log.debug(
-          `getAttrDataAsync: ${attributionFile.path} deserializes to ${code}`
+          `getAttrDataAsync: attribution bytes deserializes to ${code}`
         );
         if (AppConstants.platform == "macosx" && !code) {
           // On macOS, an empty attribution code is fine.  (On Windows, that
@@ -379,7 +420,7 @@ var AttributionCode = {
    */
   async deleteFileAsync() {
     try {
-      await OS.File.remove(this.attributionFile.path);
+      await IOUtils.remove(this.attributionFile.path);
     } catch (ex) {
       // The attribution file may already have been deleted,
       // or it may have never been installed at all;

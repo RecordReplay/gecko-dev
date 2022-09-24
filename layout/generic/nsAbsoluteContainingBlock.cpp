@@ -11,6 +11,7 @@
 
 #include "nsAbsoluteContainingBlock.h"
 
+#include "nsAtomicContainerFrame.h"
 #include "nsContainerFrame.h"
 #include "nsGkAtoms.h"
 #include "mozilla/CSSAlignUtils.h"
@@ -512,12 +513,12 @@ static nscoord OffsetToAlignedStaticPos(const ReflowInput& aKidReflowInput,
       // absolute containing block.
       alignAreaSize = aAbsPosCBSize.ConvertTo(pcWM, aAbsPosCBWM);
     } else {
-      // The alignment container is a the grid container's padding box (which
-      // we can get by subtracting away its border from frame's size):
+      // The alignment container is a the grid container's content box (which
+      // we can get by subtracting away its border & padding from frame's size):
       alignAreaSize = aPlaceholderContainer->GetLogicalSize(pcWM);
-      LogicalMargin pcBorder =
-          aPlaceholderContainer->GetLogicalUsedBorder(pcWM);
-      alignAreaSize -= pcBorder.Size(pcWM);
+      LogicalMargin pcBorderPadding =
+          aPlaceholderContainer->GetLogicalUsedBorderAndPadding(pcWM);
+      alignAreaSize -= pcBorderPadding.Size(pcWM);
     }
   } else {
     NS_ERROR("Unsupported container for abpsos CSS Box Alignment");

@@ -6,7 +6,6 @@
 
 #include "APZCCallbackHelper.h"
 
-#include "TouchActionHelper.h"
 #include "gfxPlatform.h"  // For gfxPlatform::UseTiling
 
 #include "mozilla/EventForwards.h"
@@ -14,14 +13,11 @@
 #include "mozilla/dom/MouseEventBinding.h"
 #include "mozilla/dom/BrowserParent.h"
 #include "mozilla/IntegerPrintfMacros.h"
-#include "mozilla/layers/LayerTransactionChild.h"
 #include "mozilla/layers/RepaintRequest.h"
-#include "mozilla/layers/ShadowLayers.h"
 #include "mozilla/layers/WebRenderLayerManager.h"
 #include "mozilla/layers/WebRenderBridgeChild.h"
 #include "mozilla/DisplayPortUtils.h"
 #include "mozilla/PresShell.h"
-#include "mozilla/TouchEvents.h"
 #include "mozilla/ToString.h"
 #include "mozilla/ViewportUtils.h"
 #include "nsContainerFrame.h"
@@ -129,8 +125,7 @@ static CSSPoint ScrollFrameTo(nsIScrollableFrame* aFrame,
   // request because we'll clobber that one, which is bad.
   bool scrollInProgress = APZCCallbackHelper::IsScrollInProgress(aFrame);
   if (!scrollInProgress) {
-    aFrame->ScrollToCSSPixelsApproximate(targetScrollPosition,
-                                         ScrollOrigin::Apz);
+    aFrame->ScrollToCSSPixelsForApz(targetScrollPosition);
     geckoScrollPosition = CSSPoint::FromAppUnits(aFrame->GetScrollPosition());
     aSuccessOut = true;
   }
@@ -156,7 +151,8 @@ static DisplayPortMargins ScrollFrame(nsIContent* aContent,
       nsLayoutUtils::FindScrollableFrameFor(aRequest.GetScrollId());
   if (sf) {
     sf->ResetScrollInfoIfNeeded(aRequest.GetScrollGeneration(),
-                                aRequest.IsAnimationInProgress());
+                                aRequest.GetScrollGenerationOnApz(),
+                                aRequest.GetScrollAnimationType());
     sf->SetScrollableByAPZ(!aRequest.IsScrollInfoLayer());
     if (sf->IsRootScrollFrameOfDocument()) {
       if (!APZCCallbackHelper::IsScrollInProgress(sf)) {
@@ -372,10 +368,8 @@ void APZCCallbackHelper::UpdateRootFrame(const RepaintRequest& aRequest) {
     // probability of being exactly 1.
     presShellResolution =
         (aRequest.GetPresShellResolution() /
-         aRequest.GetCumulativeResolution().ToScaleFactor().scale) *
-        (aRequest.GetZoom().ToScaleFactor() /
-         aRequest.GetDevPixelsPerCSSPixel())
-            .scale;
+         aRequest.GetCumulativeResolution().scale) *
+        (aRequest.GetZoom() / aRequest.GetDevPixelsPerCSSPixel()).scale;
     presShell->SetResolutionAndScaleTo(presShellResolution,
                                        ResolutionChangeOrigin::Apz);
 
@@ -389,7 +383,7 @@ void APZCCallbackHelper::UpdateRootFrame(const RepaintRequest& aRequest) {
         nsLayoutUtils::FindScrollableFrameFor(aRequest.GetScrollId());
     CSSPoint currentScrollPosition =
         CSSPoint::FromAppUnits(sf->GetScrollPosition());
-    sf->ScrollToCSSPixelsApproximate(currentScrollPosition, ScrollOrigin::Apz);
+    sf->ScrollToCSSPixelsForApz(currentScrollPosition);
   }
 
   // Do this as late as possible since scrolling can flush layout. It also
@@ -681,36 +675,19 @@ static bool PrepareForSetTargetAPZCNotification(
 }
 
 static void SendLayersDependentApzcTargetConfirmation(
-    nsPresContext* aPresContext, uint64_t aInputBlockId,
+    nsIWidget* aWidget, uint64_t aInputBlockId,
     nsTArray<ScrollableLayerGuid>&& aTargets) {
-  PresShell* ps = aPresContext->GetPresShell();
-  if (!ps) {
+  WindowRenderer* renderer = aWidget->GetWindowRenderer();
+  if (!renderer) {
     return;
   }
 
-  LayerManager* lm = ps->GetLayerManager();
-  if (!lm) {
-    return;
-  }
-
-  if (WebRenderLayerManager* wrlm = lm->AsWebRenderLayerManager()) {
+  if (WebRenderLayerManager* wrlm = renderer->AsWebRender()) {
     if (WebRenderBridgeChild* wrbc = wrlm->WrBridge()) {
       wrbc->SendSetConfirmedTargetAPZC(aInputBlockId, aTargets);
     }
     return;
   }
-
-  ShadowLayerForwarder* lf = lm->AsShadowForwarder();
-  if (!lf) {
-    return;
-  }
-
-  LayerTransactionChild* shadow = lf->GetShadowManager();
-  if (!shadow) {
-    return;
-  }
-
-  shadow->SendSetConfirmedTargetAPZC(aInputBlockId, aTargets);
 }
 
 }  // namespace
@@ -739,7 +716,7 @@ void DisplayportSetListener::Register() {
 void DisplayportSetListener::OnPostRefresh() {
   APZCCH_LOG("Got refresh, sending target APZCs for input block %" PRIu64 "\n",
              mInputBlockId);
-  SendLayersDependentApzcTargetConfirmation(mPresContext, mInputBlockId,
+  SendLayersDependentApzcTargetConfirmation(mWidget, mInputBlockId,
                                             std::move(mTargets));
 }
 
@@ -802,28 +779,6 @@ APZCCallbackHelper::SendSetTargetAPZCNotification(nsIWidget* aWidget,
   return nullptr;
 }
 
-nsTArray<TouchBehaviorFlags>
-APZCCallbackHelper::SendSetAllowedTouchBehaviorNotification(
-    nsIWidget* aWidget, dom::Document* aDocument,
-    const WidgetTouchEvent& aEvent, uint64_t aInputBlockId,
-    const SetAllowedTouchBehaviorCallback& aCallback) {
-  nsTArray<TouchBehaviorFlags> flags;
-  if (!aWidget || !aDocument) {
-    return flags;
-  }
-  if (PresShell* presShell = aDocument->GetPresShell()) {
-    if (nsIFrame* rootFrame = presShell->GetRootFrame()) {
-      for (uint32_t i = 0; i < aEvent.mTouches.Length(); i++) {
-        flags.AppendElement(TouchActionHelper::GetAllowedTouchBehavior(
-            aWidget, RelativeTo{rootFrame, ViewportType::Visual},
-            aEvent.mTouches[i]->mRefPoint));
-      }
-      aCallback(aInputBlockId, flags);
-    }
-  }
-  return flags;
-}
-
 void APZCCallbackHelper::NotifyMozMouseScrollEvent(
     const ScrollableLayerGuid::ViewID& aScrollId, const nsString& aEvent) {
   nsCOMPtr<nsIContent> targetContent = nsLayoutUtils::FindContentFor(aScrollId);
@@ -859,9 +814,9 @@ void APZCCallbackHelper::NotifyFlushComplete(PresShell* aPresShell) {
 
 /* static */
 bool APZCCallbackHelper::IsScrollInProgress(nsIScrollableFrame* aFrame) {
-  using IncludeApzAnimation = nsIScrollableFrame::IncludeApzAnimation;
+  using AnimationState = nsIScrollableFrame::AnimationState;
 
-  return aFrame->IsScrollAnimating(IncludeApzAnimation::No) ||
+  return aFrame->ScrollAnimationState().contains(AnimationState::MainThread) ||
          nsLayoutUtils::CanScrollOriginClobberApz(aFrame->LastScrollOrigin());
 }
 

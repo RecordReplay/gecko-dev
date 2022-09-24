@@ -43,11 +43,12 @@ class AccessibleFront extends FrontClassWithSpec(accessibleSpec) {
     return this.getParent();
   }
 
-  get remoteFrame() {
+  get useChildTargetToFetchChildren() {
     if (!BROWSER_TOOLBOX_FISSION_ENABLED && this.targetFront.isParentProcess) {
       return false;
     }
-    return this._form.remoteFrame;
+
+    return this._form.useChildTargetToFetchChildren;
   }
 
   get role() {
@@ -173,7 +174,7 @@ class AccessibleFront extends FrontClassWithSpec(accessibleSpec) {
   }
 
   async children() {
-    if (!this.remoteFrame) {
+    if (!this.useChildTargetToFetchChildren) {
       return super.children();
     }
 
@@ -212,7 +213,7 @@ class AccessibleFront extends FrontClassWithSpec(accessibleSpec) {
    *         Complete snapshot of current accessible front.
    */
   async _accumulateSnapshot(snapshot) {
-    const { childCount, remoteFrame } = snapshot;
+    const { childCount, useChildTargetToFetchChildren } = snapshot;
     // No children, we are done.
     if (childCount === 0) {
       return snapshot;
@@ -220,7 +221,7 @@ class AccessibleFront extends FrontClassWithSpec(accessibleSpec) {
 
     // If current accessible is not a remote frame, continue accumulating inside
     // its children.
-    if (!remoteFrame) {
+    if (!useChildTargetToFetchChildren) {
       const childSnapshots = [];
       for (const childSnapshot of snapshot.children) {
         childSnapshots.push(this._accumulateSnapshot(childSnapshot));
@@ -235,9 +236,9 @@ class AccessibleFront extends FrontClassWithSpec(accessibleSpec) {
     const frameNodeFront = await inspectorFront.getNodeActorFromContentDomReference(
       snapshot.contentDOMReference
     );
-    // Remove contentDOMReference and remoteFrame properties.
+    // Remove contentDOMReference and useChildTargetToFetchChildren properties.
     delete snapshot.contentDOMReference;
-    delete snapshot.remoteFrame;
+    delete snapshot.useChildTargetToFetchChildren;
     if (!frameNodeFront) {
       return snapshot;
     }
@@ -370,8 +371,12 @@ class AccessibleWalkerFront extends FrontClassWithSpec(accessibleWalkerSpec) {
    *                   types of the accessibility issues to audit for
    *                 - {Function} onProgress
    *                   callback function for a progress audit-event
+   *                 - {Boolean} retrieveAncestries (defaults to true)
+   *                   Set to false to _not_ retrieve ancestries of audited accessible objects.
+   *                   This is used when a specific document is selected in the iframe picker
+   *                   and we want to treat it as the root of the accessibility panel tree.
    */
-  async audit({ types, onProgress }) {
+  async audit({ types, onProgress, retrieveAncestries = true }) {
     const onAudit = new Promise(resolve => {
       const auditEventHandler = ({ type, ancestries, progress }) => {
         switch (type) {
@@ -396,11 +401,12 @@ class AccessibleWalkerFront extends FrontClassWithSpec(accessibleWalkerSpec) {
     });
 
     const audit = await onAudit;
-    // If audit resulted in an error or there's nothing to report, we are done
-    // (no need to check for ancestry across the remote frame hierarchy). See
-    // also https://bugzilla.mozilla.org/show_bug.cgi?id=1641551 why the rest of
+    // If audit resulted in an error, if there's nothing to report or if the callsite
+    // explicitly asked to not retrieve ancestries, we are done.
+    // (no need to check for ancestry across the remote frame hierarchy).
+    // See also https://bugzilla.mozilla.org/show_bug.cgi?id=1641551 why the rest of
     // the code path is only supported when content toolbox fission is enabled.
-    if (audit.error || audit.ancestries.length === 0) {
+    if (audit.error || audit.ancestries.length === 0 || !retrieveAncestries) {
       return audit;
     }
 
@@ -484,7 +490,7 @@ class AccessibleWalkerFront extends FrontClassWithSpec(accessibleWalkerSpec) {
     // If no remote frames were found, currentElm will be null.
     while (currentElm) {
       // Safety check to ensure that the currentElm is a remote frame.
-      if (currentElm.remoteFrame) {
+      if (currentElm.useChildTargetToFetchChildren) {
         const {
           walker: domWalkerFront,
         } = await currentElm.targetFront.getFront("inspector");

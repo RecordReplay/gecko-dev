@@ -4,9 +4,7 @@
  */
 "use strict";
 
-let syncService = {};
-ChromeUtils.import("resource://services-sync/service.js", syncService);
-const service = syncService.Service;
+let { Service } = ChromeUtils.import("resource://services-sync/service.js");
 const { UIState } = ChromeUtils.import("resource://services-sync/UIState.jsm");
 
 let getState;
@@ -51,7 +49,7 @@ add_task(async function testSyncRemoteTabsButtonFunctionality() {
   syncNowButton.click();
   info("The sync now button was clicked");
 
-  await waitForCondition(() => syncWasCalled);
+  await TestUtils.waitForCondition(() => syncWasCalled);
 
   // We need to stop the Syncing animation manually otherwise the button
   // will be disabled at the beginning of a next test.
@@ -80,7 +78,7 @@ function mockFunctions() {
     email: "user@mozilla.com",
   });
 
-  service.sync = mocked_sync;
+  Service.sync = mocked_sync;
 }
 
 function mocked_sync() {
@@ -89,10 +87,10 @@ function mocked_sync() {
 
 function restoreValues() {
   UIState.get = getState;
-  service.sync = originalSync;
+  Service.sync = originalSync;
 }
 
 function storeInitialValues() {
   getState = UIState.get;
-  originalSync = service.sync;
+  originalSync = Service.sync;
 }

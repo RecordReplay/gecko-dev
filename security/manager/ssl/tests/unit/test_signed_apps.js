@@ -139,7 +139,12 @@ function original_app_path(test_name) {
 }
 
 function tampered_app_path(test_name) {
-  return FileUtils.getFile("TmpD", ["test_signed_app-" + test_name + ".zip"]);
+  return new FileUtils.File(
+    PathUtils.join(
+      Services.dirsvc.get("TmpD", Ci.nsIFile).path,
+      `test_signed_app-${test_name}.zip`
+    )
+  );
 }
 
 var hashTestcases = [
@@ -1003,6 +1008,26 @@ add_test(function() {
       "add-on with huge manifest file",
       Cr.NS_ERROR_SIGNED_JAR_ENTRY_INVALID
     )
+  );
+});
+
+// Verification should pass despite a not-yet-valid EE certificate.
+// Regression test for bug 1713628
+add_test(function() {
+  certdb.openSignedAppFileAsync(
+    Ci.nsIX509CertDB.AppXPCShellRoot,
+    original_app_path("validity_not_yet_valid"),
+    check_open_result("validity_not_yet_valid", Cr.NS_OK)
+  );
+});
+
+// Verification should pass despite an expired EE certificate.
+// Regression test for bug 1267318 and bug 1548973
+add_test(function() {
+  certdb.openSignedAppFileAsync(
+    Ci.nsIX509CertDB.AppXPCShellRoot,
+    original_app_path("validity_expired"),
+    check_open_result("validity_expired", Cr.NS_OK)
   );
 });
 

@@ -5,42 +5,10 @@
 /* import-globals-from extensionControlled.js */
 /* import-globals-from preferences.js */
 
-ChromeUtils.defineModuleGetter(
-  this,
-  "PlacesUtils",
-  "resource://gre/modules/PlacesUtils.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "ExtensionSettingsStore",
-  "resource://gre/modules/ExtensionSettingsStore.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "UrlbarPrefs",
-  "resource:///modules/UrlbarPrefs.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "UrlbarUtils",
-  "resource:///modules/UrlbarUtils.jsm"
-);
-ChromeUtils.defineModuleGetter(
-  this,
-  "NimbusFeatures",
-  "resource://nimbus/ExperimentAPI.jsm"
-);
-
-XPCOMUtils.defineLazyModuleGetters(this, {
-  UrlbarProviderQuickSuggest:
-    "resource:///modules/UrlbarProviderQuickSuggest.jsm",
-});
-
 Preferences.addAll([
   { id: "browser.search.suggest.enabled", type: "bool" },
   { id: "browser.urlbar.suggest.searches", type: "bool" },
   { id: "browser.search.suggest.enabled.private", type: "bool" },
-  { id: "browser.urlbar.suggest.quicksuggest", type: "bool" },
   { id: "browser.search.hiddenOneOffs", type: "unichar" },
   { id: "browser.search.widget.inNavBar", type: "bool" },
   { id: "browser.urlbar.showSearchSuggestionsFirst", type: "bool" },
@@ -81,8 +49,10 @@ var gSearchPane = {
     window.addEventListener("dblclick", this);
 
     Services.obs.addObserver(this, "browser-search-engine-modified");
+    Services.obs.addObserver(this, "intl:app-locales-changed");
     window.addEventListener("unload", () => {
       Services.obs.removeObserver(this, "browser-search-engine-modified");
+      Services.obs.removeObserver(this, "intl:app-locales-changed");
     });
 
     let suggestsPref = Preferences.get("browser.search.suggest.enabled");
@@ -122,12 +92,6 @@ var gSearchPane = {
     this._initDefaultEngines();
     this._updateSuggestionCheckboxes();
     this._showAddEngineButton();
-    this._updateQuickSuggest = this._updateQuickSuggest.bind(this);
-    NimbusFeatures.urlbar.onUpdate(this._updateQuickSuggest);
-    window.addEventListener("unload", () => {
-      NimbusFeatures.urlbar.off(this._updateQuickSuggest);
-    });
-    this._updateQuickSuggest(true);
   },
 
   /**
@@ -185,7 +149,6 @@ var gSearchPane = {
     let privateWindowCheckbox = document.getElementById(
       "showSearchSuggestionsPrivateWindows"
     );
-    let quickSuggestCheckbox = document.getElementById("showQuickSuggest");
 
     urlbarSuggests.disabled = !suggestsPref.value || permanentPB;
     privateWindowCheckbox.disabled = !suggestsPref.value;
@@ -209,59 +172,15 @@ var gSearchPane = {
       positionCheckbox.checked = Preferences.get(
         positionCheckbox.getAttribute("preference")
       ).value;
-      quickSuggestCheckbox.disabled = false;
-      quickSuggestCheckbox.checked = Preferences.get(
-        quickSuggestCheckbox.getAttribute("preference")
-      ).value;
     } else {
       positionCheckbox.disabled = true;
       positionCheckbox.checked = false;
-      quickSuggestCheckbox.disabled = true;
-      quickSuggestCheckbox.checked = false;
     }
 
     let permanentPBLabel = document.getElementById(
       "urlBarSuggestionPermanentPBLabel"
     );
     permanentPBLabel.hidden = urlbarSuggests.hidden || !permanentPB;
-  },
-
-  /**
-   * Shows or hides the Quick Suggest checkbox depending on whether the en-US
-   * Quick Suggest experiment is enabled.
-   *
-   * @param {boolean} [onStartup]
-   *   True when this is called from `.init`
-   */
-  _updateQuickSuggest(onStartup = false) {
-    let container = document.getElementById("showQuickSuggestContainer");
-    let desc = document.getElementById("searchSuggestionsDesc");
-
-    if (!UrlbarPrefs.get("quickSuggestEnabled")) {
-      // The experiment is not enabled.  This is the default, so to avoid
-      // accidentally messing anything up, only modify the doc if we're being
-      // called due to a change in the experiment enabled status.
-      if (!onStartup) {
-        container.setAttribute("hidden", "true");
-        if (desc.dataset.l10nIdOriginal) {
-          desc.dataset.l10nId = desc.dataset.l10nIdOriginal;
-          delete desc.dataset.l10nIdOriginal;
-        }
-        document.l10n.translateElements([desc]);
-      }
-      return;
-    }
-
-    // The experiment is enabled.
-    document
-      .getElementById("showQuickSuggestLearnMore")
-      .setAttribute("href", UrlbarProviderQuickSuggest.helpUrl);
-    container.removeAttribute("hidden");
-    if (desc.dataset.l10nId) {
-      desc.dataset.l10nIdOriginal = desc.dataset.l10nId;
-      delete desc.dataset.l10nId;
-    }
-    desc.textContent = "Choose how search suggestions appear.";
   },
 
   _showAddEngineButton() {
@@ -418,57 +337,78 @@ var gSearchPane = {
   },
 
   /**
-   * nsIObserver implementation.  We observe the following:
-   *
-   * * browser-search-engine-modified: Update the default engine UI and engine
-   *   tree view as appropriate when engine changes occur.
+   * Handle when the app locale is changed.
    */
-  observe(subject, topic, data) {
-    if (topic == "browser-search-engine-modified") {
-      let engine = subject;
-      engine.QueryInterface(Ci.nsISearchEngine);
-      switch (data) {
-        case "engine-added":
-          gEngineView._engineStore.addEngine(engine);
-          gEngineView.rowCountChanged(gEngineView.lastEngineIndex, 1);
+  async appLocalesChanged() {
+    await document.l10n.ready;
+    await gEngineView.loadL10nNames();
+  },
+
+  /**
+   * Update the default engine UI and engine tree view as appropriate when engine changes
+   * or locale changes occur.
+   *
+   * @param {Object} engine
+   * @param {string} data
+   */
+  browserSearchEngineModified(engine, data) {
+    engine.QueryInterface(Ci.nsISearchEngine);
+    switch (data) {
+      case "engine-added":
+        gEngineView._engineStore.addEngine(engine);
+        gEngineView.rowCountChanged(gEngineView.lastEngineIndex, 1);
+        gSearchPane.buildDefaultEngineDropDowns();
+        break;
+      case "engine-changed":
+        gSearchPane.buildDefaultEngineDropDowns();
+        gEngineView._engineStore.updateEngine(engine);
+        gEngineView.invalidate();
+        break;
+      case "engine-removed":
+        gSearchPane.remove(engine);
+        break;
+      case "engine-default": {
+        // If the user is going through the drop down using up/down keys, the
+        // dropdown may still be open (eg. on Windows) when engine-default is
+        // fired, so rebuilding the list unconditionally would get in the way.
+        let selectedEngine = document.getElementById("defaultEngine")
+          .selectedItem.engine;
+        if (selectedEngine.name != engine.name) {
           gSearchPane.buildDefaultEngineDropDowns();
-          break;
-        case "engine-changed":
-          gSearchPane.buildDefaultEngineDropDowns();
-          gEngineView._engineStore.updateEngine(engine);
-          gEngineView.invalidate();
-          break;
-        case "engine-removed":
-          gSearchPane.remove(engine);
-          break;
-        case "engine-default": {
+        }
+        break;
+      }
+      case "engine-default-private": {
+        if (
+          this._separatePrivateDefaultEnabledPref.value &&
+          this._separatePrivateDefaultPref.value
+        ) {
           // If the user is going through the drop down using up/down keys, the
           // dropdown may still be open (eg. on Windows) when engine-default is
           // fired, so rebuilding the list unconditionally would get in the way.
-          let selectedEngine = document.getElementById("defaultEngine")
+          const selectedEngine = document.getElementById("defaultPrivateEngine")
             .selectedItem.engine;
           if (selectedEngine.name != engine.name) {
             gSearchPane.buildDefaultEngineDropDowns();
           }
-          break;
         }
-        case "engine-default-private": {
-          if (
-            this._separatePrivateDefaultEnabledPref.value &&
-            this._separatePrivateDefaultPref.value
-          ) {
-            // If the user is going through the drop down using up/down keys, the
-            // dropdown may still be open (eg. on Windows) when engine-default is
-            // fired, so rebuilding the list unconditionally would get in the way.
-            const selectedEngine = document.getElementById(
-              "defaultPrivateEngine"
-            ).selectedItem.engine;
-            if (selectedEngine.name != engine.name) {
-              gSearchPane.buildDefaultEngineDropDowns();
-            }
-          }
-          break;
-        }
+        break;
+      }
+    }
+  },
+
+  /**
+   * nsIObserver implementation.
+   */
+  observe(subject, topic, data) {
+    switch (topic) {
+      case "intl:app-locales-changed": {
+        this.appLocalesChanged();
+        break;
+      }
+      case "browser-search-engine-modified": {
+        this.browserSearchEngineModified(subject, data);
+        break;
       }
     }
   },
@@ -544,10 +484,17 @@ var gSearchPane = {
 
   remove(aEngine) {
     let index = gEngineView._engineStore.removeEngine(aEngine);
+    if (!gEngineView.tree) {
+      // Only update the selection if it's visible in the UI.
+      return;
+    }
+
     gEngineView.rowCountChanged(index, -1);
     gEngineView.invalidate();
+
     gEngineView.selection.select(Math.min(index, gEngineView.rowCount - 1));
     gEngineView.ensureRowIsVisible(gEngineView.currentIndex);
+
     document.getElementById("engineList").focus();
   },
 
@@ -712,12 +659,9 @@ EngineStore.prototype = {
     let engineToUpdate = this._engines.findIndex(
       e => e.originalEngine == newEngine
     );
-    if (engineToUpdate == -1) {
-      console.error("Could not find engine to update");
-      return;
+    if (engineToUpdate != -1) {
+      this.engines[engineToUpdate] = this._cloneEngine(newEngine);
     }
-
-    this.engines[engineToUpdate] = this._cloneEngine(newEngine);
   },
 
   moveEngine(aEngine, aNewIndex) {
@@ -828,30 +772,34 @@ function EngineView(aEngineStore) {
 
   UrlbarPrefs.addObserver(this);
 
-  // This maps local shortcut sources to their l10n names.  The names are needed
-  // by getCellText.  Getting the names is async but getCellText is not, so we
-  // cache them here to retrieve them syncronously in getCellText.
-  this._localShortcutL10nNames = new Map();
-  document.l10n
-    .formatValues(
-      UrlbarUtils.LOCAL_SEARCH_MODES.map(mode => {
-        let name = UrlbarUtils.getResultSourceName(mode.source);
-        return { id: `urlbar-search-mode-${name}` };
-      })
-    )
-    .then(names => {
-      for (let { source } of UrlbarUtils.LOCAL_SEARCH_MODES) {
-        this._localShortcutL10nNames.set(source, names.shift());
-      }
-      // Invalidate the tree now that we have the names in case getCellText was
-      // called before name retrieval finished.
-      this.invalidate();
-    });
+  this.loadL10nNames();
 }
 
 EngineView.prototype = {
   _engineStore: null,
   tree: null,
+
+  loadL10nNames() {
+    // This maps local shortcut sources to their l10n names.  The names are needed
+    // by getCellText.  Getting the names is async but getCellText is not, so we
+    // cache them here to retrieve them syncronously in getCellText.
+    this._localShortcutL10nNames = new Map();
+    return document.l10n
+      .formatValues(
+        UrlbarUtils.LOCAL_SEARCH_MODES.map(mode => {
+          let name = UrlbarUtils.getResultSourceName(mode.source);
+          return { id: `urlbar-search-mode-${name}` };
+        })
+      )
+      .then(names => {
+        for (let { source } of UrlbarUtils.LOCAL_SEARCH_MODES) {
+          this._localShortcutL10nNames.set(source, names.shift());
+        }
+        // Invalidate the tree now that we have the names in case getCellText was
+        // called before name retrieval finished.
+        this.invalidate();
+      });
+  },
 
   get lastEngineIndex() {
     return this._engineStore.engines.length - 1;

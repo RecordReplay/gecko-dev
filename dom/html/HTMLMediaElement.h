@@ -42,10 +42,10 @@
 // Define to output information on decoding and painting framerate
 /* #define DEBUG_FRAME_RATE 1 */
 
-typedef uint16_t nsMediaNetworkState;
-typedef uint16_t nsMediaReadyState;
-typedef uint32_t SuspendTypes;
-typedef uint32_t AudibleChangedReasons;
+using nsMediaNetworkState = uint16_t;
+using nsMediaReadyState = uint16_t;
+using SuspendTypes = uint32_t;
+using AudibleChangedReasons = uint32_t;
 
 class nsIStreamListener;
 
@@ -86,8 +86,7 @@ class nsISerialEventTarget;
 class nsITimer;
 class nsRange;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 // Number of milliseconds between timeupdate events as defined by spec
 #define TIMEUPDATE_MS 250
@@ -114,12 +113,12 @@ class HTMLMediaElement : public nsGenericHTMLElement,
                          public nsStubMutationObserver,
                          public TelemetryProbesReporterOwner {
  public:
-  typedef mozilla::TimeStamp TimeStamp;
-  typedef mozilla::layers::ImageContainer ImageContainer;
-  typedef mozilla::VideoFrameContainer VideoFrameContainer;
-  typedef mozilla::MediaResource MediaResource;
-  typedef mozilla::MediaDecoderOwner MediaDecoderOwner;
-  typedef mozilla::MetadataTags MetadataTags;
+  using TimeStamp = mozilla::TimeStamp;
+  using ImageContainer = mozilla::layers::ImageContainer;
+  using VideoFrameContainer = mozilla::VideoFrameContainer;
+  using MediaResource = mozilla::MediaResource;
+  using MediaDecoderOwner = mozilla::MediaDecoderOwner;
+  using MetadataTags = mozilla::MetadataTags;
 
   // Helper struct to keep track of the MediaStreams returned by
   // mozCaptureStream(). For each OutputMediaStream, dom::MediaTracks get
@@ -420,7 +419,7 @@ class HTMLMediaElement : public nsGenericHTMLElement,
    * current when they were enqueued, and if it has changed when they come to
    * fire, they consider themselves cancelled, and don't fire.
    */
-  uint32_t GetCurrentLoadID() { return mCurrentLoadID; }
+  uint32_t GetCurrentLoadID() const { return mCurrentLoadID; }
 
   /**
    * Returns the load group for this media element's owner document.
@@ -655,9 +654,14 @@ class HTMLMediaElement : public nsGenericHTMLElement,
 
   // These functions return accumulated time, which are used for the telemetry
   // usage. Return -1 for error.
-  double TotalPlayTime() const;
+  double TotalVideoPlayTime() const;
+  double VisiblePlayTime() const;
   double InvisiblePlayTime() const;
   double VideoDecodeSuspendedTime() const;
+  double TotalAudioPlayTime() const;
+  double AudiblePlayTime() const;
+  double InaudiblePlayTime() const;
+  double MutedPlayTime() const;
 
   // Test methods for decoder doctor.
   void SetFormatDiagnosticsReportForMimeType(const nsAString& aMimeType,
@@ -677,8 +681,8 @@ class HTMLMediaElement : public nsGenericHTMLElement,
   void SetSrcObject(DOMMediaStream& aValue);
   void SetSrcObject(DOMMediaStream* aValue);
 
-  bool MozPreservesPitch() const { return mPreservesPitch; }
-  void SetMozPreservesPitch(bool aPreservesPitch);
+  bool PreservesPitch() const { return mPreservesPitch; }
+  void SetPreservesPitch(bool aPreservesPitch);
 
   MediaKeys* GetMediaKeys() const;
 
@@ -696,7 +700,7 @@ class HTMLMediaElement : public nsGenericHTMLElement,
 
   bool IsEventAttributeNameInternal(nsAtom* aName) override;
 
-  bool ContainsRestrictedContent();
+  bool ContainsRestrictedContent() const;
 
   void NotifyWaitingForKey() override;
 
@@ -808,7 +812,7 @@ class HTMLMediaElement : public nsGenericHTMLElement,
                                       ErrorResult& aRv);
   // Get the sink id of the device that audio is being played. Initial value is
   // empty and the default device is being used.
-  void GetSinkId(nsString& aSinkId) {
+  void GetSinkId(nsString& aSinkId) const {
     MOZ_ASSERT(NS_IsMainThread());
     aSinkId = mSink.first;
   }
@@ -1930,7 +1934,6 @@ class HTMLMediaElement : public nsGenericHTMLElement,
 // Check if the context is chrome or has the debugger or tabs permission
 bool HasDebuggerOrTabsPrivilege(JSContext* aCx, JSObject* aObj);
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_HTMLMediaElement_h

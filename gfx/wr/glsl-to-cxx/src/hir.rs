@@ -919,6 +919,8 @@ pub struct SymRef(u32);
 
 #[derive(Debug)]
 struct Scope {
+    // The field is not actively used but useful for `Debug`.
+    #[allow(dead_code)]
     name: String,
     names: HashMap<String, SymRef>,
 }
@@ -1252,7 +1254,7 @@ pub struct Expr {
     pub ty: Type,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FieldSet {
     Rgba,
     Xyzw,
@@ -1336,9 +1338,9 @@ impl SwizzleSelector {
         }
     }
 
-    pub fn to_string(&self) -> String {
+    pub fn to_field_set(&self, field_set: FieldSet) -> String {
         let mut s = String::new();
-        let fs = match self.field_set {
+        let fs = match field_set {
             FieldSet::Rgba => ['r', 'g', 'b', 'a'],
             FieldSet::Xyzw => ['x', 'y', 'z', 'w'],
             FieldSet::Stpq => ['s', 't', 'p', 'q'],
@@ -1347,6 +1349,10 @@ impl SwizzleSelector {
             s.push(fs[*i as usize])
         }
         s
+    }
+
+    pub fn to_string(&self) -> String {
+        self.to_field_set(self.field_set)
     }
 }
 

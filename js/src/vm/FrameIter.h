@@ -26,8 +26,8 @@
 #include "vm/Activation.h"       // js::InterpreterActivation
 #include "vm/Stack.h"            // js::{AbstractFramePtr,MaybeCheckAliasing}
 #include "wasm/WasmConstants.h"  // js::wasm::Trap
+#include "wasm/WasmFrame.h"      // js::wasm::{Frame,TrapData}
 #include "wasm/WasmFrameIter.h"  // js::wasm::{ExitReason,RegisterState,WasmFrameIter}
-#include "wasm/WasmTypes.h"  // js::wasm::{Frame,TrapData}
 
 struct JSPrincipals;
 
@@ -352,8 +352,6 @@ class FrameIter {
   // change their this-value later and non-strict functions will box
   // primitives).
   JS::Value thisArgument(JSContext* cx) const;
-
-  JS::Value newTarget() const;
 
   JS::Value returnValue() const;
   void setReturnValue(const JS::Value& v);

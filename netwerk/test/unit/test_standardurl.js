@@ -1,12 +1,7 @@
 "use strict";
 
 var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-var { AppConstants } = ChromeUtils.import(
-  "resource://gre/modules/AppConstants.jsm"
-);
-const gPrefs = Cc["@mozilla.org/preferences-service;1"].getService(
-  Ci.nsIPrefBranch
-);
+const gPrefs = Services.prefs;
 
 function symmetricEquality(expect, a, b) {
   /* Use if/else instead of |do_check_eq(expect, a.spec == b.spec)| so
@@ -124,8 +119,7 @@ add_test(function test_setQuery() {
     .QueryInterface(Ci.nsIURL);
   symmetricEquality(false, provided, target);
 
-  var newProvided = Cc["@mozilla.org/network/io-service;1"]
-    .getService(Ci.nsIIOService)
+  var newProvided = Services.io
     .newURI("#bar", null, provided)
     .QueryInterface(Ci.nsIURL);
 
@@ -572,9 +566,7 @@ add_test(
 );
 
 add_test(function test_hugeStringThrows() {
-  let prefs = Cc["@mozilla.org/preferences-service;1"].getService(
-    Ci.nsIPrefService
-  );
+  let prefs = Services.prefs;
   let maxLen = prefs.getIntPref("network.standard-url.max-length");
   let url = stringToURL("http://test:test@example.com");
 

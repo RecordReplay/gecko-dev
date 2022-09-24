@@ -88,6 +88,10 @@ urlbar-plugins-notification-anchor =
     .tooltiptext = Manage plug-in use
 urlbar-web-rtc-share-devices-notification-anchor =
     .tooltiptext = Manage sharing your camera and/or microphone with the site
+# "Speakers" is used in a general sense that might include headphones or
+# another audio output connection.
+urlbar-web-rtc-share-speaker-notification-anchor =
+    .tooltiptext = Manage sharing other speakers with the site
 urlbar-autoplay-notification-anchor =
     .tooltiptext = Open autoplay panel
 urlbar-persistent-storage-notification-anchor =
@@ -322,7 +326,7 @@ identity-enable-mixed-content-blocking =
     .label = Enable protection
     .accesskey = E
 identity-more-info-link-text =
-    .label = More Information
+    .label = More information
 
 ## Window controls
 
@@ -534,6 +538,20 @@ urlbar-result-action-search-bookmarks = Search Bookmarks
 urlbar-result-action-search-history = Search History
 urlbar-result-action-search-tabs = Search Tabs
 
+## Labels shown above groups of urlbar results
+
+# A label shown above the "Firefox Suggest" (bookmarks/history) group in the
+# urlbar results.
+urlbar-group-firefox-suggest =
+  .label = { -firefox-suggest-brand-name }
+
+# A label shown above the search suggestions group in the urlbar results. It
+# should use sentence case.
+# Variables
+#  $engine (String): the name of the search engine providing the suggestions
+urlbar-group-search-suggestions =
+  .label = { $engine } suggestions
+
 ## Full Screen and Pointer Lock UI
 
 # Please ensure that the domain stays in the `<span data-l10n-name="domain">` markup.
@@ -663,11 +681,35 @@ toolbar-settings-button =
      *[other] Open settings
   }
 
-## More items
+toolbar-overflow-customize-button =
+  .label = Customize toolbar…
+  .accesskey = C
 
-more-menu-go-offline =
-  .label = Work Offline
-  .accesskey = k
+toolbar-button-email-link =
+  .label = Email link
+  .tooltiptext = Email a link to this page
+
+# Variables:
+#  $shortcut (String): keyboard shortcut to save a copy of the page
+toolbar-button-save-page =
+  .label = Save page
+  .tooltiptext = Save this page ({ $shortcut })
+
+# Variables:
+#  $shortcut (String): keyboard shortcut to open a local file
+toolbar-button-open-file =
+  .label = Open file
+  .tooltiptext = Open a file ({ $shortcut })
+
+toolbar-button-synced-tabs =
+  .label = Synced tabs
+  .tooltiptext = Show tabs from other devices
+
+# Variables
+# $shortcut (string) - Keyboard shortcut to open a new private browsing window
+toolbar-button-new-private-window =
+  .label = New private window
+  .tooltiptext = Open a new private browsing window ({ $shortcut })
 
 ## EME notification panel
 
@@ -689,8 +731,108 @@ panel-save-update-password = Password
 addon-removal-title = Remove { $name }?
 addon-removal-abuse-report-checkbox = Report this extension to { -vendor-short-name }
 
-## Remote / Synced tabs
+##
 
-remote-tabs-manage-account =
-  .label = Manage Account
-remote-tabs-sync-now = Sync Now
+# "More" item in macOS share menu
+menu-share-more =
+    .label = More…
+ui-tour-info-panel-close =
+    .tooltiptext = Close
+
+## Variables:
+##  $uriHost (String): URI host for which the popup was allowed or blocked.
+
+popups-infobar-allow =
+    .label = Allow pop-ups for { $uriHost }
+    .accesskey = p
+
+popups-infobar-block =
+    .label = Block pop-ups for { $uriHost }
+    .accesskey = p
+
+##
+
+popups-infobar-dont-show-message =
+    .label = Don’t show this message when pop-ups are blocked
+    .accesskey = D
+
+edit-popup-settings =
+    .label = Manage pop-up settings…
+    .accesskey = M
+
+picture-in-picture-hide-toggle =
+    .label = Hide Picture-in-Picture Toggle
+    .accesskey = H
+
+## Since the default position for PiP controls does not change for RTL layout,
+## right-to-left languages should use "Left" and "Right" as in the English strings,
+
+picture-in-picture-move-toggle-right =
+    .label = Move Picture-in-Picture Toggle to Right Side
+    .accesskey = R
+
+picture-in-picture-move-toggle-left =
+    .label = Move Picture-in-Picture Toggle to Left Side
+    .accesskey = L
+
+##
+
+# Navigator Toolbox
+
+# This string is a spoken label that should not include
+# the word "toolbar" or such, because screen readers already know that
+# this container is a toolbar. This avoids double-speaking.
+navbar-accessible =
+    .aria-label = Navigation
+
+navbar-downloads =
+    .label = Downloads
+
+navbar-overflow =
+    .tooltiptext = More tools…
+
+# Variables:
+#   $shortcut (String): keyboard shortcut to print the page
+navbar-print =
+    .label = Print
+    .tooltiptext = Print this page… ({ $shortcut })
+
+navbar-home =
+    .label = Home
+    .tooltiptext = { -brand-short-name } Home Page
+
+navbar-library =
+    .label = Library
+    .tooltiptext = View history, saved bookmarks, and more
+
+navbar-search =
+    .title = Search
+
+navbar-accessibility-indicator =
+    .tooltiptext = Accessibility Features Enabled
+
+# Name for the tabs toolbar as spoken by screen readers. The word
+# "toolbar" is appended automatically and should not be included in
+# in the string
+tabs-toolbar =
+    .aria-label = Browser tabs
+
+tabs-toolbar-new-tab =
+    .label = New Tab
+
+tabs-toolbar-list-all-tabs =
+    .label = List all tabs
+    .tooltiptext = List all tabs
+
+## Infobar shown at startup to suggest session-restore
+
+# <img data-l10n-name="icon"/> will be replaced by the application menu icon
+restore-session-startup-suggestion-message = <strong>Open previous tabs?</strong> You can restore your previous session from the { -brand-short-name } application menu <img data-l10n-name="icon"/>, under History.
+restore-session-startup-suggestion-button = Show me how
+
+## Mozilla data reporting notification (Telemetry, Firefox Health Report, etc)
+
+data-reporting-notification-message = { -brand-short-name } automatically sends some data to { -vendor-short-name } so that we can improve your experience.
+data-reporting-notification-button =
+    .label = Choose What I Share
+    .accesskey = C

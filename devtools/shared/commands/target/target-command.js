@@ -9,20 +9,8 @@ const EventEmitter = require("devtools/shared/event-emitter");
 
 const BROWSERTOOLBOX_FISSION_ENABLED = "devtools.browsertoolbox.fission";
 
-const {
-  LegacyProcessesWatcher,
-} = require("devtools/shared/commands/target/legacy-target-watchers/legacy-processes-watcher");
-const {
-  LegacyServiceWorkersWatcher,
-} = require("devtools/shared/commands/target/legacy-target-watchers/legacy-serviceworkers-watcher");
-const {
-  LegacySharedWorkersWatcher,
-} = require("devtools/shared/commands/target/legacy-target-watchers/legacy-sharedworkers-watcher");
-const {
-  LegacyWorkersWatcher,
-} = require("devtools/shared/commands/target/legacy-target-watchers/legacy-workers-watcher");
-
 class TargetCommand extends EventEmitter {
+  #selectedTargetFront;
   /**
    * This class helps managing, iterating over and listening for Targets.
    *
@@ -55,7 +43,7 @@ class TargetCommand extends EventEmitter {
     this.onLocalTabRemotenessChange = this.onLocalTabRemotenessChange.bind(
       this
     );
-    if (this.descriptorFront.isLocalTab) {
+    if (this.descriptorFront.isTabDescriptor) {
       this.descriptorFront.on(
         "remoteness-change",
         this.onLocalTabRemotenessChange
@@ -78,35 +66,16 @@ class TargetCommand extends EventEmitter {
     // time watchTargets is called.
     this._pendingWatchTargetInitialization = new Map();
 
-    // Listeners for target creation and destruction
+    // Listeners for target creation, destruction and selection
     this._createListeners = new EventEmitter();
     this._destroyListeners = new EventEmitter();
+    this._selectListeners = new EventEmitter();
 
     this._onTargetAvailable = this._onTargetAvailable.bind(this);
     this._onTargetDestroyed = this._onTargetDestroyed.bind(this);
+    this._onTargetSelected = this._onTargetSelected.bind(this);
 
-    this.legacyImplementation = {
-      process: new LegacyProcessesWatcher(
-        this,
-        this._onTargetAvailable,
-        this._onTargetDestroyed
-      ),
-      worker: new LegacyWorkersWatcher(
-        this,
-        this._onTargetAvailable,
-        this._onTargetDestroyed
-      ),
-      shared_worker: new LegacySharedWorkersWatcher(
-        this,
-        this._onTargetAvailable,
-        this._onTargetDestroyed
-      ),
-      service_worker: new LegacyServiceWorkersWatcher(
-        this,
-        this._onTargetAvailable,
-        this._onTargetDestroyed
-      ),
-    };
+    this.legacyImplementation = {};
 
     // Public flag to allow listening for workers even if the fission pref is off
     // This allows listening for workers in the content toolbox outside of fission contexts
@@ -125,14 +94,22 @@ class TargetCommand extends EventEmitter {
     //                but we wait for the watcher actor to notify us about it
     //                via target-available-form avent.
     this._gotFirstTopLevelTarget = false;
-    this.commands = commands;
     this._onResourceAvailable = this._onResourceAvailable.bind(this);
+  }
+
+  get selectedTargetFront() {
+    return this.#selectedTargetFront || this.targetFront;
   }
 
   // Called whenever a new Target front is available.
   // Either because a target was already available as we started calling startListening
   // or if it has just been created
   async _onTargetAvailable(targetFront) {
+    // We put the `commands` on the targetFront so it can be retrieved from any front easily.
+    // Without this, protocol.js fronts won't have any easy access to it.
+    // Ideally, Fronts would all be migrated to commands and we would no longer need this hack.
+    targetFront.commands = this.commands;
+
     // If the new target is a top level target, we are target switching.
     // Target-switching is only triggered for "local-tab" browsing-context
     // targets which should always have the topLevelTarget flag initialized
@@ -164,24 +141,13 @@ class TargetCommand extends EventEmitter {
     if (targetFront.isTopLevel) {
       // First report that all existing targets are destroyed
       if (!isFirstTarget) {
-        for (const target of this._targets) {
-          // We only consider the top level target to be switched
-          const isDestroyedTargetSwitching = target == this.targetFront;
-          this._onTargetDestroyed(target, {
-            isTargetSwitching: isDestroyedTargetSwitching,
-          });
-        }
-        // Stop listening to legacy listeners as we now have to listen
-        // on the new target.
-        this.stopListening({ onlyLegacy: true });
-
-        // Clear the cached target list
-        this._targets.clear();
+        this._destroyExistingTargetsOnTargetSwitching();
       }
 
       // Update the reference to the memoized top level target
       this.targetFront = targetFront;
       this.descriptorFront.setTarget(targetFront);
+      this.#selectedTargetFront = null;
 
       if (isFirstTarget && this.isServerTargetSwitchingEnabled()) {
         this._gotFirstTopLevelTarget = true;
@@ -219,13 +185,52 @@ class TargetCommand extends EventEmitter {
     // Re-register the listeners as the top level target changed
     // and some targets are fetched from it
     if (targetFront.isTopLevel && !isFirstTarget) {
-      await this.startListening({ onlyLegacy: true });
+      await this.startListening({ isTargetSwitching: true });
     }
 
+    // These two events are used by tests using the production codepath (i.e. disabling flags.testing)
     // To be consumed by tests triggering frame navigations, spawning workers...
-    this.emitForTests("processed-available-target", targetFront);
+    this.emit("processed-available-target", targetFront);
+
     if (isTargetSwitching) {
-      this.emitForTests("switched-target", targetFront);
+      this.emit("switched-target", targetFront);
+    }
+  }
+
+  _destroyExistingTargetsOnTargetSwitching() {
+    const destroyedTargets = [];
+    for (const target of this._targets) {
+      // We only consider the top level target to be switched
+      const isDestroyedTargetSwitching = target == this.targetFront;
+      const isServiceWorker = target.targetType === this.TYPES.SERVICE_WORKER;
+      const isPopup = target.targetForm.isPopup;
+
+      // Never destroy the popup targets when the top level target is destroyed
+      // as the popup follow a different lifecycle.
+      // Also avoid destroying service worker targets for similar reason,
+      // unless this.destroyServiceWorkersOnNavigation is true.
+      if (
+        !isPopup &&
+        (!isServiceWorker || this.destroyServiceWorkersOnNavigation)
+      ) {
+        this._onTargetDestroyed(target, {
+          isTargetSwitching: isDestroyedTargetSwitching,
+          // Do not destroy service worker front as we may want to keep using it.
+          shouldDestroyTargetFront: !isServiceWorker,
+        });
+        destroyedTargets.push(target);
+      }
+    }
+
+    // Stop listening to legacy listeners as we now have to listen
+    // on the new target.
+    this.stopListening({ isTargetSwitching: true });
+
+    // Remove destroyed target from the cached target list. We don't simply clear the
+    // Map as SW targets might not have been destroyed (i.e. when destroyServiceWorkersOnNavigation
+    // is set to false).
+    for (const target of destroyedTargets) {
+      this._targets.delete(target);
     }
   }
 
@@ -275,6 +280,17 @@ class TargetCommand extends EventEmitter {
     });
     this._targets.delete(targetFront);
 
+    // If the destroyed target was the selected one, we need to do some cleanup
+    if (this.#selectedTargetFront == targetFront) {
+      // If we're doing a targetSwitch, simply nullify #selectedTargetFront
+      if (isTargetSwitching) {
+        this.#selectedTargetFront = null;
+      } else {
+        // Otherwise we want to select the top level target
+        this.selectTarget(this.targetFront);
+      }
+    }
+
     if (shouldDestroyTargetFront) {
       // When calling targetFront.destroy(), we will first call TargetFrontMixin.destroy,
       // which will try to call `detach` RDP method.
@@ -285,7 +301,28 @@ class TargetCommand extends EventEmitter {
       targetFront.baseFrontClassDestroy();
 
       targetFront.destroy();
+
+      // Delete the attribute we set from _onTargetAvailable so that we avoid leaking commands
+      // if any target front is leaked.
+      delete targetFront.commands;
     }
+  }
+
+  /**
+   *
+   * @param {TargetFront} targetFront
+   */
+  async _onTargetSelected(targetFront) {
+    if (this.#selectedTargetFront == targetFront) {
+      // Target is already selected, we can bail out.
+      return;
+    }
+
+    this.#selectedTargetFront = targetFront;
+    const targetType = this.getTargetType(targetFront);
+    await this._selectListeners.emitAsync(targetType, {
+      targetFront,
+    });
   }
 
   _setListening(type, value) {
@@ -317,11 +354,11 @@ class TargetCommand extends EventEmitter {
    *          optional targetTypeOrTrait
    */
   hasTargetWatcherSupport(targetTypeOrTrait) {
-    // If the top level target is a parent process, we're in the browser console or browser toolbox.
-    // In such case, if the browser toolbox fission pref is disabled, we don't want to use watchers
+    // If we're in the browser console or browser toolbox and the browser
+    // toolbox fission pref is disabled, we don't want to use watchers
     // (even if traits on the server are enabled).
     if (
-      this.descriptorFront.isParentProcessDescriptor &&
+      this.descriptorFront.isBrowserProcessDescriptor &&
       !Services.prefs.getBoolPref(BROWSERTOOLBOX_FISSION_ENABLED, false)
     ) {
       return false;
@@ -348,11 +385,12 @@ class TargetCommand extends EventEmitter {
    * reported to _onTargetAvailable.
    *
    * @param Object options
-   *        Dictionary object with `onlyLegacy` optional boolean.
-   *        If true, we wouldn't register listener set on the Watcher Actor,
-   *        but still register listeners set via Legacy Listeners.
+   * @param Boolean options.isTargetSwitching
+   *        Set to true when this is called while a target switching happens. In such case,
+   *        we won't register listener set on the Watcher Actor, but still register listeners
+   *        set via Legacy Listeners.
    */
-  async startListening({ onlyLegacy = false } = {}) {
+  async startListening({ isTargetSwitching = false } = {}) {
     // The first time we call this method, we pull the current top level target from the descriptor
     if (
       !this.isServerTargetSwitchingEnabled() &&
@@ -390,10 +428,19 @@ class TargetCommand extends EventEmitter {
         // When we switch to a new top level target, we don't have to stop and restart
         // Watcher listener as it is independant from the top level target.
         // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-        if (!onlyLegacy) {
+        if (!isTargetSwitching) {
           await this.watcherFront.watchTargets(type);
         }
-      } else if (this.legacyImplementation[type]) {
+      } else if (LegacyTargetWatchers[type]) {
+        // Instantiate the legacy listener only once for each TargetCommand, and reuse it if we stop and restart listening
+        if (!this.legacyImplementation[type]) {
+          this.legacyImplementation[type] = new LegacyTargetWatchers[type](
+            this,
+            this._onTargetAvailable,
+            this._onTargetDestroyed,
+            this.commands
+          );
+        }
         await this.legacyImplementation[type].listen();
       } else {
         throw new Error(`Unsupported target type '${type}'`);
@@ -428,6 +475,10 @@ class TargetCommand extends EventEmitter {
     this.targetFront.setIsTopLevel(true);
     this._gotFirstTopLevelTarget = true;
 
+    // See _onTargetAvailable. As this target isn't going through that method
+    // we have to replicate doing that here.
+    this.targetFront.commands = this.commands;
+
     // Add the top-level target to the list of targets.
     this._targets.add(this.targetFront);
   }
@@ -435,9 +486,13 @@ class TargetCommand extends EventEmitter {
   _computeTargetTypes() {
     let types = [];
 
-    if (this.descriptorFront.isLocalTab) {
+    // We also check for watcher support as some xpcshell tests uses legacy APIs and don't support frames.
+    if (
+      this.descriptorFront.isTabDescriptor &&
+      this.hasTargetWatcherSupport(TargetCommand.TYPES.FRAME)
+    ) {
       types = [TargetCommand.TYPES.FRAME];
-    } else if (this.descriptorFront.isParentProcessDescriptor) {
+    } else if (this.descriptorFront.isBrowserProcessDescriptor) {
       const fissionBrowserToolboxEnabled = Services.prefs.getBoolPref(
         BROWSERTOOLBOX_FISSION_ENABLED
       );
@@ -468,16 +523,15 @@ class TargetCommand extends EventEmitter {
    * Stop listening for targets from the server
    *
    * @param Object options
-   *        Dictionary object with `onlyLegacy` optional boolean.
-   *        If true, we wouldn't unregister listener set on the Watcher Actor,
-   *        but still unregister listeners set via Legacy Listeners.
+   * @param Boolean options.isTargetSwitching
+   *        Set to true when this is called while a target switching happens. In such case,
+   *        we won't unregister listener set on the Watcher Actor, but still unregister
+   *        listeners set via Legacy Listeners.
    */
-  stopListening({ onlyLegacy = false } = {}) {
+  stopListening({ isTargetSwitching = false } = {}) {
     // As DOCUMENT_EVENT isn't using legacy listener,
     // there is no need to stop and restart it in case of target switching.
-    // (We typically set onlyLegacy=true when we stop and restart legacy listeners
-    // during a target switch)
-    if (this._watchingDocumentEvent && !onlyLegacy) {
+    if (this._watchingDocumentEvent && !isTargetSwitching) {
       this.commands.resourceCommand.unwatchResources(
         [this.commands.resourceCommand.TYPES.DOCUMENT_EVENT],
         {
@@ -499,11 +553,11 @@ class TargetCommand extends EventEmitter {
         // When we switch to a new top level target, we don't have to stop and restart
         // Watcher listener as it is independant from the top level target.
         // This isn't the case for some Legacy Listeners, which fetch targets from the top level target
-        if (!onlyLegacy) {
+        if (!isTargetSwitching) {
           this.watcherFront.unwatchTargets(type);
         }
       } else if (this.legacyImplementation[type]) {
-        this.legacyImplementation[type].unlisten();
+        this.legacyImplementation[type].unlisten({ isTargetSwitching });
       } else {
         throw new Error(`Unsupported target type '${type}'`);
       }
@@ -512,7 +566,7 @@ class TargetCommand extends EventEmitter {
 
   getTargetType(target) {
     const { typeName } = target;
-    if (typeName == "browsingContextTarget") {
+    if (typeName == "windowGlobalTarget") {
       return TargetCommand.TYPES.FRAME;
     }
 
@@ -562,22 +616,45 @@ class TargetCommand extends EventEmitter {
   /**
    * Listen for the creation and/or destruction of target fronts matching one of the provided types.
    *
-   * @param {Array<String>} types
+   * @param {Object} options
+   * @param {Array<String>} options.types
    *        The type of target to listen for. Constant of TargetCommand.TYPES.
-   * @param {Function} onAvailable
-   *        Callback fired when a target has been just created or was already available.
-   *        The function is called with the following arguments:
+   * @param {Function} options.onAvailable
+   *        Mandatory callback fired when a target has been just created or was already available.
+   *        The function is called with a single object argument containing the following properties:
    *        - {TargetFront} targetFront: The target Front
    *        - {Boolean} isTargetSwitching: Is this target relates to a navigation and
    *                    this replaced a previously available target, this flag will be true
-   * @param {Function} onDestroy
-   *        Callback fired in case of target front destruction.
+   * @param {Function} options.onDestroyed
+   *        Optional callback fired in case of target front destruction.
    *        The function is called with the same arguments than onAvailable.
+   * @param {Function} options.onSelected
+   *        Optional callback fired when a given target is selected from the iframe picker
+   *        The function is called with a single object argument containing the following properties:
+   *        - {TargetFront} targetFront: The target Front
    */
-  async watchTargets(types, onAvailable, onDestroy) {
+  async watchTargets(options = {}) {
+    const availableOptions = [
+      "types",
+      "onAvailable",
+      "onDestroyed",
+      "onSelected",
+    ];
+    const unsupportedKeys = Object.keys(options).filter(
+      key => !availableOptions.includes(key)
+    );
+    if (unsupportedKeys.length > 0) {
+      throw new Error(
+        `TargetCommand.watchTargets does not expect the following options: ${unsupportedKeys.join(
+          ", "
+        )}`
+      );
+    }
+
+    const { types, onAvailable, onDestroyed, onSelected } = options;
     if (typeof onAvailable != "function") {
       throw new Error(
-        "TargetCommand.watchTargets expects a function as second argument"
+        "TargetCommand.watchTargets expects a function for the onAvailable option"
       );
     }
 
@@ -641,8 +718,11 @@ class TargetCommand extends EventEmitter {
 
     for (const type of types) {
       this._createListeners.on(type, onAvailable);
-      if (onDestroy) {
-        this._destroyListeners.on(type, onDestroy);
+      if (onDestroyed) {
+        this._destroyListeners.on(type, onDestroyed);
+      }
+      if (onSelected) {
+        this._selectListeners.on(type, onSelected);
       }
     }
 
@@ -654,10 +734,28 @@ class TargetCommand extends EventEmitter {
    * Stop listening for the creation and/or destruction of a given type of target fronts.
    * See `watchTargets()` for documentation of the arguments.
    */
-  unwatchTargets(types, onAvailable, onDestroy) {
+  unwatchTargets(options = {}) {
+    const availableOptions = [
+      "types",
+      "onAvailable",
+      "onDestroyed",
+      "onSelected",
+    ];
+    const unsupportedKeys = Object.keys(options).filter(
+      key => !availableOptions.includes(key)
+    );
+    if (unsupportedKeys.length > 0) {
+      throw new Error(
+        `TargetCommand.unwatchTargets does not expect the following options: ${unsupportedKeys.join(
+          ", "
+        )}`
+      );
+    }
+
+    const { types, onAvailable, onDestroyed, onSelected } = options;
     if (typeof onAvailable != "function") {
       throw new Error(
-        "TargetCommand.unwatchTargets expects a function as second argument"
+        "TargetCommand.unwatchTargets expects a function for the onAvailable option"
       );
     }
 
@@ -669,8 +767,11 @@ class TargetCommand extends EventEmitter {
       }
 
       this._createListeners.off(type, onAvailable);
-      if (onDestroy) {
-        this._destroyListeners.off(type, onDestroy);
+      if (onDestroyed) {
+        this._destroyListeners.off(type, onDestroyed);
+      }
+      if (onSelected) {
+        this._selectListeners.off(type, onSelected);
       }
     }
     this._pendingWatchTargetInitialization.delete(onAvailable);
@@ -697,19 +798,56 @@ class TargetCommand extends EventEmitter {
   }
 
   /**
+   * Retrieve all the target fronts in the selected target tree (including the selected
+   * target itself).
+   *
+   * @param {Array<String>} types
+   *        The types of target to retrieve. Array of TargetCommand.TYPES
+   * @return {Promise<Array<TargetFront>>} Promise that resolves to an array of target fronts.
+   */
+  async getAllTargetsInSelectedTargetTree(types) {
+    const allTargets = this.getAllTargets(types);
+    if (this.isTopLevelTargetSelected()) {
+      return allTargets;
+    }
+
+    const targets = [this.selectedTargetFront];
+    for (const target of allTargets) {
+      const isInSelectedTree = await target.isTargetAnAncestor(
+        this.selectedTargetFront
+      );
+
+      if (isInSelectedTree) {
+        targets.push(target);
+      }
+    }
+    return targets;
+  }
+
+  /**
    * For all the target fronts of given types, retrieve all the target-scoped fronts of the given types.
    *
    * @param {Array<String>} targetTypes
    *        The types of target to iterate over. Constant of TargetCommand.TYPES.
    * @param {String} frontType
    *        The type of target-scoped front to retrieve. It can be "inspector", "console", "thread",...
+   * @param {Object} options
+   * @param {Boolean} options.onlyInSelectedTargetTree
+   *        Set to true to only get the fronts for targets who are in the "targets tree"
+   *        of the selected target.
    */
-  async getAllFronts(targetTypes, frontType) {
+  async getAllFronts(
+    targetTypes,
+    frontType,
+    { onlyInSelectedTargetTree = false } = {}
+  ) {
     if (!Array.isArray(targetTypes) || !targetTypes?.length) {
       throw new Error("getAllFronts expects a non-empty array of target types");
     }
-    const fronts = [];
-    const targets = this.getAllTargets(targetTypes);
+    const promises = [];
+    const targets = !onlyInSelectedTargetTree
+      ? this.getAllTargets(targetTypes)
+      : await this.getAllTargetsInSelectedTargetTree(targetTypes);
     for (const target of targets) {
       // For still-attaching worker targets, the threadFront may not yet be available,
       // whereas TargetMixin.getFront will throw if the actorID isn't available in targetForm.
@@ -717,10 +855,9 @@ class TargetCommand extends EventEmitter {
         continue;
       }
 
-      const front = await target.getFront(frontType);
-      fronts.push(front);
+      promises.push(target.getFront(frontType));
     }
-    return fronts;
+    return Promise.all(promises);
   }
 
   /**
@@ -728,7 +865,7 @@ class TargetCommand extends EventEmitter {
    * the tab navigates to a distinct process.
    *
    * @param TargetFront targetFront
-   *        The BrowsingContextTargetFront instance that navigated to another process
+   *        The WindowGlobalTargetFront instance that navigated to another process
    */
   async onLocalTabRemotenessChange(targetFront) {
     if (this.isServerTargetSwitchingEnabled()) {
@@ -762,21 +899,14 @@ class TargetCommand extends EventEmitter {
 
   /**
    * Reload the current top level target.
-   * This only works for targets inheriting from BrowsingContextTarget.
+   * This only works for targets inheriting from WindowGlobalTarget.
    *
    * @param {Boolean} bypassCache
    *        If true, the reload will be forced to bypass any cache.
    */
   async reloadTopLevelTarget(bypassCache = false) {
-    // @backward-compat { version 91 }
-    //                  BrowsingContextTargetActor.reload was moved to descriptors.
-    //                  After release 91 is on the release channel, we can check
-    //                  this.descriptorFront.traits.supportsReloadDescriptor
-    //                  instead.
-    if (!this.targetFront.isBrowsingContext) {
-      throw new Error(
-        "The top level target isn't a BrowsingContext and doesn't support being reloaded"
-      );
+    if (!this.descriptorFront.traits.supportsReloadDescriptor) {
+      throw new Error("The top level target doesn't support being reloaded");
     }
 
     // Wait for the next DOCUMENT_EVENT's dom-complete event
@@ -795,31 +925,9 @@ class TargetCommand extends EventEmitter {
       }
     );
 
-    // @backward-compat { version 91 }
-    //                  BrowsingContextTargetActor.reload was moved to descriptors.
-    if (this.descriptorFront.traits.supportsReloadDescriptor) {
-      await this.descriptorFront.reloadDescriptor({ bypassCache });
-    } else {
-      await this._legacyTargetActorReload(bypassCache);
-    }
+    await this.descriptorFront.reloadDescriptor({ bypassCache });
 
     await onReloaded;
-  }
-
-  async _legacyTargetActorReload(force) {
-    const { targetFront } = this;
-    try {
-      // Arguments of reload are a bit convoluted.
-      // We expect an dictionary object, which only support one attribute
-      // called "force" which force bypassing the caches.
-      await targetFront.reload({ options: { force } });
-    } catch (e) {
-      // If the target follows the window global lifecycle, the reload request
-      // will fail, and we should swallow the error. Re-throw it otherwise.
-      if (!targetFront.targetForm.followWindowGlobalLifeCycle) {
-        throw e;
-      }
-    }
   }
 
   /**
@@ -835,8 +943,72 @@ class TargetCommand extends EventEmitter {
     await this._onTargetAvailable(newTarget);
   }
 
+  /**
+   * Called when the user selects a frame in the iframe picker.
+   *
+   * @param {WindowGlobalTargetFront} targetFront
+   *        The target front we want the toolbox to focus on.
+   */
+  selectTarget(targetFront) {
+    return this._onTargetSelected(targetFront);
+  }
+
+  /**
+   * Returns true if the top-level frame is the selected one
+   *
+   * @returns {Boolean}
+   */
+  isTopLevelTargetSelected() {
+    return this.selectedTargetFront === this.targetFront;
+  }
+
+  /**
+   * Returns true if a non top-level frame is the selected one in the iframe picker.
+   *
+   * @returns {Boolean}
+   */
+  isNonTopLevelTargetSelected() {
+    return this.selectedTargetFront !== this.targetFront;
+  }
+
   isTargetRegistered(targetFront) {
     return this._targets.has(targetFront);
+  }
+
+  getParentTarget(targetFront) {
+    // Note that there are edgecases:
+    // * Until bug 1741927 is fixed and we remove non-EFT codepath entirely,
+    //   we may receive a `parentInnerWindowId` that doesn't relate to any target.
+    //   This happens when the parent document of the targetFront is a document loaded in the
+    //   same process as its parent document. In such scenario, and only when EFT is disabled,
+    //   we won't instantiate a target for the parent document of the targetFront.
+    // * `parentInnerWindowId` could be null in some case like for tabs in the MBT
+    //   we should report the top level target as parent. That's what `getParentWindowGlobalTarget` does.
+    //   Once we can stop using getParentWindowGlobalTarget for the other edgecase we will be able to
+    //   replace it with such fallback: `return this.targetFront;`.
+    //   browser_target_command_frames.js will help you get things right.
+    const { parentInnerWindowId } = targetFront.targetForm;
+    if (parentInnerWindowId) {
+      const targets = this.getAllTargets([TargetCommand.TYPES.FRAME]);
+      const parent = targets.find(
+        target => target.innerWindowId == parentInnerWindowId
+      );
+      // Until EFT is the only codepath supported (bug 1741927), we will fallback to `getParentWindowGlobalTarget`
+      // as we may not have a target if the parent is an iframe running in the same process as its parent.
+      if (parent) {
+        return parent;
+      }
+    }
+
+    // Note that all callsites which care about FRAME additional target
+    // should all have a toolbox using the watcher actor.
+    // It should be: MBT, regular tab toolbox and web extension.
+    // The others which still don't support watcher don't spawn FRAME targets:
+    // browser content toolbox and service workers.
+
+    return this.watcherFront.getParentWindowGlobalTarget(
+      targetFront.browsingContextID
+    );
   }
 
   isDestroyed() {
@@ -858,7 +1030,9 @@ class TargetCommand extends EventEmitter {
     this.stopListening();
     this._createListeners.off();
     this._destroyListeners.off();
+    this._selectListeners.off();
 
+    this.#selectedTargetFront = null;
     this._isDestroyed = true;
   }
 }
@@ -875,6 +1049,28 @@ TargetCommand.TYPES = TargetCommand.prototype.TYPES = {
 };
 TargetCommand.ALL_TYPES = TargetCommand.prototype.ALL_TYPES = Object.values(
   TargetCommand.TYPES
+);
+
+const LegacyTargetWatchers = {};
+loader.lazyRequireGetter(
+  LegacyTargetWatchers,
+  TargetCommand.TYPES.PROCESS,
+  "devtools/shared/commands/target/legacy-target-watchers/legacy-processes-watcher"
+);
+loader.lazyRequireGetter(
+  LegacyTargetWatchers,
+  TargetCommand.TYPES.WORKER,
+  "devtools/shared/commands/target/legacy-target-watchers/legacy-workers-watcher"
+);
+loader.lazyRequireGetter(
+  LegacyTargetWatchers,
+  TargetCommand.TYPES.SHARED_WORKER,
+  "devtools/shared/commands/target/legacy-target-watchers/legacy-sharedworkers-watcher"
+);
+loader.lazyRequireGetter(
+  LegacyTargetWatchers,
+  TargetCommand.TYPES.SERVICE_WORKER,
+  "devtools/shared/commands/target/legacy-target-watchers/legacy-serviceworkers-watcher"
 );
 
 module.exports = TargetCommand;

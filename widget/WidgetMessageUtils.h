@@ -32,12 +32,14 @@ struct ParamTraits<mozilla::LookAndFeel::IntID>
 
 template <>
 struct ParamTraits<mozilla::LookAndFeel::ColorID>
-    : ContiguousEnumSerializer<mozilla::LookAndFeel::ColorID,
-                               mozilla::LookAndFeel::ColorID::WindowBackground,
-                               mozilla::LookAndFeel::ColorID::End> {
+    : ContiguousEnumSerializer<
+          mozilla::LookAndFeel::ColorID,
+          mozilla::LookAndFeel::ColorID::TextSelectDisabledBackground,
+          mozilla::LookAndFeel::ColorID::End> {
   using IdType = std::underlying_type_t<mozilla::LookAndFeel::ColorID>;
   static_assert(
-      static_cast<IdType>(mozilla::LookAndFeel::ColorID::WindowBackground) ==
+      static_cast<IdType>(
+          mozilla::LookAndFeel::ColorID::TextSelectDisabledBackground) ==
       IdType(0));
 };
 
@@ -51,11 +53,11 @@ struct ParamTraits<nsCursor>
     : ContiguousEnumSerializer<nsCursor, eCursor_standard, eCursorCount> {};
 
 template <>
-struct ParamTraits<nsIWidget::TouchpadPinchPhase>
+struct ParamTraits<nsIWidget::TouchpadGesturePhase>
     : ContiguousEnumSerializerInclusive<
-          nsIWidget::TouchpadPinchPhase,
-          nsIWidget::TouchpadPinchPhase::PHASE_BEGIN,
-          nsIWidget::TouchpadPinchPhase::PHASE_END> {};
+          nsIWidget::TouchpadGesturePhase,
+          nsIWidget::TouchpadGesturePhase::PHASE_BEGIN,
+          nsIWidget::TouchpadGesturePhase::PHASE_END> {};
 
 template <>
 struct ParamTraits<nsIWidget::TouchPointerState>

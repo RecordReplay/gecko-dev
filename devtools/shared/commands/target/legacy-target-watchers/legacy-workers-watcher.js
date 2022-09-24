@@ -4,9 +4,7 @@
 
 "use strict";
 
-const {
-  LegacyProcessesWatcher,
-} = require("devtools/shared/commands/target/legacy-target-watchers/legacy-processes-watcher");
+const LegacyProcessesWatcher = require("devtools/shared/commands/target/legacy-target-watchers/legacy-processes-watcher");
 
 class LegacyWorkersWatcher {
   constructor(targetCommand, onTargetAvailable, onTargetDestroyed) {
@@ -142,11 +140,11 @@ class LegacyWorkersWatcher {
     this.target = this.targetCommand.targetFront;
 
     if (this.target.isParentProcess) {
-      await this.targetCommand.watchTargets(
-        [this.targetCommand.TYPES.PROCESS],
-        this._onProcessAvailable,
-        this._onProcessDestroyed
-      );
+      await this.targetCommand.watchTargets({
+        types: [this.targetCommand.TYPES.PROCESS],
+        onAvailable: this._onProcessAvailable,
+        onDestroyed: this._onProcessDestroyed,
+      });
 
       // The ParentProcessTarget front is considered to be a FRAME instead of a PROCESS.
       // So process it manually here.
@@ -180,7 +178,10 @@ class LegacyWorkersWatcher {
     }
 
     // Here, we're handling Dedicated Workers in content toolbox.
-    this.targetsByProcess.set(this.target, new Set());
+    this.targetsByProcess.set(
+      this.target,
+      this.targetsByProcess.get(this.target) || new Set()
+    );
     this._workerListChangedListener = this._workerListChanged.bind(
       this,
       this.target
@@ -193,14 +194,14 @@ class LegacyWorkersWatcher {
     return this.targetCommand.getAllTargets([this.targetCommand.TYPES.PROCESS]);
   }
 
-  unlisten() {
+  unlisten({ isTargetSwitching } = {}) {
     // Stop listening for new process targets.
     if (this.target.isParentProcess) {
-      this.targetCommand.unwatchTargets(
-        [this.targetCommand.TYPES.PROCESS],
-        this._onProcessAvailable,
-        this._onProcessDestroyed
-      );
+      this.targetCommand.unwatchTargets({
+        types: [this.targetCommand.TYPES.PROCESS],
+        onAvailable: this._onProcessAvailable,
+        onDestroyed: this._onProcessDestroyed,
+      });
     } else if (this._isServiceWorkerWatcher) {
       this._legacyProcessesWatcher.unlisten();
     }
@@ -213,7 +214,16 @@ class LegacyWorkersWatcher {
       for (const targetFront of this._getProcessTargets()) {
         const listener = this.targetsListeners.get(targetFront);
         targetFront.off("workerListChanged", listener);
-        this.targetsByProcess.delete(targetFront);
+
+        // When unlisten is called from a target switch and service workers targets are not
+        // destroyed on navigation, we don't want to remove the targets from targetsByProcess
+        if (
+          !isTargetSwitching ||
+          !this._isServiceWorkerWatcher ||
+          this.targetCommand.destroyServiceWorkersOnNavigation
+        ) {
+          this.targetsByProcess.delete(targetFront);
+        }
         this.targetsListeners.delete(targetFront);
       }
     } else {
@@ -225,4 +235,4 @@ class LegacyWorkersWatcher {
   }
 }
 
-module.exports = { LegacyWorkersWatcher };
+module.exports = LegacyWorkersWatcher;

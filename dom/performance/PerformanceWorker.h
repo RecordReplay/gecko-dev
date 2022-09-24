@@ -8,11 +8,9 @@
 #define mozilla_dom_PerformanceWorker_h
 
 #include "Performance.h"
+#include "mozilla/dom/WorkerPrivate.h"
 
-namespace mozilla {
-namespace dom {
-
-class WorkerPrivate;
+namespace mozilla::dom {
 
 class PerformanceWorker final : public Performance {
  public:
@@ -94,10 +92,9 @@ class PerformanceWorker final : public Performance {
   }
 
  private:
-  WorkerPrivate* mWorkerPrivate;
+  CheckedUnsafePtr<WorkerPrivate> mWorkerPrivate;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_PerformanceWorker_h

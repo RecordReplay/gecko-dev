@@ -3,6 +3,8 @@
 
 "use strict";
 
+const kForceOverflowWidthPx = 450;
+
 const chrome_base =
   "chrome://mochitests/content/browser/browser/base/content/test/general/";
 Services.scriptloader.loadSubScript(chrome_base + "head.js", this);
@@ -13,9 +15,21 @@ const fxaDevices = [
     id: 1,
     name: "Foo",
     availableCommands: { "https://identity.mozilla.com/cmd/open-uri": "baz" },
+    lastAccessTime: Date.now(),
   },
-  { id: 2, name: "Bar", clientRecord: "bar" }, // Legacy send tab target (no availableCommands).
-  { id: 3, name: "Homer" }, // Incompatible target.
+  {
+    id: 2,
+    name: "Bar",
+    availableCommands: { "https://identity.mozilla.com/cmd/open-uri": "boo" },
+    lastAccessTime: Date.now() + 60000, // add 30min
+  },
+  {
+    id: 3,
+    name: "Baz",
+    clientRecord: "bar",
+    lastAccessTime: Date.now() + 120000, // add 60min
+  }, // Legacy send tab target (no availableCommands).
+  { id: 4, name: "Homer" }, // Incompatible target.
 ];
 
 let [testTab] = gBrowser.visibleTabs;
@@ -36,7 +50,7 @@ function updateTabContextMenu(tab = gBrowser.selectedTab) {
   menu.hidePopup();
 }
 
-add_task(async function setup() {
+add_setup(async function() {
   await promiseSyncReady();
   await Services.search.init();
   // gSync.init() is called in a requestIdleCallback. Force its initialization.
@@ -95,6 +109,32 @@ add_task(async function test_sendTabToDevice_showsConfirmationHint_fxa() {
   await checkForConfirmationHint("fxa-toolbar-menu-button");
   document.documentElement.setAttribute("fxastatus", "not_configured");
 });
+
+add_task(
+  async function test_sendTabToDevice_showsConfirmationHint_onOverflowMenu() {
+    // We need to change the fxastatus from "not_configured" to show the FxA button.
+    is(
+      document.documentElement.getAttribute("fxastatus"),
+      "not_configured",
+      "FxA button is hidden"
+    );
+    document.documentElement.setAttribute("fxastatus", "foo");
+
+    let navbar = document.getElementById("nav-bar");
+
+    // Resize the window so that the account button is in the overflow menu.
+    let originalWidth = window.outerWidth;
+    window.resizeTo(kForceOverflowWidthPx, window.outerHeight);
+    await TestUtils.waitForCondition(() => navbar.hasAttribute("overflowing"));
+
+    await checkForConfirmationHint("PanelUI-menu-button");
+    document.documentElement.setAttribute("fxastatus", "not_configured");
+
+    window.resizeTo(originalWidth, window.outerHeight);
+    await TestUtils.waitForCondition(() => !navbar.hasAttribute("overflowing"));
+    CustomizableUI.reset();
+  }
+);
 
 add_task(async function test_sendTabToDevice_showsConfirmationHint_appMenu() {
   // If fxastatus is "not_configured" then the FxA button is hidden, and we

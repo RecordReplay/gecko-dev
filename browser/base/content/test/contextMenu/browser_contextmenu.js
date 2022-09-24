@@ -64,6 +64,7 @@ add_task(async function init() {
     set: [
       ["browser.search.separatePrivateDefault.ui.enabled", true],
       ["extensions.screenshots.disabled", false],
+      ["layout.forms.reveal-password-context-menu.enabled", true],
     ],
   });
 });
@@ -223,6 +224,19 @@ add_task(async function test_link_over_shadow_dom() {
 add_task(async function test_mailto() {
   await test_contextmenu("#test-mailto", [
     "context-copyemail",
+    true,
+    "---",
+    null,
+    "context-searchselect",
+    true,
+    "context-searchselect-private",
+    true,
+  ]);
+});
+
+add_task(async function test_tel() {
+  await test_contextmenu("#test-tel", [
+    "context-copyphone",
     true,
     "---",
     null,
@@ -658,10 +672,6 @@ add_task(async function test_iframe() {
       true,
       "---",
       null,
-      "context-take-frame-screenshot",
-      true,
-      "---",
-      null,
       "context-viewframesource",
       true,
       "context-viewframeinfo",
@@ -749,10 +759,6 @@ add_task(async function test_video_in_iframe() {
       true,
       "---",
       null,
-      "context-take-frame-screenshot",
-      true,
-      "---",
-      null,
       "context-viewframeinfo",
       true,
     ]),
@@ -832,10 +838,6 @@ add_task(async function test_video_in_iframe() {
       true,
       "---",
       null,
-      "context-take-frame-screenshot",
-      true,
-      "---",
-      null,
       "context-viewframeinfo",
       true,
     ]),
@@ -903,10 +905,6 @@ add_task(async function test_audio_in_iframe() {
       true,
       "---",
       null,
-      "context-take-frame-screenshot",
-      true,
-      "---",
-      null,
       "context-viewframeinfo",
       true,
     ]),
@@ -957,10 +955,6 @@ add_task(async function test_image_in_iframe() {
       "---",
       null,
       "context-printframe",
-      true,
-      "---",
-      null,
-      "context-take-frame-screenshot",
       true,
       "---",
       null,
@@ -1655,10 +1649,6 @@ add_task(async function test_srcdoc() {
       "---",
       null,
       "context-printframe",
-      true,
-      "---",
-      null,
-      "context-take-frame-screenshot",
       true,
       "---",
       null,

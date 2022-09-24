@@ -20,6 +20,11 @@ ChromeUtils.defineModuleGetter(
   "webrtcUI",
   "resource:///modules/webrtcUI.jsm"
 );
+ChromeUtils.defineModuleGetter(
+  this,
+  "PrivateBrowsingUtils",
+  "resource://gre/modules/PrivateBrowsingUtils.jsm"
+);
 
 // If there are only this many or fewer tabs open, just sort by weight, and close
 // the lowest tab. Otherwise, do a more intensive compuation that determines the
@@ -29,13 +34,20 @@ const MIN_TABS_COUNT = 10;
 // Weight for non-discardable tabs.
 const NEVER_DISCARD = 100000;
 
+// Default minimum inactive duration.  Tabs that were accessed in the last
+// period of this duration are not unloaded.
+const kMinInactiveDurationInMs = Services.prefs.getIntPref(
+  "browser.tabs.min_inactive_duration_before_unload"
+);
+
 let criteriaTypes = [
   ["isNonDiscardable", NEVER_DISCARD],
   ["isLoading", 8],
-  ["usingPictureInPicture", 4],
-  ["playingMedia", 3],
-  ["usingWebRTC", 3],
+  ["usingPictureInPicture", NEVER_DISCARD],
+  ["playingMedia", NEVER_DISCARD],
+  ["usingWebRTC", NEVER_DISCARD],
   ["isPinned", 2],
+  ["isPrivate", NEVER_DISCARD],
 ];
 
 // Indicies into the criteriaTypes lists.
@@ -75,11 +87,31 @@ let DefaultTabUnloaderMethods = {
   },
 
   usingWebRTC(tab, weight) {
-    return webrtcUI.browserHasStreams(tab.linkedBrowser) ? weight : 0;
+    const browser = tab.linkedBrowser;
+    if (!browser) {
+      return 0;
+    }
+
+    // No need to iterate browser contexts for hasActivePeerConnection
+    // because hasActivePeerConnection is set only in the top window.
+    return webrtcUI.browserHasStreams(browser) ||
+      browser.browsingContext?.currentWindowGlobal?.hasActivePeerConnections()
+      ? weight
+      : 0;
+  },
+
+  isPrivate(tab, weight) {
+    return PrivateBrowsingUtils.isBrowserPrivate(tab.linkedBrowser)
+      ? weight
+      : 0;
   },
 
   getMinTabCount() {
     return MIN_TABS_COUNT;
+  },
+
+  getNow() {
+    return Date.now();
   },
 
   *iterateTabs() {
@@ -117,16 +149,16 @@ let DefaultTabUnloaderMethods = {
    * @param tabs array of tabs, used only by unit tests
    * @param map of processes returned by getAllProcesses.
    */
-  async calculateMemoryUsage(tabs, processMap) {
+  async calculateMemoryUsage(processMap) {
     let parentProcessInfo = await ChromeUtils.requestProcInfo();
     let childProcessInfoList = parentProcessInfo.children;
     for (let childProcInfo of childProcessInfoList) {
       let processInfo = processMap.get(childProcInfo.pid);
       if (!processInfo) {
-        processInfo = { count: 0, topCount: 0 };
+        processInfo = { count: 0, topCount: 0, tabSet: new Set() };
         processMap.set(childProcInfo.pid, processInfo);
       }
-      processInfo.memory = childProcInfo.residentUniqueSize;
+      processInfo.memory = childProcInfo.memory;
     }
   },
 };
@@ -141,19 +173,29 @@ var TabUnloader = {
    * Initialize low-memory detection and tab auto-unloading.
    */
   init() {
-    if (Services.prefs.getBoolPref("browser.tabs.unloadOnLowMemory", true)) {
-      const watcher = Cc["@mozilla.org/xpcom/memory-watcher;1"].getService(
-        Ci.nsIAvailableMemoryWatcherBase
-      );
-      watcher.registerTabUnloader(this);
-    }
-  },
-
-  // This method is exposed on nsITabUnloader
-  async unloadTabAsync() {
     const watcher = Cc["@mozilla.org/xpcom/memory-watcher;1"].getService(
       Ci.nsIAvailableMemoryWatcherBase
     );
+    watcher.registerTabUnloader(this);
+  },
+
+  isDiscardable(tab) {
+    if (!("weight" in tab)) {
+      return false;
+    }
+    return tab.weight < NEVER_DISCARD;
+  },
+
+  // This method is exposed on nsITabUnloader
+  async unloadTabAsync(minInactiveDuration = kMinInactiveDurationInMs) {
+    const watcher = Cc["@mozilla.org/xpcom/memory-watcher;1"].getService(
+      Ci.nsIAvailableMemoryWatcherBase
+    );
+
+    if (!Services.prefs.getBoolPref("browser.tabs.unloadOnLowMemory", true)) {
+      watcher.onUnloadAttemptCompleted(Cr.NS_ERROR_NOT_AVAILABLE);
+      return;
+    }
 
     if (this._isUnloading) {
       // Don't post multiple unloading requests.  The situation may be solved
@@ -164,7 +206,9 @@ var TabUnloader = {
     }
 
     this._isUnloading = true;
-    const isTabUnloaded = await this.unloadLeastRecentlyUsedTab();
+    const isTabUnloaded = await this.unloadLeastRecentlyUsedTab(
+      minInactiveDuration
+    );
     this._isUnloading = false;
 
     watcher.onUnloadAttemptCompleted(
@@ -175,6 +219,10 @@ var TabUnloader = {
   /**
    * Get a list of tabs that can be discarded. This list includes all tabs in
    * all windows and is sorted based on a weighting described below.
+   *
+   * @param minInactiveDuration If this value is a number, tabs that were accessed
+   *        in the last |minInactiveDuration| msec are not unloaded even if they
+   *        are least-recently-used.
    *
    * @param tabMethods an helper object with methods called by this algorithm.
    *
@@ -200,11 +248,24 @@ var TabUnloader = {
    * The tabMethods are used so that unit tests can use false tab objects and
    * override their behaviour.
    */
-  async getSortedTabs(tabMethods = DefaultTabUnloaderMethods) {
+  async getSortedTabs(
+    minInactiveDuration = kMinInactiveDurationInMs,
+    tabMethods = DefaultTabUnloaderMethods
+  ) {
     let tabs = [];
+
+    const now = tabMethods.getNow();
 
     let lowestWeight = 1000;
     for (let tab of tabMethods.iterateTabs()) {
+      if (
+        typeof minInactiveDuration == "number" &&
+        now - tab.tab.lastAccessed < minInactiveDuration
+      ) {
+        // Skip "fresh" tabs, which were accessed within the specified duration.
+        continue;
+      }
+
       let weight = determineTabBaseWeight(tab, tabMethods);
 
       // Don't add tabs that have a weight of -1.
@@ -225,9 +286,9 @@ var TabUnloader = {
       return a.tab.lastAccessed - b.tab.lastAccessed;
     });
 
-    // If the lowest priority tab is not discardable, don't discard any tabs.
-    if (!tabs.length || tabs[0].weight == NEVER_DISCARD) {
-      return [];
+    // If the lowest priority tab is not discardable, no need to continue.
+    if (!tabs.length || !this.isDiscardable(tabs[0])) {
+      return tabs;
     }
 
     // Determine the lowest weight that the tabs have. The tabs with the
@@ -250,7 +311,10 @@ var TabUnloader = {
       higherWeightedCount = minCount;
     }
 
-    if (higherWeightedCount < tabs.length) {
+    // If |lowestWeightedCount| is 1, no benefit from calculating
+    // the tab's memory and additional weight.
+    const lowestWeightedCount = tabs.length - higherWeightedCount;
+    if (lowestWeightedCount > 1) {
       let processMap = getAllProcesses(tabs, tabMethods);
 
       let higherWeightedTabs = tabs.splice(-higherWeightedCount);
@@ -266,11 +330,15 @@ var TabUnloader = {
    * Select and discard one tab.
    * @returns true if a tab was unloaded, otherwise false.
    */
-  async unloadLeastRecentlyUsedTab() {
-    let sortedTabs = await this.getSortedTabs();
+  async unloadLeastRecentlyUsedTab(
+    minInactiveDuration = kMinInactiveDurationInMs
+  ) {
+    const sortedTabs = await this.getSortedTabs(minInactiveDuration);
 
     for (let tabInfo of sortedTabs) {
-      if (tabInfo.weight == NEVER_DISCARD) {
+      if (!this.isDiscardable(tabInfo)) {
+        // Since |sortedTabs| is sorted, once we see an undiscardable tab
+        // no need to continue the loop.
         return false;
       }
 
@@ -279,6 +347,7 @@ var TabUnloader = {
         Services.console.logStringMessage(
           `TabUnloader discarded <${remoteType}>`
         );
+        tabInfo.tab.updateLastUnloadedByTabUnloader();
         return true;
       }
     }
@@ -321,6 +390,7 @@ function determineTabBaseWeight(tab, tabMethods) {
  * The map will map process ids to an object with two properties:
  *   count - the number of tabs or subframes that use this process
  *   topCount - the number of top-level tabs that use this process
+ *   tabSet - the indices of the tabs hosted by this process
  *
  * @param tabs array of tabs
  * @param tabMethods an helper object with methods called by this algorithm.
@@ -336,15 +406,37 @@ function getAllProcesses(tabs, tabMethods) {
 
   let processMap = new Map();
 
-  for (let tab of tabs) {
+  for (let tabIndex = 0; tabIndex < tabs.length; ++tabIndex) {
+    const tab = tabs[tabIndex];
+
+    // The per-tab map will map process ids to an object with three properties:
+    //   isTopLevel - whether the process hosts the tab's top-level frame or not
+    //   frameCount - the number of frames hosted by the process
+    //                (a top frame contributes 2 and a sub frame contributes 1)
+    //   entryToProcessMap - the reference to the object in |processMap|
+    tab.processes = new Map();
+
     let topLevel = true;
     for (let pid of tabMethods.iterateProcesses(tab.tab)) {
       let processInfo = processMap.get(pid);
       if (processInfo) {
         processInfo.count++;
+        processInfo.tabSet.add(tabIndex);
       } else {
-        processInfo = { count: 1, topCount: 0 };
+        processInfo = { count: 1, topCount: 0, tabSet: new Set([tabIndex]) };
         processMap.set(pid, processInfo);
+      }
+
+      let tabProcessEntry = tab.processes.get(pid);
+      if (tabProcessEntry) {
+        ++tabProcessEntry.frameCount;
+      } else {
+        tabProcessEntry = {
+          isTopLevel: topLevel,
+          frameCount: 1,
+          entryToProcessMap: processInfo,
+        };
+        tab.processes.set(pid, tabProcessEntry);
       }
 
       if (topLevel) {
@@ -352,6 +444,8 @@ function getAllProcesses(tabs, tabMethods) {
         processInfo.topCount = processInfo.topCount
           ? processInfo.topCount + 1
           : 1;
+        // top-level frame contributes two frame counts
+        ++tabProcessEntry.frameCount;
       }
     }
   }
@@ -368,19 +462,18 @@ function getAllProcesses(tabs, tabMethods) {
  * @param tabMethods an helper object with methods called by this algorithm.
  */
 async function adjustForResourceUse(tabs, processMap, tabMethods) {
-  await tabMethods.calculateMemoryUsage(tabs, processMap);
+  // The second argument is needed for testing.
+  await tabMethods.calculateMemoryUsage(processMap, tabs);
 
   let sortWeight = 0;
   for (let tab of tabs) {
     tab.sortWeight = ++sortWeight;
 
-    let topLevel = true;
     let uniqueCount = 0;
     let totalMemory = 0;
-    for (let pid of tabMethods.iterateProcesses(tab.tab)) {
-      let processInfo = processMap.get(pid);
-      let { count, topCount, memory } = processInfo;
-      if (count == 1) {
+    for (const procEntry of tab.processes.values()) {
+      const processInfo = procEntry.entryToProcessMap;
+      if (processInfo.tabSet.size == 1) {
         uniqueCount++;
       }
 
@@ -391,12 +484,10 @@ async function adjustForResourceUse(tabs, processMap, tabMethods) {
       // So for example, if a process is used in four top level tabs and two
       // subframes, the top level tabs share 80% of the memory and the subframes
       // use 20% of the memory.
-      let perFrameMemory = memory / (topCount * 2 + (count - topCount));
-      if (topLevel) {
-        topLevel = false;
-        perFrameMemory *= 2;
-      }
-      totalMemory += perFrameMemory;
+      const perFrameMemory =
+        processInfo.memory /
+        (processInfo.topCount * 2 + (processInfo.count - processInfo.topCount));
+      totalMemory += perFrameMemory * procEntry.frameCount;
     }
 
     tab.uniqueCount = uniqueCount;

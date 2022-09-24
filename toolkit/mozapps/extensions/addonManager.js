@@ -45,8 +45,6 @@ const MSG_INSTALL_CLEANUP = "WebAPICleanup";
 const MSG_ADDON_EVENT_REQ = "WebAPIAddonEventRequest";
 const MSG_ADDON_EVENT = "WebAPIAddonEvent";
 
-const CHILD_SCRIPT = "resource://gre/modules/addons/Content.js";
-
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 
 var gSingleton = null;
@@ -57,7 +55,6 @@ function amManager() {
     "resource://gre/modules/AddonManager.jsm"
   ));
 
-  Services.mm.loadFrameScript(CHILD_SCRIPT, true, true);
   Services.mm.addMessageListener(MSG_INSTALL_ENABLED, this);
   Services.mm.addMessageListener(MSG_PROMISE_REQUEST, this);
   Services.mm.addMessageListener(MSG_INSTALL_CLEANUP, this);
@@ -93,6 +90,12 @@ amManager.prototype = {
 
     const { mimetype, triggeringPrincipal, hash, icon, name, uri } = aPayload;
 
+    // NOTE: consider removing this call to isInstallAllowed from here, later it is going to be called
+    // again from inside AddonManager.installAddonFromWebpage as part of the block/allow logic.
+    //
+    // The sole purpose of the call here seems to be "clearing the optional InstallTrigger callback",
+    // which seems to be actually wrong if we are still proceeding to call getInstallForURL and the same
+    // logic used to block the install flow using the exact same method call later on.
     if (!AddonManager.isInstallAllowed(mimetype, triggeringPrincipal)) {
       aCallback = null;
       retval = false;
@@ -118,14 +121,14 @@ amManager.prototype = {
     }).then(aInstall => {
       function callCallback(status) {
         try {
-          aCallback.onInstallEnded(uri, status);
+          aCallback?.onInstallEnded(uri, status);
         } catch (e) {
           Cu.reportError(e);
         }
       }
 
       if (!aInstall) {
-        aCallback.onInstallEnded(uri, UNSUPPORTED_TYPE);
+        callCallback(UNSUPPORTED_TYPE);
         return;
       }
 
@@ -157,7 +160,10 @@ amManager.prototype = {
         mimetype,
         aBrowser,
         triggeringPrincipal,
-        aInstall
+        aInstall,
+        {
+          hasCrossOriginAncestor: aPayload.hasCrossOriginAncestor,
+        }
       );
     });
 
@@ -319,14 +325,7 @@ amManager.prototype = {
 
   classID: Components.ID("{4399533d-08d1-458c-a87a-235f74451cfa}"),
   _xpcom_factory: {
-    createInstance(aOuter, aIid) {
-      if (aOuter != null) {
-        throw Components.Exception(
-          "Component does not support aggregation",
-          Cr.NS_ERROR_NO_AGGREGATION
-        );
-      }
-
+    createInstance(aIid) {
       if (!gSingleton) {
         gSingleton = new amManager();
       }

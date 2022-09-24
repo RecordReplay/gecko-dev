@@ -4,7 +4,6 @@
 "use strict";
 
 const Services = require("Services");
-const { L10nRegistry } = require("resource://gre/modules/L10nRegistry.jsm");
 
 const EventEmitter = require("devtools/shared/event-emitter");
 
@@ -102,7 +101,7 @@ AccessibilityPanel.prototype = {
       this.onAccessibilityInspectorUpdated
     );
 
-    this.accessibilityProxy = new AccessibilityProxy(this._commands);
+    this.accessibilityProxy = new AccessibilityProxy(this._commands, this);
     await this.accessibilityProxy.initialize();
 
     // Enable accessibility service if necessary.
@@ -112,14 +111,6 @@ AccessibilityPanel.prototype = {
     ) {
       await this.accessibilityProxy.enableAccessibility();
     }
-
-    this.onResourceAvailable = this.onResourceAvailable.bind(this);
-    await this._commands.resourceCommand.watchResources(
-      [this._commands.resourceCommand.TYPES.DOCUMENT_EVENT],
-      {
-        onAvailable: this.onResourceAvailable,
-      }
-    );
 
     this.picker = new Picker(this);
     this.fluentBundles = await this.createFluentBundles();
@@ -146,7 +137,7 @@ AccessibilityPanel.prototype = {
    */
   async createFluentBundles() {
     const locales = Services.locale.appLocalesAsBCP47;
-    const generator = L10nRegistry.generateBundles(locales, [
+    const generator = L10nRegistry.getInstance().generateBundles(locales, [
       "devtools/client/accessibility.ftl",
     ]);
 
@@ -178,29 +169,16 @@ AccessibilityPanel.prototype = {
    * refreshed immediatelly if it's currently selected or lazily when the user
    * actually selects it.
    */
-  async onTabNavigated() {
+  async forceRefresh() {
     this.shouldRefresh = true;
     await this._opening;
 
+    await this.accessibilityProxy.accessibilityFrontGetPromise;
     const onUpdated = this.panelWin.once(EVENTS.INITIALIZED);
     this.refresh();
     await onUpdated;
 
     this.emit("reloaded");
-  },
-
-  onResourceAvailable: function(resources) {
-    for (const resource of resources) {
-      // Only consider top level document, and ignore remote iframes top document
-      if (
-        resource.resourceType ===
-          this._commands.resourceCommand.TYPES.DOCUMENT_EVENT &&
-        resource.name === "dom-complete" &&
-        resource.targetFront.isTopLevel
-      ) {
-        this.onTabNavigated();
-      }
-    }
   },
 
   /**
@@ -343,10 +321,6 @@ AccessibilityPanel.prototype = {
     this.postContentMessage("destroy");
 
     if (this.accessibilityProxy) {
-      this._commands.resourceCommand.unwatchResources(
-        [this._commands.resourceCommand.TYPES.DOCUMENT_EVENT],
-        { onAvailable: this.onResourceAvailable }
-      );
       this.accessibilityProxy.stopListeningForLifecycleEvents({
         init: this.onLifecycleEvent,
         shutdown: this.onLifecycleEvent,

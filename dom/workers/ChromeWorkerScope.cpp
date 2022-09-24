@@ -7,14 +7,14 @@
 #include "ChromeWorkerScope.h"
 
 #include "jsapi.h"
+#include "js/PropertyAndElement.h"  // JS_GetProperty
 #include "js/experimental/CTypes.h"  // JS::InitCTypesClass, JS::CTypesCallbacks, JS::SetCTypesCallbacks
 #include "js/MemoryFunctions.h"
 
 #include "nsNativeCharsetUtils.h"
 #include "nsString.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -64,5 +64,4 @@ bool DefineChromeWorkerFunctions(JSContext* aCx,
   return true;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

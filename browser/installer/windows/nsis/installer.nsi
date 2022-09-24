@@ -410,12 +410,6 @@ Section "-Application" APP_IDX
     StrCpy $AddDesktopSC "1"
   ${EndIf}
 
-  ${CreateUpdateDir} "Mozilla"
-  ${If} ${Errors}
-    Pop $0
-    ${LogMsg} "** ERROR Failed to create update directory: $0"
-  ${EndIf}
-
   ${LogHeader} "Adding Registry Entries"
   SetShellVarContext current  ; Set SHCTX to HKCU
   ${RegCleanMain} "Software\Mozilla"
@@ -459,17 +453,19 @@ Section "-Application" APP_IDX
   ; it doesn't cause problems always add them.
   ${SetUninstallKeys}
 
-  ; On install always add the FirefoxHTML and FirefoxURL keys.
-  ; An empty string is used for the 5th param because FirefoxHTML is not a
+  ; On install always add the FirefoxHTML-, FirefoxPDF-, and FirefoxURL- keys.
+  ; An empty string is used for the 5th param because FirefoxHTML- is not a
   ; protocol handler.
   ${GetLongPath} "$INSTDIR\${FileMainEXE}" $8
   StrCpy $2 "$\"$8$\" -osint -url $\"%1$\""
 
-  ; In Win8, the delegate execute handler picks up the value in FirefoxURL and
-  ; FirefoxHTML to launch the desktop browser when it needs to.
-  ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,1" \
-                                 "${AppRegName} Document" ""
-  ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,1" \
+  ; In Win8, the delegate execute handler picks up the value in FirefoxURL- and
+  ; FirefoxHTML- to launch the desktop browser when it needs to.
+  ${AddDisabledDDEHandlerValues} "FirefoxHTML-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
+                                 "${AppRegName} HTML Document" ""
+  ${AddDisabledDDEHandlerValues} "FirefoxPDF-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_PDF_ZERO_BASED}" \
+                                 "${AppRegName} PDF Document" ""
+  ${AddDisabledDDEHandlerValues} "FirefoxURL-$AppUserModelID" "$2" "$8,${IDI_DOCUMENT_ZERO_BASED}" \
                                  "${AppRegName} URL" "true"
 
   ; For pre win8, the following keys should only be set if we can write to HKLM.
@@ -1262,7 +1258,8 @@ Function WriteInstallationTelemetryData
 
   ; Check for top-level profile directory
   ; Note: This is the same check used to set $ExistingProfile in stub.nsi
-  ${If} ${FileExists} "$LOCALAPPDATA\Mozilla\Firefox"
+  ${GetLocalAppDataFolder} $0
+  ${If} ${FileExists} "$0\Mozilla\Firefox"
     StrCpy $1 "true"
   ${Else}
     StrCpy $1 "false"

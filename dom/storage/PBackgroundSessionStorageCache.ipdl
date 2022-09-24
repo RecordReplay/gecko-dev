@@ -36,11 +36,12 @@ union SSWriteInfo
 
 struct SSCacheCopy {
   nsCString originKey;
-  nsCString originAttributes;
+  PrincipalInfo principalInfo;
   SSSetItemInfo[] data;
 };
 
-sync refcounted protocol PBackgroundSessionStorageCache
+[ChildImpl=virtual, ParentImpl=virtual]
+sync protocol PBackgroundSessionStorageCache
 {
  manager PBackgroundSessionStorageManager;
 

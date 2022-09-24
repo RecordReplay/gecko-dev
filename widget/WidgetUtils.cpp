@@ -14,12 +14,6 @@
 #include "nsIStringBundle.h"
 #include "nsTArray.h"
 #include "prenv.h"
-#ifdef XP_WIN
-#  include "WinUtils.h"
-#endif
-#ifdef MOZ_WIDGET_GTK
-#  include "mozilla/WidgetUtilsGtk.h"
-#endif
 
 namespace mozilla {
 
@@ -97,16 +91,6 @@ nsIntRect RotateRect(nsIntRect aRect, const nsIntRect& aBounds,
 
 namespace widget {
 
-uint32_t WidgetUtils::IsTouchDeviceSupportPresent() {
-#ifdef XP_WIN
-  return WinUtils::IsTouchDeviceSupportPresent();
-#elif defined(MOZ_WIDGET_GTK)
-  return WidgetUtilsGTK::IsTouchDeviceSupportPresent();
-#else
-  return 0;
-#endif
-}
-
 // static
 void WidgetUtils::SendBidiKeyboardInfoToContent() {
   nsCOMPtr<nsIBidiKeyboard> bidiKeyboard = nsContentUtils::GetBidiKeyboard();
@@ -144,15 +128,6 @@ void WidgetUtils::GetBrandShortName(nsAString& aBrandName) {
   if (bundle) {
     bundle->GetStringFromName("brandShortName", aBrandName);
   }
-}
-
-const char* WidgetUtils::GetSnapInstanceName() {
-  char* instanceName = PR_GetEnv("SNAP_INSTANCE_NAME");
-  if (instanceName != nullptr) {
-    return instanceName;
-  }
-  // Compatibility for snapd <= 2.35:
-  return PR_GetEnv("SNAP_NAME");
 }
 
 }  // namespace widget

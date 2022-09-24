@@ -4,6 +4,7 @@
 
 "use strict";
 
+const Services = require("Services");
 const {
   Component,
   createFactory,
@@ -17,13 +18,14 @@ const dom = require("devtools/client/shared/vendor/react-dom-factories");
 const {
   getFormattedIPAndPort,
   getFormattedSize,
+  getRequestPriorityAsText,
 } = require("devtools/client/netmonitor/src/utils/format-utils");
 const { L10N } = require("devtools/client/netmonitor/src/utils/l10n");
 const {
   getHeadersURL,
   getTrackingProtectionURL,
   getHTTPStatusCodeURL,
-} = require("devtools/client/netmonitor/src/utils/mdn-utils");
+} = require("devtools/client/netmonitor/src/utils/doc-utils");
 const {
   fetchNetworkUpdatePacket,
   writeHeaderText,
@@ -73,6 +75,12 @@ loader.lazyRequireGetter(
   "devtools/client/shared/components/menu/utils",
   true
 );
+loader.lazyRequireGetter(
+  this,
+  "openContentLink",
+  "devtools/client/shared/link",
+  true
+);
 
 const { div, input, label, span, textarea, tr, td, button } = dom;
 
@@ -98,13 +106,14 @@ const HEADERS_CONTENT_BLOCKING = L10N.getStr(
 const HEADERS_ETP = L10N.getStr(
   "netmonitor.trackingResource.enhancedTrackingProtection"
 );
+const HEADERS_PRIORITY = L10N.getStr("netmonitor.headers.requestPriority");
 
 /**
  * Headers panel component
  * Lists basic information about the request
  *
  * In http/2 all response headers are in small case.
- * See: https://developer.mozilla.org/en-US/docs/Tools/Network_Monitor/request_details#Headers
+ * See: https://firefox-source-docs.mozilla.org/devtools-user/network_monitor/request_details/index.html#response-headers
  * RFC: https://tools.ietf.org/html/rfc7540#section-8.1.2
  */
 class HeadersPanel extends Component {
@@ -118,6 +127,7 @@ class HeadersPanel extends Component {
       openLink: PropTypes.func,
       targetSearchResult: PropTypes.object,
       openRequestBlockingAndAddUrl: PropTypes.func.isRequired,
+      openHTTPCustomRequestTab: PropTypes.func.isRequired,
       cloneRequest: PropTypes.func,
       sendCustomRequest: PropTypes.func,
       shouldExpandPreview: PropTypes.bool,
@@ -378,9 +388,11 @@ class HeadersPanel extends Component {
 
       let rows;
       if (value) {
+        const match = value.match(/\n/g);
+        rows = match !== null ? match.length : 0;
         // Need to add 1 for the horizontal scrollbar
         // not to cover the last row of raw data
-        rows = value.match(/\n/g).length + 1;
+        rows = rows + 1;
       }
 
       return tr(
@@ -455,6 +467,7 @@ class HeadersPanel extends Component {
           member: Object.assign({}, member, { open: false }),
           mode: MODE.TINY,
           noGrip: true,
+          openLink: openContentLink,
         })
       ),
       headerDocURL ? MDNLink({ url: headerDocURL }) : null
@@ -530,11 +543,13 @@ class HeadersPanel extends Component {
         statusText,
         urlDetails,
         referrerPolicy,
+        priority,
         isThirdPartyTrackingResource,
         contentSize,
         transferredSize,
       },
       openRequestBlockingAndAddUrl,
+      openHTTPCustomRequestTab,
       shouldExpandPreview,
       setHeadersUrlPreviewExpanded,
     } = this.props;
@@ -727,14 +742,23 @@ class HeadersPanel extends Component {
       ? this.renderSummary(HEADERS_REFERRER, referrerPolicy)
       : null;
 
+    const summaryPriority = priority
+      ? this.renderSummary(HEADERS_PRIORITY, getRequestPriorityAsText(priority))
+      : null;
+
     const summaryItems = [
       summaryStatus,
       summaryVersion,
       summarySize,
       summaryReferrerPolicy,
+      summaryPriority,
       trackingProtectionStatus,
       trackingProtectionDetails,
     ].filter(summaryItem => summaryItem !== null);
+
+    const newEditAndResendPref = Services.prefs.getBoolPref(
+      "devtools.netmonitor.features.newEditAndResend"
+    );
 
     return div(
       { className: "headers-panel-container" },
@@ -760,9 +784,15 @@ class HeadersPanel extends Component {
         button(
           {
             id: "edit-resend-button",
-            className: "devtools-button devtools-dropdown-button",
+            className: !newEditAndResendPref
+              ? "devtools-button devtools-dropdown-button"
+              : "devtools-button",
             title: RESEND,
-            onClick: this.onShowResendMenu,
+            onClick: !newEditAndResendPref
+              ? this.onShowResendMenu
+              : () => {
+                  openHTTPCustomRequestTab();
+                },
           },
           span({ className: "title" }, RESEND)
         )
@@ -803,6 +833,8 @@ module.exports = connect(
       dispatch(Actions.setHeadersUrlPreviewExpanded(expanded)),
     openRequestBlockingAndAddUrl: url =>
       dispatch(Actions.openRequestBlockingAndAddUrl(url)),
+    openHTTPCustomRequestTab: () =>
+      dispatch(Actions.openHTTPCustomRequest(true)),
     cloneRequest: id => dispatch(Actions.cloneRequest(id)),
     sendCustomRequest: () =>
       dispatch(Actions.sendCustomRequest(props.connector)),

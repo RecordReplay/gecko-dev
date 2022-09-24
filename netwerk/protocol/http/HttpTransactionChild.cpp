@@ -25,15 +25,15 @@
 #include "nsProxyRelease.h"
 #include "nsQueryObject.h"
 #include "nsSerializationHelper.h"
+#include "OpaqueResponseUtils.h"
 
 using mozilla::ipc::BackgroundParent;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 NS_IMPL_ISUPPORTS(HttpTransactionChild, nsIRequestObserver, nsIStreamListener,
                   nsITransportEventSink, nsIThrottledInputChannel,
-                  nsIThreadRetargetableStreamListener);
+                  nsIThreadRetargetableStreamListener, nsIEarlyHintObserver);
 
 //-----------------------------------------------------------------------------
 // HttpTransactionChild <public>
@@ -69,8 +69,8 @@ nsresult HttpTransactionChild::InitInternal(
     nsHttpRequestHead* requestHead, nsIInputStream* requestBody,
     uint64_t requestContentLength, bool requestBodyHasHeaders,
     uint64_t topLevelOuterContentWindowId, uint8_t httpTrafficCategory,
-    uint64_t requestContextID, uint32_t classOfService, uint32_t initialRwin,
-    bool responseTimeoutEnabled, uint64_t channelId,
+    uint64_t requestContextID, ClassOfService classOfService,
+    uint32_t initialRwin, bool responseTimeoutEnabled, uint64_t channelId,
     bool aHasTransactionObserver,
     const Maybe<H2PushedStreamArg>& aPushedStreamArg) {
   LOG(("HttpTransactionChild::InitInternal [this=%p caps=%x]\n", this, caps));
@@ -172,7 +172,7 @@ mozilla::ipc::IPCResult HttpTransactionChild::RecvInit(
     const uint64_t& aReqContentLength, const bool& aReqBodyIncludesHeaders,
     const uint64_t& aTopLevelOuterContentWindowId,
     const uint8_t& aHttpTrafficCategory, const uint64_t& aRequestContextID,
-    const uint32_t& aClassOfService, const uint32_t& aInitialRwin,
+    const ClassOfService& aClassOfService, const uint32_t& aInitialRwin,
     const bool& aResponseTimeoutEnabled, const uint64_t& aChannelId,
     const bool& aHasTransactionObserver,
     const Maybe<H2PushedStreamArg>& aPushedStreamArg,
@@ -417,6 +417,9 @@ HttpTransactionChild::OnStartRequest(nsIRequest* aRequest) {
         !protocol.IsEmpty()) {
       mProtocolVersion.Assign(protocol);
     }
+    // Make sure peerId is generated.
+    nsAutoCString unused;
+    info->GetPeerId(unused);
     nsCOMPtr<nsISerializable> secInfoSer = do_QueryInterface(secInfoSupp);
     if (secInfoSer) {
       NS_SerializeToString(secInfoSer, serializedSecurityInfoOut);
@@ -432,13 +435,11 @@ HttpTransactionChild::OnStartRequest(nsIRequest* aRequest) {
       mProtocolVersion.Assign(nsHttp::GetProtocolVersion(version));
     }
     optionalHead = Some(*head);
-    if (mTransaction->Caps() & NS_HTTP_CALL_CONTENT_SNIFFER) {
-      nsAutoCString contentTypeOptionsHeader;
-      if (!(head->GetContentTypeOptionsHeader(contentTypeOptionsHeader) &&
-            contentTypeOptionsHeader.EqualsIgnoreCase("nosniff"))) {
-        RefPtr<nsInputStreamPump> pump = do_QueryObject(mTransactionPump);
-        pump->PeekStream(GetDataForSniffer, &dataForSniffer);
-      }
+
+    if (GetOpaqueResponseBlockedReason(*head) ==
+        OpaqueResponseBlockedReason::BLOCKED_SHOULD_SNIFF) {
+      RefPtr<nsInputStreamPump> pump = do_QueryObject(mTransactionPump);
+      pump->PeekStream(GetDataForSniffer, &dataForSniffer);
     }
   }
 
@@ -637,5 +638,13 @@ HttpTransactionChild::CheckListenerChain() {
   return NS_OK;
 }
 
-}  // namespace net
-}  // namespace mozilla
+NS_IMETHODIMP
+HttpTransactionChild::EarlyHint(const nsACString& value) {
+  LOG(("HttpTransactionChild::EarlyHint"));
+  if (CanSend()) {
+    Unused << SendEarlyHint(PromiseFlatCString(value));
+  }
+  return NS_OK;
+}
+
+}  // namespace mozilla::net

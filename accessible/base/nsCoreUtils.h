@@ -14,6 +14,7 @@
 
 #include "nsPoint.h"
 #include "nsTArray.h"
+#include "Units.h"
 
 class nsRange;
 class nsTreeColumn;
@@ -167,10 +168,10 @@ class nsCoreUtils {
    *
    * @param aScrollableFrame  the scrollable frame
    * @param aFrame            the frame to scroll
-   * @param aPoint            the point scroll to
+   * @param aPoint            the point scroll to (in dev pixels)
    */
   static void ScrollFrameToPoint(nsIFrame* aScrollableFrame, nsIFrame* aFrame,
-                                 const nsIntPoint& aPoint);
+                                 const mozilla::LayoutDeviceIntPoint& aPoint);
 
   /**
    * Converts scroll type constant defined in nsIAccessibleScrollType to
@@ -181,14 +182,6 @@ class nsCoreUtils {
                                           mozilla::ScrollAxis* aHorizontal);
 
   /**
-   * Returns coordinates in device pixels relative screen for the top level
-   * window.
-   *
-   * @param aNode  the DOM node hosted in the window.
-   */
-  static nsIntPoint GetScreenCoordsForWindow(nsINode* aNode);
-
-  /**
    * Return document shell for the given DOM node.
    */
   static already_AddRefed<nsIDocShell> GetDocShellFor(nsINode* aNode);
@@ -197,11 +190,6 @@ class nsCoreUtils {
    * Return true if the given document is root document.
    */
   static bool IsRootDocument(Document* aDocument);
-
-  /**
-   * Return true if the given document is content document (not chrome).
-   */
-  static bool IsContentDocument(Document* aDocument);
 
   /**
    * Return true if the given document is a top level content document in this
@@ -323,6 +311,7 @@ class nsCoreUtils {
   static void DispatchAccEvent(RefPtr<nsIAccessibleEvent> aEvent);
 
   static bool IsDisplayContents(nsIContent* aContent);
+  static bool CanCreateAccessibleWithoutFrame(nsIContent* aContent);
 
   /**
    * Return whether the document and all its in-process ancestors are visible in

@@ -34,6 +34,7 @@
 #include "mozilla/dom/BlobURLProtocolHandler.h"
 #include "mozilla/dom/File.h"
 #include "mozilla/dom/PerformanceStorage.h"
+#include "mozilla/dom/PerformanceTiming.h"
 #include "mozilla/dom/UserActivation.h"
 #include "mozilla/dom/WorkerCommon.h"
 #include "mozilla/PreloaderBase.h"
@@ -43,6 +44,7 @@
 #include "mozilla/StaticPrefs_browser.h"
 #include "mozilla/StaticPrefs_network.h"
 #include "mozilla/StaticPrefs_privacy.h"
+#include "mozilla/StaticPrefs_javascript.h"
 #include "mozilla/Unused.h"
 
 #include "Fetch.h"
@@ -236,21 +238,18 @@ AlternativeDataStreamListener::OnStartRequest(nsIRequest* aRequest) {
     // call FetchDriver::HttpFetch to load main body
     MOZ_ASSERT(mFetchDriver);
     return mFetchDriver->HttpFetch();
-
-  } else {
-    // Needn't load alternative data, since alternative data does not exist.
-    // Set status to FALLBACK to reuse the opened channel to load main body,
-    // then call FetchDriver::OnStartRequest to continue the work. Unfortunately
-    // can't change the stream listener to mFetchDriver, need to keep
-    // AlternativeDataStreamListener alive to redirect OnDataAvailable and
-    // OnStopRequest to mFetchDriver.
-    MOZ_ASSERT(alternativeDataType.IsEmpty());
-    mStatus = AlternativeDataStreamListener::FALLBACK;
-    mAlternativeDataCacheEntryId = 0;
-    MOZ_ASSERT(mFetchDriver);
-    return mFetchDriver->OnStartRequest(aRequest);
   }
-  return NS_OK;
+  // Needn't load alternative data, since alternative data does not exist.
+  // Set status to FALLBACK to reuse the opened channel to load main body,
+  // then call FetchDriver::OnStartRequest to continue the work. Unfortunately
+  // can't change the stream listener to mFetchDriver, need to keep
+  // AlternativeDataStreamListener alive to redirect OnDataAvailable and
+  // OnStopRequest to mFetchDriver.
+  MOZ_ASSERT(alternativeDataType.IsEmpty());
+  mStatus = AlternativeDataStreamListener::FALLBACK;
+  mAlternativeDataCacheEntryId = 0;
+  MOZ_ASSERT(mFetchDriver);
+  return mFetchDriver->OnStartRequest(aRequest);
 }
 
 NS_IMETHODIMP
@@ -817,8 +816,9 @@ nsresult FetchDriver::HttpFetch(
   if (!aPreferredAlternativeDataType.IsEmpty()) {
     nsCOMPtr<nsICacheInfoChannel> cic = do_QueryInterface(chan);
     if (cic) {
-      cic->PreferAlternativeDataType(aPreferredAlternativeDataType, ""_ns,
-                                     true);
+      cic->PreferAlternativeDataType(
+          aPreferredAlternativeDataType, ""_ns,
+          nsICacheInfoChannel::PreferredAlternativeDataDeliveryType::ASYNC);
       MOZ_ASSERT(!mAltDataListener);
       mAltDataListener = new AlternativeDataStreamListener(
           this, chan, aPreferredAlternativeDataType);
@@ -829,11 +829,14 @@ nsresult FetchDriver::HttpFetch(
   } else {
     // Integrity check cannot be done on alt-data yet.
     if (mRequest->GetIntegrity().IsEmpty()) {
+      MOZ_ASSERT(!FetchUtil::WasmAltDataType.IsEmpty());
       nsCOMPtr<nsICacheInfoChannel> cic = do_QueryInterface(chan);
-      if (cic) {
-        cic->PreferAlternativeDataType(nsLiteralCString(WASM_ALT_DATA_TYPE_V1),
-                                       nsLiteralCString(WASM_CONTENT_TYPE),
-                                       false);
+      if (cic && StaticPrefs::javascript_options_wasm_caching() &&
+          !mRequest->SkipWasmCaching()) {
+        cic->PreferAlternativeDataType(
+            FetchUtil::WasmAltDataType, nsLiteralCString(WASM_CONTENT_TYPE),
+            nsICacheInfoChannel::PreferredAlternativeDataDeliveryType::
+                SERIALIZE);
       }
     }
 
@@ -852,14 +855,15 @@ nsresult FetchDriver::HttpFetch(
   mChannel = chan;
   return NS_OK;
 }
-already_AddRefed<InternalResponse> FetchDriver::BeginAndGetFilteredResponse(
-    InternalResponse* aResponse, bool aFoundOpaqueRedirect) {
+
+SafeRefPtr<InternalResponse> FetchDriver::BeginAndGetFilteredResponse(
+    SafeRefPtr<InternalResponse> aResponse, bool aFoundOpaqueRedirect) {
   MOZ_ASSERT(aResponse);
   AutoTArray<nsCString, 4> reqURLList;
   mRequest->GetURLListWithoutFragment(reqURLList);
   MOZ_ASSERT(!reqURLList.IsEmpty());
   aResponse->SetURLList(reqURLList);
-  RefPtr<InternalResponse> filteredResponse;
+  SafeRefPtr<InternalResponse> filteredResponse;
   if (aFoundOpaqueRedirect) {
     filteredResponse = aResponse->OpaqueRedirectResponse();
   } else {
@@ -885,25 +889,25 @@ already_AddRefed<InternalResponse> FetchDriver::BeginAndGetFilteredResponse(
 
   MOZ_ASSERT(filteredResponse);
   MOZ_ASSERT(mObserver);
+  MOZ_ASSERT(filteredResponse);
   if (!ShouldCheckSRI(*mRequest, *filteredResponse)) {
     // Need to keep mObserver alive.
     RefPtr<FetchDriverObserver> observer = mObserver;
-    observer->OnResponseAvailable(filteredResponse);
+    observer->OnResponseAvailable(filteredResponse.clonePtr());
 #ifdef DEBUG
     mResponseAvailableCalled = true;
 #endif
   }
 
-  return filteredResponse.forget();
+  return filteredResponse;
 }
 
 void FetchDriver::FailWithNetworkError(nsresult rv) {
   AssertIsOnMainThread();
-  RefPtr<InternalResponse> error = InternalResponse::NetworkError(rv);
   if (mObserver) {
     // Need to keep mObserver alive.
     RefPtr<FetchDriverObserver> observer = mObserver;
-    observer->OnResponseAvailable(error);
+    observer->OnResponseAvailable(InternalResponse::NetworkError(rv));
 #ifdef DEBUG
     mResponseAvailableCalled = true;
 #endif
@@ -916,6 +920,7 @@ void FetchDriver::FailWithNetworkError(nsresult rv) {
   }
 
   mChannel = nullptr;
+  Unfollow();
 }
 
 NS_IMETHODIMP
@@ -954,7 +959,7 @@ FetchDriver::OnStartRequest(nsIRequest* aRequest) {
 
   mNeedToObserveOnDataAvailable = mObserver->NeedOnDataAvailable();
 
-  RefPtr<InternalResponse> response;
+  SafeRefPtr<InternalResponse> response;
   nsCOMPtr<nsIChannel> channel = do_QueryInterface(aRequest);
   nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(aRequest);
 
@@ -993,8 +998,8 @@ FetchDriver::OnStartRequest(nsIRequest* aRequest) {
     rv = httpChannel->GetResponseStatusText(statusText);
     MOZ_ASSERT(NS_SUCCEEDED(rv));
 
-    response = new InternalResponse(responseStatus, statusText,
-                                    mRequest->GetCredentialsMode());
+    response = MakeSafeRefPtr<InternalResponse>(responseStatus, statusText,
+                                                mRequest->GetCredentialsMode());
 
     UniquePtr<mozilla::ipc::PrincipalInfo> principalInfo(
         new mozilla::ipc::PrincipalInfo());
@@ -1020,8 +1025,8 @@ FetchDriver::OnStartRequest(nsIRequest* aRequest) {
     }
     MOZ_ASSERT(!result.Failed());
   } else {
-    response =
-        new InternalResponse(200, "OK"_ns, mRequest->GetCredentialsMode());
+    response = MakeSafeRefPtr<InternalResponse>(200, "OK"_ns,
+                                                mRequest->GetCredentialsMode());
 
     if (!contentType.IsEmpty()) {
       nsAutoCString contentCharset;
@@ -1088,8 +1093,8 @@ FetchDriver::OnStartRequest(nsIRequest* aRequest) {
       }
     } else if (!cic->PreferredAlternativeDataTypes().IsEmpty()) {
       MOZ_ASSERT(cic->PreferredAlternativeDataTypes().Length() == 1);
-      MOZ_ASSERT(cic->PreferredAlternativeDataTypes()[0].type().EqualsLiteral(
-          WASM_ALT_DATA_TYPE_V1));
+      MOZ_ASSERT(cic->PreferredAlternativeDataTypes()[0].type().Equals(
+          FetchUtil::WasmAltDataType));
       MOZ_ASSERT(
           cic->PreferredAlternativeDataTypes()[0].contentType().EqualsLiteral(
               WASM_CONTENT_TYPE));
@@ -1171,7 +1176,8 @@ FetchDriver::OnStartRequest(nsIRequest* aRequest) {
 
   // Resolves fetch() promise which may trigger code running in a worker.  Make
   // sure the Response is fully initialized before calling this.
-  mResponse = BeginAndGetFilteredResponse(response, foundOpaqueRedirect);
+  mResponse =
+      BeginAndGetFilteredResponse(std::move(response), foundOpaqueRedirect);
   if (NS_WARN_IF(!mResponse)) {
     // Fail to generate a paddingInfo for opaque response.
     MOZ_DIAGNOSTIC_ASSERT(mRequest->GetResponseTainting() ==
@@ -1435,7 +1441,7 @@ void FetchDriver::FinishOnStopRequest(
       MOZ_ASSERT(mResponse);
       // Need to keep mObserver alive.
       RefPtr<FetchDriverObserver> observer = mObserver;
-      observer->OnResponseAvailable(mResponse);
+      observer->OnResponseAvailable(mResponse.clonePtr());
 #ifdef DEBUG
       mResponseAvailableCalled = true;
 #endif
@@ -1448,6 +1454,7 @@ void FetchDriver::FinishOnStopRequest(
   }
 
   mChannel = nullptr;
+  Unfollow();
 }
 
 NS_IMETHODIMP
@@ -1551,6 +1558,23 @@ void FetchDriver::SetController(
     const Maybe<ServiceWorkerDescriptor>& aController) {
   MOZ_ASSERT(!mFetchCalled);
   mController = aController;
+}
+
+PerformanceTimingData* FetchDriver::GetPerformanceTimingData(
+    nsAString& aInitiatorType, nsAString& aEntryName) {
+  MOZ_ASSERT(XRE_IsParentProcess());
+  MOZ_ASSERT(mChannel);
+
+  nsCOMPtr<nsITimedChannel> timedChannel = do_QueryInterface(mChannel);
+  if (!timedChannel) {
+    return nullptr;
+  }
+  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(mChannel);
+  if (!httpChannel) {
+    return nullptr;
+  }
+  return dom::PerformanceTimingData::Create(timedChannel, httpChannel, 0,
+                                            aInitiatorType, aEntryName);
 }
 
 void FetchDriver::SetRequestHeaders(nsIHttpChannel* aChannel,

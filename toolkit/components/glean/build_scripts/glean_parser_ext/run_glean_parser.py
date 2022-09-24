@@ -7,7 +7,6 @@
 import cpp
 import js
 import os
-import re
 import rust
 import sys
 
@@ -17,6 +16,13 @@ from util import generate_metric_ids
 from glean_parser import lint, parser, util
 from mozbuild.util import FileAvoidWrite
 from pathlib import Path
+from typing import Any, Dict
+
+
+class ParserError(Exception):
+    """Thrown from parse if something goes wrong"""
+
+    pass
 
 
 GIFFT_TYPES = {
@@ -33,6 +39,8 @@ GIFFT_TYPES = {
         "uuid",
         "datetime",
         "quantity",
+        "rate",
+        "url",
     ],
 }
 
@@ -41,11 +49,7 @@ def get_parser_options(moz_app_version):
     app_version_major = moz_app_version.split(".", 1)[0]
     return {
         "allow_reserved": False,
-        "custom_is_expired": lambda expires: expires == "expired"
-        or expires != "never"
-        and int(expires) <= int(app_version_major),
-        "custom_validate_expires": lambda expires: expires in ("expired", "never")
-        or re.fullmatch(r"\d\d+", expires, flags=re.ASCII),
+        "expire_by_version": int(app_version_major),
     }
 
 
@@ -62,27 +66,60 @@ def parse(args):
 
     input_files = [Path(x) for x in yaml_array]
 
+    options = get_parser_options(moz_app_version)
+
+    return parse_with_options(input_files, options)
+
+
+def parse_with_options(input_files, options):
     # Derived heavily from glean_parser.translate.translate.
     # Adapted to how mozbuild sends us a fd, and to expire on versions not dates.
-
-    options = get_parser_options(moz_app_version)
 
     # Lint the yaml first, then lint the metrics.
     if lint.lint_yaml_files(input_files, parser_config=options):
         # Warnings are Errors
-        sys.exit(1)
+        raise ParserError("linter found problems")
 
     all_objs = parser.parse_objects(input_files, options)
     if util.report_validation_errors(all_objs):
-        sys.exit(1)
+        raise ParserError("found validation errors during parse")
 
     nits = lint.lint_metrics(all_objs.value, options)
     if nits is not None and any(nit.check_name != "EXPIRED" for nit in nits):
         # Treat Warnings as Errors in FOG.
         # But don't fail the whole build on expired metrics (it blocks testing).
-        sys.exit(1)
+        raise ParserError("glinter nits found during parse")
 
-    return all_objs.value, options
+    objects = all_objs.value
+
+    # bug 1720494: This should be a simple call to translate.transform
+    counters = {}
+    numerators_by_denominator: Dict[str, Any] = {}
+    for (category_name, category_val) in objects.items():
+        if category_name == "tags":
+            continue
+        for metric in category_val.values():
+            fqmn = metric.identifier()
+            if getattr(metric, "type", None) == "counter":
+                counters[fqmn] = metric
+            denominator_name = getattr(metric, "denominator_metric", None)
+            if denominator_name:
+                metric.type = "numerator"
+                numerators_by_denominator.setdefault(denominator_name, [])
+                numerators_by_denominator[denominator_name].append(metric)
+
+    for denominator_name, numerators in numerators_by_denominator.items():
+        if denominator_name not in counters:
+            print(
+                f"No `counter` named {denominator_name} found to be used as"
+                "denominator for {numerator_names}",
+                file=sys.stderr,
+            )
+            raise ParserError("rate couldn't find denominator")
+        counters[denominator_name].type = "denominator"
+        counters[denominator_name].numerators = numerators
+
+    return objects, options
 
 
 # Must be kept in sync with the length of `deps` in moz.build.
@@ -134,7 +171,10 @@ def output_gifft_map(output_fd, probe_type, all_objs, cpp_fd):
             ):
                 info = (metric.telemetry_mirror, f"{category_name}.{metric.name}")
                 if metric.type in GIFFT_TYPES[probe_type]:
-                    if info in ids_to_probes.values():
+                    if any(
+                        metric.telemetry_mirror == value[0]
+                        for value in ids_to_probes.values()
+                    ):
                         print(
                             f"Telemetry mirror {metric.telemetry_mirror} already registered",
                             file=sys.stderr,

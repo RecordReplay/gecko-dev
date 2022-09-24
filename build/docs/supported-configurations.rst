@@ -51,6 +51,7 @@ cross-compilation where available:
     * Previous release
 * Windows x86_64
     * Windows 10 with MozillaBuild Environment
+    * Windows 11 with MozillaBuild Environment
 
 Tier-2 Hosts and Toolchains
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -161,5 +162,3 @@ proper solution. If you can provide a patch, a regression range or
 assist in verifying that the developer's patches work for your platform,
 that would help a lot towards getting your bugs fixed and checked into
 the tree.
-
-

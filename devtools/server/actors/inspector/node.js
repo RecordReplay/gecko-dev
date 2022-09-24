@@ -10,9 +10,10 @@ const InspectorUtils = require("InspectorUtils");
 const protocol = require("devtools/shared/protocol");
 const { PSEUDO_CLASSES } = require("devtools/shared/css/constants");
 const { nodeSpec, nodeListSpec } = require("devtools/shared/specs/node");
+
 loader.lazyRequireGetter(
   this,
-  ["getCssPath", "getXPath", "findCssSelector", "findAllCssSelectors"],
+  ["getCssPath", "getXPath", "findCssSelector"],
   "devtools/shared/inspector/css-logic",
   true
 );
@@ -20,16 +21,17 @@ loader.lazyRequireGetter(
 loader.lazyRequireGetter(
   this,
   [
+    "getShadowRootMode",
     "isAfterPseudoElement",
     "isAnonymous",
     "isBeforePseudoElement",
     "isDirectShadowHostChild",
+    "isFrameBlockedByCSP",
+    "isFrameWithChildTarget",
     "isMarkerPseudoElement",
     "isNativeAnonymous",
     "isShadowHost",
     "isShadowRoot",
-    "getShadowRootMode",
-    "isRemoteFrame",
   ],
   "devtools/shared/layout/utils",
   true
@@ -94,6 +96,9 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
     this.walker = walker;
     this.rawNode = node;
     this._eventCollector = new EventCollector(this.walker.targetActor);
+    // Map<id -> nsIEventListenerInfo> that we maintain to be able to disable/re-enable event listeners
+    // The id is generated from getEventListenerInfo
+    this._nsIEventListenersInfo = new Map();
 
     // Store the original display type and scrollable state and whether or not the node is
     // displayed to track changes when reflows occur.
@@ -147,6 +152,31 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
         this.rawNode.removeEventListener("slotchange", this.slotchangeListener);
       }
       this.slotchangeListener = null;
+    }
+
+    if (this._waitForFrameLoadAbortController) {
+      this._waitForFrameLoadAbortController.abort();
+      this._waitForFrameLoadAbortController = null;
+    }
+    if (this._waitForFrameLoadIntervalId) {
+      clearInterval(this._waitForFrameLoadIntervalId);
+      this._waitForFrameLoadIntervalId = null;
+    }
+
+    if (this._nsIEventListenersInfo) {
+      // Re-enable all event listeners that we might have disabled
+      for (const nsIEventListenerInfo of this._nsIEventListenersInfo.values()) {
+        // If event listeners/node don't exist anymore, accessing nsIEventListenerInfo.enabled
+        // will throw.
+        try {
+          if (!nsIEventListenerInfo.enabled) {
+            nsIEventListenerInfo.enabled = true;
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+      this._nsIEventListenersInfo = null;
     }
 
     this._eventCollector.destroy();
@@ -212,13 +242,19 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
       form.isDocumentElement = true;
     }
 
-    // Flag the remote frame and declare at least one child (the #document element) so
-    // that they can be expanded.
-    if (this.isRemoteFrame) {
-      form.remoteFrame = true;
-      form.numChildren = 1;
-      form.browsingContextID = this.rawNode.browsingContext.id;
+    if (isFrameBlockedByCSP(this.rawNode)) {
+      form.numChildren = 0;
     }
+
+    // Flag the node if a different walker is needed to retrieve its children (i.e. if
+    // this is a remote frame, or if it's an iframe and we're creating targets for every iframes)
+    if (this.useChildTargetToFetchChildren) {
+      form.useChildTargetToFetchChildren = true;
+      // Declare at least one child (the #document element) so
+      // that they can be expanded.
+      form.numChildren = 1;
+    }
+    form.browsingContextID = this.rawNode.browsingContext?.id;
 
     return form;
   },
@@ -228,6 +264,10 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
    * API.
    */
   watchDocument: function(doc, callback) {
+    if (!doc.defaultView) {
+      return;
+    }
+
     const node = this.rawNode;
     // Create the observer on the node's actor.  The node will make sure
     // the observer is cleaned up when the actor is released.
@@ -253,14 +293,13 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
   },
 
   /**
-   * Check if the current node is representing a remote frame.
-   * In the context of the browser toolbox, a remote frame can be the <browser remote>
-   * element found inside each tab.
-   * In the context of the content toolbox, a remote frame can be a <iframe> that contains
-   * a different origin document.
+   * Check if the current node represents an element (e.g. an iframe) which has a dedicated
+   * target for its underlying document that we would need to use to fetch the child nodes.
+   * This will be the case for iframes if EFT is enabled, or if this is a remote iframe and
+   * fission is enabled.
    */
-  get isRemoteFrame() {
-    return isRemoteFrame(this.rawNode);
+  get useChildTargetToFetchChildren() {
+    return isFrameWithChildTarget(this.walker.targetActor, this.rawNode);
   },
 
   get isTopLevelDocument() {
@@ -413,16 +452,6 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
   },
 
   /**
-   * Gets event listeners and adds their information to the events array.
-   *
-   * @param  {Node} node
-   *         Node for which we are to get listeners.
-   */
-  getEventListeners: function(node) {
-    return this._eventCollector.getEventListeners(node);
-  },
-
-  /**
    * Retrieve the script location of the custom element definition for this node, when
    * relevant. To be linked to a custom element definition
    */
@@ -452,11 +481,11 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
     // this throws as the debugger can _not_ be in the same compartment as the debugger.
     // This happens when we toggle fission for content toolbox because we try to reparent
     // the Walker of the tab. This happens because we do not detect in Walker.reparentRemoteFrame
-    // that the target of the tab is the top level. That's because the target is a FrameTargetActor
+    // that the target of the tab is the top level. That's because the target is a WindowGlobalTargetActor
     // which is retrieved via Node.getEmbedderElement and doesn't return the LocalTabTargetActor.
     // We should probably work on TabDescriptor so that the LocalTabTargetActor has a descriptor,
     // and see if we can possibly move the local tab specific out of the TargetActor and have
-    // the TabDescriptor expose a pure FrameTargetActor?? (See bug 1579042)
+    // the TabDescriptor expose a pure WindowGlobalTargetActor?? (See bug 1579042)
     if (Cu.getObjectPrincipal(global) == Cu.getObjectPrincipal(dbg)) {
       return undefined;
     }
@@ -495,20 +524,9 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
    */
   getUniqueSelector: function() {
     if (Cu.isDeadWrapper(this.rawNode)) {
-      return [];
-    }
-    return findCssSelector(this.rawNode);
-  },
-
-  /**
-   * Get the full array of selectors from the topmost document, going through
-   * iframes.
-   */
-  getAllSelectors: function() {
-    if (Cu.isDeadWrapper(this.rawNode)) {
       return "";
     }
-    return findAllCssSelectors(this.rawNode);
+    return findCssSelector(this.rawNode);
   },
 
   /**
@@ -566,7 +584,56 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
    * Get all event listeners that are listening on this node.
    */
   getEventListenerInfo: function() {
-    return this.getEventListeners(this.rawNode);
+    this._nsIEventListenersInfo.clear();
+
+    const eventListenersData = this._eventCollector.getEventListeners(
+      this.rawNode
+    );
+    let counter = 0;
+    for (const eventListenerData of eventListenersData) {
+      if (eventListenerData.nsIEventListenerInfo) {
+        const id = `event-listener-info-${++counter}`;
+        this._nsIEventListenersInfo.set(
+          id,
+          eventListenerData.nsIEventListenerInfo
+        );
+
+        eventListenerData.eventListenerInfoId = id;
+        // remove the nsIEventListenerInfo since we don't want to send it to the client.
+        delete eventListenerData.nsIEventListenerInfo;
+      }
+    }
+    return eventListenersData;
+  },
+
+  /**
+   * Disable a specific event listener given its associated id
+   *
+   * @param {String} eventListenerInfoId
+   */
+  disableEventListener: function(eventListenerInfoId) {
+    const nsEventListenerInfo = this._nsIEventListenersInfo.get(
+      eventListenerInfoId
+    );
+    if (!nsEventListenerInfo) {
+      throw new Error("Unkown nsEventListenerInfo");
+    }
+    nsEventListenerInfo.enabled = false;
+  },
+
+  /**
+   * (Re-)enable a specific event listener given its associated id
+   *
+   * @param {String} eventListenerInfoId
+   */
+  enableEventListener: function(eventListenerInfoId) {
+    const nsEventListenerInfo = this._nsIEventListenersInfo.get(
+      eventListenerInfoId
+    );
+    if (!nsEventListenerInfo) {
+      throw new Error("Unkown nsEventListenerInfo");
+    }
+    nsEventListenerInfo.enabled = true;
   },
 
   /**
@@ -667,14 +734,68 @@ const NodeActor = protocol.ActorClassWithSpec(nodeSpec, {
    * If the current node is an iframe, wait for the content window to be loaded.
    */
   async waitForFrameLoad() {
-    if (Cu.isDeadWrapper(this.rawNode)) {
-      return;
+    if (this.useChildTargetToFetchChildren) {
+      // If the document is handled by a dedicated target, we'll wait for a DOCUMENT_EVENT
+      // on the created target.
+      throw new Error(
+        "iframe content document has its own target, use that one instead"
+      );
     }
 
-    const { contentDocument, contentWindow } = this.rawNode;
-    if (contentDocument && contentDocument.readyState !== "complete") {
+    if (Cu.isDeadWrapper(this.rawNode)) {
+      throw new Error("Node is dead");
+    }
+
+    const { contentDocument } = this.rawNode;
+    if (!contentDocument) {
+      throw new Error("Can't access contentDocument");
+    }
+
+    if (contentDocument.readyState === "uninitialized") {
+      // If the readyState is "uninitialized", the document is probably an about:blank
+      // transient document. In such case, we want to wait until the "final" document
+      // is inserted.
+
+      const { chromeEventHandler } = this.rawNode.ownerGlobal.docShell;
+      const browsingContextID = this.rawNode.browsingContext.id;
+      await new Promise((resolve, reject) => {
+        this._waitForFrameLoadAbortController = new AbortController();
+
+        chromeEventHandler.addEventListener(
+          "DOMDocElementInserted",
+          e => {
+            const { browsingContext } = e.target.defaultView;
+            // Check that the document we're notified about is the iframe one.
+            if (browsingContext.id == browsingContextID) {
+              resolve();
+              this._waitForFrameLoadAbortController.abort();
+            }
+          },
+          { signal: this._waitForFrameLoadAbortController.signal }
+        );
+
+        // It might happen that the "final" document will be a remote one, living in a
+        // different process, which means we won't get the DOMDocElementInserted event
+        // here, and will wait forever. To prevent this Promise to hang forever, we use
+        // a setInterval to check if the final document can be reached, so we can reject
+        // if it's not.
+        // This is definitely not a perfect solution, but I wasn't able to find something
+        // better for this feature. I think it's _fine_ as this method will be removed
+        // when EFT is  enabled everywhere in release.
+        this._waitForFrameLoadIntervalId = setInterval(() => {
+          if (Cu.isDeadWrapper(this.rawNode) || !this.rawNode.contentDocument) {
+            reject("Can't access the iframe content document");
+            clearInterval(this._waitForFrameLoadIntervalId);
+            this._waitForFrameLoadIntervalId = null;
+            this._waitForFrameLoadAbortController.abort();
+          }
+        }, 50);
+      });
+    }
+
+    if (this.rawNode.contentDocument.readyState === "loading") {
       await new Promise(resolve => {
-        DOMHelpers.onceDOMReady(contentWindow, resolve);
+        DOMHelpers.onceDOMReady(this.rawNode.contentWindow, resolve);
       });
     }
   },

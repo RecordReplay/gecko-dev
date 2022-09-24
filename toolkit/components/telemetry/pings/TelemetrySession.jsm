@@ -29,8 +29,6 @@ XPCOMUtils.defineLazyModuleGetters(this, {
 
 const Utils = TelemetryUtils;
 
-const myScope = this;
-
 // When modifying the payload in incompatible ways, please bump this version number
 const PAYLOAD_VERSION = 4;
 const PING_TYPE_MAIN = "main";
@@ -63,15 +61,8 @@ const IS_UNIFIED_TELEMETRY = Services.prefs.getBoolPref(
 
 var gWasDebuggerAttached = false;
 
-XPCOMUtils.defineLazyServiceGetters(this, {
-  Telemetry: ["@mozilla.org/base/telemetry;1", "nsITelemetry"],
-});
-
 function generateUUID() {
-  let str = Cc["@mozilla.org/uuid-generator;1"]
-    .getService(Ci.nsIUUIDGenerator)
-    .generateUUID()
-    .toString();
+  let str = Services.uuid.generateUUID().toString();
   // strip {}
   return str.substring(1, str.length - 1);
 }
@@ -408,13 +399,14 @@ var Impl = {
     // Look for app-specific timestamps
     var appTimestamps = {};
     try {
-      let o = {};
-      ChromeUtils.import("resource://gre/modules/TelemetryTimestamps.jsm", o);
-      appTimestamps = o.TelemetryTimestamps.get();
+      let { TelemetryTimestamps } = ChromeUtils.import(
+        "resource://gre/modules/TelemetryTimestamps.jsm"
+      );
+      appTimestamps = TelemetryTimestamps.get();
     } catch (ex) {}
 
     // Only submit this if the extended set is enabled.
-    if (!Utils.isContentProcess && Telemetry.canRecordExtended) {
+    if (!Utils.isContentProcess && Services.telemetry.canRecordExtended) {
       try {
         ret.addonManager = AddonManagerPrivate.getSimpleMeasures();
       } catch (ex) {}
@@ -451,12 +443,12 @@ var Impl = {
     gWasDebuggerAttached = gWasDebuggerAttached || isDebuggerAttached;
     ret.debuggerAttached = Number(gWasDebuggerAttached);
 
-    let shutdownDuration = Telemetry.lastShutdownDuration;
+    let shutdownDuration = Services.telemetry.lastShutdownDuration;
     if (shutdownDuration) {
       ret.shutdownDuration = shutdownDuration;
     }
 
-    let failedProfileLockCount = Telemetry.failedProfileLockCount;
+    let failedProfileLockCount = Services.telemetry.failedProfileLockCount;
     if (failedProfileLockCount) {
       ret.failedProfileLockCount = failedProfileLockCount;
     }
@@ -480,7 +472,7 @@ var Impl = {
   },
 
   getHistograms: function getHistograms(clearSubsession) {
-    return Telemetry.getSnapshotForHistograms(
+    return Services.telemetry.getSnapshotForHistograms(
       "main",
       clearSubsession,
       !this._testing
@@ -488,7 +480,7 @@ var Impl = {
   },
 
   getKeyedHistograms(clearSubsession) {
-    return Telemetry.getSnapshotForKeyedHistograms(
+    return Services.telemetry.getSnapshotForKeyedHistograms(
       "main",
       clearSubsession,
       !this._testing
@@ -512,12 +504,12 @@ var Impl = {
     }
 
     let scalarsSnapshot = keyed
-      ? Telemetry.getSnapshotForKeyedScalars(
+      ? Services.telemetry.getSnapshotForKeyedScalars(
           "main",
           clearSubsession,
           !this._testing
         )
-      : Telemetry.getSnapshotForScalars(
+      : Services.telemetry.getSnapshotForScalars(
           "main",
           clearSubsession,
           !this._testing
@@ -622,7 +614,7 @@ var Impl = {
     };
 
     // Add extended set measurements common to chrome & content processes
-    if (Telemetry.canRecordExtended) {
+    if (Services.telemetry.canRecordExtended) {
       payloadObj.log = [];
     }
 
@@ -698,10 +690,12 @@ var Impl = {
     payloadObj.info = info;
 
     // Add extended set measurements for chrome process.
-    if (Telemetry.canRecordExtended) {
-      payloadObj.slowSQL = protect(() => Telemetry.slowSQL);
-      payloadObj.fileIOReports = protect(() => Telemetry.fileIOReports);
-      payloadObj.lateWrites = protect(() => Telemetry.lateWrites);
+    if (Services.telemetry.canRecordExtended) {
+      payloadObj.slowSQL = protect(() => Services.telemetry.slowSQL);
+      payloadObj.fileIOReports = protect(
+        () => Services.telemetry.fileIOReports
+      );
+      payloadObj.lateWrites = protect(() => Services.telemetry.lateWrites);
 
       payloadObj.addonDetails = protect(() =>
         AddonManagerPrivate.getTelemetryDetails()
@@ -752,13 +746,13 @@ var Impl = {
       // been suspended since boot, we want the previous property to hold,
       // regardless of the delay during or between the two
       // `msSinceProcessStart*` calls.
-      Telemetry.scalarSet(
+      Services.telemetry.scalarSet(
         "browser.engagement.session_time_excluding_suspend",
-        Telemetry.msSinceProcessStartExcludingSuspend()
+        Services.telemetry.msSinceProcessStartExcludingSuspend()
       );
-      Telemetry.scalarSet(
+      Services.telemetry.scalarSet(
         "browser.engagement.session_time_including_suspend",
-        Telemetry.msSinceProcessStartIncludingSuspend()
+        Services.telemetry.msSinceProcessStartIncludingSuspend()
       );
 
       if (isMobile) {
@@ -778,7 +772,9 @@ var Impl = {
         clearSubsession
       );
     } catch (ex) {
-      Telemetry.getHistogramById("TELEMETRY_ASSEMBLE_PAYLOAD_EXCEPTION").add(1);
+      Services.telemetry
+        .getHistogramById("TELEMETRY_ASSEMBLE_PAYLOAD_EXCEPTION")
+        .add(1);
       throw ex;
     } finally {
       if (!Utils.isContentProcess && clearSubsession) {
@@ -850,7 +846,7 @@ var Impl = {
       return;
     }
 
-    if (!Telemetry.canRecordBase && !testing) {
+    if (!Services.telemetry.canRecordBase && !testing) {
       this._log.config(
         "earlyInit - Telemetry recording is disabled, skipping Chrome process setup."
       );
@@ -906,7 +902,7 @@ var Impl = {
         this.addObserver("idle-daily");
         await Services.telemetry.gatherMemory();
 
-        Telemetry.asyncFetchTelemetryData(function() {});
+        Services.telemetry.asyncFetchTelemetryData(function() {});
 
         if (IS_UNIFIED_TELEMETRY) {
           // Check for a previously written aborted session ping.
@@ -1023,7 +1019,10 @@ var Impl = {
       }
     }
 
-    if (AppConstants.platform == "android" && Telemetry.canRecordExtended) {
+    if (
+      AppConstants.platform == "android" &&
+      Services.telemetry.canRecordExtended
+    ) {
       let payload = this.getSessionPayload(REASON_SAVED_SESSION, false);
 
       let options = {
@@ -1083,7 +1082,7 @@ var Impl = {
     // This function returns the current Telemetry payload to the caller.
     // We only gather startup info once.
     if (!Object.keys(this._slowSQLStartup).length) {
-      this._slowSQLStartup = Telemetry.slowSQL;
+      this._slowSQLStartup = Services.telemetry.slowSQL;
     }
     Services.telemetry.gatherMemory();
     return this.getSessionPayload(reason, clearSubsession);
@@ -1098,7 +1097,7 @@ var Impl = {
         this._startupIO.startupSessionRestoreWriteBytes,
       ] = counters;
     }
-    this._slowSQLStartup = Telemetry.slowSQL;
+    this._slowSQLStartup = Services.telemetry.slowSQL;
   },
 
   setAddOns: function setAddOns(aAddOns) {
@@ -1120,7 +1119,8 @@ var Impl = {
     // inactivity, because it is just the start of this active tick.
     if (needsUpdate) {
       this._sessionActiveTicks++;
-      Telemetry.scalarAdd("browser.engagement.active_ticks", 1);
+      Services.telemetry.scalarAdd("browser.engagement.active_ticks", 1);
+      Glean.browserEngagement.activeTicks.add(1);
     }
   },
 
@@ -1305,9 +1305,9 @@ var Impl = {
       !("sessionId" in data)
     ) {
       this._log.error("_loadSessionData - session data is invalid");
-      Telemetry.getHistogramById("TELEMETRY_SESSIONDATA_FAILED_VALIDATION").add(
-        1
-      );
+      Services.telemetry
+        .getHistogramById("TELEMETRY_SESSIONDATA_FAILED_VALIDATION")
+        .add(1);
       return null;
     }
 
@@ -1398,7 +1398,7 @@ var Impl = {
 
     let payload = null;
     if (aProvidedPayload) {
-      payload = Cu.cloneInto(aProvidedPayload, myScope);
+      payload = Cu.cloneInto(aProvidedPayload, {});
       // Overwrite the original reason.
       payload.info.reason = REASON_ABORTED_SESSION;
     } else {

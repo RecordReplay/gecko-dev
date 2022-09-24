@@ -22,6 +22,7 @@
 #include "js/Class.h"  // JSClassOps, ClassSpec
 #include "vm/JSObject.h"
 #include "vm/NativeObject.h"  // NativeObject
+#include "wasm/WasmSerialize.h"
 #include "wasm/WasmValType.h"
 
 namespace js {
@@ -32,7 +33,13 @@ namespace wasm {
 struct V128 {
   uint8_t bytes[16];  // Little-endian
 
+  WASM_CHECK_CACHEABLE_POD(bytes);
+
   V128() { memset(bytes, 0, sizeof(bytes)); }
+
+  explicit V128(uint8_t splatValue) {
+    memset(bytes, int(splatValue), sizeof(bytes));
+  }
 
   template <typename T>
   T extractLane(unsigned lane) const {
@@ -59,6 +66,8 @@ struct V128 {
 
   bool operator!=(const V128& rhs) const { return !(*this == rhs); }
 };
+
+WASM_DECLARE_CACHEABLE_POD(V128);
 
 static_assert(sizeof(V128) == 16, "Invariant");
 
@@ -210,7 +219,8 @@ class WasmValueBox : public NativeObject {
 // need to, but it probably could.
 
 class FuncRef {
-  JSFunction* value_;
+  // mutable so that tracing may access a JSFunction* from a `const FuncRef`
+  mutable JSFunction* value_;
 
   explicit FuncRef() : value_((JSFunction*)-1) {}
   explicit FuncRef(JSFunction* p) : value_(p) {
@@ -234,7 +244,9 @@ class FuncRef {
 
   JSFunction* asJSFunction() { return value_; }
 
-  bool isNull() { return value_ == nullptr; }
+  bool isNull() const { return value_ == nullptr; }
+
+  void trace(JSTracer* trc) const;
 };
 
 using RootedFuncRef = Rooted<FuncRef>;
@@ -261,6 +273,7 @@ class LitVal {
     double f64_;
     wasm::V128 v128_;
     wasm::AnyRef ref_;
+
     Cell() : v128_() {}
     ~Cell() = default;
   };
@@ -268,6 +281,15 @@ class LitVal {
  protected:
   ValType type_;
   Cell cell_;
+
+  // We check the fields of cell_ here instead of in the union to avoid a
+  // template issue. In addition, Cell is only cacheable POD when used in
+  // LitVal and not Val, so checking here makes sense.
+  WASM_CHECK_CACHEABLE_POD(type_, cell_.i32_, cell_.i64_, cell_.f32_,
+                           cell_.f64_, cell_.v128_);
+  WASM_ALLOW_NON_CACHEABLE_POD_FIELD(
+      cell_.ref_,
+      "The pointer value in ref_ is guaranteed to always be null in a LitVal.");
 
  public:
   LitVal() : type_(ValType()), cell_{} {}
@@ -314,7 +336,7 @@ class LitVal {
   explicit LitVal(V128 v128) : type_(ValType::V128) { cell_.v128_ = v128; }
 
   explicit LitVal(ValType type, AnyRef any) : type_(type) {
-    MOZ_ASSERT(type.isReference());
+    MOZ_ASSERT(type.isRefRepr());
     MOZ_ASSERT(any.isNull(),
                "use Val for non-nullptr ref types to get tracing");
     cell_.ref_ = any;
@@ -343,7 +365,7 @@ class LitVal {
     return cell_.f64_;
   }
   AnyRef ref() const {
-    MOZ_ASSERT(type_.isReference());
+    MOZ_ASSERT(type_.isRefRepr());
     return cell_.ref_;
   }
   const V128& v128() const {
@@ -351,6 +373,8 @@ class LitVal {
     return cell_.v128_;
   }
 };
+
+WASM_DECLARE_CACHEABLE_POD(LitVal);
 
 // A Val is a LitVal that can contain (non-null) pointers to GC things. All Vals
 // must be used with the rooting APIs as they may contain JS objects.
@@ -366,7 +390,7 @@ class MOZ_NON_PARAM Val : public LitVal {
   explicit Val(double f64) : LitVal(f64) {}
   explicit Val(V128 v128) : LitVal(v128) {}
   explicit Val(ValType type, AnyRef val) : LitVal(type, AnyRef::null()) {
-    MOZ_ASSERT(type.isReference());
+    MOZ_ASSERT(type.isRefRepr());
     cell_.ref_ = val;
   }
   explicit Val(ValType type, FuncRef val) : LitVal(type, AnyRef::null()) {
@@ -402,7 +426,7 @@ class MOZ_NON_PARAM Val : public LitVal {
   bool operator!=(const Val& rhs) const { return !(*this == rhs); }
 
   bool isJSObject() const {
-    return type_.isValid() && type_.isReference() && !cell_.ref_.isNull();
+    return type_.isValid() && type_.isRefRepr() && !cell_.ref_.isNull();
   }
 
   JSObject* asJSObject() const {
@@ -414,8 +438,13 @@ class MOZ_NON_PARAM Val : public LitVal {
     return cell_.ref_.asJSObjectAddress();
   }
 
+  // Read from `loc` which is a rooted location and needs no barriers.
   void readFromRootedLocation(const void* loc);
+  // Write to `loc` which is a rooted location and needs no barriers.
   void writeToRootedLocation(void* loc, bool mustWrite64) const;
+
+  // Write to `loc` which is in the heap and must be barriered.
+  void writeToHeapLocation(void* loc) const;
 
   // See the comment for `ToWebAssemblyValue` below.
   static bool fromJSValue(JSContext* cx, ValType targetType, HandleValue val,

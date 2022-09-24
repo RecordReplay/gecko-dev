@@ -6,6 +6,9 @@
 
 ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 var { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { TestUtils } = ChromeUtils.import(
+  "resource://testing-common/TestUtils.jsm"
+);
 
 let h2Port;
 let h3Port;
@@ -19,7 +22,7 @@ const certOverrideService = Cc[
   "@mozilla.org/security/certoverride;1"
 ].getService(Ci.nsICertOverrideService);
 
-function setup() {
+add_setup(async function setup() {
   trr_test_setup();
 
   let env = Cc["@mozilla.org/process/environment;1"].getService(
@@ -37,30 +40,34 @@ function setup() {
   Assert.notEqual(h3NoResponsePort, null);
   Assert.notEqual(h3NoResponsePort, "");
 
-  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRFIRST);
-
   Services.prefs.setBoolPref("network.dns.upgrade_with_https_rr", true);
   Services.prefs.setBoolPref("network.dns.use_https_rr_as_altsvc", true);
   Services.prefs.setBoolPref("network.dns.echconfig.enabled", true);
-}
 
-setup();
-registerCleanupFunction(async () => {
-  trr_clear_prefs();
-  Services.prefs.clearUserPref("network.dns.upgrade_with_https_rr");
-  Services.prefs.clearUserPref("network.dns.use_https_rr_as_altsvc");
-  Services.prefs.clearUserPref("network.dns.echconfig.enabled");
-  Services.prefs.clearUserPref("network.dns.echconfig.fallback_to_origin");
-  Services.prefs.clearUserPref("network.dns.httpssvc.reset_exclustion_list");
-  Services.prefs.clearUserPref("network.http.http3.enabled");
-  Services.prefs.clearUserPref(
-    "network.dns.httpssvc.http3_fast_fallback_timeout"
-  );
-  Services.prefs.clearUserPref("network.http.speculative-parallel-limit");
-  Services.prefs.clearUserPref("network.dns.localDomains");
-  if (trrServer) {
-    await trrServer.stop();
+  registerCleanupFunction(async () => {
+    trr_clear_prefs();
+    Services.prefs.clearUserPref("network.dns.upgrade_with_https_rr");
+    Services.prefs.clearUserPref("network.dns.use_https_rr_as_altsvc");
+    Services.prefs.clearUserPref("network.dns.echconfig.enabled");
+    Services.prefs.clearUserPref("network.dns.echconfig.fallback_to_origin");
+    Services.prefs.clearUserPref("network.dns.httpssvc.reset_exclustion_list");
+    Services.prefs.clearUserPref("network.http.http3.enable");
+    Services.prefs.clearUserPref(
+      "network.dns.httpssvc.http3_fast_fallback_timeout"
+    );
+    Services.prefs.clearUserPref("network.http.speculative-parallel-limit");
+    Services.prefs.clearUserPref("network.dns.localDomains");
+    Services.prefs.clearUserPref("network.dns.http3_echconfig.enabled");
+    if (trrServer) {
+      await trrServer.stop();
+    }
+  });
+
+  if (mozinfo.socketprocess_networking) {
+    await TestUtils.waitForCondition(() => Services.io.socketProcessLaunched);
   }
+
+  Services.prefs.setIntPref("network.trr.mode", Ci.nsIDNSService.MODE_TRRFIRST);
 });
 
 function makeChan(url) {
@@ -563,7 +570,7 @@ add_task(async function testH3Connection() {
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
-  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+  Services.prefs.setBoolPref("network.http.http3.enable", true);
 
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
@@ -623,7 +630,7 @@ add_task(async function testFastfallbackToH2() {
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
-  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+  Services.prefs.setBoolPref("network.http.http3.enable", true);
   // Use a short timeout to make sure the fast fallback timer will be triggered.
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
@@ -716,7 +723,7 @@ add_task(async function testFailedH3Connection() {
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
-  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+  Services.prefs.setBoolPref("network.http.http3.enable", true);
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
     0
@@ -763,7 +770,7 @@ add_task(async function testHttp3ExcludedList() {
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
-  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+  Services.prefs.setBoolPref("network.http.http3.enable", true);
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
     0
@@ -831,11 +838,12 @@ add_task(async function testAllRecordsInHttp3ExcludedList() {
   await trrServer.start();
   dns.clearCache(true);
   Services.prefs.setIntPref("network.trr.mode", 3);
+  Services.prefs.setBoolPref("network.dns.http3_echconfig.enabled", true);
   Services.prefs.setCharPref(
     "network.trr.uri",
     `https://foo.example.com:${trrServer.port}/dns-query`
   );
-  Services.prefs.setBoolPref("network.http.http3.enabled", true);
+  Services.prefs.setBoolPref("network.http.http3.enable", true);
   Services.prefs.setIntPref(
     "network.dns.httpssvc.http3_fast_fallback_timeout",
     0

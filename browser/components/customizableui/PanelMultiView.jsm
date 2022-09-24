@@ -293,14 +293,17 @@ var PanelMultiView = class extends AssociatedToNode {
    * If the panel does not contain a <panelmultiview>, it is closed directly.
    * This allows consumers like page actions to accept different panel types.
    *
+   * @param {DOMNode} panelNode The <panel> node.
+   * @param {Boolean} [animate] Whether to show a fade animation. Optional.
+   *
    * @see The non-static hidePopup method for details.
    */
-  static hidePopup(panelNode) {
+  static hidePopup(panelNode, animate = false) {
     let panelMultiViewNode = panelNode.querySelector("panelmultiview");
     if (panelMultiViewNode) {
-      this.forNode(panelMultiViewNode).hidePopup();
+      this.forNode(panelMultiViewNode).hidePopup(animate);
     } else {
-      panelNode.hidePopup();
+      panelNode.hidePopup(animate);
     }
   }
 
@@ -594,8 +597,14 @@ var PanelMultiView = class extends AssociatedToNode {
    * This means that by the time this method returns all the operations handled
    * by the "popuphidden" event are completed, for example resetting the "open"
    * state of the anchor, and the panel is already invisible.
+   *
+   * @note The value of animate could be changed to true by default, in both
+   *       this and the static method above. (see bug 1769813)
+   *
+   * @param {Boolean} [animate] Whether to show a fade animation. Optional.
+   *
    */
-  hidePopup() {
+  hidePopup(animate = false) {
     if (!this.node || !this.connected) {
       return;
     }
@@ -605,7 +614,7 @@ var PanelMultiView = class extends AssociatedToNode {
     // request to open the panel, which will have no effect if the request has
     // been canceled already.
     if (["open", "showing"].includes(this._panel.state)) {
-      this._panel.hidePopup();
+      this._panel.hidePopup(animate);
     } else {
       this._openPopupCancelCallback();
     }
@@ -837,6 +846,13 @@ var PanelMultiView = class extends AssociatedToNode {
 
     panelView.node.panelMultiView = this.node;
     this.openViews.push(panelView);
+
+    // Panels could contain out-pf-process <browser> elements, that need to be
+    // supported with a remote attribute on the panel in order to display properly.
+    // See bug https://bugzilla.mozilla.org/show_bug.cgi?id=1365660
+    if (panelView.node.getAttribute("remote") == "true") {
+      this._panel.setAttribute("remote", "true");
+    }
 
     let canceled = await panelView.dispatchAsyncEvent("ViewShowing");
 
@@ -1160,13 +1176,10 @@ var PanelMultiView = class extends AssociatedToNode {
     // incorrect value when the window spans multiple screens.
     let anchor = this._panel.anchorNode;
     let anchorRect = anchor.getBoundingClientRect();
+    let screen = anchor.screen;
 
-    let screen = this._screenManager.screenForRect(
-      anchor.screenX,
-      anchor.screenY,
-      anchorRect.width,
-      anchorRect.height
-    );
+    // GetAvailRect returns screen-device pixels, which we can convert to CSS
+    // pixels here.
     let availTop = {},
       availHeight = {};
     screen.GetAvailRect({}, availTop, {}, availHeight);
@@ -1216,7 +1229,11 @@ var PanelMultiView = class extends AssociatedToNode {
         currentView.keyNavigation(aEvent);
         break;
       case "mousemove":
-        this.openViews.forEach(panelView => panelView.clearNavigation());
+        this.openViews.forEach(panelView => {
+          if (!panelView.ignoreMouseMove) {
+            panelView.clearNavigation();
+          }
+        });
         break;
       case "popupshowing": {
         this._viewContainer.setAttribute("panelopen", "true");
@@ -1369,6 +1386,13 @@ var PanelView = class extends AssociatedToNode {
    * Adds a header with the given title, or removes it if the title is empty.
    */
   set headerText(value) {
+    let ensureHeaderSeparator = headerNode => {
+      if (headerNode.nextSibling.tagName != "toolbarseparator") {
+        let separator = this.document.createXULElement("toolbarseparator");
+        this.node.insertBefore(separator, headerNode.nextSibling);
+      }
+    };
+
     // If the header already exists, update or remove it as requested.
     let header = this.node.firstElementChild;
     if (header && header.classList.contains("panel-header")) {
@@ -1376,6 +1400,7 @@ var PanelView = class extends AssociatedToNode {
         // The back button has a label in it - we want to select
         // the label that's a direct child of the header.
         header.querySelector(".panel-header > h1 > span").textContent = value;
+        ensureHeaderSeparator(header);
       } else {
         if (header.nextSibling.tagName == "toolbarseparator") {
           header.nextSibling.remove();
@@ -1416,10 +1441,7 @@ var PanelView = class extends AssociatedToNode {
     header.append(backButton, h1);
     this.node.prepend(header);
 
-    if (header.nextSibling.tagName != "toolbarseparator") {
-      let separator = this.document.createXULElement("toolbarseparator");
-      this.node.insertBefore(separator, header.nextSibling);
-    }
+    ensureHeaderSeparator(header);
   }
 
   /**
@@ -1461,6 +1483,8 @@ var PanelView = class extends AssociatedToNode {
       // This view does not require the workaround.
       return;
     }
+
+    const profilerMarkerStartTime = Cu.now();
 
     // We batch DOM changes together in order to reduce synchronous layouts.
     // First we reset any change we may have made previously. The first time
@@ -1551,6 +1575,12 @@ var PanelView = class extends AssociatedToNode {
       });
       element.style.height = bounds.height + "px";
     }
+
+    ChromeUtils.addProfilerMarker(
+      "PMV.descriptionHeightWorkaround()",
+      profilerMarkerStartTime,
+      `<${this.node.tagName} id="${this.node.id}">`
+    );
   }
 
   /**
@@ -1590,7 +1620,6 @@ var PanelView = class extends AssociatedToNode {
         node.tagName == "toolbarbutton" ||
         node.tagName == "checkbox" ||
         node.classList.contains("text-link") ||
-        node.classList.contains("navigable") ||
         (!arrowKey && this._isNavigableWithTabOnly(node))
       ) {
         // Set the tabindex attribute to make sure the node is focusable.
@@ -1790,9 +1819,14 @@ var PanelView = class extends AssociatedToNode {
         return false;
       }
       let context = contextNode.getAttribute("context");
+      if (!context) {
+        return false;
+      }
       let popup = this.document.getElementById(context);
       return popup && popup.state == "open";
     };
+
+    this.ignoreMouseMove = false;
 
     let keyCode = event.code;
     switch (keyCode) {

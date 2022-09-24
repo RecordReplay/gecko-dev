@@ -6,7 +6,7 @@ import { generatedToOriginalId } from "devtools-source-map";
 
 import assert from "../../utils/assert";
 import { recordEvent } from "../../utils/telemetry";
-import { remapBreakpoints } from "../breakpoints";
+import { updateBreakpointsForNewPrettyPrintedSource } from "../breakpoints";
 
 import { setSymbols } from "./symbols";
 import { prettyPrint } from "../../workers/pretty-print";
@@ -18,6 +18,7 @@ import {
 import { loadSourceText } from "./loadSourceText";
 import { mapFrames } from "../pause";
 import { selectSpecificLocation } from "../sources";
+import { createPrettyPrintOriginalSource } from "../../client/firefox/create";
 
 import {
   getSource,
@@ -66,20 +67,13 @@ export function createPrettySource(cx, sourceId) {
     const source = getSourceFromId(getState(), sourceId);
     const url = getPrettyOriginalSourceURL(source);
     const id = generatedToOriginalId(sourceId, url);
-
-    const prettySource = {
+    const prettySource = createPrettyPrintOriginalSource(
       id,
       url,
-      relativeUrl: url,
-      isBlackBoxed: false,
-      isPrettyPrinted: true,
-      isWasm: false,
-      isExtension: false,
-      extensionName: null,
-      isOriginal: true,
-    };
+      source.thread
+    );
 
-    dispatch({ type: "ADD_SOURCE", cx, source: prettySource });
+    dispatch({ type: "ADD_SOURCES", cx, sources: [prettySource] });
 
     await dispatch(selectSource(cx, id));
 
@@ -150,7 +144,7 @@ export function togglePrettyPrint(cx, sourceId) {
 
     await dispatch(setSymbols({ cx, source: newPrettySource }));
 
-    await dispatch(remapBreakpoints(cx, sourceId));
+    await dispatch(updateBreakpointsForNewPrettyPrintedSource(cx, sourceId));
 
     return newPrettySource;
   };

@@ -10,6 +10,7 @@
 #include <functional>
 #include "mozilla/Maybe.h"
 #include "mozilla/ResultExtensions.h"
+#include "nsAttrValue.h"
 #include "nsCOMPtr.h"
 #include "nsIInterfaceRequestor.h"
 #include "nsIInterfaceRequestorUtils.h"
@@ -27,6 +28,7 @@
 #include "nsReadableUtils.h"
 #include "nsServiceManagerUtils.h"
 #include "nsString.h"
+#include "nsTArray.h"
 
 class nsIPrincipal;
 class nsIAsyncStreamCopier;
@@ -102,6 +104,21 @@ nsresult NS_NewFileURI(
     nsIURI** result, nsIFile* spec,
     nsIIOService* ioService =
         nullptr);  // pass in nsIIOService to optimize callers
+
+// Functions for adding additional encoding to a URL for compatibility with
+// Apple's NSURL class URLWithString method.
+//
+// @param aResult
+//        Out parameter for the encoded URL spec
+// @param aSpec
+//        The spec for the URL to be encoded
+nsresult NS_GetSpecWithNSURLEncoding(nsACString& aResult,
+                                     const nsACString& aSpec);
+// @param aResult
+//        Out parameter for the encoded URI
+// @param aSpec
+//        The spec for the URL to be encoded
+nsresult NS_NewURIWithNSURLEncoding(nsIURI** aResult, const nsACString& aSpec);
 
 // These methods will only mutate the URI if the ref of aInput doesn't already
 // match the ref we are trying to set.
@@ -844,6 +861,11 @@ void net_EnsurePSMInit();
  */
 bool NS_IsAboutBlank(nsIURI* uri);
 
+/**
+ * Test whether a URI is "about:srcdoc".  |uri| must not be null
+ */
+bool NS_IsAboutSrcdoc(nsIURI* uri);
+
 nsresult NS_GenerateHostPort(const nsCString& host, int32_t port,
                              nsACString& hostLine);
 
@@ -894,9 +916,9 @@ void NS_TrimHTTPWhitespace(const nsACString& aSource, nsACString& aDest);
  */
 nsresult NS_ShouldSecureUpgrade(
     nsIURI* aURI, nsILoadInfo* aLoadInfo, nsIPrincipal* aChannelResultPrincipal,
-    bool aPrivateBrowsing, bool aAllowSTS,
-    const mozilla::OriginAttributes& aOriginAttributes, bool& aShouldUpgrade,
-    std::function<void(bool, nsresult)>&& aResultCallback, bool& aWillCallback);
+    bool aAllowSTS, const mozilla::OriginAttributes& aOriginAttributes,
+    bool& aShouldUpgrade, std::function<void(bool, nsresult)>&& aResultCallback,
+    bool& aWillCallback);
 
 /**
  * Returns an https URI for channels that need to go through secure upgrades.
@@ -973,6 +995,56 @@ bool SchemeIsData(nsIURI* aURI);
 bool SchemeIsViewSource(nsIURI* aURI);
 bool SchemeIsResource(nsIURI* aURI);
 bool SchemeIsFTP(nsIURI* aURI);
+
+struct LinkHeader {
+  nsString mHref;
+  nsString mRel;
+  nsString mTitle;
+  nsString mIntegrity;
+  nsString mSrcset;
+  nsString mSizes;
+  nsString mType;
+  nsString mMedia;
+  nsString mAnchor;
+  nsString mCrossOrigin;
+  nsString mReferrerPolicy;
+  nsString mAs;
+
+  LinkHeader();
+  void Reset();
+  bool operator==(const LinkHeader& rhs) const;
+};
+
+nsTArray<LinkHeader> ParseLinkHeader(const nsAString& aLinkData);
+
+enum ASDestination : uint8_t {
+  DESTINATION_INVALID,
+  DESTINATION_AUDIO,
+  DESTINATION_DOCUMENT,
+  DESTINATION_EMBED,
+  DESTINATION_FONT,
+  DESTINATION_IMAGE,
+  DESTINATION_MANIFEST,
+  DESTINATION_OBJECT,
+  DESTINATION_REPORT,
+  DESTINATION_SCRIPT,
+  DESTINATION_SERVICEWORKER,
+  DESTINATION_SHAREDWORKER,
+  DESTINATION_STYLE,
+  DESTINATION_TRACK,
+  DESTINATION_VIDEO,
+  DESTINATION_WORKER,
+  DESTINATION_XSLT,
+  DESTINATION_FETCH
+};
+
+void ParseAsValue(const nsAString& aValue, nsAttrValue& aResult);
+nsContentPolicyType AsValueToContentPolicy(const nsAttrValue& aValue);
+
+bool CheckPreloadAttrs(const nsAttrValue& aAs, const nsAString& aType,
+                       const nsAString& aMedia,
+                       mozilla::dom::Document* aDocument);
+void WarnIgnoredPreload(const mozilla::dom::Document&, nsIURI&);
 }  // namespace net
 }  // namespace mozilla
 
@@ -987,5 +1059,7 @@ bool SchemeIsFTP(nsIURI* aURI);
  */
 nsresult NS_HasRootDomain(const nsACString& aInput, const nsACString& aHost,
                           bool* aResult);
+
+void CheckForBrokenChromeURL(nsILoadInfo* aLoadInfo, nsIURI* aURI);
 
 #endif  // !nsNetUtil_h__

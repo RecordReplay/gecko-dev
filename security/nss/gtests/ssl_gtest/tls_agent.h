@@ -14,6 +14,7 @@
 #include <functional>
 #include <iostream>
 
+#include "nss_policy.h"
 #include "test_io.h"
 
 #define GTEST_HAS_RTTI 0
@@ -192,7 +193,7 @@ class TlsAgent : public PollTarget {
   void SetDowngradeCheckVersion(uint16_t version);
   void CheckSecretsDestroyed();
   void ConfigNamedGroups(const std::vector<SSLNamedGroup>& groups);
-  void DisableECDHEServerKeyReuse();
+  void EnableECDHEServerKeyReuse();
   bool GetPeerChainLength(size_t* count);
   void CheckCipherSuite(uint16_t cipher_suite);
   void SetResumptionTokenCallback();
@@ -231,7 +232,9 @@ class TlsAgent : public PollTarget {
 
   static const char* state_str(State state) { return states[state]; }
 
-  PRFileDesc* ssl_fd() const { return ssl_fd_.get(); }
+  NssManagedFileDesc ssl_fd() const {
+    return NssManagedFileDesc(ssl_fd_.get(), policy_, option_);
+  }
   std::shared_ptr<DummyPrSocket>& adapter() { return adapter_; }
 
   const SSLChannelInfo& info() const {
@@ -307,6 +310,13 @@ class TlsAgent : public PollTarget {
   void ExpectSendAlert(uint8_t alert, uint8_t level = 0);
 
   std::string alpn_value_to_use_ = "";
+  // set the given policy before this agent runs
+  void SetPolicy(SECOidTag oid, PRUint32 set, PRUint32 clear) {
+    policy_ = NssPolicy(oid, set, clear);
+  }
+  void SetNssOption(PRInt32 id, PRInt32 value) {
+    option_ = NssOption(id, value);
+  }
 
  private:
   const static char* states[];
@@ -453,6 +463,8 @@ class TlsAgent : public PollTarget {
   SniCallbackFunction sni_callback_;
   bool skip_version_checks_;
   std::vector<uint8_t> resumption_token_;
+  NssPolicy policy_;
+  NssOption option_;
 };
 
 inline std::ostream& operator<<(std::ostream& stream,

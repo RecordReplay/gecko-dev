@@ -30,7 +30,7 @@
 #include "mozilla/dom/CoalescedTouchData.h"
 #include "mozilla/dom/CoalescedWheelData.h"
 #include "mozilla/dom/MessageManagerCallback.h"
-#include "mozilla/dom/VsyncChild.h"
+#include "mozilla/dom/VsyncMainChild.h"
 #include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventForwards.h"
@@ -38,12 +38,12 @@
 #include "mozilla/layers/APZCCallbackHelper.h"
 #include "mozilla/layers/CompositorOptions.h"
 #include "mozilla/layers/GeckoContentControllerTypes.h"
-#include "nsIWebBrowserChrome.h"
 #include "mozilla/dom/ipc/IdType.h"
 #include "AudioChannelService.h"
 #include "PuppetWidget.h"
 #include "nsDeque.h"
 #include "nsIRemoteTab.h"
+#include "nsTHashSet.h"
 
 class nsBrowserStatusFilter;
 class nsIDOMWindow;
@@ -60,6 +60,8 @@ template <typename T>
 class nsPtrHashKey;
 
 namespace mozilla {
+enum class NativeKeyBindingsType : uint8_t;
+
 class AbstractThread;
 class PresShell;
 
@@ -84,9 +86,7 @@ class TabGroup;
 class ClonedMessageData;
 class CoalescedMouseData;
 class CoalescedWheelData;
-class ContentSessionStore;
-class SessionStoreChangeListener;
-class TabListener;
+class SessionStoreChild;
 class RequestData;
 class WebProgressData;
 
@@ -163,14 +163,12 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                            public TabContext,
                            public nsITooltipListener,
                            public mozilla::ipc::IShmemAllocator {
-  typedef mozilla::widget::PuppetWidget PuppetWidget;
-  typedef mozilla::dom::ClonedMessageData ClonedMessageData;
-  typedef mozilla::dom::CoalescedMouseData CoalescedMouseData;
-  typedef mozilla::dom::CoalescedWheelData CoalescedWheelData;
-  typedef mozilla::layers::APZEventState APZEventState;
-  typedef mozilla::layers::SetAllowedTouchBehaviorCallback
-      SetAllowedTouchBehaviorCallback;
-  typedef mozilla::layers::TouchBehaviorFlags TouchBehaviorFlags;
+  using PuppetWidget = mozilla::widget::PuppetWidget;
+  using ClonedMessageData = mozilla::dom::ClonedMessageData;
+  using CoalescedMouseData = mozilla::dom::CoalescedMouseData;
+  using CoalescedWheelData = mozilla::dom::CoalescedWheelData;
+  using APZEventState = mozilla::layers::APZEventState;
+  using TouchBehaviorFlags = mozilla::layers::TouchBehaviorFlags;
 
   friend class PBrowserChild;
 
@@ -273,7 +271,8 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   MOZ_CAN_RUN_SCRIPT_BOUNDARY mozilla::ipc::IPCResult
   RecvCloneDocumentTreeIntoSelf(
       const MaybeDiscarded<BrowsingContext>& aSourceBC,
-      const embedding::PrintData& aPrintData);
+      const embedding::PrintData& aPrintData,
+      CloneDocumentTreeIntoSelfResolver&& aResolve);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
   mozilla::ipc::IPCResult RecvUpdateRemotePrintSettings(
@@ -395,8 +394,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                                                 aApzResponse);
   }
 
-  mozilla::ipc::IPCResult RecvUpdateEpoch(const uint32_t& aEpoch);
-
   mozilla::ipc::IPCResult RecvUpdateSHistory();
 
   mozilla::ipc::IPCResult RecvNativeSynthesisResponse(
@@ -458,11 +455,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   PFilePickerChild* AllocPFilePickerChild(const nsString& aTitle,
                                           const int16_t& aMode);
 
-  virtual PVsyncChild* AllocPVsyncChild();
-
-  virtual bool DeallocPVsyncChild(PVsyncChild* aActor);
-
-  RefPtr<VsyncChild> GetVsyncChild();
+  RefPtr<VsyncMainChild> GetVsyncChild();
 
   bool DeallocPFilePickerChild(PFilePickerChild* aActor);
 
@@ -474,14 +467,12 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   const EffectsInfo& GetEffectsInfo() const { return mEffectsInfo; }
 
-  hal::ScreenOrientation GetOrientation() const { return mOrientation; }
-
   void SetBackgroundColor(const nscolor& aColor);
 
   MOZ_CAN_RUN_SCRIPT_BOUNDARY virtual mozilla::ipc::IPCResult RecvUpdateEffects(
       const EffectsInfo& aEffects);
 
-  void RequestEditCommands(nsIWidget::NativeKeyBindingsType aType,
+  void RequestEditCommands(NativeKeyBindingsType aType,
                            const WidgetKeyboardEvent& aEvent,
                            nsTArray<CommandInt>& aCommands);
 
@@ -609,9 +600,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
       const LayoutDevicePoint& aPoint, const Modifiers& aModifiers,
       const ScrollableLayerGuid& aGuid, const uint64_t& aInputBlockId);
 
-  void SetAllowedTouchBehavior(
-      uint64_t aInputBlockId, const nsTArray<TouchBehaviorFlags>& aFlags) const;
-
   bool UpdateFrame(const layers::RepaintRequest& aRequest);
   bool NotifyAPZStateChange(
       const ViewID& aViewId,
@@ -671,7 +659,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   void FlushAllCoalescedMouseData();
   void ProcessPendingCoalescedMouseDataAndDispatchEvents();
 
-  void ProcessPendingColaescedTouchData();
+  void ProcessPendingCoalescedTouchData();
 
   void HandleRealMouseButtonEvent(const WidgetMouseEvent& aEvent,
                                   const ScrollableLayerGuid& aGuid,
@@ -681,7 +669,11 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
     mCancelContentJSEpoch = aEpoch;
   }
 
-  bool UpdateSessionStore();
+  void UpdateSessionStore();
+
+  mozilla::dom::SessionStoreChild* GetSessionStoreChild() {
+    return mSessionStoreChild;
+  }
 
 #ifdef XP_WIN
   // Check if the window this BrowserChild is associated with supports
@@ -719,8 +711,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   mozilla::ipc::IPCResult RecvNavigateByKey(const bool& aForward,
                                             const bool& aForDocumentNavigation);
-
-  mozilla::ipc::IPCResult RecvRequestNotifyAfterRemotePaint();
 
   mozilla::ipc::IPCResult RecvSuppressDisplayport(const bool& aEnabled);
 
@@ -787,6 +777,14 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
                                        WebProgressData& aWebProgressData,
                                        RequestData& aRequestData);
 
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  nsresult UpdateRemotePrintSettings(const embedding::PrintData& aPrintData);
+
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY
+  nsresult CloneDocumentTreeIntoSelf(
+      const MaybeDiscarded<BrowsingContext>& aSourceBC,
+      const embedding::PrintData& aPrintData);
+
   class DelayedDeleteRunnable;
 
   RefPtr<BrowserChildMessageManager> mBrowserChildMessageManager;
@@ -803,13 +801,12 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   layers::LayersId mLayersId;
   CSSRect mUnscaledOuterRect;
   Maybe<bool> mLayersConnected;
+  Maybe<bool> mLayersConnectRequested;
   EffectsInfo mEffectsInfo;
-  hal::ScreenOrientation mOrientation;
 
-  RefPtr<VsyncChild> mVsyncChild;
+  RefPtr<VsyncMainChild> mVsyncChild;
 
   RefPtr<APZEventState> mAPZEventState;
-  SetAllowedTouchBehaviorCallback mSetAllowedTouchBehaviorCallback;
 
   // Position of client area relative to the outer window
   LayoutDeviceIntPoint mClientOffset;
@@ -871,7 +868,6 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
 
   friend class ContentChild;
 
-
   CSSSize mUnscaledInnerSize;
 
   // Store the end time of the handling of the last repeated keydown/keypress
@@ -897,8 +893,7 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   RefPtr<CoalescedTouchMoveFlusher> mCoalescedTouchMoveEventFlusher;
 
   RefPtr<layers::IAPZCTreeManager> mApzcTreeManager;
-  RefPtr<TabListener> mSessionStoreListener;
-  RefPtr<SessionStoreChangeListener> mSessionStoreChangeListener;
+  RefPtr<SessionStoreChild> mSessionStoreChild;
 
   // The most recently seen layer observer epoch in RecvSetDocShellIsActive.
   layers::LayersObserverEpoch mLayersObserverEpoch;
@@ -925,6 +920,9 @@ class BrowserChild final : public nsMessageManagerScriptExecutor,
   // Should only be accessed on main thread.
   Maybe<bool> mWindowSupportsProtectedMedia;
 #endif
+
+  // If set, resolve when we receive ChildToParentMatrix.
+  RefPtr<dom::Promise> mContentTransformPromise;
 
   DISALLOW_EVIL_CONSTRUCTORS(BrowserChild);
 };

@@ -22,6 +22,7 @@
 #include "nsUnicodeProperties.h"
 #include "nsCRT.h"
 #include "nsRange.h"
+#include "nsReadableUtils.h"
 #include "nsContentUtils.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/TextEditor.h"
@@ -31,6 +32,8 @@
 #include "mozilla/dom/HTMLOptionElement.h"
 #include "mozilla/dom/HTMLSelectElement.h"
 #include "mozilla/dom/Text.h"
+#include "mozilla/intl/Segmenter.h"
+#include "mozilla/intl/UnicodeProperties.h"
 #include "mozilla/StaticPrefs_browser.h"
 
 using namespace mozilla;
@@ -55,14 +58,6 @@ NS_IMPL_CYCLE_COLLECTING_ADDREF(nsFind)
 NS_IMPL_CYCLE_COLLECTING_RELEASE(nsFind)
 
 NS_IMPL_CYCLE_COLLECTION(nsFind)
-
-nsFind::nsFind()
-    : mFindBackward(false),
-      mCaseSensitive(false),
-      mMatchDiacritics(false),
-      mWordBreaker(nullptr) {}
-
-nsFind::~nsFind() = default;
 
 #ifdef DEBUG_FIND
 #  define DEBUG_FIND_PRINTF(...) printf(__VA_ARGS__)
@@ -122,6 +117,21 @@ static bool IsDisplayedNode(const nsINode* aNode) {
   return aNode->IsElement() && aNode->AsElement()->IsDisplayContents();
 }
 
+static bool IsRubyAnnotationNode(const nsINode* aNode) {
+  if (!aNode->IsContent()) {
+    return false;
+  }
+
+  nsIFrame* frame = aNode->AsContent()->GetPrimaryFrame();
+  if (!frame) {
+    return false;
+  }
+
+  StyleDisplay display = frame->StyleDisplay()->mDisplay;
+  return StyleDisplay::RubyText == display ||
+         StyleDisplay::RubyTextContainer == display;
+}
+
 static bool IsVisibleNode(const nsINode* aNode) {
   if (!IsDisplayedNode(aNode)) {
     return false;
@@ -131,6 +141,10 @@ static bool IsVisibleNode(const nsINode* aNode) {
   if (!frame) {
     // display: contents
     return true;
+  }
+
+  if (frame->IsContentHidden() || frame->AncestorHidesContent()) {
+    return false;
   }
 
   return frame->StyleVisibility()->IsVisible();
@@ -181,6 +195,13 @@ static bool SkipNode(const nsIContent* aContent) {
         DumpNode(content);
         return true;
       }
+    }
+
+    if (StaticPrefs::browser_find_ignore_ruby_annotations() &&
+        IsRubyAnnotationNode(content)) {
+      DEBUG_FIND_PRINTF("Skipping node: ");
+      DumpNode(content);
+      return true;
     }
 
     if (content->IsInNativeAnonymousSubtree() &&
@@ -449,13 +470,13 @@ NS_IMETHODIMP
 nsFind::GetEntireWord(bool* aEntireWord) {
   if (!aEntireWord) return NS_ERROR_NULL_POINTER;
 
-  *aEntireWord = !!mWordBreaker;
+  *aEntireWord = mEntireWord;
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsFind::SetEntireWord(bool aEntireWord) {
-  mWordBreaker = aEntireWord ? nsContentUtils::WordBreaker() : nullptr;
+  mEntireWord = aEntireWord;
   return NS_OK;
 }
 
@@ -504,25 +525,13 @@ char32_t nsFind::DecodeChar(const char16_t* t2b, int32_t* index) const {
 }
 
 bool nsFind::BreakInBetween(char32_t x, char32_t y) const {
-  char16_t x16[2], y16[2];
-  int32_t x16len, y16len;
-  if (IS_IN_BMP(x)) {
-    x16[0] = (char16_t)x;
-    x16len = 1;
-  } else {
-    x16[0] = H_SURROGATE(x);
-    x16[1] = L_SURROGATE(x);
-    x16len = 2;
-  }
-  if (IS_IN_BMP(y)) {
-    y16[0] = (char16_t)y;
-    y16len = 1;
-  } else {
-    y16[0] = H_SURROGATE(y);
-    y16[1] = L_SURROGATE(y);
-    y16len = 2;
-  }
-  return mWordBreaker->BreakInBetween(x16, x16len, y16, y16len);
+  nsAutoStringN<4> text;
+  AppendUCS4ToUTF16(x, text);
+  const uint32_t x16Len = text.Length();
+  AppendUCS4ToUTF16(y, text);
+
+  intl::WordBreakIteratorUtf16 iter(text);
+  return *iter.Seek(x16Len - 1) == x16Len;
 }
 
 char32_t nsFind::PeekNextChar(State& aState, bool aAlreadyMatching) const {
@@ -593,7 +602,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
   }
 
   // Ignore soft hyphens in the pattern
-  static const char kShy[] = {char(CH_SHY), 0};
+  static const char16_t kShy[] = {CH_SHY, 0};
   patAutoStr.StripChars(kShy);
 
   const char16_t* patStr = patAutoStr.get();
@@ -780,7 +789,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
     // already guaranteed to not be a combining diacritical mark.)
     c = (t2b ? DecodeChar(t2b, &findex) : CHAR_TO_UNICHAR(t1b[findex]));
     if (!mMatchDiacritics && IsCombiningDiacritic(c) &&
-        !IsMathOrMusicSymbol(prevChar)) {
+        !intl::UnicodeProperties::IsMathOrMusicSymbol(prevChar)) {
       continue;
     }
     patc = DecodeChar(patStr, &pindex);
@@ -841,7 +850,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
 
     // Figure whether the previous char is a word-breaking one.
     bool wordBreakPrev = false;
-    if (mWordBreaker) {
+    if (mEntireWord) {
       if (prevChar == NBSP_CHARCODE) {
         prevChar = CHAR_TO_UNICHAR(' ');
       }
@@ -854,7 +863,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
     // b) a match has already been stored
     // c) the previous character is a different "class" than the current
     // character.
-    if ((c == patc && (!mWordBreaker || matchAnchorNode || wordBreakPrev)) ||
+    if ((c == patc && (!mEntireWord || matchAnchorNode || wordBreakPrev)) ||
         (inWhitespace && IsSpace(c))) {
       prevCharInMatch = c;
       if (inWhitespace) {
@@ -881,10 +890,10 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
 
         // Make the range:
         // Check for word break (if necessary)
-        if (mWordBreaker || inWhitespace) {
+        if (mEntireWord || inWhitespace) {
           int32_t nextfindex = findex + incr;
 
-          char16_t nextChar;
+          char32_t nextChar;
           // If still in array boundaries, get nextChar.
           if (mFindBackward ? (nextfindex >= 0) : (nextfindex < fragLen)) {
             if (t2b) {
@@ -902,7 +911,7 @@ nsFind::Find(const nsAString& aPatText, nsRange* aSearchRange,
           }
 
           // If a word break isn't there when it needs to be, reset search.
-          if (mWordBreaker && !BreakInBetween(c, nextChar)) {
+          if (mEntireWord && !BreakInBetween(c, nextChar)) {
             matchAnchorNode = nullptr;
             continue;
           }

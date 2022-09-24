@@ -68,8 +68,7 @@ DocumentChannel::DocumentChannel(nsDocShellLoadState* aLoadState,
                                  net::LoadInfo* aLoadInfo,
                                  nsLoadFlags aLoadFlags, uint32_t aCacheKey,
                                  bool aUriModified, bool aIsXFOError)
-    : mAsyncOpenTime(TimeStamp::Now()),
-      mLoadState(aLoadState),
+    : mLoadState(aLoadState),
       mCacheKey(aCacheKey),
       mLoadFlags(aLoadFlags),
       mURI(aLoadState->URI()),
@@ -160,8 +159,7 @@ static bool URIUsesDocChannel(nsIURI* aURI) {
   }
 
   nsCString spec = aURI->GetSpecOrDefault();
-  return !spec.EqualsLiteral("about:printpreview") &&
-         !spec.EqualsLiteral("about:crashcontent");
+  return !spec.EqualsLiteral("about:crashcontent");
 }
 
 bool DocumentChannel::CanUseDocumentChannel(nsIURI* aURI) {

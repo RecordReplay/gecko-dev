@@ -39,9 +39,9 @@ EXPORTS.mozilla += [
     "Bootstrap.h",
     "CmdLineAndEnvUtils.h",
     "MacLaunchHelper.h",
+    "GeckoArgs.h",
     "MultiInstanceLock.h",
     "SafeMode.h",
-    "UntrustedModulesData.h",
 ]
 
 if CONFIG["MOZ_INSTRUMENT_EVENT_LOOP"]:
@@ -51,22 +51,14 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     EXPORTS.mozilla += [
         "AssembleCmdLine.h",
         "DllPrefetchExperimentRegistryInfo.h",
-        "ModuleVersionInfo.h",
         "PolicyChecks.h",
-        "UntrustedModulesProcessor.h",
-        "WinDllServices.h",
         "WinTokenUtils.h",
     ]
     UNIFIED_SOURCES += [
         "/toolkit/mozapps/update/common/pathhash.cpp",
         "/toolkit/mozapps/update/common/updateutils_win.cpp",
         "DllPrefetchExperimentRegistryInfo.cpp",
-        "ModuleEvaluator.cpp",
-        "ModuleVersionInfo.cpp",
         "nsNativeAppSupportWin.cpp",
-        "UntrustedModulesData.cpp",
-        "UntrustedModulesProcessor.cpp",
-        "WinDllServices.cpp",
         "WinTokenUtils.cpp",
     ]
     DEFINES["PROXY_PRINTING"] = 1
@@ -80,11 +72,18 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
         UNIFIED_SOURCES += [
             "LauncherRegistryInfo.cpp",
         ]
+    DIRS += [
+        "dllservices",
+    ]
 elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
+    EXPORTS.mozilla += [
+        "MacRunFromDmgUtils.h",
+    ]
     UNIFIED_SOURCES += [
         "MacApplicationDelegate.mm",
         "MacAutoreleasePool.mm",
         "MacLaunchHelper.mm",
+        "MacRunFromDmgUtils.mm",
         "nsCommandLineServiceMac.mm",
         "nsNativeAppSupportCocoa.mm",
         "updaterfileutils_osx.mm",
@@ -102,6 +101,7 @@ elif CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
     UNIFIED_SOURCES += [
         "nsNativeAppSupportUnix.cpp",
     ]
+    CXXFLAGS += CONFIG["MOZ_X11_SM_CFLAGS"]
 else:
     UNIFIED_SOURCES += [
         "nsNativeAppSupportDefault.cpp",
@@ -141,7 +141,6 @@ UNIFIED_SOURCES += [
     "CreateAppData.cpp",
     "nsAppStartupNotifier.cpp",
     "nsConsoleWriter.cpp",
-    "nsEmbeddingModule.cpp",
     "nsNativeAppSupportBase.cpp",
     "nsSigHandlers.cpp",
     "nsXREDirProvider.cpp",
@@ -157,7 +156,7 @@ SOURCES += [
     "ProfileReset.cpp",
 ]
 
-if CONFIG["MOZ_X11"]:
+if CONFIG["MOZ_X11"] or CONFIG["MOZ_WAYLAND"]:
     UNIFIED_SOURCES += [
         "glxtest.cpp",
     ]
@@ -188,7 +187,7 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
 
-if CONFIG["MOZ_X11"]:
+if CONFIG["MOZ_X11"] or CONFIG["MOZ_WAYLAND"]:
     DEFINES["USE_GLX_TEST"] = True
 
 for var in (
@@ -269,24 +268,20 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
         "/xpcom/base",
     ]
 
-CXXFLAGS += CONFIG["TK_CFLAGS"]
 CXXFLAGS += CONFIG["MOZ_DBUS_CFLAGS"]
 CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
     CXXFLAGS += CONFIG["MOZ_PANGO_CFLAGS"]
 
 DEFINES["TOPOBJDIR"] = TOPOBJDIR
 FINAL_TARGET_PP_FILES += ["platform.ini"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
-
-if CONFIG["MOZ_IPDL_TESTS"]:
-    DEFINES["MOZ_IPDL_TESTS"] = True
 
 if CONFIG["ENABLE_TESTS"]:
     DIRS += ["test/gtest"]
 
 if CONFIG["MOZ_BACKGROUNDTASKS"]:
     DEFINES["MOZ_BACKGROUNDTASKS"] = True
+
+REQUIRES_UNIFIED_BUILD = True

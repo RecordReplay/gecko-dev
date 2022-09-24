@@ -38,7 +38,6 @@ body.wide-container {
 
 /* Typography */
 .title {
-  background-image: url("chrome://global/skin/icons/info.svg");
   background-position: left 0;
   background-repeat: no-repeat;
   background-size: 1.6em;
@@ -47,10 +46,6 @@ body.wide-container {
   font-size: 2.2em;
   -moz-context-properties: fill;
   fill: currentColor;
-}
-
-.noIllustration {
-  background-image: none;
 }
 
 .container.restore-chosen {
@@ -69,14 +64,18 @@ body.wide-container {
 
 @media (max-width: 970px) {
   .title {
-    background-image: none !important;
     padding-inline-start: 0;
     margin-inline-start: 0;
+    padding-top: 2.3em;
   }
 
   .title-text {
     padding-top: 0;
   }
+}
+
+.page-subtitle {
+  margin-bottom: 2em;
 }
 
 ul, ol {
@@ -143,12 +142,17 @@ table {
   font: message-box;
   text-align: start;
   width: 100%;
-  border: 1px solid var(--in-content-border-color);
+  border: 1px solid var(--in-content-table-border-color);
+  border-radius: 4px;
   border-spacing: 0;
+  overflow: hidden;
+}
+
+table button {
+  padding-inline: 3px;
 }
 
 th, td {
-  border: 1px solid var(--in-content-border-color);
   padding: 4px;
   text-align: match-parent;
 }
@@ -160,6 +164,7 @@ thead th {
 th {
   background-color: var(--in-content-table-header-background);
   color: var(--in-content-table-header-color);
+  border: 1px solid var(--in-content-table-border-color);
 }
 
 th.column {
@@ -168,18 +173,17 @@ th.column {
 }
 
 td {
-  border-color: var(--in-content-table-border-dark-color);
+  border: 1px solid var(--in-content-border-color);
   unicode-bidi: plaintext; /* Make sure file paths will be LTR */
 }
 
-#update-row > td:dir(rtl),
-#profile-row > td:dir(rtl) {
-  unicode-bidi: normal;
-}
-
-.notice-box {
+.action-box {
+  float: inline-end;
   background-color: var(--in-content-table-background);
-  border: 1px solid var(--in-content-border-color);
-  color: var(--in-content-text-color);
+  border: 1px solid var(--in-content-box-border-color);
+  border-radius: 4px;
   padding: 16px;
+  margin-top: 2em;
+  margin-inline-start: 20px;
+  width: 30%;
 }

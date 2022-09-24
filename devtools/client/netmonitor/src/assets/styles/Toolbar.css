@@ -32,6 +32,12 @@
   background-image: url("chrome://devtools/content/netmonitor/src/assets/icons/play.svg");
 }
 
+/* New HTTP Custom Request button */
+.devtools-button.devtools-http-custom-request-icon::before {
+  background-image: url("chrome://devtools/skin/images/add.svg");
+  background-size: 13px;
+}
+
 /* Search button */
 .devtools-button.devtools-search-icon::before {
   background-image: url("chrome://devtools/skin/images/search.svg");
@@ -70,6 +76,11 @@
   position: relative;
   vertical-align: middle;
   bottom: 1px;
+}
+
+#devtools-cache-checkbox {
+  vertical-align: unset;
+  bottom: -1px;
 }
 
 .devtools-toolbar .devtools-checkbox-label {

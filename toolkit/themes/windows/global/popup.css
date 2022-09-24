@@ -19,15 +19,13 @@ panel {
   --windows-panel-box-shadow: 0 0 4px hsla(0,0%,0%,.2);
 }
 
-@media (-moz-windows-default-theme) {
-  panel, menupopup {
-    --windows-panel-box-shadow: 0 0 4px hsla(210,4%,10%,.2);
-  }
-}
-
 menupopup {
   appearance: auto;
   -moz-default-appearance: menupopup;
+
+  /* Native menus are always light */
+  color-scheme: light;
+
   /* We set the background-color / border here so that it doesn't interfere with native styling. */
   background-color: Menu;
   border: 1px solid ThreeDShadow;
@@ -40,20 +38,20 @@ menupopup {
   menupopup {
     /* Disable the default appearance so we can override the native styling. */
     appearance: none;
-    /* Force a rounded-rect dropshadow to appear. */
-    -moz-window-shadow: cliprounded;
+    color-scheme: unset;
 
     /* Prevent any background or border around the outside of the shadow. */
     background-color: transparent;
     border: none;
-    border-radius: 4px;
+    /* To account for the box-shadow below */
+    margin: -4px;
 
     --panel-color: var(--menu-color);
     --panel-border-radius: 4px;
     --panel-padding: 4px 0;
     --panel-border-color: var(--menu-border-color);
     --panel-background: var(--menu-background-color);
-    --nested-margin: -6px;
+    --nested-margin: -10px;
   }
 
   menupopup > menuitem,
@@ -63,8 +61,8 @@ menupopup {
   }
 
   menupopup::part(content) {
-    /* Prevent contained items from drawing over the border-radius. */
-    overflow: clip;
+    box-shadow: var(--windows-panel-box-shadow);
+    margin: 4px;
   }
 }
 
@@ -113,44 +111,6 @@ panel[type="arrow"][side="right"] {
 panel[type="arrow"].panel-no-padding::part(content) {
   padding: 0;
   overflow: hidden; /* Don't let panel content overflow the border-radius */
-}
-
-:is(panel, menupopup)::part(arrow) {
-  -moz-context-properties: fill, stroke;
-  fill: var(--arrowpanel-background);
-  stroke: var(--arrowpanel-border-color);
-}
-
-:is(panel, menupopup)[side="top"]::part(arrow),
-:is(panel, menupopup)[side="bottom"]::part(arrow) {
-  list-style-image: url("chrome://global/skin/arrow/panelarrow-vertical.svg");
-  position: relative;
-  margin-inline: 10px;
-}
-
-:is(panel, menupopup)[side="top"]::part(arrow) {
-  margin-bottom: -5px;
-}
-
-:is(panel, menupopup)[side="bottom"]::part(arrow) {
-  transform: scaleY(-1);
-  margin-top: -5px;
-}
-
-:is(panel, menupopup)[side="left"]::part(arrow),
-:is(panel, menupopup)[side="right"]::part(arrow) {
-  list-style-image: url("chrome://global/skin/arrow/panelarrow-horizontal.svg");
-  position: relative;
-  margin-block: 10px;
-}
-
-:is(panel, menupopup)[side="left"]::part(arrow) {
-  margin-right: -5px;
-}
-
-:is(panel, menupopup)[side="right"]::part(arrow) {
-  transform: scaleX(-1);
-  margin-left: -5px;
 }
 
 /* rules for popups associated with menulists */

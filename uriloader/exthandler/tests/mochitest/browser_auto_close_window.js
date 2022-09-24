@@ -44,7 +44,7 @@ function promiseHelperAppDialog() {
 
 let mockHelperAppService;
 
-add_task(async function setup() {
+add_setup(async function() {
   // Replace the real helper app dialog with our own.
   mockHelperAppService = ComponentUtils._getFactory(HelperAppLauncherDialog);
   registrar.registerFactory(
@@ -53,6 +53,37 @@ add_task(async function setup() {
     HELPERAPP_DIALOG_CONTRACT_ID,
     mockHelperAppService
   );
+
+  // Ensure we always prompt for these downloads.
+  const HandlerService = Cc[
+    "@mozilla.org/uriloader/handler-service;1"
+  ].getService(Ci.nsIHandlerService);
+
+  const MIMEService = Cc["@mozilla.org/mime;1"].getService(Ci.nsIMIMEService);
+  const mimeInfo = MIMEService.getFromTypeAndExtension(
+    "application/octet-stream",
+    "bin"
+  );
+  mimeInfo.alwaysAskBeforeHandling = true;
+  HandlerService.store(mimeInfo);
+
+  // On Mac, .bin is application/macbinary
+  let mimeInfoMac;
+  if (AppConstants.platform == "macosx") {
+    mimeInfoMac = MIMEService.getFromTypeAndExtension(
+      "application/macbinary",
+      "bin"
+    );
+    mimeInfoMac.alwaysAskBeforeHandling = true;
+    HandlerService.store(mimeInfoMac);
+  }
+
+  registerCleanupFunction(() => {
+    HandlerService.remove(mimeInfo);
+    if (mimeInfoMac) {
+      HandlerService.remove(mimeInfoMac);
+    }
+  });
 });
 
 add_task(async function simple_navigation() {
@@ -70,6 +101,32 @@ add_task(async function simple_navigation() {
     let windowContext = await dialogAppeared;
 
     is(windowContext, browser.ownerGlobal, "got the right windowContext");
+  });
+});
+
+add_task(async function accel_navigation() {
+  await BrowserTestUtils.withNewTab({ gBrowser, url: PAGE_URL }, async function(
+    browser
+  ) {
+    let dialogAppeared = promiseHelperAppDialog();
+    let tabOpened = BrowserTestUtils.waitForEvent(
+      gBrowser.tabContainer,
+      "TabOpen"
+    ).then(event => {
+      return [event.target, BrowserTestUtils.waitForTabClosing(event.target)];
+    });
+
+    await BrowserTestUtils.synthesizeMouseAtCenter(
+      "#regular_load",
+      { accelKey: true },
+      browser
+    );
+
+    let windowContext = await dialogAppeared;
+    is(windowContext, browser.ownerGlobal, "got the right windowContext");
+    let [tab, closingPromise] = await tabOpened;
+    await closingPromise;
+    is(tab.linkedBrowser, null, "tab was opened and closed");
   });
 });
 

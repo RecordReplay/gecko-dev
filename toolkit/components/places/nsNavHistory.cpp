@@ -9,6 +9,7 @@
 #include "mozilla/Components.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/intl/LocaleService.h"
 
 #include "nsNavHistory.h"
 
@@ -17,13 +18,12 @@
 #include "nsFaviconService.h"
 #include "nsPlacesMacros.h"
 #include "nsPlacesTriggers.h"
-#include "DateTimeFormat.h"
+#include "mozilla/intl/AppDateTimeFormat.h"
 #include "History.h"
 #include "Helpers.h"
 #include "NotifyRankingChanged.h"
 
 #include "nsTArray.h"
-#include "nsCollationCID.h"
 #include "nsNetUtil.h"
 #include "nsPrintfCString.h"
 #include "nsPromiseFlatString.h"
@@ -138,6 +138,7 @@ using namespace mozilla::places;
 #define TOPIC_PREF_CHANGED "nsPref:changed"
 #define TOPIC_PROFILE_TEARDOWN "profile-change-teardown"
 #define TOPIC_PROFILE_CHANGE "profile-before-change"
+#define TOPIC_APP_LOCALES_CHANGED "intl:app-locales-changed"
 
 static const char* kObservedPrefs[] = {PREF_HISTORY_ENABLED,
                                        PREF_MATCH_DIACRITICS,
@@ -390,22 +391,9 @@ nsNavHistory::nsNavHistory()
       mDecayFrecencyPendingCount(0),
       mTagsFolder(-1),
       mLastCachedStartOfDay(INT64_MAX),
-      mLastCachedEndOfDay(0)
-#ifdef XP_WIN
-      ,
-      mCryptoProviderInitialized(false)
-#endif
-{
+      mLastCachedEndOfDay(0) {
   NS_ASSERTION(!gHistoryService,
                "Attempting to create two instances of the service!");
-#ifdef XP_WIN
-  BOOL cryptoAcquired =
-      CryptAcquireContext(&mCryptoProvider, 0, 0, PROV_RSA_FULL,
-                          CRYPT_VERIFYCONTEXT | CRYPT_SILENT);
-  if (cryptoAcquired) {
-    mCryptoProviderInitialized = true;
-  }
-#endif
   gHistoryService = this;
 }
 
@@ -418,12 +406,6 @@ nsNavHistory::~nsNavHistory() {
                "Deleting a non-singleton instance of the service");
 
   if (gHistoryService == this) gHistoryService = nullptr;
-
-#ifdef XP_WIN
-  if (mCryptoProviderInitialized) {
-    Unused << CryptReleaseContext(mCryptoProvider, 0);
-  }
-#endif
 }
 
 nsresult nsNavHistory::Init() {
@@ -447,6 +429,7 @@ nsresult nsNavHistory::Init() {
   if (obsSvc) {
     (void)obsSvc->AddObserver(this, TOPIC_PLACES_CONNECTION_CLOSED, true);
     (void)obsSvc->AddObserver(this, TOPIC_IDLE_DAILY, true);
+    (void)obsSvc->AddObserver(this, TOPIC_APP_LOCALES_CHANGED, true);
   }
 
   // Don't add code that can fail here! Do it up above, before we add our
@@ -2126,6 +2109,10 @@ nsNavHistory::Observe(nsISupports* aSubject, const char* aTopic,
     (void)DecayFrecency();
   }
 
+  else if (strcmp(aTopic, TOPIC_APP_LOCALES_CHANGED) == 0) {
+    mBundle = nullptr;
+  }
+
   return NS_OK;
 }
 
@@ -2231,10 +2218,11 @@ nsresult nsNavHistory::QueryToSelectClause(
     clause.Condition("AUTOCOMPLETE_MATCH(")
         .Param(":search_string")
         .Str(", h.url, page_title, tags, ")
-        .Str(nsPrintfCString("1, 1, 1, 1, %d, %d)",
+        .Str(nsPrintfCString("1, 1, 1, 1, %d, %d",
                              mozIPlacesAutoComplete::MATCH_ANYWHERE_UNMODIFIED,
                              searchBehavior)
-                 .get());
+                 .get())
+        .Str(", NULL)");
     // Serching by terms implicitly exclude queries.
     excludeQueries = true;
   }
@@ -3099,9 +3087,11 @@ void nsNavHistory::GetStringFromName(const char* aName, nsACString& aResult) {
 void nsNavHistory::GetMonthName(const PRExplodedTime& aTime,
                                 nsACString& aResult) {
   nsAutoString month;
-  nsresult rv = mozilla::DateTimeFormat::GetCalendarSymbol(
-      mozilla::DateTimeFormat::Field::Month,
-      mozilla::DateTimeFormat::Style::Wide, &aTime, month);
+
+  mozilla::intl::DateTimeFormat::ComponentsBag components;
+  components.month = Some(mozilla::intl::DateTimeFormat::Month::Long);
+  nsresult rv =
+      mozilla::intl::AppDateTimeFormat::Format(components, &aTime, month);
   if (NS_FAILED(rv)) {
     aResult = nsPrintfCString("[%d]", aTime.tm_month + 1);
     return;
@@ -3113,8 +3103,11 @@ void nsNavHistory::GetMonthName(const PRExplodedTime& aTime,
 void nsNavHistory::GetMonthYear(const PRExplodedTime& aTime,
                                 nsACString& aResult) {
   nsAutoString monthYear;
-  nsresult rv = mozilla::DateTimeFormat::FormatDateTime(
-      &aTime, DateTimeFormat::Skeleton::yyyyMMMM, monthYear);
+  mozilla::intl::DateTimeFormat::ComponentsBag components;
+  components.month = Some(mozilla::intl::DateTimeFormat::Month::Long);
+  components.year = Some(mozilla::intl::DateTimeFormat::Numeric::Numeric);
+  nsresult rv =
+      mozilla::intl::AppDateTimeFormat::Format(components, &aTime, monthYear);
   if (NS_FAILED(rv)) {
     aResult = nsPrintfCString("[%d-%d]", aTime.tm_month + 1, aTime.tm_year);
     return;
@@ -3235,17 +3228,27 @@ nsresult nsNavHistory::UpdateFrecency(int64_t aPlaceId) {
   return NS_OK;
 }
 
-nsICollation* nsNavHistory::GetCollation() {
-  if (mCollation) return mCollation;
+const mozilla::intl::Collator* nsNavHistory::GetCollator() {
+  if (mCollator) {
+    return mCollator.get();
+  }
 
-  // collation
-  nsCOMPtr<nsICollationFactory> cfact =
-      do_CreateInstance(NS_COLLATIONFACTORY_CONTRACTID);
-  NS_ENSURE_TRUE(cfact, nullptr);
-  nsresult rv = cfact->CreateCollation(getter_AddRefs(mCollation));
-  NS_ENSURE_SUCCESS(rv, nullptr);
+  auto result = mozilla::intl::LocaleService::TryCreateComponent<
+      mozilla::intl::Collator>();
+  NS_ENSURE_TRUE(result.isOk(), nullptr);
+  auto collator = result.unwrap();
 
-  return mCollation;
+  // Sort in a case-insensitive way, where "base" letters are considered
+  // equal, e.g: a = á, a = A, a ≠ b.
+  using mozilla::intl::Collator;
+  Collator::Options options{};
+  options.sensitivity = Collator::Sensitivity::Base;
+  auto optResult = collator->SetOptions(options);
+  NS_ENSURE_TRUE(optResult.isOk(), nullptr);
+
+  mCollator = UniquePtr<const Collator>(collator.release());
+
+  return mCollator.get();
 }
 
 nsIStringBundle* nsNavHistory::GetBundle() {

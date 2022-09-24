@@ -7,7 +7,7 @@
 const { createCommandsDictionary } = require("devtools/shared/commands/index");
 const ChromeUtils = require("ChromeUtils");
 const { DevToolsLoader } = ChromeUtils.import(
-  "resource://devtools/shared/Loader.jsm"
+  "resource://devtools/shared/loader/Loader.jsm"
 );
 loader.lazyRequireGetter(
   this,
@@ -31,10 +31,24 @@ loader.lazyRequireGetter(
  * Commands are implemented by modules defined in devtools/shared/commands.
  */
 exports.CommandsFactory = {
-  async forTab(tab) {
-    const client = await createLocalClient();
+  /**
+   * Create commands for a given local tab.
+   *
+   * @param {Tab} tab: A local Firefox tab, running in this process.
+   * @param {Object} options
+   * @param {DevToolsClient} options.client: An optional DevToolsClient. If none is passed,
+   *        a new one will be created.
+   * @param {DevToolsClient} options.isWebExtension: An optional boolean to flag commands
+   *        that are created for the WebExtension codebase.
+   * @returns {Object} Commands
+   */
+  async forTab(tab, { client, isWebExtension } = {}) {
+    if (!client) {
+      client = await createLocalClient();
+    }
 
-    const descriptor = await client.mainRoot.getTab({ tab });
+    const descriptor = await client.mainRoot.getTab({ tab, isWebExtension });
+    descriptor.doNotAttachThreadActor = isWebExtension;
     const commands = await createCommandsDictionary(descriptor);
     return commands;
   },
@@ -58,19 +72,27 @@ exports.CommandsFactory = {
   },
 
   /**
-   * For now, this method is only used by browser_target_list_various_descriptors.js
+   * For now, this method is only used by browser_target_command_various_descriptors.js
    * in order to cover about:debugging codepath, where we connect to remote tabs via
-   * their current outerWindowID.
+   * their current browserId.
    * But:
    *  1) this can also be used to debug local tab, but TabDescriptor.localTab/isLocalTab will be null/false.
    *  2) beyond this test, this isn't used to connect to remote tab just yet.
    * Bug 1700909 should start using this from toolbox-init/descriptor-from-url
    * and will finaly be used to connect to remote tabs.
-   */
-  async forRemoteTabInTest({ outerWindowID }) {
-    const client = await createLocalClient();
 
-    const descriptor = await client.mainRoot.getTab({ outerWindowID });
+   * @param {Object} options
+   * @param {Number} options.browserId: Mandatory attribute, to identify which tab we should
+   *        create commands for.
+   * @param {DevToolsClient} options.client: An optional DevToolsClient. If none is passed,
+   *        a new one will be created.
+   */
+  async forRemoteTabInTest({ browserId, client }) {
+    if (!client) {
+      client = await createLocalClient();
+    }
+
+    const descriptor = await client.mainRoot.getTab({ browserId });
     const commands = await createCommandsDictionary(descriptor);
     return commands;
   },
@@ -105,14 +127,17 @@ exports.CommandsFactory = {
   },
 
   /**
-   * One method to handle the whole setup sequence to connect to RDP backend for the Browser Console.
-   *
-   * This will instantiate a special DevTools module loader for the DevToolsServer.
-   * Then spawn a DevToolsClient to connect to it.
-   * Get a Main Process Descriptor from it.
-   * Finally spawn a commands object for this descriptor.
+   * This method will spawn a special `DevToolsClient`
+   * which is meant to debug the same Firefox instance
+   * and especially be able to debug chrome code.
+   * The chrome code typically runs in the system principal.
+   * This principal is a singleton which is shared among most Firefox internal codebase
+   * (JSM, privileged html documents, JS-XPCOM,...)
+   * In order to be able to debug these script we need to connect to a special DevToolsServer
+   * that runs in a dedicated and distinct system principal which is different from
+   * the one shared with the rest of Firefox frontend codebase.
    */
-  async forBrowserConsole() {
+  async spawnClientToDebugSystemPrincipal() {
     // The Browser console ends up using the debugger in autocomplete.
     // Because the debugger can't be running in the same compartment than its debuggee,
     // we have to load the server in a dedicated Loader, flagged with
@@ -140,13 +165,29 @@ exports.CommandsFactory = {
     const client = new DevToolsClient(customDevToolsServer.connectPipe());
     await client.connect();
 
+    return client;
+  },
+
+  /**
+   * One method to handle the whole setup sequence to connect to RDP backend for the Browser Console.
+   *
+   * This will instantiate a special DevTools module loader for the DevToolsServer.
+   * Then spawn a DevToolsClient to connect to it.
+   * Get a Main Process Descriptor from it.
+   * Finally spawn a commands object for this descriptor.
+   */
+  async forBrowserConsole() {
+    // The Browser console ends up using the debugger in autocomplete.
+    // Because the debugger can't be running in the same compartment than its debuggee,
+    // we have to load the server in a dedicated Loader and so spawn a special client
+    const client = await this.spawnClientToDebugSystemPrincipal();
+
     const descriptor = await client.mainRoot.getMainProcess();
 
-    // Hack something in order to help TargetMixinFront to distinguish the BrowserConsole
-    descriptor.createdForBrowserConsole = true;
+    descriptor.doNotAttachThreadActor = true;
 
-    const target = await descriptor.getTarget();
-    await target.attach();
+    // Force fetching the first top level target right away.
+    await descriptor.getTarget();
 
     const commands = await createCommandsDictionary(descriptor);
     return commands;

@@ -14,7 +14,6 @@
  * @property {number} interval
  * @property {string[]} threads
  * @property {string[]} features
- * @property {() => void} openAboutProfiling
  * @property {import("../@types/perf").Presets} presets
  */
 
@@ -24,8 +23,13 @@
  */
 
 /**
+ * @typedef {Object} OwnProps
+ * @property {() => void} onEditSettingsLinkClicked
+ */
+
+/**
  * @typedef {ResolveThunks<ThunkDispatchProps>} DispatchProps
- * @typedef {StateProps & DispatchProps} Props
+ * @typedef {StateProps & DispatchProps & OwnProps} Props
  * @typedef {import("../@types/perf").State} StoreState
  * @typedef {import("../@types/perf").FeatureDescription} FeatureDescription
  */
@@ -67,7 +71,6 @@ class DevToolsPresetSelection extends PureComponent {
   /** @param {Props} props */
   constructor(props) {
     super(props);
-    this.onPresetChange = this.onPresetChange.bind(this);
 
     /**
      * Create an object map to easily look up feature description.
@@ -83,19 +86,21 @@ class DevToolsPresetSelection extends PureComponent {
    * Handle the select change.
    * @param {React.ChangeEvent<HTMLSelectElement>} event
    */
-  onPresetChange(event) {
+  onPresetChange = event => {
     const { presets } = this.props;
     this.props.changePreset(presets, event.target.value);
-  }
+  };
 
   render() {
-    const { presetName, presets, openAboutProfiling } = this.props;
+    const { presetName, presets, onEditSettingsLinkClicked } = this.props;
 
     let presetDescription;
     const currentPreset = presets[presetName];
     if (currentPreset) {
       // Display the current preset's description.
-      presetDescription = currentPreset.description;
+      presetDescription = Localized({
+        id: currentPreset.l10nIds.devtools.description,
+      });
     } else {
       // Build up a display of the details of the custom preset.
       const { interval, threads, features } = this.props;
@@ -107,7 +112,7 @@ class DevToolsPresetSelection extends PureComponent {
             null,
             Localized(
               { id: "perftools-devtools-interval-label" },
-              span({ className: "perftools-presets-custom-bold" })
+              span({ className: "perf-presets-custom-bold" })
             ),
             " ",
             Localized({
@@ -136,10 +141,6 @@ class DevToolsPresetSelection extends PureComponent {
               description ? description.name : feature
             );
           })
-        ),
-        button(
-          { className: "perf-external-link", onClick: openAboutProfiling },
-          Localized({ id: "perftools-button-edit-settings" })
         )
       );
     }
@@ -161,15 +162,28 @@ class DevToolsPresetSelection extends PureComponent {
               value: presetName,
             },
             Object.entries(presets).map(([name, preset]) =>
-              option({ key: name, value: name }, preset.label)
+              Localized(
+                { id: preset.l10nIds.devtools.label },
+                option({ key: name, value: name })
+              )
             ),
-            option({ value: "custom" }, "Custom")
+            Localized(
+              { id: "perftools-presets-custom-label" },
+              option({ value: "custom" })
+            )
           )
           // The overhead component will go here.
         ),
         div(
           { className: "perf-presets-details-row perf-presets-description" },
           presetDescription
+        ),
+        button(
+          {
+            className: "perf-external-link",
+            onClick: onEditSettingsLinkClicked,
+          },
+          Localized({ id: "perftools-button-edit-settings" })
         )
       )
     );
@@ -187,7 +201,6 @@ function mapStateToProps(state) {
     interval: selectors.getInterval(state),
     threads: selectors.getThreads(state),
     features: selectors.getFeatures(state),
-    openAboutProfiling: selectors.getOpenAboutProfiling(state),
   };
 }
 

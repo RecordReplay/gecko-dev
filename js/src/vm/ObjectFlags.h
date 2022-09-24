@@ -22,9 +22,20 @@ enum class ObjectFlag : uint16_t {
   NotExtensible = 1 << 1,
   Indexed = 1 << 2,
   HasInterestingSymbol = 1 << 3,
-  // (1 << 4) is unused.
+
+  // If set, the shape's property map may contain an enumerable property. This
+  // only accounts for (own) shape properties: if the flag is not set, the
+  // object may still have (enumerable) dense elements, typed array elements, or
+  // a JSClass enumeration hook.
+  HasEnumerable = 1 << 4,
+
   FrozenElements = 1 << 5,  // See ObjectElements::FROZEN comment.
-  UncacheableProto = 1 << 6,
+
+  // If set, the shape teleporting optimization can no longer be used for
+  // accessing properties on this object.
+  // See: JSObject::hasInvalidatedTeleporting, ProtoChainSupportsTeleporting.
+  InvalidatedTeleporting = 1 << 6,
+
   ImmutablePrototype = 1 << 7,
 
   // See JSObject::isQualifiedVarObj().
@@ -47,6 +58,9 @@ enum class ObjectFlag : uint16_t {
   // used to invalidate IC/Warp code specializing on specific getter/setter
   // objects. See also the SMDOC comment in vm/GetterSetter.h.
   HadGetterSetterChange = 1 << 10,
+
+  // If set, invoke the watchtower testing callback for changes to this object.
+  UseWatchtowerTestingCallback = 1 << 11,
 };
 
 using ObjectFlags = EnumFlags<ObjectFlag>;

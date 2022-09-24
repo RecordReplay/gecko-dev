@@ -26,6 +26,7 @@ namespace layers {
  * frames directly to the compositor thread/process without relying on the main thread
  * which might be too busy dealing with content script.
  */
+[ManualDealloc, NeedsOtherPid]
 sync protocol PImageBridge
 {
   manages PTexture;
@@ -54,7 +55,7 @@ parent:
   async PTexture(SurfaceDescriptor aSharedData, ReadLockDescriptor aReadLock, LayersBackend aBackend, TextureFlags aTextureFlags, uint64_t aSerial, MaybeExternalImageId aExternalImageId);
   async PMediaSystemResourceManager();
 
-  sync NewCompositable(CompositableHandle aHandle, TextureInfo aInfo, LayersBackend aBackend);
+  sync NewCompositable(CompositableHandle aHandle, TextureInfo aInfo);
   async ReleaseCompositable(CompositableHandle aHandle);
 };
 

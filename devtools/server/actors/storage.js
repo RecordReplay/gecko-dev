@@ -20,10 +20,11 @@ loader.lazyGetter(this, "ExtensionStorageIDB", () => {
   return require("resource://gre/modules/ExtensionStorageIDB.jsm")
     .ExtensionStorageIDB;
 });
-loader.lazyGetter(
+loader.lazyRequireGetter(
   this,
-  "WebExtensionPolicy",
-  () => Cu.getGlobalForObject(ExtensionProcessScript).WebExtensionPolicy
+  "getAddonIdForWindowGlobal",
+  "devtools/server/actors/watcher/browsing-context-helpers.jsm",
+  true
 );
 
 const EXTENSION_STORAGE_ENABLED_PREF =
@@ -300,8 +301,14 @@ StorageActors.defaults = function(typeName, observationTopics) {
      *
      * @param {window} window
      *        The window which was removed.
+     * @param {Object} options
+     * @param {Boolean} options.dontCheckHost
+     *        If set to true, the function won't check if the host still is in this.hosts.
+     *        This is helpful in the case of the StorageActorMock, as the `hosts` getter
+     *        uses its `windows` getter, and at this point in time the window which is
+     *        going to be destroyed still exists.
      */
-    onWindowDestroyed(window) {
+    onWindowDestroyed(window, { dontCheckHost } = {}) {
       if (!this.hostVsStores) {
         return;
       }
@@ -310,7 +317,7 @@ StorageActors.defaults = function(typeName, observationTopics) {
         return;
       }
       const host = this.getHostName(window.location);
-      if (host && !this.hosts.has(host)) {
+      if (host && (!this.hosts.has(host) || dontCheckHost)) {
         this.hostVsStores.delete(host);
         const data = {};
         data[host] = [];
@@ -433,7 +440,14 @@ StorageActors.defaults = function(typeName, observationTopics) {
           }
         }
 
-        toReturn.total = this.getObjectsSize(host, names, options);
+        if (this.typeName === "Cache") {
+          // Cache storage contains several items per name but misses a custom
+          // `getObjectsSize` implementation, as implemented for IndexedDB.
+          // See Bug 1745242.
+          toReturn.total = toReturn.data.length;
+        } else {
+          toReturn.total = this.getObjectsSize(host, names, options);
+        }
       } else {
         let obj = await this.getValuesForHost(
           host,
@@ -669,7 +683,7 @@ StorageActors.createActor(
       } else {
         // If we can't find the window by host, fallback to the top window
         // origin attributes.
-        originAttributes = this.storageActor.document.effectiveStoragePrincipal
+        originAttributes = this.storageActor.document?.effectiveStoragePrincipal
           .originAttributes;
       }
 
@@ -691,7 +705,7 @@ StorageActors.createActor(
      */
     onCookieChanged(subject, topic, action) {
       if (
-        topic !== "cookie-changed" ||
+        (topic !== "cookie-changed" && topic !== "private-cookie-changed") ||
         !this.storageActor ||
         !this.storageActor.windows
       ) {
@@ -1124,11 +1138,13 @@ var cookieHelpers = {
 
   addCookieObservers() {
     Services.obs.addObserver(cookieHelpers, "cookie-changed");
+    Services.obs.addObserver(cookieHelpers, "private-cookie-changed");
     return null;
   },
 
   removeCookieObservers() {
     Services.obs.removeObserver(cookieHelpers, "cookie-changed");
+    Services.obs.removeObserver(cookieHelpers, "private-cookie-changed");
     return null;
   },
 
@@ -1139,6 +1155,7 @@ var cookieHelpers = {
 
     switch (topic) {
       case "cookie-changed":
+      case "private-cookie-changed":
         if (data === "batch-deleted") {
           const cookiesNoInterface = subject.QueryInterface(Ci.nsIArray);
           const cookies = [];
@@ -2174,6 +2191,27 @@ StorageActors.createActor(
 
     async getValuesForHost(host, name) {
       if (!name) {
+        // if we get here, we most likely clicked on the refresh button
+        // which called getStoreObjects, itself calling this method,
+        // all that, without having selected any particular cache name.
+        //
+        // Try to detect if a new cache has been added and notify the client
+        // asynchronously, via a RDP event.
+        const previousCaches = [...this.hostVsStores.get(host).keys()];
+        await this.preListStores();
+        const updatedCaches = [...this.hostVsStores.get(host).keys()];
+        const newCaches = updatedCaches.filter(
+          cacheName => !previousCaches.includes(cacheName)
+        );
+        newCaches.forEach(cacheName =>
+          this.onItemUpdated("added", host, [cacheName])
+        );
+        const removedCaches = previousCaches.filter(
+          cacheName => !updatedCaches.includes(cacheName)
+        );
+        removedCaches.forEach(cacheName =>
+          this.onItemUpdated("deleted", host, [cacheName])
+        );
         return [];
       }
       // UI is weird and expect a JSON stringified array... and pass it back :/
@@ -3566,11 +3604,8 @@ const StorageActor = protocol.ActorClassWithSpec(specs.storageSpec, {
   },
 
   isIncludedInTargetExtension(subject) {
-    const { document } = subject;
-    return (
-      document.nodePrincipal.addonId &&
-      document.nodePrincipal.addonId === this.parentActor.addonId
-    );
+    const addonId = getAddonIdForWindowGlobal(subject.windowGlobalChild);
+    return addonId && addonId === this.parentActor.addonId;
   },
 
   isIncludedInTopLevelWindow(window) {

@@ -30,36 +30,35 @@
 
 #define nsHtml5TreeBuilder_cpp__
 
-#include "nsContentUtils.h"
-#include "nsAtom.h"
-#include "nsHtml5AtomTable.h"
-#include "nsHtml5String.h"
-#include "nsNameSpaceManager.h"
-#include "nsIContent.h"
-#include "nsTraceRefcnt.h"
 #include "jArray.h"
-#include "nsHtml5DocumentMode.h"
-#include "nsHtml5ArrayCopy.h"
-#include "nsHtml5Parser.h"
-#include "nsGkAtoms.h"
-#include "nsHtml5TreeOperation.h"
-#include "nsHtml5StateSnapshot.h"
-#include "nsHtml5StackNode.h"
-#include "nsHtml5TreeOpExecutor.h"
-#include "nsHtml5StreamParser.h"
-#include "nsAHtml5TreeBuilderState.h"
-#include "nsHtml5Highlighter.h"
-#include "nsHtml5PlainTextUtils.h"
-#include "nsHtml5ViewSourceUtils.h"
 #include "mozilla/ImportScanner.h"
 #include "mozilla/Likely.h"
-#include "nsIContentHandle.h"
+#include "nsAHtml5TreeBuilderState.h"
+#include "nsAtom.h"
+#include "nsContentUtils.h"
+#include "nsGkAtoms.h"
+#include "nsHtml5ArrayCopy.h"
+#include "nsHtml5AtomTable.h"
+#include "nsHtml5DocumentMode.h"
+#include "nsHtml5Highlighter.h"
 #include "nsHtml5OplessBuilder.h"
+#include "nsHtml5Parser.h"
+#include "nsHtml5PlainTextUtils.h"
+#include "nsHtml5StackNode.h"
+#include "nsHtml5StateSnapshot.h"
+#include "nsHtml5StreamParser.h"
+#include "nsHtml5String.h"
+#include "nsHtml5TreeOperation.h"
+#include "nsHtml5TreeOpExecutor.h"
+#include "nsHtml5ViewSourceUtils.h"
+#include "nsIContent.h"
+#include "nsIContentHandle.h"
+#include "nsNameSpaceManager.h"
+#include "nsTraceRefcnt.h"
 
 #include "nsHtml5AttributeName.h"
 #include "nsHtml5ElementName.h"
 #include "nsHtml5Tokenizer.h"
-#include "nsHtml5MetaScanner.h"
 #include "nsHtml5StackNode.h"
 #include "nsHtml5UTF16Buffer.h"
 #include "nsHtml5StateSnapshot.h"
@@ -544,6 +543,10 @@ void nsHtml5TreeBuilder::zeroOriginatingReplacementCharacter() {
   }
 }
 
+void nsHtml5TreeBuilder::zeroOrReplacementCharacter() {
+  zeroOriginatingReplacementCharacter();
+}
+
 void nsHtml5TreeBuilder::eof() {
   flushCharacters();
   for (;;) {
@@ -605,7 +608,7 @@ void nsHtml5TreeBuilder::eof() {
           NS_HTML5_BREAK(eofloop);
         }
         if (MOZ_UNLIKELY(mViewSource)) {
-          errUnclosedElements(eltPos, nsGkAtoms::_template);
+          errListUnclosedStartTags(0);
         }
         while (currentPtr >= eltPos) {
           pop();
@@ -3183,7 +3186,7 @@ void nsHtml5TreeBuilder::endTagTemplateInHead() {
     errStrayEndTag(nsGkAtoms::_template);
     return;
   }
-  generateImpliedEndTags();
+  generateImpliedEndTagsThoroughly();
   if (!!MOZ_UNLIKELY(mViewSource) && !isCurrent(nsGkAtoms::_template)) {
     errUnclosedElements(eltPos, nsGkAtoms::_template);
   }
@@ -3198,8 +3201,9 @@ void nsHtml5TreeBuilder::endTagTemplateInHead() {
 int32_t
 nsHtml5TreeBuilder::findLastInTableScopeOrRootTemplateTbodyTheadTfoot() {
   for (int32_t i = currentPtr; i > 0; i--) {
-    if (stack[i]->getGroup() == nsHtml5TreeBuilder::TBODY_OR_THEAD_OR_TFOOT ||
-        stack[i]->getGroup() == nsHtml5TreeBuilder::TEMPLATE) {
+    if (stack[i]->ns == kNameSpaceID_XHTML &&
+        (stack[i]->getGroup() == nsHtml5TreeBuilder::TBODY_OR_THEAD_OR_TFOOT ||
+         stack[i]->getGroup() == nsHtml5TreeBuilder::TEMPLATE)) {
       return i;
     }
   }
@@ -3329,6 +3333,31 @@ void nsHtml5TreeBuilder::generateImpliedEndTags() {
   }
 }
 
+void nsHtml5TreeBuilder::generateImpliedEndTagsThoroughly() {
+  for (;;) {
+    switch (stack[currentPtr]->getGroup()) {
+      case CAPTION:
+      case COLGROUP:
+      case DD_OR_DT:
+      case LI:
+      case OPTGROUP:
+      case OPTION:
+      case P:
+      case RB_OR_RTC:
+      case RT_OR_RP:
+      case TBODY_OR_THEAD_OR_TFOOT:
+      case TD_OR_TH:
+      case TR: {
+        pop();
+        continue;
+      }
+      default: {
+        return;
+      }
+    }
+  }
+}
+
 bool nsHtml5TreeBuilder::isSecondOnStackBody() {
   return currentPtr >= 1 && stack[1]->getGroup() == nsHtml5TreeBuilder::BODY;
 }
@@ -3336,7 +3365,7 @@ bool nsHtml5TreeBuilder::isSecondOnStackBody() {
 void nsHtml5TreeBuilder::documentModeInternal(nsHtml5DocumentMode m,
                                               nsHtml5String publicIdentifier,
                                               nsHtml5String systemIdentifier) {
-  if (isSrcdocDocument) {
+  if (forceNoQuirks) {
     quirks = false;
     this->documentMode(STANDARDS_MODE);
     return;
@@ -3895,7 +3924,7 @@ int32_t nsHtml5TreeBuilder::findLastOrRoot(nsAtom* name) {
 
 int32_t nsHtml5TreeBuilder::findLastOrRoot(int32_t group) {
   for (int32_t i = currentPtr; i > 0; i--) {
-    if (stack[i]->getGroup() == group) {
+    if (stack[i]->ns == kNameSpaceID_XHTML && stack[i]->getGroup() == group) {
       return i;
     }
   }
@@ -4453,8 +4482,12 @@ void nsHtml5TreeBuilder::setScriptingEnabled(bool scriptingEnabled) {
   this->scriptingEnabled = scriptingEnabled;
 }
 
+void nsHtml5TreeBuilder::setForceNoQuirks(bool forceNoQuirks) {
+  this->forceNoQuirks = forceNoQuirks;
+}
+
 void nsHtml5TreeBuilder::setIsSrcdocDocument(bool isSrcdocDocument) {
-  this->isSrcdocDocument = isSrcdocDocument;
+  this->setForceNoQuirks(isSrcdocDocument);
 }
 
 void nsHtml5TreeBuilder::flushCharacters() {

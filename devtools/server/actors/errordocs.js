@@ -12,9 +12,25 @@
 // Worker contexts do not support Services; in that case we have to rely
 // on the support URL redirection.
 const Services = require("Services");
-const supportBaseURL = !isWorker
-  ? Services.urlFormatter.formatURLPref("app.support.baseURL")
-  : "https://support.mozilla.org/kb/";
+
+loader.lazyGetter(this, "supportBaseURL", () => {
+  // Fallback URL used for worker targets, as well as when app.support.baseURL
+  // cannot be formatted.
+  let url = "https://support.mozilla.org/kb/";
+
+  if (!isWorker) {
+    try {
+      // formatURLPref might throw if tokens used in app.support.baseURL
+      // are not available for the current binary. See Bug 1755626.
+      url = Services.urlFormatter.formatURLPref("app.support.baseURL");
+    } catch (e) {
+      console.warn(
+        `Failed to format app.support.baseURL, falling back to ${url} (${e.message})`
+      );
+    }
+  }
+  return url;
+});
 
 const baseErrorURL =
   "https://developer.mozilla.org/docs/Web/JavaScript/Reference/Errors/";
@@ -31,6 +47,7 @@ const ErrorDocs = {
   JSMSG_STMT_AFTER_RETURN: "Stmt_after_return",
   JSMSG_NOT_A_CODEPOINT: "Not_a_codepoint",
   JSMSG_BAD_SORT_ARG: "Array_sort_argument",
+  JSMSG_BAD_WITHSORTED_ARG: "Array_withSorted_argument",
   JSMSG_UNEXPECTED_TYPE: "Unexpected_type",
   JSMSG_NOT_DEFINED: "Not_defined",
   JSMSG_NOT_FUNCTION: "Not_a_function",
@@ -111,18 +128,19 @@ const PUBLIC_KEY_PINS_LEARN_MORE =
   "https://developer.mozilla.org/docs/Web/HTTP/Public_Key_Pinning";
 const STRICT_TRANSPORT_SECURITY_LEARN_MORE =
   "https://developer.mozilla.org/docs/Web/HTTP/Headers/Strict-Transport-Security";
-const WEAK_SIGNATURE_ALGORITHM_LEARN_MORE =
-  "https://developer.mozilla.org/docs/Web/Security/Weak_Signature_Algorithm";
 const MIME_TYPE_MISMATCH_LEARN_MORE =
   "https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Content-Type-Options";
 const SOURCE_MAP_LEARN_MORE =
-  "https://developer.mozilla.org/en-US/docs/Tools/Debugger/Source_map_errors";
+  "https://firefox-source-docs.mozilla.org/devtools-user/debugger/source_map_errors/";
 const TLS_LEARN_MORE =
   "https://blog.mozilla.org/security/2018/10/15/removing-old-versions-of-tls/";
 const X_FRAME_OPTIONS_LEARN_MORE =
   "https://developer.mozilla.org/docs/Web/HTTP/Headers/X-Frame-Options";
 const REQUEST_STORAGE_ACCESS_LEARN_MORE =
   "https://developer.mozilla.org/docs/Web/API/Document/requestStorageAccess";
+const DOCTYPE_MODES_LEARN_MORE =
+  "https://developer.mozilla.org/docs/Web/HTML/Quirks_Mode_and_Standards_Mode";
+
 const ErrorCategories = {
   "X-Frame-Options": X_FRAME_OPTIONS_LEARN_MORE,
   "Insecure Password Field": INSECURE_PASSWORDS_LEARN_MORE,
@@ -130,13 +148,13 @@ const ErrorCategories = {
   "Mixed Content Blocker": MIXED_CONTENT_LEARN_MORE,
   "Invalid HPKP Headers": PUBLIC_KEY_PINS_LEARN_MORE,
   "Invalid HSTS Headers": STRICT_TRANSPORT_SECURITY_LEARN_MORE,
-  "SHA-1 Signature": WEAK_SIGNATURE_ALGORITHM_LEARN_MORE,
   "Tracking Protection": TRACKING_PROTECTION_LEARN_MORE,
   MIMEMISMATCH: MIME_TYPE_MISMATCH_LEARN_MORE,
   "source map": SOURCE_MAP_LEARN_MORE,
   TLS: TLS_LEARN_MORE,
   requestStorageAccess: REQUEST_STORAGE_ACCESS_LEARN_MORE,
   HTTPSOnly: supportBaseURL + "https-only-prefs",
+  HTML_PARSER__DOCTYPE: DOCTYPE_MODES_LEARN_MORE,
 };
 
 const baseCorsErrorUrl =
@@ -145,17 +163,17 @@ const corsParams =
   "?utm_source=devtools&utm_medium=firefox-cors-errors&utm_campaign=default";
 const CorsErrorDocs = {
   CORSDisabled: "CORSDisabled",
-  CORSDidNotSucceed: "CORSDidNotSucceed",
+  CORSDidNotSucceed2: "CORSDidNotSucceed",
   CORSOriginHeaderNotAdded: "CORSOriginHeaderNotAdded",
   CORSExternalRedirectNotAllowed: "CORSExternalRedirectNotAllowed",
   CORSRequestNotHttp: "CORSRequestNotHttp",
-  CORSMissingAllowOrigin: "CORSMissingAllowOrigin",
+  CORSMissingAllowOrigin2: "CORSMissingAllowOrigin",
   CORSMultipleAllowOriginNotAllowed: "CORSMultipleAllowOriginNotAllowed",
   CORSAllowOriginNotMatchingOrigin: "CORSAllowOriginNotMatchingOrigin",
   CORSNotSupportingCredentials: "CORSNotSupportingCredentials",
   CORSMethodNotFound: "CORSMethodNotFound",
   CORSMissingAllowCredentials: "CORSMissingAllowCredentials",
-  CORSPreflightDidNotSucceed2: "CORSPreflightDidNotSucceed",
+  CORSPreflightDidNotSucceed3: "CORSPreflightDidNotSucceed",
   CORSInvalidAllowMethod: "CORSInvalidAllowMethod",
   CORSInvalidAllowHeader: "CORSInvalidAllowHeader",
   CORSMissingAllowHeaderFromPreflight2: "CORSMissingAllowHeaderFromPreflight",

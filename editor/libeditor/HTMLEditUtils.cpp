@@ -16,16 +16,18 @@
 #include "mozilla/EditorUtils.h"     // for EditorUtils
 #include "mozilla/dom/Element.h"     // for Element, nsINode
 #include "mozilla/dom/HTMLAnchorElement.h"
+#include "mozilla/dom/HTMLInputElement.h"
 #include "mozilla/dom/Text.h"  // for Text
 
 #include "nsAString.h"  // for nsAString::IsEmpty
 #include "nsAtom.h"     // for nsAtom
 #include "nsCaseTreatment.h"
-#include "nsCOMPtr.h"        // for nsCOMPtr, operator==, etc.
-#include "nsDebug.h"         // for NS_ASSERTION, etc.
-#include "nsElementTable.h"  // for nsHTMLElement
-#include "nsError.h"         // for NS_SUCCEEDED
-#include "nsGkAtoms.h"       // for nsGkAtoms, nsGkAtoms::a, etc.
+#include "nsCOMPtr.h"            // for nsCOMPtr, operator==, etc.
+#include "nsComputedDOMStyle.h"  // for nsComputedDOMStyle
+#include "nsDebug.h"             // for NS_ASSERTION, etc.
+#include "nsElementTable.h"      // for nsHTMLElement
+#include "nsError.h"             // for NS_SUCCEEDED
+#include "nsGkAtoms.h"           // for nsGkAtoms, nsGkAtoms::a, etc.
 #include "nsHTMLTags.h"
 #include "nsLiteralString.h"     // for NS_LITERAL_STRING
 #include "nsNameSpaceManager.h"  // for kNameSpaceID_None
@@ -157,6 +159,16 @@ bool HTMLEditUtils::IsInlineStyle(nsINode* aNode) {
       nsGkAtoms::sup, nsGkAtoms::font);
 }
 
+bool HTMLEditUtils::IsDisplayOutsideInline(const Element& aElement) {
+  RefPtr<const ComputedStyle> elementStyle =
+      nsComputedDOMStyle::GetComputedStyleNoFlush(&aElement);
+  if (!elementStyle) {
+    return false;
+  }
+  return elementStyle->StyleDisplay()->DisplayOutside() ==
+         StyleDisplayOutside::Inline;
+}
+
 bool HTMLEditUtils::IsRemovableInlineStyleElement(Element& aElement) {
   if (!aElement.IsHTMLElement()) {
     return false;
@@ -188,7 +200,7 @@ bool HTMLEditUtils::IsRemovableInlineStyleElement(Element& aElement) {
 /**
  * IsFormatNode() returns true if aNode is a format node.
  */
-bool HTMLEditUtils::IsFormatNode(nsINode* aNode) {
+bool HTMLEditUtils::IsFormatNode(const nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(
       nsGkAtoms::p, nsGkAtoms::pre, nsGkAtoms::h1, nsGkAtoms::h2, nsGkAtoms::h3,
@@ -226,7 +238,7 @@ bool HTMLEditUtils::IsListItem(const nsINode* aNode) {
 /**
  * IsAnyTableElement() returns true if aNode is an html table, td, tr, ...
  */
-bool HTMLEditUtils::IsAnyTableElement(nsINode* aNode) {
+bool HTMLEditUtils::IsAnyTableElement(const nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(
       nsGkAtoms::table, nsGkAtoms::tr, nsGkAtoms::td, nsGkAtoms::th,
@@ -277,7 +289,7 @@ bool HTMLEditUtils::IsTableCellOrCaption(nsINode& aNode) {
 /**
  * IsAnyListElement() returns true if aNode is an html list.
  */
-bool HTMLEditUtils::IsAnyListElement(nsINode* aNode) {
+bool HTMLEditUtils::IsAnyListElement(const nsINode* aNode) {
   MOZ_ASSERT(aNode);
   return aNode->IsAnyOfHTMLElements(nsGkAtoms::ul, nsGkAtoms::ol,
                                     nsGkAtoms::dl);
@@ -286,7 +298,7 @@ bool HTMLEditUtils::IsAnyListElement(nsINode* aNode) {
 /**
  * IsPre() returns true if aNode is an html pre node.
  */
-bool HTMLEditUtils::IsPre(nsINode* aNode) {
+bool HTMLEditUtils::IsPre(const nsINode* aNode) {
   return aNode && aNode->IsHTMLElement(nsGkAtoms::pre);
 }
 
@@ -340,20 +352,16 @@ bool HTMLEditUtils::IsMozDiv(nsINode* aNode) {
 /**
  * IsMailCite() returns true if aNode is an html blockquote with |type=cite|.
  */
-bool HTMLEditUtils::IsMailCite(nsINode* aNode) {
-  MOZ_ASSERT(aNode);
-
+bool HTMLEditUtils::IsMailCite(const Element& aElement) {
   // don't ask me why, but our html mailcites are id'd by "type=cite"...
-  if (aNode->IsElement() &&
-      aNode->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::type,
-                                      u"cite"_ns, eIgnoreCase)) {
+  if (aElement.AttrValueIs(kNameSpaceID_None, nsGkAtoms::type, u"cite"_ns,
+                           eIgnoreCase)) {
     return true;
   }
 
   // ... but our plaintext mailcites by "_moz_quote=true".  go figure.
-  if (aNode->IsElement() &&
-      aNode->AsElement()->AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozquote,
-                                      u"true"_ns, eIgnoreCase)) {
+  if (aElement.AttrValueIs(kNameSpaceID_None, nsGkAtoms::mozquote, u"true"_ns,
+                           eIgnoreCase)) {
     return true;
   }
 
@@ -379,25 +387,24 @@ bool HTMLEditUtils::SupportsAlignAttr(nsINode& aNode) {
       nsGkAtoms::h4, nsGkAtoms::h5, nsGkAtoms::h6);
 }
 
-bool HTMLEditUtils::IsVisibleTextNode(
-    const Text& aText, const Element* aEditingHost /* = nullptr */) {
+bool HTMLEditUtils::IsVisibleTextNode(const Text& aText) {
   if (!aText.TextDataLength()) {
     return false;
   }
 
-  if (!const_cast<Text&>(aText).TextIsOnlyWhitespace()) {
+  Maybe<uint32_t> visibleCharOffset =
+      HTMLEditUtils::GetInclusiveNextNonCollapsibleCharOffset(
+          EditorDOMPointInText(&aText, 0));
+  if (visibleCharOffset.isSome()) {
     return true;
   }
 
-  if (!aEditingHost) {
-    aEditingHost = HTMLEditUtils::
-        GetInclusiveAncestorEditableBlockElementOrInlineEditingHost(aText);
-  }
-  WSScanResult nextWSScanResult =
-      WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-          aEditingHost, EditorRawDOMPoint(&aText, 0));
-  return nextWSScanResult.InNormalWhiteSpacesOrText() &&
-         nextWSScanResult.TextPtr() == &aText;
+  // Now, all characters in aText is collapsible white-spaces.  The node is
+  // invisible if next to block boundary.
+  return !HTMLEditUtils::GetElementOfImmediateBlockBoundary(
+             aText, WalkTreeDirection::Forward) &&
+         !HTMLEditUtils::GetElementOfImmediateBlockBoundary(
+             aText, WalkTreeDirection::Backward);
 }
 
 bool HTMLEditUtils::IsInVisibleTextFrames(nsPresContext* aPresContext,
@@ -437,69 +444,126 @@ bool HTMLEditUtils::IsInVisibleTextFrames(nsPresContext* aPresContext,
   return NS_SUCCEEDED(rv) && isVisible;
 }
 
-bool HTMLEditUtils::IsVisibleBRElement(
-    const nsIContent& aContent, const Element* aEditingHost /* = nullptr */) {
-  if (!aContent.IsHTMLElement(nsGkAtoms::br)) {
-    return false;
+Element* HTMLEditUtils::GetElementOfImmediateBlockBoundary(
+    const nsIContent& aContent, const WalkTreeDirection aDirection) {
+  MOZ_ASSERT(aContent.IsHTMLElement(nsGkAtoms::br) || aContent.IsText());
+
+  // First, we get a block container.  This is not designed for reaching
+  // no block boundaries in the tree.
+  Element* maybeNonEditableAncestorBlock = HTMLEditUtils::GetAncestorElement(
+      aContent, HTMLEditUtils::ClosestBlockElement);
+  if (NS_WARN_IF(!maybeNonEditableAncestorBlock)) {
+    return nullptr;
   }
-  // Check if there is another element or text node in block after current
-  // <br> element.
-  // Note that even if following node is non-editable, it may make the
-  // <br> element visible if it just exists.
-  // E.g., foo<br><button contenteditable="false">button</button>
-  // However, we need to ignore invisible data nodes like comment node.
-  if (!aEditingHost) {
-    aEditingHost = HTMLEditUtils::
-        GetInclusiveAncestorEditableBlockElementOrInlineEditingHost(aContent);
-    if (NS_WARN_IF(!aEditingHost)) {
-      return false;
+
+  auto getNextContent = [&aDirection, &maybeNonEditableAncestorBlock](
+                            const nsIContent& aContent) -> nsIContent* {
+    return aDirection == WalkTreeDirection::Forward
+               ? HTMLEditUtils::GetNextContent(
+                     aContent,
+                     {WalkTreeOption::IgnoreDataNodeExceptText,
+                      WalkTreeOption::StopAtBlockBoundary},
+                     maybeNonEditableAncestorBlock)
+               : HTMLEditUtils::GetPreviousContent(
+                     aContent,
+                     {WalkTreeOption::IgnoreDataNodeExceptText,
+                      WalkTreeOption::StopAtBlockBoundary},
+                     maybeNonEditableAncestorBlock);
+  };
+
+  // Then, scan block element boundary while we don't see visible things.
+  const bool isBRElement = aContent.IsHTMLElement(nsGkAtoms::br);
+  for (nsIContent* nextContent = getNextContent(aContent); nextContent;
+       nextContent = getNextContent(*nextContent)) {
+    if (nextContent->IsElement()) {
+      // Break is right before a child block, it's not visible
+      if (HTMLEditUtils::IsBlockElement(*nextContent)) {
+        return nextContent->AsElement();
+      }
+
+      // XXX How about other non-HTML elements?  Assume they are styled as
+      //     blocks for now.
+      if (!nextContent->IsHTMLElement()) {
+        return nextContent->AsElement();
+      }
+
+      // If there is a visible content which generates something visible,
+      // stop scanning.
+      if (nextContent->IsAnyOfHTMLElements(
+              nsGkAtoms::applet, nsGkAtoms::iframe, nsGkAtoms::img,
+              nsGkAtoms::meter, nsGkAtoms::progress, nsGkAtoms::select,
+              nsGkAtoms::textarea)) {
+        return nullptr;
+      }
+
+      if (nextContent->IsHTMLElement(nsGkAtoms::br)) {
+        // If aContent is a <br> element, another <br> element prevents the
+        // block boundary special handling.
+        if (isBRElement) {
+          return nullptr;
+        }
+
+        MOZ_ASSERT(aContent.IsText());
+        // Following <br> element always hides its following block boundary.
+        // I.e., white-spaces is at end of the text node is visible.
+        if (aDirection == WalkTreeDirection::Forward) {
+          return nullptr;
+        }
+        // Otherwise, if text node follows <br> element, its white-spaces at
+        // start of the text node are invisible.  In this case, we return
+        // the found <br> element.
+        return nextContent->AsElement();
+      }
+
+      if (HTMLInputElement* inputElement =
+              HTMLInputElement::FromNode(nextContent)) {
+        if (inputElement->ControlType() == FormControlType::InputHidden) {
+          continue;  // Keep scanning next one due to invisible form control.
+        }
+        return nullptr;  // Followed by a visible form control so that visible
+                         // <br>.
+      }
+
+      continue;
     }
-  }
-  nsIContent* nextContent =
-      HTMLEditUtils::GetNextContent(aContent,
-                                    {WalkTreeOption::IgnoreDataNodeExceptText,
-                                     WalkTreeOption::StopAtBlockBoundary},
-                                    aEditingHost);
-  if (nextContent && nextContent->IsHTMLElement(nsGkAtoms::br)) {
-    return true;
+
+    Text* textNode = Text::FromNode(nextContent);
+    if (NS_WARN_IF(!textNode)) {
+      continue;  // XXX Is this possible?
+    }
+    if (!textNode->TextLength()) {
+      continue;  // empty invisible text node, keep scanning next one.
+    }
+    if (!textNode->TextIsOnlyWhitespace()) {
+      return nullptr;  // found a visible text node.
+    }
+    const nsTextFragment& textFragment = textNode->TextFragment();
+    const bool isWhiteSpacePreformatted =
+        EditorUtils::IsWhiteSpacePreformatted(*textNode);
+    const bool isNewLinePreformatted =
+        EditorUtils::IsNewLinePreformatted(*textNode);
+    if (!isWhiteSpacePreformatted && !isNewLinePreformatted) {
+      // if the white-space only text node is not preformatted, ignore it.
+      continue;
+    }
+    for (uint32_t i = 0; i < textFragment.GetLength(); i++) {
+      if (textFragment.CharAt(i) == HTMLEditUtils::kNewLine) {
+        if (isNewLinePreformatted) {
+          return nullptr;  // found a visible text node.
+        }
+        continue;
+      }
+      if (isWhiteSpacePreformatted) {
+        return nullptr;  // found a visible text node.
+      }
+    }
+    // All white-spaces in the text node is invisible, keep scanning next one.
   }
 
-  // A single line break before a block boundary is not displayed, so e.g.
-  // foo<p>bar<br></p> and foo<br><p>bar</p> display the same as foo<p>bar</p>.
-  // But if there are multiple <br>s in a row, all but the last are visible.
-  if (!nextContent) {
-    // This break is trailer in block, it's not visible
-    return false;
-  }
-  if (HTMLEditUtils::IsBlockElement(*nextContent)) {
-    // Break is right before a block, it's not visible
-    return false;
-  }
-
-  // If there's an inline node after this one that's not a break, and also a
-  // prior break, this break must be visible.
-  // Note that even if previous node is non-editable, it may make the
-  // <br> element visible if it just exists.
-  // E.g., <button contenteditable="false"><br>foo
-  // However, we need to ignore invisible data nodes like comment node.
-  nsIContent* previousContent = HTMLEditUtils::GetPreviousContent(
-      aContent,
-      {WalkTreeOption::IgnoreDataNodeExceptText,
-       WalkTreeOption::StopAtBlockBoundary},
-      aEditingHost);
-  if (previousContent && previousContent->IsHTMLElement(nsGkAtoms::br)) {
-    return true;
-  }
-
-  // Sigh.  We have to use expensive white-space calculation code to
-  // determine what is going on
-  EditorRawDOMPoint afterBRElement(EditorRawDOMPoint::After(aContent));
-  if (NS_WARN_IF(!afterBRElement.IsSet())) {
-    return false;
-  }
-  return !WSRunScanner::ScanNextVisibleNodeOrBlockBoundary(
-              const_cast<Element*>(aEditingHost), afterBRElement)
-              .ReachedBlockBoundary();
+  // There is no visible content and reached current block boundary.  Then,
+  // the <br> element is the last content in the block and invisible.
+  // XXX Should we treat it visible if it's the only child of a block?
+  return maybeNonEditableAncestorBlock;
 }
 
 bool HTMLEditUtils::IsEmptyNode(nsPresContext* aPresContext,
@@ -513,31 +577,28 @@ bool HTMLEditUtils::IsEmptyNode(nsPresContext* aPresContext,
     *aSeenBR = false;
   }
 
-  Element* maybeParentBlockElement =
-      aNode.IsContent() && EditorUtils::IsEditableContent(*aNode.AsContent(),
-                                                          EditorType::HTML)
-          ? GetInclusiveAncestorEditableBlockElementOrInlineEditingHost(
-                *aNode.AsContent())
-          : nullptr;
-
   if (const Text* text = Text::FromNode(&aNode)) {
     return aOptions.contains(EmptyCheckOption::SafeToAskLayout)
                ? !IsInVisibleTextFrames(aPresContext, *text)
-               : !IsVisibleTextNode(*text, maybeParentBlockElement);
+               : !IsVisibleTextNode(*text);
   }
 
-  // if it's not a text node (handled above) and it's not a container,
-  // then we don't call it empty (it's an <hr>, or <br>, etc.).
-  // Also, if it's an anchor then don't treat it as empty - even though
-  // anchors are containers, named anchors are "empty" but we don't
-  // want to treat them as such.  Also, don't call ListItems or table
-  // cells empty if caller desires.  Form Widgets not empty.
   // XXX Why do we treat non-content node is not empty?
   // XXX Why do we treat non-text data node may be not empty?
-  if (!aNode.IsContent() || !IsContainerNode(*aNode.AsContent()) ||
-      IsNamedAnchor(&aNode) || IsFormWidget(&aNode) ||
+  if (!aNode.IsContent() ||
+      // If it's not a container such as an <hr> or <br>, etc, it should be
+      // treated as not empty.
+      !IsContainerNode(*aNode.AsContent()) ||
+      // If it's a named anchor, we shouldn't treat it as empty because it
+      // has special meaning even if invisible.
+      IsNamedAnchor(&aNode) ||
+      // Form widgets should be treated as not empty because they have special
+      // meaning even if invisible.
+      IsFormWidget(&aNode) ||
+      // If the caller treats a list item element as visible, respect it.
       (aOptions.contains(EmptyCheckOption::TreatListItemAsVisible) &&
        IsListItem(&aNode)) ||
+      // If the caller treats a table cell element as visible, respect it.
       (aOptions.contains(EmptyCheckOption::TreatTableCellAsVisible) &&
        IsTableCell(&aNode))) {
     return false;
@@ -546,13 +607,12 @@ bool HTMLEditUtils::IsEmptyNode(nsPresContext* aPresContext,
   const bool isListItem = IsListItem(&aNode);
   const bool isTableCell = IsTableCell(&aNode);
 
-  // loop over children of node. if no children, or all children are either
-  // empty text nodes or non-editable, then node qualifies as empty
   bool seenBR = aSeenBR && *aSeenBR;
   for (nsIContent* childContent = aNode.GetFirstChild(); childContent;
        childContent = childContent->GetNextSibling()) {
     // Is the child editable and non-empty?  if so, return false
-    if (!EditorUtils::IsEditableContent(*childContent, EditorType::HTML)) {
+    if (!aOptions.contains(EmptyCheckOption::IgnoreEditableState) &&
+        !EditorUtils::IsEditableContent(*childContent, EditorType::HTML)) {
       continue;
     }
 
@@ -560,7 +620,7 @@ bool HTMLEditUtils::IsEmptyNode(nsPresContext* aPresContext,
       // break out if we find we aren't empty
       if (aOptions.contains(EmptyCheckOption::SafeToAskLayout)
               ? IsInVisibleTextFrames(aPresContext, *text)
-              : IsVisibleTextNode(*text, maybeParentBlockElement)) {
+              : IsVisibleTextNode(*text)) {
         return false;
       }
       continue;
@@ -612,6 +672,31 @@ bool HTMLEditUtils::IsEmptyNode(nsPresContext* aPresContext,
     *aSeenBR = seenBR;
   }
   return true;
+}
+
+bool HTMLEditUtils::ShouldInsertLinefeedCharacter(
+    EditorDOMPoint& aPointToInsert, const Element& aEditingHost) {
+  MOZ_ASSERT(aPointToInsert.IsSetAndValid());
+
+  if (!aPointToInsert.IsInContentNode()) {
+    return false;
+  }
+
+  // closestEditableBlockElement can be nullptr if aEditingHost is an inline
+  // element.
+  Element* closestEditableBlockElement =
+      HTMLEditUtils::GetInclusiveAncestorElement(
+          *aPointToInsert.ContainerAsContent(),
+          HTMLEditUtils::ClosestEditableBlockElement);
+
+  // If and only if the nearest block is the editing host or its parent,
+  // and the outer display value of the editing host is inline, and new
+  // line character is preformatted, we should insert a linefeed.
+  return (!closestEditableBlockElement ||
+          closestEditableBlockElement == &aEditingHost) &&
+         HTMLEditUtils::IsDisplayOutsideInline(aEditingHost) &&
+         EditorUtils::IsNewLinePreformatted(
+             *aPointToInsert.ContainerAsContent());
 }
 
 // We use bitmasks to test containment of elements. Elements are marked to be
@@ -1030,7 +1115,7 @@ nsIContent* HTMLEditUtils::GetNextContent(
       "GetNextContent() doesn't assume that the start point is a "
       "data node except text node");
 
-  EditorRawDOMPoint point(aPoint);
+  auto point = aPoint.template To<EditorRawDOMPoint>();
 
   // if the container is a text node, use its location instead
   if (point.IsInTextNode()) {
@@ -1390,21 +1475,146 @@ EditorDOMPointType HTMLEditUtils::GetNextEditablePoint(
 }
 
 // static
-Element*
-HTMLEditUtils::GetInclusiveAncestorEditableBlockElementOrInlineEditingHost(
-    const nsIContent& aContent) {
-  MOZ_ASSERT(EditorUtils::IsEditableContent(aContent, EditorType::HTML));
-  Element* maybeInlineEditingHost = nullptr;
-  for (Element* element : aContent.InclusiveAncestorsOfType<Element>()) {
-    if (!EditorUtils::IsEditableContent(*element, EditorType::HTML)) {
-      return maybeInlineEditingHost;
+Element* HTMLEditUtils::GetAncestorElement(
+    const nsIContent& aContent, const AncestorTypes& aAncestorTypes,
+    const Element* aAncestorLimiter /* = nullptr */) {
+  MOZ_ASSERT(
+      aAncestorTypes.contains(AncestorType::ClosestBlockElement) ||
+      aAncestorTypes.contains(AncestorType::MostDistantInlineElementInBlock));
+
+  if (&aContent == aAncestorLimiter) {
+    return nullptr;
+  }
+
+  const Element* theBodyElement = aContent.OwnerDoc()->GetBody();
+  const Element* theDocumentElement = aContent.OwnerDoc()->GetDocumentElement();
+  Element* lastAncestorElement = nullptr;
+  const bool editableElementOnly =
+      aAncestorTypes.contains(AncestorType::EditableElement);
+  const bool lookingForClosesetBlockElement =
+      aAncestorTypes.contains(AncestorType::ClosestBlockElement);
+  const bool lookingForMostDistantInlineElementInBlock =
+      aAncestorTypes.contains(AncestorType::MostDistantInlineElementInBlock);
+  const bool ignoreHRElement =
+      aAncestorTypes.contains(AncestorType::IgnoreHRElement);
+  auto isSerachingElementType = [&](const nsIContent& aContent) -> bool {
+    if (!aContent.IsElement() ||
+        (ignoreHRElement && aContent.IsHTMLElement(nsGkAtoms::hr))) {
+      return false;
+    }
+    if (editableElementOnly &&
+        !EditorUtils::IsEditableContent(aContent, EditorType::HTML)) {
+      return false;
+    }
+    return (lookingForClosesetBlockElement &&
+            HTMLEditUtils::IsBlockElement(aContent)) ||
+           (lookingForMostDistantInlineElementInBlock &&
+            HTMLEditUtils::IsInlineElement(aContent));
+  };
+  for (Element* element : aContent.AncestorsOfType<Element>()) {
+    if (editableElementOnly &&
+        !EditorUtils::IsEditableContent(*element, EditorType::HTML)) {
+      return lastAncestorElement && isSerachingElementType(*lastAncestorElement)
+                 ? lastAncestorElement  // editing host (can be inline element)
+                 : nullptr;
+    }
+    if (ignoreHRElement && element->IsHTMLElement(nsGkAtoms::hr)) {
+      if (element == aAncestorLimiter) {
+        break;
+      }
+      continue;
     }
     if (HTMLEditUtils::IsBlockElement(*element)) {
-      return element;
+      if (lookingForClosesetBlockElement) {
+        return element;  // closest block element
+      }
+      MOZ_ASSERT_IF(lastAncestorElement,
+                    HTMLEditUtils::IsInlineElement(*lastAncestorElement));
+      return lastAncestorElement;  // the last inline element which we found
     }
-    maybeInlineEditingHost = element;
+    if (element == aAncestorLimiter || element == theBodyElement ||
+        element == theDocumentElement) {
+      break;
+    }
+    lastAncestorElement = element;
   }
-  return maybeInlineEditingHost;
+  return lastAncestorElement && isSerachingElementType(*lastAncestorElement)
+             ? lastAncestorElement
+             : nullptr;
+}
+
+// static
+Element* HTMLEditUtils::GetInclusiveAncestorElement(
+    const nsIContent& aContent, const AncestorTypes& aAncestorTypes,
+    const Element* aAncestorLimiter /* = nullptr */) {
+  MOZ_ASSERT(
+      aAncestorTypes.contains(AncestorType::ClosestBlockElement) ||
+      aAncestorTypes.contains(AncestorType::MostDistantInlineElementInBlock));
+
+  const Element* theBodyElement = aContent.OwnerDoc()->GetBody();
+  const Element* theDocumentElement = aContent.OwnerDoc()->GetDocumentElement();
+  const bool editableElementOnly =
+      aAncestorTypes.contains(AncestorType::EditableElement);
+  const bool lookingForClosesetBlockElement =
+      aAncestorTypes.contains(AncestorType::ClosestBlockElement);
+  const bool lookingForMostDistantInlineElementInBlock =
+      aAncestorTypes.contains(AncestorType::MostDistantInlineElementInBlock);
+  const bool ignoreHRElement =
+      aAncestorTypes.contains(AncestorType::IgnoreHRElement);
+  auto isSerachingElementType = [&](const nsIContent& aContent) -> bool {
+    if (!aContent.IsElement() ||
+        (ignoreHRElement && aContent.IsHTMLElement(nsGkAtoms::hr))) {
+      return false;
+    }
+    if (editableElementOnly &&
+        !EditorUtils::IsEditableContent(aContent, EditorType::HTML)) {
+      return false;
+    }
+    return (lookingForClosesetBlockElement &&
+            HTMLEditUtils::IsBlockElement(aContent)) ||
+           (lookingForMostDistantInlineElementInBlock &&
+            HTMLEditUtils::IsInlineElement(aContent));
+  };
+
+  // If aContent is the body element or the document element, we shouldn't climb
+  // up to its parent.
+  if (editableElementOnly &&
+      (&aContent == theBodyElement || &aContent == theDocumentElement)) {
+    return isSerachingElementType(aContent)
+               ? const_cast<Element*>(aContent.AsElement())
+               : nullptr;
+  }
+
+  // If aContent is a block element, we don't need to climb up the tree.
+  // Consider the result right now.
+  if (HTMLEditUtils::IsBlockElement(aContent) &&
+      !(ignoreHRElement && aContent.IsHTMLElement(nsGkAtoms::hr))) {
+    return isSerachingElementType(aContent)
+               ? const_cast<Element*>(aContent.AsElement())
+               : nullptr;
+  }
+
+  // If aContent is the last element to search range because of the parent
+  // element type, consider the result before calling GetAncestorElement()
+  // because it won't return aContent.
+  if (!aContent.GetParent() ||
+      (editableElementOnly && !EditorUtils::IsEditableContent(
+                                  *aContent.GetParent(), EditorType::HTML)) ||
+      (!lookingForClosesetBlockElement &&
+       HTMLEditUtils::IsBlockElement(*aContent.GetParent()) &&
+       !(ignoreHRElement &&
+         aContent.GetParent()->IsHTMLElement(nsGkAtoms::hr)))) {
+    return isSerachingElementType(aContent)
+               ? const_cast<Element*>(aContent.AsElement())
+               : nullptr;
+  }
+
+  if (&aContent == aAncestorLimiter) {
+    return nullptr;
+  }
+
+  return HTMLEditUtils::GetAncestorElement(aContent, aAncestorTypes,
+                                           aAncestorLimiter);
 }
 
 // static
@@ -1530,11 +1740,12 @@ EditorDOMPointType HTMLEditUtils::GetBetterInsertionPointFor(
     return EditorDOMPointType();
   }
 
-  EditorDOMPointType pointToInsert(
-      aPointToInsert.GetNonAnonymousSubtreePoint());
-  if (NS_WARN_IF(!pointToInsert.IsSet()) ||
-      NS_WARN_IF(!pointToInsert.GetContainer()->IsInclusiveDescendantOf(
-          &aEditingHost))) {
+  auto pointToInsert =
+      aPointToInsert.template GetNonAnonymousSubtreePoint<EditorDOMPointType>();
+  if (MOZ_UNLIKELY(
+          NS_WARN_IF(!pointToInsert.IsSet()) ||
+          NS_WARN_IF(!pointToInsert.GetContainer()->IsInclusiveDescendantOf(
+              &aEditingHost)))) {
     // Cannot insert aContentToInsert into this DOM tree.
     return EditorDOMPointType();
   }
@@ -1579,7 +1790,8 @@ EditorDOMPointType HTMLEditUtils::GetBetterInsertionPointFor(
     return pointToInsert;
   }
 
-  return forwardScanFromPointToInsertResult.RawPointAfterContent();
+  return forwardScanFromPointToInsertResult
+      .template PointAfterContent<EditorDOMPointType>();
 }
 
 }  // namespace mozilla

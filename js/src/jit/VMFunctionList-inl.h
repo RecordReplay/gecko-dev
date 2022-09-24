@@ -13,6 +13,7 @@
 #include "builtin/RegExp.h"
 #include "builtin/String.h"
 #include "jit/BaselineIC.h"
+#include "jit/Ion.h"
 #include "jit/IonIC.h"
 #include "jit/TrialInlining.h"
 #include "jit/VMFunctions.h"
@@ -22,6 +23,7 @@
 #include "vm/EqualityOperations.h"
 #include "vm/Instrumentation.h"
 #include "vm/Interpreter.h"
+#include "vm/Iteration.h"
 #include "vm/TypedArrayObject.h"
 
 #include "jit/BaselineFrame-inl.h"
@@ -35,10 +37,13 @@ namespace jit {
 // function to be called. This list must be sorted on the name field.
 #define VMFUNCTION_LIST(_)                                                     \
   _(AddOrUpdateSparseElementHelper, js::AddOrUpdateSparseElementHelper)        \
+  _(AddSlotAndCallAddPropHook, js::AddSlotAndCallAddPropHook)                  \
   _(ArgumentsObjectCreateForInlinedIon,                                        \
     js::ArgumentsObject::createForInlinedIon)                                  \
   _(ArgumentsObjectCreateForIon, js::ArgumentsObject::createForIon)            \
+  _(ArgumentsSliceDense, js::ArgumentsSliceDense)                              \
   _(ArrayConstructorOneArg, js::ArrayConstructorOneArg)                        \
+  _(ArrayFromArgumentsObject, js::ArrayFromArgumentsObject)                    \
   _(ArrayJoin, js::jit::ArrayJoin)                                             \
   _(ArrayPushDense, js::jit::ArrayPushDense)                                   \
   _(ArraySliceDense, js::ArraySliceDense)                                      \
@@ -52,6 +57,7 @@ namespace jit {
   _(AtomicsOr64, js::jit::AtomicsOr64)                                         \
   _(AtomicsSub64, js::jit::AtomicsSub64)                                       \
   _(AtomicsXor64, js::jit::AtomicsXor64)                                       \
+  _(AtomizeString, js::AtomizeString)                                          \
   _(BaselineCompileFromBaselineInterpreter,                                    \
     js::jit::BaselineCompileFromBaselineInterpreter)                           \
   _(BaselineDebugPrologue, js::jit::DebugPrologue)                             \
@@ -109,7 +115,6 @@ namespace jit {
   _(CreateGeneratorFromFrame, js::jit::CreateGeneratorFromFrame)               \
   _(CreateThisFromIC, js::jit::CreateThisFromIC)                               \
   _(CreateThisFromIon, js::jit::CreateThisFromIon)                             \
-  _(CreateThisWithTemplate, js::CreateThisWithTemplate)                        \
   _(DebugAfterYield, js::jit::DebugAfterYield)                                 \
   _(DebugEpilogueOnBaselineReturn, js::jit::DebugEpilogueOnBaselineReturn)     \
   _(DebugLeaveLexicalEnv, js::jit::DebugLeaveLexicalEnv)                       \
@@ -183,9 +188,10 @@ namespace jit {
   _(IsPossiblyWrappedTypedArray, js::jit::IsPossiblyWrappedTypedArray)         \
   _(IsPrototypeOf, js::IsPrototypeOf)                                          \
   _(Lambda, js::Lambda)                                                        \
-  _(LambdaArrow, js::LambdaArrow)                                              \
   _(LeaveWith, js::jit::LeaveWith)                                             \
   _(LoadAliasedDebugVar, js::LoadAliasedDebugVar)                              \
+  _(MapObjectGet, js::jit::MapObjectGet)                                       \
+  _(MapObjectHas, js::jit::MapObjectHas)                                       \
   _(MutatePrototype, js::jit::MutatePrototype)                                 \
   _(NamedLambdaObjectCreateTemplateObject,                                     \
     js::NamedLambdaObject::createTemplateObject)                               \
@@ -193,14 +199,16 @@ namespace jit {
   _(NewArgumentsObject, js::jit::NewArgumentsObject)                           \
   _(NewArrayIterator, js::NewArrayIterator)                                    \
   _(NewArrayObjectBaselineFallback, js::NewArrayObjectBaselineFallback)        \
+  _(NewArrayObjectEnsureDenseInitLength,                                       \
+    js::jit::NewArrayObjectEnsureDenseInitLength)                              \
   _(NewArrayObjectOptimzedFallback, js::NewArrayObjectOptimizedFallback)       \
   _(NewArrayOperation, js::NewArrayOperation)                                  \
   _(NewArrayWithShape, js::NewArrayWithShape)                                  \
   _(NewCallObject, js::jit::NewCallObject)                                     \
   _(NewObjectOperation, js::NewObjectOperation)                                \
-  _(NewObjectOperationWithTemplate, js::NewObjectOperationWithTemplate)        \
   _(NewPlainObjectBaselineFallback, js::NewPlainObjectBaselineFallback)        \
   _(NewPlainObjectOptimizedFallback, js::NewPlainObjectOptimizedFallback)      \
+  _(NewPrivateName, js::NewPrivateName)                                        \
   _(NewRegExpStringIterator, js::NewRegExpStringIterator)                      \
   _(NewStringIterator, js::NewStringIterator)                                  \
   _(NewStringObject, js::jit::NewStringObject)                                 \
@@ -214,8 +222,6 @@ namespace jit {
   _(ObjectCreateWithTemplate, js::ObjectCreateWithTemplate)                    \
   _(ObjectWithProtoOperation, js::ObjectWithProtoOperation)                    \
   _(OnDebuggerStatement, js::jit::OnDebuggerStatement)                         \
-  _(OptimizeSpreadCall, js::OptimizeSpreadCall)                                \
-  _(PopLexicalEnv, js::jit::PopLexicalEnv)                                     \
   _(ProcessCallSiteObjOperation, js::ProcessCallSiteObjOperation)              \
   _(ProxyGetProperty, js::ProxyGetProperty)                                    \
   _(ProxyGetPropertyByValue, js::ProxyGetPropertyByValue)                      \
@@ -235,9 +241,11 @@ namespace jit {
   _(SameValue, js::SameValue)                                                  \
   _(SetArrayLength, js::jit::SetArrayLength)                                   \
   _(SetDenseElement, js::jit::SetDenseElement)                                 \
+  _(SetElementSuper, js::SetElementSuper)                                      \
   _(SetFunctionName, js::SetFunctionName)                                      \
   _(SetIntrinsicOperation, js::SetIntrinsicOperation)                          \
   _(SetObjectElementWithReceiver, js::SetObjectElementWithReceiver)            \
+  _(SetObjectHas, js::jit::SetObjectHas)                                       \
   _(SetPropertySuper, js::SetPropertySuper)                                    \
   _(StartDynamicModuleImport, js::StartDynamicModuleImport)                    \
   _(StringBigIntGreaterThanOrEqual,                                            \
@@ -258,11 +266,9 @@ namespace jit {
   _(StringsEqual, js::jit::StringsEqual<js::jit::EqualityKind::Equal>)         \
   _(StringsNotEqual, js::jit::StringsEqual<js::jit::EqualityKind::NotEqual>)   \
   _(SubstringKernel, js::SubstringKernel)                                      \
-  _(ThrowBadDerivedReturn, js::jit::ThrowBadDerivedReturn)                     \
   _(ThrowBadDerivedReturnOrUninitializedThis,                                  \
     js::jit::ThrowBadDerivedReturnOrUninitializedThis)                         \
   _(ThrowCheckIsObject, js::ThrowCheckIsObject)                                \
-  _(ThrowHomeObjectNotObject, js::ThrowHomeObjectNotObject)                    \
   _(ThrowInitializedThis, js::ThrowInitializedThis)                            \
   _(ThrowMsgOperation, js::ThrowMsgOperation)                                  \
   _(ThrowObjectCoercible, js::ThrowObjectCoercible)                            \
@@ -270,7 +276,9 @@ namespace jit {
   _(ThrowRuntimeLexicalError, js::jit::ThrowRuntimeLexicalError)               \
   _(ThrowUninitializedThis, js::ThrowUninitializedThis)                        \
   _(ToBigInt, js::ToBigInt)                                                    \
-  _(ToStringSlow, js::ToStringSlow<CanGC>)
+  _(ToStringSlow, js::ToStringSlow<CanGC>)                                     \
+  _(ValueToIterator, js::ValueToIterator)                                      \
+  _(VarEnvironmentObjectCreate, js::VarEnvironmentObject::create)
 
 // The list below is for tail calls. The third argument specifies the number of
 // non-argument Values the VM wrapper should pop from the stack. This is used

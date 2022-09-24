@@ -14,30 +14,31 @@
 #include <string.h>  // for memcpy
 #include <utility>   // for move
 
-#include "jsapi.h"  // for JS_ReportErrorNumberASCII, JS_CopyStringCharsZ
-
 #include "debugger/Debugger.h"  // for DebuggerSourceReferent, Debugger
 #include "debugger/Script.h"    // for DebuggerScript
 #include "gc/Tracer.h"  // for TraceManuallyBarrieredCrossCompartmentEdge
 #include "js/CompilationAndEvaluation.h"  // for Compile
-#include "js/experimental/TypedData.h"    // for JS_NewUint8Array
-#include "js/friend/ErrorMessages.h"      // for GetErrorMessage, JSMSG_*
-#include "js/SourceText.h"                // for JS::SourceOwnership
-#include "vm/BytecodeUtil.h"              // for JSDVG_SEARCH_STACK
-#include "vm/JSContext.h"                 // for JSContext (ptr only)
-#include "vm/JSObject.h"                  // for JSObject, RequireObject
-#include "vm/JSScript.h"          // for ScriptSource, ScriptSourceObject
+#include "js/ErrorReport.h"  // for JS_ReportErrorASCII,  JS_ReportErrorNumberASCII
+#include "js/experimental/TypedData.h"  // for JS_NewUint8Array
+#include "js/friend/ErrorMessages.h"    // for GetErrorMessage, JSMSG_*
+#include "js/SourceText.h"              // for JS::SourceOwnership
+#include "js/String.h"                  // for JS_CopyStringCharsZ
+#include "vm/BytecodeUtil.h"            // for JSDVG_SEARCH_STACK
+#include "vm/JSContext.h"               // for JSContext (ptr only)
+#include "vm/JSObject.h"                // for JSObject, RequireObject
+#include "vm/JSScript.h"                // for ScriptSource, ScriptSourceObject
 #include "vm/StringType.h"        // for NewStringCopyZ, JSString (ptr only)
 #include "vm/TypedArrayObject.h"  // for TypedArrayObject, JSObject::is
 #include "wasm/WasmCode.h"        // for Metadata
 #include "wasm/WasmDebug.h"       // for DebugState
 #include "wasm/WasmInstance.h"    // for Instance
 #include "wasm/WasmJS.h"          // for WasmInstanceObject
-#include "wasm/WasmTypes.h"       // for Bytes, RootedWasmInstanceObject
+#include "wasm/WasmTypeDecls.h"   // for Bytes, RootedWasmInstanceObject
 
 #include "debugger/Debugger-inl.h"  // for Debugger::fromJSObject
 #include "vm/JSObject-inl.h"        // for InitClass
 #include "vm/NativeObject-inl.h"    // for NewTenuredObjectWithGivenProto
+#include "wasm/WasmInstance-inl.h"
 
 namespace js {
 class GlobalObject;
@@ -59,14 +60,12 @@ const JSClassOps DebuggerSource::classOps_ = {
     nullptr,                          // mayResolve
     nullptr,                          // finalize
     nullptr,                          // call
-    nullptr,                          // hasInstance
     nullptr,                          // construct
     CallTraceMethod<DebuggerSource>,  // trace
 };
 
 const JSClass DebuggerSource::class_ = {
-    "Source", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS),
-    &classOps_};
+    "Source", JSCLASS_HAS_RESERVED_SLOTS(RESERVED_SLOTS), &classOps_};
 
 /* static */
 NativeObject* DebuggerSource::initClass(JSContext* cx,
@@ -86,8 +85,9 @@ DebuggerSource* DebuggerSource::create(JSContext* cx, HandleObject proto,
     return nullptr;
   }
   sourceObj->setReservedSlot(OWNER_SLOT, ObjectValue(*debugger));
-  referent.get().match(
-      [&](auto sourceHandle) { sourceObj->setPrivateGCThing(sourceHandle); });
+  referent.get().match([&](auto sourceHandle) {
+    sourceObj->setReservedSlotGCThingAsPrivate(SOURCE_SLOT, sourceHandle);
+  });
 
   return sourceObj;
 }
@@ -100,7 +100,7 @@ Debugger* DebuggerSource::owner() const {
 
 // For internal use only.
 NativeObject* DebuggerSource::getReferentRawObject() const {
-  return static_cast<NativeObject*>(getPrivate());
+  return maybePtrFromReservedSlot<NativeObject>(SOURCE_SLOT);
 }
 
 DebuggerSourceReferent DebuggerSource::getReferent() const {
@@ -117,10 +117,9 @@ void DebuggerSource::trace(JSTracer* trc) {
   // There is a barrier on private pointers, so the Unbarriered marking
   // is okay.
   if (JSObject* referent = getReferentRawObject()) {
-    TraceManuallyBarrieredCrossCompartmentEdge(
-        trc, static_cast<JSObject*>(this), &referent,
-        "Debugger.Source referent");
-    setPrivateUnbarriered(referent);
+    TraceManuallyBarrieredCrossCompartmentEdge(trc, this, &referent,
+                                               "Debugger.Source referent");
+    setReservedSlotGCThingAsPrivateUnbarriered(SOURCE_SLOT, referent);
   }
 }
 
@@ -173,7 +172,6 @@ struct MOZ_STACK_CLASS DebuggerSource::CallData {
   bool getStartLine();
   bool getId();
   bool getDisplayURL();
-  bool getElement();
   bool getElementProperty();
   bool getIntroductionScript();
   bool getIntroductionOffset();
@@ -422,29 +420,6 @@ bool DebuggerSource::CallData::getDisplayURL() {
   return true;
 }
 
-struct DebuggerSourceGetElementMatcher {
-  JSContext* mCx = nullptr;
-  explicit DebuggerSourceGetElementMatcher(JSContext* cx_) : mCx(cx_) {}
-  using ReturnType = JSObject*;
-  ReturnType match(HandleScriptSourceObject sourceObject) {
-    return sourceObject->unwrappedElement(mCx);
-  }
-  ReturnType match(Handle<WasmInstanceObject*> wasmInstance) { return nullptr; }
-};
-
-bool DebuggerSource::CallData::getElement() {
-  DebuggerSourceGetElementMatcher matcher(cx);
-  RootedValue elementValue(cx);
-  if (JSObject* element = referent.match(matcher)) {
-    elementValue.setObject(*element);
-    if (!obj->owner()->wrapDebuggeeValue(cx, &elementValue)) {
-      return false;
-    }
-  }
-  args.rval().set(elementValue);
-  return true;
-}
-
 struct DebuggerSourceGetElementPropertyMatcher {
   using ReturnType = Value;
   ReturnType match(HandleScriptSourceObject sourceObject) {
@@ -655,7 +630,7 @@ static JSScript* ReparseSource(JSContext* cx, HandleScriptSourceObject sso) {
   ScriptSource* ss = sso->source();
 
   JS::CompileOptions options(cx);
-  options.hideScriptFromDebugger = true;
+  options.setHideScriptFromDebugger(true);
   options.setFileAndLine(ss->filename(), ss->startLine());
 
   UncompressedSourceCache::AutoHoldEntry holder;
@@ -713,7 +688,6 @@ const JSPropertySpec DebuggerSource::properties_[] = {
     JS_DEBUG_PSG("url", getURL),
     JS_DEBUG_PSG("startLine", getStartLine),
     JS_DEBUG_PSG("id", getId),
-    JS_DEBUG_PSG("element", getElement),
     JS_DEBUG_PSG("displayURL", getDisplayURL),
     JS_DEBUG_PSG("introductionScript", getIntroductionScript),
     JS_DEBUG_PSG("introductionOffset", getIntroductionOffset),

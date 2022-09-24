@@ -66,6 +66,8 @@ enum ThreadType {
   THREAD_TYPE_ION_FREE,              // 9
   THREAD_TYPE_WASM_GENERATOR_TIER2,  // 10
   THREAD_TYPE_WORKER,                // 11
+  THREAD_TYPE_DELAZIFY,              // 12
+  THREAD_TYPE_DELAZIFY_FREE,         // 13
   THREAD_TYPE_MAX                    // Used to check shell function arguments
 };
 
@@ -460,9 +462,9 @@ static inline void js_free(void* p) {
  * - Ordinarily, use js_free/js_delete.
  *
  * - For deallocations during GC finalization, use one of the following
- *   operations on the JSFreeOp provided to the finalizer:
+ *   operations on the JS::GCContext provided to the finalizer:
  *
- *     JSFreeOp::{free_,delete_}
+ *     JS::GCContext::{free_,delete_}
  */
 
 /*

@@ -11,6 +11,7 @@
 
 #include "FocusState.h"          // for FocusState
 #include "HitTestingTreeNode.h"  // for HitTestingTreeNodeAutoLock
+#include "IAPZHitTester.h"       // for IAPZHitTester::HitTestResult
 #include "gfxPoint.h"            // for gfxPoint
 #include "mozilla/Assertions.h"  // for MOZ_ASSERT_HELPER2
 #include "mozilla/DataMutex.h"   // for DataMutex
@@ -32,6 +33,7 @@
 #include "mozilla/TimeStamp.h"       // for mozilla::TimeStamp
 #include "mozilla/UniquePtr.h"       // for UniquePtr
 #include "nsCOMPtr.h"                // for already_AddRefed
+#include "nsTArray.h"
 
 namespace mozilla {
 class MultiTouchInput;
@@ -56,8 +58,6 @@ struct FlingHandoffState;
 class InputQueue;
 class GeckoContentController;
 class HitTestingTreeNode;
-class HitTestingTreeNodeAutoLock;
-class LayerMetricsWrapper;
 class SampleTime;
 class WebRenderScrollDataWrapper;
 struct AncestorTransform;
@@ -107,6 +107,7 @@ struct ZoomTarget;
 class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   typedef mozilla::layers::AllowedTouchBehavior AllowedTouchBehavior;
   typedef mozilla::layers::AsyncDragMetrics AsyncDragMetrics;
+  using HitTestResult = IAPZHitTester::HitTestResult;
 
   // Helper struct to hold some state while we build the hit-testing tree. The
   // sole purpose of this struct is to shorten the argument list to
@@ -115,7 +116,10 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   struct TreeBuildingState;
 
  public:
-  APZCTreeManager(LayersId aRootLayersId, bool aIsUsingWebRender);
+  explicit APZCTreeManager(LayersId aRootLayersId,
+                           UniquePtr<IAPZHitTester> aHitTester = nullptr);
+
+  static mozilla::LazyLogModule sLog;
 
   void SetSampler(APZSampler* aSampler);
   void SetUpdater(APZUpdater* aUpdater);
@@ -154,37 +158,29 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
                         const FocusTarget& aFocusTarget);
 
   /**
-   * Rebuild the hit-testing tree based on the layer update that just came up.
+   * Rebuild the hit-testing tree based on an incoming WebRender transaction.
    * Preserve nodes and APZC instances where possible, but retire those whose
    * layers are no longer in the layer tree.
+   * (Note: "layer tree" here refers to the tree of WebRenderLayerScrollData
+   *  nodes sent as part of a WebRender transaction.)
    *
-   * This must be called on the updater thread as it walks the layer tree.
+   * This must be called on the updater thread.
    *
    * @param aRoot The root of the (full) layer tree
    * @param aOriginatingLayersId The layers id of the subtree that triggered
    *                             this repaint, and to which aIsFirstPaint
-   * applies.
-   * @param aIsFirstPaint True if the layers update that this is called in
+   *                             applies.
+   * @param aIsFirstPaint True if the transaction that this is called in
    *                      response to included a first-paint. If this is true,
    *                      the part of the tree that is affected by the
    *                      first-paint flag is indicated by the
-   *                      aFirstPaintLayersId parameter.
+   *                      aOriginatingLayersId parameter.
    * @param aPaintSequenceNumber The sequence number of the paint that triggered
-   *                             this layer update. Note that every layer child
+   *                             this layer update. Note that every child
    *                             process' layer subtree has its own sequence
    *                             numbers.
    */
-  void UpdateHitTestingTree(Layer* aRoot, bool aIsFirstPaint,
-                            LayersId aOriginatingLayersId,
-                            uint32_t aPaintSequenceNumber);
-
-  /**
-   * Same as the above UpdateHitTestingTree, except slightly modified to take
-   * the scrolling data passed over PWebRenderBridge instead of the raw layer
-   * tree. This version is used when WebRender is enabled because we don't have
-   * shadow layers in that scenario.
-   */
-  void UpdateHitTestingTree(const WebRenderScrollDataWrapper& aScrollWrapper,
+  void UpdateHitTestingTree(const WebRenderScrollDataWrapper& aRoot,
                             bool aIsFirstPaint, LayersId aOriginatingLayersId,
                             uint32_t aPaintSequenceNumber);
 
@@ -201,17 +197,12 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
                           const SampleTime& aSampleTime);
 
   /**
-   * Walk through all the APZCs and do the sampling steps needed when
-   * advancing to the next frame. The APZCs walked can be restricted to a
-   * specific render root by providing that as the first argument.
-   */
-  bool AdvanceAnimations(const SampleTime& aSampleTime);
-
-  /**
    * Refer to the documentation of APZInputBridge::ReceiveInputEvent() and
    * APZEventResult.
    */
-  APZEventResult ReceiveInputEvent(InputData& aEvent) override;
+  APZEventResult ReceiveInputEvent(
+      InputData& aEvent,
+      InputBlockCallback&& aCallback = InputBlockCallback()) override;
 
   /**
    * Set the keyboard shortcuts to use for translating keyboard events.
@@ -242,8 +233,7 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
    * When the event regions code is enabled, this function should be invoked to
    * to confirm the target of the input block. This is only needed in cases
    * where the initial input event of the block hit a dispatch-to-content region
-   * but is safe to call for all input blocks. This function should always be
-   * invoked on the controller thread.
+   * but is safe to call for all input blocks.
    * The different elements in the array of targets correspond to the targets
    * for the different touch points. In the case where the touch point has no
    * target, or the target is not a scrollable frame, the target's |mScrollId|
@@ -305,7 +295,6 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
    * corresponds to the different touch point that is currently active.
    * Must be called after receiving the TOUCH_START event that starts the
    * touch-session.
-   * This must be called on the controller thread.
    */
   void SetAllowedTouchBehavior(
       uint64_t aInputBlockId,
@@ -430,8 +419,19 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
 
   APZInputBridge* InputBridge() override { return this; }
 
+  /**
+   * Add a callback to be invoked when |aInputBlockId| is ready for handling.
+   *
+   * Should only be used for input blocks that are not yet ready for handling
+   * at the time this is called. If the input block was already handled,
+   * the callback will never be called.
+   *
+   * Only one callback can be registered for an input block at a time.
+   * Subsequent attempts to register a callback for an input block will be
+   * ignored until the existing callback is triggered.
+   */
   void AddInputBlockCallback(uint64_t aInputBlockId,
-                             InputBlockCallback&& aCallback) override;
+                             InputBlockCallback&& aCallback);
 
   // Methods to help process WidgetInputEvents (or manage conversion to/from
   // InputData)
@@ -441,8 +441,9 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
                              uint64_t* aOutFocusSequenceNumber,
                              LayersId* aOutLayersId) override;
 
-  void UpdateWheelTransaction(LayoutDeviceIntPoint aRefPoint,
-                              EventMessage aEventMessage) override;
+  void UpdateWheelTransaction(
+      LayoutDeviceIntPoint aRefPoint, EventMessage aEventMessage,
+      const Maybe<ScrollableLayerGuid>& aTargetGuid) override;
 
   bool GetAPZTestData(LayersId aLayersId, APZTestData* aOutData);
 
@@ -470,8 +471,7 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
       const LayerToParentLayerMatrix4x4& aCurrentTransform,
       const gfx::Matrix4x4& aScrollableContentTransform,
       AsyncPanZoomController* aApzc, const FrameMetrics& aMetrics,
-      const ScrollbarData& aScrollbarData, bool aScrollbarIsDescendant,
-      AsyncTransformComponentMatrix* aOutClipTransform);
+      const ScrollbarData& aScrollbarData, bool aScrollbarIsDescendant);
 
   /**
    * Dispatch a flush complete notification from the repaint thread of the
@@ -507,8 +507,8 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   // functions to the world.
  private:
   friend class APZUpdater;
-  void LockTree();
-  void UnlockTree();
+  void LockTree() CAPABILITY_ACQUIRE(mTreeLock);
+  void UnlockTree() CAPABILITY_RELEASE(mTreeLock);
 
   // Protected hooks for gtests subclass
   virtual AsyncPanZoomController* NewAPZCInstance(
@@ -523,39 +523,9 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
 
  private:
   mutable DataMutex<Maybe<TimeStamp>> mTestSampleTime;
+  CopyableTArray<MatrixMessage> mLastMessages;
 
  public:
-  // Represents the results of an APZ hit test.
-  struct HitTestResult {
-    // The APZC targeted by the hit test.
-    RefPtr<AsyncPanZoomController> mTargetApzc;
-    // The applicable hit test flags.
-    gfx::CompositorHitTestInfo mHitResult;
-    // The layers id of the content that was hit.
-    // This effectively identifiers the process that was hit for
-    // Fission purposes.
-    LayersId mLayersId;
-    // If a scrollbar was hit, this will be populated with the
-    // scrollbar node. The AutoLock allows accessing the scrollbar
-    // node without having to hold the tree lock.
-    HitTestingTreeNodeAutoLock mScrollbarNode;
-    // If content that is fixed to the root-content APZC was hit,
-    // the sides of the viewport to which the content is fixed.
-    SideBits mFixedPosSides = SideBits::eNone;
-    // This is set to true If mTargetApzc is overscrolled and the
-    // event targeted the gap space ("gutter") created by the overscroll.
-    bool mHitOverscrollGutter = false;
-
-    HitTestResult() = default;
-    // Make it move-only.
-    HitTestResult(HitTestResult&&) = default;
-    HitTestResult& operator=(HitTestResult&&) = default;
-
-    // Make a copy of all the fields except mScrollbarNode (the field
-    // that makes this move-only).
-    HitTestResult CopyWithoutScrollbarNode() const;
-  };
-
   /* Some helper functions to find an APZC given some identifying input. These
      functions lock the tree of APZCs while they find the right one, and then
      return an addref'd pointer to it. This allows caller code to just use the
@@ -567,6 +537,9 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   already_AddRefed<AsyncPanZoomController> GetTargetAPZC(
       const LayersId& aLayersId,
       const ScrollableLayerGuid::ViewID& aScrollId) const;
+  already_AddRefed<AsyncPanZoomController> GetTargetAPZC(
+      const LayersId& aLayersId, const ScrollableLayerGuid::ViewID& aScrollId,
+      const MutexAutoLock& aProofOfMapLock) const;
   ScreenToParentLayerMatrix4x4 GetScreenToApzcTransform(
       const AsyncPanZoomController* aApzc) const;
   ParentLayerToScreenMatrix4x4 GetApzcToGeckoTransform(
@@ -588,22 +561,31 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   already_AddRefed<AsyncPanZoomController> FindZoomableApzc(
       AsyncPanZoomController* aStart) const;
 
-  ScreenMargin GetGeckoFixedLayerMargins() const;
-
   ScreenMargin GetCompositorFixedLayerMargins() const;
 
+  APZScrollGeneration NewAPZScrollGeneration() {
+    // In the production code this function gets only called from the sampler
+    // thread but in tests using nsIDOMWindowUtils.setAsyncScrollOffset this
+    // function gets called from the controller thread so we need to lock the
+    // mutex for this counter.
+    MutexAutoLock lock(mScrollGenerationLock);
+    return mScrollGenerationCounter.NewAPZGeneration();
+  }
+
+  template <typename Callback>
+  void CallWithMapLock(Callback& aCallback) {
+    MutexAutoLock lock(mMapLock);
+    aCallback(lock);
+  }
+
  private:
-  typedef bool (*GuidComparator)(const ScrollableLayerGuid&,
-                                 const ScrollableLayerGuid&);
+  using GuidComparator = ScrollableLayerGuid::Comparator;
+  using ScrollNode = WebRenderScrollDataWrapper;
 
   /* Helpers */
-  template <class ScrollNode>
-  void UpdateHitTestingTreeImpl(const ScrollNode& aRoot, bool aIsFirstPaint,
-                                LayersId aOriginatingLayersId,
-                                uint32_t aPaintSequenceNumber);
 
   void AttachNodeToTree(HitTestingTreeNode* aNode, HitTestingTreeNode* aParent,
-                        HitTestingTreeNode* aNextSibling);
+                        HitTestingTreeNode* aNextSibling) REQUIRES(mTreeLock);
   already_AddRefed<AsyncPanZoomController> GetTargetAPZC(
       const ScrollableLayerGuid& aGuid);
   already_AddRefed<HitTestingTreeNode> GetTargetNode(
@@ -611,16 +593,10 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   HitTestingTreeNode* FindTargetNode(HitTestingTreeNode* aNode,
                                      const ScrollableLayerGuid& aGuid,
                                      GuidComparator aComparator);
-  AsyncPanZoomController* GetTargetApzcForNode(HitTestingTreeNode* aNode);
+  AsyncPanZoomController* GetTargetApzcForNode(const HitTestingTreeNode* aNode);
   AsyncPanZoomController* FindHandoffParent(
       const AsyncPanZoomController* aApzc);
-  HitTestResult GetAPZCAtPoint(const ScreenPoint& aHitTestPoint,
-                               const RecursiveMutexAutoLock& aProofOfTreeLock);
-  HitTestResult GetAPZCAtPointWR(
-      const ScreenPoint& aHitTestPoint,
-      const RecursiveMutexAutoLock& aProofOfTreeLock);
   HitTestingTreeNode* FindRootNodeForLayersId(LayersId aLayersId) const;
-  AsyncPanZoomController* FindRootApzcForLayersId(LayersId aLayersId) const;
   AsyncPanZoomController* FindRootContentApzcForLayersId(
       LayersId aLayersId) const;
   already_AddRefed<AsyncPanZoomController> GetZoomableTarget(
@@ -682,7 +658,10 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
 
     // Called at the end of ReceiveInputEvent() to perform any final
     // computations, and then return mResult.
-    APZEventResult Finish();
+    // If the event will have a delayed result then this takes care of adding
+    // the specified callback to the APZCTreeManager.
+    APZEventResult Finish(APZCTreeManager& aTreeManager,
+                          InputBlockCallback&& aCallback);
   };
 
   void ProcessTouchInput(InputHandlingState& aState, MultiTouchInput& aInput);
@@ -726,20 +705,14 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   already_AddRefed<HitTestingTreeNode> RecycleOrCreateNode(
       const RecursiveMutexAutoLock& aProofOfTreeLock, TreeBuildingState& aState,
       AsyncPanZoomController* aApzc, LayersId aLayersId);
-  template <class ScrollNode>
   HitTestingTreeNode* PrepareNodeForLayer(
       const RecursiveMutexAutoLock& aProofOfTreeLock, const ScrollNode& aLayer,
       const FrameMetrics& aMetrics, LayersId aLayersId,
       const Maybe<ZoomConstraints>& aZoomConstraints,
       const AncestorTransform& aAncestorTransform, HitTestingTreeNode* aParent,
       HitTestingTreeNode* aNextSibling, TreeBuildingState& aState);
-  template <class ScrollNode>
-  Maybe<ParentLayerIntRegion> ComputeClipRegion(const LayersId& aLayersId,
-                                                const ScrollNode& aLayer);
 
-  template <class ScrollNode>
-  void PrintAPZCInfo(const ScrollNode& aLayer,
-                     const AsyncPanZoomController* apzc);
+  void PrintLayerInfo(const ScrollNode& aLayer);
 
   void NotifyScrollbarDragInitiated(uint64_t aDragBlockId,
                                     const ScrollableLayerGuid& aGuid,
@@ -749,14 +722,9 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
 
   // Returns the transform that converts from |aNode|'s coordinates to
   // the coordinates of |aNode|'s parent in the hit-testing tree.
-  // If the returned transform includes an overscroll transform,
-  // |aOutSourceOfOverscrollTransform| (if not nullptr) is populated
-  // with the APZC which is the source of that overscroll transform.
   // Requires the caller to hold mTreeLock.
   LayerToParentLayerMatrix4x4 ComputeTransformForNode(
-      const HitTestingTreeNode* aNode,
-      const AsyncPanZoomController** aOutSourceOfOverscrollTransform =
-          nullptr) const;
+      const HitTestingTreeNode* aNode) const REQUIRES(mTreeLock);
 
   // Look up the GeckoContentController for the given layers id.
   static already_AddRefed<GeckoContentController> GetContentController(
@@ -813,7 +781,7 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
    * management state.
    * IMPORTANT: See the note about lock ordering at the top of this file. */
   mutable mozilla::RecursiveMutex mTreeLock;
-  RefPtr<HitTestingTreeNode> mRootNode;
+  RefPtr<HitTestingTreeNode> mRootNode GUARDED_BY(mTreeLock);
 
   /*
    * A set of LayersIds for which APZCTM should only send empty
@@ -824,7 +792,8 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
    * from its old tree manager (us).
    * Acquire mTreeLock before accessing this.
    */
-  std::unordered_set<LayersId, LayersId::HashFn> mDetachedLayersIds;
+  std::unordered_set<LayersId, LayersId::HashFn> mDetachedLayersIds
+      GUARDED_BY(mTreeLock);
 
   /* If the current hit-testing tree contains an async zoom container
    * node, this is set to the layers id of subtree that has the node.
@@ -1030,8 +999,9 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
    */
   ScreenMargin mGeckoFixedLayerMargins;
   /* For logging the APZC tree for debugging (enabled by the apz.printtree
-   * pref). */
-  gfx::TreeLog<gfx::LOG_DEFAULT> mApzcTreeLog;
+   * pref). The purpose of using LOG_CRITICAL is so that you don't also need to
+   * change the gfx.logging.level pref to see the output. */
+  gfx::TreeLog<gfx::LOG_CRITICAL> mApzcTreeLog;
 
   class CheckerboardFlushObserver;
   friend class CheckerboardFlushObserver;
@@ -1046,7 +1016,14 @@ class APZCTreeManager : public IAPZCTreeManager, public APZInputBridge {
   // This must only be touched on the controller thread.
   float mDPI;
 
-  bool mIsUsingWebRender;
+  friend class IAPZHitTester;
+  UniquePtr<IAPZHitTester> mHitTester;
+
+  // NOTE: This ScrollGenerationCounter needs to be per APZCTreeManager since
+  // the generation is bumped up on the sampler theread which is per
+  // APZCTreeManager.
+  ScrollGenerationCounter mScrollGenerationCounter;
+  mozilla::Mutex mScrollGenerationLock;
 
 #if defined(MOZ_WIDGET_ANDROID)
  private:

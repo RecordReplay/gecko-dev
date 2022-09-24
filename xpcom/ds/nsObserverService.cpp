@@ -151,8 +151,7 @@ void nsObserverService::Shutdown() {
   mObserverTopicTable.Clear();
 }
 
-nsresult nsObserverService::Create(nsISupports* aOuter, const nsIID& aIID,
-                                   void** aInstancePtr) {
+nsresult nsObserverService::Create(const nsIID& aIID, void** aInstancePtr) {
   LOG(("nsObserverService::Create()"));
 
   RefPtr<nsObserverService> os = new nsObserverService();
@@ -187,7 +186,8 @@ nsresult nsObserverService::FilterHttpOnTopics(const char* aTopic) {
   if (mozilla::net::IsNeckoChild() && !strncmp(aTopic, "http-on-", 8) &&
       strcmp(aTopic, "http-on-failed-opening-request") &&
       strcmp(aTopic, "http-on-opening-request") &&
-      strcmp(aTopic, "http-on-stop-request")) {
+      strcmp(aTopic, "http-on-stop-request") &&
+      strcmp(aTopic, "http-on-image-cache-response")) {
     nsCOMPtr<nsIConsoleService> console(
         do_GetService(NS_CONSOLESERVICE_CONTRACTID));
     nsCOMPtr<nsIScriptError> error(
@@ -319,6 +319,10 @@ nsObserverService::UnmarkGrayStrongObservers() {
   return NS_OK;
 }
 
+bool nsObserverService::HasObservers(const char* aTopic) {
+  return mObserverTopicTable.Contains(aTopic);
+}
+
 namespace {
 
 class NotifyWhenScriptSafeRunnable : public mozilla::Runnable {
@@ -336,7 +340,7 @@ class NotifyWhenScriptSafeRunnable : public mozilla::Runnable {
     }
   }
 
-  NS_IMETHOD Run() {
+  NS_IMETHOD Run() override {
     const char16_t* data = mData.IsVoid() ? nullptr : mData.get();
     return mObs->NotifyObservers(mSubject, mTopic.get(), data);
   }

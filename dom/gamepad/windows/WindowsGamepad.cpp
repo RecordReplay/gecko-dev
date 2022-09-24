@@ -18,6 +18,7 @@
 #include "nsITimer.h"
 #include "nsTArray.h"
 #include "nsThreadUtils.h"
+#include "nsWindowsHelpers.h"
 
 #include "mozilla/ArrayUtils.h"
 
@@ -151,7 +152,7 @@ class Gamepad {
 };
 
 // Drop this in favor of decltype when we require a new enough SDK.
-typedef void(WINAPI* XInputEnable_func)(BOOL);
+using XInputEnable_func = void(WINAPI*)(BOOL);
 
 // RAII class to wrap loading the XInput DLL
 class XInputLoader {
@@ -1091,8 +1092,7 @@ class StopWindowsGamepadServiceRunnable final : public Runnable {
 
 }  // namespace
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using namespace mozilla::ipc;
 
@@ -1133,5 +1133,4 @@ void SetGamepadLightIndicatorColor(const Tainted<GamepadHandle>& aGamepadHandle,
                                    aGreen, aBlue);
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

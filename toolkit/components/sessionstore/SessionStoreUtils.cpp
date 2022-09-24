@@ -6,6 +6,8 @@
 
 #include "js/Array.h"  // JS::GetArrayLength, JS::IsArrayObject
 #include "js/JSON.h"
+#include "js/PropertyAndElement.h"  // JS_GetElement
+#include "js/TypeDecls.h"
 #include "jsapi.h"
 #include "mozilla/PresShell.h"
 #include "mozilla/dom/AutocompleteInfoBinding.h"
@@ -18,6 +20,8 @@
 #include "mozilla/dom/RootedDictionary.h"
 #include "mozilla/dom/SessionStorageManager.h"
 #include "mozilla/dom/PBackgroundSessionStorageCache.h"
+#include "mozilla/dom/SessionStoreChangeListener.h"
+#include "mozilla/dom/SessionStoreChild.h"
 #include "mozilla/dom/SessionStoreUtils.h"
 #include "mozilla/dom/txIXPathContext.h"
 #include "mozilla/dom/WindowGlobalParent.h"
@@ -34,6 +38,7 @@
 #include "nsContentUtils.h"
 #include "nsFocusManager.h"
 #include "nsGlobalWindowOuter.h"
+#include "nsIContentInlines.h"
 #include "nsIDocShell.h"
 #include "nsIFormControl.h"
 #include "nsIScrollableFrame.h"
@@ -298,6 +303,10 @@ void SessionStoreUtils::RestoreScrollPosition(const GlobalObject& aGlobal,
 /* static */
 void SessionStoreUtils::RestoreScrollPosition(
     nsGlobalWindowInner& aWindow, const nsCString& aScrollPosition) {
+  using Change = mozilla::dom::SessionStoreChangeListener::Change;
+  SessionStoreChangeListener::CollectSessionStoreData(
+      aWindow.GetWindowContext(), EnumSet<Change>(Change::Scroll));
+
   nsCCharSeparatedTokenizer tokenizer(aScrollPosition, ',');
   nsAutoCString token(tokenizer.nextToken());
   int pos_X = atoi(token.get());
@@ -308,7 +317,7 @@ void SessionStoreUtils::RestoreScrollPosition(
 
   if (nsCOMPtr<Document> doc = aWindow.GetExtantDoc()) {
     if (nsPresContext* presContext = doc->GetPresContext()) {
-      if (presContext->IsRootContentDocument()) {
+      if (presContext->IsRootContentDocumentCrossProcess()) {
         // Use eMainThread so this takes precedence over session history
         // (ScrollFrameHelper::ScrollToRestoredPosition()).
         presContext->PresShell()->ScrollToVisual(
@@ -483,20 +492,62 @@ static void AppendValueToCollectedData(nsINode* aNode, const nsAString& aId,
   entry->mValue.SetAsObject() = &jsval.toObject();
 }
 
-static void AppendEntry(nsINode* aNode, const nsString& aId,
-                        const FormEntryValue& aValue,
-                        sessionstore::FormData& aFormData) {
+// This isn't size as in binary size, just a heuristic to not store too large
+// fields in session store. See StaticPrefs::browser_sessionstore_dom_form_limit
+static uint32_t SizeOfFormEntry(const FormEntryValue& aValue) {
+  uint32_t size = 0;
+  switch (aValue.type()) {
+    case FormEntryValue::TCheckbox:
+      size = aValue.get_Checkbox().value() ? 4 : 5;
+      break;
+    case FormEntryValue::TTextField:
+      size = aValue.get_TextField().value().Length();
+      break;
+    case FormEntryValue::TFileList: {
+      for (const auto& value : aValue.get_FileList().valueList()) {
+        size += value.Length();
+      }
+      break;
+    }
+    case FormEntryValue::TSingleSelect:
+      size = aValue.get_SingleSelect().value().Length();
+      break;
+    case FormEntryValue::TMultipleSelect: {
+      for (const auto& value : aValue.get_MultipleSelect().valueList()) {
+        size += value.Length();
+      }
+      break;
+    }
+    default:
+      break;
+  }
+  return size;
+}
+
+static uint32_t AppendEntry(nsINode* aNode, const nsString& aId,
+                            const FormEntryValue& aValue,
+                            sessionstore::FormData& aFormData) {
+  uint32_t size = SizeOfFormEntry(aValue);
+  if (size > StaticPrefs::browser_sessionstore_dom_form_limit()) {
+    return 0;
+  }
+
   if (aId.IsEmpty()) {
     FormEntry* entry = aFormData.xpath().AppendElement();
     entry->value() = aValue;
     aNode->GenerateXPath(entry->id());
+    size += entry->id().Length();
   } else {
     aFormData.id().AppendElement(FormEntry{aId, aValue});
+    size += aId.Length();
   }
+
+  return size;
 }
 
-static void CollectTextAreaElement(Document* aDocument,
-                                   sessionstore::FormData& aFormData) {
+static uint32_t CollectTextAreaElement(Document* aDocument,
+                                       sessionstore::FormData& aFormData) {
+  uint32_t size = 0;
   RefPtr<nsContentList> textlist =
       NS_GetContentList(aDocument, kNameSpaceID_XHTML, u"textarea"_ns);
   uint32_t length = textlist->Length();
@@ -527,12 +578,15 @@ static void CollectTextAreaElement(Document* aDocument,
       continue;
     }
 
-    AppendEntry(textArea, id, TextField{value}, aFormData);
+    size += AppendEntry(textArea, id, TextField{value}, aFormData);
   }
+
+  return size;
 }
 
-static void CollectInputElement(Document* aDocument,
-                                sessionstore::FormData& aFormData) {
+static uint32_t CollectInputElement(Document* aDocument,
+                                    sessionstore::FormData& aFormData) {
+  uint32_t size = 0;
   RefPtr<nsContentList> inputlist =
       NS_GetContentList(aDocument, kNameSpaceID_XHTML, u"input"_ns);
   uint32_t length = inputlist->Length();
@@ -574,7 +628,7 @@ static void CollectInputElement(Document* aDocument,
       if (checked == input->DefaultChecked()) {
         continue;
       }
-      AppendEntry(input, id, Checkbox{checked}, aFormData);
+      size += AppendEntry(input, id, Checkbox{checked}, aFormData);
     } else if (input->ControlType() == FormControlType::InputFile) {
       IgnoredErrorResult rv;
       sessionstore::FileList file;
@@ -582,7 +636,7 @@ static void CollectInputElement(Document* aDocument,
       if (rv.Failed() || file.valueList().IsEmpty()) {
         continue;
       }
-      AppendEntry(input, id, file, aFormData);
+      size += AppendEntry(input, id, file, aFormData);
     } else {
       TextField field;
       input->GetValue(field.value(), CallerType::System);
@@ -596,13 +650,16 @@ static void CollectInputElement(Document* aDocument,
                              eCaseMatters)) {
         continue;
       }
-      AppendEntry(input, id, field, aFormData);
+      size += AppendEntry(input, id, field, aFormData);
     }
   }
+
+  return size;
 }
 
-static void CollectSelectElement(Document* aDocument,
-                                 sessionstore::FormData& aFormData) {
+static uint32_t CollectSelectElement(Document* aDocument,
+                                     sessionstore::FormData& aFormData) {
+  uint32_t size = 0;
   RefPtr<nsContentList> selectlist =
       NS_GetContentList(aDocument, kNameSpaceID_XHTML, u"select"_ns);
   uint32_t length = selectlist->Length();
@@ -646,10 +703,10 @@ static void CollectSelectElement(Document* aDocument,
 
       DOMString selectVal;
       select->GetValue(selectVal);
-      AppendEntry(select, id,
-                  SingleSelect{static_cast<uint32_t>(selectedIndex),
-                               selectVal.AsAString()},
-                  aFormData);
+      size += AppendEntry(select, id,
+                          SingleSelect{static_cast<uint32_t>(selectedIndex),
+                                       selectVal.AsAString()},
+                          aFormData);
     } else {
       HTMLOptionsCollection* options = select->GetOptions();
       if (!options) {
@@ -676,21 +733,26 @@ static void CollectSelectElement(Document* aDocument,
         continue;
       }
 
-      AppendEntry(select, id, MultipleSelect{selectslist}, aFormData);
+      size += AppendEntry(select, id, MultipleSelect{selectslist}, aFormData);
     }
   }
+
+  return size;
 }
 
 /* static */
-void SessionStoreUtils::CollectFormData(Document* aDocument,
-                                        sessionstore::FormData& aFormData) {
+uint32_t SessionStoreUtils::CollectFormData(Document* aDocument,
+                                            sessionstore::FormData& aFormData) {
   MOZ_DIAGNOSTIC_ASSERT(aDocument);
-  CollectTextAreaElement(aDocument, aFormData);
-  CollectInputElement(aDocument, aFormData);
-  CollectSelectElement(aDocument, aFormData);
+  uint32_t size = 0;
+  size += CollectTextAreaElement(aDocument, aFormData);
+  size += CollectInputElement(aDocument, aFormData);
+  size += CollectSelectElement(aDocument, aFormData);
 
   aFormData.hasData() =
       !aFormData.id().IsEmpty() || !aFormData.xpath().IsEmpty();
+
+  return size;
 }
 
 /* static */
@@ -888,7 +950,7 @@ static void CollectCurrentFormData(JSContext* aCx, Document& aDocument,
                                               aRetVal);
 
   Element* bodyElement = aDocument.GetBody();
-  if (aDocument.HasFlag(NODE_IS_EDITABLE) && bodyElement) {
+  if (bodyElement && bodyElement->IsInDesignMode()) {
     bodyElement->GetInnerHTML(aRetVal.SetValue().mInnerHTML.Construct(),
                               IgnoreErrors());
   }
@@ -1086,7 +1148,7 @@ static void SetSessionData(JSContext* aCx, Element* aElement,
 MOZ_CAN_RUN_SCRIPT
 static void SetInnerHTML(Document& aDocument, const nsString& aInnerHTML) {
   RefPtr<Element> bodyElement = aDocument.GetBody();
-  if (aDocument.HasFlag(NODE_IS_EDITABLE) && bodyElement) {
+  if (bodyElement && bodyElement->IsInDesignMode()) {
     IgnoredErrorResult rv;
     bodyElement->SetInnerHTML(aInnerHTML, aDocument.NodePrincipal(), rv);
     if (!rv.Failed()) {
@@ -1141,7 +1203,6 @@ static Element* FindNodeByXPath(Document& aDocument,
   return Element::FromNodeOrNull(result->GetSingleNodeValue(rv));
 }
 
-MOZ_CAN_RUN_SCRIPT_BOUNDARY
 /* static */
 bool SessionStoreUtils::RestoreFormData(const GlobalObject& aGlobal,
                                         Document& aDocument,
@@ -1149,6 +1210,7 @@ bool SessionStoreUtils::RestoreFormData(const GlobalObject& aGlobal,
   if (!aData.mUrl.WasPassed()) {
     return true;
   }
+
   // Don't restore any data for the given frame if the URL
   // stored in the form data doesn't match its current URL.
   nsAutoCString url;
@@ -1156,6 +1218,11 @@ bool SessionStoreUtils::RestoreFormData(const GlobalObject& aGlobal,
   if (!aData.mUrl.Value().Equals(url)) {
     return false;
   }
+
+  using Change = SessionStoreChangeListener::Change;
+  SessionStoreChangeListener::CollectSessionStoreData(
+      aDocument.GetWindowContext(), EnumSet<Change>(Change::Input));
+
   if (aData.mInnerHTML.WasPassed()) {
     SetInnerHTML(aDocument, aData.mInnerHTML.Value());
   }
@@ -1253,11 +1320,14 @@ void RestoreFormEntry(Element* aNode, const FormEntryValue& aValue) {
   }
 }
 
-MOZ_CAN_RUN_SCRIPT
 /* static */
 void SessionStoreUtils::RestoreFormData(
     Document& aDocument, const nsString& aInnerHTML,
     const nsTArray<SessionStoreRestoreData::Entry>& aEntries) {
+  using Change = SessionStoreChangeListener::Change;
+  SessionStoreChangeListener::CollectSessionStoreData(
+      aDocument.GetWindowContext(), EnumSet<Change>(Change::Input));
+
   if (!aInnerHTML.IsEmpty()) {
     SetInnerHTML(aDocument, aInnerHTML);
   }
@@ -1401,7 +1471,6 @@ static void CollectFrameTreeData(JSContext* aCx,
   }
 }
 
-MOZ_CAN_RUN_SCRIPT
 already_AddRefed<nsISessionStoreRestoreData>
 SessionStoreUtils::ConstructSessionStoreRestoreData(
     const GlobalObject& aGlobal) {
@@ -1410,7 +1479,6 @@ SessionStoreUtils::ConstructSessionStoreRestoreData(
 }
 
 /* static */
-MOZ_CAN_RUN_SCRIPT
 already_AddRefed<Promise> SessionStoreUtils::InitializeRestore(
     const GlobalObject& aGlobal, CanonicalBrowsingContext& aContext,
     nsISessionStoreRestoreData* aData, ErrorResult& aError) {
@@ -1438,7 +1506,7 @@ void SessionStoreUtils::RestoreDocShellState(
     nsIDocShell* aDocShell, const DocShellRestoreState& aState) {
   if (aDocShell) {
     if (aState.URI()) {
-      aDocShell->SetCurrentURI(aState.URI());
+      aDocShell->SetCurrentURIForSessionStore(aState.URI());
     }
     RestoreDocShellCapabilities(aDocShell, aState.docShellCaps());
   }
@@ -1452,46 +1520,47 @@ already_AddRefed<Promise> SessionStoreUtils::RestoreDocShellState(
   MOZ_RELEASE_ASSERT(mozilla::SessionHistoryInParent());
   MOZ_RELEASE_ASSERT(aContext.IsTop());
 
-  if (WindowGlobalParent* wgp = aContext.GetCurrentWindowGlobal()) {
-    nsCOMPtr<nsIGlobalObject> global =
-        do_QueryInterface(aGlobal.GetAsSupports());
-    MOZ_DIAGNOSTIC_ASSERT(global);
-
-    RefPtr<Promise> promise = Promise::Create(global, aError);
-    if (aError.Failed()) {
-      return nullptr;
-    }
-
-    nsCOMPtr<nsIURI> uri;
-    if (!aURL.IsEmpty()) {
-      if (NS_FAILED(NS_NewURI(getter_AddRefs(uri), aURL))) {
-        aError.Throw(NS_ERROR_FAILURE);
-        return nullptr;
-      }
-    }
-
-    bool allowJavascript = true;
-    for (const nsACString& token :
-         nsCCharSeparatedTokenizer(aDocShellCaps, ',').ToRange()) {
-      if (token.EqualsLiteral("Javascript")) {
-        allowJavascript = false;
-      }
-    }
-
-    Unused << aContext.SetAllowJavascript(allowJavascript);
-
-    DocShellRestoreState state = {uri, aDocShellCaps};
-
-    // TODO (anny): Investigate removing this roundtrip.
-    wgp->SendRestoreDocShellState(state)->Then(
-        GetMainThreadSerialEventTarget(), __func__,
-        [promise](void) { promise->MaybeResolveWithUndefined(); },
-        [promise](void) { promise->MaybeRejectWithUndefined(); });
-
-    return promise.forget();
+  WindowGlobalParent* wgp = aContext.GetCurrentWindowGlobal();
+  if (!wgp) {
+    aError.Throw(NS_ERROR_FAILURE);
+    return nullptr;
   }
 
-  return nullptr;
+  nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aGlobal.GetAsSupports());
+  MOZ_DIAGNOSTIC_ASSERT(global);
+
+  RefPtr<Promise> promise = Promise::Create(global, aError);
+  if (aError.Failed()) {
+    return nullptr;
+  }
+
+  nsCOMPtr<nsIURI> uri;
+  if (!aURL.IsEmpty()) {
+    if (NS_FAILED(NS_NewURI(getter_AddRefs(uri), aURL))) {
+      aError.Throw(NS_ERROR_FAILURE);
+      return nullptr;
+    }
+  }
+
+  bool allowJavascript = true;
+  for (const nsACString& token :
+       nsCCharSeparatedTokenizer(aDocShellCaps, ',').ToRange()) {
+    if (token.EqualsLiteral("Javascript")) {
+      allowJavascript = false;
+    }
+  }
+
+  Unused << aContext.SetAllowJavascript(allowJavascript);
+
+  DocShellRestoreState state = {uri, aDocShellCaps};
+
+  // TODO (anny): Investigate removing this roundtrip.
+  wgp->SendRestoreDocShellState(state)->Then(
+      GetMainThreadSerialEventTarget(), __func__,
+      [promise](void) { promise->MaybeResolveWithUndefined(); },
+      [promise](void) { promise->MaybeRejectWithUndefined(); });
+
+  return promise.forget();
 }
 
 /* static */
@@ -1512,8 +1581,7 @@ void SessionStoreUtils::RestoreSessionStorageFromParent(
     SSCacheCopy& cacheInit = *cacheInitList.AppendElement();
 
     cacheInit.originKey() = originKey;
-    storagePrincipal->OriginAttributesRef().CreateSuffix(
-        cacheInit.originAttributes());
+    PrincipalToPrincipalInfo(storagePrincipal, &cacheInit.principalInfo());
 
     for (const auto& entry : originEntry.mValue.Entries()) {
       SSSetItemInfo& setItemInfo = *cacheInit.data().AppendElement();
@@ -1625,39 +1693,9 @@ nsresult SessionStoreUtils::ConstructSessionStorageValues(
     return NS_ERROR_FAILURE;
   }
 
-  // We wish to remove this step of mapping originAttributes+originKey
-  // to a storage principal in Bug 1711886 by consolidating the
-  // storage format in SessionStorageManagerBase and Session Store.
-  nsTHashMap<nsCStringHashKey, nsIPrincipal*> storagePrincipalList;
-  aBrowsingContext->PreOrderWalk([&storagePrincipalList](
-                                     BrowsingContext* aContext) {
-    WindowGlobalParent* windowParent =
-        aContext->Canonical()->GetCurrentWindowGlobal();
-    if (!windowParent) {
-      return;
-    }
-
-    nsIPrincipal* storagePrincipal = windowParent->DocumentStoragePrincipal();
-    if (!storagePrincipal) {
-      return;
-    }
-
-    const OriginAttributes& originAttributes =
-        storagePrincipal->OriginAttributesRef();
-    nsAutoCString originAttributesSuffix;
-    originAttributes.CreateSuffix(originAttributesSuffix);
-
-    nsAutoCString originKey;
-    storagePrincipal->GetStorageOriginKey(originKey);
-
-    storagePrincipalList.InsertOrUpdate(originAttributesSuffix + originKey,
-                                        storagePrincipal);
-  });
-
   for (const auto& value : aValues) {
-    nsIPrincipal* storagePrincipal =
-        storagePrincipalList.Get(value.originAttributes() + value.originKey());
-    if (!storagePrincipal) {
+    auto storagePrincipal = PrincipalInfoToPrincipal(value.principalInfo());
+    if (storagePrincipal.isErr()) {
       continue;
     }
 
@@ -1667,7 +1705,7 @@ nsresult SessionStoreUtils::ConstructSessionStorageValues(
       return NS_ERROR_FAILURE;
     }
 
-    if (NS_FAILED(storagePrincipal->GetOrigin(entry->mKey))) {
+    if (NS_FAILED(storagePrincipal.inspect()->GetOrigin(entry->mKey))) {
       return NS_ERROR_FAILURE;
     }
 
@@ -1677,20 +1715,31 @@ nsresult SessionStoreUtils::ConstructSessionStorageValues(
   return NS_OK;
 }
 
-/* static */ void SessionStoreUtils::ResetSessionStore(
-    BrowsingContext* aContext) {
-  MOZ_RELEASE_ASSERT(NATIVE_LISTENER);
-  WindowContext* windowContext = aContext->GetCurrentWindowContext();
-  if (!windowContext) {
-    return;
+/* static */
+bool SessionStoreUtils::CopyProperty(JSContext* aCx, JS::HandleObject aDst,
+                                     JS::HandleObject aSrc,
+                                     const nsAString& aName) {
+  JS::RootedId name(aCx);
+  const char16_t* data;
+  size_t length = aName.GetData(&data);
+
+  if (!JS_CharsToId(aCx, JS::TwoByteChars(data, length), &name)) {
+    return false;
   }
 
-  WindowGlobalChild* windowChild = windowContext->GetWindowGlobalChild();
-  if (!windowChild || !windowChild->CanSend()) {
-    return;
+  bool found = false;
+  if (!JS_HasPropertyById(aCx, aSrc, name, &found) || !found) {
+    return true;
   }
 
-  uint32_t epoch = aContext->GetSessionStoreEpoch();
+  JS::RootedValue value(aCx);
+  if (!JS_GetPropertyById(aCx, aSrc, name, &value)) {
+    return false;
+  }
 
-  Unused << windowChild->SendResetSessionStore(epoch);
+  if (value.isNullOrUndefined()) {
+    return true;
+  }
+
+  return JS_DefinePropertyById(aCx, aDst, name, value, JSPROP_ENUMERATE);
 }

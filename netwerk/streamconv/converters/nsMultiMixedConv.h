@@ -14,6 +14,7 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/IncrementalTokenizer.h"
 #include "nsHttpResponseHead.h"
+#include "mozilla/UniquePtr.h"
 
 #define NS_MULTIMIXEDCONVERTER_CID                 \
   { /* 7584CE90-5B25-11d3-A175-0050041CAF44 */     \
@@ -34,7 +35,7 @@ class nsPartChannel final : public nsIChannel,
                             public nsIMultiPartChannel {
  public:
   nsPartChannel(nsIChannel* aMultipartChannel, uint32_t aPartID,
-                nsIStreamListener* aListener);
+                bool aIsFirstPart, nsIStreamListener* aListener);
 
   void InitializeByteRange(int64_t aStart, int64_t aEnd);
   void SetIsLastPart() { mIsLastPart = true; }
@@ -62,7 +63,7 @@ class nsPartChannel final : public nsIChannel,
  protected:
   nsCOMPtr<nsIChannel> mMultipartChannel;
   nsCOMPtr<nsIStreamListener> mListener;
-  UniquePtr<mozilla::net::nsHttpResponseHead> mResponseHead;
+  mozilla::UniquePtr<mozilla::net::nsHttpResponseHead> mResponseHead;
 
   nsresult mStatus{NS_OK};
   nsLoadFlags mLoadFlags{0};
@@ -82,6 +83,7 @@ class nsPartChannel final : public nsIChannel,
 
   uint32_t mPartID;  // unique ID that can be used to identify
                      // this part of the multipart document
+  bool mIsFirstPart;
   bool mIsLastPart{false};
 };
 

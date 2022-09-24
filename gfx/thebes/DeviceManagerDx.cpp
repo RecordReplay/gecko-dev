@@ -21,9 +21,7 @@
 #include "mozilla/layers/CompositorBridgeChild.h"
 #include "mozilla/layers/CompositorThread.h"
 #include "mozilla/layers/DeviceAttachmentsD3D11.h"
-#include "mozilla/layers/PaintThread.h"
 #include "mozilla/Preferences.h"
-#include "nsExceptionHandler.h"
 #include "nsPrintfCString.h"
 #include "nsString.h"
 
@@ -278,7 +276,7 @@ bool DeviceManagerDx::CreateCompositorDevices() {
 
   if (int32_t sleepSec =
           StaticPrefs::gfx_direct3d11_sleep_on_create_device_AtStartup()) {
-    printf_stderr("Attach to PID: %d\n", GetCurrentProcessId());
+    printf_stderr("Attach to PID: %lu\n", GetCurrentProcessId());
     Sleep(sleepSec * 1000);
   }
 
@@ -462,10 +460,13 @@ void DeviceManagerDx::ImportDeviceInfo(const D3D11DeviceStatus& aDeviceStatus) {
   mDeviceStatus = Some(aDeviceStatus);
 }
 
-void DeviceManagerDx::ExportDeviceInfo(D3D11DeviceStatus* aOut) {
+bool DeviceManagerDx::ExportDeviceInfo(D3D11DeviceStatus* aOut) {
   if (mDeviceStatus) {
     *aOut = mDeviceStatus.value();
+    return true;
   }
+
+  return false;
 }
 
 void DeviceManagerDx::CreateContentDevices() {
@@ -861,7 +862,8 @@ FeatureStatus DeviceManagerDx::CreateContentDevice() {
   return FeatureStatus::Available;
 }
 
-RefPtr<ID3D11Device> DeviceManagerDx::CreateDecoderDevice() {
+RefPtr<ID3D11Device> DeviceManagerDx::CreateDecoderDevice(
+    bool aHardwareWebRender) {
   bool isAMD = false;
   {
     MutexAutoLock lock(mDeviceLock);
@@ -883,8 +885,9 @@ RefPtr<ID3D11Device> DeviceManagerDx::CreateDecoderDevice() {
   }
 
   if (reuseDevice) {
-    if (mCompositorDevice && mCompositorDeviceSupportsVideo &&
-        !mDecoderDevice) {
+    // Use mCompositorDevice for decoder device only for hardware WebRender.
+    if (aHardwareWebRender && mCompositorDevice &&
+        mCompositorDeviceSupportsVideo && !mDecoderDevice) {
       mDecoderDevice = mCompositorDevice;
 
       RefPtr<ID3D10Multithread> multi;
@@ -935,16 +938,6 @@ RefPtr<ID3D11Device> DeviceManagerDx::CreateDecoderDevice() {
 }
 
 void DeviceManagerDx::ResetDevices() {
-  // Flush the paint thread before revoking all these singletons. This
-  // should ensure that the paint thread doesn't start mixing and matching
-  // old and new objects together.
-  if (PaintThread::Get()) {
-    CompositorBridgeChild* cbc = CompositorBridgeChild::Get();
-    if (cbc) {
-      cbc->FlushAsyncPaints();
-    }
-  }
-
   MutexAutoLock lock(mDeviceLock);
 
   mAdapter = nullptr;

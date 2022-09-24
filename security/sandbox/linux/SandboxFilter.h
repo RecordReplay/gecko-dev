@@ -38,6 +38,12 @@ UniquePtr<sandbox::bpf_dsl::Policy> GetDecoderSandboxPolicy(
 UniquePtr<sandbox::bpf_dsl::Policy> GetSocketProcessSandboxPolicy(
     SandboxBrokerClient* aMaybeBroker);
 
+UniquePtr<sandbox::bpf_dsl::Policy> GetUtilitySandboxPolicy(
+    SandboxBrokerClient* aMaybeBroker);
+
+UniquePtr<sandbox::bpf_dsl::Policy> GetUtilityAudioDecoderSandboxPolicy(
+    SandboxBrokerClient* aMaybeBroker);
+
 }  // namespace mozilla
 
 #endif

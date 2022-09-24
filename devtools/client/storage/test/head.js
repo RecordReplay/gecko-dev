@@ -28,7 +28,11 @@ registerCleanupFunction(async () => {
       }
 
       if (win.clear) {
-        await win.clear();
+        // Do not get hung into win.clear() forever
+        await Promise.race([
+          new Promise(r => win.setTimeout(r, 10000)),
+          win.clear(),
+        ]);
       }
     });
   }
@@ -53,12 +57,12 @@ const STORAGE_PREF = "devtools.storage.enabled";
 const DOM_CACHE = "dom.caches.enabled";
 const DUMPEMIT_PREF = "devtools.dump.emit";
 const DEBUGGERLOG_PREF = "devtools.debugger.log";
-const TARGET_SWITCHING_PREF = "devtools.target-switching.server.enabled";
 
 // Allows Cache API to be working on usage `http` test page
 const CACHES_ON_HTTP_PREF = "dom.caches.testing.enabled";
 const PATH = "browser/devtools/client/storage/test/";
 const MAIN_DOMAIN = "http://test1.example.org/" + PATH;
+const MAIN_DOMAIN_SECURED = "https://test1.example.org/" + PATH;
 const MAIN_DOMAIN_WITH_PORT = "http://test1.example.org:8000/" + PATH;
 const ALT_DOMAIN = "http://sectest1.example.org/" + PATH;
 const ALT_DOMAIN_SECURED = "https://sectest1.example.org:443/" + PATH;
@@ -224,13 +228,6 @@ function forceCollections() {
   Cu.forceGC();
   Cu.forceCC();
   Cu.forceShrinkingGC();
-}
-
-/**
- * Enables server target switching
- */
-async function enableTargetSwitching() {
-  await pushPref(TARGET_SWITCHING_PREF, true);
 }
 
 // Sends a click event on the passed DOM node in an async manner
@@ -972,10 +969,11 @@ var focusSearchBoxUsingShortcut = async function(panelWin, callback) {
   const focused = once(searchBox, "focus");
 
   panelWin.focus();
-  const strings = Services.strings.createBundle(
-    "chrome://devtools/locale/storage.properties"
+
+  const shortcut = await panelWin.document.l10n.formatValue(
+    "storage-filter-key"
   );
-  synthesizeKeyShortcut(strings.GetStringFromName("storage.filter.key"));
+  synthesizeKeyShortcut(shortcut);
 
   await focused;
 
@@ -1062,19 +1060,23 @@ async function performAdd(store) {
   is(rowId, value, `Row '${rowId}' was successfully added.`);
 }
 
-function checkCellLength(len) {
-  const cells = gPanelWindow.document.querySelectorAll(
-    "#name .table-widget-cell"
-  );
-  const msg = `Table should initially display ${len} items`;
+// Cell css selector that can be used to count or select cells.
+// The selector is restricted to a single column to avoid counting duplicates.
+const CELL_SELECTOR =
+  "#storage-table .table-widget-wrapper:first-child .table-widget-cell";
 
-  is(cells.length, len, msg);
+function getCellLength() {
+  return gPanelWindow.document.querySelectorAll(CELL_SELECTOR).length;
+}
+
+function checkCellLength(len) {
+  is(getCellLength(), len, `Table should initially display ${len} items`);
 }
 
 async function scroll() {
   const $ = id => gPanelWindow.document.querySelector(id);
   const table = $("#storage-table .table-widget-body");
-  const cell = $("#name .table-widget-cell");
+  const cell = $(CELL_SELECTOR);
   const cellHeight = cell.getBoundingClientRect().height;
 
   const onStoresUpdate = gUI.once("store-objects-updated");
@@ -1107,6 +1109,18 @@ function isInTree(doc, path) {
 }
 
 /**
+ * Returns the label of the node for the provided tree path
+ * @param {Document} doc
+ * @param {Array} path
+ * @returns {String}
+ */
+function getTreeNodeLabel(doc, path) {
+  const treeId = JSON.stringify(path);
+  return doc.querySelector(`[data-id='${treeId}'] .tree-widget-item`)
+    .textContent;
+}
+
+/**
  * Checks that the pair <name, value> is displayed at the data table
  * @param {String} name
  * @param {any} value
@@ -1116,6 +1130,12 @@ function checkStorageData(name, value) {
     hasStorageData(name, value),
     `Table row has an entry for: ${name} with value: ${value}`
   );
+}
+
+async function waitForStorageData(name, value) {
+  info("Waiting for data to appear in the table");
+  await waitFor(() => hasStorageData(name, value));
+  ok(true, `Table row has an entry for: ${name} with value: ${value}`);
 }
 
 /**
@@ -1131,9 +1151,10 @@ function hasStorageData(name, value) {
  * Returns an URL of a page that uses the document-builder to generate its content
  * @param {String} domain
  * @param {String} html
+ * @param {String} protocol
  */
-function buildURLWithContent(domain, html) {
-  return `http://${domain}/document-builder.sjs?html=${encodeURI(html)}`;
+function buildURLWithContent(domain, html, protocol = "https") {
+  return `${protocol}://${domain}/document-builder.sjs?html=${encodeURI(html)}`;
 }
 
 /**

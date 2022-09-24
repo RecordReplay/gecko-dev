@@ -28,6 +28,7 @@
 #include "vm/StringType.h"
 #include "wasm/TypedObject.h"
 #include "wasm/WasmJS.h"
+#include "wasm/WasmLog.h"
 
 #include "vm/JSObject-inl.h"
 
@@ -70,6 +71,16 @@ void Val::writeToRootedLocation(void* loc, bool mustWrite64) const {
   if (mustWrite64 && type_.size() == 4) {
     memset((uint8_t*)(loc) + 4, 0, 4);
   }
+}
+
+void Val::writeToHeapLocation(void* loc) const {
+  if (type_.isRefRepr()) {
+    // TODO/AnyRef-boxing: With boxed immediates and strings, the write
+    // barrier is going to have to be more complicated.
+    *((GCPtrObject*)loc) = cell_.ref_.asJSObject();
+    return;
+  }
+  memcpy(loc, &cell_, type_.size());
 }
 
 bool Val::fromJSValue(JSContext* cx, ValType targetType, HandleValue val,
@@ -235,7 +246,7 @@ bool ToWebAssemblyValue_i32(JSContext* cx, HandleValue val, int32_t* loc,
                             bool mustWrite64) {
   bool ok = ToInt32(cx, val, loc);
   if (ok && mustWrite64) {
-#if defined(JS_CODEGEN_MIPS32) || defined(JS_CODEGEN_MIPS64)
+#if defined(JS_CODEGEN_MIPS64)
     loc[1] = loc[0] >> 31;
 #else
     loc[1] = 0;
@@ -597,6 +608,12 @@ wasm::FuncRef wasm::FuncRef::fromAnyRefUnchecked(AnyRef p) {
 #else
   return FuncRef(&p.asJSObject()->as<JSFunction>());
 #endif
+}
+
+void wasm::FuncRef::trace(JSTracer* trc) const {
+  if (value_) {
+    TraceManuallyBarrieredEdge(trc, &value_, "wasm funcref referent");
+  }
 }
 
 Value wasm::UnboxFuncRef(FuncRef val) {

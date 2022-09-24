@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(lcms2 STATIC
+add_library(lcms2 STATIC EXCLUDE_FROM_ALL
   lcms/src/cmsalpha.c
   lcms/src/cmscam02.c
   lcms/src/cmscgats.c
@@ -59,5 +59,19 @@ target_compile_definitions(lcms2
   PRIVATE "-DCMS_PTR_ALIGNMENT=8")
 target_compile_definitions(lcms2
   PUBLIC "-DCMS_NO_REGISTER_KEYWORD=1")
+
+# Ensure that a thread safe alternative of gmtime is used in LCMS
+include(CheckSymbolExists)
+check_symbol_exists(gmtime_r "time.h" HAVE_GMTIME_R)
+if (HAVE_GMTIME_R)
+  target_compile_definitions(lcms2
+    PUBLIC "-DHAVE_GMTIME_R=1")
+else()
+  check_symbol_exists(gmtime_s "time.h" HAVE_GMTIME_S)
+  if (HAVE_GMTIME_S)
+    target_compile_definitions(lcms2
+      PUBLIC "-DHAVE_GMTIME_S=1")
+  endif()
+endif()
 
 set_property(TARGET lcms2 PROPERTY POSITION_INDEPENDENT_CODE ON)

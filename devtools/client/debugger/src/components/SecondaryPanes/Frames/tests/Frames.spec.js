@@ -8,7 +8,6 @@ import Frames from "../index.js";
 // eslint-disable-next-line
 import { formatCallStackFrames } from "../../../../selectors/getCallStackFrames";
 import { makeMockFrame, makeMockSource } from "../../../../utils/test-mockup";
-import { createInitial, insertResources } from "../../../../utils/resource";
 
 function render(overrides = {}) {
   const defaultProps = {
@@ -189,8 +188,8 @@ describe("Frames", () => {
 
   describe("Blackboxed Frames", () => {
     it("filters blackboxed frames", () => {
-      const source1 = makeMockSource(undefined, "1");
-      const source2 = makeMockSource(undefined, "2");
+      const source1 = makeMockSource("source1", "1");
+      const source2 = makeMockSource("source2", "2");
       source2.isBlackBoxed = true;
 
       const frames = [
@@ -200,12 +199,21 @@ describe("Frames", () => {
         makeMockFrame("8", source2),
       ];
 
-      const sources = insertResources(createInitial(), [
-        { ...source1, content: null },
-        { ...source2, content: null },
+      const blackboxedRanges = {
+        source2: [],
+      };
+
+      const sources = new Map([
+        [source1.id, source1],
+        [source2.id, source2],
       ]);
 
-      const processedFrames = formatCallStackFrames(frames, sources, source1);
+      const processedFrames = formatCallStackFrames(
+        frames,
+        sources,
+        source1,
+        blackboxedRanges
+      );
       const selectedFrame = frames[0];
 
       const component = render({

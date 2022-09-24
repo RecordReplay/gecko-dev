@@ -66,6 +66,7 @@
 #include "nsIFrameInlines.h"
 #include "nsIScrollableFrame.h"
 #include "nsITheme.h"
+#include "nsIWidget.h"
 #include "nsLayoutUtils.h"
 #include "nsNameSpaceManager.h"
 #include "nsPlaceholderFrame.h"
@@ -265,8 +266,6 @@ bool nsBoxFrame::GetInitialHAlignment(nsBoxFrame::Halignment& aHalign) {
         return false;
     }
   }
-
-  return false;
 }
 
 bool nsBoxFrame::GetInitialVAlignment(nsBoxFrame::Valignment& aValign) {
@@ -306,8 +305,6 @@ bool nsBoxFrame::GetInitialVAlignment(nsBoxFrame::Valignment& aValign) {
         return false;
     }
   }
-
-  return false;
 }
 
 void nsBoxFrame::GetInitialOrientation(bool& aIsHorizontal) {
@@ -916,10 +913,31 @@ void nsBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     // Check for frames that are marked as a part of the region used
     // in calculating glass margins on Windows.
     const nsStyleDisplay* styles = StyleDisplay();
-    if (styles &&
-        styles->EffectiveAppearance() == StyleAppearance::MozWinExcludeGlass) {
+    if (styles->EffectiveAppearance() == StyleAppearance::MozWinExcludeGlass) {
       aBuilder->AddWindowExcludeGlassRegion(
           this, nsRect(aBuilder->ToReferenceFrame(this), GetSize()));
+    }
+
+    nsStaticAtom* windowButtonTypes[] = {nsGkAtoms::min, nsGkAtoms::max,
+                                         nsGkAtoms::close, nullptr};
+    int32_t buttonTypeIndex = mContent->AsElement()->FindAttrValueIn(
+        kNameSpaceID_None, nsGkAtoms::titlebar_button, windowButtonTypes,
+        eCaseMatters);
+
+    if (buttonTypeIndex >= 0) {
+      MOZ_ASSERT(buttonTypeIndex < 3);
+
+      if (auto* widget = GetNearestWidget()) {
+        using ButtonType = nsIWidget::WindowButtonType;
+        auto buttonType = buttonTypeIndex == 0
+                              ? ButtonType::Minimize
+                              : (buttonTypeIndex == 1 ? ButtonType::Maximize
+                                                      : ButtonType::Close);
+        auto rect = LayoutDevicePixel::FromAppUnitsToNearest(
+            nsRect(aBuilder->ToReferenceFrame(this), GetSize()),
+            PresContext()->AppUnitsPerDevPixel());
+        widget->SetWindowButtonRect(buttonType, rect);
+      }
     }
   }
 
@@ -943,7 +961,7 @@ void nsBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     // and merge them into a single Content() list. This can cause us
     // to violate CSS stacking order, but forceLayer is a magic
     // XUL-only extension anyway.
-    nsDisplayList masterList;
+    nsDisplayList masterList(aBuilder);
     masterList.AppendToTop(tempLists.BorderBackground());
     masterList.AppendToTop(tempLists.BlockBorderBackgrounds());
     masterList.AppendToTop(tempLists.Floats());
@@ -956,7 +974,7 @@ void nsBoxFrame::BuildDisplayList(nsDisplayListBuilder* aBuilder,
     // Wrap the list to make it its own layer
     aLists.Content()->AppendNewToTopWithIndex<nsDisplayOwnLayer>(
         aBuilder, this, /* aIndex = */ nsDisplayOwnLayer::OwnLayerForBoxFrame,
-        &masterList, ownLayerASR, nsDisplayOwnLayerFlags::None,
+        &masterList, ownLayerASR, mozilla::nsDisplayOwnLayerFlags::None,
         mozilla::layers::ScrollbarData{}, true, true);
   }
 }
@@ -1004,6 +1022,8 @@ nsresult nsBoxFrame::LayoutChildAt(nsBoxLayoutState& aState, nsIFrame* aBox,
 
   return NS_OK;
 }
+
+namespace mozilla {
 
 /**
  * This wrapper class lets us redirect mouse hits from descendant frames
@@ -1086,6 +1106,8 @@ void nsDisplayXULEventRedirector::HitTest(nsDisplayListBuilder* aBuilder,
     }
   }
 }
+
+}  // namespace mozilla
 
 class nsXULEventRedirectorWrapper final : public nsDisplayItemWrapper {
  public:

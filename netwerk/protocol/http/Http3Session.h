@@ -16,10 +16,10 @@
 #include "nsWeakReference.h"
 #include "HttpTrafficAnalyzer.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/WeakPtr.h"
 #include "nsDeque.h"
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 class HttpConnectionUDP;
 class Http3Stream;
@@ -94,10 +94,14 @@ class Http3Session final : public nsAHttpTransaction, public nsAHttpConnection {
 
   int64_t GetBytesWritten() { return mTotalBytesWritten; }
   int64_t BytesRead() { return mTotalBytesRead; }
-  PRIntervalTime LastWriteTime() { return mLastWriteTime; }
 
   nsresult SendData(nsIUDPSocket* socket);
   nsresult RecvData(nsIUDPSocket* socket);
+
+  void DoSetEchConfig(const nsACString& aEchConfig);
+
+  nsresult SendPriorityUpdateFrame(uint64_t aStreamId, uint8_t aPriorityUrgency,
+                                   bool aPriorityIncremental);
 
  private:
   ~Http3Session();
@@ -125,7 +129,7 @@ class Http3Session final : public nsAHttpTransaction, public nsAHttpConnection {
   void RemoveStreamFromQueues(Http3Stream*);
   void ProcessPending();
 
-  void CallCertVerification();
+  void CallCertVerification(Maybe<nsCString> aEchPublicName);
   void SetSecInfo();
 
   void StreamReadyToWrite(Http3Stream* aStream);
@@ -224,7 +228,6 @@ class Http3Session final : public nsAHttpTransaction, public nsAHttpConnection {
 
 NS_DEFINE_STATIC_IID_ACCESSOR(Http3Session, NS_HTTP3SESSION_IID);
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 #endif  // Http3Session_H__

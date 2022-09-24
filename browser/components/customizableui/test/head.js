@@ -4,16 +4,12 @@
 
 "use strict";
 
-// Avoid leaks by using tmp for imports...
-var tmp = {};
-ChromeUtils.import("resource://gre/modules/Promise.jsm", tmp);
-ChromeUtils.import("resource:///modules/CustomizableUI.jsm", tmp);
-ChromeUtils.import("resource://gre/modules/AppConstants.jsm", tmp);
-ChromeUtils.import(
-  "resource://testing-common/CustomizableUITestUtils.jsm",
-  tmp
-);
-var { Promise, CustomizableUI, AppConstants, CustomizableUITestUtils } = tmp;
+XPCOMUtils.defineLazyModuleGetters(this, {
+  AppConstants: "resource://gre/modules/AppConstants.jsm",
+  CustomizableUI: "resource:///modules/CustomizableUI.jsm",
+  CustomizableUITestUtils:
+    "resource://testing-common/CustomizableUITestUtils.jsm",
+});
 
 var EventUtils = {};
 Services.scriptloader.loadSubScript(
@@ -46,15 +42,15 @@ function createDummyXULButton(id, label, win = window) {
 
 var gAddedToolbars = new Set();
 
-function createToolbarWithPlacements(id, placements = []) {
+function createToolbarWithPlacements(id, placements = [], properties = {}) {
   gAddedToolbars.add(id);
   let tb = document.createXULElement("toolbar");
   tb.id = id;
   tb.setAttribute("customizable", "true");
-  CustomizableUI.registerArea(id, {
-    type: CustomizableUI.TYPE_TOOLBAR,
-    defaultPlacements: placements,
-  });
+
+  properties.type = CustomizableUI.TYPE_TOOLBAR;
+  properties.defaultPlacements = placements;
+  CustomizableUI.registerArea(id, properties);
   gNavToolbox.appendChild(tb);
   CustomizableUI.registerToolbarNode(tb);
   return tb;
@@ -383,26 +379,6 @@ function subviewHidden(aSubview) {
     }
     aSubview.addEventListener("ViewHiding", onViewHiding);
   });
-}
-
-function waitForCondition(aConditionFn, aMaxTries = 50, aCheckInterval = 100) {
-  function tryNow() {
-    tries++;
-    if (aConditionFn()) {
-      deferred.resolve();
-    } else if (tries < aMaxTries) {
-      tryAgain();
-    } else {
-      deferred.reject("Condition timed out: " + aConditionFn.toSource());
-    }
-  }
-  function tryAgain() {
-    setTimeout(tryNow, aCheckInterval);
-  }
-  let deferred = Promise.defer();
-  let tries = 0;
-  tryAgain();
-  return deferred.promise;
 }
 
 function waitFor(aTimeout = 100) {

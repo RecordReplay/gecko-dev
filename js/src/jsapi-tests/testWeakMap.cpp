@@ -6,7 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "gc/Zone.h"
-#include "js/Array.h"  // JS::GetArrayLength
+#include "js/Array.h"               // JS::GetArrayLength
+#include "js/GlobalObject.h"        // JS_NewGlobalObject
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
+#include "js/WeakMap.h"
 #include "jsapi-tests/tests.h"
 #include "vm/Realm.h"
 
@@ -145,7 +148,7 @@ static size_t DelegateObjectMoved(JSObject* obj, JSObject* old) {
 
 JSObject* newKey() {
   static const JSClass keyClass = {
-      "keyWithDelegate", JSCLASS_HAS_PRIVATE | JSCLASS_HAS_RESERVED_SLOTS(1),
+      "keyWithDelegate", JSCLASS_HAS_RESERVED_SLOTS(1),
       JS_NULL_CLASS_OPS, JS_NULL_CLASS_SPEC,
       JS_NULL_CLASS_EXT, JS_NULL_OBJECT_OPS};
 
@@ -195,7 +198,6 @@ JSObject* newDelegate() {
       nullptr,                   // mayResolve
       nullptr,                   // finalize
       nullptr,                   // call
-      nullptr,                   // hasInstance
       nullptr,                   // construct
       JS_GlobalObjectTraceHook,  // trace
   };

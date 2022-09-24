@@ -37,12 +37,23 @@ void ServoStyleRuleMap::EnsureTable(ShadowRoot& aShadowRoot) {
   for (auto index : IntegerRange(aShadowRoot.SheetCount())) {
     FillTableFromStyleSheet(*aShadowRoot.SheetAt(index));
   }
+  for (auto& sheet : aShadowRoot.AdoptedStyleSheets()) {
+    FillTableFromStyleSheet(*sheet);
+  }
 }
 
 void ServoStyleRuleMap::SheetAdded(StyleSheet& aStyleSheet) {
   if (!IsEmpty()) {
     FillTableFromStyleSheet(aStyleSheet);
   }
+}
+
+void ServoStyleRuleMap::SheetCloned(StyleSheet& aStyleSheet) {
+  // Invalidate all data inside. We could probably track down all the individual
+  // rules that changed etc, but it doesn't seem worth it.
+  //
+  // TODO: We can't do this until GetCssRulesInternal stops cloning.
+  // mTable.Clear();
 }
 
 void ServoStyleRuleMap::SheetRemoved(StyleSheet& aStyleSheet) {
@@ -69,29 +80,32 @@ void ServoStyleRuleMap::RuleRemoved(StyleSheet& aStyleSheet,
   }
 
   switch (aStyleRule.Type()) {
-    case CSSRule_Binding::STYLE_RULE: {
+    case StyleCssRuleType::Style: {
       auto& rule = static_cast<CSSStyleRule&>(aStyleRule);
       mTable.Remove(rule.Raw());
       break;
     }
-    case CSSRule_Binding::IMPORT_RULE:
-    case CSSRule_Binding::MEDIA_RULE:
-    case CSSRule_Binding::SUPPORTS_RULE:
-    case CSSRule_Binding::DOCUMENT_RULE: {
+    case StyleCssRuleType::Import:
+    case StyleCssRuleType::Media:
+    case StyleCssRuleType::Supports:
+    case StyleCssRuleType::LayerBlock:
+    case StyleCssRuleType::Container:
+    case StyleCssRuleType::Document: {
       // See the comment in StyleSheetRemoved.
       mTable.Clear();
       break;
     }
-    case CSSRule_Binding::FONT_FACE_RULE:
-    case CSSRule_Binding::PAGE_RULE:
-    case CSSRule_Binding::KEYFRAMES_RULE:
-    case CSSRule_Binding::KEYFRAME_RULE:
-    case CSSRule_Binding::NAMESPACE_RULE:
-    case CSSRule_Binding::COUNTER_STYLE_RULE:
-    case CSSRule_Binding::FONT_FEATURE_VALUES_RULE:
+    case StyleCssRuleType::LayerStatement:
+    case StyleCssRuleType::FontFace:
+    case StyleCssRuleType::Page:
+    case StyleCssRuleType::Keyframes:
+    case StyleCssRuleType::Keyframe:
+    case StyleCssRuleType::Namespace:
+    case StyleCssRuleType::CounterStyle:
+    case StyleCssRuleType::FontFeatureValues:
+    case StyleCssRuleType::Viewport:
+    case StyleCssRuleType::ScrollTimeline:
       break;
-    default:
-      MOZ_ASSERT_UNREACHABLE("Unhandled rule");
   }
 }
 
@@ -104,25 +118,39 @@ size_t ServoStyleRuleMap::SizeOfIncludingThis(
 
 void ServoStyleRuleMap::FillTableFromRule(css::Rule& aRule) {
   switch (aRule.Type()) {
-    case CSSRule_Binding::STYLE_RULE: {
+    case StyleCssRuleType::Style: {
       auto& rule = static_cast<CSSStyleRule&>(aRule);
       mTable.InsertOrUpdate(rule.Raw(), &rule);
       break;
     }
-    case CSSRule_Binding::MEDIA_RULE:
-    case CSSRule_Binding::SUPPORTS_RULE:
-    case CSSRule_Binding::DOCUMENT_RULE: {
+    case StyleCssRuleType::LayerBlock:
+    case StyleCssRuleType::Media:
+    case StyleCssRuleType::Supports:
+    case StyleCssRuleType::Container:
+    case StyleCssRuleType::Document: {
       auto& rule = static_cast<css::GroupRule&>(aRule);
-      auto ruleList = static_cast<ServoCSSRuleList*>(rule.CssRules());
-      FillTableFromRuleList(*ruleList);
+      if (ServoCSSRuleList* ruleList = rule.GetCssRules()) {
+        FillTableFromRuleList(*ruleList);
+      }
       break;
     }
-    case CSSRule_Binding::IMPORT_RULE: {
+    case StyleCssRuleType::Import: {
       auto& rule = static_cast<CSSImportRule&>(aRule);
       MOZ_ASSERT(aRule.GetStyleSheet());
       FillTableFromStyleSheet(*rule.GetStyleSheet());
       break;
     }
+    case StyleCssRuleType::LayerStatement:
+    case StyleCssRuleType::FontFace:
+    case StyleCssRuleType::Page:
+    case StyleCssRuleType::Keyframes:
+    case StyleCssRuleType::Keyframe:
+    case StyleCssRuleType::Namespace:
+    case StyleCssRuleType::CounterStyle:
+    case StyleCssRuleType::FontFeatureValues:
+    case StyleCssRuleType::Viewport:
+    case StyleCssRuleType::ScrollTimeline:
+      break;
   }
 }
 

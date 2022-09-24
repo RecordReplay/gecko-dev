@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "GfxInfo.h"
+#include "AndroidBuild.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
 #include "nsUnicharUtils.h"
@@ -11,12 +12,11 @@
 #include "nsExceptionHandler.h"
 #include "nsHashKeys.h"
 #include "nsVersionComparator.h"
-#include "AndroidBridge.h"
 #include "nsServiceManagerUtils.h"
 
 #include "mozilla/Preferences.h"
-
-#define NS_CRASHREPORTER_CONTRACTID "@mozilla.org/toolkit/crash-reporter;1"
+#include "mozilla/java/GeckoAppShellWrappers.h"
+#include "mozilla/java/HardwareCodecCapabilityUtilsWrappers.h"
 
 namespace mozilla {
 namespace widget {
@@ -178,47 +178,38 @@ GfxInfo::GetTestType(nsAString& aTestType) { return NS_ERROR_NOT_IMPLEMENTED; }
 void GfxInfo::EnsureInitialized() {
   if (mInitialized) return;
 
-  if (!mozilla::AndroidBridge::Bridge()) {
-    gfxWarning() << "AndroidBridge missing during initialization";
+  if (!jni::IsAvailable()) {
+    gfxWarning() << "JNI missing during initialization";
     return;
   }
 
-  if (mozilla::AndroidBridge::Bridge()->GetStaticStringField("android/os/Build",
-                                                             "MODEL", mModel)) {
-    mAdapterDescription.AppendPrintf("Model: %s",
-                                     NS_LossyConvertUTF16toASCII(mModel).get());
-  }
+  jni::String::LocalRef model = java::sdk::Build::MODEL();
+  mModel = model->ToString();
+  mAdapterDescription.AppendPrintf("Model: %s",
+                                   NS_LossyConvertUTF16toASCII(mModel).get());
 
-  if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
-          "android/os/Build", "PRODUCT", mProduct)) {
-    mAdapterDescription.AppendPrintf(
-        ", Product: %s", NS_LossyConvertUTF16toASCII(mProduct).get());
-  }
+  jni::String::LocalRef product = java::sdk::Build::PRODUCT();
+  mProduct = product->ToString();
+  mAdapterDescription.AppendPrintf(", Product: %s",
+                                   NS_LossyConvertUTF16toASCII(mProduct).get());
 
-  if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
-          "android/os/Build", "MANUFACTURER", mManufacturer)) {
-    mAdapterDescription.AppendPrintf(
-        ", Manufacturer: %s", NS_LossyConvertUTF16toASCII(mManufacturer).get());
-  }
+  jni::String::LocalRef manufacturer =
+      mozilla::java::sdk::Build::MANUFACTURER();
+  mManufacturer = manufacturer->ToString();
+  mAdapterDescription.AppendPrintf(
+      ", Manufacturer: %s", NS_LossyConvertUTF16toASCII(mManufacturer).get());
 
-  if (mozilla::AndroidBridge::Bridge()->GetStaticIntField(
-          "android/os/Build$VERSION", "SDK_INT", &mSDKVersion)) {
-    // the HARDWARE field isn't available on Android SDK < 8, but we require 9+
-    // anyway.
-    MOZ_ASSERT(mSDKVersion >= 8);
-    if (mozilla::AndroidBridge::Bridge()->GetStaticStringField(
-            "android/os/Build", "HARDWARE", mHardware)) {
-      mAdapterDescription.AppendPrintf(
-          ", Hardware: %s", NS_LossyConvertUTF16toASCII(mHardware).get());
-    }
-  } else {
-    mSDKVersion = 0;
-  }
+  mSDKVersion = java::sdk::Build::VERSION::SDK_INT();
+  // the HARDWARE field isn't available on Android SDK < 8, but we require 9+
+  // anyway.
+  MOZ_ASSERT(mSDKVersion >= 8);
+  jni::String::LocalRef hardware = java::sdk::Build::HARDWARE();
+  mHardware = hardware->ToString();
+  mAdapterDescription.AppendPrintf(
+      ", Hardware: %s", NS_LossyConvertUTF16toASCII(mHardware).get());
 
-  nsString release;
-  mozilla::AndroidBridge::Bridge()->GetStaticStringField(
-      "android/os/Build$VERSION", "RELEASE", release);
-  mOSVersion = NS_LossyConvertUTF16toASCII(release);
+  jni::String::LocalRef release = java::sdk::Build::VERSION::RELEASE();
+  mOSVersion = release->ToCString();
 
   mOSVersionInteger = 0;
   char a[5], b[5], c[5], d[5];
@@ -236,10 +227,6 @@ void GfxInfo::EnsureInitialized() {
       mGLStrings->Renderer().get(), mGLStrings->Version().get());
 
   AddCrashReportAnnotations();
-
-  mScreenInfo.mScreenDimensions =
-      mozilla::AndroidBridge::Bridge()->getScreenSize();
-
   mInitialized = true;
 }
 
@@ -363,29 +350,6 @@ NS_IMETHODIMP
 GfxInfo::GetIsGPU2Active(bool* aIsGPU2Active) {
   EnsureInitialized();
   return NS_ERROR_FAILURE;
-}
-
-NS_IMETHODIMP
-GfxInfo::GetDisplayInfo(nsTArray<nsString>& aDisplayInfo) {
-  EnsureInitialized();
-  nsString displayInfo;
-  displayInfo.AppendPrintf("%dx%d",
-                           (int32_t)mScreenInfo.mScreenDimensions.width,
-                           (int32_t)mScreenInfo.mScreenDimensions.height);
-  aDisplayInfo.AppendElement(displayInfo);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-GfxInfo::GetDisplayWidth(nsTArray<uint32_t>& aDisplayWidth) {
-  aDisplayWidth.AppendElement((uint32_t)mScreenInfo.mScreenDimensions.width);
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-GfxInfo::GetDisplayHeight(nsTArray<uint32_t>& aDisplayHeight) {
-  aDisplayHeight.AppendElement((uint32_t)mScreenInfo.mScreenDimensions.height);
-  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -558,21 +522,21 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     }
 
     if (aFeature == FEATURE_WEBRTC_HW_ACCELERATION_ENCODE) {
-      if (mozilla::AndroidBridge::Bridge()) {
+      if (jni::IsAvailable()) {
         *aStatus = WebRtcHwVp8EncodeSupported();
         aFailureId = "FEATURE_FAILURE_WEBRTC_ENCODE";
         return NS_OK;
       }
     }
     if (aFeature == FEATURE_WEBRTC_HW_ACCELERATION_DECODE) {
-      if (mozilla::AndroidBridge::Bridge()) {
+      if (jni::IsAvailable()) {
         *aStatus = WebRtcHwVp8DecodeSupported();
         aFailureId = "FEATURE_FAILURE_WEBRTC_DECODE";
         return NS_OK;
       }
     }
     if (aFeature == FEATURE_WEBRTC_HW_ACCELERATION_H264) {
-      if (mozilla::AndroidBridge::Bridge()) {
+      if (jni::IsAvailable()) {
         *aStatus = WebRtcHwH264Supported();
         aFailureId = "FEATURE_FAILURE_WEBRTC_H264";
         return NS_OK;
@@ -597,10 +561,43 @@ nsresult GfxInfo::GetFeatureStatusImpl(
     if (aFeature == FEATURE_WEBRENDER) {
       const bool isMali4xx =
           mGLStrings->Renderer().Find("Mali-4", /*ignoreCase*/ true) >= 0;
+
+      const bool isPowerVrG6110 =
+          mGLStrings->Renderer().Find("PowerVR Rogue G6110",
+                                      /* ignoreCase */ true) >= 0;
+
+      const bool isVivanteGC7000UL =
+          mGLStrings->Renderer().Find("Vivante GC7000UL",
+                                      /* ignoreCase */ true) >= 0;
+
+      const bool isPowerVrFenceSyncCrash =
+          (mGLStrings->Renderer().Find("PowerVR Rogue G6200",
+                                       /* ignoreCase */ true) >= 0 ||
+           mGLStrings->Renderer().Find("PowerVR Rogue G6430",
+                                       /* ignoreCase */ true) >= 0 ||
+           mGLStrings->Renderer().Find("PowerVR Rogue GX6250",
+                                       /* ignoreCase */ true) >= 0) &&
+          (mGLStrings->Version().Find("3283119", /* ignoreCase */ true) >= 0 ||
+           mGLStrings->Version().Find("3443629", /* ignoreCase */ true) >= 0 ||
+           mGLStrings->Version().Find("3573678", /* ignoreCase */ true) >= 0 ||
+           mGLStrings->Version().Find("3830101", /* ignoreCase */ true) >= 0);
+
       if (isMali4xx) {
         // Mali 4xx does not support GLES 3.
         *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
         aFailureId = "FEATURE_FAILURE_NO_GLES_3";
+      } else if (isPowerVrG6110) {
+        // Blocked on PowerVR Rogue G6110 due to bug 1742986 and bug 1717863.
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_POWERVR_G6110";
+      } else if (isVivanteGC7000UL) {
+        // Blocked on Vivante GC7000UL due to bug 1719327.
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_VIVANTE_GC7000UL";
+      } else if (isPowerVrFenceSyncCrash) {
+        // Blocked on various PowerVR GPUs due to bug 1773128.
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_POWERVR_FENCE_SYNC_CRASH";
       } else {
         *aStatus = nsIGfxInfo::FEATURE_ALLOW_QUALIFIED;
       }
@@ -655,8 +652,20 @@ nsresult GfxInfo::GetFeatureStatusImpl(
       return NS_OK;
     }
 
-    if (aFeature == FEATURE_WEBRENDER_SOFTWARE) {
-      *aStatus = nsIGfxInfo::FEATURE_ALLOW_ALWAYS;
+    if (aFeature == FEATURE_WEBRENDER_PARTIAL_PRESENT) {
+      // Block partial present on some devices due to rendering issues.
+      // On Mali-Txxx due to bug 1680087 and bug 1707815.
+      // On Adreno 3xx GPUs due to bug 1695771.
+      const bool isMaliT =
+          mGLStrings->Renderer().Find("Mali-T", /*ignoreCase*/ true) >= 0;
+      const bool isAdreno3xx = mGLStrings->Renderer().Find(
+                                   "Adreno (TM) 3", /*ignoreCase*/ true) >= 0;
+      if (isMaliT || isAdreno3xx) {
+        *aStatus = nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
+        aFailureId = "FEATURE_FAILURE_BUG_1680087_1695771_1707815";
+      } else {
+        *aStatus = nsIGfxInfo::FEATURE_STATUS_OK;
+      }
       return NS_OK;
     }
   }
@@ -720,7 +729,7 @@ static void SetCachedFeatureVal(int32_t aFeature, uint32_t aOsVer,
 }
 
 int32_t GfxInfo::WebRtcHwVp8EncodeSupported() {
-  MOZ_ASSERT(mozilla::AndroidBridge::Bridge());
+  MOZ_ASSERT(jni::IsAvailable());
 
   // The Android side of this calculation is very slow, so we cache the result
   // in preferences, invalidating if the OS version changes.
@@ -731,7 +740,7 @@ int32_t GfxInfo::WebRtcHwVp8EncodeSupported() {
     return status;
   }
 
-  status = mozilla::AndroidBridge::Bridge()->HasHWVP8Encoder()
+  status = java::GeckoAppShell::HasHWVP8Encoder()
                ? nsIGfxInfo::FEATURE_STATUS_OK
                : nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
 
@@ -742,7 +751,7 @@ int32_t GfxInfo::WebRtcHwVp8EncodeSupported() {
 }
 
 int32_t GfxInfo::WebRtcHwVp8DecodeSupported() {
-  MOZ_ASSERT(mozilla::AndroidBridge::Bridge());
+  MOZ_ASSERT(jni::IsAvailable());
 
   // The Android side of this caclulation is very slow, so we cache the result
   // in preferences, invalidating if the OS version changes.
@@ -753,7 +762,7 @@ int32_t GfxInfo::WebRtcHwVp8DecodeSupported() {
     return status;
   }
 
-  status = mozilla::AndroidBridge::Bridge()->HasHWVP8Decoder()
+  status = java::GeckoAppShell::HasHWVP8Decoder()
                ? nsIGfxInfo::FEATURE_STATUS_OK
                : nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
 
@@ -764,7 +773,7 @@ int32_t GfxInfo::WebRtcHwVp8DecodeSupported() {
 }
 
 int32_t GfxInfo::WebRtcHwH264Supported() {
-  MOZ_ASSERT(mozilla::AndroidBridge::Bridge());
+  MOZ_ASSERT(jni::IsAvailable());
 
   // The Android side of this calculation is very slow, so we cache the result
   // in preferences, invalidating if the OS version changes.
@@ -775,7 +784,7 @@ int32_t GfxInfo::WebRtcHwH264Supported() {
     return status;
   }
 
-  status = mozilla::AndroidBridge::Bridge()->HasHWH264()
+  status = java::HardwareCodecCapabilityUtils::HasHWH264()
                ? nsIGfxInfo::FEATURE_STATUS_OK
                : nsIGfxInfo::FEATURE_BLOCKED_DEVICE;
 

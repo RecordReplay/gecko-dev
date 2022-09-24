@@ -6,6 +6,7 @@ package org.mozilla.geckoview.test
 
 import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoSession.HistoryDelegate
 import org.mozilla.geckoview.test.rule.GeckoSessionTestRule.AssertCalled
 
 
@@ -15,7 +16,6 @@ import org.hamcrest.Matchers.*
 import org.junit.Assume.assumeThat
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.mozilla.geckoview.test.util.Callbacks
 import org.junit.Ignore
 import org.mozilla.geckoview.test.util.UiThreadUtils
 
@@ -67,39 +67,39 @@ class HistoryDelegateTest : BaseSessionTest() {
 
         // Since `getVisited` is called asynchronously after the page loads, we
         // can't use `waitForPageStop` here.
-        sessionRule.session.loadUri(testUri)
-        sessionRule.session.waitUntilCalled(GeckoSession.HistoryDelegate::class,
+        mainSession.loadUri(testUri)
+        mainSession.waitUntilCalled(GeckoSession.HistoryDelegate::class,
                                             "onVisited", "getVisited")
 
         // Sometimes link changes are not applied immediately, wait for a little bit
         UiThreadUtils.waitForCondition({
-            sessionRule.getLinkColor(testUri, "#mozilla") == VISITED_COLOR
+            mainSession.getLinkColor("#mozilla") == VISITED_COLOR
         }, sessionRule.env.defaultTimeoutMillis)
 
         assertThat(
             "Mozilla should be visited",
-            sessionRule.getLinkColor(testUri, "#mozilla"),
+            mainSession.getLinkColor("#mozilla"),
             equalTo(VISITED_COLOR)
         )
 
         assertThat(
             "Test Pilot should be visited",
-            sessionRule.getLinkColor(testUri, "#testpilot"),
+            mainSession.getLinkColor("#testpilot"),
             equalTo(VISITED_COLOR)
         )
 
         assertThat(
             "Bugzilla should be unvisited",
-            sessionRule.getLinkColor(testUri, "#bugzilla"),
+            mainSession.getLinkColor("#bugzilla"),
             equalTo(UNVISITED_COLOR)
         )
     }
 
     @Ignore //disable test on debug for frequent failures Bug 1544169
     @Test fun onHistoryStateChange() {
-        sessionRule.session.loadTestPath(HELLO_HTML_PATH)
+        mainSession.loadTestPath(HELLO_HTML_PATH)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have one entry", state.size,
@@ -111,9 +111,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.loadTestPath(HELLO2_HTML_PATH)
+        mainSession.loadTestPath(HELLO2_HTML_PATH)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,
@@ -125,9 +125,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.goBack()
+        mainSession.goBack()
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,
@@ -139,9 +139,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.goForward()
+        mainSession.goForward()
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,
@@ -153,9 +153,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.gotoHistoryIndex(0)
+        mainSession.gotoHistoryIndex(0)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,
@@ -167,9 +167,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.gotoHistoryIndex(1)
+        mainSession.gotoHistoryIndex(1)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,
@@ -187,9 +187,9 @@ class HistoryDelegateTest : BaseSessionTest() {
         assumeThat(sessionRule.env.isFission, equalTo(false))
 
         // This is a smaller version of the above test, in the hopes to minimize race conditions
-        sessionRule.session.loadTestPath(HELLO_HTML_PATH)
+        mainSession.loadTestPath(HELLO_HTML_PATH)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have one entry", state.size,
@@ -201,9 +201,9 @@ class HistoryDelegateTest : BaseSessionTest() {
             }
         })
 
-        sessionRule.session.loadTestPath(HELLO2_HTML_PATH)
+        mainSession.loadTestPath(HELLO2_HTML_PATH)
 
-        sessionRule.waitUntilCalled(object : Callbacks.HistoryDelegate {
+        sessionRule.waitUntilCalled(object : HistoryDelegate {
             @AssertCalled(count = 1)
             override fun onHistoryStateChange(session: GeckoSession, state: GeckoSession.HistoryDelegate.HistoryList) {
                 assertThat("History should have two entries", state.size,

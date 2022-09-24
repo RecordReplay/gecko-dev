@@ -65,35 +65,35 @@ wr::WrExternalImage RenderBufferTextureHost::Lock(
         gfxCriticalNote << "DataSourceSurface is null";
         return InvalidToWrExternalImage();
       }
-      if (NS_WARN_IF(!mSurface->Map(gfx::DataSourceSurface::MapType::READ_WRITE,
-                                    &mMap))) {
+      if (NS_WARN_IF(
+              !mSurface->Map(gfx::DataSourceSurface::MapType::READ, &mMap))) {
         mSurface = nullptr;
         gfxCriticalNote << "Failed to map Surface";
         return InvalidToWrExternalImage();
       }
     } else {
       const layers::YCbCrDescriptor& desc = mDescriptor.get_YCbCrDescriptor();
+      auto cbcrSize = layers::ImageDataSerializer::GetCroppedCbCrSize(desc);
 
       mYSurface = gfx::Factory::CreateWrappingDataSourceSurface(
           layers::ImageDataSerializer::GetYChannel(GetBuffer(), desc),
-          desc.yStride(), desc.ySize(), gfx::SurfaceFormat::A8);
+          desc.yStride(), desc.display().Size(), gfx::SurfaceFormat::A8);
       mCbSurface = gfx::Factory::CreateWrappingDataSourceSurface(
           layers::ImageDataSerializer::GetCbChannel(GetBuffer(), desc),
-          desc.cbCrStride(), desc.cbCrSize(), gfx::SurfaceFormat::A8);
+          desc.cbCrStride(), cbcrSize, gfx::SurfaceFormat::A8);
       mCrSurface = gfx::Factory::CreateWrappingDataSourceSurface(
           layers::ImageDataSerializer::GetCrChannel(GetBuffer(), desc),
-          desc.cbCrStride(), desc.cbCrSize(), gfx::SurfaceFormat::A8);
+          desc.cbCrStride(), cbcrSize, gfx::SurfaceFormat::A8);
       if (NS_WARN_IF(!mYSurface || !mCbSurface || !mCrSurface)) {
         mYSurface = mCbSurface = mCrSurface = nullptr;
         gfxCriticalNote << "YCbCr Surface is null";
         return InvalidToWrExternalImage();
       }
       if (NS_WARN_IF(
-              !mYSurface->Map(gfx::DataSourceSurface::MapType::READ_WRITE,
-                              &mYMap) ||
-              !mCbSurface->Map(gfx::DataSourceSurface::MapType::READ_WRITE,
+              !mYSurface->Map(gfx::DataSourceSurface::MapType::READ, &mYMap) ||
+              !mCbSurface->Map(gfx::DataSourceSurface::MapType::READ,
                                &mCbMap) ||
-              !mCrSurface->Map(gfx::DataSourceSurface::MapType::READ_WRITE,
+              !mCrSurface->Map(gfx::DataSourceSurface::MapType::READ,
                                &mCrMap))) {
         mYSurface = mCbSurface = mCrSurface = nullptr;
         gfxCriticalNote << "Failed to map YCbCr Surface";
@@ -209,19 +209,21 @@ bool RenderBufferTextureHost::MapPlane(RenderCompositor* aCompositor,
           aPlaneInfo.mData =
               layers::ImageDataSerializer::GetYChannel(mBuffer, desc);
           aPlaneInfo.mStride = desc.yStride();
-          aPlaneInfo.mSize = desc.ySize();
+          aPlaneInfo.mSize = desc.display().Size();
           break;
         case 1:
           aPlaneInfo.mData =
               layers::ImageDataSerializer::GetCbChannel(mBuffer, desc);
           aPlaneInfo.mStride = desc.cbCrStride();
-          aPlaneInfo.mSize = desc.cbCrSize();
+          aPlaneInfo.mSize =
+              layers::ImageDataSerializer::GetCroppedCbCrSize(desc);
           break;
         case 2:
           aPlaneInfo.mData =
               layers::ImageDataSerializer::GetCrChannel(mBuffer, desc);
           aPlaneInfo.mStride = desc.cbCrStride();
-          aPlaneInfo.mSize = desc.cbCrSize();
+          aPlaneInfo.mSize =
+              layers::ImageDataSerializer::GetCroppedCbCrSize(desc);
           break;
       }
       break;

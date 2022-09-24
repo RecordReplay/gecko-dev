@@ -24,8 +24,7 @@
 #include "nsNetUtil.h"
 #include "nsStringStream.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 namespace {
 
@@ -39,7 +38,8 @@ class ReportFetchHandler final : public PromiseNativeHandler {
       const nsTArray<ReportDeliver::ReportData>& aReportData)
       : mReports(aReportData.Clone()) {}
 
-  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     if (!gReportDeliver) {
       return;
     }
@@ -76,7 +76,8 @@ class ReportFetchHandler final : public PromiseNativeHandler {
     }
   }
 
-  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override {
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override {
     if (gReportDeliver) {
       for (auto& report : mReports) {
         ++report.mFailures;
@@ -372,6 +373,12 @@ ReportDeliver::Notify(nsITimer* aTimer) {
 }
 
 NS_IMETHODIMP
+ReportDeliver::GetName(nsACString& aName) {
+  aName.AssignLiteral("ReportDeliver");
+  return NS_OK;
+}
+
+NS_IMETHODIMP
 ReportDeliver::Observe(nsISupports* aSubject, const char* aTopic,
                        const char16_t* aData) {
   MOZ_ASSERT(!strcmp(aTopic, NS_XPCOM_SHUTDOWN_OBSERVER_ID));
@@ -400,10 +407,10 @@ NS_INTERFACE_MAP_BEGIN(ReportDeliver)
   NS_INTERFACE_MAP_ENTRY_AMBIGUOUS(nsISupports, nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsIObserver)
   NS_INTERFACE_MAP_ENTRY(nsITimerCallback)
+  NS_INTERFACE_MAP_ENTRY(nsINamed)
 NS_INTERFACE_MAP_END
 
 NS_IMPL_ADDREF(ReportDeliver)
 NS_IMPL_RELEASE(ReportDeliver)
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

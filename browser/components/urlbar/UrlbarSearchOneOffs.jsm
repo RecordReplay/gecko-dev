@@ -132,10 +132,7 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
     super.selectedButton = button;
 
     let expectedSearchMode;
-    if (
-      button &&
-      button != this.view.oneOffSearchButtons.settingsButtonCompact
-    ) {
+    if (button && button != this.view.oneOffSearchButtons.settingsButton) {
       expectedSearchMode = {
         engineName: button.engine?.name,
         source: button.source,
@@ -154,19 +151,11 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
   }
 
   /**
-   * @returns {number}
-   *   The selected index in the view.
+   * The selected index in the view or -1 if there is no selection.
    */
   get selectedViewIndex() {
     return this.view.selectedElementIndex;
   }
-
-  /**
-   * Sets the selected index in the view.
-   *
-   * @param {number} val
-   *   The selected index or -1 if no selection.
-   */
   set selectedViewIndex(val) {
     this.view.selectedElementIndex = val;
   }
@@ -194,8 +183,7 @@ class UrlbarSearchOneOffs extends SearchOneOffs {
     // The settings button and adding engines are a special case and executed
     // immediately.
     if (
-      this.selectedButton ==
-        this.view.oneOffSearchButtons.settingsButtonCompact ||
+      this.selectedButton == this.view.oneOffSearchButtons.settingsButton ||
       this.selectedButton.classList.contains(
         "searchbar-engine-one-off-add-engine"
       )

@@ -49,10 +49,10 @@ void SMILCompositor::ComposeAttribute(bool& aMightHavePendingStyleUpdates) {
 
   // If we might need to resolve base styles, grab a suitable ComputedStyle
   // for initializing our SMILAttr with.
-  RefPtr<ComputedStyle> baseComputedStyle;
+  RefPtr<const ComputedStyle> baseComputedStyle;
   if (MightNeedBaseStyle()) {
     baseComputedStyle = nsComputedDOMStyle::GetUnanimatedComputedStyleNoFlush(
-        mKey.mElement, nullptr);
+        mKey.mElement, PseudoStyleType::NotPseudo);
   }
 
   // FIRST: Get the SMILAttr (to grab base value from, and to eventually
@@ -122,7 +122,7 @@ void SMILCompositor::ClearAnimationEffects() {
 // Protected Helper Functions
 // --------------------------
 UniquePtr<SMILAttr> SMILCompositor::CreateSMILAttr(
-    ComputedStyle* aBaseComputedStyle) {
+    const ComputedStyle* aBaseComputedStyle) {
   nsCSSPropertyID propID = GetCSSPropertyToAnimate();
 
   if (propID != eCSSProperty_UNKNOWN) {

@@ -28,6 +28,7 @@ namespace dom {
 
 class ArrayBufferViewOrArrayBuffer;
 class BrowsingContext;
+class Element;
 class IdleRequestCallback;
 struct IdleRequestOptions;
 struct MediaMetadataInit;
@@ -90,6 +91,9 @@ class ChromeUtils {
 
   static bool IsRecordingOrReplaying(GlobalObject& aGlobal);
 
+  static void GetXPCOMErrorName(GlobalObject& aGlobal, uint32_t aErrorCode,
+                                nsACString& aRetval);
+
   static void OriginAttributesToSuffix(
       GlobalObject& aGlobal, const dom::OriginAttributesDictionary& aAttrs,
       nsCString& aSuffix);
@@ -130,6 +134,11 @@ class ChromeUtils {
                                             const nsAString& aPartitionKey,
                                             nsAString& aBaseDomain,
                                             ErrorResult& aRv);
+
+  static void GetPartitionKeyFromURL(dom::GlobalObject& aGlobal,
+                                     const nsAString& aURL,
+                                     nsAString& aPartitionKey,
+                                     ErrorResult& aRv);
 
   // Implemented in js/xpconnect/loader/ChromeScriptLoader.cpp
   static already_AddRefed<Promise> CompileScript(
@@ -182,7 +191,10 @@ class ChromeUtils {
   static already_AddRefed<Promise> RequestProcInfo(GlobalObject& aGlobal,
                                                    ErrorResult& aRv);
 
-  static void Import(const GlobalObject& aGlobal, const nsAString& aResourceURI,
+  static bool VsyncEnabled(GlobalObject& aGlobal);
+
+  static void Import(const GlobalObject& aGlobal,
+                     const nsACString& aResourceURI,
                      const Optional<JS::Handle<JSObject*>>& aTargetObj,
                      JS::MutableHandle<JSObject*> aRetval, ErrorResult& aRv);
 
@@ -245,6 +257,13 @@ class ChromeUtils {
   static void ConsumeInteractionData(
       GlobalObject& aGlobal, Record<nsString, InteractionData>& aInteractions,
       ErrorResult& aRv);
+
+  static already_AddRefed<Promise> CollectScrollingData(GlobalObject& aGlobal,
+                                                        ErrorResult& aRv);
+
+  static void GetFormAutofillConfidences(
+      GlobalObject& aGlobal, const Sequence<OwningNonNull<Element>>& aElements,
+      nsTArray<FormAutofillConfidences>& aResults, ErrorResult& aRv);
 };
 
 }  // namespace dom

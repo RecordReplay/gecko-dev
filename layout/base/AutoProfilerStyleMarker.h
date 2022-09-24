@@ -18,7 +18,7 @@ class MOZ_RAII AutoProfilerStyleMarker {
  public:
   explicit AutoProfilerStyleMarker(UniquePtr<ProfileChunkedBuffer> aCause,
                                    const Maybe<uint64_t>& aInnerWindowID)
-      : mActive(profiler_can_accept_markers()),
+      : mActive(profiler_thread_is_being_profiled_for_markers()),
         mStartTime(TimeStamp::Now()),
         mCause(std::move(aCause)),
         mInnerWindowID(aInnerWindowID) {
@@ -53,18 +53,18 @@ class MOZ_RAII AutoProfilerStyleMarker {
       }
       static MarkerSchema MarkerTypeDisplay() {
         using MS = MarkerSchema;
-        MS schema{MS::Location::markerChart, MS::Location::markerTable,
-                  MS::Location::timelineOverview};
+        MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable,
+                  MS::Location::TimelineOverview};
         schema.AddKeyLabelFormat("elementsTraversed", "Elements traversed",
-                                 MS::Format::integer);
+                                 MS::Format::Integer);
         schema.AddKeyLabelFormat("elementsStyled", "Elements styled",
-                                 MS::Format::integer);
+                                 MS::Format::Integer);
         schema.AddKeyLabelFormat("elementsMatched", "Elements matched",
-                                 MS::Format::integer);
+                                 MS::Format::Integer);
         schema.AddKeyLabelFormat("stylesShared", "Styles shared",
-                                 MS::Format::integer);
+                                 MS::Format::Integer);
         schema.AddKeyLabelFormat("stylesReused", "Styles reused",
-                                 MS::Format::integer);
+                                 MS::Format::Integer);
         return schema;
       }
     };

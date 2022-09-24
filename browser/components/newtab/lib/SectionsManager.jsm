@@ -27,10 +27,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
  * Built in sections may depend on options stored as serialised JSON in the pref
  * `${feed_pref_name}.options`.
  */
-const BUILT_IN_SECTIONS = ({
-  newNewtabExperienceEnabled,
-  customizationMenuEnabled,
-}) => ({
+const BUILT_IN_SECTIONS = () => ({
   "feeds.section.topstories": options => ({
     id: "topstories",
     pref: {
@@ -39,10 +36,7 @@ const BUILT_IN_SECTIONS = ({
         values: { provider: options.provider_name },
       },
       descString: {
-        id:
-          newNewtabExperienceEnabled || customizationMenuEnabled
-            ? "home-prefs-recommended-by-description-new"
-            : "home-prefs-recommended-by-description-update",
+        id: "home-prefs-recommended-by-description-new",
         values: { provider: options.provider_name },
       },
       nestedPrefs: options.show_spocs
@@ -101,16 +95,10 @@ const BUILT_IN_SECTIONS = ({
     id: "highlights",
     pref: {
       titleString: {
-        id:
-          newNewtabExperienceEnabled || customizationMenuEnabled
-            ? "home-prefs-recent-activity-header"
-            : "home-prefs-highlights-header",
+        id: "home-prefs-recent-activity-header",
       },
       descString: {
-        id:
-          newNewtabExperienceEnabled || customizationMenuEnabled
-            ? "home-prefs-recent-activity-description"
-            : "home-prefs-highlights-description",
+        id: "home-prefs-recent-activity-description",
       },
       nestedPrefs: [
         {
@@ -139,10 +127,7 @@ const BUILT_IN_SECTIONS = ({
     eventSource: "HIGHLIGHTS",
     icon: "chrome://global/skin/icons/highlights.svg",
     title: {
-      id:
-        newNewtabExperienceEnabled || customizationMenuEnabled
-          ? "newtab-section-header-recent-activity"
-          : "newtab-section-header-highlights",
+      id: "newtab-section-header-recent-activity",
     },
     compactCards: true,
     rowsPref: "section.highlights.rows",
@@ -203,7 +188,7 @@ const SectionsManager = {
   sections: new Map(),
   async init(prefs = {}, storage) {
     this._storage = storage;
-    const featureConfig = NimbusFeatures.newtab.getValue() || {};
+    const featureConfig = NimbusFeatures.newtab.getAllVariables() || {};
 
     for (const feedPrefName of Object.keys(BUILT_IN_SECTIONS(featureConfig))) {
       const optionsPrefName = `${feedPrefName}.options`;
@@ -252,7 +237,7 @@ const SectionsManager = {
   async addBuiltInSection(feedPrefName, optionsPrefValue = "{}") {
     let options;
     let storedPrefs;
-    const featureConfig = NimbusFeatures.newtab.getValue() || {};
+    const featureConfig = NimbusFeatures.newtab.getAllVariables() || {};
     try {
       options = JSON.parse(optionsPrefValue);
     } catch (e) {

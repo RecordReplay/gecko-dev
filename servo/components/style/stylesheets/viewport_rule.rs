@@ -241,8 +241,7 @@ fn parse_shorthand<'i, 't>(
 }
 
 impl<'a, 'b, 'i> AtRuleParser<'i> for ViewportRuleParser<'a, 'b> {
-    type PreludeNoBlock = ();
-    type PreludeBlock = ();
+    type Prelude = ();
     type AtRule = Vec<ViewportDescriptorDeclaration>;
     type Error = StyleParseErrorKind<'i>;
 }
@@ -684,7 +683,8 @@ impl MaybeNew for ViewportConstraints {
             font_metrics_provider: &provider,
             cached_system_font: None,
             in_media_query: false,
-            quirks_mode: quirks_mode,
+            quirks_mode,
+            container_info: None,
             for_smil_animation: false,
             for_non_inherited_property: None,
             rule_cache_conditions: RefCell::new(&mut conditions),
@@ -753,7 +753,7 @@ impl MaybeNew for ViewportConstraints {
                     })
                 } else {
                     None
-                };
+                }
             };
         }
 

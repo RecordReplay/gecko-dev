@@ -98,10 +98,10 @@ static bool IsEventTargetChrome(EventTarget* aEventTarget,
   }
 
   Document* doc = nullptr;
-  if (nsCOMPtr<nsINode> node = do_QueryInterface(aEventTarget)) {
+  if (nsINode* node = nsINode::FromEventTargetOrNull(aEventTarget)) {
     doc = node->OwnerDoc();
-  } else if (nsCOMPtr<nsPIDOMWindowInner> window =
-                 do_QueryInterface(aEventTarget)) {
+  } else if (nsPIDOMWindowInner* window =
+                 nsPIDOMWindowInner::FromEventTargetOrNull(aEventTarget)) {
     doc = window->GetExtantDoc();
   }
 
@@ -383,7 +383,7 @@ class EventTargetChainItem {
     bool mIsChromeHandler : 1;
 
    private:
-    typedef uint32_t RawFlags;
+    using RawFlags = uint32_t;
     void SetRawFlags(RawFlags aRawFlags) {
       static_assert(
           sizeof(EventTargetChainFlags) <= sizeof(RawFlags),
@@ -690,20 +690,46 @@ EventTargetChainItem* EventTargetChainItemForChromeTarget(
 }
 
 static bool ShouldClearTargets(WidgetEvent* aEvent) {
-  nsCOMPtr<nsIContent> finalTarget;
-  nsCOMPtr<nsIContent> finalRelatedTarget;
-  if ((finalTarget = do_QueryInterface(aEvent->mTarget)) &&
-      finalTarget->SubtreeRoot()->IsShadowRoot()) {
-    return true;
+  if (nsIContent* finalTarget =
+          nsIContent::FromEventTargetOrNull(aEvent->mTarget)) {
+    if (finalTarget->SubtreeRoot()->IsShadowRoot()) {
+      return true;
+    }
   }
 
-  if ((finalRelatedTarget = do_QueryInterface(aEvent->mRelatedTarget)) &&
-      finalRelatedTarget->SubtreeRoot()->IsShadowRoot()) {
-    return true;
+  if (nsIContent* finalRelatedTarget =
+          nsIContent::FromEventTargetOrNull(aEvent->mRelatedTarget)) {
+    if (finalRelatedTarget->SubtreeRoot()->IsShadowRoot()) {
+      return true;
+    }
   }
   // XXXsmaug Check also all the touch objects.
 
   return false;
+}
+
+static void DescribeEventTargetForProfilerMarker(const EventTarget* aTarget,
+                                                 nsACString& aDescription) {
+  auto* node = aTarget->GetAsNode();
+  if (node) {
+    if (node->IsElement()) {
+      nsAutoString nodeDescription;
+      node->AsElement()->Describe(nodeDescription, true);
+      aDescription = NS_ConvertUTF16toUTF8(nodeDescription);
+    } else if (node->IsDocument()) {
+      aDescription.AssignLiteral("document");
+    } else if (node->IsText()) {
+      aDescription.AssignLiteral("text");
+    } else if (node->IsDocumentFragment()) {
+      aDescription.AssignLiteral("document fragment");
+    }
+  } else if (aTarget->IsInnerWindow() || aTarget->IsOuterWindow()) {
+    aDescription.AssignLiteral("window");
+  } else if (aTarget->IsRootWindow()) {
+    aDescription.AssignLiteral("root window");
+  } else {
+    // Probably something that inherits from DOMEventTargetHelper.
+  }
 }
 
 /* static */
@@ -745,7 +771,7 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
   bool retargeted = false;
 
   if (aEvent->mFlags.mRetargetToNonNativeAnonymous) {
-    nsCOMPtr<nsIContent> content = do_QueryInterface(target);
+    nsIContent* content = nsIContent::FromEventTargetOrNull(target);
     if (content && content->IsInNativeAnonymousSubtree()) {
       nsCOMPtr<EventTarget> newTarget =
           content->FindFirstNonChromeOnlyAccessContent();
@@ -787,7 +813,7 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
         MOZ_CRASH("This is unsafe! Fix the caller!");
       }
     };
-    if (nsCOMPtr<nsINode> node = do_QueryInterface(target)) {
+    if (nsINode* node = nsINode::FromEventTargetOrNull(target)) {
       // If this is a node, it's possible that this is some sort of DOM tree
       // that is never accessed by script (for example an SVG image or XBL
       // binding document or whatnot).  We really only want to warn/assert here
@@ -867,7 +893,8 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
 
   bool clearTargets = false;
 
-  nsCOMPtr<nsIContent> content = do_QueryInterface(aEvent->mOriginalTarget);
+  nsCOMPtr<nsIContent> content =
+      nsIContent::FromEventTargetOrNull(aEvent->mOriginalTarget);
   bool isInAnon = content && content->IsInNativeAnonymousSubtree();
 
   aEvent->mFlags.mIsBeingDispatched = true;
@@ -950,7 +977,8 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
         topEtci = parentEtci;
       } else {
         bool ignoreBecauseOfShadowDOM = preVisitor.mIgnoreBecauseOfShadowDOM;
-        nsCOMPtr<nsINode> disabledTarget = do_QueryInterface(parentTarget);
+        nsCOMPtr<nsINode> disabledTarget =
+            nsINode::FromEventTargetOrNull(parentTarget);
         parentEtci = MayRetargetToChromeIfCanNotHandleEvent(
             chain, preVisitor, parentEtci, topEtci, disabledTarget);
         if (parentEtci && preVisitor.mCanHandle) {
@@ -1039,10 +1067,13 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
             static void StreamJSONMarkerData(
                 baseprofiler::SpliceableJSONWriter& aWriter,
                 const ProfilerString16View& aEventType,
-                const TimeStamp& aStartTime, const TimeStamp& aEventTimeStamp) {
-              aWriter.StringProperty(
-                  "eventType", NS_ConvertUTF16toUTF8(aEventType.Data(),
-                                                     aEventType.Length()));
+                const nsCString& aTarget, const TimeStamp& aStartTime,
+                const TimeStamp& aEventTimeStamp) {
+              aWriter.StringProperty("eventType",
+                                     NS_ConvertUTF16toUTF8(aEventType));
+              if (!aTarget.IsEmpty()) {
+                aWriter.StringProperty("target", aTarget);
+              }
               // This is the event processing latency, which is the time from
               // when the event was created, to when it was started to be
               // processed. Note that the computation of this latency is
@@ -1053,22 +1084,28 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
             }
             static MarkerSchema MarkerTypeDisplay() {
               using MS = MarkerSchema;
-              MS schema{MS::Location::markerChart, MS::Location::markerTable,
-                        MS::Location::timelineOverview};
+              MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable,
+                        MS::Location::TimelineOverview};
               schema.SetChartLabel("{marker.data.eventType}");
               schema.SetTooltipLabel("{marker.data.eventType} - DOMEvent");
-              schema.SetTableLabel("{marker.data.eventType}");
+              schema.SetTableLabel(
+                  "{marker.data.eventType} - {marker.data.target}");
+              schema.AddKeyLabelFormat("target", "Event Target",
+                                       MS::Format::String);
               schema.AddKeyLabelFormat("latency", "Latency",
-                                       MS::Format::duration);
+                                       MS::Format::Duration);
               return schema;
             }
           };
 
-          auto startTime = TimeStamp::NowUnfuzzed();
+          nsAutoCString target;
+          DescribeEventTargetForProfilerMarker(aEvent->mTarget, target);
+
+          auto startTime = TimeStamp::Now();
           profiler_add_marker("DOMEvent", geckoprofiler::category::DOM,
                               {MarkerTiming::IntervalStart(),
                                MarkerInnerWindowId(innerWindowId)},
-                              DOMEventMarker{}, typeStr, startTime,
+                              DOMEventMarker{}, typeStr, target, startTime,
                               aEvent->mTimeStamp);
 
           EventTargetChainItem::HandleEventTargetChain(chain, postVisitor,
@@ -1077,7 +1114,7 @@ nsresult EventDispatcher::Dispatch(nsISupports* aTarget,
           profiler_add_marker(
               "DOMEvent", geckoprofiler::category::DOM,
               {MarkerTiming::IntervalEnd(), std::move(innerWindowId)},
-              DOMEventMarker{}, typeStr, startTime, aEvent->mTimeStamp);
+              DOMEventMarker{}, typeStr, target, startTime, aEvent->mTimeStamp);
         } else {
           EventTargetChainItem::HandleEventTargetChain(chain, postVisitor,
                                                        aCallback, cd);

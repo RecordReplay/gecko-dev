@@ -20,6 +20,9 @@ include apng-mime/reftest.list
 
 skip-if(unsupportedWithDrawSnapshot) include async-scrolling/reftest.list
 
+# backgrounds/
+include backgrounds/reftest.list
+
 # bidi/
 include bidi/reftest.list
 
@@ -87,6 +90,9 @@ include css-gradients/reftest.list
 # css media queries (tests for print mode)
 include css-mediaqueries/reftest.list
 
+# css page
+include css-page/reftest.list
+
 # css parsing
 include css-parsing/reftest.list
 
@@ -113,9 +119,6 @@ include css-valid/reftest.list
 
 # css invalid
 include css-invalid/reftest.list
-
-# css-submit-invalid
-include css-submit-invalid/reftest.list
 
 # css text-overflow
 include text-overflow/reftest.list
@@ -152,6 +155,9 @@ include css-variables/reftest.list
 # harness.
 
 include cssom/reftest.list
+
+# color-scheme
+include color-scheme/reftest.list
 
 # columns/
 include columns/reftest.list

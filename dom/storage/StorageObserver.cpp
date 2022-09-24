@@ -29,8 +29,7 @@
 #include "mozilla/SpinEventLoopUntil.h"
 #include "nsServiceManagerUtils.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using namespace StorageUtils;
 
@@ -41,7 +40,8 @@ const char kTestingPref[] = "dom.storage.testing";
 
 constexpr auto kPrivateBrowsingPattern = u"{ \"privateBrowsingId\": 1 }"_ns;
 
-NS_IMPL_ISUPPORTS(StorageObserver, nsIObserver, nsISupportsWeakReference)
+NS_IMPL_ISUPPORTS(StorageObserver, nsIObserver, nsINamed,
+                  nsISupportsWeakReference)
 
 StorageObserver* StorageObserver::sSelf = nullptr;
 
@@ -468,7 +468,9 @@ StorageObserver::Observe(nsISupports* aSubject, const char* aTopic,
         MOZ_ALWAYS_SUCCEEDS(mBackgroundThread[id]->Dispatch(
             shutdownRunnable, NS_DISPATCH_NORMAL));
 
-        MOZ_ALWAYS_TRUE(SpinEventLoopUntil([&]() { return done; }));
+        MOZ_ALWAYS_TRUE(SpinEventLoopUntil(
+            "StorageObserver::Observe profile-before-change"_ns,
+            [&]() { return done; }));
 
         mBackgroundThread[id] = nullptr;
       }
@@ -521,5 +523,10 @@ StorageObserver::Observe(nsISupports* aSubject, const char* aTopic,
   return NS_ERROR_UNEXPECTED;
 }
 
-}  // namespace dom
-}  // namespace mozilla
+NS_IMETHODIMP
+StorageObserver::GetName(nsACString& aName) {
+  aName.AssignLiteral("StorageObserver");
+  return NS_OK;
+}
+
+}  // namespace mozilla::dom

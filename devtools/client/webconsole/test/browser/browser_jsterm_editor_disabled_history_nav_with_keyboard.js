@@ -8,7 +8,7 @@
 "use strict";
 
 const TEST_URI =
-  "data:text/html;charset=utf-8,Web Console test for bug 1519313";
+  "data:text/html;charset=utf-8,<!DOCTYPE html>Web Console test for bug 1519313";
 
 add_task(async function() {
   await pushPref("devtools.webconsole.input.editor", true);
@@ -28,7 +28,7 @@ add_task(async function() {
   info("Executing a bunch of non-sense JS expression");
   for (const expression of testExpressions) {
     // Wait until we get the result of the command.
-    await executeAndWaitForMessage(hud, expression, "", ".result");
+    await executeAndWaitForResultMessage(hud, expression, "");
     ok(true, `JS expression executed successfully: ${expression} `);
   }
 

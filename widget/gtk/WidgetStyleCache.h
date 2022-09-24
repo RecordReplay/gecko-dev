@@ -50,10 +50,14 @@ GtkStyleContext* CreateStyleContextWithStates(
     GtkTextDirection aDirection = GTK_TEXT_DIR_NONE,
     GtkStateFlags aStateFlags = GTK_STATE_FLAG_NORMAL);
 
-void ResetWidgetCache(void);
+void ResetWidgetCache();
 
 bool IsSolidCSDStyleUsed();
 
 void StyleContextSetScale(GtkStyleContext* style, gint aScaleFactor);
+
+gint GetBorderRadius(GtkStyleContext* aStyle);
+
+bool HeaderBarShouldDrawContainer(WidgetNodeType);
 
 #endif  // WidgetStyleCache_h

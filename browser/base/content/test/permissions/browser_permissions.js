@@ -7,29 +7,6 @@ const PERMISSIONS_PAGE =
     "chrome://mochitests/content",
     "https://example.com"
   ) + "permissions.html";
-const kStrictKeyPressEvents = SpecialPowers.getBoolPref(
-  "dom.keyboardevent.keypress.dispatch_non_printable_keys_only_system_group_in_content"
-);
-
-function openPermissionPopup() {
-  let promise = BrowserTestUtils.waitForEvent(
-    window,
-    "popupshown",
-    true,
-    event => event.target == gPermissionPanel._permissionPopup
-  );
-  gPermissionPanel._identityPermissionBox.click();
-  return promise;
-}
-
-function closePermissionPopup() {
-  let promise = BrowserTestUtils.waitForEvent(
-    gPermissionPanel._permissionPopup,
-    "popuphidden"
-  );
-  gPermissionPanel._permissionPopup.hidePopup();
-  return promise;
-}
 
 function testPermListHasEntries(expectEntries) {
   let permissionsList = document.getElementById(
@@ -327,19 +304,11 @@ add_task(async function testPermissionShortcuts() {
         expectedValue,
         "keydown event was fired or not fired as expected, " + desc
       );
-      if (kStrictKeyPressEvents) {
-        is(
-          result.keypresses,
-          0,
-          "keypress event shouldn't be fired for shortcut key, " + desc
-        );
-      } else {
-        is(
-          result.keypresses,
-          expectedValue,
-          "keypress event should be fired even for shortcut key, " + desc
-        );
-      }
+      is(
+        result.keypresses,
+        0,
+        "keypress event shouldn't be fired for shortcut key, " + desc
+      );
     }
 
     await tryKey("pressed with default permissions", 1);
@@ -478,9 +447,6 @@ add_task(async function test3rdPartyStoragePermission() {
   // that this works correctly, i.e. the permission items are added to the
   // anchor when relevant, and other permission items are added to the default
   // anchor, and adding/removing permissions preserves this behavior correctly.
-  SpecialPowers.pushPrefEnv({
-    set: [["browser.contentblocking.state-partitioning.mvp.ui.enabled", true]],
-  });
 
   await BrowserTestUtils.withNewTab(PERMISSIONS_PAGE, async function(browser) {
     await openPermissionPopup();

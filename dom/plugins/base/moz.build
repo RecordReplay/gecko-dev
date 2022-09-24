@@ -23,6 +23,7 @@ UNIFIED_SOURCES += [
 
 LOCAL_INCLUDES += [
     "/dom/base",
+    "/gfx/cairo/cairo/src",
     "/layout/generic",
     "/layout/xul",
     "/netwerk/base",
@@ -40,8 +41,5 @@ include("/ipc/chromium/chromium-config.mozbuild")
 
 FINAL_LIBRARY = "xul"
 
-CXXFLAGS += CONFIG["MOZ_CAIRO_CFLAGS"]
-CXXFLAGS += CONFIG["TK_CFLAGS"]
-
-if CONFIG["CC_TYPE"] in ("clang", "gcc"):
-    CXXFLAGS += ["-Wno-error=shadow"]
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]

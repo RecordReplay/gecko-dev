@@ -18,25 +18,22 @@ using namespace mozilla::a11y;
 
 - (NSString*)moxTitle {
   nsAutoString title;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
+  if (LocalAccessible* acc = mGeckoAccessible->AsLocal()) {
     mozilla::ErrorResult rv;
     // XXX use the flattening API when there are available
     // see bug 768298
     acc->GetContent()->GetTextContent(title, rv);
-  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
+  } else if (RemoteAccessible* proxy = mGeckoAccessible->AsRemote()) {
     proxy->Title(title);
   }
+
+  title.CompressWhitespace();
 
   return nsCocoaUtils::ToNSString(title);
 }
 
 - (id)moxValue {
-  GroupPos groupPos;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    groupPos = acc->GroupPosition();
-  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
-    groupPos = proxy->GroupPosition();
-  }
+  GroupPos groupPos = mGeckoAccessible->GroupPosition();
 
   return [NSNumber numberWithInt:groupPos.level];
 }
@@ -51,11 +48,7 @@ using namespace mozilla::a11y;
 
 - (NSURL*)moxURL {
   nsAutoString value;
-  if (LocalAccessible* acc = mGeckoAccessible.AsAccessible()) {
-    acc->Value(value);
-  } else if (RemoteAccessible* proxy = mGeckoAccessible.AsProxy()) {
-    proxy->Value(value);
-  }
+  mGeckoAccessible->Value(value);
 
   NSString* urlString = value.IsEmpty() ? nil : nsCocoaUtils::ToNSString(value);
   if (!urlString) return nil;
@@ -80,14 +73,6 @@ using namespace mozilla::a11y;
 
 - (NSArray*)moxLinkedUIElements {
   return [self getRelationsByType:RelationType::LINKS_TO];
-}
-
-@end
-
-@implementation MOXSummaryAccessible
-
-- (NSNumber*)moxExpanded {
-  return @([self stateWithMask:states::EXPANDED] != 0);
 }
 
 @end

@@ -14,7 +14,7 @@ const { CryptoUtils } = ChromeUtils.import(
 const {
   FxAccountsWebChannel,
   FxAccountsWebChannelHelpers,
-} = ChromeUtils.import("resource://gre/modules/FxAccountsWebChannel.jsm", null);
+} = ChromeUtils.import("resource://gre/modules/FxAccountsWebChannel.jsm");
 
 const URL_STRING = "https://example.com";
 
@@ -1269,6 +1269,7 @@ add_task(async function test_helpers_change_password() {
             Assert.ok(credentials.hasOwnProperty("unwrapBKey"));
             Assert.ok(credentials.hasOwnProperty("device"));
             Assert.equal(null, credentials.device);
+            Assert.equal(null, credentials.encryptedSendTabKeys);
             // "foo" isn't a field known by storage, so should be dropped.
             Assert.ok(!credentials.hasOwnProperty("foo"));
             wasCalled.updateUserAccountData = true;

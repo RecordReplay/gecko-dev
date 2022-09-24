@@ -136,7 +136,7 @@ static const char* ExpandLogFileName(const char* aFilename,
 
   const char* pidTokenPtr = strstr(aFilename, kPIDToken);
   if (pidTokenPtr &&
-      SprintfLiteral(buffer, "%.*s%s%d%s%s",
+      SprintfLiteral(buffer, "%.*s%s%" PRIPID "%s%s",
                      static_cast<int>(pidTokenPtr - aFilename), aFilename,
                      XRE_IsParentProcess() ? "-main." : "-child.",
                      base::GetCurrentProcId(), pidTokenPtr + strlen(kPIDToken),
@@ -275,7 +275,7 @@ bool LimitFileToLessThanSize(const char* aFilename, uint32_t aSize,
 #if defined(OS_WIN)
   if (!::ReplaceFileA(aFilename, tempFilename, nullptr, 0, 0, 0)) {
     NS_WARNING(
-        nsPrintfCString("ReplaceFileA failed: %d\n", GetLastError()).get());
+        nsPrintfCString("ReplaceFileA failed: %lu\n", GetLastError()).get());
     return false;
   }
 #elif defined(OS_POSIX)
@@ -599,7 +599,7 @@ class LogModuleManager {
       charsWritten = strlen(buffToWrite);
     }
 
-    if (mAddProfilerMarker && profiler_can_accept_markers()) {
+    if (mAddProfilerMarker && profiler_thread_is_being_profiled_for_markers()) {
       struct LogMarker {
         static constexpr Span<const char> MarkerTypeName() {
           return MakeStringSpan("Log");
@@ -613,10 +613,10 @@ class LogModuleManager {
         }
         static MarkerSchema MarkerTypeDisplay() {
           using MS = MarkerSchema;
-          MS schema{MS::Location::markerChart, MS::Location::markerTable};
+          MS schema{MS::Location::MarkerChart, MS::Location::MarkerTable};
           schema.SetTableLabel("({marker.data.module}) {marker.data.name}");
-          schema.AddKeyLabelFormat("module", "Module", MS::Format::string);
-          schema.AddKeyLabelFormat("name", "Name", MS::Format::string);
+          schema.AddKeyLabelFormat("module", "Module", MS::Format::String);
+          schema.AddKeyLabelFormat("name", "Name", MS::Format::String);
           return schema;
         }
       };
@@ -678,7 +678,7 @@ class LogModuleManager {
         // XXX is there a reasonable way to convert one to the other?  this is
         // bad
         PRTime prnow = PR_Now();
-        TimeStamp tmnow = TimeStamp::NowUnfuzzed();
+        TimeStamp tmnow = TimeStamp::Now();
         TimeDuration duration = tmnow - *aStart;
         PRTime prstart = prnow - duration.ToMicroseconds();
 

@@ -1,11 +1,15 @@
 # Developing Firefox on Glean
 
-```eval_rst
-.. toctree::
-    :titlesonly:
-    :maxdepth: 1
-    :glob:
+This section of docs is designed to be helpful to people developing FOG.
+If you're not touching code, tests, or documentation in `toolkit/components/glean`,
+and you're not interested in implementation details, you probably want
+[the user docs instead](../user/index).
 
-    Glean SDK Source <https://github.com/mozilla/glean/>
-    *
+```{toctree}
+:titlesonly:
+:maxdepth: 1
+:glob:
+
+*
+Glean SDK Source <https://github.com/mozilla/glean/>
 ```

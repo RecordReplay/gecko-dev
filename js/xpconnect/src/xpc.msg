@@ -79,7 +79,6 @@ XPC_MSG_DEF(NS_ERROR_FAILURE                       , "Failure")
 XPC_MSG_DEF(NS_ERROR_UNEXPECTED                    , "Unexpected error")
 XPC_MSG_DEF(NS_ERROR_OUT_OF_MEMORY                 , "Out of Memory")
 XPC_MSG_DEF(NS_ERROR_INVALID_ARG                   , "Invalid argument")
-XPC_MSG_DEF(NS_ERROR_NO_AGGREGATION                , "Component does not support aggregation")
 XPC_MSG_DEF(NS_ERROR_NOT_AVAILABLE                 , "Component is not available")
 XPC_MSG_DEF(NS_ERROR_FACTORY_NOT_REGISTERED        , "Factory not registered")
 XPC_MSG_DEF(NS_ERROR_FACTORY_REGISTER_AGAIN        , "Factory not registered (may be tried again)")
@@ -101,7 +100,6 @@ XPC_MSG_DEF(NS_ERROR_FILE_UNRESOLVABLE_SYMLINK      , "File error: Unresolvable 
 XPC_MSG_DEF(NS_ERROR_FILE_EXECUTION_FAILED          , "File error: Execution failed")
 XPC_MSG_DEF(NS_ERROR_FILE_UNKNOWN_TYPE              , "File error: Unknown type")
 XPC_MSG_DEF(NS_ERROR_FILE_DESTINATION_NOT_DIR       , "File error: Destination not dir")
-XPC_MSG_DEF(NS_ERROR_FILE_TARGET_DOES_NOT_EXIST     , "File error: Target does not exist")
 XPC_MSG_DEF(NS_ERROR_FILE_COPY_OR_MOVE_FAILED       , "File error: Copy or move failed")
 XPC_MSG_DEF(NS_ERROR_FILE_ALREADY_EXISTS            , "File error: Already exists")
 XPC_MSG_DEF(NS_ERROR_FILE_INVALID_PATH              , "File error: Invalid path")
@@ -165,7 +163,6 @@ XPC_MSG_DEF(NS_ERROR_NOT_RESUMABLE                  , "This request is not resum
 XPC_MSG_DEF(NS_ERROR_ENTITY_CHANGED                 , "It was attempted to resume the request, but the entity has changed in the meantime")
 XPC_MSG_DEF(NS_ERROR_REDIRECT_LOOP                  , "The request failed as a result of a detected redirection loop")
 XPC_MSG_DEF(NS_ERROR_UNSAFE_CONTENT_TYPE            , "The request failed because the content type returned by the server was not a type expected by the channel")
-XPC_MSG_DEF(NS_ERROR_REMOTE_XUL                     , "Attempt to access remote XUL document that is not in website's whitelist")
 XPC_MSG_DEF(NS_ERROR_LOAD_SHOWED_ERRORPAGE          , "The load caused an error page to be displayed.")
 XPC_MSG_DEF(NS_ERROR_BLOCKED_BY_POLICY              , "The request was blocked by a policy set by the system administrator.")
 
@@ -228,6 +225,7 @@ XPC_MSG_DEF(NS_ERROR_GFX_PRINTER_DOC_IS_BUSY          , "Cannot print this docum
 XPC_MSG_DEF(NS_ERROR_CONTENT_CRASHED                  , "The process that hosted this content has crashed.")
 XPC_MSG_DEF(NS_ERROR_FRAME_CRASHED                    , "The process that hosted this frame has crashed.")
 XPC_MSG_DEF(NS_ERROR_BUILDID_MISMATCH                 , "The process that hosted this content did not have the same buildID as the parent.")
+XPC_MSG_DEF(NS_ERROR_CONTENT_BLOCKED                  , "The load for this content was blocked.")
 
 /* Codes for the JS-implemented Push DOM API. These can be removed as part of bug 1252660. */
 XPC_MSG_DEF(NS_ERROR_DOM_PUSH_INVALID_KEY_ERR         , "Invalid raw ECDSA P-256 public key.")
@@ -250,3 +248,6 @@ XPC_MSG_DEF(NS_ERROR_SOCIALTRACKING_URI               , "The URI is social track
 
 /* Profile manager error codes */
 XPC_MSG_DEF(NS_ERROR_DATABASE_CHANGED                 , "Flushing the profiles to disk would have overwritten changes made elsewhere.")
+
+/* Codes related to URILoader */
+XPC_MSG_DEF(NS_BINDING_CANCELLED_OLD_LOAD           , "The async request has been cancelled by another async request")

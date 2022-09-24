@@ -5,7 +5,8 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html;charset=utf8,<p>Test editor toolbar";
+const TEST_URI =
+  "data:text/html;charset=utf8,<!DOCTYPE html><p>Test editor toolbar";
 
 add_task(async function() {
   await pushPref("devtools.webconsole.input.editor", false);
@@ -50,8 +51,8 @@ add_task(async function() {
     // Setting the input value.
     setInputValue(hud, input);
     runButton.click();
-    await waitFor(() => findMessage(hud, input));
-    await waitFor(() => findMessage(hud, output, ".message.result"));
+    await waitFor(() => findMessageByType(hud, input, ".command"));
+    await waitFor(() => findEvaluationResultMessage(hud, output));
     ok(true, "The expression and its result are displayed in the output");
     ok(
       isInputFocused(hud),

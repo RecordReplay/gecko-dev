@@ -31,13 +31,13 @@ class mozIStorageConnection;
 class mozIStorageStatement;
 class mozIStorageValueArray;
 
-namespace mozilla {
-namespace dom {
-namespace indexedDB {
+namespace mozilla::dom::indexedDB {
 
 class DatabaseFileManager;
 struct StructuredCloneFileParent;
 struct StructuredCloneReadInfoParent;
+
+extern const nsLiteralString kJournalDirectoryName;
 
 using IndexedDBCipherStrategy = quota::IPCStreamCipherStrategy;
 using CipherKey = IndexedDBCipherStrategy::KeyType;
@@ -120,8 +120,6 @@ DeserializeStructuredCloneFiles(const DatabaseFileManager& aFileManager,
 nsresult ExecuteSimpleSQLSequence(mozIStorageConnection& aConnection,
                                   Span<const nsLiteralCString> aSQLCommands);
 
-}  // namespace indexedDB
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom::indexedDB
 
 #endif  // mozilla_dom_indexeddb_actorsparent_h__

@@ -9,11 +9,9 @@
 
 #include "nsGenericHTMLElement.h"
 #include "nsTArray.h"
+#include "mozilla/dom/HTMLSlotElementBinding.h"
 
-namespace mozilla {
-namespace dom {
-
-struct AssignedNodesOptions;
+namespace mozilla::dom {
 
 class HTMLSlotElement final : public nsGenericHTMLElement {
  public:
@@ -52,8 +50,11 @@ class HTMLSlotElement final : public nsGenericHTMLElement {
   void AssignedElements(const AssignedNodesOptions& aOptions,
                         nsTArray<RefPtr<Element>>& aNodes);
 
+  void Assign(const Sequence<OwningElementOrText>& aNodes);
+
   // Helper methods
   const nsTArray<RefPtr<nsINode>>& AssignedNodes() const;
+  const nsTArray<nsINode*>& ManuallyAssignedNodes() const;
   void InsertAssignedNode(uint32_t aIndex, nsIContent&);
   void AppendAssignedNode(nsIContent&);
   void RemoveAssignedNode(nsIContent&);
@@ -67,20 +68,24 @@ class HTMLSlotElement final : public nsGenericHTMLElement {
 
   void FireSlotChangeEvent();
 
+  void RemoveManuallyAssignedNode(nsIContent&);
+
  protected:
   virtual ~HTMLSlotElement();
   JSObject* WrapNode(JSContext* aCx, JS::Handle<JSObject*> aGivenProto) final;
 
   nsTArray<RefPtr<nsINode>> mAssignedNodes;
+  nsTArray<nsINode*> mManuallyAssignedNodes;
 
   // Whether we're in the signal slot list of our unit of related similar-origin
   // browsing contexts.
   //
   // https://dom.spec.whatwg.org/#signal-slot-list
   bool mInSignalSlotList = false;
+
+  bool mInManualShadowRoot = false;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_HTMLSlotElement_h

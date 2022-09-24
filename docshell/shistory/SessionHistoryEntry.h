@@ -7,6 +7,7 @@
 #ifndef mozilla_dom_SessionHistoryEntry_h
 #define mozilla_dom_SessionHistoryEntry_h
 
+#include "mozilla/dom/DocumentBinding.h"
 #include "mozilla/Maybe.h"
 #include "mozilla/UniquePtr.h"
 #include "nsILayoutHistoryState.h"
@@ -70,8 +71,9 @@ class SessionHistoryInfo {
     mResultPrincipalURI = aResultPrincipalURI;
   }
 
-  nsIInputStream* GetPostData() const { return mPostData; }
-  void SetPostData(nsIInputStream* aPostData) { mPostData = aPostData; }
+  bool HasPostData() const { return mPostData; }
+  already_AddRefed<nsIInputStream> GetPostData() const;
+  void SetPostData(nsIInputStream* aPostData);
 
   void GetScrollPosition(int32_t* aScrollPositionX, int32_t* aScrollPositionY) {
     *aScrollPositionX = mScrollPositionX;
@@ -216,6 +218,8 @@ struct LoadingSessionHistoryInfo {
   // Initializes mInfo using aEntry and otherwise copies the values from aInfo.
   LoadingSessionHistoryInfo(SessionHistoryEntry* aEntry,
                             LoadingSessionHistoryInfo* aInfo);
+  // For about:blank only.
+  explicit LoadingSessionHistoryInfo(const SessionHistoryInfo& aInfo);
 
   // For about:blank only.
   explicit LoadingSessionHistoryInfo(const SessionHistoryInfo& aInfo);
@@ -232,13 +236,12 @@ struct LoadingSessionHistoryInfo {
   // but session-history-in-parent needs to pass needed information explicitly
   // to the relevant child process.
   bool mLoadIsFromSessionHistory = false;
-  // mRequestedIndex, mSessionHistoryLength and mLoadingCurrentActiveEntry are
-  // relevant only if mLoadIsFromSessionHistory is true.
-  int32_t mRequestedIndex = -1;
-  int32_t mSessionHistoryLength = 0;
-  // If we're loading from the current active entry we want to treat it as not
-  // a same-document navigation (see nsDocShell::IsSameDocumentNavigation).
-  bool mLoadingCurrentActiveEntry = false;
+  // mOffset and mLoadingCurrentEntry are relevant only if
+  // mLoadIsFromSessionHistory is true.
+  int32_t mOffset = 0;
+  // If we're loading from the current entry we want to treat it as not a
+  // same-document navigation (see nsDocShell::IsSameDocumentNavigation).
+  bool mLoadingCurrentEntry = false;
   // If mForceMaybeResetName.isSome() is true then the parent process has
   // determined whether the BC's name should be cleared and stored in session
   // history (see https://html.spec.whatwg.org/#history-traversal step 4.2).
@@ -393,6 +396,8 @@ class SessionHistoryEntry : public nsISHEntry {
 
   void SetIsDynamicallyAdded(bool aDynamic);
 
+  void SetWireframe(const Maybe<Wireframe>& aWireframe);
+
   // Get an entry based on LoadingSessionHistoryInfo's mLoadId. Parent process
   // only.
   static SessionHistoryEntry* GetByLoadId(uint64_t aLoadId);
@@ -409,6 +414,7 @@ class SessionHistoryEntry : public nsISHEntry {
   nsISHEntry* mParent = nullptr;
   uint32_t mID;
   nsTArray<RefPtr<SessionHistoryEntry>> mChildren;
+  Maybe<Wireframe> mWireframe;
 
   bool mForInitialLoad = false;
 
@@ -428,28 +434,37 @@ class IProtocol;
 // Allow sending SessionHistoryInfo objects over IPC.
 template <>
 struct IPDLParamTraits<dom::SessionHistoryInfo> {
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const dom::SessionHistoryInfo& aParam);
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor, dom::SessionHistoryInfo* aResult);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   dom::SessionHistoryInfo* aResult);
 };
 
 // Allow sending LoadingSessionHistoryInfo objects over IPC.
 template <>
 struct IPDLParamTraits<dom::LoadingSessionHistoryInfo> {
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const dom::LoadingSessionHistoryInfo& aParam);
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor, dom::LoadingSessionHistoryInfo* aResult);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   dom::LoadingSessionHistoryInfo* aResult);
 };
 
 // Allow sending nsILayoutHistoryState objects over IPC.
 template <>
 struct IPDLParamTraits<nsILayoutHistoryState*> {
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     nsILayoutHistoryState* aParam);
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor, RefPtr<nsILayoutHistoryState>* aResult);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   RefPtr<nsILayoutHistoryState>* aResult);
+};
+
+// Allow sending dom::Wireframe objects over IPC.
+template <>
+struct IPDLParamTraits<mozilla::dom::Wireframe> {
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
+                    const mozilla::dom::Wireframe& aParam);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   mozilla::dom::Wireframe* aResult);
 };
 
 }  // namespace ipc

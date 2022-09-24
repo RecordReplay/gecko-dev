@@ -35,11 +35,21 @@ ChromeUtils.defineModuleGetter(
   "resource://testing-common/httpd.js"
 );
 
-var gTestTargetFile = FileUtils.getFile("TmpD", ["dm-ui-test.file"]);
+let gTestTargetFile = new FileUtils.File(
+  PathUtils.join(
+    Services.dirsvc.get("TmpD", Ci.nsIFile).path,
+    "dm-ui-test.file"
+  )
+);
+
 gTestTargetFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, FileUtils.PERMS_FILE);
+Services.prefs.setIntPref("security.dialog_enable_delay", 0);
 
 // The file may have been already deleted when removing a paused download.
+// Also clear security.dialog_enable_delay pref.
 registerCleanupFunction(async () => {
+  Services.prefs.clearUserPref("security.dialog_enable_delay");
+
   if (await IOUtils.exists(gTestTargetFile.path)) {
     info("removing " + gTestTargetFile.path);
     if (Services.appinfo.OS === "WINNT") {
@@ -102,11 +112,21 @@ function continueResponses() {
  * Creates a download, which could be interrupted in the middle of it's progress.
  */
 function promiseInterruptibleDownload() {
-  let interruptibleFile = FileUtils.getFile("TmpD", ["interruptible.file"]);
+  let interruptibleFile = FileUtils.getFile("TmpD", ["interruptible.txt"]);
   interruptibleFile.createUnique(
     Ci.nsIFile.NORMAL_FILE_TYPE,
     FileUtils.PERMS_FILE
   );
+
+  registerCleanupFunction(async () => {
+    if (await IOUtils.exists(interruptibleFile.path)) {
+      if (Services.appinfo.OS === "WINNT") {
+        // We need to make the file writable to delete it on Windows.
+        await IOUtils.setPermissions(interruptibleFile.path, 0o600);
+      }
+      await IOUtils.remove(interruptibleFile.path);
+    }
+  });
 
   return Downloads.createDownload({
     source: httpUrl("interruptible.txt"),
@@ -117,13 +137,12 @@ function promiseInterruptibleDownload() {
 // Asynchronous support subroutines
 
 async function createDownloadedFile(pathname, contents) {
-  let encoder = new TextEncoder();
   let file = new FileUtils.File(pathname);
   if (file.exists()) {
     info(`File at ${pathname} already exists`);
   }
   // No post-test cleanup necessary; tmp downloads directory is already removed after each test
-  await OS.File.writeAtomic(pathname, encoder.encode(contents));
+  await IOUtils.writeUTF8(pathname, contents);
   ok(file.exists(), `Created ${pathname}`);
   return file;
 }
@@ -178,6 +197,12 @@ async function task_resetState() {
     await publicList.remove(download);
     if (await IOUtils.exists(download.target.path)) {
       await download.finalize(true);
+      info("removing " + download.target.path);
+      if (Services.appinfo.OS === "WINNT") {
+        // We need to make the file writable to delete it on Windows.
+        await IOUtils.setPermissions(download.target.path, 0o600);
+      }
+      await IOUtils.remove(download.target.path);
     }
   }
 
@@ -210,12 +235,14 @@ async function task_addDownloads(aItems) {
       canceled:
         item.state == DownloadsCommon.DOWNLOAD_CANCELED ||
         item.state == DownloadsCommon.DOWNLOAD_PAUSED,
+      deleted: item.deleted ?? false,
       error:
         item.state == DownloadsCommon.DOWNLOAD_FAILED
           ? new Error("Failed.")
           : null,
       hasPartialData: item.state == DownloadsCommon.DOWNLOAD_PAUSED,
       hasBlockedData: item.hasBlockedData || false,
+      openDownloadsListOnStart: item.openDownloadsListOnStart ?? true,
       contentType: item.contentType,
       startTime: new Date(startTimeMs++),
     };
@@ -238,9 +265,8 @@ async function task_openPanel() {
 }
 
 async function setDownloadDir() {
-  let tmpDir = await PathUtils.getTempDir();
-  tmpDir = PathUtils.join(
-    tmpDir,
+  let tmpDir = PathUtils.join(
+    PathUtils.tempDir,
     "testsavedir" + Math.floor(Math.random() * 2 ** 32)
   );
   // Create this dir if it doesn't exist (ignores existing dirs)
@@ -258,6 +284,7 @@ async function setDownloadDir() {
 }
 
 let gHttpServer = null;
+let gShouldServeInterruptibleFileAsDownload = false;
 function startServer() {
   gHttpServer = new HttpServer();
   gHttpServer.start(-1);
@@ -304,6 +331,9 @@ function startServer() {
     // Process the first part of the response.
     aResponse.processAsync();
     aResponse.setHeader("Content-Type", "text/plain", false);
+    if (gShouldServeInterruptibleFileAsDownload) {
+      aResponse.setHeader("Content-Disposition", "attachment");
+    }
     aResponse.setHeader(
       "Content-Length",
       "" + TEST_DATA_SHORT.length * 2,
@@ -320,6 +350,13 @@ function startServer() {
       })
       .catch(Cu.reportError);
   });
+}
+
+function serveInterruptibleAsDownload() {
+  gShouldServeInterruptibleFileAsDownload = true;
+  registerCleanupFunction(
+    () => (gShouldServeInterruptibleFileAsDownload = false)
+  );
 }
 
 function httpUrl(aFileName) {

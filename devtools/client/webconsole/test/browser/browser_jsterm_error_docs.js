@@ -3,7 +3,7 @@
 
 "use strict";
 
-const TEST_URI = "data:text/html,Test error documentation";
+const TEST_URI = "data:text/html,<!DOCTYPE html>Test error documentation";
 
 add_task(async function() {
   const hud = await openNewTabAndConsole(TEST_URI);
@@ -26,7 +26,7 @@ add_task(async function() {
 
     await clearOutput(hud);
 
-    const { node } = await executeAndWaitForMessage(
+    const { node } = await executeAndWaitForErrorMessage(
       hud,
       expression,
       "RangeError:"

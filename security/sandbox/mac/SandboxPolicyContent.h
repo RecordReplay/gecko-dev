@@ -122,6 +122,7 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
     (sysctl-name "hw.activecpu")
     (sysctl-name "hw.byteorder")
     (sysctl-name "hw.pagesize_compat")
+    (sysctl-name "hw.logicalcpu")
     (sysctl-name "hw.logicalcpu_max")
     (sysctl-name "hw.physicalcpu_max")
     (sysctl-name "hw.busfrequency_compat")
@@ -283,10 +284,6 @@ static const char SandboxPolicyContent[] = R"SANDBOX_LITERAL(
   (allow file-read*
       (home-regex "/Library/Application Support/[^/]+/Extensions/")
       (regex "^/Library/Application Support/[^/]+/Extensions/"))
-
-; bug 1393805
-  (allow file-read*
-      (home-subpath "/Library/Application Support/Mozilla/SystemExtensionsDev"))
 
 ; The following rules impose file access restrictions which get
 ; more restrictive in higher levels. When file-origin-specific

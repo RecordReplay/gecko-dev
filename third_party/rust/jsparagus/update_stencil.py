@@ -80,6 +80,11 @@ def extract_opcodes(paths):
     with open(paths['Opcodes.h'], 'r') as f:
         for line in f:
             line = line.strip()
+
+            if line.startswith('IF_RECORD_TUPLE('):
+                # Ignore Record and Tuple opcodes
+                continue
+
             if line.startswith('MACRO(') and ',' in line:
                 line = line[5:]
                 if line.endswith(' \\'):
@@ -462,6 +467,10 @@ def parse_operands(opcode):
             assert ty == 'u32'
             ty = 'GCThingIndex'
 
+        if 'JOF_STRING' in opcode.format_:
+            assert ty == 'u32'
+            ty = 'GCThingIndex'
+
         if 'JOF_ICINDEX' in opcode.format_ or 'JOF_LOOPHEAD' in opcode.format_:
             if ty == 'u32' and name == 'ic_index':
                 ty = 'IcIndex'
@@ -549,7 +558,7 @@ def generate_emit_methods(out_f, opcodes, types):
             assert len(params) == 1
             assert params[0][0] == 'u32'
             params[0] = ('GCThingIndex', params[0][1])
-        elif 'JOF_OBJECT' in opcode.format_ or 'JOF_SCOPE' in opcode.format_:
+        elif 'JOF_OBJECT' in opcode.format_ or 'JOF_SCOPE' in opcode.format_ or 'JOF_SHAPE' in opcode.format_:
             assert len(params) == 1
             assert params[0][0] == 'u32'
             params[0] = ('GCThingIndex', params[0][1])
@@ -589,11 +598,24 @@ def generate_emit_methods(out_f, opcodes, types):
         """))
 
 
-def update_emitter(path, types):
+def get_filtered_opcodes():
     sys.path.append(vm_dir)
     from jsopcode import get_opcodes
 
     _, opcodes = get_opcodes(args.PATH_TO_MOZILLA_CENTRAL)
+
+    filtered_opcodes = {}
+    for op, opcode in opcodes.items():
+        if opcode.type_name in ['Record literals', 'Tuple literals']:
+            continue
+
+        filtered_opcodes[op] = opcode
+
+    return filtered_opcodes
+
+
+def update_emitter(path, types):
+    opcodes = get_filtered_opcodes()
 
     tmppath = f'{path}.tmp'
 
@@ -626,10 +648,7 @@ def update_emitter(path, types):
 
 
 def update_function(path, types, flags):
-    sys.path.append(vm_dir)
-    from jsopcode import get_opcodes
-
-    _, opcodes = get_opcodes(args.PATH_TO_MOZILLA_CENTRAL)
+    opcodes = get_filtered_opcodes()
 
     tmppath = f'{path}.tmp'
 

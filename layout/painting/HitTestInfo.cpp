@@ -5,26 +5,28 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 #include "HitTestInfo.h"
+
+#include "mozilla/StaticPtr.h"
 #include "mozilla/webrender/WebRenderAPI.h"
 #include "nsDisplayList.h"
 #include "nsIFrame.h"
+#include "mozilla/layers/ScrollableLayerGuid.h"
+
+using namespace mozilla::gfx;
 
 namespace mozilla {
 
-static const HitTestInfo* gEmptyHitTestInfo = nullptr;
+static StaticAutoPtr<const HitTestInfo> gEmptyHitTestInfo;
 
 const HitTestInfo& HitTestInfo::Empty() {
-  if (gEmptyHitTestInfo) {
+  if (!gEmptyHitTestInfo) {
     gEmptyHitTestInfo = new HitTestInfo();
   }
 
   return *gEmptyHitTestInfo;
 }
 
-void HitTestInfo::Shutdown() {
-  delete gEmptyHitTestInfo;
-  gEmptyHitTestInfo = nullptr;
-}
+void HitTestInfo::Shutdown() { gEmptyHitTestInfo = nullptr; }
 
 using ViewID = layers::ScrollableLayerGuid::ViewID;
 
@@ -44,7 +46,7 @@ ViewID HitTestInfo::GetViewId(wr::DisplayListBuilder& aBuilder,
     return aASR->GetViewId();
   }
 
-  return ScrollableLayerGuid::NULL_SCROLL_ID;
+  return layers::ScrollableLayerGuid::NULL_SCROLL_ID;
 }
 
 void HitTestInfo::Initialize(nsDisplayListBuilder* aBuilder, nsIFrame* aFrame) {

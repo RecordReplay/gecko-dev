@@ -39,7 +39,7 @@
 // placebo for compat. An easy way to differentiate this from the real thing
 // is whether the property is read-only or not.  The real |Components| property
 // is read-only.
-/* global _EU_Ci, _EU_Cc, _EU_Cu, _EU_OS */
+/* global _EU_Ci, _EU_Cc, _EU_Cu, _EU_ChromeUtils, _EU_OS */
 window.__defineGetter__("_EU_Ci", function() {
   var c = Object.getOwnPropertyDescriptor(window, "Components");
   return c && c.value && !c.writable ? Ci : SpecialPowers.Ci;
@@ -55,12 +55,16 @@ window.__defineGetter__("_EU_Cu", function() {
   return c && c.value && !c.writable ? Cu : SpecialPowers.Cu;
 });
 
+window.__defineGetter__("_EU_ChromeUtils", function() {
+  var c = Object.getOwnPropertyDescriptor(window, "ChromeUtils");
+  return c && c.value && !c.writable ? ChromeUtils : SpecialPowers.ChromeUtils;
+});
+
 window.__defineGetter__("_EU_OS", function() {
   delete this._EU_OS;
   try {
-    this._EU_OS = this._EU_Cu.import(
-      "resource://gre/modules/AppConstants.jsm",
-      {}
+    this._EU_OS = _EU_ChromeUtils.import(
+      "resource://gre/modules/AppConstants.jsm"
     ).platform;
   } catch (ex) {
     this._EU_OS = null;
@@ -1032,7 +1036,7 @@ function synthesizeNativeTap(
     return;
   }
 
-  let scale = utils.screenPixelsPerCSSPixel;
+  let scale = aWindow.devicePixelRatio;
   let rect = aTarget.getBoundingClientRect();
   let x = (aWindow.mozInnerScreenX + rect.left + aOffsetX) * scale;
   let y = (aWindow.mozInnerScreenY + rect.top + aOffsetY) * scale;
@@ -1056,8 +1060,7 @@ function synthesizeNativeMouseEvent(aParams, aCallback = null) {
     atCenter, // Instead of offsetX/Y, synthesize the event at center of `target`
     screenX, // X offset in screen (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*"), offsetX/Y nor atCenter must not be set if this is set
     screenY, // Y offset in screen (in CSS pixels if `scale` is "screenPixelsPerCSSPixel*"), offsetX/Y nor atCenter must not be set if this is set
-    // If scale is "screenPixelsPerCSSPixel", it'll be used.
-    // If scale is "screenPixelsPerCSSPixelNoOverride", it'll be used.
+    // If scale is "screenPixelsPerCSSPixel", devicePixelRatio will be used.
     // If scale is "inScreenPixels", clientX/Y nor scaleX/Y are not adjusted with screenPixelsPerCSSPixel*.
     scale = "screenPixelsPerCSSPixel",
     button = 0, // if "click", "mousedown", "mouseup", set same value as DOM MouseEvent.button
@@ -1117,10 +1120,7 @@ function synthesizeNativeMouseEvent(aParams, aCallback = null) {
       return 1.0;
     }
     if (scale === "screenPixelsPerCSSPixel") {
-      return utils.screenPixelsPerCSSPixel;
-    }
-    if (scale === "screenPixelsPerCSSPixelNoOverride") {
-      return utils.screenPixelsPerCSSPixelNoOverride;
+      return win.devicePixelRatio;
     }
     throw Error(`invalid scale value (${scale}) is specified`);
   })();
@@ -1255,10 +1255,9 @@ function synthesizeAndWaitNativeMouseMove(
 ) {
   let browser = gBrowser.selectedTab.linkedBrowser;
   let mm = browser.messageManager;
-  let ContentTask = _EU_Cu.import(
-    "resource://testing-common/ContentTask.jsm",
-    null
-  ).ContentTask;
+  let { ContentTask } = _EU_ChromeUtils.import(
+    "resource://testing-common/ContentTask.jsm"
+  );
 
   let eventRegisteredPromise = new Promise(resolve => {
     mm.addMessageListener("Test:MouseMoveRegistered", function processed(
@@ -1394,10 +1393,9 @@ function synthesizeAndWaitKey(
   let mm = browser.messageManager;
   let keyCode = _createKeyboardEventDictionary(aKey, aEvent, null, aWindow)
     .dictionary.keyCode;
-  let ContentTask = _EU_Cu.import(
-    "resource://testing-common/ContentTask.jsm",
-    null
-  ).ContentTask;
+  let { ContentTask } = _EU_ChromeUtils.import(
+    "resource://testing-common/ContentTask.jsm"
+  );
 
   let keyRegisteredPromise = new Promise(resolve => {
     mm.addMessageListener("Test:KeyRegistered", function processed(message) {
@@ -3002,6 +3000,9 @@ function _computeSrcElementFromSrcSelection(aSrcSelection) {
  *          destWindow:   The window for dispatching event on destElement,
  *                        defaults to the current window object
  *          expectCancelDragStart:  Set to true if the test cancels "dragstart"
+ *          expectSrcElementDisconnected:
+ *                        Set to true if srcElement will be disconnected and
+ *                        "dragend" event won't be fired.
  *          logFunc:      Set function which takes one argument if you need
  *                        to log rect of target.  E.g., `console.log`.
  *        }
@@ -3023,6 +3024,7 @@ async function synthesizePlainDragAndDrop(aParams) {
     srcWindow = window,
     destWindow = window,
     expectCancelDragStart = false,
+    expectSrcElementDisconnected = false,
     logFunc,
   } = aParams;
   // Don't modify given dragEvent object because we modify dragEvent below and
@@ -3087,19 +3089,49 @@ async function synthesizePlainDragAndDrop(aParams) {
   );
 
   try {
-    _getDOMWindowUtils().disableNonTestMouseEvents(true);
+    _getDOMWindowUtils(srcWindow).disableNonTestMouseEvents(true);
 
     await new Promise(r => setTimeout(r, 0));
 
-    synthesizeMouse(
-      srcElement,
-      srcX,
-      srcY,
-      { type: "mousedown", id },
-      srcWindow
-    );
-    if (logFunc) {
-      logFunc(`mousedown at ${srcX}, ${srcY}`);
+    let mouseDownEvent;
+    function onMouseDown(aEvent) {
+      mouseDownEvent = aEvent;
+      if (logFunc) {
+        logFunc(`"${aEvent.type}" event is fired`);
+      }
+      if (
+        !srcElement.contains(
+          _EU_maybeUnwrap(_EU_maybeWrap(aEvent).composedTarget)
+        )
+      ) {
+        // If srcX and srcY does not point in one of rects in srcElement,
+        // "mousedown" target is not in srcElement.  Such case must not
+        // be expected by this API users so that we should throw an exception
+        // for making debugging easier.
+        throw new Error(
+          'event target of "mousedown" is not srcElement nor its descendant'
+        );
+      }
+    }
+    try {
+      srcWindow.addEventListener("mousedown", onMouseDown, { capture: true });
+      synthesizeMouse(
+        srcElement,
+        srcX,
+        srcY,
+        { type: "mousedown", id },
+        srcWindow
+      );
+      if (logFunc) {
+        logFunc(`mousedown at ${srcX}, ${srcY}`);
+      }
+      if (!mouseDownEvent) {
+        throw new Error('"mousedown" event is not fired');
+      }
+    } finally {
+      srcWindow.removeEventListener("mousedown", onMouseDown, {
+        capture: true,
+      });
     }
 
     let dragStartEvent;
@@ -3116,7 +3148,7 @@ async function synthesizePlainDragAndDrop(aParams) {
         // If srcX and srcY does not point in one of rects in srcElement,
         // "dragstart" target is not in srcElement.  Such case must not
         // be expected by this API users so that we should throw an exception
-        // for making debug easier.
+        // for making debugging easier.
         throw new Error(
           'event target of "dragstart" is not srcElement nor its descendant'
         );
@@ -3341,6 +3373,7 @@ async function synthesizePlainDragAndDrop(aParams) {
     await new Promise(r => setTimeout(r, 0));
 
     if (ds.getCurrentSession()) {
+      const sourceNode = ds.sourceNode;
       let dragEndEvent;
       function onDragEnd(aEvent) {
         dragEndEvent = aEvent;
@@ -3356,21 +3389,32 @@ async function synthesizePlainDragAndDrop(aParams) {
             'event target of "dragend" is not srcElement nor its descendant'
           );
         }
+        if (expectSrcElementDisconnected) {
+          throw new Error(
+            `"dragend" event shouldn't be fired when the source node is disconnected (the source node is ${
+              sourceNode?.isConnected ? "connected" : "null or disconnected"
+            })`
+          );
+        }
       }
       srcWindow.addEventListener("dragend", onDragEnd, { capture: true });
       try {
         ds.endDragSession(true, _parseModifiers(dragEvent));
-        if (!dragEndEvent) {
+        if (!expectSrcElementDisconnected && !dragEndEvent) {
           // eslint-disable-next-line no-unsafe-finally
           throw new Error(
-            '"dragend" event is not fired by nsIDragService.endDragSession()'
+            `"dragend" event is not fired by nsIDragService.endDragSession()${
+              ds.sourceNode && !ds.sourceNode.isConnected
+                ? "(sourceNode was disconnected)"
+                : ""
+            }`
           );
         }
       } finally {
         srcWindow.removeEventListener("dragend", onDragEnd, { capture: true });
       }
     }
-    _getDOMWindowUtils().disableNonTestMouseEvents(false);
+    _getDOMWindowUtils(srcWindow).disableNonTestMouseEvents(false);
     if (logFunc) {
       logFunc("synthesizePlainDragAndDrop() -- END");
     }

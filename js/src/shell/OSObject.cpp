@@ -33,11 +33,12 @@
 // For JSFunctionSpecWithHelp
 #include "jsfriendapi.h"
 
-#include "gc/FreeOp.h"
+#include "gc/GCContext.h"
 #include "js/CharacterEncoding.h"
 #include "js/Conversions.h"
 #include "js/experimental/TypedData.h"  // JS_NewUint8Array
 #include "js/Object.h"                  // JS::GetReservedSlot
+#include "js/PropertyAndElement.h"      // JS_DefineProperty
 #include "js/PropertySpec.h"
 #include "js/Value.h"  // JS::Value
 #include "js/Wrapper.h"
@@ -46,7 +47,7 @@
 #include "util/GetPidProvider.h"  // getpid()
 #include "util/StringBuffer.h"
 #include "util/Text.h"
-#include "util/Windows.h"
+#include "util/WindowsWrapper.h"
 #include "vm/JSObject.h"
 #include "vm/TypedArrayObject.h"
 
@@ -563,12 +564,12 @@ class FileObject : public NativeObject {
     return obj;
   }
 
-  static void finalize(JSFreeOp* fop, JSObject* obj) {
+  static void finalize(JS::GCContext* gcx, JSObject* obj) {
     FileObject* fileObj = &obj->as<FileObject>();
     RCFile* file = fileObj->rcFile();
-    fop->removeCellMemory(obj, sizeof(*file), MemoryUse::FileObjectFile);
+    gcx->removeCellMemory(obj, sizeof(*file), MemoryUse::FileObjectFile);
     if (file->release()) {
-      fop->deleteUntracked(file);
+      gcx->deleteUntracked(file);
     }
   }
 
@@ -599,7 +600,6 @@ static const JSClassOps FileObjectClassOps = {
     nullptr,               // mayResolve
     FileObject::finalize,  // finalize
     nullptr,               // call
-    nullptr,               // hasInstance
     nullptr,               // construct
     nullptr,               // trace
 };

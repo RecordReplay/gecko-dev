@@ -20,7 +20,6 @@
 #include "nsITheme.h"
 #include "nsBoxLayout.h"
 #include "nsLayoutUtils.h"
-#include "FrameLayerBuilder.h"
 #include "mozilla/dom/Attr.h"
 #include "mozilla/dom/Element.h"
 #include <algorithm>
@@ -405,7 +404,7 @@ bool nsIFrame::AddXULMinSize(nsIFrame* aBox, nsSize& aSize, bool& aWidthSet,
         case StyleAppearance::ScrollbarHorizontal: {
           ComputedStyle* style = nsLayoutUtils::StyleForScrollbar(aBox);
           auto sizes = theme->GetScrollbarSizes(
-              pc, style->StyleUIReset()->mScrollbarWidth,
+              pc, style->StyleUIReset()->ScrollbarWidth(),
               nsITheme::Overlay::No);
           if (appearance == StyleAppearance::ScrollbarVertical) {
             aSize.width = pc->DevPixelsToAppUnits(sizes.mVertical);

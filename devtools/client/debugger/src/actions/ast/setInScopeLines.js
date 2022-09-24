@@ -4,13 +4,13 @@
 
 import {
   hasInScopeLines,
-  getSourceWithContent,
+  getLocationSource,
+  getSourceTextContent,
   getVisibleSelectedFrame,
 } from "../../selectors";
 
 import { getSourceLineCount } from "../../utils/source";
 
-import { range, flatMap, uniq, without } from "lodash";
 import { isFulfilled } from "../../utils/async-value";
 
 function getOutOfScopeLines(outOfScopeLocations) {
@@ -18,15 +18,19 @@ function getOutOfScopeLines(outOfScopeLocations) {
     return null;
   }
 
-  return uniq(
-    flatMap(outOfScopeLocations, location =>
-      range(location.start.line, location.end.line)
-    )
-  );
+  const uniqueLines = new Set();
+  for (const location of outOfScopeLocations) {
+    for (let i = location.start.line; i < location.end.line; i++) {
+      uniqueLines.add(i);
+    }
+  }
+
+  return uniqueLines;
 }
 
 async function getInScopeLines(cx, location, { dispatch, getState, parser }) {
-  const source = getSourceWithContent(getState(), location.sourceId);
+  const source = getLocationSource(getState(), location);
+  const sourceTextContent = getSourceTextContent(getState(), source.id);
 
   let locations = null;
   if (location.line && source && !source.isWasm) {
@@ -35,15 +39,29 @@ async function getInScopeLines(cx, location, { dispatch, getState, parser }) {
 
   const linesOutOfScope = getOutOfScopeLines(locations);
   const sourceNumLines =
-    !source.content || !isFulfilled(source.content)
+    !sourceTextContent || !isFulfilled(sourceTextContent)
       ? 0
-      : getSourceLineCount(source.content.value);
+      : getSourceLineCount(sourceTextContent.value);
 
-  const sourceLines = range(1, sourceNumLines + 1);
+  const noLinesOutOfScope =
+    linesOutOfScope == null || linesOutOfScope.size == 0;
 
-  return !linesOutOfScope
-    ? sourceLines
-    : without(sourceLines, ...linesOutOfScope);
+  // This operation can be very costly for large files so we sacrifice a bit of readability
+  // for performance sake.
+  // We initialize an array with a fixed size and we'll directly assign value for lines
+  // that are not out of scope. This is much faster than having an empty array and pushing
+  // into it.
+  const sourceLines = new Array(sourceNumLines);
+  for (let i = 0; i < sourceNumLines; i++) {
+    const line = i + 1;
+    if (noLinesOutOfScope || !linesOutOfScope.has(line)) {
+      sourceLines[i] = line;
+    }
+  }
+
+  // Finally we need to remove any undefined values, i.e. the ones that were matching
+  // out of scope lines.
+  return sourceLines.filter(i => i != undefined);
 }
 
 export function setInScopeLines(cx) {
@@ -56,9 +74,12 @@ export function setInScopeLines(cx) {
     }
 
     const { location } = visibleFrame;
-    const { content } = getSourceWithContent(getState(), location.sourceId);
+    const sourceTextContent = getSourceTextContent(
+      getState(),
+      location.sourceId
+    );
 
-    if (hasInScopeLines(getState(), location) || !content) {
+    if (hasInScopeLines(getState(), location) || !sourceTextContent) {
       return;
     }
 

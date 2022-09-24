@@ -5,10 +5,21 @@
 const { ComponentUtils } = ChromeUtils.import(
   "resource://gre/modules/ComponentUtils.jsm"
 );
+const { AppConstants } = ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
+);
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
+const {
+  saveToDisk,
+  alwaysAsk,
+  useHelperApp,
+  handleInternally,
+  useSystemDefault,
+} = Ci.nsIHandlerInfo;
 
 const TOPIC_PDFJS_HANDLER_CHANGED = "pdfjs:handlerChanged";
 
@@ -21,6 +32,16 @@ ChromeUtils.defineModuleGetter(
   this,
   "JSONFile",
   "resource://gre/modules/JSONFile.jsm"
+);
+const { Integration } = ChromeUtils.import(
+  "resource://gre/modules/Integration.jsm"
+);
+
+/* global DownloadIntegration */
+Integration.downloads.defineModuleGetter(
+  this,
+  "DownloadIntegration",
+  "resource://gre/modules/DownloadIntegration.jsm"
 );
 
 XPCOMUtils.defineLazyServiceGetter(
@@ -35,6 +56,10 @@ XPCOMUtils.defineLazyServiceGetter(
   "@mozilla.org/mime;1",
   "nsIMIMEService"
 );
+XPCOMUtils.defineLazyModuleGetters(this, {
+  kHandlerList: "resource://gre/modules/handlers/HandlerList.jsm",
+  kHandlerListVersion: "resource://gre/modules/handlers/HandlerList.jsm",
+});
 
 function HandlerService() {
   // Observe handlersvc-json-replace so we can switch to the datasource
@@ -77,6 +102,12 @@ HandlerService.prototype = {
       this._migrateProtocolHandlersIfNeeded();
 
       Services.obs.notifyObservers(null, "handlersvc-store-initialized");
+
+      // Bug 1736924: run migration for browser.download.improvements_to_download_panel if applicable.
+      // Since we need DownloadsViewInternally to verify mimetypes, we run this after
+      // DownloadsViewInternally is registered via the 'handlersvc-store-initialized' notification.
+      this._migrateDownloadsImprovementsIfNeeded();
+      this._migrateSVGXMLIfNeeded();
     }
   },
 
@@ -87,6 +118,7 @@ HandlerService.prototype = {
           defaultHandlersVersion: {},
           mimeTypes: {},
           schemes: {},
+          isDownloadsImprovementsAlreadyMigrated: false,
         };
   },
 
@@ -95,34 +127,17 @@ HandlerService.prototype = {
    * newer than the one in the data store.
    */
   _injectDefaultProtocolHandlersIfNeeded() {
-    let prefsDefaultHandlersVersion;
     try {
-      prefsDefaultHandlersVersion = Services.prefs.getComplexValue(
+      let defaultHandlersVersion = Services.prefs.getIntPref(
         "gecko.handlerService.defaultHandlersVersion",
-        Ci.nsIPrefLocalizedString
+        0
       );
-    } catch (ex) {
-      if (
-        ex instanceof Components.Exception &&
-        ex.result == Cr.NS_ERROR_UNEXPECTED
-      ) {
-        // This platform does not have any default protocol handlers configured.
-        return;
-      }
-      throw ex;
-    }
-
-    try {
-      prefsDefaultHandlersVersion = Number(prefsDefaultHandlersVersion.data);
-      let locale = Services.locale.appLocaleAsBCP47;
-
-      let defaultHandlersVersion =
-        this._store.data.defaultHandlersVersion[locale] || 0;
-      if (defaultHandlersVersion < prefsDefaultHandlersVersion) {
+      if (defaultHandlersVersion < kHandlerListVersion) {
         this._injectDefaultProtocolHandlers();
-        this._store.data.defaultHandlersVersion[
-          locale
-        ] = prefsDefaultHandlersVersion;
+        Services.prefs.setIntPref(
+          "gecko.handlerService.defaultHandlersVersion",
+          kHandlerListVersion
+        );
         // Now save the result:
         this._store.saveSoon();
       }
@@ -132,53 +147,13 @@ HandlerService.prototype = {
   },
 
   _injectDefaultProtocolHandlers() {
-    let schemesPrefBranch = Services.prefs.getBranch(
-      "gecko.handlerService.schemes."
-    );
-    let schemePrefList = schemesPrefBranch.getChildList("");
+    let locale = Services.locale.appLocaleAsBCP47;
 
-    let schemes = {};
-
-    // read all the scheme prefs into a hash
-    for (let schemePrefName of schemePrefList) {
-      let [scheme, handlerNumber, attribute] = schemePrefName.split(".");
-
-      try {
-        let attrData = schemesPrefBranch.getComplexValue(
-          schemePrefName,
-          Ci.nsIPrefLocalizedString
-        ).data;
-        if (!(scheme in schemes)) {
-          schemes[scheme] = {};
-        }
-
-        if (!(handlerNumber in schemes[scheme])) {
-          schemes[scheme][handlerNumber] = {};
-        }
-
-        schemes[scheme][handlerNumber][attribute] = attrData;
-      } catch (ex) {}
-    }
-
-    // Now drop any entries without a uriTemplate, or with a broken one.
-    // The Array.from calls ensure we can safely delete things without
-    // affecting the iterator.
-    for (let [scheme, handlerObject] of Array.from(Object.entries(schemes))) {
-      let handlers = Array.from(Object.entries(handlerObject));
-      let validHandlers = 0;
-      for (let [key, obj] of handlers) {
-        if (
-          !obj.uriTemplate ||
-          !obj.uriTemplate.startsWith("https://") ||
-          !obj.uriTemplate.toLowerCase().includes("%s")
-        ) {
-          delete handlerObject[key];
-        } else {
-          validHandlers++;
-        }
-      }
-      if (!validHandlers) {
-        delete schemes[scheme];
+    // Initialize handlers to default and update based on locale.
+    let localeHandlers = kHandlerList.default;
+    if (kHandlerList[locale]) {
+      for (let scheme in kHandlerList[locale].schemes) {
+        localeHandlers.schemes[scheme] = kHandlerList[locale].schemes[scheme];
       }
     }
 
@@ -191,7 +166,12 @@ HandlerService.prototype = {
     // All we're trying to do is insert some web apps into the list. We
     // don't care what's already in the file, we just want to do the
     // equivalent of appending into the database. So let's just go do that:
-    for (let scheme of Object.keys(schemes)) {
+    for (let scheme of Object.keys(localeHandlers.schemes)) {
+      if (scheme == "mailto" && AppConstants.MOZ_APP_NAME == "thunderbird") {
+        // Thunderbird IS a mailto handler, it doesn't need handlers added.
+        continue;
+      }
+
       let existingSchemeInfo = this._store.data.schemes[scheme];
       if (!existingSchemeInfo) {
         // Haven't seen this scheme before. Default to asking which app the
@@ -207,8 +187,7 @@ HandlerService.prototype = {
         this._store.data.schemes[scheme] = existingSchemeInfo;
       }
       let { handlers } = existingSchemeInfo;
-      for (let handlerNumber of Object.keys(schemes[scheme])) {
-        let newHandler = schemes[scheme][handlerNumber];
+      for (let newHandler of localeHandlers.schemes[scheme].handlers) {
         // If there is already a handler registered with the same template
         // URL, ignore the new one:
         let matchingTemplate = handler =>
@@ -390,13 +369,91 @@ HandlerService.prototype = {
     }
   },
 
+  /**
+   * Update already existing handlers for non-internal mimetypes to have prefs set from alwaysAsk
+   * to saveToDisk. However, if reading an internal mimetype and set to alwaysAsk, update to use handleInternally.
+   * This migration is needed since browser.download.improvements_to_download_panel does not
+   * override user preferences if preferredAction = alwaysAsk. By doing so, we can ensure that file prompt
+   * behaviours remain consistent for most files.
+   *
+   * See Bug 1736924 for more information.
+   */
+  _noInternalHandlingDefault: new Set([
+    "text/xml",
+    "application/xml",
+    "image/svg+xml",
+  ]),
+  _migrateDownloadsImprovementsIfNeeded() {
+    // Migrate if the preference is enabled AND if the migration has never been run before.
+    // Otherwise, we risk overwriting preferences for existing profiles!
+    if (
+      Services.prefs.getBoolPref(
+        "browser.download.improvements_to_download_panel"
+      ) &&
+      !Services.policies.getActivePolicies()?.Handlers &&
+      !this._store.data.isDownloadsImprovementsAlreadyMigrated &&
+      AppConstants.MOZ_APP_NAME != "thunderbird"
+    ) {
+      for (let [type, mimeInfo] of Object.entries(this._store.data.mimeTypes)) {
+        let isViewableInternally =
+          DownloadIntegration.shouldViewDownloadInternally(type) &&
+          !this._noInternalHandlingDefault.has(type);
+        let isAskOnly = mimeInfo && mimeInfo.ask;
+
+        if (isAskOnly) {
+          if (isViewableInternally) {
+            mimeInfo.action = handleInternally;
+          } else {
+            mimeInfo.action = saveToDisk;
+          }
+
+          // Sets alwaysAskBeforeHandling to false. Needed to ensure that:
+          // preferredAction appears as expected in preferences table; and
+          // downloads behaviour is updated to never show UCT window.
+          mimeInfo.ask = false;
+        }
+      }
+
+      this._store.data.isDownloadsImprovementsAlreadyMigrated = true;
+      this._store.saveSoon();
+    }
+  },
+
+  _migrateSVGXMLIfNeeded() {
+    // Migrate if the preference is enabled AND if the migration has never been run before.
+    // We need to make sure we only run this once.
+    if (
+      Services.prefs.getBoolPref(
+        "browser.download.improvements_to_download_panel"
+      ) &&
+      !Services.policies.getActivePolicies()?.Handlers &&
+      !this._store.data.isSVGXMLAlreadyMigrated
+    ) {
+      for (let type of this._noInternalHandlingDefault) {
+        if (Object.hasOwn(this._store.data.mimeTypes, type)) {
+          let mimeInfo = this._store.data.mimeTypes[type];
+          if (!mimeInfo.ask && mimeInfo.action == handleInternally) {
+            mimeInfo.action = saveToDisk;
+          }
+        }
+      }
+
+      this._store.data.isSVGXMLAlreadyMigrated = true;
+      this._store.saveSoon();
+    }
+  },
+
   // nsIHandlerService
   enumerate() {
     let handlers = Cc["@mozilla.org/array;1"].createInstance(
       Ci.nsIMutableArray
     );
-    for (let type of Object.keys(this._store.data.mimeTypes)) {
-      let handler = gMIMEService.getFromTypeAndExtension(type, null);
+    for (let [type, typeInfo] of Object.entries(this._store.data.mimeTypes)) {
+      let primaryExtension = typeInfo.extensions?.[0] ?? null;
+      let handler = gMIMEService.getFromTypeAndExtension(
+        type,
+        primaryExtension
+      );
       handlers.appendElement(handler);
     }
     for (let type of Object.keys(this._store.data.schemes)) {
@@ -447,17 +504,20 @@ HandlerService.prototype = {
 
     // Only a limited number of preferredAction values is allowed.
     if (
-      handlerInfo.preferredAction == Ci.nsIHandlerInfo.saveToDisk ||
-      handlerInfo.preferredAction == Ci.nsIHandlerInfo.useSystemDefault ||
-      handlerInfo.preferredAction == Ci.nsIHandlerInfo.handleInternally ||
-      (handlerInfo.preferredAction == Ci.nsIHandlerInfo.alwaysAsk &&
+      handlerInfo.preferredAction == saveToDisk ||
+      handlerInfo.preferredAction == useSystemDefault ||
+      handlerInfo.preferredAction == handleInternally ||
+      // For files (ie mimetype rather than protocol handling info), ensure
+      // we can store the "always ask" state, too:
+      (handlerInfo.preferredAction == alwaysAsk &&
+        this._isMIMEInfo(handlerInfo) &&
         Services.prefs.getBoolPref(
           "browser.download.improvements_to_download_panel"
         ))
     ) {
       storedHandlerInfo.action = handlerInfo.preferredAction;
     } else {
-      storedHandlerInfo.action = Ci.nsIHandlerInfo.useHelperApp;
+      storedHandlerInfo.action = useHelperApp;
     }
 
     if (handlerInfo.alwaysAskBeforeHandling) {
@@ -549,13 +609,13 @@ HandlerService.prototype = {
         handlerInfo.hasDefaultHandler
       );
       if (
-        handlerInfo.preferredAction == Ci.nsIHandlerInfo.alwaysAsk &&
+        handlerInfo.preferredAction == alwaysAsk &&
         handlerInfo.alwaysAskBeforeHandling
       ) {
         // `store` will default to `useHelperApp` because `alwaysAsk` is
         // not one of the 3 recognized options; for compatibility, do
         // the same here.
-        handlerInfo.preferredAction = Ci.nsIHandlerInfo.useHelperApp;
+        handlerInfo.preferredAction = useHelperApp;
       }
     }
     // If it *is* a stub, don't override alwaysAskBeforeHandling or the
@@ -568,6 +628,8 @@ HandlerService.prototype = {
       for (let extension of storedHandlerInfo.extensions) {
         handlerInfo.appendExtension(extension);
       }
+    } else if (this._mockedHandler) {
+      this._insertMockedHandler(handlerInfo);
     }
   },
 
@@ -731,6 +793,58 @@ HandlerService.prototype = {
       }
     }
     return "";
+  },
+
+  _mockedHandler: null,
+  _mockedProtocol: null,
+
+  _insertMockedHandler(handlerInfo) {
+    if (handlerInfo.type == this._mockedProtocol) {
+      handlerInfo.preferredApplicationHandler = this._mockedHandler;
+      handlerInfo.possibleApplicationHandlers.insertElementAt(
+        this._mockedHandler,
+        0
+      );
+    }
+  },
+
+  // test-only: mock the handler instance for a particular protocol/scheme
+  mockProtocolHandler(protocol) {
+    if (!protocol) {
+      this._mockedProtocol = null;
+      this._mockedHandler = null;
+      return;
+    }
+    this._mockedProtocol = protocol;
+    this._mockedHandler = {
+      QueryInterface: ChromeUtils.generateQI([Ci.nsILocalHandlerApp]),
+      launchWithURI(uri, context) {
+        Services.obs.notifyObservers(uri, "mocked-protocol-handler");
+      },
+      name: "Mocked handler",
+      detailedDescription: "Mocked handler for tests",
+      equals(x) {
+        return x == this;
+      },
+      get executable() {
+        if (AppConstants.platform == "macosx") {
+          // We need an app path that isn't us, nor in our app bundle, and
+          // Apple no longer allows us to read the default-shipped apps
+          // in /Applications/ - except for Safari, it would appear!
+          let f = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+          f.initWithPath("/Applications/Safari.app");
+          return f;
+        }
+        return Services.dirsvc.get("XCurProcD", Ci.nsIFile);
+      },
+      parameterCount: 0,
+      clearParameters() {},
+      appendParameter() {},
+      getParameter() {},
+      parameterExists() {
+        return false;
+      },
+    };
   },
 };
 

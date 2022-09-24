@@ -1,3 +1,4 @@
-// |jit-test| skip-if: helperThreadCount() === 0; --off-thread-parse-global
-offThreadCompileModule("");
-finishOffThreadModule();
+// |jit-test| skip-if: helperThreadCount() === 0
+offThreadCompileModuleToStencil("");
+var stencil = finishOffThreadCompileModuleToStencil();
+instantiateModuleStencil(stencil);

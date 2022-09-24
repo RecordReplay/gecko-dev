@@ -14,6 +14,10 @@
 
 using namespace mozilla::a11y;
 
+Accessible* ia2AccessibleHyperlink::Acc() {
+  return static_cast<MsaaAccessible*>(this)->Acc();
+}
+
 AccessibleWrap* ia2AccessibleHyperlink::LocalAcc() {
   return static_cast<MsaaAccessible*>(this)->LocalAcc();
 }
@@ -27,9 +31,8 @@ ia2AccessibleHyperlink::QueryInterface(REFIID iid, void** ppv) {
   *ppv = nullptr;
 
   if (IID_IAccessibleHyperlink == iid) {
-    auto accWrap = LocalAcc();
-    if (!accWrap || (accWrap->IsProxy() ? !accWrap->Proxy()->IsLink()
-                                        : !accWrap->IsLink())) {
+    Accessible* acc = Acc();
+    if (!acc || !acc->IsLink()) {
       return E_NOINTERFACE;
     }
 
@@ -53,7 +56,6 @@ ia2AccessibleHyperlink::get_anchor(long aIndex, VARIANT* aAnchor) {
   if (!thisObj) {
     return CO_E_OBJNOTCONNECTED;
   }
-  MOZ_ASSERT(!thisObj->IsProxy());
 
   if (aIndex < 0 || aIndex >= static_cast<long>(thisObj->AnchorCount()))
     return E_INVALIDARG;
@@ -84,7 +86,6 @@ ia2AccessibleHyperlink::get_anchorTarget(long aIndex, VARIANT* aAnchorTarget) {
     return CO_E_OBJNOTCONNECTED;
   }
   nsAutoCString uriStr;
-  MOZ_ASSERT(!thisObj->IsProxy());
 
   if (aIndex < 0 || aIndex >= static_cast<long>(thisObj->AnchorCount())) {
     return E_INVALIDARG;
@@ -119,11 +120,10 @@ ia2AccessibleHyperlink::get_startIndex(long* aIndex) {
 
   *aIndex = 0;
 
-  LocalAccessible* thisObj = LocalAcc();
+  Accessible* thisObj = Acc();
   if (!thisObj) {
     return CO_E_OBJNOTCONNECTED;
   }
-  MOZ_ASSERT(!thisObj->IsProxy());
 
   if (!thisObj->IsLink()) return S_FALSE;
 
@@ -137,11 +137,10 @@ ia2AccessibleHyperlink::get_endIndex(long* aIndex) {
 
   *aIndex = 0;
 
-  LocalAccessible* thisObj = LocalAcc();
+  Accessible* thisObj = Acc();
   if (!thisObj) {
     return CO_E_OBJNOTCONNECTED;
   }
-  MOZ_ASSERT(!thisObj->IsProxy());
 
   if (!thisObj->IsLink()) return S_FALSE;
 
@@ -159,7 +158,6 @@ ia2AccessibleHyperlink::get_valid(boolean* aValid) {
   if (!thisObj) {
     return CO_E_OBJNOTCONNECTED;
   }
-  MOZ_ASSERT(!thisObj->IsProxy());
 
   if (!thisObj->IsLink()) return S_FALSE;
 

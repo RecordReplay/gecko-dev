@@ -71,7 +71,7 @@ class MediaMgrError final : public nsISupports, public BaseMediaMgrError {
 
   NS_DECL_THREADSAFE_ISUPPORTS
 
-  void Reject(dom::Promise* aPromise);
+  void Reject(dom::Promise* aPromise) const;
 
  private:
   ~MediaMgrError() = default;
@@ -87,7 +87,7 @@ class MediaStreamError final : public nsISupports,
         mParent(aParent) {}
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(MediaStreamError)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(MediaStreamError)
   NS_DECLARE_STATIC_IID_ACCESSOR(
       MOZILLA_DOM_MEDIASTREAMERROR_IMPLEMENTATION_IID)
 

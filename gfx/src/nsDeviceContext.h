@@ -26,7 +26,6 @@ class gfxContext;
 class gfxTextPerfMetrics;
 class gfxUserFontSet;
 struct nsFont;
-class nsFontCache;
 class nsAtom;
 class nsIDeviceContextSpec;
 class nsIScreen;
@@ -48,14 +47,6 @@ class nsDeviceContext final {
    * @return error status
    */
   nsresult Init(nsIWidget* aWidget);
-
-  /*
-   * Initialize the font cache if it hasn't been initialized yet.
-   * (Needed for stylo)
-   */
-  void InitFontCache();
-
-  void UpdateFontCacheUserFonts(gfxUserFontSet* aUserFontSet);
 
   /**
    * Initialize the device context from a device context spec
@@ -117,30 +108,9 @@ class nsDeviceContext final {
   }
 
   /**
-   * Get the nsFontMetrics that describe the properties of
-   * an nsFont.
-   * @param aFont font description to obtain metrics for
-   */
-  already_AddRefed<nsFontMetrics> GetMetricsFor(
-      const nsFont& aFont, const nsFontMetrics::Params& aParams);
-
-  /**
-   * Notification when a font metrics instance created for this device is
-   * about to be deleted
-   */
-  nsresult FontMetricsDeleted(const nsFontMetrics* aFontMetrics);
-
-  /**
-   * Attempt to free up resources by flushing out any fonts no longer
-   * referenced by anything other than the font cache itself.
-   * @return error status
-   */
-  nsresult FlushFontCache();
-
-  /**
    * Return the bit depth of the device.
    */
-  nsresult GetDepth(uint32_t& aDepth);
+  uint32_t GetDepth();
 
   /**
    * Get the size of the displayable area of the output device
@@ -259,7 +229,7 @@ class nsDeviceContext final {
   /**
    * True if this device context was created for printing.
    */
-  bool IsPrinterContext();
+  bool IsPrinterContext() const { return !!mPrintTarget; }
 
   mozilla::DesktopToLayoutDeviceScale GetDesktopToDeviceScale();
 
@@ -292,7 +262,6 @@ class nsDeviceContext final {
   float mPrintingScale;
   gfxPoint mPrintingTranslate;
 
-  RefPtr<nsFontCache> mFontCache;
   nsCOMPtr<nsIWidget> mWidget;
   nsCOMPtr<nsIScreenManager> mScreenManager;
   nsCOMPtr<nsIDeviceContextSpec> mDeviceContextSpec;

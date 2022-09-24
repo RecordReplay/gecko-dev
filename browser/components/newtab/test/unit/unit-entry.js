@@ -66,6 +66,14 @@ class JSWindowActorChild {
   }
 }
 
+class Logger {
+  constructor(name) {
+    this.name = name;
+  }
+
+  warn() {}
+}
+
 const TEST_GLOBAL = {
   JSWindowActorParent,
   JSWindowActorChild,
@@ -210,6 +218,27 @@ const TEST_GLOBAL = {
     writeJSON() {
       return Promise.resolve(0);
     },
+    readJSON() {
+      return Promise.resolve({});
+    },
+    read() {
+      return Promise.resolve(new Uint8Array());
+    },
+    makeDirectory() {
+      return Promise.resolve(0);
+    },
+    write() {
+      return Promise.resolve(0);
+    },
+    exists() {
+      return Promise.resolve(0);
+    },
+    remove() {
+      return Promise.resolve(0);
+    },
+    stat() {
+      return Promise.resolve(0);
+    },
   },
   NewTabUtils: {
     activityStreamProvider: {
@@ -241,6 +270,9 @@ const TEST_GLOBAL = {
   },
   PathUtils: {
     join(...parts) {
+      return parts[parts.length - 1];
+    },
+    joinRelative(...parts) {
       return parts[parts.length - 1];
     },
     getProfileDir() {
@@ -305,6 +337,11 @@ const TEST_GLOBAL = {
       recordEvent: eventDetails => {},
       scalarSet: () => {},
       keyedScalarAdd: () => {},
+    },
+    uuid: {
+      generateUUID() {
+        return "{foo-123-foo}";
+      },
     },
     console: { logStringMessage: () => {} },
     prefs: {
@@ -465,7 +502,15 @@ const TEST_GLOBAL = {
   NimbusFeatures: {
     newtab: {
       isEnabled() {},
-      getValue() {},
+      getVariable() {},
+      getAllVariables() {},
+      onUpdate() {},
+      off() {},
+    },
+    pocketNewtab: {
+      isEnabled() {},
+      getVariable() {},
+      getAllVariables() {},
       onUpdate() {},
       off() {},
     },
@@ -505,8 +550,9 @@ const TEST_GLOBAL = {
     addExpirationFilter() {},
     removeExpirationFilter() {},
   },
-  gUUIDGenerator: {
-    generateUUID: () => "{foo-123-foo}",
+  Logger,
+  Utils: {
+    SERVER_URL: "bogus://foo",
   },
 };
 overrider.set(TEST_GLOBAL);

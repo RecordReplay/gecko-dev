@@ -21,15 +21,14 @@ namespace mozilla {
  * via a module loader.
  */
 struct Module {
-  static const unsigned int kVersion = 91;
+  static const unsigned int kVersion = 102;
 
   struct CIDEntry;
 
   typedef already_AddRefed<nsIFactory> (*GetFactoryProcPtr)(
       const Module& module, const CIDEntry& entry);
 
-  typedef nsresult (*ConstructorProcPtr)(nsISupports* aOuter, const nsIID& aIID,
-                                         void** aResult);
+  typedef nsresult (*ConstructorProcPtr)(const nsIID& aIID, void** aResult);
 
   typedef nsresult (*LoadFuncPtr)();
   typedef void (*UnloadFuncPtr)();
@@ -46,14 +45,18 @@ struct Module {
     CONTENT_PROCESS_ONLY = 0x2,
 
     /**
-     * By default, modules are not loaded in the GPU process, even if
-     * ANY_PROCESS is specified. This flag enables a module in the
-     * GPU process.
+     * By default, modules are not loaded in the GPU, VR, Socket, RDD, Utility
+     * and IPDLUnitTest processes, even if ANY_PROCESS is specified. This flag
+     * enables a module in the relevant process.
+     *
+     * NOTE: IPDLUnitTest does not have its own flag, and will only load a
+     * module if it is enabled in all processes.
      */
     ALLOW_IN_GPU_PROCESS = 0x4,
     ALLOW_IN_VR_PROCESS = 0x8,
     ALLOW_IN_SOCKET_PROCESS = 0x10,
     ALLOW_IN_RDD_PROCESS = 0x20,
+    ALLOW_IN_UTILITY_PROCESS = 0x30,
     ALLOW_IN_GPU_AND_MAIN_PROCESS = ALLOW_IN_GPU_PROCESS | MAIN_PROCESS_ONLY,
     ALLOW_IN_GPU_AND_VR_PROCESS = ALLOW_IN_GPU_PROCESS | ALLOW_IN_VR_PROCESS,
     ALLOW_IN_GPU_AND_SOCKET_PROCESS =
@@ -64,13 +67,18 @@ struct Module {
         ALLOW_IN_RDD_PROCESS | ALLOW_IN_SOCKET_PROCESS,
     ALLOW_IN_GPU_RDD_AND_SOCKET_PROCESS =
         ALLOW_IN_GPU_PROCESS | ALLOW_IN_RDD_PROCESS | ALLOW_IN_SOCKET_PROCESS,
+    ALLOW_IN_GPU_RDD_SOCKET_AND_UTILITY_PROCESS =
+        ALLOW_IN_GPU_PROCESS | ALLOW_IN_RDD_PROCESS | ALLOW_IN_SOCKET_PROCESS,
     ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS =
         ALLOW_IN_GPU_PROCESS | ALLOW_IN_RDD_PROCESS | ALLOW_IN_VR_PROCESS |
-        ALLOW_IN_SOCKET_PROCESS
+        ALLOW_IN_SOCKET_PROCESS,
+    ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS =
+        ALLOW_IN_GPU_PROCESS | ALLOW_IN_RDD_PROCESS | ALLOW_IN_VR_PROCESS |
+        ALLOW_IN_SOCKET_PROCESS | ALLOW_IN_UTILITY_PROCESS
   };
 
   static constexpr size_t kMaxProcessSelector =
-      size_t(ProcessSelector::ALLOW_IN_GPU_RDD_VR_AND_SOCKET_PROCESS);
+      size_t(ProcessSelector::ALLOW_IN_GPU_RDD_VR_SOCKET_AND_UTILITY_PROCESS);
 
   /**
    * This allows category entries to be marked so that they are or are

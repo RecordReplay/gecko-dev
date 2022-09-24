@@ -11,6 +11,7 @@
 #include "mozilla/dom/Notification.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/PushManager.h"
+#include "mozilla/ipc/PBackgroundSharedTypes.h"
 #include "mozilla/dom/ServiceWorker.h"
 #include "mozilla/dom/ServiceWorkerRegistrationBinding.h"
 #include "mozilla/dom/ServiceWorkerUtils.h"
@@ -20,8 +21,7 @@
 #include "nsPIDOMWindow.h"
 #include "RemoteServiceWorkerRegistrationImpl.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(ServiceWorkerRegistration,
                                    DOMEventTargetHelper, mInstallingWorker,
@@ -50,7 +50,7 @@ ServiceWorkerRegistration::ServiceWorkerRegistration(
       mDispatchedUpdateFoundId(kInvalidUpdateFoundId) {
   MOZ_DIAGNOSTIC_ASSERT(mInner);
 
-  KeepAliveIfHasListenersFor(u"updatefound"_ns);
+  KeepAliveIfHasListenersFor(nsGkAtoms::onupdatefound);
 
   mInner->SetServiceWorkerRegistration(this);
 }
@@ -125,7 +125,7 @@ void ServiceWorkerRegistration::RegistrationCleared() {
   // Our underlying registration was removed from SWM, so we
   // will never get an updatefound event again.  We can let
   // the object GC if content is not holding it alive.
-  IgnoreKeepAliveIfHasListenersFor(u"updatefound"_ns);
+  IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onupdatefound);
 }
 
 already_AddRefed<ServiceWorker> ServiceWorkerRegistration::GetInstalling()
@@ -545,5 +545,4 @@ void ServiceWorkerRegistration::UpdateStateInternal(
   }
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

@@ -26,7 +26,7 @@ add_task(async function() {
   const { document: panelDoc, store } = changesView;
 
   await selectNode("div", inspector);
-  const onTrackChange = waitUntilAction(store, "TRACK_CHANGE");
+  const onTrackChange = waitForDispatch(store, "TRACK_CHANGE");
   await updateDeclaration(ruleView, 1, { color: "red" }, { color: "green" });
   await onTrackChange;
 
@@ -44,6 +44,9 @@ add_task(async function() {
     () => menuItem.click(),
     () => checkClipboardData(EXPECTED_CLIPBOARD_REMOVED)
   );
+
+  info("Hiding menu");
+  menu.hide(document);
 
   info(
     "Click the Copy Declaration context menu item for the added declaration"

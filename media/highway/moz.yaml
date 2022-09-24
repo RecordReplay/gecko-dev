@@ -20,11 +20,11 @@ origin:
 
   # Human-readable identifier for this version/release
   # Generally "version NNN", "tag SSS", "bookmark SSS"
-  release: commit d9882104caf9fb060d328d62cac9ce0a05a191db (2021-05-21T10:02:16Z).
+  release: commit f13e3b956eb226561ac79427893ec0afd66f91a8 (2022-02-15T18:19:21Z).
 
   # Revision to pull in
   # Must be a long or short commit SHA (long preferred)
-  revision: d9882104caf9fb060d328d62cac9ce0a05a191db
+  revision: f13e3b956eb226561ac79427893ec0afd66f91a8
 
   # The package's license, where possible using the mnemonic from
   # https://spdx.org/licenses/
@@ -35,9 +35,10 @@ origin:
   license-file: LICENSE
 
 vendoring:
-  url: https://github.com/google/highway.git
+  url: https://github.com/google/highway
   source-hosting: github
   vendor-directory: third_party/highway
 
   exclude:
     - g3doc/
+

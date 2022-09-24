@@ -13,18 +13,18 @@
 #include <string.h>  // for strlen, size_t
 #include <utility>   // for move
 
-#include "jsapi.h"  // for Rooted, CallArgs, MutableHandle
-
 #include "debugger/Debugger.h"          // for Env, Debugger, ValueToIdentifier
 #include "debugger/Object.h"            // for DebuggerObject
 #include "debugger/Script.h"            // for DebuggerScript
 #include "frontend/BytecodeCompiler.h"  // for IsIdentifier
 #include "gc/Rooting.h"                 // for RootedDebuggerEnvironment
-#include "gc/Tracer.h"  // for TraceManuallyBarrieredCrossCompartmentEdge
+#include "gc/Tracer.h"    // for TraceManuallyBarrieredCrossCompartmentEdge
+#include "js/CallArgs.h"  // for CallArgs
 #include "js/friend/ErrorMessages.h"  // for GetErrorMessage, JSMSG_*
 #include "js/HeapAPI.h"               // for IsInsideNursery
+#include "js/RootingAPI.h"            // for Rooted, MutableHandle
 #include "vm/Compartment.h"           // for Compartment
-#include "vm/JSAtom.h"                // for Atomize, PinAtom
+#include "vm/JSAtom.h"                // for Atomize
 #include "vm/JSContext.h"             // for JSContext
 #include "vm/JSFunction.h"            // for JSFunction
 #include "vm/JSObject.h"              // for JSObject, RequireObject,
@@ -60,25 +60,22 @@ const JSClassOps DebuggerEnvironment::classOps_ = {
     nullptr,                               // mayResolve
     nullptr,                               // finalize
     nullptr,                               // call
-    nullptr,                               // hasInstance
     nullptr,                               // construct
     CallTraceMethod<DebuggerEnvironment>,  // trace
 };
 
 const JSClass DebuggerEnvironment::class_ = {
     "Environment",
-    JSCLASS_HAS_PRIVATE |
-        JSCLASS_HAS_RESERVED_SLOTS(DebuggerEnvironment::RESERVED_SLOTS),
+    JSCLASS_HAS_RESERVED_SLOTS(DebuggerEnvironment::RESERVED_SLOTS),
     &classOps_};
 
 void DebuggerEnvironment::trace(JSTracer* trc) {
   // There is a barrier on private pointers, so the Unbarriered marking
   // is okay.
-  if (Env* referent = (JSObject*)getPrivate()) {
-    TraceManuallyBarrieredCrossCompartmentEdge(
-        trc, static_cast<JSObject*>(this), &referent,
-        "Debugger.Environment referent");
-    setPrivateUnbarriered(referent);
+  if (Env* referent = maybeReferent()) {
+    TraceManuallyBarrieredCrossCompartmentEdge(trc, this, &referent,
+                                               "Debugger.Environment referent");
+    setReservedSlotGCThingAsPrivateUnbarriered(ENV_SLOT, referent);
   }
 }
 
@@ -190,7 +187,7 @@ bool DebuggerEnvironment::CallData::typeGetter() {
       break;
   }
 
-  JSAtom* str = Atomize(cx, s, strlen(s), PinAtom);
+  JSAtom* str = Atomize(cx, s, strlen(s));
   if (!str) {
     return false;
   }
@@ -207,7 +204,7 @@ bool DebuggerEnvironment::CallData::scopeKindGetter() {
   Maybe<ScopeKind> kind = environment->scopeKind();
   if (kind.isSome()) {
     const char* s = ScopeKindString(*kind);
-    JSAtom* str = Atomize(cx, s, strlen(s), PinAtom);
+    JSAtom* str = Atomize(cx, s, strlen(s));
     if (!str) {
       return false;
     }
@@ -282,12 +279,12 @@ bool DebuggerEnvironment::CallData::namesMethod() {
     return false;
   }
 
-  Rooted<IdVector> ids(cx, IdVector(cx));
+  RootedIdVector ids(cx);
   if (!DebuggerEnvironment::getNames(cx, environment, &ids)) {
     return false;
   }
 
-  RootedObject obj(cx, IdVectorToArray(cx, ids));
+  JSObject* obj = IdVectorToArray(cx, ids);
   if (!obj) {
     return false;
   }
@@ -406,7 +403,7 @@ DebuggerEnvironment* DebuggerEnvironment::create(JSContext* cx,
     return nullptr;
   }
 
-  obj->setPrivateGCThing(referent);
+  obj->setReservedSlotGCThingAsPrivate(ENV_SLOT, referent);
   obj->setReservedSlot(OWNER_SLOT, ObjectValue(*debugger));
 
   return obj;
@@ -511,30 +508,27 @@ bool DebuggerEnvironment::isOptimized() const {
 /* static */
 bool DebuggerEnvironment::getNames(JSContext* cx,
                                    HandleDebuggerEnvironment environment,
-                                   MutableHandle<IdVector> result) {
+                                   MutableHandleIdVector result) {
   MOZ_ASSERT(environment->isDebuggee());
+  MOZ_ASSERT(result.empty());
 
   Rooted<Env*> referent(cx, environment->referent());
-
-  RootedIdVector ids(cx);
   {
     Maybe<AutoRealm> ar;
     ar.emplace(cx, referent);
 
     ErrorCopier ec(ar);
-    if (!GetPropertyKeys(cx, referent, JSITER_HIDDEN, &ids)) {
+    if (!GetPropertyKeys(cx, referent, JSITER_HIDDEN, result)) {
       return false;
     }
   }
 
-  for (size_t i = 0; i < ids.length(); ++i) {
-    jsid id = ids[i];
-    if (id.isAtom() && IsIdentifier(id.toAtom())) {
-      cx->markId(id);
-      if (!result.append(id)) {
-        return false;
-      }
-    }
+  result.eraseIf([](PropertyKey key) {
+    return !key.isAtom() || !IsIdentifier(key.toAtom());
+  });
+
+  for (size_t i = 0; i < result.length(); ++i) {
+    cx->markAtom(result[i].toAtom());
   }
 
   return true;

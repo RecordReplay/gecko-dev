@@ -2,14 +2,14 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 ---
-loader: taskgraph.loader.transform:loader
+loader: gecko_taskgraph.loader.transform:loader
 
 transforms:
-    - taskgraph.transforms.release:run_on_releases
-    - taskgraph.transforms.release_deps:transforms
-    - taskgraph.transforms.scriptworker:add_balrog_scopes
-    - taskgraph.transforms.balrog_toplevel:transforms
-    - taskgraph.transforms.task:transforms
+    - gecko_taskgraph.transforms.release:run_on_releases
+    - gecko_taskgraph.transforms.release_deps:transforms
+    - gecko_taskgraph.transforms.scriptworker:add_balrog_scopes
+    - gecko_taskgraph.transforms.balrog_toplevel:transforms
+    - gecko_taskgraph.transforms.task:transforms
 
 job-defaults:
     run-on-projects: []  # to make sure this never runs in CI
@@ -46,8 +46,14 @@ jobs:
                 by-release-type:
                     beta: ["firefox-beta-cdntest", "firefox-beta-localtest"]
                     release(-rc)?: ["firefox-release-cdntest", "firefox-release-localtest"]
-                    esr78: ["firefox-esr78-cdntest", "firefox-esr78-localtest"]
                     esr91: ["firefox-esr91-cdntest", "firefox-esr91-localtest"]
+                    esr102: ["firefox-esr102-cdntest", "firefox-esr102-localtest"]
+                    default: []
+            pin-channels:
+                by-release-type:
+                    beta: ["beta-localtest", "beta-cdntest"]
+                    release(-rc)?: ["release-localtest", "release-cdntest"]
+                    esr.*: ["esr-localtest", "esr-cdntest", "esr-localtest-next", "esr-cdntest-next"]
                     default: []
             platforms: ["linux", "linux64", "macosx64", "win32", "win64", "win64-aarch64"]
         treeherder:
@@ -65,6 +71,7 @@ jobs:
             product: devedition
             channel-names: ["aurora", "aurora-localtest", "aurora-cdntest"]
             rules-to-update: ["devedition-cdntest", "devedition-localtest"]
+            pin-channels: ["aurora-localtest", "aurora-cdntest"]
             platforms: ["linux", "linux64", "macosx64", "win32", "win64", "win64-aarch64"]
         treeherder:
             platform: devedition-release/opt

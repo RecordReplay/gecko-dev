@@ -12,7 +12,6 @@
 #include "mozilla/Range.h"       // for Range
 #include "mozilla/Result.h"      // for Result
 
-#include "jsapi.h"             // for JSContext
 #include "jstypes.h"           // for JS_PUBLIC_API
 #include "NamespaceImports.h"  // for Value, MutableHandleValue, HandleId
 
@@ -23,6 +22,7 @@
 #include "vm/NativeObject.h"  // for NativeObject
 
 class JS_PUBLIC_API JSAtom;
+struct JS_PUBLIC_API JSContext;
 
 namespace js {
 
@@ -104,13 +104,14 @@ class DebuggerObject : public NativeObject {
                                            MutableHandleDebuggerObject result);
   [[nodiscard]] static bool getOwnPropertyNames(JSContext* cx,
                                                 HandleDebuggerObject object,
-                                                MutableHandle<IdVector> result);
-  [[nodiscard]] static bool getOwnPropertySymbols(
-      JSContext* cx, HandleDebuggerObject object,
-      MutableHandle<IdVector> result);
+                                                MutableHandleIdVector result);
+  [[nodiscard]] static bool getOwnPropertyNamesLength(
+      JSContext* cx, HandleDebuggerObject object, size_t* result);
+  [[nodiscard]] static bool getOwnPropertySymbols(JSContext* cx,
+                                                  HandleDebuggerObject object,
+                                                  MutableHandleIdVector result);
   [[nodiscard]] static bool getOwnPrivateProperties(
-      JSContext* cx, HandleDebuggerObject object,
-      MutableHandle<IdVector> result);
+      JSContext* cx, HandleDebuggerObject object, MutableHandleIdVector result);
   [[nodiscard]] static bool getOwnPropertyDescriptor(
       JSContext* cx, HandleDebuggerObject object, HandleId id,
       MutableHandle<mozilla::Maybe<PropertyDescriptor>> desc);
@@ -176,16 +177,19 @@ class DebuggerObject : public NativeObject {
   bool isInstance() const;
   Debugger* owner() const;
 
+  JSObject* maybeReferent() const {
+    return maybePtrFromReservedSlot<JSObject>(OBJECT_SLOT);
+  }
   JSObject* referent() const {
-    JSObject* obj = (JSObject*)getPrivate();
+    JSObject* obj = maybeReferent();
     MOZ_ASSERT(obj);
     return obj;
   }
 
- private:
-  enum { OWNER_SLOT };
+  void clearReferent() { clearReservedSlotGCThingAsPrivate(OBJECT_SLOT); }
 
-  static const unsigned RESERVED_SLOTS = 1;
+ private:
+  enum { OBJECT_SLOT, OWNER_SLOT, RESERVED_SLOTS };
 
   static const JSClassOps classOps_;
 

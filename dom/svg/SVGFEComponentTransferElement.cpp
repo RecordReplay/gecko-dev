@@ -9,14 +9,15 @@
 #include "mozilla/dom/SVGComponentTransferFunctionElement.h"
 #include "mozilla/dom/SVGFEComponentTransferElementBinding.h"
 #include "mozilla/gfx/2D.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEComponentTransfer)
 
 using namespace mozilla::gfx;
 ;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEComponentTransferElement::WrapNode(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -88,5 +89,13 @@ void SVGFEComponentTransferElement::GetSourceImageNames(
   aSources.AppendElement(SVGStringInfo(&mStringAttributes[IN1], this));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+nsresult SVGFEComponentTransferElement::BindToTree(BindContext& aCtx,
+                                                   nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feComponentTransfer);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
+}  // namespace mozilla::dom

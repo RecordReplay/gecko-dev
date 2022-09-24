@@ -56,11 +56,13 @@ BROWSER_CHROME_MANIFESTS += [
     "content/test/statuspanel/browser.ini",
     "content/test/sync/browser.ini",
     "content/test/tabcrashed/browser.ini",
+    "content/test/tabcrashed/browser_aboutRestartRequired.ini",
     "content/test/tabdialogs/browser.ini",
     "content/test/tabMediaIndicator/browser.ini",
     "content/test/tabPrompts/browser.ini",
     "content/test/tabs/browser.ini",
     "content/test/touch/browser.ini",
+    "content/test/utilityOverlay/browser.ini",
     "content/test/webextensions/browser.ini",
     "content/test/webrtc/browser.ini",
     "content/test/webrtc/gracePeriod/browser.ini",
@@ -80,6 +82,10 @@ if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("windows", "gtk", "cocoa"):
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] in ("windows", "gtk"):
     DEFINES["MENUBAR_CAN_AUTOHIDE"] = 1
+
+if CONFIG["OS_ARCH"] == "WINNT" and CONFIG["MOZ_DEFAULT_BROWSER_AGENT"]:
+    # Impacts `/toolkit/content/license.html`.
+    DEFINES["MOZ_DEFAULT_BROWSER_AGENT"] = True
 
 JAR_MANIFESTS += ["jar.mn"]
 

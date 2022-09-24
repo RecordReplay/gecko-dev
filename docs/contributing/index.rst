@@ -9,6 +9,7 @@ development process and source code documentation.
    :maxdepth: 1
 
    contribution_quickref
+   stack_quickref
    pocket-guide-shipping-firefox
    editor
    reviews
@@ -32,8 +33,9 @@ development process and source code documentation.
 .. toctree::
    :caption: Additional Information
    :maxdepth: 1
-   
+
    directory_structure
    build/artifact_builds
    build/building_mobile_firefox
    build/supported
+   engineering_show_and_tell

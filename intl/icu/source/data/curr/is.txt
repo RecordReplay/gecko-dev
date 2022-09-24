@@ -433,7 +433,7 @@ is{
         }
         LSL{
             "LSL",
-            "Lesotho Loti",
+            "lesótóskur lóti",
         }
         LTL{
             "LTL",
@@ -968,9 +968,6 @@ is{
         UYU{"$"}
         VND{"₫"}
     }
-    Currencies%variant{
-        GEL{"₾"}
-    }
     CurrencyPlurals{
         AED{
             one{"arabískt dírham"}
@@ -1307,6 +1304,10 @@ is{
         LRD{
             one{"líberískur dalur"}
             other{"líberískir dalir"}
+        }
+        LSL{
+            one{"lesótóskur lóti"}
+            other{"lesótóskir lótar"}
         }
         LTL{
             one{"litháískt lít"}

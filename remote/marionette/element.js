@@ -7,6 +7,7 @@
 const EXPORTED_SYMBOLS = [
   "ChromeWebElement",
   "ContentWebElement",
+  "ContentShadowRoot",
   "ContentWebFrame",
   "ContentWebWindow",
   "element",
@@ -19,20 +20,14 @@ const { XPCOMUtils } = ChromeUtils.import(
 
 XPCOMUtils.defineLazyModuleGetters(this, {
   ContentDOMReference: "resource://gre/modules/ContentDOMReference.jsm",
+  Services: "resource://gre/modules/Services.jsm",
 
-  assert: "chrome://remote/content/marionette/assert.js",
+  assert: "chrome://remote/content/shared/webdriver/Assert.jsm",
   atom: "chrome://remote/content/marionette/atom.js",
   error: "chrome://remote/content/shared/webdriver/Errors.jsm",
   PollPromise: "chrome://remote/content/marionette/sync.js",
-  pprint: "chrome://remote/content/marionette/format.js",
+  pprint: "chrome://remote/content/shared/Format.jsm",
 });
-
-XPCOMUtils.defineLazyServiceGetter(
-  this,
-  "uuidGen",
-  "@mozilla.org/uuid-generator;1",
-  "nsIUUIDGenerator"
-);
 
 const ORDERED_NODE_ITERATOR_TYPE = 5;
 const FIRST_ORDERED_NODE_TYPE = 9;
@@ -1252,14 +1247,14 @@ element.isKeyboardInteractable = () => true;
  */
 element.scrollIntoView = function(el) {
   if (el.scrollIntoView) {
-    el.scrollIntoView({ block: "end", inline: "nearest", behavior: "instant" });
+    el.scrollIntoView({ block: "end", inline: "nearest" });
   }
 };
 
 /**
  * Ascertains whether <var>node</var> is a DOM-, SVG-, or XUL element.
  *
- * @param {*} node
+ * @param {Node} node
  *     Element thought to be an <code>Element</code> or
  *     <code>XULElement</code>.
  *
@@ -1268,6 +1263,37 @@ element.scrollIntoView = function(el) {
  */
 element.isElement = function(node) {
   return element.isDOMElement(node) || element.isXULElement(node);
+};
+
+/**
+ * Returns the shadow root of an element.
+ *
+ * @param {Node} node
+ *     Element thought to have a <code>shadowRoot</code>
+ * @returns {ShadowRoot}
+ *     shadow root of the element.
+ */
+element.getShadowRoot = function(node) {
+  const shadowRoot = node.openOrClosedShadowRoot;
+  if (!shadowRoot) {
+    throw new error.NoSuchShadowRootError();
+  }
+  return shadowRoot;
+};
+
+/**
+ * Checks whether a node has a shadow root.
+ * @param {Node} node
+ *   The node that will be checked to see if it has a shadow root
+ * @returns {boolean}
+ *   true, if it has a shadow root
+ */
+element.isShadowRoot = function(node) {
+  return (
+    node !== null &&
+    typeof node == "object" &&
+    node.containingShadowRoot == node
+  );
 };
 
 /**
@@ -1310,22 +1336,17 @@ element.isXULElement = function(node) {
 };
 
 /**
- * Ascertains whether <var>node</var> is in a XUL document.
+ * Ascertains whether <var>node</var> is in a privileged document.
  *
  * @param {*} node
- *     Element to check
+ *     Node to check.
  *
  * @return {boolean}
- *     True if <var>node</var> is in a XUL document,
+ *     True if <var>node</var> is in a privileged document,
  *     false otherwise.
  */
-element.isInXULDocument = function(node) {
-  return (
-    typeof node == "object" &&
-    node !== null &&
-    "ownerDocument" in node &&
-    node.ownerDocument.documentElement.namespaceURI === XUL_NS
-  );
+element.isInPrivilegedDocument = function(node) {
+  return !!node?.nodePrincipal?.isSystemPrincipal;
 };
 
 /**
@@ -1447,12 +1468,12 @@ class WebElement {
 
   /**
    * Returns a new {@link WebElement} reference for a DOM element,
-   * <code>WindowProxy</code>, or XUL element.
+   * <code>WindowProxy</code>, ShadowRoot, or XUL element.
    *
-   * @param {(Element|WindowProxy|XULElement)} node
+   * @param {(Element|ShadowRoot|WindowProxy|XULElement)} node
    *     Node to construct a web element reference for.
    *
-   * @return {(ContentWebElement|ChromeWebElement)}
+   * @return {(ContentShadowRoot|ContentWebElement|ChromeWebElement)}
    *     Web element reference for <var>el</var>.
    *
    * @throws {InvalidArgumentError}
@@ -1462,9 +1483,14 @@ class WebElement {
   static from(node) {
     const uuid = WebElement.generateUUID();
 
-    if (element.isElement(node)) {
-      if (element.isInXULDocument(node)) {
-        // If the node is in a XUL document, we are in "chrome" context.
+    if (element.isShadowRoot(node) && !element.isInPrivilegedDocument(node)) {
+      // When we support Chrome Shadowroots we will need to
+      // do a check here of shadowroot.host being in a privileged document
+      // See Bug 1743541
+      return new ContentShadowRoot(uuid);
+    } else if (element.isElement(node)) {
+      if (element.isInPrivilegedDocument(node)) {
+        // If the node is in a priviledged document, we are in "chrome" context.
         return new ChromeWebElement(uuid);
       }
       return new ContentWebElement(uuid);
@@ -1482,8 +1508,8 @@ class WebElement {
 
   /**
    * Unmarshals a JSON Object to one of {@link ContentWebElement},
-   * {@link ContentWebWindow}, {@link ContentWebFrame}, or
-   * {@link ChromeWebElement}.
+   * {@link ContentWebWindow}, {@link ContentWebFrame},
+   * or {@link ChromeWebElement}.
    *
    * @param {Object.<string, string>} json
    *     Web element reference, which is supposed to be a JSON Object
@@ -1505,6 +1531,9 @@ class WebElement {
 
     for (let key of keys) {
       switch (key) {
+        case ContentShadowRoot.Identifier:
+          return ContentShadowRoot.fromJSON(json);
+
         case ContentWebElement.Identifier:
           return ContentWebElement.fromJSON(json);
 
@@ -1526,7 +1555,7 @@ class WebElement {
 
   /**
    * Constructs a {@link ContentWebElement} or {@link ChromeWebElement}
-   * from a a string <var>uuid</var>.
+   * or {@link ContentShadowRoot} from a a string <var>uuid</var>.
    *
    * This whole function is a workaround for the fact that clients
    * to Marionette occasionally pass <code>{id: <uuid>}</code> JSON
@@ -1579,6 +1608,7 @@ class WebElement {
     }
 
     if (
+      ContentShadowRoot.Identifier in obj ||
       ContentWebElement.Identifier in obj ||
       ContentWebWindow.Identifier in obj ||
       ContentWebFrame.Identifier in obj ||
@@ -1596,7 +1626,7 @@ class WebElement {
    *     UUID.
    */
   static generateUUID() {
-    let uuid = uuidGen.generateUUID().toString();
+    let uuid = Services.uuid.generateUUID().toString();
     return uuid.substring(1, uuid.length - 1);
   }
 }
@@ -1626,6 +1656,31 @@ class ContentWebElement extends WebElement {
 }
 ContentWebElement.Identifier = "element-6066-11e4-a52e-4f735466cecf";
 this.ContentWebElement = ContentWebElement;
+
+/**
+ * Shadow Root elements are represented as web elements when they are
+ * transported over the wire protocol
+ */
+class ContentShadowRoot extends WebElement {
+  toJSON() {
+    return { [ContentShadowRoot.Identifier]: this.uuid };
+  }
+
+  static fromJSON(json) {
+    const { Identifier } = ContentShadowRoot;
+
+    if (!(Identifier in json)) {
+      throw new error.InvalidArgumentError(
+        pprint`Expected shadow root reference, got: ${json}`
+      );
+    }
+
+    let uuid = json[Identifier];
+    return new ContentShadowRoot(uuid);
+  }
+}
+ContentShadowRoot.Identifier = "shadow-6066-11e4-a52e-4f735466cecf";
+this.ContentShadowRoot = ContentShadowRoot;
 
 /**
  * Top-level browsing contexts, such as <code>WindowProxy</code>

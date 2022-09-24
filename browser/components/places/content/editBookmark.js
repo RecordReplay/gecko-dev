@@ -2,24 +2,36 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-// TODO: Bug 1711726 - Enable these.
-/* eslint-disable valid-jsdoc */
+/* global MozXULElement */
+
+// This is defined in browser.js and only used in the star UI.
+/* global setToolbarVisibility */
+
+/* import-globals-from controller.js */
 
 var { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
+var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
+
 XPCOMUtils.defineLazyModuleGetters(this, {
   CustomizableUI: "resource:///modules/CustomizableUI.jsm",
+  PlacesUtils: "resource://gre/modules/PlacesUtils.jsm",
+  PlacesUIUtils: "resource:///modules/PlacesUIUtils.jsm",
+  PlacesTransactions: "resource://gre/modules/PlacesTransactions.jsm",
 });
 
 var gEditItemOverlay = {
   // Array of PlacesTransactions accumulated by internal changes. It can be used
   // to wait for completion.
   transactionPromises: null,
-  _observersAdded: false,
   _staticFoldersListBuilt: false,
   _didChangeFolder: false,
+  // Tracks bookmark properties changes in the dialog, allowing external consumers
+  // to either confirm or discard them.
+  _bookmarkState: null,
+  _allTags: null,
 
   _paneInfo: null,
   _setPaneInfo(aInitInfo) {
@@ -215,25 +227,30 @@ var gEditItemOverlay = {
       }
     }
   },
+  async _initAllTags() {
+    this._allTags = new Map();
+    let fetchedTags = await PlacesUtils.bookmarks.fetchTags();
+    fetchedTags.map(tag => this._allTags.set(tag.name.toLowerCase(), tag.name));
+  },
 
   /**
    * Initialize the panel.
    *
-   * @param aInfo
-   *        An object having:
-   *        1. one of the following properties:
-   *        - node: either a result node or a node-like object representing the
-   *          item to be edited. A node-like object must have the following
-   *          properties (with values that match exactly those a result node
-   *          would have): itemId, bookmarkGuid, uri, title, type.
-   *        - uris: an array of uris for bulk tagging.
-   *
-   *        2. any of the following optional properties:
-   *          - hiddenRows (Strings array): list of rows to be hidden regardless
-   *            of the item edited. Possible values: "title", "location",
-   *            "keyword", "folderPicker".
+   * @param {object} aInfo
+   * @param {object} [aInfo.node]
+   *   If aInfo.uris is not specified, this must be specified.
+   *   Either a result node or a node-like object representing the item to be edited.
+   *   A node-like object must have the following properties (with values that
+   *   match exactly those a result node would have):
+   *   itemId, bookmarkGuid, uri, title, type.
+   * @param {nsIURI[]} [aInfo.uris]
+   *   If aInfo.node is not specified, this must be specified.
+   *   An array of uris for bulk tagging.
+   * @param {string[]} [hiddenRows]
+   *   List of rows to be hidden regardless of the item edited. Possible values:
+   *   "title", "location", "keyword", "folderPicker".
    */
-  initPanel(aInfo) {
+  async initPanel(aInfo) {
     if (typeof aInfo != "object" || aInfo === null) {
       throw new Error("aInfo must be an object.");
     }
@@ -270,6 +287,12 @@ var gEditItemOverlay = {
       focusedElement,
       onPanelReady,
     } = this._setPaneInfo(aInfo);
+
+    // initPanel can be called multiple times in a row,
+    // and awaits Promises. If the reference to `instance`
+    // changes, it must mean another caller has called
+    // initPanel again, so bail out of the initialization.
+    let instance = (this._instance = {});
 
     // If we're creating a new item on the toolbar, show it:
     if (
@@ -308,7 +331,12 @@ var gEditItemOverlay = {
     }
 
     if (showOrCollapse("keywordRow", isBookmark, "keyword")) {
-      this._initKeywordField().catch(Cu.reportError);
+      await this._initKeywordField().catch(Cu.reportError);
+      // paneInfo can be null if paneInfo is uninitialized while
+      // the process above is awaiting initialization
+      if (instance != this._instance || this._paneInfo == null) {
+        return;
+      }
       this._keywordField.readOnly = this.readOnly;
     }
 
@@ -324,7 +352,10 @@ var gEditItemOverlay = {
     // not cheap (we don't always have the parent), and there's no use case for
     // this (it's only the Star UI that shows the folderPicker)
     if (showOrCollapse("folderRow", isItem, "folderPicker")) {
-      this._initFolderMenuList(parentGuid).catch(Cu.reportError);
+      await this._initFolderMenuList(parentGuid).catch(Cu.reportError);
+      if (instance != this._instance || this._paneInfo == null) {
+        return;
+      }
     }
 
     // Selection count.
@@ -337,17 +368,8 @@ var gEditItemOverlay = {
         [uris.length]
       );
     }
-
-    // Observe changes.
-    if (!this._observersAdded) {
-      PlacesUtils.bookmarks.addObserver(this);
-      this.handlePlacesEvents = this.handlePlacesEvents.bind(this);
-      PlacesUtils.observers.addListener(
-        ["bookmark-moved"],
-        this.handlePlacesEvents
-      );
-      window.addEventListener("unload", this);
-      this._observersAdded = true;
+    if (this._paneInfo.isBookmark) {
+      this._initAllTags().catch(Cu.reportError);
     }
 
     let focusElement = () => {
@@ -379,10 +401,13 @@ var gEditItemOverlay = {
     } else {
       focusElement();
     }
+    this._bookmarkState = this.makeNewStateObject();
   },
 
   /**
    * Finds tags that are in common among this._currentInfo.uris;
+   *
+   * @returns {string[]}
    */
   _getCommonTags() {
     if ("_cachedCommonTags" in this._paneInfo) {
@@ -436,13 +461,15 @@ var gEditItemOverlay = {
 
   /**
    * Appends a menu-item representing a bookmarks folder to a menu-popup.
-   * @param aMenupopup
-   *        The popup to which the menu-item should be added.
-   * @param aFolderGuid
-   *        The identifier of the bookmarks folder.
-   * @param aTitle
-   *        The title to use as a label.
-   * @return the new menu item.
+   *
+   * @param {DOMElement} aMenupopup
+   *   The popup to which the menu-item should be added.
+   * @param {string} aFolderGuid
+   *   The identifier of the bookmarks folder.
+   * @param {string} aTitle
+   *   The title to use as a label.
+   * @returns {DOMElement}
+   *   The new menu item.
    */
   _appendFolderItemToMenupopup(aMenupopup, aFolderGuid, aTitle) {
     // First make sure the folders-separator is visible
@@ -537,8 +564,6 @@ var gEditItemOverlay = {
     }
   },
 
-  QueryInterface: ChromeUtils.generateQI(["nsINavBookmarkObserver"]),
-
   _element(aID) {
     return document.getElementById("editBMPanel_" + aID);
   },
@@ -558,16 +583,6 @@ var gEditItemOverlay = {
       }
     }
 
-    if (this._observersAdded) {
-      PlacesUtils.bookmarks.removeObserver(this);
-      PlacesUtils.observers.removeListener(
-        ["bookmark-moved"],
-        this.handlePlacesEvents
-      );
-      window.removeEventListener("unload", this);
-      this._observersAdded = false;
-    }
-
     if (this._folderMenuListListenerAdded) {
       this._folderMenuList.removeEventListener("select", this);
       this._folderMenuListListenerAdded = false;
@@ -577,6 +592,8 @@ var gEditItemOverlay = {
     this._firstEditedField = "";
     this._didChangeFolder = false;
     this.transactionPromises = [];
+    this._bookmarkState = null;
+    this._allTags = null;
   },
 
   get selectedFolderGuid() {
@@ -584,6 +601,20 @@ var gEditItemOverlay = {
       this._folderMenuList.selectedItem &&
       this._folderMenuList.selectedItem.folderGuid
     );
+  },
+
+  makeNewStateObject() {
+    if (this._paneInfo.isItem || this._paneInfo.isTag) {
+      let tags = "";
+      let keyword = "";
+
+      if (this._paneInfo.isBookmark) {
+        tags = this._element("tagsField").value;
+        keyword = this._element("keywordField").value;
+      }
+      return new PlacesUIUtils.BookmarkState(this._paneInfo, tags, keyword);
+    }
+    return null;
   },
 
   onTagsFieldChange() {
@@ -603,74 +634,41 @@ var gEditItemOverlay = {
   },
 
   /**
-   * For a given array of currently-set tags and the tags-input-field
-   * value, returns which tags should be removed and which should be added in
-   * the form of { removedTags: [...], newTags: [...] }.
+   * Works out the necessary changes for a given array of currently-set tags and
+   * the tags-input-field value.
+   *
+   * @param {string[]} aCurrentTags
+   *   The tags to compare.
+   * @returns {object}
+   *   Returns which tags should be removed and which should be added in
+   *   the form of an object: `{ removedTags: [...], newTags: [...] }`.
    */
   _getTagsChanges(aCurrentTags) {
     let inputTags = this._getTagsArrayFromTagsInputField();
 
     // Optimize the trivial cases (which are actually the most common).
     if (!inputTags.length && !aCurrentTags.length) {
-      return { newTags: [], removedTags: [] };
+      return (inputTags = []);
     }
     if (!inputTags.length) {
-      return { newTags: [], removedTags: aCurrentTags };
+      return (inputTags = aCurrentTags);
     }
-    if (!aCurrentTags.length) {
-      return { newTags: inputTags, removedTags: [] };
-    }
-
-    // Do not remove tags that may be reinserted with a different
-    // case, since the tagging service may handle those more efficiently.
-    let lcInputTags = inputTags.map(t => t.toLowerCase());
-    let removedTags = aCurrentTags.filter(
-      t => !lcInputTags.includes(t.toLowerCase())
-    );
-    let newTags = inputTags.filter(t => !aCurrentTags.includes(t));
-    return { removedTags, newTags };
+    return inputTags;
   },
 
   // Adds and removes tags for one or more uris.
   _setTagsFromTagsInputField(aCurrentTags, aURIs) {
-    let { removedTags, newTags } = this._getTagsChanges(aCurrentTags);
-    if (removedTags.length + newTags.length == 0) {
+    let inputTags = this._getTagsChanges(aCurrentTags);
+    if (!inputTags) {
       return false;
     }
-
-    let setTags = async () => {
-      let promises = [];
-      if (removedTags.length) {
-        let promise = PlacesTransactions.Untag({
-          urls: aURIs,
-          tags: removedTags,
-        })
-          .transact()
-          .catch(Cu.reportError);
-        this.transactionPromises.push(promise);
-        promises.push(promise);
-      }
-      if (newTags.length) {
-        let promise = PlacesTransactions.Tag({ urls: aURIs, tags: newTags })
-          .transact()
-          .catch(Cu.reportError);
-        this.transactionPromises.push(promise);
-        promises.push(promise);
-      }
-      // Don't use Promise.all because we want these to be executed in order.
-      for (let promise of promises) {
-        await promise;
-      }
-    };
-
+    inputTags.map(tag => this._allTags.set(tag.toLowerCase(), tag));
+    let setTags = () => this._bookmarkState._tagsChanged(inputTags);
     // Only in the library info-pane it's safe (and necessary) to batch these.
     // TODO bug 1093030: cleanup this mess when the bookmarksProperties dialog
     // and star UI code don't "run a batch in the background".
-    if (window.document.documentElement.id == "places") {
-      PlacesTransactions.batch(setTags);
-    } else {
-      setTags();
-    }
+
+    setTags();
     return true;
   },
 
@@ -680,7 +678,7 @@ var gEditItemOverlay = {
       : [this._paneInfo.uri];
     let currentTags = this._paneInfo.bulkTagging
       ? await this._getCommonTags()
-      : PlacesUtils.tagging.getTagsForURI(uris[0]);
+      : this._bookmarkState._originalState.tags;
     let anyChanges = this._setTagsFromTagsInputField(currentTags, uris);
     if (!anyChanges) {
       return false;
@@ -690,21 +688,22 @@ var gEditItemOverlay = {
     if (!this._paneInfo) {
       return false;
     }
+    await this._rebuildTagsSelectorList();
 
     // Ensure the tagsField is in sync, clean it up from empty tags
     currentTags = this._paneInfo.bulkTagging
       ? this._getCommonTags()
-      : PlacesUtils.tagging.getTagsForURI(this._paneInfo.uri);
+      : this._bookmarkState._newState.tags;
     this._initTextField(this._tagsField, currentTags.join(", "), false);
     return true;
   },
 
   /**
    * Stores the first-edit field for this dialog, if the passed-in field
-   * is indeed the first edited field
-   * @param aNewField
-   *        the id of the field that may be set (without the "editBMPanel_"
-   *        prefix)
+   * is indeed the first edited field.
+   *
+   * @param {string} aNewField
+   *   The id of the field that may be set (without the "editBMPanel_" prefix).
    */
   _mayUpdateFirstEditField(aNewField) {
     // * The first-edit-field behavior is not applied in the multi-edit case
@@ -736,27 +735,12 @@ var gEditItemOverlay = {
         this._initNamePicker();
         return;
       }
-      // Get all the bookmarks for the old tag, tag them with the new tag, and
-      // untag them from the old tag.
-      let oldTag = this._paneInfo.tag;
-      this._paneInfo.tag = tag;
-      let title = this._paneInfo.title;
-      if (title == oldTag) {
-        this._paneInfo.title = tag;
-      }
-      let promise = PlacesTransactions.RenameTag({ oldTag, tag }).transact();
-      this.transactionPromises.push(promise.catch(Cu.reportError));
-      await promise;
+
+      this._bookmarkState._titleChanged(tag);
       return;
     }
-
     this._mayUpdateFirstEditField("namePicker");
-    let promise = PlacesTransactions.EditTitle({
-      guid: this._paneInfo.itemGuid,
-      title: this._namePicker.value,
-    }).transact();
-    this.transactionPromises.push(promise.catch(Cu.reportError));
-    await promise;
+    this._bookmarkState._titleChanged(this._namePicker.value);
   },
 
   onLocationFieldChange() {
@@ -776,29 +760,14 @@ var gEditItemOverlay = {
     if (this._paneInfo.uri.equals(newURI)) {
       return;
     }
-
-    let guid = this._paneInfo.itemGuid;
-    this.transactionPromises.push(
-      PlacesTransactions.EditUrl({ guid, url: newURI })
-        .transact()
-        .catch(Cu.reportError)
-    );
+    this._bookmarkState._locationChanged(newURI.spec);
   },
 
   onKeywordFieldChange() {
     if (this.readOnly || !this._paneInfo.isBookmark) {
       return;
     }
-
-    let oldKeyword = this._keyword;
-    let keyword = (this._keyword = this._keywordField.value);
-    let postData = this._paneInfo.postData;
-    let guid = this._paneInfo.itemGuid;
-    this.transactionPromises.push(
-      PlacesTransactions.EditKeyword({ guid, keyword, postData, oldKeyword })
-        .transact()
-        .catch(Cu.reportError)
-    );
+    this._bookmarkState._keywordChanged(this._keywordField.value);
   },
 
   toggleFolderTreeVisibility() {
@@ -851,11 +820,13 @@ var gEditItemOverlay = {
    * folder. If the items-count limit (see
    * browser.bookmarks.editDialog.maxRecentFolders preference) is reached, the
    * new item replaces the last menu-item.
-   * @param aFolderGuid
-   *        The identifier of the bookmarks folder.
-   * @param aTitle
-   *        The title to use in case of menuitem creation.
-   * @return handle to the menuitem.
+   *
+   * @param {string} aFolderGuid
+   *   The identifier of the bookmarks folder.
+   * @param {string} aTitle
+   *   The title to use in case of menuitem creation.
+   * @returns {DOMElement}
+   *   The handle to the menuitem.
    */
   _getFolderMenuItem(aFolderGuid, aTitle) {
     let menupopup = this._folderMenuList.menupopup;
@@ -886,8 +857,8 @@ var gEditItemOverlay = {
       // reset the selection back to where it was and expand the tree
       // (this menu-item is hidden when the tree is already visible
       let item = this._getFolderMenuItem(
-        this._paneInfo.parentGuid,
-        this._paneInfo.title
+        this._bookmarkState._originalState.parentGuid,
+        this._bookmarkState._originalState.title
       );
       this._folderMenuList.selectedItem = item;
       // XXXmano HACK: setTimeout 100, otherwise focus goes back to the
@@ -899,15 +870,10 @@ var gEditItemOverlay = {
     // Move the item
     let containerGuid = this._folderMenuList.selectedItem.folderGuid;
     if (
-      this._paneInfo.parentGuid != containerGuid &&
-      this._paneInfo.itemGuid != containerGuid
+      this._bookmarkState._originalState.parentGuid != containerGuid &&
+      this._bookmarkState._originalState.title != containerGuid
     ) {
-      let promise = PlacesTransactions.Move({
-        guid: this._paneInfo.itemGuid,
-        newParentGuid: containerGuid,
-      }).transact();
-      this.transactionPromises.push(promise.catch(Cu.reportError));
-      await promise;
+      this._bookmarkState._parentGuidChanged(containerGuid);
 
       // Auto-show the bookmarks toolbar when adding / moving an item there.
       if (containerGuid == PlacesUtils.bookmarks.toolbarGuid) {
@@ -933,8 +899,13 @@ var gEditItemOverlay = {
   },
 
   _autoshowBookmarksToolbar() {
+    let neverShowToolbar =
+      Services.prefs.getCharPref(
+        "browser.toolbars.bookmarks.visibility",
+        "newtab"
+      ) == "never";
     let toolbar = document.getElementById("PersonalToolbar");
-    if (!toolbar.collapsed) {
+    if (!toolbar.collapsed || neverShowToolbar) {
       return;
     }
 
@@ -991,10 +962,12 @@ var gEditItemOverlay = {
     }
 
     let tagsInField = this._getTagsArrayFromTagsInputField();
-    let allTags = await PlacesUtils.bookmarks.fetchTags();
+
     let fragment = document.createDocumentFragment();
-    for (let i = 0; i < allTags.length; i++) {
-      let tag = allTags[i].name;
+    let sortedTags = [...this._allTags.values()].sort();
+
+    for (let i = 0; i < sortedTags.length; i++) {
+      let tag = sortedTags[i];
       let elt = document.createXULElement("richlistitem");
       elt.appendChild(document.createXULElement("image"));
       let label = document.createXULElement("label");
@@ -1054,7 +1027,8 @@ var gEditItemOverlay = {
   /**
    * Splits "tagsField" element value, returning an array of valid tag strings.
    *
-   * @return Array of tag strings found in the field value.
+   * @returns {string[]}
+   *   Array of tag strings found in the field value.
    */
   _getTagsArrayFromTagsInputField() {
     let tags = this._element("tagsField").value;
@@ -1124,35 +1098,6 @@ var gEditItemOverlay = {
     }
   },
 
-  async handlePlacesEvents(events) {
-    for (const event of events) {
-      switch (event.type) {
-        case "bookmark-moved":
-          if (!this._paneInfo.isItem || this._paneInfo.itemId != event.id) {
-            return;
-          }
-
-          this._paneInfo.parentGuid = event.parentGuid;
-
-          if (
-            !this._paneInfo.visibleRows.has("folderRow") ||
-            event.parentGuid === this._folderMenuList.selectedItem.folderGuid
-          ) {
-            return;
-          }
-
-          // Just setting selectItem _does not_ trigger oncommand, so we don't
-          // recurse.
-          const bm = await PlacesUtils.bookmarks.fetch(event.parentGuid);
-          this._folderMenuList.selectedItem = this._getFolderMenuItem(
-            event.parentGuid,
-            bm.title
-          );
-          break;
-      }
-    }
-  },
-
   toggleItemCheckbox(item) {
     // Update the tags field when items are checked/unchecked in the listbox
     let tags = this._getTagsArrayFromTagsInputField();
@@ -1187,119 +1132,6 @@ var gEditItemOverlay = {
     }
 
     this._initTextField(this._tagsField, tags.join(", "));
-  },
-
-  async _onTagsChange(guid, changedURI = null) {
-    let paneInfo = this._paneInfo;
-    let updateTagsField = false;
-    if (paneInfo.isURI) {
-      if (paneInfo.isBookmark && guid == paneInfo.itemGuid) {
-        updateTagsField = true;
-      } else if (!paneInfo.isBookmark) {
-        if (!changedURI) {
-          let href = (await PlacesUtils.bookmarks.fetch(guid)).url.href;
-          changedURI = Services.io.newURI(href);
-        }
-        updateTagsField = changedURI.equals(paneInfo.uri);
-      }
-    } else if (paneInfo.bulkTagging) {
-      if (!changedURI) {
-        let href = (await PlacesUtils.bookmarks.fetch(guid)).url.href;
-        changedURI = Services.io.newURI(href);
-      }
-      if (paneInfo.uris.some(uri => uri.equals(changedURI))) {
-        updateTagsField = true;
-        delete this._paneInfo._cachedCommonTags;
-      }
-    } else {
-      throw new Error("_onTagsChange called unexpectedly");
-    }
-
-    if (updateTagsField) {
-      this._initTagsField();
-      // Any tags change should be reflected in the tags selector.
-      if (this._element("tagsSelector")) {
-        await this._rebuildTagsSelectorList();
-      }
-    }
-  },
-
-  _onItemTitleChange(aItemId, aNewTitle, aGuid) {
-    if (aItemId == this._paneInfo.itemId || aGuid == this._paneInfo.itemGuid) {
-      this._paneInfo.title = aNewTitle;
-      this._initTextField(this._namePicker, aNewTitle);
-    } else if (this._paneInfo.visibleRows.has("folderRow")) {
-      // If the title of a folder which is listed within the folders
-      // menulist has been changed, we need to update the label of its
-      // representing element.
-      let menupopup = this._folderMenuList.menupopup;
-      for (let menuitem of menupopup.children) {
-        if ("folderGuid" in menuitem && menuitem.folderGuid == aGuid) {
-          menuitem.label = aNewTitle;
-          break;
-        }
-      }
-    }
-    // We need to also update title of recent folders.
-    if (this._recentFolders) {
-      for (let folder of this._recentFolders) {
-        if (folder.folderGuid == aGuid) {
-          folder.title = aNewTitle;
-          break;
-        }
-      }
-    }
-  },
-
-  // nsINavBookmarkObserver
-  onItemChanged(
-    aItemId,
-    aProperty,
-    aIsAnnotationProperty,
-    aValue,
-    aLastModified,
-    aItemType,
-    aParentId,
-    aGuid
-  ) {
-    if (aProperty == "tags" && this._paneInfo.visibleRows.has("tagsRow")) {
-      this._onTagsChange(aGuid).catch(Cu.reportError);
-      return;
-    }
-    if (
-      aProperty == "title" &&
-      (this._paneInfo.isItem || this._paneInfo.isTag)
-    ) {
-      // This also updates titles of folders in the folder menu list.
-      this._onItemTitleChange(aItemId, aValue, aGuid);
-      return;
-    }
-
-    if (!this._paneInfo.isItem || this._paneInfo.itemId != aItemId) {
-      return;
-    }
-
-    switch (aProperty) {
-      case "uri":
-        let newURI = Services.io.newURI(aValue);
-        if (!newURI.equals(this._paneInfo.uri)) {
-          this._paneInfo.uri = newURI;
-          if (this._paneInfo.visibleRows.has("locationRow")) {
-            this._initLocationField();
-          }
-
-          if (this._paneInfo.visibleRows.has("tagsRow")) {
-            delete this._paneInfo._cachedCommonTags;
-            this._onTagsChange(aGuid, newURI).catch(Cu.reportError);
-          }
-        }
-        break;
-      case "keyword":
-        if (this._paneInfo.visibleRows.has("keywordRow")) {
-          this._initKeywordField(aValue).catch(Cu.reportError);
-        }
-        break;
-    }
   },
 };
 

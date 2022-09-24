@@ -160,7 +160,9 @@ nsAsyncStreamCopier::Cancel(nsresult status) {
   nsCOMPtr<nsISupports> copierCtx;
   {
     MutexAutoLock lock(mLock);
-    if (!mIsPending) return NS_OK;
+    if (!mIsPending) {
+      return NS_OK;
+    }
     copierCtx.swap(mCopierCtx);
   }
 
@@ -214,11 +216,11 @@ nsAsyncStreamCopier::GetLoadGroup(nsILoadGroup** aLoadGroup) {
 NS_IMETHODIMP
 nsAsyncStreamCopier::SetLoadGroup(nsILoadGroup* aLoadGroup) { return NS_OK; }
 
-nsresult nsAsyncStreamCopier::InitInternal(nsIInputStream* source,
-                                           nsIOutputStream* sink,
-                                           nsIEventTarget* target,
-                                           uint32_t chunkSize, bool closeSource,
-                                           bool closeSink) {
+// Can't be accessed by multiple threads yet
+nsresult nsAsyncStreamCopier::InitInternal(
+    nsIInputStream* source, nsIOutputStream* sink, nsIEventTarget* target,
+    uint32_t chunkSize, bool closeSource,
+    bool closeSink) NO_THREAD_SAFETY_ANALYSIS {
   NS_ASSERTION(!mSource && !mSink, "Init() called more than once");
   if (chunkSize == 0) {
     chunkSize = nsIOService::gDefaultSegmentSize;
@@ -328,7 +330,10 @@ nsAsyncStreamCopier::AsyncCopy(nsIRequestObserver* observer, nsISupports* ctx) {
 
   // from this point forward, AsyncCopy is going to return NS_OK.  any errors
   // will be reported via OnStopRequest.
-  mIsPending = true;
+  {
+    MutexAutoLock lock(mLock);
+    mIsPending = true;
+  }
 
   if (mObserver) {
     rv = mObserver->OnStartRequest(AsRequest());

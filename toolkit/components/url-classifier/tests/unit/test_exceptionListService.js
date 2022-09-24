@@ -51,15 +51,15 @@ add_task(async function test_list_changes() {
   let records = [
     {
       id: "1",
-      last_modified: 100000000000000000001,
+      last_modified: 1000000000000001,
       feature: FEATURE_TRACKING_NAME,
       pattern: "example.com",
     },
   ];
 
   // Add some initial data.
-  let db = await RemoteSettings(COLLECTION_NAME).db;
-  await db.importChanges({}, 42, records);
+  let db = RemoteSettings(COLLECTION_NAME).db;
+  await db.importChanges({}, Date.now(), records);
   let promise = waitForEvent(updateEvent, "update");
 
   exceptionListService.registerAndRunExceptionListObserver(
@@ -77,18 +77,18 @@ add_task(async function test_list_changes() {
   records.push(
     {
       id: "2",
-      last_modified: 100000000000000000002,
+      last_modified: 1000000000000002,
       feature: FEATURE_TRACKING_NAME,
       pattern: "MOZILLA.ORG",
     },
     {
       id: "3",
-      last_modified: 100000000000000000003,
+      last_modified: 1000000000000003,
       feature: "some-other-feature",
       pattern: "noinclude.com",
     },
     {
-      last_modified: 100000000000000000004,
+      last_modified: 1000000000000004,
       feature: FEATURE_TRACKING_NAME,
       pattern: "*.example.org",
     }
@@ -162,33 +162,33 @@ add_task(async function test_list_init_data() {
   let records = [
     {
       id: "1",
-      last_modified: 100000000000000000001,
+      last_modified: 1000000000000001,
       feature: FEATURE_TRACKING_NAME,
       pattern: "tracking.example.com",
     },
     {
       id: "2",
-      last_modified: 100000000000000000002,
+      last_modified: 1000000000000002,
       feature: FEATURE_SOCIAL_NAME,
       pattern: "social.example.com",
     },
     {
       id: "3",
-      last_modified: 100000000000000000003,
+      last_modified: 1000000000000003,
       feature: FEATURE_TRACKING_NAME,
       pattern: "*.tracking.org",
     },
     {
       id: "4",
-      last_modified: 100000000000000000004,
+      last_modified: 1000000000000004,
       feature: FEATURE_SOCIAL_NAME,
       pattern: "MOZILLA.ORG",
     },
   ];
 
   // Add some initial data.
-  let db = await RemoteSettings(COLLECTION_NAME).db;
-  await db.importChanges({}, 42, records);
+  let db = RemoteSettings(COLLECTION_NAME).db;
+  await db.importChanges({}, Date.now(), records);
 
   // The first registered feature make ExceptionListService get the initial data
   // from remote setting.
@@ -234,19 +234,19 @@ add_task(async function test_list_init_data() {
   records.push(
     {
       id: "5",
-      last_modified: 100000000000000000002,
+      last_modified: 1000000000000002,
       feature: FEATURE_FINGERPRINTING_NAME,
       pattern: "fingerprinting.example.com",
     },
     {
       id: "6",
-      last_modified: 100000000000000000002,
+      last_modified: 1000000000000002,
       feature: "other-fature",
       pattern: "not-a-fingerprinting.example.com",
     },
     {
       id: "7",
-      last_modified: 100000000000000000002,
+      last_modified: 1000000000000002,
       feature: FEATURE_FINGERPRINTING_NAME,
       pattern: "*.fingerprinting.org",
     }

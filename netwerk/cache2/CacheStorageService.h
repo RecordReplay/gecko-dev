@@ -90,10 +90,6 @@ class CacheStorageService final : public nsICacheStorageService,
   void Shutdown();
   void DropPrivateBrowsingEntries();
 
-  // Takes care of deleting any pending trashes for both cache1 and cache2
-  // as well as old cache directory.
-  static void CleaupCacheDirectories();
-
   static CacheStorageService* Self() { return sSelf; }
   static nsISupports* SelfISupports() {
     return static_cast<nsICacheStorageService*>(Self());
@@ -105,7 +101,14 @@ class CacheStorageService final : public nsICacheStorageService,
   mozilla::Mutex& Lock() { return mLock; }
 
   // Tracks entries that may be forced valid in a pruned hashtable.
-  nsTHashMap<nsCStringHashKey, TimeStamp> mForcedValidEntries;
+  struct ForcedValidData {
+    // The timestamp is computed when the entry gets inserted into the map.
+    // It should never be null for an entry in the map.
+    TimeStamp validUntil;
+    // viewed gets set to true by a call to MarkForcedValidEntryUse()
+    bool viewed = false;
+  };
+  nsTHashMap<nsCStringHashKey, ForcedValidData> mForcedValidEntries;
   void ForcedValidEntriesPrune(TimeStamp& now);
 
   // Helper thread-safe interface to pass entry info, only difference from
@@ -194,6 +197,11 @@ class CacheStorageService final : public nsICacheStorageService,
   bool IsForcedValidEntry(nsACString const& aContextKey,
                           nsACString const& aEntryKey);
 
+  // Marks the entry as used, so we may properly report when it gets evicted
+  // if the prefetched resource was used or not.
+  void MarkForcedValidEntryUse(nsACString const& aContextKey,
+                               nsACString const& aEntryKey);
+
  private:
   friend class CacheIndex;
 
@@ -208,7 +216,7 @@ class CacheStorageService final : public nsICacheStorageService,
   // These are helpers for telemetry monitoring of the memory pools.
   void TelemetryPrune(TimeStamp& now);
   void TelemetryRecordEntryCreation(CacheEntry const* entry);
-  void TelemetryRecordEntryRemoval(CacheEntry const* entry);
+  void TelemetryRecordEntryRemoval(CacheEntry* entry);
 
  private:
   // Following methods are thread safe to call.
@@ -219,7 +227,7 @@ class CacheStorageService final : public nsICacheStorageService,
    * and uri+id extension.
    */
   nsresult AddStorageEntry(CacheStorage const* aStorage, const nsACString& aURI,
-                           const nsACString& aIdExtension, bool aReplace,
+                           const nsACString& aIdExtension, uint32_t aFlags,
                            CacheEntryHandle** aResult);
 
   /**
@@ -307,7 +315,7 @@ class CacheStorageService final : public nsICacheStorageService,
   nsresult AddStorageEntry(const nsACString& aContextKey,
                            const nsACString& aURI,
                            const nsACString& aIdExtension, bool aWriteToDisk,
-                           bool aSkipSizeCheck, bool aPin, bool aReplace,
+                           bool aSkipSizeCheck, bool aPin, uint32_t aFlags,
                            CacheEntryHandle** aResult);
 
   nsresult ClearOriginInternal(
@@ -316,10 +324,11 @@ class CacheStorageService final : public nsICacheStorageService,
 
   static CacheStorageService* sSelf;
 
-  mozilla::Mutex mLock;
-  mozilla::Mutex mForcedValidEntriesLock;
+  mozilla::Mutex mLock MOZ_UNANNOTATED{"CacheStorageService.mLock"};
+  mozilla::Mutex mForcedValidEntriesLock{
+      "CacheStorageService.mForcedValidEntriesLock"};
 
-  Atomic<bool, Relaxed> mShutdown;
+  Atomic<bool, Relaxed> mShutdown{false};
 
   // Accessible only on the service thread
   class MemoryPool {
@@ -334,7 +343,7 @@ class CacheStorageService final : public nsICacheStorageService,
 
     nsTArray<RefPtr<CacheEntry>> mFrecencyArray;
     nsTArray<RefPtr<CacheEntry>> mExpirationArray;
-    Atomic<uint32_t, Relaxed> mMemorySize;
+    Atomic<uint32_t, Relaxed> mMemorySize{0};
 
     bool OnMemoryConsumptionChange(uint32_t aSavedMemorySize,
                                    uint32_t aCurrentMemoryConsumption);
@@ -351,8 +360,8 @@ class CacheStorageService final : public nsICacheStorageService,
     MemoryPool() = delete;
   };
 
-  MemoryPool mDiskPool;
-  MemoryPool mMemoryPool;
+  MemoryPool mDiskPool{MemoryPool::DISK};
+  MemoryPool mMemoryPool{MemoryPool::MEMORY};
   TimeStamp mLastPurgeTime;
   MemoryPool& Pool(bool aUsingDisk) {
     return aUsingDisk ? mDiskPool : mMemoryPool;
@@ -367,7 +376,7 @@ class CacheStorageService final : public nsICacheStorageService,
   // cannot grab the lock there (see comment 6 in bug 1614637) and TSan reports
   // a data race. This data race is harmless, so we use this atomic flag only in
   // TSan build to suppress it.
-  Atomic<bool, Relaxed> mPurgeTimerActive;
+  Atomic<bool, Relaxed> mPurgeTimerActive{false};
 #endif
 
   class PurgeFromMemoryRunnable : public Runnable {
@@ -404,7 +413,7 @@ class CacheStorageService final : public nsICacheStorageService,
     virtual ~IOThreadSuspender() = default;
     NS_IMETHOD Run() override;
 
-    Monitor mMon;
+    Monitor mMon MOZ_UNANNOTATED;
     bool mSignaled{false};
   };
 

@@ -21,6 +21,9 @@ if (this.Components) {
     loaded: null,
   };
 
+  // NOTE: osfile.jsm imports require.js
+  /* import-globals-from /toolkit/components/workerloader/require.js */
+  /* import-globals-from /toolkit/components/osfile/osfile.jsm */
   importScripts("resource://gre/modules/osfile.jsm");
 
   let PromiseWorker = require("resource://gre/modules/workers/PromiseWorker.js");
@@ -301,35 +304,6 @@ if (this.Components) {
     },
     removeDir(path, options) {
       return File.removeDir(Type.path.fromMsg(path), options);
-    },
-    macGetXAttr(path, name) {
-      let data = File.macGetXAttr(
-        Type.path.fromMsg(path),
-        Type.cstring.fromMsg(name)
-      );
-      return new Meta(
-        {
-          buffer: data.buffer,
-          byteOffset: data.byteOffset,
-          byteLength: data.byteLength,
-        },
-        {
-          transfers: [data.buffer],
-        }
-      );
-    },
-    macRemoveXAttr(path, name) {
-      return File.macRemoveXAttr(
-        Type.path.fromMsg(path),
-        Type.cstring.fromMsg(name)
-      );
-    },
-    macSetXAttr(path, name, value) {
-      return File.macSetXAttr(
-        Type.path.fromMsg(path),
-        Type.cstring.fromMsg(name),
-        Type.voidptr_t.fromMsg(value)
-      );
     },
     new_DirectoryIterator: function new_DirectoryIterator(path, options) {
       let directoryPath = Type.path.fromMsg(path);

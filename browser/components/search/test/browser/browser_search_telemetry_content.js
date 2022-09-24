@@ -4,7 +4,7 @@ const BASE_PROBE_NAME = "browser.engagement.navigation.";
 const SCALAR_CONTEXT_MENU = BASE_PROBE_NAME + "contextmenu";
 const SCALAR_ABOUT_NEWTAB = BASE_PROBE_NAME + "about_newtab";
 
-add_task(async function setup() {
+add_setup(async function() {
   // Create two new search engines. Mark one as the default engine, so
   // the test don't crash. We need to engines for this test as the searchbar
   // in content doesn't display the default search engine among the one-off engines.
@@ -127,9 +127,7 @@ add_task(async function test_about_newtab() {
   await SpecialPowers.pushPrefEnv({
     set: [
       [
-        [
-          "browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar",
-        ],
+        "browser.newtabpage.activity-stream.improvesearch.handoffToAwesomebar",
         false,
       ],
     ],

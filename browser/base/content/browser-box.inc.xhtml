@@ -16,7 +16,7 @@
 # To ensure the button doesn't expand unnecessarily for short labels, the
 # spacer should significantly out-flex the button.
       <spacer flex="1000"/>
-      <toolbarbutton id="sidebar-close" class="close-icon tabbable" tooltiptext="&sidebarCloseButton.tooltip;" oncommand="SidebarUI.hide();"/>
+      <toolbarbutton id="sidebar-close" class="close-icon tabbable" data-l10n-id="sidebar-close-button" oncommand="SidebarUI.hide();"/>
     </box>
     <browser id="sidebar" flex="1" autoscroll="false" disablehistory="true" disablefullscreen="true"
               style="min-width: 14em; width: 18em; max-width: 36em;" tooltip="aHTMLTooltip"/>
@@ -24,7 +24,7 @@
 
   <splitter id="sidebar-splitter" class="chromeclass-extrachrome sidebar-splitter" hidden="true"/>
   <vbox id="appcontent" flex="1">
-    <!-- gHighPriorityNotificationBox will be added here lazily. -->
+    <!-- gNotificationBox will be added here lazily. -->
     <tabbox id="tabbrowser-tabbox"
             flex="1" tabcontainer="tabbrowser-tabs">
       <tabpanels id="tabbrowser-tabpanels"

@@ -107,6 +107,9 @@ const COMMON_PREFERENCES = new Map([
   // as it is picked up at runtime.
   ["browser.shell.checkDefaultBrowser", false],
 
+  // Disable session restore infobar
+  ["browser.startup.couldRestoreSession.count", -1],
+
   // Do not redirect user when a milstone upgrade of Firefox is detected
   ["browser.startup.homepage_override.mstone", "ignore"],
 
@@ -117,9 +120,6 @@ const COMMON_PREFERENCES = new Map([
   // tests that open additional tabs, the test harness tab itself might get
   // unloaded
   ["browser.tabs.disableBackgroundZombification", false],
-
-  // Bug 1557457: Disable because modal dialogs might not appear in Firefox
-  ["browser.tabs.remote.separatePrivilegedContentProcess", false],
 
   // Don't unload tabs when available memory is running low
   ["browser.tabs.unloadOnLowMemory", false],
@@ -144,6 +144,10 @@ const COMMON_PREFERENCES = new Map([
   //
   // Should be set in profile.
   ["browser.uitour.enabled", false],
+
+  // Turn off Merino suggestions in the location bar so as not to trigger
+  // network connections.
+  ["browser.urlbar.merino.endpointURL", ""],
 
   // Turn off search suggestions in the location bar so as not to trigger
   // network connections.
@@ -181,6 +185,9 @@ const COMMON_PREFERENCES = new Map([
 
   // DOM Push
   ["dom.push.connection.enabled", false],
+
+  // Disable dialog abuse if alerts are triggered too quickly.
+  ["dom.successive_dialog_time_limit", 0],
 
   // Only load extensions from the application and user profile
   // AddonManager.SCOPE_PROFILE + AddonManager.SCOPE_APPLICATION
@@ -258,6 +265,9 @@ const COMMON_PREFERENCES = new Map([
 
   // Prevent starting into safe mode after application crashes
   ["toolkit.startup.max_resumed_crashes", -1],
+
+  // Make sure Topsites doesn't hit the network to retrieve tiles from Contile.
+  ["browser.topsites.contile.enabled", false],
 ]);
 
 const RecommendedPreferences = {

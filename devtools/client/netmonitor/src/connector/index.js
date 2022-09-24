@@ -22,6 +22,8 @@ loader.lazyRequireGetter(
   "devtools/client/shared/components/throttling/profiles"
 );
 
+const DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF = "devtools.netmonitor.persistlog";
+
 /**
  * Connector to Firefox backend.
  */
@@ -45,6 +47,7 @@ class Connector {
     this.onTargetAvailable = this.onTargetAvailable.bind(this);
     this.onResourceAvailable = this.onResourceAvailable.bind(this);
     this.onResourceUpdated = this.onResourceUpdated.bind(this);
+    this.updatePersist = this.updatePersist.bind(this);
 
     this.networkFront = null;
     this.listenForNetworkEvents = true;
@@ -90,10 +93,10 @@ class Connector {
       owner: this.owner,
     });
 
-    await this.commands.targetCommand.watchTargets(
-      [this.commands.targetCommand.TYPES.FRAME],
-      this.onTargetAvailable
-    );
+    await this.commands.targetCommand.watchTargets({
+      types: [this.commands.targetCommand.TYPES.FRAME],
+      onAvailable: this.onTargetAvailable,
+    });
 
     const { TYPES } = this.toolbox.resourceCommand;
     const targetResources = [
@@ -118,6 +121,16 @@ class Connector {
       onAvailable: this.onResourceAvailable,
       onUpdated: this.onResourceUpdated,
     });
+
+    // Server side persistance of the data across reload is disabled by default.
+    // Ensure enabling it, if the related frontend pref is true.
+    if (Services.prefs.getBoolPref(DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF)) {
+      await this.updatePersist();
+    }
+    Services.prefs.addObserver(
+      DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF,
+      this.updatePersist
+    );
   }
 
   disconnect() {
@@ -128,10 +141,10 @@ class Connector {
 
     this._destroyed = true;
 
-    this.commands.targetCommand.unwatchTargets(
-      [this.commands.targetCommand.TYPES.FRAME],
-      this.onTargetAvailable
-    );
+    this.commands.targetCommand.unwatchTargets({
+      types: [this.commands.targetCommand.TYPES.FRAME],
+      onAvailable: this.onTargetAvailable,
+    });
 
     const { TYPES } = this.toolbox.resourceCommand;
     this.toolbox.resourceCommand.unwatchResources(
@@ -148,11 +161,18 @@ class Connector {
       }
     );
 
+    Services.prefs.removeObserver(
+      DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF,
+      this.updatePersist
+    );
+
     if (this.actions) {
       this.actions.batchReset();
     }
 
     this.webConsoleFront = null;
+
+    this.dataProvider.destroy();
     this.dataProvider = null;
   }
 
@@ -275,9 +295,11 @@ class Connector {
 
   willNavigate() {
     if (this.actions) {
-      if (!Services.prefs.getBoolPref("devtools.netmonitor.persistlog")) {
+      if (!Services.prefs.getBoolPref(DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF)) {
         this.actions.batchReset();
         this.actions.clearRequests();
+        // clean up all the dataProvider internal state
+        this.dataProvider.destroy();
       } else {
         // If the log is persistent, just clear all accumulated timing markers.
         this.actions.clearTimingMarkers();
@@ -414,10 +436,25 @@ class Connector {
     if (this.hasResourceCommandSupport && this.networkFront) {
       return this.networkFront.getBlockedUrls();
     }
-    if (!this.webConsoleFront.traits.blockedUrls) {
-      return [];
-    }
     return this.webConsoleFront.getBlockedUrls();
+  }
+
+  async updatePersist() {
+    const enabled = Services.prefs.getBoolPref(
+      DEVTOOLS_ENABLE_PERSISTENT_LOG_PREF
+    );
+
+    // Lets keep these checks until we stop using legacy listeners entirely. (bug 1689459)
+    const hasServerSupport = this.commands.targetCommand.hasTargetWatcherSupport();
+    if (
+      hasServerSupport &&
+      this.hasResourceCommandSupport &&
+      this.networkFront
+    ) {
+      await this.networkFront.setPersist(enabled);
+    }
+
+    this.emitForTests(TEST_EVENTS.PERSIST_CHANGED, enabled);
   }
 
   /**

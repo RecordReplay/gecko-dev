@@ -11,7 +11,6 @@
 
 #include "Platform.h"
 #include "RemoteAccessible.h"
-#include "AccessibleOrProxy.h"
 #include "DocAccessibleParent.h"
 #include "mozTableAccessible.h"
 #include "MOXWebAreaAccessible.h"
@@ -83,7 +82,8 @@ void ProxyDestroyed(RemoteAccessible* aProxy) {
 
 void ProxyEvent(RemoteAccessible* aProxy, uint32_t aEventType) {
   // Ignore event that we don't escape below, they aren't yet supported.
-  if (aEventType != nsIAccessibleEvent::EVENT_FOCUS &&
+  if (aEventType != nsIAccessibleEvent::EVENT_ALERT &&
+      aEventType != nsIAccessibleEvent::EVENT_FOCUS &&
       aEventType != nsIAccessibleEvent::EVENT_VALUE_CHANGE &&
       aEventType != nsIAccessibleEvent::EVENT_TEXT_VALUE_CHANGE &&
       aEventType != nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED &&
@@ -111,11 +111,11 @@ void ProxyStateChangeEvent(RemoteAccessible* aProxy, uint64_t aState,
 }
 
 void ProxyCaretMoveEvent(RemoteAccessible* aTarget, int32_t aOffset,
-                         bool aIsSelectionCollapsed) {
+                         bool aIsSelectionCollapsed, int32_t aGranularity) {
   mozAccessible* wrapper = GetNativeFromGeckoAccessible(aTarget);
   MOXTextMarkerDelegate* delegate =
       [MOXTextMarkerDelegate getOrCreateForDoc:aTarget->Document()];
-  [delegate setCaretOffset:aTarget at:aOffset];
+  [delegate setCaretOffset:aTarget at:aOffset moveGranularity:aGranularity];
   if (aIsSelectionCollapsed) {
     // If selection is collapsed, invalidate selection.
     [delegate setSelectionFrom:aTarget at:aOffset to:aTarget at:aOffset];

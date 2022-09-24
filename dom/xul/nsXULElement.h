@@ -15,9 +15,11 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "ErrorList.h"
+#include "js/experimental/JSStencil.h"
 #include "js/RootingAPI.h"
 #include "js/SourceText.h"
 #include "js/TracingAPI.h"
+#include "js/TypeDecls.h"
 #include "mozilla/AlreadyAddRefed.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Attributes.h"
@@ -48,7 +50,6 @@
 #include "nscore.h"
 
 class JSObject;
-class JSScript;
 class nsAttrValueOrString;
 class nsIControllers;
 class nsIObjectInputStream;
@@ -60,7 +61,7 @@ class nsXULPrototypeDocument;
 class nsXULPrototypeNode;
 struct JSContext;
 
-typedef nsTArray<RefPtr<nsXULPrototypeNode>> nsPrototypeArray;
+using nsPrototypeArray = nsTArray<RefPtr<nsXULPrototypeNode>>;
 
 namespace JS {
 class CompileOptions;
@@ -195,9 +196,6 @@ class nsXULPrototypeElement : public nsXULPrototypeNode {
 
   void Unlink();
 
-  // Trace all scripts held by this element and its children.
-  void TraceAllScripts(JSTracer* aTrc);
-
   nsPrototypeArray mChildren;
 
   RefPtr<mozilla::dom::NodeInfo> mNodeInfo;
@@ -214,7 +212,7 @@ class nsXULPrototypeScript : public nsXULPrototypeNode {
   explicit nsXULPrototypeScript(uint32_t aLineNo);
 
  private:
-  virtual ~nsXULPrototypeScript();
+  virtual ~nsXULPrototypeScript() = default;
 
   void FillCompileOptions(JS::CompileOptions& options);
 
@@ -236,26 +234,14 @@ class nsXULPrototypeScript : public nsXULPrototypeNode {
                    uint32_t aLineNo, mozilla::dom::Document* aDocument,
                    nsIOffThreadScriptReceiver* aOffThreadReceiver = nullptr);
 
-  void UnlinkJSObjects();
+  void Set(JS::Stencil* aStencil);
 
-  void Set(JSScript* aObject);
+  bool HasStencil() { return mStencil; }
 
-  bool HasScriptObject() {
-    // Conversion to bool doesn't trigger mScriptObject's read barrier.
-    return mScriptObject;
-  }
+  JS::Stencil* GetStencil() { return mStencil.get(); }
 
-  JSScript* GetScriptObject() { return mScriptObject; }
-
-  void TraceScriptObject(JSTracer* aTrc) {
-    JS::TraceEdge(aTrc, &mScriptObject, "active window XUL prototype script");
-  }
-
-  void Trace(const TraceCallbacks& aCallbacks, void* aClosure) {
-    if (mScriptObject) {
-      aCallbacks.Trace(&mScriptObject, "mScriptObject", aClosure);
-    }
-  }
+  nsresult InstantiateScript(JSContext* aCx,
+                             JS::MutableHandle<JSScript*> aScript);
 
   nsCOMPtr<nsIURI> mSrcURI;
   uint32_t mLineNo;
@@ -264,7 +250,7 @@ class nsXULPrototypeScript : public nsXULPrototypeNode {
   mozilla::dom::PrototypeDocumentContentSink*
       mSrcLoadWaiters;  // [OWNER] but not COMPtr
  private:
-  JS::Heap<JSScript*> mScriptObject;
+  RefPtr<JS::Stencil> mStencil;
 };
 
 class nsXULPrototypeText : public nsXULPrototypeNode {
@@ -329,7 +315,7 @@ ASSERT_NODE_FLAGS_SPACE(ELEMENT_TYPE_SPECIFIC_BITS_OFFSET + 2);
 
 class nsXULElement : public nsStyledElement {
  protected:
-  typedef mozilla::dom::Document Document;
+  using Document = mozilla::dom::Document;
 
   // Use Construct to construct elements instead of this constructor.
   explicit nsXULElement(already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
@@ -370,15 +356,14 @@ class nsXULElement : public nsStyledElement {
                            bool aDumpAll) const override {}
 #endif
 
-  MOZ_CAN_RUN_SCRIPT int32_t ScreenX();
-  MOZ_CAN_RUN_SCRIPT int32_t ScreenY();
-
   MOZ_CAN_RUN_SCRIPT bool HasMenu();
   MOZ_CAN_RUN_SCRIPT void OpenMenu(bool aOpenFlag);
 
-  MOZ_CAN_RUN_SCRIPT virtual bool PerformAccesskey(
+  MOZ_CAN_RUN_SCRIPT
+  virtual mozilla::Result<bool, nsresult> PerformAccesskey(
       bool aKeyCausesActivation, bool aIsTrustedEvent) override;
-  void ClickWithInputSource(uint16_t aInputSource, bool aIsTrustedEvent);
+  MOZ_CAN_RUN_SCRIPT void ClickWithInputSource(uint16_t aInputSource,
+                                               bool aIsTrustedEvent);
 
   virtual bool IsNodeOfType(uint32_t aFlags) const override;
   virtual bool IsFocusableInternal(int32_t* aTabIndex,
@@ -391,11 +376,9 @@ class nsXULElement : public nsStyledElement {
   virtual nsresult Clone(mozilla::dom::NodeInfo*,
                          nsINode** aResult) const override;
 
-  virtual void RecompileScriptEventListeners() override;
-
   virtual bool IsEventAttributeNameInternal(nsAtom* aName) override;
 
-  typedef mozilla::dom::DOMString DOMString;
+  using DOMString = mozilla::dom::DOMString;
   void GetXULAttr(nsAtom* aName, DOMString& aResult) const {
     GetAttr(kNameSpaceID_None, aName, aResult);
   }
@@ -492,7 +475,9 @@ class nsXULElement : public nsStyledElement {
     SetXULAttr(nsGkAtoms::src, aValue, rv);
   }
   nsIControllers* GetControllers(mozilla::ErrorResult& rv);
-  void Click(mozilla::dom::CallerType aCallerType);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
+  MOZ_CAN_RUN_SCRIPT_BOUNDARY void Click(mozilla::dom::CallerType aCallerType);
+  // TODO: Convert this to MOZ_CAN_RUN_SCRIPT (bug 1415230)
   MOZ_CAN_RUN_SCRIPT_BOUNDARY void DoCommand();
   // Style() inherited from nsStyledElement
 

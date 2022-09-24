@@ -11,6 +11,9 @@ const { XPCOMUtils } = ChromeUtils.import(
 );
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { Log } = ChromeUtils.import("resource://gre/modules/Log.jsm");
+const { AppConstants } = ChromeUtils.import(
+  "resource://gre/modules/AppConstants.jsm"
+);
 
 const LOGGER_NAME = "Toolkit.Telemetry";
 const LOGGER_PREFIX = "ClientID::";
@@ -150,22 +153,6 @@ var ClientIDImpl = {
     try {
       let state = await IOUtils.readJSON(gStateFilePath);
       if (state) {
-        try {
-          if (Services.prefs.prefHasUserValue(PREF_CACHED_CLIENTID)) {
-            let cachedID = Services.prefs.getStringPref(
-              PREF_CACHED_CLIENTID,
-              null
-            );
-            if (cachedID && cachedID != state.clientID) {
-              Services.telemetry.scalarAdd(
-                "telemetry.loaded_client_id_doesnt_match_pref",
-                1
-              );
-            }
-          }
-        } catch (e) {
-          // This data collection's not that important.
-        }
         hasCurrentClientID = this.updateClientID(state.clientID);
         if (hasCurrentClientID) {
           this._log.trace(`_doLoadClientID: Client IDs loaded from state.`);
@@ -175,7 +162,6 @@ var ClientIDImpl = {
         }
       }
     } catch (e) {
-      Services.telemetry.scalarAdd("telemetry.state_file_read_errors", 1);
       // fall through to next option
     }
 
@@ -184,7 +170,6 @@ var ClientIDImpl = {
       const cachedID = this.getCachedClientID();
       // Calling `updateClientID` with `null` logs an error, which breaks tests.
       if (cachedID) {
-        Services.telemetry.scalarAdd("telemetry.using_pref_client_id", 1);
         hasCurrentClientID = this.updateClientID(cachedID);
       }
     }
@@ -192,7 +177,6 @@ var ClientIDImpl = {
     // We're missing the ID from the DRS state file and prefs.
     // Generate a new one.
     if (!hasCurrentClientID) {
-      Services.telemetry.scalarSet("telemetry.generated_new_client_id", true);
       this.updateClientID(CommonUtils.generateUUID());
     }
     this._saveClientIdTask = this._saveClientID();
@@ -226,9 +210,7 @@ var ClientIDImpl = {
       });
       this._saveClientIdTask = null;
     } catch (ex) {
-      Services.telemetry.scalarAdd("telemetry.state_file_save_errors", 1);
-
-      if (!(ex instanceof DOMException) || ex.name !== "AbortError") {
+      if (!DOMException.isInstance(ex) || ex.name !== "AbortError") {
         throw ex;
       }
     }
@@ -243,6 +225,9 @@ var ClientIDImpl = {
   async getClientID() {
     if (!this._clientID) {
       let { clientID } = await this._loadClientID();
+      if (AppConstants.platform != "android") {
+        Glean.legacyTelemetry.clientId.set(clientID);
+      }
       return clientID;
     }
 
@@ -341,7 +326,11 @@ var ClientIDImpl = {
 
   async removeClientID() {
     this._log.trace("removeClientID");
-    Services.telemetry.scalarAdd("telemetry.removed_client_ids", 1);
+
+    if (AppConstants.platform != "android") {
+      // We can't clear the client_id in Glean, but we can make it the canary.
+      Glean.legacyTelemetry.clientId.set(CANARY_CLIENT_ID);
+    }
 
     // Wait for the removal.
     // Asynchronous calls to getClientID will also be blocked on this.
@@ -367,6 +356,9 @@ var ClientIDImpl = {
     }
 
     this._clientID = id;
+    if (AppConstants.platform != "android") {
+      Glean.legacyTelemetry.clientId.set(id);
+    }
 
     this._clientIDHash = null;
     Services.prefs.setStringPref(PREF_CACHED_CLIENTID, this._clientID);

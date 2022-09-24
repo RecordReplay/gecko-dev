@@ -7,9 +7,10 @@
 #![deny(warnings)]
 
 use neqo_common::{event::Provider, qdebug, qinfo, qtrace, Datagram, Header};
-use neqo_crypto::{init_db, AllowZeroRtt, AntiReplay};
-use neqo_http3::{ClientRequestStream, Error, Http3Server, Http3ServerEvent};
-use neqo_qpack::QpackSettings;
+use neqo_crypto::{generate_ech_keys, init_db, AllowZeroRtt, AntiReplay};
+use neqo_http3::{
+    Error, Http3OrWebTransportStream, Http3Parameters, Http3Server, Http3ServerEvent,
+};
 use neqo_transport::server::Server;
 use neqo_transport::{ConnectionEvent, ConnectionParameters, Output, RandomConnectionIdGenerator};
 use std::env;
@@ -33,10 +34,14 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 use std::net::SocketAddr;
 
+extern crate base64;
+
 const MAX_TABLE_SIZE: u64 = 65536;
 const MAX_BLOCKED_STREAMS: u16 = 10;
 const PROTOCOLS: &[&str] = &["h3-29", "h3"];
 const TIMER_TOKEN: Token = Token(0xffff);
+const ECH_CONFIG_ID: u8 = 7;
+const ECH_PUBLIC_NAME: &str = "public.example";
 
 const HTTP_RESPONSE_WITH_WRONG_FRAME: &[u8] = &[
     0x01, 0x06, 0x00, 0x00, 0xd9, 0x54, 0x01, 0x37, // headers
@@ -53,7 +58,8 @@ struct Http3TestServer {
     server: Http3Server,
     // This a map from a post request to amount of data ithas been received on the request.
     // The respons will carry the amount of data received.
-    posts: HashMap<ClientRequestStream, usize>,
+    posts: HashMap<Http3OrWebTransportStream, usize>,
+    responses: HashMap<Http3OrWebTransportStream, Vec<u8>>,
     current_connection_hash: u64,
 }
 
@@ -68,7 +74,40 @@ impl Http3TestServer {
         Self {
             server,
             posts: HashMap::new(),
+            responses: HashMap::new(),
             current_connection_hash: 0,
+        }
+    }
+
+    fn new_response(&mut self, mut stream: Http3OrWebTransportStream, mut data: Vec<u8>) {
+        if data.len() == 0 {
+            stream.stream_close_send().unwrap();
+            return;
+        }
+        let sent = stream.send_data(&data).unwrap();
+        if sent < data.len() {
+            self.responses.insert(stream, data.split_off(sent));
+        } else {
+            stream.stream_close_send().unwrap();
+        }
+    }
+
+    fn handle_stream_writable(&mut self, mut stream: Http3OrWebTransportStream) {
+        if let Some(data) = self.responses.get_mut(&stream) {
+            match stream.send_data(&data) {
+                Ok(sent) => {
+                    if sent < data.len() {
+                        let new_d = (*data).split_off(sent);
+                        *data = new_d;
+                    } else {
+                        stream.stream_close_send().unwrap();
+                        self.responses.remove(&stream);
+                    }
+                }
+                Err(_) => {
+                    eprintln!("Unexpected error");
+                }
+            }
         }
     }
 }
@@ -83,11 +122,11 @@ impl HttpServer for Http3TestServer {
             qtrace!("Event: {:?}", event);
             match event {
                 Http3ServerEvent::Headers {
-                    mut request,
+                    mut stream,
                     headers,
                     fin,
                 } => {
-                    qtrace!("Headers (request={} fin={}): {:?}", request, fin, headers);
+                    qtrace!("Headers (request={} fin={}): {:?}", stream, fin, headers);
 
                     // Some responses do not have content-type. This is on purpose to exercise
                     // UnknownDecoder code.
@@ -109,33 +148,42 @@ impl HttpServer for Http3TestServer {
                             qtrace!("Serve request {}", path);
                             if path == "/Response421" {
                                 let response_body = b"0123456789".to_vec();
-                                request
-                                    .set_response(
-                                        &[
-                                            Header::new(":status", "421"),
-                                            Header::new("cache-control", "no-cache"),
-                                            Header::new("content-type", "text/plain"),
-                                            Header::new(
-                                                "content-length",
-                                                response_body.len().to_string(),
-                                            ),
-                                        ],
-                                        &response_body,
-                                    )
+                                stream
+                                    .send_headers(&[
+                                        Header::new(":status", "421"),
+                                        Header::new("cache-control", "no-cache"),
+                                        Header::new("content-type", "text/plain"),
+                                        Header::new(
+                                            "content-length",
+                                            response_body.len().to_string(),
+                                        ),
+                                    ])
                                     .unwrap();
+                                self.new_response(stream, response_body);
                             } else if path == "/RequestCancelled" {
-                                request
-                                    .stream_reset(Error::HttpRequestCancelled.code())
+                                stream
+                                    .stream_stop_sending(Error::HttpRequestCancelled.code())
+                                    .unwrap();
+                                stream
+                                    .stream_reset_send(Error::HttpRequestCancelled.code())
                                     .unwrap();
                             } else if path == "/VersionFallback" {
-                                request
-                                    .stream_reset(Error::HttpVersionFallback.code())
+                                stream
+                                    .stream_stop_sending(Error::HttpVersionFallback.code())
+                                    .unwrap();
+                                stream
+                                    .stream_reset_send(Error::HttpVersionFallback.code())
                                     .unwrap();
                             } else if path == "/EarlyResponse" {
-                                request.stream_reset(Error::HttpNoError.code()).unwrap();
+                                stream
+                                    .stream_stop_sending(Error::HttpNoError.code())
+                                    .unwrap();
                             } else if path == "/RequestRejected" {
-                                request
-                                    .stream_reset(Error::HttpRequestRejected.code())
+                                stream
+                                    .stream_stop_sending(Error::HttpRequestRejected.code())
+                                    .unwrap();
+                                stream
+                                    .stream_reset_send(Error::HttpRequestRejected.code())
                                     .unwrap();
                             } else if path == "/.well-known/http-opportunistic" {
                                 let host_hdr = headers.iter().find(|&h| h.name() == ":authority");
@@ -144,114 +192,150 @@ impl HttpServer for Http3TestServer {
                                         let mut content = b"[\"http://".to_vec();
                                         content.extend(host.value().as_bytes());
                                         content.extend(b"\"]".to_vec());
-                                        request
-                                            .set_response(
-                                                &[
-                                                    Header::new(":status", "200"),
-                                                    Header::new("cache-control", "no-cache"),
-                                                    Header::new("content-type", "application/json"),
-                                                    Header::new(
-                                                        "content-length",
-                                                        content.len().to_string(),
-                                                    ),
-                                                ],
-                                                &content,
-                                            )
+                                        stream
+                                            .send_headers(&[
+                                                Header::new(":status", "200"),
+                                                Header::new("cache-control", "no-cache"),
+                                                Header::new("content-type", "application/json"),
+                                                Header::new(
+                                                    "content-length",
+                                                    content.len().to_string(),
+                                                ),
+                                            ])
                                             .unwrap();
+                                        self.new_response(stream, content);
                                     }
-                                    _ => request
-                                        .set_response(&default_headers, &default_ret)
-                                        .unwrap(),
+                                    _ => {
+                                        stream.send_headers(&default_headers).unwrap();
+                                        self.new_response(stream, default_ret);
+                                    }
                                 }
                             } else if path == "/no_body" {
-                                request
-                                    .set_response(
-                                        &[
-                                            Header::new(":status", "200"),
-                                            Header::new("cache-control", "no-cache"),
-                                        ],
-                                        &[],
-                                    )
+                                stream
+                                    .send_headers(&[
+                                        Header::new(":status", "200"),
+                                        Header::new("cache-control", "no-cache"),
+                                    ])
                                     .unwrap();
+                                stream.stream_close_send().unwrap();
                             } else if path == "/no_content_length" {
-                                request
-                                    .set_response(
-                                        &[
-                                            Header::new(":status", "200"),
-                                            Header::new("cache-control", "no-cache"),
-                                        ],
-                                        &vec![b'a'; 4000],
-                                    )
+                                stream
+                                    .send_headers(&[
+                                        Header::new(":status", "200"),
+                                        Header::new("cache-control", "no-cache"),
+                                    ])
                                     .unwrap();
+                                self.new_response(stream, vec![b'a'; 4000]);
                             } else if path == "/content_length_smaller" {
-                                request
-                                    .set_response(
-                                        &[
+                                stream
+                                    .send_headers(&[
+                                        Header::new(":status", "200"),
+                                        Header::new("cache-control", "no-cache"),
+                                        Header::new("content-type", "text/plain"),
+                                        Header::new("content-length", 4000.to_string()),
+                                    ])
+                                    .unwrap();
+                                self.new_response(stream, vec![b'a'; 8000]);
+                            } else if path == "/post" {
+                                // Read all data before responding.
+                                self.posts.insert(stream, 0);
+                            } else if path == "/priority_mirror" {
+                                if let Some(priority) =
+                                    headers.iter().find(|h| h.name() == "priority")
+                                {
+                                    stream
+                                        .send_headers(&[
                                             Header::new(":status", "200"),
                                             Header::new("cache-control", "no-cache"),
                                             Header::new("content-type", "text/plain"),
-                                            Header::new("content-length", 4000.to_string()),
-                                        ],
-                                        &vec![b'a'; 8000],
-                                    )
+                                            Header::new("priority-mirror", priority.value()),
+                                            Header::new(
+                                                "content-length",
+                                                priority.value().len().to_string(),
+                                            ),
+                                        ])
+                                        .unwrap();
+                                    self.new_response(stream, priority.value().as_bytes().to_vec());
+                                } else {
+                                    stream
+                                        .send_headers(&[
+                                            Header::new(":status", "200"),
+                                            Header::new("cache-control", "no-cache"),
+                                        ])
+                                        .unwrap();
+                                    stream.stream_close_send().unwrap();
+                                }
+                            } else if path == "/103_response" {
+                                if let Some(early_hint) =
+                                    headers.iter().find(|h| h.name() == "link-to-set")
+                                {
+                                    for l in early_hint.value().split(',') {
+                                        stream
+                                            .send_headers(&[
+                                                Header::new(":status", "103"),
+                                                Header::new("link", l),
+                                            ])
+                                            .unwrap();
+                                    }
+                                }
+                                stream
+                                    .send_headers(&[
+                                        Header::new(":status", "200"),
+                                        Header::new("cache-control", "no-cache"),
+                                        Header::new("content-length", "0"),
+                                    ])
                                     .unwrap();
-                            } else if path == "/post" {
-                                // Read all data before responding.
-                                self.posts.insert(request, 0);
+                                stream.stream_close_send().unwrap();
                             } else {
                                 match path.trim_matches(|p| p == '/').parse::<usize>() {
-                                    Ok(v) => request
-                                        .set_response(
-                                            &[
+                                    Ok(v) => {
+                                        stream
+                                            .send_headers(&[
                                                 Header::new(":status", "200"),
                                                 Header::new("cache-control", "no-cache"),
                                                 Header::new("content-type", "text/plain"),
                                                 Header::new("content-length", v.to_string()),
-                                            ],
-                                            &vec![b'a'; v],
-                                        )
-                                        .unwrap(),
-                                    Err(_) => request
-                                        .set_response(&default_headers, &default_ret)
-                                        .unwrap(),
+                                            ])
+                                            .unwrap();
+                                        self.new_response(stream, vec![b'a'; v]);
+                                    }
+                                    Err(_) => {
+                                        stream.send_headers(&default_headers).unwrap();
+                                        self.new_response(stream, default_ret);
+                                    }
                                 }
                             }
                         }
                         _ => {
-                            request
-                                .set_response(&default_headers, &default_ret)
-                                .unwrap();
+                            stream.send_headers(&default_headers).unwrap();
+                            self.new_response(stream, default_ret);
                         }
                     }
                 }
                 Http3ServerEvent::Data {
-                    mut request,
+                    mut stream,
                     data,
                     fin,
                 } => {
-                    if let Some(r) = self.posts.get_mut(&request) {
+                    if let Some(r) = self.posts.get_mut(&stream) {
                         *r += data.len();
                     }
                     if fin {
-                        if let Some(r) = self.posts.remove(&request) {
+                        if let Some(r) = self.posts.remove(&stream) {
                             let default_ret = b"Hello World".to_vec();
-                            request
-                                .set_response(
-                                    &[
-                                        Header::new(":status", "200"),
-                                        Header::new("cache-control", "no-cache"),
-                                        Header::new("x-data-received-length", r.to_string()),
-                                        Header::new(
-                                            "content-length",
-                                            default_ret.len().to_string(),
-                                        ),
-                                    ],
-                                    &default_ret,
-                                )
+                            stream
+                                .send_headers(&[
+                                    Header::new(":status", "200"),
+                                    Header::new("cache-control", "no-cache"),
+                                    Header::new("x-data-received-length", r.to_string()),
+                                    Header::new("content-length", default_ret.len().to_string()),
+                                ])
                                 .unwrap();
+                            self.new_response(stream, default_ret);
                         }
                     }
                 }
+                Http3ServerEvent::DataWritable { stream } => self.handle_stream_writable(stream),
                 Http3ServerEvent::StateChange { conn, state } => {
                     if matches!(state, neqo_http3::Http3State::Connected) {
                         let mut h = DefaultHasher::new();
@@ -259,6 +343,10 @@ impl HttpServer for Http3TestServer {
                         self.current_connection_hash = h.finish();
                     }
                 }
+                Http3ServerEvent::PriorityUpdate { .. }
+                | Http3ServerEvent::StreamReset { .. }
+                | Http3ServerEvent::StreamStopSending { .. }
+                | Http3ServerEvent::WebTransport(_) => {}
             }
         }
     }
@@ -279,7 +367,7 @@ impl HttpServer for Server {
                 };
                 match event {
                     ConnectionEvent::RecvStreamReadable { stream_id } => {
-                        if stream_id % 4 == 0 {
+                        if stream_id.is_bidi() && stream_id.is_client_initiated() {
                             // We are only interesting in request streams
                             acr.borrow_mut()
                                 .stream_send(stream_id, HTTP_RESPONSE_WITH_WRONG_FRAME)
@@ -358,15 +446,15 @@ fn read_dgram(
     local_address: &SocketAddr,
 ) -> Result<Option<Datagram>, io::Error> {
     let buf = &mut [0u8; 2048];
-    let (sz, remote_addr) = match socket.recv_from(&mut buf[..]) {
-        Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(None),
-        Err(err) => {
+    let res = socket.recv_from(&mut buf[..]);
+    if let Some(err) = res.as_ref().err() {
+        if err.kind() != io::ErrorKind::WouldBlock {
             eprintln!("UDP recv error: {:?}", err);
-            return Err(err);
         }
-        Ok(res) => res,
+        return Ok(None);
     };
 
+    let (sz, remote_addr) = res.unwrap();
     if sz == buf.len() {
         eprintln!("Might have received more than {} bytes", buf.len());
     }
@@ -383,6 +471,7 @@ enum ServerType {
     Http3,
     Http3Fail,
     Http3NoResponse,
+    Http3Ech,
 }
 
 struct ServersRunner {
@@ -392,6 +481,7 @@ struct ServersRunner {
     servers: HashMap<SocketAddr, (Box<dyn HttpServer>, Option<Timeout>)>,
     timer: Timer<usize>,
     active_servers: HashSet<usize>,
+    ech_config: Vec<u8>,
 }
 
 impl ServersRunner {
@@ -405,18 +495,23 @@ impl ServersRunner {
                 .tick_duration(Duration::from_millis(1))
                 .build::<usize>(),
             active_servers: HashSet::new(),
+            ech_config: Vec::new(),
         })
     }
 
     pub fn init(&mut self) {
         self.add_new_socket(0, ServerType::Http3);
         self.add_new_socket(1, ServerType::Http3Fail);
-        self.add_new_socket(3, ServerType::Http3NoResponse);
+        self.add_new_socket(2, ServerType::Http3Ech);
+        self.add_new_socket(4, ServerType::Http3NoResponse);
+
         println!(
-            "HTTP3 server listening on ports {}, {} and {}",
+            "HTTP3 server listening on ports {}, {}, {} and {}. EchConfig is @{}@",
             self.hosts[0].port(),
             self.hosts[1].port(),
-            self.hosts[2].port()
+            self.hosts[2].port(),
+            self.hosts[3].port(),
+            base64::encode(&self.ech_config)
         );
         self.poll
             .register(&self.timer, TIMER_TOKEN, Ready::readable(), PollOpt::edge())
@@ -454,12 +549,12 @@ impl ServersRunner {
             .unwrap();
 
         self.sockets.push(socket);
-        self.servers
-            .insert(local_addr, (self.create_server(server_type), None));
+        let server = self.create_server(server_type);
+        self.servers.insert(local_addr, (server, None));
         local_addr.port()
     }
 
-    fn create_server(&self, server_type: ServerType) -> Box<dyn HttpServer> {
+    fn create_server(&mut self, server_type: ServerType) -> Box<dyn HttpServer> {
         let anti_replay = AntiReplay::new(Instant::now(), Duration::from_secs(10), 7, 14)
             .expect("unable to setup anti-replay");
         let cid_mgr = Rc::new(RefCell::new(RandomConnectionIdGenerator::new(10)));
@@ -472,11 +567,10 @@ impl ServersRunner {
                     PROTOCOLS,
                     anti_replay,
                     cid_mgr,
-                    QpackSettings {
-                        max_table_size_encoder: MAX_TABLE_SIZE,
-                        max_table_size_decoder: MAX_TABLE_SIZE,
-                        max_blocked_streams: MAX_BLOCKED_STREAMS,
-                    },
+                    Http3Parameters::default()
+                        .max_table_size_encoder(MAX_TABLE_SIZE)
+                        .max_table_size_decoder(MAX_TABLE_SIZE)
+                        .max_blocked_streams(MAX_BLOCKED_STREAMS),
                     None,
                 )
                 .expect("We cannot make a server!"),
@@ -494,6 +588,30 @@ impl ServersRunner {
                 .expect("We cannot make a server!"),
             ),
             ServerType::Http3NoResponse => Box::new(NonRespondingServer::default()),
+            ServerType::Http3Ech => {
+                let mut server = Box::new(Http3TestServer::new(
+                    Http3Server::new(
+                        Instant::now(),
+                        &[" HTTP2 Test Cert"],
+                        PROTOCOLS,
+                        anti_replay,
+                        cid_mgr,
+                        Http3Parameters::default()
+                            .max_table_size_encoder(MAX_TABLE_SIZE)
+                            .max_table_size_decoder(MAX_TABLE_SIZE)
+                            .max_blocked_streams(MAX_BLOCKED_STREAMS),
+                        None,
+                    )
+                    .expect("We cannot make a server!"),
+                ));
+                let ref mut unboxed_server = (*server).server;
+                let (sk, pk) = generate_ech_keys().unwrap();
+                unboxed_server
+                    .enable_ech(ECH_CONFIG_ID, ECH_PUBLIC_NAME, &sk, &pk)
+                    .expect("unable to enable ech");
+                self.ech_config = Vec::from(unboxed_server.ech_config());
+                server
+            }
         }
     }
 

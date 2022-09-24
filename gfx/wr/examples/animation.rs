@@ -66,7 +66,9 @@ impl App {
             ReferenceFrameKind::Transform {
                 is_2d_scale_translation: false,
                 should_snap: false,
+                paired_with_perspective: false,
             },
+            SpatialTreeItemKey::new(0, 0),
         );
 
         builder.push_simple_stacking_context_with_filters(
@@ -139,24 +141,30 @@ impl Example for App {
         self.add_rounded_rect(bounds, ColorF::new(0.0, 0.0, 1.0, 0.5), builder, pipeline_id, key2, None);
     }
 
-    fn on_event(&mut self, win_event: winit::WindowEvent, api: &mut RenderApi, document_id: DocumentId) -> bool {
+    fn on_event(
+        &mut self,
+        win_event: winit::event::WindowEvent,
+        _window: &winit::window::Window,
+        api: &mut RenderApi,
+        document_id: DocumentId
+    ) -> bool {
         let mut rebuild_display_list = false;
 
         match win_event {
-            winit::WindowEvent::KeyboardInput {
-                input: winit::KeyboardInput {
-                    state: winit::ElementState::Pressed,
+            winit::event::WindowEvent::KeyboardInput {
+                input: winit::event::KeyboardInput {
+                    state: winit::event::ElementState::Pressed,
                     virtual_keycode: Some(key),
                     ..
                 },
                 ..
             } => {
                 let (delta_angle, delta_opacity) = match key {
-                    winit::VirtualKeyCode::Down => (0.0, -0.1),
-                    winit::VirtualKeyCode::Up => (0.0, 0.1),
-                    winit::VirtualKeyCode::Right => (1.0, 0.0),
-                    winit::VirtualKeyCode::Left => (-1.0, 0.0),
-                    winit::VirtualKeyCode::R => {
+                    winit::event::VirtualKeyCode::Down => (0.0, -0.1),
+                    winit::event::VirtualKeyCode::Up => (0.0, 0.1),
+                    winit::event::VirtualKeyCode::Right => (1.0, 0.0),
+                    winit::event::VirtualKeyCode::Left => (-1.0, 0.0),
+                    winit::event::VirtualKeyCode::R => {
                         rebuild_display_list = true;
                         (0.0, 0.0)
                     }
@@ -173,7 +181,8 @@ impl Example for App {
                 let xf1 = LayoutTransform::rotation(0.0, 0.0, 1.0, Angle::radians(self.angle1));
                 let xf2 = LayoutTransform::rotation(0.0, 0.0, 1.0, Angle::radians(self.angle2));
                 let mut txn = Transaction::new();
-                txn.update_dynamic_properties(
+                txn.reset_dynamic_properties();
+                txn.append_dynamic_properties(
                     DynamicProperties {
                         transforms: vec![
                             PropertyValue {
@@ -198,7 +207,7 @@ impl Example for App {
                         colors: vec![],
                     },
                 );
-                txn.generate_frame(0);
+                txn.generate_frame(0, RenderReasons::empty());
                 api.send_transaction(document_id, txn);
             }
             _ => (),

@@ -2,9 +2,10 @@
  * http://creativecommons.org/publicdomain/zero/1.0/ */
 
 /* eslint-env mozilla/chrome-worker, node */
-/* global finish, log */
 
+/* import-globals-from /testing/mochitest/tests/SimpleTest/WorkerSimpleTest.js */
 importScripts("chrome://mochikit/content/tests/SimpleTest/WorkerSimpleTest.js");
+/* import-globals-from /toolkit/components/workerloader/require.js */
 importScripts("resource://gre/modules/workers/require.js");
 
 var SharedAll = require("resource://gre/modules/osfile/osfile_shared_allthreads.jsm");
@@ -47,6 +48,7 @@ self.onmessage = function onmessage_start(msg) {
 
 function test_init() {
   info("Starting test_init");
+  /* import-globals-from /toolkit/components/osfile/osfile.jsm */
   importScripts("resource://gre/modules/osfile.jsm");
 }
 
@@ -275,12 +277,6 @@ function test_iter_dir() {
       // Since this test was written in 2011 and some of our packaging
       // sets dates arbitrarily to 2010, this should be safe.
       let year = new Date().getFullYear();
-      let creation = entry.winCreationDate;
-      ok(creation, "test_iter_dir: Windows creation date exists: " + creation);
-      ok(
-        creation.getFullYear() >= 2009 && creation.getFullYear() <= year,
-        "test_iter_dir: consistent creation date"
-      );
 
       let lastWrite = entry.winLastWriteDate;
       ok(
@@ -433,8 +429,6 @@ function test_iter_dir() {
         " | " +
         info.unixGroup +
         " | " +
-        info.creationDate +
-        " | " +
         info.lastModificationDate +
         " | " +
         info.lastAccessDate +
@@ -553,27 +547,6 @@ function test_info() {
   let startMs = start.getTime() - SLOPPY_FILE_SYSTEM_ADJUSTMENT;
   let stopMs = stop.getTime() + SLOPPY_FILE_SYSTEM_ADJUSTMENT;
   info("Testing stat with bounds [ " + startMs + ", " + stopMs + " ]");
-
-  (function() {
-    let birth;
-    if ("winBirthDate" in stat) {
-      birth = stat.winBirthDate;
-    } else if ("macBirthDate" in stat) {
-      birth = stat.macBirthDate;
-    } else {
-      ok(true, "Skipping birthdate test");
-      return;
-    }
-    ok(birth.getTime() <= stopMs, "test_info: platformBirthDate is consistent");
-    // Note: Previous versions of this test checked whether the file
-    // has been created after the start of the test. Unfortunately,
-    // this sometimes failed under Windows, in specific circumstances:
-    // if the file has been removed at the start of the test and
-    // recreated immediately, the Windows file system detects this and
-    // decides that the file was actually truncated rather than
-    // recreated, hence that it should keep its previous creation
-    // date.  Debugging hilarity ensues.
-  })();
 
   let change = stat.lastModificationDate;
   info("Testing lastModificationDate: " + change);

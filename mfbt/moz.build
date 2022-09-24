@@ -51,6 +51,7 @@ EXPORTS.mozilla = [
     "FStream.h",
     "FunctionRef.h",
     "FunctionTypeTraits.h",
+    "Fuzzing.h",
     "HashFunctions.h",
     "HashTable.h",
     "HelperMacros.h",
@@ -108,6 +109,7 @@ EXPORTS.mozilla = [
     "TemplateLib.h",
     "TextUtils.h",
     "ThreadLocal.h",
+    "ThreadSafety.h",
     "ThreadSafeWeakPtr.h",
     "ToString.h",
     "Tuple.h",
@@ -203,3 +205,5 @@ if CONFIG["MOZ_NEEDS_LIBATOMIC"]:
     OS_LIBS += ["atomic"]
 
 DEFINES["LZ4LIB_VISIBILITY"] = ""
+
+REQUIRES_UNIFIED_BUILD = True

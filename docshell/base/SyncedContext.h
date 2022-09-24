@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 #include "mozilla/Attributes.h"
+#include "mozilla/BitSet.h"
 #include "mozilla/EnumSet.h"
 #include "nsStringFwd.h"
 #include "nscore.h"
@@ -22,6 +23,8 @@ class PickleIterator;
 
 namespace IPC {
 class Message;
+class MessageReader;
+class MessageWriter;
 }  // namespace IPC
 
 namespace mozilla {
@@ -43,11 +46,11 @@ namespace syncedcontext {
 template <size_t I>
 using Index = typename std::integral_constant<size_t, I>;
 
-using IndexSet = EnumSet<size_t, uint64_t>;
-
 template <typename Context>
 class Transaction {
  public:
+  using IndexSet = EnumSet<size_t, BitSet<Context::FieldValues::count>>;
+
   // Set a field at the given index in this `Transaction`. Creating a
   // `Transaction` object and setting multiple fields on it allows for
   // multiple mutations to be performed atomically.
@@ -87,9 +90,9 @@ class Transaction {
  private:
   friend struct mozilla::ipc::IPDLParamTraits<Transaction<Context>>;
 
-  void Write(IPC::Message* aMsg, mozilla::ipc::IProtocol* aActor) const;
-  bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-            mozilla::ipc::IProtocol* aActor);
+  void Write(IPC::MessageWriter* aWriter,
+             mozilla::ipc::IProtocol* aActor) const;
+  bool Read(IPC::MessageReader* aReader, mozilla::ipc::IProtocol* aActor);
 
   // You probably don't want to directly call this method - instead call
   // `Commit`, which will perform the necessary synchronization.
@@ -122,9 +125,6 @@ class FieldValues : public Base {
  public:
   // The number of fields stored by this type.
   static constexpr size_t count = Count;
-  static_assert(count < 64,
-                "At most 64 synced fields are supported. Please file a bug if "
-                "you need additional fields.");
 
   // The base type will define a series of `Get` methods for looking up a field
   // by its field index.
@@ -141,9 +141,9 @@ class FieldValues : public Base {
  private:
   friend struct mozilla::ipc::IPDLParamTraits<FieldValues<Base, Count>>;
 
-  void Write(IPC::Message* aMsg, mozilla::ipc::IProtocol* aActor) const;
-  bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-            mozilla::ipc::IProtocol* aActor);
+  void Write(IPC::MessageWriter* aWriter,
+             mozilla::ipc::IProtocol* aActor) const;
+  bool Read(IPC::MessageReader* aReader, mozilla::ipc::IProtocol* aActor);
 
   template <typename F, size_t... Indexes>
   static void EachIndexInner(std::index_sequence<Indexes...> aIndexes,
@@ -324,14 +324,14 @@ template <typename Context>
 struct IPDLParamTraits<dom::syncedcontext::Transaction<Context>> {
   typedef dom::syncedcontext::Transaction<Context> paramType;
 
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const paramType& aParam) {
-    aParam.Write(aMsg, aActor);
+    aParam.Write(aWriter, aActor);
   }
 
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor, paramType* aResult) {
-    return aResult->Read(aMsg, aIter, aActor);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   paramType* aResult) {
+    return aResult->Read(aReader, aActor);
   }
 };
 
@@ -339,14 +339,14 @@ template <typename Base, size_t Count>
 struct IPDLParamTraits<dom::syncedcontext::FieldValues<Base, Count>> {
   typedef dom::syncedcontext::FieldValues<Base, Count> paramType;
 
-  static void Write(IPC::Message* aMsg, IProtocol* aActor,
+  static void Write(IPC::MessageWriter* aWriter, IProtocol* aActor,
                     const paramType& aParam) {
-    aParam.Write(aMsg, aActor);
+    aParam.Write(aWriter, aActor);
   }
 
-  static bool Read(const IPC::Message* aMsg, PickleIterator* aIter,
-                   IProtocol* aActor, paramType* aResult) {
-    return aResult->Read(aMsg, aIter, aActor);
+  static bool Read(IPC::MessageReader* aReader, IProtocol* aActor,
+                   paramType* aResult) {
+    return aResult->Read(aReader, aActor);
   }
 };
 

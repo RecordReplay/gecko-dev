@@ -7,7 +7,7 @@
 "use strict";
 
 const TEST_URI =
-  "data:text/html;charset=utf8,<p>hello world" +
+  "data:text/html;charset=utf8,<!DOCTYPE html><p>hello world" +
   "<button onclick='foobar.explode()'>click!</button>";
 
 add_task(async function() {
@@ -36,7 +36,7 @@ add_task(async function() {
   const messageText = "ReferenceError: foobar is not defined";
 
   const msg = await waitFor(
-    () => findMessage(hud, messageText),
+    () => findErrorMessage(hud, messageText),
     `Message "${messageText}" wasn't found`
   );
   ok(msg, `Message found: "${messageText}"`);

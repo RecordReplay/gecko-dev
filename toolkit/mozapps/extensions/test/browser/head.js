@@ -10,12 +10,10 @@ const { TelemetryTestUtils } = ChromeUtils.import(
   "resource://testing-common/TelemetryTestUtils.jsm"
 );
 
-var tmp = {};
-ChromeUtils.import("resource://gre/modules/AddonManager.jsm", tmp);
-ChromeUtils.import("resource://gre/modules/Log.jsm", tmp);
-var AddonManager = tmp.AddonManager;
-var AddonManagerPrivate = tmp.AddonManagerPrivate;
-var Log = tmp.Log;
+let { AddonManager, AddonManagerPrivate } = ChromeUtils.import(
+  "resource://gre/modules/AddonManager.jsm"
+);
+let { Log } = ChromeUtils.import("resource://gre/modules/Log.jsm");
 
 var pathParts = gTestPath.split("/");
 // Drop the test filename
@@ -440,16 +438,6 @@ function wait_for_window_open(aCallback) {
   return log_callback(p, aCallback);
 }
 
-function get_string(aName, ...aArgs) {
-  var bundle = Services.strings.createBundle(
-    "chrome://mozapps/locale/extensions/extensions.properties"
-  );
-  if (!aArgs.length) {
-    return bundle.GetStringFromName(aName);
-  }
-  return bundle.formatStringFromName(aName, aArgs);
-}
-
 function formatDate(aDate) {
   const dtOptions = { year: "numeric", month: "long", day: "numeric" };
   return aDate.toLocaleDateString(undefined, dtOptions);
@@ -660,13 +648,7 @@ function addCertOverrides() {
 function MockProvider() {
   this.addons = [];
   this.installs = [];
-  this.types = [
-    {
-      id: "extension",
-      name: "Extensions",
-      uiPriority: 4000,
-    },
-  ];
+  this.addonTypes = ["extension"];
 
   var self = this;
   registerCleanupFunction(function() {
@@ -681,8 +663,8 @@ function MockProvider() {
 MockProvider.prototype = {
   addons: null,
   installs: null,
+  addonTypes: null,
   started: null,
-  types: null,
   queryDelayPromise: Promise.resolve(),
 
   blockQueryResponses() {
@@ -707,7 +689,12 @@ MockProvider.prototype = {
    */
   register: function MP_register() {
     info("Registering mock add-on provider");
-    AddonManagerPrivate.registerProvider(this, this.types);
+    // addonTypes is supposedly the full set of types supported by the provider.
+    // The current list is not complete (there are tests that mock add-on types
+    // other than "extension"), but it doesn't affect tests since addonTypes is
+    // mainly used to determine whether any of the AddonManager's providers
+    // support a type, and XPIProvider already defines the types of interest.
+    AddonManagerPrivate.registerProvider(this, this.addonTypes);
   },
 
   /**
@@ -1445,12 +1432,6 @@ function waitForCondition(condition, nextTest, errorMsg) {
 // Wait for and then acknowledge (by pressing the primary button) the
 // given notification.
 function promiseNotification(id = "addon-webext-permissions") {
-  if (
-    !Services.prefs.getBoolPref("extensions.webextPermissionPrompts", false)
-  ) {
-    return Promise.resolve();
-  }
-
   return new Promise(resolve => {
     function popupshown() {
       let notification = PopupNotifications.getNotification(id);
@@ -1598,6 +1579,15 @@ async function loadInitialView(type, opts) {
   await loadCallbackDone;
 
   return win;
+}
+
+function getSection(doc, type) {
+  const SECTION_INDEXES = {
+    enabled: 0,
+    disabled: 1,
+    colorway: 2,
+  };
+  return doc.querySelector(`section[section="${SECTION_INDEXES[type]}"]`);
 }
 
 function waitForViewLoad(win) {

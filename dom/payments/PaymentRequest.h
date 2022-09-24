@@ -16,8 +16,7 @@
 #include "nsWrapperCache.h"
 #include "PaymentRequestUpdateEvent.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class PaymentAddress;
 class PaymentRequestChild;
@@ -201,8 +200,10 @@ class PaymentRequest final : public DOMEventTargetHelper,
   nsresult UpdatePaymentMethod(const nsAString& aMethodName,
                                const ChangeDetails& aMethodDetails);
 
-  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override;
-  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue) override;
+  void ResolvedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override;
+  void RejectedCallback(JSContext* aCx, JS::Handle<JS::Value> aValue,
+                        ErrorResult& aRv) override;
 
   bool InFullyActiveDocument();
 
@@ -274,7 +275,6 @@ class PaymentRequest final : public DOMEventTargetHelper,
 
   PaymentRequestChild* mIPC;
 };
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_PaymentRequest_h

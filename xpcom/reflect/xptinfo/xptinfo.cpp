@@ -63,7 +63,7 @@ nsresult nsXPTInterfaceInfo::GetMethodInfo(
 }
 
 nsresult nsXPTInterfaceInfo::GetConstant(uint16_t aIndex,
-                                         JS::MutableHandleValue aConstant,
+                                         JS::MutableHandle<JS::Value> aConstant,
                                          char** aName) const {
   if (aIndex < ConstantCount()) {
     aConstant.set(Constant(aIndex).JSValue());
@@ -92,9 +92,14 @@ const char* nsXPTMethodInfo::SymbolDescription() const {
 
 bool nsXPTMethodInfo::GetId(JSContext* aCx, jsid& aId) const {
   if (IsSymbol()) {
-    aId = SYMBOL_TO_JSID(GetSymbol(aCx));
+    aId = JS::PropertyKey::Symbol(GetSymbol(aCx));
     return true;
   }
 
-  return mozilla::dom::AtomizeAndPinJSString(aCx, aId, Name());
+  JSString* str = JS_AtomizeString(aCx, Name());
+  if (!str) {
+    return false;
+  }
+  aId = JS::PropertyKey::NonIntAtom(str);
+  return true;
 }

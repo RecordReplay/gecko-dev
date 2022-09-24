@@ -73,9 +73,7 @@ bool AboutToCheckerboard(const FrameMetrics& aPaintedMetrics,
   // The main-thread code to compute the painted area can introduce some
   // rounding error due to multiple unit conversions, so we inflate the rect by
   // one app unit to account for that.
-  CSSRect painted = (aPaintedMetrics.GetCriticalDisplayPort().IsEmpty()
-                         ? aPaintedMetrics.GetDisplayPort()
-                         : aPaintedMetrics.GetCriticalDisplayPort()) +
+  CSSRect painted = aPaintedMetrics.GetDisplayPort() +
                     aPaintedMetrics.GetLayoutScrollOffset();
   painted.Inflate(CSSMargin::FromAppUnits(nsMargin(1, 1, 1, 1)));
 
@@ -84,9 +82,9 @@ bool AboutToCheckerboard(const FrameMetrics& aPaintedMetrics,
   CSSRect visible =
       CSSRect(aCompositorMetrics.GetVisualScrollOffset(),
               aCompositorMetrics.CalculateBoundedCompositedSizeInCssPixels());
-  visible.Inflate(LayerSize(StaticPrefs::apz_danger_zone_x(),
-                            StaticPrefs::apz_danger_zone_y()) /
-                  aCompositorMetrics.LayersPixelsPerCSSPixel());
+  visible.Inflate(ScreenSize(StaticPrefs::apz_danger_zone_x(),
+                             StaticPrefs::apz_danger_zone_y()) /
+                  aCompositorMetrics.DisplayportPixelsPerCSSPixel());
 
   // Clamp both rects to the scrollable rect, because having either of those
   // exceed the scrollable rect doesn't make sense, and could lead to false
@@ -95,18 +93,6 @@ bool AboutToCheckerboard(const FrameMetrics& aPaintedMetrics,
   visible = visible.Intersect(aPaintedMetrics.GetScrollableRect());
 
   return !painted.Contains(visible);
-}
-
-bool ShouldUseProgressivePaint() {
-  // The mutexes required for progressive painting pose a security risk
-  // on sandboxed platforms. Additionally, Android is the only platform
-  // that supports progressive painting, so if on a sandboxed platform
-  // or not on Android, we should not use progressive painting.
-#if defined(MOZ_SANDBOX) || !defined(MOZ_WIDGET_ANDROID)
-  return false;
-#else
-  return StaticPrefs::layers_progressive_paint_DoNotUseDirectly();
-#endif
 }
 
 SideBits GetOverscrollSideBits(const ParentLayerPoint& aOverscrollAmount) {

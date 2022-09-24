@@ -16,6 +16,7 @@
 #include "nsXULPopupManager.h"
 #include "nsIScriptContext.h"
 #include "mozilla/dom/Document.h"
+#include "mozilla/dom/DocumentInlines.h"
 #include "nsServiceManagerUtils.h"
 #include "nsLayoutUtils.h"
 #include "mozilla/ReflowInput.h"
@@ -100,16 +101,15 @@ nsresult nsXULPopupListener::HandleEvent(Event* aEvent) {
   }
 
   // Get the node that was clicked on.
-  EventTarget* target = mouseEvent->GetTarget();
-  nsCOMPtr<nsIContent> targetContent = do_QueryInterface(target);
+  nsCOMPtr<nsIContent> targetContent =
+      nsIContent::FromEventTargetOrNull(mouseEvent->GetTarget());
   if (!targetContent) {
     return NS_OK;
   }
 
-  {
-    EventTarget* originalTarget = mouseEvent->GetOriginalTarget();
-    nsCOMPtr<nsIContent> content = do_QueryInterface(originalTarget);
-    if (content && EventStateManager::IsTopLevelRemoteTarget(content)) {
+  if (nsIContent* content =
+          nsIContent::FromEventTargetOrNull(mouseEvent->GetOriginalTarget())) {
+    if (EventStateManager::IsTopLevelRemoteTarget(content)) {
       return NS_OK;
     }
   }
@@ -184,8 +184,8 @@ nsresult nsXULPopupListener::FireFocusOnTargetContent(
   nsIFrame* targetFrame = aTargetContent->GetPrimaryFrame();
   if (!targetFrame) return NS_ERROR_FAILURE;
 
-  const nsStyleUI* ui = targetFrame->StyleUI();
-  bool suppressBlur = (ui->mUserFocus == StyleUserFocus::Ignore);
+  const bool suppressBlur =
+      targetFrame->StyleUI()->UserFocus() == StyleUserFocus::Ignore;
 
   RefPtr<Element> newFocusElement;
 
@@ -209,7 +209,7 @@ nsresult nsXULPopupListener::FireFocusOnTargetContent(
       }
       fm->SetFocus(newFocusElement, focusFlags);
     } else if (!suppressBlur) {
-      nsPIDOMWindowOuter* window = doc->GetWindow();
+      nsCOMPtr<nsPIDOMWindowOuter> window = doc->GetWindow();
       fm->ClearFocus(window);
     }
   }
@@ -336,10 +336,8 @@ nsresult nsXULPopupListener::LaunchPopup(MouseEvent* aEvent) {
     pm->ShowPopup(mPopupContent, mElement, u""_ns, 0, 0, false, true, false,
                   aEvent);
   } else {
-    int32_t xPos = aEvent->ScreenX(CallerType::System);
-    int32_t yPos = aEvent->ScreenY(CallerType::System);
-
-    pm->ShowPopupAtScreen(mPopupContent, xPos, yPos, mIsContext, aEvent);
+    CSSIntPoint pos = aEvent->ScreenPoint(CallerType::System);
+    pm->ShowPopupAtScreen(mPopupContent, pos.x, pos.y, mIsContext, aEvent);
   }
 
   return NS_OK;

@@ -48,6 +48,9 @@ with Files("tests/xpcshell/test_UpdateUtils*.js"):
 with Files("AsyncPrefs.jsm"):
     BUG_COMPONENT = ("Core", "Security: Process Sandboxing")
 
+with Files("AsanReporter.jsm"):
+    BUG_COMPONENT = ("Firefox Build System", "General")
+
 with Files("Color.jsm"):
     BUG_COMPONENT = ("Toolkit", "Find Toolbar")
 
@@ -183,6 +186,7 @@ EXTRA_JS_MODULES += [
     "InlineSpellCheckerContent.jsm",
     "Integration.jsm",
     "JSONFile.jsm",
+    "JsonSchema.jsm",
     "KeywordUtils.jsm",
     "LayoutUtils.jsm",
     "Log.jsm",
@@ -198,8 +202,6 @@ EXTRA_JS_MODULES += [
     "PrivateBrowsingUtils.jsm",
     "ProcessType.jsm",
     "ProfileAge.jsm",
-    "Promise-backend.js",
-    "Promise.jsm",
     "PromiseUtils.jsm",
     "Region.jsm",
     "RemotePageAccessManager.jsm",
@@ -216,6 +218,11 @@ EXTRA_JS_MODULES += [
     "UpdateUtils.jsm",
     "WebChannel.jsm",
 ]
+
+if CONFIG["MOZ_ASAN_REPORTER"]:
+    EXTRA_JS_MODULES += [
+        "AsanReporter.jsm",
+    ]
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "cocoa":
     EXTRA_JS_MODULES += [
@@ -253,13 +260,6 @@ if "Android" != CONFIG["OS_TARGET"]:
     DIRS += [
         "subprocess",
     ]
-else:
-    DEFINES["ANDROID"] = True
-    EXTRA_JS_MODULES += [
-        "secondscreen/RokuApp.jsm",
-        "secondscreen/SimpleServiceDiscovery.jsm",
-    ]
-
 
 if CONFIG["MOZ_WIDGET_TOOLKIT"] == "windows":
     EXTRA_JS_MODULES += [
@@ -286,7 +286,7 @@ for var in (
     "DEBUG_JS_MODULES",
     "OMNIJAR_NAME",
 ):
-    DEFINES[var] = CONFIG[var]
+    DEFINES[var] = CONFIG[var] or ""
 
 for var in (
     "MOZ_ALLOW_ADDON_SIDELOAD",

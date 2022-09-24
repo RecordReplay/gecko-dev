@@ -21,8 +21,11 @@
 #include "mozilla/dom/AudioContextBinding.h"
 #include "mozilla/dom/BaseAudioContextBinding.h"
 #include "mozilla/dom/BiquadFilterNodeBinding.h"
+#include "mozilla/dom/BrowsingContext.h"
+#include "mozilla/dom/CanonicalBrowsingContext.h"
 #include "mozilla/dom/ChannelMergerNodeBinding.h"
 #include "mozilla/dom/ChannelSplitterNodeBinding.h"
+#include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/ConvolverNodeBinding.h"
 #include "mozilla/dom/DelayNodeBinding.h"
 #include "mozilla/dom/DynamicsCompressorNodeBinding.h"
@@ -79,13 +82,12 @@
 #include "ScriptProcessorNode.h"
 #include "StereoPannerNode.h"
 #include "WaveShaperNode.h"
+#include "Tracing.h"
 
 extern mozilla::LazyLogModule gAutoplayPermissionLog;
 
 #define AUTOPLAY_LOG(msg, ...) \
   MOZ_LOG(gAutoplayPermissionLog, LogLevel::Debug, (msg, ##__VA_ARGS__))
-
-using std::move;
 
 namespace mozilla::dom {
 
@@ -220,6 +222,7 @@ void AudioContext::StartBlockedAudioContextIfAllowed() {
 }
 
 void AudioContext::DisconnectFromWindow() {
+  MaybeClearPageAwakeRequest();
   nsPIDOMWindowInner* window = GetOwner();
   if (window) {
     window->RemoveAudioContext(this);
@@ -229,6 +232,7 @@ void AudioContext::DisconnectFromWindow() {
 AudioContext::~AudioContext() {
   DisconnectFromWindow();
   UnregisterWeakMemoryReporter(this);
+  MOZ_ASSERT(!mSetPageAwakeRequest, "forgot to revoke for page awake?");
 }
 
 JSObject* AudioContext::WrapObject(JSContext* aCx,
@@ -539,13 +543,10 @@ already_AddRefed<OscillatorNode> AudioContext::CreateOscillator(
 }
 
 already_AddRefed<PeriodicWave> AudioContext::CreatePeriodicWave(
-    const Float32Array& aRealData, const Float32Array& aImagData,
+    const Sequence<float>& aRealData, const Sequence<float>& aImagData,
     const PeriodicWaveConstraints& aConstraints, ErrorResult& aRv) {
-  aRealData.ComputeState();
-  aImagData.ComputeState();
-
   RefPtr<PeriodicWave> periodicWave = new PeriodicWave(
-      this, aRealData.Data(), aRealData.Length(), aImagData.Data(),
+      this, aRealData.Elements(), aRealData.Length(), aImagData.Elements(),
       aImagData.Length(), aConstraints.mDisableNormalization, aRv);
   if (aRv.Failed()) {
     return nullptr;
@@ -692,7 +693,7 @@ already_AddRefed<Promise> AudioContext::DecodeAudioData(
       new WebAudioDecodeJob(this, promise, successCallback, failureCallback));
   AsyncDecodeWebAudio(contentType.get(), data, length, *job);
   // Transfer the ownership to mDecodeJobs
-  mDecodeJobs.AppendElement(move(job));
+  mDecodeJobs.AppendElement(std::move(job));
 
   return promise.forget();
 }
@@ -780,6 +781,7 @@ nsISerialEventTarget* AudioContext::GetMainThread() const {
 
 void AudioContext::DisconnectFromOwner() {
   mIsDisconnecting = true;
+  MaybeClearPageAwakeRequest();
   OnWindowDestroy();
   DOMEventTargetHelper::DisconnectFromOwner();
 }
@@ -862,7 +864,7 @@ void AudioContext::Dispatch(already_AddRefed<nsIRunnable>&& aRunnable) {
   // and the global is not valid anymore.
   if (parentObject) {
     parentObject->AbstractMainThreadFor(TaskCategory::Other)
-        ->Dispatch(move(aRunnable));
+        ->Dispatch(std::move(aRunnable));
   } else {
     RefPtr<nsIRunnable> runnable(aRunnable);
     runnable = nullptr;
@@ -908,6 +910,60 @@ void AudioContext::OnStateChanged(void* aPromise, AudioContextState aNewState) {
 
   mAudioContextState = aNewState;
   Destination()->NotifyAudioContextStateChanged();
+  MaybeUpdatePageAwakeRequest();
+}
+
+BrowsingContext* AudioContext::GetTopLevelBrowsingContext() {
+  nsCOMPtr<nsPIDOMWindowInner> window = GetParentObject();
+  if (!window) {
+    return nullptr;
+  }
+  BrowsingContext* bc = window->GetBrowsingContext();
+  if (!bc || bc->IsDiscarded()) {
+    return nullptr;
+  }
+  return bc->Top();
+}
+
+void AudioContext::MaybeUpdatePageAwakeRequest() {
+  // No need to keep page awake for offline context.
+  if (IsOffline()) {
+    return;
+  }
+
+  if (mIsShutDown) {
+    return;
+  }
+
+  if (IsRunning() && !mSetPageAwakeRequest) {
+    SetPageAwakeRequest(true);
+  } else if (!IsRunning() && mSetPageAwakeRequest) {
+    SetPageAwakeRequest(false);
+  }
+}
+
+void AudioContext::SetPageAwakeRequest(bool aShouldSet) {
+  mSetPageAwakeRequest = aShouldSet;
+  BrowsingContext* bc = GetTopLevelBrowsingContext();
+  if (!bc) {
+    return;
+  }
+  if (XRE_IsContentProcess()) {
+    ContentChild* contentChild = ContentChild::GetSingleton();
+    Unused << contentChild->SendAddOrRemovePageAwakeRequest(bc, aShouldSet);
+    return;
+  }
+  if (aShouldSet) {
+    bc->Canonical()->AddPageAwakeRequest();
+  } else {
+    bc->Canonical()->RemovePageAwakeRequest();
+  }
+}
+
+void AudioContext::MaybeClearPageAwakeRequest() {
+  if (mSetPageAwakeRequest) {
+    SetPageAwakeRequest(false);
+  }
 }
 
 nsTArray<RefPtr<mozilla::MediaTrack>> AudioContext::GetAllTracks() const {
@@ -932,6 +988,7 @@ nsTArray<RefPtr<mozilla::MediaTrack>> AudioContext::GetAllTracks() const {
 }
 
 already_AddRefed<Promise> AudioContext::Suspend(ErrorResult& aRv) {
+  TRACE("AudioContext::Suspend");
   RefPtr<Promise> promise = CreatePromise(aRv);
   if (aRv.Failed() || promise->State() == Promise::PromiseState::Rejected) {
     return promise.forget();
@@ -980,7 +1037,7 @@ void AudioContext::SuspendInternal(void* aPromise,
     tracks = GetAllTracks();
   }
   auto promise = Graph()->ApplyAudioContextOperation(
-      DestinationTrack(), move(tracks), AudioContextOperation::Suspend);
+      DestinationTrack(), std::move(tracks), AudioContextOperation::Suspend);
   if ((aFlags & AudioContextOperationFlags::SendStateChange)) {
     promise->Then(
         GetMainThread(), "AudioContext::OnStateChanged",
@@ -1004,6 +1061,7 @@ void AudioContext::ResumeFromChrome() {
 }
 
 already_AddRefed<Promise> AudioContext::Resume(ErrorResult& aRv) {
+  TRACE("AudioContext::Resume");
   RefPtr<Promise> promise = CreatePromise(aRv);
   if (aRv.Failed() || promise->State() == Promise::PromiseState::Rejected) {
     return promise.forget();
@@ -1054,7 +1112,7 @@ void AudioContext::ResumeInternal(AudioContextOperationFlags aFlags) {
     tracks = GetAllTracks();
   }
   auto promise = Graph()->ApplyAudioContextOperation(
-      DestinationTrack(), move(tracks), AudioContextOperation::Resume);
+      DestinationTrack(), std::move(tracks), AudioContextOperation::Resume);
   if (aFlags & AudioContextOperationFlags::SendStateChange) {
     promise->Then(
         GetMainThread(), "AudioContext::OnStateChanged",
@@ -1139,6 +1197,7 @@ void AudioContext::ReportBlocked() {
 }
 
 already_AddRefed<Promise> AudioContext::Close(ErrorResult& aRv) {
+  TRACE("AudioContext::Close");
   RefPtr<Promise> promise = CreatePromise(aRv);
   if (aRv.Failed() || promise->State() == Promise::PromiseState::Rejected) {
     return promise.forget();
@@ -1185,7 +1244,7 @@ void AudioContext::CloseInternal(void* aPromise,
       tracks = GetAllTracks();
     }
     auto promise = Graph()->ApplyAudioContextOperation(
-        ds, move(tracks), AudioContextOperation::Close);
+        ds, std::move(tracks), AudioContextOperation::Close);
     if ((aFlags & AudioContextOperationFlags::SendStateChange)) {
       promise->Then(
           GetMainThread(), "AudioContext::OnStateChanged",
@@ -1254,8 +1313,8 @@ void AudioContext::Unmute() const {
 void AudioContext::SetParamMapForWorkletName(
     const nsAString& aName, AudioParamDescriptorMap* aParamMap) {
   MOZ_ASSERT(!mWorkletParamDescriptors.Contains(aName));
-  Unused << mWorkletParamDescriptors.InsertOrUpdate(aName, move(*aParamMap),
-                                                    fallible);
+  Unused << mWorkletParamDescriptors.InsertOrUpdate(
+      aName, std::move(*aParamMap), fallible);
 }
 
 size_t AudioContext::SizeOfIncludingThis(

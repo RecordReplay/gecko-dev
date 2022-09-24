@@ -7,6 +7,7 @@
 #include "FuzzySecurityInfo.h"
 #include "mozilla/Logging.h"
 #include "mozilla/OriginAttributes.h"
+#include "nsITlsHandshakeListener.h"
 #include "nsThreadManager.h"
 
 namespace mozilla {
@@ -338,12 +339,11 @@ FuzzySecurityInfo::SetEchConfig(const nsACString& aEchConfig) {
 NS_IMETHODIMP
 FuzzySecurityInfo::GetRetryEchConfig(nsACString& aEchConfig) { return NS_OK; }
 
-void FuzzySecurityInfo::SerializeToIPC(IPC::Message* aMsg) {
+void FuzzySecurityInfo::SerializeToIPC(IPC::MessageWriter* aWriter) {
   MOZ_CRASH("Unused");
 }
 
-bool FuzzySecurityInfo::DeserializeFromIPC(const IPC::Message* aMsg,
-                                           PickleIterator* aIter) {
+bool FuzzySecurityInfo::DeserializeFromIPC(IPC::MessageReader* aReader) {
   MOZ_CRASH("Unused");
   return false;
 }
@@ -362,6 +362,16 @@ NS_IMETHODIMP FuzzySecurityInfo::SetIsBuiltCertChainRootBuiltInRoot(
 NS_IMETHODIMP FuzzySecurityInfo::GetIsBuiltCertChainRootBuiltInRoot(
     bool* aIsBuiltInRoot) {
   *aIsBuiltInRoot = false;
+  return NS_OK;
+}
+
+NS_IMETHODIMP FuzzySecurityInfo::DisableEarlyData(void) { return NS_OK; }
+
+NS_IMETHODIMP FuzzySecurityInfo::SetHandshakeCallbackListener(
+    nsITlsHandshakeCallbackListener* callback) {
+  if (callback) {
+    callback->HandshakeDone();
+  }
   return NS_OK;
 }
 

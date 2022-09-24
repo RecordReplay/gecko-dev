@@ -15,8 +15,10 @@
  */
 
 #include "WMFH264Decoder.h"
-#include <algorithm>
+
 #include <codecapi.h>
+
+#include <algorithm>
 
 namespace wmf {
 
@@ -140,7 +142,7 @@ WMFH264Decoder::SetDecoderOutputType() {
   CComPtr<IMFMediaType> type;
 
   UINT32 typeIndex = 0;
-  while (type = nullptr,
+  while (static_cast<void>(type = nullptr),
          SUCCEEDED(mDecoder->GetOutputAvailableType(0, typeIndex++, &type))) {
     GUID subtype;
     hr = type->GetGUID(MF_MT_SUBTYPE, &subtype);

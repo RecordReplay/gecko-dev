@@ -37,8 +37,7 @@ AntiTracking._createTask({
     ok(document.cookie != "", "Nothing is blocked");
 
     // requestStorageAccess should resolve
-    let dwu = SpecialPowers.getDOMWindowUtils(window);
-    let helper = dwu.setHandlingUserInput(true);
+    SpecialPowers.wrap(document).notifyUserGestureActivation();
     await document
       .requestStorageAccess()
       .then(() => {
@@ -47,9 +46,10 @@ AntiTracking._createTask({
       .catch(() => {
         ok(false, "Should grant storage access");
       });
-    helper.destruct();
+    SpecialPowers.wrap(document).clearUserGestureActivation();
   },
-  extraPrefs: null,
+  // Bug 1617611: Fix all the tests broken by "cookies SameSite=lax by default"
+  extraPrefs: [["network.cookie.sameSite.laxByDefault", false]],
   expectedBlockingNotifications: 0,
   runInPrivateWindow: false,
   iframeSandbox: null,

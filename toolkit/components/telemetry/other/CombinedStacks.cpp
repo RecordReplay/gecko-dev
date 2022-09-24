@@ -7,8 +7,9 @@
 #include "CombinedStacks.h"
 
 #include "jsapi.h"
-#include "js/Array.h"  // JS::NewArrayObject
-#include "mozilla/HangAnnotations.h"
+#include "js/Array.h"               // JS::NewArrayObject
+#include "js/PropertyAndElement.h"  // JS_DefineElement, JS_DefineProperty
+#include "js/String.h"
 
 namespace mozilla::Telemetry {
 
@@ -147,13 +148,11 @@ void CombinedStacks::Swap(CombinedStacks& aOther) {
   mMaxStacksCount = maxStacksCount;
 }
 
-#if defined(MOZ_GECKO_PROFILER)
 void CombinedStacks::Clear() {
   mNextIndex = 0;
   mStacks.clear();
   mModules.clear();
 }
-#endif
 
 JSObject* CreateJSStackObject(JSContext* cx, const CombinedStacks& stacks) {
   JS::Rooted<JSObject*> ret(cx, JS_NewPlainObject(cx));

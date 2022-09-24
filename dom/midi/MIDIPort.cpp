@@ -11,10 +11,12 @@
 #include "mozilla/dom/MIDITypes.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "mozilla/ipc/BackgroundChild.h"
+#include "mozilla/dom/Document.h"
 #include "mozilla/dom/Promise.h"
-#include "mozilla/dom/MIDITypes.h"
 #include "mozilla/Unused.h"
+#include "nsContentUtils.h"
 #include "nsISupportsImpl.h"  // for MOZ_COUNT_CTOR, MOZ_COUNT_DTOR
+#include "MIDILog.h"
 
 using namespace mozilla::ipc;
 
@@ -34,9 +36,16 @@ NS_IMPL_ADDREF_INHERITED(MIDIPort, DOMEventTargetHelper)
 NS_IMPL_RELEASE_INHERITED(MIDIPort, DOMEventTargetHelper)
 
 MIDIPort::MIDIPort(nsPIDOMWindowInner* aWindow, MIDIAccess* aMIDIAccessParent)
-    : DOMEventTargetHelper(aWindow), mMIDIAccessParent(aMIDIAccessParent) {
+    : DOMEventTargetHelper(aWindow),
+      mMIDIAccessParent(aMIDIAccessParent),
+      mKeepAlive(false) {
   MOZ_ASSERT(aWindow);
   MOZ_ASSERT(aMIDIAccessParent);
+
+  Document* aDoc = GetOwner()->GetExtantDoc();
+  if (aDoc) {
+    aDoc->DisallowBFCaching();
+  }
 }
 
 MIDIPort::~MIDIPort() {
@@ -55,8 +64,17 @@ MIDIPort::~MIDIPort() {
 }
 
 bool MIDIPort::Initialize(const MIDIPortInfo& aPortInfo, bool aSysexEnabled) {
+  nsIURI* uri = GetDocumentIfCurrent()->GetDocumentURI();
+  nsAutoCString origin;
+  nsresult rv = nsContentUtils::GetASCIIOrigin(uri, origin);
+  if (NS_FAILED(rv)) {
+    return false;
+  }
   RefPtr<MIDIPortChild> port =
       new MIDIPortChild(aPortInfo, aSysexEnabled, this);
+  if (NS_FAILED(port->GenerateStableId(origin))) {
+    return false;
+  }
   PBackgroundChild* b = BackgroundChild::GetForCurrentThread();
   MOZ_ASSERT(b,
              "Should always have a valid BackgroundChild when creating a port "
@@ -65,17 +83,25 @@ bool MIDIPort::Initialize(const MIDIPortInfo& aPortInfo, bool aSysexEnabled) {
     return false;
   }
   mPort = port;
+  LOG("MIDIPort::Initialize (%s, %s)",
+      NS_ConvertUTF16toUTF8(mPort->Name()).get(),
+      MIDIPortTypeValues::strings[uint32_t(mPort->Type())].value);
   // Make sure to increase the ref count for the port, so it can be cleaned up
   // by the IPC manager.
   mPort->SetActorAlive();
   return true;
 }
 
-void MIDIPort::UnsetIPCPort() { mPort = nullptr; }
+void MIDIPort::UnsetIPCPort() {
+  LOG("MIDIPort::UnsetIPCPort (%s, %s)",
+      NS_ConvertUTF16toUTF8(mPort->Name()).get(),
+      MIDIPortTypeValues::strings[uint32_t(mPort->Type())].value);
+  mPort = nullptr;
+}
 
 void MIDIPort::GetId(nsString& aRetVal) const {
   MOZ_ASSERT(mPort);
-  aRetVal = mPort->MIDIPortInterface::Id();
+  aRetVal = mPort->StableId();
 }
 
 void MIDIPort::GetManufacturer(nsString& aRetVal) const {
@@ -113,17 +139,17 @@ bool MIDIPort::SysexEnabled() const {
   return mPort->SysexEnabled();
 }
 
-already_AddRefed<Promise> MIDIPort::Open() {
+already_AddRefed<Promise> MIDIPort::Open(ErrorResult& aError) {
+  LOG("MIDIPort::Open");
   MOZ_ASSERT(mPort);
   RefPtr<Promise> p;
   if (mOpeningPromise) {
     p = mOpeningPromise;
     return p.forget();
   }
-  ErrorResult rv;
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(GetOwner());
-  p = Promise::Create(go, rv);
-  if (rv.Failed()) {
+  p = Promise::Create(go, aError);
+  if (aError.Failed()) {
     return nullptr;
   }
   mOpeningPromise = p;
@@ -131,17 +157,17 @@ already_AddRefed<Promise> MIDIPort::Open() {
   return p.forget();
 }
 
-already_AddRefed<Promise> MIDIPort::Close() {
+already_AddRefed<Promise> MIDIPort::Close(ErrorResult& aError) {
+  LOG("MIDIPort::Close");
   MOZ_ASSERT(mPort);
   RefPtr<Promise> p;
   if (mClosingPromise) {
     p = mClosingPromise;
     return p.forget();
   }
-  ErrorResult rv;
   nsCOMPtr<nsIGlobalObject> go = do_QueryInterface(GetOwner());
-  p = Promise::Create(go, rv);
-  if (rv.Failed()) {
+  p = Promise::Create(go, aError);
+  if (aError.Failed()) {
     return nullptr;
   }
   mClosingPromise = p;
@@ -150,12 +176,19 @@ already_AddRefed<Promise> MIDIPort::Close() {
 }
 
 void MIDIPort::Notify(const void_t& aVoid) {
+  LOG("MIDIPort::notify MIDIAccess shutting down, dropping reference.");
   // If we're getting notified, it means the MIDIAccess parent object is dead.
   // Nullify our copy.
   mMIDIAccessParent = nullptr;
 }
 
 void MIDIPort::FireStateChangeEvent() {
+  if (!GetOwner()) {
+    return;  // Ignore changes once we've been disconnected from the owner
+  }
+
+  StateChange();
+
   MOZ_ASSERT(mPort);
   if (mPort->ConnectionState() == MIDIPortConnectionState::Open ||
       mPort->ConnectionState() == MIDIPortConnectionState::Pending) {
@@ -173,10 +206,20 @@ void MIDIPort::FireStateChangeEvent() {
       mClosingPromise = nullptr;
     }
   }
+
   if (mPort->DeviceState() == MIDIPortDeviceState::Connected &&
       mPort->ConnectionState() == MIDIPortConnectionState::Pending) {
     mPort->SendOpen();
   }
+
+  if (mPort->ConnectionState() == MIDIPortConnectionState::Open ||
+      (mPort->DeviceState() == MIDIPortDeviceState::Connected &&
+       mPort->ConnectionState() == MIDIPortConnectionState::Pending)) {
+    KeepAliveOnStatechange();
+  } else {
+    DontKeepAliveOnStatechange();
+  }
+
   // Fire MIDIAccess events first so that the port is no longer in the port
   // maps.
   if (mMIDIAccessParent) {
@@ -190,8 +233,33 @@ void MIDIPort::FireStateChangeEvent() {
   DispatchTrustedEvent(event);
 }
 
+void MIDIPort::StateChange() {}
+
 void MIDIPort::Receive(const nsTArray<MIDIMessage>& aMsg) {
   MOZ_CRASH("We should never get here!");
 }
+
+void MIDIPort::DisconnectFromOwner() {
+  DontKeepAliveOnStatechange();
+  mPort->SendClose();
+
+  DOMEventTargetHelper::DisconnectFromOwner();
+}
+
+void MIDIPort::KeepAliveOnStatechange() {
+  if (!mKeepAlive) {
+    mKeepAlive = true;
+    KeepAliveIfHasListenersFor(nsGkAtoms::onstatechange);
+  }
+}
+
+void MIDIPort::DontKeepAliveOnStatechange() {
+  if (mKeepAlive) {
+    IgnoreKeepAliveIfHasListenersFor(nsGkAtoms::onstatechange);
+    mKeepAlive = false;
+  }
+}
+
+const nsString& MIDIPort::StableId() { return mPort->StableId(); }
 
 }  // namespace mozilla::dom

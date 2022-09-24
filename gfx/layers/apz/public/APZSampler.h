@@ -9,6 +9,7 @@
 
 #include <unordered_map>
 
+#include "apz/src/APZCTreeManager.h"
 #include "base/platform_thread.h"  // for PlatformThreadId
 #include "mozilla/layers/APZUtils.h"
 #include "mozilla/layers/SampleTime.h"
@@ -30,8 +31,6 @@ struct WrWindowId;
 
 namespace layers {
 
-class APZCTreeManager;
-class LayerMetricsWrapper;
 struct ScrollbarData;
 
 /**
@@ -66,40 +65,6 @@ class APZSampler {
   void SampleForWebRender(const Maybe<VsyncId>& aGeneratedFrameId,
                           wr::TransactionWrapper& aTxn);
 
-  bool AdvanceAnimations(const SampleTime& aSampleTime);
-
-  /**
-   * Compute the updated shadow transform for a scroll thumb layer that
-   * reflects async scrolling of the associated scroll frame.
-   *
-   * Refer to APZCTreeManager::ComputeTransformForScrollThumb for the
-   * description of parameters. The only difference is that this function takes
-   * |aContent| instead of |aApzc| and |aMetrics|; aContent is the
-   * LayerMetricsWrapper corresponding to the scroll frame that is scrolled by
-   * the scroll thumb, and so the APZC and metrics can be obtained from
-   * |aContent|.
-   */
-  LayerToParentLayerMatrix4x4 ComputeTransformForScrollThumb(
-      const LayerToParentLayerMatrix4x4& aCurrentTransform,
-      const LayerMetricsWrapper& aContent, const ScrollbarData& aThumbData,
-      bool aScrollbarIsDescendant,
-      AsyncTransformComponentMatrix* aOutClipTransform);
-
-  CSSRect GetCurrentAsyncLayoutViewport(const LayerMetricsWrapper& aLayer);
-  ParentLayerPoint GetCurrentAsyncScrollOffset(
-      const LayerMetricsWrapper& aLayer);
-  AsyncTransform GetCurrentAsyncTransform(const LayerMetricsWrapper& aLayer,
-                                          AsyncTransformComponents aComponents);
-  AsyncTransformComponentMatrix GetOverscrollTransform(
-      const LayerMetricsWrapper& aLayer);
-  AsyncTransformComponentMatrix GetCurrentAsyncTransformWithOverscroll(
-      const LayerMetricsWrapper& aLayer, AsyncTransformComponents aComponents);
-  Maybe<CompositionPayload> NotifyScrollSampling(
-      const LayerMetricsWrapper& aLayer);
-
-  void MarkAsyncTransformAppliedToContent(const LayerMetricsWrapper& aLayer);
-  bool HasUnusedAsyncTransform(const LayerMetricsWrapper& aLayer);
-
   /**
    * Similar to above GetCurrentAsyncTransform, but get the current transform
    * with LayersId and ViewID.
@@ -107,21 +72,31 @@ class APZSampler {
    */
   AsyncTransform GetCurrentAsyncTransform(
       const LayersId& aLayersId, const ScrollableLayerGuid::ViewID& aScrollId,
-      AsyncTransformComponents aComponents) const;
+      AsyncTransformComponents aComponents,
+      const MutexAutoLock& aProofOfMapLock) const;
 
   /**
-   * Returns the composition bounds of the APZC correspoinding to the pair of
+   * Returns the composition bounds of the APZC corresponding to the pair of
    * |aLayersId| and |aScrollId|.
    */
   ParentLayerRect GetCompositionBounds(
-      const LayersId& aLayersId,
-      const ScrollableLayerGuid::ViewID& aScrollId) const;
+      const LayersId& aLayersId, const ScrollableLayerGuid::ViewID& aScrollId,
+      const MutexAutoLock& aProofOfMapLock) const;
 
-  ScrollableLayerGuid GetGuid(const LayerMetricsWrapper& aLayer);
-
-  GeckoViewMetrics GetGeckoViewMetrics(const LayerMetricsWrapper& aLayer) const;
-
-  ScreenMargin GetGeckoFixedLayerMargins() const;
+  struct ScrollOffsetAndRange {
+    CSSPoint mOffset;
+    CSSRect mRange;
+  };
+  /**
+   * Returns the scroll offset and scroll range of the APZC corresponding to the
+   * pair of |aLayersId| and |aScrollId|
+   *
+   * Note: This is called from OMTA Sampler thread, or Compositor thread for
+   * testing.
+   */
+  Maybe<ScrollOffsetAndRange> GetCurrentScrollOffsetAndRange(
+      const LayersId& aLayersId, const ScrollableLayerGuid::ViewID& aScrollId,
+      const MutexAutoLock& aProofOfMapLock) const;
 
   /**
    * This can be used to assert that the current thread is the
@@ -134,6 +109,11 @@ class APZSampler {
    * Returns true if currently on the APZSampler's "sampler thread".
    */
   bool IsSamplerThread() const;
+
+  template <typename Callback>
+  void CallWithMapLock(Callback& aCallback) {
+    mApz->CallWithMapLock(aCallback);
+  }
 
  protected:
   virtual ~APZSampler();
@@ -151,19 +131,19 @@ class APZSampler {
   // StaticAutoPtr wrapper on sWindowIdMap to avoid a static initializer for the
   // unordered_map. This also avoids the initializer/memory allocation in cases
   // where we're not using WebRender.
-  static StaticMutex sWindowIdLock;
+  static StaticMutex sWindowIdLock MOZ_UNANNOTATED;
   static StaticAutoPtr<std::unordered_map<uint64_t, RefPtr<APZSampler>>>
       sWindowIdMap;
   Maybe<wr::WrWindowId> mWindowId;
 
   // Lock used to protected mSamplerThreadId
-  mutable Mutex mThreadIdLock;
+  mutable Mutex mThreadIdLock MOZ_UNANNOTATED;
   // If WebRender is enabled, this holds the thread id of the render backend
   // thread (which is the sampler thread) for the compositor associated with
   // this APZSampler instance.
   Maybe<PlatformThreadId> mSamplerThreadId;
 
-  Mutex mSampleTimeLock;
+  Mutex mSampleTimeLock MOZ_UNANNOTATED;
   // Can only be accessed or modified while holding mSampleTimeLock.
   SampleTime mSampleTime;
 };

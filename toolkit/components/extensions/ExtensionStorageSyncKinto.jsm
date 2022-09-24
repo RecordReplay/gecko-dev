@@ -8,11 +8,13 @@
 // TODO:
 // * find out how the Chrome implementation deals with conflicts
 
-/* exported extensionIdToCollectionId */
+// TODO bug 1637465: Remove the Kinto-based storage implementation.
 
-var EXPORTED_SYMBOLS = ["ExtensionStorageSync", "extensionStorageSync"];
-
-const global = this;
+var EXPORTED_SYMBOLS = [
+  "ExtensionStorageSync",
+  "KintoStorageTestUtils",
+  "extensionStorageSync",
+];
 
 Cu.importGlobalProperties(["atob", "btoa"]);
 
@@ -55,6 +57,7 @@ XPCOMUtils.defineLazyModuleGetters(this, {
   Kinto: "resource://services-common/kinto-offline-client.js",
   FirefoxAdapter: "resource://services-common/kinto-storage-adapter.js",
   Observers: "resource://services-common/observers.js",
+  Services: "resource://gre/modules/Services.jsm",
   Utils: "resource://services-sync/util.js",
 });
 
@@ -130,9 +133,12 @@ var extensionStorageSync = null;
  * @param {string}    ciphertext The ciphertext over which to compute the HMAC
  * @returns {string} The computed HMAC
  */
-function ciphertextHMAC(keyBundle, id, IV, ciphertext) {
-  const hasher = keyBundle.sha256HMACHasher;
-  return CommonUtils.bytesAsHex(Utils.digestUTF8(id + IV + ciphertext, hasher));
+async function ciphertextHMAC(keyBundle, id, IV, ciphertext) {
+  const hmacKey = CommonUtils.byteStringToArrayBuffer(keyBundle.hmacKey);
+  const encoder = new TextEncoder();
+  const data = encoder.encode(id + IV + ciphertext);
+  const hmac = await CryptoUtils.hmac("SHA-256", hmacKey, data);
+  return CommonUtils.bytesAsHex(CommonUtils.arrayBufferToByteString(hmac));
 }
 
 /**
@@ -171,7 +177,7 @@ class EncryptionRemoteTransformer {
       keyBundle.encryptionKeyB64,
       IV
     );
-    let hmac = ciphertextHMAC(keyBundle, id, IV, ciphertext);
+    let hmac = await ciphertextHMAC(keyBundle, id, IV, ciphertext);
     const encryptedResult = { ciphertext, IV, hmac, id };
 
     // Copy over the _status field, so that we handle concurrency
@@ -197,7 +203,7 @@ class EncryptionRemoteTransformer {
     }
     const keyBundle = await this.getKeys();
     // Authenticate the encrypted blob with the expected HMAC
-    let computedHMAC = ciphertextHMAC(
+    let computedHMAC = await ciphertextHMAC(
       keyBundle,
       record.id,
       record.IV,
@@ -257,7 +263,7 @@ class EncryptionRemoteTransformer {
     return Promise.resolve(record.id);
   }
 }
-global.EncryptionRemoteTransformer = EncryptionRemoteTransformer;
+this.EncryptionRemoteTransformer = EncryptionRemoteTransformer;
 
 /**
  * An EncryptionRemoteTransformer that provides a keybundle derived
@@ -323,7 +329,7 @@ class KeyRingEncryptionRemoteTransformer extends EncryptionRemoteTransformer {
     );
   }
 }
-global.KeyRingEncryptionRemoteTransformer = KeyRingEncryptionRemoteTransformer;
+this.KeyRingEncryptionRemoteTransformer = KeyRingEncryptionRemoteTransformer;
 
 /**
  * A Promise that centralizes initialization of ExtensionStorageSync.
@@ -497,10 +503,7 @@ class CryptoCollection {
       // This is a new keyring. Invent an ID for this record. If this
       // changes, it means a client replaced the keyring, so we need to
       // reupload everything.
-      const uuidgen = Cc["@mozilla.org/uuid-generator;1"].getService(
-        Ci.nsIUUIDGenerator
-      );
-      const uuid = uuidgen.generateUUID().toString();
+      const uuid = Services.uuid.generateUUID().toString();
       data = { uuid, id: STORAGE_SYNC_CRYPTO_KEYRING_RECORD_ID };
     }
     return data;
@@ -692,7 +695,7 @@ let CollectionKeyEncryptionRemoteTransformer = class extends EncryptionRemoteTra
   }
 };
 
-global.CollectionKeyEncryptionRemoteTransformer = CollectionKeyEncryptionRemoteTransformer;
+this.CollectionKeyEncryptionRemoteTransformer = CollectionKeyEncryptionRemoteTransformer;
 
 /**
  * Clean up now that one context is no longer using this extension's collection.
@@ -1318,7 +1321,7 @@ class ExtensionStorageSync {
       records = {};
     } else {
       keys = Object.keys(spec);
-      records = Cu.cloneInto(spec, global);
+      records = Cu.cloneInto(spec, {});
     }
 
     for (let key of keys) {
@@ -1370,3 +1373,14 @@ class ExtensionStorageSync {
 }
 this.ExtensionStorageSync = ExtensionStorageSync;
 extensionStorageSync = new ExtensionStorageSync(_fxaService);
+
+// For test use only.
+const KintoStorageTestUtils = {
+  CollectionKeyEncryptionRemoteTransformer,
+  CryptoCollection,
+  EncryptionRemoteTransformer,
+  KeyRingEncryptionRemoteTransformer,
+  cleanUpForContext,
+  idToKey,
+  keyToId,
+};

@@ -235,6 +235,7 @@ class TlsRecordFilter : public PacketFilter {
     return KEEP;
   }
 
+  bool is_dtls_agent() const;
   bool is_dtls13() const;
   bool is_dtls13_ciphertext(uint8_t ct) const;
   TlsCipherSpec& spec(uint16_t epoch);
@@ -798,6 +799,21 @@ class TlsClientHelloVersionSetter : public TlsHandshakeFilter {
   uint16_t version_;
 };
 
+// Set the version number in the ServerHello.
+class TlsServerHelloVersionSetter : public TlsHandshakeFilter {
+ public:
+  TlsServerHelloVersionSetter(const std::shared_ptr<TlsAgent>& a,
+                              uint16_t version)
+      : TlsHandshakeFilter(a, {kTlsHandshakeServerHello}), version_(version) {}
+
+  virtual PacketFilter::Action FilterHandshake(const HandshakeHeader& header,
+                                               const DataBuffer& input,
+                                               DataBuffer* output);
+
+ private:
+  uint16_t version_;
+};
+
 // Damages the last byte of a handshake message.
 class TlsLastByteDamager : public TlsHandshakeFilter {
  public:
@@ -834,6 +850,37 @@ class SelectedCipherSuiteReplacer : public TlsHandshakeFilter {
 
  private:
   uint16_t cipher_suite_;
+};
+
+class ClientHelloPreambleCapture : public TlsHandshakeFilter {
+ public:
+  ClientHelloPreambleCapture(const std::shared_ptr<TlsAgent>& a)
+      : TlsHandshakeFilter(a, {kTlsHandshakeClientHello}),
+        captured_(false),
+        data_() {}
+
+  const DataBuffer& contents() const { return data_; }
+  bool captured() const { return captured_; }
+
+ protected:
+  PacketFilter::Action FilterHandshake(const HandshakeHeader& header,
+                                       const DataBuffer& input,
+                                       DataBuffer* output) override;
+
+ private:
+  bool captured_;
+  DataBuffer data_;
+};
+
+class ServerHelloRandomChanger : public TlsHandshakeFilter {
+ public:
+  ServerHelloRandomChanger(const std::shared_ptr<TlsAgent>& a)
+      : TlsHandshakeFilter(a, {kTlsHandshakeServerHello}) {}
+
+ protected:
+  PacketFilter::Action FilterHandshake(const HandshakeHeader& header,
+                                       const DataBuffer& input,
+                                       DataBuffer* output) override;
 };
 
 }  // namespace nss_test

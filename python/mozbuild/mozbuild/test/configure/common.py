@@ -41,7 +41,7 @@ class ConfigureTestVFS(object):
         self._paths = set(mozpath.abspath(p) for p in paths)
 
     def _real_file(self, path):
-        return mozpath.basedir(path, [topsrcdir, topobjdir, tempfile.tempdir])
+        return mozpath.basedir(path, [topsrcdir, topobjdir, tempfile.gettempdir()])
 
     def exists(self, path):
         if path in self._paths:
@@ -292,7 +292,6 @@ class BaseConfigureTest(unittest.TestCase):
                 environ,
                 OLD_CONFIGURE=os.path.join(topsrcdir, "old-configure"),
                 MOZCONFIG=mozconfig_path,
-                MOZ_TEST_PYTHON=sys.executable,
             )
 
             paths = dict(paths)

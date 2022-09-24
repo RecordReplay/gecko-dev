@@ -620,6 +620,19 @@ inline bool AbstractFramePtr::isConstructing() const {
   MOZ_CRASH("Unexpected frame");
 }
 
+inline bool AbstractFramePtr::hasCachedSavedFrame() const {
+  if (isInterpreterFrame()) {
+    return asInterpreterFrame()->hasCachedSavedFrame();
+  }
+  if (isBaselineFrame()) {
+    return asBaselineFrame()->framePrefix()->hasCachedSavedFrame();
+  }
+  if (isWasmDebugFrame()) {
+    return asWasmDebugFrame()->hasCachedSavedFrame();
+  }
+  return asRematerializedFrame()->hasCachedSavedFrame();
+}
+
 inline bool AbstractFramePtr::hasArgs() const { return isFunctionFrame(); }
 
 inline bool AbstractFramePtr::hasScript() const { return !isWasmDebugFrame(); }
@@ -794,16 +807,6 @@ inline Value& AbstractFramePtr::thisArgument() const {
     return asBaselineFrame()->thisArgument();
   }
   return asRematerializedFrame()->thisArgument();
-}
-
-inline Value AbstractFramePtr::newTarget() const {
-  if (isInterpreterFrame()) {
-    return asInterpreterFrame()->newTarget();
-  }
-  if (isBaselineFrame()) {
-    return asBaselineFrame()->newTarget();
-  }
-  return asRematerializedFrame()->newTarget();
 }
 
 inline bool AbstractFramePtr::debuggerNeedsCheckPrimitiveReturn() const {

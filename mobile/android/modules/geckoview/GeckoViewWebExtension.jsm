@@ -48,25 +48,6 @@ XPCOMUtils.defineLazyServiceGetter(
 
 const { debug, warn } = GeckoViewUtils.initLogging("Console");
 
-// Allows to |await| for AddonManager to startup
-// mostly useful in tests that run super-early when AddonManager is not
-// available yet.
-XPCOMUtils.defineLazyGetter(this, "gAddonManagerStartup", function() {
-  if (AddonManager.isReady) {
-    // Already started up, nothing to do
-    return true;
-  }
-
-  // Wait until AddonManager is ready to accept calls
-  return new Promise(resolve => {
-    AddonManager.addManagerListener({
-      onStartup() {
-        resolve(true);
-      },
-    });
-  });
-});
-
 const DOWNLOAD_CHANGED_MESSAGE = "GeckoView:WebExtension:DownloadChanged";
 
 var DownloadTracker = new (class extends EventEmitter {
@@ -219,24 +200,23 @@ class EmbedderPort {
 }
 
 class GeckoViewConnection {
-  constructor(sender, nativeApp, allowContentMessaging) {
+  constructor(sender, target, nativeApp, allowContentMessaging) {
     this.sender = sender;
+    this.target = target;
     this.nativeApp = nativeApp;
     this.allowContentMessaging = allowContentMessaging;
 
-    if (!this.allowContentMessaging && !sender.verified) {
+    if (!allowContentMessaging && sender.envType !== "addon_child") {
       throw new Error(`Unexpected messaging sender: ${JSON.stringify(sender)}`);
     }
   }
 
   get dispatcher() {
-    const target = this.sender.actor.browsingContext.top.embedderElement;
-
     if (this.sender.envType === "addon_child") {
       // If this is a WebExtension Page we will have a GeckoSession associated
       // to it and thus a dispatcher.
       const dispatcher = GeckoViewUtils.getDispatcherForWindow(
-        target.ownerGlobal
+        this.target.ownerGlobal
       );
       if (dispatcher) {
         return dispatcher;
@@ -252,7 +232,7 @@ class GeckoViewConnection {
       // If this message came from a content script, send the message to
       // the corresponding tab messenger so that GeckoSession can pick it
       // up.
-      return GeckoViewUtils.getDispatcherForWindow(target.ownerGlobal);
+      return GeckoViewUtils.getDispatcherForWindow(this.target.ownerGlobal);
     }
 
     throw new Error(`Uknown sender envType: ${this.sender.envType}`);
@@ -264,6 +244,7 @@ class GeckoViewConnection {
       sender: this.sender,
       data,
       portId,
+      extensionId: this.sender.id,
       nativeApp: this.nativeApp,
     };
 
@@ -505,6 +486,7 @@ class ExtensionInstallListener {
 class ExtensionPromptObserver {
   constructor() {
     Services.obs.addObserver(this, "webextension-permission-prompt");
+    Services.obs.addObserver(this, "webextension-optional-permission-prompt");
   }
 
   async permissionPrompt(aInstall, aAddon, aInfo) {
@@ -523,6 +505,15 @@ class ExtensionPromptObserver {
     }
   }
 
+  async optionalPermissionPrompt(aExtensionId, aPermissions, resolve) {
+    const response = await EventDispatcher.instance.sendRequestForResult({
+      type: "GeckoView:WebExtension:OptionalPrompt",
+      extensionId: aExtensionId,
+      permissions: aPermissions,
+    });
+    resolve(response.allow);
+  }
+
   observe(aSubject, aTopic, aData) {
     debug`observe ${aTopic}`;
 
@@ -531,6 +522,11 @@ class ExtensionPromptObserver {
         const { info } = aSubject.wrappedJSObject;
         const { addon, install } = info;
         this.permissionPrompt(install, addon, info);
+        break;
+      }
+      case "webextension-optional-permission-prompt": {
+        const { id, permissions, resolve } = aSubject.wrappedJSObject;
+        this.optionalPermissionPrompt(id, permissions, resolve);
         break;
       }
     }
@@ -654,14 +650,17 @@ var GeckoViewWebExtension = {
   },
 
   async ensureBuiltIn(aUri, aId) {
-    await gAddonManagerStartup;
-    const extensionData = new ExtensionData(aUri);
-    const [manifest, extension] = await Promise.all([
-      extensionData.loadManifest(),
+    await AddonManager.readyPromise;
+    // Although the add-on is privileged in practice due to it being installed
+    // as a built-in extension, we pass isPrivileged=false since the exact flag
+    // doesn't matter as we are only using ExtensionData to read the version.
+    const extensionData = new ExtensionData(aUri, false);
+    const [extensionVersion, extension] = await Promise.all([
+      extensionData.getExtensionVersionWithoutValidation(),
       this.extensionById(aId),
     ]);
 
-    if (!extension || manifest.version != extension.version) {
+    if (!extension || extensionVersion != extension.version) {
       return this.installBuiltIn(aUri);
     }
 
@@ -674,7 +673,7 @@ var GeckoViewWebExtension = {
   },
 
   async installBuiltIn(aUri) {
-    await gAddonManagerStartup;
+    await AddonManager.readyPromise;
     const addon = await AddonManager.installBuiltinAddon(aUri.spec);
     const exported = await exportExtension(addon, addon.userPermissions, aUri);
     return { extension: exported };
@@ -1049,7 +1048,7 @@ var GeckoViewWebExtension = {
 
       case "GeckoView:WebExtension:List": {
         try {
-          await gAddonManagerStartup;
+          await AddonManager.readyPromise;
           const addons = await AddonManager.getAddonsByTypes(["extension"]);
           const extensions = await Promise.all(
             addons.map(addon =>

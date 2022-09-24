@@ -333,16 +333,14 @@ class FFSetup(object):
         self._init_env()
         self._init_profile()
         try:
-            if not self.debug_mode and self.test_config["name"] != "damp":
+            if not self.debug_mode and not self.test_config["name"].startswith("damp"):
                 self._run_profile()
         except BaseException:
             self.clean()
             raise
         self._init_gecko_profile()
         LOG.info("Browser initialized.")
-        LOG.info(
-            "Fission enabled: %s" % self.browser_config.get("enable_fission", False)
-        )
+        LOG.info("Fission enabled: %s" % self.browser_config.get("fission", True))
         # remove ccov files before actual tests start
         if self.browser_config.get("code_coverage", False):
             # if the Firefox build was instrumented for ccov, initializing the browser

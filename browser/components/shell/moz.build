@@ -55,6 +55,7 @@ elif CONFIG["OS_ARCH"] == "WINNT":
     ]
     LOCAL_INCLUDES += [
         "../../../other-licenses/nsis/Contrib/CityHash/cityhash",
+        "/toolkit/xre",
     ]
     OS_LIBS += [
         "bcrypt",
@@ -81,7 +82,9 @@ for var in (
 ):
     DEFINES[var] = '"%s"' % CONFIG[var]
 
-CXXFLAGS += CONFIG["TK_CFLAGS"]
+if CONFIG["MOZ_WIDGET_TOOLKIT"] == "gtk":
+    CXXFLAGS += CONFIG["MOZ_GTK3_CFLAGS"]
+
 if CONFIG["MOZ_ENABLE_DBUS"]:
     CXXFLAGS += CONFIG["MOZ_DBUS_GLIB_CFLAGS"]
 

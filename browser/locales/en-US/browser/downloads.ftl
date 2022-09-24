@@ -29,39 +29,61 @@ downloads-cmd-cancel =
 downloads-cmd-cancel-panel =
     .aria-label = Cancel
 
-# This message is only displayed on Windows and Linux devices
-downloads-cmd-show-menuitem =
-  .label = Open Containing Folder
+downloads-cmd-show-menuitem-2 =
+  .label = { PLATFORM() ->
+      [macos] Show in Finder
+     *[other] Show in Folder
+  }
   .accesskey = F
 
-# This message is only displayed on macOS devices
-downloads-cmd-show-menuitem-mac =
-  .label = Show In Finder
-  .accesskey = F
+## Displayed in the downloads context menu for files that can be opened.
+## Variables:
+##   $handler (String) - The name of the mime type's default file handler.
+##   Example: "Notepad", "Acrobat Reader DC", "7-Zip File Manager"
 
 downloads-cmd-use-system-default =
   .label = Open In System Viewer
-  .accesskey = V
+  .accesskey = I
+# This version is shown when the download's mime type has a valid file handler.
+downloads-cmd-use-system-default-named =
+  .label = Open In { $handler }
+  .accesskey = I
 
+# We can use the same accesskey as downloads-cmd-always-open-similar-files.
+# Both should not be visible in the downloads context menu at the same time.
 downloads-cmd-always-use-system-default =
   .label = Always Open In System Viewer
   .accesskey = w
+# We can use the same accesskey as downloads-cmd-always-open-similar-files.
+# Both should not be visible in the downloads context menu at the same time.
+# This version is shown when the download's mime type has a valid file handler.
+downloads-cmd-always-use-system-default-named =
+  .label = Always Open In { $handler }
+  .accesskey = w
 
-downloads-cmd-show-button =
+##
+
+# We can use the same accesskey as downloads-cmd-always-use-system-default.
+# Both should not be visible in the downloads context menu at the same time.
+downloads-cmd-always-open-similar-files =
+  .label = Always Open Similar Files
+  .accesskey = w
+
+downloads-cmd-show-button-2 =
   .tooltiptext = { PLATFORM() ->
-      [macos] Show In Finder
-     *[other] Open Containing Folder
+      [macos] Show in Finder
+     *[other] Show in Folder
   }
 
-downloads-cmd-show-panel =
+downloads-cmd-show-panel-2 =
   .aria-label = { PLATFORM() ->
-      [macos] Show In Finder
-     *[other] Open Containing Folder
+      [macos] Show in Finder
+     *[other] Show in Folder
   }
-downloads-cmd-show-description =
+downloads-cmd-show-description-2 =
   .value = { PLATFORM() ->
-      [macos] Show In Finder
-     *[other] Open Containing Folder
+      [macos] Show in Finder
+     *[other] Show in Folder
   }
 
 downloads-cmd-show-downloads =
@@ -84,6 +106,9 @@ downloads-cmd-clear-list =
     .accesskey = a
 downloads-cmd-clear-downloads =
     .label = Clear Downloads
+    .accesskey = C
+downloads-cmd-delete-file =
+    .label = Delete
     .accesskey = D
 
 # This command is shown in the context menu when downloads are blocked.
@@ -139,6 +164,8 @@ downloading-file-opens-in-minutes = Opening in { $minutes }m…
 downloading-file-opens-in-minutes-and-seconds = Opening in { $minutes }m { $seconds }s…
 downloading-file-opens-in-seconds = Opening in { $seconds }s…
 downloading-file-opens-in-some-time = Opening when completed…
+downloading-file-click-to-open =
+  .value = Open when completed
 
 ##
 
@@ -164,6 +191,20 @@ downloads-history =
 downloads-details =
     .title = Download Details
 
+## Displayed when a site attempts to automatically download many files.
+## Variables:
+##   $num (number) - Number of blocked downloads.
+##   $url (string) - The url of the suspicious site, stripped of http, https and www prefix.
+
+downloads-files-not-downloaded = { $num ->
+    [one] File not downloaded.
+   *[other] {$num} files not downloaded.
+}
+downloads-blocked-from-url = Downloads blocked from { $url }.
+downloads-blocked-download-detailed-info = { $url } attempted to automatically download multiple files. The site could be broken or trying to store spam files on your device.
+
+##
+
 downloads-clear-downloads-button =
     .label = Clear Downloads
     .tooltiptext = Clears completed, canceled and failed downloads
@@ -176,3 +217,13 @@ downloads-list-empty =
 # This string is shown when there are no items in the Downloads Panel.
 downloads-panel-empty =
     .value = No downloads for this session.
+
+# This is displayed in an item at the bottom of the Downloads Panel when there
+# are more downloads than can fit in the list in the panel.
+#   $count (number) - number of files being downloaded that are not shown in the
+#                     panel list.
+downloads-more-downloading =
+    { $count ->
+        [one] { $count } more file downloading
+       *[other] { $count } more files downloading
+    }

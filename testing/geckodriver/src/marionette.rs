@@ -4,7 +4,7 @@
 
 use crate::browser::{Browser, LocalBrowser, RemoteBrowser};
 use crate::build;
-use crate::capabilities::{FirefoxCapabilities, FirefoxOptions};
+use crate::capabilities::{FirefoxCapabilities, FirefoxOptions, ProfileType};
 use crate::command::{
     AddonInstallParameters, AddonUninstallParameters, GeckoContextParameters,
     GeckoExtensionCommand, GeckoExtensionRoute, CHROME_ELEMENT_KEY,
@@ -37,17 +37,19 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::thread;
 use std::time;
+use url::{Host, Url};
+use webdriver::capabilities::BrowserCapabilities;
 use webdriver::command::WebDriverCommand::{
     AcceptAlert, AddCookie, CloseWindow, DeleteCookie, DeleteCookies, DeleteSession, DismissAlert,
     ElementClear, ElementClick, ElementSendKeys, ExecuteAsyncScript, ExecuteScript, Extension,
     FindElement, FindElementElement, FindElementElements, FindElements, FullscreenWindow, Get,
     GetActiveElement, GetAlertText, GetCSSValue, GetCookies, GetCurrentUrl, GetElementAttribute,
     GetElementProperty, GetElementRect, GetElementTagName, GetElementText, GetNamedCookie,
-    GetPageSource, GetTimeouts, GetTitle, GetWindowHandle, GetWindowHandles, GetWindowRect, GoBack,
-    GoForward, IsDisplayed, IsEnabled, IsSelected, MaximizeWindow, MinimizeWindow, NewSession,
-    NewWindow, PerformActions, Print, Refresh, ReleaseActions, SendAlertText, SetTimeouts,
-    SetWindowRect, Status, SwitchToFrame, SwitchToParentFrame, SwitchToWindow,
-    TakeElementScreenshot, TakeScreenshot,
+    GetPageSource, GetShadowRoot, GetTimeouts, GetTitle, GetWindowHandle, GetWindowHandles,
+    GetWindowRect, GoBack, GoForward, IsDisplayed, IsEnabled, IsSelected, MaximizeWindow,
+    MinimizeWindow, NewSession, NewWindow, PerformActions, Print, Refresh, ReleaseActions,
+    SendAlertText, SetTimeouts, SetWindowRect, Status, SwitchToFrame, SwitchToParentFrame,
+    SwitchToWindow, TakeElementScreenshot, TakeScreenshot,
 };
 use webdriver::command::{
     ActionsParameters, AddCookieParameters, GetNamedCookieParameters, GetParameters,
@@ -57,7 +59,8 @@ use webdriver::command::{
 };
 use webdriver::command::{WebDriverCommand, WebDriverMessage};
 use webdriver::common::{
-    Cookie, Date, FrameId, LocatorStrategy, WebElement, ELEMENT_KEY, FRAME_KEY, WINDOW_KEY,
+    Cookie, Date, FrameId, LocatorStrategy, ShadowRoot, WebElement, ELEMENT_KEY, FRAME_KEY,
+    SHADOW_KEY, WINDOW_KEY,
 };
 use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
 use webdriver::response::{
@@ -77,10 +80,14 @@ struct MarionetteHandshake {
 
 #[derive(Default)]
 pub(crate) struct MarionetteSettings {
+    pub(crate) binary: Option<PathBuf>,
+    pub(crate) profile_root: Option<PathBuf>,
+    pub(crate) connect_existing: bool,
     pub(crate) host: String,
     pub(crate) port: Option<u16>,
-    pub(crate) binary: Option<PathBuf>,
-    pub(crate) connect_existing: bool,
+    pub(crate) websocket_port: u16,
+    pub(crate) allow_hosts: Vec<Host>,
+    pub(crate) allow_origins: Vec<Url>,
 
     /// Brings up the Browser Toolbox when starting Firefox,
     /// letting you debug internals.
@@ -108,8 +115,8 @@ impl MarionetteHandler {
         session_id: Option<String>,
         new_session_parameters: &NewSessionParameters,
     ) -> WebDriverResult<MarionetteConnection> {
-        let (options, capabilities) = {
-            let mut fx_capabilities = FirefoxCapabilities::new(self.settings.binary.as_ref());
+        let mut fx_capabilities = FirefoxCapabilities::new(self.settings.binary.as_ref());
+        let (capabilities, options) = {
             let mut capabilities = new_session_parameters
                 .match_browser(&mut fx_capabilities)?
                 .ok_or_else(|| {
@@ -120,19 +127,52 @@ impl MarionetteHandler {
                 })?;
 
             let options = FirefoxOptions::from_capabilities(
-                fx_capabilities.chosen_binary,
-                self.settings.android_storage,
+                fx_capabilities.chosen_binary.clone(),
+                &self.settings,
                 &mut capabilities,
             )?;
-            (options, capabilities)
+            (capabilities, options)
         };
 
         if let Some(l) = options.log.level {
             logging::set_max_level(l);
         }
 
-        let host = self.settings.host.to_owned();
-        let port = self.settings.port.unwrap_or(get_free_port(&host)?);
+        let marionette_host = self.settings.host.to_owned();
+        let marionette_port = match self.settings.port {
+            Some(port) => port,
+            None => {
+                // If we're launching Firefox Desktop version 95 or later, and there's no port
+                // specified, we can pass 0 as the port and later read it back from
+                // the profile.
+                let can_use_profile: bool = options.android.is_none()
+                    && options.profile != ProfileType::Named
+                    && !self.settings.connect_existing
+                    && fx_capabilities
+                        .browser_version(&capabilities)
+                        .map(|opt_v| {
+                            opt_v
+                                .map(|v| {
+                                    fx_capabilities
+                                        .compare_browser_version(&v, ">=95")
+                                        .unwrap_or(false)
+                                })
+                                .unwrap_or(false)
+                        })
+                        .unwrap_or(false);
+                if can_use_profile {
+                    0
+                } else {
+                    get_free_port(&marionette_host)?
+                }
+            }
+        };
+
+        let websocket_port = if options.use_websocket {
+            Some(self.settings.websocket_port)
+        } else {
+            None
+        };
 
         let browser = if options.android.is_some() {
             // TODO: support connecting to running Apps.  There's no real obstruction here,
@@ -145,14 +185,24 @@ impl MarionetteHandler {
                     "Cannot connect to an existing Android App yet",
                 ));
             }
-            Browser::Remote(RemoteBrowser::new(port, options)?)
+            Browser::Remote(RemoteBrowser::new(
+                options,
+                marionette_port,
+                websocket_port,
+                self.settings.profile_root.as_ref().map(|x| x.as_path()),
+            )?)
         } else if !self.settings.connect_existing {
-            Browser::Local(LocalBrowser::new(port, options, self.settings.jsdebugger)?)
+            Browser::Local(LocalBrowser::new(
+                options,
+                marionette_port,
+                self.settings.jsdebugger,
+                self.settings.profile_root.as_ref().map(|x| x.as_path()),
+            )?)
         } else {
-            Browser::Existing
+            Browser::Existing(marionette_port)
         };
         let session = MarionetteSession::new(session_id, capabilities);
-        MarionetteConnection::new(host, port, browser, session)
+        MarionetteConnection::new(marionette_host, browser, session)
     }
 
     fn close_connection(&mut self, wait_for_shutdown: bool) {
@@ -197,7 +247,7 @@ impl WebDriverHandler<GeckoExtensionRoute> for MarionetteHandler {
             Ok(mut connection) => {
                 if connection.is_none() {
                     if let NewSession(ref capabilities) = msg.command {
-                        let conn = self.create_connection(msg.session_id.clone(), &capabilities)?;
+                        let conn = self.create_connection(msg.session_id.clone(), capabilities)?;
                         *connection = Some(conn);
                     } else {
                         return Err(WebDriverError::new(
@@ -305,6 +355,30 @@ impl MarionetteSession {
         Ok(WebElement(id))
     }
 
+    /// Converts a Marionette JSON response into a `ShadowRoot`.
+    fn to_shadow_root(&self, json_data: &Value) -> WebDriverResult<ShadowRoot> {
+        let data = try_opt!(
+            json_data.as_object(),
+            ErrorStatus::UnknownError,
+            "Failed to convert data to an object"
+        );
+
+        let shadow_root = data.get(SHADOW_KEY);
+
+        let value = try_opt!(
+            shadow_root,
+            ErrorStatus::UnknownError,
+            "Failed to extract shadow root from Marionette response"
+        );
+        let id = try_opt!(
+            value.as_str(),
+            ErrorStatus::UnknownError,
+            "Failed to convert shadow root reference value to string"
+        )
+        .to_string();
+        Ok(ShadowRoot(id))
+    }
+
     fn next_command_id(&mut self) -> MessageId {
         self.command_id += 1;
         self.command_id
@@ -388,13 +462,9 @@ impl MarionetteSession {
                         "Failed to interpret script timeout duration as u64"
                     ),
                 };
-                // Check for the spec-compliant "pageLoad", but also for "page load",
-                // which was sent by Firefox 52 and earlier.
                 let page_load = try_opt!(
                     try_opt!(
-                        resp.result
-                            .get("pageLoad")
-                            .or_else(|| resp.result.get("page load")),
+                        resp.result.get("pageLoad"),
                         ErrorStatus::UnknownError,
                         "Missing field: pageLoad"
                     )
@@ -614,6 +684,14 @@ impl MarionetteSession {
                         .collect(),
                 )))
             }
+            GetShadowRoot(_) => {
+                let shadow_root = self.to_shadow_root(try_opt!(
+                    resp.result.get("value"),
+                    ErrorStatus::UnknownError,
+                    "Failed to find value field"
+                ))?;
+                WebDriverResponse::Generic(ValueResponse(serde_json::to_value(shadow_root)?))
+            }
             GetActiveElement => {
                 let element = self.to_web_element(try_opt!(
                     resp.result.get("value"),
@@ -690,7 +768,7 @@ fn try_convert_to_marionette_message(
                     flags: vec![AppStatus::eForceQuit],
                 },
             )),
-            Browser::Existing => Some(Command::WebDriver(
+            Browser::Existing(_) => Some(Command::WebDriver(
                 MarionetteWebDriverCommand::DeleteSession,
             )),
         },
@@ -788,6 +866,11 @@ fn try_convert_to_marionette_message(
         )),
         GetPageSource => Some(Command::WebDriver(
             MarionetteWebDriverCommand::GetPageSource,
+        )),
+        GetShadowRoot(ref e) => Some(Command::WebDriver(
+            MarionetteWebDriverCommand::GetShadowRoot {
+                id: e.clone().to_string(),
+            },
         )),
         GetTitle => Some(Command::WebDriver(MarionetteWebDriverCommand::GetTitle)),
         GetWindowHandle => Some(Command::WebDriver(
@@ -1046,11 +1129,10 @@ struct MarionetteConnection {
 impl MarionetteConnection {
     fn new(
         host: String,
-        port: u16,
         mut browser: Browser,
         session: MarionetteSession,
     ) -> WebDriverResult<MarionetteConnection> {
-        let stream = match MarionetteConnection::connect(&host, port, &mut browser) {
+        let stream = match MarionetteConnection::connect(&host, &mut browser) {
             Ok(stream) => stream,
             Err(e) => {
                 if let Err(e) = browser.close(true) {
@@ -1066,16 +1148,15 @@ impl MarionetteConnection {
         })
     }
 
-    fn connect(host: &str, port: u16, browser: &mut Browser) -> WebDriverResult<TcpStream> {
+    fn connect(host: &str, browser: &mut Browser) -> WebDriverResult<TcpStream> {
         let timeout = time::Duration::from_secs(60);
         let poll_interval = time::Duration::from_millis(100);
         let now = time::Instant::now();
 
         debug!(
-            "Waiting {}s to connect to browser on {}:{}",
+            "Waiting {}s to connect to browser on {}",
             timeout.as_secs(),
             host,
-            port
         );
 
         loop {
@@ -1089,18 +1170,31 @@ impl MarionetteConnection {
                 }
             }
 
-            match MarionetteConnection::try_connect(host, port) {
-                Ok(stream) => {
-                    debug!("Connection to Marionette established on {}:{}.", host, port);
-                    return Ok(stream);
-                }
-                Err(e) => {
-                    if now.elapsed() < timeout {
-                        thread::sleep(poll_interval);
-                    } else {
-                        return Err(WebDriverError::new(ErrorStatus::Timeout, e.to_string()));
+            let last_err;
+
+            if let Some(port) = browser.marionette_port()? {
+                match MarionetteConnection::try_connect(host, port) {
+                    Ok(stream) => {
+                        debug!("Connection to Marionette established on {}:{}.", host, port);
+                        browser.update_marionette_port(port);
+                        return Ok(stream);
+                    }
+                    Err(e) => {
+                        let err_str = e.to_string();
+                        last_err = Some(err_str);
                     }
                 }
+            } else {
+                last_err = Some("Failed to read marionette port".into());
+            }
+            if now.elapsed() < timeout {
+                trace!("Retrying in {:?}", poll_interval);
+                thread::sleep(poll_interval);
+            } else {
+                return Err(WebDriverError::new(
+                    ErrorStatus::Timeout,
+                    last_err.unwrap_or_else(|| "Unknown error".into()),
+                ));
             }
         }
     }
@@ -1115,9 +1209,10 @@ impl MarionetteConnection {
         let resp = (match stream.read_timeout() {
             Ok(timeout) => {
                 // If platform supports changing the read timeout of the stream,
-                // use a short one only for the handshake with Marionette.
+                // use a short one only for the handshake with Marionette. Don't
+                // make it shorter as 1000ms to not fail on slow connections.
                 stream
-                    .set_read_timeout(Some(time::Duration::from_millis(100)))
+                    .set_read_timeout(Some(time::Duration::from_millis(1000)))
                     .ok();
                 let data = MarionetteConnection::read_resp(stream);
                 stream.set_read_timeout(timeout).ok();
@@ -1450,7 +1545,6 @@ impl ToMarionette<MarionetteFrame> for SwitchToFrameParameters {
 impl ToMarionette<Window> for SwitchToWindowParameters {
     fn to_marionette(&self) -> WebDriverResult<Window> {
         Ok(Window {
-            name: self.handle.clone(),
             handle: self.handle.clone(),
         })
     }

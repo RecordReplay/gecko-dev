@@ -18,10 +18,10 @@ appInfo.updateAppInfo({
 });
 
 const { require, loader } = ChromeUtils.import(
-  "resource://devtools/shared/Loader.jsm"
+  "resource://devtools/shared/loader/Loader.jsm"
 );
 const { worker } = ChromeUtils.import(
-  "resource://devtools/shared/worker/loader.js"
+  "resource://devtools/shared/loader/worker-loader.js"
 );
 
 const { NetUtil } = require("resource://gre/modules/NetUtil.jsm");
@@ -87,6 +87,12 @@ async function createTargetForFakeTab(title) {
 
   const tabs = await listTabs(client);
   const tabDescriptor = findTab(tabs, title);
+
+  // These xpcshell tests use mocked actors (xpcshell-test/testactors)
+  // which still don't support watcher actor.
+  // Because of that we still can't enable server side targets and target swiching.
+  tabDescriptor.disableTargetSwitching();
+
   return tabDescriptor.getTarget();
 }
 
@@ -160,11 +166,23 @@ function createLongStringFront(conn, form) {
   return front;
 }
 
-function createTestGlobal(name) {
-  const sandbox = Cu.Sandbox(
-    Cc["@mozilla.org/systemprincipal;1"].createInstance(Ci.nsIPrincipal)
+function createTestGlobal(name, options) {
+  const principal = Cc["@mozilla.org/systemprincipal;1"].createInstance(
+    Ci.nsIPrincipal
   );
+  // NOTE: The Sandbox constructor behaves differently based on the argument
+  //       length.
+  const sandbox = options
+    ? Cu.Sandbox(principal, options)
+    : Cu.Sandbox(principal);
   sandbox.__name = name;
+  // Expose a few mocks to better represent a Window object.
+  // These attributes will be used by DOCUMENT_EVENT resource listener.
+  sandbox.performance = { timing: {} };
+  sandbox.document = {
+    readyState: "complete",
+    defaultView: sandbox,
+  };
   return sandbox;
 }
 
@@ -346,16 +364,8 @@ var listener = {
 
 Services.console.registerListener(listener);
 
-function testGlobal(name) {
-  const sandbox = Cu.Sandbox(
-    Cc["@mozilla.org/systemprincipal;1"].createInstance(Ci.nsIPrincipal)
-  );
-  sandbox.__name = name;
-  return sandbox;
-}
-
 function addTestGlobal(name, server = DevToolsServer) {
-  const global = testGlobal(name);
+  const global = createTestGlobal(name);
   server.addTestGlobal(global);
   return global;
 }
@@ -379,6 +389,12 @@ async function getTestTab(client, title) {
  */
 async function attachTestTab(client, title) {
   const descriptorFront = await getTestTab(client, title);
+
+  // These xpcshell tests use mocked actors (xpcshell-test/testactors)
+  // which still don't support watcher actor.
+  // Because of that we still can't enable server side targets and target swiching.
+  descriptorFront.disableTargetSwitching();
+
   const commands = await createCommandsDictionary(descriptorFront);
   await commands.targetCommand.startListening();
   return commands;
@@ -812,8 +828,13 @@ async function setupTestFromUrl(url) {
 
   const tabs = await listTabs(devToolsClient);
   const descriptorFront = findTab(tabs, "test");
+
+  // These xpcshell tests use mocked actors (xpcshell-test/testactors)
+  // which still don't support watcher actor.
+  // Because of that we still can't enable server side targets and target swiching.
+  descriptorFront.disableTargetSwitching();
+
   const targetFront = await descriptorFront.getTarget();
-  await targetFront.attach();
 
   const threadFront = await attachThread(targetFront);
 
@@ -901,6 +922,7 @@ function threadFrontTest(test, options = {}) {
       server,
       targetFront,
       commands,
+      isWorkerServer: server === WorkerDevToolsServer,
     };
     if (waitForFinish) {
       // Use dispatchToMainThread so that the test function does not have to

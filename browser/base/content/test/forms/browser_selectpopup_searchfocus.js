@@ -6,12 +6,9 @@ SELECT +=
   '  <option selected="true">{"end": "true"}</option>' +
   "</select></body></html>";
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
-    set: [
-      ["dom.select_popup_in_parent.enabled", true],
-      ["dom.forms.selectSearch", true],
-    ],
+    set: [["dom.forms.selectSearch", true]],
   });
 });
 
@@ -19,19 +16,14 @@ add_task(async function test_focus_on_search_shouldnt_close_popup() {
   const pageUrl = "data:text/html," + escape(SELECT);
   let tab = await BrowserTestUtils.openNewForegroundTab(gBrowser, pageUrl);
 
-  let menulist = document.getElementById("ContentSelectDropdown");
-  let selectPopup = menulist.menupopup;
+  let popupShownPromise = BrowserTestUtils.waitForSelectPopupShown(window);
 
-  let popupShownPromise = BrowserTestUtils.waitForEvent(
-    selectPopup,
-    "popupshown"
-  );
   await BrowserTestUtils.synthesizeMouseAtCenter(
     "#one",
     { type: "mousedown" },
     gBrowser.selectedBrowser
   );
-  await popupShownPromise;
+  let selectPopup = await popupShownPromise;
 
   let searchInput = selectPopup.querySelector(
     ".contentSelectDropdown-searchbox"
@@ -47,6 +39,6 @@ add_task(async function test_focus_on_search_shouldnt_close_popup() {
     "select popup should still be open after clicking on the search field"
   );
 
-  await hideSelectPopup(selectPopup, "escape");
+  await hideSelectPopup("escape");
   BrowserTestUtils.removeTab(tab);
 });

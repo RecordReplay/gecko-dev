@@ -21,11 +21,6 @@ enum nsWindowType {
   eWindowType_child,      // child windows (contained inside a window on the
                           // desktop (has no border))
   eWindowType_invisible,  // windows that are invisible or offscreen
-  eWindowType_plugin,     // plugin window
-  eWindowType_plugin_ipc_chrome,   // chrome side native widget for plugins
-                                   // (e10s)
-  eWindowType_plugin_ipc_content,  // content side puppet widget for plugins
-                                   // (e10s)
 };
 
 /**
@@ -101,8 +96,7 @@ struct nsWidgetInitData {
         mScreenId(0),
         clipChildren(false),
         clipSiblings(false),
-        mDropShadow(false),
-        mListenForResizes(false),
+        mForMenupopupFrame(false),
         mRTL(false),
         mNoAutoHide(false),
         mIsDragPopup(false),
@@ -113,7 +107,8 @@ struct nsWidgetInitData {
         mAlwaysOnTop(false),
         mPIPWindow(false),
         mFissionWindow(false),
-        mResizable(false) {}
+        mResizable(false),
+        mIsPrivate(false) {}
 
   nsWindowType mWindowType;
   nsBorderStyle mBorderStyle;
@@ -124,8 +119,8 @@ struct nsWidgetInitData {
   // now, which align with the value of display type defined in HWC.
   uint32_t mScreenId;
   // when painting exclude area occupied by child windows and sibling windows
-  bool clipChildren, clipSiblings, mDropShadow;
-  bool mListenForResizes;
+  bool clipChildren, clipSiblings;
+  bool mForMenupopupFrame;
   bool mRTL;
   bool mNoAutoHide;   // true for noautohide panels
   bool mIsDragPopup;  // true for drag feedback panels
@@ -144,6 +139,7 @@ struct nsWidgetInitData {
   bool mFissionWindow;
   // True if the window is user-resizable.
   bool mResizable;
+  bool mIsPrivate;
 };
 
 #endif  // nsWidgetInitData_h__

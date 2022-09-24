@@ -21,14 +21,20 @@
 
 #include <type_traits>
 
+#include "js/Utility.h"
 #include "js/WasmFeatures.h"
 
 #include "wasm/WasmBinary.h"
 #include "wasm/WasmCompile.h"
-#include "wasm/WasmTypes.h"
+#include "wasm/WasmCompileArgs.h"
+#include "wasm/WasmModuleTypes.h"
+#include "wasm/WasmProcess.h"
+#include "wasm/WasmTypeDef.h"
 
 namespace js {
 namespace wasm {
+
+using mozilla::Some;
 
 // ModuleEnvironment contains all the state necessary to process or render
 // functions, and all of the state necessary to validate all aspects of the
@@ -50,15 +56,13 @@ struct ModuleEnvironment {
   // validating an asm.js module) and immutable during compilation:
   Maybe<uint32_t> dataCount;
   Maybe<MemoryDesc> memory;
-  TypeContext types;
+  MutableTypeContext types;
   TypeIdDescVector typeIds;
   FuncDescVector funcs;
   Uint32Vector funcImportGlobalDataOffsets;
 
   GlobalDescVector globals;
-#ifdef ENABLE_WASM_EXCEPTIONS
-  EventDescVector events;
-#endif
+  TagDescVector tags;
   TableDescVector tables;
   Uint32Vector asmJSSigToTableIndex;
   ImportVector imports;
@@ -66,7 +70,6 @@ struct ModuleEnvironment {
   Maybe<uint32_t> startFuncIndex;
   ElemSegmentVector elemSegments;
   MaybeSectionRange codeSection;
-  bool usesDuplicateImports;
 
   // Fields decoded as part of the wasm module tail:
   DataSegmentEnvVector dataSegments;
@@ -77,14 +80,10 @@ struct ModuleEnvironment {
 
   explicit ModuleEnvironment(FeatureArgs features,
                              ModuleKind kind = ModuleKind::Wasm)
-      : kind(kind),
-        features(features),
-        memory(Nothing()),
-        types(features, TypeDefVector()),
-        usesDuplicateImports(false) {}
+      : kind(kind), features(features), memory(Nothing()) {}
 
   size_t numTables() const { return tables.length(); }
-  size_t numTypes() const { return types.length(); }
+  size_t numTypes() const { return types->length(); }
   size_t numFuncs() const { return funcs.length(); }
   size_t numFuncImports() const { return funcImportGlobalDataOffsets.length(); }
   size_t numFuncDefs() const {
@@ -93,11 +92,15 @@ struct ModuleEnvironment {
 
 #define WASM_FEATURE(NAME, SHORT_NAME, ...) \
   bool SHORT_NAME##Enabled() const { return features.SHORT_NAME; }
-  JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE)
+  JS_FOR_WASM_FEATURES(WASM_FEATURE, WASM_FEATURE, WASM_FEATURE)
 #undef WASM_FEATURE
   Shareable sharedMemoryEnabled() const { return features.sharedMemory; }
-  bool hugeMemoryEnabled() const { return !isAsmJS() && features.hugeMemory; }
+  bool hugeMemoryEnabled() const {
+    return !isAsmJS() && usesMemory() &&
+           IsHugeMemoryEnabled(memory->indexType());
+  }
   bool simdWormholeEnabled() const { return features.simdWormhole; }
+  bool intrinsicsEnabled() const { return features.intrinsics; }
 
   bool isAsmJS() const { return kind == ModuleKind::AsmJS; }
 
@@ -108,6 +111,14 @@ struct ModuleEnvironment {
   bool usesMemory() const { return memory.isSome(); }
   bool usesSharedMemory() const {
     return memory.isSome() && memory->isShared();
+  }
+
+  bool initTypes(uint32_t numTypes) {
+    types = js_new<TypeContext>(features, TypeDefVector());
+    if (!types) {
+      return false;
+    }
+    return types->resize(numTypes) && typeIds.resize(numTypes);
   }
 
   void declareFuncExported(uint32_t funcIndex, bool eager, bool canRefFunc) {

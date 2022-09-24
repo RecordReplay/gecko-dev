@@ -219,7 +219,7 @@ uint32_t ARIAGridAccessible::SelectedRowCount() {
   return count;
 }
 
-void ARIAGridAccessible::SelectedCells(nsTArray<LocalAccessible*>* aCells) {
+void ARIAGridAccessible::SelectedCells(nsTArray<Accessible*>* aCells) {
   if (IsARIARole(nsGkAtoms::table)) return;
 
   AccIterator rowIter(this, filters::GetRow);
@@ -609,7 +609,7 @@ already_AddRefed<AccAttributes> ARIAGridCellAccessible::NativeAttributes() {
 
 #ifdef DEBUG
   RefPtr<nsAtom> cppClass = NS_Atomize(u"cppclass"_ns);
-  attributes->SetAttribute(cppClass, u"ARIAGridCellAccessible"_ns);
+  attributes->SetAttributeStringCopy(cppClass, u"ARIAGridCellAccessible"_ns);
 #endif
 
   return attributes.forget();

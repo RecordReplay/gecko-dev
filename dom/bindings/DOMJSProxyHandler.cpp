@@ -14,13 +14,14 @@
 
 #include "jsapi.h"
 #include "js/friend/DOMProxy.h"  // JS::DOMProxyShadowsResult, JS::ExpandoAndGeneration, JS::SetDOMProxyInformation
-#include "js/Object.h"           // JS::GetCompartment
+#include "js/PropertyAndElement.h"  // JS_AlreadyHasOwnPropertyById, JS_DefineProperty, JS_DefinePropertyById, JS_DeleteProperty, JS_DeletePropertyById
+#include "js/Object.h"              // JS::GetCompartment
 
 using namespace JS;
 
 namespace mozilla::dom {
 
-jsid s_length_id = JSID_VOID;
+jsid s_length_id = JS::PropertyKey::Void();
 
 bool DefineStaticJSVals(JSContext* cx) {
   return AtomizeAndPinJSString(cx, s_length_id, "length");

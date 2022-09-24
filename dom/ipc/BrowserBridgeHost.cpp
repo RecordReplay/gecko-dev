@@ -38,6 +38,10 @@ nsILoadContext* BrowserBridgeHost::GetLoadContext() const {
   return mBridge->GetLoadContext();
 }
 
+bool BrowserBridgeHost::CanRecv() const {
+  return mBridge && mBridge->CanRecv();
+}
+
 void BrowserBridgeHost::LoadURL(nsDocShellLoadState* aLoadState) {
   MOZ_ASSERT(aLoadState);
   Unused << mBridge->SendLoadURL(aLoadState);
@@ -47,16 +51,15 @@ void BrowserBridgeHost::ResumeLoad(uint64_t aPendingSwitchId) {
   Unused << mBridge->SendResumeLoad(aPendingSwitchId);
 }
 
-void BrowserBridgeHost::DestroyStart() { DestroyComplete(); }
-
-void BrowserBridgeHost::DestroyComplete() {
-  if (!mBridge) {
-    return;
+void BrowserBridgeHost::DestroyStart() {
+  // We don't clear the bridge until BrowserBridgeChild::ActorDestroy is called,
+  // which will end up calling DestroyComplete().
+  if (mBridge) {
+    Unused << mBridge->SendBeginDestroy();
   }
-
-  Unused << mBridge->Send__delete__(mBridge);
-  mBridge = nullptr;
 }
+
+void BrowserBridgeHost::DestroyComplete() { mBridge = nullptr; }
 
 bool BrowserBridgeHost::Show(const OwnerShowInfo& aShowInfo) {
   Unused << mBridge->SendShow(aShowInfo);

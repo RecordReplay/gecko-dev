@@ -225,8 +225,9 @@ SafeRefPtr<IDBTransaction> IDBTransaction::Create(
           }
         });
     if (NS_WARN_IF(!workerRef)) {
-      // Silence the destructor assertion if we never made this object live.
 #ifdef DEBUG
+      // Silence the destructor assertions if we never made this object live.
+      transaction->mReadyState = ReadyState::Finished;
       transaction->mSentCommitOrAbort.Flip();
 #endif
       return nullptr;
@@ -288,9 +289,6 @@ BackgroundRequestChild* IDBTransaction::StartRequest(
     transactionChild.SendPBackgroundIDBRequestConstructor(actor, aParams);
   });
 
-  MOZ_ASSERT(actor->GetActorEventTarget(),
-             "The event target shall be inherited from its manager actor.");
-
   // Balanced in BackgroundRequestChild::Recv__delete__().
   OnNewRequest();
 
@@ -305,9 +303,6 @@ void IDBTransaction::OpenCursor(PBackgroundIDBCursorChild& aBackgroundActor,
   DoWithTransactionChild([&aBackgroundActor, &aParams](auto& actor) {
     actor.SendPBackgroundIDBCursorConstructor(&aBackgroundActor, aParams);
   });
-
-  MOZ_ASSERT(aBackgroundActor.GetActorEventTarget(),
-             "The event target shall be inherited from its manager actor.");
 
   // Balanced in BackgroundCursorChild::RecvResponse().
   OnNewRequest();
@@ -350,11 +345,11 @@ void IDBTransaction::OnRequestFinished(
       return;
     }
 
-    if (mReadyState == ReadyState::Inactive) {
-      mReadyState = ReadyState::Committing;
-    }
-
     if (aRequestCompletedSuccessfully) {
+      if (mReadyState == ReadyState::Inactive) {
+        mReadyState = ReadyState::Committing;
+      }
+
       if (NS_SUCCEEDED(mAbortCode)) {
         SendCommit(true);
       } else {
@@ -362,7 +357,8 @@ void IDBTransaction::OnRequestFinished(
       }
     } else {
       // Don't try to send any more messages to the parent if the request actor
-      // was killed.
+      // was killed. Set our state accordingly to Finished.
+      mReadyState = ReadyState::Finished;
       mSentCommitOrAbort.Flip();
       IDB_LOG_MARK_CHILD_TRANSACTION(
           "Request actor was killed, transaction will be aborted",
@@ -457,18 +453,6 @@ void IDBTransaction::MaybeNoteInactiveTransaction() {
   }
 }
 
-IDBTransaction::AutoRestoreState<IDBTransaction::ReadyState::Inactive,
-                                 IDBTransaction::ReadyState::Active>
-IDBTransaction::TemporarilyTransitionToActive() {
-  return AutoRestoreState<ReadyState::Inactive, ReadyState::Active>{*this};
-}
-
-IDBTransaction::AutoRestoreState<IDBTransaction::ReadyState::Active,
-                                 IDBTransaction::ReadyState::Inactive>
-IDBTransaction::TemporarilyTransitionToInactive() {
-  return AutoRestoreState<ReadyState::Active, ReadyState::Inactive>{*this};
-}
-
 void IDBTransaction::GetCallerLocation(nsAString& aFilename,
                                        uint32_t* const aLineNo,
                                        uint32_t* const aColumn) const {
@@ -546,7 +530,7 @@ void IDBTransaction::DeleteObjectStore(const int64_t aObjectStoreId) {
 }
 
 void IDBTransaction::RenameObjectStore(const int64_t aObjectStoreId,
-                                       const nsAString& aName) {
+                                       const nsAString& aName) const {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aObjectStoreId);
   MOZ_ASSERT(Mode::VersionChange == mMode);
@@ -558,8 +542,9 @@ void IDBTransaction::RenameObjectStore(const int64_t aObjectStoreId,
           aObjectStoreId, nsString(aName)));
 }
 
-void IDBTransaction::CreateIndex(IDBObjectStore* const aObjectStore,
-                                 const indexedDB::IndexMetadata& aMetadata) {
+void IDBTransaction::CreateIndex(
+    IDBObjectStore* const aObjectStore,
+    const indexedDB::IndexMetadata& aMetadata) const {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aObjectStore);
   MOZ_ASSERT(aMetadata.id());
@@ -573,7 +558,7 @@ void IDBTransaction::CreateIndex(IDBObjectStore* const aObjectStore,
 }
 
 void IDBTransaction::DeleteIndex(IDBObjectStore* const aObjectStore,
-                                 const int64_t aIndexId) {
+                                 const int64_t aIndexId) const {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aObjectStore);
   MOZ_ASSERT(aIndexId);
@@ -588,7 +573,7 @@ void IDBTransaction::DeleteIndex(IDBObjectStore* const aObjectStore,
 
 void IDBTransaction::RenameIndex(IDBObjectStore* const aObjectStore,
                                  const int64_t aIndexId,
-                                 const nsAString& aName) {
+                                 const nsAString& aName) const {
   AssertIsOnOwningThread();
   MOZ_ASSERT(aObjectStore);
   MOZ_ASSERT(aIndexId);

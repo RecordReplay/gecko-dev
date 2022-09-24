@@ -16,14 +16,17 @@ include HttpChannelParams;
 
 include "mozilla/dom/ReferrerInfoUtils.h";
 include "mozilla/net/NeckoMessageUtils.h";
+include "mozilla/net/ClassOfService.h";
 
 using mozilla::OriginAttributes from "mozilla/ipc/BackgroundUtils.h";
+using mozilla::net::ClassOfService from "mozilla/net/ClassOfService.h";
 
 namespace mozilla {
 namespace net {
 
 //-------------------------------------------------------------------
-refcounted protocol PHttpChannel
+[ChildImpl=virtual, ParentImpl=virtual]
+protocol PHttpChannel
 {
   manager PNecko;
 
@@ -31,12 +34,13 @@ parent:
   // Note: channels are opened during construction, so no open method here:
   // see PNecko.ipdl
 
-  async SetClassOfService(uint32_t cos);
+  async SetClassOfService(ClassOfService cos);
 
   async Suspend();
   async Resume();
 
-  async Cancel(nsresult status, uint32_t requestBlockingReason);
+  async Cancel(nsresult status, uint32_t requestBlockingReason, 
+               nsCString? logString);
 
   // Reports approval/veto of redirect by child process redirect observers
   async Redirect2Verify(nsresult result, RequestHeaderTuples changedHeaders,
@@ -63,9 +67,6 @@ parent:
 
   // Called to get the input stream when altData was delivered.
   async OpenOriginalCacheInputStream();
-
-  // Called to get the input stream when altData is available.
-  async OpenAltDataCacheInputStream(nsCString aType);
 
   // Tell the parent the amount bytes read by child for the e10s back pressure
   // flow control
@@ -109,9 +110,6 @@ child:
   // avoid races: see bug 591708).
   async DeleteSelf();
 
-  // Tell the child to issue a deprecation warning.
-  async IssueDeprecationWarning(uint32_t warning, bool asError);
-
   // When CORS blocks the request in the parent process, it doesn't have the
   // correct window ID, so send the message to the child for logging to the web
   // console.
@@ -123,8 +121,6 @@ child:
                             nsString contentType);
 
   async OriginalCacheInputStreamAvailable(IPCStream? stream);
-
-  async AltDataCacheInputStreamAvailable(IPCStream? stream);
 
 
 both:

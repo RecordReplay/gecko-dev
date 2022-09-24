@@ -9,8 +9,7 @@
 
 class nsISerialEventTarget;
 
-namespace mozilla {
-namespace net {
+namespace mozilla::net {
 
 class StunAddrsListener {
  public:
@@ -32,8 +31,7 @@ class StunAddrsRequestChild final : public PStunAddrsRequestChild {
   friend class PStunAddrsRequestChild;
 
  public:
-  explicit StunAddrsRequestChild(StunAddrsListener* listener,
-                                 nsISerialEventTarget* mainThreadEventTarget);
+  explicit StunAddrsRequestChild(StunAddrsListener* listener);
 
   NS_IMETHOD_(MozExternalRefCountType) AddRef();
   NS_IMETHOD_(MozExternalRefCountType) Release();
@@ -61,7 +59,6 @@ class StunAddrsRequestChild final : public PStunAddrsRequestChild {
   NS_DECL_OWNINGTHREAD
 };
 
-}  // namespace net
-}  // namespace mozilla
+}  // namespace mozilla::net
 
 #endif  // mozilla_net_StunAddrsRequestChild_h

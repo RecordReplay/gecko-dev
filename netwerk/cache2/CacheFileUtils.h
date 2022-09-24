@@ -9,6 +9,7 @@
 #include "nsCOMPtr.h"
 #include "nsString.h"
 #include "nsTArray.h"
+#include "mozilla/Mutex.h"
 #include "mozilla/StaticMutex.h"
 #include "mozilla/TimeStamp.h"
 
@@ -130,7 +131,7 @@ class DetailedCacheHitTelemetry {
   static const uint32_t kHitRateBuckets = 20;
 
   // Protects sRecordCnt, sHitStats and Telemetry::Accumulated() calls.
-  static StaticMutex sLock;
+  static StaticMutex sLock MOZ_UNANNOTATED;
 
   // Counter of samples that is compared against kTotalSamplesReportLimit.
   static uint32_t sRecordCnt;
@@ -202,7 +203,7 @@ class CachePerfStats {
     MMA mShortAvg;
   };
 
-  static StaticMutex sLock;
+  static StaticMutex sLock MOZ_UNANNOTATED;
 
   static PerfData sData[LAST];
   static uint32_t sCacheSlowCnt;
@@ -216,6 +217,19 @@ nsresult ParseAlternativeDataInfo(const char* aInfo, int64_t* _offset,
 
 void BuildAlternativeDataInfo(const char* aInfo, int64_t aOffset,
                               nsACString& _retval);
+
+class CacheFileLock final {
+ public:
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(CacheFileLock)
+  CacheFileLock() = default;
+
+  mozilla::Mutex& Lock() { return mLock; }
+
+ private:
+  ~CacheFileLock() = default;
+
+  mozilla::Mutex mLock MOZ_UNANNOTATED{"CacheFile.mLock"};
+};
 
 }  // namespace CacheFileUtils
 }  // namespace net

@@ -6,12 +6,11 @@
 
 #include "jit/CompileWrappers.h"
 
-#include "gc/GC.h"
 #include "gc/Heap.h"
+#include "gc/Zone.h"
 #include "jit/Ion.h"
 #include "jit/JitRuntime.h"
-
-#include "vm/Realm-inl.h"
+#include "vm/Realm.h"
 
 using namespace js;
 using namespace js::jit;
@@ -111,7 +110,10 @@ const void* CompileRuntime::addressOfIonBailAfterCounter() {
 #endif
 
 const uint32_t* CompileZone::addressOfNeedsIncrementalBarrier() {
-  return zone()->addressOfNeedsIncrementalBarrier();
+  // Cast away relaxed atomic wrapper for JIT access to barrier state.
+  const mozilla::Atomic<uint32_t, mozilla::Relaxed>* ptr =
+      zone()->addressOfNeedsIncrementalBarrier();
+  return reinterpret_cast<const uint32_t*>(ptr);
 }
 
 gc::FreeSpan** CompileZone::addressOfFreeList(gc::AllocKind allocKind) {

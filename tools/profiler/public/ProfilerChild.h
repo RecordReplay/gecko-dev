@@ -11,9 +11,11 @@
 #include "mozilla/DataMutex.h"
 #include "mozilla/PProfilerChild.h"
 #include "mozilla/ProfileBufferControlledChunkManager.h"
+#include "mozilla/ProgressLogger.h"
 #include "mozilla/RefPtr.h"
 
 class nsIThread;
+struct PRThread;
 
 namespace mozilla {
 
@@ -23,7 +25,7 @@ namespace mozilla {
 // profiles from us.
 class ProfilerChild final : public PProfilerChild,
                             public mozilla::ipc::IShmemAllocator {
-  NS_INLINE_DECL_REFCOUNTING(ProfilerChild)
+  NS_INLINE_DECL_THREADSAFE_REFCOUNTING(ProfilerChild)
 
   ProfilerChild();
 
@@ -43,20 +45,28 @@ class ProfilerChild final : public PProfilerChild,
  private:
   virtual ~ProfilerChild();
 
-  mozilla::ipc::IPCResult RecvStart(const ProfilerInitParams& params) override;
+  mozilla::ipc::IPCResult RecvStart(const ProfilerInitParams& params,
+                                    StartResolver&& aResolve) override;
   mozilla::ipc::IPCResult RecvEnsureStarted(
-      const ProfilerInitParams& params) override;
-  mozilla::ipc::IPCResult RecvStop() override;
-  mozilla::ipc::IPCResult RecvPause() override;
-  mozilla::ipc::IPCResult RecvResume() override;
-  mozilla::ipc::IPCResult RecvPauseSampling() override;
-  mozilla::ipc::IPCResult RecvResumeSampling() override;
+      const ProfilerInitParams& params,
+      EnsureStartedResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvStop(StopResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvPause(PauseResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvResume(ResumeResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvPauseSampling(
+      PauseSamplingResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvResumeSampling(
+      ResumeSamplingResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvWaitOnePeriodicSampling(
+      WaitOnePeriodicSamplingResolver&& aResolve) override;
   mozilla::ipc::IPCResult RecvAwaitNextChunkManagerUpdate(
       AwaitNextChunkManagerUpdateResolver&& aResolve) override;
   mozilla::ipc::IPCResult RecvDestroyReleasedChunksAtOrBefore(
       const TimeStamp& aTimeStamp) override;
   mozilla::ipc::IPCResult RecvGatherProfile(
       GatherProfileResolver&& aResolve) override;
+  mozilla::ipc::IPCResult RecvGetGatherProfileProgress(
+      GetGatherProfileProgressResolver&& aResolve) override;
   mozilla::ipc::IPCResult RecvClearAllPages() override;
 
   void ActorDestroy(ActorDestroyReason aActorDestroyReason) override;
@@ -69,6 +79,8 @@ class ProfilerChild final : public PProfilerChild,
       PProfilerChild::AwaitNextChunkManagerUpdateResolver& aResolve);
   void ProcessChunkManagerUpdate(
       ProfileBufferControlledChunkManager::Update&& aUpdate);
+
+  static void GatherProfileThreadFunction(void* already_AddRefedParameters);
 
   nsCOMPtr<nsIThread> mThread;
   bool mDestroyed;
@@ -84,6 +96,8 @@ class ProfilerChild final : public PProfilerChild,
   static DataMutexBase<ProfilerChildAndUpdate,
                        baseprofiler::detail::BaseProfilerMutex>
       sPendingChunkManagerUpdate;
+
+  RefPtr<ProgressLogger::SharedProgress> mGatherProfileProgress;
 };
 
 }  // namespace mozilla

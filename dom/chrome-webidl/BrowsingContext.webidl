@@ -142,6 +142,14 @@ interface BrowsingContext {
   // only be set from the parent process.
   //
   // A value of 0.0 causes us to use the global default scaling factor.
+  //
+  // NOTE that this override only affects a few minor things (the value exposed
+  // to devicePixelRatio and some media queries in content, and responsive
+  // image selection). Most notably, it does _not_ affect rendering.
+  //
+  // It is intended for RDM, and is probably not what you want in other cases.
+  // If you want to change the actual device pixel ratio that rendering code
+  // uses, you probably want to change the fullZoom.
   [SetterThrows] attribute float overrideDPPX;
 
   [SetterThrows] attribute boolean suspendMediaWhenInactive;
@@ -195,6 +203,12 @@ interface BrowsingContext {
    * are available in a specific BrowsingContext and its descendents.
    */
   readonly attribute TouchEventsOverride touchEventsOverride;
+
+  /**
+   * Returns true if the top-level BrowsingContext has been configured to
+   * default-target user-initiated link clicks to _blank.
+   */
+  readonly attribute boolean targetTopLevelLinkClicksToBlank;
 
   /**
    * Partially determines whether script execution is allowed in this
@@ -285,7 +299,7 @@ interface CanonicalBrowsingContext : BrowsingContext {
     *                       set to prevent prompting.
     * @return A Promise that resolves once printing is finished.
     */
-  [Throws]
+  [NewObject, BinaryName="printJS"]
   Promise<void> print(nsIPrintSettings aPrintSettings);
 
   /**
@@ -315,7 +329,49 @@ interface CanonicalBrowsingContext : BrowsingContext {
    */
   [SetterThrows] inherit attribute TouchEventsOverride touchEventsOverride;
 
+  /**
+   * Set to true to configure the top-level BrowsingContext to default-target
+   * user-initiated link clicks to _blank.
+   */
+  [SetterThrows] inherit attribute boolean targetTopLevelLinkClicksToBlank;
+
+  /**
+   * Set the cross-group opener of this BrowsingContext. This is used to
+   * retarget the download dialog to an opener window, and close this
+   * BrowsingContext, if the first load in a newly created BrowsingContext is a
+   * download.
+   *
+   * This value will be automatically set for documents created using
+   * `window.open`.
+   */
+  [Throws]
+  void setCrossGroupOpener(CanonicalBrowsingContext crossGroupOpener);
+
   readonly attribute boolean isReplaced;
+
+
+  /**
+   * Notify APZ to start autoscrolling.
+   *
+   * (aAnchorX, aAnchorY) are the coordinates of the autoscroll anchor, in CSS
+   *                      coordinates relative to the screen.
+   * aScrollId and aPresShellId identify the scroll frame that content chose to
+   *                            scroll.
+   *
+   * Returns whether we were successfully able to notify APZ.
+   * If this function returns true, APZ (which may live in another process)
+   * may still reject the autoscroll, but it's then APZ's reponsibility
+   * to notify content via an "autoscroll-rejected-by-apz" message.
+   */
+  boolean startApzAutoscroll(float aAnchorX, float aAnchorY,
+                             unsigned long long aScrollId,
+                             unsigned long aPresShellId);
+
+  /**
+   * Notify APZ to stop autoscrolling.
+   */
+  void stopApzAutoscroll(unsigned long long aScrollId,
+                         unsigned long aPresShellId);
 };
 
 [Exposed=Window, ChromeOnly]

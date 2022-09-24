@@ -8,14 +8,14 @@
 #define mozilla_dom_StorageObserver_h
 
 #include "mozilla/dom/quota/CheckedUnsafePtr.h"
+#include "nsINamed.h"
 #include "nsIObserver.h"
 #include "nsITimer.h"
 #include "nsWeakReference.h"
 #include "nsTObserverArray.h"
 #include "nsString.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class StorageObserver;
 
@@ -37,10 +37,13 @@ class StorageObserverSink
 
 // Statically (through layout statics) initialized observer receiving and
 // processing chrome clearing notifications, such as cookie deletion etc.
-class StorageObserver : public nsIObserver, public nsSupportsWeakReference {
+class StorageObserver : public nsIObserver,
+                        public nsINamed,
+                        public nsSupportsWeakReference {
  public:
   NS_DECL_ISUPPORTS
   NS_DECL_NSIOBSERVER
+  NS_DECL_NSINAMED
 
   static nsresult Init();
   static nsresult Shutdown();
@@ -71,7 +74,6 @@ class StorageObserver : public nsIObserver, public nsSupportsWeakReference {
   nsCOMPtr<nsITimer> mDBThreadStartDelayTimer;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_StorageObserver_h

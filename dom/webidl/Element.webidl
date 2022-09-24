@@ -13,6 +13,8 @@
  * liability, trademark and document use rules apply.
  */
 
+interface nsIScreen;
+
 [Exposed=Window]
 interface Element : Node {
   [Constant]
@@ -229,6 +231,12 @@ partial interface Element {
   readonly attribute long clientWidth;
   readonly attribute long clientHeight;
 
+  // Return the screen coordinates of the element, in CSS pixels relative to
+  // the window's screen.
+  [ChromeOnly] readonly attribute long screenX;
+  [ChromeOnly] readonly attribute long screenY;
+  [ChromeOnly] readonly attribute nsIScreen? screen;
+
   // Mozilla specific stuff
   /* The minimum/maximum offset that the element can be scrolled to
      (i.e., the value that scrollLeft/scrollTop would be clamped to if they were
@@ -260,6 +268,10 @@ partial interface Element {
 // https://dom.spec.whatwg.org/#dictdef-shadowrootinit
 dictionary ShadowRootInit {
   required ShadowRootMode mode;
+  [Pref="dom.shadowdom.delegatesFocus.enabled"]
+  boolean delegatesFocus = false;
+  [Pref="dom.shadowdom.slot.assign.enabled"]
+  SlotAssignmentMode slotAssignment = "named";
 };
 
 // https://dom.spec.whatwg.org/#element
@@ -293,9 +305,9 @@ Element includes AriaAttributes;
 
 // https://fullscreen.spec.whatwg.org/#api
 partial interface Element {
-  [Throws, NeedsCallerType]
+  [NewObject, NeedsCallerType]
   Promise<void> requestFullscreen();
-  [Throws, BinaryName="requestFullscreen", NeedsCallerType, Deprecated="MozRequestFullScreenDeprecatedPrefix"]
+  [NewObject, BinaryName="requestFullscreen", NeedsCallerType, Deprecated="MozRequestFullScreenDeprecatedPrefix"]
   Promise<void> mozRequestFullScreen();
 
   // Events handlers
@@ -375,4 +387,15 @@ partial interface Element {
   // height. If the direction is vertical, it represents box's width.
   [ChromeOnly]
   readonly attribute double firstLineBoxBSize;
+};
+
+
+// Sanitizer API, https://wicg.github.io/sanitizer-api/
+dictionary SetHTMLOptions {
+  Sanitizer sanitizer;
+};
+
+partial interface Element {
+  [UseCounter, Throws, Pref="dom.security.sanitizer.enabled"]
+    void setHTML(DOMString aInnerHTML, optional SetHTMLOptions options = {});
 };

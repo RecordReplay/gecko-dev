@@ -4,15 +4,24 @@
 
 @import url("chrome://browser/skin/error-pages.css");
 
-body.certerror {
-  width: 100%;
-  justify-content: normal;
+body {
+  --warning-color: #ffa436;
 }
 
-body.caution {
-  border-style: solid;
-  border-color: #ffe900;
-  border-width: 16px;
+@media (prefers-color-scheme: dark)  {
+  body {
+    --warning-color: #ffbd4f;
+  }
+}
+
+@media (prefers-contrast) {
+  body {
+    --warning-color: var(--in-content-page-color);
+  }
+}
+
+body.certerror {
+  width: 100%;
 }
 
 body.captiveportal .title {
@@ -20,7 +29,11 @@ body.captiveportal .title {
 }
 
 body.certerror .title {
-  background-image: url("cert-error.svg");
+  background-image: url("chrome://global/skin/icons/warning.svg");
+}
+
+body.certerror .title {
+  color: var(--warning-color);
 }
 
 body.blocked .title {
@@ -47,10 +60,6 @@ button:disabled {
   margin-top: 2em;
 }
 
-#enableTls10Container {
-  display: none;
-}
-
 #prefChangeContainer {
   display: none;
 }
@@ -61,6 +70,10 @@ button:disabled {
 
 #openInNewWindowContainer {
   display: none;
+}
+
+#openInNewWindowContainer > p {
+  margin-bottom: 0;
 }
 
 #certErrorAndCaptivePortalButtonContainer {
@@ -113,33 +126,27 @@ body:not(.neterror) #advancedButton {
 }
 
 #blockingErrorReporting {
-  display: none;
   padding-bottom: 10px;
+  /* Pull a bit closer to the top than the other .advanced-panel containers
+   * as this is just a checkbox. */
+  margin-top: 1.2em;
 }
 
 #advancedPanelContainer {
   width: 100%;
+  position: absolute;
   left: 0;
 }
 
-.advanced-panel {
-  /* Hidden until the link is clicked */
-  display: none;
+#badCertAdvancedPanel {
   background-color: var(--in-content-box-background);
   border: 1px solid var(--in-content-box-border-color);
+}
+
+.advanced-panel {
   margin: 48px auto;
   min-width: var(--in-content-container-min-width);
   max-width: var(--in-content-container-max-width);
-}
-
-#overrideWeakCryptoPanel {
-  display: none;
-  flex-direction: row;
-  flex-wrap: wrap;
-  justify-content: space-between;
-  align-content: space-between;
-  align-items: flex-start;
-  margin-top: 1em;
 }
 
 .mitm-name,
@@ -148,7 +155,6 @@ body:not(.neterror) #advancedButton {
 }
 
 #errorCode {
-  cursor: pointer;
   white-space: nowrap;
 }
 
@@ -163,11 +169,10 @@ body:not(.neterror) #advancedButton {
 }
 
 #certificateErrorDebugInformation {
-  display: none;
   background-color: var(--in-content-box-info-background) !important;
   border-top: 1px solid var(--in-content-border-color);
   width: 100%;
-  padding: 1em 17.5%;
+  padding: 1em 3%;
   box-sizing: border-box;
 }
 
@@ -244,5 +249,26 @@ body:not(.neterror) #advancedButton {
     /* Break the error code to avoid long codes overflowing the screen */
     white-space: normal;
     word-wrap: anywhere;
+  }
+}
+
+@media (max-width: 970px) {
+  body.certerror .title {
+    /* !important is necessary here until Bug 1723718 is resolved */
+    background-image: url("chrome://global/skin/icons/warning.svg") !important;
+    background-position: top left;
+    padding-top: 60px;
+    margin-top: -60px;
+  }
+  /* Reduce the negative margin on small viewport sizes to avoid exceeding the
+   * 38px body vertical padding error-pages.css sets, leaving 8px space: */
+  @media (max-height: 480px) {
+    body.certerror .title {
+      margin-top: -30px;
+    }
+  }
+
+  body.certerror .title:dir(rtl) {
+    background-position-x: right;
   }
 }

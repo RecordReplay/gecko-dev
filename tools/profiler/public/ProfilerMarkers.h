@@ -121,6 +121,16 @@ inline mozilla::ProfileBufferBlockIndex AddMarkerToBuffer(
 }
 #endif
 
+[[nodiscard]] inline bool profiler_thread_is_being_profiled_for_markers() {
+  return profiler_thread_is_being_profiled(ThreadProfilingFeatures::Markers);
+}
+
+[[nodiscard]] inline bool profiler_thread_is_being_profiled_for_markers(
+    const ProfilerThreadId& aThreadId) {
+  return profiler_thread_is_being_profiled(aThreadId,
+                                           ThreadProfilingFeatures::Markers);
+}
+
 // Add a marker to the Gecko Profiler buffer.
 // - aName: Main name of this marker.
 // - aCategory: Category for this marker.
@@ -137,11 +147,13 @@ mozilla::ProfileBufferBlockIndex profiler_add_marker(
 #ifndef MOZ_GECKO_PROFILER
   return {};
 #else
-  if (!profiler_can_accept_markers()) {
+  if (!profiler_thread_is_being_profiled_for_markers(
+          aOptions.ThreadId().ThreadId())) {
     return {};
   }
-  return ::AddMarkerToBuffer(profiler_markers_detail::CachedCoreBuffer(), aName,
-                             aCategory, std::move(aOptions), aMarkerType,
+  AUTO_PROFILER_LABEL("profiler_add_marker", PROFILER);
+  return ::AddMarkerToBuffer(profiler_get_core_buffer(), aName, aCategory,
+                             std::move(aOptions), aMarkerType,
                              aPayloadArguments...);
 #endif
 }
@@ -309,6 +321,11 @@ class MOZ_RAII AutoProfilerTracing {
   AutoProfilerTracing PROFILER_RAII(categoryString, markerName,                \
                                     geckoprofiler::category::categoryPair,     \
                                     mozilla::Nothing())
+#define AUTO_PROFILER_TRACING_MARKER_INNERWINDOWID(                        \
+    categoryString, markerName, categoryPair, innerWindowId)               \
+  AutoProfilerTracing PROFILER_RAII(categoryString, markerName,            \
+                                    geckoprofiler::category::categoryPair, \
+                                    mozilla::Some(innerWindowId))
 #define AUTO_PROFILER_TRACING_MARKER_DOCSHELL(categoryString, markerName, \
                                               categoryPair, docShell)     \
   AutoProfilerTracing PROFILER_RAII(                                      \

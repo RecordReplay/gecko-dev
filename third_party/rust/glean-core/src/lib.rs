@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-#![deny(broken_intra_doc_links)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![deny(missing_docs)]
 
 //! Glean is a modern approach for recording and sending Telemetry data.
@@ -224,7 +224,7 @@ impl Glean {
             let _scanning_thread = upload_manager.scan_pending_pings_directories();
         }
 
-        let (start_time, start_time_is_corrected) = local_now_with_offset();
+        let start_time = local_now_with_offset();
         let this = Self {
             upload_enabled: cfg.upload_enabled,
             // In the subprocess, we want to avoid accessing the database entirely.
@@ -247,13 +247,6 @@ impl Glean {
             // Subprocess doesn't use "metrics" pings so has no need for a scheduler.
             schedule_metrics_pings: false,
         };
-
-        // Can't use `local_now_with_offset_and_record` above, because we needed a valid `Glean` first.
-        if start_time_is_corrected {
-            this.additional_metrics
-                .invalid_timezone_offset
-                .add(&this, 1);
-        }
 
         Ok(this)
     }
@@ -327,7 +320,7 @@ impl Glean {
             upload_enabled,
             max_events: None,
             delay_ping_lifetime_io: false,
-            app_build: "unknown".into(),
+            app_build: "Unknown".into(),
             use_core_mps: false,
         };
 
@@ -401,7 +394,7 @@ impl Glean {
     ///
     /// Whether at least one ping was generated.
     pub fn on_ready_to_submit_pings(&self) -> bool {
-        self.event_data_store.flush_pending_events_on_startup(&self)
+        self.event_data_store.flush_pending_events_on_startup(self)
     }
 
     /// Sets whether upload is enabled or not.
@@ -560,7 +553,7 @@ impl Glean {
 
     /// Gets a handle to the database.
     pub fn storage(&self) -> &Database {
-        &self.data_store.as_ref().expect("No database found")
+        self.data_store.as_ref().expect("No database found")
     }
 
     /// Gets a handle to the event database.
@@ -614,7 +607,7 @@ impl Glean {
     /// The snapshot in a string encoded as JSON. If the snapshot is empty, returns an empty string.
     pub fn snapshot(&mut self, store_name: &str, clear_store: bool) -> String {
         StorageManager
-            .snapshot(&self.storage(), store_name, clear_store)
+            .snapshot(self.storage(), store_name, clear_store)
             .unwrap_or_else(|| String::from(""))
     }
 
@@ -653,7 +646,7 @@ impl Glean {
         let ping_maker = PingMaker::new();
         let doc_id = Uuid::new_v4().to_string();
         let url_path = self.make_path(&ping.name, &doc_id);
-        match ping_maker.collect(self, &ping, reason, &doc_id, &url_path) {
+        match ping_maker.collect(self, ping, reason, &doc_id, &url_path) {
             None => {
                 log::info!(
                     "No content for ping '{}', therefore no ping queued.",
@@ -668,10 +661,10 @@ impl Glean {
                 // be included in the *next* metrics ping.
                 self.additional_metrics
                     .pings_submitted
-                    .get(&ping.name)
-                    .add(&self, 1);
+                    .get(ping.name)
+                    .add(self, 1);
 
-                if let Err(e) = ping_maker.store_ping(&self.get_data_path(), &ping) {
+                if let Err(e) = ping_maker.store_ping(self.get_data_path(), &ping) {
                     log::warn!("IO error while writing ping to file: {}. Enqueuing upload of what we have in memory.", e);
                     self.additional_metrics.io_errors.add(self, 1);
                     // `serde_json::to_string` only fails if serialization of the content
@@ -772,8 +765,8 @@ impl Glean {
         branch: String,
         extra: Option<HashMap<String, String>>,
     ) {
-        let metric = metrics::ExperimentMetric::new(&self, experiment_id);
-        metric.set_active(&self, branch, extra);
+        let metric = metrics::ExperimentMetric::new(self, experiment_id);
+        metric.set_active(self, branch, extra);
     }
 
     /// Indicates that an experiment is no longer running.
@@ -782,8 +775,8 @@ impl Glean {
     ///
     /// * `experiment_id` - The id of the active experiment to deactivate (maximum 30 bytes).
     pub fn set_experiment_inactive(&self, experiment_id: String) {
-        let metric = metrics::ExperimentMetric::new(&self, experiment_id);
-        metric.set_inactive(&self);
+        let metric = metrics::ExperimentMetric::new(self, experiment_id);
+        metric.set_inactive(self);
     }
 
     /// Persists [`Lifetime::Ping`] data that might be in memory in case
@@ -995,8 +988,8 @@ impl Glean {
     ///
     /// if the requested experiment is active, `None` otherwise.
     pub fn test_get_experiment_data_as_json(&self, experiment_id: String) -> Option<String> {
-        let metric = metrics::ExperimentMetric::new(&self, experiment_id);
-        metric.test_get_value_as_json_string(&self)
+        let metric = metrics::ExperimentMetric::new(self, experiment_id);
+        metric.test_get_value_as_json_string(self)
     }
 
     /// **Test-only API (exported for FFI purposes).**
@@ -1025,7 +1018,7 @@ impl Glean {
     /// If Glean wsa configured with `use_core_mps: false`, this has no effect.
     pub fn start_metrics_ping_scheduler(&self) {
         if self.schedule_metrics_pings {
-            scheduler::schedule(&self);
+            scheduler::schedule(self);
         }
     }
 }

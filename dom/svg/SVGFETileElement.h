@@ -12,8 +12,7 @@
 nsresult NS_NewSVGFETileElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFETileElementBase = SVGFE;
 
@@ -45,6 +44,8 @@ class SVGFETileElement : public SVGFETileElementBase {
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
+  virtual nsresult BindToTree(BindContext& aCtx, nsINode& aParent) override;
+
   // WebIDL
   already_AddRefed<DOMSVGAnimatedString> In1();
 
@@ -56,7 +57,6 @@ class SVGFETileElement : public SVGFETileElementBase {
   static StringInfo sStringInfo[2];
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFETILEELEMENT_H_

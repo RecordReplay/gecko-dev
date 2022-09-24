@@ -31,9 +31,25 @@ class nsHtml5Highlighter {
   ~nsHtml5Highlighter();
 
   /**
+   * Set the op sink (for speculation).
+   */
+  void SetOpSink(nsAHtml5TreeOpSink* aOpSink);
+
+  /**
+   * Reset state to after generated head but before processing any of the input
+   * stream.
+   */
+  void Rewind();
+
+  /**
    * Starts the generated document.
    */
   void Start(const nsAutoString& aTitle);
+
+  /**
+   * Updates the charset source via the op queue.
+   */
+  void UpdateCharsetSource(nsCharsetSource aCharsetSource);
 
   /**
    * Report a tokenizer state transition.
@@ -46,8 +62,10 @@ class nsHtml5Highlighter {
 
   /**
    * Report end of file.
+   *
+   * Returns `true` normally and `false` on OOM.
    */
-  void End();
+  [[nodiscard]] bool End();
 
   /**
    * Set the current buffer being tokenized
@@ -62,11 +80,20 @@ class nsHtml5Highlighter {
   void DropBuffer(int32_t aPos);
 
   /**
+   * Query whether there are some many ops in the queue
+   * that they should be flushed now.
+   *
+   * @return true if FlushOps() should be called now
+   */
+  bool ShouldFlushOps();
+
+  /**
    * Flush the tree ops into the sink.
    *
-   * @return true if there were ops to flush
+   * @return Ok(true) if there were ops to flush, Ok(false)
+   *         if there were no ops to flush and Err() on OOM.
    */
-  bool FlushOps();
+  mozilla::Result<bool, nsresult> FlushOps();
 
   /**
    * Linkify the current attribute value if the attribute name is one of
@@ -146,6 +173,11 @@ class nsHtml5Highlighter {
    */
   void AddBase(nsHtml5String aValue);
 
+  /**
+   * Starts a wrapper around a run of characters.
+   */
+  void StartCharacters();
+
  private:
   /**
    * Starts a span with no class.
@@ -164,11 +196,6 @@ class nsHtml5Highlighter {
    * End the current <span> or <a> in the highlighter output.
    */
   void EndSpanOrA();
-
-  /**
-   * Starts a wrapper around a run of characters.
-   */
-  void StartCharacters();
 
   /**
    * Ends a wrapper around a run of characters.
@@ -317,7 +344,13 @@ class nsHtml5Highlighter {
   nsTArray<nsHtml5TreeOperation> mOpQueue;
 
   /**
-   * The tree op stage for the tree op executor.
+   * The tree op stage for the tree op executor or a speculation when looking
+   * for meta charset.
+   *
+   * The op sink is owned by the nsHtml5TreeOpExecutor, which outlives this
+   * object, because this object is owned by the nsHtml5Tokenizer instance that
+   * is owned by the nsHtml5StreamParser, which keeps the executor alive via
+   * nsHtml5Streamparser::mExecutorFlusher.
    */
   nsAHtml5TreeOpSink* mOpSink;
 

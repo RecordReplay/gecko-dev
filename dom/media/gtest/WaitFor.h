@@ -6,8 +6,10 @@
 #define WAITFOR_H_
 
 #include "MediaEventSource.h"
+#include "MediaUtils.h"
 #include "mozilla/Maybe.h"
-#include "mozilla/Result.h"
+#include "mozilla/MozPromise.h"
+#include "mozilla/ResultVariant.h"
 #include "mozilla/SpinEventLoopUntil.h"
 
 namespace mozilla {
@@ -29,6 +31,7 @@ T WaitFor(MediaEventSource<T>& aEvent) {
   MediaEventListener listener = aEvent.Connect(
       AbstractThread::GetCurrent(), [&](T aValue) { value = Some(aValue); });
   SpinEventLoopUntil<ProcessFailureBehavior::IgnoreAndContinue>(
+      "WaitFor(MediaEventSource<T>& aEvent)"_ns,
       [&] { return value.isSome(); });
   listener.Disconnect();
   return value.value();
@@ -37,14 +40,7 @@ T WaitFor(MediaEventSource<T>& aEvent) {
 /**
  * Specialization of WaitFor<T> for void.
  */
-void WaitFor(MediaEventSource<void>& aEvent) {
-  bool done = false;
-  MediaEventListener listener =
-      aEvent.Connect(AbstractThread::GetCurrent(), [&] { done = true; });
-  SpinEventLoopUntil<ProcessFailureBehavior::IgnoreAndContinue>(
-      [&] { return done; });
-  listener.Disconnect();
-}
+void WaitFor(MediaEventSource<void>& aEvent);
 
 /**
  * Variant of WaitFor that blocks the caller until a MozPromise has either been
@@ -59,6 +55,7 @@ Result<R, E> WaitFor(const RefPtr<MozPromise<R, E, Exc>>& aPromise) {
       [&](R aResult) { success = Some(aResult); },
       [&](E aError) { error = Some(aError); });
   SpinEventLoopUntil<ProcessFailureBehavior::IgnoreAndContinue>(
+      "WaitFor(const RefPtr<MozPromise<R, E, Exc>>& aPromise)"_ns,
       [&] { return success.isSome() || error.isSome(); });
   if (success.isSome()) {
     return success.extract();
@@ -70,19 +67,67 @@ Result<R, E> WaitFor(const RefPtr<MozPromise<R, E, Exc>>& aPromise) {
  * A variation of WaitFor that takes a callback to be called each time aEvent is
  * raised. Blocks the caller until the callback function returns true.
  */
-template <typename T, typename CallbackFunction>
-void WaitUntil(MediaEventSource<T>& aEvent, const CallbackFunction& aF) {
+template <typename... Args, typename CallbackFunction>
+void WaitUntil(MediaEventSource<Args...>& aEvent, CallbackFunction&& aF) {
   bool done = false;
   MediaEventListener listener =
-      aEvent.Connect(AbstractThread::GetCurrent(), [&](T aValue) {
+      aEvent.Connect(AbstractThread::GetCurrent(), [&](Args... aValue) {
         if (!done) {
-          done = aF(aValue);
+          done = aF(std::forward<Args>(aValue)...);
         }
       });
   SpinEventLoopUntil<ProcessFailureBehavior::IgnoreAndContinue>(
+      "WaitUntil(MediaEventSource<Args...>& aEvent, CallbackFunction&& aF)"_ns,
       [&] { return done; });
   listener.Disconnect();
 }
+
+template <typename... Args>
+using TakeNPromise = MozPromise<std::vector<std::tuple<Args...>>, bool, true>;
+
+template <ListenerPolicy Lp, typename... Args>
+auto TakeN(MediaEventSourceImpl<Lp, Args...>& aEvent, size_t aN)
+    -> RefPtr<TakeNPromise<Args...>> {
+  using Storage = std::vector<std::tuple<Args...>>;
+  using Promise = TakeNPromise<Args...>;
+  using Values = media::Refcountable<Storage>;
+  using Listener = media::Refcountable<MediaEventListener>;
+  RefPtr<Values> values = MakeRefPtr<Values>();
+  values->reserve(aN);
+  RefPtr<Listener> listener = MakeRefPtr<Listener>();
+  auto promise = InvokeAsync(
+      AbstractThread::GetCurrent(), __func__, [values, aN]() mutable {
+        SpinEventLoopUntil<ProcessFailureBehavior::IgnoreAndContinue>(
+            "TakeN(MediaEventSourceImpl<Lp, Args...>& aEvent, size_t aN)"_ns,
+            [&] { return values->size() == aN; });
+        return Promise::CreateAndResolve(std::move(*values), __func__);
+      });
+  *listener = aEvent.Connect(AbstractThread::GetCurrent(),
+                             [values, listener, aN](Args... aValue) {
+                               values->push_back({aValue...});
+                               if (values->size() == aN) {
+                                 listener->Disconnect();
+                               }
+                             });
+  return promise;
+}
+
+/**
+ * Helper that, given that canonicals have just been updated on the current
+ * thread, will block its execution until mirrors and their watchers have
+ * executed on aTarget.
+ */
+inline void WaitForMirrors(const RefPtr<nsISerialEventTarget>& aTarget) {
+  Unused << WaitFor(InvokeAsync(aTarget, __func__, [] {
+    return GenericPromise::CreateAndResolve(true, "WaitForMirrors resolver");
+  }));
+}
+
+/**
+ * Short form of WaitForMirrors that assumes mirrors are on the current thread
+ * (like canonicals).
+ */
+inline void WaitForMirrors() { WaitForMirrors(GetCurrentSerialEventTarget()); }
 
 }  // namespace mozilla
 

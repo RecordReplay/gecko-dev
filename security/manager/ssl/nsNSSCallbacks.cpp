@@ -13,6 +13,7 @@
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/Assertions.h"
 #include "mozilla/Casting.h"
+#include "mozilla/Logging.h"
 #include "mozilla/RefPtr.h"
 #include "mozilla/Span.h"
 #include "mozilla/Telemetry.h"
@@ -103,7 +104,7 @@ class OCSPRequest final : public nsIStreamLoaderObserver, public nsIRunnable {
   // cancelled. This is how we know the closure in OnTimeout is valid. If the
   // timer fires before OnStreamComplete runs, it should be safe to not cancel
   // the request because necko has a strong reference to it.
-  Monitor mMonitor;
+  Monitor mMonitor MOZ_UNANNOTATED;
   bool mNotifiedDone;
   nsCOMPtr<nsIStreamLoader> mLoader;
   const nsCString mAIALocation;
@@ -591,13 +592,9 @@ void PK11PasswordPromptRunnable::RunOnTargetThread() {
   }
 
   nsString password;
-  // |checkState| is unused because |checkMsg| (the argument just before it) is
-  // null, but XPConnect requires it to point to a valid bool nonetheless.
-  bool checkState = false;
   bool userClickedOK = false;
   rv = prompt->PromptPassword(nullptr, promptString.get(),
-                              getter_Copies(password), nullptr, &checkState,
-                              &userClickedOK);
+                              getter_Copies(password), &userClickedOK);
   if (NS_FAILED(rv) || !userClickedOK) {
     return;
   }
@@ -704,31 +701,24 @@ nsCString getSignatureName(uint32_t aSignatureScheme) {
 // call with shutdown prevention lock held
 static void PreliminaryHandshakeDone(PRFileDesc* fd) {
   nsNSSSocketInfo* infoObject = (nsNSSSocketInfo*)fd->higher->secret;
-  if (!infoObject) return;
-
-  SSLChannelInfo channelInfo;
-  if (SSL_GetChannelInfo(fd, &channelInfo, sizeof(channelInfo)) == SECSuccess) {
-    infoObject->SetSSLVersionUsed(channelInfo.protocolVersion);
-    infoObject->SetEarlyDataAccepted(channelInfo.earlyDataAccepted);
-    infoObject->SetResumed(channelInfo.resumed);
-
-    SSLCipherSuiteInfo cipherInfo;
-    if (SSL_GetCipherSuiteInfo(channelInfo.cipherSuite, &cipherInfo,
-                               sizeof cipherInfo) == SECSuccess) {
-      /* Set the Status information */
-      infoObject->mHaveCipherSuiteAndProtocol = true;
-      infoObject->mCipherSuite = channelInfo.cipherSuite;
-      infoObject->mProtocolVersion = channelInfo.protocolVersion & 0xFF;
-      infoObject->mKeaGroup.Assign(getKeaGroupName(channelInfo.keaGroup));
-      infoObject->mSignatureSchemeName.Assign(
-          getSignatureName(channelInfo.signatureScheme));
-      infoObject->SetKEAUsed(channelInfo.keaType);
-      infoObject->SetKEAKeyBits(channelInfo.keaKeyBits);
-      infoObject->SetMACAlgorithmUsed(cipherInfo.macAlgorithm);
-      infoObject->mIsDelegatedCredential = channelInfo.peerDelegCred;
-      infoObject->mIsAcceptedEch = channelInfo.echAccepted;
-    }
+  if (!infoObject) {
+    return;
   }
+  SSLChannelInfo channelInfo;
+  if (SSL_GetChannelInfo(fd, &channelInfo, sizeof(channelInfo)) != SECSuccess) {
+    return;
+  }
+  SSLCipherSuiteInfo cipherInfo;
+  if (SSL_GetCipherSuiteInfo(channelInfo.cipherSuite, &cipherInfo,
+                             sizeof(cipherInfo)) != SECSuccess) {
+    return;
+  }
+  infoObject->SetPreliminaryHandshakeInfo(channelInfo, cipherInfo);
+  infoObject->SetSSLVersionUsed(channelInfo.protocolVersion);
+  infoObject->SetEarlyDataAccepted(channelInfo.earlyDataAccepted);
+  infoObject->SetKEAUsed(channelInfo.keaType);
+  infoObject->SetKEAKeyBits(channelInfo.keaKeyBits);
+  infoObject->SetMACAlgorithmUsed(cipherInfo.macAlgorithm);
 
   // Don't update NPN details on renegotiation.
   if (infoObject->IsPreliminaryHandshakeDone()) {
@@ -1098,11 +1088,12 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
 
   EVStatus evStatus;
   CertificateTransparencyInfo certificateTransparencyInfo;
-  UniqueCERTCertList builtChain;
+  nsTArray<nsTArray<uint8_t>> builtChainCertBytes;
+  nsTArray<uint8_t> certBytes(cert->derCert.data, cert->derCert.len);
   bool isBuiltCertChainRootBuiltInRoot = false;
   mozilla::pkix::Result rv = certVerifier->VerifySSLServerCert(
-      cert, mozilla::pkix::Now(), infoObject, infoObject->GetHostName(),
-      builtChain, flags, maybePeerCertsBytes, stapledOCSPResponse,
+      certBytes, mozilla::pkix::Now(), infoObject, infoObject->GetHostName(),
+      builtChainCertBytes, flags, maybePeerCertsBytes, stapledOCSPResponse,
       sctsFromTLSExtension, Nothing(), infoObject->GetOriginAttributes(),
       &evStatus,
       nullptr,  // OCSP stapling telemetry
@@ -1116,15 +1107,15 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
             ("HandshakeCallback: couldn't rebuild verified certificate info"));
   }
 
-  RefPtr<nsNSSCertificate> nssc(nsNSSCertificate::Create(cert.get()));
+  nsCOMPtr<nsIX509Cert> x509Cert(new nsNSSCertificate(cert.get()));
   if (rv == Success && evStatus == EVStatus::EV) {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-            ("HandshakeCallback using NEW cert %p (is EV)", nssc.get()));
-    infoObject->SetServerCert(nssc, EVStatus::EV);
+            ("HandshakeCallback using NEW cert (is EV)"));
+    infoObject->SetServerCert(x509Cert, EVStatus::EV);
   } else {
     MOZ_LOG(gPIPNSSLog, LogLevel::Debug,
-            ("HandshakeCallback using NEW cert %p (is not EV)", nssc.get()));
-    infoObject->SetServerCert(nssc, EVStatus::NotEV);
+            ("HandshakeCallback using NEW cert (is not EV)"));
+    infoObject->SetServerCert(x509Cert, EVStatus::NotEV);
   }
 
   if (rv == Success) {
@@ -1132,9 +1123,7 @@ static void RebuildVerifiedCertificateInformation(PRFileDesc* fd,
         TransportSecurityInfo::ConvertCertificateTransparencyInfoToStatus(
             certificateTransparencyInfo);
     infoObject->SetCertificateTransparencyStatus(status);
-    nsTArray<nsTArray<uint8_t>> certBytesArray =
-        TransportSecurityInfo::CreateCertBytesArray(builtChain);
-    infoObject->SetSucceededCertChain(std::move(certBytesArray));
+    infoObject->SetSucceededCertChain(std::move(builtChainCertBytes));
     infoObject->SetIsBuiltCertChainRootBuiltInRoot(
         isBuiltCertChainRootBuiltInRoot);
   }

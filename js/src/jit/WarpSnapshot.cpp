@@ -6,18 +6,17 @@
 
 #include "jit/WarpSnapshot.h"
 
-#include "mozilla/IntegerPrintfMacros.h"
+#include "mozilla/DebugOnly.h"
 
 #include <type_traits>
 
 #include "jit/CacheIRCompiler.h"
 #include "jit/CacheIRSpewer.h"
+#include "vm/EnvironmentObject.h"
 #include "vm/GetterSetter.h"
 #include "vm/GlobalObject.h"
 #include "vm/JSContext.h"
 #include "vm/Printer.h"
-
-#include "vm/EnvironmentObject-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -155,12 +154,6 @@ void WarpGetImport::dumpData(GenericPrinter& out) const {
   out.printf("    needsLexicalCheck: %u\n", needsLexicalCheck());
 }
 
-void WarpLambda::dumpData(GenericPrinter& out) const {
-  out.printf("    baseScript: 0x%p\n", baseScript());
-  out.printf("    flags: 0x%x\n", unsigned(flags().toRaw()));
-  out.printf("    nargs: %u\n", unsigned(nargs_));
-}
-
 void WarpRest::dumpData(GenericPrinter& out) const {
   out.printf("    shape: 0x%p\n", shape());
 }
@@ -291,10 +284,6 @@ void WarpGetImport::traceData(JSTracer* trc) {
   TraceWarpGCPtr(trc, targetEnv_, "warp-import-env");
 }
 
-void WarpLambda::traceData(JSTracer* trc) {
-  TraceWarpGCPtr(trc, baseScript_, "warp-lambda-basescript");
-}
-
 void WarpRest::traceData(JSTracer* trc) {
   TraceWarpGCPtr(trc, shape_, "warp-rest-shape");
 }
@@ -328,6 +317,7 @@ void WarpCacheIR::traceData(JSTracer* trc) {
         case StubField::Type::RawInt32:
         case StubField::Type::RawPointer:
         case StubField::Type::RawInt64:
+        case StubField::Type::Double:
           break;
         case StubField::Type::Shape: {
           uintptr_t word = stubInfo_->getStubRawWord(stubData_, offset);
@@ -376,9 +366,10 @@ void WarpCacheIR::traceData(JSTracer* trc) {
           break;
         }
         case StubField::Type::AllocSite: {
-          uintptr_t word = stubInfo_->getStubRawWord(stubData_, offset);
-          auto* site = reinterpret_cast<gc::AllocSite*>(word);
-          site->trace(trc);
+          mozilla::DebugOnly<uintptr_t> word =
+              stubInfo_->getStubRawWord(stubData_, offset);
+          MOZ_ASSERT(word == uintptr_t(gc::DefaultHeap) ||
+                     word == uintptr_t(gc::TenuredHeap));
           break;
         }
         case StubField::Type::Limit:

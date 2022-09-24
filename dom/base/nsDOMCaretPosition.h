@@ -12,11 +12,9 @@
 #include "nsINode.h"
 #include "nsWrapperCache.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 class DOMRect;
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 /**
  * Implementation of a DOM Caret Position, which is a node and offset within
@@ -27,11 +25,11 @@ class DOMRect;
  * @see Document::caretPositionFromPoint(float x, float y)
  */
 class nsDOMCaretPosition : public nsISupports, public nsWrapperCache {
-  typedef mozilla::dom::DOMRect DOMRect;
+  using DOMRect = mozilla::dom::DOMRect;
 
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(nsDOMCaretPosition)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(nsDOMCaretPosition)
 
   nsDOMCaretPosition(nsINode* aNode, uint32_t aOffset);
 

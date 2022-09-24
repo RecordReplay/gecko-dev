@@ -26,8 +26,10 @@ std::ostream& operator<<(std::ostream& aStream, const FrameMetrics& aMetrics) {
   if (aMetrics.GetVisualScrollUpdateType() != FrameMetrics::eNone) {
     aStream << "] [vd=" << aMetrics.GetVisualDestination();
   }
+  if (aMetrics.IsScrollInfoLayer()) {
+    aStream << "] [scrollinfo";
+  }
   aStream << "] [dp=" << aMetrics.GetDisplayPort()
-          << "] [cdp=" << aMetrics.GetCriticalDisplayPort()
           << "] [rcs=" << aMetrics.GetBoundingCompositionSize()
           << "] [v=" << aMetrics.GetLayoutViewport()
           << nsPrintfCString("] [z=(ld=%.3f r=%.3f",
@@ -36,7 +38,7 @@ std::ostream& operator<<(std::ostream& aStream, const FrameMetrics& aMetrics) {
                  .get()
           << " cr=" << aMetrics.GetCumulativeResolution()
           << " z=" << aMetrics.GetZoom()
-          << " er=" << aMetrics.GetExtraResolution() << " )] [u=("
+          << " t=" << aMetrics.GetTransformToAncestorScale() << " )] [u=("
           << (int)aMetrics.GetVisualScrollUpdateType() << " "
           << aMetrics.GetScrollGeneration()
           << ")] scrollId=" << aMetrics.GetScrollId();
@@ -126,7 +128,7 @@ void FrameMetrics::KeepLayoutViewportEnclosingVisualViewport(
 /* static */
 CSSRect FrameMetrics::CalculateScrollRange(
     const CSSRect& aScrollableRect, const ParentLayerRect& aCompositionBounds,
-    const CSSToParentLayerScale2D& aZoom) {
+    const CSSToParentLayerScale& aZoom) {
   CSSSize scrollPortSize =
       CalculateCompositedSizeInCssPixels(aCompositionBounds, aZoom);
   CSSRect scrollRange = aScrollableRect;
@@ -140,8 +142,8 @@ CSSRect FrameMetrics::CalculateScrollRange(
 /* static */
 CSSSize FrameMetrics::CalculateCompositedSizeInCssPixels(
     const ParentLayerRect& aCompositionBounds,
-    const CSSToParentLayerScale2D& aZoom) {
-  if (aZoom == CSSToParentLayerScale2D(0, 0)) {
+    const CSSToParentLayerScale& aZoom) {
+  if (aZoom == CSSToParentLayerScale(0)) {
     return CSSSize();  // avoid division by zero
   }
   return aCompositionBounds.Size() / aZoom;
@@ -206,10 +208,19 @@ bool ScrollSnapInfo::HasScrollSnapping() const {
 }
 
 bool ScrollSnapInfo::HasSnapPositions() const {
-  return (!mSnapPositionX.IsEmpty() &&
-          mScrollSnapStrictnessX != StyleScrollSnapStrictness::None) ||
-         (!mSnapPositionY.IsEmpty() &&
-          mScrollSnapStrictnessY != StyleScrollSnapStrictness::None);
+  if (!HasScrollSnapping()) {
+    return false;
+  }
+
+  for (const auto& target : mSnapTargets) {
+    if ((target.mSnapPositionX &&
+         mScrollSnapStrictnessX != StyleScrollSnapStrictness::None) ||
+        (target.mSnapPositionY &&
+         mScrollSnapStrictnessY != StyleScrollSnapStrictness::None)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void ScrollSnapInfo::InitializeScrollSnapStrictness(
@@ -311,16 +322,14 @@ std::ostream& operator<<(std::ostream& aStream,
 
 std::ostream& operator<<(std::ostream& aStream,
                          const ScrollMetadata& aMetadata) {
-  aStream << "{ [metrics=" << aMetadata.GetMetrics()
+  aStream << "{ [description=" << aMetadata.GetContentDescription()
+          << "] [metrics=" << aMetadata.GetMetrics()
           << "] [color=" << aMetadata.GetBackgroundColor();
   if (aMetadata.GetScrollParentId() != ScrollableLayerGuid::NULL_SCROLL_ID) {
     aStream << "] [scrollParent=" << aMetadata.GetScrollParentId();
   }
-  if (aMetadata.HasScrollClip()) {
-    aStream << "] [clip=" << aMetadata.ScrollClip().GetClipRect();
-  }
-  if (aMetadata.HasMaskLayer()) {
-    aStream << "] [mask=" << aMetadata.ScrollClip().GetMaskLayerIndex().value();
+  if (aMetadata.GetHasScrollgrab()) {
+    aStream << "] [scrollgrab";
   }
   aStream << "] [overscroll=" << aMetadata.GetOverscrollBehavior() << "] ["
           << aMetadata.GetScrollUpdates().Length() << " scrollupdates"

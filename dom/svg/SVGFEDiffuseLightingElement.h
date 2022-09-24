@@ -12,8 +12,7 @@
 nsresult NS_NewSVGFEDiffuseLightingElement(
     nsIContent** aResult, already_AddRefed<mozilla::dom::NodeInfo>&& aNodeInfo);
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 using SVGFEDiffuseLightingElementBase = SVGFELightingElement;
 
@@ -39,6 +38,8 @@ class SVGFEDiffuseLightingElement : public SVGFEDiffuseLightingElementBase {
 
   virtual nsresult Clone(dom::NodeInfo*, nsINode** aResult) const override;
 
+  virtual nsresult BindToTree(BindContext& aCtx, nsINode& aParent) override;
+
   // WebIDL
   already_AddRefed<DOMSVGAnimatedString> In1();
   already_AddRefed<DOMSVGAnimatedNumber> SurfaceScale();
@@ -47,7 +48,6 @@ class SVGFEDiffuseLightingElement : public SVGFEDiffuseLightingElementBase {
   already_AddRefed<DOMSVGAnimatedNumber> KernelUnitLengthY();
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // DOM_SVG_SVGFEDIFFUSELIGHTINGELEMENT_H_

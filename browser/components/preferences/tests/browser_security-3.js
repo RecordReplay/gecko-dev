@@ -3,7 +3,7 @@
 
 "use strict";
 
-add_task(async function setup() {
+add_setup(async function() {
   await openPreferencesViaOpenPreferencesAPI("privacy", { leaveOpen: true });
   registerCleanupFunction(async function() {
     Services.prefs.unlockPref("browser.safebrowsing.phishing.enabled");

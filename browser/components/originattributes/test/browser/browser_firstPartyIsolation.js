@@ -3,10 +3,12 @@ const BASE_URL =
 const EXAMPLE_BASE_URL = BASE_URL.replace("mochi.test:8888", "example.com");
 const BASE_DOMAIN = "mochi.test";
 
-add_task(async function setup() {
+add_setup(async function() {
   Services.prefs.setBoolPref("privacy.firstparty.isolate", true);
+  Services.prefs.setBoolPref("dom.security.https_first", false);
   registerCleanupFunction(function() {
     Services.prefs.clearUserPref("privacy.firstparty.isolate");
+    Services.prefs.clearUserPref("dom.security.https_first");
     Services.cookies.removeAll();
     Services.cache2.clear();
   });

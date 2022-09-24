@@ -1,7 +1,7 @@
 # Migrating Firefox Telemetry to Glean
 
 This guide aims to help you migrate individual data collections from
-[Firefox Telemetry](../../telemetry)
+[Firefox Telemetry](/toolkit/components/telemetry/index.rst)
 to
 [Glean][book-of-glean] via [Firefox on Glean](../index.md).
 
@@ -9,14 +9,13 @@ This is intended to be a reference to help you fill out your
 [migration worksheet][migration-worksheet],
 or for mentally translating Telemetry concepts to Glean ones.
 
-```eval_rst
-.. contents::
+```{contents}
 ```
 
 ## General Things To Bear In Mind
 
 You should familiarize yourself with
-[the guide on adding new metrics to Firefox Desktop](new_definitions.file.md).
+[the guide on adding new metrics to Firefox Desktop](new_definitions_file.md).
 Its advice stacks with the advice included in this guide as
 (once you've figured out what kind) you will indeed be adding new metrics.
 
@@ -77,6 +76,9 @@ It's as simple as calling `testGetValue`.
 All migrated collections are expected to be tested.
 If you can't test them, then you'd better have an exceptionally good reason why not.
 
+For more details, please peruse the
+[instrumentation testing docs](instrumentation_tests).
+
 ## Which Glean Metric Type Should I Use?
 
 Glean uses higher-level metric types than Firefox Telemetry does.
@@ -133,7 +135,7 @@ Glean uses a [clever automatic bucketing algorithm][timing-distribution-metric] 
 
 So for a Histogram that records timing samples like this:
 
-```json
+```
   "GC_MS": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "geckoview_streaming"],
@@ -189,7 +191,7 @@ Glean uses a [clever automatic bucketing algorithm][memory-distribution-metric] 
 
 So for a Histogram that records memory samples like this:
 
-```json
+```
   "MEMORY_TOTAL": {
     "record_in_processes": ["main"],
     "products": ["firefox", "thunderbird"],
@@ -254,7 +256,7 @@ we have a "catch all" metric type for you: [Custom Distribution][custom-distribu
 Sadly, you'll have to care about the bucketing algorithm and bucket ranges for this one.
 So for a Histogram with artisinal samples like:
 
-```json
+```
   "CHECKERBOARD_SEVERITY": {
     "record_in_processes": ["main", "content", "gpu"],
     "products": ["firefox", "fennec", "geckoview_streaming"],
@@ -321,7 +323,7 @@ Simply enumerate the discrete categories as `labels` in the `labeled_counter`.
 
 For example, for a Histogram of kind `categorical` like:
 
-```json
+```
   "AVIF_DECODE_RESULT": {
     "record_in_processes": ["main", "content"],
     "products": ["firefox", "geckoview_streaming"],
@@ -903,6 +905,7 @@ work within what Glean currently affords or
 [new-metric-type]: https://wiki.mozilla.org/Glean/Adding_or_changing_Glean_metric_types
 [glean-matrix]: https://chat.mozilla.org/#/room/#glean:mozilla.org
 [checkerboard-severity]: https://searchfox.org/mozilla-central/rev/d59bdea4956040e16113b05296c56867f761735b/gfx/layers/apz/src/CheckerboardEvent.cpp#44
-[telemetry-events]: ../../telemetry/collection/events.html
-[telemetry-scalars]: ../../telemetry/collection/scalars.html
-[telemetry-histograms]: ../../telemetry/collection/histograms.html
+[telemetry-events]: /toolkit/components/telemetry/collection/events.rst
+[telemetry-scalars]: /toolkit/components/telemetry/collection/scalars.rst
+[telemetry-histograms]: /toolkit/components/telemetry/collection/histograms.rst
+[repositories-yaml]: https://github.com/mozilla/probe-scraper/blob/main/repositories.yaml

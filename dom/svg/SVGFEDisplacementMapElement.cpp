@@ -7,13 +7,14 @@
 #include "mozilla/dom/SVGFEDisplacementMapElement.h"
 #include "mozilla/dom/SVGFEDisplacementMapElementBinding.h"
 #include "mozilla/SVGFilterInstance.h"
+#include "mozilla/dom/Document.h"
+#include "mozilla/dom/BindContext.h"
 
 NS_IMPL_NS_NEW_SVG_ELEMENT(FEDisplacementMap)
 
 using namespace mozilla::gfx;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 JSObject* SVGFEDisplacementMapElement::WrapNode(
     JSContext* aCx, JS::Handle<JSObject*> aGivenProto) {
@@ -109,6 +110,15 @@ void SVGFEDisplacementMapElement::GetSourceImageNames(
   aSources.AppendElement(SVGStringInfo(&mStringAttributes[IN2], this));
 }
 
+nsresult SVGFEDisplacementMapElement::BindToTree(BindContext& aCtx,
+                                                 nsINode& aParent) {
+  if (aCtx.InComposedDoc()) {
+    aCtx.OwnerDoc().SetUseCounter(eUseCounter_custom_feDisplacementMap);
+  }
+
+  return SVGFE::BindToTree(aCtx, aParent);
+}
+
 //----------------------------------------------------------------------
 // SVGElement methods
 
@@ -126,5 +136,4 @@ SVGElement::StringAttributesInfo SVGFEDisplacementMapElement::GetStringInfo() {
                               ArrayLength(sStringInfo));
 }
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom

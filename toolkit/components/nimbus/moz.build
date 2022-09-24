@@ -7,17 +7,18 @@
 with Files("**"):
     BUG_COMPONENT = ("Firefox", "Nimbus Desktop Client")
 
-EXPORTS.mozilla.browser += [
-    "lib/NimbusFeatures.h",
-]
+EXPORTS.mozilla.browser += ["!lib/NimbusFeatureManifest.h", "lib/NimbusFeatures.h"]
 
 UNIFIED_SOURCES += [
     "lib/NimbusFeatures.cpp",
 ]
 
-TEST_DIRS += [
-    "test/gtest",
-]
+# We expose NimbusFeatures to Android to make it easier to
+# import everywhere but the tests will fail to run
+if CONFIG["OS_TARGET"] != "Android":
+    TEST_DIRS += [
+        "test/gtest",
+    ]
 
 BROWSER_CHROME_MANIFESTS += [
     "test/browser/browser.ini",
@@ -28,11 +29,22 @@ XPCSHELL_TESTS_MANIFESTS += ["test/unit/xpcshell.ini"]
 SPHINX_TREES["docs"] = "docs"
 
 TESTING_JS_MODULES += [
-    "schemas/ExperimentFeatureManifest.schema.json",
-    "schemas/ExperimentFeatureRemote.schema.json",
-    "schemas/NimbusExperiment.schema.json",
     "test/NimbusTestUtils.jsm",
 ]
+
+GeneratedFile(
+    "FeatureManifest.js",
+    script="generate/generate_feature_manifest.py",
+    entry_point="generate_feature_manifest",
+    inputs=["./FeatureManifest.yaml"],
+)
+
+GeneratedFile(
+    "lib/NimbusFeatureManifest.h",
+    script="generate/generate_feature_manifest.py",
+    entry_point="generate_platform_feature_manifest",
+    inputs=["./FeatureManifest.yaml"],
+)
 
 FINAL_LIBRARY = "xul"
 

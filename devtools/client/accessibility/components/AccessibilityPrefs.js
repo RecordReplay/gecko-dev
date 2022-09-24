@@ -57,10 +57,7 @@ class AccessibilityPrefs extends Component {
   }
 
   onLearnMoreClick() {
-    openDocLink(
-      A11Y_LEARN_MORE_LINK +
-        "?utm_source=devtools&utm_medium=a11y-panel-toolbar"
-    );
+    openDocLink(A11Y_LEARN_MORE_LINK);
   }
 
   render() {
@@ -80,7 +77,7 @@ class AccessibilityPrefs extends Component {
           tooltip: L10N.getStr("accessibility.pref.scroll.into.view.title"),
           onClick: this.onPrefClick.bind(this, PREFS.SCROLL_INTO_VIEW),
         }),
-        hr(),
+        hr({ key: "hr" }),
         MenuItem({
           role: "link",
           key: "accessibility-tree-filters-prefs-menu-help",

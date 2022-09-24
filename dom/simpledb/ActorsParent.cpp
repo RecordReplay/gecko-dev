@@ -40,6 +40,7 @@
 #include "mozilla/dom/quota/MemoryOutputStream.h"
 #include "mozilla/dom/quota/QuotaCommon.h"
 #include "mozilla/dom/quota/QuotaManager.h"
+#include "mozilla/dom/quota/ResultExtensions.h"
 #include "mozilla/dom/quota/UsageInfo.h"
 #include "mozilla/ipc/BackgroundParent.h"
 #include "mozilla/ipc/BackgroundUtils.h"
@@ -69,16 +70,6 @@
 #include "nsThreadUtils.h"
 #include "nscore.h"
 #include "prio.h"
-
-#define DISABLE_ASSERTS_FOR_FUZZING 0
-
-#if DISABLE_ASSERTS_FOR_FUZZING
-#  define ASSERT_UNLESS_FUZZING(...) \
-    do {                             \
-    } while (0)
-#else
-#  define ASSERT_UNLESS_FUZZING(...) MOZ_ASSERT(false, __VA_ARGS__)
-#endif
 
 namespace mozilla::dom {
 
@@ -315,16 +306,10 @@ class OpenOp final : public ConnectionOperationBase,
     // Next step is FinishOpen.
     Initial,
 
-    // Opening directory or initializing quota manager on the PBackground
-    // thread. Next step is either DirectoryOpenPending if quota manager is
-    // already initialized or QuotaManagerPending if quota manager needs to be
-    // initialized.
+    // Ensuring quota manager is created and opening directory on the
+    // PBackground thread. Next step is either SendingResults if quota manager
+    // is not available or DirectoryOpenPending if quota manager is available.
     FinishOpen,
-
-    // Waiting for quota manager initialization to complete on the PBackground
-    // thread. Next step is either SendingResults if initialization failed or
-    // DirectoryOpenPending if initialization succeeded.
-    QuotaManagerPending,
 
     // Waiting for directory open allowed on the PBackground thread. The next
     // step is either SendingResults if directory lock failed to acquire, or
@@ -362,10 +347,6 @@ class OpenOp final : public ConnectionOperationBase,
   nsresult Open();
 
   nsresult FinishOpen();
-
-  nsresult QuotaManagerOpen();
-
-  nsresult OpenDirectory();
 
   nsresult SendToIOThread();
 
@@ -466,32 +447,8 @@ class CloseOp final : public ConnectionOperationBase {
 class QuotaClient final : public mozilla::dom::quota::Client {
   static QuotaClient* sInstance;
 
-  bool mShutdownRequested;
-
  public:
   QuotaClient();
-
-  static bool IsShuttingDownOnBackgroundThread() {
-    AssertIsOnBackgroundThread();
-
-    if (sInstance) {
-      return sInstance->IsShuttingDown();
-    }
-
-    return QuotaManager::IsShuttingDown();
-  }
-
-  static bool IsShuttingDownOnNonBackgroundThread() {
-    MOZ_ASSERT(!IsOnBackgroundThread());
-
-    return QuotaManager::IsShuttingDown();
-  }
-
-  bool IsShuttingDown() const {
-    AssertIsOnBackgroundThread();
-
-    return mShutdownRequested;
-  }
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(QuotaClient, override)
 
@@ -572,17 +529,17 @@ PBackgroundSDBConnectionParent* AllocPBackgroundSDBConnectionParent(
   }
 
   if (NS_WARN_IF(!IsValidPersistenceType(aPersistenceType))) {
-    ASSERT_UNLESS_FUZZING();
+    MOZ_CRASH_UNLESS_FUZZING();
     return nullptr;
   }
 
   if (NS_WARN_IF(aPrincipalInfo.type() == PrincipalInfo::TNullPrincipalInfo)) {
-    ASSERT_UNLESS_FUZZING();
+    MOZ_CRASH_UNLESS_FUZZING();
     return nullptr;
   }
 
   if (NS_WARN_IF(!QuotaManager::IsPrincipalInfoValid(aPrincipalInfo))) {
-    ASSERT_UNLESS_FUZZING();
+    MOZ_CRASH_UNLESS_FUZZING();
     return nullptr;
   }
 
@@ -812,7 +769,7 @@ bool Connection::VerifyRequestParams(const SDBRequestParams& aParams) const {
   switch (aParams.type()) {
     case SDBRequestParams::TSDBRequestOpenParams: {
       if (NS_WARN_IF(mOpen)) {
-        ASSERT_UNLESS_FUZZING();
+        MOZ_CRASH_UNLESS_FUZZING();
         return false;
       }
 
@@ -824,7 +781,7 @@ bool Connection::VerifyRequestParams(const SDBRequestParams& aParams) const {
     case SDBRequestParams::TSDBRequestWriteParams:
     case SDBRequestParams::TSDBRequestCloseParams: {
       if (NS_WARN_IF(!mOpen)) {
-        ASSERT_UNLESS_FUZZING();
+        MOZ_CRASH_UNLESS_FUZZING();
         return false;
       }
 
@@ -884,12 +841,12 @@ PBackgroundSDBRequestParent* Connection::AllocPBackgroundSDBRequestParent(
 #endif
 
   if (NS_WARN_IF(!trustParams && !VerifyRequestParams(aParams))) {
-    ASSERT_UNLESS_FUZZING();
+    MOZ_CRASH_UNLESS_FUZZING();
     return nullptr;
   }
 
   if (NS_WARN_IF(mRunningRequest)) {
-    ASSERT_UNLESS_FUZZING();
+    MOZ_CRASH_UNLESS_FUZZING();
     return nullptr;
   }
 
@@ -1135,7 +1092,14 @@ nsresult OpenOp::Open() {
 
 nsresult OpenOp::FinishOpen() {
   AssertIsOnOwningThread();
+  MOZ_ASSERT(!mOriginMetadata.mOrigin.IsEmpty());
+  MOZ_ASSERT(!mDirectoryLock);
   MOZ_ASSERT(mState == State::FinishOpen);
+
+  if (NS_WARN_IF(QuotaClient::IsShuttingDownOnBackgroundThread()) ||
+      IsActorDestroyed()) {
+    return NS_ERROR_ABORT;
+  }
 
   if (gOpenConnections) {
     for (const auto& connection : *gOpenConnections) {
@@ -1146,44 +1110,9 @@ nsresult OpenOp::FinishOpen() {
     }
   }
 
-  if (QuotaManager::Get()) {
-    nsresult rv = OpenDirectory();
-    if (NS_WARN_IF(NS_FAILED(rv))) {
-      return rv;
-    }
+  QM_TRY(QuotaManager::EnsureCreated());
 
-    return NS_OK;
-  }
-
-  mState = State::QuotaManagerPending;
-  QuotaManager::GetOrCreate(this);
-
-  return NS_OK;
-}
-
-nsresult OpenOp::QuotaManagerOpen() {
-  AssertIsOnOwningThread();
-  MOZ_ASSERT(mState == State::QuotaManagerPending);
-
-  if (NS_WARN_IF(!QuotaManager::Get())) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsresult rv = OpenDirectory();
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  return NS_OK;
-}
-
-nsresult OpenOp::OpenDirectory() {
-  AssertIsOnOwningThread();
-  MOZ_ASSERT(mState == State::FinishOpen ||
-             mState == State::QuotaManagerPending);
-  MOZ_ASSERT(!mOriginMetadata.mOrigin.IsEmpty());
-  MOZ_ASSERT(!mDirectoryLock);
-  MOZ_ASSERT(!QuotaClient::IsShuttingDownOnBackgroundThread());
+  // Open the directory
   MOZ_ASSERT(QuotaManager::Get());
 
   RefPtr<DirectoryLock> directoryLock =
@@ -1239,7 +1168,7 @@ nsresult OpenOp::DatabaseWork() {
   QuotaManager* quotaManager = QuotaManager::Get();
   MOZ_ASSERT(quotaManager);
 
-  QM_TRY(quotaManager->EnsureStorageIsInitialized());
+  QM_TRY(MOZ_TO_RESULT(quotaManager->EnsureStorageIsInitialized()));
 
   QM_TRY_INSPECT(
       const auto& dbDirectory,
@@ -1251,7 +1180,8 @@ nsresult OpenOp::DatabaseWork() {
               mOriginMetadata));
         }
 
-        QM_TRY(quotaManager->EnsureTemporaryStorageIsInitialized());
+        QM_TRY(
+            MOZ_TO_RESULT(quotaManager->EnsureTemporaryStorageIsInitialized()));
         QM_TRY_RETURN(quotaManager->EnsureTemporaryOriginIsInitialized(
             persistenceType, mOriginMetadata));
       }()
@@ -1408,10 +1338,6 @@ OpenOp::Run() {
 
     case State::FinishOpen:
       rv = FinishOpen();
-      break;
-
-    case State::QuotaManagerPending:
-      rv = QuotaManagerOpen();
       break;
 
     case State::DatabaseWorkOpen:
@@ -1689,7 +1615,7 @@ void CloseOp::OnSuccess() {
 
 QuotaClient* QuotaClient::sInstance = nullptr;
 
-QuotaClient::QuotaClient() : mShutdownRequested(false) {
+QuotaClient::QuotaClient() {
   AssertIsOnBackgroundThread();
   MOZ_ASSERT(!sInstance, "We expect this to be a singleton!");
 
@@ -1750,7 +1676,7 @@ Result<UsageInfo, nsresult> QuotaClient::GetUsageForOrigin(
       [](UsageInfo usageInfo,
          const nsCOMPtr<nsIFile>& file) -> Result<UsageInfo, nsresult> {
         QM_TRY_INSPECT(const bool& isDirectory,
-                       MOZ_TO_RESULT_INVOKE(file, IsDirectory));
+                       MOZ_TO_RESULT_INVOKE_MEMBER(file, IsDirectory));
 
         if (isDirectory) {
           Unused << WARN_IF_FILE_IS_UNKNOWN(*file);
@@ -1758,11 +1684,11 @@ Result<UsageInfo, nsresult> QuotaClient::GetUsageForOrigin(
         }
 
         nsString leafName;
-        QM_TRY(file->GetLeafName(leafName));
+        QM_TRY(MOZ_TO_RESULT(file->GetLeafName(leafName)));
 
         if (StringEndsWith(leafName, kSDBSuffix)) {
           QM_TRY_INSPECT(const int64_t& fileSize,
-                         MOZ_TO_RESULT_INVOKE(file, GetFileSize));
+                         MOZ_TO_RESULT_INVOKE_MEMBER(file, GetFileSize));
 
           MOZ_ASSERT(fileSize >= 0);
 
@@ -1810,9 +1736,6 @@ void QuotaClient::StopIdleMaintenance() { AssertIsOnBackgroundThread(); }
 
 void QuotaClient::InitiateShutdown() {
   AssertIsOnBackgroundThread();
-  MOZ_ASSERT(!mShutdownRequested);
-
-  mShutdownRequested = true;
 
   if (gOpenConnections) {
     for (const auto& connection : *gOpenConnections) {

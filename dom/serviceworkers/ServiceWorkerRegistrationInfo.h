@@ -13,12 +13,10 @@
 #include "mozilla/dom/ServiceWorkerInfo.h"
 #include "mozilla/dom/ServiceWorkerRegistrationBinding.h"
 #include "mozilla/dom/ServiceWorkerRegistrationDescriptor.h"
-#include "nsContentUtils.h"
 #include "nsProxyRelease.h"
 #include "nsTObserverArray.h"
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class ServiceWorkerRegistrationListener;
 
@@ -39,7 +37,7 @@ class ServiceWorkerRegistrationInfo final
   };
   nsTArray<UniquePtr<VersionEntry>> mVersionList;
 
-  const nsID mAgentClusterId = nsContentUtils::GenerateUUID();
+  const nsID mAgentClusterId = nsID::GenerateUUID();
 
   uint32_t mControlledClientsCounter;
   uint32_t mDelayMultiplier;
@@ -76,7 +74,7 @@ class ServiceWorkerRegistrationInfo final
   NS_DECL_ISUPPORTS
   NS_DECL_NSISERVICEWORKERREGISTRATIONINFO
 
-  typedef std::function<void()> TryToActivateCallback;
+  using TryToActivateCallback = std::function<void()>;
 
   ServiceWorkerRegistrationInfo(
       const nsACString& aScope, nsIPrincipal* aPrincipal,
@@ -261,9 +259,10 @@ class ServiceWorkerRegistrationInfo final
   // call to `aFunc`, so `aFunc` will always get a reference to a non-null
   // pointer.
   void ForEachWorker(void (*aFunc)(RefPtr<ServiceWorkerInfo>&));
+
+  void CheckQuotaUsage();
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // mozilla_dom_serviceworkerregistrationinfo_h

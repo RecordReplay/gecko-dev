@@ -51,7 +51,6 @@ let RemotePageAccessManager = {
         "security.enterprise_roots.auto-enabled",
         "security.certerror.hideAddException",
       ],
-      RPMSetBoolPref: ["security.tls.version.enable-deprecated"],
       RPMGetIntPref: [
         "services.settings.clock_skew_seconds",
         "services.settings.last_update_seconds",
@@ -88,17 +87,10 @@ let RemotePageAccessManager = {
       RPMGetFormatURLPref: ["app.support.baseURL"],
       RPMGetBoolPref: [
         "security.certerror.hideAddException",
-        "security.tls.version.enable-deprecated",
-        "security.certerrors.tls.version.show-override",
         "security.xfocsp.errorReporting.automatic",
         "security.xfocsp.errorReporting.enabled",
-        "browser.proton.enabled",
       ],
-      RPMSetBoolPref: [
-        "security.tls.version.enable-deprecated",
-        "security.xfocsp.errorReporting.automatic",
-      ],
-      RPMPrefIsLocked: ["security.tls.version.min"],
+      RPMSetBoolPref: ["security.xfocsp.errorReporting.automatic"],
       RPMAddToHistogram: ["*"],
       RPMGetInnerMostURI: ["*"],
       RPMGetHttpResponseHeader: ["*"],
@@ -110,13 +102,21 @@ let RemotePageAccessManager = {
       RPMSendAsyncMessage: ["*"],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
+      RPMGetStringPref: ["extensions.pocket.site"],
     },
     "about:pocket-signup": {
       RPMSendAsyncMessage: ["*"],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
+      RPMGetStringPref: ["extensions.pocket.site"],
     },
     "about:pocket-home": {
+      RPMSendAsyncMessage: ["*"],
+      RPMAddMessageListener: ["*"],
+      RPMRemoveMessageListener: ["*"],
+      RPMGetStringPref: ["extensions.pocket.site"],
+    },
+    "about:pocket-style-guide": {
       RPMSendAsyncMessage: ["*"],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
@@ -129,9 +129,11 @@ let RemotePageAccessManager = {
         "SearchHandoff",
       ],
       RPMSendQuery: [
+        "IsPromoBlocked",
         "ShouldShowSearch",
         "ShouldShowSearchBanner",
-        "ShouldShowVPNPromo",
+        "ShouldShowPromo",
+        "SpecialMessageActionDispatch",
       ],
       RPMAddMessageListener: ["*"],
       RPMRemoveMessageListener: ["*"],
@@ -176,7 +178,7 @@ let RemotePageAccessManager = {
         "privacy.trackingprotection.socialtracking.enabled",
         "browser.contentblocking.report.show_mobile_app",
         "browser.contentblocking.report.hide_vpn_banner",
-        "browser.contentblocking.report.vpn.enabled",
+        "browser.vpn_promo.enabled",
       ],
       RPMGetStringPref: [
         "browser.contentblocking.category",
@@ -192,7 +194,6 @@ let RemotePageAccessManager = {
         "browser.contentblocking.report.vpn-promo.url",
         "browser.contentblocking.report.vpn-android.url",
         "browser.contentblocking.report.vpn-ios.url",
-        "browser.contentblocking.report.vpn_platforms",
       ],
       RPMGetIntPref: ["network.cookie.cookieBehavior"],
       RPMGetFormatURLPref: [

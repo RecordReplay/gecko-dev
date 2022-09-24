@@ -9,7 +9,7 @@ const DIRPATH = getRootDirectory(gTestPath).replace(
  */
 const TEST_BLOB_CONTENTS = `I'm a disk-backed test blob! Hooray!`;
 
-add_task(async function setup() {
+add_setup(async function() {
   await SpecialPowers.pushPrefEnv({
     set: [
       // Set preferences so that opening a page with the origin "example.org"
@@ -235,11 +235,19 @@ async function do_test_sw(host, remoteType, swMode, fileBlob) {
             .filter(swURL => swURL == url);
         }
       );
-      Assert.deepEqual(
-        workerDebuggerURLs,
-        [sw],
-        "The worker should be running in the correct child process"
-      );
+      if (remoteType.startsWith("webServiceWorker=")) {
+        Assert.notDeepEqual(
+          workerDebuggerURLs,
+          [sw],
+          "Isolated workers should not be running in the content child process"
+        );
+      } else {
+        Assert.deepEqual(
+          workerDebuggerURLs,
+          [sw],
+          "The worker should be running in the correct child process"
+        );
+      }
 
       // Unregister the ServiceWorker.  The registration will continue to control
       // `browser` and therefore continue to exist and its worker to continue
@@ -289,7 +297,40 @@ async function makeFileBlob(blobContents) {
   return fileBlob;
 }
 
+function getSWTelemetrySums() {
+  let telemetry = Cc["@mozilla.org/base/telemetry;1"].getService(
+    Ci.nsITelemetry
+  );
+  let keyedhistograms = telemetry.getSnapshotForKeyedHistograms("main", false)
+    .parent;
+  let keyedscalars = telemetry.getSnapshotForKeyedScalars("main", false).parent;
+  // We're not looking at the distribution of the histograms, just that they changed
+  return {
+    SERVICE_WORKER_RUNNING_All: keyedhistograms.SERVICE_WORKER_RUNNING
+      ? keyedhistograms.SERVICE_WORKER_RUNNING.All.sum
+      : 0,
+    SERVICE_WORKER_RUNNING_Fetch: keyedhistograms.SERVICE_WORKER_RUNNING
+      ? keyedhistograms.SERVICE_WORKER_RUNNING.Fetch.sum
+      : 0,
+    SERVICEWORKER_RUNNING_MAX_All: keyedscalars["serviceworker.running_max"]
+      ? keyedscalars["serviceworker.running_max"].All
+      : 0,
+    SERVICEWORKER_RUNNING_MAX_Fetch: keyedscalars["serviceworker.running_max"]
+      ? keyedscalars["serviceworker.running_max"].Fetch
+      : 0,
+  };
+}
+
 add_task(async function test() {
+  // Can't test telemetry without this since we may not be on the nightly channel
+  let oldCanRecord = Services.telemetry.canRecordExtended;
+  Services.telemetry.canRecordExtended = true;
+  registerCleanupFunction(() => {
+    Services.telemetry.canRecordExtended = oldCanRecord;
+  });
+
+  let initialSums = getSWTelemetrySums();
+
   // ## Isolated Privileged Process
   // Trigger a straightforward intercepted navigation with no request body that
   // returns a synthetic response.
@@ -314,10 +355,49 @@ add_task(async function test() {
 
   // ## Fission Isolation
   if (Services.appinfo.fissionAutostart) {
-    const fissionUrl = "example.com";
-    const fissionRemoteType = `webIsolated=https://example.com`;
-
-    await do_test_sw(fissionUrl, fissionRemoteType, "synthetic", null);
-    await do_test_sw(fissionUrl, fissionRemoteType, "synthetic", fileBlob);
+    // ## ServiceWorker isolation
+    const isolateUrl = "example.com";
+    const isolateRemoteType = `webServiceWorker=https://` + isolateUrl;
+    await do_test_sw(isolateUrl, isolateRemoteType, "synthetic", null);
+    await do_test_sw(isolateUrl, isolateRemoteType, "synthetic", fileBlob);
   }
+  let telemetrySums = getSWTelemetrySums();
+  info(JSON.stringify(telemetrySums));
+  info(
+    "Initial Running All: " +
+      initialSums.SERVICE_WORKER_RUNNING_All +
+      ", Fetch: " +
+      initialSums.SERVICE_WORKER_RUNNING_Fetch
+  );
+  info(
+    "Initial Max Running All: " +
+      initialSums.SERVICEWORKER_RUNNING_MAX_All +
+      ", Fetch: " +
+      initialSums.SERVICEWORKER_RUNNING_MAX_Fetch
+  );
+  info(
+    "Running All: " +
+      telemetrySums.SERVICE_WORKER_RUNNING_All +
+      ", Fetch: " +
+      telemetrySums.SERVICE_WORKER_RUNNING_Fetch
+  );
+  info(
+    "Max Running All: " +
+      telemetrySums.SERVICEWORKER_RUNNING_MAX_All +
+      ", Fetch: " +
+      telemetrySums.SERVICEWORKER_RUNNING_MAX_Fetch
+  );
+  ok(
+    telemetrySums.SERVICE_WORKER_RUNNING_All >
+      initialSums.SERVICE_WORKER_RUNNING_All,
+    "ServiceWorker running count changed"
+  );
+  ok(
+    telemetrySums.SERVICE_WORKER_RUNNING_Fetch >
+      initialSums.SERVICE_WORKER_RUNNING_Fetch,
+    "ServiceWorker running count changed"
+  );
+  // We don't use ok()'s for MAX because MAX may have been set before we
+  // set canRecordExtended, and if so we won't record a new value unless
+  // the max increases again.
 });

@@ -29,6 +29,7 @@ const { XPCOMUtils } = ChromeUtils.import(
 XPCOMUtils.defineLazyModuleGetters(this, {
   AppConstants: "resource://gre/modules/AppConstants.jsm",
   DownloadHistory: "resource://gre/modules/DownloadHistory.jsm",
+  DownloadPaths: "resource://gre/modules/DownloadPaths.jsm",
   E10SUtils: "resource://gre/modules/E10SUtils.jsm",
   FileUtils: "resource://gre/modules/FileUtils.jsm",
   NetUtil: "resource://gre/modules/NetUtil.jsm",
@@ -176,6 +177,15 @@ Download.prototype = {
   canceled: false,
 
   /**
+   * Downloaded files can be deleted from within Firefox, e.g. via the context
+   * menu. Currently Firefox does not track file moves (see bug 1746386), so if
+   * a download's target file stops existing we have to assume it's "moved or
+   * missing." To distinguish files intentionally deleted within Firefox from
+   * files that are moved/missing, we mark them as "deleted" with this property.
+   */
+  deleted: false,
+
+  /**
    * When the download fails, this is set to a DownloadError instance indicating
    * the cause of the failure.  If the download has been completed successfully
    * or has been canceled, this property is null.  This property is reset to
@@ -275,6 +285,15 @@ Download.prototype = {
   launchWhenSucceeded: false,
 
   /**
+   * When a download starts, we typically want to automatically open the
+   * downloads panel if the pref browser.download.alwaysOpenPanel is enabled.
+   * However, there are conditions where we want to prevent this. For example, a
+   * false value can prevent the downloads panel from opening when an add-on
+   * creates a download without user input as part of some background operation.
+   */
+  openDownloadsListOnStart: true,
+
+  /**
    * This represents the MIME type of the download.
    */
   contentType: null,
@@ -311,6 +330,11 @@ Download.prototype = {
    * and rejected if the attempt fails.
    */
   _currentAttempt: null,
+
+  /**
+   * The download was launched to open from the Downloads Panel.
+   */
+  _launchedFromPanel: false,
 
   /**
    * Starts the download for the first time, or restarts a download that failed
@@ -598,7 +622,11 @@ Download.prototype = {
           new FileUtils.File(this.target.path)
         );
       } else if (
-        Services.prefs.getBoolPref("browser.helperApps.deleteTempFileOnExit")
+        Services.prefs.getBoolPref("browser.helperApps.deleteTempFileOnExit") &&
+        Services.prefs.getBoolPref(
+          "browser.download.start_downloads_in_tmp_dir",
+          false
+        )
       ) {
         gExternalAppLauncher.deleteTemporaryFileOnExit(
           new FileUtils.File(this.target.path)
@@ -643,6 +671,12 @@ Download.prototype = {
       );
     }
 
+    if (this.error?.becauseBlockedByReputationCheck) {
+      Services.telemetry
+        .getKeyedHistogramById("DOWNLOADS_USER_ACTION_ON_BLOCKED_DOWNLOAD")
+        .add(this.error.reputationCheckVerdict, 2); // unblock
+    }
+
     if (
       this.error?.reputationCheckVerdict == DownloadError.BLOCK_VERDICT_INSECURE
     ) {
@@ -654,10 +688,23 @@ Download.prototype = {
       // This ensures the verdict will not get set again after the browser
       // restarts and the download gets serialized and de-serialized again.
       delete this._unknownProperties?.errorObj;
-      this.start().catch(e => {
-        this.error = e;
-        this._notifyChange();
-      });
+      this.start()
+        .catch(err => {
+          if (err.becauseTargetFailed) {
+            // In case we cannot write to the target file
+            // retry with a new unique name
+            let uniquePath = DownloadPaths.createNiceUniqueFile(
+              new FileUtils.File(this.target.path)
+            ).path;
+            this.target.path = uniquePath;
+            return this.start();
+          }
+          return Promise.reject(err);
+        })
+        .catch(err => {
+          this.error = err;
+          this._notifyChange();
+        });
       this._notifyChange();
       this._promiseUnblock = DownloadIntegration.downloadDone(this);
       return this._promiseUnblock;
@@ -709,6 +756,16 @@ Download.prototype = {
       );
     }
 
+    if (this.error?.becauseBlockedByReputationCheck) {
+      // We have to record the telemetry in both DownloadsCommon.deleteDownload
+      // and confirmBlock here. The former is for cases where users click
+      // "Remove file" in the download panel and the latter is when
+      // users click "X" button in about:downloads.
+      Services.telemetry
+        .getKeyedHistogramById("DOWNLOADS_USER_ACTION_ON_BLOCKED_DOWNLOAD")
+        .add(this.error.reputationCheckVerdict, 1); // confirm block
+    }
+
     if (!this.hasBlockedData) {
       return Promise.reject(
         new Error(
@@ -754,6 +811,10 @@ Download.prototype = {
       return Promise.reject(
         new Error("launch can only be called if the download succeeded")
       );
+    }
+
+    if (this._launchedFromPanel) {
+      Services.telemetry.scalarAdd("downloads.file_opened", 1);
     }
 
     return DownloadIntegration.launchDownload(this, options);
@@ -899,6 +960,7 @@ Download.prototype = {
           if (this.currentBytes != 0 || this.hasPartialData) {
             this.currentBytes = 0;
             this.hasPartialData = false;
+            this.target.refreshPartFileState();
             this._notifyChange();
           }
         } finally {
@@ -1082,6 +1144,36 @@ Download.prototype = {
   },
 
   /**
+   * Deletes all file data associated with a download, preserving the download
+   * object itself and updating it for download views.
+   */
+  async manuallyRemoveData() {
+    let { path } = this.target;
+    if (this.succeeded) {
+      // Temp files are made "read-only" by DownloadIntegration.downloadDone, so
+      // reset the permission bits to read/write. This won't be necessary after
+      // bug 1733587 since Downloads won't ever be temporary.
+      await IOUtils.setPermissions(path, 0o660);
+      await IOUtils.remove(path, { ignoreAbsent: true });
+    }
+    this.deleted = true;
+    await this.cancel();
+    await this.removePartialData();
+    // We need to guarantee that the UI is refreshed irrespective of what state
+    // the download is in when this is called, to ensure the download doesn't
+    // wind up stuck displaying as if it exists when it actually doesn't. And
+    // that means updating this.target.partFileExists no matter what.
+    await this.target.refreshPartFileState();
+    await this.refresh();
+    // The above methods will sometimes call _notifyChange, but not always. It
+    // depends on whether the download is `succeeded`, `stopped`, `canceled`,
+    // etc. Since this method needs to update the UI and can be invoked on any
+    // download as long as its target has some file on the system, we need to
+    // call _notifyChange no matter what state the download is in.
+    this._notifyChange();
+  },
+
+  /**
    * Indicates the time of the last progress notification, expressed as the
    * number of milliseconds since January 1, 1970, 00:00:00 UTC.  This is zero
    * until some bytes have actually been transferred.
@@ -1252,6 +1344,7 @@ const kPlainSerializableDownloadProperties = [
   "launchWhenSucceeded",
   "contentType",
   "handleInternally",
+  "openDownloadsListOnStart",
 ];
 
 /**
@@ -1345,6 +1438,11 @@ DownloadSource.prototype = {
   url: null,
 
   /**
+   * String containing the original URL for the download source.
+   */
+  originalUrl: null,
+
+  /**
    * Indicates whether the download originated from a private window.  This
    * determines the context of the network request that is made to retrieve the
    * resource.
@@ -1404,6 +1502,11 @@ DownloadSource.prototype = {
   cookieJarSettings: null,
 
   /**
+   * Represents the authentication header of the download source, could be null if
+   * the download source had no authentication header.
+   */
+  authHeader: null,
+  /**
    * Returns a static representation of the current object state.
    *
    * @return A JavaScript object that can be serialized to JSON.
@@ -1417,11 +1520,6 @@ DownloadSource.prototype = {
     if (this.allowHttpStatus) {
       // If the callback was used, we can't reproduce this across sessions.
       return null;
-    }
-
-    // Simplify the representation if we don't have other details.
-    if (!this.isPrivate && !this.referrerInfo && !this._unknownProperties) {
-      return this.url;
     }
 
     let serializable = { url: this.url };
@@ -1450,6 +1548,12 @@ DownloadSource.prototype = {
     }
 
     serializeUnknownProperties(this, serializable);
+
+    // Simplify the representation if we don't have other details.
+    if (Object.keys(serializable).length === 1) {
+      // serializable's only key is "url", just return the URL as a string.
+      return this.url;
+    }
     return serializable;
   },
 };
@@ -1499,6 +1603,9 @@ DownloadSource.fromSerializable = function(aSerializable) {
         source[propName] = aSerializable[propName];
       }
     }
+    if ("originalUrl" in aSerializable) {
+      source.originalUrl = aSerializable.originalUrl;
+    }
     if ("referrerInfo" in aSerializable) {
       // Quick pass, pass directly nsIReferrerInfo, we don't need to serialize
       // and deserialize
@@ -1539,14 +1646,20 @@ DownloadSource.fromSerializable = function(aSerializable) {
       }
     }
 
+    if ("authHeader" in aSerializable) {
+      source.authHeader = aSerializable.authHeader;
+    }
+
     deserializeUnknownProperties(
       source,
       aSerializable,
       property =>
         property != "url" &&
+        property != "originalUrl" &&
         property != "isPrivate" &&
         property != "referrerInfo" &&
-        property != "cookieJarSettings"
+        property != "cookieJarSettings" &&
+        property != "authHeader"
     );
   }
 
@@ -1786,6 +1899,7 @@ DownloadError.BLOCK_VERDICT_MALWARE = "Malware";
 DownloadError.BLOCK_VERDICT_POTENTIALLY_UNWANTED = "PotentiallyUnwanted";
 DownloadError.BLOCK_VERDICT_INSECURE = "Insecure";
 DownloadError.BLOCK_VERDICT_UNCOMMON = "Uncommon";
+DownloadError.BLOCK_VERDICT_DOWNLOAD_SPAM = "DownloadSpam";
 
 DownloadError.prototype = {
   __proto__: Error.prototype,
@@ -2299,7 +2413,15 @@ DownloadCopySaver.prototype = {
           }
         },
 
-        onDataAvailable(aRequest, aInputStream, aOffset, aCount) {
+        onDataAvailable: (aRequest, aInputStream, aOffset, aCount) => {
+          // Check if the download have been canceled in the mean time,
+          // and close the channel and return earlier, BackgroundFileSaver
+          // methods shouldn't be called anymore after `finish` was called
+          // on download cancellation.
+          if (this._canceled) {
+            aRequest.cancel(Cr.NS_BINDING_ABORTED);
+            return;
+          }
           backgroundFileSaver.onDataAvailable(
             aRequest,
             aInputStream,
@@ -2356,6 +2478,27 @@ DownloadCopySaver.prototype = {
         ) {
           channel.loadInfo.cookieJarSettings =
             download.source.cookieJarSettings;
+        }
+        if (
+          channel instanceof Ci.nsIHttpChannel &&
+          download.source.authHeader
+        ) {
+          try {
+            channel.setRequestHeader(
+              "Authorization",
+              download.source.authHeader,
+              true
+            );
+          } catch (e) {}
+        }
+
+        if (download.source.userContextId) {
+          // Getters and setters only exist on originAttributes,
+          // so it has to be cloned, changed, and re-set
+          channel.loadInfo.originAttributes = {
+            ...channel.loadInfo.originAttributes,
+            userContextId: download.source.userContextId,
+          };
         }
 
         // This makes the channel be corretly throttled during page loads
@@ -2446,6 +2589,10 @@ DownloadCopySaver.prototype = {
       verdict,
     } = await DownloadIntegration.shouldBlockForReputationCheck(download);
     if (shouldBlock) {
+      Services.telemetry
+        .getKeyedHistogramById("DOWNLOADS_USER_ACTION_ON_BLOCKED_DOWNLOAD")
+        .add(verdict, 0);
+
       let newProperties = { progress: 100, hasPartialData: false };
 
       // We will remove the potentially dangerous file if instructed by
@@ -2467,7 +2614,21 @@ DownloadCopySaver.prototype = {
     }
 
     if (partFilePath) {
-      await IOUtils.move(partFilePath, targetPath);
+      try {
+        await IOUtils.move(partFilePath, targetPath);
+      } catch (e) {
+        if (e.name === "NotAllowedError") {
+          // In case we cannot write to the target file
+          // retry with a new unique name
+          let uniquePath = DownloadPaths.createNiceUniqueFile(
+            new FileUtils.File(targetPath)
+          ).path;
+          await IOUtils.move(partFilePath, uniquePath);
+          this.download.target.path = uniquePath;
+        } else {
+          throw e;
+        }
+      }
     }
   },
 
@@ -2702,6 +2863,15 @@ DownloadLegacySaver.prototype = {
     // For legacy downloads, we must update the referrerInfo at this time.
     if (aRequest instanceof Ci.nsIHttpChannel) {
       this.download.source.referrerInfo = aRequest.referrerInfo;
+    }
+
+    // Don't open the download panel when the user initiated to save a
+    // link or document.
+    if (
+      aRequest instanceof Ci.nsIChannel &&
+      aRequest.loadInfo.isUserTriggeredSave
+    ) {
+      this.download.openDownloadsListOnStart = false;
     }
 
     this.addToHistory();

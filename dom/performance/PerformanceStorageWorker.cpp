@@ -10,7 +10,7 @@
 #include "PerformanceTiming.h"
 #include "mozilla/dom/WorkerRef.h"
 #include "mozilla/dom/WorkerRunnable.h"
-#include "mozilla/dom/WorkerPrivate.h"
+#include "mozilla/dom/WorkerScope.h"
 
 namespace mozilla::dom {
 
@@ -73,6 +73,7 @@ already_AddRefed<PerformanceStorageWorker> PerformanceStorageWorker::Create(
 
   RefPtr<PerformanceStorageWorker> storage = new PerformanceStorageWorker();
 
+  MutexAutoLock lock(storage->mMutex);  // for thread-safety analysis
   storage->mWorkerRef = WeakWorkerRef::Create(
       aWorkerPrivate, [storage]() { storage->ShutdownOnWorker(); });
 
@@ -120,6 +121,20 @@ void PerformanceStorageWorker::AddEntry(nsIHttpChannel* aChannel,
   Unused << NS_WARN_IF(!r->Dispatch());
 }
 
+void PerformanceStorageWorker::AddEntry(
+    const nsString& aEntryName, const nsString& aInitiatorType,
+    UniquePtr<PerformanceTimingData>&& aData) {
+  MOZ_ASSERT(!NS_IsMainThread());
+  if (!aData) {
+    return;
+  }
+
+  UniquePtr<PerformanceProxyData> data = MakeUnique<PerformanceProxyData>(
+      std::move(aData), aInitiatorType, aEntryName);
+
+  AddEntryOnWorker(std::move(data));
+}
+
 void PerformanceStorageWorker::ShutdownOnWorker() {
   MutexAutoLock lock(mMutex);
 
@@ -127,7 +142,7 @@ void PerformanceStorageWorker::ShutdownOnWorker() {
     return;
   }
 
-  MOZ_ASSERT(IsCurrentThreadRunningWorker());
+  MOZ_ASSERT(!NS_IsMainThread());
 
   mWorkerRef = nullptr;
 }

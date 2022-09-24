@@ -4,19 +4,21 @@
 
 "use strict";
 
-const EXPORTED_SYMBOLS = ["UrlbarQuickSuggest", "KeywordTree"];
+const EXPORTED_SYMBOLS = ["ONBOARDING_CHOICE", "UrlbarQuickSuggest"];
 
 const { XPCOMUtils } = ChromeUtils.import(
   "resource://gre/modules/XPCOMUtils.jsm"
 );
 
-const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-
 XPCOMUtils.defineLazyModuleGetters(this, {
   BrowserWindowTracker: "resource:///modules/BrowserWindowTracker.jsm",
-  RemoteSettings: "resource://services-settings/remote-settings.js",
-  UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
+  EventEmitter: "resource://gre/modules/EventEmitter.jsm",
   NimbusFeatures: "resource://nimbus/ExperimentAPI.jsm",
+  QUICK_SUGGEST_SOURCE: "resource:///modules/UrlbarProviderQuickSuggest.jsm",
+  RemoteSettings: "resource://services-settings/remote-settings.js",
+  Services: "resource://gre/modules/Services.jsm",
+  TaskQueue: "resource:///modules/UrlbarUtils.jsm",
+  UrlbarPrefs: "resource:///modules/UrlbarPrefs.jsm",
   UrlbarProviderQuickSuggest:
     "resource:///modules/UrlbarProviderQuickSuggest.jsm",
 });
@@ -32,76 +34,167 @@ const RS_COLLECTION = "quicksuggest";
 
 // Categories that should show "Firefox Suggest" instead of "Sponsored"
 const NONSPONSORED_IAB_CATEGORIES = new Set(["5 - Education"]);
-// Version in which the mr1 dialog is shown.
-const MR1_VERSION = 89;
 
+const FEATURE_AVAILABLE = "quickSuggestEnabled";
 const SEEN_DIALOG_PREF = "quicksuggest.showedOnboardingDialog";
-const VERSION_PREF = "browser.startup.upgradeDialog.version";
 const RESTARTS_PREF = "quicksuggest.seenRestarts";
+const DIALOG_VERSION_PREF = "quicksuggest.onboardingDialogVersion";
+const DIALOG_VARIATION_PREF = "quickSuggestOnboardingDialogVariation";
+
+// Values returned by the onboarding dialog depending on the user's response.
+// These values are used in telemetry events, so be careful about changing them.
+const ONBOARDING_CHOICE = {
+  ACCEPT_2: "accept_2",
+  CLOSE_1: "close_1",
+  DISMISS_1: "dismiss_1",
+  DISMISS_2: "dismiss_2",
+  LEARN_MORE_1: "learn_more_1",
+  LEARN_MORE_2: "learn_more_2",
+  NOT_NOW_2: "not_now_2",
+  REJECT_2: "reject_2",
+};
+
+const ONBOARDING_URI =
+  "chrome://browser/content/urlbar/quicksuggestOnboarding.html";
+
+// This is a score in the range [0, 1] used by the provider to compare
+// suggestions. All suggestions require a score, so if a remote settings
+// suggestion does not have one, it's assigned this value. We choose a low value
+// to allow Merino to experiment with a broad range of scores server side.
+const DEFAULT_SUGGESTION_SCORE = 0.2;
+
+// Entries are added to the `_resultsByKeyword` map in chunks, and each chunk
+// will add at most this many entries.
+const ADD_RESULTS_CHUNK_SIZE = 1000;
 
 /**
- * Fetches the suggestions data from RemoteSettings and builds the tree
+ * Fetches the suggestions data from RemoteSettings and builds the structures
  * to provide suggestions for UrlbarProviderQuickSuggest.
  */
-class Suggestions {
-  // The RemoteSettings client.
-  _rs = null;
-  // Let tests wait for init to complete.
-  _initPromise = null;
-  // Resolver function stored to call when init is complete.
-  _initResolve = null;
-  // A tree that maps keywords to a result.
-  _tree = new KeywordTree();
-  // A map of the result data.
-  _results = new Map();
-
-  async init() {
-    if (this._initPromise) {
-      return this._initPromise;
-    }
-    this._initPromise = Promise.resolve();
-    if (UrlbarPrefs.get("quickSuggestEnabled")) {
-      this._initPromise = new Promise(resolve => (this._initResolve = resolve));
-      Services.tm.idleDispatchToMainThread(this.onEnabledUpdate.bind(this));
-    } else {
-      NimbusFeatures.urlbar.onUpdate(this.onEnabledUpdate.bind(this));
-    }
+class QuickSuggest extends EventEmitter {
+  init() {
     UrlbarPrefs.addObserver(this);
-    return this._initPromise;
+    NimbusFeatures.urlbar.onUpdate(() => this._queueSettingsSetup());
+
+    this._settingsTaskQueue.queue(() => {
+      return new Promise(resolve => {
+        Services.tm.idleDispatchToMainThread(() => {
+          this._queueSettingsSetup();
+          resolve();
+        });
+      });
+    });
   }
 
-  /*
+  /**
+   * @returns {number}
+   *   A score in the range [0, 1] that can be used to compare suggestions. All
+   *   suggestions require a score, so if a remote settings suggestion does not
+   *   have one, it's assigned this value.
+   */
+  get DEFAULT_SUGGESTION_SCORE() {
+    return DEFAULT_SUGGESTION_SCORE;
+  }
+
+  /**
+   * @returns {Promise}
+   *   Resolves when any ongoing updates to the suggestions data are done.
+   */
+  get readyPromise() {
+    return this._settingsTaskQueue.emptyPromise;
+  }
+
+  /**
+   * @returns {object}
+   *   Global quick suggest configuration from remote settings:
+   *
+   *   {
+   *     best_match: {
+   *       min_search_string_length,
+   *       blocked_suggestion_ids,
+   *     },
+   *     impression_caps: {
+   *       nonsponsored: {
+   *         lifetime,
+   *         custom: [
+   *           { interval_s, max_count },
+   *         ],
+   *       },
+   *       sponsored: {
+   *         lifetime,
+   *         custom: [
+   *           { interval_s, max_count },
+   *         ],
+   *       },
+   *     },
+   *   }
+   */
+  get config() {
+    return this._config;
+  }
+
+  /**
    * Handle queries from the Urlbar.
+   *
+   * @param {string} phrase
+   *   The search string.
+   * @returns {array}
+   *   The matched suggestion objects. If there are no matches, an empty array
+   *   is returned.
    */
   async query(phrase) {
     log.info("Handling query for", phrase);
     phrase = phrase.toLowerCase();
-    let resultID = this._tree.get(phrase);
-    if (resultID === null) {
-      return null;
+    let object = this._resultsByKeyword.get(phrase);
+    if (!object) {
+      return [];
     }
-    let result = this._results.get(resultID);
-    if (!result) {
-      return null;
-    }
-    let d = new Date();
-    let pad = number => number.toString().padStart(2, "0");
-    let date =
-      `${d.getFullYear()}${pad(d.getMonth() + 1)}` +
-      `${pad(d.getDate())}${pad(d.getHours())}`;
-    let icon = await this.fetchIcon(result.icon);
-    return {
-      fullKeyword: this.getFullKeyword(phrase, result.keywords),
+
+    // `object` will be a single result object if there's only one match or an
+    // array of result objects if there's more than one match.
+    let results = [object].flat();
+
+    // Start each icon fetch at the same time and wait for them all to finish.
+    let icons = await Promise.all(
+      results.map(({ icon }) => this._fetchIcon(icon))
+    );
+
+    return results.map(result => ({
+      full_keyword: this.getFullKeyword(phrase, result.keywords),
       title: result.title,
-      url: result.url.replace("%YYYYMMDDHH%", date),
-      click_url: result.click_url.replace("%YYYYMMDDHH%", date),
-      // impression_url doesn't have any parameters
+      url: result.url,
+      click_url: result.click_url,
       impression_url: result.impression_url,
       block_id: result.id,
-      advertiser: result.advertiser.toLocaleLowerCase(),
-      isSponsored: !NONSPONSORED_IAB_CATEGORIES.has(result.iab_category),
-      icon,
-    };
+      advertiser: result.advertiser,
+      iab_category: result.iab_category,
+      is_sponsored: !NONSPONSORED_IAB_CATEGORIES.has(result.iab_category),
+      score:
+        typeof result.score == "number"
+          ? result.score
+          : DEFAULT_SUGGESTION_SCORE,
+      source: QUICK_SUGGEST_SOURCE.REMOTE_SETTINGS,
+      icon: icons.shift(),
+      position: result.position,
+      _test_is_best_match: result._test_is_best_match,
+    }));
+  }
+
+  /**
+   * Records the Nimbus exposure event if it hasn't already been recorded during
+   * the app session. This method actually queues the recording on idle because
+   * it's potentially an expensive operation.
+   */
+  ensureExposureEventRecorded() {
+    // `recordExposureEvent()` makes sure only one event is recorded per app
+    // session even if it's called many times, but since it may be expensive, we
+    // also keep `_recordedExposureEvent`.
+    if (!this._recordedExposureEvent) {
+      this._recordedExposureEvent = true;
+      Services.tm.idleDispatchToMainThread(() =>
+        NimbusFeatures.urlbar.recordExposureEvent({ once: true })
+      );
+    }
   }
 
   /**
@@ -157,184 +250,303 @@ class Suggestions {
   }
 
   /**
-   * Called when a urlbar pref changes. The onboarding dialog will set the
-   * `browser.urlbar.quicksuggest.user-seen-dialog` pref once the user has
-   * seen the dialog at which point we can start showing results.
-   *
-   * @param {string} pref
-   *   The name of the pref relative to `browser.urlbar`.
-   */
-  onPrefChanged(pref) {
-    switch (pref) {
-      case SEEN_DIALOG_PREF:
-        this.onEnabledUpdate();
-        break;
-    }
-  }
-
-  /*
-   * Called when an update that may change whether this feature is enabled
-   * or not has occured.
-   *
-   * QuickSuggest is controlled by two perferences that can be remotely
-   * configured through Nimbus.
-   *
-   *   * `quickSuggestEnabled`: this enables the QuickSuggest feature, but the
-   *     suggestion might not be immediately available if we want the user to
-   *     see the onboarding dialog, which is controlled by
-   *     `quickSuggestShouldShowOnboardingDialog`
-   *
-   *   * `quickSuggestShouldShowOnboardingDialog`: this determines whether the
-   *     QuickSuggest onboarding dialog should be shown before we show any
-   *     suggestions to the user once QuickSuggest is enabled
-   */
-  onEnabledUpdate() {
-    if (
-      UrlbarPrefs.get("quickSuggestEnabled") &&
-      (UrlbarPrefs.get(SEEN_DIALOG_PREF) ||
-        !UrlbarPrefs.get("quickSuggestShouldShowOnboardingDialog"))
-    ) {
-      this._setupRemoteSettings();
-    }
-  }
-
-  /*
    * An onboarding dialog can be shown to the users who are enrolled into
    * the QuickSuggest experiments or rollouts. This behavior is controlled
    * by the pref `browser.urlbar.quicksuggest.shouldShowOnboardingDialog`
    * which can be remotely configured by Nimbus.
    *
-   * Given that the release may overlap with MR1 which has an onboarding dialog
-   * We will wait for a few restarts after the MR1 dialog will have been shown
-   * before showing the QuickSuggest dialog. This could be remotely configured
-   * by Nimbus through `quickSuggestShowOnboardingDialogAfterNRestarts`, the
-   * default is 2.
+   * Given that the release may overlap with another onboarding dialog, we may
+   * wait for a few restarts before showing the QuickSuggest dialog. This can
+   * be remotely configured by Nimbus through
+   * `quickSuggestShowOnboardingDialogAfterNRestarts`, the default is 0.
+   *
+   * @returns {boolean}
+   *   True if the dialog was shown and false if not.
    */
   async maybeShowOnboardingDialog() {
-    // If quicksuggest is not enabled, the user has already seen the
-    // quicksuggest onboarding dialog, the onboarding dialog is configured to
-    // be skipped, or the user is not yet on a version where they could have
-    // seen the mr1 onboarding dialog then we won't show the quicksuggest
-    // onboarding.
+    // The call to this method races scenario initialization on startup, and the
+    // Nimbus variables we rely on below depend on the scenario, so wait for it
+    // to be initialized.
+    await UrlbarPrefs.firefoxSuggestScenarioStartupPromise;
+
+    // If the feature is disabled, the user has already seen the dialog, or the
+    // user has already opted in, don't show the onboarding.
     if (
-      !UrlbarPrefs.get("quickSuggestEnabled") ||
-      !UrlbarPrefs.get("quickSuggestShouldShowOnboardingDialog") ||
+      !UrlbarPrefs.get(FEATURE_AVAILABLE) ||
       UrlbarPrefs.get(SEEN_DIALOG_PREF) ||
-      Services.prefs.getIntPref(VERSION_PREF, 0) < MR1_VERSION
+      UrlbarPrefs.get("quicksuggest.dataCollection.enabled")
     ) {
-      return;
+      return false;
     }
 
-    // Wait a number of restarts after the user will have seen the mr1 onboarding dialog
-    // before showing the quicksuggest one.
+    // Wait a number of restarts before showing the dialog.
     let restartsSeen = UrlbarPrefs.get(RESTARTS_PREF);
     if (
       restartsSeen <
       UrlbarPrefs.get("quickSuggestShowOnboardingDialogAfterNRestarts")
     ) {
       UrlbarPrefs.set(RESTARTS_PREF, restartsSeen + 1);
-      return;
+      return false;
     }
 
-    let params = { disable: false, learnMore: false };
     let win = BrowserWindowTracker.getTopWindow();
-    await win.gDialogBox.open(
-      "chrome://browser/content/urlbar/quicksuggestOnboarding.xhtml",
-      params
-    );
+
+    // Don't show the dialog on top of about:welcome for new users.
+    if (win.gBrowser?.currentURI?.spec == "about:welcome") {
+      return false;
+    }
+
+    if (UrlbarPrefs.get("experimentType") === "modal") {
+      this.ensureExposureEventRecorded();
+    }
+
+    if (!UrlbarPrefs.get("quickSuggestShouldShowOnboardingDialog")) {
+      return false;
+    }
+
+    let variationType;
+    try {
+      // An error happens if the pref is not in user prefs.
+      variationType = UrlbarPrefs.get(DIALOG_VARIATION_PREF).toLowerCase();
+    } catch (e) {}
+
+    let params = { choice: undefined, variationType, visitedMain: false };
+    await win.gDialogBox.open(ONBOARDING_URI, params);
 
     UrlbarPrefs.set(SEEN_DIALOG_PREF, true);
-
-    if (params.disable) {
-      win.openPreferences("search-quickSuggest");
-    } else if (params.learnMore) {
-      win.openTrustedLinkIn(UrlbarProviderQuickSuggest.helpUrl, "tab", {
-        fromChrome: true,
-      });
-    }
-  }
-
-  /*
-   * Set up RemoteSettings listeners.
-   */
-  async _setupRemoteSettings() {
-    this._rs = RemoteSettings(RS_COLLECTION);
-    this._rs.on("sync", this._onSettingsSync.bind(this));
-    await this._ensureAttachmentsDownloaded();
-    if (this._initResolve) {
-      this._initResolve();
-      this._initResolve = null;
-    }
-  }
-
-  /*
-   * Called when RemoteSettings updates are received.
-   */
-  async _onSettingsSync({ data: { deleted } }) {
-    const toDelete = deleted?.filter(d => d.attachment);
-    // Remove local files of deleted records
-    if (toDelete) {
-      await Promise.all(
-        toDelete.map(entry => this._rs.attachments.delete(entry))
-      );
-    }
-    await this._ensureAttachmentsDownloaded();
-  }
-
-  /*
-   * We store our RemoteSettings data in attachments, ensure the attachments
-   * are saved locally.
-   */
-  async _ensureAttachmentsDownloaded() {
-    log.info("_ensureAttachmentsDownloaded started");
-    let dataOpts = { useCache: true };
-    let data = await this._rs.get({ filters: { type: "data" } });
-    await Promise.all(
-      data.map(r => this._rs.attachments.download(r, dataOpts))
+    UrlbarPrefs.set(
+      DIALOG_VERSION_PREF,
+      JSON.stringify({ version: 1, variation: variationType })
     );
 
-    let icons = await this._rs.get({ filters: { type: "icon" } });
-    await Promise.all(icons.map(r => this._rs.attachments.download(r)));
+    // Record the user's opt-in choice on the user branch. This pref is sticky,
+    // so it will retain its user-branch value regardless of what the particular
+    // default was at the time.
+    let optedIn = params.choice == ONBOARDING_CHOICE.ACCEPT_2;
+    UrlbarPrefs.set("quicksuggest.dataCollection.enabled", optedIn);
 
-    await this._createTree();
-    log.info("_ensureAttachmentsDownloaded complete");
+    switch (params.choice) {
+      case ONBOARDING_CHOICE.LEARN_MORE_1:
+      case ONBOARDING_CHOICE.LEARN_MORE_2:
+        win.openTrustedLinkIn(UrlbarProviderQuickSuggest.helpUrl, "tab", {
+          fromChrome: true,
+        });
+        break;
+      case ONBOARDING_CHOICE.ACCEPT_2:
+      case ONBOARDING_CHOICE.REJECT_2:
+      case ONBOARDING_CHOICE.NOT_NOW_2:
+      case ONBOARDING_CHOICE.CLOSE_1:
+        // No other action required.
+        break;
+      default:
+        params.choice = params.visitedMain
+          ? ONBOARDING_CHOICE.DISMISS_2
+          : ONBOARDING_CHOICE.DISMISS_1;
+        break;
+    }
+
+    UrlbarPrefs.set("quicksuggest.onboardingDialogChoice", params.choice);
+
+    Services.telemetry.recordEvent(
+      "contextservices.quicksuggest",
+      "opt_in_dialog",
+      params.choice
+    );
+
+    return true;
   }
 
-  /*
-   * Recreate the KeywordTree on startup or with RemoteSettings updates.
+  /**
+   * Called when a urlbar pref changes. The onboarding dialog will set the
+   * `browser.urlbar.suggest.quicksuggest` prefs if the user has opted in, at
+   * which point we can start showing results.
+   *
+   * @param {string} pref
+   *   The name of the pref relative to `browser.urlbar`.
    */
-  async _createTree() {
-    log.info("Building new KeywordTree");
-    this._results = new Map();
-    this._tree = new KeywordTree();
-    let data = await this._rs.get({ filters: { type: "data" } });
-
-    for (let record of data) {
-      let { buffer } = await this._rs.attachments.download(record, {
-        useCache: true,
-      });
-      let json = JSON.parse(new TextDecoder("utf-8").decode(buffer));
-      this._processSuggestionsJSON(json);
+  onPrefChanged(pref) {
+    switch (pref) {
+      case "suggest.quicksuggest.nonsponsored":
+      case "suggest.quicksuggest.sponsored":
+        this._queueSettingsSetup();
+        break;
     }
   }
 
-  /*
-   * Handle incoming suggestions data and add to local data.
+  // The RemoteSettings client.
+  _rs = null;
+
+  // Task queue for serializing access to remote settings and related data.
+  // Methods in this class should use this when they need to to modify or access
+  // the settings client. It ensures settings accesses are serialized, do not
+  // overlap, and happen only one at a time. It also lets clients, especially
+  // tests, use this class without having to worry about whether a settings sync
+  // or initialization is ongoing; see `readyPromise`.
+  _settingsTaskQueue = new TaskQueue();
+
+  // Configuration data synced from remote settings. See the `config` getter.
+  _config = {};
+
+  // Maps each keyword in the dataset to one or more results for the keyword. If
+  // only one result uses a keyword, the keyword's value in the map will be the
+  // result object. If more than one result uses the keyword, the value will be
+  // an array of the results. The reason for not always using an array is that
+  // we expect the vast majority of keywords to be used by only one result, and
+  // since there are potentially very many keywords and results and we keep them
+  // in memory all the time, we want to save as much memory as possible.
+  _resultsByKeyword = new Map();
+
+  // This is only defined as a property so that tests can override it.
+  _addResultsChunkSize = ADD_RESULTS_CHUNK_SIZE;
+
+  /**
+   * Queues a task to ensure our remote settings client is initialized or torn
+   * down as appropriate.
    */
-  async _processSuggestionsJSON(json) {
-    for (let result of json) {
-      this._results.set(result.id, result);
-      for (let keyword of result.keywords) {
-        this._tree.set(keyword, result.id);
+  _queueSettingsSetup() {
+    this._settingsTaskQueue.queue(() => {
+      let enabled =
+        UrlbarPrefs.get(FEATURE_AVAILABLE) &&
+        (UrlbarPrefs.get("suggest.quicksuggest.nonsponsored") ||
+          UrlbarPrefs.get("suggest.quicksuggest.sponsored"));
+      if (enabled && !this._rs) {
+        this._onSettingsSync = (...args) => this._queueSettingsSync(...args);
+        this._rs = RemoteSettings(RS_COLLECTION);
+        this._rs.on("sync", this._onSettingsSync);
+        this._queueSettingsSync();
+      } else if (!enabled && this._rs) {
+        this._rs.off("sync", this._onSettingsSync);
+        this._rs = null;
+        this._onSettingsSync = null;
       }
+    });
+  }
+
+  /**
+   * Queues a task to populate the results map from the remote settings data
+   * plus any other work that needs to be done on sync.
+   *
+   * @param {object} [event]
+   *   The event object passed to the "sync" event listener if you're calling
+   *   this from the listener.
+   */
+  async _queueSettingsSync(event = null) {
+    await this._settingsTaskQueue.queue(async () => {
+      // Remove local files of deleted records
+      if (event?.data?.deleted) {
+        await Promise.all(
+          event.data.deleted
+            .filter(d => d.attachment)
+            .map(entry =>
+              Promise.all([
+                this._rs.attachments.deleteDownloaded(entry), // type: data
+                this._rs.attachments.deleteFromDisk(entry), // type: icon
+              ])
+            )
+        );
+      }
+
+      let dataType = UrlbarPrefs.get("quickSuggestRemoteSettingsDataType");
+      log.debug("Loading data with type:", dataType);
+
+      let [configArray, data] = await Promise.all([
+        this._rs.get({ filters: { type: "configuration" } }),
+        this._rs.get({ filters: { type: dataType } }),
+        this._rs
+          .get({ filters: { type: "icon" } })
+          .then(icons =>
+            Promise.all(icons.map(i => this._rs.attachments.downloadToDisk(i)))
+          ),
+      ]);
+
+      log.debug("Got configuration:", configArray);
+      this._setConfig(configArray?.[0]?.configuration || {});
+
+      this._resultsByKeyword.clear();
+
+      log.debug(`Got data with ${data.length} records`);
+      for (let record of data) {
+        let { buffer } = await this._rs.attachments.download(record);
+        let results = JSON.parse(new TextDecoder("utf-8").decode(buffer));
+        log.debug(`Adding ${results.length} results`);
+        await this._addResults(results);
+      }
+    });
+  }
+
+  /**
+   * Sets the quick suggest config and emits a "config-set" event.
+   *
+   * @param {object} config
+   */
+  _setConfig(config) {
+    this._config = config || {};
+    this.emit("config-set");
+  }
+
+  /**
+   * Adds a list of result objects to the results map. This method is also used
+   * by tests to set up mock suggestions.
+   *
+   * @param {array} results
+   *   Array of result objects.
+   */
+  async _addResults(results) {
+    // There can be many results, and each result can have many keywords. To
+    // avoid blocking the main thread for too long, update the map in chunks,
+    // and to avoid blocking the UI and other higher priority work, do each
+    // chunk only when the main thread is idle. During each chunk, we'll add at
+    // most `_addResultsChunkSize` entries to the map.
+    let resultIndex = 0;
+    let keywordIndex = 0;
+
+    // Keep adding chunks until all results have been fully added.
+    while (resultIndex < results.length) {
+      await new Promise(resolve => {
+        Services.tm.idleDispatchToMainThread(() => {
+          // Keep updating the map until the current chunk is done.
+          let indexInChunk = 0;
+          while (
+            indexInChunk < this._addResultsChunkSize &&
+            resultIndex < results.length
+          ) {
+            let result = results[resultIndex];
+            if (keywordIndex == result.keywords.length) {
+              resultIndex++;
+              keywordIndex = 0;
+              continue;
+            }
+            // If the keyword's only result is `result`, store it directly as
+            // the value. Otherwise store an array of results. For details, see
+            // the `_resultsByKeyword` comment.
+            let keyword = result.keywords[keywordIndex];
+            let object = this._resultsByKeyword.get(keyword);
+            if (!object) {
+              this._resultsByKeyword.set(keyword, result);
+            } else if (!Array.isArray(object)) {
+              this._resultsByKeyword.set(keyword, [object, result]);
+            } else {
+              object.push(result);
+            }
+            keywordIndex++;
+            indexInChunk++;
+          }
+
+          // The current chunk is done.
+          resolve();
+        });
+      });
     }
   }
 
-  /*
+  /**
    * Fetch the icon from RemoteSettings attachments.
+   *
+   * @param {string} path
+   *   The icon's remote settings path.
    */
-  async fetchIcon(path) {
-    if (!path) {
+  async _fetchIcon(path) {
+    if (!path || !this._rs) {
       return null;
     }
     let record = (
@@ -345,171 +557,8 @@ class Suggestions {
     if (!record) {
       return null;
     }
-    return this._rs.attachments.download(record);
+    return this._rs.attachments.downloadToDisk(record);
   }
 }
 
-// Token used as a key to store results within the Map, cannot be used
-// within a keyword.
-const RESULT_KEY = "^";
-
-/**
- * This is an implementation of a Map based Tree. We can store
- * multiple keywords that point to a single term, for example:
- *
- *   tree.add("headphones", "headphones");
- *   tree.add("headph", "headphones");
- *   tree.add("earphones", "headphones");
- *
- *   tree.get("headph") == "headphones"
- *
- * The tree can store multiple prefixes to a term efficiently
- * so ["hea", "head", "headp", "headph", "headpho", ...] wont lead
- * to duplication in memory. The tree will only return a result
- * for keywords that have been explcitly defined and not attempt
- * to guess based on prefix.
- *
- * Once a tree have been build, it can be flattened with `.flatten`
- * the tree can then be serialised and deserialised with `.toJSON`
- * and `.fromJSON`.
- */
-class KeywordTree {
-  constructor() {
-    this.tree = new Map();
-  }
-
-  /*
-   * Set a keyword for a result.
-   */
-  set(keyword, id) {
-    if (keyword.includes(RESULT_KEY)) {
-      throw new Error(`"${RESULT_KEY}" is reserved`);
-    }
-    let tree = this.tree;
-    for (let x = 0, c = ""; (c = keyword.charAt(x)); x++) {
-      let child = tree.get(c) || new Map();
-      tree.set(c, child);
-      tree = child;
-    }
-    tree.set(RESULT_KEY, id);
-  }
-
-  /**
-   * Get the result for a given phrase.
-   *
-   * @param {string} query
-   *   The query string.
-   * @returns {*}
-   *   The matching result in the tree or null if there isn't a match.
-   */
-  get(query) {
-    query = query.trimStart() + RESULT_KEY;
-    let node = this.tree;
-    let phrase = "";
-    while (phrase.length < query.length) {
-      // First, assume the tree isn't flattened and try to look up the next char
-      // in the query.
-      let key = query[phrase.length];
-      let child = node.get(key);
-      if (!child) {
-        // Not found, so fall back to looking through all of the node's keys.
-        key = null;
-        for (let childKey of node.keys()) {
-          let childPhrase = phrase + childKey;
-          if (childPhrase == query.substring(0, childPhrase.length)) {
-            key = childKey;
-            break;
-          }
-        }
-        if (!key) {
-          return null;
-        }
-        child = node.get(key);
-      }
-      node = child;
-      phrase += key;
-    }
-    if (phrase.length != query.length) {
-      return null;
-    }
-    // At this point, `node` is the found result.
-    return node;
-  }
-
-  /*
-   * We flatten the tree by combining consecutive single branch keywords
-   * with the same results into a longer keyword. so ["a", ["b", ["c"]]]
-   * becomes ["abc"], we need to be careful that the result matches so
-   * if a prefix search for "hello" only starts after 2 characters it will
-   * be flattened to ["he", ["llo"]].
-   */
-  flatten() {
-    this._flatten("", this.tree, null);
-  }
-
-  /**
-   * Recursive flatten() helper.
-   *
-   * @param {string} key
-   *   The key for `node` in `parent`.
-   * @param {Map} node
-   *   The currently visited node.
-   * @param {Map} parent
-   *   The parent of `node`, or null if `node` is the root.
-   */
-  _flatten(key, node, parent) {
-    // Flatten the node's children.  We need to store node.entries() in an array
-    // rather than iterating over them directly because _flatten() can modify
-    // them during iteration.
-    for (let [childKey, child] of [...node.entries()]) {
-      if (childKey != RESULT_KEY) {
-        this._flatten(childKey, child, node);
-      }
-    }
-    // If the node has a single child, then replace the node in `parent` with
-    // the child.
-    if (node.size == 1 && parent) {
-      parent.delete(key);
-      let childKey = [...node.keys()][0];
-      parent.set(key + childKey, node.get(childKey));
-    }
-  }
-
-  /*
-   * Turn a tree into a serialisable JSON object.
-   */
-  toJSONObject(map = this.tree) {
-    let tmp = {};
-    for (let [key, val] of map) {
-      if (val instanceof Map) {
-        tmp[key] = this.toJSONObject(val);
-      } else {
-        tmp[key] = val;
-      }
-    }
-    return tmp;
-  }
-
-  /*
-   * Build a tree from a serialisable JSON object that was built
-   * with `toJSON`.
-   */
-  fromJSON(json) {
-    this.tree = this.JSONObjectToMap(json);
-  }
-
-  JSONObjectToMap(obj) {
-    let map = new Map();
-    for (let key of Object.keys(obj)) {
-      if (typeof obj[key] == "object") {
-        map.set(key, this.JSONObjectToMap(obj[key]));
-      } else {
-        map.set(key, obj[key]);
-      }
-    }
-    return map;
-  }
-}
-
-let UrlbarQuickSuggest = new Suggestions();
-UrlbarQuickSuggest.init();
+let UrlbarQuickSuggest = new QuickSuggest();

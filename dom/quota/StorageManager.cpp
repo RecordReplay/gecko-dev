@@ -752,6 +752,17 @@ already_AddRefed<Promise> StorageManager::Estimate(ErrorResult& aRv) {
                                        aRv);
 }
 
+already_AddRefed<Promise> StorageManager::GetDirectory(ErrorResult& aRv) {
+  RefPtr<Promise> promise = Promise::Create(GetParentObject(), aRv);
+  if (aRv.Failed()) {
+    return nullptr;
+  }
+
+  promise->MaybeReject(NS_ERROR_NOT_IMPLEMENTED);
+
+  return promise.forget();
+}
+
 NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(StorageManager, mOwner)
 
 NS_IMPL_CYCLE_COLLECTING_ADDREF(StorageManager)

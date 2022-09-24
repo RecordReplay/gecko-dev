@@ -7,6 +7,7 @@
 
 #include "GfxInfoCollector.h"
 #include "jsapi.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 #include "nsString.h"
 
 using namespace mozilla;
@@ -18,7 +19,7 @@ void InfoObject::DefineProperty(const char* name, int value) {
   mOk = JS_DefineProperty(mCx, mObj, name, value, JSPROP_ENUMERATE);
 }
 
-void InfoObject::DefineProperty(const char* name, nsAString& value) {
+void InfoObject::DefineProperty(const char* name, const nsAString& value) {
   if (!mOk) return;
 
   const nsString& flat = PromiseFlatString(value);

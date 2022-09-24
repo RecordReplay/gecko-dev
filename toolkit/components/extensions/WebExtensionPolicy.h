@@ -67,7 +67,7 @@ class WebExtensionPolicy final : public nsISupports,
                                  public SupportsWeakPtr {
  public:
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
-  NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS(WebExtensionPolicy)
+  NS_DECL_CYCLE_COLLECTION_WRAPPERCACHE_CLASS(WebExtensionPolicy)
 
   using ScriptArray = nsTArray<RefPtr<WebExtensionContentScript>>;
 
@@ -88,6 +88,8 @@ class WebExtensionPolicy final : public nsISupports,
   }
 
   bool IsPrivileged() { return mIsPrivileged; }
+
+  bool TemporarilyInstalled() { return mTemporarilyInstalled; }
 
   void GetURL(const nsAString& aPath, nsAString& aURL, ErrorResult& aRv) const;
 
@@ -247,6 +249,8 @@ class WebExtensionPolicy final : public nsISupports,
   RefPtr<WebExtensionLocalizeCallback> mLocalizeCallback;
 
   bool mIsPrivileged;
+  bool mTemporarilyInstalled;
+
   RefPtr<AtomSet> mPermissions;
   RefPtr<MatchPatternSet> mHostPermissions;
 

@@ -22,9 +22,11 @@
 #include "nsICacheEntry.h"
 #include "nsIRequest.h"
 #include "nsJSUtils.h"
+#include "sslerr.h"
 #include <errno.h>
 #include <functional>
 #include "nsLiteralString.h"
+#include <string.h>
 
 namespace mozilla {
 namespace net {
@@ -48,44 +50,8 @@ enum {
 };
 #undef HTTP_ATOM
 
-class nsCaseInsentitiveHashKey : public PLDHashEntryHdr {
- public:
-  using KeyType = const nsACString&;
-  using KeyTypePointer = const nsACString*;
-
-  explicit nsCaseInsentitiveHashKey(KeyTypePointer aStr) : mStr(*aStr) {
-    // take it easy just deal HashKey
-  }
-
-  nsCaseInsentitiveHashKey(const nsCaseInsentitiveHashKey&) = delete;
-  nsCaseInsentitiveHashKey(nsCaseInsentitiveHashKey&& aToMove) noexcept
-      : PLDHashEntryHdr(std::move(aToMove)), mStr(aToMove.mStr) {}
-  ~nsCaseInsentitiveHashKey() = default;
-
-  KeyType GetKey() const { return mStr; }
-  bool KeyEquals(const KeyTypePointer aKey) const {
-    return mStr.Equals(*aKey, nsCaseInsensitiveCStringComparator);
-  }
-
-  static KeyTypePointer KeyToPointer(KeyType aKey) { return &aKey; }
-  static PLDHashNumber HashKey(const KeyTypePointer aKey) {
-    nsAutoCString tmKey(*aKey);
-    ToLowerCase(tmKey);
-    return mozilla::HashString(tmKey);
-  }
-  enum { ALLOW_MEMMOVE = false };
-
-  // To avoid double-counting, only measure the string if it is unshared.
-  size_t SizeOfExcludingThis(mozilla::MallocSizeOf aMallocSizeOf) const {
-    return GetKey().SizeOfExcludingThisIfUnshared(aMallocSizeOf);
-  }
-
- private:
-  const nsCString mStr;
-};
-
-static StaticDataMutex<nsTHashtable<nsCaseInsentitiveHashKey>> sAtomTable(
-    "nsHttp::sAtomTable");
+static StaticDataMutex<nsTHashtable<nsCStringASCIICaseInsensitiveHashKey>>
+    sAtomTable("nsHttp::sAtomTable");
 
 // This is set to true in DestroyAtomTable so we don't try to repopulate the
 // table if ResolveAtom gets called during shutdown for some reason.
@@ -94,7 +60,8 @@ static Atomic<bool> sTableDestroyed{false};
 // We put the atoms in a hash table for speedy lookup.. see ResolveAtom.
 namespace nsHttp {
 
-nsresult CreateAtomTable(nsTHashtable<nsCaseInsentitiveHashKey>& base) {
+nsresult CreateAtomTable(
+    nsTHashtable<nsCStringASCIICaseInsensitiveHashKey>& base) {
   if (sTableDestroyed) {
     return NS_ERROR_ILLEGAL_DURING_SHUTDOWN;
   }
@@ -308,7 +275,8 @@ bool IsPermanentRedirect(uint32_t httpStatus) {
 bool ValidationRequired(bool isForcedValid,
                         nsHttpResponseHead* cachedResponseHead,
                         uint32_t loadFlags, bool allowStaleCacheContent,
-                        bool isImmutable, bool customConditionalRequest,
+                        bool forceValidateCacheContent, bool isImmutable,
+                        bool customConditionalRequest,
                         nsHttpRequestHead& requestHead, nsICacheEntry* entry,
                         CacheControlParser& cacheControlRequest,
                         bool fromPreviousSession,
@@ -335,7 +303,9 @@ bool ValidationRequired(bool isForcedValid,
 
   // If the VALIDATE_ALWAYS flag is set, any cached data won't be used until
   // it's revalidated with the server.
-  if ((loadFlags & nsIRequest::VALIDATE_ALWAYS) && !isImmutable) {
+  if (((loadFlags & nsIRequest::VALIDATE_ALWAYS) ||
+       forceValidateCacheContent) &&
+      !isImmutable) {
     LOG(("Validating based on VALIDATE_ALWAYS load flag\n"));
     return true;
   }
@@ -824,35 +794,53 @@ ParsedHeaderValueListList::ParsedHeaderValueListList(
   Tokenize(mFull.BeginReading(), mFull.Length(), ',', consumer);
 }
 
-void LogCallingScriptLocation(void* instance) {
-  if (!LOG4_ENABLED()) {
-    return;
+Maybe<nsCString> CallingScriptLocationString() {
+  if (!LOG4_ENABLED() && !xpc::IsInAutomation()) {
+    return Nothing();
   }
 
   JSContext* cx = nsContentUtils::GetCurrentJSContext();
   if (!cx) {
-    return;
+    return Nothing();
   }
 
   nsAutoCString fileNameString;
   uint32_t line = 0, col = 0;
   if (!nsJSUtils::GetCallingLocation(cx, fileNameString, &line, &col)) {
+    return Nothing();
+  }
+
+  nsCString logString = ""_ns;
+  logString.AppendPrintf("%s:%u:%u", fileNameString.get(), line, col);
+  return Some(logString);
+}
+
+void LogCallingScriptLocation(void* instance) {
+  Maybe<nsCString> logLocation = CallingScriptLocationString();
+  LogCallingScriptLocation(instance, logLocation);
+}
+
+void LogCallingScriptLocation(void* instance,
+                              const Maybe<nsCString>& aLogLocation) {
+  if (aLogLocation.isNothing()) {
     return;
   }
 
-  LOG(("%p called from script: %s:%u:%u", instance, fileNameString.get(), line,
-       col));
+  nsCString logString;
+  logString.AppendPrintf("%p called from script: ", instance);
+  logString.AppendPrintf("%s", aLogLocation->get());
+  LOG(("%s", logString.get()));
 }
 
 void LogHeaders(const char* lineStart) {
   nsAutoCString buf;
-  char* endOfLine;
-  while ((endOfLine = PL_strstr(lineStart, "\r\n"))) {
+  const char* endOfLine;
+  while ((endOfLine = strstr(lineStart, "\r\n"))) {
     buf.Assign(lineStart, endOfLine - lineStart);
     if (StaticPrefs::network_http_sanitize_headers_in_logs() &&
         (nsCRT::strcasestr(buf.get(), "authorization: ") ||
          nsCRT::strcasestr(buf.get(), "proxy-authorization: "))) {
-      char* p = PL_strchr(buf.get(), ' ');
+      char* p = strchr(buf.BeginWriting(), ' ');
       while (p && *++p) {
         *p = '*';
       }
@@ -1000,43 +988,41 @@ nsresult HttpProxyResponseToErrorCode(uint32_t aStatusCode) {
   return rv;
 }
 
-Tuple<nsCString, bool> SelectAlpnFromAlpnList(
-    const nsTArray<nsCString>& aAlpnList, bool aNoHttp2, bool aNoHttp3) {
-  nsCString h3Value;
-  nsCString h2Value;
-  nsCString h1Value;
-  for (const auto& npnToken : aAlpnList) {
-    bool isHttp3 = gHttpHandler->IsHttp3VersionSupported(npnToken);
-    if (isHttp3 && h3Value.IsEmpty()) {
-      h3Value.Assign(npnToken);
+SupportedAlpnRank H3VersionToRank(const nsACString& aVersion) {
+  for (uint32_t i = 0; i < kHttp3VersionCount; i++) {
+    if (aVersion.Equals(kHttp3Versions[i])) {
+      return static_cast<SupportedAlpnRank>(
+          static_cast<uint32_t>(SupportedAlpnRank::HTTP_3_DRAFT_29) + i);
     }
+  }
 
-    uint32_t spdyIndex;
+  return SupportedAlpnRank::NOT_SUPPORTED;
+}
+
+SupportedAlpnRank IsAlpnSupported(const nsACString& aAlpn) {
+  if (StaticPrefs::network_http_http3_enable() &&
+      gHttpHandler->IsHttp3VersionSupported(aAlpn)) {
+    return H3VersionToRank(aAlpn);
+  }
+
+  if (StaticPrefs::network_http_http2_enabled()) {
     SpdyInformation* spdyInfo = gHttpHandler->SpdyInfo();
-    if (NS_SUCCEEDED(spdyInfo->GetNPNIndex(npnToken, &spdyIndex)) &&
-        spdyInfo->ProtocolEnabled(spdyIndex) && h2Value.IsEmpty()) {
-      h2Value.Assign(npnToken);
-    }
-
-    if (npnToken.LowerCaseEqualsASCII("http/1.1") && h1Value.IsEmpty()) {
-      h1Value.Assign(npnToken);
+    if (aAlpn.Equals(spdyInfo->VersionString)) {
+      return SupportedAlpnRank::HTTP_2;
     }
   }
 
-  if (!h3Value.IsEmpty() && gHttpHandler->IsHttp3Enabled() && !aNoHttp3) {
-    return MakeTuple(h3Value, true);
+  if (aAlpn.LowerCaseEqualsASCII("http/1.1")) {
+    return SupportedAlpnRank::HTTP_1_1;
   }
 
-  if (!h2Value.IsEmpty() && gHttpHandler->IsSpdyEnabled() && !aNoHttp2) {
-    return MakeTuple(h2Value, false);
-  }
+  return SupportedAlpnRank::NOT_SUPPORTED;
+}
 
-  if (!h1Value.IsEmpty()) {
-    return MakeTuple(h1Value, false);
-  }
-
-  // If we are here, there is no supported alpn can be used.
-  return MakeTuple(EmptyCString(), false);
+bool SecurityErrorToBeHandledByTransaction(nsresult aReason) {
+  return (aReason ==
+          psm::GetXPCOMFromNSSError(SSL_ERROR_PROTOCOL_VERSION_ALERT)) ||
+         (aReason == psm::GetXPCOMFromNSSError(SSL_ERROR_BAD_MAC_ALERT));
 }
 
 }  // namespace net

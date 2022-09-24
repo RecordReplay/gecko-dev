@@ -19,6 +19,9 @@ about-webrtc-aec-logging-off-state-label = Start AEC Logging
 about-webrtc-aec-logging-on-state-label = Stop AEC Logging
 about-webrtc-aec-logging-on-state-msg = AEC logging active (speak with the caller for a few minutes and then stop the capture)
 
+# The autorefresh checkbox causes the page to autorefresh its content when checked
+about-webrtc-auto-refresh-label = Auto Refresh
+
 ##
 
 # "PeerConnection" is a proper noun associated with the WebRTC module. "ID" is
@@ -57,11 +60,6 @@ about-webrtc-ice-rollback-count-label = ICE rollbacks:
 about-webrtc-ice-pair-bytes-sent = Bytes sent:
 about-webrtc-ice-pair-bytes-received = Bytes received:
 about-webrtc-ice-component-id = Component ID
-
-## "Avg." is an abbreviation for Average. These are used as data labels.
-
-about-webrtc-avg-bitrate-label = Avg. bitrate:
-about-webrtc-avg-framerate-label = Avg. framerate:
 
 ## These adjectives are used to label a line of statistics collected for a peer
 ## connection. The data represents either the local or remote end of the
@@ -125,6 +123,7 @@ about-webrtc-discarded-packets-label = Discarded packets:
 about-webrtc-decoder-label = Decoder
 about-webrtc-encoder-label = Encoder
 about-webrtc-show-tab-label = Show tab
+about-webrtc-current-framerate-label = Framerate
 about-webrtc-width-px = Width (px)
 about-webrtc-height-px = Height (px)
 about-webrtc-consecutive-frames = Consecutive Frames
@@ -193,6 +192,24 @@ about-webrtc-debug-mode-on-state-msg = debug mode active, trace log at: { $path 
 about-webrtc-aec-logging-off-state-msg = captured log files can be found in: { $path }
 
 ##
+
+# This is the total number of frames encoded or decoded over an RTP stream.
+# Variables:
+#  $frames (Number) - The number of frames encoded or decoded.
+about-webrtc-frames =
+  { $frames ->
+      [one] { $frames } frame
+     *[other] { $frames } frames
+  }
+
+# This is the number of audio channels encoded or decoded over an RTP stream.
+# Variables:
+#  $channels (Number) - The number of channels encoded or decoded.
+about-webrtc-channels =
+  { $channels ->
+      [one] { $channels } channel
+     *[other] { $channels } channels
+  }
 
 # This is the total number of packets received on the PeerConnection.
 # Variables:

@@ -19,7 +19,6 @@ from mozbuild.frontend.data import (
     Exports,
     FinalTargetPreprocessedFiles,
     GeneratedFile,
-    GeneratedSources,
     HostProgram,
     HostRustLibrary,
     HostRustProgram,
@@ -623,7 +622,7 @@ class TestEmitterBasic(unittest.TestCase):
         o = objs[0]
         self.assertIsInstance(o, GeneratedFile)
         self.assertEqual(o.outputs, ("bar.c",))
-        self.assertRegexpMatches(o.script, "script.py$")
+        self.assertRegex(o.script, "script.py$")
         self.assertEqual(o.method, "make_bar")
         self.assertEqual(o.inputs, [])
 
@@ -1059,27 +1058,6 @@ class TestEmitterBasic(unittest.TestCase):
         expected = set(["bar/bar1.ipdl", "foo/foo1.ipdl"])
         self.assertEqual(pp_ipdls, expected)
 
-        generated_sources = set(ipdl_collection.all_generated_sources())
-        expected = set(
-            [
-                "bar.cpp",
-                "barChild.cpp",
-                "barParent.cpp",
-                "bar1.cpp",
-                "bar1Child.cpp",
-                "bar1Parent.cpp",
-                "bar2.cpp",
-                "foo.cpp",
-                "fooChild.cpp",
-                "fooParent.cpp",
-                "foo1.cpp",
-                "foo1Child.cpp",
-                "foo1Parent.cpp",
-                "foo2.cpp",
-            ]
-        )
-        self.assertEqual(generated_sources, expected)
-
     def test_local_includes(self):
         """Test that LOCAL_INCLUDES is emitted correctly."""
         reader = self.reader("local_includes")
@@ -1305,7 +1283,7 @@ class TestEmitterBasic(unittest.TestCase):
         for obj in self.read_topsrcdir(reader):
             if isinstance(obj, SharedLibrary):
                 if obj.basename == "cxx_shared":
-                    self.assertEquals(
+                    self.assertEqual(
                         obj.name,
                         "%scxx_shared%s"
                         % (reader.config.dll_prefix, reader.config.dll_suffix),
@@ -1313,7 +1291,7 @@ class TestEmitterBasic(unittest.TestCase):
                     self.assertTrue(obj.cxx_link)
                     got_results += 1
                 elif obj.basename == "just_c_shared":
-                    self.assertEquals(
+                    self.assertEqual(
                         obj.name,
                         "%sjust_c_shared%s"
                         % (reader.config.dll_prefix, reader.config.dll_suffix),
@@ -1338,7 +1316,9 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIsInstance(flags, ComputedFlags)
         self.assertEqual(len(objs), 6)
 
-        generated_sources = [o for o in objs if isinstance(o, GeneratedSources)]
+        generated_sources = [
+            o for o in objs if isinstance(o, Sources) and o.generated_files
+        ]
         self.assertEqual(len(generated_sources), 6)
 
         suffix_map = {obj.canonical_suffix: obj for obj in generated_sources}
@@ -1355,7 +1335,8 @@ class TestEmitterBasic(unittest.TestCase):
         for suffix, files in expected.items():
             sources = suffix_map[suffix]
             self.assertEqual(
-                sources.files, [mozpath.join(reader.config.topobjdir, f) for f in files]
+                sources.generated_files,
+                [mozpath.join(reader.config.topobjdir, f) for f in files],
             )
 
             for f in files:
@@ -1415,7 +1396,9 @@ class TestEmitterBasic(unittest.TestCase):
 
     def test_wasm_sources(self):
         """Test that WASM_SOURCES works properly."""
-        reader = self.reader("wasm-sources", extra_substs={"OS_TARGET": "Linux"})
+        reader = self.reader(
+            "wasm-sources", extra_substs={"WASM_CC": "clang", "WASM_CXX": "clang++"}
+        )
         objs = list(self.read_topsrcdir(reader))
 
         # The second to last object is a linkable.
@@ -1511,6 +1494,40 @@ class TestEmitterBasic(unittest.TestCase):
                 sources.files, [mozpath.join(reader.config.topsrcdir, f) for f in files]
             )
             self.assertFalse(sources.have_unified_mapping)
+
+    def test_object_conflicts(self):
+        """Test that object name conflicts are detected."""
+        reader = self.reader("object-conflicts/1")
+        with self.assertRaisesRegex(
+            SandboxValidationError,
+            "Test.cpp from SOURCES would have the same object name as"
+            " Test.c from SOURCES\.",
+        ):
+            self.read_topsrcdir(reader)
+
+        reader = self.reader("object-conflicts/2")
+        with self.assertRaisesRegex(
+            SandboxValidationError,
+            "Test.cpp from SOURCES would have the same object name as"
+            " subdir/Test.cpp from SOURCES\.",
+        ):
+            self.read_topsrcdir(reader)
+
+        reader = self.reader("object-conflicts/3")
+        with self.assertRaisesRegex(
+            SandboxValidationError,
+            "Test.cpp from UNIFIED_SOURCES would have the same object name as"
+            " Test.c from SOURCES in non-unified builds\.",
+        ):
+            self.read_topsrcdir(reader)
+
+        reader = self.reader("object-conflicts/4")
+        with self.assertRaisesRegex(
+            SandboxValidationError,
+            "Test.cpp from UNIFIED_SOURCES would have the same object name as"
+            " Test.c from UNIFIED_SOURCES in non-unified builds\.",
+        ):
+            self.read_topsrcdir(reader)
 
     def test_final_target_pp_files(self):
         """Test that FINAL_TARGET_PP_FILES works properly."""
@@ -1641,9 +1658,9 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIsInstance(ldflags, ComputedFlags)
         self.assertIsInstance(cflags, ComputedFlags)
         self.assertIsInstance(lib, RustLibrary)
-        self.assertRegexpMatches(lib.lib_name, "random_crate")
-        self.assertRegexpMatches(lib.import_name, "random_crate")
-        self.assertRegexpMatches(lib.basename, "random-crate")
+        self.assertRegex(lib.lib_name, "random_crate")
+        self.assertRegex(lib.import_name, "random_crate")
+        self.assertRegex(lib.basename, "random-crate")
 
     def test_multiple_rust_libraries(self):
         """Test that linking multiple Rust libraries throws an error"""
@@ -1764,8 +1781,8 @@ class TestEmitterBasic(unittest.TestCase):
         self.assertIsInstance(ldflags, ComputedFlags)
         self.assertIsInstance(cflags, ComputedFlags)
         self.assertIsInstance(lib, HostRustLibrary)
-        self.assertRegexpMatches(lib.lib_name, "host_lib")
-        self.assertRegexpMatches(lib.import_name, "host_lib")
+        self.assertRegex(lib.lib_name, "host_lib")
+        self.assertRegex(lib.import_name, "host_lib")
 
     def test_crate_dependency_path_resolution(self):
         """Test recursive dependencies resolve with the correct paths."""
@@ -1833,7 +1850,10 @@ class TestEmitterBasic(unittest.TestCase):
             self.read_topsrcdir(reader)
 
     def test_wasm_compile_flags(self):
-        reader = self.reader("wasm-compile-flags", extra_substs={"OS_TARGET": "Linux"})
+        reader = self.reader(
+            "wasm-compile-flags",
+            extra_substs={"WASM_CC": "clang", "WASM_CXX": "clang++"},
+        )
         flags = list(self.read_topsrcdir(reader))[2]
         self.assertIsInstance(flags, ComputedFlags)
         self.assertEqual(

@@ -13,8 +13,9 @@
 #include "mozilla/SurfaceFromElementResult.h"
 
 class gfxDrawable;
-class nsDisplayItem;
+
 namespace mozilla {
+class nsDisplayItem;
 
 namespace layers {
 class StackingContextHelper;
@@ -95,13 +96,13 @@ struct CSSSizeOrRatio {
 class nsImageRenderer {
  public:
   typedef mozilla::image::ImgDrawResult ImgDrawResult;
-  typedef mozilla::layers::LayerManager LayerManager;
   typedef mozilla::layers::ImageContainer ImageContainer;
 
   enum {
     FLAG_SYNC_DECODE_IMAGES = 0x01,
     FLAG_PAINTING_TO_WINDOW = 0x02,
-    FLAG_HIGH_QUALITY_SCALING = 0x04
+    FLAG_HIGH_QUALITY_SCALING = 0x04,
+    FLAG_DRAW_PARTIAL_FRAMES = 0x08
   };
   enum FitType { CONTAIN, COVER };
 
@@ -239,13 +240,10 @@ class nsImageRenderer {
                                gfxContext& aRenderingContext);
 
   bool IsRasterImage();
-  bool IsAnimatedImage();
 
   /// Retrieves the image associated with this nsImageRenderer, if there is one.
   already_AddRefed<imgIContainer> GetImage();
 
-  bool IsImageContainerAvailable(layers::LayerManager* aManager,
-                                 uint32_t aFlags);
   bool IsReady() const { return mPrepareResult == ImgDrawResult::SUCCESS; }
   ImgDrawResult PrepareResult() const { return mPrepareResult; }
   void SetExtendMode(mozilla::gfx::ExtendMode aMode) { mExtendMode = aMode; }

@@ -60,6 +60,11 @@ def _run_worker(config, paths, **lintargs):
     ):
         lintargs["show_warnings"] = True
 
+    # Override ignore thirdparty
+    # Only deactivating include_thirdparty is set on a linter.yml in use
+    if config.get("include_thirdparty", False):
+        lintargs["include_thirdparty"] = True
+
     func = supported_types[config["type"]]
     start_time = time.time()
     try:
@@ -159,7 +164,7 @@ class LintRoller(object):
         50  # set a max size to prevent command lines that are too long on Windows
     )
 
-    def __init__(self, root, exclude=None, **lintargs):
+    def __init__(self, root, exclude=None, setupargs=None, **lintargs):
         self.parse = Parser(root)
         try:
             self.vcs = get_repository_object(root)
@@ -169,6 +174,7 @@ class LintRoller(object):
         self.linters = []
         self.lintargs = lintargs
         self.lintargs["root"] = root
+        self._setupargs = setupargs or {}
 
         # result state
         self.result = ResultSummary(root)
@@ -211,6 +217,7 @@ class LintRoller(object):
 
             try:
                 setupargs = copy.deepcopy(self.lintargs)
+                setupargs.update(self._setupargs)
                 setupargs["name"] = linter["name"]
                 setupargs["log"] = logging.LoggerAdapter(
                     self.log, {"lintname": linter["name"]}
@@ -218,7 +225,9 @@ class LintRoller(object):
                 if virtualenv_manager is not None:
                     setupargs["virtualenv_manager"] = virtualenv_manager
                 start_time = time.time()
-                res = findobject(linter["setup"])(**setupargs)
+                res = findobject(linter["setup"])(
+                    **setupargs,
+                )
                 self.log.debug(
                     f"setup for {linter['name']} finished in "
                     f"{round(time.time() - start_time, 2)} seconds"
@@ -317,9 +326,10 @@ class LintRoller(object):
             if rev:
                 vcs_paths.update(self.vcs.get_changed_files("AM", rev=rev))
             if outgoing:
+                upstream = outgoing if isinstance(outgoing, str) else None
                 try:
                     vcs_paths.update(
-                        self.vcs.get_outgoing_files("AM", upstream=outgoing)
+                        self.vcs.get_outgoing_files("AM", upstream=upstream)
                     )
                 except MissingUpstreamRepo:
                     print(
@@ -331,6 +341,14 @@ class LintRoller(object):
                 print(e.output)
 
         if not (paths or vcs_paths) and (workdir or outgoing):
+            if os.environ.get("MOZ_AUTOMATION") and not os.environ.get(
+                "PYTEST_CURRENT_TEST"
+            ):
+                raise Exception(
+                    "Despite being a CI lint job, no files were linted. Is the task "
+                    "missing explicit paths?"
+                )
+
             print("warning: no files linted")
             return self.result
 
@@ -348,6 +366,9 @@ class LintRoller(object):
 
         # Make sure we never spawn more processes than we have jobs.
         num_procs = min(len(jobs), num_procs) or 1
+        if sys.platform == "win32":
+            # https://github.com/python/cpython/pull/13132
+            num_procs = min(num_procs, 61)
 
         signal.signal(signal.SIGINT, _worker_sigint_handler)
         executor = ProcessPoolExecutor(num_procs)

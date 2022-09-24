@@ -22,8 +22,7 @@ class nsIInputStream;
 class nsIPrincipal;
 class nsIUDPSocketInternal;
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
 class UDPSocketChildBase : public nsISupports {
  public:
@@ -61,8 +60,7 @@ class UDPSocketChild : public mozilla::net::PUDPSocketChild,
   nsresult Bind(nsIUDPSocketInternal* aSocket, nsIPrincipal* aPrincipal,
                 const nsACString& aHost, uint16_t aPort, bool aAddressReuse,
                 bool aLoopback, uint32_t recvBufferSize,
-                uint32_t sendBufferSize,
-                nsISerialEventTarget* aMainThreadEventTarget);
+                uint32_t sendBufferSize);
 
   // Tell the chrome process to connect the UDP socket to a given remote host
   // and port
@@ -106,7 +104,6 @@ class UDPSocketChild : public mozilla::net::PUDPSocketChild,
   nsCString mFilterName;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif  // !defined(mozilla_dom_UDPSocketChild_h__)

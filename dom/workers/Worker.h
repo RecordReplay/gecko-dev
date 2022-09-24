@@ -17,10 +17,9 @@
 #  undef PostMessage
 #endif
 
-namespace mozilla {
-namespace dom {
+namespace mozilla::dom {
 
-struct PostMessageOptions;
+struct StructuredSerializeOptions;
 struct WorkerOptions;
 class WorkerPrivate;
 
@@ -46,7 +45,8 @@ class Worker : public DOMEventTargetHelper, public SupportsWeakPtr {
                    const Sequence<JSObject*>& aTransferable, ErrorResult& aRv);
 
   void PostMessage(JSContext* aCx, JS::Handle<JS::Value> aMessage,
-                   const PostMessageOptions& aOptions, ErrorResult& aRv);
+                   const StructuredSerializeOptions& aOptions,
+                   ErrorResult& aRv);
 
   void Terminate();
 
@@ -62,7 +62,6 @@ class Worker : public DOMEventTargetHelper, public SupportsWeakPtr {
   RefPtr<WorkerPrivate> mWorkerPrivate;
 };
 
-}  // namespace dom
-}  // namespace mozilla
+}  // namespace mozilla::dom
 
 #endif /* mozilla_dom_Worker_h */

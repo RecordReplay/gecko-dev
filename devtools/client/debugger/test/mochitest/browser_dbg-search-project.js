@@ -3,10 +3,16 @@
  * file, You can obtain one at <http://mozilla.org/MPL/2.0/>. */
 
 // Testing basic project search
-add_task(async function() {
-  const dbg = await initDebugger("doc-script-switching.html", "switching-01");
 
-  await selectSource(dbg, "switching-01");
+"use strict";
+
+add_task(async function() {
+  const dbg = await initDebugger(
+    "doc-script-switching.html",
+    "script-switching-01.js"
+  );
+
+  await selectSource(dbg, "script-switching-01.js");
 
   // test opening and closing
   await openProjectSearch(dbg);
@@ -23,8 +29,8 @@ add_task(async function() {
   is(dbg.selectors.getActiveSearch(), null);
 
   const selectedSource = dbg.selectors.getSelectedSource();
-  ok(selectedSource.url.includes("switching-01"));
-  await waitForLoadedSource(dbg, "switching-01");
+  ok(selectedSource.url.includes("script-switching-01.js"));
+  await waitForLoadedSource(dbg, "script-switching-01.js");
 });
 
 // Test expanding search matches to reveal the search results.
@@ -43,6 +49,29 @@ add_task(async function() {
   collapsedNodes[0].click();
 
   is(getExpandedResultsCount(dbg), 226);
+});
+
+// Test the prioritization of source-mapped files. (Bug 1642778)
+add_task(async function() {
+  const dbg = await initDebugger("doc-react.html", "App.js");
+  await openProjectSearch(dbg);
+  type(dbg, "componentDidMount");
+  pressKey(dbg, "Enter");
+  await waitForState(dbg, state => state.projectTextSearch.status === "DONE");
+
+  is(getExpandedResultsCount(dbg), 8);
+
+  const snippets = findAllElements(dbg, "projectSearchExpandedResults");
+  const files = findAllElements(dbg, "projectSearchFileResults");
+
+  // The first item should be the original (prettified) file
+  is(
+    files[0].innerText.includes(
+      "browser/devtools/client/debugger/test/mochitest/examples/react/build/App.js"
+    ),
+    true
+  );
+  is(snippets[0].innerText.endsWith("componentDidMount() {"), true);
 });
 
 function openProjectSearch(dbg) {

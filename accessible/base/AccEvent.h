@@ -333,6 +333,12 @@ class AccReorderEvent : public AccTreeMutationEvent {
   virtual unsigned int GetEventGroups() const override {
     return AccTreeMutationEvent::GetEventGroups() | (1U << eReorderEvent);
   }
+
+  /*
+   * Make this an inner reorder event that is coalesced into
+   * a reorder event of an ancestor.
+   */
+  void SetInner() { mEventType = ::nsIAccessibleEvent::EVENT_INNER_REORDER; }
 };
 
 /**
@@ -341,12 +347,15 @@ class AccReorderEvent : public AccTreeMutationEvent {
 class AccCaretMoveEvent : public AccEvent {
  public:
   AccCaretMoveEvent(LocalAccessible* aAccessible, int32_t aCaretOffset,
-                    bool aIsSelectionCollapsed,
+                    bool aIsSelectionCollapsed, bool aIsAtEndOfLine,
+                    int32_t aGranularity,
                     EIsFromUserInput aIsFromUserInput = eAutoDetect)
       : AccEvent(::nsIAccessibleEvent::EVENT_TEXT_CARET_MOVED, aAccessible,
                  aIsFromUserInput),
         mCaretOffset(aCaretOffset),
-        mIsSelectionCollapsed(aIsSelectionCollapsed) {}
+        mIsSelectionCollapsed(aIsSelectionCollapsed),
+        mIsAtEndOfLine(aIsAtEndOfLine),
+        mGranularity(aGranularity) {}
   virtual ~AccCaretMoveEvent() {}
 
   // AccEvent
@@ -359,11 +368,16 @@ class AccCaretMoveEvent : public AccEvent {
   int32_t GetCaretOffset() const { return mCaretOffset; }
 
   bool IsSelectionCollapsed() const { return mIsSelectionCollapsed; }
+  bool IsAtEndOfLine() { return mIsAtEndOfLine; }
+
+  int32_t GetGranularity() const { return mGranularity; }
 
  private:
   int32_t mCaretOffset;
 
   bool mIsSelectionCollapsed;
+  bool mIsAtEndOfLine;
+  int32_t mGranularity;
 };
 
 /**
@@ -372,7 +386,8 @@ class AccCaretMoveEvent : public AccEvent {
 class AccTextSelChangeEvent : public AccEvent {
  public:
   AccTextSelChangeEvent(HyperTextAccessible* aTarget,
-                        dom::Selection* aSelection, int32_t aReason);
+                        dom::Selection* aSelection, int32_t aReason,
+                        int32_t aGranularity);
   virtual ~AccTextSelChangeEvent();
 
   // AccEvent
@@ -388,6 +403,8 @@ class AccTextSelChangeEvent : public AccEvent {
    */
   bool IsCaretMoveOnly() const;
 
+  int32_t GetGranularity() const { return mGranularity; }
+
   /**
    * Return selection ranges in document/control.
    */
@@ -396,6 +413,7 @@ class AccTextSelChangeEvent : public AccEvent {
  private:
   RefPtr<dom::Selection> mSel;
   int32_t mReason;
+  int32_t mGranularity;
 
   friend class EventQueue;
   friend class SelectionManager;

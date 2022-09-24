@@ -1,5 +1,6 @@
 pub type c_char = u8;
 pub type wchar_t = u32;
+pub type __u64 = ::c_ulonglong;
 
 s! {
     pub struct stat {
@@ -46,6 +47,13 @@ s! {
         pub st_ctime_nsec: ::c_long,
         __unused4: ::c_uint,
         __unused5: ::c_uint,
+    }
+
+    pub struct user_regs_struct {
+        pub regs: [u64; 31],
+        pub sp: u64,
+        pub pc: u64,
+        pub pstate: u64,
     }
 }
 
@@ -125,6 +133,7 @@ pub const SYS_epoll_ctl: ::c_long = 21;
 pub const SYS_epoll_pwait: ::c_long = 22;
 pub const SYS_dup: ::c_long = 23;
 pub const SYS_dup3: ::c_long = 24;
+pub const SYS_fcntl: ::c_long = 25;
 pub const SYS_inotify_init1: ::c_long = 26;
 pub const SYS_inotify_add_watch: ::c_long = 27;
 pub const SYS_inotify_rm_watch: ::c_long = 28;
@@ -371,5 +380,12 @@ cfg_if! {
     if #[cfg(libc_align)] {
         mod align;
         pub use self::align::*;
+    }
+}
+
+cfg_if! {
+    if #[cfg(libc_int128)] {
+        mod int128;
+        pub use self::int128::*;
     }
 }

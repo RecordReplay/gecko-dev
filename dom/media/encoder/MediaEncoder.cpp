@@ -35,10 +35,8 @@
 #include "TimeUnits.h"
 #include "Tracing.h"
 
-#ifdef MOZ_WEBM_ENCODER
-#  include "VP8TrackEncoder.h"
-#  include "WebMWriter.h"
-#endif
+#include "VP8TrackEncoder.h"
+#include "WebMWriter.h"
 
 mozilla::LazyLogModule gMediaEncoderLog("MediaEncoder");
 #define LOG(type, msg) MOZ_LOG(gMediaEncoderLog, type, msg)
@@ -113,7 +111,8 @@ class MediaEncoder::AudioTrackListener : public DirectMediaTrackListener {
 
   void NotifyQueuedChanges(MediaTrackGraph* aGraph, TrackTime aTrackOffset,
                            const MediaSegment& aQueuedMedia) override {
-    TRACE_COMMENT("MediaEncoder %p", mMediaEncoder.get());
+    TRACE_COMMENT("MediaEncoder::NotifyQueuedChanges", "%p",
+                  mMediaEncoder.get());
     MOZ_ASSERT(mMediaEncoder);
     MOZ_ASSERT(mEncoderThread);
 
@@ -222,7 +221,8 @@ class MediaEncoder::VideoTrackListener : public DirectMediaTrackListener {
 
   void NotifyQueuedChanges(MediaTrackGraph* aGraph, TrackTime aTrackOffset,
                            const MediaSegment& aQueuedMedia) override {
-    TRACE_COMMENT("MediaEncoder %p", mMediaEncoder.get());
+    TRACE_COMMENT("MediaEncoder::NotifyQueuedChanges", "%p",
+                  mMediaEncoder.get());
     MOZ_ASSERT(mMediaEncoder);
     MOZ_ASSERT(mMediaEncoder->mVideoEncoder);
     MOZ_ASSERT(mEncoderThread);
@@ -254,7 +254,8 @@ class MediaEncoder::VideoTrackListener : public DirectMediaTrackListener {
 
   void NotifyRealtimeTrackData(MediaTrackGraph* aGraph, TrackTime aTrackOffset,
                                const MediaSegment& aMedia) override {
-    TRACE_COMMENT("MediaEncoder %p", mMediaEncoder.get());
+    TRACE_COMMENT("MediaEncoder::NotifyRealtimeTrackData", "%p",
+                  mMediaEncoder.get());
     MOZ_ASSERT(mMediaEncoder);
     MOZ_ASSERT(mMediaEncoder->mVideoEncoder);
     MOZ_ASSERT(mEncoderThread);
@@ -494,7 +495,10 @@ void MediaEncoder::RunOnGraph(already_AddRefed<Runnable> aRunnable) {
    public:
     explicit Message(already_AddRefed<Runnable> aRunnable)
         : ControlMessage(nullptr), mRunnable(aRunnable) {}
-    void Run() override { mRunnable->Run(); }
+    void Run() override {
+      TRACE("MediaEncoder::RunOnGraph");
+      mRunnable->Run();
+    }
     const RefPtr<Runnable> mRunnable;
   };
   mGraphTrack->mTrack->GraphImpl()->AppendMessage(
@@ -702,12 +706,8 @@ already_AddRefed<MediaEncoder> MediaEncoder::CreateEncoder(
 
   if (mimeType->Type() == MEDIAMIMETYPE(VIDEO_WEBM) ||
       mimeType->Type() == MEDIAMIMETYPE(AUDIO_WEBM)) {
-#ifdef MOZ_WEBM_ENCODER
     MOZ_ASSERT_IF(mimeType->Type() == MEDIAMIMETYPE(AUDIO_WEBM), !videoEncoder);
     writer = MakeUnique<WebMWriter>();
-#else
-    MOZ_CRASH("Webm cannot be selected if not supported");
-#endif  // MOZ_WEBM_ENCODER
   } else if (mimeType->Type() == MEDIAMIMETYPE(AUDIO_OGG)) {
     MOZ_ASSERT(audioEncoder);
     MOZ_ASSERT(!videoEncoder);
@@ -1044,11 +1044,7 @@ void MediaEncoder::DisconnectTracks() {
 }
 
 bool MediaEncoder::IsWebMEncoderEnabled() {
-#ifdef MOZ_WEBM_ENCODER
   return StaticPrefs::media_encoder_webm_enabled();
-#else
-  return false;
-#endif
 }
 
 void MediaEncoder::UpdateInitialized() {

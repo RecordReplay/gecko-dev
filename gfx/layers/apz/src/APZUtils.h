@@ -76,8 +76,7 @@ inline bool ScrollSourceAllowsOverscroll(ScrollSource aSource) {
 // isn't too large.
 const float COORDINATE_EPSILON = 0.02f;
 
-template <typename Units>
-static bool IsZero(const gfx::PointTyped<Units>& aPoint) {
+inline bool IsZero(const CSSPoint& aPoint) {
   return FuzzyEqualsAdditive(aPoint.x, 0.0f, COORDINATE_EPSILON) &&
          FuzzyEqualsAdditive(aPoint.y, 0.0f, COORDINATE_EPSILON);
 }
@@ -157,7 +156,7 @@ constexpr AsyncTransformComponents LayoutAndVisual(
  */
 struct GeckoViewMetrics {
   CSSPoint mVisualScrollOffset;
-  CSSToParentLayerScale2D mZoom;
+  CSSToParentLayerScale mZoom;
 };
 
 namespace apz {
@@ -207,13 +206,6 @@ ScreenPoint ComputeFixedMarginsOffset(
  */
 bool AboutToCheckerboard(const FrameMetrics& aPaintedMetrics,
                          const FrameMetrics& aCompositorMetrics);
-
-/**
- * Wrapper around StaticPrefs::layers_progressive_paint that takes into account
- * whether the platform is supported or sandboxed. We should prefer this over
- * using the StaticPrefs getter directly.
- */
-bool ShouldUseProgressivePaint();
 
 /**
  * Returns SideBits where the given |aOverscrollAmount| overscrolls.

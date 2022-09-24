@@ -11,6 +11,7 @@
 
 #include "js/Array.h"  // JS::NewArrayObject
 #include "js/Debug.h"
+#include "js/PropertyAndElement.h"  // JS_DefineProperty
 #include "js/TypeDecls.h"
 #include "js/UbiNodeBreadthFirst.h"
 #include "js/UbiNodeCensus.h"
@@ -34,6 +35,7 @@
 
 #include "jsapi.h"
 #include "jsfriendapi.h"
+#include "js/MapAndSet.h"
 #include "js/Object.h"  // JS::GetCompartment
 #include "nsCycleCollectionParticipant.h"
 #include "nsCRTGlue.h"
@@ -693,10 +695,13 @@ static bool AddGlobalsAsRoots(HandleObjectVector globals,
 // If `boundaries` is incoherent, or we encounter an error while trying to
 // handle it, or we run out of memory, set `rv` appropriately and return
 // `false`.
-static bool EstablishBoundaries(JSContext* cx, ErrorResult& rv,
-                                const HeapSnapshotBoundaries& boundaries,
-                                ubi::RootList& roots,
-                                CompartmentSet& compartments) {
+//
+// Return value is a pair of the status and an AutoCheckCannotGC token,
+// forwarded from ubi::RootList::init(), to ensure that the caller does
+// not GC while the RootList is live and initialized.
+static std::pair<bool, AutoCheckCannotGC> EstablishBoundaries(
+    JSContext* cx, ErrorResult& rv, const HeapSnapshotBoundaries& boundaries,
+    ubi::RootList& roots, CompartmentSet& compartments) {
   MOZ_ASSERT(!roots.initialized());
   MOZ_ASSERT(compartments.empty());
 
@@ -707,48 +712,49 @@ static bool EstablishBoundaries(JSContext* cx, ErrorResult& rv,
 
     if (!boundaries.mRuntime.Value()) {
       rv.Throw(NS_ERROR_INVALID_ARG);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
 
-    if (!roots.init()) {
+    auto [ok, nogc] = roots.init();
+    if (!ok) {
       rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-      return false;
+      return {false, nogc};
     }
   }
 
   if (boundaries.mDebugger.WasPassed()) {
     if (foundBoundaryProperty) {
       rv.Throw(NS_ERROR_INVALID_ARG);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
     foundBoundaryProperty = true;
 
     JSObject* dbgObj = boundaries.mDebugger.Value();
     if (!dbgObj || !dbg::IsDebugger(*dbgObj)) {
       rv.Throw(NS_ERROR_INVALID_ARG);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
 
     RootedObjectVector globals(cx);
     if (!dbg::GetDebuggeeGlobals(cx, *dbgObj, &globals) ||
         !PopulateCompartmentsWithGlobals(compartments, globals) ||
-        !roots.init(compartments) || !AddGlobalsAsRoots(globals, roots)) {
+        !roots.init(compartments).first || !AddGlobalsAsRoots(globals, roots)) {
       rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
   }
 
   if (boundaries.mGlobals.WasPassed()) {
     if (foundBoundaryProperty) {
       rv.Throw(NS_ERROR_INVALID_ARG);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
     foundBoundaryProperty = true;
 
     uint32_t length = boundaries.mGlobals.Value().Length();
     if (length == 0) {
       rv.Throw(NS_ERROR_INVALID_ARG);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
 
     RootedObjectVector globals(cx);
@@ -756,28 +762,29 @@ static bool EstablishBoundaries(JSContext* cx, ErrorResult& rv,
       JSObject* global = boundaries.mGlobals.Value().ElementAt(i);
       if (!JS_IsGlobalObject(global)) {
         rv.Throw(NS_ERROR_INVALID_ARG);
-        return false;
+        return {false, AutoCheckCannotGC(cx)};
       }
       if (!globals.append(global)) {
         rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-        return false;
+        return {false, AutoCheckCannotGC(cx)};
       }
     }
 
     if (!PopulateCompartmentsWithGlobals(compartments, globals) ||
-        !roots.init(compartments) || !AddGlobalsAsRoots(globals, roots)) {
+        !roots.init(compartments).first || !AddGlobalsAsRoots(globals, roots)) {
       rv.Throw(NS_ERROR_OUT_OF_MEMORY);
-      return false;
+      return {false, AutoCheckCannotGC(cx)};
     }
   }
+  AutoCheckCannotGC nogc(cx);
 
   if (!foundBoundaryProperty) {
     rv.Throw(NS_ERROR_INVALID_ARG);
-    return false;
+    return {false, nogc};
   }
 
   MOZ_ASSERT(roots.initialized());
-  return true;
+  return {true, nogc};
 }
 
 // A variant covering all the various two-byte strings that we can get from the
@@ -1471,15 +1478,16 @@ void ChromeUtils::SaveHeapSnapshotShared(
   JSContext* cx = global.Context();
 
   {
-    Maybe<AutoCheckCannotGC> maybeNoGC;
-    ubi::RootList rootList(cx, maybeNoGC, wantNames);
-    if (!EstablishBoundaries(cx, rv, boundaries, rootList, compartments))
+    ubi::RootList rootList(cx, wantNames);
+    auto [ok, nogc] =
+        EstablishBoundaries(cx, rv, boundaries, rootList, compartments);
+    if (!ok) {
       return;
+    }
 
     StreamWriter writer(cx, gzipStream, wantNames,
                         !compartments.empty() ? &compartments : nullptr);
 
-    MOZ_ASSERT(maybeNoGC.isSome());
     ubi::Node roots(&rootList);
 
     // Serialize the initial heap snapshot metadata to the core dump.
@@ -1487,8 +1495,8 @@ void ChromeUtils::SaveHeapSnapshotShared(
         // Serialize the heap graph to the core dump, starting from our list of
         // roots.
         !WriteHeapGraph(cx, roots, writer, wantNames,
-                        !compartments.empty() ? &compartments : nullptr,
-                        maybeNoGC.ref(), nodeCount, edgeCount)) {
+                        !compartments.empty() ? &compartments : nullptr, nogc,
+                        nodeCount, edgeCount)) {
       rv.Throw(zeroCopyStream.failed() ? zeroCopyStream.result()
                                        : NS_ERROR_UNEXPECTED);
       return;

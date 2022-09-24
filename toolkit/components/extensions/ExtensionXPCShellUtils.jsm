@@ -7,9 +7,6 @@
 
 var EXPORTED_SYMBOLS = ["ExtensionTestUtils"];
 
-const { XPCOMUtils } = ChromeUtils.import(
-  "resource://gre/modules/XPCOMUtils.jsm"
-);
 const { AppConstants } = ChromeUtils.import(
   "resource://gre/modules/AppConstants.jsm"
 );
@@ -39,6 +36,11 @@ ChromeUtils.defineModuleGetter(
 );
 ChromeUtils.defineModuleGetter(
   this,
+  "Management",
+  "resource://gre/modules/Extension.jsm"
+);
+ChromeUtils.defineModuleGetter(
+  this,
   "Schemas",
   "resource://gre/modules/Schemas.jsm"
 );
@@ -47,14 +49,6 @@ ChromeUtils.defineModuleGetter(
   "Services",
   "resource://gre/modules/Services.jsm"
 );
-
-XPCOMUtils.defineLazyGetter(this, "Management", () => {
-  const { Management } = ChromeUtils.import(
-    "resource://gre/modules/Extension.jsm",
-    null
-  );
-  return Management;
-});
 
 let BASE_MANIFEST = Object.freeze({
   applications: Object.freeze({
@@ -208,6 +202,16 @@ class ExtensionWrapper {
     return this.startupPromise;
   }
 
+  awaitBackgroundStarted() {
+    if (!this.extension.manifest.background) {
+      throw new Error("Extension has no background");
+    }
+    return Promise.all([
+      this.startupPromise,
+      this.extension.promiseBackgroundStarted(),
+    ]);
+  }
+
   async startup() {
     if (this.state != "uninitialized") {
       throw new Error("Extension already started");
@@ -264,20 +268,16 @@ class ExtensionWrapper {
     this.state = "unloaded";
   }
 
-  /*
-   * This method marks the extension unloading without actually calling
-   * shutdown, since shutting down a MockExtension causes it to be uninstalled.
-   *
-   * Normally you shouldn't need to use this unless you need to test something
-   * that requires a restart, such as updates.
+  /**
+   * This method sends the message to force-sleep the background scripts.
+   * @returns {Promise} resolves after the background is asleep and listeners primed.
    */
-  markUnloaded() {
-    if (this.state != "running") {
-      throw new Error("Extension not running");
-    }
-    this.state = "unloaded";
+  terminateBackground() {
+    return this.extension.terminateBackground();
+  }
 
-    return Promise.resolve();
+  wakeupBackground() {
+    return this.extension.wakeupBackground();
   }
 
   sendMessage(...args) {
@@ -614,6 +614,22 @@ class ExternallyInstalledWrapper extends AOMExtensionWrapper {
 
 var ExtensionTestUtils = {
   BASE_MANIFEST,
+
+  get testAssertions() {
+    return ExtensionTestCommon.testAssertions;
+  },
+
+  // Shortcut to more easily access WebExtensionPolicy.backgroundServiceWorkerEnabled
+  // from mochitest-plain tests.
+  getBackgroundServiceWorkerEnabled() {
+    return ExtensionTestCommon.getBackgroundServiceWorkerEnabled();
+  },
+
+  // A test helper used to check if the pref "extension.backgroundServiceWorker.forceInTestExtension"
+  // is set to true.
+  isInBackgroundServiceWorkerTests() {
+    return ExtensionTestCommon.isInBackgroundServiceWorkerTests();
+  },
 
   async normalizeManifest(
     manifest,

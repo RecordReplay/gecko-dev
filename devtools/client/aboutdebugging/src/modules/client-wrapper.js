@@ -12,6 +12,7 @@ const {
   RUNTIME_PREFERENCE,
 } = require("devtools/client/aboutdebugging/src/constants");
 const { WorkersListener } = require("devtools/client/shared/workers-listener");
+const RootResourceCommand = require("devtools/shared/commands/root-resource/root-resource-command");
 
 const PREF_TYPES = {
   BOOL: "BOOL",
@@ -84,6 +85,10 @@ class ClientWrapper {
       os: description.os,
       version: description.version,
     };
+  }
+
+  createRootResourceCommand() {
+    return new RootResourceCommand({ rootFront: this.client.mainRoot });
   }
 
   async checkVersionCompatibility() {
@@ -180,7 +185,8 @@ class ClientWrapper {
    */
   async loadPerformanceProfiler(win, openAboutProfiling) {
     const perfFront = await this.getFront("perf");
-    win.gInit(perfFront, "devtools-remote", openAboutProfiling);
+    const { traits } = this.client;
+    await win.gInit(perfFront, traits, "devtools-remote", openAboutProfiling);
   }
 
   /**
@@ -189,7 +195,14 @@ class ClientWrapper {
    */
   async loadAboutProfiling(win, openRemoteDevTools) {
     const perfFront = await this.getFront("perf");
-    win.gInit(perfFront, "aboutprofiling-remote", openRemoteDevTools);
+    const isSupportedPlatform = await perfFront.isSupportedPlatform();
+    const supportedFeatures = await perfFront.getSupportedFeatures();
+    await win.gInit(
+      "aboutprofiling-remote",
+      isSupportedPlatform,
+      supportedFeatures,
+      openRemoteDevTools
+    );
   }
 }
 
