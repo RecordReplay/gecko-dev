@@ -2569,9 +2569,6 @@ bool gfxPlatform::WebRenderEnvvarEnabled() {
 }
 
 void gfxPlatform::InitWebRenderConfig() {
-  gfxVars::SetUseWebRender(false);
-  return;
-#if 0
   bool prefEnabled = WebRenderPrefEnabled();
   bool envvarEnabled = WebRenderEnvvarEnabled();
 
@@ -2585,12 +2582,6 @@ void gfxPlatform::InitWebRenderConfig() {
   // crash reports.
   ScopedGfxFeatureReporter reporter("WR", prefEnabled || envvarEnabled);
   if (!XRE_IsParentProcess()) {
-    // Force-disable WebRender in recording/replaying child processes, which
-    // have their own compositor.
-    if (recordreplay::IsRecordingOrReplaying()) {
-      gfxVars::SetUseWebRender(false);
-    }
-
     // The parent process runs through all the real decision-making code
     // later in this function. For other processes we still want to report
     // the state of the feature for crash reports.
@@ -2638,7 +2629,7 @@ void gfxPlatform::InitWebRenderConfig() {
 
   // gfxFeature is not usable in the GPU process, so we use gfxVars to transmit
   // this feature
-  if (hasWebRender && !recordreplay::IsRecordingOrReplaying()) {
+  if (hasWebRender) {
     gfxVars::SetUseWebRender(true);
     reporter.SetSuccessful();
 
@@ -2801,7 +2792,6 @@ void gfxPlatform::InitWebRenderConfig() {
   // The RemoveShaderCacheFromDiskIfNecessary() needs to be called after
   // WebRenderConfig initialization.
   gfxUtils::RemoveShaderCacheFromDiskIfNecessary();
-#endif
 }
 
 void gfxPlatform::InitHardwareVideoConfig() {

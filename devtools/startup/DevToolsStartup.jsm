@@ -93,7 +93,7 @@ ChromeUtils.defineModuleGetter(
   "resource:///modules/PanelMultiView.jsm"
 );
 const { AboutNewTab } = ChromeUtils.import("resource:///modules/AboutNewTab.jsm");
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { require } = ChromeUtils.import("resource://devtools/shared/loader/Loader.jsm");
 const {
   ContentProcessListener,
 } = require("devtools/server/actors/webconsole/listeners/content-process");

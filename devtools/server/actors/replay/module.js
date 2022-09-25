@@ -51,7 +51,7 @@ const { NetUtil } = ChromeUtils.import("resource://gre/modules/NetUtil.jsm");
 
 const { ComponentUtils } = ChromeUtils.import("resource://gre/modules/ComponentUtils.jsm");
 
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { require } = ChromeUtils.import("resource://devtools/shared/loader/Loader.jsm");
 
 const { getCurrentZoom } = require("devtools/shared/layout/utils");
 const { getDebuggerSourceURL } = require("devtools/server/actors/utils/source-url");
@@ -543,7 +543,7 @@ function getStylesheetWindow(stylesheet) {
 }
 
 const { DebuggerNotificationObserver } = Cu.getGlobalForObject(
-  require("resource://devtools/shared/Loader.jsm")
+  require("resource://devtools/shared/loader/Loader.jsm")
 );
 const gNotificationObserver = new DebuggerNotificationObserver();
 gNotificationObserver.addListener(eventListener);

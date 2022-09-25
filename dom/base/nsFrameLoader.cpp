@@ -495,7 +495,8 @@ already_AddRefed<nsFrameLoader> nsFrameLoader::Recreate(
 
   RefPtr<BrowsingContext> context = aContext;
   if (!context || !aPreserveContext || recording.Length() ||
-      (context->Canonical() &&
+      (XRE_IsParentProcess() &&
+       context->Canonical() &&
        context->Canonical()->GetContentParent() &&
        context->Canonical()->GetContentParent()->IsRecording())) {
     context = CreateBrowsingContext(aOwner, /* openWindowInfo */ nullptr,

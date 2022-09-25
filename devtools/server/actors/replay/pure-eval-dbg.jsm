@@ -6,7 +6,7 @@
 // 'devtools/server/actors/webconsole/eval-with-debugger.js'. We had to
 // duplicate them in order to ensure that they run in the correct compartment.
 
-const { require } = ChromeUtils.import("resource://devtools/shared/Loader.jsm");
+const { require } = ChromeUtils.import("resource://devtools/shared/loader/Loader.jsm");
 
 const eagerEcmaAllowlist = require("devtools/server/actors/webconsole/eager-ecma-allowlist");
 const eagerFunctionAllowlist = require("devtools/server/actors/webconsole/eager-function-allowlist");
