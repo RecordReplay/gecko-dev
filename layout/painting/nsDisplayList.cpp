@@ -2682,19 +2682,6 @@ nsRect nsDisplayItem::GetClippedBounds(nsDisplayListBuilder* aBuilder) const {
   return GetClip().ApplyNonRoundedIntersection(r);
 }
 
-nsRect nsDisplayItem::GetPaintRect(nsDisplayListBuilder* aBuilder,
-                                   gfxContext* aCtx) {
-  bool dummy;
-  nsRect result = GetBounds(aBuilder, &dummy);
-  if (aCtx) {
-    result.IntersectRect(result,
-                         nsLayoutUtils::RoundGfxRectToAppRect(
-                             aCtx->GetClipExtents(),
-                             mFrame->PresContext()->AppUnitsPerDevPixel()));
-  }
-  return result;
-}
-
 nsDisplayContainer::nsDisplayContainer(
     nsDisplayListBuilder* aBuilder, nsIFrame* aFrame,
     const ActiveScrolledRoot* aActiveScrolledRoot, nsDisplayList* aList)
@@ -6179,7 +6166,8 @@ bool nsDisplayTransform::ComputePerspectiveMatrix(const nsIFrame* aFrame,
   perspectiveOrigin += frameToPerspectiveGfxOffset;
 
   aOutMatrix._34 =
-      -1.0 / NSAppUnitsToFloatPixels(perspective, aAppUnitsPerPixel);
+      -1.0 / NSAppUnitsToFloatPixels(CSSPixel::ToAppUnits(perspective),
+                                     aAppUnitsPerPixel);
 
   aOutMatrix.ChangeBasis(Point3D(perspectiveOrigin.x, perspectiveOrigin.y, 0));
   return true;

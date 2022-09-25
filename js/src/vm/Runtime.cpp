@@ -25,6 +25,7 @@
 #  include <sys/mman.h>
 #endif
 
+#include "jsapi.h"
 #include "jsfriendapi.h"
 #include "jsmath.h"
 
@@ -904,7 +905,7 @@ void js::SetTrackObjectsCallback(bool aTrackObjects) {
 
         Zone::DiscardOptions options;
         options.discardBaselineCode = false;
-        zone->discardJitCode(cx->runtime()->defaultFreeOp(), options);
+        zone->discardJitCode(cx->runtime()->gcContext(), options);
       }
     }
   }

@@ -1079,6 +1079,9 @@ void GlobalObjectData::trace(JSTracer* trc, GlobalObject* global) {
   TraceNullableEdge(trc, &iterResultWithoutPrototypeTemplate,
                     "iter-result-without-prototype-template");
 
+  TraceNullableEdge(trc, &instrumentationHolder,
+                    "instrumentation-holder");
+
   TraceNullableEdge(trc, &selfHostingScriptSource,
                     "self-hosting-script-source");
 

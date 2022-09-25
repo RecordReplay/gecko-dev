@@ -561,7 +561,7 @@ static bool RecordReplayFaultCallback(void** prip, void* rbp, void* rsp) {
   }
 
   auto* frame = reinterpret_cast<Frame*>(rbp);
-  Instance* instance = GetNearestEffectiveTls(frame)->instance;
+  Instance* instance = GetNearestEffectiveInstance(frame);
   MOZ_RELEASE_ASSERT(&instance->code() == &segment.code() ||
                      trap == Trap::IndirectCallBadSig);
 

@@ -87,6 +87,9 @@ class ThreadEventQueue final : public SynchronizedEventQueue {
   bool mShutdownTasksRun GUARDED_BY(mLock) = false;
 
   const bool mIsMainThread;
+
+  Mutex mLockNonDeterministic;
+  EventQueue mBaseQueueNonDeterministic;
 };
 
 }  // namespace mozilla

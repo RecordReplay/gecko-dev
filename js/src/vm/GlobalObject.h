@@ -221,6 +221,8 @@ class GlobalObjectData {
 
   UniquePtr<gc::FinalizationRegistryGlobalData> finalizationRegistryData;
 
+  HeapPtr<JSObject*> instrumentationHolder;
+
   // Whether the |globalThis| property has been resolved on the global object.
   bool globalThisResolved = false;
 
@@ -385,6 +387,14 @@ class GlobalObject : public NativeObject {
   void setPrototype(JSProtoKey key, JSObject* obj) {
     MOZ_ASSERT(obj);
     data().builtinConstructors[key].prototype = obj;
+  }
+
+  JSObject* getInstrumentationHolder() {
+    return data().instrumentationHolder;
+  }
+
+  void setInstrumentationHolder(JSObject* obj) {
+    data().instrumentationHolder = obj;
   }
 
   /*

@@ -27,8 +27,22 @@
 <h1 data-l10n-id="default-bookmarks-heading">default-bookmarks-heading</h1>
 
 <dl><p>
-    <dt><h3 personal_toolbar_folder="true">@bookmarks_toolbarfolder@</h3></dt>
-    <dd>@bookmarks_toolbarfolder_description@
+    <dt><h3 personal_toolbar_folder="true" data-l10n-id="default-bookmarks-toolbarfolder">default-bookmarks-toolbarfolder</h3></dt>
+    <dd data-l10n-id="default-bookmarks-toolbarfolder-description">default-bookmarks-toolbarfolder-description</dd>
+#ifndef NIGHTLY_BUILD
+        <dl><p>
+            <dt><a href="https://www.mozilla.org/firefox/central/" icon="@firefox_icon@" data-l10n-id="default-bookmarks-getting-started">default-bookmarks-getting-started</a></dt>
+        </dl><p>
+    <dt><h3 data-l10n-id="default-bookmarks-firefox-heading">default-bookmarks-firefox-heading</h3></dt>
+        <dl><p>
+        </dl><p>
+#else
+        <dl><p>
+        </dl><p>
+    <dt><h3 data-l10n-id="default-bookmarks-nightly-heading">default-bookmarks-nightly-heading</h3></dt>
+        <dl><p>
+        </dl><p>
+#endif
 </dl>
 </body>
 </html>

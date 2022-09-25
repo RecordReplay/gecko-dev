@@ -1260,7 +1260,7 @@ static JSLinearString* StringifySHA256Bytes(JSContext* cx, const uint8_t *sha256
     buf[i*2] = HEXMAP[(byte >> 4) & 0xf];
     buf[i*2 + 1] = HEXMAP[byte & 0xf];
   }
-  return NewStringCopyUTF8N<CanGC>(cx, JS::UTF8Chars(buf, 64));
+  return NewStringCopyUTF8N(cx, JS::UTF8Chars(buf, 64));
 }
 
 JSLinearString* ScriptSource::hash(JSContext* cx) {

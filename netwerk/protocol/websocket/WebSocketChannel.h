@@ -164,8 +164,7 @@ class WebSocketChannel : public BaseWebSocketChannel,
   void GeneratePong(uint8_t* payload, uint32_t len);
   void GeneratePing();
 
-  [[nodiscard]] nsresult OnNetworkChangedTargetThread();
-  [[nodiscard]] nsresult OnNetworkChangedSocketThread();
+  [[nodiscard]] nsresult OnNetworkChanged();
   [[nodiscard]] nsresult StartPinging();
 
   void BeginOpen(bool aCalledFromAdmissionManager);

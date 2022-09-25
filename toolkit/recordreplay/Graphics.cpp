@@ -12,6 +12,7 @@
 #include "ProcessRecordReplay.h"
 #include "mozilla/Base64.h"
 #include "mozilla/StaticMutex.h"
+#include "mozilla/layers/TextureHost.h"
 #include "imgIEncoder.h"
 #include "nsComponentManagerUtils.h"
 #include "nsPrintfCString.h"
@@ -34,65 +35,10 @@ void InitializeGraphics() {
   gSetPaintCallback(PaintCallback);
 }
 
-// When replaying we perform all compositor updates on a LayerTransactionParent
-// we create in process. Only updates from the first LayerTransactionChild are
-// performed, so that we don't get confused if there are multiple layer trees
-// in use within the process.
-static LayerTransactionChild* gLayerTransactionChild;
-
-static LayerManagerComposite* gLayerManager;
 static CompositorBridgeParent* gCompositorBridge;
-static LayerTransactionParent* gLayerTransactionParent;
 
 // Directory to write paints to when recording, for use in debugging.
 static const char* gPaintsDirectory;
-
-static void EnsureInitialized(LayerTransactionChild* aChild) {
-  MOZ_RELEASE_ASSERT(NS_IsMainThread());
-
-  if (gLayerTransactionParent) {
-    return;
-  }
-
-  gLayerTransactionChild = aChild;
-
-  Compositor* compositor = new BasicCompositor(nullptr, nullptr);
-  gLayerManager = new LayerManagerComposite(compositor);
-
-  gCompositorBridge = new CompositorBridgeParent(nullptr,
-                                                 CSSToLayoutDeviceScale(1),
-                                                 TimeDuration(),
-                                                 CompositorOptions(),
-                                                 false,
-                                                 gfx::IntSize());
-  gCompositorBridge->SetLayerManager(gLayerManager);
-
-  gLayerTransactionParent = new LayerTransactionParent(gLayerManager,
-                                                       gCompositorBridge, nullptr,
-                                                       LayersId(), TimeDuration());
-
-  gPaintsDirectory = getenv("RECORD_REPLAY_PAINTS_DIRECTORY");
-}
-
-static bool ShouldUpdateCompositor(LayerTransactionChild* aChild) {
-  // We never need to update the compositor state in the recording process,
-  // because we send updates to the UI process which will composite in the
-  // regular way.
-  EnsureInitialized(aChild);
-  return (IsReplaying() || gPaintsDirectory) && gLayerTransactionChild == aChild;
-}
-
-void SendUpdate(LayerTransactionChild* aChild, const TransactionInfo& aInfo) {
-  if (ShouldUpdateCompositor(aChild)) {
-    // Make sure the compositor does not interact with the recording.
-    recordreplay::AutoDisallowThreadEvents disallow;
-
-    // Even if we won't be painting, we need to continue updating the layer state
-    // in case we end up wanting to paint later.
-    ipc::IPCResult rv = gLayerTransactionParent->RecvUpdate(aInfo);
-    MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
-  }
-}
 
 static TimeStamp gCompositeTime;
 
@@ -113,34 +59,6 @@ void OnPaint() {
   MaybeCreatePaintFile();
 
   gOnPaint();
-}
-
-void SendNewCompositable(LayerTransactionChild* aChild,
-                         const layers::CompositableHandle& aHandle,
-                         const layers::TextureInfo& aInfo) {
-  if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
-    ipc::IPCResult rv = gLayerTransactionParent->RecvNewCompositable(aHandle, aInfo);
-    MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
-  }
-}
-
-void SendReleaseCompositable(LayerTransactionChild* aChild,
-                             const layers::CompositableHandle& aHandle) {
-  if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
-    ipc::IPCResult rv = gLayerTransactionParent->RecvReleaseCompositable(aHandle);
-    MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
-  }
-}
-
-void SendReleaseLayer(LayerTransactionChild* aChild,
-                      const layers::LayerHandle& aHandle) {
-  if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
-    ipc::IPCResult rv = gLayerTransactionParent->RecvReleaseLayer(aHandle);
-    MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
-  }
 }
 
 // Format to use for graphics data.
@@ -300,7 +218,7 @@ static char* PaintCallback(const char* aMimeType, int aJPEGQuality) {
   MOZ_RELEASE_ASSERT(!gFetchedDrawTarget);
 
   AutoDisallowThreadEvents disallow;
-  gCompositorBridge->CompositeToTarget(VsyncId(), nullptr, nullptr);
+  //gCompositorBridge->CompositeToTarget(VsyncId(), nullptr, nullptr);
 
   if (!gFetchedDrawTarget && !recordreplay::HasDivergedFromRecording()) {
     return nullptr;

@@ -349,7 +349,7 @@ nsresult XRE_InitChildProcess(int aArgc, char* aArgv[],
   recordreplay::Initialize(&aArgc, &aArgv);
   mozilla::TimeStamp afterRRInit = ([]() {
     mozilla::recordreplay::AutoPassThroughThreadEvents pt;
-    return mozilla::TimeStamp::NowUnfuzzed();
+    return mozilla::TimeStamp::Now();
   })();
   // Only print init-time message when not replaying.
   if (!recordreplay::IsReplaying()) {

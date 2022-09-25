@@ -89,8 +89,11 @@ class BufferTextureData : public TextureData {
                                            int32_t aBufferSize,
                                            TextureFlags aTextureFlags);
 
+ // Exposed for record/replay graphics usage.
+ public:
   virtual uint8_t* GetBuffer() = 0;
   virtual size_t GetBufferSize() = 0;
+ protected:
 
   BufferTextureData(const BufferDescriptor& aDescriptor,
                     gfx::BackendType aMoz2DBackend)

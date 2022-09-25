@@ -62,7 +62,6 @@ static const JSClassOps InstrumentationHolderClassOps = {
     nullptr,                               // mayResolve
     RealmInstrumentation::holderFinalize,  // finalize
     nullptr,                               // call
-    nullptr,                               // hasInstance
     nullptr,                               // construct
     RealmInstrumentation::holderTrace,     // trace
 };
@@ -180,7 +179,7 @@ bool RealmInstrumentation::setActive(JSContext* cx,
 
     Zone::DiscardOptions options;
     options.discardBaselineCode = false;
-    cx->zone()->discardJitCode(cx->runtime()->defaultFreeOp(), options);
+    cx->zone()->discardJitCode(cx->runtime()->gcContext(), options);
   }
 
   return true;
