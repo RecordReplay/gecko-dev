@@ -46,29 +46,6 @@ function topicObservable(topic, checkFn) {
   return deferred;
 }
 
-// Similar to TestUtils.topicObserved, but returns a deferred promise that
-// can be resolved
-function topicObservable(topic, checkFn) {
-  let deferred = PromiseUtils.defer();
-  function observer(subject, topic, data) {
-    try {
-      if (checkFn && !checkFn(subject, data)) {
-        return;
-      }
-      deferred.resolve([subject, data]);
-    } catch (ex) {
-      deferred.reject(ex);
-    }
-  }
-  deferred.promise.finally(() => {
-    Services.obs.removeObserver(observer, topic);
-    checkFn = null;
-  });
-  Services.obs.addObserver(observer, topic);
-
-  return deferred;
-}
-
 async function setupRemoteSettings() {
   const settings = await RemoteSettings("hijack-blocklists");
   sinon.stub(settings, "get").returns([

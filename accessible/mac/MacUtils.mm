@@ -36,10 +36,6 @@ NSString* GetAccAttr(mozAccessible* aNativeAccessible, nsAtom* aAttrName) {
     return nil;
   }
 
-  if (!attributes) {
-    return nil;
-  }
-
   attributes->GetAttribute(aAttrName, result);
 
   if (!result.IsEmpty()) {

@@ -5803,7 +5803,6 @@ dependencies = [
  "etagere",
  "euclid",
  "fog",
- "foreign-types",
  "freetype",
  "fxhash",
  "gleam",

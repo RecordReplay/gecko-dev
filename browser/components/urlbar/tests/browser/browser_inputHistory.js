@@ -21,7 +21,7 @@ async function bumpScore(
   if (counts.picks) {
     for (let i = 0; i < counts.picks; ++i) {
       await UrlbarTestUtils.promiseAutocompleteResultPopup({
-        window: win,
+        window,
         value: searchString,
       });
       let promise = needToLoad
@@ -35,8 +35,8 @@ async function bumpScore(
         EventUtils.synthesizeKey("KEY_ArrowDown", {});
       }
       if (useMouseClick) {
-        let element = UrlbarTestUtils.getSelectedRow(win);
-        EventUtils.synthesizeMouseAtCenter(element, {}, win);
+        let element = UrlbarTestUtils.getSelectedRow(window);
+        EventUtils.synthesizeMouseAtCenter(element, {});
       } else {
         EventUtils.synthesizeKey("KEY_Enter", {});
       }
@@ -59,9 +59,6 @@ add_setup(async function() {
     ],
   });
   registerCleanupFunction(async () => {
-    await BrowserTestUtils.closeWindow(win);
-    // Avoid memory leaking, need to set null explicitly.
-    win = null;
     await PlacesUtils.history.clear();
     await PlacesUtils.bookmarks.eraseEverything();
   });
@@ -76,12 +73,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "si", { visits: 3, picks: 3 });
   await bumpScore(url2, "site", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 
   info(
@@ -91,12 +88,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "site", { visits: 3, picks: 3 });
   await bumpScore(url2, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 
   info("Same visit count, different picks, both exact match");
@@ -104,12 +101,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "si", { visits: 3, picks: 3 });
   await bumpScore(url2, "si", { visits: 3, picks: 1 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 
   info("Same visit count, different picks, both exact match, invert");
@@ -117,12 +114,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "si", { visits: 3, picks: 1 });
   await bumpScore(url2, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 
   info("Same visit count, different picks, both partial match");
@@ -130,12 +127,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "site", { visits: 3, picks: 3 });
   await bumpScore(url2, "site", { visits: 3, picks: 1 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 
   info("Same visit count, different picks, both partial match, invert");
@@ -143,12 +140,12 @@ add_task(async function test_adaptive_with_search_terms() {
   await bumpScore(url1, "site", { visits: 3, picks: 1 });
   await bumpScore(url2, "site", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 });
 
@@ -162,12 +159,12 @@ add_task(async function test_adaptive_with_decay() {
   await decayInputHistory();
   await bumpScore(url2, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 
   info("Same visit count, same picks, both exact match, decay second");
@@ -176,12 +173,12 @@ add_task(async function test_adaptive_with_decay() {
   await decayInputHistory();
   await bumpScore(url1, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 });
 
@@ -195,12 +192,12 @@ add_task(async function test_adaptive_limited() {
   await decayInputHistory();
   await bumpScore(url2, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 
   info("Same visit count, same picks, both exact match, decay second");
@@ -209,12 +206,12 @@ add_task(async function test_adaptive_limited() {
   await decayInputHistory();
   await bumpScore(url1, "si", { visits: 3, picks: 3 });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 });
 
@@ -244,17 +241,17 @@ add_task(async function test_adaptive_limited() {
   // After 1 heuristic and 3 input history results.
   let expectedBookmarkIndex = 4;
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "site",
   });
   let result = await UrlbarTestUtils.getDetailsOfResultAt(
-    win,
+    window,
     expectedBookmarkIndex
   );
   Assert.equal(result.url, url, "Check bookmarked result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, n - 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, n - 1);
   Assert.equal(
-    UrlbarTestUtils.getResultCount(win),
+    UrlbarTestUtils.getResultCount(window),
     n,
     "Check all the results are filled"
   );
@@ -292,7 +289,7 @@ add_task(async function test_adaptive_behaviors() {
     ],
   });
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "site",
   });
   let result = (await UrlbarTestUtils.waitForAutocompleteResultAt(window, 1))
@@ -393,36 +390,8 @@ add_task(async function test_adaptive_behaviors() {
     "The input history result is a bookmark."
   );
 
-  // Clearing history but not deleting the bookmark. This simulates the case
-  // where the user has cleared their history or is using permanent private
-  // browsing mode.
-  await PlacesUtils.history.clear();
-  await SpecialPowers.pushPrefEnv({
-    set: [
-      ["browser.urlbar.suggest.bookmark", true],
-      ["browser.urlbar.suggest.history", false],
-      ["browser.urlbar.suggest.openpage", false],
-    ],
-  });
-  await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
-    value: "sit",
-  });
-  result = (await UrlbarTestUtils.waitForAutocompleteResultAt(win, 1)).result;
-  Assert.equal(result.payload.url, historyUrl, "Check bookmarked result");
   Assert.equal(
-    result.providerName,
-    "InputHistory",
-    "The bookmarked result is from InputHistory."
-  );
-  Assert.equal(
-    result.source,
-    UrlbarUtils.RESULT_SOURCE.BOOKMARKS,
-    "The input history result is a bookmark."
-  );
-
-  Assert.equal(
-    UrlbarTestUtils.getResultCount(win),
+    UrlbarTestUtils.getResultCount(window),
     2,
     "Check there are no unexpected results"
   );
@@ -441,12 +410,12 @@ add_task(async function test_adaptive_mouse() {
   await bumpScore(url1, "site", { visits: 3, picks: 3 }, true);
   await bumpScore(url2, "site", { visits: 3, picks: 1 }, true);
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 
   info("Same visit count, different picks, invert");
@@ -454,12 +423,12 @@ add_task(async function test_adaptive_mouse() {
   await bumpScore(url1, "site", { visits: 3, picks: 1 }, true);
   await bumpScore(url2, "site", { visits: 3, picks: 3 }, true);
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url2, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url1, "Check second result");
 });
 
@@ -478,17 +447,17 @@ add_task(async function test_adaptive_searchmode() {
   await bumpScore(url1, "site", { visits: 3, picks: 3 }, true);
   await bumpScore(url2, "site", { visits: 3, picks: 1 }, true);
   await UrlbarTestUtils.promiseAutocompleteResultPopup({
-    window: win,
+    window,
     value: "si",
   });
-  let result = await UrlbarTestUtils.getDetailsOfResultAt(win, 1);
+  let result = await UrlbarTestUtils.getDetailsOfResultAt(window, 1);
   Assert.equal(result.url, url1, "Check first result");
-  result = await UrlbarTestUtils.getDetailsOfResultAt(win, 2);
+  result = await UrlbarTestUtils.getDetailsOfResultAt(window, 2);
   Assert.equal(result.url, url2, "Check second result");
 
   info("Entering search mode.");
   // enterSearchMode checks internally that our site.tld URLs are not shown.
-  await UrlbarTestUtils.enterSearchMode(win, {
+  await UrlbarTestUtils.enterSearchMode(window, {
     engineName: suggestionsEngine.name,
   });
 

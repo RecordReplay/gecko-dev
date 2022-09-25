@@ -619,10 +619,6 @@ class ProviderQuickSuggest extends UrlbarProvider {
       };
 
       // impression
-      //
-      // Set `search_query` and `matched_keywords` to empty string, both of
-      // them are required fields for the impression, so we need to keep them
-      // in the payload. See bug 1725492 for more details.
       PartnerLinkAttribution.sendContextualServicesPing(
         {
           ...payload,
