@@ -4861,10 +4861,6 @@ bool ClientWebGLContext::DoReadPixels(const webgl::ReadPixelsDesc& desc,
   }
 
   const auto& shmemBytes = shmem.ByteRange();
-  if (!shmem) {
-    EnqueueError(LOCAL_GL_OUT_OF_MEMORY, "Failed to map in back buffer.");
-    return false;
-  }
 
   uint8_t bpp;
   if (!GetBytesPerPixel(desc.pi, &bpp)) {

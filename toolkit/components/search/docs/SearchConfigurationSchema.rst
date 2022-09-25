@@ -204,16 +204,6 @@ the ``foo-fr`` folder of the ``_locales`` folder for this extension.
 Note: ``"$USER_REGION"`` was added in Firefox 98.0.1 and 97.7.1esr and used an exact match.
 In Firefox 100.0 the replacement was updated to use a standard string replacement.
 
-From Firefox 98.0.1 and 97.7.1esr, ``"$USER_LOCALE"`` may also be used in the
-``telemetryId`` field.
-
-$USER_REGION
-------------
-
-This can be used in the same situations as ``"$USER_LOCALE"``.
-
-It was added in the Firefox 98.0.1 and 97.7.1esr releases.
-
 "default"
 ---------
 

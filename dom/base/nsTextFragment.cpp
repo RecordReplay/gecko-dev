@@ -357,9 +357,6 @@ bool nsTextFragment::Append(const char16_t* aBuffer, uint32_t aLength,
   // This is a common case because some callsites create a textnode
   // with a value by creating the node and then calling AppendData.
   if (mState.mLength == 0) {
-    if (MOZ_UNLIKELY(aLength > INT32_MAX)) {
-      return false;
-    }
     return SetTo(aBuffer, aLength, aUpdateBidi, aForce2b);
   }
 

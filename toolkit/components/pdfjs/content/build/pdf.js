@@ -6138,7 +6138,6 @@ function compileType3Glyph(imgData) {
       points[j0] = data[pos] ? 1 : 8;
       ++count;
     }
-  }
 
     let sum = (data[pos] ? 4 : 0) + (data[pos - lineSize] ? 8 : 0);
 
@@ -12961,69 +12960,6 @@ class AnnotationElement {
           }
 
           const exportValue = typeof exportValues === "string" ? exportValues : null;
-          const domElement = document.getElementById(id);
-
-          if (domElement && !GetElementsByNameSet.has(domElement)) {
-            (0, _util.warn)(`_getElementsByName - element not allowed: ${id}`);
-            continue;
-          }
-
-          fields.push({
-            id,
-            exportValue,
-            domElement
-          });
-        }
-      }
-
-      return fields;
-    }
-
-    for (const domElement of document.getElementsByName(name)) {
-      const {
-        id,
-        exportValue
-      } = domElement;
-
-      if (id === skipId) {
-        continue;
-      }
-
-      if (!GetElementsByNameSet.has(domElement)) {
-        continue;
-      }
-
-      fields.push({
-        id,
-        exportValue,
-        domElement
-      });
-    }
-
-    return fields;
-  }
-
-  _getElementsByName(name, skipId = null) {
-    const fields = [];
-
-    if (this._fieldObjects) {
-      const fieldObj = this._fieldObjects[name];
-
-      if (fieldObj) {
-        for (const {
-          page,
-          id,
-          exportValues
-        } of fieldObj) {
-          if (page === -1) {
-            continue;
-          }
-
-          if (id === skipId) {
-            continue;
-          }
-
-          const exportValue = typeof exportValues === "string" ? exportValues : null;
           const domElement = document.querySelector(`[data-element-id="${id}"]`);
 
           if (domElement && !GetElementsByNameSet.has(domElement)) {
@@ -13982,15 +13918,6 @@ class ChoiceWidgetAnnotationElement extends WidgetAnnotationElement {
     const storedData = storage.getValue(id, {
       value: this.data.fieldValue
     });
-    let {
-      fontSize
-    } = this.data.defaultAppearanceData;
-
-    if (!fontSize) {
-      fontSize = 9;
-    }
-
-    const fontSizeStyle = `calc(${fontSize}px * var(--zoom-factor))`;
     const selectElement = document.createElement("select");
     GetElementsByNameSet.add(selectElement);
     selectElement.setAttribute("data-element-id", id);
@@ -16222,7 +16149,7 @@ Object.defineProperty(exports, "OPS", ({
 Object.defineProperty(exports, "PDFDataRangeTransport", ({
   enumerable: true,
   get: function () {
-    return _display_utils.PixelsPerInch;
+    return _api.PDFDataRangeTransport;
   }
 }));
 Object.defineProperty(exports, "PDFDateString", ({
@@ -16234,7 +16161,7 @@ Object.defineProperty(exports, "PDFDateString", ({
 Object.defineProperty(exports, "PDFWorker", ({
   enumerable: true,
   get: function () {
-    return _display_utils.RenderingCancelledException;
+    return _api.PDFWorker;
   }
 }));
 Object.defineProperty(exports, "PasswordResponses", ({

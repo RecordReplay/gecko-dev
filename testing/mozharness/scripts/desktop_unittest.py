@@ -218,14 +218,6 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
                 },
             ],
             [
-                ["--threads"],
-                {
-                    "action": "store",
-                    "dest": "threads",
-                    "help": "Number of total chunks",
-                },
-            ],
-            [
                 ["--gpu-required"],
                 {
                     "action": "store_true",
@@ -640,9 +632,6 @@ class DesktopUnittest(TestingMixin, MercurialScript, MozbaseMixin, CodeCoverageM
 
             if c["headless"]:
                 base_cmd.append("--headless")
-
-            if c.get("threads"):
-                base_cmd.extend(["--threads", c["threads"]])
 
             if c.get("threads"):
                 base_cmd.extend(["--threads", c["threads"]])

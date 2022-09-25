@@ -13185,26 +13185,6 @@ class PartialEvaluator {
         }
 
         let scaledDim = glyphWidth * scale;
-        let glyphUnicode = glyph.unicode;
-
-        if (glyphUnicode === " " && (i === 0 || i + 1 === ii || glyphs[i - 1].unicode === " " || glyphs[i + 1].unicode === " ")) {
-          if (!font.vertical) {
-            charSpacing += scaledDim + textState.wordSpacing;
-            textState.translateTextMatrix(charSpacing * textState.textHScale, 0);
-          } else {
-            charSpacing += -scaledDim + textState.wordSpacing;
-            textState.translateTextMatrix(0, -charSpacing);
-          }
-
-          continue;
-        }
-
-        compareWithLastPosition();
-        const textChunk = ensureTextContentItem();
-
-        if (DiacriticRegExp.test(glyph.unicode)) {
-          scaledDim = 0;
-        }
 
         if (glyph.isWhitespace) {
           if (!font.vertical) {
@@ -49475,8 +49455,6 @@ exports.searchNode = searchNode;
 var _xfa_object = __w_pdfjs_require__(77);
 
 var _namespaces = __w_pdfjs_require__(79);
-
-var _namespaces = __w_pdfjs_require__(77);
 
 var _util = __w_pdfjs_require__(2);
 

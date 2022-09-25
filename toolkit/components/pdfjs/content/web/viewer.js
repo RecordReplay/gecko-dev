@@ -7074,8 +7074,6 @@ var _base_tree_viewer = __webpack_require__(13);
 
 var _pdfjsLib = __webpack_require__(4);
 
-var _pdfjsLib = __webpack_require__(4);
-
 var _ui_utils = __webpack_require__(3);
 
 class PDFOutlineViewer extends _base_tree_viewer.BaseTreeViewer {
@@ -9759,7 +9757,6 @@ class BaseViewer {
       this.renderingQueue = options.renderingQueue;
     }
 
-    this._doc = document.documentElement;
     this.scroll = (0, _ui_utils.watchScroll)(this.container, this._scrollUpdate.bind(this));
     this.presentationModeState = _ui_utils.PresentationModeState.UNKNOWN;
     this._onBeforeDraw = this._onAfterDraw = null;
@@ -10371,67 +10368,6 @@ class BaseViewer {
     state.previousPageNumber = pageNumber;
   }
 
-  _ensurePageViewVisible() {
-    if (this._scrollMode !== _ui_utils.ScrollMode.PAGE) {
-      throw new Error("_ensurePageViewVisible: Invalid scrollMode value.");
-    }
-
-    const pageNumber = this._currentPageNumber,
-          state = this._scrollModePageState,
-          viewer = this.viewer;
-
-    if (viewer.hasChildNodes()) {
-      viewer.textContent = "";
-
-      for (const pageView of this._pages) {
-        state.shadowViewer.appendChild(pageView.div);
-      }
-    }
-
-    state.pages.length = 0;
-
-    if (this._spreadMode === _ui_utils.SpreadMode.NONE) {
-      const pageView = this._pages[pageNumber - 1];
-      viewer.appendChild(pageView.div);
-      state.pages.push(pageView);
-    } else {
-      const pageIndexSet = new Set(),
-            parity = this._spreadMode - 1;
-
-      if (pageNumber % 2 !== parity) {
-        pageIndexSet.add(pageNumber - 1);
-        pageIndexSet.add(pageNumber);
-      } else {
-        pageIndexSet.add(pageNumber - 2);
-        pageIndexSet.add(pageNumber - 1);
-      }
-
-      let spread = null;
-
-      for (let i = 0, ii = this._pages.length; i < ii; ++i) {
-        if (!pageIndexSet.has(i)) {
-          continue;
-        }
-
-        if (spread === null) {
-          spread = document.createElement("div");
-          spread.className = "spread";
-          viewer.appendChild(spread);
-        } else if (i % 2 === parity) {
-          spread = spread.cloneNode(false);
-          viewer.appendChild(spread);
-        }
-
-        const pageView = this._pages[i];
-        spread.appendChild(pageView.div);
-        state.pages.push(pageView);
-      }
-    }
-
-    state.scrollDown = pageNumber >= state.previousPageNumber;
-    state.previousPageNumber = pageNumber;
-  }
-
   _scrollUpdate() {
     if (this.pagesCount === 0) {
       return;
@@ -10938,18 +10874,6 @@ class BaseViewer {
 
       pageView.toggleLoadingIconSpinner(false);
     }
-  }
-
-  get _scrollAhead() {
-    switch (this._scrollMode) {
-      case _ui_utils.ScrollMode.PAGE:
-        return this._scrollModePageState.scrollDown;
-
-      case _ui_utils.ScrollMode.HORIZONTAL:
-        return this.scroll.right;
-    }
-
-    return this.scroll.down;
   }
 
   forceRendering(currentlyVisiblePages) {
@@ -12079,11 +12003,6 @@ class PDFPageView {
       this._optionalContentConfigPromise = optionalContentConfigPromise;
     }
 
-    if (this._isStandalone) {
-      const doc = document.documentElement;
-      doc.style.setProperty("--zoom-factor", this.scale);
-    }
-
     const totalRotation = (this.rotation + this.pdfPageRotate) % 360;
     this.viewport = this.viewport.clone({
       scale: this.scale * _pdfjsLib.PixelsPerInch.PDF_TO_CSS_UNITS,
@@ -13123,8 +13042,6 @@ Object.defineProperty(exports, "__esModule", ({
   value: true
 }));
 exports.XfaLayerBuilder = void 0;
-
-var _pdf_link_service = __webpack_require__(18);
 
 var _pdfjsLib = __webpack_require__(4);
 
@@ -14826,8 +14743,6 @@ var _pdfjsLib = __webpack_require__(4);
 var _pdf_link_service = __webpack_require__(8);
 
 var _xfa_layer_builder = __webpack_require__(37);
-
-var _xfa_layer_builder = __webpack_require__(34);
 
 function getXfaHtmlForPrinting(printContainer, pdfDocument) {
   const xfaHtml = pdfDocument.allXfaHtml;
