@@ -449,7 +449,7 @@ cubeb* GetCubebContextUnlocked() {
   }
   if (recordreplay::IsRecordingOrReplaying()) {
     // Media is not supported when recording or replaying.
-    recordreplay::ReportUnsupportedFeature("MediaPlayback", 54);
+    recordreplay::ReportUnsupportedFeature("MediaPlayback #1", 54);
     return nullptr;
   }
   if (sCubebState != CubebState::Uninitialized) {

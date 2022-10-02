@@ -256,6 +256,8 @@ void MediaDecodeTask::OnInitDemuxerCompleted() {
   if (!!mDemuxer->GetNumberTracks(TrackInfo::kAudioTrack)) {
     mTrackDemuxer = mDemuxer->GetTrackDemuxer(TrackInfo::kAudioTrack, 0);
     if (!mTrackDemuxer) {
+      recordreplay::RecordReplayAssert("MediaDecodeTask::OnInitDemuxerCompleted #2");
+
       LOG("MediaDecodeTask: Could not get a track demuxer.");
       ReportFailureOnMainThread(WebAudioDecodeJob::UnknownContent);
       return;
@@ -290,12 +292,16 @@ void MediaDecodeTask::OnCreateDecoderCompleted(
 void MediaDecodeTask::OnCreateDecoderFailed(const MediaResult& aError) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
 
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnCreateDecoderFailed");
+
   LOG("MediaDecodeTask: Could not create a decoder.");
   ReportFailureOnMainThread(WebAudioDecodeJob::UnknownContent);
 }
 
 void MediaDecodeTask::OnInitDemuxerFailed(const MediaResult& aError) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
+
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnInitDemuxerFailed");
 
   LOG("MediaDecodeTask: Could not initialize the demuxer.");
   ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -317,6 +323,8 @@ void MediaDecodeTask::OnInitDecoderCompleted() {
 
 void MediaDecodeTask::OnInitDecoderFailed() {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
+
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnInitDecoderFailed");
 
   ShutdownDecoder();
   LOG("MediaDecodeTask: Could not initialize the decoder");
@@ -347,6 +355,8 @@ void MediaDecodeTask::OnAudioDemuxFailed(const MediaResult& aError) {
   if (aError.Code() == NS_ERROR_DOM_MEDIA_END_OF_STREAM) {
     DoDecode();
   } else {
+    recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDemuxFailed #2");
+
     ShutdownDecoder();
     LOG("MediaDecodeTask: Audio demux failed");
     ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -406,6 +416,8 @@ void MediaDecodeTask::OnAudioDecodeCompleted(
 void MediaDecodeTask::OnAudioDecodeFailed(const MediaResult& aError) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
 
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeFailed");
+
   ShutdownDecoder();
   LOG("MediaDecodeTask: decode audio failed.");
   ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -440,6 +452,8 @@ void MediaDecodeTask::OnAudioDrainCompleted(
 void MediaDecodeTask::OnAudioDrainFailed(const MediaResult& aError) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
 
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDrainFailed");
+
   ShutdownDecoder();
   LOG("MediaDecodeTask: Drain audio failed");
   ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
@@ -469,6 +483,8 @@ void MediaDecodeTask::FinishDecode() {
   if (!frameCount || !channelCount || !sampleRate) {
     LOG("MediaDecodeTask: invalid content frame count, channel count or "
         "sample-rate");
+    recordreplay::RecordReplayAssert("MediaDecodeTask::FinishDecode #2 %u %u %u",
+                                     frameCount, channelCount, sampleRate);
     ReportFailureOnMainThread(WebAudioDecodeJob::InvalidContent);
     return;
   }
@@ -501,6 +517,7 @@ void MediaDecodeTask::FinishDecode() {
                                                fallible);
   if (!buffer) {
     LOG("MediaDecodeTask: Could not create final buffer (f32)");
+    recordreplay::RecordReplayAssert("MediaDecodeTask::FinishDecode #5");
     ReportFailureOnMainThread(WebAudioDecodeJob::UnknownError);
     return;
   }
@@ -514,6 +531,7 @@ void MediaDecodeTask::FinishDecode() {
   RefPtr<SharedBuffer> buffer = SharedBuffer::Create(bufferSize);
   if (!buffer) {
     LOG("MediaDecodeTask: Could not create final buffer (i16)");
+    recordreplay::RecordReplayAssert("MediaDecodeTask::FinishDecode #6");
     ReportFailureOnMainThread(WebAudioDecodeJob::UnknownError);
     return;
   }
@@ -605,6 +623,7 @@ void MediaDecodeTask::AllocateBuffer() {
 
   if (!mDecodeJob.AllocateBuffer()) {
     LOG("MediaDecodeTask: Could not allocate final buffer");
+    recordreplay::RecordReplayAssert("MediaDecodeTask::AllocateBuffer #2");
     ReportFailureOnMainThread(WebAudioDecodeJob::UnknownError);
     return;
   }
