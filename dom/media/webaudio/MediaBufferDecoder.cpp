@@ -366,6 +366,8 @@ void MediaDecodeTask::OnAudioDemuxFailed(const MediaResult& aError) {
 void MediaDecodeTask::DoDecode() {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
 
+  recordreplay::RecordReplayAssert("MediaDecodeTask::DoDecode #1 %d", mRawSamples.IsEmpty());
+
   if (mRawSamples.IsEmpty()) {
     DoDrain();
     return;
@@ -402,17 +404,22 @@ void MediaDecodeTask::OnAudioDecodeCompleted(
     MediaDataDecoder::DecodedData&& aResults) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
 
-  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted");
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted %zu", aResults.Length());
 
   for (auto&& sample : aResults) {
     MOZ_ASSERT(sample->mType == MediaData::Type::AUDIO_DATA);
     RefPtr<AudioData> audioData = sample->As<AudioData>();
+
+    recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted #1 %u %u",
+                                     audioData->mRate, audioData->mChannel);
 
     mMediaInfo.mAudio.mRate = audioData->mRate;
     mMediaInfo.mAudio.mChannels = audioData->mChannels;
 
     mAudioQueue.Push(audioData.forget());
   }
+
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted #2");
 
   DoDecode();
 }
