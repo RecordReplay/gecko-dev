@@ -411,7 +411,7 @@ void MediaDecodeTask::OnAudioDecodeCompleted(
     RefPtr<AudioData> audioData = sample->As<AudioData>();
 
     recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted #1 %u %u",
-                                     audioData->mRate, audioData->mChannel);
+                                     audioData->mRate, audioData->mChannels);
 
     mMediaInfo.mAudio.mRate = audioData->mRate;
     mMediaInfo.mAudio.mChannels = audioData->mChannels;
