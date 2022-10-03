@@ -39,6 +39,9 @@ bool MediaDataDecoderProxy::CanDecodeBatch() const {
 RefPtr<MediaDataDecoder::DecodePromise> MediaDataDecoderProxy::DecodeBatch(
     nsTArray<RefPtr<MediaRawData>>&& aSamples) {
   MOZ_ASSERT(!mIsShutdown);
+
+  recordreplay::RecordReplayAssert("MediaDataDecoderProxy::DecodeBatch %d", !!mProxyThread);
+
   if (!mProxyThread) {
     return mProxyDecoder->DecodeBatch(std::move(aSamples));
   }

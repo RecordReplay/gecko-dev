@@ -371,6 +371,8 @@ void MediaDecodeTask::DoDecode() {
     return;
   }
 
+  recordreplay::RecordReplayAssert("MediaDecodeTask::DoDecode #1 %u %d", mBatchSize, mDecoder->CanDecodeBatch());
+
   if (mBatchSize > 1 && mDecoder->CanDecodeBatch()) {
     nsTArray<RefPtr<MediaRawData>> rawSampleBatch;
     const int batchSize = std::min((unsigned long)mBatchSize,
@@ -399,6 +401,8 @@ void MediaDecodeTask::DoDecode() {
 void MediaDecodeTask::OnAudioDecodeCompleted(
     MediaDataDecoder::DecodedData&& aResults) {
   MOZ_ASSERT(OnPSupervisorTaskQueue());
+
+  recordreplay::RecordReplayAssert("MediaDecodeTask::OnAudioDecodeCompleted");
 
   for (auto&& sample : aResults) {
     MOZ_ASSERT(sample->mType == MediaData::Type::AUDIO_DATA);
