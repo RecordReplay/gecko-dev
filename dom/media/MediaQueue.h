@@ -24,7 +24,7 @@ class MediaQueue : private nsRefPtrDeque<T> {
  public:
   MediaQueue()
       : nsRefPtrDeque<T>(),
-        mRecursiveMutex("mediaqueue"),
+        mRecursiveMutex("mediaqueue", /* aOrdered */ true),
         mEndOfStream(false) {}
 
   ~MediaQueue() { Reset(); }
