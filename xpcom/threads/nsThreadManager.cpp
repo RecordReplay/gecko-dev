@@ -564,6 +564,8 @@ nsThreadManager::NewNamedThread(const nsACString& aName, uint32_t aStackSize,
     return NS_ERROR_NOT_INITIALIZED;
   }
 
+  recordreplay::RecordReplayAssert("nsThreadManager::NewNamedThread #1");
+
   [[maybe_unused]] TimeStamp startTime = TimeStamp::Now();
 
   RefPtr<ThreadEventQueue> queue =

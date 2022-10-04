@@ -256,6 +256,8 @@ void ThreadedDriver::WaitForNextIteration() {
 }
 
 TimeDuration SystemClockDriver::WaitInterval() {
+  recordreplay::RecordReplayAssert("SystemClockDriver::WaitInterval");
+
   MOZ_ASSERT(mThread);
   MOZ_ASSERT(OnThread());
   TimeStamp now = TimeStamp::Now();
