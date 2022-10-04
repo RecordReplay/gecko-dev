@@ -161,9 +161,10 @@ RefPtr<MediaDataDecoder::DecodePromise> RemoteDecoderChild::Decode(
           recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback ProcessOutput");
           ProcessOutput(std::move(response.get_DecodedOutputIPDL()));
         }
+        recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback #5 %zu", mDecodedData.Length());
         mDecodePromise.Resolve(std::move(mDecodedData), __func__);
         mDecodedData = MediaDataDecoder::DecodedData();
-        recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback done %zu", mDecodedData.Length());
+        recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback done");
       });
 
   return mDecodePromise.Ensure(__func__);
