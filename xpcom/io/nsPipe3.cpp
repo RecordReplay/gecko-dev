@@ -954,8 +954,13 @@ void nsPipe::OnPipeException(nsresult aReason, bool aOutputOnly) {
         continue;
       }
 
-      if (list[i]->OnInputException(aReason, events, mon.get()) == NotifyMonitor) {
-        needNotify = true;
+      // Don't forward input exceptions if we're recording/replaying
+      // and events are disallowed.
+      // See #RUN-660
+      if (! recordreplay::AreThreadEventsDisallowed()) {
+        if (list[i]->OnInputException(aReason, events, mon.get()) == NotifyMonitor) {
+          needNotify = true;
+        }
       }
     }
 
