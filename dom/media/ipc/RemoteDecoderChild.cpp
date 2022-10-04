@@ -116,6 +116,8 @@ RefPtr<MediaDataDecoder::DecodePromise> RemoteDecoderChild::Decode(
     const nsTArray<RefPtr<MediaRawData>>& aSamples) {
   AssertOnManagerThread();
 
+  recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode Start");
+
   auto samples = MakeRefPtr<ArrayOfRemoteMediaRawData>();
   if (!samples->Fill(aSamples,
                      [&](size_t aSize) { return AllocateBuffer(aSize); })) {

@@ -83,6 +83,8 @@ MediaDataDecoder::ConversionRequired AudioTrimmer::NeedsConversion() const {
 
 RefPtr<MediaDataDecoder::DecodePromise> AudioTrimmer::HandleDecodedResult(
     DecodePromise::ResolveOrRejectValue&& aValue, MediaRawData* aRaw) {
+  recordreplay::RecordReplayAssert("AudioTrimmer::HandleDecodedResult Start");
+
   MOZ_ASSERT(mThread->IsOnCurrentThread(),
              "We're not on the thread we were first initialized on");
   if (aValue.IsReject()) {
@@ -92,6 +94,9 @@ RefPtr<MediaDataDecoder::DecodePromise> AudioTrimmer::HandleDecodedResult(
   int64_t rawStart = aRaw ? aRaw->mTime.ToMicroseconds() : 0;
   int64_t rawEnd = aRaw ? aRaw->GetEndTime().ToMicroseconds() : 0;
   MediaDataDecoder::DecodedData results = std::move(aValue.ResolveValue());
+
+  recordreplay::RecordReplayAssert("AudioTrimmer::HandleDecodedResult #1 %zu", results.Length());
+
   if (results.IsEmpty()) {
     // No samples returned, we assume this is due to the latency of the
     // decoder and that the related decoded sample will be returned during
@@ -164,6 +169,8 @@ RefPtr<MediaDataDecoder::DecodePromise> AudioTrimmer::DecodeBatch(
              "We're not on the thread we were first initialized on");
   LOG("DecodeBatch");
 
+  recordreplay::RecordReplayAssert("AudioTrimmer::DecodeBatch Start");
+
   for (auto&& sample : aSamples) {
     PrepareTrimmers(sample);
   }
@@ -177,6 +184,7 @@ RefPtr<MediaDataDecoder::DecodePromise> AudioTrimmer::DecodeBatch(
                    // delay and that all decoded frames have been shifted by n =
                    // compressedSamples.Length() - decodedSamples.Length() and
                    // that the first n compressed samples returned nothing.
+                   recordreplay::RecordReplayAssert("AudioTrimmer::DecodeBatch callback");
                    return self->HandleDecodedResult(std::move(aValue), nullptr);
                  });
   return p;
