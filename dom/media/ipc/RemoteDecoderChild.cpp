@@ -126,6 +126,8 @@ RefPtr<MediaDataDecoder::DecodePromise> RemoteDecoderChild::Decode(
       mThread, __func__,
       [self = RefPtr{this}, this](
           PRemoteDecoderChild::DecodePromise::ResolveOrRejectValue&& aValue) {
+        recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback start");
+
         // We no longer need the samples as the data has been
         // processed by the parent.
         // If the parent died, the error being fatal will cause the
@@ -154,10 +156,12 @@ RefPtr<MediaDataDecoder::DecodePromise> RemoteDecoderChild::Decode(
           return;
         }
         if (response.type() == DecodeResultIPDL::TDecodedOutputIPDL) {
+          recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback ProcessOutput");
           ProcessOutput(std::move(response.get_DecodedOutputIPDL()));
         }
         mDecodePromise.Resolve(std::move(mDecodedData), __func__);
         mDecodedData = MediaDataDecoder::DecodedData();
+        recordreplay::RecordReplayAssert("RemoteDecoderChild::Decode callback done %zu", mDecodedData.Length());
       });
 
   return mDecodePromise.Ensure(__func__);
