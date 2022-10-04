@@ -108,6 +108,8 @@ class MediaTrackGraphInitThreadRunnable : public Runnable {
     LOG(LogLevel::Debug, ("Starting a new system driver for graph %p",
                           mDriver->mGraphInterface.get()));
 
+    recordreplay::RecordReplayAssert("MediaTrackGraphInitThreadRunnable::Run Start");
+
     if (GraphDriver* previousDriver = mDriver->PreviousDriver()) {
       LOG(LogLevel::Debug,
           ("%p releasing an AudioCallbackDriver(%p), for graph %p",
@@ -121,6 +123,8 @@ class MediaTrackGraphInitThreadRunnable : public Runnable {
     }
 
     mDriver->RunThread();
+
+    recordreplay::RecordReplayAssert("MediaTrackGraphInitThreadRunnable::Run Done");
     return NS_OK;
   }
 
@@ -408,6 +412,8 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
                                AudioMixer* aMixer) override {
     MOZ_ASSERT(!aMixer);
 
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration Start");
+
 #ifdef DEBUG
     AutoInCallback aic(mOwner);
 #endif
@@ -438,6 +444,7 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
             "AudioCallbackDriver::FallbackDriverStopped",
             [self = RefPtr<FallbackWrapper>(this), this,
              result = std::move(result)]() mutable {
+              recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration callback start");
               FallbackDriverState fallbackState =
                   result.IsStillProcessing() ? FallbackDriverState::None
                                              : FallbackDriverState::Stopped;
@@ -465,6 +472,7 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
                 }
               }
               mOwner = nullptr;
+              recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration callback #5");
               NS_DispatchBackgroundTask(NS_NewRunnableFunction(
                   "AudioCallbackDriver::FallbackDriverStopped::Release",
                   [fallback = std::move(self->mFallbackDriver)] {}));
