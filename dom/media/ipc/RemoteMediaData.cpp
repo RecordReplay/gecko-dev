@@ -259,7 +259,9 @@ bool ArrayOfRemoteAudioData::Fill(
 
 already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
     size_t aIndex) const {
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt Start %zu", aIndex);
   if (!IsValid()) {
+    recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #1");
     return nullptr;
   }
   MOZ_ASSERT(aIndex < Count());
@@ -267,8 +269,11 @@ already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
                         "Something ain't right here");
   const auto& sample = mSamples[aIndex];
   AlignedAudioBuffer data = mBuffers.AlignedBufferAt<AudioDataValue>(aIndex);
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #2 %zu %d",
+                                   mBuffers.SizeAt(aIndex), !!data);
   if (mBuffers.SizeAt(aIndex) && !data) {
     // OOM
+    recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #3");
     return nullptr;
   }
   auto audioData = MakeRefPtr<AudioData>(
@@ -282,6 +287,7 @@ already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
   audioData->mTrimWindow = sample.mTrimWindow;
   audioData->mFrames = sample.mFrames;
   audioData->mDataOffset = sample.mDataOffset;
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt Done");
   return audioData.forget();
 }
 
