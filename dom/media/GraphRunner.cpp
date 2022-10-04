@@ -60,6 +60,8 @@ auto GraphRunner::OneIteration(GraphTime aStateTime, GraphTime aIterationEnd,
                                AudioMixer* aMixer) -> IterationResult {
   TRACE();
 
+  recordreplay::RecordReplayAssert("GraphRunner::OneIteration Start");
+
   MonitorAutoLock lock(mMonitor);
   MOZ_ASSERT(mThreadState == ThreadState::Wait);
   mIterationState = Some(IterationState(aStateTime, aIterationEnd, aMixer));
@@ -91,6 +93,9 @@ auto GraphRunner::OneIteration(GraphTime aStateTime, GraphTime aIterationEnd,
 
   IterationResult result = std::move(mIterationResult);
   mIterationResult = IterationResult();
+
+  recordreplay::RecordReplayAssert("GraphRunner::OneIteration Done");
+
   return result;
 }
 

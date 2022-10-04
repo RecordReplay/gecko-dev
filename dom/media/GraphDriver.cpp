@@ -209,15 +209,23 @@ void ThreadedDriver::RunThread() {
          (long)nextStateComputedTime));
 
     mStateComputedTime = nextStateComputedTime;
+
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #5");
+
     IterationResult result =
         Graph()->OneIteration(mStateComputedTime, mIterationEnd, nullptr);
+
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6");
 
     if (result.IsStop()) {
       // Signal that we're done stopping.
       result.Stopped();
+      recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #7");
       break;
     }
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #8");
     WaitForNextIteration();
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #9");
     if (GraphDriver* nextDriver = result.NextDriver()) {
       LOG(LogLevel::Debug, ("%p: Switching to AudioCallbackDriver", Graph()));
       result.Switched();
