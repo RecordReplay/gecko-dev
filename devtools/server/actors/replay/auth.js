@@ -105,6 +105,16 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
+function validateUserToken() {
+  const userToken = getReplayUserToken();
+  if (userToken) {
+    const exp = tokenExpiration(userToken);
+    if (exp < Date.now()) {
+      setReplayUserToken(null);
+    }
+  }
+}
+
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
 // will be set to null and will be removed from the map on the next pass
 const webChannelTargets = new Map();
@@ -261,6 +271,7 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 
 // Init
 (() => {
+  validateUserToken();
   initializeRecordingWebChannel();
   refresh();
 })();
