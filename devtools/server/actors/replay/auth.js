@@ -215,7 +215,8 @@ async function refresh() {
       Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
       setReplayUserToken(json.access_token);
 
-      setTimeout(refresh, json.expires_in * 1000);
+      // refresh a minute before token expiration
+      setTimeout(refresh, json.expires_in * 1000 - (60 * 1000));
     } else {
       pingTelemetry("browser", "auth-request-failed", {
         message: "no-access-token"
