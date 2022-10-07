@@ -112,7 +112,7 @@ function validateUserToken() {
     const { payload } = tokenInfo(userToken);
     const exp = tokenExpiration(userToken);
     if (exp < Date.now()) {
-      pingTelemetry("browser", "token-expired", {
+      pingTelemetry("browser", "auth-expired", {
         expiration: exp,
         authId: payload.sub
       });
