@@ -142,7 +142,7 @@ function notifyWebChannelTargets() {
 
 // Notify a single tab of the current auth state
 function notifyWebChannelTarget(channel, target) {
-  let token = getReplayUserToken();
+  const token = getReplayUserToken();
 
   if (validateUserToken()) {
     channel.send({ token }, target);
