@@ -107,12 +107,22 @@ function tokenExpiration(token) {
 
 function validateUserToken() {
   const userToken = getReplayUserToken();
+
   if (userToken) {
+    const { payload } = tokenInfo(userToken);
     const exp = tokenExpiration(userToken);
     if (exp < Date.now()) {
+      pingTelemetry("browser", "token-expired", {
+        expiration: exp,
+        authId: payload.sub
+      });
       setReplayUserToken(null);
+
+      return false;
     }
   }
+
+  return true;
 }
 
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
@@ -132,9 +142,11 @@ function notifyWebChannelTargets() {
 
 // Notify a single tab of the current auth state
 function notifyWebChannelTarget(channel, target) {
-  const token = getReplayUserToken();
+  let token = getReplayUserToken();
 
-  channel.send({ token }, target);
+  if (validateUserToken()) {
+    channel.send({ token }, target);
+  }
 }
 
 function handleAuthChannelMessage(channel, _id, message, target) {
