@@ -13,7 +13,8 @@ var EXPORTED_SYMBOLS = [
   "getReplayUserToken",
   "tokenInfo",
   "tokenExpiration",
-  "openSigninPage"
+  "openSigninPage",
+  "getAuthHost"
 ];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
@@ -54,6 +55,14 @@ function hasOriginalApiKey() {
 }
 function getOriginalApiKey() {
   return gOriginalApiKey;
+}
+
+function getAuthHost() {
+  return getenv("RECORD_REPLAY_AUTH_HOST") || "webreplay.us.auth0.com";
+}
+
+function getAuthClientId() {
+  return getenv("RECORD_REPLAY_AUTH_CLIENT_ID") || "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo";
 }
 
 function setReplayRefreshToken(token) {
@@ -166,14 +175,14 @@ async function refresh() {
   }
 
   try {
-    const resp = await fetch("https://webreplay.us.auth0.com/oauth/token", {
+    const resp = await fetch(`https://${getAuthHost()}/oauth/token`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         audience: "https://api.replay.io",
         scope: "openid profile offline_access",
         grant_type: "refresh_token",
-        client_id: "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo",
+        client_id: getAuthClientId(),
         refresh_token: refreshToken,
       })
     });
