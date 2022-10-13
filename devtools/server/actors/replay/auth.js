@@ -114,26 +114,6 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
-function validateUserToken() {
-  const userToken = getReplayUserToken();
-
-  if (userToken) {
-    const { payload } = tokenInfo(userToken);
-    const exp = tokenExpiration(userToken);
-    if (exp < Date.now()) {
-      pingTelemetry("browser", "auth-expired", {
-        expiration: exp,
-        authId: payload.sub
-      });
-      setReplayUserToken(null);
-
-      return false;
-    }
-  }
-
-  return true;
-}
-
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
 // will be set to null and will be removed from the map on the next pass
 const webChannelTargets = new Map();
@@ -153,9 +133,7 @@ function notifyWebChannelTargets() {
 function notifyWebChannelTarget(channel, target) {
   const token = getReplayUserToken();
 
-  if (validateUserToken()) {
-    channel.send({ token }, target);
-  }
+  channel.send({ token }, target);
 }
 
 function handleAuthChannelMessage(channel, _id, message, target) {
@@ -224,8 +202,7 @@ async function refresh() {
       Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
       setReplayUserToken(json.access_token);
 
-      // refresh a minute before token expiration
-      setTimeout(refresh, json.expires_in * 1000 - (60 * 1000));
+      setTimeout(refresh, json.expires_in * 1000);
     } else {
       pingTelemetry("browser", "auth-request-failed", {
         message: "no-access-token"
@@ -293,7 +270,6 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 
 // Init
 (() => {
-  validateUserToken();
   initializeRecordingWebChannel();
   refresh();
 })();
