@@ -357,9 +357,15 @@ if (ReplayAuth.hasOriginalApiKey()) {
 }
 
 Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
-  // when the token changes (for either login or logout), reset the validate url
-  // flag to null so we check again for the potentially new user
-  gShouldValidateUrl = null;
+  let token = ReplayAuth.getReplayUserToken();
+  if (!token) {
+    // when the token changes (for either login or logout), reset the validate url
+    // flag to null so we check again for the potentially new user
+    gShouldValidateUrl = null;
+    return;
+  }
+
+  setAccessToken(token);
 });
 
 const beginRecordingResourceUpload = recordingId => {
