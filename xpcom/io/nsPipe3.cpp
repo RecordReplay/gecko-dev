@@ -791,7 +791,7 @@ void nsPipe::DrainInputStream(nsPipeReadState& aReadState,
     // Don't bother checking if this results in an advance buffer segment
     // read.  Since we are draining the entire stream we will read an
     // advance buffer segment no matter what.
-    AdvanceReadSegment(aReadState, mon);
+    AdvanceReadSegment(aReadState, mon.get());
   }
 
   // Force the stream into an empty state.  Make sure mAvailable, mCursor, and
@@ -813,9 +813,9 @@ void nsPipe::DrainInputStream(nsPipeReadState& aReadState,
 
   // If we have read any segments from the advance buffer then we can
   // potentially notify blocked writers.
-  if (!IsAdvanceBufferFull(mon) &&
+  if (!IsAdvanceBufferFull(mon.get()) &&
       mOutput.OnOutputWritable(aEvents) == NotifyMonitor) {
-    mon.NotifyAll();
+    mon.get().NotifyAll();
   }
 }
 
