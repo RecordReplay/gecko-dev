@@ -375,6 +375,11 @@ class MOZ_STACK_CLASS AutoReadSegment final {
     MOZ_DIAGNOSTIC_ASSERT(mPipe);
     MOZ_DIAGNOSTIC_ASSERT(!mReadState.mActiveRead);
     mStatus = mPipe->GetReadSegment(mReadState, mSegment, mLength);
+
+    // https://linear.app/replay/issue/RUN-660
+    recordreplay::RecordReplayAssert("AutoReadSegment::AutoReadSegment %d %u %u",
+                                     mStatus, mLength, aMaxLength);
+
     if (NS_SUCCEEDED(mStatus)) {
       MOZ_DIAGNOSTIC_ASSERT(mReadState.mActiveRead);
       MOZ_DIAGNOSTIC_ASSERT(mSegment);
@@ -384,6 +389,10 @@ class MOZ_STACK_CLASS AutoReadSegment final {
   }
 
   ~AutoReadSegment() {
+    // https://linear.app/replay/issue/RUN-660
+    recordreplay::RecordReplayAssert("AutoReadSegment::~AutoReadSegment %d %u",
+                                     mStatus, mOffset);
+
     if (NS_SUCCEEDED(mStatus)) {
       if (mOffset) {
         mPipe->AdvanceReadCursor(mReadState, mOffset);
@@ -410,6 +419,9 @@ class MOZ_STACK_CLASS AutoReadSegment final {
   }
 
   void Advance(uint32_t aCount) {
+    // https://linear.app/replay/issue/RUN-660
+    recordreplay::RecordReplayAssert("AutoReadSegment::Advance %u", aCount);
+
     MOZ_DIAGNOSTIC_ASSERT(NS_SUCCEEDED(mStatus));
     MOZ_DIAGNOSTIC_ASSERT(aCount <= (mLength - mOffset));
     mOffset += aCount;
@@ -639,6 +651,9 @@ void nsPipe::AdvanceReadCursor(nsPipeReadState& aReadState,
                                uint32_t aBytesRead) {
   MOZ_DIAGNOSTIC_ASSERT(aBytesRead > 0);
 
+  // https://linear.app/replay/issue/RUN-660
+  recordreplay::RecordReplayAssert("nsPipe::AdvanceReadCursor Start");
+
   nsPipeEvents events;
   {
     ReentrantMonitorAutoEnter mon(mReentrantMonitor);
@@ -659,14 +674,27 @@ void nsPipe::AdvanceReadCursor(nsPipeReadState& aReadState,
         !ReadSegmentBeingWritten(aReadState)) {
       // Advance the segment position.  If we have read any segments from the
       // advance buffer then we can potentially notify blocked writers.
+
+      // https://linear.app/replay/issue/RUN-660
+      recordreplay::RecordReplayAssert("nsPipe::AdvanceReadCursor #1");
+
       if (AdvanceReadSegment(aReadState, mon) == SegmentAdvanceBufferRead &&
           mOutput.OnOutputWritable(events) == NotifyMonitor) {
+        // https://linear.app/replay/issue/RUN-660
+        recordreplay::RecordReplayAssert("nsPipe::AdvanceReadCursor #2");
+
         mon.NotifyAll();
       }
     }
 
+    // https://linear.app/replay/issue/RUN-660
+    recordreplay::RecordReplayAssert("nsPipe::AdvanceReadCursor #3");
+
     ReleaseReadSegment(aReadState, events);
   }
+
+  // https://linear.app/replay/issue/RUN-660
+  recordreplay::RecordReplayAssert("nsPipe::AdvanceReadCursor Done");
 }
 
 SegmentChangeResult nsPipe::AdvanceReadSegment(
@@ -740,7 +768,7 @@ SegmentChangeResult nsPipe::AdvanceReadSegment(
 
 void nsPipe::DrainInputStream(nsPipeReadState& aReadState,
                               nsPipeEvents& aEvents) {
-  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+  ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
 
   // If a segment is actively being read in ReadSegments() for this input
   // stream, then we cannot drain the stream.  This can happen because
