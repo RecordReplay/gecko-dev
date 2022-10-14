@@ -740,7 +740,7 @@ SegmentChangeResult nsPipe::AdvanceReadSegment(
 
 void nsPipe::DrainInputStream(nsPipeReadState& aReadState,
                               nsPipeEvents& aEvents) {
-  ReentrantMonitorAutoEnter mon(mReentrantMonitor);
+  ReentrantMonitorAutoEnterMaybeEventsDisallowed mon(mReentrantMonitor);
 
   // If a segment is actively being read in ReadSegments() for this input
   // stream, then we cannot drain the stream.  This can happen because
