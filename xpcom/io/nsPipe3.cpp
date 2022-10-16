@@ -1660,10 +1660,15 @@ nsPipeOutputStream::AddRef() {
 NS_IMETHODIMP_(MozExternalRefCountType)
 nsPipeOutputStream::Release() {
   if (--mWriterRefCnt == 0) {
-    // Because the refcount is threadsafe, the final release can occur at
-    // non-deterministic points.
-    recordreplay::AutoDisallowThreadEvents disallow;
-    Close();
+    // Because the refcount is threadsafe and can be held by GC'ed objects,
+    // the final release can occur at non-deterministic points. Closing the
+    // output stream affects the pipe's state and consequently the behavior
+    // of input streams that may still be in use. To ensure the input streams
+    // behave the same when replaying we don't close the output stream after
+    // the last release when recording/replaying.
+    if (!recordreplay::IsRecordingOrReplaying()) {
+      Close();
+    }
   }
   return mPipe->Release();
 }
