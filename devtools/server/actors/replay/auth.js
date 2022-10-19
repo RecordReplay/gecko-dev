@@ -135,7 +135,7 @@ function scheduleRefreshTimer(expiresInMs) {
 }
 
 function validateUserToken() {
-  let userToken = getReplayUserToken();
+  const userToken = getReplayUserToken();
 
   if (!userToken) {
     return null;
