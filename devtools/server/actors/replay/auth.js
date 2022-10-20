@@ -88,11 +88,15 @@ function getReplayUserToken() {
 function captureLastAuthId() {
   const token = getReplayUserToken();
   if (token) {
-    const { payload } = tokenInfo(token);
-    lastAuthId = payload.sub;
+    const t = tokenInfo(token);
+    lastAuthId = t?.payload.sub;
   }
 }
 
+/**
+ * @param {string} token
+ * @returns {{payload: Record<string, unknown>} | null}
+ */
 function tokenInfo(token) {
   const [_header, encPayload, _cypher] = token.split(".", 3);
   if (typeof encPayload !== "string") {
@@ -116,6 +120,10 @@ function tokenInfo(token) {
   return { payload };
 }
 
+/**
+ * @param {string} token
+ * @returns {number | null}
+ */
 function tokenExpiration(token) {
   const userInfo = tokenInfo(token);
   if (!userInfo) {
@@ -134,14 +142,13 @@ function scheduleRefreshTimer(expiresInMs) {
   refreshTimer = setTimeout(refresh, expiresInMs - (60 * 1000));
 }
 
-function validateUserToken() {
+async function validateUserToken() {
   const userToken = getReplayUserToken();
 
   if (!userToken) {
     return null;
   }
 
-  const { payload } = tokenInfo(userToken);
   const exp = tokenExpiration(userToken);
   if (exp > Date.now()) {
     // The current token hasn't expired yet so schedule a refresh and return it
@@ -151,13 +158,15 @@ function validateUserToken() {
   }
 
   // Try to refresh the access token and return it if successful
-  const refreshedToken = refresh();
+  const refreshedToken = await refresh();
 
   if (!refreshedToken) {
+    const t = tokenInfo(userToken);
+
     pingTelemetry("browser", "auth-expired", {
       expirationDate: new Date(exp).toISOString(),
       expiration: exp,
-      authId: payload.sub
+      authId: t?.payload.sub
     });
   }
 
