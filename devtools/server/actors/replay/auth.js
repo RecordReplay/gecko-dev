@@ -49,8 +49,6 @@ const Env = Cc["@mozilla.org/process/environment;1"].getService(
   Ci.nsIEnvironment
 );
 
-let lastAuthId = undefined;
-
 const gOriginalApiKey = Env.get("RECORD_REPLAY_API_KEY");
 function hasOriginalApiKey() {
   return !!gOriginalApiKey;
@@ -79,18 +77,9 @@ function setReplayUserToken(token) {
   if (token === getReplayUserToken()) return;
 
   Services.prefs.setStringPref("devtools.recordreplay.user-token", token);
-  captureLastAuthId();
 }
 function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
-}
-
-function captureLastAuthId() {
-  const token = getReplayUserToken();
-  if (token) {
-    const { payload } = tokenInfo(token);
-    lastAuthId = payload.sub;
-  }
 }
 
 function tokenInfo(token) {
@@ -133,7 +122,6 @@ function validateUserToken() {
     const exp = tokenExpiration(userToken);
     if (exp < Date.now()) {
       pingTelemetry("browser", "auth-expired", {
-        expirationDate: new Date(exp).toISOString(),
         expiration: exp,
         authId: payload.sub
       });
@@ -225,8 +213,7 @@ async function refresh() {
 
     if (json.error) {
       pingTelemetry("browser", "auth-request-failed", {
-        message: json.error,
-        authId: lastAuthId
+        message: json.error
       });
       setReplayRefreshToken("");
       setReplayUserToken("");
@@ -241,14 +228,12 @@ async function refresh() {
       setTimeout(refresh, json.expires_in * 1000 - (60 * 1000));
     } else {
       pingTelemetry("browser", "auth-request-failed", {
-        message: "no-access-token",
-        authId: lastAuthId
+        message: "no-access-token"
       });
     }
   } catch (e) {
     pingTelemetry("browser", "auth-request-failed", {
-      message: String(e),
-      authId: lastAuthId
+      message: String(e)
     });
   }
 }
@@ -308,8 +293,7 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 
 // Init
 (() => {
-  initializeRecordingWebChannel();
-  captureLastAuthId();
   validateUserToken();
+  initializeRecordingWebChannel();
   refresh();
 })();
