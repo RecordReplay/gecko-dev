@@ -19,7 +19,7 @@ var EXPORTED_SYMBOLS = [
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
-const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { setTimeout, clearTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
@@ -50,6 +50,7 @@ const Env = Cc["@mozilla.org/process/environment;1"].getService(
 );
 
 let lastAuthId = undefined;
+let refreshTimer = null;
 
 const gOriginalApiKey = Env.get("RECORD_REPLAY_API_KEY");
 function hasOriginalApiKey() {
@@ -69,7 +70,6 @@ function getAuthClientId() {
 
 function setReplayRefreshToken(token) {
   Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
-  refresh();
 }
 
 function setReplayUserToken(token) {
@@ -125,25 +125,43 @@ function tokenExpiration(token) {
   return typeof exp === "number" ? exp * 1000 : null;
 }
 
+function scheduleRefreshTimer(expiresInMs) {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+
+  // refresh a minute before token expiration
+  refreshTimer = setTimeout(refresh, expiresInMs - (60 * 1000));
+}
+
 function validateUserToken() {
   const userToken = getReplayUserToken();
 
-  if (userToken) {
-    const { payload } = tokenInfo(userToken);
-    const exp = tokenExpiration(userToken);
-    if (exp < Date.now()) {
-      pingTelemetry("browser", "auth-expired", {
-        expirationDate: new Date(exp).toISOString(),
-        expiration: exp,
-        authId: payload.sub
-      });
-      setReplayUserToken(null);
-
-      return false;
-    }
+  if (!userToken) {
+    return null;
   }
 
-  return true;
+  const { payload } = tokenInfo(userToken);
+  const exp = tokenExpiration(userToken);
+  if (exp > Date.now()) {
+    // The current token hasn't expired yet so schedule a refresh and return it
+    scheduleRefreshTimer(exp - Date.now());
+
+    return userToken;
+  }
+
+  // Try to refresh the access token and return it if successful
+  const refreshedToken = refresh();
+
+  if (!refreshedToken) {
+    pingTelemetry("browser", "auth-expired", {
+      expirationDate: new Date(exp).toISOString(),
+      expiration: exp,
+      authId: payload.sub
+    });
+  }
+
+  return refreshedToken;
 }
 
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
@@ -156,16 +174,16 @@ function notifyWebChannelTargets() {
     if (target.browsingContext.currentWindowGlobal) {
       notifyWebChannelTarget(channel, target);
     } else {
-      webChannelTargets.delete(key)
+      webChannelTargets.delete(key);
     }
   }
 }
 
 // Notify a single tab of the current auth state
-function notifyWebChannelTarget(channel, target) {
-  const token = getReplayUserToken();
+async function notifyWebChannelTarget(channel, target) {
+  const token = await validateUserToken();
 
-  if (validateUserToken()) {
+  if (token) {
     channel.send({ token }, target);
   }
 }
@@ -224,32 +242,29 @@ async function refresh() {
     const json = await resp.json();
 
     if (json.error) {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: json.error,
-        authId: lastAuthId
-      });
-      setReplayRefreshToken("");
-      setReplayUserToken("");
-      return;
+      throw new Error(json.error);
     }
 
-    if (json.access_token) {
-      Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
-      setReplayUserToken(json.access_token);
-
-      // refresh a minute before token expiration
-      setTimeout(refresh, json.expires_in * 1000 - (60 * 1000));
-    } else {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: "no-access-token",
-        authId: lastAuthId
-      });
+    if (!json.access_token) {
+      throw new Error("no-access-token");
     }
+
+    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
+    setReplayUserToken(json.access_token);
+
+    scheduleRefreshTimer(json.expires_in * 1000);
+
+    return json.access_token;
   } catch (e) {
     pingTelemetry("browser", "auth-request-failed", {
-      message: String(e),
+      message: e.message ? e.message : String(e),
       authId: lastAuthId
     });
+
+    setReplayRefreshToken("");
+    setReplayUserToken("");
+
+    return null;
   }
 }
 
@@ -289,6 +304,11 @@ function openSigninPage() {
           await new Promise(resolve => setTimeout(resolve, 3000));
         } else {
           setReplayRefreshToken(resp.data.closeAuthRequest.token);
+
+          // refresh the token immediately to exchange it for an access token
+          // and acquire a new refresh token
+          await refresh();
+
           resolve();
           break;
         }
@@ -311,5 +331,4 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
   initializeRecordingWebChannel();
   captureLastAuthId();
   validateUserToken();
-  refresh();
 })();
