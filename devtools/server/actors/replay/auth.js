@@ -72,6 +72,9 @@ function setReplayRefreshToken(token) {
   Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
 }
 
+/**
+ * @param {string | null} token
+ */
 function setReplayUserToken(token) {
   token = token || "";
 
@@ -142,6 +145,9 @@ function scheduleRefreshTimer(expiresInMs) {
   refreshTimer = setTimeout(refresh, expiresInMs - (60 * 1000));
 }
 
+/**
+ * @returns {Promise<string | null>}
+ */
 async function validateUserToken() {
   const userToken = getReplayUserToken();
 
@@ -336,10 +342,13 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 });
 
 // Init
-(() => {
+(async () => {
   initializeRecordingWebChannel();
   if (!hasOriginalApiKey()) {
     captureLastAuthId();
-    setReplayUserToken(validateUserToken());
+    // clear the token so we ensure that the token is communicated to connection.js
+    const token = await validateUserToken();
+    setReplayUserToken(null);
+    setReplayUserToken(token);
   }
 })();
