@@ -338,6 +338,8 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 // Init
 (() => {
   initializeRecordingWebChannel();
-  captureLastAuthId();
-  validateUserToken();
+  if (!hasOriginalApiKey()) {
+    captureLastAuthId();
+    setReplayUserToken(validateUserToken());
+  }
 })();
