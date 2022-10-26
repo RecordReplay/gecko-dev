@@ -46,7 +46,7 @@ const {
 } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/connection.js"
 );
-const { openSigninPage } = ChromeUtils.import(
+const { openSigninPage, getAuthHost } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/auth.js"
 );
 const { pingTelemetry } = ChromeUtils.import(
@@ -1498,7 +1498,7 @@ function pickSigninPage(gBrowser) {
   const host = gBrowser.selectedBrowser.documentURI.host;
   if (getRecordingState(gBrowser.selectedBrowser) === RecordingState.READY && (
     /(\.|^)replay.io$/.test(host) ||
-    "webreplay.us.auth0.com" === host
+    getAuthHost() === host
   )) {
     gBrowser.loadURI(url, options);
   } else {

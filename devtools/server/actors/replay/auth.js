@@ -13,12 +13,13 @@ var EXPORTED_SYMBOLS = [
   "getReplayUserToken",
   "tokenInfo",
   "tokenExpiration",
-  "openSigninPage"
+  "openSigninPage",
+  "getAuthHost"
 ];
 
 const { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
 const { XPCOMUtils } = ChromeUtils.import("resource://gre/modules/XPCOMUtils.jsm");
-const { setTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
+const { setTimeout, clearTimeout } = ChromeUtils.import("resource://gre/modules/Timer.jsm");
 const { pingTelemetry } = ChromeUtils.import(
   "resource://devtools/server/actors/replay/telemetry.js"
 );
@@ -48,6 +49,9 @@ const Env = Cc["@mozilla.org/process/environment;1"].getService(
   Ci.nsIEnvironment
 );
 
+let lastAuthId = undefined;
+let refreshTimer = null;
+
 const gOriginalApiKey = Env.get("RECORD_REPLAY_API_KEY");
 function hasOriginalApiKey() {
   return !!gOriginalApiKey;
@@ -56,11 +60,21 @@ function getOriginalApiKey() {
   return gOriginalApiKey;
 }
 
-function setReplayRefreshToken(token) {
-  Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
-  refresh();
+function getAuthHost() {
+  return getenv("RECORD_REPLAY_AUTH_HOST") || "webreplay.us.auth0.com";
 }
 
+function getAuthClientId() {
+  return getenv("RECORD_REPLAY_AUTH_CLIENT_ID") || "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo";
+}
+
+function setReplayRefreshToken(token) {
+  Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
+}
+
+/**
+ * @param {string | null} token
+ */
 function setReplayUserToken(token) {
   token = token || "";
 
@@ -68,11 +82,24 @@ function setReplayUserToken(token) {
   if (token === getReplayUserToken()) return;
 
   Services.prefs.setStringPref("devtools.recordreplay.user-token", token);
+  captureLastAuthId();
 }
 function getReplayUserToken() {
   return Services.prefs.getStringPref("devtools.recordreplay.user-token");
 }
 
+function captureLastAuthId() {
+  const token = getReplayUserToken();
+  if (token) {
+    const t = tokenInfo(token);
+    lastAuthId = t?.payload.sub;
+  }
+}
+
+/**
+ * @param {string} token
+ * @returns {{payload: Record<string, unknown>} | null}
+ */
 function tokenInfo(token) {
   const [_header, encPayload, _cypher] = token.split(".", 3);
   if (typeof encPayload !== "string") {
@@ -96,6 +123,10 @@ function tokenInfo(token) {
   return { payload };
 }
 
+/**
+ * @param {string} token
+ * @returns {number | null}
+ */
 function tokenExpiration(token) {
   const userInfo = tokenInfo(token);
   if (!userInfo) {
@@ -103,6 +134,49 @@ function tokenExpiration(token) {
   }
   const exp = userInfo.payload?.exp;
   return typeof exp === "number" ? exp * 1000 : null;
+}
+
+function scheduleRefreshTimer(expiresInMs) {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+  }
+
+  // refresh a minute before token expiration
+  refreshTimer = setTimeout(refresh, expiresInMs - (60 * 1000));
+}
+
+/**
+ * @returns {Promise<string | null>}
+ */
+async function validateUserToken() {
+  const userToken = getReplayUserToken();
+
+  if (!userToken) {
+    return null;
+  }
+
+  const exp = tokenExpiration(userToken);
+  if (exp > Date.now()) {
+    // The current token hasn't expired yet so schedule a refresh and return it
+    scheduleRefreshTimer(exp - Date.now());
+
+    return userToken;
+  }
+
+  // Try to refresh the access token and return it if successful
+  const refreshedToken = await refresh();
+
+  if (!refreshedToken) {
+    const t = tokenInfo(userToken);
+
+    pingTelemetry("browser", "auth-expired", {
+      expirationDate: new Date(exp).toISOString(),
+      expiration: exp,
+      authId: t?.payload.sub
+    });
+  }
+
+  return refreshedToken;
 }
 
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
@@ -115,16 +189,18 @@ function notifyWebChannelTargets() {
     if (target.browsingContext.currentWindowGlobal) {
       notifyWebChannelTarget(channel, target);
     } else {
-      webChannelTargets.delete(key)
+      webChannelTargets.delete(key);
     }
   }
 }
 
 // Notify a single tab of the current auth state
-function notifyWebChannelTarget(channel, target) {
-  const token = getReplayUserToken();
+async function notifyWebChannelTarget(channel, target) {
+  const token = await validateUserToken();
 
-  channel.send({ token }, target);
+  if (token) {
+    channel.send({ token }, target);
+  }
 }
 
 function handleAuthChannelMessage(channel, _id, message, target) {
@@ -166,14 +242,14 @@ async function refresh() {
   }
 
   try {
-    const resp = await fetch("https://webreplay.us.auth0.com/oauth/token", {
+    const resp = await fetch(`https://${getAuthHost()}/oauth/token`, {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify({
         audience: "https://api.replay.io",
         scope: "openid profile offline_access",
         grant_type: "refresh_token",
-        client_id: "4FvFnJJW4XlnUyrXQF8zOLw6vNAH1MAo",
+        client_id: getAuthClientId(),
         refresh_token: refreshToken,
       })
     });
@@ -181,28 +257,29 @@ async function refresh() {
     const json = await resp.json();
 
     if (json.error) {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: json.error
-      });
-      setReplayRefreshToken("");
-      setReplayUserToken("");
-      return;
+      throw new Error(json.error);
     }
 
-    if (json.access_token) {
-      Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
-      setReplayUserToken(json.access_token);
-
-      setTimeout(refresh, json.expires_in * 1000);
-    } else {
-      pingTelemetry("browser", "auth-request-failed", {
-        message: "no-access-token"
-      });
+    if (!json.access_token) {
+      throw new Error("no-access-token");
     }
+
+    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
+    setReplayUserToken(json.access_token);
+
+    scheduleRefreshTimer(json.expires_in * 1000);
+
+    return json.access_token;
   } catch (e) {
     pingTelemetry("browser", "auth-request-failed", {
-      message: String(e)
+      message: e.message ? e.message : String(e),
+      authId: lastAuthId
     });
+
+    setReplayRefreshToken("");
+    setReplayUserToken("");
+
+    return null;
   }
 }
 
@@ -242,6 +319,11 @@ function openSigninPage() {
           await new Promise(resolve => setTimeout(resolve, 3000));
         } else {
           setReplayRefreshToken(resp.data.closeAuthRequest.token);
+
+          // refresh the token immediately to exchange it for an access token
+          // and acquire a new refresh token
+          await refresh();
+
           resolve();
           break;
         }
@@ -260,7 +342,13 @@ Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
 });
 
 // Init
-(() => {
+(async () => {
   initializeRecordingWebChannel();
-  refresh();
+  if (!hasOriginalApiKey()) {
+    captureLastAuthId();
+    // clear the token so we ensure that the token is communicated to connection.js
+    const token = await validateUserToken();
+    setReplayUserToken(null);
+    setReplayUserToken(token);
+  }
 })();

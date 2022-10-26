@@ -264,6 +264,20 @@ const replaySchemeMap = {
       MigrationUtils.MIGRATION_ENTRYPOINT_UNKNOWN,
     ]);
   },
+  open: (url, principal, browsingContext) => {
+    const browser = browsingContext.topFrameElement;
+    const tabbrowser = browser.getTabBrowser();
+
+    const isSelectedBrowsingContext = tabbrowser.selectedBrowser.browsingContext === browsingContext;
+
+    if (tabbrowser.visibleTabs.length === 1 && isSelectedBrowsingContext) {
+      tabbrowser.loadURI(replaySchemeMap.library, {
+        triggeringPrincipal: principal
+      });
+    } else if (isSelectedBrowsingContext) {
+      tabbrowser.removeTab(tabbrowser.selectedTab);
+    }
+  },
   record: (url, principal, browsingContext) => {
     const parts = new URLSearchParams(url.query);
     const target = parts.get("url");
