@@ -463,6 +463,10 @@ bool IPDLParamTraits<Shmem>::Read(const IPC::Message* aMsg,
   }
 
   Shmem::SharedMemory* rawmem = aActor->LookupSharedMemory(id);
+
+  recordreplay::RecordReplayAssert("IPDLParamTraits<Shmem>::Read %d %d %zu",
+                                   (int)id, !!rawmem, rawmem ? rawmem->Size() : 0);
+
   if (rawmem) {
     *aResult = Shmem(Shmem::PrivateIPDLCaller(), rawmem, id);
     return true;
