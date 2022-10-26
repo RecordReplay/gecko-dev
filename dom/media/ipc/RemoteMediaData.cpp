@@ -14,6 +14,8 @@ namespace mozilla {
 
 bool RemoteArrayOfByteBuffer::AllocateShmem(
     size_t aSize, std::function<ShmemBuffer(size_t)>& aAllocator) {
+  recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AllocateShmem %zu", aSize);
+
   ShmemBuffer buffer = aAllocator(aSize);
   if (!buffer.Valid()) {
     return false;
@@ -78,6 +80,8 @@ RemoteArrayOfByteBuffer& RemoteArrayOfByteBuffer::operator=(
   mBuffers = std::move(aOther.mBuffers);
   mOffsets = std::move(aOther.mOffsets);
   aOther.mIsValid = false;
+
+  recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::operator= %zu", mBuffers ? mBuffers->Size<uint8_t>() : 0);
   return *this;
 }
 
@@ -123,9 +127,13 @@ already_AddRefed<MediaByteBuffer> RemoteArrayOfByteBuffer::MediaByteBufferAt(
 /* static */ bool ipc::IPDLParamTraits<RemoteArrayOfByteBuffer>::Read(
     const IPC::Message* aMsg, PickleIterator* aIter,
     mozilla::ipc::IProtocol* aActor, RemoteArrayOfByteBuffer* aVar) {
-  return ReadIPDLParam(aMsg, aIter, aActor, &aVar->mIsValid) &&
+  bool rv = ReadIPDLParam(aMsg, aIter, aActor, &aVar->mIsValid) &&
          ReadIPDLParam(aMsg, aIter, aActor, &aVar->mBuffers) &&
          ReadIPDLParam(aMsg, aIter, aActor, &aVar->mOffsets);
+
+  recordreplay::RecordReplayAssert("IPDLParamTraits<RemoteArrayOfByteBuffer>::Read %zu", aVar->mBuffers ? aVar->mBuffers->Size<uint8_t>() : 0);
+
+  return rv;
 }
 
 bool ArrayOfRemoteMediaRawData::Fill(
