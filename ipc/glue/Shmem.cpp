@@ -238,7 +238,7 @@ Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
 
   MOZ_ASSERT(!strncmp(header->mMagic, sMagic, sizeof(sMagic)),
              "invalid segment");
-  mSize = recordreplay::RecordReplayValue("Shmem size", static_cast<size_t>(header->mSize));
+  mSize = header->mSize;
 
   size_t pageSize = SharedMemory::SystemPageSize();
   MOZ_ASSERT(mSegment->Size() - (2 * pageSize) >= mSize,
@@ -252,8 +252,6 @@ Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
   // don't set these until we know they're valid
   mData = data;
   mId = aId;
-
-  recordreplay::RecordReplayAssert("Shmem::Shmem %zu", mSize);
 }
 
 void Shmem::AssertInvariants() const {
@@ -380,7 +378,7 @@ void Shmem::Dealloc(PrivateIPDLCaller, SharedMemory* aSegment) {
 
 Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
     : mSegment(aSegment), mData(aSegment->memory()), mSize(0), mId(aId) {
-  mSize = static_cast<size_t>(*PtrToSize(mSegment));
+  mSize = recordreplay::RecordReplayValue("Shmem size", static_cast<size_t>(*PtrToSize(mSegment)));
   MOZ_RELEASE_ASSERT(mSegment->Size() - sizeof(uint32_t) >= mSize,
                      "illegal size in shared memory segment");
 }
