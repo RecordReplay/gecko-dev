@@ -94,6 +94,12 @@ class MediaDecodeTask final : public Runnable {
     MOZ_ASSERT(NS_IsMainThread());
   }
 
+  ~MediaDecodeTask() {
+    // Disallow events when releasing resources at non-deterministic points.
+    recordreplay::AutoDisallowThreadEvents disallow;
+    mAudioQueue = nullptr;
+  }
+
   // MOZ_CAN_RUN_SCRIPT_BOUNDARY until Runnable::Run is MOZ_CAN_RUN_SCRIPT.  See
   // bug 1535398.
   MOZ_CAN_RUN_SCRIPT_BOUNDARY
