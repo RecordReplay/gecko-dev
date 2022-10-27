@@ -238,7 +238,7 @@ Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
 
   MOZ_ASSERT(!strncmp(header->mMagic, sMagic, sizeof(sMagic)),
              "invalid segment");
-  mSize = static_cast<size_t>(header->mSize);
+  mSize = recordreplay::RecordReplayValue("Shmem size", static_cast<size_t>(header->mSize));
 
   size_t pageSize = SharedMemory::SystemPageSize();
   MOZ_ASSERT(mSegment->Size() - (2 * pageSize) >= mSize,
