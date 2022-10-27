@@ -252,6 +252,8 @@ Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
   // don't set these until we know they're valid
   mData = data;
   mId = aId;
+
+  recordreplay::RecordReplayAssert("Shmem::Shmem %zu", mSize);
 }
 
 void Shmem::AssertInvariants() const {
@@ -469,6 +471,10 @@ bool IPDLParamTraits<Shmem>::Read(const IPC::Message* aMsg,
 
   if (rawmem) {
     *aResult = Shmem(Shmem::PrivateIPDLCaller(), rawmem, id);
+
+    recordreplay::RecordReplayAssert("IPDLParamTraits<Shmem>::Read #1 %zu",
+                                     aResult->Size<uint8_t>());
+
     return true;
   }
   *aResult = Shmem();
