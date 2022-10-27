@@ -95,9 +95,10 @@ class MediaDecodeTask final : public Runnable {
   }
 
   ~MediaDecodeTask() {
-    // Disallow events when releasing resources at non-deterministic points.
+    // Reset the queue with events disallowed, as this takes an ordered lock
+    // and the task may be destroyed at a non-deterministic point.
     recordreplay::AutoDisallowThreadEvents disallow;
-    mAudioQueue = nullptr;
+    mAudioQueue.Reset();
   }
 
   // MOZ_CAN_RUN_SCRIPT_BOUNDARY until Runnable::Run is MOZ_CAN_RUN_SCRIPT.  See
