@@ -215,10 +215,11 @@ void ThreadedDriver::RunThread() {
     IterationResult result =
         Graph()->OneIteration(mStateComputedTime, mIterationEnd, nullptr);
 
-    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6");
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6 %d", result.IsStop());
 
     if (result.IsStop()) {
       // Signal that we're done stopping.
+      recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6.1");
       result.Stopped();
       recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #7");
       break;
@@ -436,13 +437,20 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
 
     AudioStreamState audioState = mOwner->mAudioStreamState;
 
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #1 %d %d",
+                                     (int)audioState, result.IsStillProcessing());
+
     MOZ_ASSERT(audioState != AudioStreamState::Stopping,
                "The audio driver can only enter stopping if it iterated the "
                "graph, which it can only do if there's no fallback driver");
     if (audioState != AudioStreamState::Running && result.IsStillProcessing()) {
+      recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #2");
+
       mOwner->MaybeStartAudioStream();
       return result;
     }
+
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #3");
 
     MOZ_ASSERT(result.IsStillProcessing() || result.IsStop() ||
                result.IsSwitchDriver());
