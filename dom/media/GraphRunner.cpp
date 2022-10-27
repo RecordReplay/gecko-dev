@@ -94,7 +94,7 @@ auto GraphRunner::OneIteration(GraphTime aStateTime, GraphTime aIterationEnd,
   IterationResult result = std::move(mIterationResult);
   mIterationResult = IterationResult();
 
-  recordreplay::RecordReplayAssert("GraphRunner::OneIteration Done");
+  recordreplay::RecordReplayAssert("GraphRunner::OneIteration Done %d", result.IsStop());
 
   return result;
 }
@@ -121,6 +121,9 @@ NS_IMETHODIMP GraphRunner::Run() {
     mIterationResult = mGraph->OneIterationImpl(mIterationState->StateTime(),
                                                 mIterationState->IterationEnd(),
                                                 mIterationState->Mixer());
+
+    recordreplay::RecordReplayAssert("GraphRunner::Run #5 %d", mIterationResult.IsStop());
+
     // Signal that mIterationResult was updated
     mThreadState = ThreadState::Wait;
     mMonitor.Notify();

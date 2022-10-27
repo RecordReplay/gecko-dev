@@ -1694,12 +1694,14 @@ auto MediaTrackGraphImpl::OneIterationImpl(GraphTime aStateTime,
       // ref-cycle graph->nextDriver->currentDriver->graph.
       SwitchAtNextIteration(nullptr);
     }
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #5");
     return IterationResult::CreateStop(
         NewRunnableMethod("MediaTrackGraphImpl::SignalMainThreadCleanup", this,
                           &MediaTrackGraphImpl::SignalMainThreadCleanup));
   }
 
   if (Switching()) {
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #6");
     RefPtr<GraphDriver> nextDriver = move(mNextDriver);
     return IterationResult::CreateSwitchDriver(
         nextDriver, NewRunnableMethod<StoreRefPtrPassByPtr<GraphDriver>>(
