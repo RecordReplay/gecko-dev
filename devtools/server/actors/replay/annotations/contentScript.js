@@ -11,11 +11,13 @@ function initialize(dbgWindow, RecordReplayControl) {
   window.wrappedJSObject.__RECORD_REPLAY_ANNOTATION_HOOK__ =
     (source, message) => {
       if (!source || typeof source !== "string") {
-        throw new Error("Replay annotations must include a source");
+        window.console.error("Replay annotations must include a source");
+        return false;
       }
 
       if (message && typeof message !== "object") {
-        throw new Error("Replay annotation messages must be an object if set");
+        window.console.error("Replay annotation messages must be an object if set");
+        return false;
       }
 
       RecordReplayControl.onAnnotation(
@@ -25,6 +27,8 @@ function initialize(dbgWindow, RecordReplayControl) {
           message
         })
       );
+
+      return true;
     };
 }
 
