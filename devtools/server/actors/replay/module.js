@@ -64,6 +64,10 @@ const {
   initialize: initReduxDevtools,
 } = require("devtools/server/actors/replay/redux-devtools/contentScript");
 
+const {
+  initialize: initGenericAnnotations,
+} = require("devtools/server/actors/replay/annotations/contentScript");
+
 const { evalExpression } = ChromeUtils.import("resource://devtools/server/actors/replay/pure-eval-dbg.jsm");
 
 const { StackingContext } = require("devtools/server/actors/replay/stacking-context");
@@ -508,6 +512,8 @@ gNewGlobalHooks.push(dbgWindow => {
         && !getenv("RECORD_REPLAY_DISABLE_REDUX_DEVTOOLS")) {
       initReduxDevtools(dbgWindow, RecordReplayControl);
     }
+
+    initGenericAnnotations(dbgWindow, RecordReplayControl);
   }
 });
 

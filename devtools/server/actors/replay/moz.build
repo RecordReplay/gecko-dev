@@ -6,7 +6,8 @@
 
 DIRS += [
     "react-devtools",
-    "redux-devtools"
+    "redux-devtools",
+    "annotations"
 ]
 
 DevToolsModules(
