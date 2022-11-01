@@ -9,21 +9,15 @@ function initialize(dbgWindow, RecordReplayControl) {
   window = dbgWindow.unsafeDereference();
 
   window.wrappedJSObject.__RECORD_REPLAY_ANNOTATION_HOOK__ =
-    (source, message) => {
-      if (!source || typeof source !== "string") {
-        window.console.error("Replay annotations source must be a string");
-        return false;
-      }
-
-      if (message && typeof message !== "object") {
-        window.console.error("Replay annotation message must be an object if set");
+    (kind, message) => {
+      if (!kind || typeof kind !== "string") {
+        window.console.error("Replay annotation `kind` must be a string");
         return false;
       }
 
       RecordReplayControl.onAnnotation(
-        "generic",
+        kind,
         JSON.stringify({
-          source,
           message
         })
       );
