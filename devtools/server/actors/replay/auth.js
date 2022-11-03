@@ -150,8 +150,9 @@ function scheduleRefreshTimer(expiresInMs) {
  */
 async function validateUserToken() {
   const userToken = getReplayUserToken();
+  const userTokenInfo = tokenInfo(userToken);
 
-  if (!userToken) {
+  if (!userToken || !userTokenInfo) {
     return null;
   }
 
@@ -167,12 +168,10 @@ async function validateUserToken() {
   const refreshedToken = await refresh();
 
   if (!refreshedToken) {
-    const t = tokenInfo(userToken);
-
     pingTelemetry("browser", "auth-expired", {
       expirationDate: new Date(exp).toISOString(),
       expiration: exp,
-      authId: t?.payload.sub
+      authId: userTokenInfo.payload.sub
     });
   }
 
