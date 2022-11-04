@@ -1487,7 +1487,7 @@ function pickSigninPage(gBrowser) {
   const externalAuthFlow = Services.prefs.getBoolPref("devtools.recordreplay.ext-auth", false);
 
   if (externalAuthFlow) {
-    openSigninPage(gBrowser.selectedBrowser);
+    openSigninPage();
     return;
   }
 
