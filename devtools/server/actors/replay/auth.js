@@ -234,6 +234,29 @@ function initializeRecordingWebChannel() {
   }
 }
 
+function handleAuthRequestFailed(e, extra = {}) {
+  console.error(e);
+
+  const message = e?.id || "unexpected-internal-error";
+  const errorMessage = e?.message;
+
+  switch (message) {
+    case 'timeout':
+      showAuthenticationError("The request timed out before authentication completed. Please try again.")
+      break;
+    case 'unexpected-internal-error':
+      showAuthenticationError("An unexpected error occurred. Support has been notified. You may try again or contact support@replay.io for help.");
+      break;
+  }
+
+  pingTelemetry("browser", "auth-request-failed", {
+    message,
+    errorMessage,
+    authId: lastAuthId,
+    ...extra,
+  });
+}
+
 async function refresh() {
   const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
   if (!refreshToken) {
@@ -256,11 +279,16 @@ async function refresh() {
     const json = await resp.json();
 
     if (json.error) {
-      throw new Error(json.error);
+      throw new Error({
+        id: "auth0-error",
+        message: json.error
+      });
     }
 
     if (!json.access_token) {
-      throw new Error("no-access-token");
+      throw new Error({
+        id: "no-access-token"
+      });
     }
 
     Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
@@ -270,10 +298,7 @@ async function refresh() {
 
     return json.access_token;
   } catch (e) {
-    pingTelemetry("browser", "auth-request-failed", {
-      message: e.message ? e.message : String(e),
-      authId: lastAuthId
-    });
+    handleAuthRequestFailed(e);
 
     setReplayRefreshToken("");
     setReplayUserToken("");
@@ -282,22 +307,27 @@ async function refresh() {
   }
 }
 
+function showAuthenticationError(message) {
+  try {
+    const mainWindow = Services.wm.getMostRecentWindow("navigator:browser");
+    const browser = mainWindow.gBrowser.selectedBrowser;
+    const notificationKey = "replay-invalidated-recording";
+    const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
+    const notification = notificationBox.getNotificationWithValue(notificationKey);
 
-function showAuthenticationError(browser, message) {
-  const notificationKey = "replay-invalidated-recording";
-  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
-  const notification = notificationBox.getNotificationWithValue(notificationKey);
+    if (notification) {
+      return;
+    }
 
-  if (notification) {
-    return;
+    notificationBox.appendNotification(
+      message,
+      notificationKey,
+      undefined,
+      notificationBox.PRIORITY_WARNING_HIGH,
+    );
+  } catch (e) {
+    console.error(e);
   }
-
-  notificationBox.appendNotification(
-    message,
-    notificationKey,
-    undefined,
-    notificationBox.PRIORITY_WARNING_HIGH,
-  );
 }
 
 function base64URLEncode(str) {
@@ -357,28 +387,7 @@ function openSigninPage(browser) {
       }
     })
   ]).catch(e => {
-    console.error(e);
-
-    const message = e?.id || "unexpected-internal-error";
-    const errorMessage = e?.message;
-
-    if (browser) {
-      switch (message) {
-        case 'timeout':
-          showAuthenticationError(browser, "The request timed out before authentication completed. Please try again.")
-          break;
-        case 'unexpected-internal-error':
-          showAuthenticationError(browser, "An unexpected error occurred. Support has been notified. You may try again or contact support@replay.io for help.");
-          break;
-      }
-    }
-
-    pingTelemetry("browser", "auth-request-failed", {
-      message,
-      errorMessage,
-      clientKey: key,
-      authId: lastAuthId,
-    });    
+    handleAuthRequestFailed(e, {clientKey: key})
   });
 }
 
