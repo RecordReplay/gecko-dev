@@ -205,7 +205,7 @@ async function notifyWebChannelTarget(channel, target) {
 function handleAuthChannelMessage(channel, _id, message, target) {
   const { type } = message;
   if (type === "login") {
-    openSigninPage();
+    openSigninPage(target.browser);
   } else if (type === "connect") {
     webChannelTargets.set(target.browsingContext, {channel, target});
     notifyWebChannelTarget(channel, target);
@@ -282,12 +282,30 @@ async function refresh() {
   }
 }
 
+
+function showAuthenticationError(browser, message) {
+  const notificationKey = "replay-invalidated-recording";
+  const notificationBox = browser.getTabBrowser().getNotificationBox(browser);
+  const notification = notificationBox.getNotificationWithValue(notificationKey);
+
+  if (notification) {
+    return;
+  }
+
+  notificationBox.appendNotification(
+    message,
+    notificationKey,
+    undefined,
+    notificationBox.PRIORITY_WARNING_HIGH,
+  );
+}
+
 function base64URLEncode(str) {
   // https://auth0.com/docs/authorization/flows/call-your-api-using-the-authorization-code-flow-with-pkce
   return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-function openSigninPage() {
+function openSigninPage(browser) {
   const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
   const key = base64URLEncode(btoa(keyArray.join("")));
   const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
@@ -297,11 +315,14 @@ function openSigninPage() {
     .getProtocolHandlerInfo("https")
     .launchWithURI(url);
 
+  let timedOut = false;
   Promise.race([
-    new Promise((_resolve, reject) => setTimeout(reject, 2 * 60 * 1000)),
+    new Promise((_resolve, reject) => setTimeout(() => {
+      timedOut = true;
+      reject({id: "timeout"});
+    }, 2 * 60 * 1000)),
     new Promise(async (resolve, reject) => {
-      let retries = 0;
-      while (retries < 40) {
+      while (!timedOut) {
         const resp = await queryAPIServer(`
           mutation CloseAuthRequest($key: String!) {
             closeAuthRequest(input: {key: $key}) {
@@ -314,8 +335,15 @@ function openSigninPage() {
         });
 
         if (resp.errors) {
-          retries++;
-          await new Promise(resolve => setTimeout(resolve, 3000));
+          if (resp.errors.length === 1 && resp.errors[0].message === "Authentication request does not exist") {
+            await new Promise(resolve => setTimeout(resolve, 3000));
+          } else {
+            reject({
+              message: resp.errors.map(e => e.message).filter(Boolean).join(", ")
+            });
+
+            break;
+          }
         } else {
           setReplayRefreshToken(resp.data.closeAuthRequest.token);
 
@@ -327,13 +355,31 @@ function openSigninPage() {
           break;
         }
       }
-
-      pingTelemetry("browser", "auth-request-failed", {
-        message: "max-retries"
-      });
-      reject(`Failed to authenticate`);
     })
-  ]).catch(console.error);
+  ]).catch(e => {
+    console.error(e);
+
+    const message = e?.id || "unexpected-internal-error";
+    const errorMessage = e?.message;
+
+    if (browser) {
+      switch (message) {
+        case 'timeout':
+          showAuthenticationError(browser, "The request timed out before authentication completed. Please try again.")
+          break;
+        case 'unexpected-internal-error':
+          showAuthenticationError(browser, "An unexpected error occurred. Support has been notified. You may try again or contact support@replay.io for help.");
+          break;
+      }
+    }
+
+    pingTelemetry("browser", "auth-request-failed", {
+      message,
+      errorMessage,
+      clientKey: key,
+      authId: lastAuthId,
+    });    
+  });
 }
 
 Services.prefs.addObserver("devtools.recordreplay.user-token", () => {
