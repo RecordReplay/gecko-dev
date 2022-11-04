@@ -205,7 +205,7 @@ async function notifyWebChannelTarget(channel, target) {
 function handleAuthChannelMessage(channel, _id, message, target) {
   const { type } = message;
   if (type === "login") {
-    openSigninPage();
+    openSigninPage(target.browser);
   } else if (type === "connect") {
     webChannelTargets.set(target.browsingContext, {channel, target});
     notifyWebChannelTarget(channel, target);
@@ -335,7 +335,7 @@ function base64URLEncode(str) {
   return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-function openSigninPage() {
+function openSigninPage(browser) {
   const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
   const key = base64URLEncode(btoa(keyArray.join("")));
   const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
