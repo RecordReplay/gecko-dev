@@ -72,6 +72,10 @@ function setReplayRefreshToken(token) {
   Services.prefs.setStringPref("devtools.recordreplay.refresh-token", token || "");
 }
 
+function getReplayRefreshToken() {
+  return Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
+}
+
 /**
  * @param {string | null} token
  */
@@ -164,18 +168,20 @@ async function validateUserToken() {
     return userToken;
   }
 
-  // Try to refresh the access token and return it if successful
-  const refreshedToken = await refresh();
-
-  if (!refreshedToken) {
-    pingTelemetry("browser", "auth-expired", {
+  if (!getReplayRefreshToken()) {
+    pingTelemetry("browser", "no-refresh-token", {
       expirationDate: new Date(exp).toISOString(),
-      expiration: exp,
       authId: userTokenInfo.payload.sub
     });
+
+    return;
   }
 
-  return refreshedToken;
+  try {
+    return await refresh();
+  } catch (e) {
+    handleAuthRequestFailed(e);
+  }
 }
 
 // Tracks the open replay.io tabs. If one is closed, its currentWindowGlobal
@@ -258,11 +264,6 @@ function handleAuthRequestFailed(e, extra = {}) {
 }
 
 async function refresh() {
-  const refreshToken = Services.prefs.getStringPref("devtools.recordreplay.refresh-token", "");
-  if (!refreshToken) {
-    return;
-  }
-
   try {
     const resp = await fetch(`https://${getAuthHost()}/oauth/token`, {
       method: "POST",
@@ -272,38 +273,42 @@ async function refresh() {
         scope: "openid profile offline_access",
         grant_type: "refresh_token",
         client_id: getAuthClientId(),
-        refresh_token: refreshToken,
+        refresh_token: getReplayRefreshToken(),
       })
     });
 
     const json = await resp.json();
 
     if (json.error) {
-      throw new Error({
+      throw {
         id: "auth0-error",
         message: json.error
-      });
+      };
     }
 
     if (!json.access_token) {
-      throw new Error({
+      throw {
         id: "no-access-token"
-      });
+      };
     }
 
-    Services.prefs.setStringPref("devtools.recordreplay.refresh-token", json.refresh_token);
+    if (!json.refresh_token) {
+      throw {
+        id: "no-refresh-token"
+      };
+    }
+
+    setReplayRefreshToken(json.refresh_token);
     setReplayUserToken(json.access_token);
 
     scheduleRefreshTimer(json.expires_in * 1000);
 
     return json.access_token;
   } catch (e) {
-    handleAuthRequestFailed(e);
-
     setReplayRefreshToken("");
     setReplayUserToken("");
 
-    return null;
+    throw e;
   }
 }
 
@@ -335,7 +340,7 @@ function base64URLEncode(str) {
   return str.replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
 
-function openSigninPage(browser) {
+function openSigninPage() {
   const keyArray = Array.from({length: 32}, () => String.fromCodePoint(Math.floor(Math.random() * 256)));
   const key = base64URLEncode(btoa(keyArray.join("")));
   const viewHost = getenv("RECORD_REPLAY_VIEW_HOST") || "https://app.replay.io";
@@ -352,38 +357,47 @@ function openSigninPage(browser) {
       reject({id: "timeout"});
     }, 2 * 60 * 1000)),
     new Promise(async (resolve, reject) => {
-      while (!timedOut) {
-        const resp = await queryAPIServer(`
-          mutation CloseAuthRequest($key: String!) {
-            closeAuthRequest(input: {key: $key}) {
-              success
-              token
+      try {
+        while (!timedOut) {
+          const resp = await queryAPIServer(`
+            mutation CloseAuthRequest($key: String!) {
+              closeAuthRequest(input: {key: $key}) {
+                success
+                token
+              }
             }
-          }
-        `, {
-          key
-        });
+          `, {
+            key
+          });
 
-        if (resp.errors) {
-          if (resp.errors.length === 1 && resp.errors[0].message === "Authentication request does not exist") {
-            await new Promise(resolve => setTimeout(resolve, 3000));
+          if (resp.errors) {
+            if (resp.errors.length === 1 && resp.errors[0].message === "Authentication request does not exist") {
+              await new Promise(resolve => setTimeout(resolve, 3000));
+            } else {
+              throw {
+                id: "close-graphql-error",
+                message: resp.errors.map(e => e.message).filter(Boolean).join(", ")
+              };
+            }
+          } else if (!resp.data.closeAuthRequest.token) {
+            // there's no obvious reason this would occur but for completeness ...
+            throw {
+              id: "close-missing-token",
+              message: JSON.stringify(resp)
+            };
           } else {
-            reject({
-              message: resp.errors.map(e => e.message).filter(Boolean).join(", ")
-            });
+            setReplayRefreshToken(resp.data.closeAuthRequest.token);
 
+            // refresh the token immediately to exchange it for an access token
+            // and acquire a new refresh token
+            await refresh();
+
+            resolve();
             break;
           }
-        } else {
-          setReplayRefreshToken(resp.data.closeAuthRequest.token);
-
-          // refresh the token immediately to exchange it for an access token
-          // and acquire a new refresh token
-          await refresh();
-
-          resolve();
-          break;
         }
+      } catch (e) {
+        reject(e);
       }
     })
   ]).catch(e => {
