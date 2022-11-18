@@ -52,6 +52,10 @@ const Env = Cc["@mozilla.org/process/environment;1"].getService(
 let lastAuthId = undefined;
 let refreshTimer = null;
 
+function maskToken(token) {
+  return token.replaceAll(/.(?!.{0,2}$)/g, "*");
+}
+
 const gOriginalApiKey = Env.get("RECORD_REPLAY_API_KEY");
 function hasOriginalApiKey() {
   return !!gOriginalApiKey;
@@ -169,7 +173,7 @@ async function validateUserToken() {
   }
 
   if (!getReplayRefreshToken()) {
-    pingTelemetry("browser", "no-refresh-token", {
+    pingTelemetry("browser", "auth-no-refresh-token", {
       expirationDate: new Date(exp).toISOString(),
       authId: userTokenInfo.payload.sub
     });
@@ -180,7 +184,7 @@ async function validateUserToken() {
   try {
     return await refresh();
   } catch (e) {
-    handleAuthRequestFailed(e);
+    handleAuthRequestFailed(e, {refreshToken: e.refreshToken});
   }
 }
 
@@ -264,6 +268,7 @@ function handleAuthRequestFailed(e, extra = {}) {
 }
 
 async function refresh() {
+  const refresh_token = getReplayRefreshToken();
   try {
     const resp = await fetch(`https://${getAuthHost()}/oauth/token`, {
       method: "POST",
@@ -273,7 +278,7 @@ async function refresh() {
         scope: "openid profile offline_access",
         grant_type: "refresh_token",
         client_id: getAuthClientId(),
-        refresh_token: getReplayRefreshToken(),
+        refresh_token,
       })
     });
 
@@ -303,12 +308,20 @@ async function refresh() {
 
     scheduleRefreshTimer(json.expires_in * 1000);
 
+    pingTelemetry("browser", "auth-refresh-success", {
+      refreshToken: maskToken(json.refresh_token),
+      expirationDate: new Date(json.expires_in * 1000).toISOString(),
+    });
+
     return json.access_token;
   } catch (e) {
     setReplayRefreshToken("");
     setReplayUserToken("");
 
-    throw e;
+    throw {
+      ...e,
+      refreshToken: maskToken(refresh_token)
+    };
   }
 }
 
@@ -386,7 +399,12 @@ function openSigninPage() {
               message: JSON.stringify(resp)
             };
           } else {
-            setReplayRefreshToken(resp.data.closeAuthRequest.token);
+            const refreshToken = resp.data.closeAuthRequest.token;
+            pingTelemetry("browser", "auth-request-success", {
+              refreshToken: maskToken(refreshToken),
+            });
+
+            setReplayRefreshToken(refreshToken);
 
             // refresh the token immediately to exchange it for an access token
             // and acquire a new refresh token
@@ -401,7 +419,7 @@ function openSigninPage() {
       }
     })
   ]).catch(e => {
-    handleAuthRequestFailed(e, {clientKey: key})
+    handleAuthRequestFailed(e, {refreshToken: e.refreshToken, clientKey: key})
   });
 }
 
