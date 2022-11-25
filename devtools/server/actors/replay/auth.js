@@ -381,7 +381,7 @@ function openSigninPage() {
             }
           `, {
             key
-          });
+          }, true);
 
           if (resp.errors) {
             if (resp.errors.length === 1 && resp.errors[0].message === "Authentication request does not exist") {

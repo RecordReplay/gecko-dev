@@ -25,8 +25,8 @@ function getAPIServer() {
   return Services.prefs.getStringPref("devtools.recordreplay.apiServer");
 }
 
-async function queryAPIServer(query, variables = {}) {
-  const token = ReplayAuth.getReplayUserToken() || ReplayAuth.getOriginalApiKey();
+async function queryAPIServer(query, variables = {}, anonymous = false) {
+  const token = anonymous ? null : (ReplayAuth.getReplayUserToken() || ReplayAuth.getOriginalApiKey());
 
   const headers = {
     "Content-Type": "application/json",
