@@ -29,6 +29,8 @@
 #include "prerror.h"
 #include "prnetdb.h"
 
+#include <ostream>
+
 namespace mozilla {
 namespace net {
 
@@ -605,10 +607,33 @@ void nsSocketTransportService::ApplyPortRemapPreference(
   }
 }
 
+namespace mozilla {
+  extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
+}
+
 PRIntervalTime nsSocketTransportService::PollTimeout(PRIntervalTime now) {
+  // #RUN-1055
+  recordreplay::RecordReplayAssert(
+    "#RUN-1055 nsSocketTransportService::PollTImeout 10 mActiveCount=%u",
+    (unsigned) mActiveCount);
   if (mActiveCount == 0) {
     return NS_SOCKET_POLL_TIMEOUT;
   }
+
+  // #RUN-1055
+  std::ostringstream oss;
+  for (uint32_t i = 0; i < mActiveCount; ++i) {
+    if (i > 0) {
+      oss << ",";
+    }
+    oss << mozilla::NumberToStringRecordReplayWorkaroundForWindows(
+      (uint64_t) mActiveList[i].mFD->identity
+    );
+  }
+  recordreplay::RecordReplayAssert(
+    "#RUN-1055 nsSocketTransportService::PollTImeout 20 mActiveListIds=%s",
+    oss.str().c_str()
+  );
 
   // compute minimum time before any socket timeout expires.
   PRIntervalTime minR = NS_SOCKET_POLL_TIMEOUT;
