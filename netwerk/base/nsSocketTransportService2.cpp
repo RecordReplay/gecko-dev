@@ -32,6 +32,10 @@
 #include <ostream>
 
 namespace mozilla {
+  extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
+}
+
+namespace mozilla {
 namespace net {
 
 LazyLogModule gSocketTransportLog("nsSocketTransport");
@@ -605,10 +609,6 @@ void nsSocketTransportService::ApplyPortRemapPreference(
   if (!portRemapping.IsEmpty()) {
     mPortRemapping.emplace(portRemapping);
   }
-}
-
-namespace mozilla {
-  extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
 }
 
 PRIntervalTime nsSocketTransportService::PollTimeout(PRIntervalTime now) {
