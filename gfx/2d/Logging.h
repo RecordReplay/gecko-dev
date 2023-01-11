@@ -33,6 +33,11 @@ extern GFX2D_API mozilla::LogModule* GetGFX2DLog();
 #endif
 
 namespace mozilla {
+  extern std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v);
+  extern std::string SignedNumberToStringRecordReplayWorkaroundForWindows(int64_t v);
+}
+
+namespace mozilla {
 namespace gfx {
 
 #if defined(MOZ_LOGGING)
@@ -313,37 +318,37 @@ class Log final {
   }
   Log& operator<<(int aInt) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aInt;
+      mMessage << SignedNumberToStringRecordReplayWorkaroundForWindows(aInt);
     }
     return *this;
   }
   Log& operator<<(unsigned int aInt) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aInt;
+      mMessage << NumberToStringRecordReplayWorkaroundForWindows(aInt);
     }
     return *this;
   }
   Log& operator<<(long aLong) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aLong;
+      mMessage << SignedNumberToStringRecordReplayWorkaroundForWindows(aLong);
     }
     return *this;
   }
   Log& operator<<(unsigned long aLong) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aLong;
+      mMessage << NumberToStringRecordReplayWorkaroundForWindows(aLong);
     }
     return *this;
   }
   Log& operator<<(long long aLong) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aLong;
+      mMessage << SignedNumberToStringRecordReplayWorkaroundForWindows(aLong);
     }
     return *this;
   }
   Log& operator<<(unsigned long long aLong) {
     if (MOZ_UNLIKELY(LogIt())) {
-      mMessage << aLong;
+      mMessage << NumberToStringRecordReplayWorkaroundForWindows(aLong);
     }
     return *this;
   }
@@ -736,13 +741,13 @@ class Log final {
     if (mLogIt) {
       if (AutoPrefix()) {
         if (mOptions & int(LogOptions::AssertOnCall)) {
-          mMessage << "[GFX" << L;
+          mMessage << "[GFX" << SignedNumberToStringRecordReplayWorkaroundForWindows(L);
         } else {
-          mMessage << "[GFX" << L << "-";
+          mMessage << "[GFX" << SignedNumberToStringRecordReplayWorkaroundForWindows(L) << "-";
         }
       }
       if ((mOptions & int(LogOptions::CrashAction)) && ValidReason()) {
-        mMessage << " " << (int)mReason;
+        mMessage << " " << SignedNumberToStringRecordReplayWorkaroundForWindows((int)mReason);
       }
       if (AutoPrefix()) {
         mMessage << "]: ";

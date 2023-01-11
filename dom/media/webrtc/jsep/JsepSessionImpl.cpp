@@ -58,6 +58,11 @@ std::string NumberToStringRecordReplayWorkaroundForWindows(uint64_t v) {
   snprintf(buf, sizeof(buf), "%llu", v);
   return std::string(buf);
 }
+std::string SignedNumberToStringRecordReplayWorkaroundForWindows(int64_t v) {
+  char buf[50];
+  snprintf(buf, sizeof(buf), "%lld", v);
+  return std::string(buf);
+}
 
 static std::string GetRandomHex(size_t words) {
   std::ostringstream os;
