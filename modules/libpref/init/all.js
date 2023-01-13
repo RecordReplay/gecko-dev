@@ -839,7 +839,7 @@ pref("devtools.recordreplay.user-token", "");
 pref("devtools.recordreplay.uploadSourceMaps", true);
 
 // Whether to record redux devtools annotations
-pref("devtools.recordreplay.enableReduxDevTools", false);
+pref("devtools.recordreplay.enableReduxDevTools", true);
 
 // Whether to skip the logic in the rr `onNewScript` handler.
 // Defaults to false (don't skip, do execute logic).
