@@ -1525,7 +1525,7 @@ class nsHtml5RequestStopper : public Runnable {
   ~nsHtml5RequestStopper() {
     // This can be destroyed at non-deterministic points, so disallow events
     // while the stream parser pointer is destroyed.
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("nsHtml5RequestStopper::~nsHtml5RequestStopper");
     mStreamParser = nullptr;
   }
 

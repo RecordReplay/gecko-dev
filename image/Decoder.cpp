@@ -72,7 +72,7 @@ Decoder::Decoder(RasterImage* aImage)
 Decoder::~Decoder() {
   // Decoder destruction occurs at non-deterministic points even if events
   // aren't disallowed, due to its threadsafe refcount.
-  recordreplay::AutoDisallowThreadEvents disallow;
+  recordreplay::AutoDisallowThreadEvents disallow("Decoder::~Decoder");
 
   MOZ_ASSERT(mProgress == NoProgress || !mImage,
              "Destroying Decoder without taking all its progress changes");

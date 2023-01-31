@@ -88,7 +88,7 @@ RasterImage::~RasterImage() {
   // shouldn't matter.
   // See issue822, and linear #BAC-978.
   // https://linear.app/replay/issue/BAC-978/mismatch-orderedlock-imgrequest
-  mozilla::recordreplay::AutoDisallowThreadEvents disallowThreadEvents;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallowThreadEvents("RasterImage::~RasterImage");
 
   // Make sure our SourceBuffer is marked as complete. This will ensure that any
   // outstanding decoders terminate.

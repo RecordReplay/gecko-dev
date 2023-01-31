@@ -111,7 +111,7 @@ HttpChannelChild::HttpChannelChild()
 HttpChannelChild::~HttpChannelChild() {
   // Destruction can occur at non-deterministic points even if events aren't
   // currently disallowed.
-  recordreplay::AutoDisallowThreadEvents disallow;
+  recordreplay::AutoDisallowThreadEvents disallow("HttpChannelChild::~HttpChannelChild");
 
   LOG(("Destroying HttpChannelChild @%p\n", this));
 
@@ -172,7 +172,7 @@ NS_IMPL_ADDREF(HttpChannelChild)
 NS_IMETHODIMP_(MozExternalRefCountType) HttpChannelChild::Release() {
   // Reference counts can vary between recording/replaying and we don't want to
   // interact with the recording.
-  recordreplay::AutoDisallowThreadEvents disallow;
+  recordreplay::AutoDisallowThreadEvents disallow("HttpChannelChild::Release");
 
   if (!NS_IsMainThread()) {
     nsrefcnt count = mRefCnt;

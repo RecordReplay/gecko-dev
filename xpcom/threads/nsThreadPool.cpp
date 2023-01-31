@@ -254,7 +254,7 @@ nsThreadPool::Run() {
   do {
     // Run any pending non-deterministic events first.
     {
-      recordreplay::AutoDisallowThreadEvents disallow;
+      recordreplay::AutoDisallowThreadEvents disallow("nsThreadPool::Run");
       MutexAutoLock lock(mMutexNonDeterministic);
       TimeDuration delay;
       for (;;) {

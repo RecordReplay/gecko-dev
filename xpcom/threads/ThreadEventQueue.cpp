@@ -147,7 +147,7 @@ already_AddRefed<nsIRunnable> ThreadEventQueue::GetEvent(
     bool aMayWait, mozilla::TimeDuration* aLastEventDelay) {
   // Run any pending non-deterministic events.
   if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("ThreadEventQueue::GetEvent");
     MutexAutoLock lock(mLockNonDeterministic);
     while (true) {
       TimeDuration delay;

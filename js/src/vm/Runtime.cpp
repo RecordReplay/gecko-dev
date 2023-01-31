@@ -419,7 +419,7 @@ static bool HandleInterrupt(JSContext* cx, bool invokeCallback) {
   // Additionally, returning false here will change subsequent behavior, so
   // such an event cannot occur during recording or replay without
   // invalidating the recording.
-  mozilla::recordreplay::AutoDisallowThreadEvents d;
+  mozilla::recordreplay::AutoDisallowThreadEvents d("HandleInterrupt");
 
   cx->runtime()->gc.gcIfRequested();
 

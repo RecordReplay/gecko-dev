@@ -273,7 +273,7 @@ class MOZ_IS_SMARTPTR_TO_REFCOUNTED nsMainThreadPtrHolder final {
   ~nsMainThreadPtrHolder() {
     mozilla::Maybe<mozilla::recordreplay::AutoDisallowThreadEvents> disallow;
     if (mRecordReplayNonDeterministic) {
-      disallow.emplace();
+      disallow.emplace("nsMainThreadPtrHolder::~nsMainThreadPtrHolder");
     }
     if (NS_IsMainThread()) {
       NS_IF_RELEASE(mRawPtr);

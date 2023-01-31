@@ -3353,7 +3353,7 @@ bool GCRuntime::triggerGC(JS::GCReason reason) {
     return false;
   }
 
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("GCRuntime::triggerGC");
 
   JS::PrepareForFullGC(rt->mainContextFromOwnThread());
   requestMajorGC(reason);
@@ -3451,7 +3451,7 @@ bool GCRuntime::triggerZoneGC(Zone* zone, JS::GCReason reason, size_t used,
     return false;
   }
 
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("GCRuntime::triggerZoneGC");
 
 #ifdef JS_GC_ZEAL
   if (hasZealMode(ZealMode::Alloc)) {
@@ -6044,7 +6044,7 @@ IncrementalProgress GCRuntime::markUntilBudgetExhausted(
 
   // Marked GC things may vary between recording and replaying, so marking
   // and sweeping should not perform any recorded events.
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("GCRuntime::markUntilBudgetExhausted");
 
   AutoMajorGCProfilerEntry s(this);
 
@@ -6565,7 +6565,7 @@ bool GCRuntime::initSweepActions() {
 IncrementalProgress GCRuntime::performSweepActions(SliceBudget& budget) {
   // Marked GC things may vary between recording and replaying, so sweep
   // actions should not perform any recorded events.
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("GCRuntime::performSweepActions");
 
   AutoMajorGCProfilerEntry s(this);
   gcstats::AutoPhase ap(stats(), gcstats::PhaseKind::SWEEP);
@@ -7963,7 +7963,7 @@ SliceBudget GCRuntime::defaultBudget(JS::GCReason reason, int64_t millis) {
 }
 
 void GCRuntime::gc(JS::GCOptions options, JS::GCReason reason) {
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("GCRuntime::gc");
   collect(true, SliceBudget::unlimited(), mozilla::Some(options), reason);
 }
 

@@ -107,6 +107,7 @@ struct MOZ_RAII AutoPassThroughThreadEvents {
 // Mark a region where thread events are not allowed to occur. The process will
 // crash immediately if an event does happen.
 static inline void BeginDisallowThreadEvents();
+static inline void BeginDisallowThreadEventsWithLabel(const char* aLabel);
 static inline void EndDisallowThreadEvents();
 
 // Whether events in this thread are disallowed.
@@ -114,7 +115,9 @@ static inline bool AreThreadEventsDisallowed();
 
 // RAII class for a region where thread events are disallowed.
 struct MOZ_RAII AutoDisallowThreadEvents {
-  AutoDisallowThreadEvents() { BeginDisallowThreadEvents(); }
+  explicit AutoDisallowThreadEvents(const char* aLabel) {
+    BeginDisallowThreadEventsWithLabel(aLabel);
+  }
   ~AutoDisallowThreadEvents() { EndDisallowThreadEvents(); }
 };
 
@@ -408,6 +411,7 @@ MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(EndPassThroughThreadEvents, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(AreThreadEventsPassedThrough, bool, false, (),
                                ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(BeginDisallowThreadEvents, (), ())
+MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(BeginDisallowThreadEventsWithLabel, (const char* aLabel), (aLabel))
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(EndDisallowThreadEvents, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(AreThreadEventsDisallowed, bool, false, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(PushCrashNote, (const char* aNote), (aNote))

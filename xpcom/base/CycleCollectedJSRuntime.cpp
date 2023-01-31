@@ -759,7 +759,7 @@ size_t CycleCollectedJSRuntime::SizeOfExcludingThis(
 void CycleCollectedJSRuntime::UnmarkSkippableJSHolders() {
   // Prevent nsWrapperCaches accessed under CanSkip from adding recorded events
   // which might not replay in the same order.
-  recordreplay::AutoDisallowThreadEvents disallow;
+  recordreplay::AutoDisallowThreadEvents disallow("CycleCollectedJSRuntime::UnmarkSkippableJSHolders");
 
   mJSHolders.ForEach([](void* holder, nsScriptObjectTracer* tracer,
                         JS::Zone* zone) { tracer->CanSkip(holder, true); });

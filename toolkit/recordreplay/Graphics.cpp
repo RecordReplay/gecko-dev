@@ -85,7 +85,7 @@ static bool ShouldUpdateCompositor(LayerTransactionChild* aChild) {
 void SendUpdate(LayerTransactionChild* aChild, const TransactionInfo& aInfo) {
   if (ShouldUpdateCompositor(aChild)) {
     // Make sure the compositor does not interact with the recording.
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("SendUpdate");
 
     // Even if we won't be painting, we need to continue updating the layer state
     // in case we end up wanting to paint later.
@@ -119,7 +119,7 @@ void SendNewCompositable(LayerTransactionChild* aChild,
                          const layers::CompositableHandle& aHandle,
                          const layers::TextureInfo& aInfo) {
   if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("SendNewCompositable");
     ipc::IPCResult rv = gLayerTransactionParent->RecvNewCompositable(aHandle, aInfo);
     MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
   }
@@ -128,7 +128,7 @@ void SendNewCompositable(LayerTransactionChild* aChild,
 void SendReleaseCompositable(LayerTransactionChild* aChild,
                              const layers::CompositableHandle& aHandle) {
   if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("SendReleaseCompositable");
     ipc::IPCResult rv = gLayerTransactionParent->RecvReleaseCompositable(aHandle);
     MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
   }
@@ -137,7 +137,7 @@ void SendReleaseCompositable(LayerTransactionChild* aChild,
 void SendReleaseLayer(LayerTransactionChild* aChild,
                       const layers::LayerHandle& aHandle) {
   if (ShouldUpdateCompositor(aChild)) {
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("SendReleaseLayer");
     ipc::IPCResult rv = gLayerTransactionParent->RecvReleaseLayer(aHandle);
     MOZ_RELEASE_ASSERT(rv == ipc::IPCResult::Ok());
   }
@@ -299,7 +299,7 @@ static char* PaintCallback(const char* aMimeType, int aJPEGQuality) {
 
   MOZ_RELEASE_ASSERT(!gFetchedDrawTarget);
 
-  AutoDisallowThreadEvents disallow;
+  AutoDisallowThreadEvents disallow("PaintCallback");
   gCompositorBridge->CompositeToTarget(VsyncId(), nullptr, nullptr);
 
   if (!gFetchedDrawTarget && !recordreplay::HasDivergedFromRecording()) {

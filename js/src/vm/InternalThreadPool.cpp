@@ -213,7 +213,7 @@ void HelperThread::ThreadMain(InternalThreadPool* pool, HelperThread* helper) {
   // Helper threads are allowed to run differently during recording and
   // replay, as compiled scripts and GCs are allowed to vary. Because of
   // this, no recorded events at all should occur while on helper threads.
-  mozilla::recordreplay::AutoDisallowThreadEvents d;
+  mozilla::recordreplay::AutoDisallowThreadEvents d("HelperThread::ThreadMain");
 
   helper->ensureRegisteredWithProfiler();
   helper->threadLoop(pool);

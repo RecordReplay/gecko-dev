@@ -1038,7 +1038,7 @@ void js::Nursery::collect(JS::GCOptions options, JS::GCReason reason) {
   JSRuntime* rt = runtime();
   MOZ_ASSERT(!rt->mainContextFromOwnThread()->suppressGC);
 
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("js::Nursery::collect");
 
   if (!isEnabled() || isEmpty()) {
     // Our barriers are not always exact, and there may be entries in the

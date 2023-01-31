@@ -261,7 +261,7 @@ class ImageDecoderHelper final : public Runnable,
 
  private:
   ~ImageDecoderHelper() {
-    recordreplay::AutoDisallowThreadEvents disallow;
+    recordreplay::AutoDisallowThreadEvents disallow("ImageDecoderHelper::~ImageDecoderHelper");
     NS_ReleaseOnMainThread("ImageDecoderHelper::mCallback", mCallback.forget());
   }
 

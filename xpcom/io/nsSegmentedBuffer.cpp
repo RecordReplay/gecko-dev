@@ -129,7 +129,7 @@ void nsSegmentedBuffer::FreeOMT(void* aPtr) {
 }
 
 void nsSegmentedBuffer::FreeOMT(std::function<void()>&& aTask) {
-  mozilla::recordreplay::AutoDisallowThreadEvents disallow;
+  mozilla::recordreplay::AutoDisallowThreadEvents disallow("nsSegmentedBuffer::FreeOMT");
 
   if (!NS_IsMainThread()) {
     aTask();

@@ -93,7 +93,7 @@ nsLoadGroup::nsLoadGroup()
 nsLoadGroup::~nsLoadGroup() {
   // Destruction can occur at non-deterministic points even if events aren't
   // currently disallowed.
-  recordreplay::AutoDisallowThreadEvents disallow;
+  recordreplay::AutoDisallowThreadEvents disallow("nsLoadGroup::~nsLoadGroup");
 
   DebugOnly<nsresult> rv = Cancel(NS_BINDING_ABORTED);
   NS_ASSERTION(NS_SUCCEEDED(rv), "Cancel failed");

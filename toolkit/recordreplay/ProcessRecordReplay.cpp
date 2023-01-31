@@ -104,6 +104,7 @@ static void (*gBeginPassThroughEvents)();
 static void (*gEndPassThroughEvents)();
 static bool (*gAreEventsPassedThrough)();
 static void (*gBeginDisallowEvents)();
+static void (*gBeginDisallowEventsWithLabel)(const char* aLabel);
 static void (*gEndDisallowEvents)();
 static bool (*gAreEventsDisallowed)();
 static bool (*gHasDivergedFromRecording)();
@@ -430,6 +431,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayEndPassThroughEvents", gEndPassThroughEvents);
   LoadSymbol("RecordReplayAreEventsPassedThrough", gAreEventsPassedThrough);
   LoadSymbol("RecordReplayBeginDisallowEvents", gBeginDisallowEvents);
+  LoadSymbol("RecordReplayBeginDisallowEventsWithLabel", gBeginDisallowEventsWithLabel);
   LoadSymbol("RecordReplayEndDisallowEvents", gEndDisallowEvents);
   LoadSymbol("RecordReplayAreEventsDisallowed", gAreEventsDisallowed);
   LoadSymbol("RecordReplayHasDivergedFromRecording", gHasDivergedFromRecording);
@@ -651,6 +653,10 @@ MOZ_EXPORT bool RecordReplayInterface_InternalAreThreadEventsPassedThrough() {
 
 MOZ_EXPORT void RecordReplayInterface_InternalBeginDisallowThreadEvents() {
   gBeginDisallowEvents();
+}
+
+MOZ_EXPORT void RecordReplayInterface_InternalBeginDisallowThreadEventsWithLabel(const char* aLabel) {
+  gBeginDisallowEventsWithLabel(aLabel);
 }
 
 MOZ_EXPORT void RecordReplayInterface_InternalEndDisallowThreadEvents() {
