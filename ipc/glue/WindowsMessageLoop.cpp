@@ -862,6 +862,13 @@ static DWORD WaitForSingleObjectExWrapper(HANDLE aEvent, DWORD aTimeout) {
 }
 
 static DWORD CoWaitForMultipleHandlesWrapper(HANDLE aEvent, DWORD aTimeout) {
+  // RUN-1246 (https://linear.app/replay/issue/RUN-1246)
+  // If we've diverged from the recording, we can't use CoWaitForMultipleHandles.
+  // Fail immediately instead of trying.
+  if (recordreplay::HasDivergedFromRecording()) {
+    return WAIT_FAILED;
+  }
+
   DWORD waitResult = 0;
   ::SetLastError(ERROR_SUCCESS);
   HRESULT hr = ::CoWaitForMultipleHandles(COWAIT_ALERTABLE, aTimeout, 1,
