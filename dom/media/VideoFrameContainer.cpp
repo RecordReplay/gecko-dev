@@ -132,6 +132,7 @@ void VideoFrameContainer::SetCurrentFramesLocked(
     const gfx::IntSize& aIntrinsicSize,
     const nsTArray<ImageContainer::NonOwningImage>& aImages) {
   mMutex.AssertCurrentThreadOwns();
+  recordreplay::RecordReplayAssert("[RUN-1253] VideoFrameContainer::SetCurrentFramesLocked #1");
 
   if (aIntrinsicSize != mIntrinsicSize) {
     mIntrinsicSize = aIntrinsicSize;
@@ -153,6 +154,8 @@ void VideoFrameContainer::SetCurrentFramesLocked(
   //  until it is safe.
   nsTArray<ImageContainer::OwningImage> oldImages;
   mImageContainer->GetCurrentImages(&oldImages);
+  recordreplay::RecordReplayAssert("[RUN-1253] VideoFrameContainer::SetCurrentFramesLocked #2 %u",
+    (unsigned) oldImages.Length());
 
   PrincipalHandle principalHandle = PRINCIPAL_HANDLE_NONE;
   ImageContainer::FrameID lastFrameIDForOldPrincipalHandle =
@@ -173,6 +176,8 @@ void VideoFrameContainer::SetCurrentFramesLocked(
     mFrameIDForPendingPrincipalHandle = 0;
   }
 
+  recordreplay::RecordReplayAssert("[RUN-1253] VideoFrameContainer::SetCurrentFramesLocked #3 %u",
+    (unsigned) aImages.IsEmpty());
   if (aImages.IsEmpty()) {
     mImageContainer->ClearAllImages();
   } else {

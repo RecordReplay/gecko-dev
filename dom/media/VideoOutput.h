@@ -118,8 +118,10 @@ class VideoOutput : public DirectMediaTrackListener {
           lastPrincipalHandle, images.LastElement().mFrameID);
     }
 
+    recordreplay::RecordReplayAssert("[RUN-1253] VideoOutput::SendFrames #1");
     mVideoFrameContainer->SetCurrentFrames(
         mFrames[0].second.mFrame.GetIntrinsicSize(), images);
+    recordreplay::RecordReplayAssert("[RUN-1253] VideoOutput::SendFrames #2");
     mMainThread->Dispatch(NewRunnableMethod("VideoFrameContainer::Invalidate",
                                             mVideoFrameContainer,
                                             &VideoFrameContainer::Invalidate));

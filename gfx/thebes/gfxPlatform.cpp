@@ -182,6 +182,10 @@ qcms_transform* gfxPlatform::gCMSInverseRGBTransform = nullptr;
 qcms_transform* gfxPlatform::gCMSRGBATransform = nullptr;
 qcms_transform* gfxPlatform::gCMSBGRATransform = nullptr;
 
+namespace mozilla {
+  extern std::string SignedNumberToStringRecordReplayWorkaroundForWindows(int64_t v);
+}
+
 /// This override of the LogForwarder, initially used for the critical graphics
 /// errors, is sending the log to the crash annotations as well, but only
 /// if the capacity set with the method below is >= 2.  We always retain the
@@ -279,7 +283,9 @@ void CrashStatsLogForwarder::UpdateCrashReport() {
   }
 
   for (auto& it : mBuffer) {
-    message << logAnnotation << Get<0>(it) << "]" << Get<1>(it)
+    std::string item0 =
+      SignedNumberToStringRecordReplayWorkaroundForWindows(Get<0>(it));
+    message << logAnnotation << item0 << "]" << Get<1>(it)
             << " (t=" << Get<2>(it) << ") ";
   }
 

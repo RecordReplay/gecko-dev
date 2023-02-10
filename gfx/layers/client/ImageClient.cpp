@@ -170,6 +170,7 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
   if (mLastUpdateGenerationCounter == generationCounter) {
     return true;
   }
+  recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage #1");
   mLastUpdateGenerationCounter = generationCounter;
 
   // Don't try to update to invalid images.
@@ -188,12 +189,16 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
     mBuffers.Clear();
     return true;
   }
+  recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage #2 images=%u",
+    (unsigned) images.Length());
 
   nsTArray<Buffer> newBuffers;
   AutoTArray<CompositableForwarder::TimedTextureClient, 4> textures;
 
   for (auto& img : images) {
     Image* image = img.mImage;
+    recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage forLoop #1 image=%d",
+      (int) image->GetSerial());
 
     RefPtr<TextureClient> texture = image->GetTextureClient(GetForwarder());
     const bool hasTextureClient = !!texture;
@@ -222,6 +227,7 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
     if (!texture) {
       return false;
     }
+    recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage forLoop #2");
 
     // We check if the texture's allocator is still open, since in between media
     // decoding a frame and adding it to the compositable, we could have
@@ -229,6 +235,7 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
     if (!texture->GetAllocator()->IPCOpen()) {
       continue;
     }
+    recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage forLoop #3");
     if (!AddTextureClient(texture)) {
       return false;
     }
@@ -245,6 +252,7 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
     newBuf->mTextureClient = texture;
 
     texture->SyncWithObject(GetForwarder()->GetSyncObject());
+    recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage forLoop #4");
   }
 
   GetForwarder()->UseTextures(this, textures);
@@ -254,6 +262,7 @@ bool ImageClientSingle::UpdateImage(ImageContainer* aContainer,
   }
   mBuffers = std::move(newBuffers);
 
+  recordreplay::RecordReplayAssert("[RUN-1252] ImageClientSingle::UpdateImage #6");
   return true;
 }
 
