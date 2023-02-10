@@ -94,6 +94,10 @@ PRIntervalTime nsSocketTransportService::SocketContext::TimeoutIn(
   SOCKET_LOG(("SocketContext::TimeoutIn socket=%p, timeout=%us", mHandler,
               mHandler->mPollTimeout));
 
+  recordreplay::RecordReplayAssert(
+    "[RUN-1055] nsSocketTransportService::SocketContext::TimeoutIn 10 %u %u",
+    (unsigned) mHandler->mPollTimeout, (unsigned) mPollStartEpoch
+  );
   if (mHandler->mPollTimeout == UINT16_MAX || !mPollStartEpoch) {
     SOCKET_LOG(("  not engaged"));
     return NS_SOCKET_POLL_TIMEOUT;
@@ -612,15 +616,13 @@ void nsSocketTransportService::ApplyPortRemapPreference(
 }
 
 PRIntervalTime nsSocketTransportService::PollTimeout(PRIntervalTime now) {
-  // #RUN-1055
   recordreplay::RecordReplayAssert(
-    "#RUN-1055 nsSocketTransportService::PollTImeout 10 mActiveCount=%u",
+    "[RUN-1055] nsSocketTransportService::PollTimeout 10 mActiveCount=%u",
     (unsigned) mActiveCount);
   if (mActiveCount == 0) {
     return NS_SOCKET_POLL_TIMEOUT;
   }
 
-  // #RUN-1055
   std::ostringstream oss;
   for (uint32_t i = 0; i < mActiveCount; ++i) {
     if (i > 0) {
@@ -631,7 +633,7 @@ PRIntervalTime nsSocketTransportService::PollTimeout(PRIntervalTime now) {
     );
   }
   recordreplay::RecordReplayAssert(
-    "#RUN-1055 nsSocketTransportService::PollTImeout 20 mActiveListIds=%s",
+    "[RUN-1055] nsSocketTransportService::PollTimeout 20 mActiveListIds=%s",
     oss.str().c_str()
   );
 
@@ -644,6 +646,10 @@ PRIntervalTime nsSocketTransportService::PollTimeout(PRIntervalTime now) {
       minR = r;
     }
   }
+  recordreplay::RecordReplayAssert(
+    "[RUN-1055] nsSocketTransportService::PollTimeout 30 minR=%u",
+    (unsigned) minR
+  );
   if (minR == NS_SOCKET_POLL_TIMEOUT) {
     SOCKET_LOG(("poll timeout: none\n"));
     return NS_SOCKET_POLL_TIMEOUT;
@@ -665,9 +671,8 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
   bool pendingEvents = false;
   mRawThread->HasPendingEvents(&pendingEvents);
 
-  // https://github.com/RecordReplay/backend/issues/3977
   recordreplay::RecordReplayAssert(
-    "nsSocketTransportService::Poll 10 ts=%u pendingEvents=%s hasFd=%s",
+    "[RUN-1055] nsSocketTransportService::Poll 10 ts=%u pendingEvents=%s hasFd=%s",
     (unsigned) ts,
     pendingEvents ? "yes" : "no",
     mPollList[0].fd ? "yes" : "no");
@@ -698,9 +703,8 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
       SOCKET_LOG(("  timeout shorthened after network change event"));
     }
   }
-  // https://github.com/RecordReplay/backend/issues/3977
   recordreplay::RecordReplayAssert(
-    "nsSocketTransportService::Poll 20 pollTimeout=%u",
+    "[RUN-1055] nsSocketTransportService::Poll 20 pollTimeout=%u",
     (unsigned) pollTimeout);
 
   TimeStamp pollStart;
@@ -729,8 +733,7 @@ int32_t nsSocketTransportService::Poll(TimeDuration* pollDuration,
   SOCKET_LOG(("    ...returned after %i milliseconds\n",
               PR_IntervalToMilliseconds(PR_IntervalNow() - ts)));
 
-  // https://github.com/RecordReplay/backend/issues/3977
-  recordreplay::RecordReplayAssert("nsSocketTransportService::Poll timeout %d elapsed %d",
+  recordreplay::RecordReplayAssert("[RUN-1055] nsSocketTransportService::Poll timeout %d elapsed %d",
                                    PR_IntervalToMilliseconds(pollTimeout),
                                    PR_IntervalToMilliseconds(PR_IntervalNow() - ts));
   recordreplay::Diagnostic("nsSocketTransportService::Poll");
