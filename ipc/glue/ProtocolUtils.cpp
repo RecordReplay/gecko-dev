@@ -495,6 +495,9 @@ bool IProtocol::DeallocShmem(Shmem& aMem) {
 
 void IProtocol::SetManager(IProtocol* aManager) {
   MOZ_RELEASE_ASSERT(!mManager || mManager == aManager);
+  recordreplay::RecordReplayAssert("[RUN-916] IProtocol::SetManager %d %d",
+    (int) !!mManager,
+    (int) !!aManager->mToplevel);
   mManager = aManager;
   mToplevel = aManager->mToplevel;
 }
