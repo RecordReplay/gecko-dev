@@ -21,7 +21,7 @@ pref("app.update.url.manual", "https://replay.io");
 pref("app.update.url.details", "https://replay.io");
 
 // Adding a trailing # to support appending targeted help from "Learn more" links
-pref('replay.support.baseURL', 'https://docs.replay.io/docs#');
+pref('replay.support.baseURL', 'https://docs.replay.io/#');
 pref("startup.homepage_welcome_url", "https://app.replay.io/browser/welcome");
 pref("replay.newtab.url", "https://app.replay.io/browser/new-tab");
 
