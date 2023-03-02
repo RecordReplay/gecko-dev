@@ -29,6 +29,8 @@ const { setInterval, clearInterval } = ChromeUtils.import(
 // In non-recording/replaying processes there are no properties on RecordReplayControl.
 const isRecordingOrReplaying = !!RecordReplayControl.onNewSource;
 
+RecordReplayControl.log(`KVKV HERE`);
+
 if (isRecordingOrReplaying) {
   Services.cpmm.sendAsyncMessage("RecordingStarting");
 }
@@ -1212,10 +1214,16 @@ if (isRecordingOrReplaying) {
     return channel;
   }
 
+  function kvkvDumpChannel(channelId, topic) {
+    const now = Date.now();
+    RecordReplayControl.log(`KVKV child ${topic} ${now} ${channelId}`);
+  }
   function onRequestStreamTopic(subject, topic, data) {
     const inputStream = subject.QueryInterface(Ci.nsIInputStream);
     const channelId = +data;
     const isRequestBody = topic === "replay-request-start";
+
+    kvkvDumpChannel(channelId, topic);
 
     const streamId = `${isRequestBody ? "request" : "response"}-${channelId}`;
     notifyRequestEvent(channelId, isRequestBody ? "request-body" : "response-body", {});
@@ -1268,6 +1276,8 @@ if (isRecordingOrReplaying) {
 
   Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);
+    const channelId = channel ? channel.channelId : "NONE";
+    kvkvDumpChannel(channelId, topic);
     if (!channel) {
       return;
     }
@@ -1331,6 +1341,7 @@ if (isRecordingOrReplaying) {
 
   Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);
+    // RecordReplayControl.log(`KVKV child http-on-stop-request ${channel ? channel.channelId : "NONE"}`);
     if (!channel) {
       return;
     }
@@ -1351,6 +1362,7 @@ if (isRecordingOrReplaying) {
   function notifyRequestEvent(channelId, kind, data) {
     // https://github.com/RecordReplay/backend/issues/4397
     RecordReplayControl.recordReplayAssert(`notifyRequestEvent ${kind}`);
+    RecordReplayControl.log(`KVKV notifyRequestEvent ${channelId} kind=${kind} data=${JSON.stringify(data)}`);
     gCurrentRequestEvent = {
       kind,
       data,

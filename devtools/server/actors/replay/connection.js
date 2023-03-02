@@ -1576,8 +1576,15 @@ function ensureHttpChannel(channel) {
   return channel;
 }
 
+function kvkvDumpChannel(channel, name, topic, data) {
+  const channelId = channel ? channel.channelId : "NONE";
+  const now = Date.now();
+  ChromeUtils.recordReplayLog(`KVKV parent ${name} ${now} ${channelId}`);
+}
+
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
+  kvkvDumpChannel(channel, "http-on-opening-request", topic, data);
   const recording = channel ? getChannelRecording(channel) : null;
   if (!recording) {
     return;
@@ -1612,15 +1619,16 @@ function sendChannelRequestStart(recording, channel) {
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
+  kvkvDumpChannel(channel, "http-on-examine-cached-response", topic, data);
   if (!channel) {
     return;
   }
-
   sendChannelResponseStart(channel, true);
 }, "http-on-examine-cached-response");
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
+  kvkvDumpChannel(channel, "http-on-examine-response", topic, data);
   if (!channel) {
     return;
   }
@@ -1629,8 +1637,9 @@ Services.obs.addObserver((subject, topic, data) => {
 }, "http-on-examine-response");
 
 Services.obs.addObserver(
-  (subject) => {
+  (subject, topic, data) => {
     const channel = ensureHttpChannel(subject);
+    kvkvDumpChannel(channel, "service-worker-synthesized-response", topic, data);
 
     sendChannelResponseStart(channel, false, true);
   },
