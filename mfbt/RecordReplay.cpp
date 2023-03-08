@@ -31,7 +31,7 @@ namespace recordreplay {
   Macro(InternalRecordReplayValue, size_t, (const char* aWhy, size_t aValue),  \
         (aWhy, aValue))                                                        \
   Macro(InternalHasDivergedFromRecording, bool, (), ())                        \
-  Macro(InternalIsUnhandledDivergenceAllowed, bool, (), ())                    \
+  Macro(InternalAllowSideEffects, bool, (), ())                                \
   Macro(InternalThingIndex, size_t, (void* aThing), (aThing))                  \
   Macro(InternalIndexThing, void*, (size_t aId), (aId))                        \
   Macro(InternalCreateOrderedLock, int, (const char* aName), (aName))          \
