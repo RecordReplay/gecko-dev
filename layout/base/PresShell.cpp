@@ -4062,7 +4062,7 @@ static inline void AssertFrameTreeIsSane(const PresShell& aPresShell) {
 void PresShell::DoFlushPendingNotifications(mozilla::ChangesToFlush aFlush) {
   // Flushing layout can interact with the system in new ways, and doesn't
   // happen when unhandled divergence isn't allowed.
-  if (!mozilla::recordreplay::IsUnhandledDivergenceAllowed()) {
+  if (!mozilla::recordreplay::AllowSideEffects()) {
     return;
   }
 

@@ -151,7 +151,7 @@ static inline bool HasDivergedFromRecording();
 // Return whether execution is allowed to interact with the system in a way
 // that could trigger an unhandled divergence. This returns true except during
 // certain operations while diverged from the recording.
-static inline bool IsUnhandledDivergenceAllowed();
+static inline bool AllowSideEffects();
 
 // API for debugging inconsistent behavior between recording and replay.
 // By calling Assert or AssertBytes a thread event will be inserted and any
@@ -418,7 +418,7 @@ MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(RecordReplayBytes,
                                     (const char* aWhy, void* aData, size_t aSize),
                                     (aWhy, aData, aSize))
 MOZ_MAKE_RECORD_REPLAY_WRAPPER(HasDivergedFromRecording, bool, false, (), ())
-MOZ_MAKE_RECORD_REPLAY_WRAPPER(IsUnhandledDivergenceAllowed, bool, true, (), ())
+MOZ_MAKE_RECORD_REPLAY_WRAPPER(AllowSideEffects, bool, true, (), ())
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(InvalidateRecording, (const char* aWhy),
                                     (aWhy))
 MOZ_MAKE_RECORD_REPLAY_WRAPPER_VOID(RecordReplayAssertBytes,
