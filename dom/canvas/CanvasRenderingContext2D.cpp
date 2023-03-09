@@ -4068,7 +4068,7 @@ gfxFontGroup* CanvasRenderingContext2D::GetCurrentFontStyle() {
     // Creating new font groups interacts with the system and could trigger
     // unhandled divergences from the recording, so avoid this when those
     // divergences aren't allowed.
-    if (!recordreplay::IsUnhandledDivergenceAllowed()) {
+    if (!recordreplay::AllowSideEffects()) {
       return nullptr;
     }
 

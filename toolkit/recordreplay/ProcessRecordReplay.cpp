@@ -107,7 +107,7 @@ static void (*gBeginDisallowEvents)();
 static void (*gEndDisallowEvents)();
 static bool (*gAreEventsDisallowed)();
 static bool (*gHasDivergedFromRecording)();
-static bool (*gIsUnhandledDivergenceAllowed)();
+static bool (*gAllowSideEffects)();
 static void (*gRecordReplayNewCheckpoint)();
 static bool (*gRecordReplayIsReplaying)();
 static int (*gCreateOrderedLock)(const char* aName);
@@ -433,7 +433,7 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayEndDisallowEvents", gEndDisallowEvents);
   LoadSymbol("RecordReplayAreEventsDisallowed", gAreEventsDisallowed);
   LoadSymbol("RecordReplayHasDivergedFromRecording", gHasDivergedFromRecording);
-  LoadSymbol("RecordReplayIsUnhandledDivergenceAllowed", gIsUnhandledDivergenceAllowed);
+  LoadSymbol("RecordReplayAllowSideEffects", gAllowSideEffects);
   LoadSymbol("RecordReplayNewCheckpoint", gRecordReplayNewCheckpoint);
   LoadSymbol("RecordReplayIsReplaying", gRecordReplayIsReplaying);
   LoadSymbol("RecordReplayCreateOrderedLock", gCreateOrderedLock);
@@ -665,8 +665,8 @@ MOZ_EXPORT bool RecordReplayInterface_InternalHasDivergedFromRecording() {
   return gHasDivergedFromRecording();
 }
 
-MOZ_EXPORT bool RecordReplayInterface_InternalIsUnhandledDivergenceAllowed() {
-  return gIsUnhandledDivergenceAllowed();
+MOZ_EXPORT bool RecordReplayInterface_InternalAllowSideEffects() {
+  return gAllowSideEffects();
 }
 
 MOZ_EXPORT int RecordReplayInterface_InternalCreateOrderedLock(const char* aName) {

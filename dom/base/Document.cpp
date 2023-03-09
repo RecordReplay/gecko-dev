@@ -10563,7 +10563,7 @@ class nsDocumentOnStack {
 
 void Document::FlushPendingNotifications(mozilla::ChangesToFlush aFlush) {
   // See PresShell::DoFlushPendingNotifications.
-  if (!mozilla::recordreplay::IsUnhandledDivergenceAllowed()) {
+  if (!mozilla::recordreplay::AllowSideEffects()) {
     return;
   }
 
