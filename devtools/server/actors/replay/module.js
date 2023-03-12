@@ -709,6 +709,7 @@ const commands = {
   "Target.getCurrentNetworkRequestEvent": Target_getCurrentNetworkRequestEvent,
   "Target.getCurrentNetworkStreamData": Target_getCurrentNetworkStreamData,
   "Target.getPossibleBreakpointsForMultipleSources": Target_getPossibleBreakpointsForMultipleSources,
+  "Target.evaluatePrivileged": Target_evaluatePrivileged,
 };
 
 function OnProtocolCommand(method, params) {
@@ -1023,6 +1024,11 @@ function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
       };
     }))
   };
+}
+
+function Target_evaluatePrivileged({ expression }) {
+  const result = eval(`(function() { ${expression} })()`);
+  return { result };
 }
 
 function GetPossibleBreakpoints(sourceId) {
