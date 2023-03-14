@@ -668,7 +668,6 @@ NetworkObserver.prototype = {
     extraSizeData,
     extraStringData
   ) {
-    ChromeUtils.recordReplayLog(`NetworkObserver.observeActivity ${channel.channelId} ${activityType}`);
     if (
       !this.owner ||
       (activityType != gActivityDistributor.ACTIVITY_TYPE_HTTP_TRANSACTION &&

@@ -14,6 +14,7 @@ const { OS } = ChromeUtils.import("resource://gre/modules/osfile.jsm");
 const { setTimeout } = Components.utils.import(
   "resource://gre/modules/Timer.jsm"
 );
+const { ComponentUtils } = ChromeUtils.import("resource://gre/modules/ComponentUtils.jsm");
 
 const { EventEmitter } = ChromeUtils.import("resource://gre/modules/EventEmitter.jsm");
 
@@ -1576,15 +1577,61 @@ function ensureHttpChannel(channel) {
   return channel;
 }
 
-function kvkvDumpChannel(channel, name, topic, data) {
+function kvkvDumpChannel(channel, name) {
   const channelId = channel ? channel.channelId : "NONE";
   const now = Date.now();
   ChromeUtils.recordReplayLog(`KVKV parent ${name} ${now} ${channelId}`);
 }
 
+// Register redirect sink.
+const SINK_CLASS_DESCRIPTION = "Replay Networking Event Sink In Parent";
+const SINK_CLASS_ID = Components.ID("{a0aa47b1-fac2-4cb9-b396-dd2e68d975ad}");
+const SINK_CONTRACT_ID = "@mozilla.org/network/monitor/channeleventsink;1";
+const SINK_CATEGORY_NAME = "net-channel-event-sinks";
+class ReplayChannelEventSinkParent {
+  asyncOnChannelRedirect(oldChannel, newChannel, flags, callback) {
+    const oldChan = ensureHttpChannel(oldChannel);
+    const newChan = ensureHttpChannel(newChannel);
+
+    kvkvDumpChannel(oldChan, "onRedirect-OLD");
+    kvkvDumpChannel(newChan, "onRedirect-NEW");
+    callback.onRedirectVerifyCallback(Cr.NS_OK);
+    return;
+
+    const bookmark = oldChan ? gActiveRequests.get(oldChan.channelId) : null;
+    if (newChan && typeof bookmark === "number") {
+      gPendingRedirects.set(newChan.channelId, bookmark);
+
+      // It seems that redirected requests don't fire the done event.
+      onHttpStopRequest(oldChan);
+    }
+
+    callback.onRedirectVerifyCallback(Cr.NS_OK);
+  }
+}
+ReplayChannelEventSink.prototype.QueryInterface = ChromeUtils.generateQI([
+  "nsIChannelEventSink",
+]);
+const ReplayChannelEventSinkFactory =
+  ComponentUtils.generateSingletonFactory(ReplayChannelEventSink);
+const registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+registrar.registerFactory(
+  SINK_CLASS_ID,
+  SINK_CLASS_DESCRIPTION,
+  SINK_CONTRACT_ID,
+  ReplayChannelEventSinkFactory
+);
+Services.catMan.addCategoryEntry(
+  SINK_CATEGORY_NAME,
+  SINK_CONTRACT_ID,
+  SINK_CONTRACT_ID,
+  false,
+  true
+);
+
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
-  kvkvDumpChannel(channel, "http-on-opening-request", topic, data);
+  kvkvDumpChannel(channel, "http-on-opening-request");
   const recording = channel ? getChannelRecording(channel) : null;
   if (!recording) {
     return;
@@ -1592,6 +1639,11 @@ Services.obs.addObserver((subject, topic, data) => {
 
   sendChannelRequestStart(recording, channel);
 }, "http-on-opening-request");
+
+Services.obs.addObserver((subject, topic, data) => {
+  const channel = ensureHttpChannel(subject);
+  kvkvDumpChannel(channel, "http-on-modify-request");
+}, "http-on-modify-request");
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
@@ -1619,7 +1671,7 @@ function sendChannelRequestStart(recording, channel) {
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
-  kvkvDumpChannel(channel, "http-on-examine-cached-response", topic, data);
+  kvkvDumpChannel(channel, "http-on-examine-cached-response");
   if (!channel) {
     return;
   }
@@ -1628,7 +1680,7 @@ Services.obs.addObserver((subject, topic, data) => {
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
-  kvkvDumpChannel(channel, "http-on-examine-response", topic, data);
+  kvkvDumpChannel(channel, "http-on-examine-response");
   if (!channel) {
     return;
   }
@@ -1639,7 +1691,7 @@ Services.obs.addObserver((subject, topic, data) => {
 Services.obs.addObserver(
   (subject, topic, data) => {
     const channel = ensureHttpChannel(subject);
-    kvkvDumpChannel(channel, "service-worker-synthesized-response", topic, data);
+    kvkvDumpChannel(channel, "service-worker-synthesized-response");
 
     sendChannelResponseStart(channel, false, true);
   },
