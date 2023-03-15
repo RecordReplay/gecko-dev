@@ -15,6 +15,7 @@ const { setTimeout } = Components.utils.import(
   "resource://gre/modules/Timer.jsm"
 );
 
+const { ComponentUtils } = ChromeUtils.import("resource://gre/modules/ComponentUtils.jsm");
 const { EventEmitter } = ChromeUtils.import("resource://gre/modules/EventEmitter.jsm");
 
 const { CryptoUtils } = ChromeUtils.import(
@@ -1654,6 +1655,74 @@ function sendChannelResponseStart(channel, fromCache, fromServiceWorker) {
     data: getChannelResponseData(channel, fromCache, fromServiceWorker),
   });
 }
+
+//
+// Handle request redirects.
+//
+const SINK_CLASS_DESCRIPTION = "Replay Networking Event Sink In Parent";
+const SINK_CLASS_ID = Components.ID("{e9caba93-270b-486c-95e1-894864b40ac2}");
+const SINK_CONTRACT_ID = "@mozilla.org/network/monitor/channeleventsink;1";
+const SINK_CATEGORY_NAME = "net-channel-event-sinks";
+class ReplayChannelEventSinkParent {
+  asyncOnChannelRedirect(oldChannel, newChannel, flags, callback) {
+    let oldChan, newChan, recording, newChanRecording;
+    try {
+      oldChan = ensureHttpChannel(oldChannel);
+      newChan = ensureHttpChannel(newChannel);
+      recording = getChannelRecording(oldChan);
+      newChanRecording = getChannelRecording(newChan);
+    } catch (err) {
+      ChromeUtils.recordReplayLog(`Failed to get channel ids`);
+    }
+
+    // Sanity check for redirects happening from/to valid channels, and
+    // the recordings being the same between them.
+    if (
+      (oldChan && newChan && recording) &&
+      (recording === newChanRecording)
+    ) {
+      // Only send redirect messages to child if the redirect is internal,
+      // and involves different channel ids.
+      if (
+        (flags & Ci.nsIChannelEventSink.REDIRECT_INTERNAL) &&
+        (oldChan.channelId !== newChan.channelId)
+      ) {
+        recording.sendProcessMessage("RecordingChannelInternalRedirect", {
+          oldChannelId: oldChan.channelId,
+          newChannelId: newChan.channelId
+        });
+      }
+    } else if (recording) {
+      const oldChanId = oldChan ? oldChan.channelId : -1;
+      const newChanId  = newChan ? newChan.channelId : -1;
+      const recordingsSame = recording === newRecording;
+      ChromeUtils.recordReplayLog(
+        `Unusable network redirect: ${oldChanId} -> ${newChanId} (sameRecordings=${recordingsSame})`
+      );
+    }
+    callback.onRedirectVerifyCallback(Cr.NS_OK);
+  }
+}
+ReplayChannelEventSinkParent.prototype.QueryInterface = ChromeUtils.generateQI([
+  "nsIChannelEventSink",
+]);
+const ReplayChannelEventSinkFactory = ComponentUtils.generateSingletonFactory(
+  ReplayChannelEventSinkParent
+);
+const registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
+registrar.registerFactory(
+  SINK_CLASS_ID,
+  SINK_CLASS_DESCRIPTION,
+  SINK_CONTRACT_ID,
+  ReplayChannelEventSinkFactory
+);
+Services.catMan.addCategoryEntry(
+  SINK_CATEGORY_NAME,
+  SINK_CONTRACT_ID,
+  SINK_CONTRACT_ID,
+  false,
+  true
+);
 
 const distributor =
   Cc["@mozilla.org/network/http-activity-distributor;1"]
