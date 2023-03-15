@@ -1609,11 +1609,11 @@ class ReplayChannelEventSinkParent {
     callback.onRedirectVerifyCallback(Cr.NS_OK);
   }
 }
-ReplayChannelEventSink.prototype.QueryInterface = ChromeUtils.generateQI([
+ReplayChannelEventSinkParent.prototype.QueryInterface = ChromeUtils.generateQI([
   "nsIChannelEventSink",
 ]);
 const ReplayChannelEventSinkFactory =
-  ComponentUtils.generateSingletonFactory(ReplayChannelEventSink);
+  ComponentUtils.generateSingletonFactory(ReplayChannelEventSinkParent);
 const registrar = Components.manager.QueryInterface(Ci.nsIComponentRegistrar);
 registrar.registerFactory(
   SINK_CLASS_ID,
@@ -1644,6 +1644,13 @@ Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);
   kvkvDumpChannel(channel, "http-on-modify-request");
 }, "http-on-modify-request");
+
+function onRequestStreamTopic(subject, topic, data) {
+    const channelId = +data;
+    kvkvDumpChannel(channelId, topic);
+}
+Services.obs.addObserver(onRequestStreamTopic, "replay-request-start");
+Services.obs.addObserver(onRequestStreamTopic, "replay-response-start");
 
 Services.obs.addObserver((subject, topic, data) => {
   const channel = ensureHttpChannel(subject);

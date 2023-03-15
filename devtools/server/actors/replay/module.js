@@ -1233,6 +1233,7 @@ if (isRecordingOrReplaying) {
     listenForStreamData();
 
     function onStreamData(value) {
+      RecordReplayControl.log(`KVKV XXXXX-XXXXX onRequestStreamTopic-DATA ${channelId} kind=${kind} isRequest=${isRequestBody}`);
       notifyNetworkStreamData(streamId, offset, value.byteLength, ({ index, length }) => ({
         kind: "data",
         value: ChromeUtils.base64URLEncode(
@@ -1322,6 +1323,8 @@ if (isRecordingOrReplaying) {
 
   Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);
+    const channelId = channel ? channel.channelId : "NONE";
+    kvkvDumpChannel(channelId, topic);
     if (!channel) {
       return;
     }
@@ -1341,7 +1344,8 @@ if (isRecordingOrReplaying) {
 
   Services.obs.addObserver((subject, topic, data) => {
     const channel = getChannel(subject);
-    // RecordReplayControl.log(`KVKV child http-on-stop-request ${channel ? channel.channelId : "NONE"}`);
+    const channelId = channel ? channel.channelId : "NONE";
+    kvkvDumpChannel(channelId, topic);
     if (!channel) {
       return;
     }
@@ -1374,6 +1378,7 @@ if (isRecordingOrReplaying) {
   Services.cpmm.addMessageListener("RecordingChannelRequestRawHeaders", {
     receiveMessage(msg) {
       const { channelId, requestRawHeaders } = msg.data;
+      RecordReplayControl.log(`KVKV child RequestRawHeaders-fromParent ${channelId}`);
 
       if (!gActiveRequests.has(channelId)) {
         return;
@@ -1388,6 +1393,7 @@ if (isRecordingOrReplaying) {
   Services.cpmm.addMessageListener("RecordingChannelResponseStart", {
     receiveMessage(msg) {
       const { channelId, data } = msg.data;
+      RecordReplayControl.log(`KVKV child ResponseStart-fromParent ${channelId}`);
 
       if (!gActiveRequests.has(channelId)) {
         return;
@@ -1408,6 +1414,7 @@ if (isRecordingOrReplaying) {
   Services.cpmm.addMessageListener("RecordingChannelResponseRawHeaders", {
     receiveMessage(msg) {
       const { channelId, responseRawHeaders } = msg.data;
+      RecordReplayControl.log(`KVKV child ReponseRawHeaders-fromParent ${channelId}`);
 
       if (!gActiveRequests.has(channelId)) {
         return;
@@ -1427,6 +1434,11 @@ if (isRecordingOrReplaying) {
     asyncOnChannelRedirect(oldChannel, newChannel, flags, callback) {
       const oldChan = getChannel(oldChannel);
       const newChan = getChannel(newChannel);
+
+      const oldChannelId = oldChan ? oldChan.channelId : "NONE";
+      const newChannelId = newChan ? newChan.channelId : "NONE";
+      kvkvDumpChannel(oldChannelId, "Redirect-OLD");
+      kvkvDumpChannel(oldChannelId, "Redirect-NEW");
 
       const bookmark = oldChan ? gActiveRequests.get(oldChan.channelId) : null;
       if (newChan && typeof bookmark === "number") {
