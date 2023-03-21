@@ -1027,7 +1027,7 @@ function Target_getPossibleBreakpointsForMultipleSources({ sourceIds }) {
 }
 
 function Target_evaluatePrivileged({ expression }) {
-  const result = eval(`(function() { ${expression} })()`);
+  const result = eval(expression);
   return { result };
 }
 
