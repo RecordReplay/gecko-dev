@@ -1202,6 +1202,20 @@ if (isRecordingOrReplaying) {
   // it can be applied to the new channel created to handle the redirect.
   const gPendingRedirects = new Map();
 
+  // ChannelId => ChannelId
+  // Some redirects are handled by the parent process when a service
+  // worker is involved.  In this case, the parent process will create
+  // a new channel to handle the redirect, and treat it as an "internal"
+  // redirect to a new channel, but without any "http-on-opening-request"
+  // for it.  However, "http-on-stop-request" will be fired on the new
+  // channel.
+  //
+  // We want to treat these target channels as equivalent to the original
+  // channel.  This map tracks the original channel for each target channel.
+  // The various network event handler functions below will map channel
+  // ids to actual channel ids.
+  const gInternalRedirects = new Map();
+
   function getChannel(subject) {
     if (!(subject instanceof Ci.nsIHttpChannel)) {
       return null;
@@ -1217,9 +1231,12 @@ if (isRecordingOrReplaying) {
     const channelId = +data;
     const isRequestBody = topic === "replay-request-start";
 
-    const streamId = `${isRequestBody ? "request" : "response"}-${channelId}`;
-    notifyRequestEvent(channelId, isRequestBody ? "request-body" : "response-body", {});
-    notifyNetworkStreamStart(streamId, isRequestBody ? "request-data" : "response-data", `${channelId}`);
+    // This may be for an internally redirected request.
+    const actualChannelId = gInternalRedirects.get(channelId) || channelId;
+
+    const streamId = `${isRequestBody ? "request" : "response"}-${actualChannelId}`;
+    notifyRequestEvent(actualChannelId, isRequestBody ? "request-body" : "response-body", {});
+    notifyNetworkStreamStart(streamId, isRequestBody ? "request-data" : "response-data", `${actualChannelId}`);
 
     let offset = 0;
     listenForStreamData();
@@ -1249,6 +1266,7 @@ if (isRecordingOrReplaying) {
 
       let available;
       try {
+        // Check status of stream - throws if the stream is closed.
         available = inputStream.available();
       } catch {
         onStreamEnd();
@@ -1271,7 +1289,6 @@ if (isRecordingOrReplaying) {
     if (!channel) {
       return;
     }
-
     onHttpOpeningRequest(channel.channelId, getChannelRequestData(channel), false);
   }, "http-on-opening-request");
 
@@ -1339,13 +1356,20 @@ if (isRecordingOrReplaying) {
   }, "http-on-stop-request");
 
   function onHttpStopRequest(channel) {
-    if (!gActiveRequests.has(channel.channelId)) {
+    // This may be for an internally redirected request.
+    const actualChannelId =
+      gInternalRedirects.get(channel.channelId) || channel.channelId;
+
+    if (!gActiveRequests.has(actualChannelId)) {
       return;
     }
 
-    gActiveRequests.delete(channel.channelId);
+    gActiveRequests.delete(actualChannelId);
+    if (actualChannelId !== channel.channelId) {
+      gInternalRedirects.delete(channel.channelId);
+    }
 
-    notifyRequestEvent(channel.channelId, "request-done", getChannelRequestDoneData(channel));
+    notifyRequestEvent(actualChannelId, "request-done", getChannelRequestDoneData(channel));
   }
 
   function notifyRequestEvent(channelId, kind, data) {
@@ -1363,11 +1387,13 @@ if (isRecordingOrReplaying) {
     receiveMessage(msg) {
       const { channelId, requestRawHeaders } = msg.data;
 
-      if (!gActiveRequests.has(channelId)) {
+      // This may be for an internally redirected request.
+      const actualChannelId = gInternalRedirects.get(channelId) || channelId;
+      if (!gActiveRequests.has(actualChannelId)) {
         return;
       }
 
-      notifyRequestEvent(channelId, "request-raw-headers", {
+      notifyRequestEvent(actualChannelId, "request-raw-headers", {
         requestRawHeaders
       });
     },
@@ -1377,19 +1403,21 @@ if (isRecordingOrReplaying) {
     receiveMessage(msg) {
       const { channelId, data } = msg.data;
 
-      if (!gActiveRequests.has(channelId)) {
+      // This may be for an internally redirected request.
+      const actualChannelId = gInternalRedirects.get(channelId) || channelId;
+      if (!gActiveRequests.has(actualChannelId)) {
         return;
       }
 
       const { remoteDestination, ...response } = data;
 
       if (remoteDestination) {
-        notifyRequestEvent(channelId, "request-destination", {
+        notifyRequestEvent(actualChannelId, "request-destination", {
           destinationAddress: remoteDestination.address,
           destinationPort: remoteDestination.port,
         });
       }
-      notifyRequestEvent(channelId, "response", response);
+      notifyRequestEvent(actualChannelId, "response", response);
     },
   });
 
@@ -1397,13 +1425,26 @@ if (isRecordingOrReplaying) {
     receiveMessage(msg) {
       const { channelId, responseRawHeaders } = msg.data;
 
-      if (!gActiveRequests.has(channelId)) {
+      // This may be for an internally redirected request.
+      const actualChannelId = gInternalRedirects.get(channelId) || channelId;
+      if (!gActiveRequests.has(actualChannelId)) {
         return;
       }
 
-      notifyRequestEvent(channelId, "response-raw-headers", {
+      notifyRequestEvent(actualChannelId, "response-raw-headers", {
         responseRawHeaders,
       });
+    },
+  });
+
+  Services.cpmm.addMessageListener("RecordingChannelInternalRedirect", {
+    receiveMessage(msg) {
+      const { oldChannelId, newChannelId } = msg.data;
+
+      if (!gActiveRequests.has(oldChannelId)) {
+        return;
+      }
+      gInternalRedirects.set(newChannelId, oldChannelId);
     },
   });
 
