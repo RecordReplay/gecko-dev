@@ -115,7 +115,7 @@ function getRevisionDate(
  * When changing this: always keep all versions of this in sync, or else, builds will break.
  */
 function computeBuildId() {
-  const geckoRevision = spawnChecked("git", ["rev-parse", "--short", "HEAD"]).stdout.toString().trim();
+  const geckoRevision = spawnChecked("git", ["rev-parse", "--short=12", "HEAD"]).stdout.toString().trim();
   
   const runtimeDate = getRevisionDate();
 
