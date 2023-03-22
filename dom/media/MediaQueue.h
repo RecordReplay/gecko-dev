@@ -24,7 +24,7 @@ class MediaQueue : private nsRefPtrDeque<T> {
  public:
   MediaQueue()
       : nsRefPtrDeque<T>(),
-        mRecursiveMutex("mediaqueue"),
+        mRecursiveMutex("mediaqueue", /* aOrdered */ true),
         mEndOfStream(false) {}
 
   ~MediaQueue() { Reset(); }
@@ -86,7 +86,13 @@ class MediaQueue : private nsRefPtrDeque<T> {
   }
 
   void Reset() {
-    RecursiveMutexAutoLock lock(mRecursiveMutex);
+    Maybe<RecursiveMutexAutoLock> lock;
+    if (recordreplay::AreThreadEventsDisallowed()) {
+      recordreplay::AutoPassThroughThreadEvents pt;
+      lock.emplace(mRecursiveMutex);
+    } else {
+      lock.emplace(mRecursiveMutex);
+    }
     nsRefPtrDeque<T>::Erase();
     mEndOfStream = false;
   }

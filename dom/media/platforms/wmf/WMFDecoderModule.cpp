@@ -88,7 +88,7 @@ static bool IsRemoteAcceleratedCompositor(
 
 static bool CanCreateMFTDecoder(const GUID& aGuid) {
   if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::ReportUnsupportedFeature("MediaPlayback", 54);
+    recordreplay::ReportUnsupportedFeature("MediaPlayback #3", 54);
     return false;
   }
 

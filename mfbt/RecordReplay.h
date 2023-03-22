@@ -234,6 +234,13 @@ struct OrderedAtomic {
     OrderedUnlock(mOrderedLockId);
     return rv;
   }
+
+  bool compareExchange(T aOldValue, T aNewValue) {
+    OrderedLock(mOrderedLockId);
+    bool rv = mInner.compareExchange(aOldValue, aNewValue);
+    OrderedUnlock(mOrderedLockId);
+    return rv;
+  }
 };
 
 // Determine whether this is a recording/replaying process, and

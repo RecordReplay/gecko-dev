@@ -150,20 +150,29 @@ class RemoteArrayOfByteBuffer {
     MOZ_ASSERT(aIndex < Count());
     const OffsetEntry& entry = mOffsets[aIndex];
     size_t entrySize = Get<1>(entry);
+    recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AlignedBufferAt %zu %zu %zu %d %d %zu",
+                                     aIndex, Get<0>(entry), Get<1>(entry),
+                                     !!mBuffers,
+                                     mBuffers && mBuffers->IsReadable(),
+                                     mBuffers ? mBuffers->Size<uint8_t>() : 0);
     if (!mBuffers || !entrySize) {
       // It's an empty one.
+      recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AlignedBufferAt #1");
       return AlignedBuffer<Type>();
     }
     if (!Check(Get<0>(entry), entrySize)) {
       // This Shmem is corrupted and can't contain the data we are about to
       // retrieve. We return an empty array instead of asserting to allow for
       // recovery.
+      recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AlignedBufferAt #2");
       return AlignedBuffer<Type>();
     }
     if (0 != entrySize % sizeof(Type)) {
       // There's an error, that entry can't represent this data.
+      recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AlignedBufferAt #3");
       return AlignedBuffer<Type>();
     }
+    recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AlignedBufferAt Done");
     return AlignedBuffer<Type>(
         reinterpret_cast<Type*>(BuffersStartAddress() + Get<0>(entry)),
         entrySize / sizeof(Type));

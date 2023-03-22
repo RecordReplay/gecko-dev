@@ -14,6 +14,8 @@ namespace mozilla {
 
 bool RemoteArrayOfByteBuffer::AllocateShmem(
     size_t aSize, std::function<ShmemBuffer(size_t)>& aAllocator) {
+  recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::AllocateShmem %zu", aSize);
+
   ShmemBuffer buffer = aAllocator(aSize);
   if (!buffer.Valid()) {
     return false;
@@ -78,6 +80,8 @@ RemoteArrayOfByteBuffer& RemoteArrayOfByteBuffer::operator=(
   mBuffers = std::move(aOther.mBuffers);
   mOffsets = std::move(aOther.mOffsets);
   aOther.mIsValid = false;
+
+  recordreplay::RecordReplayAssert("RemoteArrayOfByteBuffer::operator= %zu", mBuffers ? mBuffers->Size<uint8_t>() : 0);
   return *this;
 }
 
@@ -123,9 +127,13 @@ already_AddRefed<MediaByteBuffer> RemoteArrayOfByteBuffer::MediaByteBufferAt(
 /* static */ bool ipc::IPDLParamTraits<RemoteArrayOfByteBuffer>::Read(
     const IPC::Message* aMsg, PickleIterator* aIter,
     mozilla::ipc::IProtocol* aActor, RemoteArrayOfByteBuffer* aVar) {
-  return ReadIPDLParam(aMsg, aIter, aActor, &aVar->mIsValid) &&
+  bool rv = ReadIPDLParam(aMsg, aIter, aActor, &aVar->mIsValid) &&
          ReadIPDLParam(aMsg, aIter, aActor, &aVar->mBuffers) &&
          ReadIPDLParam(aMsg, aIter, aActor, &aVar->mOffsets);
+
+  recordreplay::RecordReplayAssert("IPDLParamTraits<RemoteArrayOfByteBuffer>::Read %zu", aVar->mBuffers ? aVar->mBuffers->Size<uint8_t>() : 0);
+
+  return rv;
 }
 
 bool ArrayOfRemoteMediaRawData::Fill(
@@ -259,7 +267,9 @@ bool ArrayOfRemoteAudioData::Fill(
 
 already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
     size_t aIndex) const {
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt Start %zu", aIndex);
   if (!IsValid()) {
+    recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #1");
     return nullptr;
   }
   MOZ_ASSERT(aIndex < Count());
@@ -267,8 +277,11 @@ already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
                         "Something ain't right here");
   const auto& sample = mSamples[aIndex];
   AlignedAudioBuffer data = mBuffers.AlignedBufferAt<AudioDataValue>(aIndex);
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #2 %zu %d",
+                                   mBuffers.SizeAt(aIndex), !!data);
   if (mBuffers.SizeAt(aIndex) && !data) {
     // OOM
+    recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt #3");
     return nullptr;
   }
   auto audioData = MakeRefPtr<AudioData>(
@@ -282,6 +295,7 @@ already_AddRefed<AudioData> ArrayOfRemoteAudioData::ElementAt(
   audioData->mTrimWindow = sample.mTrimWindow;
   audioData->mFrames = sample.mFrames;
   audioData->mDataOffset = sample.mDataOffset;
+  recordreplay::RecordReplayAssert("ArrayOfRemoteAudioData::ElementAt Done");
   return audioData.forget();
 }
 

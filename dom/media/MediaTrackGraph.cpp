@@ -1625,10 +1625,14 @@ bool MediaTrackGraphImpl::UpdateMainThreadState() {
 auto MediaTrackGraphImpl::OneIteration(GraphTime aStateTime,
                                        GraphTime aIterationEnd,
                                        AudioMixer* aMixer) -> IterationResult {
+  recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIteration Start");
+
   if (mGraphRunner) {
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIteration #1");
     return mGraphRunner->OneIteration(aStateTime, aIterationEnd, aMixer);
   }
 
+  recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIteration #2");
   return OneIterationImpl(aStateTime, aIterationEnd, aMixer);
 }
 
@@ -1637,6 +1641,8 @@ auto MediaTrackGraphImpl::OneIterationImpl(GraphTime aStateTime,
                                            AudioMixer* aMixer)
     -> IterationResult {
   TRACE();
+
+  recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl Start");
 
   mIterationEndTime = aIterationEnd;
 
@@ -1660,7 +1666,9 @@ auto MediaTrackGraphImpl::OneIterationImpl(GraphTime aStateTime,
   // These require a single thread, which has an nsThread with an event queue.
   if (mGraphRunner || !mRealtime) {
     TRACE_COMMENT("MessagePort events");
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #1");
     NS_ProcessPendingEvents(nullptr);
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #2");
   }
 
   GraphTime stateTime = std::min(aStateTime, GraphTime(mEndTime));
@@ -1686,18 +1694,22 @@ auto MediaTrackGraphImpl::OneIterationImpl(GraphTime aStateTime,
       // ref-cycle graph->nextDriver->currentDriver->graph.
       SwitchAtNextIteration(nullptr);
     }
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #5");
     return IterationResult::CreateStop(
         NewRunnableMethod("MediaTrackGraphImpl::SignalMainThreadCleanup", this,
                           &MediaTrackGraphImpl::SignalMainThreadCleanup));
   }
 
   if (Switching()) {
+    recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl #6");
     RefPtr<GraphDriver> nextDriver = move(mNextDriver);
     return IterationResult::CreateSwitchDriver(
         nextDriver, NewRunnableMethod<StoreRefPtrPassByPtr<GraphDriver>>(
                         "MediaTrackGraphImpl::SetCurrentDriver", this,
                         &MediaTrackGraphImpl::SetCurrentDriver, nextDriver));
   }
+
+  recordreplay::RecordReplayAssert("MediaTrackGraphImpl::OneIterationImpl Done");
 
   return IterationResult::CreateStillProcessing();
 }

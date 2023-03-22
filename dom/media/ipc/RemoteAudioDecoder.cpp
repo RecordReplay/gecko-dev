@@ -24,8 +24,11 @@ MediaResult RemoteAudioDecoderChild::ProcessOutput(
   RefPtr<ArrayOfRemoteAudioData> arrayData =
       aDecodedData.get_ArrayOfRemoteAudioData();
 
+  recordreplay::RecordReplayAssert("RemoteAudioDecoderChild::ProcessOutput %zu", arrayData->Count());
+
   for (size_t i = 0; i < arrayData->Count(); i++) {
     RefPtr<AudioData> data = arrayData->ElementAt(i);
+    recordreplay::RecordReplayAssert("RemoteAudioDecoderChild::ProcessOutput #1 %zu %d", i, !!data);
     if (!data) {
       // OOM
       return MediaResult(NS_ERROR_OUT_OF_MEMORY, __func__);

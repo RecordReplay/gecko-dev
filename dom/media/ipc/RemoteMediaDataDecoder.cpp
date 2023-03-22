@@ -58,20 +58,24 @@ RefPtr<MediaDataDecoder::InitPromise> RemoteMediaDataDecoder::Init() {
 
 RefPtr<MediaDataDecoder::DecodePromise> RemoteMediaDataDecoder::Decode(
     MediaRawData* aSample) {
+  recordreplay::RecordReplayAssert("RemoteMediaDataDecoder::Decode Start");
   RefPtr<RemoteMediaDataDecoder> self = this;
   RefPtr<MediaRawData> sample = aSample;
   return InvokeAsync(
       RemoteDecoderManagerChild::GetManagerThread(), __func__,
       [self, sample]() {
+        recordreplay::RecordReplayAssert("RemoteMediaDataDecoder::Decode callback");
         return self->mChild->Decode(nsTArray<RefPtr<MediaRawData>>{sample});
       });
 }
 
 RefPtr<MediaDataDecoder::DecodePromise> RemoteMediaDataDecoder::DecodeBatch(
     nsTArray<RefPtr<MediaRawData>>&& aSamples) {
+  recordreplay::RecordReplayAssert("RemoteMediaDataDecoder::DecodeBatch Start");
   RefPtr<RemoteMediaDataDecoder> self = this;
   return InvokeAsync(RemoteDecoderManagerChild::GetManagerThread(), __func__,
                      [self, samples = std::move(aSamples)]() {
+                       recordreplay::RecordReplayAssert("RemoteMediaDataDecoder::DecodeBatch callback");
                        return self->mChild->Decode(samples);
                      });
 }

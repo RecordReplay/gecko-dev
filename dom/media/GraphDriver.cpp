@@ -108,6 +108,8 @@ class MediaTrackGraphInitThreadRunnable : public Runnable {
     LOG(LogLevel::Debug, ("Starting a new system driver for graph %p",
                           mDriver->mGraphInterface.get()));
 
+    recordreplay::RecordReplayAssert("MediaTrackGraphInitThreadRunnable::Run Start");
+
     if (GraphDriver* previousDriver = mDriver->PreviousDriver()) {
       LOG(LogLevel::Debug,
           ("%p releasing an AudioCallbackDriver(%p), for graph %p",
@@ -121,6 +123,8 @@ class MediaTrackGraphInitThreadRunnable : public Runnable {
     }
 
     mDriver->RunThread();
+
+    recordreplay::RecordReplayAssert("MediaTrackGraphInitThreadRunnable::Run Done");
     return NS_OK;
   }
 
@@ -205,15 +209,24 @@ void ThreadedDriver::RunThread() {
          (long)nextStateComputedTime));
 
     mStateComputedTime = nextStateComputedTime;
+
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #5");
+
     IterationResult result =
         Graph()->OneIteration(mStateComputedTime, mIterationEnd, nullptr);
 
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6 %d", result.IsStop());
+
     if (result.IsStop()) {
       // Signal that we're done stopping.
+      recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #6.1");
       result.Stopped();
+      recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #7");
       break;
     }
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #8");
     WaitForNextIteration();
+    recordreplay::RecordReplayAssert("ThreadedDriver::RunThread #9");
     if (GraphDriver* nextDriver = result.NextDriver()) {
       LOG(LogLevel::Debug, ("%p: Switching to AudioCallbackDriver", Graph()));
       result.Switched();
@@ -252,6 +265,8 @@ void ThreadedDriver::WaitForNextIteration() {
 }
 
 TimeDuration SystemClockDriver::WaitInterval() {
+  recordreplay::RecordReplayAssert("SystemClockDriver::WaitInterval");
+
   MOZ_ASSERT(mThread);
   MOZ_ASSERT(OnThread());
   TimeStamp now = TimeStamp::Now();
@@ -408,6 +423,8 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
                                AudioMixer* aMixer) override {
     MOZ_ASSERT(!aMixer);
 
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration Start");
+
 #ifdef DEBUG
     AutoInCallback aic(mOwner);
 #endif
@@ -420,13 +437,20 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
 
     AudioStreamState audioState = mOwner->mAudioStreamState;
 
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #1 %d %d",
+                                     (int)audioState, result.IsStillProcessing());
+
     MOZ_ASSERT(audioState != AudioStreamState::Stopping,
                "The audio driver can only enter stopping if it iterated the "
                "graph, which it can only do if there's no fallback driver");
     if (audioState != AudioStreamState::Running && result.IsStillProcessing()) {
+      recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #2");
+
       mOwner->MaybeStartAudioStream();
       return result;
     }
+
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration #3");
 
     MOZ_ASSERT(result.IsStillProcessing() || result.IsStop() ||
                result.IsSwitchDriver());
@@ -438,6 +462,7 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
             "AudioCallbackDriver::FallbackDriverStopped",
             [self = RefPtr<FallbackWrapper>(this), this,
              result = std::move(result)]() mutable {
+              recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration callback start");
               FallbackDriverState fallbackState =
                   result.IsStillProcessing() ? FallbackDriverState::None
                                              : FallbackDriverState::Stopped;
@@ -465,6 +490,7 @@ class AudioCallbackDriver::FallbackWrapper : public GraphInterface {
                 }
               }
               mOwner = nullptr;
+              recordreplay::RecordReplayAssert("AudioCallbackDriver::FallbackWrapper::OneIteration callback #5");
               NS_DispatchBackgroundTask(NS_NewRunnableFunction(
                   "AudioCallbackDriver::FallbackDriverStopped::Release",
                   [fallback = std::move(self->mFallbackDriver)] {}));
@@ -569,6 +595,8 @@ void AudioCallbackDriver::Init() {
   bool fromFallback = fallbackState == FallbackDriverState::Running;
   cubeb* cubebContext = CubebUtils::GetCubebContext();
   if (!cubebContext) {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::Init #1");
+
     NS_WARNING("Could not get cubeb context.");
     LOG(LogLevel::Warning, ("%s: Could not get cubeb context", __func__));
     mAudioStreamState = AudioStreamState::None;
@@ -595,6 +623,8 @@ void AudioCallbackDriver::Init() {
   }
 
   if (!mOutputChannelCount) {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::Init #2");
+
     LOG(LogLevel::Warning, ("Output number of channels is 0."));
     mAudioStreamState = AudioStreamState::None;
     if (!fromFallback) {
@@ -680,6 +710,8 @@ void AudioCallbackDriver::Init() {
         "Could not set the audio stream volume in GraphDriver.cpp");
     CubebUtils::ReportCubebBackendUsed();
   } else {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::Init #10");
+
     NS_WARNING(
         "Could not create a cubeb stream for MediaTrackGraph, falling "
         "back to a SystemClockDriver");
@@ -717,6 +749,8 @@ void AudioCallbackDriver::Init() {
 }
 
 void AudioCallbackDriver::Start() {
+  recordreplay::RecordReplayAssert("AudioCallbackDriver::Start");
+
   MOZ_ASSERT(!IsStarted());
   MOZ_ASSERT(mAudioStreamState == AudioStreamState::None);
   MOZ_ASSERT_IF(PreviousDriver(), PreviousDriver()->InIteration());
@@ -850,6 +884,8 @@ long AudioCallbackDriver::DataCallback(const AudioDataValue* aInputBuffer,
   if (!mSandboxed && CheckThreadIdChanged()) {
     CubebUtils::GetAudioThreadRegistry()->Register(mAudioThreadId);
   }
+
+  recordreplay::RecordReplayAssert("AudioCallbackDriver::DataCallback");
 
   if (mAudioStreamState.compareExchange(AudioStreamState::Pending,
                                         AudioStreamState::Running)) {
@@ -1000,6 +1036,8 @@ long AudioCallbackDriver::DataCallback(const AudioDataValue* aInputBuffer,
                           aFrames * mOutputChannelCount);
 
   if (result.IsStop()) {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::DataCallback #10");
+
     if (mInputDeviceID) {
       mGraphInterface->NotifyInputStopped();
     }
@@ -1014,6 +1052,8 @@ long AudioCallbackDriver::DataCallback(const AudioDataValue* aInputBuffer,
   }
 
   if (GraphDriver* nextDriver = result.NextDriver()) {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::DataCallback #11");
+
     LOG(LogLevel::Debug,
         ("%p: Switching to %s driver.", Graph(),
          nextDriver->AsAudioCallbackDriver() ? "audio" : "system"));
@@ -1058,6 +1098,8 @@ void AudioCallbackDriver::StateCallback(cubeb_state aState) {
 
   AudioStreamState streamState = mAudioStreamState;
   if (aState != CUBEB_STATE_STARTED) {
+    recordreplay::RecordReplayAssert("AudioCallbackDriver::StateCallback #1");
+
     // Clear the flag for the not running states: stopped, drained, error.
     streamState = mAudioStreamState.exchange(AudioStreamState::None);
   }

@@ -357,7 +357,7 @@ void MediaFormatReader::DecoderFactory::DoCreateDecoder(Data& aData) {
 
   // Media playback is not supported when recording or replaying.
   if (recordreplay::IsRecordingOrReplaying()) {
-    recordreplay::ReportUnsupportedFeature("MediaPlayback", 54);
+    recordreplay::ReportUnsupportedFeature("MediaPlayback #2", 54);
     return;
   }
 

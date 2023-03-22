@@ -760,7 +760,7 @@ class AudioCallbackDriver : public GraphDriver, public MixerCallbackReceiver {
     /* There is an AudioStream that is draining, and will soon stop. */
     Stopping
   };
-  Atomic<AudioStreamState> mAudioStreamState;
+  recordreplay::OrderedAtomic<AudioStreamState> mAudioStreamState;
   /* State of the fallback driver, see inline comments. */
   enum class FallbackDriverState {
     /* There is no fallback driver. */
@@ -771,7 +771,7 @@ class AudioCallbackDriver : public GraphDriver, public MixerCallbackReceiver {
        may iterate the graph. */
     Stopped,
   };
-  Atomic<FallbackDriverState> mFallbackDriverState{FallbackDriverState::None};
+  recordreplay::OrderedAtomic<FallbackDriverState> mFallbackDriverState{FallbackDriverState::None};
   /* SystemClockDriver used as fallback if this AudioCallbackDriver fails to
    * init or start. */
   DataMutex<RefPtr<FallbackWrapper>> mFallback;

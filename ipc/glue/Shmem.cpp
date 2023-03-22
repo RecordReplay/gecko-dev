@@ -238,7 +238,7 @@ Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
 
   MOZ_ASSERT(!strncmp(header->mMagic, sMagic, sizeof(sMagic)),
              "invalid segment");
-  mSize = static_cast<size_t>(header->mSize);
+  mSize = header->mSize;
 
   size_t pageSize = SharedMemory::SystemPageSize();
   MOZ_ASSERT(mSegment->Size() - (2 * pageSize) >= mSize,
@@ -378,7 +378,7 @@ void Shmem::Dealloc(PrivateIPDLCaller, SharedMemory* aSegment) {
 
 Shmem::Shmem(PrivateIPDLCaller, SharedMemory* aSegment, id_t aId)
     : mSegment(aSegment), mData(aSegment->memory()), mSize(0), mId(aId) {
-  mSize = static_cast<size_t>(*PtrToSize(mSegment));
+  mSize = recordreplay::RecordReplayValue("Shmem size", static_cast<size_t>(*PtrToSize(mSegment)));
   MOZ_RELEASE_ASSERT(mSegment->Size() - sizeof(uint32_t) >= mSize,
                      "illegal size in shared memory segment");
 }
@@ -463,8 +463,16 @@ bool IPDLParamTraits<Shmem>::Read(const IPC::Message* aMsg,
   }
 
   Shmem::SharedMemory* rawmem = aActor->LookupSharedMemory(id);
+
+  recordreplay::RecordReplayAssert("IPDLParamTraits<Shmem>::Read %d %d %zu",
+                                   (int)id, !!rawmem, rawmem ? rawmem->Size() : 0);
+
   if (rawmem) {
     *aResult = Shmem(Shmem::PrivateIPDLCaller(), rawmem, id);
+
+    recordreplay::RecordReplayAssert("IPDLParamTraits<Shmem>::Read #1 %zu",
+                                     aResult->Size<uint8_t>());
+
     return true;
   }
   *aResult = Shmem();
