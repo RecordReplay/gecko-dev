@@ -20,6 +20,8 @@ function getLatestPlaywrightRevision() {
 function sendBuildTestRequest(contents) {
   const text = JSON.stringify(contents);
 
+  console.log("Sending Task", JSON.stringify(contents, undefined, 2));
+
   const headers = {
     "Content-Type": "application/json",
     "Content-Length": text.length,
