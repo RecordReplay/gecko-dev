@@ -41,6 +41,7 @@ function platformTasks(platform) {
         kind: "ReleaseRuntime",
         runtime: "geckoPlaywright",
         revision: playwrightRevision,
+        driverRevision: process.env.INPUT_DRIVER_REVISION
       },
       platform
     );
