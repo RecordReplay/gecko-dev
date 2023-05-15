@@ -3,10 +3,13 @@ on:
   workflow_dispatch:
     inputs:
       runtime_sha:
+        description: (Optional) 12 char SHA of gecko-dev
         type: string
       playwright_sha:
+        description: (Optional) 12 char SHA of playwright branch of gecko-dev
         type: string
       driver_sha:
+        description: (Optional) 12 char SHA of driver
         type: string
 
 jobs:
