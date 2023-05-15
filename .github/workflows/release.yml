@@ -1,6 +1,16 @@
 name: Release Latest Browsers
 on:
   workflow_dispatch:
+    inputs:
+      runtime_sha:
+        description: (Optional) 12 char SHA of gecko-dev
+        type: string
+      playwright_sha:
+        description: (Optional) 12 char SHA of playwright branch of gecko-dev
+        type: string
+      driver_sha:
+        description: (Optional) 12 char SHA of driver
+        type: string
 
 jobs:
   release:
@@ -14,14 +24,12 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_API_KEY }}
           version: "1.38.4"
       - uses: actions/checkout@v2
-        with:
-          ref: replay-playwright
-      - uses: actions/checkout@v2
-        with:
-          ref: webreplay-release
       - uses: ./.github/actions/release
         env:
           BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
           BUILD_TEST_HOSTNAME: a49855c191a944333918aea7ad31bc76-6a8a830d89921d8a.elb.us-east-2.amazonaws.com
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
+          INPUT_RUNTIME_REVISION: ${{ inputs.runtime_sha }}
+          INPUT_PLAYWRIGHT_REVISION: ${{ inputs.playwright_sha }}
+          INPUT_DRIVER_REVISION: ${{ inputs.driver_sha }}
