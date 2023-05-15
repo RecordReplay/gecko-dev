@@ -7,8 +7,8 @@ const {
   newTask,
 } = require("../utils");
 
-const replayRevision = getLatestReplayRevision();
-const playwrightRevision = getLatestPlaywrightRevision();
+const replayRevision = process.env.INPUT_RUNTIME_REVISION || getLatestReplayRevision();
+const playwrightRevision = process.env.INPUT_PLAYWRIGHT_REVISION || getLatestPlaywrightRevision();
 
 sendBuildTestRequest({
   name: `Gecko Release ${replayRevision}`,
@@ -26,6 +26,7 @@ function platformTasks(platform) {
       kind: "ReleaseRuntime",
       runtime: "gecko",
       revision: replayRevision,
+      driverRevision: process.env.INPUT_DRIVER_REVISION,
     },
     platform
   );

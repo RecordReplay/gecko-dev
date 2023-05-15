@@ -1,6 +1,13 @@
 name: Release Latest Browsers
 on:
   workflow_dispatch:
+    inputs:
+      runtime_sha:
+        type: string
+      playwright_sha:
+        type: string
+      driver_sha:
+        type: string
 
 jobs:
   release:
@@ -25,3 +32,6 @@ jobs:
           BUILD_TEST_HOSTNAME: a49855c191a944333918aea7ad31bc76-6a8a830d89921d8a.elb.us-east-2.amazonaws.com
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
+          INPUT_RUNTIME_REVISION: ${{ inputs.runtime_sha }}
+          INPUT_PLAYWRIGHT_REVISION: ${{ inputs.playwright_sha }}
+          INPUT_DRIVER_REVISION: ${{ inputs.driver_sha }}
