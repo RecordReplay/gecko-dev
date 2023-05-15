@@ -18,42 +18,42 @@ function getLatestPlaywrightRevision() {
 }
 
 function sendBuildTestRequest(contents) {
-  // const text = JSON.stringify(contents);
+  const text = JSON.stringify(contents);
 
   console.log("Sending Task", JSON.stringify(contents, undefined, 2));
 
-  // const headers = {
-  //   "Content-Type": "application/json",
-  //   "Content-Length": text.length,
-  //   Authorization: process.env.BUILD_TEST_AUTHORIZATION,
-  // };
+  const headers = {
+    "Content-Type": "application/json",
+    "Content-Length": text.length,
+    Authorization: process.env.BUILD_TEST_AUTHORIZATION,
+  };
 
-  // // Allow overriding the build/test connection info for testing.
-  // const options = {
-  //   hostname: process.env.BUILD_TEST_HOSTNAME || "build-test.replay.io",
-  //   port: process.env.BUILD_TEST_PORT || 443,
-  //   path: "/",
-  //   method: "POST",
-  //   headers,
-  // };
+  // Allow overriding the build/test connection info for testing.
+  const options = {
+    hostname: process.env.BUILD_TEST_HOSTNAME || "build-test.replay.io",
+    port: process.env.BUILD_TEST_PORT || 443,
+    path: "/",
+    method: "POST",
+    headers,
+  };
 
-  // const request = (process.env.BUILD_TEST_INSECURE ? http : https).request(
-  //   options,
-  //   response => {
-  //     console.log(`RequestFinished Code ${response.statusCode}`);
-  //     process.exit(response.statusCode == 200 ? 0 : 1);
-  //   }
-  // );
-  // request.on("error", e => {
-  //   throw new Error(`Error contacting build/test server: ${e}`);
-  // });
-  // request.write(text);
-  // request.end();
+  const request = (process.env.BUILD_TEST_INSECURE ? http : https).request(
+    options,
+    response => {
+      console.log(`RequestFinished Code ${response.statusCode}`);
+      process.exit(response.statusCode == 200 ? 0 : 1);
+    }
+  );
+  request.on("error", e => {
+    throw new Error(`Error contacting build/test server: ${e}`);
+  });
+  request.write(text);
+  request.end();
 
-  // setTimeout(() => {
-  //   console.log("Timed out waiting for build/test server response");
-  //   process.exit(1);
-  // }, 30000);
+  setTimeout(() => {
+    console.log("Timed out waiting for build/test server response");
+    process.exit(1);
+  }, 30000);
 }
 
 function spawnChecked(cmd, args, options) {
