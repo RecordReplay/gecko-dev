@@ -528,12 +528,12 @@ DateFormat::create(EStyle timeStyle, EStyle dateStyle, const Locale& locale)
         status = U_ZERO_ERROR;
     }
 
-    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #5");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #5");
 
     // Try to create a SimpleDateFormat of the desired style.
     SimpleDateFormat *f = new SimpleDateFormat(timeStyle, dateStyle, locale, status);
 
-    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #6");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #6");
 
     if (U_SUCCESS(status)) return f;
     delete f;
@@ -542,11 +542,11 @@ DateFormat::create(EStyle timeStyle, EStyle dateStyle, const Locale& locale)
     // the DateFormatSymbols for this locale.
     status = U_ZERO_ERROR;
 
-    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #7");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #7");
 
     f = new SimpleDateFormat(locale, status);
 
-    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #8");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #8");
 
     if (U_SUCCESS(status)) return f;
     delete f;

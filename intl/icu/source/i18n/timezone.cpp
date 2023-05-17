@@ -429,7 +429,7 @@ createSystemTimeZone(const UnicodeString& id) {
 TimeZone* U_EXPORT2
 TimeZone::createTimeZone(const UnicodeString& ID)
 {
-    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createTimeZone");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createTimeZone");
 
     /* We first try to lookup the zone ID in our system list.  If this
      * fails, we try to parse it as a custom string GMT[+-]hh:mm.  If
@@ -579,7 +579,7 @@ static void U_CALLCONV initDefault()
 TimeZone* U_EXPORT2
 TimeZone::createDefault()
 {
-    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createDefault");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createDefault");
 
     umtx_initOnce(gDefaultZoneInitOnce, initDefault);
     {
@@ -593,7 +593,7 @@ TimeZone::createDefault()
 TimeZone* U_EXPORT2
 TimeZone::forLocaleOrDefault(const Locale& locale)
 {
-    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::forLocaleOrDefault");
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::forLocaleOrDefault");
 
     char buffer[ULOC_KEYWORDS_CAPACITY] = "";
     UErrorCode localStatus = U_ZERO_ERROR;
