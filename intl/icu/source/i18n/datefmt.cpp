@@ -23,6 +23,7 @@
 
 #if !UCONFIG_NO_FORMATTING
 
+#include "mozilla/RecordReplay.h"
 #include "unicode/ures.h"
 #include "unicode/datefmt.h"
 #include "unicode/smpdtfmt.h"
@@ -527,15 +528,26 @@ DateFormat::create(EStyle timeStyle, EStyle dateStyle, const Locale& locale)
         status = U_ZERO_ERROR;
     }
 
+    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #5");
+
     // Try to create a SimpleDateFormat of the desired style.
     SimpleDateFormat *f = new SimpleDateFormat(timeStyle, dateStyle, locale, status);
+
+    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #6");
+
     if (U_SUCCESS(status)) return f;
     delete f;
 
     // If that fails, try to create a format using the default pattern and
     // the DateFormatSymbols for this locale.
     status = U_ZERO_ERROR;
+
+    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #7");
+
     f = new SimpleDateFormat(locale, status);
+
+    recordreplay::RecordReplayAssert("[RUN-1972] DateFormat::create #8");
+
     if (U_SUCCESS(status)) return f;
     delete f;
 

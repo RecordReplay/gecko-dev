@@ -39,6 +39,7 @@
 
 #include "utypeinfo.h"  // for 'typeid' to work
 
+#include "mozilla/RecordReplay.h"
 #include "unicode/utypes.h"
 #include "unicode/ustring.h"
 #include "uassert.h"
@@ -428,6 +429,8 @@ createSystemTimeZone(const UnicodeString& id) {
 TimeZone* U_EXPORT2
 TimeZone::createTimeZone(const UnicodeString& ID)
 {
+    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createTimeZone");
+
     /* We first try to lookup the zone ID in our system list.  If this
      * fails, we try to parse it as a custom string GMT[+-]hh:mm.  If
      * all else fails, we return GMT, which is probably not what the
@@ -576,6 +579,8 @@ static void U_CALLCONV initDefault()
 TimeZone* U_EXPORT2
 TimeZone::createDefault()
 {
+    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::createDefault");
+
     umtx_initOnce(gDefaultZoneInitOnce, initDefault);
     {
         Mutex lock(&gDefaultZoneMutex);
@@ -588,6 +593,8 @@ TimeZone::createDefault()
 TimeZone* U_EXPORT2
 TimeZone::forLocaleOrDefault(const Locale& locale)
 {
+    recordreplay::RecordReplayAssert("[RUN-1972] TimeZone::forLocaleOrDefault");
+
     char buffer[ULOC_KEYWORDS_CAPACITY] = "";
     UErrorCode localStatus = U_ZERO_ERROR;
     int32_t count = locale.getKeywordValue("timezone", buffer, sizeof(buffer), localStatus);

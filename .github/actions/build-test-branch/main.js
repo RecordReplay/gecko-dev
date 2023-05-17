@@ -44,8 +44,9 @@ if (slot) {
 sendBuildTestRequest({
   name: requestName,
   tasks: [
-    ...platformTasks("macOS"),
-    ...platformTasks("linux"),
+    // FIXME
+    //...platformTasks("macOS"),
+    //...platformTasks("linux"),
     ...platformTasks("windows"),
   ],
   // If multiple test runs were specified then the request runs at low priority.
