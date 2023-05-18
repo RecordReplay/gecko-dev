@@ -2515,7 +2515,7 @@ BundledFontLoader::CreateEnumeratorFromKey(
   // and the nsIFile pointer in its contents will be invalid. Avoid this problem
   // by registering the collection keys used by this process.
   size_t index = recordreplay::RecordReplayValue("BundledFontLoader::CreateEnumeratorFromKey",
-                                                 recordreplay::ThingIndex(aCollectionKey));
+                                                 recordreplay::ThingIndex((void*)aCollectionKey));
   if (recordreplay::IsReplaying()) {
     aCollectionKey = recordreplay::IndexThing(index);
   }
