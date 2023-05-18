@@ -4,6 +4,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+brokenbuild
+
 #include "ProcessRecordReplay.h"
 
 #include "JSControl.h"
@@ -25,24 +27,25 @@
 #include <sys/stat.h>
 
 #ifdef XP_MACOSX
-#include "mozilla/MacLaunchHelper.h"
+#  include "mozilla/MacLaunchHelper.h"
 #endif
 
 #ifndef XP_WIN
-#include <dlfcn.h>
-#include <sys/time.h>
-#include <unistd.h>
+#  include <dlfcn.h>
+#  include <sys/time.h>
+#  include <unistd.h>
 #else
-#include <io.h>
-#include <libloaderapi.h>
+#  include <io.h>
+#  include <libloaderapi.h>
 #endif
 
-extern "C" void RecordReplayOrderDefaultTimeZoneMutex();
+    extern "C" void
+    RecordReplayOrderDefaultTimeZoneMutex();
 
 namespace mozilla {
 
 namespace image {
-  extern void RecordReplayInitializeSurfaceCacheMutex();
+extern void RecordReplayInitializeSurfaceCacheMutex();
 }
 
 extern void RecordReplayInitializeTimerThreadWrapperMutex();
@@ -65,7 +68,8 @@ struct JSFilter {
   unsigned mEndLine = 0;
 };
 
-static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters);
+static void ParseJSFilters(const char* aEnv,
+                           InfallibleVector<JSFilter>& aFilters);
 static bool FilterMatches(const InfallibleVector<JSFilter>& aFilters,
                           const char* aFilename, unsigned aLine);
 
@@ -79,7 +83,8 @@ static void (*gAttach)(const char* dispatch, const char* buildId);
 static void (*gSetApiKey)(const char* apiKey);
 static void (*gProfileExecution)(const char* path);
 static void (*gAddProfilerEvent)(const char* event, const char* json);
-static void (*gLabelExecutableCode)(const void* aCode, size_t aSize, const char* aKind);
+static void (*gLabelExecutableCode)(const void* aCode, size_t aSize,
+                                    const char* aKind);
 static void (*gSetFaultCallback)(FaultCallback aCallback);
 static void (*gRecordCommandLineArguments)(int*, char***);
 static uintptr_t (*gRecordReplayValue)(const char* why, uintptr_t value);
@@ -113,7 +118,8 @@ static bool (*gRecordReplayIsReplaying)();
 static int (*gCreateOrderedLock)(const char* aName);
 static void (*gOrderedLock)(int aLock);
 static void (*gOrderedUnlock)(int aLock);
-static void (*gOnMouseEvent)(const char* aKind, size_t aClientX, size_t aClientY);
+static void (*gOnMouseEvent)(const char* aKind, size_t aClientX,
+                             size_t aClientY);
 static void (*gOnKeyEvent)(const char* aKind, const char* aKey);
 static void (*gOnNavigationEvent)(const char* aKind, const char* aUrl);
 static const char* (*gGetRecordingId)();
@@ -122,19 +128,28 @@ static void (*gSetCrashReasonCallback)(const char* (*aCallback)());
 static void (*gInvalidateRecording)(const char* aFormat, ...);
 static void (*gSetCrashNote)(const char* aNote);
 static void (*gNotifyActivity)();
-static void (*gNewStableHashTable)(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate);
-static void (*gMoveStableHashTable)(const void* aTableSrc, const void* aTableDst);
+static void (*gNewStableHashTable)(const void* aTable,
+                                   KeyEqualsEntryCallback aKeyEqualsEntry,
+                                   void* aPrivate);
+static void (*gMoveStableHashTable)(const void* aTableSrc,
+                                    const void* aTableDst);
 static void (*gDeleteStableHashTable)(const void* aTable);
-static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
+static uint32_t (*gLookupStableHashCode)(const void* aTable, const void* aKey,
+                                         uint32_t aUnstableHashCode,
                                          bool* aFoundMatch);
-static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable, const void* aEntry);
-static void (*gStableHashTableMoveEntry)(const void* aTable, const void* aEntrySrc, const void* aEntryDst);
-static void (*gStableHashTableDeleteEntry)(const void* aTable, const void* aEntry);
+static void (*gStableHashTableAddEntryForLastLookup)(const void* aTable,
+                                                     const void* aEntry);
+static void (*gStableHashTableMoveEntry)(const void* aTable,
+                                         const void* aEntrySrc,
+                                         const void* aEntryDst);
+static void (*gStableHashTableDeleteEntry)(const void* aTable,
+                                           const void* aEntry);
 static bool (*gIsRecordingCreated)();
 static bool (*gWaitForRecordingCreated)();
 
 #ifndef XP_WIN
-static void (*gAddOrderedPthreadMutex)(const char* aName, pthread_mutex_t* aMutex);
+static void (*gAddOrderedPthreadMutex)(const char* aName,
+                                       pthread_mutex_t* aMutex);
 typedef void* DriverHandle;
 #else
 static void (*gAddOrderedCriticalSection)(const char* aName, void* aCS);
@@ -151,15 +166,15 @@ void LoadSymbolInternal(const char* name, void** psym, bool aOptional) {
   *psym = BitwiseCast<void*>(GetProcAddress(gDriverHandle, name));
 #endif
   if (!*psym && !aOptional) {
-    fprintf(stderr, "Could not find %s in Record Replay driver, crashing.\n", name);
+    fprintf(stderr, "Could not find %s in Record Replay driver, crashing.\n",
+            name);
     MOZ_CRASH();
   }
 }
 
-// This is called when the process crashes to return any reason why Gecko is crashing.
-static const char* GetCrashReason() {
-  return gMozCrashReason;
-}
+// This is called when the process crashes to return any reason why Gecko is
+// crashing.
+static const char* GetCrashReason() { return gMozCrashReason; }
 
 // Do any special Gecko configuration to get it ready for recording/replaying.
 static void ConfigureGecko() {
@@ -179,7 +194,8 @@ static void ConfigureGecko() {
   RecordReplayOrderDefaultTimeZoneMutex();
 
 #ifdef XP_WIN
-  // Make sure NSS is always initialized in case it gets used while generating paint data.
+  // Make sure NSS is always initialized in case it gets used while generating
+  // paint data.
   EnsureNSSInitializedChromeOrContent();
 #endif
 }
@@ -188,9 +204,7 @@ extern char gRecordReplayDriver[];
 extern int gRecordReplayDriverSize;
 extern char gBuildId[];
 
-const char* GetBuildId() {
-  return gBuildId;
-}
+const char* GetBuildId() { return gBuildId; }
 
 static const char* GetTempDirectory() {
 #ifndef XP_WIN
@@ -201,18 +215,21 @@ static const char* GetTempDirectory() {
 #endif
 }
 
-static DriverHandle DoLoadDriverHandle(const char* aPath, bool aPrintError = true) {
+static DriverHandle DoLoadDriverHandle(const char* aPath,
+                                       bool aPrintError = true) {
 #ifndef XP_WIN
   void* handle = dlopen(aPath, RTLD_LAZY);
   if (!handle && aPrintError) {
     char* error = dlerror();
-    fprintf(stderr, "DoLoadDriverHandle: dlopen failed %s: %s\n", aPath, error ? error : "<no error>");
+    fprintf(stderr, "DoLoadDriverHandle: dlopen failed %s: %s\n", aPath,
+            error ? error : "<no error>");
   }
   return handle;
 #else
   HMODULE handle = LoadLibraryA(aPath);
   if (!handle && aPrintError) {
-    fprintf(stderr, "DoLoadDriverHandle: LoadLibraryA failed %s: %u\n", aPath, GetLastError());
+    fprintf(stderr, "DoLoadDriverHandle: LoadLibraryA failed %s: %u\n", aPath,
+            GetLastError());
   }
   return handle;
 #endif
@@ -226,15 +243,18 @@ static DriverHandle OpenDriverHandle() {
 
   const char* tmpdir = GetTempDirectory();
   if (!tmpdir) {
-    fprintf(stderr, "Can't figure out temporary directory, can't create driver.\n");
+    fprintf(stderr,
+            "Can't figure out temporary directory, can't create driver.\n");
     return nullptr;
   }
 
   char filename[1024];
 #ifndef XP_WIN
-  snprintf(filename, sizeof(filename), "%s/recordreplay-%s.so", tmpdir, gBuildId);
+  snprintf(filename, sizeof(filename), "%s/recordreplay-%s.so", tmpdir,
+           gBuildId);
 #else
-  snprintf(filename, sizeof(filename), "%s\\recordreplay-%s.dll", tmpdir, gBuildId);
+  snprintf(filename, sizeof(filename), "%s\\recordreplay-%s.dll", tmpdir,
+           gBuildId);
 #endif
 
   DriverHandle handle = DoLoadDriverHandle(filename, /* aPrintError */ false);
@@ -244,20 +264,22 @@ static DriverHandle OpenDriverHandle() {
 
   char tmpFilename[1024];
 #ifndef XP_WIN
-  snprintf(tmpFilename, sizeof(tmpFilename), "%s/recordreplay.so-XXXXXX", tmpdir);
+  snprintf(tmpFilename, sizeof(tmpFilename), "%s/recordreplay.so-XXXXXX",
+           tmpdir);
   int fd = mkstemp(tmpFilename);
 #else
   int fd;
   for (int i = 0; i < 10; i++) {
-    snprintf(tmpFilename, sizeof(tmpFilename), "%s\\recordreplay.dll-XXXXXX", tmpdir);
+    snprintf(tmpFilename, sizeof(tmpFilename), "%s\\recordreplay.dll-XXXXXX",
+             tmpdir);
     _mktemp(tmpFilename);
     fd = _open(tmpFilename, O_CREAT | O_TRUNC | O_WRONLY | O_BINARY);
     if (fd >= 0) {
       break;
     }
   }
-  #define write _write
-  #define close _close
+#  define write _write
+#  define close _close
 #endif
   if (fd < 0) {
     fprintf(stderr, "mkstemp failed, can't create driver.\n");
@@ -266,7 +288,8 @@ static DriverHandle OpenDriverHandle() {
 
   int nbytes = write(fd, gRecordReplayDriver, gRecordReplayDriverSize);
   if (nbytes != gRecordReplayDriverSize) {
-    fprintf(stderr, "write to driver temporary file failed, can't create driver.\n");
+    fprintf(stderr,
+            "write to driver temporary file failed, can't create driver.\n");
     return nullptr;
   }
 
@@ -278,14 +301,14 @@ static DriverHandle OpenDriverHandle() {
   // files created by the browser even if they are related to the update
   // process.
   char* args[] = {
-    (char*)"/usr/bin/xattr",
-    (char*)"-d",
-    (char*)"com.apple.quarantine",
-    tmpFilename,
+      (char*)"/usr/bin/xattr",
+      (char*)"-d",
+      (char*)"com.apple.quarantine",
+      tmpFilename,
   };
   pid_t pid;
   LaunchChildMac(4, args, &pid);
-#endif // XP_MACOSX
+#endif  // XP_MACOSX
 
   int rv = rename(tmpFilename, filename);
   if (rv < 0) {
@@ -332,7 +355,8 @@ static void MaybeStartProfiling() {
     return;
   }
 
-  nsPrintfCString path("%s%cprofile-%d.log", directory, PR_GetDirectorySeparator(), rand());
+  nsPrintfCString path("%s%cprofile-%d.log", directory,
+                       PR_GetDirectorySeparator(), rand());
 
   gProfileExecution(path.get());
   gIsProfiling = true;
@@ -345,7 +369,8 @@ static void MaybeStartProfiling() {
 // recording will not be usable.
 static bool gPretendNotRecording = false;
 
-// Whether the recorder will be directly uploading the recording, vs. writing it to disk.
+// Whether the recorder will be directly uploading the recording, vs. writing it
+// to disk.
 static bool gUploadingRecording = false;
 
 extern "C" {
@@ -423,7 +448,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayAssertBytes", gAssertBytes);
   LoadSymbol("RecordReplayProgressCounter", gProgressCounter);
   LoadSymbol("RecordReplaySetProgressCallback", gSetProgressCallback);
-  LoadSymbol("RecordReplayEnableProgressCheckpoints", gEnableProgressCheckpoints);
+  LoadSymbol("RecordReplayEnableProgressCheckpoints",
+             gEnableProgressCheckpoints);
   LoadSymbol("RecordReplayProgressReached", gProgressReached);
   LoadSymbol("RecordReplaySetTrackObjectsCallback", gSetTrackObjectsCallback);
   LoadSymbol("RecordReplayBeginPassThroughEvents", gBeginPassThroughEvents);
@@ -452,9 +478,11 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   LoadSymbol("RecordReplayMoveStableHashTable", gMoveStableHashTable);
   LoadSymbol("RecordReplayDeleteStableHashTable", gDeleteStableHashTable);
   LoadSymbol("RecordReplayLookupStableHashCode", gLookupStableHashCode);
-  LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup", gStableHashTableAddEntryForLastLookup);
+  LoadSymbol("RecordReplayStableHashTableAddEntryForLastLookup",
+             gStableHashTableAddEntryForLastLookup);
   LoadSymbol("RecordReplayStableHashTableMoveEntry", gStableHashTableMoveEntry);
-  LoadSymbol("RecordReplayStableHashTableDeleteEntry", gStableHashTableDeleteEntry);
+  LoadSymbol("RecordReplayStableHashTableDeleteEntry",
+             gStableHashTableDeleteEntry);
   LoadSymbol("RecordReplayIsRecordingCreated", gIsRecordingCreated);
   LoadSymbol("RecordReplayWaitForRecordingCreated", gWaitForRecordingCreated);
 
@@ -465,7 +493,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
 #ifndef XP_WIN
   LoadSymbol("RecordReplayAddOrderedPthreadMutex", gAddOrderedPthreadMutex);
 #else
-  LoadSymbol("RecordReplayAddOrderedCriticalSection", gAddOrderedCriticalSection);
+  LoadSymbol("RecordReplayAddOrderedCriticalSection",
+             gAddOrderedCriticalSection);
   LoadSymbol("RecordReplayAddOrderedSRWLock", gAddOrderedSRWLock);
 #endif
 
@@ -508,7 +537,8 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   gRecordCommandLineArguments(aArgc, aArgv);
   gSetCrashReasonCallback(GetCrashReason);
 
-  gUploadingRecording = RecordReplayValue("UploadingRecording", !!*dispatchAddress);
+  gUploadingRecording =
+      RecordReplayValue("UploadingRecording", !!*dispatchAddress);
 
   // Unless disabled via the environment, pre-process all created recordings so
   // that they will load faster after saving the recording.
@@ -523,14 +553,13 @@ MOZ_EXPORT void RecordReplayInterface_Initialize(int* aArgc, char*** aArgv) {
   MaybeStartProfiling();
 }
 
-MOZ_EXPORT size_t
-RecordReplayInterface_InternalRecordReplayValue(const char* aWhy, size_t aValue) {
+MOZ_EXPORT size_t RecordReplayInterface_InternalRecordReplayValue(
+    const char* aWhy, size_t aValue) {
   return gRecordReplayValue(aWhy, aValue);
 }
 
-MOZ_EXPORT void RecordReplayInterface_InternalRecordReplayBytes(const char* aWhy,
-                                                                void* aData,
-                                                                size_t aSize) {
+MOZ_EXPORT void RecordReplayInterface_InternalRecordReplayBytes(
+    const char* aWhy, void* aData, size_t aSize) {
   gRecordReplayBytes(aWhy, aData, aSize);
 }
 
@@ -574,7 +603,8 @@ MOZ_EXPORT void* RecordReplayInterface_InternalIndexThing(size_t aId) {
   return gIdPointer(aId);
 }
 
-MOZ_EXPORT void RecordReplayInterface_InternalAssertScriptedCaller(const char* aWhy) {
+MOZ_EXPORT void RecordReplayInterface_InternalAssertScriptedCaller(
+    const char* aWhy) {
   JS::AutoFilename filename;
   unsigned lineno;
   unsigned column;
@@ -593,16 +623,17 @@ MOZ_EXPORT void RecordReplayInterface_InternalNotifyActivity() {
   gNotifyActivity();
 }
 
-MOZ_EXPORT void RecordReplayInterface_ExecutionProgressHook(unsigned aSourceId, const char* aFilename, unsigned aLineno,
-                                                            unsigned aColumn) {
+MOZ_EXPORT void RecordReplayInterface_ExecutionProgressHook(
+    unsigned aSourceId, const char* aFilename, unsigned aLineno,
+    unsigned aColumn) {
   if (FilterMatches(gExecutionAsserts, aFilename, aLineno)) {
-    RecordReplayAssert("ExecutionProgress %u:%s:%u:%u", aSourceId, aFilename, aLineno, aColumn);
+    RecordReplayAssert("ExecutionProgress %u:%s:%u:%u", aSourceId, aFilename,
+                       aLineno, aColumn);
   }
 }
 
-MOZ_EXPORT bool RecordReplayInterface_ShouldEmitRecordReplayAssert(const char* aFilename,
-                                                                   unsigned aLineno,
-                                                                   unsigned aColumn) {
+MOZ_EXPORT bool RecordReplayInterface_ShouldEmitRecordReplayAssert(
+    const char* aFilename, unsigned aLineno, unsigned aColumn) {
   return FilterMatches(gJSAsserts, aFilename, aLineno);
 }
 
@@ -624,7 +655,8 @@ MOZ_EXPORT void RecordReplayInterface_AdvanceExecutionProgressCounter() {
   ++*gProgressCounter();
 }
 
-MOZ_EXPORT void RecordReplayInterface_SetExecutionProgressCallback(void (*aCallback)(uint64_t)) {
+MOZ_EXPORT void RecordReplayInterface_SetExecutionProgressCallback(
+    void (*aCallback)(uint64_t)) {
   gSetProgressCallback(aCallback);
   gEnableProgressCheckpoints();
 }
@@ -633,7 +665,8 @@ MOZ_EXPORT void RecordReplayInterface_ExecutionProgressReached() {
   gProgressReached();
 }
 
-MOZ_EXPORT void RecordReplayInterface_SetTrackObjectsCallback(void (*aCallback)(bool)) {
+MOZ_EXPORT void RecordReplayInterface_SetTrackObjectsCallback(
+    void (*aCallback)(bool)) {
   gSetTrackObjectsCallback(aCallback);
 }
 
@@ -669,7 +702,8 @@ MOZ_EXPORT bool RecordReplayInterface_InternalAllowSideEffects() {
   return gAllowSideEffects();
 }
 
-MOZ_EXPORT int RecordReplayInterface_InternalCreateOrderedLock(const char* aName) {
+MOZ_EXPORT int RecordReplayInterface_InternalCreateOrderedLock(
+    const char* aName) {
   return gCreateOrderedLock(aName);
 }
 
@@ -702,40 +736,44 @@ void RecordReplayOrderedUnlock(int aLock) {
 
 #ifndef XP_WIN
 
-MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedPthreadMutex(const char* aName,
-                                                                     pthread_mutex_t* aMutex) {
+MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedPthreadMutex(
+    const char* aName, pthread_mutex_t* aMutex) {
   gAddOrderedPthreadMutex(aName, aMutex);
 }
 
-MOZ_EXPORT void RecordReplayAddOrderedPthreadMutexFromC(const char* aName, pthread_mutex_t* aMutex) {
+MOZ_EXPORT void RecordReplayAddOrderedPthreadMutexFromC(
+    const char* aName, pthread_mutex_t* aMutex) {
   if (IsRecordingOrReplaying()) {
     gAddOrderedPthreadMutex(aName, aMutex);
   }
 }
 
-#else // XP_WIN
+#else  // XP_WIN
 
-MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedCriticalSection(const char* aName, void* aCS) {
+MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedCriticalSection(
+    const char* aName, void* aCS) {
   gAddOrderedCriticalSection(aName, aCS);
 }
 
-MOZ_EXPORT void RecordReplayAddOrderedCriticalSectionFromC(const char* aName, PCRITICAL_SECTION aCS) {
+MOZ_EXPORT void RecordReplayAddOrderedCriticalSectionFromC(
+    const char* aName, PCRITICAL_SECTION aCS) {
   if (IsRecordingOrReplaying()) {
     gAddOrderedCriticalSection(aName, aCS);
   }
 }
 
-MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedSRWLock(const char* aName, void* aLock) {
+MOZ_EXPORT void RecordReplayInterface_InternalAddOrderedSRWLock(
+    const char* aName, void* aLock) {
   gAddOrderedSRWLock(aName, aLock);
 }
 
-#endif // XP_WIN
+#endif  // XP_WIN
 
 static Vector<const char*> gCrashNotes;
 
 MOZ_EXPORT void RecordReplayInterface_InternalPushCrashNote(const char* aNote) {
   if (NS_IsMainThread()) {
-    (void) gCrashNotes.append(aNote);
+    (void)gCrashNotes.append(aNote);
     if (gSetCrashNote) {
       gSetCrashNote(aNote);
     }
@@ -752,19 +790,23 @@ MOZ_EXPORT void RecordReplayInterface_InternalPopCrashNote() {
   }
 }
 
-MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent, const char* aJSON) {
+MOZ_EXPORT void RecordReplayInterface_AddProfilerEvent(const char* aEvent,
+                                                       const char* aJSON) {
   if (gIsRecordingOrReplaying || gIsProfiling) {
     gAddProfilerEvent(aEvent, aJSON);
   }
 }
 
-MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode, size_t aSize, const char* aKind) {
+MOZ_EXPORT void RecordReplayInterface_LabelExecutableCode(const void* aCode,
+                                                          size_t aSize,
+                                                          const char* aKind) {
   if (gIsRecordingOrReplaying || gIsProfiling) {
     gLabelExecutableCode(aCode, aSize, aKind);
   }
 }
 
-MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) {
+MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(
+    FaultCallback aCallback) {
   if (gIsRecordingOrReplaying) {
     gSetFaultCallback(aCallback);
   }
@@ -772,19 +814,14 @@ MOZ_EXPORT void RecordReplayInterface_SetFaultCallback(FaultCallback aCallback) 
 
 }  // extern "C"
 
-bool IsRecordingCreated() {
-  return gIsRecordingCreated();
-}
+bool IsRecordingCreated() { return gIsRecordingCreated(); }
 
-bool IsUploadingRecording() {
-  return gUploadingRecording;
-}
+bool IsUploadingRecording() { return gUploadingRecording; }
 
-const char* GetRecordingId() {
-  return gGetRecordingId();
-}
+const char* GetRecordingId() { return gGetRecordingId(); }
 
-static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilters) {
+static void ParseJSFilters(const char* aEnv,
+                           InfallibleVector<JSFilter>& aFilters) {
   const char* value = getenv(aEnv);
   if (!value) {
     return;
@@ -817,8 +854,8 @@ static void ParseJSFilters(const char* aEnv, InfallibleVector<JSFilter>& aFilter
 
     filter.mEndLine = atoi(value);
 
-    PrintLog("ParseJSFilter %s %s %u %u", aEnv,
-             filter.mFilename.c_str(), filter.mStartLine, filter.mEndLine);
+    PrintLog("ParseJSFilter %s %s %u %u", aEnv, filter.mFilename.c_str(),
+             filter.mStartLine, filter.mEndLine);
     aFilters.append(filter);
 
     end = strchr(value, '@');
@@ -837,23 +874,18 @@ static bool FilterMatches(const InfallibleVector<JSFilter>& aFilters,
       return true;
     }
     if (strstr(aFilename, filter.mFilename.c_str()) &&
-        aLine >= filter.mStartLine &&
-        aLine <= filter.mEndLine) {
+        aLine >= filter.mStartLine && aLine <= filter.mEndLine) {
       return true;
     }
   }
   return false;
 }
 
-const char* CurrentFirefoxVersion() {
-  return "91.0";
-}
+const char* CurrentFirefoxVersion() { return "91.0"; }
 
 static bool gHasCheckpoint = false;
 
-bool HasCheckpoint() {
-  return gHasCheckpoint;
-}
+bool HasCheckpoint() { return gHasCheckpoint; }
 
 // Note: This should be called even if we aren't recording/replaying, to report
 // cases where recording is unsupported to the UI process.
@@ -872,10 +904,10 @@ void CreateCheckpoint() {
   gRecordReplayNewCheckpoint();
   gHasCheckpoint = true;
 
-  // When recording all content, we won't remember the recording until it has loaded
-  // some interesting source. See Method_OnNewSource. Otherwise we want to make sure
-  // the recording has at least one checkpoint, which won't be the case for
-  // preallocated recording processes which aren't in use yet.
+  // When recording all content, we won't remember the recording until it has
+  // loaded some interesting source. See Method_OnNewSource. Otherwise we want
+  // to make sure the recording has at least one checkpoint, which won't be the
+  // case for preallocated recording processes which aren't in use yet.
   if (!gRecordAllContent) {
     RememberRecording();
   }
@@ -890,9 +922,7 @@ void MaybeCreateCheckpoint() {
   }
 }
 
-void RememberRecording() {
-  gRememberRecording();
-}
+void RememberRecording() { gRememberRecording(); }
 
 static bool gTearingDown;
 
@@ -918,9 +948,7 @@ void FinishRecording() {
   abort();
 }
 
-bool IsTearingDownProcess() {
-  return gTearingDown;
-}
+bool IsTearingDownProcess() { return gTearingDown; }
 
 void OnMouseEvent(dom::BrowserChild* aChild, const WidgetMouseEvent& aEvent) {
   if (!gHasCheckpoint) {
@@ -939,7 +967,8 @@ void OnMouseEvent(dom::BrowserChild* aChild, const WidgetMouseEvent& aEvent) {
   }
 }
 
-void OnKeyboardEvent(dom::BrowserChild* aChild, const WidgetKeyboardEvent& aEvent) {
+void OnKeyboardEvent(dom::BrowserChild* aChild,
+                     const WidgetKeyboardEvent& aEvent) {
   if (!gHasCheckpoint) {
     return;
   }
@@ -963,7 +992,8 @@ void OnKeyboardEvent(dom::BrowserChild* aChild, const WidgetKeyboardEvent& aEven
 
 static nsCString gLastLocationURL;
 
-void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFlags) {
+void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation,
+                      uint32_t aFlags) {
   if (!gHasCheckpoint) {
     return;
   }
@@ -1012,7 +1042,9 @@ void OnLocationChange(dom::BrowserChild* aChild, nsIURI* aLocation, uint32_t aFl
   gLastLocationURL = url;
 }
 
-void NewStableHashTable(const void* aTable, KeyEqualsEntryCallback aKeyEqualsEntry, void* aPrivate) {
+void NewStableHashTable(const void* aTable,
+                        KeyEqualsEntryCallback aKeyEqualsEntry,
+                        void* aPrivate) {
   if (IsRecordingOrReplaying()) {
     gNewStableHashTable(aTable, aKeyEqualsEntry, aPrivate);
   }
@@ -1030,19 +1062,21 @@ void DeleteStableHashTable(const void* aTable) {
   }
 }
 
-uint32_t LookupStableHashCode(const void* aTable, const void* aKey, uint32_t aUnstableHashCode,
-                              bool* aFoundMatch) {
+uint32_t LookupStableHashCode(const void* aTable, const void* aKey,
+                              uint32_t aUnstableHashCode, bool* aFoundMatch) {
   MOZ_RELEASE_ASSERT(IsRecordingOrReplaying());
   return gLookupStableHashCode(aTable, aKey, aUnstableHashCode, aFoundMatch);
 }
 
-void StableHashTableAddEntryForLastLookup(const void* aTable, const void* aEntry) {
+void StableHashTableAddEntryForLastLookup(const void* aTable,
+                                          const void* aEntry) {
   if (IsRecordingOrReplaying()) {
     gStableHashTableAddEntryForLastLookup(aTable, aEntry);
   }
 }
 
-void StableHashTableMoveEntry(const void* aTable, const void* aEntrySrc, const void* aEntryDst) {
+void StableHashTableMoveEntry(const void* aTable, const void* aEntrySrc,
+                              const void* aEntryDst) {
   if (IsRecordingOrReplaying()) {
     gStableHashTableMoveEntry(aTable, aEntrySrc, aEntryDst);
   }
