@@ -2511,6 +2511,15 @@ BundledFontLoader::CreateEnumeratorFromKey(
     IDWriteFactory* aFactory, const void* aCollectionKey,
     UINT32 aCollectionKeySize,
     IDWriteFontFileEnumerator** aFontFileEnumerator) {
+  // When replaying the collection key's contents will be replayed from the recording,
+  // and the nsIFile pointer in its contents will be invalid. Avoid this problem
+  // by registering the collection keys used by this process.
+  size_t index = recordreplay::RecordReplayValue("BundledFontLoader::CreateEnumeratorFromKey",
+                                                 recordreplay::ThingIndex(aCollectionKey));
+  if (recordreplay::IsReplaying()) {
+    aCollectionKey = recordreplay::IndexThing(index);
+  }
+
   nsIFile* fontDir = *(nsIFile**)aCollectionKey;
   *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, fontDir);
   NS_ADDREF(*aFontFileEnumerator);
@@ -2538,9 +2547,13 @@ gfxDWriteFontList::CreateBundledFontsCollection(IDWriteFactory* aFactory) {
   }
 
   const void* key = localDir.get();
+  recordreplay::RegisterThing(&key);
+
   RefPtr<IDWriteFontCollection> collection;
   HRESULT hr = aFactory->CreateCustomFontCollection(loader, &key, sizeof(key),
                                                     getter_AddRefs(collection));
+
+  recordreplay::UnregisterThing(&key);
 
   aFactory->UnregisterFontCollectionLoader(loader);
 
