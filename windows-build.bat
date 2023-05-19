@@ -46,5 +46,6 @@ IF DEFINED GITDIR (
 
 REM Start shell.
 %MOZILLABUILD%msys\bin\bash --login recordreplay/%GECKODIR%/windows-build.sh
+IF %ERRORLEVEL% NEQ 0 EXIT /B %ERRORLEVEL%
 
-EXIT /B
+EXIT /B 0
