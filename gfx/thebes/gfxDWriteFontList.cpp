@@ -2516,6 +2516,9 @@ BundledFontLoader::CreateEnumeratorFromKey(
   // by registering the collection keys used by this process.
   size_t index = recordreplay::RecordReplayValue("BundledFontLoader::CreateEnumeratorFromKey",
                                                  recordreplay::ThingIndex((void*)aCollectionKey));
+
+  recordreplay::Diagnostic("[RUN-1998] BundledFontLoader::CreateEnumeratorFromKey %p %zu", aCollectionKey, index);
+
   if (recordreplay::IsReplaying()) {
     aCollectionKey = recordreplay::IndexThing(index);
   }
@@ -2549,11 +2552,11 @@ gfxDWriteFontList::CreateBundledFontsCollection(IDWriteFactory* aFactory) {
   const void* key = localDir.get();
   recordreplay::RegisterThing(&key);
 
+  recordreplay::Diagnostic("[RUN-1998] gfxDWriteFontList::CreateBundledFontsCollection #5 %p", &key);
+
   RefPtr<IDWriteFontCollection> collection;
   HRESULT hr = aFactory->CreateCustomFontCollection(loader, &key, sizeof(key),
                                                     getter_AddRefs(collection));
-
-  recordreplay::UnregisterThing(&key);
 
   aFactory->UnregisterFontCollectionLoader(loader);
 
