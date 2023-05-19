@@ -64,6 +64,9 @@ function spawnChecked(cmd, args, options) {
   console.error(prettyCmd);
 
   const rv = spawnSync(cmd, args, options);
+  console.log("Ran command", prettyCmd);
+  console.log("Exit code", rv.status);
+  console.log("Signal", rv.signal);
 
   if (rv.status != 0 || rv.error) {
     console.error(rv.error);
