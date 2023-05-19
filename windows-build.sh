@@ -1,4 +1,4 @@
-set -e
+set -euo pipefail
 
 cd recordreplay
 cd $GECKODIR
