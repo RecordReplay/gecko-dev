@@ -2512,7 +2512,7 @@ BundledFontLoader::CreateEnumeratorFromKey(
     UINT32 aCollectionKeySize,
     IDWriteFontFileEnumerator** aFontFileEnumerator) {
   if (recordreplay::IsReplaying()) {
-    return;
+    return S_OK;
   }
   recordreplay::AutoPassThroughThreadEvents pt;
 
