@@ -2519,6 +2519,11 @@ BundledFontLoader::CreateEnumeratorFromKey(
 
   recordreplay::Diagnostic("[RUN-1998] BundledFontLoader::CreateEnumeratorFromKey %p %zu", aCollectionKey, index);
 
+  if (!index) {
+    recordreplay::PrintLog("BundledFontLoader::CreateEnumeratorFromKey UnknownCollectionKey");
+    MOZ_RELEASE_ASSERT(index);
+  }
+
   if (recordreplay::IsReplaying()) {
     aCollectionKey = recordreplay::IndexThing(index);
   }
