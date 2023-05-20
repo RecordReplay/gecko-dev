@@ -2511,13 +2511,15 @@ BundledFontLoader::CreateEnumeratorFromKey(
     IDWriteFactory* aFactory, const void* aCollectionKey,
     UINT32 aCollectionKeySize,
     IDWriteFontFileEnumerator** aFontFileEnumerator) {
+  nsIFile* fontDir = *(nsIFile**)aCollectionKey;
+
   // When replaying the collection key's contents will be replayed from the recording,
   // and the nsIFile pointer in its contents will be invalid. Avoid this problem
-  // by registering the collection keys used by this process.
+  // by registering the file pointers used by this process.
   size_t index = recordreplay::RecordReplayValue("BundledFontLoader::CreateEnumeratorFromKey",
-                                                 recordreplay::ThingIndex((void*)aCollectionKey));
+                                                 recordreplay::ThingIndex(fontDir));
 
-  recordreplay::Diagnostic("[RUN-1998] BundledFontLoader::CreateEnumeratorFromKey %p %zu", aCollectionKey, index);
+  recordreplay::Diagnostic("[RUN-1998] BundledFontLoader::CreateEnumeratorFromKey %p %zu", fontDir, index);
 
   if (recordreplay::IsRecordingOrReplaying() && !index) {
     recordreplay::PrintLog("BundledFontLoader::CreateEnumeratorFromKey UnknownCollectionKey");
@@ -2525,10 +2527,9 @@ BundledFontLoader::CreateEnumeratorFromKey(
   }
 
   if (recordreplay::IsReplaying()) {
-    aCollectionKey = recordreplay::IndexThing(index);
+    fontDir = (nsIFile*)recordreplay::IndexThing(index);
   }
 
-  nsIFile* fontDir = *(nsIFile**)aCollectionKey;
   *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, fontDir);
   NS_ADDREF(*aFontFileEnumerator);
   return S_OK;
@@ -2555,9 +2556,9 @@ gfxDWriteFontList::CreateBundledFontsCollection(IDWriteFactory* aFactory) {
   }
 
   const void* key = localDir.get();
-  recordreplay::RegisterThing(&key);
+  recordreplay::RegisterThing(key);
 
-  recordreplay::Diagnostic("[RUN-1998] gfxDWriteFontList::CreateBundledFontsCollection #5 %p", &key);
+  recordreplay::Diagnostic("[RUN-1998] gfxDWriteFontList::CreateBundledFontsCollection #5 %p", key);
 
   RefPtr<IDWriteFontCollection> collection;
   HRESULT hr = aFactory->CreateCustomFontCollection(loader, &key, sizeof(key),
