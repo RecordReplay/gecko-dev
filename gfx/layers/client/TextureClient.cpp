@@ -1204,16 +1204,20 @@ already_AddRefed<TextureClient> TextureClient::CreateForDrawing(
   // https://github.com/RecordReplay/backend/issues/5113
   recordreplay::RecordReplayAssert("TextureClient::CreateForDrawing Start");
 
+  recordreplay::Diagnostic("TextureClient::CreateForDrawing");
+
   LayersBackend layersBackend = aKnowsCompositor->GetCompositorBackendType();
   gfx::BackendType moz2DBackend =
       BackendTypeForBackendSelector(layersBackend, aSelector);
 
   // also test the validity of aAllocator
   if (!aAllocator || !aAllocator->IPCOpen()) {
+    recordreplay::Diagnostic("TextureClient::CreateForDrawing #1");
     return nullptr;
   }
 
   if (!gfx::Factory::AllowedSurfaceSize(aSize)) {
+    recordreplay::Diagnostic("TextureClient::CreateForDrawing #2");
     return nullptr;
   }
 
@@ -1222,6 +1226,7 @@ already_AddRefed<TextureClient> TextureClient::CreateForDrawing(
                           aSelector, aTextureFlags, aAllocFlags);
 
   if (data) {
+    recordreplay::Diagnostic("TextureClient::CreateForDrawing #3");
     return MakeAndAddRef<TextureClient>(data, aTextureFlags, aAllocator);
   }
 
@@ -1323,16 +1328,21 @@ already_AddRefed<TextureClient> TextureClient::CreateForRawBufferAccess(
   // https://github.com/RecordReplay/backend/issues/5113
   recordreplay::RecordReplayAssert("TextureClient::CreateForRawBufferAccess Start");
 
+  recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess");
+
   // also test the validity of aAllocator
   if (!aAllocator || !aAllocator->IPCOpen()) {
+    recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess #1");
     return nullptr;
   }
 
   if (aAllocFlags & ALLOC_DISALLOW_BUFFERTEXTURECLIENT) {
+    recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess #2");
     return nullptr;
   }
 
   if (!gfx::Factory::AllowedSurfaceSize(aSize)) {
+    recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess #3");
     return nullptr;
   }
 
@@ -1354,8 +1364,11 @@ already_AddRefed<TextureClient> TextureClient::CreateForRawBufferAccess(
       aSize, aFormat, gfx::BackendType::SKIA, aLayersBackend, aTextureFlags,
       aAllocFlags, aAllocator);
   if (!texData) {
+    recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess #4");
     return nullptr;
   }
+
+  recordreplay::Diagnostic("TextureClient::CreateForRawBufferAccess Done");
 
   return MakeAndAddRef<TextureClient>(texData, aTextureFlags, aAllocator);
 }
