@@ -2517,7 +2517,7 @@ BundledFontLoader::CreateEnumeratorFromKey(
   // embedded pointers within it. Workaround this by creating a dummy enumerator when
   // we're replaying.
   if (recordreplay::IsReplaying()) {
-    *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, fontDir);
+    *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, nullptr);
     NS_ADDREF(*aFontFileEnumerator);
     return S_OK;
   }
