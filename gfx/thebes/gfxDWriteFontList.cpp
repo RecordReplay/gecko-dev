@@ -2463,6 +2463,12 @@ BundledFontFileEnumerator::BundledFontFileEnumerator(IDWriteFactory* aFactory,
 
 IFACEMETHODIMP
 BundledFontFileEnumerator::MoveNext(BOOL* aHasCurrentFile) {
+  // Watch out for missing fonts when replaying.
+  if (recordreplay::IsReplaying()) {
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   bool hasMore = false;
   if (mEntries) {
     if (NS_SUCCEEDED(mEntries->HasMoreElements(&hasMore)) && hasMore) {
@@ -2477,6 +2483,12 @@ BundledFontFileEnumerator::MoveNext(BOOL* aHasCurrentFile) {
 
 IFACEMETHODIMP
 BundledFontFileEnumerator::GetCurrentFontFile(IDWriteFontFile** aFontFile) {
+  // Watch out for missing fonts when replaying.
+  if (recordreplay::IsReplaying()) {
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   nsCOMPtr<nsIFile> file = do_QueryInterface(mCurrent);
   if (!file) {
     return E_FAIL;
