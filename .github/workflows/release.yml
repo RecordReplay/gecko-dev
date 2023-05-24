@@ -24,6 +24,10 @@ jobs:
           authkey: ${{ secrets.TAILSCALE_API_KEY }}
           version: "1.38.4"
       - uses: actions/checkout@v2
+      - name: Checkout
+        run: |
+          git fetch --no-tags --depth=1 origin webreplay-release
+          git fetch --no-tags --depth=1 origin replay-playwright
       - uses: ./.github/actions/release
         env:
           BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
