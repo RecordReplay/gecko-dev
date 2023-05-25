@@ -23,6 +23,8 @@
 #include "number_utils.h"
 #include "number_utypes.h"
 
+#include "mozilla/RecordReplay.h"
+
 using namespace icu;
 using namespace icu::number;
 using namespace icu::number::impl;
@@ -78,7 +80,7 @@ DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols*
         : DecimalFormat(symbolsToAdopt, status) {
     std::string ss;
     mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat %s",
-                                              pattern.toUTF8String().c_str());
+                                              pattern.toUTF8String(ss).c_str());
 
     if (U_FAILURE(status)) {
       mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #1");
