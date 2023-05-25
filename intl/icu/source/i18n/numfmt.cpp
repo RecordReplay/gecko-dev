@@ -57,6 +57,8 @@
 #include "number_decimalquantity.h"
 #include "number_utils.h"
 
+#include "mozilla/RecordReplay.h"
+
 //#define FMT_DEBUG
 
 #ifdef FMT_DEBUG
@@ -1055,15 +1057,20 @@ NumberFormat::createInstance(const Locale& loc, UNumberFormatStyle kind, UErrorC
     if (kind != UNUM_DECIMAL) {
         return internalCreateInstance(loc, kind, status);
     }
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::createInstance #1");
     const SharedNumberFormat *shared = createSharedInstance(loc, kind, status);
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::createInstance #2");
         return NULL;
     }
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::createInstance #3");
     NumberFormat *result = (*shared)->clone();
     shared->removeRef();
     if (result == NULL) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::createInstance #4");
         status = U_MEMORY_ALLOCATION_ERROR;
     }
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::createInstance Done");
     return result;
 }
     
@@ -1257,18 +1264,22 @@ static void U_CALLCONV nscacheInit() {
 template<> U_I18N_API
 const SharedNumberFormat *LocaleCacheKey<SharedNumberFormat>::createObject(
         const void * /*unused*/, UErrorCode &status) const {
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] LocaleCacheKey<SharedNumberFormat>::createObject");
     const char *localeId = fLoc.getName();
     NumberFormat *nf = NumberFormat::internalCreateInstance(
             localeId, UNUM_DECIMAL, status);
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] LocaleCacheKey<SharedNumberFormat>::createObject #1");
         return NULL;
     }
     SharedNumberFormat *result = new SharedNumberFormat(nf);
     if (result == NULL) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] LocaleCacheKey<SharedNumberFormat>::createObject #2");
         status = U_MEMORY_ALLOCATION_ERROR;
         delete nf;
         return NULL;
     }
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] LocaleCacheKey<SharedNumberFormat>::createObject Done");
     result->addRef();
     return result;
 }
