@@ -1315,9 +1315,15 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
                            UNumberFormatStyle style,
                            UBool mustBeDecimalFormat,
                            UErrorCode& status) {
-    if (U_FAILURE(status)) return NULL;
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance");
+
+    if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #1");
+        return NULL;
+    }
 
     if (style < 0 || style >= UNUM_FORMAT_STYLE_COUNT) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #2");
         status = U_ILLEGAL_ARGUMENT_ERROR;
         return NULL;
     }
@@ -1329,17 +1335,22 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
     // The UNUM_PATTERN_ styles are not supported here
     // because this method does not take a pattern string.
     if (!isStyleSupported(style)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #3");
         status = U_UNSUPPORTED_ERROR;
         return NULL;
     }
 
 #if U_PLATFORM_USES_ONLY_WIN32_API
     if (!mustBeDecimalFormat) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #4");
+
         char buffer[8];
         int32_t count = desiredLocale.getKeywordValue("compat", buffer, sizeof(buffer), status);
 
         // if the locale has "@compat=host", create a host-specific NumberFormat
         if (U_SUCCESS(status) && count > 0 && uprv_strcmp(buffer, "host") == 0) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #5");
+
             UBool curr = TRUE;
 
             switch (style) {
@@ -1355,10 +1366,15 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
             case UNUM_CASH_CURRENCY:
             case UNUM_CURRENCY_STANDARD:
             {
+                mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #6");
+
                 LocalPointer<Win32NumberFormat> f(new Win32NumberFormat(desiredLocale, curr, status), status);
                 if (U_SUCCESS(status)) {
+                    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #7");
                     return f.orphan();
                 }
+
+                mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #8");
             }
             break;
             default:
@@ -1389,12 +1405,16 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         ns = ownedNs.getAlias();
     }
 
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #10");
+
     // check results of getting a numbering system
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #11");
         return NULL;
     }
 
     if (mustBeDecimalFormat && ns->isAlgorithmic()) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #12");
         status = U_UNSUPPORTED_ERROR;
         return NULL;
     }
@@ -1403,12 +1423,14 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
     UnicodeString pattern;
     LocalUResourceBundlePointer ownedResource(ures_open(NULL, desiredLocale.getName(), &status));
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #13");
         return NULL;
     }
     else {
         // Loads the decimal symbols of the desired locale.
         symbolsToAdopt.adoptInsteadAndCheckErrorCode(new DecimalFormatSymbols(desiredLocale, status), status);
         if (U_FAILURE(status)) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #14");
             return NULL;
         }
 
@@ -1421,6 +1443,7 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         pattern = UnicodeString(TRUE, patternPtr, -1);
     }
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #15");
         return NULL;
     }
     if(style==UNUM_CURRENCY || style == UNUM_CURRENCY_ISO || style == UNUM_CURRENCY_ACCOUNTING 
@@ -1433,6 +1456,8 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
 
     LocalPointer<NumberFormat> f;
     if (ns->isAlgorithmic()) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #16");
+
         UnicodeString nsDesc;
         UnicodeString nsRuleSetGroup;
         UnicodeString nsRuleSetName;
@@ -1462,12 +1487,15 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
 
         RuleBasedNumberFormat *r = new RuleBasedNumberFormat(desiredRulesType,nsLoc,status);
         if (r == NULL) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #20");
             status = U_MEMORY_ALLOCATION_ERROR;
             return NULL;
         }
         r->setDefaultRuleSet(nsRuleSetName,status);
         f.adoptInstead(r);
     } else {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #21");
+
         // replace single currency sign in the pattern with double currency sign
         // if the style is UNUM_CURRENCY_ISO
         if (style == UNUM_CURRENCY_ISO) {
@@ -1489,6 +1517,7 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         }
 
         if (U_FAILURE(status)) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #25");
             return nullptr;
         }
 
@@ -1498,6 +1527,7 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         }
 
         if (U_FAILURE(status)) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #26");
             return nullptr;
         }
 
@@ -1507,8 +1537,12 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
     f->setLocaleIDs(ures_getLocaleByType(ownedResource.getAlias(), ULOC_VALID_LOCALE, &status),
                     ures_getLocaleByType(ownedResource.getAlias(), ULOC_ACTUAL_LOCALE, &status));
     if (U_FAILURE(status)) {
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #27");
         return NULL;
     }
+
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance Done");
+
     return f.orphan();
 }
 
