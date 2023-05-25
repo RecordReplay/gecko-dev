@@ -1509,10 +1509,14 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         LocalPointer<DecimalFormat> df(new DecimalFormat(pattern, syms, style, status));
 
         if (df.isValid()) {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #22");
+
             // if the DecimalFormat object was successfully new'ed, then it will own symbolsToAdopt, even if the status is a failure.
             symbolsToAdopt.orphan();
         }
         else {
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #23");
+
             status = U_MEMORY_ALLOCATION_ERROR;
         }
 
