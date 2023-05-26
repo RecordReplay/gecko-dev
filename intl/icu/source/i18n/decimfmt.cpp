@@ -79,8 +79,13 @@ DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols*
                              UNumberFormatStyle style, UErrorCode& status)
         : DecimalFormat(symbolsToAdopt, status) {
     std::string ss;
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat %s",
-                                              pattern.toUTF8String(ss).c_str());
+    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat %s %d",
+                                              pattern.toUTF8String(ss).c_str(),
+                                              (int)pattern.length());
+    for (int i = 0; i < pattern.length(); i++) {
+      mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #0 %d %d",
+                                                i, pattern.char32At(i));
+    }
 
     if (U_FAILURE(status)) {
       mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #1");
