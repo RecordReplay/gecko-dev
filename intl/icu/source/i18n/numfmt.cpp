@@ -1441,6 +1441,8 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
                 gFormatCldrStyles[style],
                 status);
         pattern = UnicodeString(TRUE, patternPtr, -1);
+
+        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #14.1 %d", pattern.length());
     }
     if (U_FAILURE(status)) {
         mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #15");
@@ -1451,6 +1453,7 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         const UChar* currPattern = symbolsToAdopt->getCurrencyPattern();
         if(currPattern!=NULL){
             pattern.setTo(currPattern, u_strlen(currPattern));
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #15.1 %d", pattern.length());
         }
     }
 
@@ -1501,6 +1504,7 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
         if (style == UNUM_CURRENCY_ISO) {
             pattern.findAndReplace(UnicodeString(TRUE, gSingleCurrencySign, 1),
                                    UnicodeString(TRUE, gDoubleCurrencySign, 2));
+            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] NumberFormat::makeInstance #21.1 %d", pattern.length());
         }
 
         // "new DecimalFormat()" does not adopt the symbols argument if its memory allocation fails.
