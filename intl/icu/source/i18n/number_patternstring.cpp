@@ -17,8 +17,6 @@
 #include "number_roundingutils.h"
 #include "number_mapper.h"
 
-#include "mozilla/RecordReplay.h"
-
 using namespace icu;
 using namespace icu::number;
 using namespace icu::number::impl;
@@ -143,34 +141,20 @@ void ParsedPatternInfo::consumePattern(const UnicodeString& patternString, UErro
     // Use move assignment to overwrite instead.
     U_ASSERT(state.offset == 0);
 
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern %d", state.offset);
-
     // pattern := subpattern (';' subpattern)?
     currentSubpattern = &positive;
     consumeSubpattern(status);
     if (U_FAILURE(status)) { return; }
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern #1 %d", state.offset);
-
     if (state.peek() == u';') {
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern #2");
-
         state.next(); // consume the ';'
         // Don't consume the negative subpattern if it is empty (trailing ';')
         if (state.peek() != -1) {
-            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern #3");
-
             fHasNegativeSubpattern = true;
             currentSubpattern = &negative;
             consumeSubpattern(status);
             if (U_FAILURE(status)) { return; }
-
-            mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern #4 %d", state.offset);
         }
     }
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] ParsedPatternInfo::consumePattern #5 %d %d", state.peek(), state.offset);
-
     if (state.peek() != -1) {
         state.toParseException(u"Found unquoted special character");
         status = U_UNQUOTED_SPECIAL;
@@ -477,12 +461,7 @@ void ParsedPatternInfo::consumeExponent(UErrorCode& status) {
 void PatternParser::parseToExistingPropertiesImpl(const UnicodeString& pattern,
                                                   DecimalFormatProperties& properties,
                                                   IgnoreRounding ignoreRounding, UErrorCode& status) {
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] PatternParser::parseToExistingPropertiesImpl %d",
-                                              U_FAILURE(status));
-
     if (pattern.length() == 0) {
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] PatternParser::parseToExistingPropertiesImpl #1");
-
         // Backwards compatibility requires that we reset to the default values.
         // TODO: Only overwrite the properties that "saveToProperties" normally touches?
         properties.clear();
@@ -491,15 +470,8 @@ void PatternParser::parseToExistingPropertiesImpl(const UnicodeString& pattern,
 
     ParsedPatternInfo patternInfo;
     parseToPatternInfo(pattern, patternInfo, status);
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] PatternParser::parseToExistingPropertiesImpl #2 %d",
-                                              U_FAILURE(status));
-
     if (U_FAILURE(status)) { return; }
     patternInfoToProperties(properties, patternInfo, ignoreRounding, status);
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] PatternParser::parseToExistingPropertiesImpl Done %d",
-                                              U_FAILURE(status));
 }
 
 void

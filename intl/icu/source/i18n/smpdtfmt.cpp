@@ -80,8 +80,6 @@
 #include <stdio.h>
 #endif
 
-#include "mozilla/RecordReplay.h"
-
 // *****************************************************************************
 // class SimpleDateFormat
 // *****************************************************************************
@@ -917,15 +915,9 @@ void
 SimpleDateFormat::initialize(const Locale& locale,
                              UErrorCode& status)
 {
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize");
-
     if (U_FAILURE(status)) return;
 
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #1");
-
     parsePattern(); // Need this before initNumberFormatters(), to set fHasHanYearChar
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #2");
 
     // Simple-minded hack to force Gannen year numbering for ja@calendar=japanese
     // if format is non-numeric (includes 年) and fDateOverride is not already specified.
@@ -936,37 +928,22 @@ SimpleDateFormat::initialize(const Locale& locale,
         fDateOverride.setTo(u"y=jpanyear", -1);
     }
 
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #3");
-
     // We don't need to check that the row count is >= 1, since all 2d arrays have at
     // least one row
     fNumberFormat = NumberFormat::createInstance(locale, status);
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #4");
-
     if (fNumberFormat != NULL && U_SUCCESS(status))
     {
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #5");
-
         fixNumberFormatForDates(*fNumberFormat);
         //fNumberFormat->setLenient(TRUE); // Java uses a custom DateNumberFormat to format/parse
 
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #6");
-
         initNumberFormatters(locale, status);
-
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #7");
-
         initFastNumberFormatters(status);
 
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize #8");
     }
     else if (U_SUCCESS(status))
     {
         status = U_MISSING_RESOURCE_ERROR;
     }
-
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] SimpleDateFormat::initialize Done");
 }
 
 /* Initialize the fields we use to disambiguate ambiguous years. Separate

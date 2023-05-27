@@ -23,8 +23,6 @@
 #include "number_utils.h"
 #include "number_utypes.h"
 
-#include "mozilla/RecordReplay.h"
-
 using namespace icu;
 using namespace icu::number;
 using namespace icu::number::impl;
@@ -78,19 +76,7 @@ DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols*
 DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols* symbolsToAdopt,
                              UNumberFormatStyle style, UErrorCode& status)
         : DecimalFormat(symbolsToAdopt, status) {
-    std::string ss;
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat %s %d",
-                                              pattern.toUTF8String(ss).c_str(),
-                                              (int)pattern.length());
-    for (int i = 0; i < pattern.length(); i++) {
-      mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #0 %d %d",
-                                                i, pattern.char32At(i));
-    }
-
-    if (U_FAILURE(status)) {
-      mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #1");
-     return;
-    }
+    if (U_FAILURE(status)) { return; }
     // If choice is a currency type, ignore the rounding information.
     if (style == UNumberFormatStyle::UNUM_CURRENCY ||
         style == UNumberFormatStyle::UNUM_CURRENCY_ISO ||
@@ -99,10 +85,8 @@ DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols*
         style == UNumberFormatStyle::UNUM_CURRENCY_STANDARD ||
         style == UNumberFormatStyle::UNUM_CURRENCY_PLURAL) {
         setPropertiesFromPattern(pattern, IGNORE_ROUNDING_ALWAYS, status);
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #2 %d", U_FAILURE(status));
     } else {
         setPropertiesFromPattern(pattern, IGNORE_ROUNDING_IF_CURRENCY, status);
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #3 %d", U_FAILURE(status));
     }
     // Note: in Java, CurrencyPluralInfo is set in NumberFormat.java, but in C++, it is not set there,
     // so we have to set it here.
@@ -110,13 +94,10 @@ DecimalFormat::DecimalFormat(const UnicodeString& pattern, DecimalFormatSymbols*
         LocalPointer<CurrencyPluralInfo> cpi(
                 new CurrencyPluralInfo(fields->symbols->getLocale(), status),
                 status);
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #4 %d", U_FAILURE(status));
         if (U_FAILURE(status)) { return; }
         fields->properties.currencyPluralInfo.fPtr.adoptInstead(cpi.orphan());
-        mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat #5 %d", U_FAILURE(status));
     }
     touch(status);
-    mozilla::recordreplay::RecordReplayAssert("[RUN-1972] DecimalFormat::DecimalFormat Done %d", U_FAILURE(status));
 }
 
 DecimalFormat::DecimalFormat(const DecimalFormatSymbols* symbolsToAdopt, UErrorCode& status) {
