@@ -57,6 +57,8 @@
 #include "number_decimalquantity.h"
 #include "number_utils.h"
 
+#include "mozilla/RecordReplay.h"
+
 //#define FMT_DEBUG
 
 #ifdef FMT_DEBUG
@@ -1407,7 +1409,12 @@ NumberFormat::makeInstance(const Locale& desiredLocale,
                 ns->getName(),
                 gFormatCldrStyles[style],
                 status);
-        pattern = UnicodeString(TRUE, patternPtr, -1);
+
+        // Record/replay string length to workaround the length differing when
+        // replaying for an unknown reason.
+        int len = mozilla::recordreplay::RecordReplayValue("NumberFormat::makeInstance", u_strlen(patternPtr));
+
+        pattern = UnicodeString(TRUE, patternPtr, len);
     }
     if (U_FAILURE(status)) {
         return NULL;
