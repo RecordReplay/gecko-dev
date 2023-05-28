@@ -16,6 +16,7 @@
 #include "nsWindowsDllInterceptor.h"
 #include "mozilla/CmdLineAndEnvUtils.h"
 #include "mozilla/DebugOnly.h"
+#include "mozilla/RecordReplay.h"
 #include "mozilla/StackWalk_windows.h"
 #include "mozilla/TimeStamp.h"
 #include "mozilla/UniquePtr.h"
@@ -353,6 +354,9 @@ static wchar_t* lastslash(wchar_t* s, int len) {
 static NTSTATUS NTAPI patched_LdrLoadDll(PWCHAR filePath, PULONG flags,
                                          PUNICODE_STRING moduleFileName,
                                          PHANDLE handle) {
+  // This code only runs when recording.
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   // We have UCS2 (UTF16?), we want ASCII, but we also just want the filename
   // portion
 #define DLLNAME_MAX 128

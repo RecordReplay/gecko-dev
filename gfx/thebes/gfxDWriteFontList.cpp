@@ -2456,11 +2456,19 @@ class BundledFontFileEnumerator : public IDWriteFontFileEnumerator {
 BundledFontFileEnumerator::BundledFontFileEnumerator(IDWriteFactory* aFactory,
                                                      nsIFile* aFontDir)
     : mFactory(aFactory), mFontDir(aFontDir) {
-  mFontDir->GetDirectoryEntries(getter_AddRefs(mEntries));
+  if (mFontDir) {
+    mFontDir->GetDirectoryEntries(getter_AddRefs(mEntries));
+  }
 }
 
 IFACEMETHODIMP
 BundledFontFileEnumerator::MoveNext(BOOL* aHasCurrentFile) {
+  // Watch out for missing fonts when replaying.
+  if (recordreplay::IsReplaying()) {
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   bool hasMore = false;
   if (mEntries) {
     if (NS_SUCCEEDED(mEntries->HasMoreElements(&hasMore)) && hasMore) {
@@ -2475,6 +2483,12 @@ BundledFontFileEnumerator::MoveNext(BOOL* aHasCurrentFile) {
 
 IFACEMETHODIMP
 BundledFontFileEnumerator::GetCurrentFontFile(IDWriteFontFile** aFontFile) {
+  // Watch out for missing fonts when replaying.
+  if (recordreplay::IsReplaying()) {
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   nsCOMPtr<nsIFile> file = do_QueryInterface(mCurrent);
   if (!file) {
     return E_FAIL;
@@ -2511,6 +2525,16 @@ BundledFontLoader::CreateEnumeratorFromKey(
     IDWriteFactory* aFactory, const void* aCollectionKey,
     UINT32 aCollectionKeySize,
     IDWriteFontFileEnumerator** aFontFileEnumerator) {
+  // The collection key's contents will be recorded/replayed and we can't dereference
+  // embedded pointers within it. Workaround this by creating a dummy enumerator when
+  // we're replaying.
+  if (recordreplay::IsReplaying()) {
+    *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, nullptr);
+    NS_ADDREF(*aFontFileEnumerator);
+    return S_OK;
+  }
+  recordreplay::AutoPassThroughThreadEvents pt;
+
   nsIFile* fontDir = *(nsIFile**)aCollectionKey;
   *aFontFileEnumerator = new BundledFontFileEnumerator(aFactory, fontDir);
   NS_ADDREF(*aFontFileEnumerator);
