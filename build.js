@@ -122,5 +122,5 @@ function computeBuildId() {
   // Use the later of the two dates in the build ID.
   const date = +runtimeDate >= +driverDate ? runtimeDate : driverDate;
 
-  return `${currentPlatform()}-gecko-${date}-${geckoRevision}-${driverRevision}`;
+  return `${currentPlatform()}-x86_64-gecko-${date}-${geckoRevision}-${driverRevision}`;
 }
