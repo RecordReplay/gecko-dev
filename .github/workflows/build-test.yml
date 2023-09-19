@@ -21,6 +21,7 @@ jobs:
         with:
           oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          tags: tag:buildtest
       - uses: actions/checkout@v2
         with:
           ref: replay-playwright
