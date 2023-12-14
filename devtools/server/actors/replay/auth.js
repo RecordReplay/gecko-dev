@@ -233,7 +233,10 @@ function initializeRecordingWebChannel() {
   );
   const localUrl = "http://localhost:8080/";
 
+  // custom subdomains
   registerWebChannel(/^https:\/\/.+.replay.io$/);
+  // preview branches
+  registerWebChannel(/^https:\/\/.+-recordreplay.vercel.app$/);
   registerWebChannel(pageUrl);
   registerWebChannel(localUrl);
 
