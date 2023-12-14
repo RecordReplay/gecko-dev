@@ -233,11 +233,12 @@ function initializeRecordingWebChannel() {
   );
   const localUrl = "http://localhost:8080/";
 
+  registerWebChannel(/^https:\/\/.+.replay.io$/);
   registerWebChannel(pageUrl);
   registerWebChannel(localUrl);
 
   function registerWebChannel(url) {
-    const urlForWebChannel = Services.io.newURI(url);
+    const urlForWebChannel = url instanceof RegExp ? url : Services.io.newURI(url);
     const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
     channel.listen((...args) => handleAuthChannelMessage(channel, ...args));

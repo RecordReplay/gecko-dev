@@ -119,6 +119,10 @@ var WebChannel = function(id, originOrPermission) {
     // restrict based on the site's origin, not on other origin attributes
     // such as containers or private browsing.
     this._originCheckCallback = requestPrincipal => {
+      if (originOrPermission instanceof RegExp) {
+        return originOrPermission.test(requestPrincipal.originNoSuffix);
+      }
+
       return originOrPermission.prePath === requestPrincipal.originNoSuffix;
     };
   }
