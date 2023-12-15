@@ -38,6 +38,9 @@ namespace mozilla::recordreplay {
   `
 );
 
+// set rust compiler version with rustup
+spawnChecked("rustup", ["show"]);
+
 const buildOptions = {
   stdio: "inherit",
   env: {
@@ -116,7 +119,7 @@ function getRevisionDate(
  */
 function computeBuildId() {
   const geckoRevision = spawnChecked("git", ["rev-parse", "--short=12", "HEAD"]).stdout.toString().trim();
-  
+
   const runtimeDate = getRevisionDate();
 
   // Use the later of the two dates in the build ID.
