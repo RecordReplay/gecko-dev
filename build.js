@@ -39,7 +39,7 @@ namespace mozilla::recordreplay {
 );
 
 // set rust compiler version with rustup
-spawnChecked("rustup", ["show"]);
+console.log(spawnChecked("rustup", ["show"]));
 
 const buildOptions = {
   stdio: "inherit",
