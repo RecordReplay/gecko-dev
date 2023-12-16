@@ -59,6 +59,10 @@ if (currentPlatform() == "windows") {
   spawnChecked("./mach", ["package"], buildOptions);
 }
 
+const rv = spawnSync("rustc", ["--version"]);
+console.log("rustc version stdout", rv.stdout.toString());
+console.log("rustc version stderr", rv.stderr.toString());
+
 function spawnChecked(cmd, args, options) {
   const prettyCmd = [cmd].concat(args).join(" ");
   console.error(prettyCmd);
