@@ -8,9 +8,19 @@ const gecko = __dirname;
 const driverArchive = `${currentPlatform()}-recordreplay.tgz`;
 let downloadArchive = driverArchive;
 if (process.env.DRIVER_REVISION) {
-  downloadArchive = `${currentPlatform()}-recordreplay-${process.env.DRIVER_REVISION}.tgz`;
+  downloadArchive = `${currentPlatform()}-recordreplay-${
+    process.env.DRIVER_REVISION
+  }.tgz`;
 }
-spawnChecked("curl", [`https://static.replay.io/downloads/${downloadArchive}`, "-o", driverArchive], { stdio: "inherit" });
+spawnChecked(
+  "curl",
+  [
+    `https://static.replay.io/downloads/${downloadArchive}`,
+    "-o",
+    driverArchive,
+  ],
+  { stdio: "inherit" }
+);
 
 // Files which should be in the archive.
 const driverFile = `${currentPlatform()}-recordreplay.${driverExtension()}`;
@@ -20,7 +30,9 @@ fs.unlinkSync(driverArchive);
 
 // Embed the driver in the source.
 const driverContents = fs.readFileSync(driverFile);
-const { revision: driverRevision, date: driverDate } = JSON.parse(fs.readFileSync(driverJSON, "utf8"));
+const { revision: driverRevision, date: driverDate } = JSON.parse(
+  fs.readFileSync(driverJSON, "utf8")
+);
 fs.unlinkSync(driverFile);
 fs.unlinkSync(driverJSON);
 let driverString = "";
@@ -50,6 +62,10 @@ const buildOptions = {
   },
 };
 
+const rv = spawnSync("rustc", ["--version"]);
+console.log("rustc version stdout", rv.stdout.toString());
+console.log("rustc version stderr", rv.stderr.toString());
+
 if (currentPlatform() == "windows") {
   // Windows builds need to enter the mozilla-build shell, and uses separate
   // scripts for this.
@@ -58,10 +74,6 @@ if (currentPlatform() == "windows") {
   spawnChecked("./mach", ["build"], buildOptions);
   spawnChecked("./mach", ["package"], buildOptions);
 }
-
-const rv = spawnSync("rustc", ["--version"]);
-console.log("rustc version stdout", rv.stdout.toString());
-console.log("rustc version stderr", rv.stderr.toString());
 
 function spawnChecked(cmd, args, options) {
   const prettyCmd = [cmd].concat(args).join(" ");
@@ -97,10 +109,7 @@ function driverExtension() {
 /**
  * @returns {string} "YYYYMMDD" format of UTC timestamp of given revision.
  */
-function getRevisionDate(
-  revision = "HEAD",
-  spawnOptions
-) {
+function getRevisionDate(revision = "HEAD", spawnOptions) {
   const dateString = spawnChecked(
     "git",
     ["show", revision, "--pretty=%cd", "--date=iso-strict", "--no-patch"],
@@ -119,7 +128,9 @@ function getRevisionDate(
  * When changing this: always keep all versions of this in sync, or else, builds will break.
  */
 function computeBuildId() {
-  const geckoRevision = spawnChecked("git", ["rev-parse", "--short=12", "HEAD"]).stdout.toString().trim();
+  const geckoRevision = spawnChecked("git", ["rev-parse", "--short=12", "HEAD"])
+    .stdout.toString()
+    .trim();
 
   const runtimeDate = getRevisionDate();
 
