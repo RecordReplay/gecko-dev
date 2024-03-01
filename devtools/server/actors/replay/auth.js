@@ -233,11 +233,15 @@ function initializeRecordingWebChannel() {
   );
   const localUrl = "http://localhost:8080/";
 
+  // custom subdomains
+  registerWebChannel(/^https:\/\/.+.replay.io$/);
+  // preview branches
+  registerWebChannel(/^https:\/\/.+-recordreplay.vercel.app$/);
   registerWebChannel(pageUrl);
   registerWebChannel(localUrl);
 
   function registerWebChannel(url) {
-    const urlForWebChannel = Services.io.newURI(url);
+    const urlForWebChannel = url instanceof RegExp ? url : Services.io.newURI(url);
     const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
     channel.listen((...args) => handleAuthChannelMessage(channel, ...args));
