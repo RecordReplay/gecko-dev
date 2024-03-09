@@ -57,6 +57,7 @@ function platformTasks(platform) {
       kind: "StaticLiveTests",
       runtime: "gecko",
       revision: replayRevision,
+      driverRevision,
     },
     platform,
     [buildReplayTask]
