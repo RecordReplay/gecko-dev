@@ -11,7 +11,7 @@ const clobberInput = process.env.INPUT_CLOBBER;
 console.log("Clobber", clobberInput);
 const clobber = clobberInput == "true";
 
-const replayRevision = getLatestReplayRevision();
+const replayRevision = '33e7e0e35c3c'; // getLatestReplayRevision();
 const unmergedPlaywrightRevision = getLatestPlaywrightRevision();
 
 const driverRevision = process.env.INPUT_DRIVER_REVISION;
