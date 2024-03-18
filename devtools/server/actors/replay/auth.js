@@ -233,11 +233,15 @@ function initializeRecordingWebChannel() {
   );
   const localUrl = "http://localhost:8080/";
 
+  const replayio = /^https:\/\/.+.replay.io$/;
+  const previewBranches = /^https:\/\/.+-recordreplay.vercel.app$/;
   // custom subdomains
-  registerWebChannel(/^https:\/\/.+.replay.io$/);
+  registerWebChannel(replayio);
   // preview branches
-  registerWebChannel(/^https:\/\/.+-recordreplay.vercel.app$/);
-  registerWebChannel(pageUrl);
+  registerWebChannel(previewBranches);
+  if (!replayio.test(pageUrl) && !previewBranches.test(pageUrl)) {
+    registerWebChannel(pageUrl);
+  }
   registerWebChannel(localUrl);
 
   function registerWebChannel(url) {
