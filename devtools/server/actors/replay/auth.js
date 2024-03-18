@@ -233,14 +233,20 @@ function initializeRecordingWebChannel() {
   );
   const localUrl = "http://localhost:8080/";
 
+  const replayio = /^https:\/\/.+.replay.io\/?$/;
+  const previewBranches = /^https:\/\/.+-recordreplay.vercel.app\/?$/;
   // custom subdomains
-  registerWebChannel(/^https:\/\/.+.replay.io$/);
+  registerWebChannel(replayio);
   // preview branches
-  registerWebChannel(/^https:\/\/.+-recordreplay.vercel.app$/);
-  registerWebChannel(pageUrl);
+  registerWebChannel(previewBranches);
+  if (!replayio.test(pageUrl) && !previewBranches.test(pageUrl)) {
+    console.log(pageUrl, replayio, previewBranches);
+    registerWebChannel(pageUrl);
+  }
   registerWebChannel(localUrl);
 
   function registerWebChannel(url) {
+    console.log("Registering WebChannel for", url);
     const urlForWebChannel = url instanceof RegExp ? url : Services.io.newURI(url);
     const channel = new WebChannel("record-replay-token", urlForWebChannel);
 
