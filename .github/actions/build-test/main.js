@@ -11,8 +11,10 @@ const clobberInput = process.env.INPUT_CLOBBER;
 console.log("Clobber", clobberInput);
 const clobber = clobberInput == "true";
 
-const replayRevision = getLatestReplayRevision();
+const replayRevision = '13484038b925'; // getLatestReplayRevision();
 const unmergedPlaywrightRevision = getLatestPlaywrightRevision();
+
+const driverRevision = process.env.INPUT_DRIVER_REVISION;
 
 const mergePlaywrightTask = newTask(
   `Merge into playwright branch`,
@@ -43,6 +45,7 @@ function platformTasks(platform) {
       kind: "BuildRuntime",
       runtime: "gecko",
       revision: replayRevision,
+      driverRevision,
       clobber,
     },
     platform
@@ -54,6 +57,7 @@ function platformTasks(platform) {
       kind: "StaticLiveTests",
       runtime: "gecko",
       revision: replayRevision,
+      driverRevision,
     },
     platform,
     [buildReplayTask]

@@ -6,6 +6,9 @@ on:
         description: "Build the browser from scratch"
         type: boolean
         required: false
+      driver_revision:
+        description: "Driver revision to use, if not the latest"
+        required: false
   push:
     branches:
       - webreplay-release
@@ -26,8 +29,8 @@ jobs:
         with:
           ref: replay-playwright
       - uses: actions/checkout@v2
-        with:
-          ref: webreplay-release
+        # with:
+        #   ref: webreplay-release
       - uses: ./.github/actions/build-test
         env:
           BUILD_TEST_AUTHORIZATION: ${{ secrets.BUILD_TEST_AUTHORIZATION }}
@@ -35,3 +38,4 @@ jobs:
           BUILD_TEST_PORT: ${{ secrets.BUILD_TEST_PORT }}
           BUILD_TEST_INSECURE: ${{ secrets.BUILD_TEST_INSECURE }}
           INPUT_CLOBBER: ${{ github.event.inputs.clobber }}
+          INPUT_DRIVER_REVISION: ${{ github.event.inputs.driver_revision }}
