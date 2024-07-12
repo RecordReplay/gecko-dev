@@ -821,6 +821,7 @@ if (isRecordingOrReplaying) {
 }
 
 function consoleAPIMessageLevel({ level }) {
+  console.log(`level`, level) // group, groupEnd, ...
   switch (level) {
     case "trace":
       return "trace";
@@ -830,6 +831,10 @@ function consoleAPIMessageLevel({ level }) {
       return "error";
     case "assert":
       return "assert";
+     case "group":
+      return "group";
+    case "groupEnd":
+      return "groupEnd";
     default:
       return "info";
   }
